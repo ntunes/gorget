@@ -770,59 +770,143 @@ pub(super) fn lower_call(
             }
         }
 
-        // Allocator constructors → runtime functions
-        if name == "Arena" && args.len() == 1 {
-            let cap_op = lower_expr(ctx, builder, &args[0].node.value);
-            let arena_type = ctx.type_mapper.lookup_named("Arena").unwrap_or(I64_TYPE);
-            let dst = builder.call_extern("gorget_arena_new", vec![cap_op], arena_type);
-            return FunctionBuilder::copy(dst);
-        }
-        if name == "TrackingAllocator" && args.is_empty() {
-            let ta_type = ctx.type_mapper.lookup_named("TrackingAllocator").unwrap_or(I64_TYPE);
-            let dst = builder.call_extern("gorget_tracking_new", vec![], ta_type);
-            return FunctionBuilder::copy(dst);
-        }
-        if name == "PoolAllocator" && args.len() == 2 {
-            let a1 = lower_expr(ctx, builder, &args[0].node.value);
-            let a2 = lower_expr(ctx, builder, &args[1].node.value);
-            let pool_type = ctx.type_mapper.lookup_named("PoolAllocator").unwrap_or(I64_TYPE);
-            let dst = builder.call_extern("gorget_pool_new", vec![a1, a2], pool_type);
-            return FunctionBuilder::copy(dst);
-        }
-        if name == "TlsfAllocator" && args.len() == 1 {
-            let a1 = lower_expr(ctx, builder, &args[0].node.value);
-            let tlsf_type = ctx.type_mapper.lookup_named("TlsfAllocator").unwrap_or(I64_TYPE);
-            let dst = builder.call_extern("gorget_tlsf_new", vec![a1], tlsf_type);
-            return FunctionBuilder::copy(dst);
-        }
-        if name == "FixedBufferAllocator" && args.len() == 1 {
-            let a1 = lower_expr(ctx, builder, &args[0].node.value);
-            let fba_type = ctx.type_mapper.lookup_named("FixedBufferAllocator").unwrap_or(I64_TYPE);
-            let dst = builder.call_extern("gorget_fba_new", vec![a1], fba_type);
-            return FunctionBuilder::copy(dst);
-        }
-        if name == "FallbackAllocator" && args.len() == 2 {
-            let a1 = lower_expr(ctx, builder, &args[0].node.value);
-            let a2 = lower_expr(ctx, builder, &args[1].node.value);
-            let fb_type = ctx.type_mapper.lookup_named("FallbackAllocator").unwrap_or(I64_TYPE);
-            let dst = builder.call_extern("gorget_fallback_new", vec![a1, a2], fb_type);
-            return FunctionBuilder::copy(dst);
+        // Allocator constructors → runtime functions. Name-aware
+        // cap=/alloc=/positional split, mirroring the String-ctor branch
+        // above (round-33). Every allocator's runtime ctor captures
+        // `__gorget_current_alloc` as its parent — struct AND backing
+        // buffer come from it, and destroy frees back into it
+        // (runtime_arena_alloc.c gorget_arena_new; same shape in
+        // runtime_{tlsf,pool,fixedbuf,fallback,tracking}_alloc.c) — so
+        // `alloc=a` is the one-shot spelling of the documented `with`-
+        // nesting semantics (language-reference §15.3 "Nesting": "An
+        // allocator created inside a `with` block uses the outer allocator
+        // for its own internal metadata"), delivered via the SAME push/pop
+        // bracket as the collection ctors below. For TrackingAllocator the
+        // parent is also the wrapped allocator (`t->inner = pa`), so
+        // `TrackingAllocator(alloc=a)` means "instrument allocator `a`".
+        // Before round-33 these branches were named-arg-BLIND:
+        // `Arena(alloc=outer)` passed the Arena STRUCT as the byte
+        // capacity (runtime panic on C, llc ptr-vs-i64 on LLVM), and any
+        // named/0-arg shape fell past the arity-gated intercepts into an
+        // unintelligible cc/llc/ld error. Shapes beyond the accepted ones
+        // (unknown/duplicate named args, multi-source capacity, wrong
+        // positional arity, non-int capacity) are rejected at typecheck —
+        // don't intercept them here.
+        //
+        // (runtime ctor, Gorget type, positional arity). `None` arity =
+        // one OPTIONAL capacity (cap= or a single positional); omitting it
+        // passes 0, which hits the runtime default (Arena 4096, TLSF
+        // 65536 — documented for TLSF in §15.3; `with Arena() as pool:`
+        // is the design-doc flagship spelling). `Some(n)` = fixed n-arg
+        // positional signature, no capacity axis.
+        let alloc_ctor: Option<(&str, &str, Option<usize>)> = match name.as_str() {
+            "Arena" => Some(("gorget_arena_new", "Arena", None)),
+            "TlsfAllocator" => Some(("gorget_tlsf_new", "TlsfAllocator", None)),
+            "FixedBufferAllocator" => Some(("gorget_fba_new", "FixedBufferAllocator", None)),
+            "TrackingAllocator" => Some(("gorget_tracking_new", "TrackingAllocator", Some(0))),
+            "PoolAllocator" => Some(("gorget_pool_new", "PoolAllocator", Some(2))),
+            "FallbackAllocator" => Some(("gorget_fallback_new", "FallbackAllocator", Some(2))),
+            _ => None,
+        };
+        if let Some((rt_fn, ty_name, fixed_arity)) = alloc_ctor {
+            let alloc_arg = args.iter().find(|a| {
+                a.node.name.as_ref().map_or(false, |n| n.node == "alloc")
+            });
+            let cap_arg = args.iter().find(|a| {
+                a.node.name.as_ref().map_or(false, |n| n.node == "cap")
+            });
+            let positional_args: Vec<&Spanned<ast::CallArg>> = args.iter()
+                .filter(|a| a.node.name.is_none())
+                .collect();
+            let named_accounted = positional_args.len() + args.iter().filter(|a| {
+                a.node.name.as_ref().map_or(false, |n| n.node == "cap" || n.node == "alloc")
+            }).count();
+            let shape_ok = named_accounted == args.len()
+                && match fixed_arity {
+                    // Single optional capacity: cap= OR one positional.
+                    None => positional_args.len() + usize::from(cap_arg.is_some()) <= 1,
+                    // Fixed positional signature; no cap= axis.
+                    Some(n) => positional_args.len() == n && cap_arg.is_none(),
+                };
+            if shape_ok {
+                let alloc_type = ctx.type_mapper.lookup_named(ty_name).unwrap_or(I64_TYPE);
+                // Lower the allocator FIRST and push the bracket so the
+                // ctor's own struct + backing buffer come from it (the
+                // runtime records it as parent, so destroy stays balanced).
+                let bracketed = if let Some(alloc_a) = alloc_arg {
+                    let alloc_op = lower_expr(ctx, builder, &alloc_a.node.value);
+                    builder.push_allocator(alloc_op);
+                    true
+                } else {
+                    false
+                };
+                let ctor_args: Vec<Operand> = match fixed_arity {
+                    None => {
+                        let cap_op = if let Some(cap_a) = cap_arg {
+                            lower_expr(ctx, builder, &cap_a.node.value)
+                        } else if let Some(pos) = positional_args.first() {
+                            lower_expr(ctx, builder, &pos.node.value)
+                        } else {
+                            Operand::Constant(Constant::I64(0))
+                        };
+                        vec![cap_op]
+                    }
+                    Some(_) => positional_args.iter()
+                        .map(|a| lower_expr(ctx, builder, &a.node.value))
+                        .collect(),
+                };
+                let dst = builder.call_extern(rt_fn, ctor_args, alloc_type);
+                if bracketed {
+                    builder.pop_allocator();
+                }
+                return FunctionBuilder::copy(dst);
+            }
         }
 
-        // Channel[T](capacity) constructor → Channel__T__new(capacity)
+        // Channel[T](capacity) constructor → Channel__T__new(capacity).
+        // Same name-aware cap=/alloc= split as the allocator ctors above —
+        // §15.3 lists Channel among the alloc=-accepting ctors, and the
+        // runtime snapshots `__gorget_current_alloc` into `ch->alloc` at
+        // construction (channel_runtime.c gorget_channel_new), so the
+        // bracket is sticky for the ring buffer and its waiter arrays.
+        // Before round-33 this branch read args[0] blindly:
+        // `Channel[int](alloc=a)` passed the Arena struct as the capacity
+        // (NULL ring buffer → SIGSEGV on first send, BOTH backends) and
+        // `Channel[int](cap=4, alloc=a)` silently ignored the allocator.
         if name == "Channel" {
             if let Some(type_args) = generic_args {
                 if !type_args.is_empty() {
                     let mangled = super::super::types::mangle_generic_name(name, type_args);
                     let mangled = ctx.resolve_type_name(&mangled);
                     let chan_type = get_or_register_type(ctx, &mangled, None);
-                    let cap_op = if !args.is_empty() {
-                        lower_expr(ctx, builder, &args[0].node.value)
+                    let alloc_arg = args.iter().find(|a| {
+                        a.node.name.as_ref().map_or(false, |n| n.node == "alloc")
+                    });
+                    let cap_arg = args.iter().find(|a| {
+                        a.node.name.as_ref().map_or(false, |n| n.node == "cap")
+                    });
+                    let positional_args: Vec<&Spanned<ast::CallArg>> = args.iter()
+                        .filter(|a| a.node.name.is_none())
+                        .collect();
+                    let bracketed = if let Some(alloc_a) = alloc_arg {
+                        let alloc_op = lower_expr(ctx, builder, &alloc_a.node.value);
+                        builder.push_allocator(alloc_op);
+                        true
+                    } else {
+                        false
+                    };
+                    let cap_op = if let Some(cap_a) = cap_arg {
+                        lower_expr(ctx, builder, &cap_a.node.value)
+                    } else if let Some(pos) = positional_args.first() {
+                        lower_expr(ctx, builder, &pos.node.value)
                     } else {
                         Operand::Constant(Constant::I64(0))
                     };
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![cap_op], chan_type);
+                    if bracketed {
+                        builder.pop_allocator();
+                    }
                     return FunctionBuilder::copy(dst);
                 }
             }

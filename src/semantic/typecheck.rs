@@ -1516,12 +1516,38 @@ impl<'a> TypeChecker<'a> {
                     let is_builtin_ctor = matches!(cname.as_str(),
                         "Vector" | "Dict" | "HashMap"
                         | "Set" | "HashSet" | "Channel" | "String" | "Arena" | "PoolAllocator" | "TlsfAllocator"
-                        | "FixedBufferAllocator" | "FallbackAllocator"
+                        | "FixedBufferAllocator" | "FallbackAllocator" | "TrackingAllocator"
+                    );
+                    // `cap=` exists only where the ctor has a capacity
+                    // param: the collection reserve, String/Channel
+                    // buffers, and the single-capacity allocators.
+                    // PoolAllocator(block_size, initial_count) /
+                    // FallbackAllocator(primary, secondary) /
+                    // TrackingAllocator() have no capacity axis — `cap=`
+                    // there is an unknown name, same as on a user fn
+                    // without that param (round-33).
+                    let accepts_cap = matches!(cname.as_str(),
+                        "Vector" | "Dict" | "HashMap" | "Set" | "HashSet"
+                        | "Channel" | "String" | "Arena" | "TlsfAllocator"
+                        | "FixedBufferAllocator"
                     );
                     if is_builtin_ctor {
+                        // Duplicate named args used to be SILENTLY
+                        // first-wins (`Vector[int](cap=4, cap=8)` reserved
+                        // 4) — reject like the user-fn named-arg path
+                        // (check_named_args_and_defaults) does (round-33).
+                        let mut seen_cap = false;
+                        let mut seen_alloc = false;
                         for arg in args {
                             if let Some(ref name) = arg.node.name {
-                                if name.node == "cap" {
+                                if name.node == "cap" && accepts_cap {
+                                    if seen_cap {
+                                        self.error(
+                                            SemanticErrorKind::DuplicateNamedArg { name: name.node.clone() },
+                                            arg.span,
+                                        );
+                                    }
+                                    seen_cap = true;
                                     // `cap=` takes an integer capacity (any int
                                     // width) — round-33. Before this reject the
                                     // value was "type-inferred and deferred to
@@ -1544,22 +1570,7 @@ impl<'a> TypeChecker<'a> {
                                     // parallel list).
                                     let cap_type = self.infer_expr(&arg.node.value);
                                     let cap_resolved = self.resolve_type(cap_type);
-                                    // Unwrap &/! wrappers (an int borrowed
-                                    // through a `&` param still names a
-                                    // valid capacity).
-                                    let cap_inner = match self.types.get(cap_resolved) {
-                                        ResolvedType::Ref(t) | ResolvedType::Owned(t) => self.resolve_type(*t),
-                                        _ => cap_resolved,
-                                    };
-                                    let cap_ok = match self.types.get(cap_inner) {
-                                        ResolvedType::Primitive(p) => is_integer_type(p),
-                                        // Error: already diagnosed — don't cascade.
-                                        // Never: diverging arg, unreachable anyway.
-                                        // Var: unbound inference variable —
-                                        // can't classify; never false-positive.
-                                        ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => true,
-                                        _ => false,
-                                    };
+                                    let (cap_inner, cap_ok) = self.int_capacity_check(cap_resolved);
                                     if !cap_ok {
                                         self.error(
                                             SemanticErrorKind::TypeMismatch {
@@ -1575,22 +1586,17 @@ impl<'a> TypeChecker<'a> {
                                         arg.span,
                                     );
                                 } else {
+                                    if seen_alloc {
+                                        self.error(
+                                            SemanticErrorKind::DuplicateNamedArg { name: name.node.clone() },
+                                            arg.span,
+                                        );
+                                    }
+                                    seen_alloc = true;
                                     // Validate the alloc= value type is an allocator
                                     let alloc_type = self.infer_expr(&arg.node.value);
                                     let alloc_resolved = self.resolve_type(alloc_type);
-                                    let is_alloc = match self.types.get(alloc_resolved) {
-                                        ResolvedType::Defined(def_id) => {
-                                            matches!(self.scopes.get_def(*def_id).name.as_str(), "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator" | "FixedBufferAllocator" | "FallbackAllocator")
-                                        }
-                                        // Error: already diagnosed — don't cascade a
-                                        // second TypeMismatch printing `found Error`.
-                                        // Never/Var: diverging / unbound — can't
-                                        // classify; never false-positive. Same
-                                        // exemption set as the cap= arm above.
-                                        ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => true,
-                                        _ => false,
-                                    };
-                                    if !is_alloc {
+                                    if !self.is_allocator_arg_type(alloc_resolved) {
                                         self.error(
                                             SemanticErrorKind::TypeMismatch {
                                                 expected: "allocator type (Arena, TrackingAllocator, PoolAllocator, TlsfAllocator, FixedBufferAllocator, or FallbackAllocator)".to_string(),
@@ -1628,9 +1634,11 @@ impl<'a> TypeChecker<'a> {
                         // error. Reject at check time instead (Core #8).
                         if cname == "String" {
                             let positional_count = args.iter().filter(|a| a.node.name.is_none()).count();
-                            let cap_count = args.iter().filter(|a| {
+                            // Distinct sources: duplicate cap= is already
+                            // a DuplicateNamedArg above — don't cascade.
+                            let cap_count = usize::from(args.iter().any(|a| {
                                 a.node.name.as_ref().map_or(false, |n| n.node == "cap")
-                            }).count();
+                            }));
                             if positional_count + cap_count > 1 {
                                 self.error(
                                     SemanticErrorKind::TypeMismatch {
@@ -1670,6 +1678,123 @@ impl<'a> TypeChecker<'a> {
                                     args[0].node.value.span,
                                 );
                             }
+                        }
+                        // Allocator-ctor / Channel capacity-axis policy
+                        // (round-33, same Core #8 rationale as the String
+                        // shapes above): these used to be arity-gated,
+                        // named-arg-BLIND intercepts in GIR lowering, so
+                        // every off-shape call — `Arena()`,
+                        // `Arena(cap=64, alloc=a)`, `PoolAllocator(cap=8)`,
+                        // `Arena("x")` — fell through to an undefined
+                        // symbol / incompatible-arg cc/llc/ld error, or
+                        // worse, wrong-accepted (`Arena(alloc=a)` passed
+                        // the allocator STRUCT as the byte capacity).
+                        // Reject off-shapes at check time; GIR lowering
+                        // (exprs/calls.rs `alloc_ctor`) then only sees the
+                        // accepted ones.
+                        let positional_count = args.iter().filter(|a| a.node.name.is_none()).count();
+                        // DISTINCT capacity sources: duplicate cap= is one
+                        // source, already rejected as DuplicateNamedArg
+                        // above — don't cascade a second multi-source
+                        // error on top of it.
+                        let cap_count = usize::from(args.iter().any(|a| {
+                            a.node.name.as_ref().map_or(false, |n| n.node == "cap")
+                        }));
+                        match cname.as_str() {
+                            // Single int capacity (positional or cap=).
+                            // Omitting it is fine where the runtime
+                            // defines the default — Arena 4096; TLSF
+                            // 65536, documented §15.3 (the design doc's
+                            // flagship spelling is `with Arena() as
+                            // pool:`); Channel 0 = rendezvous — but NOT
+                            // for FixedBufferAllocator: a 0-byte buffer
+                            // returns NULL on every alloc (garbage-at-
+                            // first-use), and §15.3 documents its
+                            // capacity as required.
+                            "Arena" | "TlsfAllocator" | "FixedBufferAllocator" | "Channel" => {
+                                if cname == "FixedBufferAllocator" && positional_count + cap_count == 0 {
+                                    self.error(
+                                        SemanticErrorKind::WrongArgCount { expected: 1, found: 0 },
+                                        expr.span,
+                                    );
+                                } else if positional_count + cap_count > 1 {
+                                    self.error(
+                                        SemanticErrorKind::TypeMismatch {
+                                            expected: format!("a single capacity argument — {cname}(n) or {cname}(cap=n), optionally with alloc="),
+                                            found: format!("{} capacity arguments", positional_count + cap_count),
+                                        },
+                                        expr.span,
+                                    );
+                                } else if positional_count == 1 {
+                                    // Same integer predicate as the cap= arm.
+                                    let pos = args.iter().find(|a| a.node.name.is_none()).unwrap();
+                                    let pos_type = self.infer_expr(&pos.node.value);
+                                    let pos_resolved = self.resolve_type(pos_type);
+                                    let (pos_inner, pos_ok) = self.int_capacity_check(pos_resolved);
+                                    if !pos_ok {
+                                        self.error(
+                                            SemanticErrorKind::TypeMismatch {
+                                                expected: format!("an integer capacity (any int width), e.g. {cname}(64)"),
+                                                found: self.describe_resolved_type(pos_inner),
+                                            },
+                                            pos.node.value.span,
+                                        );
+                                    }
+                                }
+                            }
+                            // Fixed 2-positional signatures; no capacity axis.
+                            "PoolAllocator" | "FallbackAllocator" => {
+                                if positional_count != 2 {
+                                    self.error(
+                                        SemanticErrorKind::WrongArgCount { expected: 2, found: positional_count },
+                                        expr.span,
+                                    );
+                                } else if cname == "PoolAllocator" {
+                                    // PoolAllocator(block_size, initial_count):
+                                    // both ints — same predicate as cap=.
+                                    for pos in args.iter().filter(|a| a.node.name.is_none()) {
+                                        let pos_type = self.infer_expr(&pos.node.value);
+                                        let pos_resolved = self.resolve_type(pos_type);
+                                        let (pos_inner, pos_ok) = self.int_capacity_check(pos_resolved);
+                                        if !pos_ok {
+                                            self.error(
+                                                SemanticErrorKind::TypeMismatch {
+                                                    expected: "an integer — PoolAllocator(block_size, initial_count)".to_string(),
+                                                    found: self.describe_resolved_type(pos_inner),
+                                                },
+                                                pos.node.value.span,
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    // FallbackAllocator(primary, secondary):
+                                    // both allocators — same predicate as alloc=.
+                                    for pos in args.iter().filter(|a| a.node.name.is_none()) {
+                                        let pos_type = self.infer_expr(&pos.node.value);
+                                        let pos_resolved = self.resolve_type(pos_type);
+                                        if !self.is_allocator_arg_type(pos_resolved) {
+                                            self.error(
+                                                SemanticErrorKind::TypeMismatch {
+                                                    expected: "allocator type (Arena, TrackingAllocator, PoolAllocator, TlsfAllocator, FixedBufferAllocator, or FallbackAllocator)".to_string(),
+                                                    found: self.describe_resolved_type(pos_resolved),
+                                                },
+                                                pos.node.value.span,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            // Wraps the active (or alloc=-given) allocator;
+                            // takes nothing else.
+                            "TrackingAllocator" => {
+                                if positional_count != 0 {
+                                    self.error(
+                                        SemanticErrorKind::WrongArgCount { expected: 0, found: positional_count },
+                                        expr.span,
+                                    );
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -5749,6 +5874,47 @@ impl<'a> TypeChecker<'a> {
                 Some(init_type)
             }
             _ => None,
+        }
+    }
+
+    /// Shared integer-capacity predicate for builtin-ctor capacity args —
+    /// the `cap=` arm and every positional-capacity arm (String(n),
+    /// Arena/TlsfAllocator/FixedBufferAllocator/Channel positional,
+    /// PoolAllocator's two ints) classify through THIS one predicate
+    /// (Core #4: one predicate, no parallel list). Unwraps &/! (an int
+    /// borrowed through a `&` param still names a valid capacity) and
+    /// returns `(inner, ok)` so the caller can render `inner` in the
+    /// diagnostic. Error: already diagnosed — don't cascade. Never:
+    /// diverging arg, unreachable anyway. Var: unbound inference
+    /// variable — can't classify; never false-positive.
+    fn int_capacity_check(&mut self, resolved: TypeId) -> (TypeId, bool) {
+        let inner = match self.types.get(resolved) {
+            ResolvedType::Ref(t) | ResolvedType::Owned(t) => self.resolve_type(*t),
+            _ => resolved,
+        };
+        let ok = match self.types.get(inner) {
+            ResolvedType::Primitive(p) => is_integer_type(p),
+            ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => true,
+            _ => false,
+        };
+        (inner, ok)
+    }
+
+    /// Shared is-an-allocator predicate for builtin-ctor allocator args —
+    /// the `alloc=` arm and FallbackAllocator's two positionals classify
+    /// through this one predicate. Same Error/Never/Var no-cascade
+    /// exemption as `int_capacity_check`.
+    fn is_allocator_arg_type(&mut self, resolved: TypeId) -> bool {
+        match self.types.get(resolved) {
+            ResolvedType::Defined(def_id) => {
+                matches!(
+                    self.scopes.get_def(*def_id).name.as_str(),
+                    "Arena" | "TrackingAllocator" | "PoolAllocator" | "TlsfAllocator"
+                        | "FixedBufferAllocator" | "FallbackAllocator"
+                )
+            }
+            ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => true,
+            _ => false,
         }
     }
 

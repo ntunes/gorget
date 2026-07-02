@@ -1,0 +1,10 @@
+# round-33: a positional capacity on an allocator ctor must be an integer
+# (same predicate as cap= — one predicate, no parallel list, Core #4).
+# `Arena("big")` used to fall through GIR lowering into
+# gorget_arena_new(<Str>) and die at the C toolchain with an unintelligible
+# internal error. Must be a clean type error at `gg check` (Core #8).
+from std.alloc import Arena
+
+void main():
+    Arena a = Arena("big")
+    print(a.bytes_used())

@@ -12670,6 +12670,72 @@ done",
     );
 }
 
+// cap=/alloc= on the ALLOCATOR ctors themselves + Channel — the class
+// completion of the String round above (round-33). Every allocator runtime
+// ctor captures `__gorget_current_alloc` as its parent (struct + backing
+// buffer from it, released back on destroy), so `alloc=a` is the one-shot
+// spelling of §15.3's nesting rule via the same push/pop bracket. Before:
+// `Arena(alloc=outer)` passed the Arena STRUCT as the byte capacity
+// (runtime panic / llc ptr-vs-i64), `Arena(cap=n, alloc=a)` + `Arena()` +
+// `TrackingAllocator(alloc=a)` died as unintelligible cc/ld errors.
+#[test]
+fn allocator_ctor_alloc_keyword() {
+    run_gg(
+        "allocator_ctor_alloc_keyword.gg",
+        "\
+arena-in-arena: true
+pool blocks: 8
+fba capacity: 256
+tracker wraps alloc=: true
+42
+65536
+ok",
+    );
+}
+
+// Channel cap=/alloc= — §15.3 promises Channel among the alloc=-accepting
+// ctors; the lowering read args[0] name-blindly: alloc=-only passed the
+// allocator struct as the capacity (NULL ring buffer → SIGSEGV on first
+// send on BOTH backends), cap=+alloc= silently ignored the allocator.
+#[test]
+fn channel_alloc_keyword() {
+    run_gg(
+        "channel_alloc_keyword.gg",
+        "\
+buffer in arena: true
+1
+2
+rendezvous slot in arena: true
+ok",
+    );
+}
+
+// Off-shape builtin-ctor calls must be CLEAN type errors, not cc/llc/ld
+// internal errors or silent wrong-accepts (Core #8).
+#[test]
+fn allocator_ctor_multi_source_errors() {
+    check_gg_fails(
+        "allocator_ctor_multi_source_error.gg",
+        "a single capacity argument",
+    );
+}
+
+#[test]
+fn builtin_ctor_dup_named_arg_errors() {
+    check_gg_fails(
+        "builtin_ctor_dup_named_arg_error.gg",
+        "duplicate named argument",
+    );
+}
+
+#[test]
+fn allocator_ctor_capacity_type_errors() {
+    check_gg_fails(
+        "allocator_ctor_capacity_type_error.gg",
+        "an integer capacity",
+    );
+}
+
 #[test]
 fn tracking_basic() {
     run_gg(

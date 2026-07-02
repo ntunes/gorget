@@ -1,0 +1,47 @@
+# round-33: allocator ctors accept cap=/alloc= — the one-shot spelling of
+# §15.3's nesting rule. Every allocator's runtime ctor captures the current
+# allocator as its parent (struct + backing buffer come from it; destroy
+# releases back into it), so `alloc=a` brackets the ctor exactly like the
+# collection ctors. Before this the GIR branches were named-arg-BLIND:
+# `Arena(alloc=outer)` passed the Arena STRUCT as the byte capacity (runtime
+# "arena allocation failed" panic on C / llc ptr-vs-i64 error on LLVM),
+# `Arena(cap=n, alloc=a)` and `Arena()` fell through to unintelligible
+# cc/ld errors, and `TrackingAllocator(alloc=a)` died as a cc struct-member
+# error. `TrackingAllocator(alloc=a)` instruments allocator `a` specifically.
+# with-idiom on purpose: RAII values backed by a BARE allocator outlive a
+# manual destroy (drop runs at scope exit, after the destroy) — see the
+# TODO.md bare-allocator destroy-ordering entry.
+from std.alloc import Arena, PoolAllocator, TlsfAllocator, TrackingAllocator, FixedBufferAllocator
+
+void main():
+    with Arena(65536) as outer:
+        Arena inner = Arena(cap=1024, alloc=outer)
+        assert outer.bytes_used() >= 1024, "inner arena backing must come from outer"
+        print(f"arena-in-arena: {outer.bytes_used() >= 1024}")
+
+        PoolAllocator p = PoolAllocator(64, 8, alloc=outer)
+        assert outer.bytes_used() >= 1024 + 512, "pool slab must come from outer"
+        print(f"pool blocks: {p.total_blocks()}")
+
+        TlsfAllocator t = TlsfAllocator(cap=8192, alloc=outer)
+        FixedBufferAllocator f = FixedBufferAllocator(cap=256, alloc=outer)
+        print(f"fba capacity: {f.capacity()}")
+
+        TrackingAllocator tr = TrackingAllocator(alloc=outer)
+        String s = String("hello allocator world, long enough to heap", alloc=tr)
+        assert tr.alloc_count() >= 1, "tracker must see the string alloc"
+        print(f"tracker wraps alloc=: {tr.alloc_count() >= 1}")
+        print(s.len())
+
+        # Nested destroy releases back into outer (no-op deallocs) while
+        # outer is alive; outer itself is reclaimed at with-exit.
+        inner.destroy()
+
+    # Omitted capacity falls back to the runtime default (Arena 4096,
+    # TLSF 65536 — the design doc's flagship spelling is `with Arena()`).
+    Arena d = Arena()
+    TlsfAllocator td = TlsfAllocator()
+    print(td.pool_size())
+    d.destroy()
+    td.destroy()
+    print("ok")

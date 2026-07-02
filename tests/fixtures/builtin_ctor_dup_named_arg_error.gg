@@ -1,0 +1,10 @@
+# round-33: duplicate named args on builtin ctors used to be SILENTLY
+# first-wins (`Vector[int](cap=4, cap=8)` reserved 4 and dropped the 8 on
+# the floor). User-defined calls already reject duplicates
+# (DuplicateNamedArg in check_named_args_and_defaults) — builtin ctors now
+# go through the same policy.
+from std.collections import Vector
+
+void main():
+    Vector[int] v = Vector[int](cap=4, cap=8)
+    print(v.len())

@@ -1,0 +1,27 @@
+# round-33: Channel[T] cap=/alloc= — §15.3 lists Channel among the alloc=-
+# accepting ctors and the runtime snapshots the constructing allocator into
+# the channel (ring buffer + waiter arrays), but GIR lowering read args[0]
+# name-blindly: `Channel[int](alloc=a)` passed the allocator struct as the
+# capacity (huge alloc → NULL ring buffer → SIGSEGV on first send, BOTH
+# backends) and `Channel[int](cap=4, alloc=a)` silently ignored the
+# allocator (bytes_used stayed 0 while §15.3 promises the buffer in `a`).
+# with-idiom: the channels' RAII drop runs at block exit, before the arena
+# is destroyed.
+from std.channel import Channel
+from std.alloc import Arena
+
+void main():
+    with Arena(65536) as a:
+        Channel[int] ch = Channel[int](cap=4, alloc=a)
+        assert a.bytes_used() >= 32, "ring buffer must come from the arena"
+        print(f"buffer in arena: {a.bytes_used() >= 32}")
+        ch.send(1)
+        ch.send(2)
+        print(ch.recv())
+        print(ch.recv())
+
+        int before = a.bytes_used()
+        Channel[int] rz = Channel[int](alloc=a)
+        assert a.bytes_used() > before, "rendezvous slot must come from the arena"
+        print(f"rendezvous slot in arena: {a.bytes_used() > before}")
+    print("ok")

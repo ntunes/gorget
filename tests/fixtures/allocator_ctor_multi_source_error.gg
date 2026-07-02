@@ -1,0 +1,11 @@
+# round-33: single-capacity builtin ctors (Arena, TlsfAllocator,
+# FixedBufferAllocator, Channel) take at most ONE capacity source — a
+# positional OR cap=, optionally with alloc=. Multi-source shapes used to
+# fall past the arity-gated GIR intercept into an unintelligible cc error
+# ("incompatible type for argument 1 of 'gorget_arena_bytes_used'"). Must
+# be a clean type error at `gg check` (Core #8).
+from std.alloc import Arena
+
+void main():
+    Arena a = Arena(64, cap=128)
+    print(a.bytes_used())
