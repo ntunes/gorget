@@ -73,6 +73,56 @@ fn skip_unless_full() -> bool {
     std::env::var("GG_FULL").ok().filter(|s| !s.is_empty()).is_none()
 }
 
+/// Gate for the MATCH-count floor ratchets in `c_emit_comparison` (default-
+/// running CI gate) and `self_host_runtime_diff` (dev-loop ratchet). Round-32
+/// excellence audit finding 4 / REC 2: the north-star parity number becomes an
+/// executable gate (devbook/25 — prose rots, guards don't).
+///
+/// Returns true when the floor assert should fire. Every carve-out prints a
+/// NON-SILENT notice so a skipped gate is visible in the log, never silent:
+///
+/// - **`GG_PARITY_FLOOR_OFF=1`** — explicit escape hatch for a box where the
+///   floor false-reds (e.g. transient machine load flipping MATCH→CRASH via
+///   timeouts). Loud by design; unset it for gate-honest results.
+/// - **linux-only** — on macOS dev boxes the self-host net CC-FAILs on ~925
+///   fixtures for platform reasons (Apple clang rejects constructs Linux gcc
+///   accepts as warnings — see TODO.md "macOS dev machine CANNOT run the
+///   self-host runtime net"); a floor there would hard-fail every macOS dev
+///   box for reasons unrelated to any change.
+/// - **C backend only** (`gg_backend().is_none()`) — the LLVM CI job runs the
+///   FULL integration suite with `GG_BACKEND=llvm --release` and the
+///   comparison tests do NOT `skip_under_llvm()`; under that job the
+///   self-host driver itself builds via LLVM and the LLVM-side counts are
+///   unseeded/unverified. The diagnostic summary above the assert still
+///   prints the LLVM-run count, so a future round can ratchet it
+///   deliberately. Do not floor LLVM without seeding it first.
+fn parity_floor_active(test_name: &str) -> bool {
+    if std::env::var("GG_PARITY_FLOOR_OFF").as_deref() == Ok("1") {
+        eprintln!(
+            "WARNING [{test_name}]: MATCH-count floor DISABLED via GG_PARITY_FLOOR_OFF=1 — \
+             parity regressions will NOT fail this run. Unset it for gate-honest results."
+        );
+        return false;
+    }
+    if !cfg!(target_os = "linux") {
+        eprintln!(
+            "NOTE [{test_name}]: MATCH-count floor skipped (non-linux host — the self-host \
+             cc step CC-FAILs en masse under Apple clang; see the TODO.md macOS shim note). \
+             The floor is enforced on linux (CI and linux dev boxes)."
+        );
+        return false;
+    }
+    if gg_backend().is_some() {
+        eprintln!(
+            "NOTE [{test_name}]: MATCH-count floor skipped (GG_BACKEND is set — non-default-\
+             backend counts are not yet seeded; ratchet them deliberately in a future round \
+             using the counts printed above)."
+        );
+        return false;
+    }
+    true
+}
+
 /// Path to the `gg` binary that integration tests invoke. Cargo sets
 /// `CARGO_BIN_EXE_gg` at compile time of this test binary and guarantees the
 /// referenced executable is built and up-to-date before the test process
@@ -15449,8 +15499,11 @@ fn lowerer_comparison() {
 // bodies (`fn(...) {` lines after the `// ── Function Definitions ──`
 // section marker) in each side and reports match/mismatch + crashes.
 //
-// Diagnostic: always passes. Use the eprintln output to track
-// self-host coverage of the Rust frontend's behaviour.
+// Floored diagnostic: prints the full match/mismatch report (the
+// debugging surface), then enforces a Matched-count floor at the end of
+// the fn (linux + default C backend only — see `parity_floor_active`).
+// Because this test runs in the default CI job, the floor is a REAL CI
+// gate for self-host C-emission parity — a regression fails the build.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn c_emit_comparison() {
@@ -15621,6 +15674,49 @@ fn c_emit_comparison() {
     }
 
     eprintln!("\n================================\n");
+
+    // ── Matched-count floor: the north-star number as an executable CI gate ──
+    //
+    // This assert deliberately sits at the END of the fn, AFTER every
+    // diagnostic listing above — when it fires, the MISMATCHED /
+    // SELF-HOST CRASHES backlogs it needs for debugging have already been
+    // printed. `c_emit_comparison` runs in the DEFAULT CI job (debug
+    // profile, C backend), so this floor is a real CI gate. The count is
+    // profile-independent — it is a pure text comparison of emitted C,
+    // and a per-fixture timeout PANICS the test loudly (`run_with_timeout`)
+    // rather than silently lowering the count — so the assert behaves
+    // identically in debug and release runs.
+    //
+    // Seeded 2026-07-02 from a regenerated run in THIS worktree (never
+    // from a dated TODO/memory number):
+    //   rm tests/fixtures/self_host_lowerer/driver{,.c}
+    //   cargo test --test integration --release c_emit_comparison -- --nocapture
+    //   → Total: 1353, Matched: 1115, Mismatched: 110, Self-host crashes: 1,
+    //     Rust rejected (error fixtures): 126, Rust crashes: 0
+    //
+    // No jitter padding: the count is a deterministic text comparison and
+    // a hung fixture PANICS (run_with_timeout) instead of silently lowering
+    // the count, so the floor is the exact regenerated Matched value.
+    //
+    // Bump-on-improvement: when Matched rises, raise the floor in the
+    // same commit that lands the improvement so the gain is locked in.
+    const C_EMIT_MATCH_FLOOR: usize = 1115;
+    if parity_floor_active("c_emit_comparison") {
+        assert!(
+            matched as usize >= C_EMIT_MATCH_FLOOR,
+            "c_emit_comparison Matched-count floor regression: Matched {matched} < floor \
+             {C_EMIT_MATCH_FLOOR} (north-star parity ratchet, round-32 audit finding 4).\n\n\
+             A change regressed self-host C-emission parity with Rust gg. The MISMATCHED / \
+             SELF-HOST CRASHES listings above name the fixtures — fix the regression rather \
+             than lowering the floor.\n\n\
+             Regenerate the count with:\n  \
+             rm tests/fixtures/self_host_lowerer/driver{{,.c}}\n  \
+             cargo test --test integration --release c_emit_comparison -- --nocapture\n\n\
+             If the count went UP (an improvement landed), raise C_EMIT_MATCH_FLOOR in \
+             tests/integration.rs in the same commit to lock in the new floor.\n\
+             Emergency escape hatch (loud, temporary): GG_PARITY_FLOOR_OFF=1."
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -16302,6 +16398,18 @@ fn validate_passes_passes_self_host() {
 // dev iteration is strictly safe — no signal would be missed except the
 // eprintln convergence number, which is informational. CI / pre-push
 // runs should set `GG_FULL=1` to include it.
+//
+// Deliberately NOT floored (round-32 MATCH-count ratchets, audit
+// finding 4): unlike `c_emit_comparison` (default-running CI gate) and
+// `self_host_runtime_diff` (dev-loop ratchet), this test is (a)
+// GG_FULL-gated, so it runs in neither CI nor the default dev loop —
+// a floor here would almost never fire; (b) splice-based (Rust runtime
+// preamble + kitchen-sink module union spliced onto stage-1 C), a
+// mechanism superseded by the splice-free `--emit-c` path that
+// `self_host_runtime_diff` exercises; and (c) subject to the same
+// timeout→CRASH flips without a seeded jitter measurement. If it is
+// ever promoted to a gated run, seed a floor then via
+// `parity_floor_active` + the bump-on-improvement idiom.
 //
 // For each fixture in `tests/fixtures/*.gg`:
 //   1. Build & run via Rust gg → capture stdout (the "gold" output).
@@ -18877,12 +18985,22 @@ fn runtime_parity_corpus(manifest_dir: &Path) -> Vec<PathBuf> {
     fixtures
 }
 
-/// (A) DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1), always-pass.
+/// (A) FLOORED DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1).
 ///
 /// Full corpus, live `gg run` oracle. Discovers the MATCH set and the
 /// WRONG-OUTPUT / CC-FAIL / CRASH / DRIVER-FAIL backlog. Prints the honest
 /// parity rate MATCH / (MATCH + WRONG + CC-FAIL + CRASH + DRIVER-FAIL) over the
-/// non-excluded set. No assertion — it never fails the suite.
+/// non-excluded set, then enforces a MATCH-count floor at the end of the fn
+/// (linux + default C backend + release only — see `parity_floor_active` and
+/// the comment at the assert).
+///
+/// Role: DEV-LOOP ratchet, not a CI gate — CI sets neither GG_RUNTIME_DIFF nor
+/// GG_FULL, so this test early-returns there (correct semantics: the assert is
+/// bypassed only when no work was done). The default-running per-fixture CI
+/// guard for self-host runtime behaviour is the `self_host_runtime` snapshot
+/// net below. What this floor adds: it guards the matching-but-UNsnapshotted
+/// fixtures, and turns every intentional north-star run (the documented
+/// invocation below) into a gate instead of a printout.
 ///
 /// Run it with:
 ///   GG_RUNTIME_DIFF=1 cargo test --test integration --release self_host_runtime_diff -- --nocapture
@@ -19050,7 +19168,66 @@ fn self_host_runtime_diff() {
         eprintln!("  RUST-CRASH    {stem}");
     }
     eprintln!("================================\n");
-    // Diagnostic only — no assertion.
+
+    // ── MATCH-count floor: the north-star number as an executable ratchet ──
+    //
+    // This assert deliberately sits at the END of the fn, AFTER every backlog
+    // listing above — when it fires, the WRONG-OUTPUT / CC-FAIL / CRASH /
+    // DRIVER-FAIL diagnostics it needs for debugging have already been
+    // printed.
+    //
+    // Release-only (on top of `parity_floor_active`'s linux/C-backend/escape-
+    // hatch gates): the MATCH count is timeout-sensitive — a slow oracle
+    // `gg run` or fixture binary flips MATCH→CRASH/RUST-CRASH with NO retry
+    // (`run_with_timeout_catching`) — and a debug-profile gg is slow enough
+    // to flip fixtures spuriously. The documented invocation above is
+    // `--release`; a debug run skips the floor with a loud notice, so the
+    // assert's behaviour is *deliberately* profile-gated rather than
+    // pretending the count is profile-independent (it is not).
+    //
+    // Seeded 2026-07-02 from a regenerated run in THIS worktree (never from a
+    // dated TODO/memory number):
+    //   rm tests/fixtures/self_host_lowerer/driver{,.c}
+    //   GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration \
+    //       --release self_host_runtime_diff -- --nocapture
+    //   → MATCH 986 (WRONG 19, CC-FAIL 85, CRASH 14 — of which 5 were
+    //     'timed out after 30s' MATCH→CRASH flips; the round-32 audit log
+    //     independently measured 5 such flips on this box).
+    //
+    // Floor = 986 − 5 (regenerated MATCH minus measured timeout jitter,
+    // nothing more) = 981.
+    //
+    // Bump-on-improvement: when MATCH rises, raise the floor in the same
+    // commit that lands the improvement so the gain is locked in. Do NOT
+    // pad the floor beyond measured jitter.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 981;
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
+             MATCH count is timeout-flip sensitive and seeded from --release runs; use the \
+             documented --release invocation for the gate)."
+        );
+    } else if parity_floor_active("self_host_runtime_diff") {
+        assert!(
+            matched.len() >= RUNTIME_DIFF_MATCH_FLOOR,
+            "self_host_runtime_diff MATCH-count floor regression: MATCH {} < floor \
+             {RUNTIME_DIFF_MATCH_FLOOR} (north-star parity ratchet, round-32 audit finding 4).\n\n\
+             A change regressed self-host runtime parity with Rust gg. The WRONG-OUTPUT / \
+             CC-FAIL / CRASH / DRIVER-FAIL backlogs above name the fixtures — fix the \
+             regression rather than lowering the floor. Timeout flips are real (a hung \
+             fixture flips MATCH→CRASH with no retry): check the CRASH listing for 'timed \
+             out' entries first — the floor already discounts measured jitter, so a miss \
+             beyond that is a real regression.\n\n\
+             Regenerate the count with:\n  \
+             rm tests/fixtures/self_host_lowerer/driver{{,.c}}\n  \
+             GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration \
+             --release self_host_runtime_diff -- --nocapture\n\n\
+             If MATCH went UP (an improvement landed), raise RUNTIME_DIFF_MATCH_FLOOR in \
+             tests/integration.rs in the same commit to lock in the new floor.\n\
+             Emergency escape hatch (loud, temporary): GG_PARITY_FLOOR_OFF=1.",
+            matched.len(),
+        );
+    }
 }
 
 /// (B) LOCK-IN NET — default-running, build-breaking.
