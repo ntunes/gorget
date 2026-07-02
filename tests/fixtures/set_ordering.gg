@@ -1,6 +1,6 @@
 # Test that Set preserves insertion order.
 
-def main():
+void main():
     # --- Set (ordered, insertion-order preserving) ---
     Set[int] s = Set[int]()
     s.add(30)

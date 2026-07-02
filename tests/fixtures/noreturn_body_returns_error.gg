@@ -1,0 +1,16 @@
+# A function declared `noreturn` must never return control to its caller:
+# call sites type the call as `Never` and the IR emits `unreachable`
+# immediately after it, so a noreturn function that DOES return runs its
+# caller straight into that unreachable — a miscompile, not a style issue.
+# All three lie shapes must be rejected: falling off the end, an explicit
+# `return`, and a non-diverging expression body.
+noreturn void lie_falls_off(int x):
+    print(x)
+
+noreturn void lie_returns():
+    return
+
+noreturn void lie_expr(): print(2)
+
+void main():
+    lie_returns()

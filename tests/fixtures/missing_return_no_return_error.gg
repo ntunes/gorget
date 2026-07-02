@@ -1,0 +1,9 @@
+# Definite-return analysis: a non-void function with no `return` at all.
+# Previously this passed `gg check` and then CRASHED the compiler at LIR
+# ("SSA dominance violation in @f: use of undefined value in terminator",
+# src/lir/ssa.rs) — the reject at `gg check` also closes that ICE path.
+int f(int x):
+    print(x)
+
+void main():
+    print(f(7))

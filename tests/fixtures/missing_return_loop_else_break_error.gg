@@ -1,0 +1,14 @@
+# Definite-return analysis, loop-else break-binding: a loop's `else`
+# clause is NOT part of the loop body, so a `break` inside it exits the
+# ENCLOSING loop (§6.12). The outer `loop` here CAN therefore exit
+# normally and `f` falls off its end — previously this passed `gg check`
+# and silently returned 0 at runtime.
+int f(int n):
+    loop:
+        while n > 0:
+            n = n - 1
+        else:
+            break
+
+void main():
+    print(f(3))

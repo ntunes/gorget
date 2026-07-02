@@ -1,0 +1,10 @@
+# Definite-return analysis: a non-void function must not be able to reach
+# the end of its body without returning. Here the `if` has no `else`, so
+# `f(-5)` would fall off the end — previously this passed `gg check` and
+# silently returned 0 at runtime.
+int f(int x):
+    if x > 0:
+        return 41
+
+void main():
+    print(f(-5))

@@ -25,6 +25,23 @@ void greet(String name):
     print(f"Hello, {name}!")
 ```
 
+### Every Path Must Return
+
+A function with a non-`void` return type must return on **every** path
+through its body — the compiler rejects a function that could reach the
+end of its body without a `return`:
+
+```gorget
+int sign(int x):
+    if x > 0:
+        return 1      # error: what if x <= 0? control falls off the end
+```
+
+Add an `else` (or a trailing `return`) so every path produces a value.
+Paths that `throw`, call a diverging function like `panic`, or enter a
+loop that never exits normally also count as returning — they never reach
+the end of the body.
+
 ### Expression-Body Shorthand
 
 When a function is a single expression, skip the block:

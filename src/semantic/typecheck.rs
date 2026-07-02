@@ -513,6 +513,17 @@ struct TypeChecker<'a> {
     implicit_it_type: Option<TypeId>,
     /// Map from expression span to its inferred TypeId (used by codegen for Result-based `?`).
     expr_types: FxHashMap<Span, TypeId>,
+    /// Spans of statement-position / match-arm expressions whose inferred type
+    /// is `Never` (panic, noreturn extern calls). Recorded during checking so
+    /// the definite-return analysis can consult divergence without re-running
+    /// inference.
+    diverging_exprs: rustc_hash::FxHashSet<Span>,
+    /// Spans of `match` statements/expressions (the span passed to
+    /// `check_match_exhaustiveness`) whose arm set is known to cover every
+    /// possible scrutinee value WITHOUT an `else` arm (exhaustive enum match,
+    /// unguarded catch-all pattern, or the panic-by-default `Fault` enum).
+    /// Consulted by the definite-return analysis.
+    exhaustive_matches: rustc_hash::FxHashSet<Span>,
     /// Map from method call span start → DefId of resolved method (for borrow checker).
     method_resolutions: FxHashMap<usize, DefId>,
     /// Snag #11: for each cross-error-type auto-propagation site that resolves
@@ -614,6 +625,8 @@ impl<'a> TypeChecker<'a> {
             current_function_is_async: false,
             implicit_it_type: None,
             expr_types: FxHashMap::default(),
+            diverging_exprs: rustc_hash::FxHashSet::default(),
+            exhaustive_matches: rustc_hash::FxHashSet::default(),
             method_resolutions: FxHashMap::default(),
             from_conversions: FxHashMap::default(),
             current_self_type: None,
@@ -3521,7 +3534,11 @@ impl<'a> TypeChecker<'a> {
             }
 
             Stmt::Expr(expr) => {
-                return Some(self.infer_expr(expr));
+                let ty = self.infer_expr(expr);
+                if self.resolve_type(ty) == self.types.never_id {
+                    self.diverging_exprs.insert(expr.span);
+                }
+                return Some(ty);
             }
 
             Stmt::Assign { target, value } => {
@@ -3819,6 +3836,9 @@ impl<'a> TypeChecker<'a> {
                         self.unify(gt, self.types.bool_id, guard.span);
                     }
                     let arm_type = self.infer_expr(&arm.body);
+                    if self.resolve_type(arm_type) == self.types.never_id {
+                        self.diverging_exprs.insert(arm.body.span);
+                    }
                     if first_arm_type.is_none() {
                         first_arm_type = Some(arm_type);
                     }
@@ -3954,17 +3974,48 @@ impl<'a> TypeChecker<'a> {
         // MetaFor items expand at monomorphization time; we can't check exhaustiveness
         // statically if any are present — the expanded arms may cover all variants.
         if arms.iter().any(|i| matches!(i, MatchItem::MetaFor { .. })) {
+            // Assume covered for the definite-return analysis (pre-expansion
+            // we can't know; treating as covered avoids false positives).
+            self.exhaustive_matches.insert(span);
             return;
         }
 
-        // Resolve the scrutinee type and check if it's an enum.
-        let resolved = self.resolve_type(scrutinee_type);
+        // Resolve the scrutinee type and check if it's an enum. Peel `Ref`
+        // wrappers: collection reads (`v.get(i)`, `v[i]`) and borrowed
+        // params produce element REFERENCES (CoW zero-cost reads), and a
+        // match on a reference matches the referent's variants.
+        let mut resolved = self.resolve_type(scrutinee_type);
+        let mut peel_depth = 0;
+        while let ResolvedType::Ref(inner) = self.types.get(resolved) {
+            resolved = self.resolve_type(*inner);
+            peel_depth += 1;
+            if peel_depth > 8 {
+                break;
+            }
+        }
         let enum_def_id = match self.types.get(resolved) {
             ResolvedType::Defined(def_id) => *def_id,
             ResolvedType::Generic(def_id, _) => *def_id,
-            _ => return,
+            _ => {
+                // Non-enum scrutinee (int, String, bool, tuple, …):
+                // exhaustiveness is not enforced, but an unguarded catch-all
+                // arm still covers every value — record it for the
+                // definite-return analysis. A bool scrutinee is also covered
+                // by unguarded literal `true` + `false` arms.
+                if arms.iter().filter_map(|i| i.arm()).any(|arm| {
+                    arm.guard.is_none() && pattern_is_catchall_syntactic(&arm.pattern.node)
+                }) || (resolved == self.types.bool_id && bool_arms_cover(arms)) {
+                    self.exhaustive_matches.insert(span);
+                }
+                return;
+            }
         };
         if self.scopes.get_def(enum_def_id).kind != DefKind::Enum {
+            if arms.iter().filter_map(|i| i.arm()).any(|arm| {
+                arm.guard.is_none() && pattern_is_catchall_syntactic(&arm.pattern.node)
+            }) {
+                self.exhaustive_matches.insert(span);
+            }
             return;
         }
 
@@ -3975,6 +4026,10 @@ impl<'a> TypeChecker<'a> {
         // handler usually carries an `else:`, which already covers it; this rule
         // makes the `else`-less form legal too.)
         if self.scopes.get_def(enum_def_id).name == "Fault" {
+            // Omitted variants fall through to a runtime PANIC — control
+            // diverges on them, so the match counts as covered for the
+            // definite-return analysis.
+            self.exhaustive_matches.insert(span);
             return;
         }
 
@@ -3993,6 +4048,7 @@ impl<'a> TypeChecker<'a> {
             }
             self.collect_covered_variants(&arm.pattern.node, &all_variants, &mut covered, &mut has_catchall);
             if has_catchall {
+                self.exhaustive_matches.insert(span);
                 return;
             }
         }
@@ -4004,7 +4060,171 @@ impl<'a> TypeChecker<'a> {
             .collect();
         if !missing.is_empty() {
             self.error(SemanticErrorKind::NonExhaustiveMatch { missing_variants: missing }, span);
+        } else {
+            self.exhaustive_matches.insert(span);
         }
+    }
+
+    // ── Definite-return analysis ─────────────────────────────────────────
+    //
+    // A syntactic "terminating statement" analysis in the spirit of the Go
+    // spec (§ Terminating statements) / Java's "can complete normally"
+    // (JLS 14.21): a non-void function body must not be able to fall off
+    // its end. Runs after `check_block` in `check_function`, reading only
+    // facts already computed during checking (`diverging_exprs` for
+    // Never-typed calls, `exhaustive_matches` for else-less matches).
+    //
+    // Deliberately syntactic-conservative: condition VALUES are not
+    // evaluated, so a dead `else: break` under `while true` defeats the
+    // infinite-loop rule and rejects — matching Go's terminating-statement
+    // rule and the existing dead-`if false: break` behavior.
+    //
+    // Known false-NEGATIVE-only limitation: meta constructs (`meta if` /
+    // `meta for` / `meta match` / `meta while`, and match arms behind
+    // `MetaFor`) expand at monomorphization and are assumed terminating
+    // pre-expansion — a fall-off inside an expanded body is not caught
+    // here. Never a false positive.
+
+    /// Does control definitely NOT fall through this block to whatever
+    /// follows it? True when ANY statement in the list terminates (control
+    /// never proceeds past a terminating statement, so later statements are
+    /// unreachable and irrelevant).
+    fn block_terminates(&self, block: &Block) -> bool {
+        block.stmts.iter().any(|s| self.stmt_terminates(s))
+    }
+
+    /// Terminating-statement classification. Conservative: `false` means
+    /// "control may proceed past this statement".
+    fn stmt_terminates(&self, stmt: &Spanned<Stmt>) -> bool {
+        match &stmt.node {
+            // Direct control transfer out of the fall-through path.
+            Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break(_) | Stmt::Continue => true,
+
+            // Never-typed expression statements (panic, noreturn externs),
+            // or block expressions whose block terminates.
+            Stmt::Expr(e) => self.expr_diverges(e),
+
+            // if: requires an else, and every branch must terminate.
+            Stmt::If { then_body, elif_branches, else_body, .. } => {
+                else_body.as_ref().is_some_and(|eb| {
+                    self.block_terminates(then_body)
+                        && elif_branches.iter().all(|(_, b)| self.block_terminates(b))
+                        && self.block_terminates(eb)
+                })
+            }
+
+            // match: every arm must diverge, and the value space must be
+            // covered (an else arm that terminates, or a match recorded
+            // exhaustive by `check_match_exhaustiveness`).
+            Stmt::Match { arms, else_arm, .. } => {
+                let arms_terminate = arms.iter().all(|item| match item {
+                    MatchItem::Arm(arm) => self.expr_diverges(&arm.body),
+                    // Pre-expansion meta arms: assume terminating (checked
+                    // only post-monomorphization; avoids false positives).
+                    MatchItem::MetaFor { .. } => true,
+                });
+                arms_terminate
+                    && match else_arm {
+                        Some(eb) => self.block_terminates(eb),
+                        None => self.exhaustive_matches.contains(&stmt.span),
+                    }
+            }
+
+            // loop: terminates iff no break can exit it (either it loops
+            // forever or exits via return/throw).
+            Stmt::Loop { body } => !block_has_loop_break(body),
+
+            // while: a literal-`true` condition with no break is an
+            // infinite loop (Java-style constant-condition rule). A
+            // conditional while with a loop-else and no break always runs
+            // the else on exit, so a terminating else terminates the whole
+            // statement. Any break defeats both.
+            Stmt::While { condition, body, else_body } => {
+                if block_has_loop_break(body) {
+                    return false;
+                }
+                if matches!(condition.node, Expr::BoolLiteral(true)) {
+                    return true;
+                }
+                else_body.as_ref().is_some_and(|eb| self.block_terminates(eb))
+            }
+
+            // for: may iterate zero times, so only a terminating loop-else
+            // (with no break) terminates the statement.
+            Stmt::For { body, else_body, .. } => {
+                !block_has_loop_break(body)
+                    && else_body.as_ref().is_some_and(|eb| self.block_terminates(eb))
+            }
+
+            // Transparent block wrappers.
+            Stmt::With { body, .. }
+            | Stmt::Unsafe { body }
+            | Stmt::NamedScope { body, .. } => self.block_terminates(body),
+
+            // select: waits until some arm fires; if every arm body
+            // terminates (and the else, when present, does too), control
+            // never falls through.
+            Stmt::Select { arms, else_arm } => {
+                arms.iter().all(|a| self.block_terminates(&a.body))
+                    && else_arm.as_ref().map_or(true, |eb| self.block_terminates(eb))
+            }
+
+            // Compile-time conditionals expand at monomorphization — assume
+            // terminating pre-expansion (avoids false positives; the
+            // expanded body is not re-typechecked).
+            Stmt::MetaIf { .. }
+            | Stmt::MetaFor { .. }
+            | Stmt::MetaMatch { .. }
+            | Stmt::MetaWhile { .. } => true,
+
+            // Everything else falls through.
+            _ => false,
+        }
+    }
+
+    /// Does this expression (statement-position or match-arm body) diverge?
+    fn expr_diverges(&self, expr: &Spanned<Expr>) -> bool {
+        if self.diverging_exprs.contains(&expr.span) {
+            return true; // typed Never during inference (panic / noreturn)
+        }
+        match &expr.node {
+            Expr::Block(b) => self.block_terminates(b),
+            Expr::Do { body } => self.block_terminates(body),
+            _ => false,
+        }
+    }
+
+    /// The definite-return check for a non-void block-bodied function.
+    fn check_definite_return(&mut self, func: &FunctionDef, block: &Block, return_type: TypeId) {
+        // SYNTACTIC void gate: a generic return type (`T`) may not resolve
+        // at decl time (generic bodies are fully typed only at
+        // monomorphization), but a non-void-declared function still must
+        // return on every path.
+        if matches!(
+            func.return_type.node,
+            Type::Primitive(PrimitiveType::Void)
+        ) {
+            return;
+        }
+        if self.block_terminates(block) {
+            return;
+        }
+        let rt = self.resolve_type(return_type);
+        let return_type_name = if rt == self.types.error_id || rt == self.types.void_id {
+            // Unresolved at decl time (generic param, undefined name):
+            // fall back to the AST spelling.
+            ast_type_to_gorget_name(&func.return_type.node)
+                .unwrap_or_else(|| "a value".to_string())
+        } else {
+            self.describe_resolved_type(rt)
+        };
+        self.error(
+            SemanticErrorKind::MissingReturn {
+                function: func.name.node.clone(),
+                return_type: return_type_name,
+            },
+            func.name.span,
+        );
     }
 
     /// Recursively collect which enum variants a pattern covers.
@@ -6403,13 +6623,60 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        // `noreturn` + `throws` is a contradiction at the declaration: a
+        // `throw` RETURNS control to the caller via the error channel, but
+        // callers type a noreturn call as `Never` and the IR emits
+        // `unreachable` right after it. (Extern bodies included — the
+        // combination is a lie regardless of where the body lives.)
+        if func.qualifiers.is_noreturn {
+            if let Some(throws) = &func.throws {
+                self.error(
+                    SemanticErrorKind::NoreturnWithThrows {
+                        function: func.name.node.clone(),
+                    },
+                    throws.span,
+                );
+            }
+        }
+
         match &func.body {
             FunctionBody::Block(block) => {
                 self.check_block(block);
+                if func.qualifiers.is_noreturn {
+                    // A noreturn body must DIVERGE: terminate on every path
+                    // AND contain no `return` at all (`block_terminates`
+                    // counts `return` as terminating — here that is exactly
+                    // the lie: callers run into `unreachable` after the call).
+                    if !self.block_terminates(block) || block_contains_return(block) {
+                        self.error(
+                            SemanticErrorKind::NoreturnBodyReturns {
+                                function: func.name.node.clone(),
+                            },
+                            func.name.span,
+                        );
+                    }
+                } else {
+                    // Definite-return analysis: a non-void function must not
+                    // be able to fall off the end of its body.
+                    self.check_definite_return(func, block, return_type);
+                }
             }
             FunctionBody::Expression(expr) => {
                 let expr_type = self.infer_expr(expr);
                 self.unify(return_type, expr_type, expr.span);
+                // Expression-bodied noreturn: the body must itself diverge
+                // (type `Never`) — `noreturn void e(): print(1)` is the same
+                // lie-path as a block body that falls off the end.
+                if func.qualifiers.is_noreturn
+                    && self.resolve_type(expr_type) != self.types.never_id
+                {
+                    self.error(
+                        SemanticErrorKind::NoreturnBodyReturns {
+                            function: func.name.node.clone(),
+                        },
+                        func.name.span,
+                    );
+                }
             }
             FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
@@ -6444,6 +6711,177 @@ impl<'a> TypeChecker<'a> {
                 );
             }
         }
+    }
+}
+
+/// Do the unguarded arms cover both `true` and `false` literals? (Bool
+/// scrutinee exhaustiveness for the definite-return analysis.)
+fn bool_arms_cover(arms: &[MatchItem]) -> bool {
+    let mut saw = [false, false];
+    for arm in arms.iter().filter_map(|i| i.arm()) {
+        if arm.guard.is_some() {
+            continue;
+        }
+        collect_bool_literals(&arm.pattern.node, &mut saw);
+    }
+    saw[0] && saw[1]
+}
+
+fn collect_bool_literals(pattern: &Pattern, saw: &mut [bool; 2]) {
+    match pattern {
+        Pattern::Literal(e) => {
+            if let Expr::BoolLiteral(b) = &e.node {
+                saw[usize::from(*b)] = true;
+            }
+        }
+        Pattern::Or(alts) => {
+            for p in alts {
+                collect_bool_literals(&p.node, saw);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Is this pattern a syntactic catch-all (matches any value of any type)?
+/// Used by the definite-return analysis for NON-enum scrutinees, where any
+/// binding acts as a catch-all. (Enum scrutinees go through the richer
+/// `collect_covered_variants`, which also knows variant-name bindings.)
+fn pattern_is_catchall_syntactic(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Wildcard | Pattern::Rest | Pattern::Binding(_) => true,
+        Pattern::Or(alts) => alts.iter().any(|p| pattern_is_catchall_syntactic(&p.node)),
+        Pattern::Tuple(elems) => elems.iter().all(|p| pattern_is_catchall_syntactic(&p.node)),
+        _ => false,
+    }
+}
+
+/// Does this loop body contain a `break` that exits THIS loop? Recurses into
+/// nested non-loop constructs; stops at nested loops (their `break`s bind to
+/// the inner loop). Closures cannot `break` an enclosing loop, so expression
+/// recursion is limited to block-shaped expressions.
+fn block_has_loop_break(block: &Block) -> bool {
+    block.stmts.iter().any(|s| stmt_has_loop_break(&s.node))
+}
+
+fn stmt_has_loop_break(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Break(_) => true,
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            block_has_loop_break(then_body)
+                || elif_branches.iter().any(|(_, b)| block_has_loop_break(b))
+                || else_body.as_ref().is_some_and(block_has_loop_break)
+        }
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter().any(|item| match item {
+                MatchItem::Arm(arm) => expr_has_loop_break(&arm.body.node),
+                MatchItem::MetaFor { arm_template, .. } => {
+                    expr_has_loop_break(&arm_template.body.node)
+                }
+            }) || else_arm.as_ref().is_some_and(block_has_loop_break)
+        }
+        Stmt::With { body, .. }
+        | Stmt::Unsafe { body }
+        | Stmt::NamedScope { body, .. } => block_has_loop_break(body),
+        Stmt::Select { arms, else_arm } => {
+            arms.iter().any(|a| block_has_loop_break(&a.body))
+                || else_arm.as_ref().is_some_and(block_has_loop_break)
+        }
+        Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+            block_has_loop_break(then_body)
+                || elif_branches.iter().any(|(_, b)| block_has_loop_break(b))
+                || else_body.as_ref().is_some_and(block_has_loop_break)
+        }
+        Stmt::MetaFor { body, .. } => block_has_loop_break(body),
+        Stmt::MetaMatch { arms, else_arm, .. } => {
+            arms.iter().any(|(_, b)| block_has_loop_break(b))
+                || else_arm.as_ref().is_some_and(block_has_loop_break)
+        }
+        Stmt::MetaWhile { body, .. } => block_has_loop_break(body),
+        Stmt::Expr(e) => expr_has_loop_break(&e.node),
+        // A nested loop's BODY captures its own breaks (opaque here), but
+        // its `else` clause is NOT part of the loop for break-binding: a
+        // `break` inside a loop's `else` exits the ENCLOSING loop (§6.12).
+        // (`loop` has no else clause.)
+        Stmt::While { else_body, .. } | Stmt::For { else_body, .. } => {
+            else_body.as_ref().is_some_and(block_has_loop_break)
+        }
+        // Everything else can't contain a statement-level break that binds
+        // to the enclosing loop.
+        _ => false,
+    }
+}
+
+fn expr_has_loop_break(expr: &Expr) -> bool {
+    match expr {
+        Expr::Block(b) => block_has_loop_break(b),
+        Expr::Do { body } => block_has_loop_break(body),
+        _ => false,
+    }
+}
+
+/// Does this `noreturn`-function body contain a `return` that belongs to
+/// the FUNCTION? Unlike `break`, a `return` inside a nested loop still
+/// returns from the function, so the walk recurses into every statement
+/// body. Expression recursion is limited to block-shaped expressions
+/// (`Expr::Block` / `Expr::Do`, mirroring `expr_has_loop_break`) and
+/// NEVER enters `Expr::Closure` / `Expr::ImplicitClosure` — a `return`
+/// inside a closure returns from the closure, not the enclosing function.
+fn block_contains_return(block: &Block) -> bool {
+    block.stmts.iter().any(|s| stmt_contains_return(&s.node))
+}
+
+fn stmt_contains_return(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Return(_) => true,
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            block_contains_return(then_body)
+                || elif_branches.iter().any(|(_, b)| block_contains_return(b))
+                || else_body.as_ref().is_some_and(block_contains_return)
+        }
+        Stmt::While { body, else_body, .. } | Stmt::For { body, else_body, .. } => {
+            block_contains_return(body)
+                || else_body.as_ref().is_some_and(block_contains_return)
+        }
+        Stmt::Loop { body } => block_contains_return(body),
+        Stmt::Match { arms, else_arm, .. } => {
+            arms.iter().any(|item| match item {
+                MatchItem::Arm(arm) => expr_contains_return(&arm.body.node),
+                MatchItem::MetaFor { arm_template, .. } => {
+                    expr_contains_return(&arm_template.body.node)
+                }
+            }) || else_arm.as_ref().is_some_and(block_contains_return)
+        }
+        Stmt::With { body, .. }
+        | Stmt::Unsafe { body }
+        | Stmt::NamedScope { body, .. } => block_contains_return(body),
+        Stmt::Select { arms, else_arm } => {
+            arms.iter().any(|a| block_contains_return(&a.body))
+                || else_arm.as_ref().is_some_and(block_contains_return)
+        }
+        Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+            block_contains_return(then_body)
+                || elif_branches.iter().any(|(_, b)| block_contains_return(b))
+                || else_body.as_ref().is_some_and(block_contains_return)
+        }
+        Stmt::MetaFor { body, .. } => block_contains_return(body),
+        Stmt::MetaMatch { arms, else_arm, .. } => {
+            arms.iter().any(|(_, b)| block_contains_return(b))
+                || else_arm.as_ref().is_some_and(block_contains_return)
+        }
+        Stmt::MetaWhile { body, .. } => block_contains_return(body),
+        Stmt::Expr(e) => expr_contains_return(&e.node),
+        _ => false,
+    }
+}
+
+fn expr_contains_return(expr: &Expr) -> bool {
+    match expr {
+        Expr::Block(b) => block_contains_return(b),
+        Expr::Do { body } => block_contains_return(body),
+        // NEVER `Expr::Closure` / `Expr::ImplicitClosure`: their `return`
+        // binds to the closure body, not the enclosing function.
+        _ => false,
     }
 }
 

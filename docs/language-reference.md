@@ -618,6 +618,20 @@ int double(int x): x * 2
 
 Equivalent to a block body with `return`.
 
+**Definite return.** A function whose return type is not `void` must not
+be able to reach the end of its body: every control-flow path must end in
+`return`, `throw`, a call to a `noreturn` function (e.g. `panic`), or a
+loop that cannot exit normally. An `if` must have an `else` (or be
+followed by a terminating statement); a `match` counts only when its arms
+cover the scrutinee's value space and every arm terminates; a `break`
+inside a loop's `else` clause exits the enclosing loop (see
+[section 6.12](#612-while-loop)). Expression-bodied functions always
+return their expression's value. The analysis is syntactic — condition
+values are not evaluated, so `while true` with no `break` counts as
+non-exiting, but any `break` defeats it even under a constant condition.
+A function declared `noreturn` must itself never be able to reach the end
+of its body or execute a `return`, and cannot declare a `throws` clause.
+
 **Self parameters** (in equip blocks):
 
 | Form                       | Meaning           |
@@ -1298,7 +1312,7 @@ for i, s in pairs:          # bare — preferred
 while_stmt = "while" expr ":" block [ "else" ":" block ] ;
 ```
 
-Loops while the condition is `true`. Supports `else` (runs if loop exits normally without `break`).
+Loops while the condition is `true`. Supports `else` (runs if loop exits normally without `break`). The `else` block is not part of the loop body: a `break` inside it binds to the enclosing loop.
 
 ### 6.13 Loop (Infinite)
 

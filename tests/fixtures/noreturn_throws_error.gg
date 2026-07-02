@@ -1,0 +1,15 @@
+# `noreturn` + `throws` is a contradiction at the declaration: a `throw`
+# RETURNS control to the caller via the error channel, but callers type a
+# noreturn call as `Never` and the IR emits `unreachable` right after it —
+# a caller catching the error would run into that unreachable. Rejected at
+# `gg check`. (This closes every return-via-error path: `throw` in a
+# non-throws function is already ThrowInNonThrowingFunction, and `?`
+# propagation requires the throws clause.)
+struct ParseError:
+    String msg
+
+noreturn void f() throws ParseError:
+    throw ParseError("boom")
+
+void main():
+    print("side")

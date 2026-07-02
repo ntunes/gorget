@@ -19,7 +19,7 @@ String describe(Greeting g):
             pass
     return f"{msg} ({pri})"
 
-String main():
+void main():
     Greeting a = Greeting(Some("hello"), Some(1))
     print(describe(a))
     Greeting b = Greeting(None, None)

@@ -1158,6 +1158,70 @@ fn static_option_none_match() {
     run_gg("static_option_none_match.gg", "none");
 }
 
+// ── Definite-return analysis ─────────────────────────────────────────
+// A non-void function must not be able to reach the end of its body
+// (Go/JLS-14.21-style syntactic terminating statements). Previously a
+// fall-off passed `gg check` and silently returned 0/"" on both backends;
+// a function with NO return at all ICEd LIR in debug ("SSA dominance
+// violation", src/lir/ssa.rs) and silently miscompiled in release.
+
+#[test]
+fn missing_return_error() {
+    check_gg_fails(
+        "missing_return_error.gg",
+        "missing return: control can reach the end of `f`",
+    );
+}
+
+#[test]
+fn missing_return_no_return_error() {
+    check_gg_fails(
+        "missing_return_no_return_error.gg",
+        "missing return: control can reach the end of `f`",
+    );
+}
+
+// Loop-else break-binding: a `break` inside a loop's `else` clause exits
+// the ENCLOSING loop (the else is not part of the loop body — §6.12), so
+// the outer loop can exit normally and the function falls off its end.
+#[test]
+fn missing_return_loop_else_break_error() {
+    check_gg_fails(
+        "missing_return_loop_else_break_error.gg",
+        "missing return: control can reach the end of `f`",
+    );
+}
+
+// A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
+// emits `unreachable` right after it, so a noreturn function that falls
+// off its end, executes a `return`, or has a non-diverging expression body
+// would run its caller into unreachable — a miscompile.
+#[test]
+fn noreturn_body_returns_error() {
+    check_gg_fails(
+        "noreturn_body_returns_error.gg",
+        "is declared `noreturn` but control can reach the end of its body",
+    );
+}
+
+// `noreturn` + `throws` is contradictory: a `throw` returns control via
+// the error channel while callers typed the call `Never`.
+#[test]
+fn noreturn_throws_error() {
+    check_gg_fails(
+        "noreturn_throws_error.gg",
+        "declared `noreturn` but has a `throws` clause",
+    );
+}
+
+// Accept side of the noreturn gate: genuinely diverging bodies pass, and a
+// `return` inside a closure belongs to the closure, not the enclosing
+// noreturn function.
+#[test]
+fn noreturn_diverges() {
+    run_gg("noreturn_diverges.gg", "before\n42");
+}
+
 // A bare `return` in a non-void `T throws E` function (here `int throws`)
 // must error as a missing return value — it previously lowered silently to
 // `Ok(0)`. The `void throws E` bare-return remains valid (raw return = void).

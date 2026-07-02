@@ -402,6 +402,22 @@ pub enum SemanticErrorKind {
     /// Match expression is not exhaustive — some enum variants are not covered.
     NonExhaustiveMatch { missing_variants: Vec<String> },
 
+    /// A non-void function has a path that reaches the end of the body
+    /// without returning a value (definite-return analysis).
+    MissingReturn { function: String, return_type: String },
+
+    /// A function declared `noreturn` whose body can return control to
+    /// the caller: falls off the end, executes a `return`, or has a
+    /// non-diverging expression body. Callers type a noreturn call as
+    /// `Never` and the IR emits `unreachable` right after it, so a
+    /// returning noreturn function is a miscompile, not a style issue.
+    NoreturnBodyReturns { function: String },
+
+    /// `noreturn` combined with a `throws` clause: a `throw` returns
+    /// control to the caller via the error channel, contradicting
+    /// `noreturn` (callers would run into `unreachable`).
+    NoreturnWithThrows { function: String },
+
     /// Named argument doesn't match any parameter.
     UnknownNamedArg { name: String },
 
@@ -788,6 +804,33 @@ impl std::fmt::Display for SemanticError {
                     f,
                     "non-exhaustive match: missing variants: {}",
                     missing_variants.join(", ")
+                )
+            }
+            SemanticErrorKind::MissingReturn { function, return_type } => {
+                write!(
+                    f,
+                    "missing return: control can reach the end of `{function}` \
+                     without returning a value — every path must end in `return` \
+                     (expected `{return_type}`), `throw`, or a diverging call \
+                     like `panic`"
+                )
+            }
+            SemanticErrorKind::NoreturnBodyReturns { function } => {
+                write!(
+                    f,
+                    "`{function}` is declared `noreturn` but control can reach \
+                     the end of its body (or execute a `return`) — a noreturn \
+                     function must diverge on every path: loop forever or end \
+                     in a call to another noreturn function like `exit` or \
+                     `panic`"
+                )
+            }
+            SemanticErrorKind::NoreturnWithThrows { function } => {
+                write!(
+                    f,
+                    "`{function}` is declared `noreturn` but has a `throws` \
+                     clause — a noreturn function cannot return, not even an \
+                     error"
                 )
             }
             SemanticErrorKind::StringIndexAssign => {

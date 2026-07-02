@@ -1,0 +1,19 @@
+# Accept side of the noreturn gate: a `noreturn` function whose body
+# genuinely diverges (ends in a call to another noreturn function) passes
+# `gg check` and runs. Also pins the closure exemption in the noreturn
+# return-walk: a `return` INSIDE a closure belongs to the closure, not the
+# enclosing noreturn function, so `die` below is legal.
+from std.os import exit
+
+noreturn void die(int code):
+    int(int) double = (int y):
+        return y * 2
+    print(double(21))
+    exit(code)
+
+# Expression-bodied noreturn with a diverging tail call (types `Never`).
+noreturn void die_expr(): exit(1)
+
+void main():
+    print("before")
+    die(0)

@@ -1,4 +1,4 @@
-def main():
+void main():
     # 1. Basic assert true
     assert true
 
