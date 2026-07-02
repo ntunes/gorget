@@ -668,6 +668,15 @@ pub(super) fn lower_field_assign(
     let mut rhs = lower_expr(ctx, builder, value);
     clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
 
+    // CoW UAF fix (round-33): when the object is projected (`v[i].field = x`),
+    // `obj` above is a TRANSIENT index/field-store handle that
+    // `lower_index_access` tagged as a live CollectionElement/FieldPath borrow
+    // into the base. It is the store LOCATION, dead after this statement — not a
+    // live borrow. Untrack it so a later same-collection mutation can't clone a
+    // handle whose buffer it has reallocated (heap-UAF). The store below uses
+    // the Place, not the ownership tag, so this is store-neutral.
+    ctx.untrack_projected_store_target(builder, &obj);
+
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
         let local_idx = place.local.0 as usize;
         if local_idx < builder.locals.len() {
@@ -854,6 +863,36 @@ fn maybe_unregister_string_temp(
     }
 }
 
+/// Build the mutable-self pointer arg for an index-assign setter dispatch
+/// (`Vector__set` / `Dict__put` / user `IndexMut::set`).
+///
+/// When `obj` is ALREADY a pointer to the collection — a nested-index element
+/// handle (`m[i]` for a resource element lowers to `Ptr(inner)`) — pass that
+/// pointer DIRECTLY. Taking its address (`&place`) double-indirects: the setter
+/// receives `&handle` and reads it as the collection struct, an over-read past
+/// the 8-byte pointer slot (heap/stack-buffer-overflow). The LIR passthrough
+/// that elides `&` on an SSA-temp pointer does NOT fire for a materialized
+/// MUTABLE local (the shape the G1 projected-root materialize produces for
+/// `m[i][j] = x`), so the elision must be explicit here. Mirrors the method-call
+/// `is_ptr` receiver fast-path (exprs/methods.rs). Otherwise (a value place),
+/// borrow it mutably.
+fn index_assign_self_ptr(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    place: &Place,
+    obj_type: TypeId,
+    obj_is_ptr: bool,
+) -> Operand {
+    if obj_is_ptr && place.projections.is_empty() {
+        FunctionBuilder::copy(place.local)
+    } else {
+        let ptr_type = ctx.register_mut_ptr_type(obj_type);
+        let ptr_local = builder.add_local(ptr_type, None);
+        builder.emit_borrow_mut(ptr_local, place.clone());
+        FunctionBuilder::copy(ptr_local)
+    }
+}
+
 /// Lower an index assignment: `obj[index] = value`
 pub(super) fn lower_index_assign(
     ctx: &mut LoweringContext,
@@ -896,6 +935,13 @@ pub(super) fn lower_index_assign(
     } else {
         (lower_expr(ctx, builder, object), None)
     };
+    // CoW UAF fix (round-33): a projected object (`m[i][j] = x`) lowers `m[i]`
+    // to a TRANSIENT element handle tagged as a live CollectionElement borrow
+    // into the base. It is the store LOCATION, dead after this statement — untrack
+    // it so a later same-collection mutation can't clone a handle whose buffer it
+    // reallocated (heap-UAF). Store-neutral: the `__set` call borrows the Place,
+    // never reads the ownership tag. (Sibling of lower_field_assign.)
+    ctx.untrack_projected_store_target(builder, &obj);
     let idx = lower_expr(ctx, builder, index);
 
     // Determine the receiver type to dispatch correctly.
@@ -903,6 +949,12 @@ pub(super) fn lower_index_assign(
     // since infer_operand_type_full doesn't walk projections.
     let obj_type_raw = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
     let obj_type = ctx.pointee_type(obj_type_raw).unwrap_or(obj_type_raw);
+    // When `obj` is ALREADY a pointer to the collection, the setter's
+    // mutable-self arg is that pointer DIRECTLY — see `index_assign_self_ptr`.
+    let obj_is_ptr = matches!(
+        ctx.type_registry.get(obj_type_raw),
+        Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+    );
 
     // Propagate the collection's element/value type as `expected_type` so an
     // empty `[]` / `{}` RHS sizes its allocation correctly. Without this,
@@ -973,13 +1025,11 @@ pub(super) fn lower_index_assign(
         let val = ctx.ensure_owned_at_consuming_arg(
             builder, val, value, crate::ir::ImplicitCloneReason::ConsumingArg);
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
-            let ptr_type = ctx.register_mut_ptr_type(obj_type);
-            let ptr_local = builder.add_local(ptr_type, None);
-            builder.emit_borrow_mut(ptr_local, place.clone());
+            let self_ptr = index_assign_self_ptr(ctx, builder, place, obj_type, obj_is_ptr);
             let mangled = format!("{type_name}__set");
             builder.call_void(
                 mangled,
-                vec![FunctionBuilder::copy(ptr_local), idx, val.clone()],
+                vec![self_ptr, idx, val.clone()],
             );
             maybe_move_zero(ctx, builder, &val);
         }
@@ -990,13 +1040,11 @@ pub(super) fn lower_index_assign(
         let val = ctx.ensure_owned_at_consuming_arg(
             builder, val, value, crate::ir::ImplicitCloneReason::ConsumingArg);
         if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
-            let ptr_type = ctx.register_mut_ptr_type(obj_type);
-            let ptr_local = builder.add_local(ptr_type, None);
-            builder.emit_borrow_mut(ptr_local, place.clone());
+            let self_ptr = index_assign_self_ptr(ctx, builder, place, obj_type, obj_is_ptr);
             let mangled = format!("{type_name}__put");
             builder.call_void(
                 mangled,
-                vec![FunctionBuilder::copy(ptr_local), idx.clone(), val.clone()],
+                vec![self_ptr, idx.clone(), val.clone()],
             );
             maybe_move_zero(ctx, builder, &idx);
             maybe_move_zero(ctx, builder, &val);
@@ -1011,12 +1059,10 @@ pub(super) fn lower_index_assign(
             ];
             for set_name in &candidates {
                 if ctx.fn_sigs.contains_key(set_name.as_str()) {
-                    let ptr_type = ctx.register_mut_ptr_type(obj_type);
-                    let ptr_local = builder.add_local(ptr_type, None);
-                    builder.emit_borrow_mut(ptr_local, place.clone());
+                    let self_ptr = index_assign_self_ptr(ctx, builder, place, obj_type, obj_is_ptr);
                     builder.call_void(
                         set_name.clone(),
-                        vec![FunctionBuilder::copy(ptr_local), idx, val],
+                        vec![self_ptr, idx, val],
                     );
                     return;
                 }

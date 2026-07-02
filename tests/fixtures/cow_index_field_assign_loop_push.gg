@@ -1,0 +1,41 @@
+# CoW G1 memory-safety gate (round-33 output-review UAF): an index-projected
+# field-ASSIGN (`v[0].name = x`) materializes the bare-param root, THEN a
+# same-collection mutation in a LOOP must NOT dangle the transient store-target
+# element handle. Pre-fix (the shipped G1) this SIGSEGV'd both backends
+# (heap-use-after-free in Res__clone). Correct full-lazy-CoW semantics: the
+# materialize made `v` a private copy, so the pushes land on THAT copy and the
+# caller is untouched.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void heavy_while(Vector[Res] v):
+    v[0].name = "MUT"
+    int i = 0
+    while i < 5:
+        v.push(Res("x"))
+        i = i + 1
+    print(v.len())            # 6  (1 original + 5 pushed onto the private copy)
+    print(v[0].name)          # MUT
+
+void heavy_for(Vector[Res] v):
+    v[0].name = "MUT2"
+    for k in [1, 2, 3]:
+        v.push(Res("y"))
+    print(v.len())            # 4
+    print(v[0].name)          # MUT2
+
+void main():
+    Vector[Res] a = Vector[Res]()
+    a.push(Res("original"))
+    heavy_while(a)
+    print(a.len())            # 1  (caller untouched)
+    print(a[0].name)          # original
+
+    Vector[Res] b = Vector[Res]()
+    b.push(Res("original"))
+    heavy_for(b)
+    print(b.len())            # 1
+    print(b[0].name)          # original
+    print("done")

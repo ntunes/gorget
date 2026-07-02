@@ -25527,6 +25527,48 @@ done",
     );
 }
 
+/// CoW G1 memory-safety gate (round-33 output-review UAF): an index-projected
+/// field-ASSIGN (`v[0].name = x`) materializes the bare-param root, then a
+/// same-collection mutation in a while- AND a for-loop. The transient
+/// store-target element handle must be untracked (else cow_before_mutation
+/// Case 3 clones a handle whose buffer the push reallocated → heap-UAF, SIGSEGV
+/// both backends pre-fix). Correct full-lazy-CoW: pushes land on the private
+/// copy; the caller is untouched. MUST be ASan-clean on both backends.
+#[test]
+fn cow_index_field_assign_loop_push() {
+    run_gg(
+        "cow_index_field_assign_loop_push.gg",
+        "\
+6
+MUT
+1
+original
+4
+MUT2
+1
+original
+done",
+    );
+}
+
+/// CoW G1 memory-safety gate (round-33): a NESTED index-ASSIGN (`m[i][j] = x`)
+/// materializes the root, then a same-collection push in a loop. Locks BOTH the
+/// transient-ref untrack (heap-UAF) AND the setter Ptr-passthrough
+/// (index_assign_self_ptr — the materialized element handle is already a Ptr, so
+/// `&handle` would over-read → stack-buffer-overflow in gorget_array_set).
+#[test]
+fn cow_index_nested_assign_loop_push() {
+    run_gg(
+        "cow_index_nested_assign_loop_push.gg",
+        "\
+6
+99
+1
+1
+done",
+    );
+}
+
 #[test]
 fn cow_set_string_clone() {
     run_gg(

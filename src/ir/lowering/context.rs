@@ -2345,6 +2345,51 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// A projected-store TARGET handle (`v[i].field = x` / `m[i][j] = x` →
+    /// `lower_expr(v[i])` → the `gorget_array_get` element handle that
+    /// `lower_index_access` tags as a live `CollectionElement`/`FieldPath` borrow
+    /// into the base) is TRANSIENT: it exists only to name the store location and
+    /// is DEAD once the assign statement completes — it is NOT a live borrow that
+    /// outlives the statement. Leaving it CoW-tracked lets a later same-collection
+    /// mutation (`v.push()` in a loop) hit `cow_before_mutation` Case 3 ("clone
+    /// each ref into the collection"); the first push reallocates the buffer, so
+    /// the cloned handle dangles → heap-use-after-free (both backends). This is
+    /// harmless without the G1 projected-root materialize (the collection stays a
+    /// bare-param borrow, so the push re-materializes into a NEW buffer and the
+    /// handle keeps pointing into the untouched original) — but once the store
+    /// materializes the root into an owned copy, the handle points into that copy
+    /// and the copy's own realloc frees under it. Reset the handle to Untracked
+    /// after the store so Case 3 cannot find it. Mirrors `restore_locals`, which
+    /// drops the identical `CollectionElement`/`FieldPath` states for scope-local
+    /// handles leaving their scope. No-op unless the operand names an element/
+    /// field-path borrow local (leaves owned/aliased/other operands untouched).
+    pub fn untrack_projected_store_target(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        obj: &Operand,
+    ) {
+        use crate::ir::{LocalOwnership, BorrowOrigin};
+        let place = match obj {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            _ => return,
+        };
+        if !place.projections.is_empty() { return; }
+        let idx = place.local.0 as usize;
+        if idx >= builder.locals.len() { return; }
+        let is_transient_elem_ref = matches!(
+            &builder.locals[idx].ownership,
+            LocalOwnership::Borrowed {
+                origin: BorrowOrigin::CollectionElement(_)
+                      | BorrowOrigin::FieldPath(_)
+                      | BorrowOrigin::CowBorrowPending,
+                ..
+            }
+        );
+        if is_transient_elem_ref {
+            builder.locals[idx].ownership = LocalOwnership::default();
+        }
+    }
+
     /// Check if a local's string data is a fresh allocation not shared with any
     /// other variable. True only for direct function/extern call results that
     /// return the owned string type. Phase D4.5 step 5b.2: reads

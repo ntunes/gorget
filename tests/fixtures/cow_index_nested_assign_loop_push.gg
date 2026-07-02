@@ -1,0 +1,22 @@
+# CoW G1 memory-safety gate (round-33): a NESTED index-ASSIGN (`m[i][j] = x`)
+# materializes the bare-param root, THEN a same-collection push in a loop. The
+# transient `m[i]` element handle (a Ptr into the materialized copy) must not
+# be double-indirected by the setter (was a stack-buffer-overflow in
+# gorget_array_set) nor re-cloned by cow_before_mutation (was a heap-UAF).
+from std.collections import Vector
+
+void heavy(Vector[Vector[int]] m):
+    m[0][0] = 99
+    int i = 0
+    while i < 5:
+        m.push([7, 8])
+        i = i + 1
+    print(m.len())            # 6
+    print(m[0][0])            # 99
+
+void main():
+    Vector[Vector[int]] a = [[1, 2]]
+    heavy(a)
+    print(a.len())            # 1  (caller untouched)
+    print(a[0][0])            # 1
+    print("done")
