@@ -363,6 +363,21 @@ meant to take.
 
 ## Mutation severs the alias: `cow_before_mutation`
 
+**The rule this section implements (the spec).** A resource value is a
+borrow until a write reaches it; the write **materializes** the value
+(copy-on-write) at the closest context where it is immutable, and the
+write lands on that private copy. Write-through to the original happens
+only along an unbroken chain of `&` (mutable) access to a real owner —
+the instant that chain hits an immutable binding (a bare local, a bare
+parameter, a bare alias, a `for x in coll` element) the copy is taken
+*there* and the original is left untouched. This is deliberately **more
+tolerant than Rust**, which rejects a mutation through an immutable
+borrow; Gorget copies instead. The user-facing statement is in
+`docs/language-design.md` §3 and `docs/language-reference.md` §9.6; the
+mechanism is `cow_before_mutation` and its materialize routines below.
+The current enforcement is only partial — see
+[§ Implementation status](#implementation-status--what-materializes-today-and-the-gaps).
+
 A borrow is only as cheap as the absence of a write. When the lowering is about
 to mutate a local — a mutating method call (`exprs/methods.rs:1590,1623`), a
 reassignment, an index/field assign (`assigns.rs:71,489,730`) — it first calls
@@ -401,6 +416,22 @@ named-local guard was masking.
 (`self.data.push(x)` materializes `CollectionRef`s borrowing `"self.data"`), and
 `cow_sever_all_aliases_from` (`context.rs:2782`) handles the reassign case
 (aliases keep the *old* value).
+
+### Implementation status — converging to the uniform rule
+
+The single rule above is the **design target**, and the implementation is
+**converging** to it — one uniform materialize-at-mutation chokepoint, not
+`cow_before_mutation` extended shape-by-shape. Today `cow_before_mutation`
+enforces the rule for the **tracked-source** cases (the `is_bare_param`
+direct-param clone and the `Alias`/`CollectionElement`/`FieldPath`/
+`RuntimeView` origins off `LocalOwnership`); some **bare-rooted** shapes —
+element/field/method-projected mutation through a bare param, `&t`/`&self`
+on a bare value, untracked alias chains — still write through until the
+round-33 materialize track lands (owner-confirmed 2026-07-02; the detailed
+gap map and live status are in `TODO.md`). So do **not** read the presence
+of `cow_before_mutation` as "the spec is enforced everywhere" — it is
+partial and being unified. **When the track lands, this marker is removed
+and the doc describes only the single uniform rule.**
 
 ## Full lazy materialization (#37) — the lazy-CoW default
 

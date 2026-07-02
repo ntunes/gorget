@@ -143,7 +143,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 1. **Safe by default** - no null, no data races, no use-after-free
 2. **Readable first** - code should look clean; minimize sigils and noise
 3. **Explicit types at boundaries** - function signatures are fully typed; locals can be inferred
-4. **Mutable by default, const opt-in** - local variables are mutable; use `const` for immutability. Function arguments are the opposite: immutable borrow by default, requiring `&` for mutable access
+4. **Mutable by default, const opt-in** - local variables are mutable; use `const` for immutability. Function arguments are the opposite: an immutable (read-only) borrow by default, `&` for **write-through** to the caller. A bare argument never mutates the caller's data — a write through it *copies-on-write* into a private copy (materializes) rather than failing; `&` is how a change reaches the caller. See §3.2.
 5. **Zero-cost abstractions** - traits, generics, and closures compile away
 6. **No garbage collector** - ownership + borrowing, like Rust
 
@@ -314,6 +314,33 @@ consume(!name)           # moved - name is GONE after this
 # print(name)            # COMPILE ERROR: name was moved
 ```
 
+**The one rule underneath all three — full lazy copy-on-write.** A
+resource value is a cheap **borrow** until something tries to **modify** it. At that moment the
+compiler asks whether the write can reach a real owner through an
+unbroken chain of `&` (mutable) access. If it can, the write lands on the
+owner (**write-through**). The instant that chain instead hits an
+immutable binding — a bare local, a bare parameter, a bare alias, a
+`for x in coll` element — the value **materializes** (copies-on-write)
+*there* and the write lands on the private copy, leaving everything
+upstream untouched. The copy is **fully lazy** — deferred to the mutation that
+demands it, never speculative; a mutation that never runs never allocates
+(§9.6). So bare (the default) is *read-only-and-copy-on-write*,
+`&` is *write-through*, `!` is *move*. This is deliberately **more tolerant
+than Rust**, which rejects a mutation through an immutable borrow; Gorget
+copies instead. Everything below — parameters (§3.2), assignments
+(§3.3–3.4), fields (§3.4), collection elements, loops — is this single
+rule applied at each position.
+
+**The cost side — when to reach for `&`.** Because a bare mutation
+*copies*, mutating through a bare binding can pay a clone (the
+copy-on-write), whereas an `&` mutation writes **in place** with no copy.
+So `&` does two jobs at once: it makes the change **reach the caller**,
+and it **avoids the clone**. Reach for it on the values you actually mean
+to modify — especially large collections on hot paths; leave a parameter
+bare when you only read it, or when a cheap private-copy mutation is
+genuinely what you want. In short: **bare = safe default, copies if you
+write; `&` = write-through, no copy.**
+
 ### 3.2 Type Categories: Resource vs Trivial
 
 Every type in Gorget falls into one of two categories based on whether it owns a resource:
@@ -327,13 +354,13 @@ The distinction is about **what the type owns**, not how large it is. A `Point` 
 
 **Resource types and parameter passing:**
 
-| Declaration | Pointer kind | Callee may mutate? | Callee drops? |
-|-------------|-------------|-------------------|---------------|
-| `Vector[int] v` | `const T*` (read-only) | No | No |
-| `Vector[int] &v` | `T*` (mutable) | Yes | No |
-| `Vector[int] !v` | `T*` (mutable) | Yes | Yes |
+| Declaration | Pointer kind | A mutation through the param… | Callee drops? |
+|-------------|-------------|-------------------------------|---------------|
+| `Vector[int] v` | `const T*` (read-only) | materializes a private copy (copy-on-write); the caller is untouched | No |
+| `Vector[int] &v` | `T*` (mutable) | writes through to the caller's value | No |
+| `Vector[int] !v` | `T*` (mutable) | writes through; the callee owns and drops it | Yes |
 
-Bare Resource params are `const` — the C compiler enforces immutability. The `&` sigil grants mutation, `!` transfers ownership. **Resource types are never copied by value (memcpy).** The only ways to obtain an owned resource value are construction, `.clone()`, or `!move`.
+A bare Resource param is a **read-only borrow** of the caller's data: the callee reads it freely but cannot change what the caller sees through it — the incoming pointer is `const`. A mutation *attempt* is **not** a compile error, though: it **materializes** a private copy (copy-on-write) and the write lands on that copy, leaving the caller untouched. (This is where Gorget is **more tolerant than Rust** — Rust rejects a mutation through an immutable borrow outright; Gorget copies instead.) So `void sneaky(Vector[Res] v): v[0].name = "x"` compiles and runs — it just mutates `sneaky`'s own private copy, never the caller's vector. The `&` sigil is the opt-in for **write-through** (a change made through an `&` param reaches the caller's value), and `!` transfers ownership. **Resource types are never copied by value (memcpy) at the boundary** — the only copy that ever happens is the copy-on-write clone at a mutation. A freshly owned resource value comes from construction, `.clone()`, `!move`, or that implicit copy-on-write clone.
 
 **Storing borrowed parameters:**
 
@@ -2419,7 +2446,7 @@ Convenience wrappers that provide inline fallbacks (`get_or`, `get_or_put`, `unw
 
 #### Index Access Ownership
 
-Subscript read (`v[i]`) returns a **mutable borrow** (`&T`) of the element in place. The element is not moved out of the collection and not copied — the caller gets a reference to the original. This is the same model as Rust's `Index`/`IndexMut` traits.
+Subscript read (`v[i]`) borrows the element in place — it is not moved out of the collection and not eagerly copied. Whether that borrow is read-only or write-through depends on the root (the one rule from §3): **direct place mutation** on a collection you own or hold via `&` writes through in place (`matrix[0].push(4)`, `v[i] = x`); a subscript **bound to a local** (`Vector[int] row = matrix[0]`) is a read-only borrow like any other, and mutating that local **materializes** a private copy (copy-on-write), leaving the collection untouched (§3.2). Here Gorget is **more tolerant than Rust's `Index`/`IndexMut`** — a write through the bound borrow copies rather than being rejected.
 
 What happens next depends on how the borrow is used:
 

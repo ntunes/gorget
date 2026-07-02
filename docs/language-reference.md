@@ -1637,19 +1637,19 @@ pair._0
 index_expr = expr "[" expr "]" ;
 ```
 
-Accesses an element by index. Subscript read returns a **mutable borrow** of the element — the element stays in the collection.
+Accesses an element by index. A subscript read borrows the element in place — the element stays in the collection.
 
 ```gorget
 arr[0]              # borrows element at index 0
 map["key"]          # borrows value for "key"
 ```
 
-For resource collection types (Vector, Dict, Set), the subscript returns a **mutable borrow** — a reference into the collection's storage. Use `.clone()` for an owned copy. **Strings are the exception:** `s[i]` is a **read-only codepoint view**, and strings are not index-assignable (`s[i] = x` and `s[i] += x` are compile errors) — string mutation is rebuild-based (`replace(...)`, slicing + concatenation). See the indexing, slicing, and iteration table in the Strings section for the full view semantics:
+For resource collection types (Vector, Dict, Set), the subscript borrows into the collection's storage. Mutating the subscript **place** directly — on a collection you own or hold via `&` — writes through in place (`matrix[0].push(5)`, `v[0] = x`). But a subscript **bound to a local** (`Vector[int] row = matrix[0]`) is a read-only borrow like any other: mutating that local materializes a private copy and leaves the collection untouched (§9.6). Use `.clone()` for an eager owned copy. **Strings are the exception:** `s[i]` is a **read-only codepoint view**, and strings are not index-assignable (`s[i] = x` and `s[i] += x` are compile errors) — string mutation is rebuild-based (`replace(...)`, slicing + concatenation). See the indexing, slicing, and iteration table in the Strings section for the full view semantics:
 
 ```gorget
 Vector[Vector[int]] matrix = [[1, 2], [3, 4]]
-auto row = matrix[0]              # &Vector[int] — borrow into matrix
-matrix[0].push(5)                 # mutates in place through borrow
+auto row = matrix[0]              # borrow into matrix (read-only — mutating row copies)
+matrix[0].push(5)                 # direct place mutation — writes through in place
 Vector[int] owned = matrix[0].clone()  # deep clone — independent copy
 ```
 
@@ -2324,6 +2324,15 @@ captures, and collection element reads all produce pointers (borrows) to
 the source data — no clone happens. The first mutation through one of
 the aliases triggers a clone, giving the mutator its own copy.
 
+A bare binding or parameter is therefore **read-only**: a mutation
+through it does not fail and does not reach the source — it
+**materializes** a private copy at the binding and the write lands there,
+leaving the borrowed-from value untouched. Write-through to the source is
+the job of the `&` sigil (and `for x in &coll`): a change made through an
+`&` borrow reaches the original. (Gorget is deliberately more tolerant
+than Rust here — Rust rejects a mutation through an immutable borrow;
+Gorget copies instead.)
+
 The compiler also optimises last-use: if the source isn't live past the
 assign, the IR-lowering picks Move instead of Borrow (still no clone,
 and the source becomes invalid as if `!`-moved). See
@@ -2359,11 +2368,11 @@ a closed inventory.
 
 **`.clone()` works on all types.** Explicit `.clone()` calls route to the correct clone function: collections use `gorget_array_clone`/`gorget_map_clone`/etc., user structs use generated `{Name}__clone`, copy types return the value unchanged.
 
-**Collection `.get()` returns a mutable borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read:
+**Collection `.get()` returns a read-only borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read. Mutating the bound value materializes a private copy (the collection is untouched); to change the element in the collection, use a mutable borrow (`&`, `for x in &coll`) or a direct place mutation (`v[i] = x`, `v[i].m()`):
 
 ```gorget
-auto entry = v.get(i).unwrap()    # &Entry — borrow into v's storage
-Entry entry = v.get(i).unwrap()   # &Entry — also a borrow
+auto entry = v.get(i).unwrap()    # read-only borrow into v's storage
+Entry entry2 = v.get(i).unwrap()  # also a borrow
 Entry owned = v.get(i).unwrap().clone()  # Entry — owned copy (explicit)
 ```
 

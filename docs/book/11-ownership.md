@@ -361,6 +361,76 @@ about when clones happen — the rule is simple: borrows are free,
 ownership costs a clone, and a clone happens only at the moment it's
 actually needed.
 
+### Mutating a borrow gives you a private copy
+
+A borrow is *read-only*. The moment you write through one, the compiler
+hands you your own copy and the write lands there — the value you
+borrowed from never changes. This holds for every borrow: a bare local,
+a bare function parameter, a bare alias, a `for` loop variable.
+
+```gorget
+void relabel(Vector[Point] pts):    # bare param — a read-only borrow
+    pts[0].label = "start"           # write → pts materializes a copy here
+    print(pts[0].label)              # "start" — this function sees its copy
+
+void main():
+    Vector[Point] world = make_world()
+    relabel(world)
+    print(world[0].label)            # unchanged — the caller's data is intact
+```
+
+`relabel` cannot corrupt its caller: the write copies-on-write into a
+private `pts`, and `world` is untouched. (Rust would *reject* that write;
+Gorget copies instead — it is more tolerant.) Two consequences are worth
+internalizing:
+
+**1. The copy rebinds locally.** After the mutation, later reads *inside
+the same function* see the copy (`"start"`), while the caller keeps the
+original. The name now refers to the private copy.
+
+**2. Each alias copies independently.** Two aliases of the same value
+stay independent — mutating one never disturbs the other:
+
+```gorget
+Vector[int] a = source
+Vector[int] b = source     # both borrow source
+a.push(99)                 # a materializes ITS own copy
+print(b.len())             # unchanged — b still borrows the original
+```
+
+That per-alias, at-the-write copy is what makes it copy-on-*write* rather
+than "mutate in place."
+
+### When you *want* the caller to see the change: `&`
+
+Use a mutable borrow (`&`) when the whole point is to modify the
+original. `&` propagates write access outward to the real owner, so the
+change is visible to the caller:
+
+```gorget
+void relabel(Vector[Point] &pts):   # mutable borrow — write-through
+    pts[0].label = "start"
+
+void main():
+    Vector[Point] world = make_world()
+    relabel(&world)                  # & at the call site, too
+    print(world[0].label)            # "start" — the caller sees it
+```
+
+The same split shows up in `for` loops. `for x in coll` borrows each
+element read-only, so mutating `x` copies-on-write and the collection is
+left intact; `for x in &coll` asks for write access, so the mutation
+lands back in the collection (see the
+[language reference](../language-reference.md), §6.11):
+
+```gorget
+for p in points:        # read-only — mutating p copies, points unchanged
+    p.label = "x"
+
+for p in &points:       # write-through — points IS modified
+    p.label = "x"
+```
+
 ---
 
 ## Summary

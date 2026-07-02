@@ -49,15 +49,19 @@ print(s)                       # still "hello"
 
 ### Collection reads
 
-Collection reads (`.get()`, `v[i]`) return a mutable borrow (`&T`) into the
-collection's storage. `auto` bindings preserve the borrow (zero cost). Typed
-bindings currently clone (the `CowBorrow` state is tracked but propagation
-to typed bindings requires collection provenance tracking — see TODO):
+Collection reads (`.get()`, `v[i]`) return a **read-only borrow** into the
+collection's storage — both `auto` and typed bindings preserve the borrow (zero
+cost, no implicit clone; the field-of-element borrow-provenance work delivered
+the typed-binding propagation the old TODO here referred to). Mutating the bound
+value **materializes** a private copy (copy-on-write), leaving the collection
+untouched; to change the element in the collection, mutate the place directly on
+a collection you own or via `&` (the write-through path). The uniform model is in
+`docs/language-reference.md` §9.6 and `docs/devbook/11-copy-on-write.md`:
 
 ```gorget
-auto entry = v.get(i).unwrap() # &Entry — mutable borrow into v's storage
-Entry entry = v.get(i).unwrap() # Entry — currently clones (owned copy)
-print(entry.name)              # read — zero cost either way
+auto entry = v.get(i).unwrap()   # read-only borrow into v's storage
+Entry entry2 = v.get(i).unwrap() # also a borrow — no implicit clone
+print(entry.name)                # read — zero cost
 ```
 
 Borrows propagate through field access and destructuring:
@@ -160,7 +164,7 @@ print(c.title)                    # ERROR: use of moved value `c`
 
 ## Mutable Borrow (`&`) Unchanged
 
-`&` still means "the callee can mutate the caller's value directly." This bypasses CoW — the callee operates on the original data. The borrow checker ensures no aliases exist during the mutable borrow.
+`&` is the **write-through** path: the callee mutates the caller's value directly, with no copy-on-write clone — it operates on the original data (the opposite of a bare borrow, which materializes a private copy on mutation). The borrow checker ensures no aliases exist during the mutable borrow.
 
 ```gorget
 void append(Vector[int] &v):

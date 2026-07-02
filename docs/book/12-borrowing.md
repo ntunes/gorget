@@ -173,17 +173,28 @@ boundary (here, the struct field).
 
 ## Collection Element Borrowing
 
-Reading an element from a collection returns a **mutable borrow** — a reference
-into the collection's storage:
+Reading an element from a collection returns a **read-only borrow** — a
+zero-cost reference into the collection's storage:
 
 ```gorget
 Vector[Player] players = get_players()
-auto p = players.get(0).unwrap()  # p is &Player — borrows from players
-print(p.name)                     # read through borrow — zero cost
-p.score += 10                     # mutates in place through borrow
+auto p = players.get(0).unwrap()  # p borrows player 0 — no copy
+print(p.name)                     # read through the borrow — zero cost
 ```
 
-The borrow propagates through field access and destructuring:
+Like every borrow, `p` is read-only: writing through it (`p.score += 10`)
+copies-on-write into a private `p` and leaves `players` untouched — see
+[Copy-on-Write](11-ownership.md#mutating-a-borrow-gives-you-a-private-copy).
+To change the element *in the collection*, ask for write access — mutate
+the place directly on a collection you own, or iterate mutably:
+
+```gorget
+players[0].score += 10       # direct place mutation — players[0] changes
+for p in &players:           # mutable iteration — write-through
+    p.score += 10
+```
+
+The read-only borrow propagates through field access and destructuring:
 
 ```gorget
 auto ev = events.get(i).unwrap()   # &GameEvent
