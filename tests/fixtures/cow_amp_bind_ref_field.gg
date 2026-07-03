@@ -1,0 +1,17 @@
+# CoW G2 site 3 (standalone projected `auto r = &s.field`): binding a `&` to a
+# projected bare-alias root materializes the root `b` (private copy) before the
+# borrow. The later `r.push` reaches `b.data`, not the shared source `a.data`.
+# Closes the coverage hole flagged by the Track B output-review (the call-arg
+# projected form was tested by cow_amp_field_arg; the standalone form was not).
+struct Holder:
+    Vector[int] data
+
+void main():
+    Vector[int] init = [1, 2, 3]
+    Holder a = Holder(init)
+    Holder b = a
+    auto r = &b.data
+    r.push(9)
+    print(a.data.len())   # 3
+    print(b.data.len())   # 4
+    print("done")

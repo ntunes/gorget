@@ -25607,6 +25607,22 @@ done",
     );
 }
 
+/// CoW G2 site 3 (STANDALONE projected `auto r = &s.field`): binding a `&` to a
+/// projected bare-alias root materializes the root before the borrow, so the
+/// later `r.push` reaches the private copy's field, not the shared source's.
+/// Closes the coverage hole the Track B output-review flagged (the call-arg
+/// projected form is `cow_amp_field_arg`; this is the standalone form).
+#[test]
+fn cow_amp_bind_ref_field() {
+    run_gg(
+        "cow_amp_bind_ref_field.gg",
+        "\
+3
+4
+done",
+    );
+}
+
 /// CoW G2 site 3 (projected `&s.field` call-arg): the projection ROOT is a bare
 /// alias, so `&b.data` materializes the root before the borrow — the push
 /// reaches the copy's field, not the shared source's. Pre-fix both printed 4.
