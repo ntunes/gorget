@@ -3116,6 +3116,23 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 static_name = _ts_redirect.clone()
                         int sdst = add_local(&ctx, static_ret, None)
                         emit(&ctx, GICallExtern(sdst, static_name, static_args))
+                        # Bug D (Core #4, sibling 4/4): this static-method / variant-
+                        # ctor / trait-static path returns here BEFORE the generic
+                        # method-call `register_local_for_drop` (~:4265). `sdst` is
+                        # the extern call's owned return value (LoOwned) — a
+                        # `default()`/static-ctor that yields a genuinely HEAP-owned
+                        # resource (`Res.default()` building a heap String, a static
+                        # `F.make()` returning a runtime-built String) LEAKED when
+                        # discarded (measured: 33B static String / 27B struct-with-
+                        # String). Register `sdst`; self-gating no-ops POD returns
+                        # (`int.default()` → I64, `int.parse()` → Option[int]:
+                        # is_droppable_type skips both). A static method that returns
+                        # a bare string LITERAL yields a cap=0 view VALUE in the
+                        # LoOwned slot — it registers, but the scope-exit
+                        # `gorget_string_free` no-ops on cap=0, so it stays CLEAN (no
+                        # double-free). Bound/consumed results move-zero the temp so
+                        # its DropIfAlive no-ops.
+                        register_local_for_drop(&ctx, sdst, static_ret, &gmod)
                         return sdst
                 else:
                     pass
@@ -3389,6 +3406,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         emit(&ctx, GIAssign(uo_dst, op_consume(&ctx, &gmod, default_local, CkAssign())))
                         set_terminator(&ctx, GTJump(uo_merge_bb))
                         switch_to(&ctx, uo_merge_bb)
+                        # Bug D (Core #4, sibling 1/4): this `unwrap_or` intercept
+                        # RETURNS here BEFORE the generic method-call arm's
+                        # `register_local_for_drop` (~:4265) that every fall-through
+                        # method gets. `uo_dst` is an owned value slot: the Some-arm
+                        # deep-clones the payload (`gorget_string_clone_to_owned` /
+                        # `<T>__clone`) and the None-arm moves the value-typed
+                        # default in — a DISCARDED resource result
+                        # (`if o.unwrap_or(d) == x:`) LEAKED (measured 6B String).
+                        # Register `uo_dst`; `register_local_for_drop` self-gates
+                        # (lower_drops.gg:236-253: non-droppable / LoBorrowed /
+                        # LoView skip) so a POD / view result no-ops, and a
+                        # bound/returned/consumed result move-zeros the temp so its
+                        # DropIfAlive no-ops.
+                        register_local_for_drop(&ctx, uo_dst, uo_slot_tid, &gmod)
                         return uo_dst
                     # Plain unwrap: emit a real field read through the
                     # scrutinee-ptr helper, matching PConstructor destructure.
@@ -3406,11 +3437,39 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # inherit shim leaves LoOwned dst's alone (those
                     # were explicitly cloned and need their own drop).
                     inherit_borrow_from(&ctx, field_val, recv)
+                    # Bug D (Core #4, sibling 1/4): register the owned resource clone
+                    # this plain `unwrap`/`expect` returns for scope-exit drop —
+                    # mirrors the generic method-call `register_local_for_drop`
+                    # (~:4265) this early return skips. `emit_payload_read`
+                    # deep-clones a resource Some/Ok payload into a fresh owned slot;
+                    # discarded (`if o.unwrap() == x:`) it LEAKED (measured: 6B
+                    # String / 24B Vector / 786B Dict). Runs AFTER
+                    # `inherit_borrow_from`, so a borrowed-recv unwrap
+                    # (`coll.get(i).unwrap()` GtPtr, a `(&opt).unwrap()`) is
+                    # LoBorrowed → self-skipped (no double-free against the element /
+                    # receiver owner). POD / view payloads self-skip via
+                    # is_droppable_type / LoView; bound/returned/consumed results
+                    # move-zero the temp so its DropIfAlive no-ops.
+                    register_local_for_drop(&ctx, field_val, ctx.locals.get(field_val).unwrap().type_id, &gmod)
                     return field_val
                 # Fall back to re-cast if we couldn't identify the variant.
                 # Phase 3 (Class 8): inherit recv's borrow tag onto ud so a
                 # chained `coll.get(i).unwrap()` doesn't byte-copy the alias
                 # into a fresh LoOwned slot.
+                #
+                # Bug D (Core #4 class-completeness): these two fallback returns
+                # are DELIBERATELY NOT `register_local_for_drop`'d. They are
+                # UNREACHABLE for well-typed code: `variant_name == ""` (which is
+                # the only way inner_tid stays derivable-but-variant-unknown, or
+                # `inner_tid < 0`) means `recv` is neither an Option nor a Result,
+                # i.e. a type error the checker already rejects. `ud`
+                # inherit-copies recv's borrow tag (so a borrowed recv stays
+                # LoBorrowed → would self-skip anyway) and `return recv` is a
+                # harmless alias of an already-tracked local (recv is itself
+                # registered/param-owned at its own birth). Registering here would
+                # risk double-registering `recv`. If a future feature makes this
+                # path reachable for a genuinely-owned discardable temp, register
+                # `ud` (NOT `recv`) — mirror the plain-unwrap site above.
                 if inner_tid >= 0:
                     int ud = add_local_inheriting(&ctx, inner_tid, None, recv)
                     emit(&ctx, GIAssign(ud, op_consume(&ctx, &gmod, recv, CkAssign())))
@@ -3468,6 +3527,19 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             pass
                 int clone_dst = add_local(&ctx, recv_tid, None)
                 emit(&ctx, GIAssign(clone_dst, OpClone(recv)))
+                # Bug D (Core #4, sibling 2/4): `.clone()` returns here BEFORE the
+                # generic method-call `register_local_for_drop` (~:4265). `OpClone`
+                # deep-copies the receiver into a FRESH owned slot (LoOwned,
+                # `gorget_string_clone_to_owned` / `<T>__clone` / `gorget_array_clone`)
+                # — never an alias of `recv` — so a DISCARDED resource
+                # `.clone()` (`if s.clone() == x:`) LEAKED (measured: 28B String /
+                # 24B Vector). Register `clone_dst`; self-gating no-ops for a POD /
+                # view clone, and a bound/consumed clone move-zeros the temp so its
+                # DropIfAlive no-ops. Registering the owned COPY never double-frees
+                # the receiver (they are separate heap objects). (`Shared.clone()`
+                # is refcount-bump and never reaches here — it falls through the
+                # `gorget_shared` gate to the generic dispatch, which registers it.)
+                register_local_for_drop(&ctx, clone_dst, recv_tid, &gmod)
                 return clone_dst
             # Thread[T] methods — join / id. The receiver is a `Thread__{T}`
             # opaque handle with NO registered fn body, so `fn_sigs` has no
@@ -3501,6 +3573,16 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     return thr_void_dst
                 int thr_join_dst = add_local(&ctx, thr_payload_tid, None)
                 emit(&ctx, GICall(thr_join_dst, thr_join_fn, [op_consume(&ctx, &gmod, recv, CkCallArgOwning())]))
+                # Bug D (Core #4, sibling 3/4): `Thread.join()` returns here BEFORE
+                # the generic method-call `register_local_for_drop` (~:4265).
+                # `thr_join_dst` is the payload T returned BY VALUE from the joined
+                # thread (a fresh owned value, never an alias — the handle itself is
+                # move-consumed above) — so a DISCARDED resource payload
+                # (`if t.join() == x:`) LEAKED (measured: 35B heap String). Register
+                # `thr_join_dst`; self-gating no-ops a POD payload (`Thread[int]`)
+                # and the void→unit path above never reaches here. Bound/consumed
+                # results move-zero the temp so its DropIfAlive no-ops.
+                register_local_for_drop(&ctx, thr_join_dst, thr_payload_tid, &gmod)
                 return thr_join_dst
             # Detect mutating-method-on-field-access pattern *before*
             # lowering args, so we capture wb_base / wb_field while the
