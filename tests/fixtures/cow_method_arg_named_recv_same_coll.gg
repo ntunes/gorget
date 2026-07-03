@@ -1,0 +1,35 @@
+# CoW G1 memory-safety gate (round-33 re-review 4, receiver-root anchor): a
+# bare-param NAMED receiver (`v` is a plain Identifier, NOT projected) with a
+# same-collection element ARG (`v.push(v[0])`) + a later realloc. `v` materializes
+# its root at the NAMED-receiver block (is_bare_param), so the arg `v[0]` mints a
+# CollectionElement ref into the private copy; leaving it CoW-tracked dangles it
+# on the next push → heap-UAF (deterministic HARD-SIGSEGV both backends pre-fix,
+# even without ASan). The named-receiver / index-source blocks now arm the
+# end-of-statement untrack. MUST be ASan-clean, no SIGSEGV, both backends.
+from std.collections import Vector
+
+struct Res:
+    String name
+
+void flat(Vector[Res] v):
+    v.push(v[0])                 # same-collection arg; v materializes here
+    v.push(Res("z"))             # realloc
+    v.push(Res("z"))             # realloc
+    print(v.len())               # 4  (A, A-copy, z, z on the private copy)
+    print(v[0].name)             # A
+
+void nested(Vector[Vector[Res]] m):
+    m.push(m[0])
+    m.push([Res("z")])
+    m.push([Res("z")])
+    print(m.len())               # 4
+
+void main():
+    Vector[Res] a = [Res("A")]
+    flat(a)
+    print(a.len())               # 1  (caller untouched)
+
+    Vector[Vector[Res]] b = [[Res("A")]]
+    nested(b)
+    print(b.len())               # 1
+    print("done")

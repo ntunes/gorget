@@ -3937,66 +3937,94 @@ fn top_level_fn_bodies(content: &str) -> Vec<(String, String)> {
 
 /// Structural guard (Core #4 "one fix, all siblings" / #6 "convert a recurring
 /// bug class into an executable guard"; devbook/25 §3a): the G1 "materialize a
-/// projected mutation through an immutable root" transform has EXACTLY THREE
-/// call sites — `lower_field_assign`, `lower_index_assign` (stmts/assigns.rs),
-/// and `lower_method_call` (exprs/methods.rs). Each replaces the mutated
-/// collection with a private OWNED COPY and then lowers the store-target's
-/// projection chain AND the RHS / args — every index-load in those mints a
-/// TRANSIENT `CollectionElement`/`FieldPath` handle INTO that copy. If any such
+/// mutation target/receiver root into a private owned copy" transform. When a
+/// fn materializes such a root and then lowers a store-target projection chain /
+/// method receiver PLUS args / RHS, every index-load mints a TRANSIENT
+/// `CollectionElement`/`FieldPath` handle INTO the private copy. If any such
 /// handle stays CoW-tracked, a later same-collection mutation reallocates the
 /// copy and `cow_before_mutation` Case 3 clones freed memory → heap-UAF. The
 /// round-33 fold chain fixed exactly this class one leaked site at a time (the
-/// object chain, then the RHS/index, then the method-call args); this lint
-/// stops the NEXT sibling from drifting.
+/// object chain, then the RHS/index, then the method-call args, then the
+/// bare-param NAMED-receiver / index-source materialize `v.push(v[0])`).
 ///
-/// The shared close is `untrack_transient_element_refs_in_range`. The invariant
-/// pinned here: every fn that performs the G1 materialize — signalled by a
-/// `resolve_projection_root_local(` call — MUST also call
-/// `untrack_transient_element_refs_in_range(`. A 4th projected-materialize site
-/// added without the untrack fails here, forcing it through the shared path.
+/// The shared close is `untrack_transient_element_refs_in_range`. This guard is
+/// anchored on the ROOT MATERIALIZE — a `cow_before_mutation(` call — NOT on
+/// `resolve_projection_root_local` (which the named-receiver / index-source
+/// materialize does NOT use, so anchoring there missed it — the exact gap the
+/// 5th fold hit). The invariant: EVERY fn in the two mutation-lowering files
+/// that calls `cow_before_mutation(` is classified — `UNTRACK_REQUIRED` (it also
+/// lowers a projected target/receiver + args/RHS, so it MUST call the untrack)
+/// or `UNTRACK_EXEMPT` (whole-value reassign — `cow_before_mutation` there just
+/// SEVERS the reassigned collection's OWN refs before its buffer is replaced;
+/// the RHS is a single cloned value, so there are no projection-chain / arg
+/// element handles into a private copy to dangle). A NEW `cow_before_mutation`
+/// caller fails the classification assert, forcing a decision.
 ///
-/// **If this fails:** you added (or removed) a G1 root-materialize site. If you
-/// added one, span the WHOLE statement's lowering with a
-/// `untrack_transient_element_refs_in_range(builder, start, len)` call (see the
-/// existing three — snapshot `builder.locals.len()` before the receiver/object
-/// lowers, untrack after the args/RHS are consumed). Update `EXPECTED_SITES`
-/// only when the site set genuinely, deliberately changes.
+/// **If this fails:** (a) a fn in `UNTRACK_REQUIRED` lost its untrack — restore
+/// it (span the whole statement's lowering; see `lower_field_assign`); or (b) a
+/// NEW `cow_before_mutation` caller appeared — if it materializes a projected
+/// target/receiver + args/RHS, add it to `UNTRACK_REQUIRED` AND call the
+/// untrack; if it's a whole-value reassign with no projection/arg element
+/// handles, add it to `UNTRACK_EXEMPT` with a one-line why.
 #[test]
 fn g1_projected_materialize_sites_untrack() {
-    const EXPECTED_SITES: &[&str] =
+    // Materialize a projected target/receiver + args/RHS → MUST untrack.
+    const UNTRACK_REQUIRED: &[&str] =
         &["lower_field_assign", "lower_index_assign", "lower_method_call"];
+    // Whole-value reassign (`x = y`): `cow_before_mutation` severs the target's
+    // own element refs before its buffer is replaced — no projection-chain / arg
+    // element handles into a private copy, so no untrack needed.
+    const UNTRACK_EXEMPT: &[&str] = &["lower_assign"];
+
     let files = [
         "src/ir/lowering/stmts/assigns.rs",
         "src/ir/lowering/exprs/methods.rs",
     ];
-    let mut g1_sites: Vec<String> = Vec::new();
+    let mut required_seen: Vec<String> = Vec::new();
     for file in files {
         let content = fs::read_to_string(file).unwrap_or_default();
         for (name, body) in top_level_fn_bodies(&content) {
-            if body.contains("resolve_projection_root_local(") {
+            if !body.contains("cow_before_mutation(") {
+                continue;
+            }
+            let requires = UNTRACK_REQUIRED.contains(&name.as_str());
+            let exempt = UNTRACK_EXEMPT.contains(&name.as_str());
+            assert!(
+                requires || exempt,
+                "New `cow_before_mutation` caller `{name}` ({file}) — it materializes \
+                 a mutation target/receiver root. If it also lowers a PROJECTED \
+                 store / method receiver + args/RHS, it MUST call \
+                 `untrack_transient_element_refs_in_range` (add to UNTRACK_REQUIRED); \
+                 if it's a whole-value reassign with no projection-chain / arg \
+                 element handles into the private copy, add to UNTRACK_EXEMPT with a \
+                 one-line why. This gate exists because a same-collection element \
+                 handle into the private copy dangles on the next mutation \
+                 (heap-UAF) — see the round-33 fold chain."
+            );
+            if requires {
                 assert!(
                     body.contains("untrack_transient_element_refs_in_range("),
                     "G1 root-materialize site `{name}` ({file}) calls \
-                     `resolve_projection_root_local` — it materializes a projected \
-                     mutation into a private owned copy — but NEVER calls \
-                     `untrack_transient_element_refs_in_range`. The transient \
-                     element/arg handles into that copy dangle on a later \
-                     same-collection mutation (heap-UAF). Untrack the whole \
+                     `cow_before_mutation` (materializes a projected mutation into a \
+                     private owned copy) but NEVER calls \
+                     `untrack_transient_element_refs_in_range`. Its transient \
+                     projection-chain / arg element handles into that copy dangle on \
+                     a later same-collection mutation (heap-UAF). Untrack the whole \
                      statement's lowering range (see `lower_field_assign`)."
                 );
-                g1_sites.push(name);
+                required_seen.push(name);
             }
         }
     }
-    g1_sites.sort();
+    required_seen.sort();
     let mut expected: Vec<String> =
-        EXPECTED_SITES.iter().map(|s| s.to_string()).collect();
+        UNTRACK_REQUIRED.iter().map(|s| s.to_string()).collect();
     expected.sort();
     assert_eq!(
-        g1_sites, expected,
-        "The set of G1 projected-root-materialize sites changed: {g1_sites:?} vs \
-         expected {expected:?}. Each site MUST route through \
-         `untrack_transient_element_refs_in_range`; update `EXPECTED_SITES` only \
-         when the set genuinely, deliberately changes."
+        required_seen, expected,
+        "The set of untrack-required G1 root-materialize sites changed: \
+         {required_seen:?} vs expected {expected:?}. Each MUST route through \
+         `untrack_transient_element_refs_in_range`; update `UNTRACK_REQUIRED` only \
+         when the set deliberately changes."
     );
 }

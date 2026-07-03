@@ -492,15 +492,18 @@ pub(super) fn lower_method_call(
 
     // CoW UAF fix (round-33, class fix — the 3rd G1 root-materialize site, after
     // lower_field_assign / lower_index_assign): snapshot the local range for the
-    // WHOLE method-call statement (receiver chain + args). If the projected-root
-    // materialize below fires, an ARG that is an element of the SAME collection
-    // the receiver root-materializes (`v[0].set_from(v[1])`, `m[0].push(m[1][0])`)
-    // mints a transient CollectionElement/FieldPath ref into the private owned
-    // copy; it dangles on a later same-collection push (cow_before_mutation Case 3
-    // clones freed memory → heap-UAF). The untrack runs at the END (after
-    // `ensure_owned_at_consuming_arg` has cloned the consumed args), guarded by
-    // `did_g1_materialize` so NON-materializing / `&`-correct method calls stay
-    // byte-identical. Mirrors the assign gate.
+    // WHOLE method-call statement (receiver chain + args). If ANY of the three
+    // receiver-root materialize blocks below actually rebinds the root into a
+    // private owned copy — the projected-root block (`v[0].method()`), the
+    // bare-param NAMED-receiver block (`v.push(v[0])`), or the index-source block
+    // — an ARG that is an element of the SAME collection (`v[0].set_from(v[1])`,
+    // `m[0].push(m[1][0])`, `v.push(v[0])`) mints a transient CollectionElement/
+    // FieldPath ref into that copy; it dangles on a later same-collection push
+    // (cow_before_mutation Case 3 clones freed memory → heap-UAF). Each of those
+    // blocks sets `did_g1_materialize` on its `before != after` rebind; the
+    // untrack runs at the END (after `ensure_owned_at_consuming_arg` has cloned
+    // the consumed args), guarded by that flag so NON-materializing / `&`-correct
+    // method calls stay byte-identical. Mirrors the assign gate.
     let stmt_locals_start = builder.locals.len();
     let mut did_g1_materialize = false;
 
@@ -1925,6 +1928,12 @@ pub(super) fn lower_method_call(
                         if let Some((new_local, _)) = ctx.lookup_local(&hint) {
                             if new_local != place.local {
                                 recv = FunctionBuilder::copy(new_local);
+                                // A bare-param NAMED receiver (`v.push(v[0])`)
+                                // materialized its root into a private copy here —
+                                // arm the end-of-statement untrack (see the
+                                // projected-root block) so a same-collection element
+                                // ARG ref into that copy can't dangle on the next push.
+                                did_g1_materialize = true;
                             }
                         }
                     }
@@ -1959,6 +1968,10 @@ pub(super) fn lower_method_call(
                             if let Some((new_local, _)) = ctx.lookup_local(&hint) {
                                 if new_local != source_local {
                                     recv = lower_expr(ctx, builder, receiver);
+                                    // The index-source collection materialized into a
+                                    // private copy — arm the end-of-statement untrack
+                                    // (symmetric with the named-receiver block above).
+                                    did_g1_materialize = true;
                                 }
                             }
                         }

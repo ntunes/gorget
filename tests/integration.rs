@@ -25737,6 +25737,25 @@ done",
     );
 }
 
+/// CoW G1 memory-safety gate (round-33 re-review 4, receiver-root anchor): a
+/// bare-param NAMED receiver with a same-collection element ARG (`v.push(v[0])`,
+/// `m.push(m[0])`) + a later realloc. `v` materializes at the NAMED-receiver /
+/// index-source block (not the projected-root block), so `did_g1_materialize`
+/// must be armed there too. Pre-fix: deterministic HARD-SIGSEGV both backends.
+#[test]
+fn cow_method_arg_named_recv_same_coll() {
+    run_gg(
+        "cow_method_arg_named_recv_same_coll.gg",
+        "\
+4
+A
+1
+4
+1
+done",
+    );
+}
+
 #[test]
 fn cow_set_string_clone() {
     run_gg(
