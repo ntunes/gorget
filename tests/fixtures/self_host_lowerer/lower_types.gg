@@ -2488,6 +2488,56 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         if recv >= 0 and recv < ctx.locals.len():
             return ctx.locals.get(recv).unwrap().type_id
         return I64_TYPE
+    # `Shared[T].downgrade()` -> `Weak[T]`; `Weak[T].upgrade()` -> `Option[Shared[T]]`.
+    # Mirrors Rust gg's SHARED.downgrade (-> `Weak__{elem}`) and WEAK.upgrade
+    # (-> `Option__Shared__{elem}`) return_type closures (src/ir/lowering/builtins.rs
+    # :549 / :576). Gated on the TYPED method_prefix (`gorget_shared` / `gorget_weak`
+    # via resource_meta_for, Core #2 / layering rule 2), NOT a `Shared__`/`Weak__`
+    # name-match. Without these arms both fall through to the I64 default below:
+    # downgrade's `GorgetShared*` result lands in an int64_t slot (so `w` becomes
+    # `&slot`), and upgrade's raw `int` result is assigned into the
+    # `Option__Shared__<T>` STRUCT slot (cc: incompatible types). The upgrade arm
+    # additionally records the enum category so the downstream `match ...: case
+    # Some(x):` destructures the `Shared[T]` payload (mirrors the `.get()`/`find`
+    # option-minting arms above). The nullable-ptr -> Option LIFT and the typed
+    # `Weak__T__upgrade` wrapper live in lir_lower.gg / lir_codegen.gg.
+    if method == "downgrade" or method == "upgrade":
+        String sw_recv = ""
+        if recv >= 0 and recv < ctx.locals.len():
+            int sw_tid = ctx.locals.get(recv).unwrap().type_id
+            if sw_tid >= 0 and sw_tid < gmod.type_table.len():
+                GirType sw_gt0 = gmod.type_table.get(sw_tid).unwrap()
+                match sw_gt0:
+                    case GtPtr(sw_in):
+                        sw_tid = sw_in
+                    case GtMutPtr(sw_in2):
+                        sw_tid = sw_in2
+                    else:
+                        pass
+            if sw_tid >= 0 and sw_tid < gmod.type_table.len():
+                GirType sw_gt = gmod.type_table.get(sw_tid).unwrap()
+                match sw_gt:
+                    case GtNamed(sw_n):
+                        sw_recv = sw_n
+                    else:
+                        pass
+        match resource_meta_for(&gmod, sw_recv):
+            case Some(sw_meta):
+                match sw_meta.method_prefix:
+                    case Some(sw_pfx):
+                        if method == "downgrade" and sw_pfx == "gorget_shared":
+                            String dg_elem = sw_recv.slice(8, sw_recv.len())
+                            return lookup_or_register_named(&gmod, "Weak__" + dg_elem)
+                        if method == "upgrade" and sw_pfx == "gorget_weak":
+                            String ug_elem = sw_recv.slice(6, sw_recv.len())
+                            int ug_opt = lookup_or_register_named(&gmod, "Option__Shared__" + ug_elem)
+                            int ug_payload = resolve_field_gir_type("Shared__" + ug_elem, &gmod)
+                            record_enum_category(&gmod, ug_opt, ENUM_CAT_OPTION, ug_payload, -1)
+                            return ug_opt
+                    case None:
+                        pass
+            case None:
+                pass
     # Default to I64 for unknown methods
     return I64_TYPE
 

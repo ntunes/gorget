@@ -1048,6 +1048,14 @@ String emit_shared_method_wrappers(LirModule &m):
         if not td_seen.contains(req.type_name):
             td_seen.put(req.type_name.clone(), true)
             out = out + "typedef GorgetShared* " + req.type_name + ";\n"
+        # A Weak upgrade wrapper returns `Shared__<inner>` — make sure that
+        # typedef is in scope even when the program calls no Shared *method*
+        # (downgrade is a raw call, so it registers no Shared wrapper request).
+        if req.kind == "upgrade":
+            String up_shared_td = "Shared__" + req.inner_c
+            if not td_seen.contains(up_shared_td):
+                td_seen.put(up_shared_td.clone(), true)
+                out = out + "typedef GorgetShared* " + up_shared_td + ";\n"
     # Pass 2: wrapper bodies (one per request; deduped by (type_name, kind) at the
     # write site).
     for req2 in m.shared_wrapper_requests:
@@ -1074,6 +1082,15 @@ String emit_shared_method_wrappers(LirModule &m):
             # is inner-type-agnostic: clone only touches the refcount, never the
             # payload, so the same shape serves Shared[int] and Shared[Vector[_]].
             out = out + "static inline " + tn + " " + tn + "__clone(" + tn + " self) { return gorget_shared_clone(self); }\n"
+        elif req2.kind == "upgrade":
+            # Weak[T].upgrade() typed wrapper. `gorget_weak_upgrade(self)`
+            # CAS-bumps the strong count and returns 1 on success (the control
+            # block is alive) / 0 otherwise; on success the SAME handle is a
+            # valid `Shared__<T>` (Shared and Weak both point at the one
+            # GorgetShared control block). Returns `self`-or-NULL so the
+            # nullable-ptr→Option lift wraps it into `Option[Shared[T]]`. Mirrors
+            # Rust gg's `Weak__T__upgrade` (`gorget_weak_upgrade(self) ? self : NULL`).
+            out = out + "static inline Shared__" + req2.inner_c + " " + tn + "__upgrade(" + tn + " self) { return gorget_weak_upgrade(self) ? self : NULL; }\n"
     if out != "":
         out = out + "\n"
     return out
