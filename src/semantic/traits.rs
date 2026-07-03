@@ -1002,6 +1002,38 @@ fn process_impl(
         return;
     }
 
+    // Reject equipping a scalar primitive with a trait. A scalar primitive
+    // (int/int8-64/uint/uint8-64/float/float32-64/bool) has no addressable
+    // heap `self` and no vtable slot, so any trait method dispatch — direct
+    // `x.m()` OR `Box[Trait]` trait-object dispatch — miscompiles (C backend
+    // SEGVs dereferencing the value-as-pointer; LLVM rejects the NULL-degraded
+    // vtable). Intrinsic trait satisfaction (Hashable/Cloneable/Displayable/
+    // Numeric) does NOT go through user equip blocks — it is short-circuited by
+    // `has_trait_impl_by_name` and special-cased in lowering (`x.hash(&h)` →
+    // write_int) — so this reject leaves it untouched. `String`/`str`(CStr) are
+    // heap/view-backed and excluded (`equip String with Writer` is legitimate),
+    // as is `Void`. Keying off the RESOLVED type (Core #2, typed metadata) is
+    // alias-robust: `type MyInt = int` is meta-inlined to `int` before this
+    // point, so it rejects too. Fixing the class at the producer (equip
+    // registration) kills both crash shapes at once.
+    if trait_name.is_some() {
+        if let types::ResolvedType::Primitive(pt) = types.get(self_type_id) {
+            if !matches!(
+                pt,
+                PrimitiveType::StringType | PrimitiveType::CStr | PrimitiveType::Void
+            ) {
+                errors.push(SemanticError {
+                    kind: SemanticErrorKind::PrimitiveTraitImpl {
+                        trait_: trait_name.clone().unwrap_or_default(),
+                        type_: self_type_name.clone(),
+                    },
+                    span: impl_block.span,
+                });
+                return;
+            }
+        }
+    }
+
     // Resolve trait generic args to TypeIds for duplicate detection.
     // e.g. From[int] → [int_type_id], From[str] → [str_type_id], Displayable → []
     let trait_arg_type_ids: Vec<TypeId> = impl_block.trait_.as_ref()
@@ -2119,19 +2151,27 @@ equip MyStruct with MyTrait:
 
     #[test]
     fn orphan_rule_rejects_both_foreign() {
-        // Built-in type (int is a primitive, won't be found in scopes) +
-        // built-in trait (Displayable) → both foreign → orphan error
+        // Built-in type (String is heap-backed, won't be found in scopes) +
+        // built-in trait (Displayable) → both foreign → orphan error.
+        // (`String` rather than a scalar primitive here: a scalar like `int`
+        // now hits the earlier `PrimitiveTraitImpl` reject before the orphan
+        // check runs. String is a legitimate equip target — heap-backed, not
+        // a scalar — so it still reaches and exercises the orphan rule.)
         let source = "\
-equip int with Displayable:
+equip String with Displayable:
     String display(self):
         return \"x\"
 ";
         let (_, errors) = analyze(source);
+        // `type_` renders as "stringtype" — the lowercased Debug of
+        // `PrimitiveType::StringType` (a pre-existing `type_name` rendering
+        // quirk, orthogonal to this test). The orphan rule firing on a
+        // both-foreign equip is what's under test.
         assert!(
             errors.iter().any(|e| matches!(
                 &e.kind,
                 SemanticErrorKind::OrphanImpl { trait_, type_ }
-                    if trait_ == "Displayable" && type_ == "int"
+                    if trait_ == "Displayable" && type_ == "stringtype"
             )),
             "both foreign should be rejected: {:?}", errors
         );
@@ -2139,14 +2179,20 @@ equip int with Displayable:
 
     #[test]
     fn orphan_rule_local_trait_foreign_type() {
-        // Local trait + built-in type → allowed
+        // Local trait + built-in type → allowed.
+        // (`String` rather than a scalar primitive: a scalar `int` target now
+        // hits the `PrimitiveTraitImpl` reject, which would make this test
+        // "pass" over a program that is actually rejected — a misleading
+        // fossil. String is a legitimate foreign non-scalar equip target, so
+        // the orphan rule (local trait ⇒ no orphan violation) is still what's
+        // under test.)
         let source = "\
 trait MyTrait:
-    int value(self)
+    String value(self)
 
-equip int with MyTrait:
-    int value(self):
-        return 42
+equip String with MyTrait:
+    String value(self):
+        return \"x\"
 ";
         let (_, errors) = analyze(source);
         assert!(

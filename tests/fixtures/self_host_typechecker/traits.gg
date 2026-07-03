@@ -21,9 +21,11 @@ from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefInfo, Scope, get_scope_at
 from scope import SkEquipBlock, SkFunction
 from types import TypeTable, ResolvedType, ast_type_to_resolved, get_rtype_at
-from types import RTGeneric, RTFunction
+from types import RTGeneric, RTFunction, RTPrimitive
 from types import FunctionSig, MethodSigShape, TraitInfo, EquipInfo
 from types import TraitRegistry, MethodResolution, ShapeResolution
+from resolve import ResolveContext
+from diagnostic import Diagnostic, DkPrimitiveTraitImpl
 
 # Data-type definitions (FunctionSig, MethodSigShape, TraitInfo,
 # EquipInfo, TraitRegistry, MethodResolution, ShapeResolution) live in
@@ -221,7 +223,7 @@ Option[int] registry_find_nth_equip_def_scope(int n, int parent_scope, ScopeTabl
 
 # ── Collect an EquipBlock into the registry ──────────────────
 
-void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable &types, TraitRegistry &registry):
+void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable &types, TraitRegistry &registry, ResolveContext &ctx):
     int saved = scopes.current_scope()
     if equip_scope >= 0:
         scopes.set_current(equip_scope)
@@ -233,6 +235,35 @@ void collect_equip(EquipBlock eq, int equip_scope, ScopeTable &scopes, TypeTable
         if scopes.lookup(tn) is Some(td):
             trait_def_id = td
         trait_name = tn
+    # Reject equipping a scalar primitive with a trait. A scalar primitive
+    # (int/int8-64/uint/uint8-64/float/float32-64/bool/char) has no
+    # addressable heap `self` and no vtable slot, so trait method dispatch —
+    # direct OR via `Box[Trait]` — miscompiles (the self-by-pointer ABI
+    # derefs the value-as-address → SEGV). Mirrors Rust's `process_impl`
+    # reject. Key off the RESOLVED type (Core #2, typed metadata): direct
+    # scalars resolve to `RTPrimitive(pname)` via `primitive_id`. Intrinsic
+    # trait satisfaction (Hashable/Cloneable/Displayable/Numeric) does NOT go
+    # through equip blocks (Phase-4 `primitive_satisfies_trait`), so it is
+    # untouched. `str`/`String`/`cstr`/`void` are excluded from the scalar
+    # set, so `equip String with Writer` stays legitimate.
+    #
+    # KNOWN GAP (filed, not fixed here): a `type X = scalar` alias is NOT
+    # caught — `collect_equip` runs BEFORE alias `type_id` resolution
+    # (ITypeAlias handler in typecheck.gg), so the target resolves to
+    # RTDefined, not RTPrimitive. Reordering alias resolution has a
+    # disproportionate blast radius (registry-ordering comment upstream), so
+    # this is a filed self-host-only asymmetry (Rust meta-inlines the alias
+    # before process_impl and does reject). The DIRECT-scalar SEGV — the
+    # load-bearing case — is closed in both compilers.
+    if trait_name != "":
+        match types.get(self_tid):
+            case RTPrimitive(pname):
+                if is_scalar_primitive_name(pname):
+                    ctx.diagnostics.push(Diagnostic.error(eq.target.span, DkPrimitiveTraitImpl(), "cannot equip scalar primitive `" + pname + "` with trait `" + trait_name + "`: scalar primitives cannot be trait method receivers (no addressable `self`), so both direct dispatch and `Box[" + trait_name + "]` trait-object dispatch would miscompile. Wrap the value in a struct and equip that."))
+                    scopes.set_current(saved)
+                    return
+            else:
+                pass
     Vector[String] method_names = Vector[String]()
     Vector[int] method_def_ids = Vector[int]()
     Vector[FunctionSig] method_sigs = Vector[FunctionSig]()
@@ -474,7 +505,7 @@ void register_builtin_traits(ScopeTable scopes, TypeTable types, TraitRegistry &
 
 # ── Build the registry for a module ──────────────────────────
 
-TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable &types):
+TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     TraitRegistry registry = new_trait_registry()
     int module_scope = 0
     for item_a in module.items:
@@ -488,7 +519,7 @@ TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable 
         match item_b:
             case IEquip(eq):
                 int equip_scope = registry_find_nth_equip_def_scope(eq_idx, module_scope, scopes).unwrap_or(-1)
-                collect_equip(eq, equip_scope, &scopes, &types, &registry)
+                collect_equip(eq, equip_scope, &scopes, &types, &registry, &ctx)
                 eq_idx = eq_idx + 1
             else:
                 pass
@@ -676,6 +707,30 @@ MethodResolution resolve_method_full(TraitRegistry registry, int type_id, String
 
 bool is_numeric_primitive_name(String name):
     if name == "int" or name == "float":
+        return true
+    if name == "int8" or name == "int16" or name == "int32" or name == "int64":
+        return true
+    if name == "uint8" or name == "uint16" or name == "uint32" or name == "uint64":
+        return true
+    if name == "float32" or name == "float64":
+        return true
+    return false
+
+# The SCALAR builtins that cannot be trait method receivers: they have no
+# addressable heap `self` and no vtable slot, so any `equip <scalar> with
+# Trait` block miscompiles (self-by-pointer ABI derefs the value-as-address
+# → SEGV / NULL-degraded vtable). `collect_equip` rejects on this set;
+# mirrors Rust's `is_scalar_primitive`.
+#
+# ⚠ DELIBERATELY SEPARATE from `is_numeric_primitive_name` — do NOT fold this
+# into that helper. `is_numeric_primitive_name` feeds `primitive_satisfies_trait`
+# (numeric-trait dispatch); adding `bool`/`char` there would make them spuriously
+# satisfy Add/Sub/Numeric (a semantic regression). This set is a SUPERSET (adds
+# bare `uint` + `bool` + `char`) used ONLY for the equip-reject. `str` / `String` /
+# `cstr` / `void` are heap/view/unit and are NOT scalars — they are excluded so
+# `equip String with Writer` stays legitimate.
+bool is_scalar_primitive_name(String name):
+    if name == "int" or name == "uint" or name == "float" or name == "bool" or name == "char":
         return true
     if name == "int8" or name == "int16" or name == "int32" or name == "int64":
         return true

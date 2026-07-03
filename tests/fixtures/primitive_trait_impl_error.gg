@@ -1,0 +1,28 @@
+# `equip <scalar-primitive> with Trait` must be rejected at the semantic
+# layer (Core invariant #8: reference-grade, not "matches a broken backend").
+#
+# A scalar primitive (here `int`) has no addressable heap `self` and no vtable
+# slot. The uniform method ABI passes `self` by pointer; for a scalar the
+# caller passes the VALUE as that pointer and the body dereferences it as an
+# address. Before this reject, `equip int with Doubler` compiled and then:
+#   - DIRECT dispatch (`x.double_it()`)  → silent SEGV (exit 139), C backend.
+#   - `Box[Doubler]` trait-object dispatch → same SEGV / NULL-degraded vtable
+#     (LLVM `llc` rejects the NULL `__drop` struct-initializer).
+# Both crash shapes are closed by rejecting the equip at registration.
+#
+# `str`/`String`/`cstr` are heap/view-backed (`equip String with Writer` is
+# legitimate) and are NOT rejected — only scalar primitives are.
+from std.collections import Box
+
+trait Doubler:
+    int double_it(self)
+
+equip int with Doubler:
+    int double_it(self):
+        return self * 2
+
+void main():
+    int x = 21
+    print(x.double_it())            # direct dispatch — was silent SEGV
+    Box[Doubler] d = Box.new(5)     # trait-object dispatch — was SEGV / llc error
+    print(d.double_it())

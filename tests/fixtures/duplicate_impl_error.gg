@@ -1,13 +1,22 @@
+# Duplicate trait-impl detection. The target is a struct (`Num`), not a
+# scalar primitive: `equip <scalar> with Trait` is now rejected up front by
+# the `PrimitiveTraitImpl` check, which would preempt the duplicate-impl
+# error this fixture is meant to exercise. A struct is a legitimate equip
+# target, so the second `equip Num with Sortable` is what trips duplicate
+# detection.
 trait Sortable:
     bool less(self, Self other)
 
-equip int with Sortable:
-    bool less(self, int other):
-        return self < other
+struct Num:
+    int v
 
-equip int with Sortable:
-    bool less(self, int other):
-        return self < other
+equip Num with Sortable:
+    bool less(self, Num other):
+        return self.v < other.v
+
+equip Num with Sortable:
+    bool less(self, Num other):
+        return self.v < other.v
 
 void main():
     pass

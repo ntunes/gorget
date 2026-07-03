@@ -1,0 +1,25 @@
+# KNOWN-GAP fixture (see the `#[ignore]`'d `primitive_trait_impl_alias_error`
+# test in tests/integration.rs). Expected behavior: REJECT — a trait equip on
+# a type alias of a scalar primitive is exactly as unsound as equipping the
+# scalar directly (same self-by-pointer ABI, same SEGV).
+#
+# Rust `gg` DOES reject this: `ast_type_to_resolved` folds the alias `MyInt`
+# to `Primitive(int)` before `process_impl` runs, so the `PrimitiveTraitImpl`
+# check fires. The SELF-HOST typechecker does NOT reject it yet: its
+# `collect_equip` runs BEFORE the `ITypeAlias` type_id resolution pass, so the
+# equip target resolves to `RTDefined`, not `RTPrimitive`, and the scalar-set
+# check never sees `"int"`. Reordering alias resolution has disproportionate
+# blast radius (registry-ordering constraint), so the gap is filed, not forced.
+# The DIRECT-scalar SEGV — the load-bearing case — is closed in BOTH compilers.
+type MyInt = int
+
+trait Doubler:
+    int double_it(self)
+
+equip MyInt with Doubler:
+    int double_it(self):
+        return self * 2
+
+void main():
+    int x = 21
+    print(x.double_it())

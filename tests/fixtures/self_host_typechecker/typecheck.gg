@@ -2061,7 +2061,7 @@ void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, Reso
     # struct fields / enum variants as it walks; the registry only needs
     # equip-block self types and method sigs which `ast_type_to_resolved`
     # can compute from the resolved scope tree.
-    types.trait_registry = build_trait_registry(module, &scopes, &types)
+    types.trait_registry = build_trait_registry(module, &scopes, &types, &ctx)
     # Pre-pass: register all function signatures (sets def.type_id for
     # IFunction items) before walking any bodies. Without this, when
     # main's body uses `auto x = imported_fn()` and imported_fn comes

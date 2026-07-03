@@ -24778,6 +24778,30 @@ fn duplicate_impl_error() {
 }
 
 #[test]
+fn primitive_trait_impl_error() {
+    // Reject `equip <scalar-primitive> with Trait` — a scalar `self` has no
+    // addressable heap object / vtable slot, so both direct dispatch AND
+    // `Box[Trait]` trait-object dispatch previously miscompiled to a silent
+    // SEGV (Core invariant #8). Rejected at the equip-registration site.
+    check_gg_fails("primitive_trait_impl_error.gg", "cannot equip scalar primitive");
+}
+
+#[test]
+#[ignore = "KNOWN GAP: `type X = scalar; equip X with Trait` is rejected by \
+Rust gg (alias folds to the scalar before process_impl) but NOT by the \
+self-host typechecker (collect_equip runs before ITypeAlias type_id \
+resolution, so the target resolves to RTDefined, not RTPrimitive). Filed \
+rather than forced — reordering alias resolution has disproportionate blast \
+radius. The DIRECT-scalar SEGV is closed in BOTH compilers. Un-ignore once \
+the self-host catches aliased scalars too."]
+fn primitive_trait_impl_alias_error() {
+    // Expected (both compilers): REJECT. Documents the intended behavior for
+    // the aliased-scalar case so the wired-in expectation reflects what the
+    // language SHOULD do, not the current self-host gap.
+    check_gg_fails("primitive_trait_impl_alias_error.gg", "cannot equip scalar primitive");
+}
+
+#[test]
 fn unsatisfied_trait_bound_error() {
     check_gg_fails("unsatisfied_trait_bound_error.gg", "does not satisfy trait bound");
 }

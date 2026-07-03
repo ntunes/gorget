@@ -274,6 +274,14 @@ pub enum SemanticErrorKind {
     /// Duplicate trait implementation.
     DuplicateImpl { trait_: String, type_: String },
 
+    /// A scalar primitive (int/float/bool/…, not String) was equipped with a
+    /// trait. Scalar primitives have no addressable heap `self` and no vtable
+    /// slot, so trait method dispatch (direct or via `Box[Trait]`) miscompiles
+    /// — the C backend passes the value where a `self` pointer is expected and
+    /// dereferences garbage (SEGV); LLVM rejects the NULL-degraded vtable
+    /// global. Rejected up front.
+    PrimitiveTraitImpl { trait_: String, type_: String },
+
     /// A user-defined type's field/variant graph forms an unbounded cycle —
     /// every loop through the cycle stores its members by value (no `Box[T]`,
     /// `Vector[T]`, or other heap indirection), so the type would have
@@ -667,6 +675,15 @@ impl std::fmt::Display for SemanticError {
                         "duplicate implementation of trait `{trait_}` for type `{type_}`"
                     )
                 }
+            }
+            SemanticErrorKind::PrimitiveTraitImpl { trait_, type_ } => {
+                write!(
+                    f,
+                    "cannot equip scalar primitive `{type_}` with trait `{trait_}`: \
+                    scalar primitives cannot be trait method receivers (no addressable \
+                    `self`), so both direct dispatch and `Box[{trait_}]` trait-object \
+                    dispatch would miscompile. Wrap the value in a struct and equip that."
+                )
             }
             SemanticErrorKind::RecursiveTypeNeedsBox { name, cycle } => {
                 write!(
