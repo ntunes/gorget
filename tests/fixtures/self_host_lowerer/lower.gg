@@ -10,6 +10,7 @@ from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator
 from gir import SharedLocalInfo, InnerSharedSpawn, PendingSharedAsync
 from gir import Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure
+from gir import peel_ptr_tid
 from gir import ClosureCapture, CAP_BY_VALUE, CAP_BY_MUT_REF
 from gir import SCHED_POOL, SCHED_THREAD, SCHED_INLINE, SCHED_SINGLE
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
@@ -750,6 +751,47 @@ bool is_mut_borrow_param_local(LowerCtx &ctx, GirModule &gmod, int local):
             return true
         else:
             return false
+
+# ── R36-B: CoW G1/G1a decide-at-root materialize for a PROJECTED mutation
+# whose root is a bare (immutable-in-context) by-value param. Clones the whole
+# root collection/struct into a fresh owned local and rebinds the name so the
+# projected mutation (`v[i]=x`, `v[i].f=x`, `o.inner.f=x`, `s.field.push()`)
+# lands on the private copy — the caller's buffer is untouched. A `&`/`!`
+# mut-borrow root (GtMutPtr, caught by is_mut_borrow_param_local) or an owned
+# local root (LoOwned != LoParam) is SKIPPED (writes through, unchanged).
+# Mirrors Rust cow_before_mutation on the projection root (assigns.rs:601 /
+# methods.rs:1851). Returns true if it materialized. After the rebind, the
+# root local is LoOwned, so a second call in the same statement finds a
+# non-param and returns false (no double-clone) — idempotent per root.
+bool cow_materialize_projected_root(LowerCtx &ctx, GirModule &gmod, SpannedExpr target):
+    String root = cow_source_root_name(target)
+    if root == "":
+        return false
+    if not nl_contains(&ctx, root):
+        return false
+    int root_local = nl_get(&ctx, root)
+    bool is_param = false
+    match ctx.locals.get(root_local).unwrap().ownership:
+        case LoParam():
+            is_param = true
+        else:
+            pass
+    if not is_param:
+        return false
+    if is_mut_borrow_param_local(&ctx, &gmod, root_local):
+        return false
+    int root_tid = ctx.locals.get(root_local).unwrap().type_id
+    int struct_tid = peel_ptr_tid(&gmod, root_tid)
+    String tname = type_id_to_name(struct_tid, &gmod)
+    String clone_fn = resolve_payload_clone_fn(tname, &gmod)
+    if clone_fn == "":
+        return false
+    int mat = add_local(&ctx, struct_tid, None)
+    Vector[Operand] cargs = [OpBorrow(root_local)]
+    emit(&ctx, GICallExtern(mat, clone_fn, cargs))
+    nl_put(&ctx, root, mat)
+    register_local_for_drop(&ctx, mat, struct_tid, &gmod)
+    return true
 
 # Phase 3 (2026-05-22) — Class 8 keystone fix.
 #

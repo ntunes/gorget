@@ -28,7 +28,7 @@ from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
-from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, is_mut_borrow_param_local
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, is_mut_borrow_param_local, cow_materialize_projected_root
 from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
@@ -889,12 +889,20 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # The codegen expands this to `((T*)base)->field = value;`.
                     # Previously silently dropped — `self.lex_pos += 1` didn't
                     # increment, leaving the lexer loop spinning.
+                    # R36-B: PROJECTED field-store (`v[i].f = x`, `o.inner.f = x`)
+                    # through a bare param materializes the immutable-in-context
+                    # ROOT first (caller untouched). A bare `self.f = x` (root is
+                    # `self`, a `&self` GtMutPtr param) is skipped by the helper.
+                    cow_materialize_projected_root(&ctx, &gmod, target_expr)
                     lower_field_write(&ctx, *base_box, field_name, value_expr, &gmod)
                 case EIndex(base_box, idx_box):
                     # v[i] = x — Vector/Dict/Set index assignment. Dispatch
                     # to the collection's runtime setter based on the base
                     # type name. The self-host uses this for Dict[K,V] put
                     # (int_consts[name] = val) and Vector[T] set patterns.
+                    # R36-B: a bare-param root (`v[i] = x`, `m[i][j] = x`)
+                    # materializes the root collection first (caller untouched).
+                    cow_materialize_projected_root(&ctx, &gmod, target_expr)
                     lower_index_assign(&ctx, *base_box, *idx_box, value_expr, &gmod)
                 case EDeref(inner_box):
                     # `*b = X` — write X THROUGH the box pointer into the heap
