@@ -2471,8 +2471,17 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 case EIdentifier(fname):
                     # Check if fname is a local variable (callable parameter or closure).
                     # If so, dispatch through closure protocol instead of direct call.
-                    # Skip if fname is a known function (fn_sigs) or redirect target.
-                    if nl_contains(&ctx, fname) and not gmod.fn_sigs.contains(fname) and not gmod.call_redirects.contains(fname):
+                    # A named local SHADOWS a same-named top-level function (lexical
+                    # scoping): `nl_contains` holds ONLY genuine local bindings
+                    # (params / var-decls / closures via `nl_put`) — a plain
+                    # function call never `nl_put`s its name — so a hit here means a
+                    # real shadowing local (`auto pick = (int n): …` over a top-level
+                    # `int pick(bool)`) that MUST route through the closure protocol,
+                    # NOT the direct function call. A `not fn_sigs.contains(fname)`
+                    # guard here would fire ONLY in the shadow case and wrongly pick
+                    # the function (test_if_expressions case #20). Redirects still
+                    # take priority (call-redirect'd names are not shadowing locals).
+                    if nl_contains(&ctx, fname) and not gmod.call_redirects.contains(fname):
                         int callable_local = nl_get(&ctx, fname)
                         # Lower args
                         Vector[Operand] cl_args = []
@@ -3896,6 +3905,42 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             else:
                                 pass
                         _mdf_si += 1
+            # Hoisted loop-invariant collection-mutator decl lookup. Used for
+            # BOTH (a) the owning-VALUE-arg expected-type hint just below AND
+            # (b) the per-arg owning-promotion inside the loop — previously two
+            # separate `collection_builtin_method(_recv_ck, mname)` matches, now
+            # one linear-scan + clone hoisted out (correctness-neutral, cheaper).
+            Option[BuiltinMethodDecl] _mut_decl = collection_builtin_method(_recv_ck, mname)
+            # Collection-mutator owning-VALUE-arg expected type. A bare `None`
+            # (and `Some`/`Ok`/`Error`) pushed into a `Vector[Option[T]]` /
+            # `Dict[_, Option[T]]` needs `expected_type` set to the element/value
+            # type so `ENoneLiteral` (lower_expr :~4616) materializes a TAGGED
+            # None ctor instead of falling to `OpConstUnit` (int32 0) — which the
+            # push then copies as a zeroed {tag=0,payload=0} == bogus Some(0)
+            # (test_vector_edge_cases `opt_vec.push(None)`). The VALUE position is
+            # the LAST `owning_arg_positions` entry (push→0, set/insert→1, Dict
+            # put→1); the Dict KEY (idx 0) is left untouched (a bare enum key is
+            # not a real case). NARROWED to Option/Result element types — the same
+            # class `_combinator_et` targets — so non-enum element pushes are
+            # byte-unchanged. Mirrors Rust gg setting the push arg's expected type
+            # to the element type.
+            int _mut_val_pos = -1
+            int _mut_val_et = -1
+            match _mut_decl:
+                case Some(_mvdecl):
+                    if _mvdecl.owning_arg_positions.len() > 0:
+                        _mut_val_pos = _mvdecl.owning_arg_positions.get(_mvdecl.owning_arg_positions.len() - 1).unwrap()
+                        String _mut_val_name = index_value_type_name(recv_type_name)
+                        if _mut_val_name == "Str":
+                            _mut_val_name = "GorgetString"
+                        if _mut_val_name != "":
+                            int _mv_cand = resolve_field_gir_type(_mut_val_name, &gmod)
+                            if _mv_cand >= 0:
+                                EnumCategory _mv_ec = enum_category_of(&gmod, _mv_cand)
+                                if _mv_ec.category == ENUM_CAT_OPTION or _mv_ec.category == ENUM_CAT_RESULT:
+                                    _mut_val_et = _mv_cand
+                case None:
+                    pass
             int _ma_idx = 0
             for ma in filled_margs:
                 # closure Phase 2 Step A: a method-call arg that CONTAINS a
@@ -3911,6 +3956,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # save/restore keeps it scoped to this arg.
                 int prev_expected_ma = ctx.expected_type
                 ctx.expected_type = _combinator_et
+                # Collection-mutator owning-value arg: hint the Option/Result
+                # element type (see the `_mut_val_et` computation above the loop)
+                # so a bare `None`/`Some`/`Ok`/`Error` materializes tagged.
+                if _ma_idx == _mut_val_pos and _mut_val_et >= 0:
+                    ctx.expected_type = _mut_val_et
                 if expr_has_it(ma):
                     ma_val = record_implicit_it_closure(&ctx, ma, &gmod)
                 else:
@@ -3943,7 +3993,10 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # (COLLECTION_BUILTIN_METHODS, keyed by the RESOLVED kind).
                 # None (non-collection receiver or non-mutator method) → no
                 # promotion, exactly as the old `is_owning_mutator_arg` false.
-                match collection_builtin_method(_recv_ck, mname):
+                # Reuses the hoisted `_mut_decl` (same lookup as the value-type
+                # hint above) instead of re-calling collection_builtin_method
+                # per arg.
+                match _mut_decl:
                     case Some(cdecl):
                         if int_vec_contains(cdecl.owning_arg_positions, _ma_idx):
                             ma_kind = CkCallArgOwning()

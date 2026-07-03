@@ -4461,7 +4461,20 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             else:
                 # Tier 1 lift: collection void* → Option wrap. Mirrors
                 # src/lir/lower/lifts.rs::emit_void_ptr_option_wrap.
-                if dst_local >= 0 and is_collection_void_return(call_name):
+                #
+                # EXCLUDE the EIndex-exclusive raw getters (`gorget_array_get`/
+                # `gorget_map_get`, keyed on the UNMAPPED `func_name` — a `.get()`
+                # arrives as `gorget_array_safe_get` / mapped from `Dict__K__V__get`,
+                # never these raw symbols; same predicate the `eindex_raw_getter`
+                # copy-out below trusts). For `vec[i]` the dst Option-ness means the
+                # *element type* is `Option[T]`, NOT that we must wrap a nullable
+                # pointer: wrapping here reads only `*(int64_t*)ptr` (the tag) and
+                # rebuilds a bogus `Some(tag)`, so every `Vector[Option[T]]` index
+                # read collapsed to `Some(0)` (test_if_expressions / _collections_nested /
+                # _vector_edge_cases). Skipping the lift lets EIndex fall through to
+                # the aggregate `*(StructT*)(void*)` copy-out at `eindex_raw_getter`.
+                bool eix_raw_get_lift = (func_name == "gorget_array_get") or (func_name == "gorget_map_get")
+                if dst_local >= 0 and is_collection_void_return(call_name) and not eix_raw_get_lift:
                     int lift_dst_slot = local_to_slot.get(dst_local).unwrap()
                     int lift_slot_ty = f.slots.get(lift_dst_slot).unwrap().ty
                     if lift_slot_ty >= LT_STRUCT_BASE:
