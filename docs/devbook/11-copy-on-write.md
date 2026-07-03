@@ -424,14 +424,19 @@ The single rule above is the **design target**, and the implementation is
 `cow_before_mutation` extended shape-by-shape. Today `cow_before_mutation`
 enforces the rule for the **tracked-source** cases (the `is_bare_param`
 direct-param clone and the `Alias`/`CollectionElement`/`FieldPath`/
-`RuntimeView` origins off `LocalOwnership`); some **bare-rooted** shapes —
-element/field/method-projected mutation through a bare param, `&t`/`&self`
-on a bare value, untracked alias chains — still write through until the
-round-33 materialize track lands (owner-confirmed 2026-07-02; the detailed
-gap map and live status are in `TODO.md`). So do **not** read the presence
-of `cow_before_mutation` as "the spec is enforced everywhere" — it is
-partial and being unified. **When the track lands, this marker is removed
-and the doc describes only the single uniform rule.**
+`RuntimeView` origins off `LocalOwnership`), **plus** the bare-rooted
+**projected mutation** shapes (`v[i].field = x`, `v.field.push()`,
+`v[i].method()` through a bare param — G1, landed `d1b1744a`, round-33)
+**and** the bare-rooted **`&`-of-value FORMATION** shapes (`&t` / `&self`
+on a bare value, and projected `f(&s.field)` / `auto r = &s.field` — G2,
+landed `2c7fbf04`, round-34). The one remaining unconverged shape is
+**untracked alias chains** — a `&`-mutation whose root is a view-returning
+method (`&x.slice()[i]`), which `resolve_projection_root_local` cannot name,
+so it still writes through (gap map + live status in `TODO.md`). So do
+**not** yet read the presence of `cow_before_mutation` as "the spec is
+enforced everywhere" — one class remains. **When the untracked-alias-chains
+audit lands, this marker is removed and the doc describes only the single
+uniform rule.**
 
 ## Full lazy materialization (#37) — the lazy-CoW default
 
