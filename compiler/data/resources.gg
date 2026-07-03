@@ -2863,6 +2863,15 @@ public static Vector[BuiltinMethodEntry] COLLECTION_BUILTIN_METHODS = [
         BuiltinMethodDecl("push", false, [0], BrkInfer(), true),
         BuiltinMethodDecl("set", false, [1], BrkInfer(), true),
         BuiltinMethodDecl("insert", false, [1], BrkInfer(), true),
+        # `fill(n, val)` — HINT-ONLY (EMPTY owning_arg_positions): the value is
+        # cloned into every slot, so consuming it (clone + move-zero) would
+        # double-free a live source. The lowerer derives the value-arg
+        # element-type HINT position from the LAST arg (not from
+        # owning_arg_positions), so membership in this table alone makes a bare
+        # `None` in `Vector[Option[T]].fill(n, None)` materialize TAGGED (not
+        # int32 0 == bogus Some(0)). Empty owning list ⇒ hint-WITHOUT-consume,
+        # mirroring Rust gg's split of the value-arg hint from the consume set.
+        BuiltinMethodDecl("fill", false, [], BrkInfer(), true),
     ]),
     BuiltinMethodEntry(CkDeque(), [
         BuiltinMethodDecl("push", false, [0], BrkInfer(), true),
@@ -2875,6 +2884,14 @@ public static Vector[BuiltinMethodEntry] COLLECTION_BUILTIN_METHODS = [
     BuiltinMethodEntry(CkDict(), [
         BuiltinMethodDecl("put", false, [0, 1], BrkInfer(), true),
         BuiltinMethodDecl("set", false, [0, 1], BrkInfer(), true),
+        # `get_or_put(k, default)` — HINT-ONLY (EMPTY owning_arg_positions): the
+        # default is BORROWED (inserted only on a miss), so consuming it would
+        # double-free. Hint the LAST-arg (value) element type so a bare `None`
+        # default materializes TAGGED, same hint-without-consume split as fill.
+        # (The flip is LATENT: get_or_put(k, None) still CC-FAILs on a deeper
+        # `__gg_Option__int64_t` type-registration bug — the row is forward-
+        # correct and harmless, but only the fill flip is claimed for now.)
+        BuiltinMethodDecl("get_or_put", false, [], BrkInfer(), true),
     ]),
     # Set add/insert own their single element arg (idx 0). Both the ordered
     # (Set) and unordered (HashSet) kinds share the same mutator surface, so

@@ -1786,8 +1786,10 @@ fn option_assign() {
 // Pre-fix the inline bare-None got no expected-type hint → materialised as
 // `Constant::Null` → copied into the slot as zero bytes == bogus `Some(0)` on
 // BOTH backends. Both compilers agree on this fixture (self-host verified), so
-// it auto-joins `self_host_runtime_diff`. (`fill` / `get_or_put` diverge on the
-// self-host and are carried by the Rust-only `rust_collection_fill_bare_none_no_segv`.)
+// it auto-joins `self_host_runtime_diff`. (`fill` now also agrees on both
+// compilers — see the `fill_bare_none.gg` fixture / `collection_fill_bare_none`
+// — after R37-T4 gave the self-host a hint-without-consume `fill` row.
+// `get_or_put(k, None)` still diverges on a deeper self-host bug, still filed.)
 #[test]
 fn collection_bare_none_value() {
     run_gg(
@@ -19384,70 +19386,27 @@ fn runtime_parity_corpus(manifest_dir: &Path) -> Vec<PathBuf> {
     fixtures
 }
 
-/// RUST-ONLY regression for the `Vector[Option[T]].fill(n, None)` bare-None
-/// SEGV / miscompile (Core #8, R36-C).
+/// Regression for the `Vector[Option[T]].fill(n, None)` bare-None SEGV /
+/// miscompile (Core #8, R36-C on Rust; R37-T4 on the self-host).
 ///
 /// Sibling of the `collection_bare_none_value.gg` shared fixture: the value-arg
-/// expected-type hint (`methods.rs` `value_arg_idx_for_method`) now covers
-/// `fill`, so a bare `None` in the fill value position materialises as a tagged
-/// `None` instead of `Constant::Null`. Before the fix, `gorget_array_fill(...,
-/// NULL)` did a memcpy FROM the null pointer → SEGV (exit 139).
+/// expected-type hint (`methods.rs` `value_arg_idx_for_method` on Rust; the
+/// `fill` row in `COLLECTION_BUILTIN_METHODS` + the LAST-arg hint derivation on
+/// the self-host) now covers `fill`, so a bare `None` in the fill value
+/// position materialises as a tagged `None` instead of `Constant::Null`. Before
+/// the fix, Rust did a memcpy FROM the null pointer → SEGV (exit 139); the
+/// self-host lowered the None to int32 0 → bogus `Some(0)`.
 ///
-/// Why this is NOT a `tests/fixtures/*.gg` fixture (which would be auto-scanned
-/// into `runtime_parity_corpus` and force self-host agreement): the SELF-HOST
-/// still miscompiles `fill(None)` → `Some(0)` (its owning table lacks `fill`,
-/// and the naive remedy double-frees `fill(2, live_string)` because the
-/// self-host conflates the value HINT with a value CONSUME). That divergence is
-/// FILED as a follow-up (correct-expected-output fixture + TODO). Until the
-/// self-host grows a hint-without-consume path, `fill(None)` cannot enter the
-/// both-compilers-must-agree corpus, so this Rust-only inline test carries the
-/// regression instead.
+/// Both compilers now agree on `fill_bare_none.gg`, so it is a real
+/// `tests/fixtures/*.gg` fixture auto-scanned into `runtime_parity_corpus`
+/// (the self-host grew the hint-WITHOUT-consume path: the `fill` row carries an
+/// EMPTY `owning_arg_positions`, so `fill(2, live_string)` is ASan-clean — no
+/// double-free). This inline `run_gg` keeps the fast direct assertion.
+/// (`get_or_put(k, None)` still diverges on a deeper `__gg_Option__int64_t`
+/// self-host type-registration bug — that flip stays filed as a follow-up.)
 #[test]
-fn rust_collection_fill_bare_none_no_segv() {
-    let gg_exe: PathBuf = gg_binary().to_path_buf();
-    let tmp_root = std::env::temp_dir().join(format!(
-        "gg_fill_none_{}_{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0),
-    ));
-    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
-    let src = tmp_root.join("fill_bare_none.gg");
-    std::fs::write(
-        &src,
-        "void main():\n\
-        \x20   Vector[Option[int]] f = []\n\
-        \x20   f.fill(3, None)\n\
-        \x20   print(f.len())\n\
-        \x20   print(f[0].is_none())\n\
-        \x20   print(f[1].is_none())\n\
-        \x20   print(f[2].is_none())\n",
-    )
-    .expect("failed to write fill_bare_none.gg");
-
-    let run = run_with_timeout(
-        Command::new(&gg_exe).arg("run").arg(&src).stdin(Stdio::null()),
-        "run fill_bare_none.gg",
-    );
-    let _ = std::fs::remove_dir_all(&tmp_root);
-
-    // No SEGV (a signal-terminated child has `status.code() == None`; the
-    // pre-fix memcpy-from-NULL crashed with SIGSEGV / exit 139).
-    assert!(
-        run.status.success(),
-        "`gg run` on Vector[Option[int]].fill(3, None) should exit 0 (pre-fix: \
-         SEGV from gorget_array_fill(..., NULL)); got status {:?}.\nstderr: {}",
-        run.status.code(),
-        String::from_utf8_lossy(&run.stderr),
-    );
-    assert_eq!(
-        String::from_utf8_lossy(&run.stdout).trim_end(),
-        "3\ntrue\ntrue\ntrue",
-        "fill(3, None) must produce 3 elements all `is_none()` (pre-fix: \
-         Some(0) / crash)",
-    );
+fn collection_fill_bare_none() {
+    run_gg("fill_bare_none.gg", "3\ntrue\ntrue\ntrue");
 }
 
 /// RUST-ONLY regression for the R37-T1 self-host CoW under-materialize: a

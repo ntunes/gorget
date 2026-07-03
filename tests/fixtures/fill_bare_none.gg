@@ -1,0 +1,7 @@
+void main():
+    Vector[Option[int]] f = []
+    f.fill(3, None)
+    print(f.len())
+    print(f[0].is_none())
+    print(f[1].is_none())
+    print(f[2].is_none())

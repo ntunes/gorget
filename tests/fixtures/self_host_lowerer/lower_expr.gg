@@ -3704,6 +3704,43 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int _mod_dst = add_local(&ctx, _mod_op_ty, None)
                 emit(&ctx, GIBinOp(_mod_dst, OP_MOD, _mod_op_ty, op_consume(&ctx, &gmod, recv, CkBinOpArg()), op_consume(&ctx, &gmod, _mod_div, CkBinOpArg())))
                 return _mod_dst
+            # ── Primitive `.display()` / `.debug()` → runtime to-str ──────
+            # `x.display()` / `x.debug()` on a numeric/bool receiver has no
+            # userland `int64_t__display` / `__debug` body — Rust gg lowers it
+            # directly to the matching `gorget_{int,float,bool}_to_str`
+            # (src/ir/lowering/exprs/methods.rs:730-786). Without this the call
+            # falls to `recv_type_name + "__" + mname` → an undefined symbol →
+            # gcc implicit-int "aggregate <== int" CC-FAIL.
+            #
+            # ⚠ DISPATCH OFF THE PEELED RECEIVER `type_id`, NOT `recv_type_name`
+            # (Core #2, layering rule 2): `type_id_to_base_name` (and hence
+            # `recv_type_name`) returns the `"int64_t"` fallback for EVERY
+            # primitive — bool=0 / f32=9 / f64=10 are all `< PRIM_COUNT=12`,
+            # NOT stored as `GtNamed` — so a name-string test would silently
+            # emit `gorget_int_to_str` for a bool (→ `1`, Rust `true`) or a
+            # float (→ `3`, Rust `3.5`). Keying on the type_id makes bool/float
+            # ACTUALLY correct, each via its own runtime symbol. The i8/i16/i32
+            # → i64 and f32 → f64 widening in Rust `methods.rs:745-775` happens
+            # IMPLICITLY at the C extern call (the symbols take `int64_t`/
+            # `double`), so no explicit cast is needed. A struct receiver
+            # (`type_id ≥ PRIM_COUNT` → `GtNamed`) falls through to the userland
+            # equip-block `display`/`debug` dispatch unchanged.
+            if (mname == "debug" or mname == "display") and margs.len() == 0:
+                int _pd_tid = peel_ptr_tid(&gmod, ctx.locals.get(recv).unwrap().type_id)
+                bool _pd_is_int = _pd_tid == I8_TYPE or _pd_tid == I16_TYPE or _pd_tid == I32_TYPE or _pd_tid == I64_TYPE or _pd_tid == U8_TYPE or _pd_tid == U16_TYPE or _pd_tid == U32_TYPE or _pd_tid == U64_TYPE
+                bool _pd_is_f = _pd_tid == F32_TYPE or _pd_tid == F64_TYPE
+                bool _pd_is_bool = _pd_tid == BOOL_TYPE
+                if _pd_is_int or _pd_is_f or _pd_is_bool:
+                    int _pd_gs = resolve_field_gir_type("GorgetString", &gmod)
+                    int _pd_dst = add_local(&ctx, _pd_gs, None)
+                    String _pd_fn = "gorget_int_to_str"
+                    if _pd_is_f:
+                        _pd_fn = "gorget_float_to_str"
+                    elif _pd_is_bool:
+                        _pd_fn = "gorget_bool_to_str"
+                    emit(&ctx, GICallExtern(_pd_dst, _pd_fn, [op_consume(&ctx, &gmod, recv, CkFormatArg())]))
+                    register_local_for_drop(&ctx, _pd_dst, _pd_gs, &gmod)
+                    return _pd_dst
             # ── Primitive `.hash(&h)` → direct Hasher write ──────────────
             # `x.hash(&h)` on a scalar / bool / String / byte / char receiver
             # has no userland `int64_t__hash` body — Rust gg lowers it
@@ -4055,8 +4092,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int _mut_val_et = -1
             match _mut_decl:
                 case Some(_mvdecl):
-                    if _mvdecl.owning_arg_positions.len() > 0:
-                        _mut_val_pos = _mvdecl.owning_arg_positions.get(_mvdecl.owning_arg_positions.len() - 1).unwrap()
+                    # The value arg (which needs the element-type HINT so a bare
+                    # `None`/`Some`/`Ok`/`Error` materializes TAGGED rather than
+                    # as int32 0) is the LAST arg for EVERY collection value-
+                    # mutator (push→0, set/insert/put/fill/get_or_put→last).
+                    # Deriving the hint POSITION from the arg count — not from
+                    # `owning_arg_positions` — DECOUPLES the HINT from the
+                    # CONSUME: `fill`/`get_or_put` carry an EMPTY
+                    # `owning_arg_positions` (they clone/borrow the value per
+                    # element, so consuming would double-free a live source) yet
+                    # still get the hint. Byte-identical for the existing owning
+                    # rows (their last owning position IS the last arg). Mirrors
+                    # Rust gg's split of the value-arg hint from the consume set.
+                    if filled_margs.len() > 0:
+                        _mut_val_pos = filled_margs.len() - 1
                         String _mut_val_name = index_value_type_name(recv_type_name)
                         if _mut_val_name == "Str":
                             _mut_val_name = "GorgetString"
