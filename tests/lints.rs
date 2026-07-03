@@ -747,6 +747,71 @@ fn container_literal_arms_count() {
     );
 }
 
+/// Ratchet (Core #2 "No name matching" / Core #6 "convert the bug class to a
+/// guard"): the consuming-position NAME match in `lower_method_call`
+/// (`src/ir/lowering/exprs/methods.rs`) must stay GATED on the typed
+/// `is_gir_method` (resolved-callee identity), so a USER equip method that
+/// merely SHARES a name with a builtin collection mutator
+/// (`push`/`add`/`insert`/`set`/`send`/`put`/…) is NEVER routed to the
+/// consume/clone path purely by NAME (gorget-arena snag #2 — the call-site temp
+/// was force-cloned because the method was named `push`).
+///
+/// Two structural assertions:
+///  1. The consuming-mutator name list (`"push" | "add" | "extend" | "send" |
+///     "push_back" | "push_front"`) appears exactly TWICE — the value-arg
+///     type-hint arm and the consuming-position arm. A new collection-mutator
+///     name (or a copy of the arm) forces an audit: is it a value-position
+///     HINT only (like `fill`/`get_or_put`, which must NOT consume), or a true
+///     consume? — then re-pin.
+///  2. The consuming-position match is preceded by the `if is_gir_method` gate.
+///     Dropping the gate (re-introducing the raw name-match) drops this
+///     substring, so the guard trips structurally — a name-match reintroduction
+///     fails the suite (the spurious clone is otherwise output-identical +
+///     memory-safe, invisible to stdout/ASan; see the
+///     `snag_call_site_move_no_clone` integration gate).
+///
+/// **If this fails:**
+///   - Count changed → audit the new/removed name arm (hint-vs-consume, see the
+///     `methods.rs` `value_arg_idx_for_method` notes) and re-pin `EXPECTED`.
+///   - Gate substring missing → the `consuming_positions_by_name` match is no
+///     longer gated on `is_gir_method`; a user equip method can again inherit
+///     builtin-collection consume semantics by name. Re-add
+///     `let consuming_positions_by_name: Vec<usize> = if is_gir_method`.
+///
+/// Precedent: `container_literal_arms_count` above.
+#[test]
+fn consuming_position_name_match_is_gir_gated() {
+    let src = fs::read_to_string("src/ir/lowering/exprs/methods.rs")
+        .expect("read src/ir/lowering/exprs/methods.rs");
+
+    // (1) The consuming-mutator name list appears in exactly two arms:
+    //     the value-arg type-hint arm + the consuming-position arm.
+    const EXPECTED_ARMS: usize = 2;
+    let arms = src
+        .matches("\"push\" | \"add\" | \"extend\" | \"send\" | \"push_back\" | \"push_front\"")
+        .count();
+    assert_eq!(
+        arms, EXPECTED_ARMS,
+        "consuming-mutator name-list arm count in `lower_method_call` changed: \
+         {arms} vs expected {EXPECTED_ARMS}. A new collection-mutator name (or a \
+         duplicated arm) needs a hint-vs-consume audit (see the \
+         `value_arg_idx_for_method` notes in methods.rs) and a re-pin here.",
+    );
+
+    // (2) The consuming-position match MUST be gated on the typed callee
+    //     identity `is_gir_method` — NOT the method name (Core #2). Dropping the
+    //     gate re-opens gorget-arena snag #2.
+    let gated =
+        src.contains("let consuming_positions_by_name: Vec<usize> = if is_gir_method");
+    assert!(
+        gated,
+        "gorget-arena snag #2 guard removed: `consuming_positions_by_name` must be \
+         gated on the typed `is_gir_method` (resolved-callee identity) so a USER \
+         equip method is never routed to the consume/clone path by NAME. Re-add \
+         `let consuming_positions_by_name: Vec<usize> = if is_gir_method`.",
+    );
+}
+
 /// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rule 3 "one source of
 /// truth"): every resource-typed field-load in `lower_field_access`
 /// (`src/ir/lowering/exprs/mod.rs`) must route its borrow tag through the

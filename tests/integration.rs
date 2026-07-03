@@ -28322,6 +28322,74 @@ fn witness_never_emitted_c_clone_shape() {
     let _ = std::fs::remove_dir(&work_dir);
 }
 
+/// Regression gate for gorget-arena snag #2 (Core #2, "No name matching"): a
+/// USER equip method whose NAME collides with a builtin collection mutator
+/// (`push`/`add`/`insert`/`set`/`send`/`put`) must NOT clone its temp arg at
+/// the CALL SITE. Its arg ownership is decided by the typed param signature
+/// (`is_gir_method` → `method_param_types`), not the method name; the
+/// name-based consuming-position fallback is gated so a user method never
+/// reaches it. This is invisible to stdout + ASan (a spurious clone is
+/// output-identical and memory-safe), so the gate asserts the `--clones=sites`
+/// Clone Report count directly.
+///
+/// The fixture's `push`/`emit` bodies push only an `int` (Copy), so the fixture's
+/// ENTIRE clone count isolates the call site — decoupled from the in-body
+/// `self.coll.push(!p)` move-eligibility axis (gorget-arena snag #1). Before the
+/// `is_gir_method` gate: 1 clone (at `q.push`). After: 0.
+///
+/// Backend-independent: the Clone Report is a GIR-level diagnostic (emitted from
+/// `main.rs`, before backend selection), byte-identical under `--backend=llvm`
+/// (verified), so no `skip_under_llvm`. Copies the fixture to a uniquely-named
+/// temp dir so the `--clones=sites` build cannot race artifact paths under
+/// `--test-threads=4`. Precedent: `witness_never_emitted_c_clone_shape`.
+#[test]
+fn snag_call_site_move_no_clone() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path =
+        manifest_dir.join("tests/fixtures/snag_call_site_move_no_clone.gg");
+    assert!(fixture_path.exists());
+
+    let work_dir = std::env::temp_dir().join(format!(
+        "gg_snag2_call_site_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&work_dir).unwrap();
+    let gg_path = work_dir.join("snag_call_site_move_no_clone.gg");
+    std::fs::copy(&fixture_path, &gg_path).unwrap();
+
+    let out = build_with_timeout(
+        gg_command("build").arg(&gg_path).arg("--clones=sites"),
+        "snag_call_site_move_no_clone.gg",
+    );
+    assert!(
+        out.status.success(),
+        "build failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // "=== Clone Report (N implicit clone[s]) ===" (main.rs eprintln); N must be 0.
+    // No report line at all also means 0 clones.
+    let n: usize = stderr
+        .split("Clone Report (")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    assert_eq!(
+        n, 0,
+        "snag #2 regressed: a user equip method named like a builtin collection \
+         mutator cloned its temp arg at the CALL SITE (the consuming-position \
+         name-match is no longer gated on the typed `is_gir_method`). Expected 0 \
+         clones, got {n}.\n{stderr}"
+    );
+
+    let _ = std::fs::remove_file(&gg_path);
+    let _ = std::fs::remove_file(work_dir.join("snag_call_site_move_no_clone.c"));
+    let _ = std::fs::remove_file(work_dir.join("snag_call_site_move_no_clone"));
+    let _ = std::fs::remove_dir(&work_dir);
+}
+
 // ── #37 Phase 2 (self-host lazy CoW, provenance-direct) — W1: the F1
 // scan-soundness probes ───────────────────────────────────────────────
 //

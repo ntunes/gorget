@@ -2274,16 +2274,37 @@ pub(super) fn lower_method_call(
         // mutating methods (push/add/extend/send/push_back/push_front) consume
         // arg 0; (put/set/insert) consume the value at arg 1 (dict) or arg 1 (vec).
         let is_string_builder_method = type_name == "GorgetString";
-        let consuming_positions_by_name: Vec<usize> = match method_name {
-            "push" | "add" | "extend" | "send" | "push_back" | "push_front"
-                if !is_string_builder_method => vec![0],
-            "put" | "set" | "insert" => {
-                let mut p = vec![];
-                if lowered_method_args.len() >= 1 { p.push(0); }
-                if lowered_method_args.len() >= 2 { p.push(1); }
-                p
+        // The consuming-position NAME match below applies ONLY to builtin
+        // collection RUNTIME methods, which carry no typed param signature —
+        // `is_gir_method` is false, so `method_param_types` is empty and the
+        // `lower_call_arg` pass above could NOT decide arg ownership from the
+        // callee's param type, hence this name-based fallback. A USER equip
+        // method that merely SHARES a name with a builtin collection mutator
+        // (`equip Q: void push(&self, Ev !event)`) already had its arg ownership
+        // resolved by `lower_call_arg` from its typed `method_param_types`;
+        // re-running the consuming-position materialization here spuriously
+        // CLONES a fresh temp at the call site (gorget-arena snag #2 — a user
+        // `push`/`add`/`insert`/`set`/`send`/`put` was routed to the consume
+        // path purely because of its name). Route the decision off the
+        // resolved-callee typed identity (`gir_equip_methods` — "did this call
+        // resolve to a user GIR equip method?"), NOT the method NAME. The prior
+        // `fn_param_abis`/`ByPtr` filter below only caught borrow-param user
+        // methods and MISSED `!`-move-param ones. (CLAUDE.md "No name matching",
+        // Core invariant #2: put the flag on the typed decl, read via accessor.)
+        let consuming_positions_by_name: Vec<usize> = if is_gir_method {
+            vec![]
+        } else {
+            match method_name {
+                "push" | "add" | "extend" | "send" | "push_back" | "push_front"
+                    if !is_string_builder_method => vec![0],
+                "put" | "set" | "insert" => {
+                    let mut p = vec![];
+                    if lowered_method_args.len() >= 1 { p.push(0); }
+                    if lowered_method_args.len() >= 2 { p.push(1); }
+                    p
+                }
+                _ => vec![],
             }
-            _ => vec![],
         };
         // The name match above only identifies CANDIDATE value positions. A
         // position genuinely *consumes* its arg — and therefore needs the

@@ -1,0 +1,21 @@
+enum Ev:
+    Named(String)
+
+struct Q:
+    Vector[int] sizes
+
+equip Q:
+    void push(&self, Ev !event):        # user method named like a builtin collection mutator
+        match event:
+            case Ev.Named(n):
+                self.sizes.push(n.len())   # pushes a PRIMITIVE -> no in-body resource clone
+    void emit(&self, Ev !event):        # control: identical body, non-collection name
+        match event:
+            case Ev.Named(n):
+                self.sizes.push(n.len())
+
+void main():
+    Q q = Q([])
+    q.push(Ev.Named("aa"))              # snag #2: temp must MOVE at the call site, not clone
+    q.emit(Ev.Named("bbb"))             # control: temp moves
+    print(q.sizes.len())
