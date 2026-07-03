@@ -36,6 +36,7 @@ $ gg run mail.gg
 |  | Gorget | Rust | Go | Python |
 |--|--------|------|----|--------|
 | Memory safety | Compile-time ownership | Compile-time ownership | GC | GC |
+| Value semantics | Automatic lazy CoW | Explicit `.clone()` | Manual copy / shared refs | Shared refs (no copy) |
 | Lifetime annotations | None | Required for complex borrows | N/A | N/A |
 | Error model | Auto-propagating `throws` | `Result` + `?` at every call | `if err != nil` | Exceptions |
 | Null safety | `Option[T]` — no nulls | `Option<T>` — no nulls | Nil pointers | `None` everywhere |
@@ -46,16 +47,18 @@ $ gg run mail.gg
 
 We think safe languages shouldn't have to be verbose. Here's what that means in practice:
 
-- **Ownership without lifetime annotations** — the borrow checker works without lifetime parameters in function signatures. Borrows and moves are marked at call sites (`&` for mutable borrow, `!` for move), so ownership transfers are visible where they happen. Inside a function, bare-identifier assignment (`Spanned b = a`) borrows by default and clones only when something mutates. When you put a non-Copy value into a collection / struct field / enum variant, the compiler picks the cheapest correct strategy automatically:
+- **Value semantics, zero-copy by default** — reading, binding, and passing a `String` or `Vector` copies *nothing*: bare-identifier assignment (`Spanned b = a`) and bare parameters are borrows (a pointer to the same data). The compiler inserts a copy at exactly one moment — the first write that would otherwise disturb a value you still hold — and the copy is **fully lazy**: a mutation path that never runs never allocates. You get plain value semantics with the minimal clone set placed for you, as if you'd written every copy by hand. `&` opts into **write-through** (the change reaches the caller, and skips the copy); `!` moves. No lifetime annotations, no `.clone()` for correctness — only when you *want* to pay for a copy up front.
 
-  | Source state                          | Action                  |
-  |---------------------------------------|-------------------------|
-  | dead at this site (last use)          | auto-move (zero cost)   |
-  | live past this site                   | auto-clone (independent copy) |
-  | borrow (`&` / `.get()` / param)       | auto-clone (always)     |
-  | explicit `!source`                    | forced move (source consumed) |
+  At an ownership boundary (a collection put, a struct/enum field, a `return`, a closure capture) the value must be owned, so the compiler picks per source:
 
-  No `?`-style noise at every call site; clones are silent by default, and `--clones` reports every implicit clone with its location and reason if you want to audit them. The full design is in [`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md).
+  | Source at an owning boundary                        | Action                        |
+  |-----------------------------------------------------|-------------------------------|
+  | owns its value, dead here (last use)                | auto-move — zero cost         |
+  | owns its value, still used later (live)             | auto-clone — independent copy |
+  | a borrow (bare param, `.get()` element, bare alias) | auto-clone — independent copy |
+  | explicit `!source`                                  | forced move — source consumed |
+
+  Clones are silent by default; `--clones=sites` prints every implicit clone with its `file:line:col`, type, and reason, and `--clones=stats` reports the clones a run *actually executed* — so a clone that sneaks onto a hot path is one build flag away from being found. The full design is in [`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md).
 
 - **Error handling without noise** — functions declare `throws` and errors propagate automatically. No `?` at every call site, no `try` blocks wrapping your logic, no `if err != nil`. When you do need control, `catch`, `rethrow`, and `on error` give you exactly the level of handling you want.
 - **Compiler-checked concurrency** — `shared int count = 0` gives you thread-safe mutable state. The compiler selects the right synchronization primitive (atomic, mutex, or rwlock), prevents deadlocks by enforcing consistent lock ordering, and warns about stale reads, check-then-act races, and lost updates — all at compile time.
@@ -81,6 +84,42 @@ int double(int x): x * 2
 # Type inference for locals
 auto result = add(10, double(5))
 ```
+
+### Value semantics and copy-on-write
+
+Resource types (`String`, `Vector`, `Dict`, your own structs) have plain value semantics — but reads never copy, and copies are *lazy*. A value is a borrow until something writes to it; the copy happens at that write, and only if it runs.
+
+```gorget
+Vector[String] names = ["ann", "bob"]
+String first = names.get(0).unwrap()    # borrows element 0 — no copy
+if should_log:
+    names.push("carol")                 # first's only moment of danger:
+                                        # the copy happens HERE — and only if this runs
+print(first)                            # "ann", always
+```
+
+If `should_log` is false, this makes **zero copies** — not at the bind, not at the print. If it's true, exactly one copy happens, at the `push`. Either way `first` prints what you read into it: value semantics, with the clone deferred to the one instant it's needed.
+
+Writing through a bare binding gives you a private copy and leaves the original alone. `&` is how you opt into write-through:
+
+```gorget
+void relabel(Vector[int] xs):     # bare param — a read-only borrow
+    xs[0] = 99                     # writes into a PRIVATE copy (copy-on-write)
+
+void bump(Vector[int] &xs):       # & param — write-through
+    xs[0] = 99                     # writes through to the caller's vector
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    relabel(a)
+    print(a[0])                    # 1  — the caller is untouched (bare copied)
+    bump(&a)
+    print(a[0])                    # 99 — the change reached the caller (&)
+```
+
+That's the whole model: **bare borrows and copies-on-write, `&` writes through, `!` moves** — one rule at every position. (Where Rust would *reject* the write through a bare binding, Gorget copies instead — it's more tolerant.) It works the same for user structs, enum variants, and `for` loops: `for x in coll` borrows each element read-only, `for x in &coll` writes through.
+
+For comparison, Swift gives copy-on-write only to its **standard-library** collections (`Array`, `Dictionary`, `Set`, `String`) — your own types don't get it unless you implement `isKnownUniquelyReferenced` by hand. C++ copies eagerly via copy constructors; avoiding the copy is **manual** (`std::move`, references). Gorget's CoW is automatic, lazy, and applies to every resource type — user structs included.
 
 ### Error handling
 
