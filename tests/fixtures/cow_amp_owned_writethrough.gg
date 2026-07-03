@@ -1,0 +1,11 @@
+# CoW G2 control: `&` of an OWNED root (no alias, unique) writes through as
+# usual — the materialize is a no-op, so the push reaches `a`. Guards against
+# over-materializing a value that legitimately owns its buffer.
+void modify(Vector[int] &v):
+    v.push(9)
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    modify(&a)
+    print(a.len())        # 4
+    print("done")

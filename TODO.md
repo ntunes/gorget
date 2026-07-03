@@ -25,6 +25,17 @@ Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (
   - **G1-fieldpath — owner-decided option (a):** `v.field.push(x)` through a bare param materializes the bare-param struct — a real +120K-clone at ONE self-host site. FIX THAT SITE TO `&` first (it should be `&`; restores zero delta + self-host `&`-correctness), THEN materialize. Bundle with or follow G1a.
   - **G2 — follow-up:** `inner(&t)` / `&self` on a bare value → materialize at the `&`-of-bare FORMATION site (call-arg lowering), a distinct insertion point (not a mutation site).
   - When all three land → DELETE the `devbook/11` "converging" marker; docs then describe only the single uniform rule.
+  - **🐛 `for x in &coll` element write-through is LOST — even on an OWNED vector (filed round-34 by the G2 track; NOT a G2 materialize gap, a distinct for-loop `&`-binding write-through hole).** The mutation inside the loop body never reaches the collection's backing store. Repro (prints `1`, SHOULD print `101`):
+    ```
+    struct Cell:
+        int n
+    void main():
+        Vector[Cell] a = [Cell(1), Cell(2)]
+        for c in &a:            # &-bound loop var = exclusive write-through per the CoW model
+            c.n = c.n + 100
+        print(a[0].n)           # got 1, expected 101
+    ```
+    Aliased-root variant (`Vector[Cell] b = a; for c in &b: c.n += 100`) likewise leaves BOTH `a` and `b` unchanged. Fix is in the for-loop lowering (the `&`-bound element local is a copy, not a write-through pointer into the collection element) — own scout; NOT the `&`-formation materialize sites G2 touches.
 
 
 - **🎯 ROUND-33 SHAPE (owner-directed 2026-07-02): 3 DEEP multi-session tracks + 1 ROLLING follow-ups slot (refill from the ranked queue below each time an item lands, while any DEEP track is in flight).** Each DEEP track opens with its own scout; full per-track loop applies:

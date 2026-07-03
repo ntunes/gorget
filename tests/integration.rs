@@ -25527,6 +25527,123 @@ done",
     );
 }
 
+/// CoW G2 site 1 (round-34, `&`-of-a-bare-value FORMATION): passing a BARE
+/// ALIAS by `&` to a free-fn arg materializes a private copy at the formation
+/// site — the callee's write-through lands on the copy, not the shared source.
+/// Pre-fix the source grew and the alias stayed stale (both backends).
+#[test]
+fn cow_amp_bare_alias_arg() {
+    run_gg(
+        "cow_amp_bare_alias_arg.gg",
+        "\
+3
+4
+done",
+    );
+}
+
+/// CoW G2 site 1c: a BARE (immutable-in-context) resource PARAMETER passed by
+/// `&` materializes a private copy; the caller's vector is untouched. Pre-fix
+/// the write leaked through the bare param to the caller.
+#[test]
+fn cow_amp_bare_param_arg() {
+    run_gg(
+        "cow_amp_bare_param_arg.gg",
+        "\
+4
+3
+done",
+    );
+}
+
+/// CoW G2 site 1b: a bare alias passed by `&` to a METHOD arg routes through
+/// the same `lower_call_arg` materialize — the copy grows, the source is
+/// untouched.
+#[test]
+fn cow_amp_method_arg_bare() {
+    run_gg(
+        "cow_amp_method_arg_bare.gg",
+        "\
+3
+4
+done",
+    );
+}
+
+/// CoW G2 site 2 (standalone `auto r = &name`): binding a `&` to a bare alias
+/// materializes a private copy, so a later `r.push` lands on the copy.
+#[test]
+fn cow_amp_bind_ref() {
+    run_gg(
+        "cow_amp_bind_ref.gg",
+        "\
+3
+4
+done",
+    );
+}
+
+/// CoW G2 site 3 (projected `&s.field` call-arg): the projection ROOT is a bare
+/// alias, so `&b.data` materializes the root before the borrow — the push
+/// reaches the copy's field, not the shared source's. Pre-fix both printed 4.
+/// The projection mints transient element/field handles into the private copy;
+/// they are untracked (G1 UAF-fold class) — MUST be ASan-clean.
+#[test]
+fn cow_amp_field_arg() {
+    run_gg(
+        "cow_amp_field_arg.gg",
+        "\
+3
+4
+done",
+    );
+}
+
+/// CoW G2 site 3 with a SIDE-EFFECTING index (`&arr[side()]`): the root
+/// materializes, but the index expression must be evaluated EXACTLY ONCE
+/// (materialize-before-single-lower, never lower→materialize→re-lower). "SIDE"
+/// prints once; the nested push lands on the private copy.
+#[test]
+fn cow_amp_index_side_effect_once() {
+    run_gg(
+        "cow_amp_index_side_effect_once.gg",
+        "\
+SIDE
+3
+4
+done",
+    );
+}
+
+/// CoW G2 (site 1, live second alias): the source is READ AFTER the `&`
+/// mutation — both aliases stay live. No use-after-free; source untouched,
+/// copy grown. MUST be ASan-clean under `--sanitize`.
+#[test]
+fn cow_amp_live_alias() {
+    run_gg(
+        "cow_amp_live_alias.gg",
+        "\
+1
+3
+4
+9
+done",
+    );
+}
+
+/// CoW G2 control: `&` of an OWNED (unique) root writes through as usual — the
+/// materialize is a no-op, so the push reaches the source. Guards against
+/// over-materializing a value that legitimately owns its buffer.
+#[test]
+fn cow_amp_owned_writethrough() {
+    run_gg(
+        "cow_amp_owned_writethrough.gg",
+        "\
+4
+done",
+    );
+}
+
 /// CoW G1 memory-safety gate (round-33 output-review UAF): an index-projected
 /// field-ASSIGN (`v[0].name = x`) materializes the bare-param root, then a
 /// same-collection mutation in a while- AND a for-loop. The transient

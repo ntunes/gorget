@@ -1,0 +1,17 @@
+# CoW G2 site 1b (method `&` arg): a bare alias passed by `&` to a method arg
+# routes through the same lower_call_arg materialize. `b` grows, `a` untouched.
+struct Sink:
+    int dummy
+
+equip Sink:
+    void take(self, Vector[int] &v):
+        v.push(9)
+
+void main():
+    Sink s = Sink(0)
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = a
+    s.take(&b)
+    print(a.len())        # 3
+    print(b.len())        # 4
+    print("done")

@@ -1,0 +1,18 @@
+# CoW G2 site 3 (projected `&arr[i]` with a SIDE-EFFECTING index): the root
+# `alias` materializes, but the index expression `side()` must be evaluated
+# EXACTLY ONCE (materialize-before-single-lower, never re-lower). "SIDE" prints
+# once; the nested push lands on the private copy `alias`, `outer` untouched.
+void bump(Vector[int] &v):
+    v.push(99)
+
+int side():
+    print("SIDE")
+    return 0
+
+void main():
+    Vector[Vector[int]] outer = [[1, 2, 3]]
+    Vector[Vector[int]] alias = outer
+    bump(&alias[side()])
+    print(outer[0].len())   # 3
+    print(alias[0].len())   # 4
+    print("done")

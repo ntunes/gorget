@@ -1,0 +1,15 @@
+# CoW G2 site 1c (bare-param `&` arg): a bare (immutable-in-context) resource
+# parameter passed by `&` materializes a private copy; the caller's vector is
+# untouched. Pre-fix the write leaked THROUGH the bare param to the caller.
+void modify(Vector[int] &v):
+    v.push(9)
+
+void outer(Vector[int] t):
+    modify(&t)
+    print(t.len())        # 4  (private copy inside outer grew)
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    outer(a)
+    print(a.len())        # 3  (caller untouched)
+    print("done")

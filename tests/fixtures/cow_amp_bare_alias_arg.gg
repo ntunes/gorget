@@ -1,0 +1,13 @@
+# CoW G2 site 1 (free-fn `&` arg): passing a BARE ALIAS by `&` materializes a
+# private copy at the `&`-formation site. The callee's write-through lands on
+# the copy `b`, NOT the shared source `a`. Pre-fix `a` grew and `b` stayed 3.
+void modify(Vector[int] &v):
+    v.push(9)
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = a
+    modify(&b)
+    print(a.len())        # 3  (source untouched)
+    print(b.len())        # 4  (private copy grew)
+    print("done")

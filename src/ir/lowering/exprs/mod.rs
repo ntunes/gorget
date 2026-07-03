@@ -330,6 +330,17 @@ fn lower_expr_inner(
             // Skip the auto-deref that Identifier normally does — just forward the pointer.
             if let Expr::Identifier(name) = &inner.node {
                 if let Some((local_id, _)) = ctx.lookup_local(name) {
+                    // CoW `&`-of-a-bare-value FORMATION (G2, site 2 — the
+                    // standalone sibling of `lower_call_arg`'s `&name` arg):
+                    // `auto r = &x` must materialize a bare param / bare alias so
+                    // a later `r.push(..)` lands on the private copy, not the
+                    // shared source. cow_before_mutation rebinds the name on
+                    // materialize, so RE-RESOLVE before the fast-path checks;
+                    // forwarding the stale (pre-materialize) Ptr would write
+                    // through to the source and orphan the copy. No-op (no
+                    // rebind) on a real `&`-param / owned root → byte-identical.
+                    ctx.cow_before_mutation(builder, local_id, inner.span);
+                    let local_id = ctx.lookup_local(name).map(|(l, _)| l).unwrap_or(local_id);
                     if ctx.is_ref_local(builder, local_id)
                         || ctx.is_param_borrow_unique(builder, local_id)
                     {
@@ -360,7 +371,40 @@ fn lower_expr_inner(
                     return FunctionBuilder::copy(dst);
                 }
             }
+            // CoW `&`-of-a-PROJECTED-bare-value FORMATION (G2, site 3, standalone
+            // form): `auto r = &b.data`, `auto r = &b.data[i]` where the
+            // projection ROOT is a bare param / bare alias. Materialize the root
+            // BEFORE the single lowering of `inner` (below) so the projection
+            // re-reads out of the private owned copy and a later write through
+            // `r` lands there, not on the shared source. Same UAF-fold class as
+            // the call-arg form and the G1 method-receiver materialize — the
+            // transient element/field handles the projection mints MUST be
+            // untracked. Identifier / Deref shapes are handled above; only
+            // genuine projections reach here.
+            let mut g2_projected_untrack_start: Option<usize> = None;
+            if !matches!(&inner.node, Expr::Identifier(_) | Expr::Deref { .. }) {
+                if let Some(root_local) = resolve_projection_root_local(ctx, &inner.node) {
+                    let start = builder.locals.len();
+                    let root_name = builder.local_name(root_local).map(|s| s.to_string());
+                    let before = root_name.as_deref().and_then(|n| ctx.lookup_local(n).map(|(l, _)| l));
+                    ctx.cow_before_mutation(builder, root_local, inner.span);
+                    let after = root_name.as_deref().and_then(|n| ctx.lookup_local(n).map(|(l, _)| l));
+                    // Untrack ONLY when the root actually materialized (no-op on
+                    // a unique / owned root → byte-identical for non-materializing
+                    // projected borrows).
+                    if before != after {
+                        g2_projected_untrack_start = Some(start);
+                    }
+                }
+            }
             let val = lower_expr(ctx, builder, inner);
+            // G2 site-3 UAF-fold close: reset the transient element/field handles
+            // the projection minted INTO the private copy so a later
+            // same-collection push can't Case-3-clone a dangling temp. Gated on
+            // materialize-happened; named borrows spared by the helper's guard.
+            if let Some(s) = g2_projected_untrack_start {
+                ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());
+            }
             // GlobalRef → GlobalRefPtr: emit &global_name directly.
             if let Operand::Constant(Constant::GlobalRef(name)) = &val {
                 return Operand::Constant(Constant::GlobalRefPtr(name.clone()));

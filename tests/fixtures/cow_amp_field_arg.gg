@@ -1,0 +1,17 @@
+# CoW G2 site 3 (projected `&s.field` call-arg): the projection ROOT `b` is a
+# bare alias, so `&b.data` materializes `b` (private copy) before the borrow.
+# The push reaches `b.data`, not the shared `a.data`. Pre-fix both printed 4.
+struct Holder:
+    Vector[int] data
+
+void modify(Vector[int] &v):
+    v.push(9)
+
+void main():
+    Vector[int] init = [1, 2, 3]
+    Holder a = Holder(init)
+    Holder b = a
+    modify(&b.data)
+    print(a.data.len())   # 3
+    print(b.data.len())   # 4
+    print("done")

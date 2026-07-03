@@ -1,0 +1,15 @@
+# CoW G2 (site 1, live second alias): the source `a` is READ AFTER the `&b`
+# mutation — both `a` and `b` stay live. No use-after-free; `a` untouched,
+# `b` grown. (ASan-clean under --sanitize.)
+void modify(Vector[int] &v):
+    v.push(9)
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = a
+    modify(&b)
+    print(a[0])           # 1
+    print(a.len())        # 3
+    print(b.len())        # 4
+    print(b[3])           # 9
+    print("done")

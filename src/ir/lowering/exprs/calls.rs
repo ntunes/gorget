@@ -55,8 +55,15 @@ pub(super) fn lower_call_arg(
     if matches!(arg.node.ownership, Ownership::MutableBorrow) {
         if let Expr::Identifier(name) = &arg.node.value.node {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
-                // CoW: mutable borrow mutates the local. Sever aliases first.
+                // CoW `&`-of-a-bare-value FORMATION (G2, site 1): materialize a
+                // private copy of a bare param / bare alias so the callee's
+                // write-through lands on the copy, not the shared source.
                 ctx.cow_before_mutation(builder, local_id, arg.span);
+                // Re-resolve: cow_before_mutation may have rebound `name` to a
+                // freshly-materialized OWNED local. Forwarding the stale
+                // `local_id` (the pre-materialize borrowed Ptr) would write
+                // through to the source buffer and orphan the copy.
+                let local_id = ctx.lookup_local(name).map(|(l, _)| l).unwrap_or(local_id);
                 let is_already_ptr = {
                     let lid = local_id.0 as usize;
                     lid < builder.locals.len() && matches!(
@@ -130,6 +137,37 @@ pub(super) fn lower_call_arg(
             }
         }
     }
+    // CoW `&`-of-a-PROJECTED-bare-value FORMATION (G2, site 3, call-arg form):
+    // `f(&s.field)`, `f(&arr[i])` where the projection ROOT is a bare param /
+    // bare alias. Materialize the root BEFORE the SINGLE lowering of the arg
+    // (below) so the projection re-reads out of the private owned copy and the
+    // callee's write-through lands there, not on the shared source. Mirrors the
+    // G1 method-receiver root-materialize (`methods.rs`) — same UAF-fold class,
+    // so the transient element/field handles the projection mints MUST be
+    // untracked (a leftover CowBorrow into the private copy would Case-3-dangle
+    // on a later same-collection push). The Identifier / Deref shapes are
+    // handled by the whole-value blocks above; only genuine projections reach
+    // here. Materialize-before-single-lower (NOT lower→materialize→re-lower)
+    // keeps a side-effecting index (`&arr[side_effect()]`) evaluated once.
+    let mut g2_projected_untrack_start: Option<usize> = None;
+    if matches!(arg.node.ownership, Ownership::MutableBorrow)
+        && !matches!(&arg.node.value.node, Expr::Identifier(_) | Expr::Deref { .. })
+    {
+        if let Some(root_local) = super::resolve_projection_root_local(ctx, &arg.node.value.node) {
+            let start = builder.locals.len();
+            let root_name = builder.local_name(root_local).map(|s| s.to_string());
+            let before = root_name.as_deref().and_then(|n| ctx.lookup_local(n).map(|(l, _)| l));
+            ctx.cow_before_mutation(builder, root_local, arg.span);
+            let after = root_name.as_deref().and_then(|n| ctx.lookup_local(n).map(|(l, _)| l));
+            // Untrack ONLY when the root actually materialized: a unique / owned
+            // root is a no-op (before == after) → no private copy → no dangling
+            // handles, and gating keeps non-materializing projected `&`-args
+            // byte-identical (sites 1+2 self-host neutrality guarantee).
+            if before != after {
+                g2_projected_untrack_start = Some(start);
+            }
+        }
+    }
     let val = lower_expr(ctx, builder, &arg.node.value);
     // Snag #43 (2026-05-13): a throws-call passed in arg position
     // (`v.push(sub())` where `sub() throws E`, in a fn that itself
@@ -149,6 +187,16 @@ pub(super) fn lower_call_arg(
     // the param type is itself a Result, e.g. `Vector[Result[T,E]]
     // .push(Ok(...))`) prevents over-unwrapping.
     let val = super::maybe_auto_propagate(ctx, builder, val, arg.node.value.span);
+    // G2 site-3 UAF-fold close: the projection above minted transient
+    // element/field handles INTO the freshly-materialized private copy. Reset
+    // their CoW tags now (before the borrow is built and the arg is forwarded)
+    // so a later same-collection push can't Case-3-clone a dangling temp. Only
+    // fires when the root materialized (see `g2_projected_untrack_start`), so
+    // non-materializing projected `&`-args stay byte-identical. Named borrows
+    // are spared by the helper's `local_name(local).is_none()` guard.
+    if let Some(s) = g2_projected_untrack_start {
+        ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());
+    }
     match arg.node.ownership {
         Ownership::MutableBorrow => {
             // GlobalRef → GlobalRefPtr: emit &global_name directly.

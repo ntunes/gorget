@@ -3969,8 +3969,21 @@ fn top_level_fn_bodies(content: &str) -> Vec<(String, String)> {
 #[test]
 fn g1_projected_materialize_sites_untrack() {
     // Materialize a projected target/receiver + args/RHS → MUST untrack.
-    const UNTRACK_REQUIRED: &[&str] =
-        &["lower_field_assign", "lower_index_assign", "lower_method_call"];
+    // `lower_call_arg` (calls.rs) and `lower_expr_inner` (exprs/mod.rs) join the
+    // set via the round-34 G2 `&`-of-a-PROJECTED-bare-value FORMATION sites:
+    // `f(&s.field)` / `auto r = &b.data` materialize the projection root, lower a
+    // projection that mints transient element/field handles into the private
+    // copy, so they MUST untrack (same UAF-fold class). Both fns ALSO contain
+    // whole-value `cow_before_mutation` callers (site-1/2 `&name`, the `!name` /
+    // `!x` move-severs) — those need no untrack, but classification is PER FN, so
+    // the projected path makes the whole fn UNTRACK_REQUIRED.
+    const UNTRACK_REQUIRED: &[&str] = &[
+        "lower_field_assign",
+        "lower_index_assign",
+        "lower_method_call",
+        "lower_call_arg",
+        "lower_expr_inner",
+    ];
     // Whole-value reassign (`x = y`): `cow_before_mutation` severs the target's
     // own element refs before its buffer is replaced — no projection-chain / arg
     // element handles into a private copy, so no untrack needed.
@@ -3979,6 +3992,8 @@ fn g1_projected_materialize_sites_untrack() {
     let files = [
         "src/ir/lowering/stmts/assigns.rs",
         "src/ir/lowering/exprs/methods.rs",
+        "src/ir/lowering/exprs/calls.rs",
+        "src/ir/lowering/exprs/mod.rs",
     ];
     let mut required_seen: Vec<String> = Vec::new();
     for file in files {

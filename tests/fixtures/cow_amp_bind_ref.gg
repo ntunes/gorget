@@ -1,0 +1,10 @@
+# CoW G2 site 2 (standalone `auto r = &name`): binding a `&` to a bare alias
+# materializes a private copy, so a later `r.push` lands on the copy `b`.
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = a
+    auto r = &b
+    r.push(9)
+    print(a.len())        # 3
+    print(b.len())        # 4
+    print("done")
