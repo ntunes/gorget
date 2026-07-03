@@ -1,0 +1,11 @@
+# T5 resource-element compound sibling (ASan-gated): `V[i] += s` on a static
+# Vector[String] (read old element, concat, store back). The old element must
+# be freed exactly once and the concatenated result owned — no leak / UAF /
+# double-free.
+static Vector[String] NAMES = ["alice", "bob", "carol"]
+
+void main():
+    NAMES[1] += "by"
+    print(NAMES[0])
+    print(NAMES[1])
+    print(NAMES[2])

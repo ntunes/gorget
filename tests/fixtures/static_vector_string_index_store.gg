@@ -1,0 +1,11 @@
+# T5 resource-element coverage (ASan-gated): index-store a String into a
+# static Vector[String]. The overwritten element must be dropped exactly once
+# and the new value owned by the vector — no leak / UAF / double-free at the
+# store or at static teardown.
+static Vector[String] NAMES = ["alice", "bob", "carol"]
+
+void main():
+    NAMES[1] = "BOB"
+    print(NAMES[0])
+    print(NAMES[1])
+    print(NAMES[2])

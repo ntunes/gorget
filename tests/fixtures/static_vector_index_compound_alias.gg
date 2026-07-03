@@ -1,0 +1,11 @@
+# T5 + full-lazy-CoW (compound sibling): `a = SHARED; SHARED[0] += 5` → the
+# alias keeps its own copy (10), the static writes through (15). Guards the
+# compound Borrow-local materialization against aliasing an already-bound
+# copy's storage.
+static Vector[int] SHARED = [10, 20, 30]
+
+void main():
+    Vector[int] a = SHARED
+    SHARED[0] += 5
+    print(a[0])
+    print(SHARED[0])

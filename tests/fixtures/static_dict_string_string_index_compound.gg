@@ -1,0 +1,10 @@
+# T5 resource-VALUE Dict compound sibling (ASan-gated): `M[k] += s` on a
+# static Dict[String, String] (read old value, concat, put back). The old
+# value must be freed exactly once and the concatenated result owned — no
+# leak / UAF / double-free.
+static Dict[String, String] M = {"k": "old", "j": "keep"}
+
+void main():
+    M["k"] += "er"
+    print(M["k"])
+    print(M["j"])

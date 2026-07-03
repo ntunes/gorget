@@ -1,0 +1,15 @@
+# T5: a direct index-store on a module-level static Vector must write
+# THROUGH to the static (full-lazy-CoW: a static mutated by its own name
+# mutates in place). Bug (both backends): the setter's Copy/Move place-guard
+# dropped the store when the object was a `GlobalRef` Constant → the write was
+# silently lost and the read saw the un-mutated 10. Fixed by materializing the
+# static into a MutPtr write-through local (mirrors static field-store).
+static Vector[int] SHARED = [10, 20, 30]
+
+void main():
+    SHARED[0] = 99
+    SHARED[2] = 77
+    int i = 0
+    while i < 3:
+        print(SHARED[i])
+        i = i + 1

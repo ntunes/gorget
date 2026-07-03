@@ -1,0 +1,13 @@
+# T5 sibling: compound index-store (`SHARED[i] OP= x`) on a static Vector.
+# The compound arm has no obj_is_ptr handling and segfaults on a MutPtr, so
+# the fix materializes the GlobalRef into a Borrow local (shared header
+# aliasing the global buffer; the in-bounds __set writes in place). Bug
+# before the fix: both the read-back and the write were dropped (printed 10).
+static Vector[int] SHARED = [10, 20, 30]
+
+void main():
+    SHARED[0] += 5
+    SHARED[1] *= 2
+    print(SHARED[0])
+    print(SHARED[1])
+    print(SHARED[2])

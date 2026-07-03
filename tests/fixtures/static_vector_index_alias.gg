@@ -1,0 +1,11 @@
+# T5 + full-lazy-CoW: a DIRECT same-name mutation writes THROUGH to the
+# static; an ALIAS bound (bare-assign) before the mutation keeps its own copy.
+# alias[0] must stay 10 after `SHARED[0] = 99` (the bare-assign materialized a
+# private copy at the boundary; the direct static write does not leak into it).
+static Vector[int] SHARED = [10, 20, 30]
+
+void main():
+    Vector[int] alias = SHARED
+    SHARED[0] = 99
+    print(alias[0])
+    print(SHARED[0])

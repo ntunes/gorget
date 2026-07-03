@@ -1,0 +1,10 @@
+# T5 resource-VALUE Dict coverage (ASan-gated): store a String value into a
+# static Dict[String, String]. Distinct from the Vector case — hash-table
+# storage with separate key/value drop recipes. The replaced value must be
+# freed exactly once, the new value owned — no leak / UAF / double-free.
+static Dict[String, String] M = {"k": "old", "j": "keep"}
+
+void main():
+    M["k"] = "new"
+    print(M["k"])
+    print(M["j"])

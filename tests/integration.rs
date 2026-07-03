@@ -21223,6 +21223,116 @@ false
     );
 }
 
+// T5: a direct index-store on a module-level static collection must write
+// THROUGH to the static (full-lazy-CoW — a static mutated by its own name
+// mutates in place). Before the fix, the setter's `Operand::Copy | Move`
+// place-guard silently dropped the store when the object resolved to a
+// `GlobalRef` Constant (both backends), so the read saw the un-mutated value.
+// Fixed in `lower_index_assign` (plain, MutPtr write-through via
+// `materialize_global_field_base`) + `lower_compound_assign` Index arm
+// (Borrow-local materialization mirroring the read path).
+#[test]
+fn static_vector_index_store() {
+    run_gg(
+        "static_vector_index_store.gg",
+        "\
+99
+20
+77",
+    );
+}
+
+#[test]
+fn static_vector_index_compound() {
+    run_gg(
+        "static_vector_index_compound.gg",
+        "\
+15
+40
+30",
+    );
+}
+
+#[test]
+fn static_dict_index_compound() {
+    run_gg(
+        "static_dict_index_compound.gg",
+        "\
+11
+2",
+    );
+}
+
+// Full-lazy-CoW: an alias bound before the mutation keeps its own copy (10),
+// the direct same-name static write goes through (99). Plain + compound.
+#[test]
+fn static_vector_index_alias() {
+    run_gg(
+        "static_vector_index_alias.gg",
+        "\
+10
+99",
+    );
+}
+
+#[test]
+fn static_vector_index_compound_alias() {
+    run_gg(
+        "static_vector_index_compound_alias.gg",
+        "\
+10
+15",
+    );
+}
+
+// Resource-element coverage (ASan-gated: the overwritten element must be
+// dropped exactly once). Vector[String] plain + compound. The compound
+// leak-fix (drop the owned old-element clone that `gorget_str_cat` reads but
+// does not free) also covers the LOCAL `V[i] += s` case.
+#[test]
+fn static_vector_string_index_store() {
+    run_gg(
+        "static_vector_string_index_store.gg",
+        "\
+alice
+BOB
+carol",
+    );
+}
+
+#[test]
+fn static_vector_string_index_compound() {
+    run_gg(
+        "static_vector_string_index_compound.gg",
+        "\
+alice
+bobby
+carol",
+    );
+}
+
+// Resource-VALUE Dict coverage (ASan-gated): Dict[String, String] plain +
+// compound — distinct hash-table storage with separate key/value drop recipes.
+#[test]
+fn static_dict_string_string_index_store() {
+    run_gg(
+        "static_dict_string_string_index_store.gg",
+        "\
+new
+keep",
+    );
+}
+
+#[test]
+fn static_dict_string_string_index_compound() {
+    run_gg(
+        "static_dict_string_string_index_compound.gg",
+        "\
+older
+keep",
+    );
+}
+
 #[test]
 fn static_ref_param() {
     run_gg(

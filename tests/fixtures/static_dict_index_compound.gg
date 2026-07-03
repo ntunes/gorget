@@ -1,0 +1,9 @@
+# T5 sibling: compound index-store on a static Dict (`M[k] OP= x`). Same
+# GlobalRef-Constant drop as the Vector arm; the Borrow-local materialization
+# is shared, but Dict uses a distinct hash-table internal layout.
+static Dict[String, int] M = {"a": 1, "b": 2}
+
+void main():
+    M["a"] += 10
+    print(M["a"])
+    print(M["b"])

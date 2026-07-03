@@ -955,6 +955,17 @@ pub(super) fn lower_index_assign(
         } else {
             (lower_expr(ctx, builder, object), None)
         }
+    } else if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
+        // T5: bare-identifier module-level `static` base (`SHARED[i] = x`). A plain
+        // `lower_expr` yields a `GlobalRef` Constant, NOT a Copy/Move Place, so the
+        // setter's `Operand::Copy | Move` guard below silently DROPS the store (the
+        // write-back is lost — reads see the un-mutated static). Materialize the
+        // static into an addressable `MutPtr(<coll>)` local (mirrors
+        // lower_field_assign:667) so the setter writes THROUGH to the global. Track A's
+        // mutation prescan records index-stored statics as mutated, so the static is
+        // already emitted with writable imperative storage — this only closes the
+        // write path.
+        (global_ptr, None)
     } else {
         (lower_expr(ctx, builder, object), None)
     };
@@ -1462,6 +1473,33 @@ pub(super) fn lower_compound_assign(
             (lower_expr(ctx, builder, object), None)
         };
 
+        // T5 sibling: `SHARED[i] OP= x` on a bare-identifier module-level
+        // `static`. A bare `lower_expr` yields an `Operand::Constant(GlobalRef)`,
+        // NOT a Copy/Move Place, so the `Operand::Copy | Move` guard below drops
+        // BOTH the read and the write-back (the compound update is silently lost).
+        // Unlike the plain-store arm (which uses `materialize_global_field_base`'s
+        // MutPtr write-through), this arm's read (`index_load`) and write
+        // (`emit_borrow_mut` + `__set`) both assume a DIRECT value place with no
+        // `obj_is_ptr` handling — so mirror the READ path (`lower_index_access`,
+        // methods.rs): materialize the GlobalRef into a direct-value local via
+        // `Borrow` (a zero-cost shallow header aliasing the global's heap buffer;
+        // the global retains ownership). An in-bounds element `__set` writes to the
+        // shared buffer in place → visible in the global, with no realloc/header
+        // drift. Value-typed statics `Copy`.
+        let obj = if let Operand::Constant(Constant::GlobalRef(_)) = obj {
+            let base_type = infer_operand_type_full(ctx, &obj, builder);
+            let local = builder.add_local(base_type, None);
+            let mode = if ctx.type_registry.is_resource_type(base_type) {
+                crate::ir::instructions::AssignMode::Borrow
+            } else {
+                crate::ir::instructions::AssignMode::Copy
+            };
+            builder.assign_mode(mode, Place::local(local), obj);
+            Operand::Copy(Place::local(local))
+        } else {
+            obj
+        };
+
         let idx_raw = lower_expr(ctx, builder, index);
         let obj_type = resolved_field_type.unwrap_or_else(|| infer_operand_type_full(ctx, &obj, builder));
         let obj_type = ctx.pointee_type(obj_type).unwrap_or(obj_type);
@@ -1567,13 +1605,33 @@ pub(super) fn lower_compound_assign(
             let is_string = elem_type == ctx.type_mapper.owned_string_type;
 
             let result = if is_string && matches!(op, ast::BinaryOp::Add) {
-                // String concatenation via gorget_str_cat
+                // String concatenation via gorget_str_cat. `cur_val` is an OWNED
+                // clone of the old element (`index_load` clones resource-typed
+                // elements to owned), and the runtime `gorget_str_cat` reads both
+                // args BY VALUE without freeing them, so the old-element clone must
+                // be dropped here or it leaks. It is NOT drop-registered
+                // (`builder.index_load` is called directly, not via a
+                // drop-registering ctx helper), so an unconditional Drop frees it
+                // exactly once — no double-free. Pre-existing leak on `V[i] += s` /
+                // `M[k] += s` for local AND static resource-element collections
+                // (ASan: 4-byte leak, both backends); surfaced by the T5 static
+                // index-store fixtures. The concat result is an independent fresh
+                // allocation, so it does not alias `cur_val`.
                 let owned_type = ctx.type_mapper.owned_string_type;
+                let cur_local = match &cur_val {
+                    Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+                        Some(p.local)
+                    }
+                    _ => None,
+                };
                 let tmp = builder.call_extern(
                     "gorget_str_cat",
                     vec![cur_val, rhs],
                     owned_type,
                 );
+                if let Some(local) = cur_local {
+                    builder.drop(Place::local(local));
+                }
                 FunctionBuilder::copy(tmp)
             } else {
                 // Check for operator overload on Named types
