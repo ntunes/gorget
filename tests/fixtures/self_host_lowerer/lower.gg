@@ -2158,14 +2158,14 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
             set_terminator(&sctx, GTReturn(OpConstUnit()))
         else:
             pass
-    pop_drop_scope(&sctx)
-    Vector[BasicBlock] sblocks = []
-    int sbi = 0
-    while sbi < sctx.block_insts.len():
-        Vector[Instruction] sinsts = sctx.block_insts.get(sbi).unwrap()
-        Terminator st = sctx.block_terms.get(sbi).unwrap()
-        sblocks.push(BasicBlock(sinsts, st))
-        sbi += 1
+    # Route through the shared function-body finalizer (pop drop frame →
+    # compute_liveness → wire_liveness_into_modes → flush_drop_queue →
+    # assemble). A suite setup/teardown body is a full function and MUST run
+    # the same liveness finalization so last-use consumes become MOVES (source
+    # zeroed) — the previous inline pop+assembly OMITTED wire_liveness_into_modes,
+    # leaving moved-from sources registered → over-drop (same class as the
+    # test-body path). SINGLE source of truth for the block-assembly idiom.
+    Vector[BasicBlock] sblocks = finalize_body_blocks(&sctx, &gmod, fn_name)
     Vector[int] sparams = []
     return GirFunction(fn_name.clone(), !sparams, UNIT_TYPE, sctx.locals, !sblocks, [], [])
 
@@ -4393,14 +4393,17 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                                 set_terminator(&tctx, GTReturn(OpConstUnit()))
                             else:
                                 pass
-                        pop_drop_scope(&tctx)
-                        Vector[BasicBlock] tblocks = []
-                        int tbi = 0
-                        while tbi < tctx.block_insts.len():
-                            Vector[Instruction] tinsts = tctx.block_insts.get(tbi).unwrap()
-                            Terminator tt = tctx.block_terms.get(tbi).unwrap()
-                            tblocks.push(BasicBlock(tinsts, tt))
-                            tbi += 1
+                        # Route through the shared function-body finalizer — a
+                        # test body is a full function and MUST run the same
+                        # liveness finalization (pop → compute_liveness →
+                        # wire_liveness_into_modes → flush_drop_queue → assemble).
+                        # Without wire_liveness_into_modes the last-use ctor-arg
+                        # consumes stay OpCopy (never OpMove), so the moved-from
+                        # source slots (`v`→`Some(v)`→`Wrapper`→`w`) are never
+                        # IMoveSlot-zeroed and drop_elab keeps their
+                        # GIDropIfAlive → over-drop / double-free
+                        # (test_option_resource_field).
+                        Vector[BasicBlock] tblocks = finalize_body_blocks(&tctx, &gmod, test_fn_name)
                         Vector[int] tparams = []
                         gmod.functions.push(GirFunction(test_fn_name, !tparams, UNIT_TYPE, tctx.locals, !tblocks, [], []))
                         # Register the full test metadata for the runner-main

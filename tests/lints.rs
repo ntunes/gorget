@@ -4043,3 +4043,88 @@ fn g1_projected_materialize_sites_untrack() {
          when the set deliberately changes."
     );
 }
+
+/// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings" +
+/// #6 "convert a recurring bug class into an executable guard"; devbook/24
+/// "fix the class, not the instance"): every function-body lowering path in the
+/// self-host lowerer MUST finalize through the shared `finalize_body_blocks`
+/// helper (`lower_loops.gg`), which pops the drop frame, runs `compute_liveness`
+/// → `wire_liveness_into_modes` (the OpMove/OpClone consuming-operand decision)
+/// → `flush_drop_queue`, and only THEN assembles the `BasicBlock` vector.
+///
+/// The bug class this pins (R35 Bug B): the `test`-body and `suite`-body inline
+/// lowering paths open-coded the tail and OMITTED `wire_liveness_into_modes`, so
+/// last-use ctor-arg consumes stayed `OpCopy` (never `OpMove`) and the
+/// moved-from source slots were never zeroed → drop_elab over-dropped them →
+/// DOUBLE-FREE (`test_option_resource_field` sig6). The fix routed all three
+/// inline paths (test-body, suite-body, the `lower_equip_block` method path)
+/// through `finalize_body_blocks`.
+///
+/// The anti-pattern is the manual block-ASSEMBLY loop that reconstructs the
+/// `Vector[BasicBlock]` from the ctx's separate `block_insts` / `block_terms`
+/// vectors — its sink is `push(BasicBlock(`. That sink MUST appear EXACTLY ONCE
+/// in the self-host lowerer: inside `finalize_body_blocks`. A merely-counting
+/// `finalize_body_blocks(` caller-count lint could NOT catch a 4th body path
+/// that forgets to call it; pinning the assembly sink DOES. Single-block literal
+/// constructions (`[BasicBlock([], GTReturn(...))]` for stub / spawn-wrapper
+/// bodies that have no drop frame to finalize) use list-literal syntax, not
+/// `push(BasicBlock(`, so an idiom-scoped lint correctly excludes them.
+///
+/// **If this fails with count > 1:** a new function-body path re-inlined the
+/// block-assembly loop instead of calling `finalize_body_blocks` — route it
+/// through the helper (else it silently skips liveness finalization → UAF /
+/// double-free). **If it fails with count 0:** `finalize_body_blocks` was
+/// refactored away from the `push(BasicBlock(` idiom — retarget this lint at the
+/// new assembly sink.
+#[test]
+fn self_host_body_finalize_single_assembly_site() {
+    /// Baseline 2026-07-03 (R35 Bug B): 1 — the sole block-assembly loop lives
+    /// in `finalize_body_blocks` (`lower_loops.gg`). test-body / suite-body /
+    /// method-path all route through it.
+    const EXPECTED: usize = 1;
+
+    // The lower*.gg body-lowering files are REAL files (not symlinks) in
+    // self_host_lowerer; the `push(BasicBlock(` idiom lives nowhere else, so
+    // scoping to this dir avoids any symlink double-count.
+    let dir = "tests/fixtures/self_host_lowerer";
+    let mut sites = 0usize;
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => panic!("self_host_body_finalize_single_assembly_site: cannot read {dir}"),
+    };
+    for de in entries.flatten() {
+        let p = de.path();
+        if p.is_symlink() {
+            continue;
+        }
+        if p.extension().map_or(true, |e| e != "gg") {
+            continue;
+        }
+        let content = match fs::read_to_string(&p) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') {
+                continue; // .gg comments
+            }
+            sites += trimmed.matches("push(BasicBlock(").count();
+        }
+    }
+
+    assert_eq!(
+        sites, EXPECTED,
+        "Self-host block-assembly idiom `push(BasicBlock(` site count changed: \
+         {sites} vs {EXPECTED}.\n\n\
+         Every function-body lowering path MUST finalize through the shared \
+         `finalize_body_blocks` helper (pop drop frame → compute_liveness → \
+         wire_liveness_into_modes → flush_drop_queue → assemble). A path that \
+         re-inlines the block-assembly loop skips `wire_liveness_into_modes`, so \
+         last-use consumes stay OpCopy and moved-from sources are never zeroed → \
+         drop_elab double-frees (R35 Bug B: test_option_resource_field). Route the \
+         new path through `finalize_body_blocks` instead of open-coding the loop. \
+         Update EXPECTED only if `finalize_body_blocks` itself was intentionally \
+         refactored.",
+    );
+}

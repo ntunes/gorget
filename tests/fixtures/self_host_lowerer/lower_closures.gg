@@ -624,32 +624,13 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
         # Lower body
         lower_stmts(&ctx, mdef.body, &gmod, is_main)
 
-        # Phase 2: pop function-scope drop frame. If body fell through
-        # without an explicit return, this emits cleanup drops.
-        pop_drop_scope(&ctx)
-
-        # GIR-liveness Phase 2a (Path A part 1). Same wiring as
-        # `lower_function` above — see `wire_liveness_into_modes`
-        # docstring for the rewriter contract.
-        LivenessAnalysis liveness2 = compute_liveness(&ctx)
-        int diff2 = liveness_instrumentation_diff(&ctx, &liveness2)
-        if diff2 > 0:
-            diag_warn("gir_liveness_diff", mangled + ": " + int_to_str(diff2) + " sites")
-        wire_liveness_into_modes(&ctx, &gmod, &liveness2)
-
-        # Phase 2c COMMIT 3 Prereq C — flush the deferred drop
-        # queue. See the matching call site in `lower_function`
-        # for the architectural contract.
-        flush_drop_queue(&ctx)
-
-        # Assemble blocks
-        Vector[BasicBlock] blocks = []
-        int bi = 0
-        while bi < ctx.block_insts.len():
-            Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
-            Terminator term = ctx.block_terms.get(bi).unwrap()
-            blocks.push(BasicBlock(insts, term))
-            bi += 1
+        # Phase 2: pop the function-scope drop frame + run the GIR-liveness
+        # finalization (compute_liveness → wire_liveness_into_modes's
+        # OpMove/OpClone decision → flush_drop_queue) + assemble the blocks —
+        # the shared function-body tail. Same contract as `lower_function`;
+        # deduped through `finalize_body_blocks` so the block-assembly idiom has
+        # ONE source of truth (Core #4 / one source of truth).
+        Vector[BasicBlock] blocks = finalize_body_blocks(&ctx, &gmod, mangled)
 
         # Dup-def dedup (lazy-adapter pre-existing bug): an explicit
         # `MapIter[…]` annotation + the `.map()` chain both reach here for the
