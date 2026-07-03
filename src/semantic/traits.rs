@@ -1376,22 +1376,44 @@ fn validate_trait_impls(registry: &TraitRegistry, module: &Module, types: &TypeT
     }
 }
 
-/// Recursively check whether a type contains `error_id` anywhere in its
-/// generic-arg tree. Trait method signatures store unresolved type
-/// parameters (T, Self) as `error_id`, so any composite type whose args
-/// reach `error_id` is effectively a placeholder waiting on substitution
-/// at the impl site.
-fn type_contains_error(types: &TypeTable, type_id: TypeId) -> bool {
-    if type_id == types.error_id {
-        return true;
-    }
+/// Recursively check whether a type contains `Error` anywhere in its
+/// type-argument tree. Two callers rely on this:
+///  - trait method-signature validation (this file): trait signatures store
+///    unresolved type parameters (T, Self) as `error_id`, so any composite
+///    type whose args reach `error_id` is a placeholder awaiting substitution
+///    at the impl site, and strict signature checks are skipped for it.
+///  - generic-struct field access (`typecheck.rs` `Expr::FieldAccess`): a
+///    generic-param field resolves to `Error` in `field_types` (module-scope
+///    resolution), so the concrete-field slice only trusts — and type-checks
+///    against — field types that are fully Error-free.
+///
+/// The base case matches `ResolvedType::Error` directly (catching any
+/// Error-typed TypeId, not just the canonical `types.error_id`), and the
+/// recursion covers the full composite-variant set so that an `Error` nested
+/// inside any container (`A[]`, `ref A`, `A!`, `Callable[A(...)]`, a tuple, a
+/// function type, …) is detected — a type containing `Error` anywhere is not
+/// "concrete". One source of truth (Core #3); do not add a second copy.
+pub(crate) fn type_contains_error(types: &TypeTable, type_id: TypeId) -> bool {
     use crate::semantic::types::ResolvedType;
     match types.get(type_id) {
+        ResolvedType::Error => true,
         ResolvedType::Generic(_, args) => {
             args.iter().any(|&arg| type_contains_error(types, arg))
         }
         ResolvedType::Tuple(elems) => {
             elems.iter().any(|&e| type_contains_error(types, e))
+        }
+        ResolvedType::Array(e, _)
+        | ResolvedType::Slice(e)
+        | ResolvedType::Ref(e)
+        | ResolvedType::Owned(e)
+        | ResolvedType::CallableTrait(e)
+        | ResolvedType::MutCallableTrait(e)
+        | ResolvedType::ConsumeCallableTrait(e) => type_contains_error(types, *e),
+        ResolvedType::BoxedCallable { inner, .. } => type_contains_error(types, *inner),
+        ResolvedType::Function { params, return_type, .. } => {
+            params.iter().any(|&p| type_contains_error(types, p))
+                || type_contains_error(types, *return_type)
         }
         _ => false,
     }

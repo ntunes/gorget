@@ -1,0 +1,37 @@
+# R36-D (generic twin of field_off_element_match_return.gg): a `match` on a
+# CONCRETE field read off a collection element whose type is a GENERIC struct
+# (`Vector[GNode[int]]`) used to false-reject with "missing return". The
+# element read is a CoW zero-cost view typed `Ref(Generic(GNode, [int]))`;
+# after T6's Ref-peel the receiver is `Generic(...)`, which the field lookup
+# still didn't handle -> `.kind` typed `<error>` -> the exhaustiveness check
+# silently bailed and the definite-return analysis concluded the total match
+# could fall through. The generic-struct field-access branch now types the
+# concrete `.kind` field to its real enum type, so exhaustiveness works and
+# the false "missing return" is gone. The `while true:` arm is a genuinely
+# diverging arm (never reached at runtime here).
+enum Kind:
+    Value()
+    Next()
+    Halt()
+
+struct GNode[T]:
+    Kind kind          # concrete enum field
+    T payload
+
+int walk(Vector[GNode[int]] nodes, int i):
+    match nodes.get(i).unwrap().kind:
+        case Kind.Value():
+            return nodes.get(i).unwrap().payload
+        case Kind.Next():
+            return walk(nodes, i + 1)
+        case Kind.Halt():
+            while true:
+                pass
+
+void main():
+    Vector[GNode[int]] a = [GNode[int](Kind.Value(), 1)]
+    Vector[GNode[int]] b = [GNode[int](Kind.Next(), 0), GNode[int](Kind.Value(), 7)]
+    Vector[GNode[int]] c = [GNode[int](Kind.Next(), 0), GNode[int](Kind.Value(), -1)]
+    print(walk(a, 0))
+    print(walk(b, 0))
+    print(walk(c, 0))

@@ -2678,6 +2678,53 @@ impl<'a> TypeChecker<'a> {
                         }
                     }
                 }
+                // Field access on a CONCRETE instantiation of a generic struct
+                // (`Pair[int,String] p; p.tag`). The struct's `field_types`
+                // were resolved at module scope in `populate_def_field_types`,
+                // where the struct's own generic params (A/B) are NOT in scope,
+                // so generic-param fields resolve to `error_id` there while
+                // CONCRETE fields (`int tag`, `Kind kind`) resolve correctly.
+                // Return the concrete field type so a genuine mismatch
+                // (`String x = p.tag`) is REJECTED rather than silently accepted
+                // (Core #8), and so a `match` on a concrete field read off a
+                // generic-struct element (`v.get(i).unwrap().kind`) types its
+                // scrutinee (fixing the snag-13 definite-return false-positive
+                // for the generic case). Generic-param fields (whose resolved
+                // type contains `Error`) still fall through to `error_id` and
+                // are typed later by monomorphization; the full generic-arg
+                // substitution that types those precisely is the follow-up
+                // (Strategy 2B — see TODO.md).
+                //
+                // Note: unlike the `Defined` path above, a missing field is
+                // NOT reported here. Several generic types auto-deref to an
+                // inner type for field access (`Box[T]`, `ReadGuard[T]` /
+                // `WriteGuard[T]` / `Guard[T]`, `Weak`/`Shared`), so a field
+                // absent from the outer struct is legitimately resolved through
+                // the deref target downstream; emitting `NoFieldFound` here
+                // would false-reject those. Reporting genuinely-missing fields
+                // on generic structs needs deref-awareness and is part of the
+                // full follow-up.
+                if let ResolvedType::Generic(did, _) = self.types.get(resolved).clone() {
+                    if let Some(sfi) = self.struct_fields.get(&did) {
+                        if let Some(field_idx) =
+                            sfi.fields.iter().position(|(name, _)| name == &field.node)
+                        {
+                            if let Some(field_tids) =
+                                self.scopes.get_def(did).field_types.clone()
+                            {
+                                if let Some(&tid) = field_tids.get(field_idx) {
+                                    // Only trust a field type that is fully
+                                    // concrete: generic-param fields resolve to
+                                    // `Error` in `field_types` (module-scope
+                                    // resolution) and must fall through.
+                                    if !super::traits::type_contains_error(self.types, tid) {
+                                        return tid;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.types.error_id
             }
 

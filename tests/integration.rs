@@ -1270,6 +1270,34 @@ fn field_off_element_match_nonexhaustive_error() {
     );
 }
 
+// R36-D (generic twin of field_off_element_match_return): a total `match` on
+// a CONCRETE field read off a collection element whose type is a GENERIC
+// struct (`Vector[GNode[int]]`) used to false-reject with "missing return".
+// After T6's Ref-peel the receiver is `Generic(GNode, [int])`, which the
+// field lookup didn't handle -> `.kind` typed `<error>` -> exhaustiveness
+// silently bailed. The new generic-struct field-access branch types the
+// concrete `.kind` field to its real enum type, so exhaustiveness works.
+// Must compile AND run.
+#[test]
+fn field_off_generic_element_match_return() {
+    run_gg("field_off_generic_element_match_return.gg", "1\n7\n-1");
+}
+
+// R36-D (Core #8): a genuine type mismatch on a CONCRETE field of a generic
+// struct (`String x = p.tag` where `tag` is `int`) used to pass `gg check`
+// silently (the `Generic` receiver fell through to `error_id`, which unifies
+// with anything) and then CRASH IR-lowering. The generic-struct field-access
+// branch now returns the concrete field's real type, so the mismatch is
+// rejected at check time. (Generic-PARAM fields still fall through — the full
+// substitution fix is Strategy 2B, tracked in TODO.md.)
+#[test]
+fn generic_struct_concrete_field_type_mismatch_error() {
+    check_gg_fails(
+        "generic_struct_concrete_field_type_mismatch_error.gg",
+        "type mismatch",
+    );
+}
+
 // A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
 // emits `unreachable` right after it, so a noreturn function that falls
 // off its end, executes a `return`, or has a non-diverging expression body
