@@ -5855,7 +5855,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 1, &cparams, &cbody):
             return -1
         if cparams.len() != 1:
             return -1
@@ -5909,7 +5909,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 1, &cparams, &cbody):
             return -1
         if cparams.len() != 1:
             return -1
@@ -5937,7 +5937,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(1).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(1).unwrap(), 2, &cparams, &cbody):
             return -1
         if cparams.len() != 2:
             return -1
@@ -5950,7 +5950,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 2, &cparams, &cbody):
             return -1
         if cparams.len() != 2:
             return -1
@@ -5963,7 +5963,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 1, &cparams, &cbody):
             return -1
         if cparams.len() != 1:
             return -1
@@ -5978,7 +5978,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 1, &cparams, &cbody):
             return -1
         if cparams.len() != 1:
             return -1
@@ -6028,7 +6028,7 @@ int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 1, &cparams, &cbody):
             return -1
         if cparams.len() != 1:
             return -1
@@ -6069,7 +6069,7 @@ int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(1).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(1).unwrap(), 2, &cparams, &cbody):
             return -1
         if cparams.len() != 2:
             return -1
@@ -6082,7 +6082,7 @@ int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 1, &cparams, &cbody):
             return -1
         if cparams.len() != 1:
             return -1
@@ -6095,7 +6095,7 @@ int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 1, &cparams, &cbody):
             return -1
         if cparams.len() != 1:
             return -1
@@ -6194,6 +6194,34 @@ bool closure_extract(SpannedExpr arg, Vector[String] &out_params, SpannedExpr &o
                     return false
         else:
             return false
+
+# Extract a HOF closure body OR synthesize a wrapper for a non-closure-literal
+# CALLABLE arg (a named function like `v.map(double)`, or a callable-valued
+# local). `closure_extract` only matches `EClosure` literals, so `map(double)`
+# — where the arg is `EIdentifier("double")` — would fall through to the
+# undefined `Vector__T__map` monomorph. Instead synthesize a wrapper closure
+# `(p0, ..., p{arity-1}): arg(p0, ..., p{arity-1})` with fresh param names, so
+# the SAME inline-loop machinery lowers it exactly like a closure literal. The
+# synthesized `arg(p...)` ECall routes through normal dispatch, handling named
+# functions AND callable-valued locals uniformly (Rust gg wraps named fns in an
+# `__adapt_*` thunk; the self-host inlines the call directly). `arity` is fixed
+# by the HOF at each call site (map/filter/any/all/each/flat_map = 1; Vector/Set
+# fold, reduce, Dict filter = 2; Dict fold = 3) — read from that site's own
+# trailing `cparams.len()` check.
+bool extract_hof_closure(SpannedExpr arg, int arity, Vector[String] &out_params, SpannedExpr &out_body):
+    if closure_extract(arg.clone(), &out_params, &out_body):
+        return true
+    Vector[SpannedExpr] call_args = []
+    int i = 0
+    while i < arity:
+        String pn = "__hofp" + int_to_str(i)
+        out_params.push(pn)
+        call_args.push(SpannedExpr(EIdentifier(pn), arg.span))
+        i += 1
+    Vector[String] no_names = []
+    Vector[SpannedType] no_targs = []
+    out_body = SpannedExpr(ECall(Box(arg), call_args, no_names, no_targs), arg.span)
+    return true
 
 # `fold(init, (acc, x): body)` → `acc = init; for x in v: acc = body`.
 # The accumulator is a scalar local seeded with the lowered `init`,
@@ -6305,7 +6333,7 @@ int try_lower_dict_hof(LowerCtx &ctx, int recv, String recv_type_name, String mn
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(1).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(1).unwrap(), 3, &cparams, &cbody):
             return -1
         if cparams.len() != 3:
             return -1
@@ -6329,7 +6357,7 @@ int try_lower_dict_hof(LowerCtx &ctx, int recv, String recv_type_name, String mn
             return -1
         Vector[String] cparams = []
         SpannedExpr cbody = sexpr
-        if not closure_extract(margs.get(0).unwrap(), &cparams, &cbody):
+        if not extract_hof_closure(margs.get(0).unwrap(), 2, &cparams, &cbody):
             return -1
         if cparams.len() != 2:
             return -1
