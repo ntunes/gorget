@@ -3128,6 +3128,53 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # through the `__field_read_<enum>_<Variant>_0` helper, same as
             # PConstructor destructure.
             #
+            # ── R35 T4: CoW G1 field-path decide-at-root materialize for a
+            # BARE-value projected mutating receiver (`s.field.push(x)` where
+            # `s` is a bare param). Mirrors Rust methods.rs:1851
+            # (cow_before_mutation on the projection root): clone the whole
+            # immutable-in-context root struct into a fresh owned local and
+            # rebind the name so the field-path mutation lands on the private
+            # copy — the caller's buffer is untouched. A `&`/`!` (mut-borrow /
+            # move) root is GtMutPtr, caught by `is_mut_borrow_param_local`, so
+            # it is skipped and writes through (unchanged). An owned local root
+            # is LoOwned≠LoParam → also skipped. SCOPE: single-level
+            # `EFieldAccess(EIdentifier)` receivers with a bare LoParam root
+            # only; the full class (index-projected roots, alias/element roots,
+            # SAssign-path roots, G2 formation shapes, the end-of-statement
+            # untrack UAF fold) is NOT covered here (DEEP tail, see TODO).
+            match (*recv_box).expr:
+                case EFieldAccess(_fp_base_box, _fp_field):
+                    match (*_fp_base_box).expr:
+                        case EIdentifier(_fp_root):
+                            bool _fp_mut = false
+                            match builtin_method_mutates(mname):
+                                case Some(_fpd):
+                                    _fp_mut = _fpd.is_mutating
+                                case None:
+                                    pass
+                            if _fp_mut and nl_contains(&ctx, _fp_root):
+                                int _fp_root_local = nl_get(&ctx, _fp_root)
+                                bool _fp_is_param = false
+                                match ctx.locals.get(_fp_root_local).unwrap().ownership:
+                                    case LoParam():
+                                        _fp_is_param = true
+                                    else:
+                                        pass
+                                if _fp_is_param and not is_mut_borrow_param_local(&ctx, &gmod, _fp_root_local):
+                                    int _fp_root_tid = ctx.locals.get(_fp_root_local).unwrap().type_id
+                                    int _fp_struct_tid = peel_ptr_tid(&gmod, _fp_root_tid)
+                                    String _fp_sname = type_id_to_base_name(_fp_struct_tid, &gmod)
+                                    if is_droppable_type(_fp_struct_tid, &gmod) and gmod.resource_types.contains(_fp_sname):
+                                        String _fp_clone = _fp_sname + "__clone"
+                                        int _fp_mat = add_local(&ctx, _fp_struct_tid, None)
+                                        Vector[Operand] _fp_cargs = [OpBorrow(_fp_root_local)]
+                                        emit(&ctx, GICallExtern(_fp_mat, _fp_clone, _fp_cargs))
+                                        nl_put(&ctx, _fp_root, _fp_mat)
+                                        register_local_for_drop(&ctx, _fp_mat, _fp_struct_tid, &gmod)
+                        else:
+                            pass
+                else:
+                    pass
             # Place base — a method receiver is passed as `self` BY POINTER,
             # so a `&`/`!`-param (`GtMutPtr`) receiver must stay the pointer
             # (else the method mutates a discarded dereffed copy, not the
