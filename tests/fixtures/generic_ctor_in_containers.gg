@@ -1,0 +1,80 @@
+# R37-T2 (Core #4): a generic-struct constructor `GX[int](...)` nested inside a
+# container / block / literal expression, OR a nested generic type-arg, must be
+# DISCOVERED so its monomorphized struct body is registered. Before the fix the
+# self-host lowerer's `discover_generic_calls_expr` had no arm for these shapes
+# (fell to `else: pass`), so the ctor was never visited → an empty
+# `{char __pad}` mono struct → `[bug] I64(0)` on a later field read → wrong
+# output. Each function below isolates one sibling shape so the ctor's ONLY
+# occurrence is inside that container (auto-typed where possible so no type
+# annotation names the generic — discovery must come from walking the
+# expression). Mirrors Rust gg's `scan_expr`/`scan_type`.
+struct GArr[T]:
+    T v
+struct GTup[T]:
+    T v
+struct GMat[T]:
+    T v
+struct GIf[T]:
+    T v
+struct GBlk[T]:
+    T v
+struct GDic[T]:
+    T v
+struct Wrap[T]:
+    T inner
+
+# EArrayLiteral expr arm: ctor ONLY inside an array literal.
+int read_arr():
+    auto a = [GArr[int](10)]
+    return a.get(0).unwrap().v
+
+# ETupleLiteral expr arm: ctor ONLY inside a tuple literal.
+int read_tuple():
+    auto t = (GTup[int](20), 5)
+    auto g, n = t
+    return g.v + n
+
+# EMatch expr arm: ctor ONLY inside match-expression arms (yield the int field
+# to sidestep an ORTHOGONAL struct-by-value-through-match codegen quirk).
+int read_match(int sel):
+    auto x = match sel:
+        case 0: GMat[int](30).v
+        else: GMat[int](31).v
+    return x
+
+# EIf expr arm (elif/else completion): ctor ONLY inside if-else expression arms.
+int read_if(int sel):
+    auto x = if sel == 0: GIf[int](40).v elif sel == 1: GIf[int](41).v else: GIf[int](42).v
+    return x
+
+# EBlock/EDo expr arm: ctor ONLY inside a do-block expression.
+int read_block():
+    auto x = do:
+        GBlk[int](50).v
+    return x
+
+# scan_type recursion at the ECall targ site: foo[Wrap[GDic[int]]] — the inner
+# GDic[int] must be discovered by recursing the call's OWN type-args.
+int foo[T](T x):
+    return 60
+
+int read_nested():
+    Wrap[GDic[int]] w = Wrap[GDic[int]](GDic[int](70))
+    int r = foo[Wrap[GDic[int]]](w)
+    return r + w.inner.v
+
+# scan_type recursion at the SVarDecl annotation: Dict[String, GDic[int]] must
+# discover the nested GDic[int].
+int read_dict_annot():
+    Dict[String, GDic[int]] d = {}
+    d.put("a", GDic[int](80))
+    return d.get("a").unwrap().v
+
+void main():
+    print(read_arr())
+    print(read_tuple())
+    print(read_match(0))
+    print(read_if(1))
+    print(read_block())
+    print(read_nested())
+    print(read_dict_annot())

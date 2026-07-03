@@ -1127,6 +1127,88 @@ fn self_host_comprehension_dispatch_arms_count() {
 
 /// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
 /// + #6 "convert a recurring bug class into an executable guard"; devbook/24
+/// rule 2): the SELF-HOST generic-instance DISCOVERY walker
+/// `discover_generic_calls_expr` (`lower_generics.gg`) must visit EVERY
+/// sub-expression-bearing `Expr` variant. A variant that falls into the
+/// `else: pass` fallback is NEVER walked, so a generic-struct constructor
+/// nested inside it (`[GNode[int](...)]`, `S(f=GNode[int](...))`, an if-else
+/// arm, a block/do, a match arm, …) is never discovered → its monomorphized
+/// struct body is never registered → an empty `{char __pad}` struct →
+/// `[bug] I64(0)` on a later field read (R37-T2, the
+/// `field_off_generic_element_match_return` runtime WRONG). This mirrors Rust
+/// gg's `scan_expr` (`src/ir/lowering/generics/mod.rs:663-806`).
+///
+/// The count is pinned to the FULL sub-expr-bearing self-host `Expr` set (all
+/// 35 arms), NOT just the arms the target fixture needed. Only the 9 leaf
+/// variants (EIntLiteral / EFloatLiteral / EBoolLiteral / EStringLiteral /
+/// ECharLiteral / ENoneLiteral / EIdentifier / ESelfExpr / EIt) may fall to
+/// `else: pass`.
+///
+/// **If this fails because an arm was ADDED:** confirm the new arm RECURSES
+/// into its sub-exprs (and, if it carries type-args like ECall/EMethodCall,
+/// scans them via the shared `discover_generic_calls_type` walker) — never
+/// registers from a non-type-arg field (⚠ `EStructLiteral`'s middle
+/// `Vector[String]` is FIELD NAMES). Then bump EXPECTED with a justification.
+/// **If a NEW sub-expr-bearing `Expr` variant lands** in `ast.gg`, it MUST get
+/// an arm here (recurse-only, or a type-arg scan if it carries targs) — do not
+/// leave it in `else: pass`. **If an arm was removed:** lower EXPECTED to lock
+/// the new floor.
+#[test]
+fn self_host_generic_discovery_expr_arms_count() {
+    /// Baseline 2026-07-03 (R37-T2): 35 top-level `case E…` arms in
+    /// `discover_generic_calls_expr` — the complete sub-expr-bearing self-host
+    /// `Expr` set. Counts the function's TOP-LEVEL match arms only (8-space
+    /// indent); the nested `case EIdentifier` (inside the ECall arm) and the
+    /// `case Some|None` sub-matches are deeper-indented and excluded.
+    const EXPECTED: usize = 35;
+
+    // lower_generics.gg lives ONLY in self_host_lowerer (real file, not
+    // symlinked), so no double-count guard is needed.
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_generics.gg").unwrap_or_default();
+
+    // Scope to the `discover_generic_calls_expr` fn body: from its signature to
+    // the next top-level `void ` definition (`discover_generic_calls_type`).
+    let start = content
+        .find("void discover_generic_calls_expr(")
+        .expect("self_host_generic_discovery_expr_arms_count: discover_generic_calls_expr fn not found");
+    let end = content[start..]
+        .find("\nvoid discover_generic_calls_type(")
+        .map(|o| start + o)
+        .expect("self_host_generic_discovery_expr_arms_count: end of discover_generic_calls_expr not found");
+    let window = &content[start..end];
+
+    let mut arms = 0usize;
+    for line in window.lines() {
+        if line.trim_start().starts_with('#') {
+            continue; // .gg comments
+        }
+        // Top-level match arms are indented EXACTLY 8 spaces. `strip_prefix`
+        // with the 8-space prefix rejects the deeper-indented nested arms
+        // (`case EIdentifier` at 20 spaces, `case Some|None` at 12 spaces).
+        if line.strip_prefix("        case E").is_some() {
+            arms += 1;
+        }
+    }
+
+    assert_eq!(
+        arms, EXPECTED,
+        "Self-host `discover_generic_calls_expr` arm count changed: \
+         {arms} vs {EXPECTED}.\n\n\
+         The generic-instance discovery walker must visit EVERY \
+         sub-expression-bearing `Expr` variant — a variant left in `else: pass` \
+         is never walked, so a generic-struct ctor nested inside it is never \
+         discovered → an empty `{{char __pad}}` mono struct → `[bug] I64(0)` on \
+         a later field read. A new arm MUST recurse into its sub-exprs (and scan \
+         any type-args via the shared `discover_generic_calls_type` walker) — \
+         never register from a non-type-arg field (`EStructLiteral`'s middle \
+         `Vector[String]` is FIELD NAMES). Bump EXPECTED with a justification, \
+         or lower it if an arm was removed.",
+    );
+}
+
+/// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
+/// + #6 "convert a recurring bug class into an executable guard"; devbook/24
 /// rule 2 "typed metadata, not name-matched"): the Option/Result HOF combinator
 /// templates in the self-host `emit_option_result_combinator`
 /// (`lir_codegen.gg`) are an enumerated class. Each one that dispatches a USER

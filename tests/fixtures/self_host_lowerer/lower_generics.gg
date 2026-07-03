@@ -689,6 +689,13 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
     match sexpr.expr:
         case ECall(callee_box, args, _, targs):
             if targs.len() > 0 and not has_type_variable_ctx(targs, &tparams):
+                # R37-T2 (Core #4 sibling of the SVarDecl annotation path):
+                # recurse into the call's OWN type-args via the shared type
+                # walker so a NESTED generic (`foo[Wrapper[GNode[int]]](...)`)
+                # discovers the inner `GNode[int]` too. Rust `scan_expr` scans
+                # them (generics/mod.rs:672) before the identifier registration.
+                for ta in targs:
+                    discover_generic_calls_type(ta, &seen, &instances, &tparams)
                 SpannedExpr callee = *callee_box
                 match callee.expr:
                     case EIdentifier(fname):
@@ -703,8 +710,14 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
             for arg in args:
                 discover_generic_calls_expr(arg, &seen, &instances, &tparams)
             discover_generic_calls_expr(*callee_box, &seen, &instances, &tparams)
-        case EMethodCall(obj, _, args, _, _):
+        case EMethodCall(obj, _, args, _, mtargs):
             discover_generic_calls_expr(*obj, &seen, &instances, &tparams)
+            # R37-T2 (Core #4 sibling-drift): the method-call type-args were
+            # IGNORED (`_`). Rust `scan_expr` scans them (generics/mod.rs:711)
+            # so a turbofish like `v.collect[GNode[int]]()` discovers the
+            # nested `GNode[int]`.
+            for ta in mtargs:
+                discover_generic_calls_type(ta, &seen, &instances, &tparams)
             for arg in args:
                 discover_generic_calls_expr(arg, &seen, &instances, &tparams)
         case EBinaryOp(lhs, _, rhs):
@@ -715,6 +728,17 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
         case EIf(cond, then_body, branches):
             discover_generic_calls_expr(*cond, &seen, &instances, &tparams)
             discover_generic_calls_stmts(then_body, &seen, &instances, &tparams)
+            # R37-T2: the elif/else branches were NOT walked (Rust `scan_expr`
+            # walks them at generics/mod.rs:753-759) — a generic ctor in an
+            # `else:` arm of an if-EXPRESSION was missed. Mirrors the SIf stmt
+            # arm below.
+            for eb in branches:
+                match eb.condition:
+                    case Some(elif_cond):
+                        discover_generic_calls_expr(elif_cond, &seen, &instances, &tparams)
+                    case None:
+                        pass
+                discover_generic_calls_stmts(eb.body, &seen, &instances, &tparams)
         case EFieldAccess(obj, _):
             discover_generic_calls_expr(*obj, &seen, &instances, &tparams)
         case EIndex(obj, idx):
@@ -725,23 +749,169 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
         case EFString(_, fexprs, _):
             for fx in fexprs:
                 discover_generic_calls_expr(fx, &seen, &instances, &tparams)
+        # ── R37-T2 (Core #4): container / block / literal recurse-only arms ──
+        # A generic-struct ctor nested in ANY of these was previously NEVER
+        # visited (fell to `else: pass`), so its mono-struct body was never
+        # registered → empty `{char __pad}` struct → `[bug] I64(0)` on a later
+        # field read. These mirror Rust `scan_expr` (generics/mod.rs:663-806):
+        # they RECURSE into sub-exprs but do NOT register — registration happens
+        # only at the ECall/EMethodCall/SVarDecl type-arg sites through the
+        # shared `discover_generic_calls_type` walker.
+        case EArrayLiteral(aelems):
+            for el in aelems:
+                discover_generic_calls_expr(el, &seen, &instances, &tparams)
+        case ETupleLiteral(telems):
+            for el in telems:
+                discover_generic_calls_expr(el, &seen, &instances, &tparams)
+        case EStructLiteral(_, _, fvals):
+            # ⚠ R3 (BLOCKING): the middle `Vector[String]` is FIELD NAMES, not
+            # type args — do NOT register from it. Recurse ONLY the field VALUES
+            # (`fvals`) so a nested ctor `S(f=GNode[int](...))` is discovered.
+            # In-corpus generic-struct construction uses CALL syntax
+            # `GNode[int](...)` (an ECall), never type-args-on-EStructLiteral,
+            # so there is nothing to register here.
+            for fv in fvals:
+                discover_generic_calls_expr(fv, &seen, &instances, &tparams)
+        case EDictLiteral(dkeys, dvals):
+            for k in dkeys:
+                discover_generic_calls_expr(k, &seen, &instances, &tparams)
+            for dv in dvals:
+                discover_generic_calls_expr(dv, &seen, &instances, &tparams)
+        case EMatch(scrut, arms):
+            discover_generic_calls_expr(*scrut, &seen, &instances, &tparams)
+            for arm in arms:
+                discover_generic_calls_stmts(arm.body, &seen, &instances, &tparams)
+        case EBlock(bstmts):
+            discover_generic_calls_stmts(bstmts, &seen, &instances, &tparams)
+        case EDo(dstmts):
+            discover_generic_calls_stmts(dstmts, &seen, &instances, &tparams)
+        case ERange(opt_lo, opt_hi, _):
+            match opt_lo:
+                case Some(lo):
+                    discover_generic_calls_expr(*lo, &seen, &instances, &tparams)
+                case None:
+                    pass
+            match opt_hi:
+                case Some(hi):
+                    discover_generic_calls_expr(*hi, &seen, &instances, &tparams)
+                case None:
+                    pass
+        case EMove(mv):
+            discover_generic_calls_expr(*mv, &seen, &instances, &tparams)
+        case EMutableBorrow(mb):
+            discover_generic_calls_expr(*mb, &seen, &instances, &tparams)
+        case EImplicitClosure(ic):
+            discover_generic_calls_expr(*ic, &seen, &instances, &tparams)
+        case EListComp(lc_body, _, lc_iter, lc_filter):
+            discover_generic_calls_expr(*lc_body, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*lc_iter, &seen, &instances, &tparams)
+            match lc_filter:
+                case Some(lcf):
+                    discover_generic_calls_expr(*lcf, &seen, &instances, &tparams)
+                case None:
+                    pass
+        case ESetComp(sc_body, _, sc_iter, sc_filter):
+            discover_generic_calls_expr(*sc_body, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*sc_iter, &seen, &instances, &tparams)
+            match sc_filter:
+                case Some(scf):
+                    discover_generic_calls_expr(*scf, &seen, &instances, &tparams)
+                case None:
+                    pass
+        case EDictComp(dc_key, dc_val, _, dc_iter, dc_filter):
+            discover_generic_calls_expr(*dc_key, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*dc_val, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*dc_iter, &seen, &instances, &tparams)
+            match dc_filter:
+                case Some(dcf):
+                    discover_generic_calls_expr(*dcf, &seen, &instances, &tparams)
+                case None:
+                    pass
+        # ── R37-T2 (pass-3 completeness): pure recurse-only arms for the
+        # remaining sub-expr-bearing self-host `Expr` variants (Rust `_ => {}`).
+        # None has a reachable generic-ctor shape in the current corpus, but
+        # they are added so the arm-count lint pins the FULL sub-expr-bearing
+        # self-host `Expr` set — the next such variant is forced through. ──
+        case EDotShorthand(_, dexprs):
+            for de in dexprs:
+                discover_generic_calls_expr(de, &seen, &instances, &tparams)
+        case EAwait(aw):
+            discover_generic_calls_expr(*aw, &seen, &instances, &tparams)
+        case ESpawn(sp):
+            discover_generic_calls_expr(*sp, &seen, &instances, &tparams)
+        case ESpawnBlocking(spb):
+            discover_generic_calls_expr(*spb, &seen, &instances, &tparams)
+        case ETry(tr):
+            discover_generic_calls_expr(*tr, &seen, &instances, &tparams)
+        case EDeref(dr):
+            discover_generic_calls_expr(*dr, &seen, &instances, &tparams)
+        case EDefaultOp(do_l, do_r):
+            discover_generic_calls_expr(*do_l, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*do_r, &seen, &instances, &tparams)
+        case EIs(is_e, _, _):
+            discover_generic_calls_expr(*is_e, &seen, &instances, &tparams)
+        case EAs(as_e, _):
+            discover_generic_calls_expr(*as_e, &seen, &instances, &tparams)
+        case ERethrow(re1, _, _, re2):
+            discover_generic_calls_expr(*re1, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*re2, &seen, &instances, &tparams)
+        case ECatch(ce1, _, ce2):
+            discover_generic_calls_expr(*ce1, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*ce2, &seen, &instances, &tparams)
+        case EFaultCatch(fc1, _, fc2):
+            discover_generic_calls_expr(*fc1, &seen, &instances, &tparams)
+            discover_generic_calls_expr(*fc2, &seen, &instances, &tparams)
+        else:
+            pass
+
+# R37-T2 (Core #4): shared walk of a TYPE annotation for nested generic
+# instantiations, mirroring Rust gg's `scan_type` (generics/mod.rs:409-455).
+# A `TNamed` with concrete type-args registers the instance AND recurses its
+# args FIRST, so `Dict[String, GNode[int]]` discovers BOTH `Dict__…` and the
+# nested `GNode__int64_t`. Invoked from ALL THREE targ sites (ECall targs,
+# EMethodCall targs, SVarDecl annotation) so a nested generic in any of them is
+# discovered — centralized at the producer, not patched per site. The self-host
+# `Type` enum has NO `TRef`/`TOwned` (borrow/move are sigils, not Type
+# variants), so there are no ref/owned arms. `seen`-dedup makes a double
+# register a no-op.
+void discover_generic_calls_type(SpannedType stype, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Dict[String, bool] &tparams):
+    match stype.ty:
+        case TNamed(tname, targs):
+            if targs.len() > 0 and not has_type_variable_ctx(targs, &tparams):
+                # Recurse into the args BEFORE registering the outer, so nested
+                # instances (the `GNode[int]` inside `Dict[String, GNode[int]]`)
+                # are discovered too. Mirrors Rust `scan_type` order.
+                for ta in targs:
+                    discover_generic_calls_type(ta, &seen, &instances, &tparams)
+                String mangled = compute_mangled_name(targs, tname)
+                if not seen.contains(mangled):
+                    seen.put(mangled.clone(), true)
+                    GenericInstance gi = GenericInstance(tname, targs, mangled)
+                    instances.push(!gi)
+        case TTuple(elems):
+            for te in elems:
+                discover_generic_calls_type(te, &seen, &instances, &tparams)
+        case TFunction(ret, params, _):
+            discover_generic_calls_type(*ret, &seen, &instances, &tparams)
+            for pp in params:
+                discover_generic_calls_type(pp, &seen, &instances, &tparams)
+        case TArray(elem, _):
+            discover_generic_calls_type(*elem, &seen, &instances, &tparams)
+        case TSlice(elem):
+            discover_generic_calls_type(*elem, &seen, &instances, &tparams)
         else:
             pass
 
 void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Dict[String, bool] &tparams):
     match stmt:
         case SVarDecl(stype, _, init, _, _, _):
-            # Also discover type instances from type annotations (e.g., Stack[int] s = ...)
-            match stype.ty:
-                case TNamed(tname, targs):
-                    if targs.len() > 0 and not has_type_variable_ctx(targs, &tparams):
-                        String mangled = compute_mangled_name(targs, tname)
-                        if not seen.contains(mangled):
-                            seen.put(mangled.clone(), true)
-                            GenericInstance gi = GenericInstance(tname, targs, mangled)
-                            instances.push(!gi)
-                else:
-                    pass
+            # Discover type instances from the annotation (e.g. `Stack[int] s`).
+            # R37-T2 (Core #4): route through the shared `discover_generic_calls_type`
+            # walker so a NESTED generic in the annotation
+            # (`Dict[String, GNode[int]] d = {...}`) discovers the inner
+            # `GNode[int]` too — the old inline `TNamed` match registered only
+            # the OUTER type and dropped the nested targ.
+            discover_generic_calls_type(stype, &seen, &instances, &tparams)
             discover_generic_calls_expr(init, &seen, &instances, &tparams)
         case SAssign(target, value):
             discover_generic_calls_expr(target, &seen, &instances, &tparams)

@@ -1283,6 +1283,23 @@ fn field_off_generic_element_match_return() {
     run_gg("field_off_generic_element_match_return.gg", "1\n7\n-1");
 }
 
+// R37-T2 (Core #4): a generic-struct constructor `GX[int](...)` nested inside a
+// container / block / literal expression (array/tuple/match-expr/if-else-expr/
+// do-block), or reached only through a nested type-arg (`foo[Wrap[GDic[int]]]`,
+// `Dict[String, GDic[int]]`), must be DISCOVERED so its monomorphized struct
+// body is registered — otherwise the self-host lowerer emits an empty
+// `{char __pad}` struct and `[bug] I64(0)` on a later field read. This fixture
+// is the class regression net (each fn isolates one sibling shape); it also
+// auto-joins `self_host_runtime_diff`, exercising the discovery through the
+// self-host itself. Must compile AND run on both backends.
+#[test]
+fn generic_ctor_in_containers() {
+    run_gg(
+        "generic_ctor_in_containers.gg",
+        "10\n25\n30\n41\n50\n130\n80",
+    );
+}
+
 // R36-D (Core #8): a genuine type mismatch on a CONCRETE field of a generic
 // struct (`String x = p.tag` where `tag` is `int`) used to pass `gg check`
 // silently (the `Generic` receiver fell through to `error_id`, which unifies
