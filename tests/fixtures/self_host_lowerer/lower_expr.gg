@@ -31,7 +31,7 @@ from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, Capture
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
-from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
+from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver, cow_materialize_projected_root
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
 from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_mutate, cow_lazy_join_view_result
@@ -3145,53 +3145,51 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # through the `__field_read_<enum>_<Variant>_0` helper, same as
             # PConstructor destructure.
             #
-            # ── R35 T4: CoW G1 field-path decide-at-root materialize for a
-            # BARE-value projected mutating receiver (`s.field.push(x)` where
-            # `s` is a bare param). Mirrors Rust methods.rs:1851
-            # (cow_before_mutation on the projection root): clone the whole
-            # immutable-in-context root struct into a fresh owned local and
-            # rebind the name so the field-path mutation lands on the private
-            # copy — the caller's buffer is untouched. A `&`/`!` (mut-borrow /
-            # move) root is GtMutPtr, caught by `is_mut_borrow_param_local`, so
-            # it is skipped and writes through (unchanged). An owned local root
-            # is LoOwned≠LoParam → also skipped. SCOPE: single-level
-            # `EFieldAccess(EIdentifier)` receivers with a bare LoParam root
-            # only; the full class (index-projected roots, alias/element roots,
-            # SAssign-path roots, G2 formation shapes, the end-of-statement
-            # untrack UAF fold) is NOT covered here (DEEP tail, see TODO).
-            match (*recv_box).expr:
-                case EFieldAccess(_fp_base_box, _fp_field):
-                    match (*_fp_base_box).expr:
-                        case EIdentifier(_fp_root):
-                            bool _fp_mut = false
-                            match builtin_method_mutates(mname):
-                                case Some(_fpd):
-                                    _fp_mut = _fpd.is_mutating
-                                case None:
-                                    pass
-                            if _fp_mut and nl_contains(&ctx, _fp_root):
-                                int _fp_root_local = nl_get(&ctx, _fp_root)
-                                bool _fp_is_param = false
-                                match ctx.locals.get(_fp_root_local).unwrap().ownership:
-                                    case LoParam():
-                                        _fp_is_param = true
-                                    else:
-                                        pass
-                                if _fp_is_param and not is_mut_borrow_param_local(&ctx, &gmod, _fp_root_local):
-                                    int _fp_root_tid = ctx.locals.get(_fp_root_local).unwrap().type_id
-                                    int _fp_struct_tid = peel_ptr_tid(&gmod, _fp_root_tid)
-                                    String _fp_sname = type_id_to_base_name(_fp_struct_tid, &gmod)
-                                    if is_droppable_type(_fp_struct_tid, &gmod) and gmod.resource_types.contains(_fp_sname):
-                                        String _fp_clone = _fp_sname + "__clone"
-                                        int _fp_mat = add_local(&ctx, _fp_struct_tid, None)
-                                        Vector[Operand] _fp_cargs = [OpBorrow(_fp_root_local)]
-                                        emit(&ctx, GICallExtern(_fp_mat, _fp_clone, _fp_cargs))
-                                        nl_put(&ctx, _fp_root, _fp_mat)
-                                        register_local_for_drop(&ctx, _fp_mat, _fp_struct_tid, &gmod)
+            # ── R37 T1 (S3/S4): CoW G1/G1a decide-at-root materialize for a
+            # mutating-method receiver whose root is a bare (immutable-in-
+            # context) by-value param. Supersedes the R35 T4 builtin-only,
+            # single-level `EFieldAccess(EIdentifier)` block; the shared
+            # `cow_materialize_projected_root` helper walks `cow_source_root_name`
+            # so ONE call covers every receiver shape (named / index-projected /
+            # field-of-index / field-path). Mirrors Rust cow_before_mutation on
+            # the projection root (methods.rs:1851). Helper skips a `&`/`!`
+            # (GtMutPtr, caught by is_mut_borrow_param_local), owned (LoOwned≠
+            # LoParam), or POD/`.get()`-view root (0 clone); rebinds root→LoOwned
+            # (idempotent per root in the statement).
+            #
+            # ⚠ GATE (load-bearing — a full `method_mutates_receiver` gate is a
+            # ~14 GB clone bomb on the self-compile, OOM-kills the bootstrap):
+            #   • BUILTIN mutating (`builtin_method_mutates` is_mutating) →
+            #     materialize on ANY receiver shape. Covers S4 builtin push
+            #     (`v.push(v[0])`, `m[0].push(m[1][0])`).
+            #   • USER method (builtin lookup None) → materialize ONLY on a
+            #     PROJECTED receiver (EIndex / EFieldAccess base), gated on
+            #     `method_mutates_receiver`. Covers S3 (`v[0].set_name(x)`,
+            #     `v[0].inner.set_name(x)`) + `v[0].set_from(v[1])`.
+            # A NAMED-receiver user call is deliberately NOT materialized: Gorget's
+            # `&self` is a MUTABLE borrow, so method_mutates_receiver cannot tell a
+            # read-only `&self` (`sexpr.clone()`, getters) from a mutating one and
+            # returns true for all — deep-cloning the WHOLE receiver root on every
+            # such call is the clone bomb. Restricting the user path to PROJECTED
+            # receivers keeps peak self-compile RSS at ~1 GB (== baseline). This
+            # leaves a DELIBERATE divergence (a named-receiver USER `&self` mutator
+            # on a bare by-value param writes through) — the real fix needs a
+            # `&self` mutation-inference pass; see TODO (do NOT force-fix — that
+            # re-introduces the bomb).
+            bool _r37_mut = false
+            match builtin_method_mutates(mname):
+                case Some(_r37d):
+                    _r37_mut = _r37d.is_mutating
+                case None:
+                    match (*recv_box).expr:
+                        case EIndex(_r37ib, _r37ii):
+                            _r37_mut = method_mutates_receiver(*recv_box, mname, &gmod)
+                        case EFieldAccess(_r37fb, _r37ff):
+                            _r37_mut = method_mutates_receiver(*recv_box, mname, &gmod)
                         else:
                             pass
-                else:
-                    pass
+            if _r37_mut:
+                cow_materialize_projected_root(&ctx, &gmod, *recv_box)
             # Place base — a method receiver is passed as `self` BY POINTER,
             # so a `&`/`!`-param (`GtMutPtr`) receiver must stay the pointer
             # (else the method mutates a discarded dereffed copy, not the
@@ -7893,6 +7891,14 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                             ad_handled = true
                     else:
                         pass
+            # ── R37 T1 (S5 site 1): CoW G2 `&`-of-a-bare-value FORMATION.
+            # A `&t` call arg (parser strips the sigil; callee param is `&T` =
+            # borrow_flags[ai]) passing a bare immutable-in-context resource must
+            # materialize a private copy at the FORMATION site. Only PROJECTED /
+            # bare-param roots that the helper accepts clone; a `&`/`!`/owned/POD
+            # root is skipped. Mirrors Rust G2 site 1 (calls.rs, 2c7fbf04).
+            if ai < borrow_flags.len() and borrow_flags.get(ai).unwrap():
+                cow_materialize_projected_root(&ctx, &gmod, arg)
             if not ad_handled:
                 arg_local = lower_expr(&ctx, arg, &gmod)
             ctx.expected_type = prev_expected_arg

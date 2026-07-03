@@ -19450,6 +19450,91 @@ fn rust_collection_fill_bare_none_no_segv() {
     );
 }
 
+/// RUST-ONLY regression for the R37-T1 self-host CoW under-materialize: a
+/// NAMED-receiver USER `&self` mutator invoked on a BARE by-value param must
+/// leave the caller's value untouched (CoW-default-borrow: the callee's `Res`
+/// is a private copy). Rust gg gets this right — `mutate(a)` prints the copy's
+/// `"Y"` while `main` still sees `"A"`.
+///
+/// KNOWN SELF-HOST DIVERGENCE (filed, do NOT force-fix): the self-host lowerer
+/// (`self_host_lowerer/lower_expr.gg`, R37-T1) deliberately narrows the
+/// CoW-materialize on a mutating METHOD receiver to BUILTIN-any + USER-PROJECTED
+/// receivers only. A named-receiver USER `&self` call (`x.set_name("Y")` on a
+/// bare param) is NOT materialized, so the self-host WRITES THROUGH and prints
+/// `Y / Y / done` where Rust prints `Y / A / done`. The narrowing is
+/// load-bearing: Gorget's `&self` is a MUTABLE borrow, so the self-host cannot
+/// tell a read-only `&self` (`sexpr.clone()`, getters — called constantly in the
+/// driver) from a mutating one; materializing on EVERY named user-`&self`
+/// receiver deep-clones the whole receiver root per call — a measured ~14 GB
+/// clone bomb that OOM-kills `self_host_bootstrap_fixed_point`. The real fix
+/// needs a `&self` MUTATION-INFERENCE pass (classify each `&self` method
+/// read-only vs mutating, materialize only for the mutating ones). Filed in
+/// TODO.md.
+///
+/// Why this is NOT a `tests/fixtures/*.gg` fixture (mirrors the reasoning on
+/// `rust_collection_fill_bare_none_no_segv` above): `runtime_parity_corpus`
+/// auto-scans every `tests/fixtures/*.gg`, so a fixture here would force
+/// self-host agreement and count as a permanent WRONG in `self_host_runtime_diff`
+/// (and the `cow_*` sweep). Until the self-host grows the `&self`
+/// mutation-inference pass, this named-receiver case cannot enter the
+/// both-compilers-must-agree corpus, so this Rust-only inline test carries the
+/// correct-expected-output regression instead.
+#[test]
+fn rust_named_recv_user_mutator_caller_untouched() {
+    let gg_exe: PathBuf = gg_binary().to_path_buf();
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_named_recv_wt_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let src = tmp_root.join("named_recv_writethrough.gg");
+    std::fs::write(
+        &src,
+        "struct Res:\n\
+        \x20   String name\n\
+        \n\
+        equip Res:\n\
+        \x20   void set_name(&self, String n):\n\
+        \x20       self.name = n\n\
+        \n\
+        void mutate(Res x):\n\
+        \x20   x.set_name(\"Y\")\n\
+        \x20   print(x.name)\n\
+        \n\
+        void main():\n\
+        \x20   Res a = Res(\"A\")\n\
+        \x20   mutate(a)\n\
+        \x20   print(a.name)\n\
+        \x20   print(\"done\")\n",
+    )
+    .expect("failed to write named_recv_writethrough.gg");
+
+    let run = run_with_timeout(
+        Command::new(&gg_exe).arg("run").arg(&src).stdin(Stdio::null()),
+        "run named_recv_writethrough.gg",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    assert!(
+        run.status.success(),
+        "`gg run` on a named-receiver user `&self` mutator should exit 0; got {:?}.\nstderr: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim_end(),
+        "Y\nA\ndone",
+        "a named-receiver user `&self` mutator on a bare by-value param must NOT \
+         write through to the caller (CoW-default-borrow): the copy prints \"Y\", \
+         the caller still prints \"A\". Self-host currently prints \"Y\\nY\\ndone\" \
+         (filed, R37-T1 narrowed gate — see doc comment).",
+    );
+}
+
 /// (A) FLOORED DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1).
 ///
 /// Full corpus, live `gg run` oracle. Discovers the MATCH set and the
