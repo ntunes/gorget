@@ -2704,22 +2704,45 @@ impl<'a> TypeChecker<'a> {
                 // would false-reject those. Reporting genuinely-missing fields
                 // on generic structs needs deref-awareness and is part of the
                 // full follow-up.
-                if let ResolvedType::Generic(did, _) = self.types.get(resolved).clone() {
-                    if let Some(sfi) = self.struct_fields.get(&did) {
+                if let ResolvedType::Generic(did, targs) = self.types.get(resolved).clone() {
+                    if let Some(sfi) = self.struct_fields.get(&did).cloned() {
                         if let Some(field_idx) =
                             sfi.fields.iter().position(|(name, _)| name == &field.node)
                         {
-                            if let Some(field_tids) =
-                                self.scopes.get_def(did).field_types.clone()
-                            {
-                                if let Some(&tid) = field_tids.get(field_idx) {
-                                    // Only trust a field type that is fully
-                                    // concrete: generic-param fields resolve to
-                                    // `Error` in `field_types` (module-scope
-                                    // resolution) and must fall through.
-                                    if !super::traits::type_contains_error(self.types, tid) {
-                                        return tid;
-                                    }
+                            if let Some(ast_ty) = sfi.field_ast_types.get(field_idx) {
+                                // Strategy 2B: substitute the struct's generic
+                                // params (`A`/`B`) with the receiver's concrete
+                                // type args (`int`/`String`) and resolve the
+                                // field's AST type against that map — mirrors the
+                                // enum path (`resolve_user_enum_field_types`).
+                                // Concrete fields (`int tag`, `Kind kind`) have no
+                                // param name in the subst, so they resolve to
+                                // their real type (subsumes the R36-D session-1
+                                // DefInfo.field_types read); a generic-param field
+                                // (`A first` → int) now resolves precisely too, so
+                                // a mismatch (`String bad = p.first`) is REJECTED
+                                // and a `match g.kind` on a genparam field types
+                                // its scrutinee instead of false-rejecting.
+                                let subst: FxHashMap<String, TypeId> = sfi
+                                    .generic_param_names
+                                    .iter()
+                                    .cloned()
+                                    .zip(targs.iter().cloned())
+                                    .collect();
+                                let tid = self.resolve_ast_type_with_subst(
+                                    &ast_ty.node,
+                                    ast_ty.span,
+                                    &subst,
+                                );
+                                // Only trust a fully-concrete field type: a field
+                                // whose type still contains `Error` after subst
+                                // (unbound param, or a nested name like
+                                // `Vector[A]` the shallow subst can't reach) falls
+                                // through to `error_id` and is typed later by
+                                // monomorphization — preserving the auto-deref
+                                // guard behavior (`Box[T]`, `ReadGuard[T]`, etc.).
+                                if !super::traits::type_contains_error(self.types, tid) {
+                                    return tid;
                                 }
                             }
                         }

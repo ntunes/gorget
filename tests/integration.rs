@@ -1298,6 +1298,33 @@ fn generic_struct_concrete_field_type_mismatch_error() {
     );
 }
 
+// R37-T2A (Strategy 2B, SOUNDNESS): a genuine type mismatch on a GENERIC-PARAM
+// field of a generic struct (`String bad = p.first` where `first` is `A` = int)
+// used to pass `gg check` silently — R36-D session-1 typed only CONCRETE fields,
+// generic-param fields resolved to `Error` at module scope and fell through to
+// `error_id` (which unifies with anything). The field-access branch now
+// substitutes the receiver's concrete type args into the field's AST type
+// (`A` -> int) and resolves it precisely, so the mismatch is rejected.
+#[test]
+fn generic_struct_field_type_mismatch_error() {
+    check_gg_fails(
+        "generic_struct_field_type_mismatch_error.gg",
+        "type mismatch",
+    );
+}
+
+// R37-T2A (Strategy 2B): a `match` on a GENERIC-PARAM field (`g.kind` where
+// `kind` is `T` = the `Kind` enum) used to FALSE-REJECT with "missing return" —
+// the scrutinee typed `<error>`, exhaustiveness bailed, and definite-return
+// concluded the total match could fall through. With the param substitution the
+// field types to `Kind`, the match is seen as exhaustive, and it compiles AND
+// runs. Direct construction (not a Vector literal) so the self-host lowerer
+// discovers the generic instance and it MATCHes the Rust-gg oracle.
+#[test]
+fn generic_param_field_match() {
+    run_gg("generic_param_field_match.gg", "42\n105\n-1");
+}
+
 // A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
 // emits `unreachable` right after it, so a noreturn function that falls
 // off its end, executes a `return`, or has a non-diverging expression body

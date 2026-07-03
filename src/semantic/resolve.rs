@@ -25,6 +25,16 @@ const BUILTIN_GENERIC_TYPES: &[&str] = &[
 #[derive(Debug, Clone)]
 pub struct StructFieldInfo {
     pub fields: Vec<(String, Span)>,
+    /// Generic type parameter names for the struct (e.g. ["A", "B"] for
+    /// `Pair[A, B]`). Empty for non-generic structs. Stored UNCONDITIONALLY
+    /// (unlike `struct_generic_bounds`, which records names only when a param
+    /// carries a trait bound) so generic-struct field access can build a
+    /// name→targ substitution even for `struct Pair[A, B]` with no bounds.
+    pub generic_param_names: Vec<String>,
+    /// AST field types, in declaration order (parallel to `fields`). Used to
+    /// resolve concrete AND generic-param field types at a generic-struct
+    /// field access (`Pair[int,String] p; p.first` → substitute A=int).
+    pub field_ast_types: Vec<Spanned<Type>>,
 }
 
 /// Side table for enum variant info.
@@ -569,8 +579,17 @@ fn collect_item(
                         .iter()
                         .map(|f| (f.node.name.node.clone(), f.span))
                         .collect();
-                    ctx.struct_fields
-                        .insert(def_id, StructFieldInfo { fields });
+                    // Populate BOTH unconditionally (NOT gated on trait bounds):
+                    // a plain `struct Pair[A, B]` with no bounds must still get
+                    // its param names so generic-struct field access can build a
+                    // name→targ substitution. Mirrors the enum path.
+                    let field_ast_types: Vec<Spanned<Type>> =
+                        s.fields.iter().map(|f| f.node.type_.clone()).collect();
+                    let generic_param_names = extract_generic_param_names(&s.generic_params);
+                    ctx.struct_fields.insert(
+                        def_id,
+                        StructFieldInfo { fields, generic_param_names, field_ast_types },
+                    );
                     let bounds = extract_generic_bounds(&s.generic_params);
                     if !bounds.is_empty() {
                         let param_names = extract_generic_param_names(&s.generic_params);

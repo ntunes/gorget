@@ -1,0 +1,21 @@
+# R37-T2A (Strategy 2B, SOUNDNESS): a genuine type mismatch on a GENERIC-PARAM
+# field of a generic struct must be REJECTED at type-check, not silently
+# accepted. `first` has type `A` (the struct's first generic param); at
+# `Pair[int, String] p`, `A` = int, so `String bad = p.first` assigns an int to
+# a String slot.
+#
+# R36-D session-1 typed only CONCRETE generic-struct fields (`int tag`);
+# generic-param fields (`A first`) resolve to `Error` at module scope (the
+# struct's own params aren't in scope there), fell through to `error_id`, and
+# `error_id` unifies with any concrete type — so this WRONGLY passed `gg check`.
+# Strategy 2B substitutes the receiver's concrete type args (`A` -> int) into the
+# field's AST type and resolves it precisely, so the mismatch is caught here.
+struct Pair[A, B]:
+    A first
+    B second
+    int tag
+
+void main():
+    Pair[int, String] p = Pair[int, String](1, "x", 7)
+    String bad = p.first    # A = int assigned to String -> type mismatch
+    print(bad)
