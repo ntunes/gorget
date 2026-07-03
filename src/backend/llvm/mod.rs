@@ -908,15 +908,9 @@ pub fn generate_llvm_ir(module: &LirModule) -> String {
     // (no runtime ctor call), so we need their `@.str.N` index resolved
     // before `emit_globals` runs.
     for g in &module.globals {
-        if let LirGlobalInit::Extern { name, args } = &g.init {
-            if crate::backend::c_lir::helpers::is_str_literal_view_init(
-                name, args, &g.ty, &module.structs,
-            ) {
-                if let LirGlobalInitArg::StrLit(text) = &args[0] {
-                    str_globals.intern(text);
-                }
-            }
-        }
+        // Recurse through struct / static-array-view globals so nested string-
+        // literal views (R34 Track A) get their `@.str.N` interned too.
+        intern_const_strs(&g.init, &g.ty, module, &mut str_globals);
     }
 
     // Track how many strings are pre-interned so we can detect late additions.
@@ -1127,7 +1121,191 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
 
 // ── Global Variables ───────────────────────────────────────────────────────
 
+/// R34 Track A: render a const `LirGlobalInit` to an LLVM constant EXPRESSION
+/// (type-prefixed, e.g. `%GorgetArray { … }`, `i64 5`, `%RuntimeFn { … }`).
+/// RECURSIVE — nested structs, string views, and nested `StaticArrayView`s all
+/// resolve here. `StaticArrayView`s need a NAMED backing constant (LLVM can't
+/// take the address of an inline array in a constant initializer), so any such
+/// definitions are appended to `aux` (emitted just before the referencing
+/// global) and `aux_ctr` hands out unique `@.arrback.N` names.
+///
+/// The scalar / FuncAddr / str-view spellings are kept byte-identical to the
+/// former inline `Struct`/`Extern` global arms so existing struct globals
+/// (`Point`, `Vec3`, module string literals) emit unchanged.
+fn llvm_const_value(
+    init: &LirGlobalInit,
+    ty: &LirType,
+    module: &LirModule,
+    snames: &HashMap<u32, String>,
+    str_globals: &StrGlobals,
+    aux: &mut String,
+    aux_ctr: &mut usize,
+) -> String {
+    match init {
+        LirGlobalInit::Zeroed => format!("{} zeroinitializer", llvm_type_full(ty, snames)),
+        LirGlobalInit::FuncAddr(fid) => {
+            let fname = c_func_name(&module.functions[fid.0 as usize].name);
+            format!("ptr @{fname}")
+        }
+        LirGlobalInit::BoxDropAddr(inner) => format!("ptr @Box__{inner}__drop"),
+        LirGlobalInit::Bytes(data) if data.len() <= 8 => llvm_scalar_bytes_const(data, ty),
+        LirGlobalInit::Bytes(_) => format!("{} zeroinitializer", llvm_type_full(ty, snames)),
+        LirGlobalInit::Extern { name, args } => {
+            // Module-level / nested string literal → `%GorgetString` view into
+            // the interned `@.str.N` rodata (cap=0, no alloc, no free).
+            if crate::backend::c_lir::helpers::is_str_literal_view_init(name, args, ty, &module.structs) {
+                if let (LirGlobalInitArg::StrLit(text), LirGlobalInitArg::Int(len)) = (&args[0], &args[1]) {
+                    let idx = str_globals.get_index(text);
+                    return format!("%GorgetString {{ ptr @.str.{idx}, i64 0, i64 {len}, ptr null }}");
+                }
+            }
+            format!("{} zeroinitializer", llvm_type_full(ty, snames))
+        }
+        LirGlobalInit::Struct { struct_id, fields } => {
+            llvm_struct_const(*struct_id, fields, module, snames, str_globals, aux, aux_ctr)
+        }
+        LirGlobalInit::StaticArrayView { elem_ty, elems } => {
+            let elem_llvm = llvm_type_full(elem_ty, snames);
+            let elem_size = sizeof_lir_type(elem_ty, &module.structs, snames);
+            let data_ptr = if elems.is_empty() {
+                // An empty array needs no backing constant — a zero-length view
+                // never dereferences `.data`.
+                "ptr null".to_string()
+            } else {
+                let n = *aux_ctr;
+                *aux_ctr += 1;
+                let elem_consts: Vec<String> = elems
+                    .iter()
+                    .map(|e| llvm_const_value(e, elem_ty, module, snames, str_globals, aux, aux_ctr))
+                    .collect();
+                writeln!(
+                    aux,
+                    "@.arrback.{n} = private constant [{} x {elem_llvm}] [ {} ]",
+                    elems.len(),
+                    elem_consts.join(", ")
+                )
+                .unwrap();
+                format!("ptr @.arrback.{n}")
+            };
+            // %GorgetArray = { ptr data, i64 cap, i64 len, i64 elem_size, [32 x i8] rest }
+            // cap = 0 marks the buffer non-owning; the trailing 32 bytes (alloc
+            // + elem_drop/clone/materialize fn ptrs) are all NULL for a view.
+            format!(
+                "%GorgetArray {{ {data_ptr}, i64 0, i64 {}, i64 {elem_size}, [32 x i8] zeroinitializer }}",
+                elems.len()
+            )
+        }
+    }
+}
+
+/// Render a scalar `Bytes` field to an LLVM typed constant, matching the former
+/// inline `Struct` field emitter (float bit-patterns; little-endian integer).
+fn llvm_scalar_bytes_const(data: &[u8], ty: &LirType) -> String {
+    match ty {
+        LirType::F64 if data.len() == 8 => {
+            let bits = u64::from_le_bytes([
+                data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+            ]);
+            format!("double 0x{bits:016X}")
+        }
+        LirType::F32 if data.len() == 4 => {
+            let bits = f32::from_le_bytes([data[0], data[1], data[2], data[3]]) as f64;
+            format!("float 0x{:016X}", bits.to_bits())
+        }
+        _ => {
+            let mut val = 0i64;
+            for (bi, &b) in data.iter().enumerate() {
+                val |= (b as i64) << (bi * 8);
+            }
+            format!("{} {val}", llvm_type(ty))
+        }
+    }
+}
+
+/// Render a `Struct`/flat-enum const, mirroring `emit_struct_types`' field +
+/// inter-field + trailing padding layout EXACTLY (same size/align helpers), so
+/// the constant's field sequence matches the declared `%Name = type { … }`. A
+/// mismatch is a hard LLVM verifier error (loud build failure, never silent
+/// miscompile).
+fn llvm_struct_const(
+    struct_id: crate::lir::StructId,
+    field_values: &[LirGlobalInit],
+    module: &LirModule,
+    snames: &HashMap<u32, String>,
+    str_globals: &StrGlobals,
+    aux: &mut String,
+    aux_ctr: &mut usize,
+) -> String {
+    let def = &module.structs[struct_id.0 as usize];
+    let name = &snames[&struct_id.0];
+    let is_vtable = name.ends_with("_VTable");
+    let mut parts: Vec<String> = Vec::new();
+    let mut offset = 0usize;
+    for (i, (_, fty)) in def.fields.iter().enumerate() {
+        let (field_ty, fsz, c_align) = if is_vtable {
+            (LirType::Ptr, 8usize, 8usize)
+        } else if *fty == LirType::Void {
+            (LirType::I8, 1usize, 1usize)
+        } else {
+            (
+                fty.clone(),
+                sizeof_lir_type(fty, &module.structs, snames),
+                crate::lir::lower::types::c_alignof_lir_type(fty, &module.structs),
+            )
+        };
+        let aligned_offset = (offset + c_align - 1) & !(c_align - 1);
+        if aligned_offset > offset {
+            parts.push(format!("{} zeroinitializer", llvm_struct_padding(aligned_offset - offset)));
+            offset = aligned_offset;
+        }
+        let val = match field_values.get(i) {
+            Some(v) => llvm_const_value(v, &field_ty, module, snames, str_globals, aux, aux_ctr),
+            None => format!("{} zeroinitializer", llvm_type_full(&field_ty, snames)),
+        };
+        parts.push(val);
+        offset += fsz;
+    }
+    if !is_vtable {
+        if let Some(c_size) = def.computed_c_size {
+            if c_size > offset {
+                parts.push(format!("{} zeroinitializer", llvm_struct_padding(c_size - offset)));
+            }
+        }
+    }
+    format!("%{name} {{ {} }}", parts.join(", "))
+}
+
+/// Recursively intern every string-literal-view `StrLit` reachable from a
+/// const global init, so `@.str.N` indices resolve before `emit_globals`.
+fn intern_const_strs(init: &LirGlobalInit, ty: &LirType, module: &LirModule, str_globals: &mut StrGlobals) {
+    match init {
+        LirGlobalInit::Extern { name, args } => {
+            if crate::backend::c_lir::helpers::is_str_literal_view_init(name, args, ty, &module.structs) {
+                if let LirGlobalInitArg::StrLit(text) = &args[0] {
+                    str_globals.intern(text);
+                }
+            }
+        }
+        LirGlobalInit::Struct { struct_id, fields } => {
+            let def = module.structs.get(struct_id.0 as usize);
+            for (i, f) in fields.iter().enumerate() {
+                let fty = def
+                    .and_then(|d| d.fields.get(i).map(|(_, t)| t.clone()))
+                    .unwrap_or(LirType::I64);
+                intern_const_strs(f, &fty, module, str_globals);
+            }
+        }
+        LirGlobalInit::StaticArrayView { elem_ty, elems } => {
+            for e in elems {
+                intern_const_strs(e, elem_ty, module, str_globals);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>, str_globals: &StrGlobals) {
+    let mut aux_ctr = 0usize;
     for (i, global) in module.globals.iter().enumerate() {
         let ty = llvm_type_full(&global.ty, snames);
         let linkage = if global.is_const { "private constant" } else { "internal global" };
@@ -1153,6 +1331,21 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                 let sdef = &module.structs[struct_id.0 as usize];
                 // Use named struct only if field count matches; otherwise anonymous
                 let use_named = fields.len() == sdef.fields.len() && !sdef.fields.is_empty();
+                if use_named {
+                    // R34 Track A: route the well-formed case through the
+                    // recursive const emitter — it mirrors `emit_struct_types`'
+                    // ABI padding and recurses into nested structs / string
+                    // views / static-array-view fields (the former inline arm
+                    // zero-inited those). Byte-identical for existing padding-
+                    // free scalar struct globals.
+                    let mut aux = String::new();
+                    let cv = llvm_const_value(
+                        &global.init, &global.ty, module, snames, str_globals, &mut aux, &mut aux_ctr,
+                    );
+                    out.push_str(&aux); // backing constants precede the global that references them
+                    writeln!(out, "@__lir_g{i} = {linkage} {cv} ; {}", global.name).unwrap();
+                    continue;
+                }
                 let sty = if use_named {
                     format!("%{}", snames[&struct_id.0])
                 } else {
@@ -1257,6 +1450,18 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                 // emitted at main()'s prologue (`emit_global_runtime_init`).
                 // The declaration zero-inits the slot.
                 writeln!(out, "@__lir_g{i} = {linkage} {ty} zeroinitializer ; {} (runtime init)", global.name).unwrap();
+            }
+            LirGlobalInit::StaticArrayView { .. } => {
+                // R34 Track A: a `cap = 0` %GorgetArray view over a named
+                // backing constant (`@.arrback.N`, emitted first). Recursive —
+                // struct/string/nested-array elements resolve via
+                // `llvm_const_value`.
+                let mut aux = String::new();
+                let cv = llvm_const_value(
+                    &global.init, &global.ty, module, snames, str_globals, &mut aux, &mut aux_ctr,
+                );
+                out.push_str(&aux);
+                writeln!(out, "@__lir_g{i} = {linkage} {cv} ; {}", global.name).unwrap();
             }
         }
     }

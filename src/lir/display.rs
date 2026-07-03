@@ -92,6 +92,14 @@ fn write_global_init(f: &mut fmt::Formatter<'_>, init: &LirGlobalInit) -> fmt::R
             }
             write!(f, " }}")
         }
+        LirGlobalInit::StaticArrayView { elem_ty, elems } => {
+            write!(f, " = static_view[{elem_ty:?}; {}]{{", elems.len())?;
+            for (i, e) in elems.iter().enumerate() {
+                if i > 0 { write!(f, ",")?; }
+                write_global_init(f, e)?;
+            }
+            write!(f, " }}")
+        }
     }
 }
 

@@ -761,6 +761,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
                 // forward-declared with the function decls, so defer with them.
                 LirGlobalInit::FuncAddr(_) | LirGlobalInit::BoxDropAddr(_) => true,
                 LirGlobalInit::Struct { fields, .. } => fields.iter().any(check),
+                LirGlobalInit::StaticArrayView { elems, .. } => elems.iter().any(check),
                 _ => false,
             }
         }
@@ -774,7 +775,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
         }
         let kw = if g.is_const { "const " } else { "" };
         write!(out, "{kw}{} __lir_g{i}", c_type_named(&g.ty, &struct_names)).unwrap();
-        emit_global_init(&mut out, &g.init, &g.ty, &module.functions, &module.structs);
+        emit_global_init(&mut out, &g.init, &g.ty, &module.functions, &module.structs, &struct_names);
         writeln!(out, "; // {}", g.name).unwrap();
     }
     if !module.globals.is_empty() {
@@ -870,7 +871,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
         let g = &module.globals[i];
         let kw = if g.is_const { "const " } else { "" };
         write!(out, "{kw}{} __lir_g{i}", c_type_named(&g.ty, &struct_names)).unwrap();
-        emit_global_init(&mut out, &g.init, &g.ty, &module.functions, &module.structs);
+        emit_global_init(&mut out, &g.init, &g.ty, &module.functions, &module.structs, &struct_names);
         writeln!(out, "; // {}", g.name).unwrap();
     }
     if !deferred_globals.is_empty() {

@@ -1334,6 +1334,16 @@ pub fn lower_module(
         }
     }
 
+    // R34 Track A: whole-program mutation prescan. MUST run BEFORE the static-
+    // lowering loop below — statics lower before functions, so populating the
+    // set inside the static loop would leave it EMPTY when `lower_static_decl`
+    // consumes it (→ a mutated static wrongly emitted as an immutable rodata
+    // view → UB). Scans EVERY function-like body for direct mutations of a
+    // static (mutating-method receiver, assign/compound-assign target root,
+    // `&STATIC`, `!STATIC` — incl. index/field projections) and records the
+    // static's original `DefId`.
+    ctx.mutated_static_defs = scan_mutated_statics(ctx.analysis, &ast_module.items);
+
     // Lower module-level static declarations → Globals.
     // Skip duplicate globals (same name from different modules merged into one AST).
     let mut seen_globals: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
@@ -2479,6 +2489,34 @@ fn lower_static_decl(
     // ctors (`Point(3,4)`/`Counter(0)`) are EXCLUDED by the predicate so they
     // stay on the compile-time `GlobalInit::Struct` path (no regression of
     // `static_global_method_call.gg`; output-neutral on every literal-arg static).
+    // R34 Track A: intercept const-foldable global collections/aggregates and
+    // emit them as STATIC C data (a `cap = 0` view over a file-scope compound
+    // literal) instead of an imperative `__gg_static_init_<name>()` builder —
+    // no runtime ctor, no startup allocation. GATED on two soundness checks:
+    //   1. The static is NEVER directly mutated (mutation prescan, `DefId`
+    //      membership) — a `cap = 0` view points at immutable rodata that a
+    //      `push`/`&STATIC`/`STATIC[i]=x` would corrupt or segfault on.
+    //   2. Every element/resource-field type is READ-SAFE (`try_const_view`'s
+    //      internal `elem_type_read_safe` gate) — a `Custom`/`Trivial`-drop
+    //      element with no clone path would be MOVE-ZEROED on IndexLoad,
+    //      zeroing the rodata slot.
+    // Any unhandled shape → `try_const_view` returns `None` → the existing
+    // imperative path runs unchanged (predicate/emitter are fused, so they
+    // never disagree).
+    let static_def_id = ctx
+        .analysis
+        .scopes
+        .lookup_def_by_span(&decl.name.node, decl.name.span);
+    let directly_mutated = static_def_id
+        .map(|d| ctx.mutated_static_defs.contains(&d))
+        .unwrap_or(true); // unresolved def → be conservative, stay imperative
+    if !directly_mutated {
+        if let Some(view) = try_const_view(ctx, type_id, &decl.value.node) {
+            module.globals.push(Global { name, type_id, init: view });
+            return;
+        }
+    }
+
     let needs_struct_ctor_init = struct_ctor_needs_synthetic_fn(ctx, type_id, &decl.value.node);
     if initializer_needs_synthetic_fn(&decl.value.node) || is_enum_typed || needs_struct_ctor_init {
         let synth_name = format!("__gg_static_init_{}", name);
@@ -2956,6 +2994,580 @@ fn literal_to_global_init(expr: &crate::parser::ast::Expr) -> Option<crate::ir::
             _ => None,
         },
         _ => None,
+    }
+}
+
+// ── R34 Track A: shape-driven const-value emitter ──────────────────────────
+//
+// `try_const_view` turns a const-foldable static initializer (a Vector-of-
+// struct/enum/string/scalar literal, recursively) into a `GlobalInit` tree
+// that the backends bake as STATIC C data — a `cap = 0` view over a file-scope
+// compound literal — instead of an imperative `__gg_static_init_<name>()`
+// builder. The predicate and the emitter are ONE fused function: any shape it
+// cannot encode returns `None`, and `lower_static_decl` falls through to the
+// unchanged imperative path (so predicate and emitter can never disagree).
+//
+// Shapes handled (covers all five self-host tables — RUNTIME_FNS, RESOURCES,
+// the three BUILTIN_* — plus any user const global collection of the same
+// shapes): scalar literals; `String` fields (→ cap=0 rodata view); struct
+// literals of const args; FLAT enum variants (payload-less AND String/const-
+// payload like `MkExact("…")`); bare `Option[T]` (`Some(constval)` / `None`);
+// and nested `Vector` literals (→ nested `StaticArrayView`). Dict/Set are OUT
+// (hash-layout replication is a separate, harder problem — session 2+).
+
+/// Entry point: attempt to encode `expr` (typed `type_id`) as a const
+/// `GlobalInit`. Dispatches on the resolved GIR type.
+fn try_const_view(
+    ctx: &LoweringContext,
+    type_id: TypeId,
+    expr: &crate::parser::ast::Expr,
+) -> Option<crate::ir::GlobalInit> {
+    let gir = ctx.type_registry.get(type_id)?.clone();
+    match &gir {
+        GirType::Bool
+        | GirType::I8 | GirType::I16 | GirType::I32 | GirType::I64
+        | GirType::U8 | GirType::U16 | GirType::U32 | GirType::U64
+        | GirType::F32 | GirType::F64 => {
+            const_scalar_bytes(&gir, expr).map(crate::ir::GlobalInit::Bytes)
+        }
+        GirType::Named(name) => try_const_named(ctx, name, expr),
+        _ => None,
+    }
+}
+
+/// Encode `expr` against a mangled type NAME (used for `StaticArrayView`
+/// elements, where only the decoded element name is in hand — no `TypeId`).
+fn try_const_view_by_name(
+    ctx: &LoweringContext,
+    name: &str,
+    expr: &crate::parser::ast::Expr,
+) -> Option<crate::ir::GlobalInit> {
+    if let Some(gir) = mangled_scalar_gir(name) {
+        return const_scalar_bytes(&gir, expr).map(crate::ir::GlobalInit::Bytes);
+    }
+    try_const_named(ctx, name, expr)
+}
+
+/// Encode `expr` against a Named GIR type: String view, collection, enum, or
+/// struct. Non-const / unsupported shapes → `None`.
+fn try_const_named(
+    ctx: &LoweringContext,
+    name: &str,
+    expr: &crate::parser::ast::Expr,
+) -> Option<crate::ir::GlobalInit> {
+    use crate::parser::ast::Expr;
+    use crate::ir::{GlobalInit, GlobalInitArg};
+
+    // `String` field → a `cap = 0` view into the C `.rodata` section (mirror
+    // the module-level string-literal path in `lower_static_decl`). The `len`
+    // is the BYTE length — `gorget_str_from_literal`'s contract.
+    if matches!(name, "GorgetString" | "Str" | "String") {
+        if let Expr::StringLiteral(s, _) = expr {
+            let text = s.as_plain_text();
+            let len = text.len() as i64;
+            return Some(GlobalInit::Extern {
+                name: "gorget_str_from_literal".to_string(),
+                args: vec![GlobalInitArg::StrLit(text), GlobalInitArg::Int(len)],
+            });
+        }
+        return None;
+    }
+
+    // Snapshot what we need from the TypeDef, then release the borrow so the
+    // recursive calls can re-borrow `ctx.type_registry` freely.
+    let td = ctx.type_registry.get_type_def(name)?;
+    if td.metadata.collection_kind == Some(CollectionKind::Array) {
+        // Vector-family collection → nested static view. (Dict/Set are gated
+        // out by requiring collection_kind == Array specifically.)
+        return try_const_array(ctx, name, expr);
+    }
+    match &td.kind {
+        TypeDefKind::Enum(edef) => try_const_enum(ctx, name, edef, expr),
+        TypeDefKind::Struct(sdef) if !sdef.fields.is_empty() => try_const_struct(ctx, name, sdef, expr),
+        // Zero-field structs / aliases: nothing const to encode.
+        _ => None,
+    }
+}
+
+/// `Vector[T]` literal → `StaticArrayView`. The element type name is recovered
+/// by stripping the collection prefix from the mangled name (structural decode,
+/// gated by the TYPED `collection_kind == Array` in the caller — the name is
+/// never used to DECIDE collection-ness, only to recover the element type, the
+/// same pattern `synthesize_struct_fields` uses for `Option__`/`Result__`).
+fn try_const_array(
+    ctx: &LoweringContext,
+    coll_name: &str,
+    expr: &crate::parser::ast::Expr,
+) -> Option<crate::ir::GlobalInit> {
+    use crate::parser::ast::Expr;
+    let Expr::ArrayLiteral(elems) = expr else { return None; };
+    let elem_name = coll_name.split_once("__").map(|(_, rest)| rest)?;
+
+    // Drop-strategy soundness gate: the element type must NEVER be move-zeroed
+    // by the C `IndexLoad` read path — else reading `STATIC[i]` would zero the
+    // immutable rodata slot. Safe iff (recursively) drop ∈ {None, Recursive}
+    // OR the type has a clone_fn (the read path clones instead of moving).
+    let mut visited = rustc_hash::FxHashSet::default();
+    if !elem_type_read_safe(ctx, elem_name, &mut visited) {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(elems.len());
+    for e in elems {
+        out.push(try_const_view_by_name(ctx, elem_name, &e.node)?);
+    }
+    Some(crate::ir::GlobalInit::StaticArrayView {
+        elem_type_name: elem_name.to_string(),
+        elems: out,
+    })
+}
+
+/// Struct literal of const args → `GlobalInit::Struct` (positional fields).
+fn try_const_struct(
+    ctx: &LoweringContext,
+    name: &str,
+    sdef: &crate::ir::types::StructDef,
+    expr: &crate::parser::ast::Expr,
+) -> Option<crate::ir::GlobalInit> {
+    let args = ctor_positional_args(name, expr)?;
+    if args.len() != sdef.fields.len() {
+        return None;
+    }
+    let mut fields = Vec::with_capacity(sdef.fields.len());
+    for (field, arg) in sdef.fields.iter().zip(args.iter()) {
+        let fv = try_const_view(ctx, field.type_id, arg)?;
+        fields.push((field.name.clone(), fv));
+    }
+    Some(crate::ir::GlobalInit::Struct { type_name: name.to_string(), fields })
+}
+
+/// FLAT enum variant (payload-less or const/String payload, incl. bare
+/// `Option` `Some`/`None`) → a tagged `GlobalInit::Struct` matching the flat C
+/// enum layout `{ i32 tag; <variant0 fields…>; <variant1 fields…>; … }`. The
+/// active variant's payload slots recurse; every other slot is `Zeroed`.
+/// Union-layout enums (flat field count > 4, the LIR `is_large_enum`
+/// threshold) are rejected — the positional container only models the flat
+/// layout.
+fn try_const_enum(
+    ctx: &LoweringContext,
+    name: &str,
+    edef: &crate::ir::types::EnumDef,
+    expr: &crate::parser::ast::Expr,
+) -> Option<crate::ir::GlobalInit> {
+    let flat_field_count: usize = 1 + edef.variants.iter().map(|v| v.fields.len()).sum::<usize>();
+    if flat_field_count > 4 {
+        return None; // union layout — not modeled by the flat positional container
+    }
+    let (variant_name, payload_args) = enum_variant_and_args(expr)?;
+    let idx = ctx.resolve_variant_tag(name, &variant_name)?; // declaration index == runtime tag
+    let variant = edef.variants.get(idx as usize)?;
+    if payload_args.len() != variant.fields.len() {
+        return None;
+    }
+    let mut fields: Vec<(String, crate::ir::GlobalInit)> = Vec::with_capacity(flat_field_count);
+    fields.push((
+        "tag".to_string(),
+        crate::ir::GlobalInit::Bytes((idx as i32).to_le_bytes().to_vec()),
+    ));
+    for (vi, v) in edef.variants.iter().enumerate() {
+        for (fi, f) in v.fields.iter().enumerate() {
+            let slot_name = format!("{}_{}", v.name, fi);
+            if vi == idx as usize {
+                let val = try_const_view(ctx, f.type_id, payload_args[fi])?;
+                fields.push((slot_name, val));
+            } else {
+                fields.push((slot_name, crate::ir::GlobalInit::Zeroed));
+            }
+        }
+    }
+    Some(crate::ir::GlobalInit::Struct { type_name: name.to_string(), fields })
+}
+
+/// The IndexLoad move-zero soundness gate (recursive). Mirrors the C read-path
+/// decision at `src/lir/lower/insts.rs`: a `cap = 0` view element is READ-SAFE
+/// iff the read never memsets the source slot — i.e. the type has a `clone_fn`
+/// (read clones), OR its drop strategy is `None`/`Recursive` (read Loads or
+/// deep-clones, no zero). `Trivial`/`Custom` drop with no clone_fn → the read
+/// move-zeroes the rodata → UNSAFE.
+fn elem_type_read_safe(
+    ctx: &LoweringContext,
+    name: &str,
+    visited: &mut rustc_hash::FxHashSet<String>,
+) -> bool {
+    if mangled_scalar_gir(name).is_some() {
+        return true; // primitives are trivially copyable
+    }
+    if matches!(name, "GorgetString" | "Str" | "String") {
+        return true; // string reads clone (gorget_string_clone_to_owned)
+    }
+    if !visited.insert(name.to_string()) {
+        return true; // cycle guard
+    }
+    let (own_safe, is_array, child_type_ids): (bool, bool, Vec<TypeId>) = {
+        let Some(td) = ctx.type_registry.get_type_def(name) else {
+            return true; // no TypeDef → opaque/primitive-ish → nothing to move-zero here
+        };
+        let own = td.metadata.clone_fn.is_some()
+            || matches!(
+                td.metadata.drop_strategy,
+                DropStrategy::None | DropStrategy::Recursive
+            );
+        let is_array = td.metadata.collection_kind == Some(CollectionKind::Array);
+        let mut ids = Vec::new();
+        match &td.kind {
+            TypeDefKind::Struct(sd) => {
+                for f in &sd.fields {
+                    ids.push(f.type_id);
+                }
+            }
+            TypeDefKind::Enum(ed) => {
+                for v in &ed.variants {
+                    for f in &v.fields {
+                        ids.push(f.type_id);
+                    }
+                }
+            }
+            _ => {}
+        }
+        (own, is_array, ids)
+    };
+    if !own_safe {
+        return false;
+    }
+    for tid in child_type_ids {
+        if let Some(GirType::Named(child)) = ctx.type_registry.get(tid) {
+            let child = child.clone();
+            if !elem_type_read_safe(ctx, &child, visited) {
+                return false;
+            }
+        }
+    }
+    if is_array {
+        if let Some((_, elem)) = name.split_once("__") {
+            let elem = elem.to_string();
+            if !elem_type_read_safe(ctx, &elem, visited) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Extract positional ctor args from `Name(a, b, …)` (Call) or `Name{ … }`
+/// (StructLiteral). Rejects named args and a callee that doesn't match `name`.
+fn ctor_positional_args<'e>(
+    type_name: &str,
+    expr: &'e crate::parser::ast::Expr,
+) -> Option<Vec<&'e crate::parser::ast::Expr>> {
+    use crate::parser::ast::Expr;
+    match expr {
+        Expr::Call { callee, args, .. } => {
+            let cname = match &callee.node {
+                Expr::Identifier(n) => n.as_str(),
+                _ => return None,
+            };
+            if cname != type_name {
+                return None;
+            }
+            let mut out = Vec::with_capacity(args.len());
+            for a in args {
+                if a.node.name.is_some() {
+                    return None; // named arg — not the positional const shape
+                }
+                out.push(&a.node.value.node);
+            }
+            Some(out)
+        }
+        Expr::StructLiteral { name, args, .. } => {
+            if name.node != type_name {
+                return None;
+            }
+            Some(args.iter().map(|a| &a.node).collect())
+        }
+        _ => None,
+    }
+}
+
+/// Extract `(variant_name, payload_arg_exprs)` from an enum-variant value.
+/// Handles the bare (`MkExact("x")`, `TF64()`, `Some(v)`, `None`) and
+/// qualified (`Enum.Variant(...)`) forms.
+fn enum_variant_and_args<'e>(
+    expr: &'e crate::parser::ast::Expr,
+) -> Option<(String, Vec<&'e crate::parser::ast::Expr>)> {
+    use crate::parser::ast::Expr;
+    match expr {
+        Expr::NoneLiteral => Some(("None".to_string(), vec![])),
+        Expr::Identifier(n) => Some((n.clone(), vec![])),
+        Expr::Path { segments } => segments.last().map(|s| (s.node.clone(), vec![])),
+        Expr::Call { callee, args, .. } => {
+            let vname = match &callee.node {
+                Expr::Identifier(n) => n.clone(),
+                Expr::Path { segments } => segments.last()?.node.clone(),
+                _ => return None,
+            };
+            let mut out = Vec::with_capacity(args.len());
+            for a in args {
+                if a.node.name.is_some() {
+                    return None;
+                }
+                out.push(&a.node.value.node);
+            }
+            Some((vname, out))
+        }
+        // Resolver-rewritten qualified variant ctor `Enum.Variant(args)` — the
+        // enum name is the receiver, the variant is the "method". The variant
+        // name is validated by `resolve_variant_tag` in the caller (a genuine
+        // method call on a non-enum receiver simply won't resolve to a tag →
+        // `None` → imperative fallthrough), so we don't re-check the receiver.
+        Expr::MethodCall { method, args, .. } => {
+            let mut out = Vec::with_capacity(args.len());
+            for a in args {
+                if a.node.name.is_some() {
+                    return None;
+                }
+                out.push(&a.node.value.node);
+            }
+            Some((method.node.clone(), out))
+        }
+        _ => None,
+    }
+}
+
+/// Encode a scalar literal to width-correct little-endian bytes matching the
+/// GIR primitive type. Returns `None` for non-literal / mismatched exprs.
+fn const_scalar_bytes(gir: &GirType, expr: &crate::parser::ast::Expr) -> Option<Vec<u8>> {
+    use crate::parser::ast::{Expr, UnaryOp};
+    fn as_i(e: &Expr) -> Option<i64> {
+        match e {
+            Expr::IntLiteral(n) => Some(*n as i64),
+            Expr::UnaryOp { op: UnaryOp::Neg, operand } => match &operand.node {
+                Expr::IntLiteral(n) => Some(-(*n as i64)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    fn as_f(e: &Expr) -> Option<f64> {
+        match e {
+            Expr::FloatLiteral(f) => Some(*f),
+            Expr::IntLiteral(n) => Some(*n as f64),
+            Expr::UnaryOp { op: UnaryOp::Neg, operand } => match &operand.node {
+                Expr::FloatLiteral(f) => Some(-f),
+                Expr::IntLiteral(n) => Some(-(*n as f64)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    match gir {
+        GirType::Bool => match expr {
+            Expr::BoolLiteral(b) => Some(vec![if *b { 1 } else { 0 }]),
+            _ => None,
+        },
+        GirType::I8 | GirType::U8 => as_i(expr).map(|n| (n as i8).to_le_bytes().to_vec()),
+        GirType::I16 | GirType::U16 => as_i(expr).map(|n| (n as i16).to_le_bytes().to_vec()),
+        GirType::I32 | GirType::U32 => as_i(expr).map(|n| (n as i32).to_le_bytes().to_vec()),
+        GirType::I64 | GirType::U64 => as_i(expr).map(|n| n.to_le_bytes().to_vec()),
+        GirType::F32 => as_f(expr).map(|f| (f as f32).to_le_bytes().to_vec()),
+        GirType::F64 => as_f(expr).map(|f| f.to_le_bytes().to_vec()),
+        _ => None,
+    }
+}
+
+/// Map a mangled primitive type name (`int64_t`, `double`, `bool`, …) to its
+/// GIR primitive — used where only the decoded element name is in hand.
+fn mangled_scalar_gir(name: &str) -> Option<GirType> {
+    Some(match name {
+        "bool" => GirType::Bool,
+        "int8_t" | "int8" => GirType::I8,
+        "int16_t" | "int16" => GirType::I16,
+        "int32_t" | "int32" => GirType::I32,
+        "int64_t" | "int" => GirType::I64,
+        "uint8_t" | "uint8" => GirType::U8,
+        "uint16_t" | "uint16" => GirType::U16,
+        "uint32_t" | "uint32" => GirType::U32,
+        "uint64_t" | "uint" => GirType::U64,
+        "float" | "float32" => GirType::F32,
+        "double" | "float64" => GirType::F64,
+        _ => return None,
+    })
+}
+
+// ── R34 Track A: whole-program static-mutation prescan ─────────────────────
+//
+// Walks every function-like body and records the `DefId` of any module-level
+// static that is DIRECTLY mutated. The const-view optimization is refused for
+// those statics (a `cap = 0` rodata view can't be grown, written through, or
+// move-consumed). Keyed by the original static `DefId`, which is sound across
+// module boundaries: imports rebind the imported name to the ORIGINAL
+// definition's `DefId` (`ScopeTable::rebind_alias` / `bind_wildcard` /
+// `export_non_private`), so a mutation in any module and the decl in
+// `lower_static_decl` resolve to the same `DefId`.
+
+/// Compute the set of directly-mutated static `DefId`s across the whole program.
+fn scan_mutated_statics(
+    analysis: &AnalysisResult,
+    items: &[crate::span::Spanned<Item>],
+) -> rustc_hash::FxHashSet<crate::semantic::ids::DefId> {
+    let mut scan = StaticMutationScan {
+        analysis,
+        mutated: rustc_hash::FxHashSet::default(),
+    };
+    scan.scan_items(items);
+    scan.mutated
+}
+
+struct StaticMutationScan<'a> {
+    analysis: &'a AnalysisResult,
+    mutated: rustc_hash::FxHashSet<crate::semantic::ids::DefId>,
+}
+
+impl<'a> StaticMutationScan<'a> {
+    /// Visit every function-like body reachable from the item list, including
+    /// equip-block methods, trait default methods, and test / bench / suite
+    /// hooks — a static can be mutated from any executable body.
+    fn scan_items(&mut self, items: &[crate::span::Spanned<Item>]) {
+        use crate::parser::visitor::ExprVisitor;
+        for item in items {
+            match &item.node {
+                Item::Function(f) => self.scan_body(&f.body),
+                Item::Equip(eq) => {
+                    for m in &eq.items {
+                        self.scan_body(&m.node.body);
+                    }
+                }
+                Item::Trait(t) => {
+                    for it in &t.items {
+                        if let crate::parser::ast::TraitItem::Method(m) = &it.node {
+                            self.scan_body(&m.body);
+                        }
+                    }
+                }
+                Item::Test(t) => self.visit_block(&t.body),
+                Item::Bench(b) => self.visit_block(&b.body),
+                Item::SuiteSetup(s) => self.visit_block(&s.body),
+                Item::SuiteTeardown(s) => self.visit_block(&s.body),
+                // `Item::Module` wrappers are already flattened away before this
+                // pass (see `flat_module` in `lower_module`); recurse defensively
+                // in case an unflattened list is ever passed.
+                Item::Module { items, .. } => self.scan_items(items),
+                _ => {}
+            }
+        }
+    }
+
+    fn scan_body(&mut self, body: &FunctionBody) {
+        use crate::parser::visitor::ExprVisitor;
+        match body {
+            FunctionBody::Block(b) => self.visit_block(b),
+            FunctionBody::Expression(e) => self.visit_expr(e),
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+        }
+    }
+
+    /// Peel index / field / tuple-field / deref projections to the base
+    /// identifier and, if it resolves to a module-level static, return its
+    /// `DefId`. `STATIC`, `STATIC[i]`, `STATIC.f`, `STATIC[i].f` all root at
+    /// the same static.
+    fn root_static(&self, expr: &crate::span::Spanned<crate::parser::ast::Expr>) -> Option<crate::semantic::ids::DefId> {
+        use crate::parser::ast::Expr;
+        let mut cur = expr;
+        loop {
+            match &cur.node {
+                Expr::Index { object, .. }
+                | Expr::FieldAccess { object, .. }
+                | Expr::TupleFieldAccess { object, .. } => cur = object,
+                Expr::Deref { expr } => cur = expr,
+                Expr::Identifier(_) => {
+                    let def_id = *self.analysis.resolution_map.get(&cur.span.start)?;
+                    if self.analysis.scopes.get_def(def_id).kind
+                        == crate::semantic::scope::DefKind::Static
+                    {
+                        return Some(def_id);
+                    }
+                    return None;
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn mark(&mut self, expr: &crate::span::Spanned<crate::parser::ast::Expr>) {
+        if let Some(d) = self.root_static(expr) {
+            self.mutated.insert(d);
+        }
+    }
+
+    /// `&`/`!` sigils on call args carry ownership separately from the
+    /// `MutableBorrow`/`Move` wrapper exprs; check both.
+    fn mark_owning_args(&mut self, args: &[crate::span::Spanned<crate::parser::ast::CallArg>]) {
+        use crate::parser::ast::Ownership;
+        for a in args {
+            if matches!(a.node.ownership, Ownership::MutableBorrow | Ownership::Move) {
+                self.mark(&a.node.value);
+            }
+        }
+    }
+}
+
+impl<'a> crate::parser::visitor::ExprVisitor for StaticMutationScan<'a> {
+    fn visit_expr(&mut self, expr: &crate::span::Spanned<crate::parser::ast::Expr>) {
+        use crate::parser::ast::Expr;
+        match &expr.node {
+            // (c)/(d): `&STATIC` write-through borrow, `!STATIC` move/consume.
+            Expr::MutableBorrow { expr: inner } | Expr::Move { expr: inner } => {
+                self.mark(inner);
+            }
+            // (a): a method call on a static receiver. CONSERVATIVE: block on
+            // ANY method (a sound over-approximation of the mutating-method
+            // class — a precise builtin-`is_mutating` + user-`&self`/`!self`
+            // classification is interprocedural and unsound to name-guess; over-
+            // blocking only keeps a static imperative, never miscompiles). The
+            // five target tables are `for`-iterated, never method-called, so
+            // this costs them nothing.
+            Expr::MethodCall { receiver, args, .. } => {
+                self.mark(receiver);
+                self.mark_owning_args(args);
+            }
+            Expr::Call { args, .. } => {
+                self.mark_owning_args(args);
+            }
+            Expr::DotShorthand { args, .. } => {
+                self.mark_owning_args(args);
+            }
+            // f-string interpolations: the default `walk_expr` only visits a
+            // fake identifier per segment and DROPS the parsed interpolation
+            // expressions — so a mutation inside `f"{STATIC.pop()}"` would be
+            // missed. Walk the real parsed exprs for soundness.
+            Expr::StringLiteral(_, parsed) => {
+                for e in parsed {
+                    self.visit_expr(e);
+                }
+            }
+            _ => {}
+        }
+        crate::parser::visitor::walk_expr(self, expr);
+    }
+
+    fn visit_stmt(&mut self, stmt: &crate::span::Spanned<crate::parser::ast::Stmt>) {
+        use crate::parser::ast::{Ownership, Stmt};
+        match &stmt.node {
+            // (b): assign / compound-assign whose target ROOT is a static
+            // (incl. index/field projections `STATIC[i] = x`, `STATIC.f = x`).
+            Stmt::Assign { target, .. } | Stmt::CompoundAssign { target, .. } => {
+                self.mark(target);
+            }
+            // (c): `for x in &STATIC` / `for x in !STATIC` — `&` is write-through
+            // exclusive access, `!` consumes. Plain `for x in STATIC` (shared
+            // borrow) is a read and does NOT block.
+            Stmt::For { ownership, iterable, .. } => {
+                if matches!(ownership, Ownership::MutableBorrow | Ownership::Move) {
+                    self.mark(iterable);
+                }
+            }
+            _ => {}
+        }
+        crate::parser::visitor::walk_stmt(self, stmt);
     }
 }
 

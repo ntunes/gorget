@@ -427,6 +427,18 @@ pub struct LoweringContext<'a> {
     /// the global never aliases drop-tracked memory, so there's nothing to
     /// double-free and nothing to deep-copy.
     pub string_literal_view_globals: rustc_hash::FxHashSet<String>,
+    /// R34 Track A: `DefId`s of module-level statics that are DIRECTLY mutated
+    /// somewhere in the program (mutating-method receiver, assign/compound-
+    /// assign target root, `&STATIC` mut-borrow, `!STATIC` move — including
+    /// index/field projections). Populated by `scan_mutated_statics` in a
+    /// whole-program pre-pass that COMPLETES BEFORE the static-lowering loop
+    /// (statics lower before functions, so a same-loop population would be
+    /// empty when consumed → a mutated static wrongly emitted as an immutable
+    /// `.rodata` view → UB). `lower_static_decl` refuses the const-view
+    /// optimization for any static whose `DefId` is in this set. Keyed by the
+    /// original static `DefId` — sound across module boundaries because imports
+    /// rebind to the original definition's `DefId` (not a fresh alias id).
+    pub mutated_static_defs: rustc_hash::FxHashSet<crate::semantic::ids::DefId>,
     /// Set of equip method names that are GIR-lowered (not extern/C-runtime).
     /// Used by lower_method_call to decide whether to pass resource-type args by pointer.
     pub gir_equip_methods: rustc_hash::FxHashSet<String>,
@@ -594,6 +606,7 @@ impl<'a> LoweringContext<'a> {
             global_names: rustc_hash::FxHashSet::default(),
             global_type_names: FxHashMap::default(),
             string_literal_view_globals: rustc_hash::FxHashSet::default(),
+            mutated_static_defs: rustc_hash::FxHashSet::default(),
             gir_equip_methods: rustc_hash::FxHashSet::default(),
             trivial_getter_methods: rustc_hash::FxHashSet::default(),
             sentinel_to_option_methods: rustc_hash::FxHashSet::default(),

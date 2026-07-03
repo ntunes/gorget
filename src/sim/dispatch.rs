@@ -456,6 +456,18 @@ impl<'m> Interpreter<'m> {
                 // interpreter; return a zero value as a placeholder.
                 Value::zero_for_type(type_id, &self.module.type_registry)
             }
+            GlobalInit::StaticArrayView { elem_type_name, elems } => {
+                // R34 Track A: materialize the const array into a SimArray so
+                // the interpreter observes the same element sequence the C /
+                // LLVM backends bake into the static view. Best-effort — the
+                // sim is not a shipped backend for these tables.
+                use crate::sim::value::SimArray;
+                let arr = SimArray::new(format!("Vector__{elem_type_name}"));
+                for e in elems {
+                    arr.push(self.eval_global_init(e, type_id));
+                }
+                Value::Array(arr)
+            }
         }
     }
 

@@ -161,6 +161,14 @@ fn print_global_init(out: &mut String, init: &GlobalInit) {
             }
             write!(out, ")").unwrap();
         }
+        GlobalInit::StaticArrayView { elem_type_name, elems } => {
+            write!(out, "static_view[{elem_type_name}; {}]{{ ", elems.len()).unwrap();
+            for (i, e) in elems.iter().enumerate() {
+                if i > 0 { write!(out, ", ").unwrap(); }
+                print_global_init(out, e);
+            }
+            write!(out, " }}").unwrap();
+        }
     }
 }
 

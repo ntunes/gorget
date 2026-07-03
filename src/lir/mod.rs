@@ -1679,6 +1679,16 @@ pub enum LirGlobalInit {
         name: String,
         args: Vec<LirGlobalInitArg>,
     },
+    /// R34 Track A: LIR mirror of `ir::GlobalInit::StaticArrayView`. Backends
+    /// emit a `cap = 0` `GorgetArray` view over a file-scope compound-literal
+    /// backing buffer of `elems`. `elem_ty` is the resolved element `LirType`
+    /// — backends spell the C / LLVM element type from it and size the buffer
+    /// via its byte size (never a name substring). Empty `elems` → `.data`
+    /// is NULL (an empty compound literal is not valid ISO C).
+    StaticArrayView {
+        elem_ty: LirType,
+        elems: Vec<LirGlobalInit>,
+    },
 }
 
 /// LIR mirror of `ir::GlobalInitArg`. Backends consume this directly —

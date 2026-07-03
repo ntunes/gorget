@@ -569,7 +569,7 @@ pub(super) fn c_sizeof_tuple_fields(fields_str: &str, structs: &[StructDef], ali
     total
 }
 
-pub(super) fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashMap<String, FuncId>, target_ty: &LirType, struct_reg: &StructRegistry) -> LirGlobalInit {
+pub(super) fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collections::HashMap<String, FuncId>, target_ty: &LirType, struct_reg: &StructRegistry, gir_types: &crate::ir::types::TypeRegistry) -> LirGlobalInit {
     match init {
         ir::GlobalInit::Zeroed => LirGlobalInit::Zeroed,
         ir::GlobalInit::Bytes(b) => LirGlobalInit::Bytes(b.clone()),
@@ -595,9 +595,26 @@ pub(super) fn lower_global_init(init: &ir::GlobalInit, func_index: &std::collect
                     _ => None,
                 })
                 .unwrap_or(StructId(0));
+            // `type_name` is the primary key for `struct_id` (see the
+            // `GlobalInit::Struct` arm above); the const-value emitter reads it
+            // straight off the GIR `Named` type so it always resolves. Field
+            // recursion keeps the existing I64 target — the C/LLVM `Struct`
+            // emit reads field types from `structs[struct_id]`, not this target.
             LirGlobalInit::Struct {
                 struct_id,
-                fields: fields.iter().map(|(_, f)| lower_global_init(f, func_index, &LirType::I64, struct_reg)).collect(),
+                fields: fields.iter().map(|(_, f)| lower_global_init(f, func_index, &LirType::I64, struct_reg, gir_types)).collect(),
+            }
+        }
+        ir::GlobalInit::StaticArrayView { elem_type_name, elems } => {
+            // Resolve the element type name → element LirType via the same
+            // helper the cross-module Result/Option field resolver uses; the
+            // backends spell the C / LLVM element type from this typed handle.
+            let elem_ty = super::component_to_lir_type(elem_type_name, struct_reg, gir_types);
+            LirGlobalInit::StaticArrayView {
+                elem_ty: elem_ty.clone(),
+                elems: elems.iter()
+                    .map(|e| lower_global_init(e, func_index, &elem_ty, struct_reg, gir_types))
+                    .collect(),
             }
         }
         ir::GlobalInit::Extern { name, args } => {

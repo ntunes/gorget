@@ -663,12 +663,12 @@ pub(super) fn rewrite_inline_c_locals(code: &str, func: &LirFunction) -> String 
     }
     result
 }
-pub(super) fn emit_global_init(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction], structs: &[StructDef]) {
+pub(super) fn emit_global_init(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction], structs: &[StructDef], struct_names: &HashMap<u32, String>) {
     write!(out, " = ").unwrap();
-    emit_global_init_value(out, init, ty, funcs, structs);
+    emit_global_init_value(out, init, ty, funcs, structs, struct_names);
 }
 
-pub(super) fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction], structs: &[StructDef]) {
+pub(super) fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty: &LirType, funcs: &[LirFunction], structs: &[StructDef], struct_names: &HashMap<u32, String>) {
     match init {
         // Pointer-typed zeroed slot (e.g. the NULL-degraded vtable `__drop`
         // slot for an unresolvable concrete) → spell `NULL`, not a braced
@@ -723,7 +723,7 @@ pub(super) fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty:
                     write!(out, ", ").unwrap();
                 }
                 let ft = field_types.and_then(|fts| fts.get(i).map(|(_, t)| t)).unwrap_or(&LirType::I64);
-                emit_global_init_value(out, f, ft, funcs, structs);
+                emit_global_init_value(out, f, ft, funcs, structs, struct_names);
             }
             write!(out, "}}").unwrap();
         }
@@ -751,6 +751,39 @@ pub(super) fn emit_global_init_value(out: &mut String, init: &LirGlobalInit, ty:
             // call emitted at main()'s prologue. The compile-time
             // declaration just zero-inits the slot.
             write!(out, "{{0}}").unwrap();
+        }
+        LirGlobalInit::StaticArrayView { elem_ty, elems } => {
+            // R34 Track A: a `cap = 0` GorgetArray view over a file-scope
+            // compound-literal backing buffer. A compound literal at file
+            // scope has static storage duration (C11 §6.5.2.5p5), so its
+            // address is valid for the whole program — no separate backing
+            // decl and no startup allocation. `cap == 0` marks the buffer
+            // non-owning: `gorget_array_free` is a no-op and reads clone-out
+            // on demand. elem_drop / elem_clone / elem_materialize default to
+            // NULL via designated-init zeroing — safe for a view (never freed;
+            // the IndexLoad read path clones through the element type's own
+            // `__clone` for Recursive/collection/string elements).
+            let elem_c = c_type_named(elem_ty, struct_names);
+            if elems.is_empty() {
+                // An empty compound literal `(T[]){}` is not valid ISO C (a
+                // GNU extension that breaks under -pedantic-errors). Use a
+                // NULL data pointer — a zero-length view never dereferences it.
+                write!(
+                    out,
+                    "{{ .data = NULL, .cap = 0, .len = 0, .elem_size = sizeof({elem_c}), .alloc = NULL }}"
+                ).unwrap();
+            } else {
+                write!(out, "{{ .data = ({elem_c}[]){{").unwrap();
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 { write!(out, ", ").unwrap(); }
+                    emit_global_init_value(out, e, elem_ty, funcs, structs, struct_names);
+                }
+                write!(
+                    out,
+                    "}}, .cap = 0, .len = {}, .elem_size = sizeof({elem_c}), .alloc = NULL }}",
+                    elems.len()
+                ).unwrap();
+            }
         }
     }
 }

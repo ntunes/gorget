@@ -751,6 +751,27 @@ pub enum GlobalInit {
         name: String,
         args: Vec<GlobalInitArg>,
     },
+    /// R34 Track A: a const-foldable global collection emitted as STATIC C
+    /// data — a `cap = 0` `GorgetArray` view over a file-scope compound-literal
+    /// backing buffer (static storage duration, C11 §6.5.2.5p5). Replaces the
+    /// imperative `__gg_static_init_<name>()` builder (a startup sequence of
+    /// `gorget_array_new` + N× `gorget_array_push`) — no runtime constructor,
+    /// no startup allocation, the data lives in `.rodata`/`.data`.
+    ///
+    /// RECURSIVE: each element is a full `GlobalInit` — scalar `Bytes`, string
+    /// view (`Extern gorget_str_from_literal`, cap=0 into `.rodata`), a nested
+    /// struct/enum (`Struct`), or a further nested `StaticArrayView`. This is
+    /// what lets the RUNTIME_FNS / RESOURCES / BUILTIN_* tables (Vector-of-
+    /// struct-of-{string,enum,nested-Vector,Option}) lower to pure data.
+    ///
+    /// `elem_type_name` is the mangled element type name (`int64_t`,
+    /// `RuntimeParam`, `MatchKind`, `ResourceEntry`, …) that the LIR layer
+    /// resolves to the element `LirType`; the backends spell the C / LLVM
+    /// element type from that typed handle (never from a name substring).
+    StaticArrayView {
+        elem_type_name: String,
+        elems: Vec<GlobalInit>,
+    },
 }
 
 /// A single runtime-init argument — typed so backends don't C-syntax-parse
