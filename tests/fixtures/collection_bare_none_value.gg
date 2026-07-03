@@ -1,0 +1,58 @@
+# Core #8 regression: a bare `None` (no VarDecl to tag it) at a collection's
+# VALUE-consuming position must store `None`, not `Some(0)`.
+#
+# Before the fix, the value arg of `Dict.put` / `Vector.set` / `Vector.insert`
+# got NO expected-type hint, so an inline bare `None` materialised as
+# `Constant::Null` and was copied into the slot as zero bytes == bogus `Some(0)`
+# on BOTH backends. The fix hints the value position with the collection's
+# value/element type (`infer_collection_element_type`), so `None` materialises
+# as a properly tagged Option.
+#
+# TYPED INTERMEDIATES are used deliberately: `m.get(k)` returns a Ref[Option[V]]
+# and Rust gg does not auto-deref Ref, so a chained `.get(k).unwrap().unwrap()`
+# is a semantic error on Rust. Binding to a typed local first (`Option[int] a =
+# m.get(k).unwrap()`) reads the value out, then a second `.unwrap()`/`.is_none()`
+# inspects the Option itself — a shape both compilers accept.
+#
+# `fill` and `get_or_put` are covered by the Rust-only vehicle in
+# tests/integration.rs, not here: the self-host still diverges on them (filed).
+
+void main():
+    # Dict.put with a bare None value.
+    Dict[String, Option[int]] m = {}
+    m.put("a", Some(5))
+    m.put("b", None)
+    Option[int] a = m.get("a").unwrap()
+    Option[int] b = m.get("b").unwrap()
+    print(a.unwrap())        # 5
+    print(b.is_none())       # true
+
+    # Vector.set / Vector.insert with a bare None value.
+    Vector[Option[int]] v = [Some(9)]
+    v.set(0, None)           # overwrite element 0 with a bare None
+    v.insert(0, Some(1))     # shift; element 0 = Some(1), element 1 = None
+    Option[int] v0 = v[0]
+    Option[int] v1 = v[1]
+    print(v0.unwrap())       # 1
+    print(v1.is_none())      # true
+
+    # Control: a Result-valued Dict put (non-Option enum value).
+    Dict[String, Result[int, String]] r = {}
+    r.put("ok", Ok(7))
+    Result[int, String] rr = r.get("ok").unwrap()
+    print(rr.unwrap())       # 7
+
+    # Control: a plain (non-Option) Dict is unaffected.
+    Dict[String, int] n = {}
+    n.put("x", 10)
+    print(n.get("x").unwrap())  # 10
+
+    # Control: Option[String] (resource-typed value) — bare None stores None,
+    # a live Some stores the string.
+    Dict[String, Option[String]] os = {}
+    os.put("h", Some("hello"))
+    os.put("z", None)
+    Option[String] oh = os.get("h").unwrap()
+    Option[String] oz = os.get("z").unwrap()
+    print(oh.unwrap())       # hello
+    print(oz.is_none())      # true

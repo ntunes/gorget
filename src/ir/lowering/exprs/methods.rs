@@ -2197,18 +2197,58 @@ pub(super) fn lower_method_call(
         // `Vector[Result[int, String]].push(Ok(1))`). For
         // GIR-lowered equip methods, `method_param_types` already
         // carries the typed signature; for builtin collection runtime
-        // methods, derive the element type from the receiver's
-        // `Vector__T` / `Set__T` / `HashSet__T` name. Dict / HashMap
-        // value-position typing skipped here — the key/value split
-        // requires Dict-specific name parsing the existing helper
-        // doesn't cover; the runtime contract for those methods
-        // forwards values by pointer so the over-unwrap risk is lower
-        // (a tag-bytes write would be caught at the C boundary).
+        // methods, derive the element/value type from the receiver's
+        // mangled name (see the per-family hint below — Dict/HashMap value
+        // typing IS handled, via `infer_collection_element_type`).
+        //
+        // Owning-VALUE-arg expected-type hint. The value position and the
+        // element/value type it should carry differ per method family:
+        //
+        //   push/add/extend/send/push_back/push_front → value is arg 0; its
+        //     type is the collection ELEMENT type (`Vector__T`/`Set__T` →  T),
+        //     recovered by `extract_elem_type_id_from_type_name`.
+        //   put/set/insert/fill/get_or_put → value is the LAST arg (Dict
+        //     `put(k, v)` / `get_or_put(k, v)`, Vector `set(i, v)` /
+        //     `insert(i, v)` / `fill(n, v)`); its type is the collection VALUE
+        //     type (Dict → V, Vector → T), recovered by
+        //     `infer_collection_element_type` (the SAME source of truth the
+        //     `d[k]` / `v[i]` index-read path uses, so the Dict key/value
+        //     split heuristic is consistent across both). The KEY / INDEX /
+        //     COUNT arg (position 0) is left un-hinted — its type is unrelated
+        //     to V.
+        //
+        // Without this hint the value's `expected_type` is unset, so a bare
+        // `None` (or `Some`/`Ok`/`Error`) in the value position materialises as
+        // `Constant::Null` and is either copied into the slot as zeros == bogus
+        // `Some(0)` (Dict `put`/`get_or_put`, whose runtime store does NOT
+        // rewrite Null → tagged struct — `Dict[_, Option[T]].put(k, None)` read
+        // back as `Some(0)` on both backends) or memcpy'd FROM the null pointer
+        // (Vector `fill`, which SEGV'd on `gorget_array_fill(..., NULL)`).
+        // `Vector.push`/`set`/`insert` avoided it — `push` via this same hint,
+        // `set`/`insert` via the store-site Null rewrite — an inconsistency this
+        // unifies. Mirrors the self-host `lower_expr.gg` owning-value
+        // element-type hint (round-35 T3).
+        //
+        // NOTE: this is a HINT ONLY. `fill`/`get_or_put` are deliberately NOT
+        // added to `consuming_positions_by_name` below — the hint-vs-consume
+        // separation is load-bearing: `fill` clones its value per element
+        // internally and `get_or_put` borrows the default, so consuming (clone +
+        // move-zero) the value here would double-free a live source
+        // (`fill(2, live_string)` / `get_or_put(k, live_default)`).
         let elem_type_hint = extract_elem_type_id_from_type_name(ctx, &type_name);
-        let value_arg_idx_for_method: Option<usize> = match method_name {
-            "push" | "add" | "extend" | "send" | "push_back" | "push_front" => Some(0),
-            _ => None,
-        };
+        let (value_arg_idx_for_method, value_arg_type_hint): (Option<usize>, Option<TypeId>) =
+            match method_name {
+                "push" | "add" | "extend" | "send" | "push_back" | "push_front" =>
+                    (Some(0), elem_type_hint),
+                "put" | "set" | "insert" | "fill" | "get_or_put" if args.len() >= 2 => {
+                    // `recv` has already been moved into `call_args` above; recover
+                    // the receiver TypeId from the mangled `type_name` instead.
+                    let val_hint = ctx.type_mapper.lookup_named(&type_name)
+                        .map(|recv_tid| infer_collection_element_type(ctx, recv_tid));
+                    (Some(args.len() - 1), val_hint)
+                }
+                _ => (None, None),
+            };
         let mut lowered_method_args: Vec<Operand> = args.iter()
             .enumerate()
             .map(|(i, arg)| {
@@ -2217,7 +2257,7 @@ pub(super) fn lower_method_call(
                 if let Some(pt) = callee_pt {
                     ctx.func_state.expected_type = Some(pt);
                 } else if Some(i) == value_arg_idx_for_method {
-                    if let Some(et) = elem_type_hint {
+                    if let Some(et) = value_arg_type_hint {
                         ctx.func_state.expected_type = Some(et);
                     }
                 }
