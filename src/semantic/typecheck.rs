@@ -2632,7 +2632,22 @@ impl<'a> TypeChecker<'a> {
 
             Expr::FieldAccess { object, field } => {
                 let object_type = self.infer_expr(object);
-                let resolved = self.resolve_type(object_type);
+                let mut resolved = self.resolve_type(object_type);
+                // Peel `Ref` wrappers: collection reads (`v.get(i)`, `v[i]`)
+                // and borrowed values produce element REFERENCES (CoW
+                // zero-cost views), so `coll.get(i).unwrap().field` sees the
+                // referent's struct. Mirrors the peel in
+                // `check_match_exhaustiveness`; without it the field types
+                // as `error_id` and a match on it is wrongly deemed
+                // non-exhaustive (definite-return false positive).
+                let mut peel_depth = 0;
+                while let ResolvedType::Ref(inner) = self.types.get(resolved) {
+                    resolved = self.resolve_type(*inner);
+                    peel_depth += 1;
+                    if peel_depth > 8 {
+                        break;
+                    }
+                }
                 // Check if the field exists on the resolved type AND
                 // return the field's actual type. Returning error_id
                 // here lets bogus calls slip through downstream — e.g.
@@ -2668,7 +2683,17 @@ impl<'a> TypeChecker<'a> {
 
             Expr::TupleFieldAccess { object, index } => {
                 let object_type = self.infer_expr(object);
-                let resolved = self.resolve_type(object_type);
+                let mut resolved = self.resolve_type(object_type);
+                // Peel `Ref` wrappers, as in `FieldAccess`: a tuple read from
+                // a collection element (`coll.get(i).unwrap().0`) is a view.
+                let mut peel_depth = 0;
+                while let ResolvedType::Ref(inner) = self.types.get(resolved) {
+                    resolved = self.resolve_type(*inner);
+                    peel_depth += 1;
+                    if peel_depth > 8 {
+                        break;
+                    }
+                }
                 match self.types.get(resolved).clone() {
                     ResolvedType::Tuple(elems) => {
                         if *index < elems.len() {

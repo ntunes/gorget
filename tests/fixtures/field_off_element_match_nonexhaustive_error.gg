@@ -1,0 +1,29 @@
+# Negative companion to field_off_element_match_return.gg: a NON-exhaustive
+# `match` on a field read off a collection ELEMENT
+# (`nodes.get(i).unwrap().kind`) must still REJECT. Before the Ref-peel fix
+# this form typed `.kind` as `<error>`, so the exhaustiveness check SILENTLY
+# bailed and the missing `Kind.Halt()` arm went unreported (only a spurious
+# "missing return" fired). With the peel the scrutinee resolves to its real
+# enum type and the missing variant is correctly reported. This is the
+# ratchet: the field-off-element form flips baseline-silently-bails ->
+# correctly-rejects (a DIRECT `.get(i).unwrap()` scrutinee already rejected
+# at baseline via the exhaustiveness peel, so it would be a weak guard).
+enum Kind:
+    Value()
+    Next()
+    Halt()
+
+struct Node:
+    Kind kind
+    int payload
+
+int walk(Vector[Node] nodes, int i):
+    match nodes.get(i).unwrap().kind:
+        case Kind.Value():
+            return nodes.get(i).unwrap().payload
+        case Kind.Next():
+            return walk(nodes, i + 1)
+
+void main():
+    Vector[Node] a = [Node(Kind.Value(), 1)]
+    print(walk(a, 0))

@@ -1242,6 +1242,34 @@ fn missing_return_loop_else_break_error() {
     );
 }
 
+// Snag #13 (gorget-js `eval_instanceof`): a total `match` on a field read
+// off a collection ELEMENT (`nodes.get(i).unwrap().kind`) used to
+// false-reject with a spurious "missing return". The element read is a CoW
+// zero-cost view typed `Ref(Node)`, so the trailing `.kind` field-access
+// typed as `<error>` and `check_match_exhaustiveness` silently bailed,
+// making the definite-return analysis believe the total match could fall
+// through. Fixed by peeling `Ref` before the field lookup in
+// `Expr::FieldAccess` / `Expr::TupleFieldAccess`. Must compile AND run.
+#[test]
+fn field_off_element_match_return() {
+    run_gg("field_off_element_match_return.gg", "1\n7\n-1");
+}
+
+// Negative ratchet for the same peel: a NON-exhaustive `match` on a field
+// read off a collection element must still be REJECTED. Before the peel this
+// form silently bailed the exhaustiveness check (only a spurious "missing
+// return" fired); with it, the scrutinee resolves to its real enum type and
+// the missing variant is correctly reported. (A DIRECT `.get(i).unwrap()`
+// scrutinee already rejects at baseline via the exhaustiveness peel, so the
+// field-off-element form is the one that actually ratchets this behavior.)
+#[test]
+fn field_off_element_match_nonexhaustive_error() {
+    check_gg_fails(
+        "field_off_element_match_nonexhaustive_error.gg",
+        "non-exhaustive match: missing variants:",
+    );
+}
+
 // A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
 // emits `unreachable` right after it, so a noreturn function that falls
 // off its end, executes a `return`, or has a non-diverging expression body

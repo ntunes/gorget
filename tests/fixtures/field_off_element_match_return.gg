@@ -1,0 +1,35 @@
+# Snag #13 (gorget-js `eval_instanceof`): a `match` on a field read off a
+# collection ELEMENT (`nodes.get(i).unwrap().kind`) used to false-reject
+# with "missing return: control can reach the end of `walk`". The element
+# read is a CoW zero-cost view typed `Ref(Node)`, so the trailing `.kind`
+# field-access typed as `<error>`; the exhaustiveness check then silently
+# bailed and the definite-return analysis concluded the total match could
+# fall through. The `while true:` arm is a genuinely diverging arm (never
+# reached at runtime here). Fixed by peeling `Ref` before the field lookup
+# in `Expr::FieldAccess` / `Expr::TupleFieldAccess`.
+enum Kind:
+    Value()
+    Next()
+    Halt()
+
+struct Node:
+    Kind kind
+    int payload
+
+int walk(Vector[Node] nodes, int i):
+    match nodes.get(i).unwrap().kind:
+        case Kind.Value():
+            return nodes.get(i).unwrap().payload
+        case Kind.Next():
+            return walk(nodes, i + 1)
+        case Kind.Halt():
+            while true:
+                pass
+
+void main():
+    Vector[Node] a = [Node(Kind.Value(), 1)]
+    Vector[Node] b = [Node(Kind.Next(), 0), Node(Kind.Value(), 7)]
+    Vector[Node] c = [Node(Kind.Next(), 0), Node(Kind.Value(), -1)]
+    print(walk(a, 0))
+    print(walk(b, 0))
+    print(walk(c, 0))
