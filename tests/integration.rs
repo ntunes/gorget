@@ -19623,7 +19623,7 @@ fn self_host_runtime_diff() {
     // Bump-on-improvement: when MATCH rises, raise the floor in the same
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 992;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1040;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
