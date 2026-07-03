@@ -7242,6 +7242,23 @@ String emit_all_drop_clone_forward_decls(LirModule &m, Vector[String] &sn):
         out = out + "\n"
     return out
 
+# A recursive-drop payload field is dropped BY VALUE (pass the handle stored in
+# the field) rather than by ADDRESS (pass `&field`) when its runtime is a
+# ptr-handle (`Ptr` opaque handle: Shared/Channel/Weak/Mutex/RWLock; or `Box`
+# value box). Those runtime drop symbols (`gorget_shared_drop`, ... ) take the
+# handle BY VALUE — passing `&field` (a `T**`) decrements the low bytes of the
+# field ADDRESS, never reaches 0, never frees → leak. Value-struct resources
+# (String/Array/Map → free fn takes a pointer) and 16-byte inline Guards keep
+# the by-address form. This mirrors the LOCAL GIDrop path's `drop_loads_value`
+# (lir_lower.gg:4607-4611) — same typed `type_runtime_map` source of truth, no
+# name-match on the drop symbol (docs/devbook/24-layering-discipline.md rule 2).
+bool drop_field_by_value(String field_type_name, LirModule &m):
+    if m.type_runtime_map.contains(field_type_name):
+        String rt = m.type_runtime_map.get(field_type_name).unwrap_or("")
+        if rt == "Ptr" or rt == "Box":
+            return true
+    return false
+
 String emit_struct_drops(LirModule &m, Vector[String] &sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
@@ -7302,6 +7319,8 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
             String access = field_access(type_name, fd.field_name, &m, &sn, true)
             if fd.drop_fn_name == "free":
                 out = out + "    free(" + access + ");\n"
+            elif drop_field_by_value(fd.field_type_name, &m):
+                out = out + "    " + fd.drop_fn_name + "(" + access + ");\n"
             else:
                 out = out + "    " + fd.drop_fn_name + "(&" + access + ");\n"
             di += 1
@@ -7445,6 +7464,8 @@ String emit_enum_drops(LirModule &m, Vector[String] &sn):
                     # multi-field variants.
                     if evd.drop_fn_name == "free":
                         case_body = case_body + "            free(" + access + ");\n"
+                    elif drop_field_by_value(evd.field_type_name, &m):
+                        case_body = case_body + "            " + evd.drop_fn_name + "(" + access + ");\n"
                     else:
                         case_body = case_body + "            " + evd.drop_fn_name + "(&" + access + ");\n"
                 vvi += 1
@@ -7582,6 +7603,8 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
                         String access = field_access(type_name, evd.field_name, &m, &sn, true)
                         if evd.drop_fn_name == "free":
                             case_body = case_body + "            free(self->" + c_field_name(evd.field_name) + ");\n"
+                        elif drop_field_by_value(evd.field_type_name, &m):
+                            case_body = case_body + "            " + evd.drop_fn_name + "(" + access + ");\n"
                         else:
                             case_body = case_body + "            " + evd.drop_fn_name + "(&" + access + ");\n"
                     vvi += 1
@@ -7599,6 +7622,8 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
                 String access = field_access(type_name, fd.field_name, &m, &sn, true)
                 if fd.drop_fn_name == "free":
                     out = out + "    free(" + access + ");\n"
+                elif drop_field_by_value(fd.field_type_name, &m):
+                    out = out + "    " + fd.drop_fn_name + "(" + access + ");\n"
                 else:
                     out = out + "    " + fd.drop_fn_name + "(&" + access + ");\n"
                 di += 1
