@@ -31,6 +31,7 @@ from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, s
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains
 from lower import is_builtin_collection_base
+from lower import classify_call_arg
 
 # ── Type mapping ─────────────────────────────────────────
 
@@ -2923,6 +2924,31 @@ int map_compound_binop(String op):
 # Every other op (and `+=` on non-String operands) is byte-identical to the
 # original `GIBinOp(dst, map_compound_binop(op), result_ty, …)` call.
 void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs_val, int result_ty, GirModule &gmod):
+    # R42-A (Core #4 — centralize at the producer): user operator-overload
+    # compound-assign (`a += b` on a struct/enum with `equip X with Add`) is
+    # dispatched HERE rather than at each of the 5+ emit_compound_arith call
+    # sites, so the whole sibling class is closed at once: a `Vec2 &v: v += …`
+    # (deref-store site), a struct-field `s.v += …`, a mutable-static compound,
+    # AND a struct-element `arr[i] += …` all route `dst = X__add(&a, b)` here.
+    # The guard (`lhs_val` is a REGISTERED user type AND `X__op` is a real
+    # fn_sig) makes it inert for scalar/String operands — so the Shared/Mutex/
+    # Atomic inner-type callers (lower_expr.gg) and the scalar static/field/
+    # element callers keep the raw binop. `lhs_val` is always a fresh value
+    # temp at every caller, so OpMove is safe. Mirrors Rust lower_compound_
+    # assign's identifier overload arm (src/ir/lowering/stmts/assigns.rs:1292-1330).
+    String ov_meth = compound_op_overload_method(op)
+    if ov_meth != "":
+        String ov_tn = local_type_name(lhs_val, &ctx, &gmod)
+        bool ov_user = gmod.type_infos.contains(ov_tn)
+        if not ov_user and ov_tn.contains("__"):
+            int ov_dd = ov_tn.index_of("__").unwrap()
+            if ov_dd > 0 and gmod.type_infos.contains(ov_tn.slice(0, ov_dd)):
+                ov_user = true
+        String ov_full = ov_tn + "__" + ov_meth
+        if ov_user and gmod.fn_sigs.contains(ov_full):
+            Vector[Operand] ov_args = [OpMove(lhs_val), op_consume(&ctx, &gmod, rhs_val, classify_call_arg(&gmod, ov_full, 1))]
+            emit(&ctx, GICallExtern(dst, ov_full, ov_args))
+            return
     if op == "+=" and (is_string_local(lhs_val, &ctx, &gmod) or is_string_local(rhs_val, &ctx, &gmod)):
         Vector[Operand] cat_args = []
         cat_args.push(op_consume(&ctx, &gmod, lhs_val, CkCallArgBorrow()))
@@ -2930,6 +2956,23 @@ void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs
         emit(&ctx, GICallExtern(dst, "gorget_str_cat", cat_args))
     else:
         emit(&ctx, GIBinOp(dst, map_compound_binop(op), result_ty, op_consume(&ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, rhs_val, CkBinOpArg())))
+
+# R42-A: compound-assign operator → the user-overload method name it dispatches
+# to (`a += b` → X__add(&a, b)). Only the arithmetic ops overload; wrap/bitwise/
+# shift compound-assigns keep the raw binop. Mirrors Rust lower_compound_assign's
+# `overload_method` match (src/ir/lowering/stmts/assigns.rs:1293-1300).
+String compound_op_overload_method(String op):
+    if op == "+=":
+        return "add"
+    if op == "-=":
+        return "sub"
+    if op == "*=":
+        return "mul"
+    if op == "/=":
+        return "div"
+    if op == "%=":
+        return "rem"
+    return ""
 
 bool is_comparison(String op):
     match op:

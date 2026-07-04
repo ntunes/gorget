@@ -4798,6 +4798,23 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             pass
                 case None:
                     pass
+            # R42-A: user Index operator overload — `g[i]` on a struct/enum with
+            # `equip X with Index` → X__get(&g, i). Mirrors Rust lower_index_
+            # access's equip-get dispatch. Placed HERE (after collection-getter
+            # resolution, gated `eix_getter == ""`) so a real collection can never
+            # reach it — symmetric with the WRITE side (lower_index_assign gates
+            # its user-__set dispatch on `setter == ""`). A resource collection
+            # always sets eix_getter non-empty above, so `eix_getter == ""` proves
+            # this base is NOT a runtime collection. Without this a user index-read
+            # fell to the I64/0 stub below (silent wrong-value).
+            if eix_getter == "" and gmod.type_infos.contains(eix_base_name):
+                String eix_get_full = eix_base_name + "__get"
+                if gmod.fn_sigs.contains(eix_get_full):
+                    int eix_get_ret = gmod.fn_sigs.get(eix_get_full).unwrap()
+                    int eix_get_dst = add_local(&ctx, eix_get_ret, None)
+                    Vector[Operand] eix_get_args = [OpBorrow(eix_base), op_consume(&ctx, &gmod, eix_idx, classify_call_arg(&gmod, eix_get_full, 1))]
+                    emit(&ctx, GICallExtern(eix_get_dst, eix_get_full, eix_get_args))
+                    return eix_get_dst
             if eix_getter == "":
                 # Unsupported base (Set has no index-read, unknown type):
                 # keep the legacy I64/0 placeholder rather than crash.

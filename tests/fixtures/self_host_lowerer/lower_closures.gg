@@ -397,11 +397,29 @@ bool is_builtin_trait(String tname):
         return true
     if tname == "Add" or tname == "Sub" or tname == "Mul" or tname == "Div":
         return true
+    # R42-A: the remaining arithmetic/operator traits emit BARE `Type__method`
+    # names (matching Rust gg — no vtable, no `_for_` prefix), because the
+    # binop/unary/compare dispatch sites spell the bare `Type__rem/neg/compare`.
+    # Omitting them made the self-host register Neg/Comparable/Rem as own-vtable
+    # USER traits → def `Neg__Type_for_Type__neg` but call `Type__neg` → C
+    # implicit-int / undefined-ref (mirrors the Debuggable Root #1 above).
+    if tname == "Rem" or tname == "Neg" or tname == "Comparable":
+        return true
+    # Index/IndexMut are the `[]` operator overloads — `g[i]` / `g[i] = x`
+    # dispatch the BARE `X__get` / `X__set` (see the EIndex read arm +
+    # lower_index_assign), matching Rust gg (bare, no vtable). Registering them
+    # as own-vtable USER traits emitted `Index__…_for_X__get` → undefined-ref.
+    if tname == "Index" or tname == "IndexMut":
+        return true
+    if tname.starts_with("Index[") or tname.starts_with("IndexMut["):
+        return true
     if tname.starts_with("Iterable"):
         return true
     if tname.starts_with("Add[") or tname.starts_with("Sub["):
         return true
     if tname.starts_with("Mul[") or tname.starts_with("Div["):
+        return true
+    if tname.starts_with("Rem[") or tname.starts_with("Neg["):
         return true
     return false
 

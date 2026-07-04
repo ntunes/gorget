@@ -1,0 +1,41 @@
+from std.collections import Vector
+
+# R42-A regression: NON-identifier compound-assign operator overloads.
+# The `operator_overload.gg` fixture only exercises the IDENTIFIER compound
+# site (`a += Vec2(...)`). This one exercises the sibling sites that the
+# Core #4 centralization (dispatch inside `emit_compound_arith`) closes:
+#   - EFieldAccess compound: `h.v += Vec2(...)`
+#   - `&`-param compound (deref-store): `v += Vec2(...)` inside `bump`
+#   - collection-element compound: `xs[i] += Vec2(...)`
+
+struct Vec2:
+    int x
+    int y
+
+equip Vec2 with Add[Vec2]:
+    Vec2 add(self, Vec2 rhs):
+        return Vec2(self.x + rhs.x, self.y + rhs.y)
+
+struct Holder:
+    Vec2 v
+
+# `&`-param compound overload — hits the GtMutPtr deref-store site.
+void bump(Vec2 &v):
+    v += Vec2(100, 200)
+
+void main():
+    # struct-field compound overload (EFieldAccess site)
+    Holder h = Holder(Vec2(1, 2))
+    h.v += Vec2(10, 20)
+    print(f"{h.v.x} {h.v.y}")
+
+    # &-param compound overload (deref-store site)
+    Vec2 p = Vec2(3, 4)
+    bump(&p)
+    print(f"{p.x} {p.y}")
+
+    # collection-element compound overload (v[i] += ... site)
+    Vector[Vec2] xs = [Vec2(5, 6), Vec2(7, 8)]
+    xs[0] += Vec2(1000, 2000)
+    print(f"{xs[0].x} {xs[0].y}")
+    print(f"{xs[1].x} {xs[1].y}")

@@ -1215,6 +1215,11 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             emit(&ctx, GIAssign(lhs_val, op_consume(&ctx, &gmod, lid, CkAssign())))
                             int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                             int op_dst = add_local(&ctx, lhs_type, None)
+                            # R42-A: user operator-overload compound-assign
+                            # (`a += b` on a struct/enum with `equip X with Add`)
+                            # is dispatched INSIDE emit_compound_arith (Core #4
+                            # "centralize at the producer"), so this and every
+                            # other emit_compound_arith caller gets it uniformly.
                             emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
                             emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, op_dst, CkAssign())))
                     elif static_contains(&gmod, name):
@@ -1874,6 +1879,19 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
                     pass
         case None:
             pass
+    # R42-A: user IndexMut operator overload — `g[i] = x` on a struct/enum with
+    # `equip X with IndexMut` → X__set(&g, i, x). Mirrors Rust lower_index_assign's
+    # IndexMut equip-set dispatch (src/ir/lowering/stmts/assigns.rs:1090). Without
+    # it a user index-write hit the lower_fail below.
+    if setter == "" and gmod.type_infos.contains(base_tname):
+        String ia_set_full = base_tname + "__set"
+        if gmod.fn_sigs.contains(ia_set_full):
+            Operand ia_set_self = OpBorrow(base)
+            if is_ptr_type(base_tid, &gmod):
+                ia_set_self = OpCopy(base)
+            Vector[Operand] ia_set_args = [ia_set_self, op_consume(&ctx, &gmod, idx, classify_call_arg(&gmod, ia_set_full, 1)), op_consume(&ctx, &gmod, val, classify_call_arg(&gmod, ia_set_full, 2))]
+            emit(&ctx, GICallExtern(-1, ia_set_full, ia_set_args))
+            return
     if setter == "":
         lower_fail("lower_index_assign: unsupported base type " + base_tname)
         return
