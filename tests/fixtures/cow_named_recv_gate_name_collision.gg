@@ -1,0 +1,29 @@
+# R38 `&self` mutation-inference — GATE user-first name-collision.
+#
+# A user `&self` MUTATOR whose name COLLIDES with a READ-ONLY builtin
+# (`get`) is called on a bare-value-param NAMED receiver. The CoW gate in
+# lower_expr is builtin-first, so `builtin_method_mutates("get")` returns
+# `Some(is_mutating=false)` — WITHOUT the gate's user-first name-collision
+# guard the write goes through (self-host Y/Y). The guard OR-s in the
+# mutation-inference classification (`Holder__get` is a genuine mutator),
+# so the gate materializes `c` before the write and the caller's `orig`
+# keeps "A" — matching Rust (whose `&self` over-approx also materializes).
+# This mirrors the SCAN's user→builtin order (Core #4, one fix all
+# siblings). Correct output: Y then A.
+struct Holder:
+    String name
+
+equip Holder:
+    # user &self MUTATOR named like the read-only builtin `get`
+    void get(&self):
+        self.name = "Y"
+
+String touch(Holder c):
+    c.get()
+    return c.name
+
+void main():
+    Holder orig = Holder("A")
+    String inner = touch(orig)
+    print(inner)          # Y  (the materialized copy was mutated)
+    print(orig.name)      # A  (the caller's value is untouched)

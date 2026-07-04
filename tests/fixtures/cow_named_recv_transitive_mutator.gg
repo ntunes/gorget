@@ -1,0 +1,30 @@
+# R38 `&self` mutation-inference — TRANSITIVE mutation through a self-call.
+#
+# `bump` has NO direct self-write of `name`; it mutates `name` only by
+# calling `set_name` on `self`. The mutation-inference fixpoint must
+# propagate `set_name`'s mutating classification along the self-callee EDGE
+# `Rec__bump -> Rec__set_name`, so `Rec__bump` is classified mutating too.
+# Then the NAMED-receiver call `r.bump()` in `touch` materializes `r`
+# (bare-value param) so the caller's `orig` is untouched. Correct output:
+# Y then A.
+struct Rec:
+    String name
+    int n
+
+equip Rec:
+    void set_name(&self, String s):
+        self.name = s
+
+    void bump(&self):
+        self.n = self.n + 1
+        self.set_name("Y")
+
+String touch(Rec r):
+    r.bump()
+    return r.name
+
+void main():
+    Rec orig = Rec("A", 0)
+    String inner = touch(orig)
+    print(inner)          # Y  (the materialized copy was mutated via bump)
+    print(orig.name)      # A  (the caller's value is untouched)

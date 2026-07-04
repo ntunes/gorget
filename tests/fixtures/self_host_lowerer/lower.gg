@@ -47,7 +47,7 @@ from gir import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
 from lower_cow import compute_cow_scan, cow_pristine_after, cow_source_root_name
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
-from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, try_register_sync_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, try_register_sync_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, process_pending_shared_async
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
@@ -1026,6 +1026,518 @@ bool method_mutates_receiver(SpannedExpr recv, String mname, GirModule &gmod):
             pass
     # (3) CONSERVATIVE DEFAULT: unknown ⇒ assume mutating (safe over-clone).
     return true
+
+# ══ R38 — `&self` MUTATION-INFERENCE pass ════════════════════════════
+#
+# Classify each equip method (keyed `Type__mname`) as READ-ONLY vs
+# actually-WRITES-self, so the named-receiver CoW-materialize gate fires
+# ONLY for genuine mutators (a full `&self`⇒mutating over-approx is a
+# ~12GB clone bomb — read-only getters/`.clone()` flood the hot loops).
+#
+# direct_mut(m) = body has (a) an assign/compound whose target ROOT is
+#   `self`, OR (b) self / a self-projection passed to a `&`/`!` callee
+#   param, OR (c) a mutating BUILTIN method called on self / a
+#   self-projection, OR (d) an unknown user method on an UNRESOLVABLE
+#   self-projection (conservative leaf). self-calls to KNOWN user methods
+#   are collected as callee EDGES and resolved by the fixpoint.
+# mutates_self(m) = direct_mut(m) OR any(mutates_self(c) for c in callees).
+# Fixpoint grows monotonically (mirror of the resource_types loop) → sound.
+
+# Is `key` (Type__mname) a user method that takes `&self`/`!self` at
+# param 0? (Only such methods can mutate the caller's receiver.) Reads the
+# self-convention from the typed fn_borrow_params / fn_move_params maps.
+bool mutinf_takes_mut_self(GirModule &gmod, String key):
+    if gmod.fn_borrow_params.contains(key):
+        Vector[bool] bf = gmod.fn_borrow_params.get(key).unwrap()
+        if bf.len() > 0 and bf.get(0).unwrap():
+            return true
+    if gmod.fn_move_params.contains(key):
+        Vector[bool] mf = gmod.fn_move_params.get(key).unwrap()
+        if mf.len() > 0 and mf.get(0).unwrap():
+            return true
+    return false
+
+# Does callee `Type__mname` let its `arg_idx`-th (self-excluded) arg be
+# mutated (declared `&`/`!`)? Ctx-free sibling of method_arg_lets_callee_mutate.
+bool mutinf_method_arg_mut(GirModule &gmod, String mkey, int arg_idx):
+    return call_arg_lets_callee_mutate(&gmod, mkey, arg_idx + 1)
+
+# Is `e` a projection path rooted at the method's `self` receiver
+# (`self`, `self.f`, `self.f[i]`, `*self`, `self.m()`)? `self` is the
+# distinct `ESelfExpr` AST node (NOT `EIdentifier("self")`), so
+# cow_source_root_name — which only knows EIdentifier roots — returns ""
+# for it; this walker recognises ESelfExpr as the root.
+bool mutinf_expr_is_self_rooted(SpannedExpr e):
+    match e.expr:
+        case ESelfExpr():
+            return true
+        case EFieldAccess(base, _):
+            return mutinf_expr_is_self_rooted(*base)
+        case EIndex(base, _):
+            return mutinf_expr_is_self_rooted(*base)
+        case EDeref(inner):
+            return mutinf_expr_is_self_rooted(*inner)
+        case EMethodCall(recv, _, _, _, _):
+            return mutinf_expr_is_self_rooted(*recv)
+        case ETry(inner):
+            return mutinf_expr_is_self_rooted(*inner)
+        case EIdentifier(idn):
+            return idn == "self"
+        else:
+            return false
+
+# Recursive expression scan. Returns true if a DIRECT self-mutation is
+# found in `e`; appends KNOWN user self-method callees to `callees`.
+bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[String] &callees):
+    bool m = false
+    match e.expr:
+        case EMethodCall(recv_box, mname, margs, _, _):
+            if mutinf_expr_is_self_rooted(*recv_box):
+                # Receiver is self or a self-projection. Classify in the
+                # user→builtin→leaf order that MIRRORS method_mutates_receiver
+                # (lower.gg:~1003): a known non-generic USER method wins FIRST
+                # (this closes the name-collision shape when the receiver type
+                # resolves — a user `&self`-mutator named like a read-only
+                # builtin is found here before the builtin table), the
+                # name-based BUILTIN table is NEXT (reachable even when the type
+                # is UNRESOLVED — the hot read-only-getter `self.items.len()`
+                # case), and a conservative `true` leaf is LAST.
+                #
+                # STEP 1: known non-generic USER method — resolve receiver type.
+                String rtn = ""
+                match (*recv_box).expr:
+                    case ESelfExpr():
+                        rtn = target
+                    else:
+                        int rtid = lookup_expr_gir_type(*recv_box, &gmod)
+                        if rtid >= 0:
+                            rtn = type_id_to_name(rtid, &gmod)
+                bool classified = false
+                if rtn.len() > 0:
+                    String ckey = rtn + "__" + mname
+                    if gmod.fn_borrow_params.contains(ckey):
+                        # CALLEE EDGE — let the fixpoint resolve &self mutation
+                        # transitively. UNCONDITIONAL .contains→edge push: a
+                        # bare-self user method never enters method_mutates_self's
+                        # mutating set, so its edge is INERT (a copy can't write
+                        # through) → correctly read-only. Do NOT read
+                        # method_mutates_self here (it is being computed —
+                        # reading it collapses transitivity).
+                        callees.push(ckey)
+                        classified = true
+                # STEP 2: known BUILTIN — name-based, TYPE-INDEPENDENT, so it
+                # is reachable when the receiver type is UNRESOLVED (the hot
+                # read-only getter `int size(&self): return self.items.len()`
+                # has `self.items`→-1 at scan time; step 1 fails; this yields
+                # `len → is_mutating=false` → NOT mutating; an "unresolved ⇒
+                # true" leaf here would re-bomb every `x.size()`).
+                if not classified:
+                    match builtin_method_mutates(mname):
+                        case Some(bd):
+                            if bd.is_mutating:
+                                m = true
+                            classified = true
+                        case None:
+                            pass
+                # STEP 3: conservative leaf — neither a resolved-type user
+                # method in fn_borrow_params NOR any builtin ⇒ assume mutating
+                # (a generic-equip instance, or an unknown user method on an
+                # unresolvable self-projection). Read-only builtins were caught
+                # by step 2, so this does NOT re-bomb the hot getters.
+                if not classified:
+                    m = true
+            # self / self-projection passed to a `&`/`!` method arg.
+            String rtn2 = ""
+            match (*recv_box).expr:
+                case ESelfExpr():
+                    rtn2 = target
+                else:
+                    int rtid2 = lookup_expr_gir_type(*recv_box, &gmod)
+                    if rtid2 >= 0:
+                        rtn2 = type_id_to_name(rtid2, &gmod)
+            int mai = 0
+            for ma in margs:
+                if mutinf_expr_is_self_rooted(ma):
+                    if rtn2.len() > 0 and mutinf_method_arg_mut(&gmod, rtn2 + "__" + mname, mai):
+                        m = true
+                if mutinf_scan_expr(ma, target, &gmod, &callees):
+                    m = true
+                mai += 1
+            if mutinf_scan_expr(*recv_box, target, &gmod, &callees):
+                m = true
+        case ECall(callee_box, cargs, _, _):
+            String fname = ""
+            match (*callee_box).expr:
+                case EIdentifier(fid):
+                    fname = fid
+                    if gmod.call_redirects.contains(fname):
+                        fname = gmod.call_redirects.get(fname).unwrap()
+                else:
+                    pass
+            int cai = 0
+            for ca in cargs:
+                if fname.len() > 0 and mutinf_expr_is_self_rooted(ca):
+                    if call_arg_lets_callee_mutate(&gmod, fname, cai):
+                        m = true
+                if mutinf_scan_expr(ca, target, &gmod, &callees):
+                    m = true
+                cai += 1
+            if mutinf_scan_expr(*callee_box, target, &gmod, &callees):
+                m = true
+        case EMutableBorrow(inner_box):
+            # `&self` / `&self.field` formed for a mutating position.
+            if mutinf_expr_is_self_rooted(*inner_box):
+                m = true
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees):
+                m = true
+        case EMove(inner_box):
+            if mutinf_expr_is_self_rooted(*inner_box):
+                m = true
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees):
+                m = true
+        case EBinaryOp(lhs_box, _, rhs_box):
+            if mutinf_scan_expr(*lhs_box, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*rhs_box, target, &gmod, &callees): m = true
+        case EUnaryOp(_, inner_box):
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
+        case EFieldAccess(base_box, _):
+            if mutinf_scan_expr(*base_box, target, &gmod, &callees): m = true
+        case EIndex(base_box, idx_box):
+            if mutinf_scan_expr(*base_box, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*idx_box, target, &gmod, &callees): m = true
+        case EDeref(inner_box):
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
+        case EAs(inner_box, _):
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
+        case ETry(inner_box):
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
+        case EAwait(inner_box):
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
+        case ESpawn(inner_box):
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
+        case ESpawnBlocking(inner_box):
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
+        case EArrayLiteral(elems):
+            for el in elems:
+                if mutinf_scan_expr(el, target, &gmod, &callees): m = true
+        case ETupleLiteral(elems_t):
+            for elt in elems_t:
+                if mutinf_scan_expr(elt, target, &gmod, &callees): m = true
+        case EDictLiteral(keys_d, vals_d):
+            for kd in keys_d:
+                if mutinf_scan_expr(kd, target, &gmod, &callees): m = true
+            for vd in vals_d:
+                if mutinf_scan_expr(vd, target, &gmod, &callees): m = true
+        case EStructLiteral(_, _, fields_s):
+            for fs in fields_s:
+                if mutinf_scan_expr(fs, target, &gmod, &callees): m = true
+        case EFString(_, parts_f, _):
+            for pf in parts_f:
+                if mutinf_scan_expr(pf, target, &gmod, &callees): m = true
+        case EIf(cond_box, then_b, elses):
+            if mutinf_scan_expr(*cond_box, target, &gmod, &callees): m = true
+            if mutinf_scan_stmts(then_b, target, &gmod, &callees): m = true
+            for eb in elses:
+                if mutinf_scan_stmts(eb.body, target, &gmod, &callees): m = true
+        case EMatch(scrut_box, arms):
+            if mutinf_scan_expr(*scrut_box, target, &gmod, &callees): m = true
+            for arm in arms:
+                match arm.guard:
+                    case Some(ge):
+                        if mutinf_scan_expr(ge, target, &gmod, &callees): m = true
+                    case None:
+                        pass
+                if mutinf_scan_stmts(arm.body, target, &gmod, &callees): m = true
+        case EBlock(blk_stmts):
+            if mutinf_scan_stmts(blk_stmts, target, &gmod, &callees): m = true
+        case EDo(do_stmts):
+            if mutinf_scan_stmts(do_stmts, target, &gmod, &callees): m = true
+        case EClosure(_, clo_body):
+            # A closure body that writes self also mutates self (deferred).
+            if mutinf_scan_stmts(clo_body, target, &gmod, &callees): m = true
+        case EImplicitClosure(ic_box):
+            if mutinf_scan_expr(*ic_box, target, &gmod, &callees): m = true
+        case EDefaultOp(lhs_box, rhs_box):
+            if mutinf_scan_expr(*lhs_box, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*rhs_box, target, &gmod, &callees): m = true
+        case EListComp(elem_box, _, iter_box, opt_filt):
+            if mutinf_scan_expr(*elem_box, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*iter_box, target, &gmod, &callees): m = true
+            match opt_filt:
+                case Some(fb):
+                    if mutinf_scan_expr(*fb, target, &gmod, &callees): m = true
+                case None:
+                    pass
+        case ESetComp(selem_box, _, siter_box, sfilt_opt):
+            if mutinf_scan_expr(*selem_box, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*siter_box, target, &gmod, &callees): m = true
+            match sfilt_opt:
+                case Some(sfb):
+                    if mutinf_scan_expr(*sfb, target, &gmod, &callees): m = true
+                case None:
+                    pass
+        case EDictComp(dk_box, dv_box, _, diter_box, dfilt_opt):
+            if mutinf_scan_expr(*dk_box, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*dv_box, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*diter_box, target, &gmod, &callees): m = true
+            match dfilt_opt:
+                case Some(dfb):
+                    if mutinf_scan_expr(*dfb, target, &gmod, &callees): m = true
+                case None:
+                    pass
+        case ERethrow(re_inner, _, _, re_handler):
+            if mutinf_scan_expr(*re_inner, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*re_handler, target, &gmod, &callees): m = true
+        case ECatch(ce_inner, _, ce_handler):
+            if mutinf_scan_expr(*ce_inner, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*ce_handler, target, &gmod, &callees): m = true
+        case EFaultCatch(fc_inner, _, fc_handler):
+            if mutinf_scan_expr(*fc_inner, target, &gmod, &callees): m = true
+            if mutinf_scan_expr(*fc_handler, target, &gmod, &callees): m = true
+        case ERange(rlo_opt, rhi_opt, _):
+            match rlo_opt:
+                case Some(rlo):
+                    if mutinf_scan_expr(*rlo, target, &gmod, &callees): m = true
+                case None:
+                    pass
+            match rhi_opt:
+                case Some(rhi):
+                    if mutinf_scan_expr(*rhi, target, &gmod, &callees): m = true
+                case None:
+                    pass
+        case EIs(is_inner, _, _):
+            if mutinf_scan_expr(*is_inner, target, &gmod, &callees): m = true
+        case EDotShorthand(_, ds_args):
+            for da in ds_args:
+                if mutinf_scan_expr(da, target, &gmod, &callees): m = true
+        else:
+            pass
+    return m
+
+# Statement-list scan (mirrors cow_scan_stmts control-flow coverage).
+bool mutinf_scan_stmts(Vector[Stmt] stmts, String target, GirModule &gmod, Vector[String] &callees):
+    bool m = false
+    for st in stmts:
+        match st:
+            case SVarDecl(_, _, init_e, _, _, _):
+                if mutinf_scan_expr(init_e, target, &gmod, &callees): m = true
+            case SAssign(lhs_e, rhs_e):
+                if mutinf_expr_is_self_rooted(lhs_e):
+                    m = true
+                if mutinf_scan_expr(lhs_e, target, &gmod, &callees): m = true
+                if mutinf_scan_expr(rhs_e, target, &gmod, &callees): m = true
+            case SCompoundAssign(lhs_e, _, rhs_e):
+                if mutinf_expr_is_self_rooted(lhs_e):
+                    m = true
+                if mutinf_scan_expr(lhs_e, target, &gmod, &callees): m = true
+                if mutinf_scan_expr(rhs_e, target, &gmod, &callees): m = true
+            case SExpr(ex):
+                if mutinf_scan_expr(ex, target, &gmod, &callees): m = true
+            case SReturn(opt_e):
+                match opt_e:
+                    case Some(re):
+                        if mutinf_scan_expr(re, target, &gmod, &callees): m = true
+                    case None:
+                        pass
+            case SThrow(te):
+                if mutinf_scan_expr(te, target, &gmod, &callees): m = true
+            case SBreak(opt_be):
+                match opt_be:
+                    case Some(be):
+                        if mutinf_scan_expr(be, target, &gmod, &callees): m = true
+                    case None:
+                        pass
+            case SWhile(cond_e, body_w, else_w):
+                if mutinf_scan_expr(cond_e, target, &gmod, &callees): m = true
+                if mutinf_scan_stmts(body_w, target, &gmod, &callees): m = true
+                if mutinf_scan_stmts(else_w, target, &gmod, &callees): m = true
+            case SLoop(body_l):
+                if mutinf_scan_stmts(body_l, target, &gmod, &callees): m = true
+            case SFor(_, iter_e, body_f, _, else_f):
+                if mutinf_scan_expr(iter_e, target, &gmod, &callees): m = true
+                if mutinf_scan_stmts(body_f, target, &gmod, &callees): m = true
+                if mutinf_scan_stmts(else_f, target, &gmod, &callees): m = true
+            case SIf(cond_if, then_if, elses_if):
+                if mutinf_scan_expr(cond_if, target, &gmod, &callees): m = true
+                if mutinf_scan_stmts(then_if, target, &gmod, &callees): m = true
+                for eb_if in elses_if:
+                    if mutinf_scan_stmts(eb_if.body, target, &gmod, &callees): m = true
+            case SMatch(scrut_if, arms_if):
+                if mutinf_scan_expr(scrut_if, target, &gmod, &callees): m = true
+                for arm_if in arms_if:
+                    match arm_if.guard:
+                        case Some(gif):
+                            if mutinf_scan_expr(gif, target, &gmod, &callees): m = true
+                        case None:
+                            pass
+                    if mutinf_scan_stmts(arm_if.body, target, &gmod, &callees): m = true
+            case SWith(with_e, _, body_with):
+                if mutinf_scan_expr(with_e, target, &gmod, &callees): m = true
+                if mutinf_scan_stmts(body_with, target, &gmod, &callees): m = true
+            case SNamedScope(_, body_ns):
+                if mutinf_scan_stmts(body_ns, target, &gmod, &callees): m = true
+            case SOnError(body_oe):
+                if mutinf_scan_stmts(body_oe, target, &gmod, &callees): m = true
+            case SAssert(ae, _):
+                if mutinf_scan_expr(ae, target, &gmod, &callees): m = true
+            case SAssertReturn(are, _):
+                if mutinf_scan_expr(are, target, &gmod, &callees): m = true
+            case SSnapshot(_, _, se):
+                if mutinf_scan_expr(se, target, &gmod, &callees): m = true
+            case SSelect(sel_arms):
+                for sel_arm in sel_arms:
+                    match sel_arm.op:
+                        case SORecv(_, _, recv_e):
+                            if mutinf_scan_expr(recv_e, target, &gmod, &callees): m = true
+                        case SOSend(send_ch, send_v):
+                            if mutinf_scan_expr(send_ch, target, &gmod, &callees): m = true
+                            if mutinf_scan_expr(send_v, target, &gmod, &callees): m = true
+                    if mutinf_scan_stmts(sel_arm.body, target, &gmod, &callees): m = true
+            else:
+                pass
+    return m
+
+# Driver: populate gmod.method_mutates_self with a fixpoint over the module.
+void compute_method_mutates_self(GirModule &gmod, Module m):
+    # Per-method direct-mutation seed + self-callee edges.
+    Dict[String, bool] direct = {}
+    Dict[String, Vector[String]] edges = {}
+    Vector[String] keys = []
+    for mi_item in m.items:
+        match mi_item:
+            case IEquip(mi_eq):
+                if mi_eq.type_params.len() == 0:
+                    String mi_tn = ""
+                    match mi_eq.target.ty:
+                        case TNamed(mi_n, mi_targs):
+                            if mi_targs.len() == 0:
+                                mi_tn = mi_n
+                        case TPrimitive(mi_n):
+                            mi_tn = mi_n
+                        else:
+                            pass
+                    if mi_tn != "":
+                        for mi_meth in mi_eq.methods:
+                            # Only &self/!self methods can mutate the caller's
+                            # value. Read the self-convention from the typed
+                            # fn_borrow_params/fn_move_params maps (populated by
+                            # the earlier pre-pass) — NOT mi_meth.params, whose
+                            # `self` ownership is reset to bare by the
+                            # apply_collect_target_rewrites reconstruction.
+                            String mkey = mi_tn + "__" + mi_meth.name
+                            bool takes_mut = mutinf_takes_mut_self(&gmod, mkey)
+                            if takes_mut:
+                                Vector[String] ces = []
+                                bool dm = mutinf_scan_stmts(mi_meth.body, mi_tn, &gmod, &ces)
+                                direct.put(mkey, dm)
+                                edges.put(mkey, ces)
+                                keys.push(mkey)
+            else:
+                pass
+    # Seed the result with the direct-mutation flags.
+    for sk in keys:
+        gmod.method_mutates_self.put(sk, direct.get(sk).unwrap())
+    # Fixpoint: propagate mutation through self-method-call edges.
+    bool changed = true
+    while changed:
+        changed = false
+        for fk in keys:
+            if not gmod.method_mutates_self.get(fk).unwrap():
+                for ce in edges.get(fk).unwrap():
+                    if gmod.method_mutates_self.contains(ce) and gmod.method_mutates_self.get(ce).unwrap():
+                        gmod.method_mutates_self.put(fk, true)
+                        changed = true
+
+# Gate accessor: does the NAMED-receiver user method `recv_name.mname(...)`
+# actually WRITE its receiver? Resolves the receiver local's declared type
+# (via ctx.locals — a bare EIdentifier receiver has NO typechecker
+# expr-type entry, so lookup_expr_gir_type returns -1) and reads the
+# classification map. A method not in the map either takes bare `self`
+# (a copy — no write-through) or is a generic-equip instance (not yet
+# classified) → treat as read-only (the BASE gate already did not
+# materialize named receivers, so this is no regression — degrade-to-BASE).
+bool mutinf_named_recv_writes_self(LowerCtx &ctx, GirModule &gmod, String recv_name, String mname):
+    if not nl_contains(&ctx, recv_name):
+        return false
+    int rlocal = nl_get(&ctx, recv_name)
+    if rlocal < 0:
+        return false
+    int rtid = ctx.locals.get(rlocal).unwrap().type_id
+    int struct_tid = peel_ptr_tid(&gmod, rtid)
+    String rtn = type_id_to_name(struct_tid, &gmod)
+    if rtn.len() == 0:
+        return false
+    String key = rtn + "__" + mname
+    if gmod.method_mutates_self.contains(key):
+        return gmod.method_mutates_self.get(key).unwrap()
+    return false
+
+# Type NAME of struct field `fname` on struct type `tname` (from the typed
+# GirTypeInfo field table), "" if unknown. Used by the projected-receiver
+# resolver below to walk `s.v` field projections.
+String mutinf_field_type_name(GirModule &gmod, String tname, String fname):
+    if gmod.type_infos.contains(tname):
+        GirTypeInfo mfti = gmod.type_infos.get(tname).unwrap()
+        for mfti_f in mfti.fields:
+            if mfti_f.name == fname:
+                return mfti_f.type_name
+    return ""
+
+# Resolve the TYPE NAME of a (possibly PROJECTED) receiver expr, walking the
+# projection path from a NAMED root. Returns "" when unresolvable (→
+# degrade-to-BASE). Companion to `mutinf_named_recv_writes_self` for the
+# PROJECTED gate case: the typechecker side table (`lookup_expr_gir_type`)
+# does NOT key a projected receiver like `v[0]` / `s.v[0]` at lowering time,
+# so this walks the projection from the root local's TYPED slot:
+#   • EIdentifier    → the local's declared type name (via ctx.locals);
+#   • EIndex(base)   → `index_value_type_name` of base's type (Vector/Deque/
+#                      Set element, Dict/HashMap value);
+#   • EFieldAccess(base, f) → the field's typed `GirFieldInfo.type_name`;
+#   • EDeref(inner)  → transparent.
+String mutinf_recv_type_name(LowerCtx &ctx, GirModule &gmod, SpannedExpr e):
+    match e.expr:
+        case EIdentifier(mrt_idn):
+            if not nl_contains(&ctx, mrt_idn):
+                return ""
+            int mrt_lid = nl_get(&ctx, mrt_idn)
+            if mrt_lid < 0:
+                return ""
+            int mrt_tid = peel_ptr_tid(&gmod, ctx.locals.get(mrt_lid).unwrap().type_id)
+            return type_id_to_name(mrt_tid, &gmod)
+        case EIndex(mrt_base, _):
+            String mrt_bt = mutinf_recv_type_name(&ctx, &gmod, *mrt_base)
+            if mrt_bt.len() > 0:
+                return index_value_type_name(mrt_bt)
+            return ""
+        case EFieldAccess(mrt_fbase, mrt_fname):
+            String mrt_ft = mutinf_recv_type_name(&ctx, &gmod, *mrt_fbase)
+            if mrt_ft.len() > 0:
+                return mutinf_field_type_name(&gmod, mrt_ft, mrt_fname)
+            return ""
+        case EDeref(mrt_inner):
+            return mutinf_recv_type_name(&ctx, &gmod, *mrt_inner)
+        else:
+            return ""
+
+# Gate accessor for a PROJECTED receiver (`v[0].m()` / `s.v[0].m()` /
+# `o.inner.m()`): does the user method `mname` on the receiver's resolved
+# (element/field) type actually WRITE self? Resolves the projected type via
+# `mutinf_recv_type_name` and reads `method_mutates_self`. PRECISE + bomb-safe
+# by construction: `method_mutates_self` holds ONLY genuine user `&self`/`!self`
+# mutators, so a builtin-colliding name on a projected receiver (`v[0].len()`,
+# `s.items[0].len()`) resolves to `Elem__len`, absent from the map → false →
+# NO clone. Only a genuine user mutator named like a builtin (`v[0].get()` where
+# `get` mutates) → true → materialize. Unresolvable projection → "" → false
+# (degrade-to-BASE, filed). This is the projected SIBLING of
+# `mutinf_named_recv_writes_self` (Core #4 — one fix, all siblings).
+bool mutinf_projected_recv_writes_self(LowerCtx &ctx, GirModule &gmod, SpannedExpr recv, String mname):
+    String prtn = mutinf_recv_type_name(&ctx, &gmod, recv)
+    if prtn.len() == 0:
+        return false
+    String pkey = prtn + "__" + mname
+    if gmod.method_mutates_self.contains(pkey):
+        return gmod.method_mutates_self.get(pkey).unwrap()
+    return false
 
 # ── call_arg_lets_callee_mutate — typed `&`/`!`-arg signature read ───
 #
@@ -2924,7 +3436,12 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre, {}, {}, {})
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, {}, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre, {}, {}, {})
+
+    # R38: mutation-inference — classify each &self/!self equip method
+    # read-only vs writes-self (fixpoint), so the named-receiver CoW gate
+    # materializes ONLY for genuine mutators (no clone bomb).
+    compute_method_mutates_self(&gmod, m)
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors

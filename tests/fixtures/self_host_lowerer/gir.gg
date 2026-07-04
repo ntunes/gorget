@@ -609,6 +609,16 @@ struct GirModule:
     # borrows (Ptr alias propagated at zero cost), `!T` is the owning
     # opt-in.
     Dict[String, Vector[bool]] fn_move_params
+    # R38 mutation-inference: per equip-method (keyed `Type__mname`, self =
+    # param idx 0), true iff the method actually WRITES self (transitively).
+    # Computed by `compute_method_mutates_self` — a monotone fixpoint over
+    # the module in the pre-pass. Distinguishes a read-only `&self` (getter /
+    # `.clone()`) from a mutating one so the named-receiver CoW-materialize
+    # gate fires ONLY for genuine mutators (a full `&self`⇒mutating
+    # over-approx is a ~12GB clone bomb). Sits alongside the existing
+    # `fn_borrow_params`/`fn_move_params`/`resource_types` name-keyed
+    # classification caches — one source of truth for this axis.
+    Dict[String, bool] method_mutates_self
     # Module-level int constants and None-typed sentinel decls.
     Dict[String, int] const_decls
     # Module-level bool constants — `const bool ENABLED = true`. Mirrors

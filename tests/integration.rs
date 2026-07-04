@@ -4894,6 +4894,109 @@ num",
 }
 
 #[test]
+fn cow_named_recv_mutator() {
+    // R38 `&self` mutation-inference: a NAMED-receiver `&self` MUTATOR on a
+    // bare-value param must materialize (CoW) so the caller is not written
+    // through. `touch(orig)` borrows `orig`; `r.set_name("Y")` is a
+    // named-receiver call of the `&self` mutator `set_name`, which the
+    // mutation-inference pass classifies a genuine mutator, so the gate
+    // materializes `r` before the write. Pre-R38 the self-host left named
+    // receivers un-materialized (Y/Y write-through); Rust materializes (Y/A).
+    run_gg(
+        "cow_named_recv_mutator.gg",
+        "\
+Y
+A",
+    );
+}
+
+#[test]
+fn cow_named_recv_transitive_mutator() {
+    // R38: transitive mutation through a self-call. `bump` has no direct
+    // self-write of `name`; it mutates only by calling `set_name` on `self`.
+    // The fixpoint propagates `set_name`'s mutating classification along the
+    // self-callee edge `Rec__bump -> Rec__set_name`, so `bump` is classified
+    // mutating and the named-receiver call `r.bump()` materializes `r`.
+    run_gg(
+        "cow_named_recv_transitive_mutator.gg",
+        "\
+Y
+A",
+    );
+}
+
+#[test]
+fn cow_named_recv_readonly() {
+    // R38 precision: a read-only `&self` chain on a named receiver stays
+    // read-only (no over-clone). `describe` only calls the getter `get_name`
+    // on `self`; the fixpoint classifies both read-only, so `r.describe()` is
+    // NOT materialized. Output is correct either way — the precision (no
+    // clone bomb) is guarded by the peak-RSS check, not this fixture.
+    run_gg(
+        "cow_named_recv_readonly.gg",
+        "\
+A
+A",
+    );
+}
+
+#[test]
+fn cow_named_recv_gate_name_collision() {
+    // R38 gate user-first (Core #4 sibling of the scan): a user `&self`
+    // MUTATOR whose name COLLIDES with a read-only builtin (`get`), called on
+    // a bare-value-param NAMED receiver, must still materialize. The lower_expr
+    // gate is builtin-first, so `builtin_method_mutates("get")` says read-only;
+    // the gate's name-collision guard OR-s in the mutation-inference answer
+    // (`Holder__get` is a genuine mutator) so `c` materializes before the write
+    // and `orig` stays "A" — matching Rust. Without the guard the write goes
+    // through (Y/Y). Mirrors the scan's user->builtin order.
+    run_gg(
+        "cow_named_recv_gate_name_collision.gg",
+        "\
+Y
+A",
+    );
+}
+
+#[test]
+fn cow_named_recv_gate_projected_name_collision() {
+    // R38 gate user-first, PROJECTED sibling (Core #4 "one fix, all siblings"):
+    // a user `&self` MUTATOR named like a read-only builtin (`get`), called on
+    // a PROJECTED receiver `s.v[0]` whose root `s` is a bare-value param. The
+    // builtin-first gate short-circuits on `builtin_method_mutates("get")`, so
+    // the name-collision guard must consult the user-first `method_mutates_
+    // receiver` for projected receivers too (not just bare identifiers) — it
+    // resolves the element type `Holder__get` (a genuine mutator) and
+    // materializes the root before the write, so `orig` stays "A" (Z/A),
+    // matching Rust. Without the projected arm the write goes through (Z/Z).
+    run_gg(
+        "cow_named_recv_gate_projected_name_collision.gg",
+        "\
+Z
+A",
+    );
+}
+
+#[test]
+#[ignore = "R38 known self-host gap: a GENERIC-equip `&self` mutator invoked \
+via a bare-value-param named receiver is NOT materialized by the self-host \
+(compute_method_mutates_self classifies non-generic equips only), so it \
+writes through (self-host Y/Y) whereas Rust materializes (Y/A). This asserts \
+the language-intended Y/A (Rust already satisfies it — the gap is self-host \
+runtime-diff-only; the fixture lives in tests/fixtures/known_gaps/ so it \
+stays OUT of the runtime-diff corpus). Un-ignore + promote when generic-equip \
+classification lands (mirror the fn_sigs generic-instances pre-pass). See \
+TODO.md."]
+fn cow_named_recv_generic_equip_gap() {
+    run_gg(
+        "known_gaps/generic_equip_mutator_named_recv.gg",
+        "\
+Y
+A",
+    );
+}
+
+#[test]
 fn const_match_pattern() {
     // `case CONST_NAME:` compares against the named constant instead
     // of shadowing it as a fresh variable binding. Snag 2026-05-13:

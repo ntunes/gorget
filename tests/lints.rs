@@ -1273,6 +1273,158 @@ fn self_host_generic_discovery_expr_arms_count() {
 }
 
 /// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
+/// + #6 "convert a recurring bug class into an executable guard"): the R38
+/// `&self` mutation-inference walker `mutinf_scan_expr` (`lower.gg`) must visit
+/// EVERY sub-expression-bearing `Expr` variant. A variant that falls into the
+/// `else: pass` fallback is NEVER walked, so a self-mutation hiding inside it
+/// (a mutating `self.v.push(..)` nested in a range bound `self.lo()..self.hi()`,
+/// an `is`-scrutinee `self.take() is Some`, a `.V(self.drain())` dot-shorthand
+/// arg, an if/match/block, …) is NEVER detected → the method is mis-classified
+/// READ-ONLY → the named-receiver CoW gate does NOT materialize → a
+/// write-through divergence from Rust (degrade-to-BASE — the SAME failure class
+/// the pass exists to close). Mirrors the self-host generic-discovery walker
+/// (`self_host_generic_discovery_expr_arms_count` above) and Rust gg's
+/// `cow_scan_expr`.
+///
+/// The count is pinned to the FULL sub-expr-bearing self-host `Expr` set (all
+/// 35 arms). Only the 9 leaf variants (EIntLiteral / EFloatLiteral /
+/// EBoolLiteral / EStringLiteral / ECharLiteral / ENoneLiteral / EIdentifier /
+/// ESelfExpr / EIt) may fall to `else: pass`.
+///
+/// **If this fails because an arm was ADDED:** confirm the new arm RECURSES
+/// into its sub-exprs (and, if it is a method call, keeps the user→builtin→leaf
+/// self-rooted classification order). Then bump EXPECTED with a justification.
+/// **If a NEW sub-expr-bearing `Expr` variant lands** in `ast.gg`, it MUST get
+/// an arm here (recurse-only at minimum) — never leave it in `else: pass`.
+/// **If an arm was removed:** lower EXPECTED to lock the new floor.
+#[test]
+fn self_host_mutinf_scan_expr_arms_count() {
+    /// Baseline 2026-07-04 (R38-T-B): 35 top-level `case E…` arms in
+    /// `mutinf_scan_expr` — the complete sub-expr-bearing self-host `Expr` set,
+    /// identical to `discover_generic_calls_expr`. Counts the function's
+    /// TOP-LEVEL match arms only (8-space indent); the nested `case ESelfExpr`
+    /// (inside the EMethodCall receiver sub-matches, 20-space indent) and the
+    /// `case Some|None` sub-matches (12-space indent) are excluded.
+    const EXPECTED: usize = 35;
+
+    // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
+    // no double-count guard is needed.
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+
+    // Scope to the `mutinf_scan_expr` fn body: from its signature to the next
+    // top-level `bool ` definition (`mutinf_scan_stmts`).
+    let start = content
+        .find("bool mutinf_scan_expr(")
+        .expect("self_host_mutinf_scan_expr_arms_count: mutinf_scan_expr fn not found");
+    let end = content[start..]
+        .find("\nbool mutinf_scan_stmts(")
+        .map(|o| start + o)
+        .expect("self_host_mutinf_scan_expr_arms_count: end of mutinf_scan_expr not found");
+    let window = &content[start..end];
+
+    let mut arms = 0usize;
+    for line in window.lines() {
+        if line.trim_start().starts_with('#') {
+            continue; // .gg comments
+        }
+        // Top-level match arms are indented EXACTLY 8 spaces; deeper-indented
+        // nested `case E…` arms are rejected by the 8-space prefix.
+        if line.strip_prefix("        case E").is_some() {
+            arms += 1;
+        }
+    }
+
+    assert_eq!(
+        arms, EXPECTED,
+        "Self-host `mutinf_scan_expr` arm count changed: {arms} vs {EXPECTED}.\n\n\
+         The `&self` mutation-inference walker must visit EVERY \
+         sub-expression-bearing `Expr` variant — a variant left in `else: pass` \
+         is never walked, so a self-mutation hiding inside it is never detected \
+         → the method is mis-classified read-only → the named-receiver CoW gate \
+         under-materializes → a write-through divergence from Rust. A new arm \
+         MUST recurse into its sub-exprs. Bump EXPECTED with a justification, or \
+         lower it if an arm was removed.",
+    );
+}
+
+/// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
+/// + #6 "convert a recurring bug class into an executable guard"): the
+/// STATEMENT-list half of the R38 `&self` mutation-inference walker
+/// `mutinf_scan_stmts` (`lower.gg`) must visit EVERY runtime-statement-bearing
+/// `Stmt` variant. Statements are the PRIMARY self-mutation carriers — a
+/// `self.f = x` / `self.f += x` / `self.v[i] = x` lands in `SAssign` /
+/// `SCompoundAssign`, and every block-bearing stmt (`SFor`/`SWhile`/`SIf`/
+/// `SMatch`/`SWith`/…) can nest one — so a variant left in `else: pass` hides a
+/// direct self-mutation → the method is mis-classified READ-ONLY → the
+/// named-receiver CoW gate under-materializes → a write-through divergence.
+/// This is the higher-value companion to `self_host_mutinf_scan_expr_arms_count`
+/// (per its own Core #6 rationale).
+///
+/// The count is pinned to the RUNTIME-statement set (19 arms). Excluded (may
+/// fall to `else: pass`): the leaf `SContinue`/`SPass` (no sub-nodes), `SItem`
+/// (a nested item definition never captures the enclosing `self`), and the
+/// compile-time meta statements `SMeta`/`SMetaFor`/`SMetaIf`/`SMetaConst`/
+/// `SMetaForMatch`/`SMetaMatch`/`SMetaWhile` (expanded by meta.gg BEFORE
+/// lowering, so absent from a method body reaching `compute_method_mutates_self`).
+///
+/// **If this fails because an arm was ADDED:** confirm the new arm scans its
+/// sub-exprs AND flags a self-rooted `SAssign`/`SCompoundAssign` lhs. Bump
+/// EXPECTED with a justification. **If a NEW runtime-statement variant lands**
+/// in `ast.gg` (esp. one that can carry an assignment), it MUST get an arm here
+/// — never leave a self-write carrier in `else: pass`. **If an arm was removed:**
+/// lower EXPECTED to lock the new floor.
+#[test]
+fn self_host_mutinf_scan_stmts_arms_count() {
+    /// Baseline 2026-07-04 (R38-T-B): 19 top-level `case S…` arms in
+    /// `mutinf_scan_stmts`. Counts the function's TOP-LEVEL match arms only
+    /// (12-space indent — one level deeper than mutinf_scan_expr because the
+    /// `match st:` sits inside `for st in stmts:`); the nested `case Some|None`
+    /// / `case SORecv|SOSend` sub-matches are deeper-indented and excluded.
+    const EXPECTED: usize = 19;
+
+    // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
+    // no double-count guard is needed.
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+
+    // Scope to the `mutinf_scan_stmts` fn body: from its signature to the next
+    // top-level `void ` definition (`compute_method_mutates_self`).
+    let start = content
+        .find("bool mutinf_scan_stmts(")
+        .expect("self_host_mutinf_scan_stmts_arms_count: mutinf_scan_stmts fn not found");
+    let end = content[start..]
+        .find("\nvoid compute_method_mutates_self(")
+        .map(|o| start + o)
+        .expect("self_host_mutinf_scan_stmts_arms_count: end of mutinf_scan_stmts not found");
+    let window = &content[start..end];
+
+    let mut arms = 0usize;
+    for line in window.lines() {
+        if line.trim_start().starts_with('#') {
+            continue; // .gg comments
+        }
+        // Top-level match arms are indented EXACTLY 12 spaces; deeper-indented
+        // nested `case S…` arms (the SSelect `case SORecv|SOSend`, 20 spaces)
+        // are rejected by the 12-space prefix.
+        if line.strip_prefix("            case S").is_some() {
+            arms += 1;
+        }
+    }
+
+    assert_eq!(
+        arms, EXPECTED,
+        "Self-host `mutinf_scan_stmts` arm count changed: {arms} vs {EXPECTED}.\n\n\
+         Statements are the PRIMARY self-mutation carriers — a variant left in \
+         `else: pass` hides a direct `self.f = x` / `self.f += x` → the method \
+         is mis-classified read-only → the named-receiver CoW gate \
+         under-materializes → a write-through divergence from Rust. A new arm \
+         MUST scan its sub-exprs and flag a self-rooted assign lhs. Bump \
+         EXPECTED with a justification, or lower it if an arm was removed.",
+    );
+}
+
+/// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
 /// + #6 "convert a recurring bug class into an executable guard"; devbook/24
 /// rule 2 "typed metadata, not name-matched"): the Option/Result HOF combinator
 /// templates in the self-host `emit_option_result_combinator`

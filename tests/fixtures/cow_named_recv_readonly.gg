@@ -1,0 +1,25 @@
+# R38 `&self` mutation-inference — PRECISION: a read-only `&self` chain on
+# a NAMED receiver must STAY read-only (no over-clone, hence no clone bomb).
+#
+# `describe` has no direct self-write; it only calls the getter `get_name`
+# on `self`. The fixpoint classifies BOTH `Rec__get_name` and (transitively)
+# `Rec__describe` READ-ONLY, so the NAMED-receiver call `r.describe()` is
+# NOT materialized. The output is correct either way (a read cannot be
+# written through), but the classification keeps the hot self-compile loops
+# from deep-cloning every `&self` getter receiver — the ~12GB clone bomb the
+# blanket `&self`-implies-mutating over-approx would produce (peak RSS is the
+# real precision guard). Correct output: A then A.
+struct Rec:
+    String name
+
+equip Rec:
+    String get_name(&self):
+        return self.name
+
+    String describe(&self):
+        return self.get_name()
+
+void main():
+    Rec r = Rec("A")
+    print(r.describe())   # A  (read-only chain)
+    print(r.name)         # A

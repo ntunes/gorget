@@ -31,7 +31,7 @@ from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, Capture
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
-from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver, cow_materialize_projected_root
+from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver, cow_materialize_projected_root, mutinf_named_recv_writes_self, mutinf_projected_recv_writes_self
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
 from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_mutate, cow_lazy_join_view_result
@@ -3198,26 +3198,66 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             #     PROJECTED receiver (EIndex / EFieldAccess base), gated on
             #     `method_mutates_receiver`. Covers S3 (`v[0].set_name(x)`,
             #     `v[0].inner.set_name(x)`) + `v[0].set_from(v[1])`.
-            # A NAMED-receiver user call is deliberately NOT materialized: Gorget's
-            # `&self` is a MUTABLE borrow, so method_mutates_receiver cannot tell a
-            # read-only `&self` (`sexpr.clone()`, getters) from a mutating one and
-            # returns true for all — deep-cloning the WHOLE receiver root on every
-            # such call is the clone bomb. Restricting the user path to PROJECTED
-            # receivers keeps peak self-compile RSS at ~1 GB (== baseline). This
-            # leaves a DELIBERATE divergence (a named-receiver USER `&self` mutator
-            # on a bare by-value param writes through) — the real fix needs a
-            # `&self` mutation-inference pass; see TODO (do NOT force-fix — that
-            # re-introduces the bomb).
+            #   • NAMED USER receiver (builtin lookup None, bare EIdentifier) →
+            #     materialize ONLY when the R38 `&self` mutation-inference pass
+            #     classified the method a GENUINE mutator of the receiver type
+            #     (`mutinf_named_recv_writes_self`). A blanket `&self`⇒mutating
+            #     over-approx here is the ~14 GB clone bomb (a read-only `&self`
+            #     getter / `.clone()` in a hot loop deep-clones the whole root),
+            #     so the pass separates read-only `&self` from mutating: only the
+            #     latter clone. This CLOSES the R37 T1 named-receiver
+            #     write-through divergence while keeping peak self-compile RSS at
+            #     ~1 GB (== baseline). A false read-only degrades to the BASE
+            #     write-through (no NEW miscompile — the gate below is itself
+            #     double-gated on a bare-value root); the residuals
+            #     (generic-equip instances, name-collision on an unresolvable
+            #     self-projection) are FILED in TODO.md per Core #8.
             bool _r37_mut = false
             match builtin_method_mutates(mname):
                 case Some(_r37d):
                     _r37_mut = _r37d.is_mutating
+                    # R38 name-collision guard (Core #4 — keep the GATE
+                    # user-first for EVERY receiver shape, mirroring both the
+                    # SCAN's user→builtin order and method_mutates_receiver):
+                    # a user `&self`-mutator whose name COLLIDES with a READ-ONLY
+                    # builtin (`get`/`map`/`peek`/`values`/`find`/…) must still
+                    # materialize — the builtin table says read-only but the
+                    # user-first classification has the correct (mutating)
+                    # answer. Applies to a bare NAMED receiver (via
+                    # `mutinf_named_recv_writes_self`) AND to a PROJECTED
+                    # receiver (`v[0].get()` / `o.inner.get()`, via the shipping
+                    # user-first `method_mutates_receiver`, which resolves the
+                    # projected/element type). ORs `true` ONLY for a genuine
+                    # user mutator (rare) → bomb-free (still double-gated on a
+                    # bare-value root by cow_materialize_projected_root; a
+                    # genuine projected builtin call `s.items[0].len()` resolves
+                    # to `Elem__len`, absent from method_mutates_self → stays
+                    # false, no clone. `mutinf_projected_recv_writes_self` walks
+                    # the projection (named / `v[i]` / `s.v[i]` / `o.inner`) to
+                    # the element/field type and reads the PRECISE
+                    # method_mutates_self map, so it is user-first for EVERY
+                    # receiver shape — NOT method_mutates_receiver, which returns
+                    # the builtin's read-only answer for a projected receiver
+                    # (lookup_expr_gir_type does not key projections at lowering).
+                    if not _r37_mut:
+                        if mutinf_projected_recv_writes_self(&ctx, &gmod, *recv_box, mname):
+                            _r37_mut = true
                 case None:
                     match (*recv_box).expr:
                         case EIndex(_r37ib, _r37ii):
                             _r37_mut = method_mutates_receiver(*recv_box, mname, &gmod)
                         case EFieldAccess(_r37fb, _r37ff):
                             _r37_mut = method_mutates_receiver(*recv_box, mname, &gmod)
+                        case EIdentifier(_r37id):
+                            # R38: a NAMED (bare-identifier) receiver materializes
+                            # ONLY when the `&self`/`!self` mutation-inference pass
+                            # classified `mname` as a GENUINE mutator of this
+                            # receiver type. A read-only `&self` (getter/.clone())
+                            # stays borrowed → no clone bomb; a real mutator flips
+                            # WRONG→correct (closes the R37 T1 named-receiver
+                            # write-through divergence). Supersedes the deliberate
+                            # "named receivers never materialize" narrowing.
+                            _r37_mut = mutinf_named_recv_writes_self(&ctx, &gmod, _r37id, mname)
                         else:
                             pass
             if _r37_mut:

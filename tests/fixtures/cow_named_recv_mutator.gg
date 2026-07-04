@@ -1,0 +1,27 @@
+# R38 `&self` mutation-inference — a NAMED-receiver `&self` MUTATOR on a
+# bare-value param must MATERIALIZE (copy-on-write) so the caller's value
+# is NOT written through.
+#
+# `touch(orig)` passes `orig` by value; a bare param is a zero-cost BORROW
+# (Ptr alias). Inside, `r.set_name("Y")` is a NAMED-receiver call of the
+# `&self` mutator `set_name`. The mutation-inference pass classifies
+# `Rec__set_name` a genuine mutator, so the CoW gate materializes `r`
+# before the write — the caller's `orig` keeps "A". The pre-R38 self-host
+# left the named receiver un-materialized (wrote through to "Y", a
+# divergence from Rust, which materializes). Correct output: Y then A.
+struct Rec:
+    String name
+
+equip Rec:
+    void set_name(&self, String n):
+        self.name = n
+
+String touch(Rec r):
+    r.set_name("Y")
+    return r.name
+
+void main():
+    Rec orig = Rec("A")
+    String inner = touch(orig)
+    print(inner)          # Y  (the materialized copy was mutated)
+    print(orig.name)      # A  (the caller's value is untouched)

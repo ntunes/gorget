@@ -1,0 +1,36 @@
+# R38 `&self` mutation-inference — GATE user-first, PROJECTED sibling.
+#
+# The `case Some` name-collision guard must be user-first for EVERY receiver
+# shape, not just a bare identifier (Core #4 "one fix, all siblings"). Here a
+# user `&self` MUTATOR named like the READ-ONLY builtin `get` is called on a
+# PROJECTED receiver `s.v[0]` whose root `s` is a bare-value param. The gate
+# is builtin-first, so `builtin_method_mutates("get")` = `Some(read-only)`;
+# without the projected arm of the guard the `EIndex` receiver falls through
+# and the write goes through (self-host Z/Z). The guard resolves the projected
+# element type via `mutinf_recv_type_name` (root local `s`'s typed slot -> field
+# `v` -> `Vector__Holder` -> element `Holder`) and reads the PRECISE
+# `method_mutates_self` map (`Holder__get` is a genuine mutator), then
+# materializes the root `s` before the write, so `orig` keeps "A" — matching
+# Rust (Z/A). A genuine projected builtin like `s.v[0].len()` resolves to
+# `Holder__len`, absent from `method_mutates_self` -> stays read-only, no clone
+# (bomb-safe). Correct output: Z then A.
+struct Holder:
+    String name
+
+struct S:
+    Vector[Holder] v
+
+equip Holder:
+    # user &self MUTATOR named like the read-only builtin `get`
+    void get(&self):
+        self.name = "Z"
+
+String touch(S s):
+    s.v[0].get()
+    return s.v[0].name
+
+void main():
+    S orig = S([Holder("A")])
+    String inner = touch(orig)
+    print(inner)              # Z  (the materialized copy was mutated)
+    print(orig.v[0].name)     # A  (the caller's value is untouched)
