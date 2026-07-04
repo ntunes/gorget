@@ -1026,3 +1026,56 @@ diagnostic-always-pass (a green run asserts nothing about parity). The C/LLVM
 **backends** are not self-hosted, so the `cap==0` runtime materialize hooks and
 the `MoveZero`-to-zero-slot codegen have **no self-host coverage** — they exist
 only in `src/backend/`.
+
+### The `&self` mutation-inference pass — gating named-receiver materialize
+
+When a bare (immutable-rooted) by-value receiver is mutated through a method
+call, `cow_before_mutation` must materialize a private copy of the root (§
+[Mutation severs the alias](#mutation-severs-the-alias-cow_before_mutation)).
+For a **named** user receiver — `x.set_name("Y")` where `x` is a bare `Res`
+param — the self-host needs to know whether the method actually *writes* its
+receiver: materialize only if it does. A blanket `&self`⇒mutating
+over-approximation is not a correctness bug (the extra clone is harmless), but
+it is a *memory* bomb: every read-only `&self` getter or `.clone()` in a hot
+driver loop would deep-clone the whole root, and the self-host — unlike the
+Rust reference — must compile **itself**, a program whose hot loops call such
+getters densely. Measured, the naive over-approximation is a ~12–14 GB clone
+bomb that OOM-kills the self-compile / `bootstrap_fixed_point` (only peak RSS,
+not a green sweep or ASan, catches it). Rust's CoW gate uses the analogous
+name/signature over-approximation (`method_mutates_receiver`) but is never
+compiled through these hot loops, so it never balloons — this classifier is a
+**self-host-only** need, standing in for the Pass-5 purity inference the
+self-host driver otherwise lacks.
+
+`compute_method_mutates_self` (`lower.gg:1401`, run from the pre-pass) computes
+the answer precisely: a monotone fixpoint over self-callee edges. It seeds each
+`&self`/`!self` equip method (non-generic equips only) with a direct-mutation
+flag from `mutinf_scan_stmts` / `mutinf_scan_expr` (which recognise
+`self`-rooted writes via `mutinf_expr_is_self_rooted`), records the set of
+`self`-method calls each makes as edges, then propagates mutation along those
+edges until fixed. The result is keyed `Type__mname` on the typed
+`GirModule.method_mutates_self` map (`gir.gg:621`) — one source of truth for
+this axis, alongside the existing `fn_borrow_params` / `fn_move_params`
+name-keyed caches. The self-convention (whether idx-0 is `&self`/`!self`) is
+read from `fn_borrow_params`/`fn_move_params`, **not** from `mi_meth.params` —
+`apply_collect_target_rewrites` resets the reconstructed `self` param's
+ownership to bare (a filed footgun).
+
+The materialize gate (`lower_expr.gg`, the method-call arm's `_r37_mut` block)
+and the scan both run **USER→BUILTIN→leaf** order, mirroring Rust's
+`method_mutates_receiver`: the user-method classification (via the
+`method_mutates_self` map) is consulted *before* the name-based
+`builtin_method_mutates` table, so a user `&self`-mutator whose name collides
+with a read-only builtin (`get`/`map`/`peek`/`values`/…) still materializes.
+The name-collision guard resolves the receiver's element/field type
+(`mutinf_recv_type_name` — the typed local slot + `index_value_type_name` +
+`GirTypeInfo.fields`) for both a named receiver (`mutinf_named_recv_writes_self`)
+and a projected one (`v[i].get()` / `s.v[i].get()` / `o.inner.get()`,
+`mutinf_projected_recv_writes_self`), so classification stays precise across
+receiver shapes. It is bomb-safe by construction: a genuine projected builtin
+call `v[i].len()` resolves to `Elem__len`, absent from `method_mutates_self`,
+so it stays read-only and clones nothing. A false read-only (an unclassified
+generic-equip instance, or a name-collision on an *unresolvable* projection)
+degrades to the pre-existing BASE write-through — no new miscompile, since the
+materialize is itself double-gated on a bare-value root — and those residual
+sub-cases are filed in `TODO.md`.
