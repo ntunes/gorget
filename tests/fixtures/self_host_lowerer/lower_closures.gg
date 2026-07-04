@@ -381,6 +381,16 @@ String mangle_trait_equip_name(String tname, Vector[SpannedType] trait_generic_a
 bool is_builtin_trait(String tname):
     if tname == "Equatable" or tname == "Displayable" or tname == "Cloneable":
         return true
+    if tname == "Debuggable":
+        # Root #1 (Debuggable): Rust gg treats Debuggable as a DERIVE/builtin
+        # trait — an `equip X with Debuggable` emits its `debug` body under the
+        # BARE `X__debug` symbol (mirroring Displayable → `X__display`), and the
+        # call site spells the same bare name. Omitting it here made the
+        # self-host register Debuggable as an own-vtable USER trait: the body
+        # emitted `Debuggable_for_X__debug` while the call site kept bare
+        # `X__debug` → C implicit-int / undefined-ref (`Str` from `int`). Adding
+        # it aligns def + call on the bare name, matching Rust and Displayable.
+        return true
     if tname == "Hashable" or tname == "Serializable" or tname == "Deserializable":
         return true
     if tname == "Ordinal" or tname == "Drop":

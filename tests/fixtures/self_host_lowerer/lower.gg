@@ -4373,9 +4373,22 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                     match ieqblk.target.ty:
                         case TNamed(tn, targs):
                             if targs.len() == 0:
-                                target_name = tn
+                                # Root #1 spelling fix: the equip target must be
+                                # spelled with the SAME C-normalized name the
+                                # body-emit uses (lower.gg `eq_target_sp =
+                                # type_to_c_name(eqblk.target)`) and the call-site
+                                # trait-redirect searches (lower_expr.gg
+                                # `_for_<recv_type_name>__<m>`, recv normalized to
+                                # e.g. GorgetString). Using the raw surface name
+                                # `tn` registered `Writer_for_String__write` while
+                                # the body defined `Writer_for_GorgetString__write`
+                                # — the redirect missed, and a `String.write()`
+                                # (equip String with Writer) fell through to the
+                                # builtin `gorget_str_write` (undefined). One source
+                                # of truth: type_to_c_name (Layering rule 3).
+                                target_name = type_to_c_name(ieqblk.target, &gmod)
                         case TPrimitive(tn):
-                            target_name = tn
+                            target_name = type_to_c_name(ieqblk.target, &gmod)
                         else:
                             pass
                     if target_name != "":
