@@ -778,6 +778,28 @@ fn count_uses_in_expr(expr: &Expr, counts: &mut rustc_hash::FxHashMap<String, u3
         Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand } => {
             count_uses_in_expr(&operand.node, counts);
         }
+        // Struct / container literals also USE their argument identifiers — the
+        // prescan previously omitted these, so a name appearing only inside a
+        // `Wrapper(item)` / `[item]` / `(a, b)` / `{k: v}` was undercounted
+        // (`is_single_use` mis-reported false). Traverse them like Call args.
+        // This ENABLES the container-literal move (T-A) and improves
+        // `is_single_use` precision for literals; it is NOT a general fix for
+        // the remaining `_ => {}` identifier-bearing kinds (that residual
+        // undercount can only make `is_single_use` spuriously true, which the
+        // `is_last_use_at` co-gate + the GIR "read after MoveZero" validator
+        // still block — cost is a missed move-opt, never a wrong result).
+        Expr::StructLiteral { args, .. } => {
+            for arg in args { count_uses_in_expr(&arg.node, counts); }
+        }
+        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+            for e in elems { count_uses_in_expr(&e.node, counts); }
+        }
+        Expr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                count_uses_in_expr(&k.node, counts);
+                count_uses_in_expr(&v.node, counts);
+            }
+        }
         Expr::Block(block) => count_uses_in_block(&block.stmts, counts),
         Expr::If { condition, then_branch, elif_branches, else_branch, .. } => {
             count_uses_in_expr(&condition.node, counts);

@@ -28351,6 +28351,85 @@ fn move_eligibility_conformance() {
     );
 }
 
+// gorget-arena snag #1, ctor field-init extension (T-A, the 8th consuming
+// category): an owning `!` (move) resource param forwarded into a STRUCT
+// constructor field-init (`Wrapper(item)`) OR an ENUM-variant field-init
+// (`Some(item)`) at its single-use LAST use MOVES, not clones. `return item`
+// already moved; the two ctor field-inits cloned (2 → 0 clone delta, git-revert
+// confirmed). A clone at a `!`-move site is a bug (violates "!-move is
+// zero-cost by definition") but is output-identical + memory-safe (the leak is
+// silent under a pool allocator) → invisible to stdout + ASan, which is exactly
+// why the bug shipped. Assert the CLONE COUNT directly (via `--clones=sites` on
+// STDERR), AND the correct output, AND EXIT=0 under MALLOC_CHECK_=3. Backend-
+// independent (GIR-layer diagnostic; no `skip_under_llvm`). Copies the fixture
+// to a uniquely-named temp dir so the `--clones=sites` build cannot race
+// artifact paths under `--test-threads=4`. Sibling of
+// `move_owning_param_into_collection_zero_clones` (the collection-put category).
+#[test]
+fn move_owning_param_into_ctor_zero_clones() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/move_owning_param_into_ctor_zero_clones.gg");
+    assert!(fixture_path.exists(), "fixture not found: {}", fixture_path.display());
+
+    let work_dir = std::env::temp_dir()
+        .join(format!("gg_move_owning_param_ctor_{}", std::process::id()));
+    std::fs::create_dir_all(&work_dir).unwrap();
+    let gg_path = work_dir.join("move_owning_param_into_ctor_zero_clones.gg");
+    std::fs::copy(&fixture_path, &gg_path).unwrap();
+
+    let out = build_with_timeout(
+        gg_command("build").arg(&gg_path).arg("--clones=sites"),
+        "move_owning_param_into_ctor_zero_clones.gg",
+    );
+    assert!(
+        out.status.success(),
+        "build failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    // "=== Clone Report (N implicit clone[s]) ===" (main.rs eprintln); N must be 0.
+    // No report line at all also means 0 clones.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let n: usize = stderr
+        .split("Clone Report (")
+        .nth(1)
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    assert_eq!(
+        n, 0,
+        "T-A regressed: an owning `!` resource param forwarded into a struct \
+         ctor (`Wrapper(item)`) or enum variant (`Some(item)`) at its single-use \
+         last use must MOVE (0 implicit clones), got {n}.\n{stderr}"
+    );
+
+    // Correct output + no double-free/leak: run under MALLOC_CHECK_=3 (glibc
+    // heap-consistency checks abort on a double-free), assert EXIT=0 + stdout.
+    let exe_path = work_dir.join("move_owning_param_into_ctor_zero_clones");
+    let run = std::process::Command::new(&exe_path)
+        .env("MALLOC_CHECK_", "3")
+        .output()
+        .expect("failed to run built binary");
+    assert!(
+        run.status.success(),
+        "runtime failed (double-free/leak under MALLOC_CHECK_=3?):\nstatus: {:?}\nstdout: {}\nstderr: {}",
+        run.status,
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim_end(),
+        "xa\nxb",
+        "T-A: moved-into-ctor values must print correctly"
+    );
+
+    let _ = std::fs::remove_file(&gg_path);
+    let _ = std::fs::remove_file(work_dir.join("move_owning_param_into_ctor_zero_clones.c"));
+    let _ = std::fs::remove_file(&exe_path);
+    let _ = std::fs::remove_dir(&work_dir);
+}
+
 // Clone-count lock-in (the property stdout tests can't see): in
 // witness_never's emitted C, `main` must (a) bind via
 // gorget_string_borrow_view, (b) contain EXACTLY ONE

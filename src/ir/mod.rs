@@ -692,6 +692,12 @@ pub struct Local {
     /// and needs the exit drop. Read by `lower_drop` (LIR) to bypass the
     /// `is_pure_borrow_for` Nop and emit the deref-aware drop sequence.
     pub is_owning_param: bool,
+    /// T-A: when this local is the untracked value-temp that `Expr::Identifier`
+    /// lowering produced by auto-deref'ing a bare `!` owning resource param,
+    /// this is that source param's `LocalId`. Lets a downstream ctor/boundary
+    /// consuming position MOVE the value (zeroing the param slot) instead of
+    /// defensively cloning the untracked temp. `None` for every other local.
+    pub deref_of_owning_param: Option<LocalId>,
 }
 
 /// A basic block.
@@ -849,6 +855,7 @@ mod tests {
                 ownership: LocalOwnership::default(),
                 slot_kind: SlotKind::default(),
                 is_owning_param: false,
+                deref_of_owning_param: None,
             }],
             blocks: vec![BasicBlock::new()],
             is_test_fn: false,

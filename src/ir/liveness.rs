@@ -553,6 +553,7 @@ mod tests {
             ownership: LocalOwnership::default(),
             slot_kind: SlotKind::default(),
             is_owning_param: false,
+            deref_of_owning_param: None,
         }
     }
 

@@ -38,6 +38,7 @@ impl FunctionBuilder {
             ownership: LocalOwnership::default(),
             slot_kind: SlotKind::default(),
             is_owning_param: false,
+            deref_of_owning_param: None,
         });
 
         // _1.._N = parameters
@@ -50,6 +51,7 @@ impl FunctionBuilder {
                 ownership: LocalOwnership::default(),
                 slot_kind: SlotKind::default(),
                 is_owning_param: false,
+                deref_of_owning_param: None,
             });
         }
 
@@ -79,6 +81,7 @@ impl FunctionBuilder {
             ownership: LocalOwnership::default(),
             slot_kind: SlotKind::default(),
             is_owning_param: false,
+            deref_of_owning_param: None,
         });
         id
     }

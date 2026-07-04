@@ -1553,6 +1553,16 @@ impl<'a> LoweringContext<'a> {
                             || self.is_named_local(local)
                             || is_untracked;
                         if needs_clone {
+                            // T-A: owning `!` param deref-temp at its single-use last
+                            // use MOVES into the enum variant instead of cloning. All
+                            // 3 by-value ctor clone sites route through this shared
+                            // helper (`maybe_move_owning_param_ctor_temp`) — sibling
+                            // site 1 of 3; a 4th site must call it too (Core #4).
+                            let move_span = maybe_span.unwrap_or(crate::span::Span { start: 0, end: 0 });
+                            if let Some(moved) = self.maybe_move_owning_param_ctor_temp(builder, op, move_span) {
+                                *op = moved;
+                                continue;
+                            }
                             if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
                                 if let Some(s) = maybe_span {
                                     self.warn_clone_and_hit(builder, s, local_type, crate::ir::ImplicitCloneReason::ConsumingArg);
@@ -1998,6 +2008,59 @@ impl<'a> LoweringContext<'a> {
         crate::ir::builder::FunctionBuilder::copy(tmp)
     }
 
+    /// T-A (gorget-arena snag #1 ctor extension): the owning-`!`-param carve-out
+    /// for the struct/enum **ctor field-init** boundary — the 8th consuming
+    /// category snag #1 left cloning. `operand` here is the untracked **deref
+    /// temp** that `Expr::Identifier` lowering produced for a bare `!` param
+    /// (the param linkage lives on the typed `Local.deref_of_owning_param`
+    /// field, one source of truth — no sidecar map). If that temp came from a
+    /// non-string owning `!` param whose **single-use last use** this is, MOVE
+    /// it instead of the by-value defensive clone: `set_owned` the temp and
+    /// `move_zero_and_mark` the param slot (suppressing its exit-drop) so the
+    /// recipient ctor becomes the sole owner of the heap buffer. Returns the
+    /// (already-Copy) operand on a hit; `None` when not move-eligible (caller
+    /// then clones through `clone_fn_for_ptr`). Mirrors snag #1's consuming-arg
+    /// carve-out; SAME TWO LANDMINES, both preserved:
+    ///   (1) Strings clone via a different path and must NOT be move-zeroed here
+    ///       (double-free) — excluded via `is_string_type`;
+    ///   (2) `is_single_use` rejects a param reassigned in a loop (`lhs = f(lhs)`),
+    ///       where zeroing the reused slot trips the GIR "read after MoveZero"
+    ///       validator.
+    ///
+    /// Centralizes the move decision for all 3 by-value ctor clone sites
+    /// (enum-init `clone_resource_args_for_init`, struct-boundary
+    /// `ensure_owned_at_boundary` Case 2, user-literal `clone_multi_use_resource_args`)
+    /// so a 4th such site added later is forced through the shared helper (Core #4).
+    pub(crate) fn maybe_move_owning_param_ctor_temp(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: &Operand,
+        span: crate::span::Span,
+    ) -> Option<Operand> {
+        let temp = match operand {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
+            _ => return None,
+        };
+        // Was this temp a deref of an owning `!` param? (typed provenance on Local)
+        let param = builder.locals.get(temp.0 as usize)?.deref_of_owning_param?;
+        let inner = builder.local_type(temp);
+        // Strings clone via a different path — excluded (move-zeroing double-frees).
+        if self.is_string_type(inner) || !self.type_registry.is_resource_type(inner) {
+            return None;
+        }
+        let param_name = builder.local_name(param)?.to_string();
+        // Single-use last use on all paths — otherwise the param is still live.
+        if !self.is_last_use_at(&param_name, span) || !self.is_single_use(&param_name) {
+            return None;
+        }
+        // MOVE: the temp already holds the pointee bytes (identifier-lowering
+        // deref'd `*param` into it). Own it and zero the param slot so the single
+        // exit-drop accountant does not re-drop the transferred buffer.
+        self.set_owned(builder, temp);
+        self.move_zero_and_mark(builder, param);
+        Some(operand.clone())
+    }
+
     pub fn ensure_owned_at_boundary(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
@@ -2138,6 +2201,12 @@ impl<'a> LoweringContext<'a> {
             }
         }
 
+        // T-A: owning `!` resource param deref-temp at its single-use last use
+        // MOVES into the struct/enum ctor field instead of the defensive clone
+        // (sibling site 2 of 3 — shared `maybe_move_owning_param_ctor_temp`).
+        if let Some(moved) = self.maybe_move_owning_param_ctor_temp(builder, &operand, span) {
+            return moved;
+        }
         if let Some(clone_fn) = self.clone_fn_for_ptr(local_type) {
             self.warn_clone_and_hit(builder, span, local_type, reason);
             let cloned = builder.call(

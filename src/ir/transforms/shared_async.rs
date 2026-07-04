@@ -368,6 +368,7 @@ fn alloc_local(func: &mut Function, type_id: TypeId, hint: Option<&str>) -> Loca
         ownership: crate::ir::LocalOwnership::default(),
         slot_kind: crate::ir::SlotKind::default(),
         is_owning_param: false,
+        deref_of_owning_param: None,
     });
     id
 }
@@ -727,12 +728,12 @@ mod tests {
             params: vec![mut_ptr_i64, I64_TYPE],
             return_type: I64_TYPE,
             locals: vec![
-                Local { type_id: I64_TYPE, name_hint: Some("_0".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false },         // return place
-                Local { type_id: mut_ptr_i64, name_hint: Some("counter".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false },  // _1: &int
-                Local { type_id: I64_TYPE, name_hint: Some("amount".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false },      // _2: int
-                Local { type_id: task_type, name_hint: Some("_task".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false },      // _3: Task
-                Local { type_id: I64_TYPE, name_hint: Some("_await_res".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false },  // _4: await result
-                Local { type_id: I64_TYPE, name_hint: Some("_result".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false },     // _5: final result
+                Local { type_id: I64_TYPE, name_hint: Some("_0".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false, deref_of_owning_param: None },         // return place
+                Local { type_id: mut_ptr_i64, name_hint: Some("counter".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false, deref_of_owning_param: None },  // _1: &int
+                Local { type_id: I64_TYPE, name_hint: Some("amount".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false, deref_of_owning_param: None },      // _2: int
+                Local { type_id: task_type, name_hint: Some("_task".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false, deref_of_owning_param: None },      // _3: Task
+                Local { type_id: I64_TYPE, name_hint: Some("_await_res".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false, deref_of_owning_param: None },  // _4: await result
+                Local { type_id: I64_TYPE, name_hint: Some("_result".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false, deref_of_owning_param: None },     // _5: final result
             ],
             blocks: vec![
                 BasicBlock {
@@ -974,7 +975,7 @@ mod tests {
         // Add a second param
         let mut_ptr_i64 = reg.insert(GirType::MutPtr(I64_TYPE));
         source.params.push(I64_TYPE);
-        source.locals.push(Local { type_id: mut_ptr_i64, name_hint: Some("counter2".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false });
+        source.locals.push(Local { type_id: mut_ptr_i64, name_hint: Some("counter2".into()), ownership: crate::ir::LocalOwnership::default(), slot_kind: crate::ir::SlotKind::default(), is_owning_param: false, deref_of_owning_param: None });
 
         let mutex_type = reg.insert(GirType::Named("Mutex__int64_t".into()));
         let guard_type = reg.insert(GirType::Named("Guard__int64_t".into()));

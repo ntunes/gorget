@@ -1,0 +1,36 @@
+# Regression pin — gorget-arena snag #1, ctor field-init extension (T-A, the 8th
+# consuming category): an owning `!` (move) resource param forwarded into a
+# struct constructor field-init (`Wrapper(item)`) OR an enum-variant field-init
+# (`Some(item)`) at its single-use LAST use MOVES, not clones. A clone at a
+# `!`-move site violates the "!-move is zero-cost by definition" contract; it is
+# output-identical + memory-safe (the leak it induces is silent under a pool
+# allocator) → invisible to the stdout + ASan gates, which is exactly why the
+# bug shipped. Assert the CLONE COUNT directly (via `--clones=sites` on STDERR).
+# HEAP-owned Strings (built via concat, NOT literals — literals are cap=0
+# `.rodata` views whose free no-ops and would HIDE a double-free).
+struct R:
+    String name
+
+struct Wrapper:
+    R item
+
+# `!`-move param moved into a STRUCT ctor field-init at last use.
+Wrapper wrap_struct(R !item):
+    return Wrapper(item)
+
+# `!`-move param moved into an ENUM-variant field-init at last use.
+Option[R] wrap_enum(R !item):
+    return Some(item)
+
+void main():
+    String base = "x"
+    R a = R(base + "a")
+    Wrapper w = wrap_struct(!a)
+    print(w.item.name)
+    R b = R(base + "b")
+    Option[R] o = wrap_enum(!b)
+    match o:
+        case Some(r):
+            print(r.name)
+        else:
+            print("none")

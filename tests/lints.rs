@@ -4275,3 +4275,63 @@ fn self_host_body_finalize_single_assembly_site() {
          refactored.",
     );
 }
+
+/// T-A (gorget-arena snag #1 ctor extension, Core #4 sibling-site-drift guard):
+/// the owning-`!`-param → ctor-field move decision is centralized in ONE helper,
+/// `maybe_move_owning_param_ctor_temp`, and every by-value clone site at a ctor /
+/// boundary consuming position MUST route through it BEFORE its defensive clone.
+/// There are exactly THREE such sites (an enumerated class):
+///   1. enum-variant init  — `clone_resource_args_for_init` (context.rs)
+///   2. struct-boundary     — `ensure_owned_at_boundary` Case 2 (context.rs)
+///   3. user-literal by-val — `clone_multi_use_resource_args` (exprs/mod.rs)
+///
+/// **If this fails:** a 4th by-value ctor clone site was added (or one was
+/// removed) without routing the move decision through the shared helper. A new
+/// site that clones directly re-opens the `!`-move-is-zero-cost regression for
+/// its shape (invisible to stdout + ASan — a spurious clone is output-identical
+/// and only leaks silently under a pool allocator). Call
+/// `maybe_move_owning_param_ctor_temp(builder, &operand, span)` before the
+/// `clone_fn_for_ptr` clone, then bump `EXPECTED_CALL_SITES`.
+#[test]
+fn owning_param_ctor_move_helper_site_count() {
+    const HELPER_FN: &str = "fn maybe_move_owning_param_ctor_temp";
+    const HELPER_CALL: &str = "maybe_move_owning_param_ctor_temp(";
+    const EXPECTED_CALL_SITES: usize = 3;
+
+    let files = [
+        "src/ir/lowering/context.rs",
+        "src/ir/lowering/exprs/mod.rs",
+    ];
+
+    let mut helper_defs = 0usize;
+    let mut call_sites = 0usize;
+    for f in files {
+        let content = fs::read_to_string(f).unwrap_or_default();
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                continue; // prose / anchor comments mention the helper by name
+            }
+            if line.contains(HELPER_FN) {
+                helper_defs += 1;
+                continue; // the definition line is not a call site
+            }
+            call_sites += line.matches(HELPER_CALL).count();
+        }
+    }
+
+    assert_eq!(
+        helper_defs, 1,
+        "Expected exactly one `maybe_move_owning_param_ctor_temp` definition, found {helper_defs}.",
+    );
+    assert_eq!(
+        call_sites, EXPECTED_CALL_SITES,
+        "owning-`!`-param ctor-move helper call-site count changed: {call_sites} vs \
+         {EXPECTED_CALL_SITES}.\n\n\
+         The move-vs-clone decision at a struct/enum ctor field-init must be \
+         centralized in `maybe_move_owning_param_ctor_temp` (Core #4). A new \
+         by-value clone site that doesn't call it before `clone_fn_for_ptr` re-opens \
+         the `!`-move-is-zero-cost regression (snag #1's 8th consuming category). \
+         Route the new site through the shared helper, then bump EXPECTED_CALL_SITES.",
+    );
+}

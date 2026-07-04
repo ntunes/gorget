@@ -164,6 +164,16 @@ fn lower_expr_inner(
                     } else {
                         builder.assign(Place::local(tmp), Operand::Copy(deref_place));
                     }
+                    // T-A (snag #1 ctor extension): if this is an owning `!` resource
+                    // param, record the deref-temp → param provenance (typed field on
+                    // Local, one source of truth — no sidecar map) so a downstream
+                    // ctor/boundary consuming position can MOVE the value (zeroing the
+                    // param slot) instead of defensively cloning the untracked temp.
+                    if (local_id.0 as usize) < builder.locals.len()
+                        && builder.locals[local_id.0 as usize].is_owning_param
+                    {
+                        builder.locals[tmp.0 as usize].deref_of_owning_param = Some(local_id);
+                    }
                     Operand::Copy(Place::local(tmp))
                 } else {
                     Operand::Copy(Place::local(local_id))
@@ -4234,6 +4244,17 @@ fn clone_multi_use_resource_args(
                     let is_named_no_span = ctx.is_named_local(local)
                         && ast_args.get(i).map(|arg| !matches!(&arg.node, Expr::Identifier(_))).unwrap_or(true);
                     if is_borrow_param || is_multi_use || is_field_access || is_named_in_loop || is_non_owned_string || is_untracked || is_named_no_span {
+                        // T-A: owning `!` param deref-temp at its single-use last use
+                        // MOVES into the ctor field instead of cloning (user enums /
+                        // struct-literal by-value path — sibling site 3 of 3, shared
+                        // `maybe_move_owning_param_ctor_temp`). Uses the arg span for
+                        // last-use.
+                        let move_span = ast_args.get(i).map(|a| a.span)
+                            .unwrap_or(crate::span::Span { start: 0, end: 0 });
+                        if let Some(moved) = ctx.maybe_move_owning_param_ctor_temp(builder, &*op, move_span) {
+                            *op = moved;
+                            continue;
+                        }
                         let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
                             if let Some(span) = ast_args.get(i).map(|a| a.span) {
