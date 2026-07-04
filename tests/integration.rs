@@ -16204,7 +16204,7 @@ fn c_emit_comparison() {
     //
     // Bump-on-improvement: when Matched rises, raise the floor in the
     // same commit that lands the improvement so the gain is locked in.
-    const C_EMIT_MATCH_FLOOR: usize = 1118;
+    const C_EMIT_MATCH_FLOOR: usize = 1175;
     if parity_floor_active("c_emit_comparison") {
         assert!(
             matched as usize >= C_EMIT_MATCH_FLOOR,
@@ -19935,7 +19935,7 @@ fn self_host_runtime_diff() {
     // Bump-on-improvement: when MATCH rises, raise the floor in the same
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1080;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1088;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
