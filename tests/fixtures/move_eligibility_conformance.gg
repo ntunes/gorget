@@ -1,0 +1,63 @@
+# Move-eligibility CONFORMANCE gate — every documented move-eligible shape
+# (CLAUDE.md "Ownership at Consuming Positions") at EVERY consuming position the
+# owning-`!`-param carve-out touches (push / explicit push / index-set /
+# dict-assign / field-assign) MOVES -> 0 implicit clones. HEAP-owned Strings via
+# concat so the string free path runs; a clone-instead-of-move is output-
+# identical and memory-safe, so this asserts the CLONE COUNT (a wrong move is
+# also caught by the stdout expectation below).
+struct S:
+    String name
+
+struct Holder:
+    S inner
+
+# position: push, shape #1 owning `!` param (bare last use)
+void p_bare(Vector[S] &out, S !item):
+    out.push(item)
+
+# position: push, explicit `!`
+void p_bang(Vector[S] &out, S !item):
+    out.push(!item)
+
+# position: vector index-set
+void set_idx(Vector[S] &out, int i, S !item):
+    out[i] = item
+
+# position: dict-assign
+void set_key(Dict[int, S] &d, int k, S !item):
+    d[k] = item
+
+# position: field-assign
+void set_field(Holder &h, S !item):
+    h.inner = item
+
+void main():
+    Vector[S] out = []
+    String base = "x"
+    S a = S(base + "a")
+    p_bare(&out, !a)
+    S b = S(base + "b")
+    p_bang(&out, !b)
+    # shape #2: expression temp, owning by construction -> move
+    out.push(S(base + "c"))
+    # shape #3: named local at last use, bound to an owned value -> move
+    S d = S(base + "d")
+    out.push(d)
+    # position: index-set overwrites out[0]
+    S e = S(base + "e")
+    set_idx(&out, 0, !e)
+    # position: dict-assign
+    Dict[int, S] dd = {}
+    S f = S(base + "f")
+    set_key(&dd, 7, !f)
+    # position: field-assign
+    Holder h = Holder(S(base + "z"))
+    S g = S(base + "g")
+    set_field(&h, !g)
+    print(out[0].name)
+    print(out[1].name)
+    print(out[2].name)
+    print(out[3].name)
+    print(dd[7].name)
+    print(h.inner.name)
+    print(out.len())

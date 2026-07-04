@@ -2702,9 +2702,19 @@ pub(super) fn lower_method_call(
             // gives Ptr(resource) which is_resource_type misses. Fall back
             // to lowered_method_args (pre-wrapping) which has Ptr(resource)
             // → pointee_type gives resource → is_resource_type matches.
+            // An owning `!` resource param forwarded AS ITS POINTER
+            // (`out.push(!item)` where `item: MutPtr(S)` is `is_owning_param`)
+            // is a MOVE, not a borrow — `lower_call_arg` already forwarded the
+            // pointer + move-zeroed the slot, so re-cloning here defeats the
+            // move. Strings are excluded (they clone via a different path).
+            let is_owning_param_ptr = |local: LocalId, builder: &FunctionBuilder, ctx: &LoweringContext| -> bool {
+                (local.0 as usize) < builder.locals.len()
+                    && builder.locals[local.0 as usize].is_owning_param
+                    && !ctx.is_string_type(builder.local_type(local))
+            };
             let needs_clone = call_args.get(call_idx).and_then(|op| {
                 if let Operand::Copy(place) | Operand::Move(place) = op {
-                    if place.projections.is_empty() {
+                    if place.projections.is_empty() && !is_owning_param_ptr(place.local, builder, ctx) {
                         let local_type = builder.local_type(place.local);
                         if let Some(inner) = ctx.pointee_type(local_type) {
                             if ctx.type_registry.is_resource_type(inner) {
@@ -2718,7 +2728,7 @@ pub(super) fn lower_method_call(
                 // Fallback: check pre-wrapped arg (handles Ptr(resource) from field access)
                 lowered_method_args.get(value_idx).and_then(|op| {
                     if let Operand::Copy(place) | Operand::Move(place) = op {
-                        if place.projections.is_empty() {
+                        if place.projections.is_empty() && !is_owning_param_ptr(place.local, builder, ctx) {
                             let local_type = builder.local_type(place.local);
                             if let Some(inner) = ctx.pointee_type(local_type) {
                                 if ctx.type_registry.is_resource_type(inner) {

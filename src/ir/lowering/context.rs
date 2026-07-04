@@ -2207,6 +2207,13 @@ impl<'a> LoweringContext<'a> {
         //   (a) Named identifier arg — check last-use + borrow state.
         //   (b) Non-identifier / non-named-local — expression temp, always
         //       last-use by construction (the temp was just created).
+        // Centralized owning-`!`-param carve-out: when a non-string owning `!`
+        // resource param is forwarded into a consuming position at its
+        // single-use last use, it MOVES (not clones). Record the PARAM slot so
+        // the single exit-drop accountant is suppressed uniformly at every
+        // shared-helper caller site (push/put/set/insert, index-set,
+        // dict-assign, field-assign, Box ctor/.new) via one `move_zero`.
+        let mut owning_param_move_src: Option<LocalId> = None;
         let needs_clone = if let Expr::Identifier(ref name) = arg_expr.node {
             if self.is_named_local(local) {
                 let is_borrow = !self.drops.is_registered(local)
@@ -2225,11 +2232,28 @@ impl<'a> LoweringContext<'a> {
                     // cloned T value.
                     let inner = self.pointee_type(src_type).unwrap_or(src_type);
                     if self.type_registry.is_resource_type(inner) {
-                        let is_borrow = !self.drops.is_registered(src_local)
-                            || self.is_bare_param(builder, src_local)
-                            || self.is_ref_local(builder, src_local)
-                            || self.is_cow_borrow(builder, src_local);
-                        is_borrow || !self.is_last_use_at(name, arg_expr.span)
+                        // Owning `!` resource param (non-string) at its
+                        // single-use last use → MOVE. `is_single_use` guards
+                        // against a param reassigned in a loop (`lhs = f(lhs)`),
+                        // where move-zeroing the reused slot would trip the GIR
+                        // "read after MoveZero" validator. Strings clone via a
+                        // different path and must NOT be move-zeroed here.
+                        let is_owning_param = (src_local.0 as usize) < builder.locals.len()
+                            && builder.locals[src_local.0 as usize].is_owning_param
+                            && !self.type_mapper.is_string_type(inner);
+                        if is_owning_param
+                            && self.is_last_use_at(name, arg_expr.span)
+                            && self.is_single_use(name)
+                        {
+                            owning_param_move_src = Some(src_local);
+                            false
+                        } else {
+                            let is_borrow = !self.drops.is_registered(src_local)
+                                || self.is_bare_param(builder, src_local)
+                                || self.is_ref_local(builder, src_local)
+                                || self.is_cow_borrow(builder, src_local);
+                            is_borrow || !self.is_last_use_at(name, arg_expr.span)
+                        }
                     } else { false }
                 } else { false };
                 result
@@ -2238,7 +2262,15 @@ impl<'a> LoweringContext<'a> {
             // Expression temp — always last-use, no clone needed.
             false
         };
-        if !needs_clone { return operand; }
+        if !needs_clone {
+            if let Some(src) = owning_param_move_src {
+                // Move: the deref temp now owns the value; move-zero the param
+                // slot so the exit-drop accountant does not re-drop it.
+                self.set_owned(builder, local);
+                self.move_zero_and_mark(builder, src);
+            }
+            return operand;
+        }
         if let Some(clone_fn) = self.clone_fn_for_ptr(arg_type) {
             self.warn_clone_and_hit(builder, arg_expr.span, arg_type, reason);
             let cloned = builder.call(

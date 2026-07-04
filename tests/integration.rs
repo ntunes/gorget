@@ -28237,6 +28237,76 @@ fn cow_lazy_selfref_concat_poke() {
     run_gg("cow_lazy_selfref_concat_poke.gg", "s = hello!\nv0 = mutated");
 }
 
+// gorget-arena snag #1 (CoW contract): an owning `!` (move) resource param
+// forwarded into a consuming position (push / index-set / dict-assign /
+// field-assign) at its single-use LAST use MOVES, not clones. A clone here is
+// output-identical + memory-safe (the leak it induces is silent under a pool
+// allocator) → invisible to the stdout + ASan gates, which is exactly why the
+// bug shipped. Assert the CLONE COUNT directly (via the `--clones=sites` Clone
+// Report on STDERR). Backend-identical (the clone decision is a GIR-layer
+// diagnostic; no `skip_under_llvm`). Precedent: witness_never_emitted_c_clone_shape.
+// The two behavioral twins (move_owning_param_snag1 / move_eligibility_conformance
+// via run_gg) catch a WRONG move by output; this catches a silent clone.
+#[test]
+fn move_owning_param_into_collection_zero_clones() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Build a uniquely-named COPY in the temp dir so this test cannot race the
+    // run_gg twins (move_owning_param_snag1 / move_eligibility_conformance),
+    // which build + execute the SAME fixture artifacts under --test-threads=4.
+    let work_dir = std::env::temp_dir()
+        .join(format!("gg_move_owning_param_clones_{}", std::process::id()));
+    std::fs::create_dir_all(&work_dir).unwrap();
+    for fixture in ["move_owning_param_snag1", "move_eligibility_conformance"] {
+        let src = manifest_dir.join("tests/fixtures").join(format!("{fixture}.gg"));
+        assert!(src.exists(), "fixture not found: {}", src.display());
+        let gg_path = work_dir.join(format!("{fixture}.gg"));
+        std::fs::copy(&src, &gg_path).unwrap();
+        let out = build_with_timeout(
+            gg_command("build").arg(&gg_path).arg("--clones=sites"),
+            fixture,
+        );
+        assert!(
+            out.status.success(),
+            "build failed for {fixture}:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        // The Clone Report is printed to STDERR (main.rs `eprintln!`), NOT stdout.
+        let s = String::from_utf8_lossy(&out.stderr);
+        let n: u32 = s
+            .lines()
+            .find_map(|l| {
+                l.trim()
+                    .strip_prefix("=== Clone Report (")
+                    .and_then(|r| r.split_whitespace().next())
+                    .and_then(|d| d.parse().ok())
+            })
+            .expect("clone report header on stderr");
+        assert_eq!(
+            n, 0,
+            "{fixture}: every documented move-eligible shape at a consuming \
+             position must MOVE (0 implicit clones), got {n}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&work_dir);
+}
+
+// gorget-arena snag #1 behavioral twin: a WRONG move (use-after-move /
+// corruption) is caught by stdout. HEAP-owned Strings (via concat) so the
+// string free path is exercised at runtime.
+#[test]
+fn move_owning_param_snag1() {
+    run_gg("move_owning_param_snag1.gg", "xa\nxb");
+}
+
+#[test]
+fn move_eligibility_conformance() {
+    run_gg(
+        "move_eligibility_conformance.gg",
+        "xe\nxb\nxc\nxd\nxf\nxg\n4",
+    );
+}
+
 // Clone-count lock-in (the property stdout tests can't see): in
 // witness_never's emitted C, `main` must (a) bind via
 // gorget_string_borrow_view, (b) contain EXACTLY ONE
