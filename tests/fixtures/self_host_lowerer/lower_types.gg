@@ -2030,6 +2030,22 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return lookup_or_register_named(&gmod, "Vector__GorgetString")
     if method == "bytes":
         return lookup_or_register_named(&gmod, "Vector__uint8_t")
+    # `codepoints` returns `Vector[int]` (the Unicode scalar values). Runtime
+    # `gorget_str_codepoints` (runtime_string_array.c:41) builds a `GorgetArray`
+    # of `int64_t`. Unlike the sibling String collection-returners above, the
+    # DEFAULT here is NOT a bare element-erased `GorgetArray` — it is the
+    # `return I64_TYPE` fall-through at the bottom of this function. Without this
+    # arm, `Vector[int] cps = s.codepoints()` types the result SLOT `int64_t`
+    # while the runtime value is a `GorgetArray`, so C-emit rejects the bind with
+    # `incompatible types when assigning to type 'int64_t' from type
+    # 'GorgetArray'` — the mismatch fires at the ASSIGNMENT, before any index
+    # read. Returning the element-carrying `Vector__int64_t` (int → int64_t)
+    # types the slot as the GorgetArray it is. Mirrors Rust gg
+    # (`typecheck.rs:6506` codepoints → `Vector[int]`); sibling of the
+    # `split`/`lines`/`chars` → `Vector__GorgetString` and `bytes` →
+    # `Vector__uint8_t` arms above.
+    if method == "codepoints":
+        return lookup_or_register_named(&gmod, "Vector__int64_t")
     # `sorted`/`reversed`/`unique`/`sorted_by`/`sorted_by_key`/`enumerate` are
     # ELEMENT-PRESERVING eager array methods — they return a NEW array with the
     # receiver's OWN element type. Mirror Rust gg (`builtins.rs` `return_type:
