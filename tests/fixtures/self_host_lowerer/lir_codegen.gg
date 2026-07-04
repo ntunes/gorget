@@ -6235,9 +6235,34 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
 
 # ── Terminator emission ───────────────────────────────────
 
-String emit_term(LirTerm &term, LirFunction &func, Vector[String] &sn, Dict[int, int] &val_types):
+String emit_term(LirTerm &term, LirFunction &func, Vector[String] &sn, Dict[int, int] &val_types, bool is_throws_main):
     match term:
         case TRet(value):
+            # throws-main: the entry point keeps its `int main(...)` C signature
+            # but the GIR/LIR body returns `Result[void, E]` (lower_function's
+            # is_main+throws arm). Unwrap the Result to an exit code at the
+            # return site, mirroring Rust gg (`src/backend/c_lir/mod.rs:3331`):
+            # Ok → 0, Error → the error payload. Without this the raw Result
+            # struct is `return`ed from an `int`-signature main → C type error.
+            if is_throws_main:
+                int tm_vty = -1
+                if val_types.contains(value):
+                    tm_vty = val_types.get(value).unwrap()
+                # Only unwrap when the returned VALUE is Result-shaped (the
+                # rethrow / explicit-Error paths): an aggregate Result struct or
+                # a Ptr to one. The self-host's lower_function emits the
+                # implicit-success tail as a bare `int32 0` (NOT wrapped in
+                # `Ok(unit)` the way Rust does, functions.rs:1101) — that scalar
+                # is already the exit code, so let it fall through to a plain
+                # `return 0`. (A tighter mirror of Rust would wrap the tail in
+                # Ok at lower_function and unwrap uniformly here.)
+                bool tm_is_result_val = (tm_vty == func.return_type) or (tm_vty == LT_PTR)
+                if tm_is_result_val:
+                    String tm_ty = c_type_name(func.return_type, &sn)
+                    String tm_val = v(value)
+                    if tm_vty == LT_PTR:
+                        tm_val = "*(" + tm_ty + "*)" + v(value)
+                    return "{ " + tm_ty + " __res = " + tm_val + "; if (__res.tag == 0) { return 0; } else { return __res.Error_0; } }"
             # Void-returning functions: suppress the return value.
             if func.return_type == LT_VOID:
                 return "return;"
@@ -7004,6 +7029,14 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
 # instructions + terminator), split out of emit_function so Fix A can emit
 # the body into a side buffer BEFORE the declarations are written.
 void emit_function_body(StrBuf &out, LirFunction &func, LirModule &m, Vector[String] &sn, Dict[String, int] &slit_map, Dict[int, int] &val_types, Dict[int, int] &val_to_slot):
+    # throws-main detection (typed enum_kind, NOT a name-match on the C
+    # struct name) — drives the Result→exit-code unwrap in emit_term's TRet.
+    bool is_throws_main = false
+    if func.name == "main" and func.return_type >= LT_STRUCT_BASE:
+        int tm_sid = func.return_type - LT_STRUCT_BASE
+        if tm_sid >= 0 and tm_sid < m.structs.len():
+            if m.structs.get(tm_sid).unwrap().enum_kind == EK_RESULT:
+                is_throws_main = true
     int bi = 0
     while bi < func.blocks.len():
         # Read each block/param/inst/term through a BORROW — do NOT value-bind
@@ -7038,7 +7071,7 @@ void emit_function_body(StrBuf &out, LirFunction &func, LirModule &m, Vector[Str
             ii += 1
 
         # Terminator
-        String tcode = emit_term(&func.blocks.get(bi).unwrap().term, &func, &sn, &val_types)
+        String tcode = emit_term(&func.blocks.get(bi).unwrap().term, &func, &sn, &val_types, is_throws_main)
         sb_push(&out, "    ")
         sb_push(&out, tcode)
         sb_push(&out, "\n")
