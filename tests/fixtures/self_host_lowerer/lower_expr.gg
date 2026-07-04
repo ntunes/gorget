@@ -2785,8 +2785,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # the EIdentifier-on-`T` value path (which has no
                     # binding and emits a [bug] placeholder).
                     String ident_name = ident_name_raw
+                    # -1 = not a generic-param substitution. When `ident_name`
+                    # IS a generic type-param (`T`), `type_subs` already
+                    # resolved it to a concrete type id; keep that tid so the
+                    # `.default()` / `.parse()` static-return arms below can use
+                    # it directly instead of round-tripping through the C-name
+                    # string (which `prim_name_to_type` can't parse back — it
+                    # only accepts surface names like "int", not "int64_t" /
+                    # "GorgetString" / "double"). Core #1/#2: carry the typed
+                    # tid forward from the write site, never re-derive it from a
+                    # name at the read site.
+                    int substituted_tid = -1
                     if gmod.type_subs.contains(ident_name):
                         int sub_tid = gmod.type_subs.get(ident_name).unwrap()
+                        substituted_tid = sub_tid
                         String sub_name = type_id_to_name(sub_tid, &gmod)
                         if sub_name.len() > 0:
                             ident_name = sub_name
@@ -3041,7 +3053,17 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         elif gmod.fn_sigs.contains(static_name):
                             static_ret = gmod.fn_sigs.get(static_name).unwrap()
                         elif mname == "default":
-                            if gmod.type_infos.contains(ident_name):
+                            if substituted_tid >= 0:
+                                # Generic-param substitution: `.default()` returns
+                                # the receiver type, whose tid `type_subs` already
+                                # resolved. Use it directly — DO NOT reconstruct it
+                                # from the C-name (int64_t / GorgetString / double)
+                                # via `prim_name_to_type`, which returns -1 for
+                                # C-names → static_ret stays I64_TYPE → the slot
+                                # lands int64_t while `.default()` returns Str →
+                                # C "incompatible types" CC-FAIL.
+                                static_ret = substituted_tid
+                            elif gmod.type_infos.contains(ident_name):
                                 static_ret = lookup_or_register_named(&gmod, ident_name)
                             else:
                                 # int.default() → int, float.default() → double, etc.
@@ -3049,8 +3071,18 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 if pt >= 0:
                                     static_ret = pt
                         elif mname == "parse":
-                            # int.parse(s) returns Option[int]
+                            # int.parse(s) returns Option[int]. Same class as
+                            # `.default()` above (Core #4): a generic-param
+                            # substitution carries its resolved tid in
+                            # `substituted_tid`; use it as the inner type instead
+                            # of `prim_name_to_type(ident_name)`, which returns -1
+                            # for the substituted C-name. (Untested by the current
+                            # corpus — no fixture exercises a substituted
+                            # `T.parse()` — but it is the same lost-metadata class
+                            # and costs nothing to close.)
                             int pt = prim_name_to_type(ident_name)
+                            if substituted_tid >= 0:
+                                pt = substituted_tid
                             if pt >= 0:
                                 String opt_name = "Option__" + type_id_to_name(pt, &gmod)
                                 static_ret = lookup_or_register_named(&gmod, opt_name)
