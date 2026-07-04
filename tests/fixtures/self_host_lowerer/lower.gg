@@ -1818,6 +1818,17 @@ enum SVarDeclEmission:
     # borrow_view + pre-set materialized flag; the carried String is the
     # typed deep-copy clone fn for the flag-guarded in-place materialize.
     LazyViewBind(String)
+    # round-40 (none_assign_to_option_slot) — EAGER whole-aggregate deref-clone
+    # of a `GtPtr(agg)` source into a VALUE-typed owned local. Used by Branch
+    # A-agg when the source (an `Option`/`Result`/droppable-aggregate borrow
+    # with `resolve_payload_clone_fn == ""`) is mutated AFTER the bind, so a
+    # BorrowAlias would observe the clobbered value at the owning consume. The
+    # emission unwraps the source's pointee type so the dst slot is value-typed
+    # (avoids the GtPtr→OpClone re-entry double-clone MoveDirect would hit) and
+    # uses `OpClone` (the LIR `resource_clone_fn` deref-clone path the return-
+    # escape already uses — CloneAndMove's GICallExtern mis-routes an
+    # `Option__*__clone` name to the `__option_clone` combinator).
+    EagerAggClone()
 
 # Decide which of the three emission strategies SVarDecl should use
 # for `var_type x = val`. Returns an `SVarDeclEmission` variant; the
@@ -1943,17 +1954,44 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
     # C-pre's deep-clone (they have a clone fn + their own drop discipline).
     # Recursive-Box AST aggregates are NEVER reached here — their `.get()`
     # path clone-extracts (the permanent NO-GO exclusion).
+    #
+    # PRISTINE GATE (round-40, none_assign_to_option_slot): the borrow-flip is
+    # only sound when the alias observes the SAME value at its owning consume
+    # that it did at the bind. Branch C-pre already gates its resource borrow-
+    # flip on `cow_pristine_after` for exactly this reason; Branch A-agg
+    # OMITTED it, so `Option[String] t = r.pending; r.pending = None; return t`
+    # aliased `t` into `r.pending`, the in-place field write clobbered the
+    # field, and the deferred materialize (op_consume's OpClone at `return t`)
+    # deref-cloned the now-`None` field — returning None instead of the
+    # original Some. The designed read-only element-borrow shape (`back =
+    # coll.get(i).unwrap()` where `coll` is never mutated) stays pristine ⇒
+    # still aliases. When the bound name OR the source root is mutated after
+    # the bind, fall to EagerAggClone: it deref-clones the pointee into a
+    # VALUE-typed owned local via `OpClone` (the LIR `resource_clone_fn` path
+    # that lowers to the correct `<Aggregate>__clone`), materialising an
+    # INDEPENDENT owner at the bind BEFORE the mutation runs. (MoveDirect would
+    # keep the dst `GtPtr(agg)`-typed → the return re-enters op_consume's
+    # GtPtr→OpClone arm and double-clones a value as a pointer; CloneAndMove's
+    # `GICallExtern` mis-routes an `Option__*__clone` name to the
+    # `__option_clone` combinator — EagerAggClone sidesteps both.) An
+    # unidentifiable source (source_root == "", a temp/call-result) keeps the
+    # pre-existing BorrowAlias — the escape funnel materialises it on escape —
+    # minimising blast radius.
     if source_is_ptr_type and source_is_borrow_alias:
         match gmod.type_table.get(source_type).unwrap():
             case GtPtr(agg_inner):
                 if is_droppable_type(agg_inner, &gmod):
                     String agg_pointee = type_id_to_name(agg_inner, &gmod)
                     if resolve_payload_clone_fn(agg_pointee, &gmod) == "":
+                        if source_root != "" and not (cow_pristine_after(&ctx, bound_name, bind_pos) and cow_pristine_after(&ctx, source_root, bind_pos)):
+                            return EagerAggClone()
                         return BorrowAlias()
             case GtMutPtr(agg_inner_m):
                 if is_droppable_type(agg_inner_m, &gmod):
                     String agg_pointee_m = type_id_to_name(agg_inner_m, &gmod)
                     if resolve_payload_clone_fn(agg_pointee_m, &gmod) == "":
+                        if source_root != "" and not (cow_pristine_after(&ctx, bound_name, bind_pos) and cow_pristine_after(&ctx, source_root, bind_pos)):
+                            return EagerAggClone()
                         return BorrowAlias()
             else:
                 pass

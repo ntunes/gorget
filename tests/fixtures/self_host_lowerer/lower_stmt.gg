@@ -626,6 +626,33 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # the `closure_env_type` copy-forward above.
                     if gmod.closure_value_ret_type.contains(cevt_src_key):
                         gmod.closure_value_ret_type.put(ctx.current_fn_name + "\0" + int_to_str(var_local), gmod.closure_value_ret_type.get(cevt_src_key).unwrap())
+                case EagerAggClone():
+                    # round-40 (none_assign_to_option_slot) — eager deref-clone of
+                    # a `GtPtr(agg)`/`GtMutPtr(agg)` borrow into a VALUE-typed
+                    # owned local, materialising an INDEPENDENT copy at the bind
+                    # (Branch A-agg's non-pristine path: the source aggregate is
+                    # mutated after the bind, so a BorrowAlias would observe the
+                    # clobbered value at the owning consume). Unwrap `val`'s
+                    # pointee type so the dst slot is value-typed — else the dst
+                    # stays `GtPtr(agg)`-typed and the owning consume (`return x`)
+                    # re-enters op_consume's GtPtr→OpClone arm, double-cloning a
+                    # value as a pointer (the CloneAndMove "triple-clone" trap).
+                    # `OpClone(val)` lowers via the LIR `resource_clone_fn` deref-
+                    # clone — the same path the return-escape already uses.
+                    int eac_owned = var_type
+                    GirLocal eac_src = ctx.locals.get(val).unwrap()
+                    if eac_src.type_id >= 0 and eac_src.type_id < gmod.type_table.len():
+                        match gmod.type_table.get(eac_src.type_id).unwrap():
+                            case GtPtr(eac_inner):
+                                eac_owned = eac_inner
+                            case GtMutPtr(eac_inner_m):
+                                eac_owned = eac_inner_m
+                            else:
+                                pass
+                    var_local = add_local(&ctx, eac_owned, Some(name))
+                    emit(&ctx, GIAssign(var_local, OpClone(val)))
+                    nl_put(&ctx, name, var_local)
+                    register_local_for_drop(&ctx, var_local, eac_owned, &gmod)
                 case LazyViewBind(lv_clone_fn):
                     # #37 Phase 2 — lazy loop-carried element borrow. `val`
                     # is the GtPtr(GorgetString) element address. The bind
