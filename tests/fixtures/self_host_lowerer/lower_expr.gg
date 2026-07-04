@@ -7380,6 +7380,21 @@ int emit_fault_repanic_block(LowerCtx &ctx, GirModule &gmod, String msg, int con
     switch_to(&ctx, saved_bb)
     return panic_bb
 
+# Is `e` a string LITERAL (plain or interpolated f-string)? Used to gate the
+# `format(x)` free-fn identity intercept below to ONLY the shape Rust gg absorbs
+# (src/ir/lowering/exprs/calls.rs:807-819 intercepts a StringLiteral arg). Taken
+# BY VALUE (the caller passes an rvalue temp `args.get(0).unwrap()`, which a
+# `&`-param can't borrow — sibling read-only predicates like eval_const_int_expr
+# / static_is_literal_init also take SpannedExpr by value).
+bool arg_is_string_literal(SpannedExpr e):
+    match e.expr:
+        case EFString(_, _, _):
+            return true
+        case EStringLiteral(_, _):
+            return true
+        else:
+            return false
+
 int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[String] &arg_names, Vector[SpannedType] &targs, GirModule &gmod):
     int result = -1
     bool is_print = fname == "print"
@@ -7680,6 +7695,23 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int sc_dst = add_local(&ctx, sc_gs_tid, None)
         emit(&ctx, GICallExtern(sc_dst, "gorget_string_from_str", [OpConstStr("")]))
         result = sc_dst
+    elif fname == "format" and args.len() == 1 and enum_variant_parent(fname, &gmod) == "" and arg_is_string_literal(args.get(0).unwrap()):
+        # `format(x)` free-fn → identity on the already-lowered string arg,
+        # mirroring Rust gg (src/ir/lowering/exprs/calls.rs:807): an interpolated
+        # string literal lowers to `gorget_string_format(...)` (EFString below at
+        # ~:1788) and a plain literal to a GorgetString `OpConstStr` (EStringLiteral
+        # at ~:1783) — both already GorgetString-typed. The outer `format(...)` is
+        # ABSORBED (Rust emits NO `format` call). Without this arm the self-host
+        # emitted a raw `format(__vN)` (undefined symbol, typed i64), so a
+        # `format(...).to_upper()` receiver was int → dispatched to the char method
+        # `gorget_uint8_to_upper` (Str = int cc-fail). Identity passes the arg's
+        # GorgetString type through so the method cascade dispatches to gorget_str_*.
+        # GUARD (Core #8 fidelity): only a string-literal arg is absorbed — Rust
+        # `calls.rs:807-819` intercepts only a StringLiteral. A non-literal
+        # `format(some_var)` / `format(42)` FAILS this elif and falls through to the
+        # terminal `else` (a real free-call / clean CC-FAIL), not an inner match
+        # (which would strand the `-1` sentinel out of `return result`).
+        result = lower_expr(&ctx, args.get(0).unwrap(), &gmod)
     elif fname == "len" and args.len() == 1:
         # Free `len(x)` → dispatch to the runtime fn for the ARG's type,
         # mirroring Rust gg's free-len handler (src/ir/lowering/exprs/
