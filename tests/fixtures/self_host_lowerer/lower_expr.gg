@@ -3813,6 +3813,37 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     emit(&ctx, GICallExtern(_pd_dst, _pd_fn, [op_consume(&ctx, &gmod, recv, CkFormatArg())]))
                     register_local_for_drop(&ctx, _pd_dst, _pd_gs, &gmod)
                     return _pd_dst
+                # String receiver: `debug()` quotes+escapes via
+                # `gorget_string_debug`; `display()` is IDENTITY (returns the
+                # receiver unchanged — no runtime call). Mirrors Rust gg
+                # (src/ir/lowering/exprs/methods.rs:777-784). Without this the
+                # String call fell to the generic dispatch, which (a) mis-typed
+                # the result I64 (→ f-string `{s.debug()}` picked `%lld` and
+                # printed the byte length, e.g. `5` for `"abc"`), and (b) for
+                # `display` mapped `GorgetString__display` through the
+                # `gorget_str_` fallback to the NON-EXISTENT `gorget_str_display`
+                # (implicit-int decl → cc "Str <== int" error).
+                if is_string_type_id(_pd_tid, &gmod):
+                    int _sd_gs = resolve_field_gir_type("GorgetString", &gmod)
+                    # A Ptr-to-String receiver (a String FIELD read `self.msg` or a
+                    # `&`-borrow) must be dereferenced to a VALUE before it reaches
+                    # `gorget_string_debug` (which takes a `Str` by value) or is
+                    # returned by the identity `display`. Mirrors Rust's pointee
+                    # deref (methods.rs:732-742) and the f-string arg deref
+                    # (is_ptr_to_string_type_id branch above).
+                    int _sd_recv = recv
+                    if is_ptr_to_string_type_id(ctx.locals.get(recv).unwrap().type_id, &gmod):
+                        int _sd_v = add_local_with(&ctx, _sd_gs, None, LoBorrowed(), BoNone())
+                        emit(&ctx, GIDeref(_sd_v, recv, _sd_gs))
+                        _sd_recv = _sd_v
+                    if mname == "debug":
+                        int _sd_dst = add_local(&ctx, _sd_gs, None)
+                        emit(&ctx, GICallExtern(_sd_dst, "gorget_string_debug", [op_consume(&ctx, &gmod, _sd_recv, CkFormatArg())]))
+                        register_local_for_drop(&ctx, _sd_dst, _sd_gs, &gmod)
+                        return _sd_dst
+                    else:
+                        # display = identity: return the (dereffed) receiver value.
+                        return _sd_recv
             # ── Primitive `.hash(&h)` → direct Hasher write ──────────────
             # `x.hash(&h)` on a scalar / bool / String / byte / char receiver
             # has no userland `int64_t__hash` body — Rust gg lowers it

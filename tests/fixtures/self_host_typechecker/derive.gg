@@ -298,14 +298,14 @@ String gen_struct_debuggable(String name, String gs, String gp, Vector[Param] fi
     String src = "equip " + gp + name + gs + " with Debuggable:\n"
     src = src + "    String debug(self):\n"
     if fields.len() == 0:
-        src = src + "        return \"" + name + "()\"\n"
+        src = src + "        return \"" + name + "\"\n"
     else:
         String parts = ""
         for (i, f) in fields.enumerate():
             if i > 0:
                 parts = parts + ", "
-            parts = parts + f.param_name + "={self." + f.param_name + "}"
-        src = src + "        return f\"" + name + "(" + parts + ")\"\n"
+            parts = parts + f.param_name + ": {self." + f.param_name + ".debug()}"
+        src = src + "        return f\"" + name + " {{ " + parts + " }}\"\n"
     return src
 
 String gen_struct_cloneable(String name, String gs, String gp, Vector[Param] fields):
@@ -499,13 +499,13 @@ String gen_enum_debuggable(String name, String gs, String gp, Vector[EnumVariant
         String pat = pfx + v.name + "(" + binds + ")"
         if fc == 0:
             src = src + "            case " + pat + ":\n"
-            src = src + "                return \"" + v.name + "()\"\n"
+            src = src + "                return \"" + v.name + "\"\n"
         else:
             String parts = ""
             for (pi, _) in v.fields.enumerate():
                 if pi > 0:
                     parts = parts + ", "
-                parts = parts + "{a" + int_to_str(pi) + "}"
+                parts = parts + "{a" + int_to_str(pi) + ".debug()}"
             src = src + "            case " + pat + ":\n"
             src = src + "                return f\"" + v.name + "(" + parts + ")\"\n"
     return src
