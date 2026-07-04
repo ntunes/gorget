@@ -7080,6 +7080,20 @@ bool collection_ctor_has_cap_alloc_or_positional(Vector[SpannedExpr] &args, Vect
         return false
     return true
 
+# NAMED-ARG MODELING — does this call carry a `cap=` or `alloc=` named arg?
+# Gates the String / Channel ctor named-arg-split arms so the plain positional
+# forms stay on their existing (unchanged) paths. Reads the parser-preserved
+# `arg_names` (parallel to args, "" = positional) — a typed lookup, no name
+# match on the callee.
+bool call_has_named_cap_or_alloc(Vector[String] &arg_names):
+    int i = 0
+    while i < arg_names.len():
+        String n = arg_names.get(i).unwrap()
+        if n == "cap" or n == "alloc":
+            return true
+        i += 1
+    return false
+
 # Cross-frame fault propagation (error-model.md §11, Inc-2.1c/2.1d): emit the
 # caller-side per-category TAG-DISPATCH after a participating callee's GICall.
 # Load the i32 slot's tag VALUE ONCE, then chain a per-category equality branch
@@ -7337,6 +7351,77 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int panic_unit = add_local(&ctx, UNIT_TYPE, None)
         emit(&ctx, GIAssign(panic_unit, OpConstUnit()))
         result = panic_unit
+    elif (fname == "Str" or fname == "String" or fname == "GorgetString") and enum_variant_parent(fname, &gmod) == "" and call_has_named_cap_or_alloc(&arg_names):
+        # NAMED-ARG MODELING — String ctor cap=/alloc= split (round-39, mirroring
+        # Rust gg's `if name == "String"` branch in
+        # `src/ir/lowering/exprs/calls.rs`). `alloc=a` runs the ctor under a
+        # push/pop-allocator bracket (the SAME mechanism as the collection
+        # ctors) so the runtime snapshots the allocator into the Str's `alloc`
+        # field and growth reallocs stick to it (§15.3 "Composable allocation").
+        # Before this the bare positional arms below were named-arg-BLIND:
+        # `String(alloc=a)` (args.len()==1) identity-coerced the ARENA HANDLE
+        # into the String slot, and `String(cap=n, alloc=a)` / `String("x",
+        # alloc=a)` (args.len()==2) fell through to the generic tail (driver
+        # error / cc-fail). GATED to the named forms so the bare `String(x)` /
+        # `String()` paths below are unchanged. `arg_names` is parallel to args.
+        int str_alloc_idx = -1
+        int str_cap_idx = -1
+        int str_pos_idx = -1
+        int sni = 0
+        while sni < args.len():
+            String sn = ""
+            if sni < arg_names.len():
+                sn = arg_names.get(sni).unwrap()
+            if sn == "alloc":
+                str_alloc_idx = sni
+            elif sn == "cap":
+                str_cap_idx = sni
+            elif sn == "" and str_pos_idx < 0:
+                str_pos_idx = sni
+            sni += 1
+        int str_gs_tid = lookup_or_register_named(&gmod, "GorgetString")
+        # alloc= → push the active allocator BEFORE the ctor so the fresh Str's
+        # buffer (and its recorded `alloc`) come from it.
+        bool str_bracketed = false
+        if str_alloc_idx >= 0:
+            int str_alloc_val = lower_expr(&ctx, args.get(str_alloc_idx).unwrap(), &gmod)
+            emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(&ctx, &gmod, str_alloc_val, CkCallArgBorrow())]))
+            str_bracketed = true
+        int str_dst = add_local(&ctx, str_gs_tid, None)
+        if str_cap_idx >= 0:
+            # cap= → with_capacity(n).
+            int str_cap_val = lower_expr(&ctx, args.get(str_cap_idx).unwrap(), &gmod)
+            emit(&ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpCopy(str_cap_val)]))
+        elif str_pos_idx >= 0:
+            # Positional content/capacity: int → with_capacity, String content →
+            # from_str (materialise an OWNED Str in the bracketed allocator; the
+            # bare identity-coercion below would keep the static cap=0 view,
+            # which records NO allocator and would silently NOT bind).
+            int str_pos_val = lower_expr(&ctx, args.get(str_pos_idx).unwrap(), &gmod)
+            int str_pty = -1
+            if str_pos_val >= 0 and str_pos_val < ctx.locals.len():
+                str_pty = ctx.locals.get(str_pos_val).unwrap().type_id
+            bool str_pos_is_int = str_pty == I8_TYPE or str_pty == I16_TYPE or str_pty == I32_TYPE or str_pty == I64_TYPE or str_pty == U8_TYPE or str_pty == U16_TYPE or str_pty == U32_TYPE or str_pty == U64_TYPE
+            if str_pos_is_int:
+                emit(&ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpCopy(str_pos_val)]))
+            else:
+                emit(&ctx, GICallExtern(str_dst, "gorget_string_from_str", [op_consume(&ctx, &gmod, str_pos_val, CkFormatArg())]))
+        elif str_bracketed:
+            # Empty + alloc= → with_capacity(0) (the runtime clamps to a 16-byte
+            # minimum) so the Str records the allocator; from_str("") would
+            # return the shared static empty view and NOT bind.
+            emit(&ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpConstI64(0)]))
+        else:
+            emit(&ctx, GICallExtern(str_dst, "gorget_string_from_str", [OpConstStr("")]))
+        # alloc= → pop the allocator immediately after the ctor (one-shot).
+        if str_bracketed:
+            emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+        # FRESH-OWNED-TEMP drop registration (Core #3): with_capacity/from_str
+        # eagerly allocate, so an unconsumed temp would leak; a move into a
+        # binding self-suppresses the scope-exit drop (GIMoveZero). Same as the
+        # int-capacity arm below.
+        register_local_for_drop(&ctx, str_dst, str_gs_tid, &gmod)
+        result = str_dst
     elif (fname == "Str" or fname == "String" or fname == "GorgetString") and args.len() == 1 and enum_variant_parent(fname, &gmod) == "":
         # Identity coercion: Str(x) / String(x) returns x (already a string).
         # Lower the inner arg and pass its type through.
@@ -7570,18 +7655,79 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # no such pre-registration, so we register the Ptr explicitly here.
         # `type_id_to_base_name` unwraps `GtPtr`→"Arena" so later method
         # dispatch (`pool.bytes_used()`) still resolves on the type name.
+        # NAMED-ARG MODELING — allocator ctors accept the cap=/alloc=/positional
+        # split, the class completion of the String/collection ctor brackets
+        # (round-39, mirroring Rust gg's `alloc_ctor` table in
+        # `src/ir/lowering/exprs/calls.rs`). Every allocator runtime ctor
+        # captures `__gorget_current_alloc` as its parent (struct + backing
+        # buffer come from it, destroy releases back into it), so `alloc=a`
+        # brackets the ctor via the SAME push/pop mechanism as the collection
+        # ctors — the one-shot spelling of §15.3's nesting rule. Before this the
+        # arm was named-arg-BLIND: it lowered EVERY arg positionally, so
+        # `Arena(alloc=outer)` passed the Arena STRUCT as the byte capacity and
+        # `Arena(cap=n, alloc=a)` passed two args to the 1-arg runtime ctor
+        # (cc-fail). `arg_names` is parallel to `args` ("" = positional).
         String alloc_new_fn = allocator_constructor_runtime_name(fname)
+        # Fixed positional arity (mirrors Rust's `alloc_ctor` table): -1 = one
+        # OPTIONAL capacity (cap= OR a single positional; omitting → I64(0),
+        # which hits the runtime default — Arena 4096 / TLSF 65536). 0 =
+        # TrackingAllocator (no capacity axis). 2 = Pool/Fallback (two fixed
+        # positionals, no cap= axis).
+        int alloc_fixed_arity = -1
+        if fname == "TrackingAllocator":
+            alloc_fixed_arity = 0
+        elif fname == "PoolAllocator" or fname == "FallbackAllocator":
+            alloc_fixed_arity = 2
+        # Split the args by name.
+        int alloc_alloc_idx = -1
+        int alloc_cap_idx = -1
+        Vector[int] alloc_pos_idxs = []
+        int aci = 0
+        while aci < args.len():
+            String an = ""
+            if aci < arg_names.len():
+                an = arg_names.get(aci).unwrap()
+            if an == "alloc":
+                alloc_alloc_idx = aci
+            elif an == "cap":
+                alloc_cap_idx = aci
+            else:
+                alloc_pos_idxs.push(aci)
+            aci += 1
+        # alloc= → push the active thread-local allocator before the ctor so its
+        # struct AND backing buffer come from the chosen parent.
+        bool alloc_bracketed = false
+        if alloc_alloc_idx >= 0:
+            int a_alloc_val = lower_expr(&ctx, args.get(alloc_alloc_idx).unwrap(), &gmod)
+            emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(&ctx, &gmod, a_alloc_val, CkCallArgBorrow())]))
+            alloc_bracketed = true
         Vector[Operand] alloc_args = []
-        # CoW for-element BORROW scan (no SpannedExpr__clone): aarg is only read
-        # by lower_expr's immutable-borrow param.
-        for aarg in args:
-            int aval = lower_expr(&ctx, aarg, &gmod)
-            # Allocator constructor args are plain scalars (capacity/count);
-            # pass by value (CkCallArgBorrow yields OpCopy for a primitive).
-            alloc_args.push(op_consume(&ctx, &gmod, aval, CkCallArgBorrow()))
+        if alloc_fixed_arity < 0:
+            # One optional capacity: cap= OR a single positional, else I64(0).
+            int a_cap_src = -1
+            if alloc_cap_idx >= 0:
+                a_cap_src = alloc_cap_idx
+            elif alloc_pos_idxs.len() > 0:
+                a_cap_src = alloc_pos_idxs.get(0).unwrap()
+            if a_cap_src >= 0:
+                int a_cap_val = lower_expr(&ctx, args.get(a_cap_src).unwrap(), &gmod)
+                alloc_args.push(op_consume(&ctx, &gmod, a_cap_val, CkCallArgBorrow()))
+            else:
+                alloc_args.push(OpConstI64(0))
+        else:
+            # Fixed positional signature (Pool/Fallback = 2; Tracking = 0).
+            int api = 0
+            while api < alloc_pos_idxs.len():
+                int a_pv = lower_expr(&ctx, args.get(alloc_pos_idxs.get(api).unwrap()).unwrap(), &gmod)
+                alloc_args.push(op_consume(&ctx, &gmod, a_pv, CkCallArgBorrow()))
+                api += 1
         int alloc_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
         int alloc_dst = add_local(&ctx, alloc_ptr_ty, None)
         emit(&ctx, GICallExtern(alloc_dst, alloc_new_fn, alloc_args))
+        # alloc= → pop immediately after the ctor (one-shot; only the ctor's own
+        # allocation uses the parent).
+        if alloc_bracketed:
+            emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
         result = alloc_dst
     elif (fname == "Mutex" or fname == "RWLock") and targs.len() == 1 and args.len() == 1:
         # SYNC FIDELITY — GENERIC sync-primitive ctor `Mutex[T](v)` /
@@ -7623,6 +7769,56 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         int sync_dst = add_local(&ctx, sync_ptr_ty, None)
         emit(&ctx, GICallExtern(sync_dst, sync_new_fn, sync_args))
         result = sync_dst
+    elif fname == "Channel" and targs.len() == 1 and call_has_named_cap_or_alloc(&arg_names):
+        # NAMED-ARG MODELING — Channel[T] cap=/alloc= split (round-39, mirroring
+        # Rust gg's `if name == "Channel"` branch in
+        # `src/ir/lowering/exprs/calls.rs`). §15.3 lists Channel among the
+        # alloc=-accepting ctors and the runtime snapshots
+        # `__gorget_current_alloc` into `ch->alloc` at construction
+        # (channel_runtime.c gorget_channel_new), so the bracket is sticky for
+        # the ring buffer + waiter arrays. Before this the plain generic-ctor
+        # tail read the args positionally: `Channel[int](alloc=a)` passed the
+        # allocator struct AS the capacity (NULL ring buffer → SIGSEGV on first
+        # send) and `Channel[int](cap=4, alloc=a)` passed TWO args to the 1-arg
+        # `Channel__T` ctor (cc "too many arguments to gorget_channel_new").
+        # GATED to the named-arg forms so the plain `Channel[int](4)` path stays
+        # on the unchanged generic tail. Emits the SAME single-arg
+        # `Channel__<elem_c>(cap)` GICall the plain path does (the LIR
+        # concurrency-ctor reorder appends elem_size → gorget_channel_new).
+        String chan_mangled = "Channel"
+        for cta in targs:
+            chan_mangled = chan_mangled + "__" + type_to_c_name(cta, &gmod)
+        int chan_ret = lookup_or_register_named(&gmod, chan_mangled)
+        # Split cap (named "cap" OR a lone positional) and alloc (named "alloc").
+        int chan_cap_idx = -1
+        int chan_alloc_idx = -1
+        int chci = 0
+        while chci < args.len():
+            String cn = ""
+            if chci < arg_names.len():
+                cn = arg_names.get(chci).unwrap()
+            if cn == "alloc":
+                chan_alloc_idx = chci
+            elif cn == "cap":
+                chan_cap_idx = chci
+            elif cn == "" and chan_cap_idx < 0:
+                chan_cap_idx = chci
+            chci += 1
+        bool chan_bracketed = false
+        if chan_alloc_idx >= 0:
+            int chan_alloc_val = lower_expr(&ctx, args.get(chan_alloc_idx).unwrap(), &gmod)
+            emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(&ctx, &gmod, chan_alloc_val, CkCallArgBorrow())]))
+            chan_bracketed = true
+        # cap= / positional → the capacity scalar; omitted → 0 (rendezvous).
+        Operand chan_cap_op = OpConstI64(0)
+        if chan_cap_idx >= 0:
+            int chan_cap_val = lower_expr(&ctx, args.get(chan_cap_idx).unwrap(), &gmod)
+            chan_cap_op = op_consume(&ctx, &gmod, chan_cap_val, CkCallArgBorrow())
+        int chan_dst = add_local(&ctx, chan_ret, None)
+        emit(&ctx, GICall(chan_dst, chan_mangled, [chan_cap_op]))
+        if chan_bracketed:
+            emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+        result = chan_dst
     else:
         # Compute mangled name for generic calls
         String call_name = fname
