@@ -345,7 +345,29 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # `v.get(0).unwrap()`) — feeds the substrate-(ii) resource-bind
             # borrow-flip gate in decide_svardecl_emission.
             String cow_src_root = cow_source_root_name(init_expr)
-            SVarDeclEmission plan = decide_svardecl_emission(&ctx, &gmod, val, var_type, name, cow_src_root, init_expr.span.start)
+            # T-C (round-40): flag a bare-identifier init that names a resource-
+            # typed module `static` (`T x = SHARED`). decide_svardecl_emission
+            # DEEP-CLONES it (CloneAndMove) instead of MoveDirect-aliasing the
+            # global's heap — mirrors Rust's clone_resource_global_ref. Gated to
+            # a bare identifier so `x = STATIC[i]` / `x = STATIC.field` (element/
+            # field reads, not the whole-collection alias) are untouched. Gate on
+            # the READ identifier `gv_static_nm` (NOT the LHS `name`) matching a
+            # static AND not being shadowed by a local — mirrors the sibling
+            # static-read guard at lower_expr.gg:8268 (`static_contains(&gmod,
+            # ad_name) and not nl_contains(&ctx, ad_name)`). Using the LHS `name`
+            # would misfire on a re-declared LHS (`Vector[int] alias = SHARED`
+            # twice → 2nd bind's `nl_contains("alias")` true → gate falls through
+            # → the exact aliasing WRONG this removes); gating on the read name
+            # also correctly SKIPs a shadowing local (read the local, not the
+            # static → no deep-clone).
+            bool src_is_static_global = false
+            match init_expr.expr:
+                case EIdentifier(gv_static_nm):
+                    if static_contains(&gmod, gv_static_nm) and not nl_contains(&ctx, gv_static_nm):
+                        src_is_static_global = true
+                else:
+                    pass
+            SVarDeclEmission plan = decide_svardecl_emission(&ctx, &gmod, val, var_type, name, cow_src_root, init_expr.span.start, src_is_static_global)
             int var_local = 0
             match plan:
                 case BorrowAlias():

@@ -1834,7 +1834,7 @@ enum SVarDeclEmission:
 # `cow_pristine_after(bind_pos)` (never mutated, or last-mutated strictly
 # before the bind, and not closure-deferred). See `compute_cow_scan` /
 # `cow_pristine_after`.
-SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int val, int var_type, String bound_name, String source_root, int bind_pos):
+SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int val, int var_type, String bound_name, String source_root, int bind_pos, bool source_is_static_global):
     if val < 0 or val >= ctx.locals.len():
         return MoveDirect()
     GirLocal val_loc = ctx.locals.get(val).unwrap()
@@ -1867,6 +1867,26 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
                 pass
     bool is_string_same_type = (source_type == var_type) and (var_tname == "GorgetString") and (not source_is_ptr_type)
     String clone_fn = resolve_payload_clone_fn(var_tname, &gmod)
+
+    # T-C (round-40): `T x = STATIC_RESOURCE` — a bare read of a resource-typed
+    # module-level `static` yields a SHALLOW struct copy that ALIASES the
+    # global's heap buffer (the `__global_ref__` load memcpy's the header, then
+    # the collection's data pointer is shared). Binding it as owned (MoveDirect,
+    # the fall-through below) then (a) frees the static's heap at scope exit and
+    # (b) lets the bind observe a later `STATIC[i]=x` write THROUGH the shared
+    # buffer (static_vector_index_alias: `alias[0]` read 99, must stay 10;
+    # compound sibling read 15, must stay 10). DEEP-CLONE at the boundary so the
+    # bind owns an independent allocation — the exact analog of Rust gg's
+    # `clone_resource_global_ref` (src/ir/lowering/stmts/mod.rs:36), which clones
+    # resource `GlobalRef`s at every var-decl init / assign / return. The
+    # existing CloneAndMove branch (lower_stmt.gg) emits `<clone_fn>(&val)` then
+    # moves the fresh owner into the bind and registers it for drop. Value-typed
+    # resource source only (a Ptr/element read is a different shape, not the
+    # whole-collection alias); the caller gates on init being a BARE identifier
+    # naming a static that is NOT shadowed by a local (`static_contains` and
+    # `not nl_contains`).
+    if source_is_static_global and source_is_resource and (not source_is_ptr_type) and clone_fn != "":
+        return CloneAndMove(clone_fn)
 
     bool source_is_borrow_alias = false
     match val_loc.ownership:
