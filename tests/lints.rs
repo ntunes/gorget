@@ -1715,6 +1715,76 @@ fn self_host_drain_out_param_abi_pair() {
     );
 }
 
+/// R41-SD sibling-guard ratchet (CLAUDE.md rule 4 / "Sibling-site drift") over
+/// the self-host `Vector.swap` / `Vector.swap_remove` runtime-ABI tables. Both
+/// mutating O(1) Vector methods must be enrolled in THREE hand-kept name-match
+/// tables — miss one and `vector_swap_fill` regresses in a DIFFERENT way per
+/// table:
+///   - `map_array_method` (lir_lower.gg): method → runtime symbol. Miss → the
+///     mangled `Vector__T__swap_remove` never routes → "undefined reference".
+///   - `needs_ptr_arg` (lir_lower.gg): self (arg 0) is passed as `&arr` (Ptr),
+///     not by value. Miss → cc "incompatible type for argument 1 of
+///     'gorget_array_swap'".
+///   - `infer_method_return_type` (lower_types.gg): both return void (Rust
+///     `builtins.rs` `ret_void`). Miss → binds a void call to a dst → cc "void
+///     value not ignored as it ought to be".
+/// `swap` and `swap_remove` are siblings — adding one and forgetting the other
+/// (or forgetting a table) is the exact desync that broke `vector_swap_fill`
+/// (R41). Mirrors Rust gg `src/lir/runtime.rs` (ArraySwap / ArraySwapRemove:
+/// arg0 = A::Ptr, ret Void).
+///
+/// **If this fails:** a swap-family method lost a table entry, OR a new sibling
+/// (e.g. `swap_range`) landed without all three. Re-add it to every table, or
+/// extend this lint's `REQUIRED` list.
+#[test]
+fn self_host_vector_swap_abi_triple() {
+    let lir =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg").unwrap_or_default();
+    let types =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_types.gg").unwrap_or_default();
+
+    // Scope each check to its OWN function body so an unrelated mention of the
+    // symbol elsewhere in the file can't mask a missing table entry.
+    let callee = self_host_fn_body_noncomment(&lir, "String map_array_method(").join("\n");
+    let ptr = self_host_fn_body_noncomment(&lir, "bool needs_ptr_arg(").join("\n");
+    let ret = self_host_fn_body_noncomment(&types, "int infer_method_return_type(").join("\n");
+
+    // (method-name, runtime-symbol) siblings. The closing `"` in each needle
+    // keeps `"gorget_array_swap"` / `"swap"` from matching inside
+    // `"gorget_array_swap_remove"` / `"swap_remove"`.
+    let required: &[(&str, &str)] =
+        &[("swap", "gorget_array_swap"), ("swap_remove", "gorget_array_swap_remove")];
+
+    let mut missing: Vec<String> = Vec::new();
+    for (method, sym) in required {
+        // (1) callee table: method → runtime symbol (a `return "<sym>"`).
+        if !callee.contains(&format!("\"{sym}\"")) {
+            missing.push(format!("map_array_method: no `return \"{sym}\"` for `{method}`"));
+        }
+        // (2) needs_ptr_arg: self (arg 0) passed by pointer.
+        if !ptr.contains(&format!("\"{sym}\"")) {
+            missing.push(format!("needs_ptr_arg: `{sym}` not tagged as ptr-self"));
+        }
+        // (3) infer_method_return_type: void (UNIT) return.
+        if !ret.contains(&format!("\"{method}\"")) {
+            missing.push(format!("infer_method_return_type: `{method}` missing from the void list"));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "Self-host Vector swap/swap_remove ABI triple desynced:\n  {}\n\n\
+         Both `swap` AND `swap_remove` must appear in ALL THREE hand-kept tables \
+         (`map_array_method` + `needs_ptr_arg` in lir_lower.gg, \
+         `infer_method_return_type` in lower_types.gg). Adding one method — or \
+         one table — and forgetting the rest is the desync that broke \
+         `vector_swap_fill` (R41). Mirrors Rust gg `src/lir/runtime.rs` \
+         ArraySwap/ArraySwapRemove. Re-add the missing entry, or extend the \
+         REQUIRED list if a new swap-family sibling landed.",
+        missing.join("\n  "),
+    );
+}
+
 /// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4 / "Sibling-site drift")
 /// over the self-host trait-equip SYMBOL-MANGLE sites. The self-host mangles an
 /// equip method's symbol via TWO routes, mirroring Rust gg

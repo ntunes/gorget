@@ -26,7 +26,7 @@ from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_M
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for, is_guard_struct_type, guard_method_prefix, is_opaque_pointer_type
-from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types
+from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types, resolve_elem_type_id
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
@@ -6160,8 +6160,24 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         String var_name = cparams.get(0).unwrap()
         SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
-        # map's output element type = the input element type for the
-        # scalar-preserving fixtures in scope; filter keeps the input type.
+        # map's output element type defaults to the INPUT element type (the
+        # scalar-preserving common case, e.g. `map(double)` int→int); filter
+        # always keeps the input type. For a CROSS-TYPE `map(f)` with a NAMED
+        # function whose registered `fn_sigs` return type differs (e.g.
+        # `map(label)` with `String label(int)`), resolve the output element
+        # from the function's return type so the accumulator is `Vector[U]`,
+        # not `Vector[T]` — otherwise a `String` return gets stored into an
+        # int64 slot and read back as pointer garbage. Falls back to the input
+        # element type for inline closures / unregistered fns (unchanged — a
+        # known gap for inline cross-type map).
+        String out_elem_name = elem_name
+        if mname == "map":
+            match margs.get(0).unwrap().expr:
+                case EIdentifier(map_fn_nm):
+                    if gmod.fn_sigs.contains(map_fn_nm):
+                        out_elem_name = type_id_to_name(gmod.fn_sigs.get(map_fn_nm).unwrap(), &gmod)
+                else:
+                    pass
         # Type the accumulator with the ELEMENT-CARRYING `Vector__<elem>`
         # name (not bare `GorgetArray`) so the result is a self-describing
         # Vector: a CHAINED HOF (`v.filter(…).map(…).fold(…)`) sees a
@@ -6172,8 +6188,8 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         # push/extend/get/len calls and the C-emit assignment are unchanged.
         # Routed through the centralized `collection_accumulator_tid` helper
         # (one source of truth for collection-accumulator typing).
-        int acc_tid = collection_accumulator_tid(&gmod, "array", elem_name, "", "")
-        int acc = comp_make_acc(&ctx, acc_tid, elem_name, &gmod)
+        int acc_tid = collection_accumulator_tid(&gmod, "array", out_elem_name, "", "")
+        int acc = comp_make_acc(&ctx, acc_tid, out_elem_name, &gmod)
         String acc_name = "__hof_acc_" + int_to_str(acc)
         nl_put(&ctx, acc_name, acc)
         Vector[Stmt] body = []
@@ -6269,10 +6285,32 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         String var_name = cparams.get(0).unwrap()
         bool is_all = mname == "all"
         return lower_vector_any_all(&ctx, recv, recv_type_name, var_name, cbody, is_all, span, &gmod)
-    # ── each: side-effecting iteration, no result ────────────────────
-    # `v.each((x): f(x))` → `for x in v: f(x)`. Void HOF — the closure
-    # body is emitted as a statement; the call expression yields unit.
-    if mname == "each":
+    # ── find / find_index: first-match Option accumulator ────────────
+    # `v.find(p)`   → `for x in v: if p(x): acc = Some(x);   break` → Option[T]
+    # `v.find_index(p)` → threads a 0-based counter, `Some(idx)` → Option[int].
+    # Mirrors Rust gg's HofOp::Find / HofOp::FindIndex inline loop
+    # (src/lir/lower/insts.rs). Without this the named-fn/closure arg falls
+    # through to the broken extern dispatch (emits `gorget_array_new(arr,
+    # closure)` — CC-FAIL "too many arguments").
+    if mname == "find" or mname == "find_index":
+        if margs.len() != 1:
+            return -1
+        Vector[String] cparams = []
+        SpannedExpr cbody = sexpr
+        if not extract_hof_closure(margs.get(0).unwrap(), 1, &cparams, &cbody):
+            return -1
+        if cparams.len() != 1:
+            return -1
+        String var_name = cparams.get(0).unwrap()
+        bool by_index = mname == "find_index"
+        return lower_vector_find(&ctx, recv, recv_type_name, var_name, cbody, by_index, elem_name, span, &gmod)
+    # ── each / for_each: side-effecting iteration, no result ─────────
+    # `v.each((x): f(x))` / `v.for_each(f)` → `for x in v: f(x)`. Void HOF —
+    # the closure body is emitted as a statement; the call expression yields
+    # unit. `for_each` is the user-space-wrapper spelling (lib/std/iter.gg
+    # `Vector.for_each[F]`); `each` is the builtin alias — both desugar the
+    # same way, mirroring Rust gg's HofOp::Each.
+    if mname == "each" or mname == "for_each":
         if margs.len() != 1:
             return -1
         Vector[String] cparams = []
@@ -6611,6 +6649,56 @@ int lower_vector_any_all(LowerCtx &ctx, int recv, String recv_type_name, String 
     Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak(None)]
     Vector[ElseBranch] no_elifs = []
     Vector[Stmt] body = [SIf(guard, then_body, no_elifs)]
+    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+    return acc
+
+# `find((x): p)` / `find_index((x): p)` → a first-match Option accumulator
+# with early break. `find` yields `Option[T]` (the element); `find_index`
+# yields `Option[int]` (the 0-based position, threaded via a self-managed
+# counter). The accumulator is seeded with a typed `None` (routed through the
+# `None` ctor → LIR `IEnumInit(tag=1)`) and reassigned to `Some(<x|idx>)` on
+# the first match. Mirrors `lower_vector_any_all` (same early-break shape) but
+# with an Option result. The `Some(...)` construction routes through the
+# SAssign consume machinery: the acc local's Option type drives the
+# expected-type adoption (`try_lower_prelude_variant` → `IEnumInit(tag=0)`).
+int lower_vector_find(LowerCtx &ctx, int recv, String recv_type_name, String var_name, SpannedExpr cbody, bool by_index, String elem_name, Span span, GirModule &gmod):
+    # Accumulator: Option[elem] (find) / Option[int] (find_index).
+    String opt_inner = elem_name
+    if by_index:
+        opt_inner = "int64_t"
+    int inner_tid = resolve_elem_type_id(opt_inner, &gmod)
+    int acc_tid = lookup_or_register_named(&gmod, "Option__" + opt_inner)
+    record_enum_category(&gmod, acc_tid, ENUM_CAT_OPTION, inner_tid, -1)
+    int acc = add_local(&ctx, acc_tid, None)
+    Vector[Operand] none_args = []
+    emit(&ctx, GICallExtern(acc, "None", none_args))
+    if is_droppable_type(acc_tid, &gmod):
+        register_local_for_drop(&ctx, acc, acc_tid, &gmod)
+    String acc_name = "__hof_find_acc_" + int_to_str(acc)
+    nl_put(&ctx, acc_name, acc)
+    # 0-based match-position counter (find_index only, but harmless for find).
+    int idxc = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(idxc, OpConstI64(0)))
+    String idxc_name = "__hof_find_idx_" + int_to_str(idxc)
+    nl_put(&ctx, idxc_name, idxc)
+    SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
+    # then-body: `acc = Some(<x | idx>); break`.
+    SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_name), span)
+    SpannedExpr some_arg = SpannedExpr(EIdentifier(var_name), span)
+    if by_index:
+        some_arg = SpannedExpr(EIdentifier(idxc_name), span)
+    Vector[SpannedExpr] some_args = [some_arg]
+    Vector[String] no_names = []
+    Vector[SpannedType] no_targs = []
+    SpannedExpr some_callee = SpannedExpr(EIdentifier("Some"), span)
+    SpannedExpr some_call = SpannedExpr(ECall(Box(some_callee), some_args, no_names, no_targs), span)
+    Vector[Stmt] then_body = [SAssign(acc_lhs, some_call), SBreak(None)]
+    Vector[ElseBranch] no_elifs = []
+    Vector[Stmt] body = [SIf(cbody.clone(), then_body, no_elifs)]
+    # Advance the position counter each iteration (after the check, so a
+    # 0th-element match records index 0).
+    SpannedExpr idxc_lhs = SpannedExpr(EIdentifier(idxc_name), span)
+    body.push(SCompoundAssign(idxc_lhs, "+", SpannedExpr(EIntLiteral(1), span)))
     lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
     return acc
 

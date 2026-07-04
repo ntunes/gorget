@@ -1873,6 +1873,13 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
         return UNIT_TYPE
     if method == "sort" or method == "swap":
         return UNIT_TYPE
+    # `Vector[T].swap_remove(i)` — O(1) removal (moves last into the hole);
+    # void return (runtime `gorget_array_swap_remove`, Rust builtins.rs
+    # `ret_void`). Sibling of swap above. Without this the call falls through
+    # to the I64 default, creating a bogus destination → cc errors "void value
+    # not ignored as it ought to be".
+    if method == "swap_remove":
+        return UNIT_TYPE
     # Int-returning methods
     if method == "len" or method == "capacity" or method == "find_index":
         return I64_TYPE

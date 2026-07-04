@@ -1972,6 +1972,14 @@ String map_array_method(String method):
             return "gorget_array_reserve"
         case "swap":
             return "gorget_array_swap"
+        case "swap_remove":
+            # `Vector[T].swap_remove(i)` — O(1) removal by moving the last
+            # element into the hole. Rust gg emits a direct
+            # `gorget_array_swap_remove(arr, i)` call (runtime.rs ArraySwapRemove);
+            # the self-host's mangled `Vector__T__swap_remove` arrives here and
+            # routes to the same runtime symbol. Without this arm, link fails
+            # with "undefined reference to Vector__T__swap_remove".
+            return "gorget_array_swap_remove"
         case "index_of":
             return "gorget_array_index_of"
         case "fill":
@@ -2521,6 +2529,14 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         if fn_name == "gorget_array_clear" or fn_name == "gorget_array_reverse":
             return true
         if fn_name == "gorget_array_sort" or fn_name == "gorget_array_extend":
+            return true
+        # `gorget_array_swap(GorgetArray* arr, size_t i, size_t j)` and
+        # `gorget_array_swap_remove(GorgetArray* arr, size_t index)` both mutate
+        # the array in place → arg 0 (self) by pointer. Mirrors the Rust runtime
+        # sig registry (`runtime.rs` ArraySwap/ArraySwapRemove: arg0 = A::Ptr).
+        # Without this the self-arg passes by value and cc rejects
+        # "incompatible type for argument 1".
+        if fn_name == "gorget_array_swap" or fn_name == "gorget_array_swap_remove":
             return true
         if fn_name == "gorget_array_fill":
             # `gorget_array_fill(GorgetArray* arr, size_t n, const void* val_src)`
