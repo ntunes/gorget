@@ -148,11 +148,22 @@ where the caller *might* still use the local after the call, so the helper takes
 the AST argument expression to call `is_last_use_at(name, span)`
 (`context.rs:1043`) on named-local identifiers. Its rule:
 
-1. `Ptr(T)` borrow → always clone through the pointer (`context.rs:1977`).
+1. `Ptr(T)` borrow → clone through the pointer (`context.rs:1977`) — **except an
+   *owning* `!` resource param** (recorded via `is_owning_param` / `set_owning_param`,
+   the caller transferred ownership) at its **last use**, non-string, single-use:
+   that **MOVES** — `set_owned` + `move_zero_and_mark` on the param pointer slot
+   (`context.rs:~2217`, gorget-arena snag #1). This restores the `!`=move=zero-cost
+   contract: a `!` param is owned, so putting it into a collection / returning it /
+   passing it to another consuming position transfers rather than copies. (The
+   explicit-`!` push `out.push(!item)` routes through `consuming_clone_temps`
+   `methods.rs:~2681`, guarded identically by `is_owning_param_ptr`.) The `is_single_use`
+   gate is conservative — a param reassigned in a loop (`lhs = f(!lhs)`) must NOT move.
 2. By-value resource:
    - non-identifier expression (a temp, owning by construction) → no clone, the
      caller will `MoveZero` after the call (`context.rs:2029`);
-   - named local that is a borrow (bare param / ref-state / cow-borrow) → clone;
+   - named local that is a borrow (**bare** param / ref-state / cow-borrow) → clone
+     (a bare param is a *borrow*; the caller keeps ownership, so an owning
+     destination must be handed a copy — contrast the owning `!` param in rule 1);
    - named local **not** at its last use → clone (source still live);
    - last-use, drop-tracked, owned named local → no clone (caller `MoveZero`s).
 
