@@ -2392,6 +2392,22 @@ pub(super) fn resolve_projection_root_local(
     }
 }
 
+/// True if a projection chain contains an `Expr::Index` anywhere on its spine
+/// (`v[i]`, `v[i].f`, `m[i][j].f`, `s.f[k].g`). Used at the method-call
+/// field-receiver site to decide whether `try_resolve_field_place`'s
+/// `Expr::Index` arm could have minted a transient CollectionElement handle that
+/// must be untracked before a later same-collection mutation (Core #4 sibling of
+/// lower_field_assign's hoisted CoW untrack).
+pub(super) fn expr_projection_contains_index(expr: &Expr) -> bool {
+    match expr {
+        Expr::Index { .. } => true,
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+            expr_projection_contains_index(&object.node)
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn extract_field_path_string(expr: &Expr) -> Option<String> {
     match expr {
         Expr::FieldAccess { object, field } => {
@@ -2510,6 +2526,65 @@ pub(super) fn try_resolve_field_place(
             } else {
                 return None;
             }
+        }
+        // `v[i].field = x` / `PTS[i].field = x`: resolve the Index ELEMENT to a
+        // WRITE-THROUGH pointer so the field-store lands in the collection's
+        // heap buffer, not on a stack copy. `lower_index_access` returns a value
+        // COPY for VALUE-type elements (only resource-type elements get a
+        // `Ptr(T)` handle), so a plain `lower_expr(v[i])` on a struct-of-scalars
+        // element silently drops the write. Force the element `Ptr(T)` here for
+        // BOTH element kinds — `index_load` with a `Ptr(elem)` result type
+        // lowers to `gorget_array_get_ptr`, a pointer INTO the buffer, and the
+        // pointer-deref path below (`pointee_type` → `Projection::Deref` + field)
+        // projects the field through it. Handles local and module-level `static`
+        // array bases (GlobalRef → Borrow-local, mirroring `lower_index_access`
+        // and `lower_index_assign`'s T5 arm); the caller's root
+        // `cow_before_mutation` already materialized a private copy for a shared
+        // local, so the pointer aliases the owned buffer. Non-array collections
+        // (Dict/Set) fall through to `None` (their element-field lvalue is a
+        // separate case — see the filed `d[k].field=x` follow-up).
+        Expr::Index { object: coll, index } => {
+            let mut coll_obj = lower_expr(ctx, builder, coll);
+            // Materialize a `static` base (GlobalRef) into an addressable local:
+            // a resource-typed collection Borrows (zero-cost header aliasing the
+            // global's heap buffer, so the element `Ptr` writes THROUGH to the
+            // global); a value-typed base Copies.
+            if let Operand::Constant(Constant::GlobalRef(_)) = coll_obj {
+                let base_ty = infer_operand_type_full(ctx, &coll_obj, builder);
+                let local = builder.add_local(base_ty, None);
+                let mode = if ctx.type_registry.is_resource_type(base_ty) {
+                    crate::ir::instructions::AssignMode::Borrow
+                } else {
+                    crate::ir::instructions::AssignMode::Copy
+                };
+                builder.assign_mode(mode, Place::local(local), coll_obj);
+                coll_obj = Operand::Copy(Place::local(local));
+            }
+            let coll_place = match &coll_obj {
+                Operand::Copy(p) | Operand::Move(p) => p.clone(),
+                _ => return None,
+            };
+            let base_ty = infer_operand_type_full(ctx, &coll_obj, builder);
+            let resolved_base = ctx.pointee_type(base_ty).unwrap_or(base_ty);
+            // Only array-like collections have directly addressable elements
+            // here (typed via `collection_kind`, never a name check).
+            let base_name = ctx
+                .type_name_for_id(resolved_base)
+                .unwrap_or_default()
+                .to_string();
+            let is_array = ctx
+                .type_registry
+                .get_type_def(&base_name)
+                .and_then(|td| td.metadata.collection_kind)
+                == Some(crate::ir::types::CollectionKind::Array);
+            if !is_array {
+                return None;
+            }
+            let elem_type = infer_collection_element_type(ctx, base_ty);
+            let idx = lower_expr(ctx, builder, index);
+            let elem_ptr_type = ctx.register_ptr_type(elem_type);
+            let elem_ptr = builder.index_load(coll_place, idx, elem_ptr_type);
+            Operand::Copy(Place::local(elem_ptr))
         }
         _ => return None,
     };

@@ -624,6 +624,24 @@ pub(super) fn lower_field_assign(
         }
     }
 
+    // CoW UAF fix (round-33, class fix): snapshot the local range spanned by the
+    // WHOLE statement's lowering (object projection chain + RHS value). A
+    // projected object (`v[i].field = x`, `m[i][j].field = x`) mints a transient
+    // CollectionElement/FieldPath handle for EACH index-load level (`m[i]` → h1,
+    // `m[i][j]` → h2), AND the RHS may mint element-refs into the SAME collection
+    // (`v[0].name = v[1].name`); ALL are store-adjacent read handles, dead after
+    // this statement. Any that stays CoW-tracked dangles when a later
+    // same-collection mutation reallocates the private copy the G1 root-
+    // materialize created — see `untrack_transient_element_refs_in_range`.
+    //
+    // Hoisted ABOVE `try_resolve_field_place` (was fallback-only): the
+    // `Expr::Index` arm of that helper resolves `v[i].field` / `PTS[i].field` to
+    // a WRITE-THROUGH element pointer, and for a MULTILEVEL base (`m[i][j].field`)
+    // its inner `lower_expr(m[i])` mints the same transient CollectionElement
+    // handle the fallback does — so the try_resolve early-return path needs the
+    // same untrack, or a `m[i][j].field = x` + same-collection `push` heap-UAFs.
+    let stmt_locals_start = builder.locals.len();
+
     // Try to resolve the full field projection chain without materializing
     // intermediate struct values. This handles nested field writes like
     // `gs.current_weapon.ammo = x` by building Place { local: gs, projections: [Deref, Field(5), Field(2)] }
@@ -639,23 +657,15 @@ pub(super) fn lower_field_assign(
         ctx.func_state.expected_type = prev_expected;
         clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
         emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
+        // Untrack the transient index handles minted by the `Expr::Index` arm
+        // (and any RHS element-refs) — mirrors the fallback's end-of-stmt untrack.
+        ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
         return;
     }
 
     // Fallback: lower_expr on object (may copy intermediate structs)
     // For unique-borrow params (& or !), use the pointer local directly
     // instead of lower_expr which would copy the deref'd value to a temp
-    //
-    // CoW UAF fix (round-33, class fix): snapshot the local range spanned by the
-    // WHOLE statement's lowering (object projection chain + RHS value). A
-    // projected object (`v[i].field = x`, `m[i][j].field = x`) mints a transient
-    // CollectionElement/FieldPath handle for EACH index-load level (`m[i]` → h1,
-    // `m[i][j]` → h2), AND the RHS may mint element-refs into the SAME collection
-    // (`v[0].name = v[1].name`); ALL are store-adjacent read handles, dead after
-    // this statement. Any that stays CoW-tracked dangles when a later
-    // same-collection mutation reallocates the private copy the G1 root-
-    // materialize created — see `untrack_transient_element_refs_in_range`.
-    let stmt_locals_start = builder.locals.len();
     let obj = if let Expr::Identifier(name) = &object.node {
         if let Some((local_id, _)) = ctx.lookup_local(name) {
             if ctx.is_param_borrow_unique(builder, local_id) {
@@ -1397,6 +1407,13 @@ pub(super) fn lower_compound_assign(
     } else if let Expr::FieldAccess { object, field } = &target.node {
         // Compound assign on struct field: obj.field OP= val
         // Desugar to: read field → compute → write field back
+        // Snapshot for the same round-33 CoW untrack the plain field-assign does:
+        // `try_resolve_field_place`'s `Expr::Index` arm resolves `v[i].field OP= x`
+        // / `PTS[i].field OP= x` to a write-through element pointer, and a
+        // multilevel base (`m[i][j].field OP= x`) mints a transient
+        // CollectionElement handle that would dangle on a later same-collection
+        // mutation if left CoW-tracked.
+        let stmt_locals_start = builder.locals.len();
         if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, object, &field.node) {
             // Read current field value
             let cur = builder.add_local(field_type, None);
@@ -1415,6 +1432,7 @@ pub(super) fn lower_compound_assign(
                 );
                 emit_field_drop_if_needed(ctx, builder, &field_place, field_type);
                 builder.assign(field_place, FunctionBuilder::copy(tmp));
+                ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
                 return;
             }
 
@@ -1457,10 +1475,19 @@ pub(super) fn lower_compound_assign(
                 builder.bin_op(gir_op, field_type, FunctionBuilder::copy(cur), rhs)
             };
             builder.assign(field_place, FunctionBuilder::copy(result));
+            ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
         }
     } else if let Expr::Index { object, index } = &target.node {
         // Compound assign on index: obj[i] OP= val
         // Desugar to: current = obj[i]; result = current OP val; obj[i] = result
+        //
+        // Sibling of the FieldAccess arm: the `try_resolve_field_place` call
+        // below (`m[i].field[key] OP= x`) can fire the new `Expr::Index` arm when
+        // `inner_obj` is itself an index (`m[j].field[key]`), minting the same
+        // transient CollectionElement handle the round-33 untrack clears. Snapshot
+        // here and untrack at the arm's exit so it can't dangle on a later
+        // same-collection mutation (Core #4, one fix all siblings).
+        let stmt_locals_start = builder.locals.len();
 
         // Resolve the object — handle field access (self.vec) by resolving in-place
         let (obj, resolved_field_type) = if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
@@ -1733,6 +1760,10 @@ pub(super) fn lower_compound_assign(
                 }
             }
         }
+        // Untrack the transient CollectionElement handles minted by the
+        // `try_resolve_field_place` `Expr::Index` arm (`m[i].field[key] OP= x`) —
+        // mirrors the FieldAccess arm's end-of-stmt untrack (Core #4).
+        ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
     }
 }
 

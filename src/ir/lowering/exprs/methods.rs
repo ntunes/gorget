@@ -11,7 +11,7 @@ use super::{lower_expr, lower_call_arg, maybe_auto_propagate, infer_operand_type
             is_resource_type_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
             index_expr_to_mangle_fragment, try_resolve_field_place, extract_field_path_string,
-            resolve_projection_root_local};
+            resolve_projection_root_local, expr_projection_contains_index};
 
 fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
     if type_id == ctx.type_mapper.owned_string_type {
@@ -2014,7 +2014,22 @@ pub(super) fn lower_method_call(
         // — write-through preserved. Mirrors stmts/assigns.rs:lower_field_assign,
         // which resolves the field place AFTER cow_before_field_mutation.
         let field_place_info = if let Expr::FieldAccess { object, field } = &receiver.node {
-            try_resolve_field_place(ctx, builder, object, &field.node)
+            let info = try_resolve_field_place(ctx, builder, object, &field.node);
+            // CoW UAF (Core #4 sibling): `try_resolve_field_place`'s `Expr::Index`
+            // arm resolves a value-field of an index element (`v[i].vf.method()`)
+            // to a write-through element pointer, and for a MULTILEVEL base
+            // (`m[i][j].vf.method()`) its inner `lower_expr(m[i])` mints a transient
+            // CollectionElement handle. Left CoW-tracked, that handle dangles when a
+            // later same-collection `push` reallocs and a Case-3 clone reads the
+            // freed buffer (ASan heap-UAF). Arm the end-of-statement untrack (the
+            // `did_g1_materialize`-gated `untrack_transient_element_refs_in_range`
+            // below) so the transient is cleared — mirrors lower_field_assign's
+            // hoisted untrack. IR-instruction-neutral for the single-level shape
+            // (base is a bare local → no transient minted → untrack is a no-op).
+            if info.is_some() && expr_projection_contains_index(&object.node) {
+                did_g1_materialize = true;
+            }
+            info
         } else {
             None
         };

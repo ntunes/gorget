@@ -19597,6 +19597,127 @@ fn rust_named_recv_user_mutator_caller_untouched() {
     );
 }
 
+/// RUST reference-miscompile regression (Core #8, R39-T1): a field-store whose
+/// object is an INDEX into a Vector of a VALUE-type element (a struct of scalars)
+/// must WRITE THROUGH to the collection's heap buffer. Before the fix,
+/// `v[0].x = 99` — and the `static`, compound (`PTS[1].x += 100`), nested
+/// (`ns[0].inner.val = 99`), and value-field-method-receiver (`hs[0].c.bump()`)
+/// variants — landed on a STACK COPY of the element and were silently dropped, so
+/// Rust gg printed the STALE value on BOTH the C and LLVM backends. This was a
+/// Core #8 reference miscompile: a RESOURCE-typed element field already wrote
+/// through (the old `lower_index_access` returned a `Ptr` handle only for
+/// resource elements), which pinned the value-vs-resource asymmetry as the root.
+/// Fixed by the new `Expr::Index` arm in `try_resolve_field_place` (forces the
+/// element `Ptr(T)` for value elements too) + the hoisted round-33 CoW untrack.
+///
+/// Why this is NOT a `tests/fixtures/*.gg` fixture (mirrors
+/// `rust_named_recv_user_mutator_caller_untouched` above): `runtime_parity_corpus`
+/// / `lowerer_comparison` / `c_emit_comparison` auto-scan every
+/// `tests/fixtures/*.gg`, and the SELF-HOST lowerer STILL miscompiles this shape
+/// (verified R39-T1: the self-host `run` of `v[0].x = 88` also prints the stale
+/// `10` — it never got the round-33/34 CoW value-element write-through). A corpus
+/// fixture would force self-host agreement and count as a permanent WRONG in
+/// `self_host_runtime_diff`. The self-host mirror is filed in TODO.md; this
+/// Rust-only inline test carries the correct-expected-output regression until
+/// then, asserting BOTH backends since the pre-fix miscompile reproduced on both.
+#[test]
+fn rust_value_index_element_field_writethrough() {
+    let gg_exe: PathBuf = gg_binary().to_path_buf();
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_val_idx_field_wt_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let src = tmp_root.join("value_index_field_writethrough.gg");
+    std::fs::write(
+        &src,
+        concat!(
+            "from std.collections import Vector\n",
+            "\n",
+            "struct Point:\n",
+            "    int x\n",
+            "    int y\n",
+            "\n",
+            "struct Inner:\n",
+            "    int val\n",
+            "\n",
+            "struct Nest:\n",
+            "    Inner inner\n",
+            "    int tag\n",
+            "\n",
+            "struct Counter:\n",
+            "    int n\n",
+            "\n",
+            "equip Counter:\n",
+            "    void bump(&self):\n",
+            "        self.n = self.n + 1\n",
+            "\n",
+            "struct Holder:\n",
+            "    Counter c\n",
+            "    int id\n",
+            "\n",
+            "static Vector[Point] PTS = [Point(1, 2), Point(3, 4)]\n",
+            "\n",
+            "void main():\n",
+            "    PTS[0].x = 99\n",            // static value-element field store
+            "    print(PTS[0].x)\n",          // 99
+            "    print(PTS[1].x)\n",          // 3  (untouched)
+            "    Vector[Point] v = [Point(10, 20), Point(30, 40)]\n",
+            "    v[0].x = 88\n",              // local value-element field store
+            "    print(v[0].x)\n",           // 88
+            "    print(v[1].x)\n",           // 30
+            "    PTS[1].x += 100\n",         // compound on static value element
+            "    print(PTS[1].x)\n",         // 103
+            "    v[1].y += 5\n",             // compound on local value element
+            "    print(v[1].y)\n",           // 45
+            "    Vector[Nest] ns = [Nest(Inner(1), 7), Nest(Inner(2), 8)]\n",
+            "    ns[0].inner.val = 99\n",    // nested value-element field store
+            "    print(ns[0].inner.val)\n",  // 99
+            "    print(ns[1].inner.val)\n",  // 2
+            "    Vector[Holder] hs = [Holder(Counter(0), 1), Holder(Counter(5), 2)]\n",
+            "    hs[0].c.bump()\n",          // &mut-self method on value-field of value-index element
+            "    hs[0].c.bump()\n",
+            "    print(hs[0].c.n)\n",        // 2  (write-through)
+            "    print(hs[1].c.n)\n",        // 5  (untouched)
+            "    print(\"done\")\n",
+        ),
+    )
+    .expect("failed to write value_index_field_writethrough.gg");
+
+    let expected = "99\n3\n88\n30\n103\n45\n99\n2\n2\n5\ndone";
+
+    // Both backends must agree AND be correct — the pre-fix miscompile
+    // reproduced identically on C and LLVM (this fix is in shared GIR lowering,
+    // upstream of both backend emitters).
+    for backend in [None, Some("--backend=llvm")] {
+        let mut cmd = Command::new(&gg_exe);
+        cmd.arg("run").arg(&src).stdin(Stdio::null());
+        if let Some(flag) = backend {
+            cmd.arg(flag);
+        }
+        let label = backend.unwrap_or("(c)");
+        let run = run_with_timeout(&mut cmd, "run value_index_field_writethrough.gg");
+        assert!(
+            run.status.success(),
+            "`gg run {label}` on a value-type index-element field-store should exit 0; got {:?}.\nstderr: {}",
+            run.status.code(),
+            String::from_utf8_lossy(&run.stderr),
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim_end(),
+            expected,
+            "value-type Vector index-element field-store (plain / static / compound / nested / \
+             value-field-method-receiver) must WRITE THROUGH on backend {label} (Core #8 reference \
+             miscompile: pre-fix Rust printed the stale value on BOTH backends).",
+        );
+    }
+    let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
 /// (A) FLOORED DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1).
 ///
 /// Full corpus, live `gg run` oracle. Discovers the MATCH set and the
