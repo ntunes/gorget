@@ -449,6 +449,25 @@ enforced everywhere" — one class remains. **When the untracked-alias-chains
 audit lands, this marker is removed and the doc describes only the single
 uniform rule.**
 
+### Write-through place for an index element — value elements too
+
+Distinct from the materialize-at-mutation above — which fires when the *root*
+of the store is a bare/immutable value — is the write-lvalue for a field-store
+*into an owned collection's element*: `v[i].field = x` must resolve the ADDRESS
+of `v[i]` and write `.field` through it, or the store lands in a throwaway copy
+and is silently lost. `try_resolve_field_place`'s `Expr::Index` arm forces a
+write-through `Ptr` into the element for this — and, since round-39 (`24efcf53`),
+it does so for a **value-type** element (`struct Point`) exactly as it already
+did for a resource element, closing a value-vs-resource asymmetry: previously
+`lower_index_access` returned a value COPY for a value elem (write-through was
+reserved for resource elems), so `v[0].x = 99` dropped the write on *both*
+backends — a reference miscompile, symmetric across local, `static`, compound,
+and nested roots. The arm is `CollectionKind::Array`-gated (a `Dict`/`Set`
+element's write-through field-lvalue is a separate key-typed path, still filed),
+and it hoists the round-33 CoW untrack across its callers (including the
+compound-index arm and the `methods.rs` method-receiver sibling) so the
+transient element ref cannot be left CoW-tracked into a dangling Case-3 clone.
+
 ## Full lazy materialization (#37) — the lazy-CoW default
 
 The design goal (`docs/language-design.md`, the Performance pillar): **value

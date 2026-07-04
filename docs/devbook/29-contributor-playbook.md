@@ -598,6 +598,27 @@ counter increments linearly (no escalation, no overflow). Two rules fall out:
    deferred follow-up. This is the sibling of round-18: there a *partial* commit-chain port
    re-introduced a fixed bug; here a *faithful* port re-introduces UB the reference hides.
 
+### Worked example — round-39: the self-host driver is a build artifact — rebuild it before measuring emitted C
+
+The round-39 T2 track wired real spawn/await into the self-host's `ESpawnBlocking` lowering
+(previously a bare passthrough that ran the callee inline and dropped the `Task`/await). Its
+output-review built the *emitted C* to check the claim and reported the opposite: Group A
+(`spawn_blocking_basic`/`_multi`) was *still* sync-inline, and `spawn_blocking_basic` was leaking
+21 bytes. Both were artifacts of a **stale driver.** `tests/fixtures/self_host_lowerer/driver{,.c}`
+is a *build product* — an incremental `gg` build reuses the committed `driver.c`, so the review had
+measured the *pre-fix* bare-passthrough behavior (a direct `blocking_read`, no spawn runtime), not
+the code the fix emits. The executor cross-checked the reviewer's numbers against its own fixture
+runs, could not reproduce them, and — per "a reviewer can be wrong too" — **refused the amendment
+rather than book a phantom regression.** An independent tiebreaker settled it by forcing a clean
+rebuild (`rm tests/fixtures/self_host_lowerer/driver{,.c}`, then re-running): Group A emits **real**
+pthread-backed spawn/await, and the ASan matrix is **4/5 clean** (only `spawn_blocking_multi`'s
+anonymous await-result temp leaks 14 B — an orthogonal, pre-existing drop-registration gap). The
+lesson is mechanical: **before you measure the self-host's emitted C or run its ASan matrix,
+`rm tests/fixtures/self_host_lowerer/driver{,.c}` so the driver is rebuilt from current sources** —
+an incremental build serves a stale artifact and faithfully reproduces the behavior you just fixed.
+This is the emitted-C sibling of "re-verify a premise against current source": the premise here was
+*a number a reviewer measured*, and the cheap re-verify was a forced rebuild.
+
 ## Worktree discipline: agent worktrees nest under main
 
 Agent worktrees live UNDER the main checkout (`/workspace/gorget/.claude/worktrees/agent-*`).
