@@ -5757,31 +5757,74 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 case ECall(spawn_callee_box, spawn_args, _, _):
                     match (*spawn_callee_box).expr:
                         case EClosure(sp_params, sp_body):
-                            int sp_cid = gmod_next_closure_id(&gmod)
-                            String sp_closure_name = "__Closure_" + int_to_str(sp_cid)
-                            # Push the inline-spawn wrapper stub (unconditional,
-                            # matching the old scan's inline-spawn wrapper push).
-                            String sp_wrap_name = "__spawn_wrap_" + sp_closure_name
-                            Vector[int] sp_wp = []
-                            Vector[GirLocal] sp_wl = [GirLocal(UNIT_TYPE, None, LoOwned(), BoNone(), false)]
-                            Vector[BasicBlock] sp_wb = [BasicBlock([], GTReturn(OpConstUnit()))]
-                            gmod.functions.push(GirFunction(sp_wrap_name, !sp_wp, UNIT_TYPE, !sp_wl, !sp_wb, [], []))
-                            # Record the closure (lowerable guard identical to
-                            # the EClosure arm) so the post-pass pushes its
-                            # __Closure_N__call.
-                            ClosureSig sp_sig = compute_closure_sig(sp_cid, sp_params, sp_body, &gmod, -1)
-                            bool sp_lowerable = not (closure_body_captures(sp_params, sp_body, &gmod) or stmts_have_nested_closure(sp_body))
-                            # inline-SPAWN closures: capture support is DEFERRED
-                            # (stay stubbed-if-capturing). Pass empty captures.
-                            Vector[ClosureCapture] sp_no_caps = []
-                            gmod.lifted_closures.push(LiftedClosure(sp_cid, sp_closure_name + "__call", sp_sig.self_ptr, sp_sig.abi_param_types, sp_sig.body_param_types, sp_sig.body_param_names, sp_sig.return_type, sp_body, false, sp_lowerable, !sp_no_caps))
-                            # Lower the spawn-call args for side effects (don't
-                            # drop them, as the old ECall else:pass did).
-                            for sp_arg in spawn_args:
-                                lower_expr(&ctx, sp_arg, &gmod)
-                            int sp_dst = add_local(&ctx, UNIT_TYPE, None)
-                            emit(&ctx, GIAssign(sp_dst, OpConstUnit()))
-                            return sp_dst
+                            # Inline-spawn `spawn ((): body)(args)`. The self-host
+                            # closure-spawn model is SYNCHRONOUS-INLINE: the closure
+                            # body runs at the call site and the paired `.await()`
+                            # is a no-op — identical to the already-passing
+                            # `spawn printer()` closure-variable path (which lowers
+                            # `printer()` as a direct `fn_ptr(env)` call cast to the
+                            # Task type). The OLD code emitted an EMPTY
+                            # `__spawn_wrap_` stub + passed empty captures ("capture
+                            # support DEFERRED"), so the closure body NEVER ran
+                            # (spawn_closure_inline / spawn_unchecked* printed
+                            # nothing for the spawned closure).
+                            #
+                            # Fix: materialize the inline closure to its
+                            # GorgetClosure VALUE (the EClosure make-site mints the
+                            # cid, records the LiftedClosure, materializes captures
+                            # into a heap env-box, and the post-pass pushes
+                            # `__Closure_N__call`), then dispatch it exactly like
+                            # the direct-IIFE arm (:2626): closure value as arg-0,
+                            # call args borrowed, emit `__callable_<arity>`. The
+                            # result is typed with `ctx.expected_type` (the Task
+                            # type from the binding SVarDecl) so the codegen casts
+                            # the fn ptr to `Task__T(*)(void*)` (non-void) — a bare
+                            # `void` return over a used slot would `void value not
+                            # ignored` CC-FAIL. Mirrors the closure-LOCAL call
+                            # path's `expected_type` return-type fallback (:2610).
+                            int isp_callable = lower_expr(&ctx, *spawn_callee_box, &gmod)
+                            Vector[Operand] isp_call_args = []
+                            isp_call_args.push(op_consume(&ctx, &gmod, isp_callable, CkCallArgBorrow()))
+                            for isp_arg in spawn_args:
+                                # SIBLING of the IIFE arg loop (:2650): a
+                                # borrow-unique PARAM identifier arg is passed
+                                # THROUGH by pointer, not auto-dereffed to a value.
+                                bool isp_passed_ptr = false
+                                match isp_arg.expr:
+                                    case EIdentifier(isp_name):
+                                        if nl_contains(&ctx, isp_name):
+                                            int isp_lid = nl_get(&ctx, isp_name)
+                                            GirLocal isp_loc = ctx.locals.get(isp_lid).unwrap()
+                                            bool isp_is_param = false
+                                            match isp_loc.ownership:
+                                                case LoParam():
+                                                    isp_is_param = true
+                                                else:
+                                                    pass
+                                            if isp_is_param and isp_loc.type_id >= PRIM_COUNT and isp_loc.type_id < gmod.type_table.len():
+                                                match gmod.type_table.get(isp_loc.type_id).unwrap():
+                                                    case GtMutPtr(_):
+                                                        isp_call_args.push(op_consume(&ctx, &gmod, isp_lid, CkCallArgBorrow()))
+                                                        isp_passed_ptr = true
+                                                    else:
+                                                        pass
+                                    else:
+                                        pass
+                                if not isp_passed_ptr:
+                                    int isp_aval = lower_expr(&ctx, isp_arg, &gmod)
+                                    isp_call_args.push(op_consume(&ctx, &gmod, isp_aval, CkCallArgBorrow()))
+                            int isp_arity = spawn_args.len()
+                            String isp_call = "__callable_" + int_to_str(isp_arity)
+                            # Return type: the Task expected_type from the binding
+                            # SVarDecl (non-void so the cast over the result slot is
+                            # valid). Fall back to the closure's own return type when
+                            # no expected_type is set (bare `spawn (...)()` statement).
+                            int isp_ret = ctx.expected_type
+                            if isp_ret < 0:
+                                isp_ret = compute_closure_sig(0, sp_params, sp_body, &gmod, -1).return_type
+                            int isp_dst = add_local(&ctx, isp_ret, None)
+                            emit(&ctx, GICallExtern(isp_dst, isp_call, isp_call_args))
+                            return isp_dst
                         case EIdentifier(spawn_named_fn):
                             # `spawn ident(args)`: the identifier is EITHER a real
                             # named function OR a local CLOSURE variable (`auto g =
@@ -5855,7 +5898,31 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 else:
                     return lower_expr(&ctx, *inner_box, &gmod)
         case ESpawnBlocking(inner_box):
-            return lower_expr(&ctx, *inner_box, &gmod)
+            # `spawn blocking fn(args)` — runs the function on the blocking
+            # thread pool. For OUTPUT parity the blocking-pool vs async-pool
+            # distinction is invisible: what matters is that the awaited result
+            # is the function's real return value. Route a NAMED-fn call through
+            # the same `lower_named_fn_spawn` wiring the regular `ESpawn`
+            # EIdentifier arm uses (emits `__gorget_spawn_<fn>` into a Task-typed
+            # dst; the binding SVarDecl + `.await()` complete the round-trip).
+            # Mirrors Rust gg's `Expr::SpawnBlocking` arm (exprs/mod.rs:1471) —
+            # same producer/task registration as regular spawn (Rust also adds
+            # `blocking_fn_names` for pool selection, which does not change the
+            # emitted VALUE). Any non-named-fn shape falls back to the bare
+            # passthrough (its prior behavior).
+            match (*inner_box).expr:
+                case ECall(sb_callee_box, sb_args, _, _):
+                    match (*sb_callee_box).expr:
+                        case EIdentifier(sb_named_fn):
+                            if gmod.fn_sigs.contains(sb_named_fn) and not nl_contains(&ctx, sb_named_fn):
+                                int sb_named_dst = lower_named_fn_spawn(&ctx, sb_named_fn, sb_args, &gmod)
+                                if sb_named_dst >= 0:
+                                    return sb_named_dst
+                            return lower_expr(&ctx, *inner_box, &gmod)
+                        else:
+                            return lower_expr(&ctx, *inner_box, &gmod)
+                else:
+                    return lower_expr(&ctx, *inner_box, &gmod)
         case EDictLiteral(dkeys, dvals):
             # `{}` / `{k: v, …}` — lower each key/value for side effects,
             # then call the appropriate constructor to produce a map with
