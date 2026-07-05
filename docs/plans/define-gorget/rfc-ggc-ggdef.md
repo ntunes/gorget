@@ -1,6 +1,6 @@
 # RFC: Gorget Core (GGC) and `ggdef` — the executable definition of Gorget
 
-> **STATUS: DRAFT v3 — under sequential fresh-agent review (passes 1-2 folded; pass 3 pending).
+> **STATUS: DRAFT v4 — under sequential fresh-agent review (passes 1-3 folded; pass 4 pending).
 > Do not implement from this document until it says APPROVED.**
 > Companion: [`decisions.md`](decisions.md) (D1–D6 normative), [`scouts/`](scouts/).
 
@@ -58,21 +58,28 @@ prose (float formatting is decision §8.2).
 `ggdef` implements **eager value semantics**:
 
 - **Implicit-copy positions (closed set, matching the D4 ledger):** bare-assign binds,
-  constructor/struct/enum field init, collection put, return, closure capture. At these, a
-  value is conceptually copied as-of that point (or moved when tagged `Move`). Clone-vs-move
-  liveness optimization does not exist in `ggdef`.
-- **`Borrow` positions (bare params, reads, receivers) are non-owning views for ALL types** —
-  never a copy, never a drop in the borrower. (This is what the language already says; it also
-  means drop-tainted values are freely borrowable, and drop counts stay source-visible.)
+  constructor/struct/enum field init, collection put, return, closure capture, and
+  **materialize-on-write (below)**. At the first five, a value is conceptually copied as-of
+  that point (or moved when tagged `Move`). Clone-vs-move liveness optimization does not exist
+  in `ggdef`.
+- **`Borrow` positions (bare params, reads, receivers) are non-owning views for ALL types on
+  READ** — no copy, no drop in the borrower, for reading. **A WRITE through a Borrow binding
+  MATERIALIZES**: at the first write, the binding becomes a persistent private copy holding the
+  pre-write value with the write applied; all subsequent reads AND writes through that binding
+  see the copy; the owner is untouched; the copy drops in the borrower's scope. This is the
+  language's core CoW rule (§3.1) stated as eager semantics — it is what makes the deadwrite
+  family and D2 evaluable. **`self` is a bare binding (D2): a write through plain `self`
+  materializes exactly as above.**
 - **`WriteThrough` places** alias the owner; writes land on it. **`Move`** transfers and kills
-  the source. **`self`** is a bare binding (D2).
+  the source.
 - **Drop-purity (D4):** types carry a transitive `drop_tainted` bit from elaboration.
-  Elaboration REJECTS the implicit-copy positions above for tainted types
-  (`E_MoveWithoutOperator` family); `ggdef` therefore never implicitly copies a tainted value;
-  custom drops run at scope exit in reverse declaration order; **drop count/order for tainted
-  types is normative and byte-tested**. ⚠ Prerequisite: the collection-element custom-Drop
-  loss on named-local push (TODO HIGH, 2026-07-05) must be fixed before drop-count spectests
-  gate implementations.
+  Elaboration REJECTS all SIX implicit-copy positions above for tainted types — including
+  materialize-on-write: a write through a Borrow binding of a tainted type is a compile error
+  with the move/clone/`&` fix-it (`E_MoveWithoutOperator` family) — so `ggdef` never implicitly
+  copies a tainted value; custom drops run at scope exit in reverse declaration order; **drop
+  count/order for tainted types is normative and byte-tested**. ⚠ Prerequisite: the
+  collection-element custom-Drop loss on named-local push (TODO HIGH, 2026-07-05) must be
+  fixed before drop-count spectests gate implementations.
 - **Resource exhaustion (stack depth, OOM) is implementation-defined** and outside
   output-comparison conformance (places ledger C11: unbounded recursion → OS-guard SIGSEGV
   accepted by design). `ggdef` is total via fuel and never exhausts a real stack.
@@ -106,7 +113,8 @@ desugaring (throws→Result, for→loops, comprehensions, method→call, dot-sho
 ranges/`in`, `with`-resource, named scopes, `do:`); its OWN name resolution (the production
 resolver drags in the TypeTable; sharing defeats the ratchet); **local type inference**
 (`auto`, receiver types, D6's inferable-`E` judgment); **a simple monomorphizer** (GGC is
-monomorphic; phase 0 needs the minimal concrete-equip + generic-equip-on-builtin slice, §6);
+monomorphic; phase 0 needs the concrete-equip slice; the generic-equip-on-builtin slice is
+OPTIONAL in phase 0 per §6's exclusion list);
 trait-method resolution with **trait objects elaborated to closure-records + Box**; the D4
 transitive taint computation; the D4/D5/D6 rejections (**elaboration is their normative home**;
 production mirrors them). Elaboration-vs-production disagreements are conformance findings.
@@ -155,7 +163,7 @@ Design notes (load-bearing, from pass-2 grammar verification):
 | binding/param/`self` modes; structs; enums; tuples; match; if/while/loop/for; closures; comprehensions; throws/Result/fault-catch; `assert`; operators incl. user overloads (→ calls per C9); newtypes (→ single-field struct, `.0`); type aliases (elab-time); ranges + `in` (→ sugar); `with expr as name:` (→ scoped bind + drop-at-exit); named scopes + `do:` (→ blocks); Vector/Dict/Set/HashMap/HashSet; Box; String; print/f-strings (formatting normative) | **GGC or elaborated sugar (v1)** |
 | traits/equip static dispatch; generics/monomorph; trait objects (→ closure-record + Box) | **elaborated (§2.4), v1** |
 | `const` locals; module `static` globals (init order, mutation, program-exit drops) | **phase 1** (statics are observable global state — need explicit GGC store rules) |
-| **spec stdlib boundary**: the pure helpers spectests use (`std.conv`, `std.fmt`, pure parts of `std.collections`) | **enumerated shim list, v1**: elaboration maps each to a GGC intrinsic or a pure GGC-level definition shipped with `ggdef`; anything NOT on the shim list is out of spec v1. The list is closed and versioned. |
+| **spec stdlib boundary**: the pure helpers spectests use | **enumerated shim list, v1** (measured against the target families): `std.collections.{Vector, Set, Dict}` (import→builtin-value mapping; Vector/Dict also prelude-available) + `std.conv.int_to_str`. Elaboration maps each to a GGC intrinsic or a pure GGC-level definition shipped with `ggdef`; anything NOT on the list is out of spec v1; growing the list is a reviewed, versioned change. (`std.sync` atomics are NOT shims — phase 3.) |
 | `Shared`/`Weak`/`Mutex`/`RwLock`/atomics/`shared`/tasks/channels/`select`/async | **phase 3** (reference-cell value kind + scheduler Nondet; B6/B9/B10 spectests wait) |
 | `meta` (all forms) | **phase 2** (elaboration-time; production meta module is off-limits; v1 spectests exclude meta fixtures) |
 | directives | **dispositioned individually**: `strip-asserts` = impl option outside conformance; others (scheduler, trace, hot-reload…) = impl options, out of spec; any directive that changes language semantics must instead become a spec-versioned feature (none known today — verify in phase 1) |
@@ -187,8 +195,10 @@ spectests/
 
 - **Frontmatter:** `mode: run|static-error|parse-error`; `expect:` (stdout+exit / diagnostic
   code); `args:`/`stdin:`/`files:`; `nondet: seeds=N`; `since:`; `features:`;
-  `adjudicator: ggdef | production-v1`. Trap output normalized (defined panic message shape,
-  file:line normalized) — the normalization rule is spec text.
+  `adjudicator: ggdef | production-v1 | prose` (`prose` = expectations derived from spec prose
+  for rejections NEITHER ggdef-elaboration nor production yet implements — the §2.3
+  invariant-#8 findings live here until the rejection ships). Trap output normalized (defined
+  panic message shape, file:line normalized) — the normalization rule is spec text.
 - **Expectation provenance:** `run/` + elaboration-owned rejections (D4/D5/D6) are
   **ggdef-generated**, human-review-diffed. `parse-error/` expectations derive from the shared
   production parser (trusted-declared — an inversion in name only; stated for honesty). Other
@@ -224,27 +234,33 @@ diagnostics; registry maps code → prose section → fixtures; production adopt
 ## 6. Phased delivery
 
 - **Phase 0 — walking skeleton.** Elaborator+evaluator for the HONEST subset the target
-  fixtures actually use (measured, pass 2): binds/aliases/mutation-severing; Vector/struct/
-  String/**Option+Result with `.unwrap()`**; bare/&/! params; **concrete equip method→call**;
-  **f-strings (int/string interpolations; no float-printing fixtures exist in the target
-  families — float formatting deferred to §8.2 without blocking phase 0)**; for-loops;
-  imports + the v1 shim list; by-value closures; scope drops; print. **Exclusions are a
-  HARDCODED fixture list, not `features:`** (frontmatter is phase 1): the 3 generic-equip
-  cow fixtures (`cow_element_borrow_alias_mutate`, `cow_p3_alias_chain_mutate`,
-  `cow_p3_index_mutate`) unless the minimal generic-equip-on-Vector slice proves cheap.
+  fixtures actually use (measured, passes 2-3): binds/aliases/**materialize-on-write**;
+  Vector/**Dict/Set**/struct/String; **Option+Result with `.unwrap()`**; **match + user
+  payload enums + pattern bindings**; bare/&/! params; **concrete equip method→call incl.
+  `equip T with Drop`**; **f-strings (int/string interpolations; no float-printing fixtures
+  exist in the target families — §8.2 doesn't block phase 0)**; for/**while** loops;
+  **ranges + string slices `s[a..b]`** (the W3c shapes); **named-arg construction**
+  (`Point(x=1, y=2)`); **`with expr as name:`**; imports + the v1 shim list (§2.6);
+  by-value closures; scope drops; print. **Exclusions are a HARDCODED fixture list, not
+  `features:`** (frontmatter is phase 1): the 3 generic-equip cow fixtures
+  (`cow_element_borrow_alias_mutate`, `cow_p3_alias_chain_mutate`, `cow_p3_index_mutate`) —
+  generic-equip-on-builtin is optional; pull it in only if cheap — plus
+  `deadwrite_ok_atomic_add` (std.sync atomics are phase 3; its intended stdout requires
+  interior-mutability write-through that v1 GGC cannot express).
   Acceptance: (a) runs the cow_* family (95 programs) minus the exclusion list with output
-  matching the ratified expectations (C1–C10); (b) **the deadwrite_* PROGRAMS execute under
-  ggdef with their D1/D2-implied stdout** (expectations newly ratified; the lint's stderr
-  assertions remain production-side — DeadBareParamWrite is a production diagnostic, not GGC
-  semantics); (c) adjudicates the two smith bugs (`9` / `ablog`) and the EMove question
-  (pre-mutation value, per D1) from the definition. Import ratchet lands with the crate.
-  W3a-d String shapes are IN; their clone-count side is D1-allowed variation → annexe.
-- **Phase 1 — FULL v1 coverage + floors:** everything in §2.6 rows 1-2 not in phase 0
-  (match/enums beyond Option/Result, closures with capture lists, traits/generics/trait
-  objects, statics, comprehensions, ranges); frontmatter migration (converter from the
-  ~1,212 literal run_gg pairs → `ggdef -- gen` regeneration → human-reviewed diff — blocked
-  for float-printing fixtures on §8.2); per-impl conformance reports + floors; ggdef verdict
-  lane in smith; D4/D5/D6 rejections in elaboration + production + negative fixtures;
+  matching the ratified expectations (C1–C10); (b) the deadwrite_* PROGRAMS minus the
+  exclusion list execute under ggdef with their D1/D2-implied stdout (expectations newly
+  ratified; the lint's stderr assertions remain production-side — DeadBareParamWrite is a
+  production diagnostic, not GGC semantics); (c) adjudicates the two smith bugs (`9` /
+  `ablog`) and the EMove question (pre-mutation value, per D1) from the definition. Import
+  ratchet lands with the crate. W3a-d String shapes are IN; their clone-count side is
+  D1-allowed variation → annexe.
+- **Phase 1 — coverage completion + floors:** the §2.6 rows-1-2 remainder beyond the phase-0
+  subset (closures with capture lists, traits/generics/trait objects, comprehensions,
+  statics, the long tail of stdlib-free constructs); frontmatter migration (converter from
+  the ~1,218 literal run_gg pairs → `ggdef -- gen` regeneration → human-reviewed diff —
+  blocked for float-printing fixtures on §8.2); per-impl conformance reports + floors; ggdef
+  verdict lane in smith; D4/D5/D6 rejections in elaboration + production + negative fixtures;
   diagnostic-code registry.
 - **Phase 2 — annexe + `gg explain` v0 + minimal spec meta.**
 - **Phase 3 — sharing & concurrency** (reference cells, scheduler Nondet, B6/B9/B10).
