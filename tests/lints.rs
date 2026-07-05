@@ -1785,6 +1785,103 @@ fn self_host_vector_swap_abi_triple() {
     );
 }
 
+/// R43 iterator-protocol equip-default short-naming sibling ratchet
+/// (CLAUDE.md rule 4 / "Sibling-site drift" + Core #8 bundle).
+///
+/// An `equip X with Iterator[int]:` block's inherited DEFAULT methods
+/// (min/sum/product/contains/join …) are dispatched at the CALL SITE by the
+/// SHORT `X__method` symbol — mirroring the explicit `next` short-naming via
+/// `is_iterator_protocol_trait`. But the default-body emit in `lower_module`
+/// mangles them LONG (`{Trait}_for_{X}__method`) by default, so BOTH gated
+/// emit arms must OVERRIDE to the short symbol when the trait is
+/// iterator-protocol — else `c.iter().sum()` → `CounterIter__sum` dangles →
+/// C89 implicit-int → cc "incompatible types" (R43 `stdlib_iter_bounds_coverage`).
+///
+/// TWO body-emit arms carry the override (Core #4 / sibling-site-drift):
+///   - `did_split` (own-trait defaults) — gated by `tc_gate_sp`.
+///   - `not did_split` sibling — gated by `tc_gate`.
+/// The parent-trait defaults arm (`pt_mangled = eq_target_sp + "__" + ...`)
+/// already short-names UNCONDITIONALLY and is deliberately NOT pinned here: its
+/// short-naming is not the iterator-protocol override, and the needles below use
+/// the `dm_mangled2 = eq_target_sp` / `dm_mangled = eq_target` reassignment
+/// prefixes (which the LONG declarations `... = dm_trait2 + "_for_" + ...` and the
+/// `pt_mangled = ...` line CANNOT match), so pinning them can't falsely bless
+/// that unconditional line.
+///
+/// Companion axis (Root A2): the nullary-factory static-return-type list in
+/// `lower_expr_inner` must carry BOTH `default` AND `one` — each is a
+/// Self-returning factory static (`T.default()` / `T.one()`). A miss makes the
+/// accumulator fall through to I64 → integer-mul miscompile of `.product()`.
+///
+/// **If this fails:** a third iterator-protocol default emit-arm landed without
+/// the short-name override, OR the `default`/`one` static-ret list lost an
+/// entry, OR a new Self-returning factory static (e.g. `zero`) needs adding to
+/// the list (and to this lint).
+#[test]
+fn self_host_iter_protocol_equip_default_shortname() {
+    let lower =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower.gg").unwrap_or_default();
+    let lower_expr =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg").unwrap_or_default();
+
+    // Scope to the enclosing function bodies (comment-stripped) so an unrelated
+    // mention can't mask a missing override.
+    let module_body =
+        self_host_fn_body_noncomment(&lower, "GirModule lower_module(").join("\n");
+    let expr_body =
+        self_host_fn_body_noncomment(&lower_expr, "int lower_expr_inner(").join("\n");
+
+    let mut missing: Vec<&str> = Vec::new();
+
+    // (1) did_split arm short-name OVERRIDE. The `dm_mangled2 = eq_target_sp`
+    //     reassignment prefix is unique to the gated override — the LONG
+    //     declaration is `dm_mangled2 = dm_trait2 + "_for_" + eq_target_sp + ...`
+    //     and the unconditional parent-trait line is `pt_mangled = eq_target_sp
+    //     + ...`, so this needle matches ONLY the override.
+    if !module_body.contains("dm_mangled2 = eq_target_sp + \"__\" + tmeth2.name") {
+        missing.push(
+            "lower.gg did_split arm: iterator-protocol default short-name override \
+             `dm_mangled2 = eq_target_sp + \"__\" + tmeth2.name` (gated by tc_gate_sp) missing",
+        );
+    }
+    // (2) not-did_split sibling arm short-name OVERRIDE (same reasoning: the LONG
+    //     declaration is `dm_mangled = dm_trait + "_for_" + eq_target + ...`).
+    if !module_body.contains("dm_mangled = eq_target + \"__\" + tmeth.name") {
+        missing.push(
+            "lower.gg not-did_split arm: iterator-protocol default short-name override \
+             `dm_mangled = eq_target + \"__\" + tmeth.name` (gated by tc_gate) missing",
+        );
+    }
+    // (3) the short-name override must stay GATED on the typed iterator-protocol
+    //     predicate — unconditional short-naming breaks non-iterator equips
+    //     (cf. the Writer.flush −85 regression).
+    if !module_body.contains("is_iterator_protocol_trait(tname)") {
+        missing.push(
+            "lower.gg: the `is_iterator_protocol_trait(tname)` gate for the equip-default \
+             short-name overrides is missing — the override must stay typed-predicate-gated",
+        );
+    }
+    // (4) nullary-factory static-ret list carries BOTH default AND one.
+    if !expr_body.contains("mname == \"default\" or mname == \"one\"") {
+        missing.push(
+            "lower_expr.gg: the Self-returning nullary-factory static-ret arm must be \
+             `mname == \"default\" or mname == \"one\"` (a miss lands `.product()` acc as I64)",
+        );
+    }
+
+    assert!(
+        missing.is_empty(),
+        "Self-host iterator-protocol equip-default short-naming / factory-static ABI desynced:\n  {}\n\n\
+         BOTH `lower_module` default-body emit arms must OVERRIDE to the SHORT `{{Type}}__method` \
+         symbol when `is_iterator_protocol_trait(tname)` (the call site dispatches short, mirroring \
+         `next`), AND the `lower_expr_inner` factory-static return-type list must carry both \
+         `default` and `one`. Adding a third emit-arm — or a new Self-returning factory static \
+         (e.g. `zero`) — without extending its sibling is the R43 desync that broke \
+         `stdlib_iter_bounds_coverage`. Re-add the override / list entry, then extend this lint.",
+        missing.join("\n  "),
+    );
+}
+
 /// Snag #11 sibling-guard ratchet (CLAUDE.md rule 4 / "Sibling-site drift")
 /// over the self-host trait-equip SYMBOL-MANGLE sites. The self-host mangles an
 /// equip method's symbol via TWO routes, mirroring Rust gg

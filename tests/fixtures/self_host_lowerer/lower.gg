@@ -5197,6 +5197,13 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                                         if emit_dm2:
                                             String dm_trait2 = mangle_trait_name(tname)
                                             String dm_mangled2 = dm_trait2 + "_for_" + eq_target_sp + "__" + tmeth2.name
+                                            # Root A (R43): iterator-protocol trait defaults are
+                                            # dispatched by SHORT name at the call site (mirroring
+                                            # the explicit `next` short-naming — is_iterator_
+                                            # protocol_trait). Emit the inherited defaults short too,
+                                            # or `c.iter().sum()` → `CounterIter__sum` dangles.
+                                            if tc_gate_sp:
+                                                dm_mangled2 = eq_target_sp + "__" + tmeth2.name
                                             # Root #2: bind `Self` → *Target so `lower_function`'s
                                             # param loop types the default body's `self` param as
                                             # the concrete struct pointer (map_ast_type(TSelf())
@@ -5333,6 +5340,10 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                                                 String eq_target = type_to_c_name(eqblk.target, &gmod)
                                                 String dm_trait = mangle_trait_name(tname)
                                                 String dm_mangled = dm_trait + "_for_" + eq_target + "__" + tmeth.name
+                                                # Root A (R43): iterator-protocol defaults short-named
+                                                # (see the did_split sibling above).
+                                                if tc_gate:
+                                                    dm_mangled = eq_target + "__" + tmeth.name
                                                 # Root #2: concrete-self-ptr binding (non-split
                                                 # unregistered route — same I64-self bug).
                                                 if not tc_gate:

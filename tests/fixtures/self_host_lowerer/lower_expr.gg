@@ -3052,16 +3052,24 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             static_ret = lookup_or_register_named(&gmod, ident_name)
                         elif gmod.fn_sigs.contains(static_name):
                             static_ret = gmod.fn_sigs.get(static_name).unwrap()
-                        elif mname == "default":
+                        elif mname == "default" or mname == "one":
+                            # `.default()` (additive identity) AND `.one()`
+                            # (multiplicative identity, Numeric) BOTH return the
+                            # RECEIVER type. Root A2 (R43): the `.one()` arm was
+                            # missing, so `T acc = T.one()` in the `product`
+                            # default fell through to I64_TYPE — `acc` landed
+                            # int64_t while `double__one()` returns double, so the
+                            # loop's `acc * x` lowered as INTEGER mul (op_ty =
+                            # lhs/acc type) → `vf.iter().product()` computed 0.0
+                            # instead of 1.875. Mirrors the `.default()` handling.
                             if substituted_tid >= 0:
-                                # Generic-param substitution: `.default()` returns
-                                # the receiver type, whose tid `type_subs` already
-                                # resolved. Use it directly — DO NOT reconstruct it
-                                # from the C-name (int64_t / GorgetString / double)
-                                # via `prim_name_to_type`, which returns -1 for
-                                # C-names → static_ret stays I64_TYPE → the slot
-                                # lands int64_t while `.default()` returns Str →
-                                # C "incompatible types" CC-FAIL.
+                                # Generic-param substitution: the tid `type_subs`
+                                # already resolved. Use it directly — DO NOT
+                                # reconstruct it from the C-name (int64_t /
+                                # GorgetString / double) via `prim_name_to_type`,
+                                # which returns -1 for C-names → static_ret stays
+                                # I64_TYPE → the slot lands int64_t while the call
+                                # returns Str/double → C "incompatible types".
                                 static_ret = substituted_tid
                             elif gmod.type_infos.contains(ident_name):
                                 static_ret = lookup_or_register_named(&gmod, ident_name)
