@@ -1,0 +1,11 @@
+# DeadBareParamWrite negative: read-before-write inside the SAME loop —
+# loop-carried read-after-write (iteration 2 reads iteration 1's write).
+void grow(Vector[int] xs):
+    for i in 0..3:
+        print(xs.len())
+        xs.push(i)
+
+void main():
+    Vector[int] a = [1]
+    grow(a)
+    print(a.len())

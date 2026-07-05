@@ -3814,6 +3814,346 @@ void main():
         );
     }
 
+    // ─── DeadBareParamWrite (dead write on a bare CoW param) ──
+
+    fn has_deadwrite(
+        warnings: &[crate::semantic::errors::SemanticWarning],
+        param: &str,
+    ) -> bool {
+        has_warning(warnings, |k| matches!(k,
+            crate::semantic::errors::SemanticWarningKind::DeadBareParamWrite { name, .. }
+            if name == param
+        ))
+    }
+
+    #[test]
+    fn dead_bare_param_index_assign_warns() {
+        let source = "\
+void relabel(Vector[int] xs):
+    xs[0] = 99
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    relabel(a)
+    print(a[0])
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_deadwrite(&warnings, "xs"),
+            "expected DeadBareParamWrite for xs, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_push_warns() {
+        let source = "\
+void add_item(Vector[int] xs):
+    xs.push(42)
+
+void main():
+    Vector[int] a = [1]
+    add_item(a)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_deadwrite(&warnings, "xs"),
+            "expected DeadBareParamWrite for xs push, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_string_push_warns() {
+        let source = "\
+void shout(String s):
+    s.push(\"!\")
+
+void main():
+    String m = \"hi\"
+    shout(m)
+    print(m)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_deadwrite(&warnings, "s"),
+            "expected DeadBareParamWrite for String s, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_user_mut_method_warns() {
+        let source = "\
+struct Counter:
+    Vector[int] hits
+
+equip Counter:
+    void bump(&self):
+        self.hits.push(1)
+
+void tally(Counter c):
+    c.bump()
+
+void main():
+    Counter c = Counter(hits=[0])
+    tally(c)
+    print(c.hits.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_deadwrite(&warnings, "c"),
+            "expected DeadBareParamWrite for &self method on c, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_chained_stmt_mutator_warns() {
+        // `xs.pop().unwrap()` as a statement: the whole chain's result is
+        // discarded, caller unchanged — warns by design (the span.start
+        // statement-position classification).
+        let source = "\
+void trim(Vector[int] xs):
+    xs.pop().unwrap()
+
+void main():
+    Vector[int] a = [1, 2]
+    trim(a)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_deadwrite(&warnings, "xs"),
+            "expected DeadBareParamWrite for chained stmt-position pop, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_write_param_span_is_declaration() {
+        // The secondary label must point at the parameter declaration, which
+        // precedes the mutation site in the source.
+        let source = "\
+void relabel(Vector[int] xs):
+    xs[0] = 99
+
+void main():
+    Vector[int] a = [1]
+    relabel(a)
+    print(a[0])
+";
+        let warnings = check_warnings(source);
+        let dw = warnings.iter().find(|w| matches!(&w.kind,
+            crate::semantic::errors::SemanticWarningKind::DeadBareParamWrite { name, .. }
+            if name == "xs"
+        )).expect("expected DeadBareParamWrite for xs");
+        if let crate::semantic::errors::SemanticWarningKind::DeadBareParamWrite { param_span, .. } = &dw.kind {
+            assert!(
+                param_span.start < dw.span.start,
+                "param declaration span {:?} should precede the mutation span {:?}",
+                param_span, dw.span
+            );
+        }
+    }
+
+    #[test]
+    fn dead_bare_param_read_after_write_no_warn() {
+        let source = "\
+int peek_mod(Vector[int] xs):
+    xs[0] = 99
+    return xs[0]
+
+void main():
+    Vector[int] a = [1, 2]
+    print(peek_mod(a))
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "xs"),
+            "expected no DeadBareParamWrite for scratch-copy read, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_mut_borrow_no_warn() {
+        let source = "\
+void add_item(Vector[int] &xs):
+    xs.push(42)
+
+void main():
+    Vector[int] a = [1]
+    add_item(&a)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "xs"),
+            "expected no DeadBareParamWrite for `&` param, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_while_drain_no_warn() {
+        // The while condition re-evaluates every iteration — its read is
+        // loop-carried with the body's pop.
+        let source = "\
+void drain(Vector[int] xs):
+    while xs.len() > 2:
+        xs.pop()
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    drain(a)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "xs"),
+            "expected no DeadBareParamWrite for while-cond drain, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_loop_read_before_write_no_warn() {
+        let source = "\
+void grow(Vector[int] xs):
+    for i in 0..3:
+        print(xs.len())
+        xs.push(i)
+
+void main():
+    Vector[int] a = [1]
+    grow(a)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "xs"),
+            "expected no DeadBareParamWrite for loop-carried read, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_rebind_no_warn() {
+        let source = "\
+void rebind(Vector[int] xs):
+    xs = [9, 9]
+    xs.push(1)
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1]
+    rebind(a)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "xs"),
+            "expected no DeadBareParamWrite after full rebind, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_value_position_pop_no_warn() {
+        // Value-position mutating call is the peek idiom — a read of the copy.
+        let source = "\
+Option[int] take_last(Vector[int] xs):
+    return xs.pop()
+
+void main():
+    Vector[int] a = [1, 2]
+    print(take_last(a).unwrap_or(0))
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "xs"),
+            "expected no DeadBareParamWrite for value-position pop, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_underscore_no_warn() {
+        let source = "\
+void ignore_it(Vector[int] _xs):
+    _xs.push(1)
+
+void main():
+    Vector[int] a = [1]
+    ignore_it(a)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "_xs"),
+            "expected no DeadBareParamWrite for _-prefixed param, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_copy_type_no_warn() {
+        // Copy-struct param: mutation of a by-value copy is the
+        // Python-identical model, not tracked.
+        let source = "\
+struct Point:
+    int x
+    int y
+
+void set_x(Point p):
+    p.x = 42
+
+void main():
+    Point pt = Point(x=1, y=2)
+    set_x(pt)
+    print(pt.x)
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "p"),
+            "expected no DeadBareParamWrite for Copy struct, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_branch_sibling_read_no_warn() {
+        // Deliberate false-negative pin: write in branch A, read in branch B.
+        // Walk-order union semantics (no BranchState threading) suppress.
+        let source = "\
+void touch(Vector[int] xs, bool c):
+    if c:
+        xs.push(1)
+    else:
+        print(xs[0])
+
+void main():
+    Vector[int] a = [2]
+    touch(a, true)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "xs"),
+            "expected no DeadBareParamWrite for sibling-branch read, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn dead_bare_param_fstring_read_no_warn() {
+        // f-string interpolation reads go through synthetic-span paths — they
+        // must still count as reads of the copy.
+        let source = "\
+void log_push(Vector[int] xs):
+    xs.push(9)
+    print(f\"len={xs.len()}\")
+
+void main():
+    Vector[int] a = [1]
+    log_push(a)
+    print(a.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_deadwrite(&warnings, "xs"),
+            "expected no DeadBareParamWrite for f-string read after write, got: {:?}", warnings
+        );
+    }
+
     // ─── Phase 6: Const Promotion Tests ───────────────────────
 
     #[test]

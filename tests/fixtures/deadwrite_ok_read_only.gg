@@ -1,0 +1,7 @@
+# DeadBareParamWrite negative: read-only bare param — no write at all.
+int first(Vector[int] xs):
+    return xs[0]
+
+void main():
+    Vector[int] a = [5]
+    print(first(a))

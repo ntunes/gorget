@@ -69,6 +69,8 @@ impl<'a> BorrowChecker<'a> {
                                 if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
                                     entry.2 = true;
                                 }
+                                // Dead-write lint: f-string reads count.
+                                self.mark_bare_param_read(def_id);
                             }
                         }
                     }
@@ -82,6 +84,8 @@ impl<'a> BorrowChecker<'a> {
                     if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
                         entry.2 = true;
                     }
+                    // Dead-write lint: genuine read of a bare param.
+                    self.mark_bare_param_read(def_id);
                     let kind = self.scopes.get_def(def_id).kind;
                     if kind == DefKind::Variable {
                         self.check_use(def_id, expr.span);
@@ -249,6 +253,11 @@ impl<'a> BorrowChecker<'a> {
                                 self.require_explicit_move_for_single_owner_init(&arg.node.value);
                             }
                             self.check_expr(&arg.node.value);
+                            // Dead-write lint: `&p` args are NOT
+                            // counted as writes in v1 — without callee purity
+                            // info a read-only `&` callee (NeedlessMutableBorrow
+                            // shape) would false-positive. Follow-up: gate on
+                            // callee purity == MutatesArgs+.
                         }
                     }
                 }
@@ -276,7 +285,68 @@ impl<'a> BorrowChecker<'a> {
             Expr::MethodCall {
                 receiver, method, args, ..
             } => {
+                // Dead-write lint: if this method call mutates its
+                // receiver (builtin `is_mutating` collection/String method OR
+                // user method whose first param is `&self`), the receiver is
+                // rooted at a tracked bare resource param, AND the call is in
+                // statement position (result discarded — in value position the
+                // copy's data flows out, which is a read), the receiver walk
+                // below is a write-position read of the root.
+                //
+                // The stmt-position test is `span.start` equality with the
+                // enclosing `Stmt::Expr`, NOT "the MethodCall IS the statement
+                // expression" — intentionally. An inner mutating call of a
+                // chain in statement position (`p.pop().unwrap()` as a
+                // statement) shares its `span.start` with the statement
+                // expression, so it classifies as a write and WARNS: the whole
+                // chain's result is discarded and the caller is unchanged
+                // (think `handlers.pop().run()`). Do not "tighten" this to
+                // exact-node identity — that silently flips this class to
+                // silent (pinned by fixture deadwrite_warn_chained_stmt.gg).
+                let deadwrite_mut_root: Option<crate::semantic::ids::DefId> = {
+                    let in_stmt_position =
+                        self.deadwrite_stmt_expr_start == Some(expr.span.start);
+                    let root = if in_stmt_position {
+                        self.find_root_def_id(receiver)
+                            .filter(|d| self.deadwrite_params.contains_key(d))
+                    } else {
+                        None
+                    };
+                    root.filter(|_| {
+                        // Builtin mutating method: gate the (name-keyed)
+                        // protocol flag on the RECEIVER's type actually being
+                        // a buffer-owning builtin (collection/Channel/Heap) or
+                        // the owned String — interior-mutability handles
+                        // (AtomicInt, WaitGroup, ...) are FFI-backed and write
+                        // through, not CoW.
+                        let recv_tid = self
+                            .expr_types
+                            .get(&receiver.span)
+                            .copied()
+                            .or_else(|| self.lvalue_value_type(receiver));
+                        let is_builtin_mut = crate::ir::lowering::builtins::is_mutating_builtin_method(
+                            method.node.as_str(),
+                        ) && (self.is_buffer_owning_receiver(receiver)
+                            || recv_tid.map_or(false, |t| {
+                                self.is_buffer_owning_type(t)
+                                    || t == self.types.owned_string_id
+                            }));
+                        let is_user_mut = self
+                            .method_resolutions
+                            .get(&method.span.start)
+                            .and_then(|mdid| self.function_info.get(mdid))
+                            .map_or(false, |info| {
+                                info.param_ownerships.first() == Some(&Ownership::MutableBorrow)
+                            });
+                        is_builtin_mut || is_user_mut
+                    })
+                };
+                let deadwrite_prev_root = self.deadwrite_write_root;
+                if deadwrite_mut_root.is_some() {
+                    self.deadwrite_write_root = deadwrite_mut_root;
+                }
                 self.check_expr(receiver);
+                self.deadwrite_write_root = deadwrite_prev_root;
                 self.check_call_aliasing(args);
 
                 // Track `&` param mutation via &self method call
@@ -576,6 +646,12 @@ impl<'a> BorrowChecker<'a> {
                             self.check_expr(&arg.node.value);
                         }
                     }
+                }
+                // Dead-write lint: record the receiver mutation
+                // after receiver AND args are walked (arg reads evaluate
+                // before the mutation lands).
+                if let Some(root) = deadwrite_mut_root {
+                    self.mark_bare_param_write_def(root, expr.span);
                 }
             }
 
@@ -1082,6 +1158,8 @@ impl<'a> BorrowChecker<'a> {
                     if let Some(entry) = self.local_var_usage.get_mut(&def_id) {
                         entry.2 = true;
                     }
+                    // Dead-write lint: f-string reads count.
+                    self.mark_bare_param_read(def_id);
                 }
             }
             Expr::FieldAccess { object, .. }

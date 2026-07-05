@@ -1,0 +1,8 @@
+# DeadBareParamWrite positive: compound assign through a bare param.
+void inc(Vector[int] xs):
+    xs[0] += 1
+
+void main():
+    Vector[int] a = [10]
+    inc(a)
+    print(a[0])

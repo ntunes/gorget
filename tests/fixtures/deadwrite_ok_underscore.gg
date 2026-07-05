@@ -1,0 +1,9 @@
+# DeadBareParamWrite negative: `_`-prefixed param is the deliberate-ignore
+# convention — never tracked.
+void ignore_it(Vector[int] _xs):
+    _xs.push(1)
+
+void main():
+    Vector[int] a = [1]
+    ignore_it(a)
+    print(a.len())

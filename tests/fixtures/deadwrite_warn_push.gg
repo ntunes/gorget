@@ -1,0 +1,9 @@
+# DeadBareParamWrite positive: builtin mutating method (push) on a bare
+# Vector param in statement position, copy never read afterwards.
+void add_item(Vector[int] xs):
+    xs.push(42)
+
+void main():
+    Vector[int] a = [1]
+    add_item(a)
+    print(a.len())

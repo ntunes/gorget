@@ -1,0 +1,10 @@
+# DeadBareParamWrite positive: write inside a loop, never read anywhere —
+# the loop-carried suppression needs a READ in the loop, a bare write stays hot.
+void fill(Vector[int] xs):
+    for i in 0..3:
+        xs.push(i)
+
+void main():
+    Vector[int] a = [7]
+    fill(a)
+    print(a.len())

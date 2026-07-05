@@ -1,0 +1,16 @@
+# DeadBareParamWrite positive: nested field path rooted at a bare param.
+struct Inner:
+    Vector[int] data
+    int count
+
+struct Outer:
+    Inner inner
+    String tag
+
+void poke(Outer o):
+    o.inner.count = 5
+
+void main():
+    Outer o = Outer(inner=Inner(data=[1], count=0), tag="t")
+    poke(o)
+    print(o.inner.count)

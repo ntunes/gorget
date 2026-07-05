@@ -1,0 +1,16 @@
+# DeadBareParamWrite positive: user `&self` method called on a bare struct
+# param in statement position — mutates the private copy, never read after.
+struct Counter:
+    Vector[int] hits
+
+equip Counter:
+    void bump(&self):
+        self.hits.push(1)
+
+void tally(Counter c):
+    c.bump()
+
+void main():
+    Counter c = Counter(hits=[0])
+    tally(c)
+    print(c.hits.len())

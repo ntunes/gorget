@@ -1,0 +1,11 @@
+# DeadBareParamWrite build lock: the warning is NON-FATAL — `gg build` must
+# succeed, stderr must carry the warning, and the binary must run cleanly.
+# The program deliberately demonstrates the footgun: the caller's vector is
+# unchanged (prints 1), which is exactly what the warning is about.
+void relabel(Vector[int] xs):
+    xs[0] = 99
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    relabel(a)
+    print(a[0])

@@ -1,0 +1,13 @@
+# DeadBareParamWrite negative: AtomicInt.add on a bare param. AtomicInt is
+# an interior-mutability FFI handle that writes THROUGH (not CoW) — the
+# builtin mutating-method gate is on the receiver's type being a
+# buffer-owning builtin, so the name collision with Set.add must not fire.
+from std.sync import AtomicInt
+
+void bump(AtomicInt counter):
+    counter.add(1)
+
+void main():
+    AtomicInt c = AtomicInt(0)
+    bump(c)
+    print(c.load())

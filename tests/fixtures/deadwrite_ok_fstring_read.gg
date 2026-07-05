@@ -1,0 +1,10 @@
+# DeadBareParamWrite negative: f-string interpolation READS the param after
+# the write (the interpolation read path uses synthetic spans — pin it).
+void log_push(Vector[int] xs):
+    xs.push(9)
+    print(f"len={xs.len()}")
+
+void main():
+    Vector[int] a = [1]
+    log_push(a)
+    print(a.len())

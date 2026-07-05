@@ -1,0 +1,12 @@
+# DeadBareParamWrite positive: write followed only by an early return —
+# no read of the private copy on any path.
+int stamp(Vector[int] xs, int n):
+    xs.push(n)
+    if n > 0:
+        return 1
+    return 2
+
+void main():
+    Vector[int] a = [1]
+    print(stamp(a, 5))
+    print(a.len())

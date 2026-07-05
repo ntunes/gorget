@@ -376,6 +376,14 @@ impl ErrorReporter {
             notes.push(format!("if the function only reads from `{name}`, pass it as a bare parameter instead"));
         }
 
+        if let SemanticWarningKind::DeadBareParamWrite { name, param_span } = &warn.kind {
+            labels.push(
+                self.secondary_label(*param_span)
+                    .with_message(format!("`{name}` is declared as a bare (read-only borrow) parameter here")),
+            );
+            notes.push("if a private scratch copy is intended, read the copy after the write — or bind an explicit local instead".to_string());
+        }
+
         let mut diag = diagnostic::Diagnostic::warning()
             .with_message(warn.to_string())
             .with_labels(labels);

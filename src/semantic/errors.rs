@@ -88,6 +88,15 @@ pub enum SemanticWarningKind {
     CouldBeConst { name: String },
     /// `&` parameter is never mutated in the function body.
     NeedlessMutableBorrow { name: String },
+    /// A bare (borrow) resource parameter is mutated, materializing a private
+    /// CoW copy (docs/language-design.md §3.1-3.2), and that copy is never
+    /// read afterwards — the write is dead and the caller's value is
+    /// unchanged. The user almost certainly meant `&param` (write-through).
+    DeadBareParamWrite {
+        name: String,
+        /// The parameter's declaration site (secondary label).
+        param_span: Span,
+    },
     /// Collection mutated while an implicit CoW borrow (from .get/.unwrap/index) is alive.
     /// The CoW system handles correctness, but the pattern may be confusing.
     CowBorrowMutation { source: String, borrow: String },
@@ -149,6 +158,9 @@ impl std::fmt::Display for SemanticWarning {
             }
             SemanticWarningKind::NeedlessMutableBorrow { name } => {
                 write!(f, "parameter `&{name}` is never mutated — consider removing `&`")
+            }
+            SemanticWarningKind::DeadBareParamWrite { name, .. } => {
+                write!(f, "write to bare parameter `{name}` lands on a private copy that is discarded — the caller's value is unchanged; declare it `&{name}` to write through")
             }
             SemanticWarningKind::CowBorrowMutation { source, borrow } => {
                 write!(f, "`{source}` mutated while `{borrow}` holds an element — clone is inserted automatically")

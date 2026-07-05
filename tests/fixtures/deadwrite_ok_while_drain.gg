@@ -1,0 +1,11 @@
+# DeadBareParamWrite negative: the while-cond drain idiom. The condition
+# re-evaluates every iteration, so its read is loop-carried with the body's
+# pop — must stay silent.
+void drain(Vector[int] xs):
+    while xs.len() > 2:
+        xs.pop()
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    drain(a)
+    print(a.len())

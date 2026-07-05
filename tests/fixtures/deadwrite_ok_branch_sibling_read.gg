@@ -1,0 +1,14 @@
+# DeadBareParamWrite negative (deliberate false-negative): write in branch A,
+# read in branch B. The walk-order event clock records events across branches
+# in UNION (no BranchState threading) — the sibling-branch read counts as a
+# read-after-write and suppresses. Pins the FN-leaning branch semantics.
+void touch(Vector[int] xs, bool c):
+    if c:
+        xs.push(1)
+    else:
+        print(xs[0])
+
+void main():
+    Vector[int] a = [2]
+    touch(a, true)
+    print(a.len())
