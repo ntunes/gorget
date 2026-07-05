@@ -63,37 +63,49 @@ differential verification of all implementations. Core calculus designed mechani
 (small, total, fuel-indexed evaluation, explicit nondeterminism) but no proofs in v1.
 Mechanization is a clean later phase (Lean 4; Aeneas/Charon translation path exists).
 
-## OPEN — batch 2 (put to owner 2026-07-05)
+## DECIDED (owner, 2026-07-05 — batch 2)
 
-### O1. Drop side effects × clone placement — the direct corollary of D1
-A custom `Drop` makes clone count observable: every implicit clone is an owned value whose drop
-runs (a printing `drop` puts clone count in stdout). D1 says copy placement is implementation
-freedom — those compose only if implicit-clone drops can't be observed. Scout-A Q12: "the fork
-that turns lazy-vs-eager from perf detail into correctness."
-Options: (a) **Drop-purity rule (recommended)** — implicit clones are only available to types
-whose transitive drop is side-effect-free; a type with custom `Drop` anywhere in its graph is
-move-or-explicit-clone at ownership boundaries. Bonus: the single-owner carve-out list
-{Box, Task, TaskGroup, Guard, Owned, Callable} stops being an ad-hoc enumeration and becomes a
-DERIVED rule ("single-owner-by-default = has identity or side-effectful drop"), and user types
-with custom Drop join automatically — resolves scout-A Q20 too. (b) eager drop-count is
-normative (kills clone elision for Drop types; spec must count clones). (c) drop side effects
-non-normative (cross-implementation nondeterministic stdout — violates invariant #8; rejected
-unless owner overrides).
+### D4. Drop-purity rule
+**Implicit clones are only available to types whose transitive drop is side-effect-free.** A
+type with a custom `Drop` anywhere in its field graph is single-owner-by-default: move (`!x`)
+or explicit `x.clone()` at ownership boundaries, compile error otherwise (same error family and
+UX as Box/Task today). Explicit `.clone()` stays legal (Rust allows Clone+Drop). Copy elision
+is thereby provably unobservable — lazy CoW stays a pure optimization under D1. Precedents:
+Rust's Copy∧Drop mutual exclusion; C++'s Rule of Three as the cautionary tale this rule makes
+unrepresentable.
+**Consequences:** the single-owner carve-out becomes ONE PRINCIPLED RULE (side-effectful drop ⇒
+single-owner) PLUS two by-design members (Box, Callable — pure drops, unique by design); user
+Drop types join automatically. Implementation: a typed `is_drop_tainted` flag on the type decl
+(set at registration, transitively computed, read via accessor — layering rule 2, no
+name-matching); `E_MoveWithoutOperator` extends to tainted types at bare-assign + ctor/field-init
+sites; any implicit-materialize point for a tainted type = compile error with the move/clone/`&`
+fix-it. Migration measured ≈ zero (custom Drop: 22 fixtures — mostly drop_* tests — 1 stdlib
+use, 2 self-host uses). RFC pins: bare-assign of tainted types = error (Box-identical, chosen
+over borrow-allowed-mutation-forbidden for one-rule simplicity). Drop-count determinism
+spectests become writable. Docs write-through: language-design §3.3/§3.4.1/§9, book ch.11
+(carve-out section) + ch.16, devbook 10/11/15.
 
-### O2. Mutable closure captures: inferred vs explicit sigil
-Today the compiler INFERS mutable capture (pointer to the outer slot — real write-through
-aliasing) from whether the closure body mutates the variable (§7.3). Everywhere else in Gorget,
-mutation reaching an outer owner requires a visible `&`. Inferred mutable capture means adding
-a mutation to a closure body silently CHANGES the capture semantics of the variable.
-Options: (a) keep inference (ergonomic: counters in closures just work; current behavior);
-(b) require an explicit marker for write-through captures (uniform with `&` everywhere else;
-loud; bare captures become always-by-value).
+### D5. Closure captures: bare = by-value, write-through requires an explicit sigil
+Bare captures are ALWAYS capture-by-value (per D1: value as-of closure creation; CoW machinery
+free to defer the physical copy). Write-through (aliasing the outer slot) requires an explicit
+marker — exact syntax designed in the RFC (V2's per-variable capture list reserves the space;
+placeholder `&(): ...` / `(&name)(...)`). Body-driven INFERENCE of mutable capture is retired:
+mutation inside a bare closure mutates the closure's own copy (uniform bare-binding rule; the
+DeadBareParamWrite lint family applies).
+**Consequences:** docs stop calling by-value captures "immutable borrows" (naming fix:
+language-design §7.3, book ch.4/16); migration sweep for closures relying on inferred
+write-through (self-host/gorget-js/arena) — loud where the new rule rejects, silent-behavior-
+change where a bare closure mutates-then-reads (sweep needed, same shape as D2's); closure KIND
+classification (Callable/MutCallable/ConsumeCallable) is a separate axis and may remain
+body-inferred — only outer-aliasing becomes explicit.
 
-### O3. Unbound bare `Ok(e)`/`Error(e)` combinator chains (error-model §9 Q17)
-`Ok(5).map(...).unwrap_or(0)` with no `Result[T,E]` in scope has no `E` — both compilers
-currently miscompile it (Core #8, latent, TODO:153). Options: (a) reject, require annotation
-(smallest, monomorphization-friendly); (b) default-to-existential error type (`anyerror`-style —
-a new feature); (c) infer error sets from the function body (Zig-style — a Result redesign).
+### D6. Unbound bare `Ok(e)`/`Error(e)` carrier chains = REJECT with annotation fix-it
+A bare carrier chain with no inferable `E` (from destination type, function return, or
+arguments) is a compile error ("annotate the Result type"). Resolves error-model §9 Q17 for
+spec-v1; forward-compatible with existential/inferred-set designs later. Both compilers get the
+rejection + negative fixtures (today: silent miscompile in both, TODO:153).
+**Consequences:** docs write-through to `docs/plans/error-model.md` §9 Q17 (mark resolved) +
+language-design §6; belongs to the bounded-rejection phase per the C12 gating rule.
 
 ## OPEN — queue (later batches; from scout-B List A, scout-A tiers)
 
@@ -156,3 +168,6 @@ B9 lock = single-owner Resource, B10 Task join-on-drop, B16 arena escape = rejec
 ## LOG
 - 2026-07-05: project approved; 3 scouts ran (docs sweep, bug sweep, prior art); batch-1
   decisions D1–D3 taken; batch-2 questions O1–O3 put to owner; ledger created.
+- 2026-07-05 (later): batch-2 decided → D4 (drop-purity), D5 (explicit capture sigil),
+  D6 (reject unbound carrier chains). Owner clarification round on D4 recorded in-message
+  (drop-purity implications + honest correction re Box/Callable). RFC drafting begins.
