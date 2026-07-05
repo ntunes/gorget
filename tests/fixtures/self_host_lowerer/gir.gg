@@ -3,7 +3,7 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str
-from ast import Stmt, SpannedExpr
+from ast import Stmt, SpannedExpr, FunctionDef
 from types import TypeTable
 from scope import ScopeTable
 from compiler.data.schema import ResourceMetadata
@@ -959,6 +959,16 @@ struct GirModule:
     # `TypeMapper.thread_payload_types` (`src/ir/lowering/types.rs`).
     # Appended AT END to avoid shifting positional ctor call sites.
     Dict[int, int] thread_payload_tids
+    # R43-C: every TOP-LEVEL free-function's AST definition, keyed by name.
+    # Read by `infer_free_fn_targs` (lower_expr.gg) to (a) recover a generic
+    # callee's `type_params` + param types for structural arg-type binding and
+    # (b) resolve a call-arg's concrete type from a non-generic callee's
+    # declared return type. Populated once in `lower_module` alongside
+    # `fn_templates`. Lets the discovery pre-pass (lower_generics) AND the
+    # per-call mangle site (lower_expr) compute the SAME inferred type-args for
+    # a turbofish-free generic free-fn call (`passthrough(producer())`),
+    # mirroring Rust gg's `inferred_call_targs` side-table. Appended AT END.
+    Dict[String, FunctionDef] fn_ast_defs
 
 # Per-test metadata mirroring Rust's `TestFnInfo` (`src/ir/mod.rs:30`).
 # `fn_name` is the emitted `__test_N` symbol ("" for a skipped test, which

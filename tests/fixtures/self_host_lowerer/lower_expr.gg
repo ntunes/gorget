@@ -7403,6 +7403,129 @@ bool arg_is_string_literal(SpannedExpr e):
         else:
             return false
 
+# ── R43-C: inferred type-args for a turbofish-free generic FREE-FN call ──────
+# A generic free-fn invoked WITHOUT `[T,...]` (`passthrough(producer())`,
+# `pick(7, 9)`) must still be monomorphized. The self-host's discovery + mangle
+# both gate on `targs.len() > 0`, so these calls emit a bare template symbol
+# that is DCE'd → undefined-reference. This mirrors Rust gg's per-call subst →
+# `inferred_call_targs` side-table + `apply_inferred_call_targs`
+# (semantic/typecheck.rs:1926 / :7486): bind each of the callee template's
+# generic params structurally from the ARGUMENT types. Fully deterministic and
+# `gmod`-only so the discovery pre-pass (lower_generics) and this mangle site
+# derive the SAME targs from the SAME AST args — no span-keyed side-table
+# needed. STRICTLY GATED (returns [] unless the callee is a known generic
+# free-fn, the call is positional, every arg resolves to a concrete type, and
+# every generic param binds), so non-generic / turbofish / partially-typed
+# calls are untouched and the bootstrap (which has no such calls today) is safe.
+
+# Normalize a primitive name spelled as a bare `TNamed` (e.g. the `int` inside a
+# callee's `Result[int, E]` return type) to `TPrimitive`, so `type_to_c_name`
+# and `spanned_type_to_c_name` mangle it identically (`int64_t`, not `int`).
+SpannedType r43c_normalize_prim(SpannedType t):
+    match t.ty:
+        case TNamed(name, targs):
+            if targs.len() == 0 and prim_name_to_type(name) >= 0:
+                return SpannedType(TPrimitive(name), t.span)
+        else:
+            pass
+    return t
+
+# Concrete AST type of a call ARGUMENT, or `TInferred()` when unresolvable
+# (→ inference bails). Literals + a non-generic call's declared return type.
+SpannedType infer_arg_ast_type(SpannedExpr arg, GirModule &gmod):
+    match arg.expr:
+        case EIntLiteral(_):
+            return SpannedType(TPrimitive("int"), -1)
+        case EFloatLiteral(_):
+            return SpannedType(TPrimitive("float"), -1)
+        case EBoolLiteral(_):
+            return SpannedType(TPrimitive("bool"), -1)
+        case EStringLiteral(_, _):
+            return SpannedType(TNamed("String", []), -1)
+        case EFString(_, _, _):
+            return SpannedType(TNamed("String", []), -1)
+        case ECall(callee_box, _, _, _):
+            match (*callee_box).expr:
+                case EIdentifier(cname):
+                    if gmod.fn_ast_defs.contains(cname):
+                        FunctionDef cdef = gmod.fn_ast_defs.get(cname).unwrap()
+                        if cdef.type_params.len() == 0:
+                            return cdef.return_type
+                else:
+                    pass
+        else:
+            pass
+    return SpannedType(TInferred(), -1)
+
+# Structurally bind generic param `gp` from a (param-type, arg-type) pair.
+# Returns the bound AST type, or `TInferred()` when `gp` does not appear.
+SpannedType bind_gparam_ast(SpannedType param, SpannedType arg, String gp):
+    match param.ty:
+        case TNamed(pname, pargs):
+            if pname == gp and pargs.len() == 0:
+                return arg
+            match arg.ty:
+                case TNamed(aname, aargs):
+                    if pname == aname and pargs.len() == aargs.len():
+                        int i = 0
+                        while i < pargs.len():
+                            SpannedType sub = bind_gparam_ast(pargs.get(i).unwrap(), aargs.get(i).unwrap(), gp)
+                            match sub.ty:
+                                case TInferred():
+                                    pass
+                                else:
+                                    return sub
+                            i += 1
+                else:
+                    pass
+        else:
+            pass
+    return SpannedType(TInferred(), -1)
+
+Vector[SpannedType] infer_free_fn_targs(String fname, Vector[SpannedExpr] args, Vector[String] arg_names, GirModule &gmod):
+    Vector[SpannedType] empty = []
+    if not gmod.fn_ast_defs.contains(fname):
+        return empty
+    FunctionDef tmpl = gmod.fn_ast_defs.get(fname).unwrap()
+    # Generic free-fn only; positional args only; exact arity.
+    if tmpl.type_params.len() == 0:
+        return empty
+    if tmpl.params.len() != args.len():
+        return empty
+    for an in arg_names:
+        if an != "":
+            return empty
+    # Resolve each arg to a concrete AST type; bail if any is unresolvable.
+    Vector[SpannedType] arg_types = []
+    for a in args:
+        SpannedType at = infer_arg_ast_type(a, &gmod)
+        match at.ty:
+            case TInferred():
+                return empty
+            else:
+                pass
+        arg_types.push(at)
+    # Bind each generic param; bail unless ALL bind to a concrete type.
+    Vector[SpannedType] result = []
+    for gp in tmpl.type_params:
+        SpannedType bound = SpannedType(TInferred(), -1)
+        int pi = 0
+        while pi < tmpl.params.len():
+            SpannedType cand = bind_gparam_ast(tmpl.params.get(pi).unwrap().param_type, arg_types.get(pi).unwrap(), gp)
+            match cand.ty:
+                case TInferred():
+                    pass
+                else:
+                    bound = cand
+            pi += 1
+        match bound.ty:
+            case TInferred():
+                return empty
+            else:
+                pass
+        result.push(r43c_normalize_prim(bound))
+    return result
+
 int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[String] &arg_names, Vector[SpannedType] &targs, GirModule &gmod):
     int result = -1
     bool is_print = fname == "print"
@@ -8067,6 +8190,17 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         String call_name = fname
         if targs.len() > 0:
             for ta in targs:
+                call_name = call_name + "__" + type_to_c_name(ta, &gmod)
+        else:
+            # R43-C: a turbofish-free generic free-fn call — infer its type-args
+            # from the arg types (same helper the discovery pre-pass uses) so the
+            # emitted GICall targets the monomorphized symbol
+            # (`passthrough` → `passthrough__int64_t__AppError`). `fn_sigs` under
+            # the mangled name then yields the SUBSTITUTED return type for the
+            # dst-slot below (no separate return-type fix needed). Empty result
+            # ⇒ not an inferred generic call ⇒ `call_name` stays `fname`.
+            Vector[SpannedType] inf_targs = infer_free_fn_targs(fname, args, arg_names, &gmod)
+            for ta in inf_targs:
                 call_name = call_name + "__" + type_to_c_name(ta, &gmod)
         # Resolve call redirects (bare → module-prefixed name).
         if gmod.call_redirects.contains(call_name):

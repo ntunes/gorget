@@ -3494,7 +3494,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, {}, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre, {}, {}, {})
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, {}, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre, {}, {}, {}, {})
 
     # R38: mutation-inference — classify each &self/!self equip method
     # read-only vs writes-self (fixpoint), so the named-receiver CoW gate
@@ -3917,6 +3917,13 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
             case IFunction(fdef):
                 if fdef.type_params.len() > 0:
                     fn_templates.put(fdef.name.clone(), fdef)
+                # R43-C: record EVERY top-level free-fn's AST (generic AND
+                # non-generic) so `infer_free_fn_targs` can bind a turbofish-free
+                # generic call's type-args from arg types — a generic callee
+                # gives `type_params` + param types, a non-generic callee gives a
+                # call-arg's concrete return type. Last-write-wins matches the
+                # flat-merge loader's module-scope name resolution.
+                gmod.fn_ast_defs.put(fdef.name.clone(), fdef)
                 # Register a MAIN-MODULE inline extern's `= "symbol"` redirect
                 # (`extern int f(...) = "sym"`). load_imports only scans IMPORTED
                 # modules, so the main module's own externs never reach

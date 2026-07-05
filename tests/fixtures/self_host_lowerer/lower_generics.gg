@@ -46,7 +46,7 @@ from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, resolved_to_spanned_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
-from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
+from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, infer_free_fn_targs
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
 from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
@@ -539,10 +539,29 @@ void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String
                                         pass
                         else:
                             pass
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, carg_names, ctargs):
             discover_adapter_chain_expr(*callee_box, &gmod, equip_generic_names, &seen, &instances)
             for a in cargs:
                 discover_adapter_chain_expr(a, &gmod, equip_generic_names, &seen, &instances)
+            # R43-C: register a turbofish-free generic FREE-FN call's instance.
+            # `infer_free_fn_targs` binds the callee template's generic params
+            # from the arg types (returns [] unless it's a known generic free-fn
+            # with a fully-inferable positional call). The mangle site in
+            # lower_expr re-derives the SAME targs, so the emitted symbol matches
+            # this registered instance. Mirrors Rust gg's inferred_call_targs →
+            # monomorphization discovery. Piggybacks on this already-gmod-threaded
+            # walk (shares `seen` with the turbofish discovery, so no double-reg).
+            if ctargs.len() == 0:
+                match (*callee_box).expr:
+                    case EIdentifier(cfname):
+                        Vector[SpannedType] inf = infer_free_fn_targs(cfname, cargs, carg_names, &gmod)
+                        if inf.len() > 0:
+                            String cmangled = compute_mangled_name(inf, cfname)
+                            if not seen.contains(cmangled):
+                                seen.put(cmangled.clone(), true)
+                                instances.push(GenericInstance(cfname, inf, cmangled))
+                    else:
+                        pass
         case EFieldAccess(obj, _):
             discover_adapter_chain_expr(*obj, &gmod, equip_generic_names, &seen, &instances)
         case EBinaryOp(l, _, r):
