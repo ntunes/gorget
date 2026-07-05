@@ -4997,6 +4997,37 @@ A",
 }
 
 #[test]
+#[ignore = "known BOTH-BACKEND bug (found by the gorget-smith fuzzer, round 1): \
+an alias bind in a never-taken branch (`if v0.len() < 3: Vector[int] v5 = v0`) \
+corrupts the LATER source mutation — `v0[2] = 9` SIGSEGVs in gorget_array_clone \
+on BOTH the C and LLVM backends (ASan: near-null SEGV, frame #0 \
+gorget_array_clone — the mutation-site CoW materialize walks an alias slot that \
+was never initialized because the bind lives in a dead branch). Missing sibling \
+of cow_lazy_d1_alias_deadpath (that fixture = mutation-in-dead-branch; this = \
+BIND-in-dead-branch). The self-host prints `9` correctly, so this is a \
+Rust-gg-side fix. Asserts the language-intended output `9`; lives in \
+tests/fixtures/known_gaps/ so it stays OUT of the runtime-diff corpus. \
+Un-ignore when the dead-path alias-slot class is fixed. See TODO.md HIGH entry."]
+fn cow_dead_branch_alias_bind() {
+    run_gg("known_gaps/cow_dead_branch_alias_bind.gg", "9");
+}
+
+#[test]
+#[ignore = "known BOTH-BACKEND bug (found by the gorget-smith fuzzer, round 1): \
+`String !p` move-param + concat inside the callee (`String f(String !p): return \
+p + \"log\"`) is `gg check`-accepted but the C backend emits `(void*)a + \
+(void*)b` (cc rejects: invalid operands to binary +) and the LLVM backend dies \
+in llc (invalid operand type). A check-accepted program that fails at cc/llc \
+means the front and back ends disagree about validity (Core invariant #8 \
+adjacent). The self-host prints `ablog` correctly, so this is a Rust-gg-side \
+fix. Asserts the language-intended output `ablog`; lives in \
+tests/fixtures/known_gaps/ so it stays OUT of the runtime-diff corpus. \
+Un-ignore when the move-param concat ABI is fixed. See TODO.md HIGH entry."]
+fn move_param_concat() {
+    run_gg("known_gaps/move_param_concat.gg", "ablog");
+}
+
+#[test]
 fn const_match_pattern() {
     // `case CONST_NAME:` compares against the named constant instead
     // of shadowing it as a fresh variable binding. Snag 2026-05-13:

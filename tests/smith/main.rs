@@ -1,0 +1,861 @@
+//! # gorget-smith — differential fuzzer for the Gorget compiler
+//!
+//! Generates seeded, well-typed, deterministic Gorget programs (see
+//! `generator.rs`) and cross-checks every backend the project ships against
+//! each other, per seed, in cost order:
+//!
+//!   1. `gg check`               — front-end accepts the program
+//!   2. `gg build` (C backend)   — reference build must succeed
+//!   3. run the C binary         — must exit 0; stdout becomes the oracle
+//!   4. self-host lane           — `driver --emit-c` → `cc` → run, diff vs C
+//!   5. LLVM lane                — `gg build --backend=llvm` → run, diff vs C
+//!
+//! The per-seed flow is SHORT-CIRCUIT: the first failing oracle assigns the
+//! seed's single classification and all later lanes are skipped.
+//!
+//! ## Taxonomy (mirrors `RuntimeParityOutcome`, tests/integration.rs)
+//!
+//! | class            | meaning                                              |
+//! |------------------|------------------------------------------------------|
+//! | MATCH            | all enabled lanes agree (stdout + exit)              |
+//! | GEN-INVALID      | `gg check` rejected — generator bug OR compiler      |
+//! |                  | false-reject; triage, not automatically ours         |
+//! | BUILD-FAIL(C)    | check-accepted but `gg build` (default C backend)    |
+//! |                  | failed at ANY stage, gg or cc — a COMPILER bug (the  |
+//! |                  | front and back ends disagree about validity)         |
+//! | CRASH            | the C binary exited nonzero / signalled              |
+//! | DRIVER-FAIL      | the self-host driver rejected the program            |
+//! | CC-FAIL          | cc rejected the SELF-HOST-emitted C — a self-host    |
+//! |                  | emit defect. Distinct from BUILD-FAIL(C): that one   |
+//! |                  | is the Rust gg pipeline, this one is the self-host's |
+//! | DIVERGE(C,SH)    | self-host binary's stdout/exit differs from C        |
+//! | BUILD-FAIL(llvm) | C built but `--backend=llvm` didn't                  |
+//! | DIVERGE(C,llvm)  | LLVM binary's stdout/exit differs from C             |
+//! | TIMEOUT          | some lane hit its deadline                           |
+//!
+//! ## How to run
+//!
+//! ```text
+//! # always-on (plain `cargo test --test smith`): generator determinism only
+//! cargo test --test smith
+//!
+//! # batch run (always-pass DIAGNOSTIC — prints a verdict table, never
+//! # asserts counts). Seed range is INCLUSIVE on both ends: 1..200 = 200 seeds.
+//! GG_SMITH_SEEDS=1..200 cargo test --test smith -- --nocapture
+//!
+//! # skip the LLVM lane (ON by default)
+//! GG_SMITH_SEEDS=1..200 GG_SMITH_SKIP_LLVM=1 cargo test --test smith -- --nocapture
+//!
+//! # minimize one seed's program while its classification is preserved
+//! GG_SMITH_MINIMIZE=36 cargo test --test smith -- --nocapture
+//! ```
+//!
+//! Honors `GG_BUILD_TIMEOUT_SECS` / `GG_TEST_TIMEOUT_SECS` (same semantics as
+//! tests/integration.rs). **`GG_BACKEND` is deliberately IGNORED**: smith
+//! selects backends per-lane, explicitly — a stray `GG_BACKEND=llvm` must not
+//! silently flip the C lane (and the driver build) to LLVM and collapse the
+//! differential.
+//!
+//! ## Tier roadmap
+//!
+//! - tier 0 (this round): scalars/strings/vectors, aliases, views, moves,
+//!   helper fns, control flow — the CoW/ownership core.
+//! - tier 1 (future): the mutation-route class table of devbook/11 (§
+//!   "materialization points") — structs, nested collections, Dict, slices.
+//! - tier 2 (future): traits/equip, closures, generics.
+//!
+//! Tier is selected with `GG_SMITH_TIER` (default 0); only tier 0 exists.
+//!
+//! ## Round-1 findings (locked as `#[ignore]`d fixtures)
+//!
+//! - `tests/fixtures/known_gaps/cow_dead_branch_alias_bind.gg` — alias bind
+//!   in a never-taken branch → later source mutation SIGSEGVs in
+//!   `gorget_array_clone` on BOTH backends (test: `cow_dead_branch_alias_bind`).
+//! - `tests/fixtures/known_gaps/move_param_concat.gg` — `String !p` +
+//!   concat in the callee: check-accepted, C backend emits `(void*)a +
+//!   (void*)b` (cc rejects), llc invalid-operand on LLVM (test:
+//!   `move_param_concat`).
+//!
+//! Both TODO.md HIGH entries; the self-host is reference-correct on both.
+//!
+//! Why this tool exists: ASan is NOT the safety net for the CoW/ownership
+//! bug class (devbook/11) — the fixture corpus only covers shapes someone
+//! thought to write. Smith walks the shape space mechanically.
+
+mod generator;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+// ─────────────────────────── infrastructure ────────────────────────────
+// tests/smith is a SEPARATE crate from tests/integration.rs, so the helpers
+// there (gg_binary, run_with_timeout, self_host_emit_cc_run, …) are not
+// importable. The small subset needed is re-derived here from the same
+// sources (integration.rs:20-50 timeouts, :134-136 binary, :157-219 runner,
+// :19388-19476 self-host lane).
+
+/// Path to the pre-built `gg` binary (Cargo guarantees it is up to date
+/// before this test process starts).
+fn gg_binary() -> &'static Path {
+    Path::new(env!("CARGO_BIN_EXE_gg"))
+}
+
+/// `GG_BUILD_TIMEOUT_SECS`, else 120s scaled by host load pressure
+/// (`loadavg(1m) / cpus`, floor 1.0) — same policy as integration.rs.
+fn build_timeout() -> Duration {
+    if let Some(secs) =
+        std::env::var("GG_BUILD_TIMEOUT_SECS").ok().and_then(|s| s.parse::<u64>().ok())
+    {
+        return Duration::from_secs(secs);
+    }
+    let load = std::fs::read_to_string("/proc/loadavg")
+        .ok()
+        .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let cpus = std::thread::available_parallelism().map(|n| n.get() as f64).unwrap_or(1.0);
+    let ratio = (load / cpus).max(1.0);
+    Duration::from_secs((120.0 * ratio).ceil() as u64)
+}
+
+/// `GG_TEST_TIMEOUT_SECS`, else 30s — deadline for generated test binaries.
+fn run_timeout() -> Duration {
+    Duration::from_secs(
+        std::env::var("GG_TEST_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(30),
+    )
+}
+
+/// A child overran its deadline (killed; classified TIMEOUT by the caller).
+struct TimedOut;
+
+/// Run a command with nulled stdin and a deadline. Unlike integration.rs's
+/// `run_with_timeout` this does NOT panic on timeout — TIMEOUT is a smith
+/// classification, not a harness failure. stdout/stderr are drained on
+/// background threads to avoid the >64KB pipe-buffer deadlock.
+fn run_cmd(cmd: &mut Command, timeout: Duration) -> Result<Output, TimedOut> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|e| panic!("failed to spawn {cmd:?}: {e}"));
+
+    let stdout_handle = child.stdout.take().unwrap();
+    let stderr_handle = child.stderr.take().unwrap();
+    let stdout_thread = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let mut reader = stdout_handle;
+        reader.read_to_end(&mut buf).ok();
+        buf
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let mut reader = stderr_handle;
+        reader.read_to_end(&mut buf).ok();
+        buf
+    });
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    child.kill().ok();
+                    child.wait().ok();
+                    // Join the drain threads so their pipes close cleanly.
+                    stdout_thread.join().ok();
+                    stderr_thread.join().ok();
+                    return Err(TimedOut);
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => panic!("failed to wait on child: {e}"),
+        }
+    };
+    let stdout = stdout_thread.join().unwrap_or_default();
+    let stderr = stderr_thread.join().unwrap_or_default();
+    Ok(Output { status, stdout, stderr })
+}
+
+/// Build the self-host driver ONCE per smith process (≈57s — see the
+/// `build_gg_dir_cached` doc comment in integration.rs). The artifacts land
+/// at the shared `tests/fixtures/self_host_lowerer/driver{,.c}` paths (that
+/// is how the existing self-host lane works — deliberate carve-out; they are
+/// gitignored and must not be deleted here). Returns
+/// `(driver_exe, lib_dir, runtime_dir)`; `runtime_dir` is ABSOLUTE (derived
+/// from CARGO_MANIFEST_DIR — a relative `--runtime-dir` only works by cwd
+/// luck). The driver build never reads GG_BACKEND: the differential's
+/// reference lane is pinned to the default C backend.
+fn driver_paths() -> &'static (PathBuf, PathBuf, PathBuf) {
+    static DRIVER: OnceLock<(PathBuf, PathBuf, PathBuf)> = OnceLock::new();
+    DRIVER.get_or_init(|| {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let main_path = manifest.join("tests/fixtures/self_host_lowerer/driver.gg");
+        assert!(main_path.exists(), "driver source not found: {}", main_path.display());
+        eprintln!("[smith] building self-host driver (once per process, ~1 min)…");
+        let t0 = Instant::now();
+        let out = run_cmd(
+            Command::new(gg_binary()).arg("build").arg(&main_path),
+            build_timeout(),
+        )
+        .unwrap_or_else(|_| {
+            panic!(
+                "self-host driver build timed out after {}s (raise GG_BUILD_TIMEOUT_SECS)",
+                build_timeout().as_secs()
+            )
+        });
+        assert!(
+            out.status.success(),
+            "self-host driver build failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        eprintln!("[smith] driver built in {:.1}s", t0.elapsed().as_secs_f64());
+        (
+            manifest.join("tests/fixtures/self_host_lowerer/driver"),
+            manifest.join("lib"),
+            manifest.join("src/backend/c/runtime"),
+        )
+    })
+}
+
+// ───────────────────────────── classification ──────────────────────────
+
+/// One seed's verdict. Mirrors `RuntimeParityOutcome`
+/// (tests/integration.rs:19304-19317), extended with the differential's
+/// per-lane build classes. See the module docs for the taxonomy table.
+enum Verdict {
+    Match,
+    GenInvalid { detail: String },
+    BuildFailC { detail: String },
+    Crash { detail: String },
+    Timeout { lane: &'static str },
+    DriverFail { detail: String },
+    CcFail { detail: String },
+    DivergeSh { detail: String },
+    BuildFailLlvm { detail: String },
+    DivergeLlvm { detail: String },
+}
+
+impl Verdict {
+    fn label(&self) -> &'static str {
+        match self {
+            Verdict::Match => "MATCH",
+            Verdict::GenInvalid { .. } => "GEN-INVALID",
+            Verdict::BuildFailC { .. } => "BUILD-FAIL(C)",
+            Verdict::Crash { .. } => "CRASH",
+            Verdict::Timeout { .. } => "TIMEOUT",
+            Verdict::DriverFail { .. } => "DRIVER-FAIL",
+            Verdict::CcFail { .. } => "CC-FAIL",
+            Verdict::DivergeSh { .. } => "DIVERGE(C,SH)",
+            Verdict::BuildFailLlvm { .. } => "BUILD-FAIL(llvm)",
+            Verdict::DivergeLlvm { .. } => "DIVERGE(C,llvm)",
+        }
+    }
+
+    /// First error/diff line for the report (empty for MATCH).
+    fn detail(&self) -> String {
+        match self {
+            Verdict::Match => String::new(),
+            Verdict::GenInvalid { detail }
+            | Verdict::BuildFailC { detail }
+            | Verdict::Crash { detail }
+            | Verdict::DriverFail { detail }
+            | Verdict::CcFail { detail }
+            | Verdict::DivergeSh { detail }
+            | Verdict::BuildFailLlvm { detail }
+            | Verdict::DivergeLlvm { detail } => detail.clone(),
+            Verdict::Timeout { lane } => format!("lane: {lane}"),
+        }
+    }
+}
+
+#[derive(Default, Clone, Copy)]
+struct Timings {
+    generate: Duration,
+    check: Duration,
+    cbuild: Duration,
+    crun: Duration,
+    driver: Duration,
+    cc: Duration,
+    shrun: Duration,
+    lbuild: Duration,
+    lrun: Duration,
+}
+
+impl Timings {
+    fn add(&mut self, o: &Timings) {
+        self.generate += o.generate;
+        self.check += o.check;
+        self.cbuild += o.cbuild;
+        self.crun += o.crun;
+        self.driver += o.driver;
+        self.cc += o.cc;
+        self.shrun += o.shrun;
+        self.lbuild += o.lbuild;
+        self.lrun += o.lrun;
+    }
+
+    fn total(&self) -> Duration {
+        self.generate
+            + self.check
+            + self.cbuild
+            + self.crun
+            + self.driver
+            + self.cc
+            + self.shrun
+            + self.lbuild
+            + self.lrun
+    }
+}
+
+struct Config {
+    tier: u32,
+    skip_llvm: bool,
+}
+
+impl Config {
+    fn from_env() -> Config {
+        // NOTE: GG_BACKEND is deliberately NOT read anywhere in this crate —
+        // smith pins its backends per-lane (see module docs).
+        Config {
+            tier: std::env::var("GG_SMITH_TIER")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0),
+            skip_llvm: std::env::var("GG_SMITH_SKIP_LLVM").as_deref() == Ok("1"),
+        }
+    }
+}
+
+/// Strip ANSI escape sequences (`ESC [ … <alpha>`), so diagnostic lines from
+/// colored `gg` output stay grep-able in the teed log.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for t in chars.by_ref() {
+                if t.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    out
+}
+
+fn truncate_chars(s: &str, n: usize) -> String {
+    if s.chars().count() <= n { s.to_string() } else { s.chars().take(n).collect() }
+}
+
+/// Up to 3 `error`/`undefined` lines from a build's combined output (else
+/// its first non-empty line), joined and truncated — the "first error line"
+/// of the report.
+fn error_lines(o: &Output) -> String {
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&o.stderr),
+        String::from_utf8_lossy(&o.stdout)
+    );
+    let text = strip_ansi(&text);
+    let hits: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("error") || l.contains("undefined"))
+        .take(3)
+        .collect();
+    let joined = if hits.is_empty() {
+        text.lines().find(|l| !l.trim().is_empty()).unwrap_or("(no output)").to_string()
+    } else {
+        hits.join(" | ")
+    };
+    truncate_chars(joined.trim(), 240)
+}
+
+/// `exit=…/signal=…` + first stderr line, for CRASH-class details.
+fn exit_detail(o: &Output) -> String {
+    #[cfg(unix)]
+    let sig = {
+        use std::os::unix::process::ExitStatusExt;
+        o.status.signal()
+    };
+    #[cfg(not(unix))]
+    let sig: Option<i32> = None;
+    let first = String::from_utf8_lossy(&o.stderr);
+    let first = strip_ansi(first.lines().find(|l| !l.trim().is_empty()).unwrap_or(""));
+    truncate_chars(
+        format!("exit={:?} signal={:?} {}", o.status.code(), sig, first).trim(),
+        240,
+    )
+}
+
+/// First differing stdout line between two lanes, or a line-count/exit
+/// summary when one output is a prefix of the other.
+fn first_diff(a_name: &str, a: &str, b_name: &str, b: &str, a_exit: i32, b_exit: String) -> String {
+    let d = a
+        .lines()
+        .zip(b.lines())
+        .enumerate()
+        .find(|(_, (x, y))| x != y)
+        .map(|(i, (x, y))| format!("L{i}: {a_name}={x:?} {b_name}={y:?}"))
+        .unwrap_or_else(|| {
+            format!(
+                "line-count {a_name}={} {b_name}={} exit {a_name}={a_exit} {b_name}={b_exit}",
+                a.lines().count(),
+                b.lines().count(),
+            )
+        });
+    truncate_chars(&d, 240)
+}
+
+// ───────────────────────────── per-seed flow ───────────────────────────
+
+/// Classify one program source through the full differential. `work` is a
+/// scratch dir owned by the caller (created here; cleaned by the caller).
+/// SHORT-CIRCUIT: the first failing oracle is the verdict — cross-lane
+/// attribution of a failure happens at triage/minimization, not in the
+/// batch (generated programs are well-formed by construction, so a failure
+/// on ANY lane is already a filed-quality bug).
+fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict {
+    let cdir = work.join("c");
+    let ldir = work.join("l");
+    std::fs::create_dir_all(&cdir).expect("failed to create scratch dir");
+    std::fs::create_dir_all(&ldir).expect("failed to create scratch dir");
+    let cprog = cdir.join("prog.gg");
+    let lprog = ldir.join("prog.gg");
+    std::fs::write(&cprog, source).expect("failed to write program");
+    std::fs::write(&lprog, source).expect("failed to write program");
+
+    // (1) gg check — a rejection here is GEN-INVALID: a generator bug OR a
+    // compiler false-reject. Triage; not automatically a generator bug.
+    let t0 = Instant::now();
+    let check = run_cmd(Command::new(gg_binary()).arg("check").arg(&cprog), build_timeout());
+    t.check += t0.elapsed();
+    match check {
+        Err(TimedOut) => return Verdict::Timeout { lane: "gg check" },
+        Ok(o) if !o.status.success() => {
+            return Verdict::GenInvalid { detail: error_lines(&o) };
+        }
+        Ok(_) => {}
+    }
+
+    // (2) C build (default backend — never --backend, never GG_BACKEND).
+    // Check-accepted + ANY build failure (gg stage or cc stage) is a
+    // compiler bug: BUILD-FAIL(C).
+    let t0 = Instant::now();
+    let cbuild = run_cmd(Command::new(gg_binary()).arg("build").arg(&cprog), build_timeout());
+    t.cbuild += t0.elapsed();
+    match cbuild {
+        Err(TimedOut) => return Verdict::Timeout { lane: "gg build (C)" },
+        Ok(o) if !o.status.success() => {
+            return Verdict::BuildFailC { detail: error_lines(&o) };
+        }
+        Ok(_) => {}
+    }
+
+    // (3) C run — the reference lane's stdout becomes the oracle.
+    let t0 = Instant::now();
+    let crun = run_cmd(&mut Command::new(cdir.join("prog")), run_timeout());
+    t.crun += t0.elapsed();
+    let c_out = match crun {
+        Err(TimedOut) => return Verdict::Timeout { lane: "C run" },
+        Ok(o) if !o.status.success() => {
+            return Verdict::Crash { detail: exit_detail(&o) };
+        }
+        Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+    };
+
+    // (4) self-host lane: driver --emit-c → cc → run, diff vs C (mirrors
+    // self_host_emit_cc_run, integration.rs:19388-19476).
+    let (driver_exe, lib_dir, runtime_dir) = driver_paths();
+    let t0 = Instant::now();
+    let emit = run_cmd(
+        Command::new(driver_exe)
+            .arg(&cprog)
+            .arg(lib_dir)
+            .arg("--emit-c")
+            .arg(format!("--runtime-dir={}", runtime_dir.display())),
+        build_timeout(),
+    );
+    t.driver += t0.elapsed();
+    let emit = match emit {
+        Err(TimedOut) => return Verdict::Timeout { lane: "self-host driver emit" },
+        Ok(o) if !o.status.success() => {
+            return Verdict::DriverFail { detail: error_lines(&o) };
+        }
+        Ok(o) => o,
+    };
+    let sh_c = work.join("sh.c");
+    let sh_bin = work.join("sh");
+    std::fs::write(&sh_c, &emit.stdout).expect("failed to write self-host C");
+    let t0 = Instant::now();
+    let cc = run_cmd(
+        Command::new("cc")
+            .arg("-O0")
+            .arg("-w")
+            .arg("-o")
+            .arg(&sh_bin)
+            .arg(&sh_c)
+            .arg("-lm")
+            .arg("-lpthread"),
+        build_timeout(),
+    );
+    t.cc += t0.elapsed();
+    match cc {
+        Err(TimedOut) => return Verdict::Timeout { lane: "cc (self-host)" },
+        Ok(o) if !o.status.success() => {
+            return Verdict::CcFail { detail: error_lines(&o) };
+        }
+        Ok(_) => {}
+    }
+    let t0 = Instant::now();
+    let shrun = run_cmd(&mut Command::new(&sh_bin), run_timeout());
+    t.shrun += t0.elapsed();
+    match shrun {
+        Err(TimedOut) => return Verdict::Timeout { lane: "self-host run" },
+        Ok(o) if !o.status.success() => {
+            // C exited 0 by this point, so a nonzero self-host exit is an
+            // exit-code divergence (includes self-host-only crashes).
+            return Verdict::DivergeSh {
+                detail: format!("self-host {} vs C exit=0", exit_detail(&o)),
+            };
+        }
+        Ok(o) => {
+            let sh_out = String::from_utf8_lossy(&o.stdout).to_string();
+            if sh_out.trim_end() != c_out.trim_end() {
+                return Verdict::DivergeSh {
+                    detail: first_diff("c", &c_out, "self", &sh_out, 0, "0".to_string()),
+                };
+            }
+        }
+    }
+
+    // (5) LLVM lane (ON by default; GG_SMITH_SKIP_LLVM=1 skips).
+    if !cfg.skip_llvm {
+        let t0 = Instant::now();
+        let lbuild = run_cmd(
+            Command::new(gg_binary()).arg("build").arg("--backend=llvm").arg(&lprog),
+            build_timeout(),
+        );
+        t.lbuild += t0.elapsed();
+        match lbuild {
+            Err(TimedOut) => return Verdict::Timeout { lane: "gg build (llvm)" },
+            Ok(o) if !o.status.success() => {
+                return Verdict::BuildFailLlvm { detail: error_lines(&o) };
+            }
+            Ok(_) => {}
+        }
+        let t0 = Instant::now();
+        let lrun = run_cmd(&mut Command::new(ldir.join("prog")), run_timeout());
+        t.lrun += t0.elapsed();
+        match lrun {
+            Err(TimedOut) => return Verdict::Timeout { lane: "llvm run" },
+            Ok(o) => {
+                let l_out = String::from_utf8_lossy(&o.stdout).to_string();
+                if !o.status.success() || l_out != c_out {
+                    let l_exit = if o.status.success() {
+                        "0".to_string()
+                    } else {
+                        exit_detail(&o)
+                    };
+                    return Verdict::DivergeLlvm {
+                        detail: first_diff("c", &c_out, "llvm", &l_out, 0, l_exit),
+                    };
+                }
+            }
+        }
+    }
+
+    Verdict::Match
+}
+
+/// Generate + classify one seed. The seed's scratch dir is removed on MATCH
+/// (repro dirs are kept only for non-MATCH seeds).
+fn run_seed(seed: u64, cfg: &Config, tmp_root: &Path) -> (Verdict, Timings, PathBuf) {
+    let mut t = Timings::default();
+    let t0 = Instant::now();
+    let src = generator::generate(seed, cfg.tier);
+    t.generate += t0.elapsed();
+    let dir = tmp_root.join(format!("s{seed}"));
+    let v = classify(&src, &dir, cfg, &mut t);
+    if matches!(v, Verdict::Match) {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    (v, t, dir)
+}
+
+/// Chunked scoped-thread map over the seed range, preserving order.
+/// Worker count mirrors `parallel_map_fixtures` (integration.rs:261-300).
+fn parallel_map_seeds(
+    seeds: &[u64],
+    cfg: &Config,
+    tmp_root: &Path,
+) -> Vec<(u64, Verdict, Timings, PathBuf)> {
+    let cpus = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let n_workers = (cpus / 2).clamp(2, 8).min(seeds.len().max(1));
+    let chunk_size = seeds.len().div_ceil(n_workers);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = seeds
+            .chunks(chunk_size)
+            .map(|chunk| {
+                s.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|&seed| {
+                            let (v, t, dir) = run_seed(seed, cfg, tmp_root);
+                            if !matches!(v, Verdict::Match) {
+                                // Progressive report (one print! call so the
+                                // two lines never interleave across workers).
+                                print!(
+                                    "seed {seed}: {} [{}]\n    repro: {}\n",
+                                    v.label(),
+                                    v.detail(),
+                                    dir.display(),
+                                );
+                            }
+                            (seed, v, t, dir)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles.into_iter().flat_map(|h| h.join().expect("smith worker panicked")).collect()
+    })
+}
+
+/// Parse `GG_SMITH_SEEDS` — `A..B` (inclusive on BOTH ends; `A..=B` also
+/// accepted) or a single seed `N`.
+fn parse_seed_range(spec: &str) -> (u64, u64) {
+    let spec = spec.trim();
+    let parsed = if let Some((lo, hi)) = spec.split_once("..") {
+        let hi = hi.strip_prefix('=').unwrap_or(hi);
+        match (lo.trim().parse::<u64>(), hi.trim().parse::<u64>()) {
+            (Ok(a), Ok(b)) if a <= b => Some((a, b)),
+            _ => None,
+        }
+    } else {
+        spec.parse::<u64>().ok().map(|n| (n, n))
+    };
+    parsed.unwrap_or_else(|| {
+        panic!("GG_SMITH_SEEDS must be `A..B` (inclusive) or a single seed, got {spec:?}")
+    })
+}
+
+fn mk_tmp_root(prefix: &str) -> PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "{prefix}_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&root).expect("failed to create smith tmp root");
+    root
+}
+
+// ─────────────────────────────── tests ─────────────────────────────────
+
+/// Always-on: the generator is byte-reproducible from
+/// `(GENERATOR_VERSION, seed)` — two independent generations of the same
+/// seed must be identical, and the program skeleton must be present.
+#[test]
+fn generator_determinism() {
+    for seed in [0u64, 1, 7, 36, 42, 99, 1000, 123_456] {
+        let a = generator::generate(seed, 0);
+        let b = generator::generate(seed, 0);
+        assert_eq!(
+            a, b,
+            "generator is not deterministic for (v{}, seed {seed})",
+            generator::GENERATOR_VERSION
+        );
+        assert!(a.contains("void main():"), "seed {seed}: program lost its main()");
+        assert!(
+            a.trim_end().ends_with("print(\"end\")"),
+            "seed {seed}: program lost its end sentinel"
+        );
+    }
+}
+
+/// Env-gated batch differential — an always-pass DIAGNOSTIC (prints a
+/// verdict table, a divergent-seed list, repro paths, and the first
+/// error/diff line per non-MATCH seed; never asserts counts).
+///
+///   GG_SMITH_SEEDS=1..200 cargo test --test smith -- --nocapture
+///
+/// No-op skip without the env var.
+#[test]
+fn smith_batch() {
+    let Ok(spec) = std::env::var("GG_SMITH_SEEDS") else {
+        return; // diagnostic-only: opt in via GG_SMITH_SEEDS=A..B
+    };
+    if spec.is_empty() {
+        return;
+    }
+    let (lo, hi) = parse_seed_range(&spec);
+    let cfg = Config::from_env();
+    let tmp_root = mk_tmp_root("gg_smith");
+    let seeds: Vec<u64> = (lo..=hi).collect();
+
+    println!(
+        "=== gorget-smith batch: generator v{}, tier {}, seeds {lo}..={hi} ({} seeds), \
+         llvm lane {} ===",
+        generator::GENERATOR_VERSION,
+        cfg.tier,
+        seeds.len(),
+        if cfg.skip_llvm { "OFF (GG_SMITH_SKIP_LLVM=1)" } else { "ON" },
+    );
+
+    // One-time driver build BEFORE the parallel fan-out (OnceLock would
+    // serialize the stampede anyway, but this keeps per-seed timing honest).
+    let _ = driver_paths();
+
+    let results = parallel_map_seeds(&seeds, &cfg, &tmp_root);
+
+    let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut totals = Timings::default();
+    let mut suspicious: Vec<u64> = Vec::new();
+    let mut gen_invalid: Vec<u64> = Vec::new();
+    for (seed, v, t, _dir) in &results {
+        *counts.entry(v.label()).or_insert(0) += 1;
+        totals.add(t);
+        match v {
+            Verdict::Match => {}
+            Verdict::GenInvalid { .. } => gen_invalid.push(*seed),
+            _ => suspicious.push(*seed),
+        }
+    }
+
+    let n = seeds.len() as f64;
+    println!("\n=== gorget-smith verdict table ===");
+    println!(
+        "seeds: {}   {}",
+        seeds.len(),
+        counts.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("  "),
+    );
+    println!(
+        "avg per seed: gen={:.3}s check={:.3}s cbuild={:.3}s crun={:.3}s driver={:.3}s \
+         cc={:.3}s shrun={:.3}s lbuild={:.3}s lrun={:.3}s total={:.3}s",
+        totals.generate.as_secs_f64() / n,
+        totals.check.as_secs_f64() / n,
+        totals.cbuild.as_secs_f64() / n,
+        totals.crun.as_secs_f64() / n,
+        totals.driver.as_secs_f64() / n,
+        totals.cc.as_secs_f64() / n,
+        totals.shrun.as_secs_f64() / n,
+        totals.lbuild.as_secs_f64() / n,
+        totals.lrun.as_secs_f64() / n,
+        totals.total().as_secs_f64() / n,
+    );
+    println!("divergent/suspicious seeds: {suspicious:?}");
+    println!("gen-invalid seeds: {gen_invalid:?}");
+    if suspicious.is_empty() && gen_invalid.is_empty() {
+        let _ = std::fs::remove_dir_all(&tmp_root);
+        println!("all seeds MATCH — repro root removed");
+    } else {
+        println!("repro root (non-MATCH seed dirs kept): {}", tmp_root.display());
+        println!(
+            "minimize a seed with: GG_SMITH_MINIMIZE=<seed> cargo test --test smith -- --nocapture"
+        );
+    }
+}
+
+/// End of the removable region starting at line `i`: the line itself, plus —
+/// when it opens a block (ends with `:`) — every following line that is
+/// blank or more-indented. Port of the prototype `ddmin.py`.
+fn block_end(lines: &[String], i: usize) -> usize {
+    fn indent_of(l: &str) -> usize {
+        l.len() - l.trim_start().len()
+    }
+    let mut j = i + 1;
+    if lines[i].trim_end().ends_with(':') {
+        let base = indent_of(&lines[i]);
+        while j < lines.len()
+            && (lines[j].trim().is_empty() || indent_of(&lines[j]) > base)
+        {
+            j += 1;
+        }
+    }
+    j
+}
+
+/// Env-gated minimizer: block-aware line removal with the predicate "same
+/// classification as the original".
+///
+///   GG_SMITH_MINIMIZE=36 cargo test --test smith -- --nocapture
+///
+/// No-op skip without the env var.
+#[test]
+fn smith_minimize() {
+    let Ok(spec) = std::env::var("GG_SMITH_MINIMIZE") else {
+        return; // opt in via GG_SMITH_MINIMIZE=<seed>
+    };
+    if spec.is_empty() {
+        return;
+    }
+    let seed: u64 = spec
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("GG_SMITH_MINIMIZE must be a seed number, got {spec:?}"));
+    let cfg = Config::from_env();
+    let tmp_root = mk_tmp_root("gg_smith_min");
+    let scratch = tmp_root.join("work");
+
+    let src = generator::generate(seed, cfg.tier);
+    let mut t = Timings::default();
+    let baseline = classify(&src, &scratch, &cfg, &mut t);
+    println!(
+        "seed {seed} baseline: {} [{}] ({} lines)",
+        baseline.label(),
+        baseline.detail(),
+        src.lines().count(),
+    );
+    if matches!(baseline, Verdict::Match) {
+        println!("seed {seed} is MATCH — nothing to minimize");
+        let _ = std::fs::remove_dir_all(&tmp_root);
+        return;
+    }
+    let target = baseline.label();
+
+    let mut lines: Vec<String> = src.lines().map(str::to_string).collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let mut i = 0;
+        while i < lines.len() {
+            let j = block_end(&lines, i);
+            let mut cand: Vec<String> = lines[..i].to_vec();
+            cand.extend_from_slice(&lines[j..]);
+            if !cand.is_empty() {
+                let cand_src = cand.join("\n") + "\n";
+                let _ = std::fs::remove_dir_all(&scratch);
+                let mut tt = Timings::default();
+                let v = classify(&cand_src, &scratch, &cfg, &mut tt);
+                if v.label() == target {
+                    lines = cand;
+                    changed = true;
+                    continue; // same slot again — the next line shifted into i
+                }
+            }
+            i += 1;
+        }
+    }
+
+    let min_src = lines.join("\n") + "\n";
+    let out_path = tmp_root.join(format!("min_s{seed}.gg"));
+    std::fs::write(&out_path, &min_src).expect("failed to write minimized program");
+    let _ = std::fs::remove_dir_all(&scratch);
+    println!(
+        "=== minimized seed {seed} (classification preserved: {target}, {} lines) ===\n{min_src}\
+         saved: {}",
+        min_src.lines().count(),
+        out_path.display(),
+    );
+}

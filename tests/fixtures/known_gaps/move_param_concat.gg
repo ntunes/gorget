@@ -1,0 +1,6 @@
+String f(String !p):
+    return p + "log"
+
+void main():
+    String s = "ab"
+    print(f(!s))
