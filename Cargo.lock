@@ -164,6 +164,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ggdef"
+version = "0.1.0"
+dependencies = [
+ "gorget",
+]
+
+[[package]]
 name = "gorget"
 version = "0.1.4-alpha"
 dependencies = [

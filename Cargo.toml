@@ -1,3 +1,10 @@
+# The root crate is ALSO the workspace root (RFC §3): the executable language
+# definition lives in `spec/ggdef`, a member crate. `cargo build` still builds
+# only this root package; the ggdef crate needs `--workspace` or `-p ggdef`.
+[workspace]
+members = [".", "spec/ggdef"]
+resolver = "3"
+
 [package]
 name = "gorget"
 version = "0.1.4-alpha"
