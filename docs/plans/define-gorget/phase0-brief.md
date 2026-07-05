@@ -3,7 +3,9 @@
 > **STATUS: v4 — passes 1 (5 res) + 2 (3 res) folded; pass 3 (Opus) = SIGN OFF FOR INCREMENT A
 > (2 non-blocking findings folded into v4). B/C need one confirming pass on their sections
 > before launching (the F2 report-homes fix landed post-sign-off).**
-> **Executor launches: A: LAUNCHED 2026-07-05 (Opus) · B: not launched · C: not launched.**
+> **Executor launches: A: ✅ LANDED + MERGED to main 2026-07-05 (Opus; 26/26 MATCH; output-review
+> SIGN OFF with 2 LOW findings folded into B below) · B: not launched (needs one confirming
+> review pass on the B/C sections first) · C: not launched.**
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
 > This brief is deliberately self-contained enough for an Opus-class executor: where the RFC
@@ -112,6 +114,14 @@ construction; `with expr as name:` (scoped bind via fresh-temp Move + drop-at-ex
 loops; the v1 shim list (`std.collections.{Vector,Set,Dict}` import mapping +
 `std.conv.int_to_str` as a GGC intrinsic); by-value closures (no capture lists — D5 capture
 lists are a phase-1/production item; bare closures capture by value at creation).
+
+**Also in B (from Increment-A output-review, LOW findings F1/F2):** (F1) harden the import
+ratchet with a second scan over FULL source text for bare `gorget::(ir|semantic|lir|bir|backend)::`
+path segments — the use-line-only scan misses inline fully-qualified paths (confirmed
+reachable); (F2) either emit a structural-move trace event for fresh-temp binds (more faithful
+to §2.2's "fresh temps move") or fix the stale `trace.rs:28-29` doc-comment — pick the event
+(preferred; provenance completeness) and update the `fresh_temp_bind_is_a_move_not_a_copy`
+unit test accordingly.
 
 **Gates B:** everything from A, plus `spec/ggdef/tests/corpus_b.rs` running the **entire
 cow_* family minus the RFC's 3 generic-equip cow exclusions** (`cow_element_borrow_alias_mutate`,
