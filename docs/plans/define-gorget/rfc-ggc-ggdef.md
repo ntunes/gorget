@@ -1,6 +1,6 @@
 # RFC: Gorget Core (GGC) and `ggdef` — the executable definition of Gorget
 
-> **STATUS: DRAFT v4 — under sequential fresh-agent review (passes 1-3 folded; pass 4 pending).
+> **STATUS: DRAFT v5 — under sequential fresh-agent review (passes 1-4 folded; pass 5 pending).
 > Do not implement from this document until it says APPROVED.**
 > Companion: [`decisions.md`](decisions.md) (D1–D6 normative), [`scouts/`](scouts/).
 
@@ -59,25 +59,35 @@ prose (float formatting is decision §8.2).
 
 - **Implicit-copy positions (closed set, matching the D4 ledger):** bare-assign binds,
   constructor/struct/enum field init, collection put, return, closure capture, and
-  **materialize-on-write (below)**. At the first five, a value is conceptually copied as-of
-  that point (or moved when tagged `Move`). Clone-vs-move liveness optimization does not exist
-  in `ggdef`.
+  **materialize-on-write (below)**. An implicit copy is **a read of a LIVE PLACE** at one of
+  these positions: a fresh expression temp (constructor or call result) has no continuing
+  owner, so elaboration tags it `Move` — a STRUCTURAL fact, not the retired liveness
+  optimization. (`Res r = Res(1)`, `return make()`, and `with Res(1) as r:` are moves, never
+  copies.) At the first five positions a live-place value is conceptually copied as-of that
+  point (or moved when tagged `Move`). Clone-vs-move liveness optimization does not exist in
+  `ggdef`.
 - **`Borrow` positions (bare params, reads, receivers) are non-owning views for ALL types on
   READ** — no copy, no drop in the borrower, for reading. **A WRITE through a Borrow binding
   MATERIALIZES**: at the first write, the binding becomes a persistent private copy holding the
   pre-write value with the write applied; all subsequent reads AND writes through that binding
   see the copy; the owner is untouched; the copy drops in the borrower's scope. This is the
-  language's core CoW rule (§3.1) stated as eager semantics — it is what makes the deadwrite
-  family and D2 evaluable. **`self` is a bare binding (D2): a write through plain `self`
-  materializes exactly as above.**
+  language's core CoW rule (language-design §3.1) stated as eager semantics — it is what makes
+  the deadwrite family and D2 evaluable. **`self` is a bare binding (D2): a write through
+  plain `self` materializes exactly as above.** **Match pattern bindings and `for`-loop
+  variables are Borrow-mode bindings** (views of the scrutinee/element; materialize-on-write
+  applies) — per language-design §3.1's enumeration of bare positions.
 - **`WriteThrough` places** alias the owner; writes land on it. **`Move`** transfers and kills
   the source.
 - **Drop-purity (D4):** types carry a transitive `drop_tainted` bit from elaboration.
-  Elaboration REJECTS all SIX implicit-copy positions above for tainted types — including
+  Elaboration REJECTS all SIX implicit-copy positions above for tainted types **when the
+  source is a live place** (fresh temps move — the ledger's "Box-identical" pin) — including
   materialize-on-write: a write through a Borrow binding of a tainted type is a compile error
   with the move/clone/`&` fix-it (`E_MoveWithoutOperator` family) — so `ggdef` never implicitly
   copies a tainted value; custom drops run at scope exit in reverse declaration order; **drop
-  count/order for tainted types is normative and byte-tested**. ⚠ Prerequisite: the
+  count/order for tainted types is normative and byte-tested**. A pleasing consequence:
+  because tainted materialize is rejected, any binding that DOES conditionally materialize is
+  drop-pure, so its scope-exit drop is unobservable — the observable semantics needs no
+  dynamic drop-flags. ⚠ Prerequisite: the
   collection-element custom-Drop loss on named-local push (TODO HIGH, 2026-07-05) must be
   fixed before drop-count spectests gate implementations.
 - **Resource exhaustion (stack depth, OOM) is implementation-defined** and outside
@@ -86,7 +96,9 @@ prose (float formatting is decision §8.2).
 
 ### 2.3 Evaluator outcomes — and why GGC has no UB
 
-`eval(fuel, state, expr)` is total with exactly four outcomes: **Value** (+ trace events);
+`eval(fuel, state, expr)` is total with exactly four outcomes (trace events accompany ALL
+four — a mechanizer and a divergence-debugger both need the events leading up to a Trap or
+IllFormed, not just successful runs): **Value**;
 **Trap(Fault)** (Overflow/DivByZero/Bounds/assert-failure — catchable per the fault model;
 uncaught = defined panic with normalized output); **IllFormed** (a statically-ill-formed
 program detected dynamically — e.g. a read of a moved-out slot, incl. via an eager bind-copy
@@ -235,7 +247,7 @@ diagnostics; registry maps code → prose section → fixtures; production adopt
 
 - **Phase 0 — walking skeleton.** Elaborator+evaluator for the HONEST subset the target
   fixtures actually use (measured, passes 2-3): binds/aliases/**materialize-on-write**;
-  Vector/**Dict/Set**/struct/String; **Option+Result with `.unwrap()`**; **match + user
+  Vector/**Dict/Set**/struct/String; **Option+Result with `.unwrap()`/`.unwrap_or()`**; **match + user
   payload enums + pattern bindings**; bare/&/! params; **concrete equip method→call incl.
   `equip T with Drop`**; **f-strings (int/string interpolations; no float-printing fixtures
   exist in the target families — §8.2 doesn't block phase 0)**; for/**while** loops;
@@ -256,9 +268,10 @@ diagnostics; registry maps code → prose section → fixtures; production adopt
   ratchet lands with the crate. W3a-d String shapes are IN; their clone-count side is
   D1-allowed variation → annexe.
 - **Phase 1 — coverage completion + floors:** the §2.6 rows-1-2 remainder beyond the phase-0
-  subset (closures with capture lists, traits/generics/trait objects, comprehensions,
-  statics, the long tail of stdlib-free constructs); frontmatter migration (converter from
-  the ~1,218 literal run_gg pairs → `ggdef -- gen` regeneration → human-reviewed diff —
+  subset (closures with capture lists, traits/generics/trait objects, comprehensions, the
+  long tail of stdlib-free constructs) plus row 3's statics; frontmatter migration (converter
+  from the ~1,218 literal harness expectation pairs — 1,212 `run_gg(` + the with_args/
+  with_stdin/bench variants — → `ggdef -- gen` regeneration → human-reviewed diff —
   blocked for float-printing fixtures on §8.2); per-impl conformance reports + floors; ggdef
   verdict lane in smith; D4/D5/D6 rejections in elaboration + production + negative fixtures;
   diagnostic-code registry.
