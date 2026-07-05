@@ -148,6 +148,20 @@ language-design/book examples showing float output.
 
 ## OPEN — queue (later batches; from scout-B List A, scout-A tiers)
 
+- **A29 (owner question, 2026-07-05): CONSOLIDATE the `&`-exclusivity rules into one
+  static-semantics prose section + fixtures.** The intended rule is Rust-style (readers XOR
+  one writer, language-design §3.5) and is a PREMISE of D1's refinement claim (same-call
+  aliasing `f(v, &v)` rejection closed a lazy/eager divergence channel in RFC review pass 1) —
+  but it is currently scattered (§3.5 prose; D7 pins capture duration only; reference-doc
+  same-call rejection; open A3 local `&`-binds) and enforcement is implementation-uneven
+  (production stricter-than-spec on capture duration, accepts-and-miscompiles `auto a = &b`,
+  self-host has NO borrow-check pass). Sub-decisions to bring to the owner with the section:
+  (a) the GENERAL duration model — liveness-based (NLL-style, matching D7's capture rule) vs
+  scope-based; (b) A3's local `&`-bind disposition; (c) same-call aliasing rejection stated as
+  normative. Note: exclusivity violations are NOT dynamically detectable in ggdef (aliased
+  writes just sequence) — this rule lives entirely in the static layer, hence v1 prose +
+  fixtures, executable at v1.5.
+
 - A5 resource-valued `Dict.get_or`/`get_or_put` ownership (both compilers double-free today)
 - A6 slice representation: reject-escape is already filed as the near-term fix (TODO:465);
   the open question is whether a real slice fat-pointer ever ships
