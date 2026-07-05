@@ -4311,7 +4311,22 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
                 emit_box_alloc(dst_local, args.get(0).unwrap(), &f, bb, &local_to_slot, &sr, &m)
                 return bb
-            String mapped_early = map_runtime_name(func_name, &m, &gmod)
+            # A DEFINED user function (present in func_index) ALWAYS wins over
+            # the runtime-symbol remap — mirrors Rust gg
+            # `src/lir/lower/insts.rs:533` (the `func_index.get(func)`
+            # direct-call branch precedes the map_monomorphized_to_runtime
+            # fallback) AND the GICall twin's func_index check (~line 4069).
+            # Without this, a USER equip method whose mangled name collides with
+            # a runtime family PREFIX — `equip String: … my_len` →
+            # `GorgetString__my_len`, caught by the `MkPrefix("GorgetString__")`
+            # family — is wrongly rewritten to the nonexistent builtin
+            # `gorget_str_my_len` (undefined-ref / wrong Result-vs-int ABI).
+            # Builtins (`GorgetString__len`, `gorget_str_*`) have NO func_index
+            # entry, so they still remap; only user-defined bodies are protected.
+            bool _gce_is_user_fn = func_index.contains(func_name)
+            String mapped_early = ""
+            if not _gce_is_user_fn:
+                mapped_early = map_runtime_name(func_name, &m, &gmod)
             String effective_name = func_name
             if mapped_early != "":
                 effective_name = mapped_early
@@ -4385,7 +4400,12 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] &loc
                     int arg_val = lower_operand(arg, &f, bb, &local_to_slot, &m)
                     lir_args.push(arg_val)
                 ai += 1
-            String mapped = map_runtime_name(func_name, &m, &gmod)
+            # Same func_index-first guard as the `mapped_early` site above
+            # (sibling completeness — a user fn is never remapped to a runtime
+            # symbol at either remap point).
+            String mapped = ""
+            if not _gce_is_user_fn:
+                mapped = map_runtime_name(func_name, &m, &gmod)
             String call_name = func_name
             if mapped != "":
                 call_name = mapped

@@ -958,6 +958,23 @@ String type_id_to_base_name(int tid, GirModule &gmod):
             return type_id_to_base_name(inner, &gmod)
         case GtMutPtr(inner):
             return type_id_to_base_name(inner, &gmod)
+        case GtBool():
+            # A `bool` value's base name must be the canonical C name "bool"
+            # (matching prim_to_c_name/type_to_c_name) — NOT the "int64_t"
+            # fallback below. Method dispatch on a bool receiver mangles
+            # `<recv_type_name>__<method>`; a user `equip bool:` method is
+            # DEFINED as `bool__method` (target_name = type_to_c_name(bool)),
+            # so a call receiver reported as "int64_t" mis-dispatched to a
+            # phantom `int64_t__method` (undefined ref after DCE dropped the
+            # unreferenced `bool__method`). The other scalar variants
+            # (GtI8/I16/I32/U*/F32/F64) still fall through to the "int64_t"
+            # default — they are NOT exercised by any current equip fixture and
+            # a broader remap has wider blast radius (the "int64_t" fallback is
+            # DELIBERATELY load-bearing — GtI64/plain int relies on it, see
+            # lower_expr.gg:3785-3800). Extend per-variant with the same
+            # prim_to_c_name spelling if/when a scalar equip needs it, after a
+            # positive audit of every downstream `== "<cname>"` name-test.
+            return "bool"
         else:
             pass
     return "int64_t"

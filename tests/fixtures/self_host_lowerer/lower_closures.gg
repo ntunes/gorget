@@ -8,7 +8,8 @@
 # the cluster.
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
-from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern
+from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm, Pattern, SpannedPattern, TPrimitive
+from traits import is_scalar_primitive_name
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
@@ -470,6 +471,32 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
     int target_tid = lookup_or_register_named(&gmod, target_name)
     int self_ptr_tid = register_ptr(&gmod, target_tid)
 
+    # Scalar-primitive equip target (int/uint/float/bool/…): an inherent
+    # method's bare `self` is passed BY VALUE (the value type itself), NOT `*T`.
+    # Mirrors Rust gg `src/ir/lowering/functions.rs:1281` (the
+    # `self_type_id.0 < PRIMITIVE_TYPE_COUNT` `is_scalar` branch). String / str
+    # are heap / view-backed and stay by-pointer (is_scalar_primitive_name
+    # excludes them). `equip <scalar> with Trait` is rejected at typecheck
+    # (round-34 D#2), so this only ever affects bare-`self` inherent methods.
+    # NOTE: is_scalar_primitive_name is a SUPERSET of prim_name_to_type's mapped
+    # names — char/int64/uint64/float64 return -1 (no primitive tid), so the
+    # `scalar_self_tid >= 0` gate below leaves them on the existing by-pointer
+    # default (no fixture exercises them; filed as a sibling follow-up).
+    bool target_is_scalar = false
+    int scalar_self_tid = -1
+    match eqblk.target.ty:
+        case TPrimitive(pname):
+            if is_scalar_primitive_name(pname):
+                target_is_scalar = true
+                # The scalar's PRIMITIVE type id (I64_TYPE / BOOL_TYPE / …), NOT
+                # the NAMED "int64_t" type (`target_tid`) — the C/LIR emit renders
+                # a named type as an opaque `void*`, but the primitive tid as a
+                # true scalar value. Mirrors Rust gg's `self_type_id` being the
+                # mapped primitive (`functions.rs:1272`).
+                scalar_self_tid = prim_name_to_type(pname)
+        else:
+            pass
+
     for mdef in eqblk.methods:
         # Mangled name: Type__method or Trait_for_Type__method
         String mangled = target_name + "__" + mdef.name
@@ -589,6 +616,12 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
             # OWN_MUTABLE=1 (&self), OWN_MOVE=2 (!self) → *mut T
             if self_ownership == 1 or self_ownership == 2:
                 self_tid = register_type(&gmod, GtMutPtr(target_tid))
+            elif target_is_scalar and scalar_self_tid >= 0:
+                # Bare `self` on a scalar primitive → pass BY VALUE (the scalar
+                # primitive type id), not `*T`/`void*`. Matches Rust gg's
+                # is_scalar branch; the call-site `need_ptr` detection reads this
+                # via get_fn_param_types and auto-passes the value (no addr-of).
+                self_tid = scalar_self_tid
             # Explicit trait impls use *unit self (Rust convention)
             int concrete_self_tid = self_tid
             if is_explicit_trait:

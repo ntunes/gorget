@@ -3610,6 +3610,26 @@ fn equip_on_primitive() {
 }
 
 #[test]
+#[ignore = "R43-B known self-host gap: `equip <scalar>:` inherent methods on \
+scalar variants OTHER than int/bool (float/uint/int32/…) still mis-dispatch on \
+the self-host. `type_id_to_base_name` (self_host_lowerer/lower_types.gg) maps \
+only `GtBool()->\"bool\"`; every other scalar `GtXxx` collapses to the \
+\"int64_t\" fallback, so a `equip float:` method DEFINED as `double__m` is \
+CALLED as `int64_t__m` -> undefined ref after DCE (measured: this fixture \
+CC-FAILs on the self-host with `undefined reference to int64_t__scaled`). Rust \
+gg lowers it correctly, so this asserts the language-intended output. The \
+fixture lives in tests/fixtures/known_gaps/ so it stays OUT of the \
+runtime-diff corpus. Un-ignore + PROMOTE to a top-level tests/fixtures/*.gg \
+corpus fixture when the full-class scalar-equip lowering lands (see TODO.md \
+\"R43-B FOLLOW-UP\")."]
+fn equip_on_primitive_scalar_variants() {
+    run_gg(
+        "known_gaps/equip_on_primitive_scalar_variants.gg",
+        "43.000000\nfalse\n42",
+    );
+}
+
+#[test]
 fn equip_supertrait_split() {
     run_gg(
         "equip_supertrait_split.gg",

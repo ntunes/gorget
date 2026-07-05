@@ -1,0 +1,36 @@
+# EXPOSING FIXTURE (companion test is #[ignore]'d) for the R43-B root-3
+# sibling gap. The self-host `type_id_to_base_name`
+# (self_host_lowerer/lower_types.gg) currently maps only `GtBool() -> "bool"`;
+# every OTHER scalar `GtXxx` still collapses to the `"int64_t"` fallback. So a
+# `equip float:` / `equip uint:` inherent method is DEFINED as `double__m` /
+# `uint64_t__m` (`type_to_c_name`) while the call receiver's base name is
+# reported as `"int64_t"` -> a phantom `int64_t__m` -> undefined reference
+# after DCE drops the unreferenced correctly-named def. Rust gg lowers this
+# correctly (its receiver base-name is faithful per primitive), so the expected
+# output below is Rust gg's -- the CORRECT behavior the self-host must reach.
+#
+# Un-ignore the companion integration test (`equip_on_primitive_scalar_variants`)
+# once the self-host maps ALL scalar `GtXxx` variants faithfully AND Root-1's
+# `>= 0` gate is widened to cover char/int64/uint64/float64. See the TODO entry
+# "R43-B follow-up: full-class scalar equip lowering".
+
+equip float:
+    float scaled(self):
+        return self * 2.0
+
+    bool is_big(self):
+        return self > 100.0
+
+equip uint:
+    uint plus_one(self):
+        return self + 1
+
+int main():
+    float f = 21.5
+    print(f.scaled())
+    print(f.is_big())
+
+    uint u = 41
+    print(u.plus_one())
+
+    return 0
