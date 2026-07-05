@@ -1,6 +1,7 @@
 # EXECUTOR BRIEF: ggdef phase 0 — the walking skeleton (Increments A/B/C)
 
-> **STATUS: v1 — review passes cleared: 0 of ≥3 (update this line per pass).**
+> **STATUS: v2 — pass 1 (Opus) raised 5 reservations, all folded; passes cleared: 0 clean of ≥3
+> (update this line per pass).**
 > **Executor launches: A: not launched · B: not launched · C: not launched** (update in place).
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
@@ -24,9 +25,14 @@ Commit per increment. An increment's gates must be green before the next launche
    ONLY.
 2. **The import ratchet lint FIRST** (before any evaluator code): a new test in
    `tests/lints.rs` following the existing ratchet pattern (see `no_growth_in_name_prefix_routing`
-   for style): scan `spec/ggdef/src/**/*.rs` for `use` lines; FAIL if any path resolves into
-   `ir`, `semantic`, `lir`, `bir`, or `backend` modules of the root crate. Allowlist: `lexer`,
-   `parser` (incl. AST), `span`, plus std. Budget = 0 violations, fatal from day one.
+   at tests/lints.rs:178 for style): scan `spec/ggdef/src/**/*.rs` for `use` lines; **DENYLIST
+   semantics** — FAIL if any path resolves into `ir`, `semantic`, `lir`, `bir`, or `backend`
+   modules of the root crate. (Typical legal imports, illustrative not exhaustive: `lexer`,
+   `parser` incl. AST, `span`, `errors`, `intern`, `compiler_data`, std.) Budget = 0, fatal
+   from day one. NOTE for the executor: this is a SOURCE-discipline fence, not a link fence —
+   ggdef links the whole gorget lib, and root-crate modules like `src/errors.rs` internally
+   reference `crate::semantic` (that is fine and not your concern); the fence applies only to
+   ggdef's OWN `use` lines.
 3. **`src/ggc.rs`** — the GGC data types per RFC §2.1, for the Increment-A subset: scalar
    values (int64/bool/float64 only in A; full sized-int matrix in B), String, Vector, struct,
    tuple; places (local/field/element); the three mode tags (Borrow/WriteThrough/Move);
@@ -42,9 +48,11 @@ Commit per increment. An increment's gates must be green before the next launche
    IllFormed); scope-exit drops in reverse declaration order. Checked arithmetic → Trap(Fault).
 5. **`src/elaborate/`** — for the A-subset only: reuse the production lexer+parser; own tiny
    resolver (locals + function names; no generics yet); mode-tag resolution from syntax
-   (bare/&/!); desugar: f-strings with int/string interpolations → concat/print forms;
-   method→call for the builtin Vector/String methods in the A fixture set (len/push/get/
-   unwrap on Option in B — in A avoid fixtures needing Option); for→explicit loop.
+   (bare/&/!); desugar: **collection literals `[a, b, c]` → Vector construct + pushes**
+   (without this only ~16 cow fixtures qualify for A; with it ~34 — measured in review
+   pass 1); f-strings with int/string interpolations → concat/print forms; method→call for
+   the builtin Vector/String methods the A fixture set uses (len/push/set/index; Option and
+   `.unwrap()` are B — A avoids fixtures needing Option); for→explicit loop.
 6. **CLI**: `cargo run -p ggdef -- run file.gg` (prints program stdout; exit code per
    outcome: Value→0, Trap→101, IllFormed→102, FuelExhausted→103 — pin these in a const with
    a doc comment; they are provisional until the trap-normalization spec text lands in B) and
@@ -52,11 +60,16 @@ Commit per increment. An increment's gates must be green before the next launche
    `---trace---` line).
 7. **First conformance evidence**: a script or test (`spec/ggdef/tests/corpus_a.rs`) that runs
    ggdef over a HARDCODED list of ~20 Increment-A-compatible `cow_*` fixtures (pick fixtures
-   using only A-subset constructs — candidates: `cow_borrow_basic`, `cow_struct_sever_on_mutation`,
-   `cow_amp_owned_writethrough`, `cow_lazy_d1_alias_deadpath`, plus ~16 more the executor
-   selects by READING the fixtures; document the list + why each qualifies) and compares
-   stdout to the expected outputs extracted from `tests/integration.rs`'s literal `run_gg`
-   pairs. **Acceptance A: all listed fixtures MATCH.** Any mismatch: STOP, do not "fix" ggdef
+   using only A-subset constructs — VERIFIED-A-clean candidates from review pass 1:
+   `cow_struct_sever_on_mutation`, `cow_amp_owned_writethrough`, `cow_transitive_alias`,
+   `cow_index_proj_alias`, `cow_collection_element_mutate`, `cow_loop_borrow_propagation`,
+   `cow_scope_exit_alias`, `cow_fieldpath_double_fire`; select the rest by READING the
+   fixtures — the A-clean pool is ~34 with list-literals in A; do NOT pick Option/`.unwrap()`
+   users like `cow_borrow_basic` or `cow_lazy_d1_alias_deadpath`, those are B corpus;
+   document the list + why each qualifies) and compares stdout to the expected outputs
+   extracted from `tests/integration.rs`'s literal `run_gg` pairs (parse the Rust string
+   literal — including the `\`-continuation multi-line form, e.g. integration.rs:4895-4900 —
+   never retype it). **Acceptance A: all listed fixtures MATCH.** Any mismatch: STOP, do not "fix" ggdef
    to match without checking the divergence table below — it may be an expected divergence or
    a genuine spec finding to report.
 
@@ -69,8 +82,9 @@ Commit per increment. An increment's gates must be green before the next launche
 | the fixture is one of the two smith bugs (`cow_dead_branch_alias_bind` → 9, `move_param_concat` → ablog) | EXPECTED: ggdef MUST produce the correct value — this is acceptance (c) |
 | anything else | POTENTIAL GGDEF BUG or spec finding: STOP on that fixture, write a minimal repro, report it in the increment report for orchestrator triage. Never silently patch eval.rs to match production output |
 
-**Gates A** (foreground, tee to /tmp/ggdef_a_*_$RANDOM.log): `cargo build` (workspace) clean;
-`cargo test --lib` unchanged-green; `cargo test --test lints` green INCLUDING the new ratchet;
+**Gates A** (foreground, tee to /tmp/ggdef_a_*_$RANDOM.log): `cargo build --workspace` clean
+(bare `cargo build` only builds the root package — ggdef needs `--workspace` or `-p ggdef`);
+`cargo test --lib` unchanged-green (root package — bare form is correct here); `cargo test --test lints` green INCLUDING the new ratchet;
 `cargo test -p ggdef` green (unit tests for eval — minimum: one test per §2.2 bullet,
 including materialize-then-read-sees-copy, owner-untouched, move-then-read=IllFormed,
 fresh-temp-move, drop order); the corpus_a run with its MATCH list printed.
@@ -93,8 +107,9 @@ loops; the v1 shim list (`std.collections.{Vector,Set,Dict}` import mapping +
 lists are a phase-1/production item; bare closures capture by value at creation).
 
 **Gates B:** everything from A, plus `spec/ggdef/tests/corpus_b.rs` running the **entire
-cow_* family minus the RFC's 4-fixture exclusion list** and the **deadwrite_* programs minus
-`deadwrite_ok_atomic_add`**. Acceptance per RFC §6(a)+(b) with the divergence table applied;
+cow_* family minus the RFC's 3 generic-equip cow exclusions** (`cow_element_borrow_alias_mutate`,
+`cow_p3_alias_chain_mutate`, `cow_p3_index_mutate`) and the **deadwrite_* programs minus
+`deadwrite_ok_atomic_add`** (the 4th RFC exclusion, a deadwrite fixture not a cow one). Acceptance per RFC §6(a)+(b) with the divergence table applied;
 the increment report MUST list every fixture in each divergence category (expected-D2,
 expected-D1/EMove, smith, findings). For the deadwrite programs the executor generates a
 `deadwrite_spec_expectations.md` (program → ggdef stdout + which D-decision explains any
