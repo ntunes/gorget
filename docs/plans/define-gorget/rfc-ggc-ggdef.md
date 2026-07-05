@@ -1,8 +1,10 @@
 # RFC: Gorget Core (GGC) and `ggdef` — the executable definition of Gorget
 
-> **STATUS: v5 + polish — REVIEW COMPLETE (5 sequential fresh passes; pass 5 = clean SIGN OFF,
-> 2026-07-05). PENDING OWNER APPROVAL + ratification of §8 items 1-2. Do not implement until
-> this line says APPROVED.**
+> **STATUS: APPROVED — owner, 2026-07-05** (after 5-pass review gauntlet + owner read + Q&A on
+> §2.2 categories; §8 items 1-2 ratified as D7/D8). Owner conditions recorded in the ledger:
+> production implementations MUST use borrows+lazy-CoW or an equally-fast proven-equivalent
+> strategy (D1 owner note — the eager formulation is spec-only). Phase 0 is GO per
+> [`phase0-brief.md`](phase0-brief.md); orchestration handover in [`HANDOVER.md`](HANDOVER.md).
 > Companion: [`decisions.md`](decisions.md) (D1–D6 normative), [`scouts/`](scouts/).
 
 ## 1. Goals and non-goals

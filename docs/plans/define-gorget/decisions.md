@@ -14,6 +14,17 @@
 > (real programs proving Gorget works); this project is the COHERENCE effort (proving the language
 > means one thing). They complement, not substitute.
 
+**Standing owner directives (added 2026-07-05, at project GO):**
+- **Dogfood findings feed the ledger:** every ugly pattern, workaround, or awkward idiom found
+  while writing real Gorget (self-host, gorget-js, gorget-arena, spectests) is a
+  LANGUAGE-DESIGN FINDING to file against this ledger — not merely a bug or style nit. This
+  generalizes "self-host as the elegance showcase" into the evidence channel that validates
+  and revises D-decisions; the spec is versioned-living precisely so revisions stay cheap.
+- **LLM-correctness KPI:** stand up a measured, ratcheted "LLM zero-shot correctness" benchmark
+  (fixed task suite; model given only the generated semantic context pack; score
+  compiles-first-try and runs-correct rates) as a first-class language-quality metric. Filed
+  in TODO; depends on the phase-2 context pack.
+
 ## DECIDED (owner, 2026-07-05 — batch 1)
 
 ### D1. Observable semantics = VALUE SEMANTICS, plus a normative copy-guarantees annexe
