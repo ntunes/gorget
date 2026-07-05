@@ -26,6 +26,11 @@ borrow-passing MUST NOT allocate — the README's promises, enforced via clone-s
 probes on designated annexe tests, not via the value-semantics evaluator). An
 eager-copy-everything implementation is nonconformant (annexe), and a lazy implementation that
 changes an observable value is nonconformant (semantics).
+**Owner note (2026-07-05):** production Gorget MUST implement this via borrows + lazy CoW (or a
+future strategy that is equally fast AND provably achieves the same semantics — the owner is
+open to alternatives); the eager formulation is spec-only, never a production strategy. The
+annexe is the enforcement: its MUST-NOT-ALLOCATE positions make an eager production
+implementation nonconformant by construction.
 
 **Derived consequences (no further decision needed):**
 - **EMove value-bug** (devbook/11 "Rust gg VALUE-WRONG on both EMove shapes") is definitively a
