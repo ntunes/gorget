@@ -1,0 +1,10 @@
+# DeadBareParamWrite negative: write then READ of the private copy — a
+# legitimate scratch-copy idiom, must stay silent.
+int peek_mod(Vector[int] xs):
+    xs[0] = 99
+    return xs[0]
+
+void main():
+    Vector[int] a = [1, 2]
+    print(peek_mod(a))
+    print(a[0])

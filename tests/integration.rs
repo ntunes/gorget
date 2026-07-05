@@ -7197,6 +7197,201 @@ fn lint_suggest_throws_already_throws() {
 }
 
 
+// ─── DeadBareParamWrite lint (dead write on a bare CoW param) ─────────────
+//
+// A bare (borrow) resource parameter that is mutated materializes a private
+// CoW copy (docs/language-design.md §3.1-3.2); if that copy is never read
+// afterwards, the write is semantically dead — the caller's value is
+// unchanged and the user almost certainly meant `&param` (write-through).
+// Positives assert the warning on `gg check` stderr; negatives assert
+// silence (each pins one of the lint's FP kill-rules).
+
+/// Stable fragment of the DeadBareParamWrite message (src/semantic/errors.rs).
+const DEADWRITE_MSG: &str = "lands on a private copy that is discarded";
+
+#[test]
+fn deadwrite_warn_index_assign() {
+    check_gg_warns(
+        "deadwrite_warn_index_assign.gg",
+        "write to bare parameter `xs` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_field_assign() {
+    check_gg_warns(
+        "deadwrite_warn_field_assign.gg",
+        "write to bare parameter `w` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_nested_field() {
+    check_gg_warns(
+        "deadwrite_warn_nested_field.gg",
+        "write to bare parameter `o` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_push() {
+    check_gg_warns(
+        "deadwrite_warn_push.gg",
+        "write to bare parameter `xs` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_user_method() {
+    // User `&self` method on the bare param receiver, statement position.
+    check_gg_warns(
+        "deadwrite_warn_user_method.gg",
+        "write to bare parameter `c` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_string_push() {
+    check_gg_warns(
+        "deadwrite_warn_string_push.gg",
+        "write to bare parameter `s` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_compound() {
+    check_gg_warns(
+        "deadwrite_warn_compound.gg",
+        "write to bare parameter `xs` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_loop_write() {
+    // Write inside a loop with no read anywhere — loop-carried suppression
+    // needs a read in the loop; a bare write stays hot.
+    check_gg_warns(
+        "deadwrite_warn_loop_write.gg",
+        "write to bare parameter `xs` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_early_return() {
+    check_gg_warns(
+        "deadwrite_warn_early_return.gg",
+        "write to bare parameter `xs` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_chained_stmt() {
+    // `xs.pop().unwrap()` as a statement WARNS by design: the whole chain's
+    // result is discarded and the caller is unchanged. Pins the
+    // span.start-based statement-position classification (check_expr.rs) —
+    // tightening it to exact-node identity would silently flip this class.
+    check_gg_warns(
+        "deadwrite_warn_chained_stmt.gg",
+        "write to bare parameter `xs` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_warn_branch_read_then_write() {
+    // A branch read BEFORE the write does not suppress — only a read after
+    // the last write (or sharing its loop) does.
+    check_gg_warns(
+        "deadwrite_warn_branch_read_then_write.gg",
+        "write to bare parameter `xs` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_build_lock_nonfatal() {
+    // The warning is non-fatal: `gg build` succeeds, stderr carries the
+    // warning, and the binary runs to a clean exit (its stdout — the caller's
+    // unchanged value — is exactly the footgun the warning describes).
+    build_gg_expect_warning(
+        "deadwrite_build_lock.gg",
+        "write to bare parameter `xs` lands on a private copy that is discarded",
+    );
+}
+
+#[test]
+fn deadwrite_ok_mut_param() {
+    check_gg_silent_for("deadwrite_ok_mut_param.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_scratch_read() {
+    check_gg_silent_for("deadwrite_ok_scratch_read.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_read_only() {
+    check_gg_silent_for("deadwrite_ok_read_only.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_loop_read_before_write() {
+    check_gg_silent_for("deadwrite_ok_loop_read_before_write.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_while_drain() {
+    // `while xs.len() > N: xs.pop()` — the condition re-evaluates every
+    // iteration, so its read is loop-carried with the body's write.
+    check_gg_silent_for("deadwrite_ok_while_drain.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_rebind() {
+    check_gg_silent_for("deadwrite_ok_rebind.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_value_pop() {
+    // Value-position mutating call (`return xs.pop()`) is the peek idiom —
+    // the copy's data flows out, which is a read.
+    check_gg_silent_for("deadwrite_ok_value_pop.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_atomic_add() {
+    // AtomicInt.add name-collides with Set.add in the builtin mutating-flag
+    // protocol; the receiver-type gate (buffer-owning builtin / owned String)
+    // must keep interior-mutability FFI handles out.
+    check_gg_silent_for("deadwrite_ok_atomic_add.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_fstring_read() {
+    check_gg_silent_for("deadwrite_ok_fstring_read.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_underscore() {
+    check_gg_silent_for("deadwrite_ok_underscore.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_copy_struct() {
+    check_gg_silent_for("deadwrite_ok_copy_struct.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_match_scrutinee() {
+    check_gg_silent_for("deadwrite_ok_match_scrutinee.gg", DEADWRITE_MSG);
+}
+
+#[test]
+fn deadwrite_ok_branch_sibling_read() {
+    // Deliberate false-negative pin: write in branch A, read in branch B —
+    // walk-order union semantics (no BranchState threading) suppress.
+    check_gg_silent_for("deadwrite_ok_branch_sibling_read.gg", DEADWRITE_MSG);
+}
+
+
 #[test]
 fn const_assign_error() {
     check_gg_fails(

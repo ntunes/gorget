@@ -1,0 +1,8 @@
+# DeadBareParamWrite negative: `&` param writes through — not a dead write.
+void add_item(Vector[int] &xs):
+    xs.push(42)
+
+void main():
+    Vector[int] a = [1]
+    add_item(&a)
+    print(a.len())

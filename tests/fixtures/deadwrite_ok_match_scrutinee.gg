@@ -1,0 +1,14 @@
+# DeadBareParamWrite negative: match scrutinee EXPRESSION rooted at the
+# param (`match xs[0]:`) is a genuine read after the write — silent.
+void classify(Vector[int] xs):
+    xs[0] = 7
+    match xs[0]:
+        case 7:
+            print("seven")
+        else:
+            print("other")
+
+void main():
+    Vector[int] a = [1]
+    classify(a)
+    print(a[0])

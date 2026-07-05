@@ -300,7 +300,13 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Stmt::Expr(expr) => {
+                // Dead-write lint: a mutating method call whose
+                // result is discarded (statement position) is a pure write;
+                // in value position the copy's data flows out (a read).
+                let dw_prev = self.deadwrite_stmt_expr_start;
+                self.deadwrite_stmt_expr_start = Some(expr.span.start);
                 self.check_expr(expr);
+                self.deadwrite_stmt_expr_start = dw_prev;
             }
 
             Stmt::Assign { target, value } => {
@@ -520,6 +526,11 @@ impl<'a> BorrowChecker<'a> {
                         if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
                             self.mut_param_mutated.insert(def_id);
                         }
+                        // Dead-write lint: a full rebind (`p = expr`)
+                        // detaches the name from the caller's value — Python
+                        // behaves identically (rebind never writes through), so
+                        // this is NOT the CoW footgun. Retire tracking.
+                        self.deadwrite_params.remove(&def_id);
                     }
                 }
 
@@ -622,7 +633,21 @@ impl<'a> BorrowChecker<'a> {
                     _ => {
                         // Track mutation of `&` params
                         self.mark_mut_param_if_applicable(target);
+                        // Dead-write lint: the target walk is a
+                        // write-position read of the root, not a use of the
+                        // materialized copy.
+                        let dw_root = self
+                            .find_root_def_id(target)
+                            .filter(|d| self.deadwrite_params.contains_key(d));
+                        let dw_prev = self.deadwrite_write_root;
+                        if dw_root.is_some() {
+                            self.deadwrite_write_root = dw_root;
+                        }
                         self.check_expr(target);
+                        self.deadwrite_write_root = dw_prev;
+                        if let Some(root) = dw_root {
+                            self.mark_bare_param_write_def(root, target.span);
+                        }
                     }
                 }
             }
@@ -772,8 +797,23 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
+                // Dead-write lint: compound assign mutates through
+                // the target root (e.g. `p[0] += 1`, `p.f += x`, `p += x` on a
+                // resource). The target walk is a write-position read; the RHS
+                // walk stays a genuine (pre-write) read.
+                let dw_root = self
+                    .find_root_def_id(target)
+                    .filter(|d| self.deadwrite_params.contains_key(d));
+                let dw_prev = self.deadwrite_write_root;
+                if dw_root.is_some() {
+                    self.deadwrite_write_root = dw_root;
+                }
                 self.check_expr(target);
+                self.deadwrite_write_root = dw_prev;
                 self.check_expr(value);
+                if let Some(root) = dw_root {
+                    self.mark_bare_param_write_def(root, target.span);
+                }
             }
 
             Stmt::Return(expr) => {
@@ -934,7 +974,13 @@ impl<'a> BorrowChecker<'a> {
                 self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
+                // Dead-write lint: unique loop id for loop-carried
+                // read-after-write detection.
+                let dw_loop_id = self.deadwrite_next_loop_id;
+                self.deadwrite_next_loop_id += 1;
+                self.deadwrite_loop_stack.push(dw_loop_id);
                 self.check_block(body);
+                self.deadwrite_loop_stack.pop();
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 self.in_return_expr = saved_in_return;
@@ -965,7 +1011,16 @@ impl<'a> BorrowChecker<'a> {
                 body,
                 else_body,
             } => {
+                // Dead-write lint: the while CONDITION re-evaluates
+                // every iteration, so its reads are loop-carried — walk it
+                // inside the same loop id as the body (a `for` iterable, by
+                // contrast, evaluates once and stays outside).
+                let dw_while_loop_id = self.deadwrite_next_loop_id;
+                self.deadwrite_next_loop_id += 1;
+                self.deadwrite_loop_stack.push(dw_while_loop_id);
                 self.check_expr(condition);
+                // (popped after the body walk — body writes must record this
+                // id so condition reads intersect them)
                 self.check_stale_condition(condition);
                 // Mark borrow origins for all `is` pattern bindings (including compound conditions)
                 self.mark_compound_is_origins(&condition.node);
@@ -986,7 +1041,16 @@ impl<'a> BorrowChecker<'a> {
                 self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
+                // Dead-write lint: unique loop id for loop-carried
+                // read-after-write detection.
+                let dw_loop_id = self.deadwrite_next_loop_id;
+                self.deadwrite_next_loop_id += 1;
+                self.deadwrite_loop_stack.push(dw_loop_id);
                 self.check_block(body);
+                self.deadwrite_loop_stack.pop();
+                // Dead-write lint: close the while-condition loop id
+                // (pushed before the condition walk above).
+                self.deadwrite_loop_stack.pop();
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 self.in_return_expr = saved_in_return;
@@ -1012,7 +1076,13 @@ impl<'a> BorrowChecker<'a> {
                 self.in_return_expr = false;
                 self.loop_depth += 1;
                 self.loop_local_defs.push(FxHashSet::default());
+                // Dead-write lint: unique loop id for loop-carried
+                // read-after-write detection.
+                let dw_loop_id = self.deadwrite_next_loop_id;
+                self.deadwrite_next_loop_id += 1;
+                self.deadwrite_loop_stack.push(dw_loop_id);
                 self.check_block(body);
+                self.deadwrite_loop_stack.pop();
                 self.loop_local_defs.pop();
                 self.loop_depth -= 1;
                 self.in_return_expr = saved_in_return;
@@ -1562,6 +1632,11 @@ impl<'a> BorrowChecker<'a> {
         self.var_reassigned.clear();
         self.mut_param_mutated.clear();
         self.current_mut_params.clear();
+        self.deadwrite_params.clear();
+        self.deadwrite_clock = 0;
+        self.deadwrite_loop_stack.clear();
+        self.deadwrite_next_loop_id = 0;
+        self.deadwrite_write_root = None;
         self.live_guards.clear();
 
         // Set scope-aware lookup context for this function
@@ -1606,6 +1681,40 @@ impl<'a> BorrowChecker<'a> {
                 // Track `&` (MutableBorrow) parameters for needless-mut detection
                 if param.node.ownership == Ownership::MutableBorrow {
                     self.current_mut_params.push((def_id, param.node.name.node.clone(), param.node.name.span));
+                }
+
+                // Dead-write lint: track bare (Borrow) resource params for
+                // DeadBareParamWrite. Exclusions (v1 non-goals, deliberate):
+                // - Copy types: mutation of a by-value copy is the
+                //   Python-identical rebind model, not the CoW footgun.
+                // - `self`: SelfExpr reads bypass the Identifier read hook,
+                //   so tracking it would false-positive on every plain-self
+                //   method — AND plain-self mutation currently WRITES THROUGH
+                //   (known bug, TODO.md HIGH entry filed 2026-07-05), so the
+                //   warning text would be wrong for it anyway. Revisit when
+                //   that bug is fixed.
+                // - `_`-prefixed names (deliberate-ignore convention).
+                // Also out of scope for v1: writes via `f(&p)` call args
+                // (needs callee purity — §3.8 MutatesArgs — to avoid
+                // false-positiving on read-only `&` callees), closure-captured
+                // params, and `for x in &p` iteration.
+                if param.node.ownership == Ownership::Borrow
+                    && param.node.name.node != "self"
+                    && !param.node.name.node.starts_with('_')
+                {
+                    let is_resource = param_def.type_id.map_or(false, |tid| {
+                        !is_copy_type(tid, self.types, self.scopes)
+                    });
+                    if is_resource {
+                        self.deadwrite_params.insert(def_id, super::DeadWriteInfo {
+                            name: param.node.name.node.clone(),
+                            param_span: param.node.name.span,
+                            last_read: None,
+                            last_write: None,
+                            write_loops: Vec::new(),
+                            read_loops: FxHashSet::default(),
+                        });
+                    }
                 }
             }
         }
@@ -1706,6 +1815,48 @@ impl<'a> BorrowChecker<'a> {
                         name: name.clone(),
                     },
                     span: *span,
+                });
+            }
+        }
+
+        // Emit dead-write warnings (DeadBareParamWrite): a bare (borrow)
+        // resource param was mutated — materializing a private CoW copy
+        // (docs/language-design.md §3.1-3.2) — and that copy is never read
+        // afterwards. The write is dead: the caller's value is unchanged, so
+        // the user almost certainly meant `&param` (write-through).
+        // Skipped in imported modules like the other per-function warnings;
+        // GG_DEADWRITE_ALL=1 is a diagnostic-only bypass of that gate, kept
+        // for corpus sweeps (measuring the lint over merged stdlib/self-host
+        // modules) — it changes nothing for normal builds.
+        let deadwrite_all = std::env::var("GG_DEADWRITE_ALL").is_ok();
+        if self.imported_module_depth == 0 || deadwrite_all {
+            let mut entries: Vec<(String, crate::span::Span, crate::span::Span)> =
+                self.deadwrite_params.values()
+                    .filter_map(|info| {
+                        let (wclock, wspan) = info.last_write?;
+                        // A genuine read after the last write → scratch copy, OK.
+                        if info.last_read.map_or(false, |r| r > wclock) {
+                            return None;
+                        }
+                        // Loop-carried: a read anywhere inside a loop that also
+                        // contains the write dynamically follows it on later
+                        // iterations.
+                        if info.write_loops.iter().any(|l| info.read_loops.contains(l)) {
+                            return None;
+                        }
+                        Some((info.name.clone(), wspan, info.param_span))
+                    })
+                    .collect();
+            // deadwrite_params is a hash map — sort by mutation site for
+            // deterministic emission order.
+            entries.sort_by_key(|(_, wspan, _)| (wspan.start, wspan.end));
+            for (name, wspan, param_span) in entries {
+                self.stale_warnings.push(crate::semantic::errors::SemanticWarning {
+                    kind: crate::semantic::errors::SemanticWarningKind::DeadBareParamWrite {
+                        name,
+                        param_span,
+                    },
+                    span: wspan,
                 });
             }
         }

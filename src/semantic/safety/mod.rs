@@ -35,6 +35,34 @@ pub(super) enum VarState {
 /// Snapshot of all variable states (for branching).
 pub(super) type StateSnapshot = FxHashMap<DefId, VarState>;
 
+/// Dead-write lint (`DeadBareParamWrite`): per-bare-resource-param tracking.
+///
+/// Deliberately NOT threaded through `BranchState` (a documented deviation
+/// from devbook 10's thread-every-axis rule): reads/writes are recorded in
+/// walk order across all branches (union semantics), which can only SUPPRESS
+/// a warning — a sibling-branch read counts as a read-after-write even when
+/// no path executes both. That is conservative in the anti-false-positive
+/// direction, the right lean for a warning; per-branch precision would only
+/// add true positives at the cost of threading a new axis through every
+/// save/restore/merge site.
+#[derive(Debug, Clone)]
+pub(super) struct DeadWriteInfo {
+    /// Parameter name (for the warning message).
+    pub(super) name: String,
+    /// The parameter's declaration site (secondary label on the warning).
+    pub(super) param_span: Span,
+    /// Clock of the most recent genuine read (not a write-target read).
+    pub(super) last_read: Option<u32>,
+    /// Clock + span of the most recent mutation through the param.
+    pub(super) last_write: Option<(u32, Span)>,
+    /// Loop ids enclosing the most recent write.
+    pub(super) write_loops: Vec<u32>,
+    /// Loop ids enclosing any genuine read (loop-carried read-after-write:
+    /// a read anywhere inside a loop that also contains a write dynamically
+    /// follows the write on iterations 2+, so it suppresses).
+    pub(super) read_loops: FxHashSet<u32>,
+}
+
 // ─── Capture Set Tracking ─────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,6 +435,24 @@ pub(super) struct BorrowChecker<'a> {
     pub(super) mut_param_mutated: FxHashSet<DefId>,
     /// `&` parameters in the current function: (DefId, name, span).
     pub(super) current_mut_params: Vec<(DefId, String, Span)>,
+    /// Dead-write lint: bare (Borrow) resource params of the current
+    /// function. DefId → tracking info. Reset per function.
+    pub(super) deadwrite_params: FxHashMap<DefId, DeadWriteInfo>,
+    /// Monotonic event clock for read/write ordering within a function walk.
+    pub(super) deadwrite_clock: u32,
+    /// Stack of unique loop ids currently being walked (For/While/Loop bodies).
+    pub(super) deadwrite_loop_stack: Vec<u32>,
+    /// Allocator for loop ids.
+    pub(super) deadwrite_next_loop_id: u32,
+    /// When Some(def_id): the walker is inside the target/receiver of a
+    /// mutation of that def — Identifier reads of it are part of the write,
+    /// not a use of the materialized copy, so they are not recorded.
+    pub(super) deadwrite_write_root: Option<DefId>,
+    /// Span start of the expression of the current `Stmt::Expr`, if any.
+    /// A mutating method call at exactly this span is in statement position
+    /// (result discarded → pure write); anywhere else its result is consumed
+    /// (a read of the copy).
+    pub(super) deadwrite_stmt_expr_start: Option<usize>,
     /// Whether to emit CouldBeConst warnings (opt-in via `--warn-const`).
     pub(super) warn_const: bool,
     /// True when checking the value expression of a destructuring VarDecl
@@ -510,6 +556,12 @@ impl<'a> BorrowChecker<'a> {
             var_reassigned: FxHashSet::default(),
             mut_param_mutated: FxHashSet::default(),
             current_mut_params: Vec::new(),
+            deadwrite_params: FxHashMap::default(),
+            deadwrite_clock: 0,
+            deadwrite_loop_stack: Vec::new(),
+            deadwrite_next_loop_id: 0,
+            deadwrite_write_root: None,
+            deadwrite_stmt_expr_start: None,
             warn_const: false,
             in_destructuring_bind: false,
             live_guards: FxHashMap::default(),

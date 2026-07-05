@@ -1,0 +1,13 @@
+# DeadBareParamWrite positive: a branch READ that precedes the write does
+# not suppress — only a read AFTER the last write (or sharing its loop) does.
+void update(Vector[int] xs, bool c):
+    if c:
+        print(xs[0])
+    else:
+        pass
+    xs[0] = 1
+
+void main():
+    Vector[int] a = [3]
+    update(a, true)
+    print(a[0])

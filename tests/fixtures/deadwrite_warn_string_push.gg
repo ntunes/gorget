@@ -1,0 +1,8 @@
+# DeadBareParamWrite positive: String.push on a bare owned-String param.
+void shout(String s):
+    s.push("!")
+
+void main():
+    String m = "hi"
+    shout(m)
+    print(m)

@@ -1,0 +1,9 @@
+# DeadBareParamWrite negative: value-position mutating call (`return
+# xs.pop()`) — the peek idiom. The copy's data flows out, which is a read.
+Option[int] take_last(Vector[int] xs):
+    return xs.pop()
+
+void main():
+    Vector[int] a = [1, 2]
+    print(take_last(a).unwrap_or(0))
+    print(a.len())

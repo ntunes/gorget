@@ -1,0 +1,12 @@
+# DeadBareParamWrite positive: chained mutating call in STATEMENT position
+# (`xs.pop().unwrap()` as a statement). The whole chain's result is discarded
+# and the caller is unchanged — this WARNS by design (think
+# `handlers.pop().run()`). Pins the span.start-based stmt-position
+# classification in check_expr.rs: do not tighten it to exact-node identity.
+void trim(Vector[int] xs):
+    xs.pop().unwrap()
+
+void main():
+    Vector[int] a = [1, 2]
+    trim(a)
+    print(a.len())

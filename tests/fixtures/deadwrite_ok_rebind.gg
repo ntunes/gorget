@@ -1,0 +1,12 @@
+# DeadBareParamWrite negative: full rebind (`xs = expr`) detaches the name
+# from the caller's value — Python-identical, tracking retires. Writes to the
+# rebound local are not the CoW footgun.
+void rebind(Vector[int] xs):
+    xs = [9, 9]
+    xs.push(1)
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1]
+    rebind(a)
+    print(a.len())

@@ -848,6 +848,42 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Dead-write lint: record a mutation through a tracked bare
+    /// resource param. `span` is the mutation site (used as the warning
+    /// span). Must be called AFTER the target/receiver walk so the write's
+    /// clock exceeds any read recorded by that walk.
+    pub(super) fn mark_bare_param_write_def(&mut self, def_id: DefId, span: Span) {
+        if !self.deadwrite_params.contains_key(&def_id) {
+            return;
+        }
+        let clock = self.deadwrite_clock;
+        self.deadwrite_clock += 1;
+        let loops = self.deadwrite_loop_stack.clone();
+        if let Some(info) = self.deadwrite_params.get_mut(&def_id) {
+            info.last_write = Some((clock, span));
+            info.write_loops = loops;
+        }
+    }
+
+    /// Dead-write lint: record a genuine read of a tracked bare
+    /// resource param. Skipped when the read is the target/receiver of the
+    /// mutation currently being marked (`deadwrite_write_root`).
+    pub(super) fn mark_bare_param_read(&mut self, def_id: DefId) {
+        if self.deadwrite_write_root == Some(def_id) {
+            return;
+        }
+        if !self.deadwrite_params.contains_key(&def_id) {
+            return;
+        }
+        let clock = self.deadwrite_clock;
+        self.deadwrite_clock += 1;
+        let loop_ids: Vec<u32> = self.deadwrite_loop_stack.clone();
+        if let Some(info) = self.deadwrite_params.get_mut(&def_id) {
+            info.last_read = Some(clock);
+            info.read_loops.extend(loop_ids);
+        }
+    }
+
     /// Enforce `MutRef[T]` exclusivity at struct construction. When a new
     /// borrow-field struct is being built that takes `src_def_id` as a
     /// `MutRef[T]` field arg, no other live borrow-field struct may already

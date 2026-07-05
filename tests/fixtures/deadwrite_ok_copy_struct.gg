@@ -1,0 +1,13 @@
+# DeadBareParamWrite negative: Copy-struct param (all-int fields). Mutation
+# of a by-value copy is the Python-identical model, out of scope for v1.
+struct Point:
+    int x
+    int y
+
+void set_x(Point p):
+    p.x = 42
+
+void main():
+    Point pt = Point(x=1, y=2)
+    set_x(pt)
+    print(pt.x)

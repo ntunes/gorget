@@ -1,0 +1,13 @@
+# DeadBareParamWrite positive: field assign through a bare struct param
+# (non-Copy struct — it owns a String). The private copy is never read.
+struct Widget:
+    String name
+    int size
+
+void resize(Widget w):
+    w.size = 7
+
+void main():
+    Widget w = Widget(name="box", size=1)
+    resize(w)
+    print(w.size)

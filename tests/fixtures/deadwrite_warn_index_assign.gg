@@ -1,0 +1,9 @@
+# DeadBareParamWrite positive: index assign through a bare Vector param.
+# The write lands on a private CoW copy that is never read — dead write.
+void relabel(Vector[int] xs):
+    xs[0] = 99
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    relabel(a)
+    print(a[0])
