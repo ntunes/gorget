@@ -1,246 +1,267 @@
 # RFC: Gorget Core (GGC) and `ggdef` — the executable definition of Gorget
 
-> **STATUS: DRAFT v2 — under sequential fresh-agent review (pass 1 folded; pass 2 pending). Do
-> not implement from this document until it carries a clean SIGN OFF and says APPROVED.**
-> Companion: [`decisions.md`](decisions.md) (D1–D6 are normative inputs),
-> [`scouts/scout-c-prior-art.md`](scouts/scout-c-prior-art.md) (architecture rationale).
+> **STATUS: DRAFT v3 — under sequential fresh-agent review (passes 1-2 folded; pass 3 pending).
+> Do not implement from this document until it says APPROVED.**
+> Companion: [`decisions.md`](decisions.md) (D1–D6 normative), [`scouts/`](scouts/).
 
 ## 1. Goals and non-goals
 
-**Goal.** Give Gorget a single, executable source of truth for its dynamic semantics — the
-triad, in one repo, merge-gated together (the WebAssembly model):
-
-1. **Spec prose** — `spec/prose/` (grows out of `language-design.md`'s normative parts).
-2. **`ggdef`** — a definitional interpreter whose behavior IS the meaning of a Gorget program.
-3. **`spectests/`** — a conformance suite every implementation runs.
+**Goal.** A single, executable source of truth for Gorget's dynamic semantics — the triad, in
+one repo, merge-gated together (the WebAssembly model): **spec prose** (`spec/prose/`),
+**`ggdef`** (a definitional interpreter whose behavior IS the meaning), **`spectests/`**
+(conformance suite every implementation runs).
 
 Charter (crate root, verbatim): **"`ggdef` is written for clarity and simplicity, not speed.
 It is a device for nailing down exact semantics, not a runtime."** Model slogan: **"CoW is an
 optimization; value semantics is the meaning"** (D1).
 
-**Non-goals (v1).** Speed; a second production frontend (share the existing lexer+parser);
-executable static semantics (v1: prose + expected-error-code fixtures; executable GGC
-well-formedness checker is v1.5); mechanized proofs (D3); shared-state and concurrency
-semantics (`Shared`/`Weak`/`Mutex`/`RwLock`/atomics/`shared`/tasks/channels — phase 3, §2.6);
-`meta` beyond nothing (phase 2, §2.6); replacing `gg sim` as a CLI feature (separate owner
+**Non-goals (v1).** Speed; a second production frontend (share lexer+parser only); executable
+static semantics (v1: prose + coded fixtures; executable well-formedness checker at v1.5);
+mechanized proofs (D3); shared-state & concurrency (`Shared`/`Weak`/`Mutex`/`RwLock`/atomics/
+`shared`/tasks/channels/`select`/async — phase 3); `meta` (phase 2); FFI/unsafe/platform
+stdlib (out of spec; impl-defined); replacing `gg sim` as a CLI feature (separate owner
 decision; sim is permanently disqualified as the *definition* — it consumes GIR; the Miri trap).
 
 ## 2. GGC — the core language
 
 The desugared core `ggdef` evaluates. Bar: small enough to hold in one head, total enough to
-mechanize later, faithful enough that every **in-scope** surface program elaborates into it
-without semantic invention. §2.6 is the closed coverage map — nothing is silently out.
+mechanize, faithful enough that every **in-scope** surface program elaborates into it without
+semantic invention. §2.6 is the closed coverage map.
 
 ### 2.1 Construct inventory (v1)
 
-**Values:** `int`/`float`/`bool` scalars (checked/wrapping arithmetic; `Fault` trap conditions
-Overflow/DivByZero/Bounds); `String` (ONE value type; view/owned provenance is implementation
-detail under D1); `Vector[T]`, `Dict[K,V]`, `Set[T]` (Dict/Set insertion-ordered per C6;
-`HashMap`/`HashSet` order = the admitted `Nondet`, seed-swept); structs; enums with payloads
-(Option/Result not special in GGC); tuples; **`Box[T]`** (unique-owner box value — needed for
-recursive types and as a D4 by-design single-owner anchor); closures (capture-by-value per D5;
-write-through captures carry the capture-mode tag from elaboration; a closure value is a code
-ref + captured environment record).
+**Values:** sized integers `int8/16/32/64`, `uint8/16/32/64` (+ aliases `int`/`uint`/`byte`),
+`float32/64`, `bool` — with checked arithmetic, the wrapping operators, and **`as`-cast
+semantics as spec rules** (float→int **saturates**, ratifying the 2026-04-24 both-backend fix;
+`language-reference.md`'s "truncates toward zero" text is stale and gets the docs write-
+through); `String` (ONE value type; view/owned provenance is implementation detail under D1);
+`Vector[T]`, `Dict[K,V]`, `Set[T]` (insertion-ordered: Dict per language-reference, Set per C6);
+`HashMap[K,V]`, `HashSet[T]` (iteration order = the admitted `Nondet`, seed-swept); structs;
+enums with payloads (Option/Result not special); tuples; `Box[T]` (unique-owner box — recursive
+types; a D4 by-design single-owner anchor); closures (capture-by-value per D5; capture-mode
+tags from elaboration; a closure value = code ref + environment record).
 
-**Places & modes:** locals, struct fields, collection elements; the three modes as
-**elaboration-resolved tags** on each use — `Borrow` (bare), `WriteThrough` (`&`), `Move` (`!`).
-GGC never re-infers a mode.
+**Places & modes:** locals, struct fields, collection elements; modes as **elaboration-resolved
+tags** — `Borrow` (bare), `WriteThrough` (`&`), `Move` (`!`). GGC never re-infers a mode.
 
 **Operations:** bind; read; write-to-place; call (per-arg mode tags); construct; index/field
-read/write; `match` with bindings; `if`/`while`/`loop` (surface `for` elaborates to explicit
-loops with the element-binding mode tag); `return`/`break`/`continue`; explicit `clone`;
-scope-exit drop markers (reverse declaration order); Result-desugared error flow (throws is
-sugar; GGC sees `Result` values + match-on-carrier); fault-catch as a **distinct guarded-op
-form** (error-model Phase 1); **`print` as the GGC output effect** — stdout is THE observable,
-so output exists in the core, and the formatting of each printable value (including float
-formatting — a known divergence surface) is NORMATIVE, specified in a formatting appendix of
-the prose.
+read/write; `match` with bindings; `if`/`while`/`loop`; `return`/`break`/`continue`; explicit
+`clone`; scope-exit drop markers (reverse declaration order); Result-desugared error flow;
+fault-catch as a distinct guarded-op form; **`assert` as a checked op** whose failure is a
+defined panic (spectests always run asserts-on; `--strip-asserts` builds are an implementation
+option outside conformance runs); **`print` as the GGC output effect** — stdout is THE
+observable; formatting of every printable value is NORMATIVE via a formatting appendix in the
+prose (float formatting is decision §8.2).
 
 ### 2.2 The ownership model in GGC (per D1/D2/D4/D5)
 
 `ggdef` implements **eager value semantics**:
 
-- A **bind** (bare) conceptually copies the value as-of the bind point. (Production compilers
-  use borrows + CoW; D1 makes the difference unobservable; the annexe (§5.4) polices the
-  performance side separately.)
-- A **`WriteThrough` place** aliases the owner; writes land on it.
-- A **`Move`** transfers the value and kills the source.
-- **Ownership boundaries** (collection put, ctor/field init, return, capture) receive the value
-  by copy (or move when tagged). Clone-vs-move liveness optimization does not exist in `ggdef`.
-- **`self`** is a bare binding (D2).
-- **Drop-purity (D4):** GGC types carry a `drop_tainted` bit from elaboration. Elaboration
-  REJECTS implicit-copy positions for tainted types (`E_MoveWithoutOperator` family); `ggdef`
-  never implicitly copies a tainted value; custom drops run at scope exit in reverse
-  declaration order; drop count/order for tainted types is normative and byte-tested.
-  ⚠ Prerequisite bug: collection-element custom-Drop loss on named-local push (TODO HIGH,
-  filed 2026-07-05) must be fixed before drop-count spectests can gate implementations.
+- **Implicit-copy positions (closed set, matching the D4 ledger):** bare-assign binds,
+  constructor/struct/enum field init, collection put, return, closure capture. At these, a
+  value is conceptually copied as-of that point (or moved when tagged `Move`). Clone-vs-move
+  liveness optimization does not exist in `ggdef`.
+- **`Borrow` positions (bare params, reads, receivers) are non-owning views for ALL types** —
+  never a copy, never a drop in the borrower. (This is what the language already says; it also
+  means drop-tainted values are freely borrowable, and drop counts stay source-visible.)
+- **`WriteThrough` places** alias the owner; writes land on it. **`Move`** transfers and kills
+  the source. **`self`** is a bare binding (D2).
+- **Drop-purity (D4):** types carry a transitive `drop_tainted` bit from elaboration.
+  Elaboration REJECTS the implicit-copy positions above for tainted types
+  (`E_MoveWithoutOperator` family); `ggdef` therefore never implicitly copies a tainted value;
+  custom drops run at scope exit in reverse declaration order; **drop count/order for tainted
+  types is normative and byte-tested**. ⚠ Prerequisite: the collection-element custom-Drop
+  loss on named-local push (TODO HIGH, 2026-07-05) must be fixed before drop-count spectests
+  gate implementations.
+- **Resource exhaustion (stack depth, OOM) is implementation-defined** and outside
+  output-comparison conformance (places ledger C11: unbounded recursion → OS-guard SIGSEGV
+  accepted by design). `ggdef` is total via fuel and never exhausts a real stack.
 
 ### 2.3 Evaluator outcomes — and why GGC has no UB
 
-`eval(fuel, state, expr)` is total with exactly four outcomes:
+`eval(fuel, state, expr)` is total with exactly four outcomes: **Value** (+ trace events);
+**Trap(Fault)** (Overflow/DivByZero/Bounds/assert-failure — catchable per the fault model;
+uncaught = defined panic with normalized output); **IllFormed** (a statically-ill-formed
+program detected dynamically — e.g. a read of a moved-out slot, incl. via an eager bind-copy
+of a partially-moved aggregate); **FuelExhausted** (distinct, swept). No undefined behavior:
+every condition is Defined, Trap, or IllFormed.
 
-1. **Value** — defined result (+ trace events).
-2. **Trap(Fault)** — Overflow/DivByZero/Bounds per the fault model (catchable by the guarded
-   form; uncaught = defined panic with defined output).
-3. **IllFormed** — a *statically ill-formed program detected dynamically* (e.g. read of a
-   moved-out slot, including via an eager bind-copy of a partially-moved aggregate). This is
-   defense-in-depth, not semantics: a `mode: run` fixture that hits IllFormed is an INVALID
-   fixture and reclassifies to `static-error`, adjudicated in v1 by production typecheck +
-   prose (see §4). IllFormed can never be a legal program's meaning.
-4. **FuelExhausted** — a distinct, swept outcome (makes the function total; mechanization-ready).
-
-There is deliberately no undefined behavior: every condition is Defined, Trap, or IllFormed.
-This rule also closes the one eager/lazy residue found in review (an eager bind-copy touching a
-dead slot that a lazy implementation never reads): such programs are ill-formed, not
-divergently-defined.
+IllFormed is defense-in-depth, never a program's meaning. A `mode: run` fixture that hits it
+is INVALID and reclassifies to `static-error`. Adjudication: if production typecheck rejects
+it, expectation = that rejection (v1). **If production typecheck ACCEPTS it, that is an
+invariant-#8 finding** — file the both-compiler bug, write the `static-error` fixture with a
+prose-derived code, and count every implementation as MISMATCH until the rejection ships.
+(This closes the circular-adjudicator hole; it also means the IllFormed rule can impose NEW
+production rejections — that's the point.) Tests of the IllFormed detector itself are `ggdef`
+unit tests, not language conformance fixtures.
 
 ### 2.4 Elaboration (surface AST → GGC) — the honest cost statement
 
-A NEW spec-owned pass sharing the production **lexer + parser only** (verified import-clean:
-the AST depends only on `crate::span`). It must never import `src/ir/` or `src/semantic/` —
-enforced by an import ratchet lint in `tests/lints.rs` from day one (allowlist: lexer, parser,
-AST, span/diagnostic plumbing). Sharing is source-level (ggdef links the gorget lib); the
-ratchet is the real fence.
+A NEW spec-owned pass sharing the production **lexer + parser only** (verified import-clean;
+AST depends only on `crate::span`). Never imports `src/ir/` or `src/semantic/` — enforced by an
+import ratchet lint from day one. Sharing is source-level; the ratchet is the real fence.
 
-Elaboration is **not thin** — it is a small type-directed front half, and that is the price of
-definitional independence, stated plainly: desugaring (throws→Result, for→loop, comprehensions,
-method→call, dot-shorthand, `it`); its OWN name resolution (production resolver drags in the
-TypeTable — sharing it defeats the ratchet); **local type inference** (`auto`, receiver types
-for method→call, D6's inferable-`E` judgment); **a simple monomorphizer** (GGC is monomorphic);
-trait-method resolution, with **trait objects elaborated to a closure-record + Box** (dynamic
-dispatch = record of code refs — no vtable machinery in GGC); the D4 transitive taint
-computation; the D4/D5/D6 rejections (elaboration is their normative home; production
-typecheck mirrors them — "both, elaboration normative"). Elaboration-vs-production-typechecker
-disagreements are themselves conformance findings.
+Elaboration is **not thin** — a small type-directed front half, priced in deliberately:
+desugaring (throws→Result, for→loops, comprehensions, method→call, dot-shorthand, `it`,
+ranges/`in`, `with`-resource, named scopes, `do:`); its OWN name resolution (the production
+resolver drags in the TypeTable; sharing defeats the ratchet); **local type inference**
+(`auto`, receiver types, D6's inferable-`E` judgment); **a simple monomorphizer** (GGC is
+monomorphic; phase 0 needs the minimal concrete-equip + generic-equip-on-builtin slice, §6);
+trait-method resolution with **trait objects elaborated to closure-records + Box**; the D4
+transitive taint computation; the D4/D5/D6 rejections (**elaboration is their normative home**;
+production mirrors them). Elaboration-vs-production disagreements are conformance findings.
 
 ### 2.5 D5 capture syntax (designed here, as the ledger delegates)
 
 **Proposed surface** (owner ratifies at RFC approval): the per-variable capture list that
-§7.4 of language-design already reserves, promoted from V2:
+language-design §7.4 reserves for V2, promoted now:
 
 ```gorget
-auto f = (): print(count)              # bare: ALL captures by-value (D5)
-auto g = (&count)(): count += 1        # capture list: &count = write-through, explicit
-auto h = (!name, &total)(int x): ...   # per-variable: move name in, alias total
-auto k = !(): consume(data)            # existing sugar: move ALL captures (unchanged)
+auto f = (): print(count)        # bare closure: ALL captures by-value (D5)
+
+auto g = (&count)():             # capture list: &count = write-through, explicit
+    count += 1                   # (multi-line body: assignment is a statement —
+                                 #  inline expression bodies can't contain `+=`)
+
+auto h = (!name, &total)(int x): # per-variable: move `name` in, alias `total`
+    total += x
+    process(!name)
+
+auto k = !(): consume(data)      # existing sugar: move ALL captures (unchanged)
 ```
 
-Rules: a capture list may contain only `&name` / `!name` entries (bare names are redundant —
-by-value is the default — and rejected to keep one spelling); `&`-captured variables follow the
-same exclusivity rules as any `&` borrow; body-driven inference of write-through is retired
-(D5), with a migration diagnostic ("closure mutates captured `count`, which is now a private
-copy — capture it `(&count)` to write through") during the transition window.
+Design notes (load-bearing, from pass-2 grammar verification):
+- **Bare names are REJECTED in capture lists** — not just style: the rejection is what
+  disambiguates a capture list from a parenthesized-callee call `(f)(x):` in expression
+  position. Every entry must be `&name` or `!name`.
+- The parser needs a **two-group lookahead** extension (`looks_like_closure` currently checks
+  `:` after the first paren group only). `(&count)` / `(!a, &b)` are grammatically live today
+  as paren/tuple expressions but calling them is semantically dead — no legal program collides.
+- Move keeps two spellings (`!()` move-all sugar; `(!name)()` per-variable) — accepted
+  asymmetry: move-all is the common idiom (thread spawn), per-variable is the precise form.
+- **Exclusivity duration for `&`-captures is LIVENESS-BASED** (NLL-style): the write-through
+  borrow ends at the closure value's last use, after which the variable is readable/writable
+  again. (Verified: production is currently scope-based — `print(count)` after the last `g()`
+  is rejected — which would make the D5 counter idiom unusable; that gap becomes a
+  conformance finding, not the spec.)
+- Body-driven inference of write-through is retired (D5); migration diagnostic: "closure
+  mutates captured `count`, which is now a private copy — capture it `(&count)` to write
+  through."
 
-### 2.6 Surface-coverage map (closed — nothing silently out)
+### 2.6 Surface-coverage map (closed; changing a row is a reviewed spec change)
 
 | Surface area | v1 disposition |
 |---|---|
-| bindings/params/`self` modes, structs, enums, tuples, match, loops, closures, comprehensions, throws/Result/fault-catch, operators (incl. user overloads → calls per C9), newtypes (→ struct), type aliases (elab-time), Vector/Dict/Set, Box, String, print/f-strings | **GGC or elaborated sugar (in v1)** |
-| traits/equip: static dispatch, generics/monomorph, trait objects | **elaborated (§2.4), in v1** |
-| `Shared`/`Weak`/`Mutex`/`RwLock`/atomics/`shared`/tasks/channels/`select`/async | **phase 3** — true sharing needs a reference-cell value kind + the Nondet scheduler; B6/B9/B10 spectests wait for it |
-| `meta` (all forms) | **phase 2** — elaboration-time evaluation; v1 spectests exclude meta fixtures via `features:` gating (4.9K-LOC production meta module is off-limits; a minimal spec meta is its own deliverable) |
-| allocators/arenas, `bytes_used()` | **implementation-observation** (outside semantic equivalence per D1); programs calling them are excluded from output-comparison conformance, annexe-side only |
-| FFI/extern, unsafe, GPU/SDL/net stdlib | **out of spec v1** (impl-defined; spec boundary = the pure language + collections + print) |
+| binding/param/`self` modes; structs; enums; tuples; match; if/while/loop/for; closures; comprehensions; throws/Result/fault-catch; `assert`; operators incl. user overloads (→ calls per C9); newtypes (→ single-field struct, `.0`); type aliases (elab-time); ranges + `in` (→ sugar); `with expr as name:` (→ scoped bind + drop-at-exit); named scopes + `do:` (→ blocks); Vector/Dict/Set/HashMap/HashSet; Box; String; print/f-strings (formatting normative) | **GGC or elaborated sugar (v1)** |
+| traits/equip static dispatch; generics/monomorph; trait objects (→ closure-record + Box) | **elaborated (§2.4), v1** |
+| `const` locals; module `static` globals (init order, mutation, program-exit drops) | **phase 1** (statics are observable global state — need explicit GGC store rules) |
+| **spec stdlib boundary**: the pure helpers spectests use (`std.conv`, `std.fmt`, pure parts of `std.collections`) | **enumerated shim list, v1**: elaboration maps each to a GGC intrinsic or a pure GGC-level definition shipped with `ggdef`; anything NOT on the shim list is out of spec v1. The list is closed and versioned. |
+| `Shared`/`Weak`/`Mutex`/`RwLock`/atomics/`shared`/tasks/channels/`select`/async | **phase 3** (reference-cell value kind + scheduler Nondet; B6/B9/B10 spectests wait) |
+| `meta` (all forms) | **phase 2** (elaboration-time; production meta module is off-limits; v1 spectests exclude meta fixtures) |
+| directives | **dispositioned individually**: `strip-asserts` = impl option outside conformance; others (scheduler, trace, hot-reload…) = impl options, out of spec; any directive that changes language semantics must instead become a spec-versioned feature (none known today — verify in phase 1) |
+| allocators/arenas, `bytes_used()`, `--clones` | **implementation-observation** (annexe-side only; such programs excluded from output-comparison) |
+| FFI/extern, unsafe, GPU/net/platform stdlib | **out of spec v1** |
 | slices `T[]` | **rejected surface** (per the filed reject-escape fix; GGC has no slice value) |
 
 ### 2.7 Interpreter discipline
 
 Safe Rust only, no `unsafe`, no deps beyond the shared frontend; pure data; one fuel-indexed
-functional-big-step eval; explicit `Nondet<T>` (hash order now, scheduling in phase 3), seeded
-and swept; every ownership-relevant event (bind-copy, move, explicit clone, drop, write,
-**annexe-tagged no-copy positions**) emits a trace event with provenance — raw material for
-`gg explain` (phase 2) and for divergence debugging.
+functional-big-step eval; explicit seeded `Nondet<T>` (hash order now, scheduling phase 3),
+swept in conformance; every ownership-relevant event (bind-copy, move, explicit clone, drop,
+write, annexe-tagged no-copy positions) emits a provenance trace event — raw material for
+`gg explain` (phase 2) and divergence debugging.
 
 ## 3. Crate & directory layout
 
 ```
 spec/
-  ggdef/          # crate (workspace member; replicate [lints.rust] warnings="deny")
-    src/elaborate/  src/ggc.rs  src/eval.rs  src/trace.rs
-  prose/          # normative prose, section-per-construct, cross-citing eval.rs (HaMLet-style)
+  ggdef/            # workspace member (replicate [lints.rust] warnings="deny")
+    src/elaborate/  src/ggc.rs  src/eval.rs  src/trace.rs  src/shims.rs
+  prose/            # section-per-construct, cross-citing eval.rs (HaMLet-style)
 spectests/
-  run/            # frontmatter + expected stdout/exit — ggdef-GENERATED
-  static-error/   # expected diagnostic codes (see §4 adjudication + §5.5 registry)
-  parse-error/
-  annexe/         # copy-guarantees probes (§5.4) — implementation-facing
-  staging/        # low-bar tier (test262 model), no gate
+  run/  static-error/  parse-error/  annexe/  staging/
 ```
 `cargo run -p ggdef -- run|gen|trace file.gg`.
 
 ## 4. Conformance wiring
 
 - **Frontmatter:** `mode: run|static-error|parse-error`; `expect:` (stdout+exit / diagnostic
-  code); `args:`/`stdin:`/`files:` (the harness's run_gg_with_args/_with_stdin/_dir shapes);
-  `nondet: seeds=N`; `since:`; `features:` (gates meta/shared/etc. until their phase);
-  `adjudicator: ggdef | production-v1` (see below). Trap output is normalized (defined panic
-  message shape; file:line normalized) — the normalization rule is spec text.
-- **Expectation provenance:** `run/` and elaboration-owned rejections (D4/D5/D6 + parse) are
-  **generated by `ggdef`** and human-review-diffed. Other `static-error/` expectations are
-  production-derived in v1 (no executable typecheck yet) and carry
-  `adjudicator: production-v1` — an explicit, tracked inversion retired at v1.5, not a silent
-  one.
-- **Runners:** thin adapters over existing machinery (integration harness for C/LLVM,
-  the self-host driver lane, ggdef itself); each prints a `spec_conformance_<impl>`
-  always-pass diagnostic with monotone floors in `tests/lints.rs`.
-- **smith:** ggdef joins as the **verdict lane** — divergences adjudicated against the
-  definition; tri-state triage (impl bug / spec bug / spec silent); spec changes justified only
-  by design intent, never "matches the implementation" (invariant #8 as spec process).
-- **Speed:** CI runs ggdef on `spectests/` (curated); nightly runs the full corpus.
+  code); `args:`/`stdin:`/`files:`; `nondet: seeds=N`; `since:`; `features:`;
+  `adjudicator: ggdef | production-v1`. Trap output normalized (defined panic message shape,
+  file:line normalized) — the normalization rule is spec text.
+- **Expectation provenance:** `run/` + elaboration-owned rejections (D4/D5/D6) are
+  **ggdef-generated**, human-review-diffed. `parse-error/` expectations derive from the shared
+  production parser (trusted-declared — an inversion in name only; stated for honesty). Other
+  `static-error/` expectations are production-derived in v1 under `adjudicator: production-v1`
+  — a tracked inversion retired at v1.5.
+- **Runners:** thin adapters over existing machinery (integration harness for C/LLVM; the
+  self-host driver lane; ggdef). `gg sim` is NOT a conformance lane (pending its disposition
+  decision, TODO A17; if kept, it may consume spectests informally). Each lane prints a
+  `spec_conformance_<impl>` always-pass diagnostic with monotone floors in `tests/lints.rs`.
+- **smith:** ggdef joins as the **verdict lane**; tri-state triage (impl bug / spec bug /
+  spec silent); spec changes justified only by design intent (invariant #8 as process).
+- **Speed:** CI runs ggdef on `spectests/`; nightly runs the full corpus.
 
 ## 5. Process
 
 **5.1 Same-PR gating** (post-skeleton): semantics-visible change = prose Δ + ggdef Δ +
-spectests + implementations green (or floor-tracked exemption). Social first, then a coverage
-lint (arm-count pattern).
-**5.2 Versioning:** `spec-v0.x` tags + changelog; `since:` on fixtures; living artifact
-(the SML freeze is the named anti-pattern); 1.0 is a spec release.
-**5.3 Docs write-through** (owner directive): each landed rule updates language-design, book,
-devbook in the same series; the ledger tracks write-through debt per decision.
-**5.4 The copy-guarantees annexe (D1's second half):** a small CLOSED list of
-MUST-NOT-ALLOCATE positions (bare bind/read/param-pass, borrow field/element read — README:50's
-promises). Tested implementation-side: `spectests/annexe/` programs under `--clones=stats` / a
-counting allocator asserting zero clones at guaranteed positions. **v1 gates the C backend
-only** — `--clones=stats` is rejected under `--backend=llvm` (open TODO(llvm-clone-stats)) and
-the self-host has only transient instrumentation; LLVM/self-host annexe lanes are floor-tracked
-debt, not silent. Spec-side counterpart: ggdef trace-tags annexe positions, making the list
-machine-readable from the definition.
-**5.5 Diagnostic code registry (named Phase-1 item):** stable `E_`-codes for spec-referenced
-diagnostics (today: enum variants + message-substring tests; `E_` appears once in the docs).
-The registry maps code → prose section → fixtures; production diagnostics adopt codes
-incrementally.
+spectests + implementations green (or floor-tracked exemption); coverage lint later.
+**5.2 Versioning:** `spec-v0.x` tags + changelog; `since:`; living artifact; 1.0 is a spec
+release.
+**5.3 Docs write-through** (owner directive): each landed rule updates language-design
+(incl. §7.4's capture-list examples — currently show bare-name borrow captures, doubly wrong
+under D5/§2.5), the book, and the devbook in the same series; the ledger tracks write-through
+debt per decision.
+**5.4 Copy-guarantees annexe (D1's second half):** small CLOSED list of MUST-NOT-ALLOCATE
+positions (bare bind/read/param-pass, borrow field/element read — README:50). Tested
+implementation-side via `spectests/annexe/` under `--clones=stats` / counting allocator.
+**v1 gates the C backend only** (LLVM rejects `--clones=stats`, open TODO; self-host has only
+transient instrumentation) — LLVM/self-host annexe lanes are floor-tracked debt. Spec-side
+counterpart: ggdef trace-tags annexe positions.
+**5.5 Diagnostic code registry (Phase-1 item):** stable `E_`-codes for spec-referenced
+diagnostics; registry maps code → prose section → fixtures; production adopts incrementally.
 
 ## 6. Phased delivery
 
-- **Phase 0 — walking skeleton:** ggdef + elaboration for the GGC subset covering the `cow_*`
-  family shapes (binds, aliases, mutation-severing, Vector/struct/String, bare/&/! params,
-  scope drops, print). Acceptance: (a) runs the cow_* + deadwrite_* families **modulo
-  feature-gated exceptions** (e.g. AtomicInt fixtures) with output matching the ratified
-  expectations (C1–C10); (b) adjudicates the two smith bugs (`9` / `ablog`) and (c) the EMove
-  question (pre-mutation value, per D1) from the definition. Import ratchet lands with the
-  crate. W3a-d String shapes are IN (highest-value adjudications); their clone-count side is
-  D1-allowed variation → annexe, not ggdef — that split is stated in the prose.
-- **Phase 1 — coverage + floors:** frontmatter migration (converter from the 1,212 literal
-  run_gg pairs → `ggdef -- gen` regeneration → human-reviewed diff, every diff a finding);
-  per-impl conformance reports + floors; ggdef verdict lane in smith; enums/match/closures/
-  error-model/traits/generics; D4/D5/D6 rejections in elaboration + production + negative
-  fixtures; diagnostic-code registry (§5.5).
-- **Phase 2 — annexe + `gg explain` v0** (trace-backed provenance, human + JSON) + minimal
-  spec meta.
-- **Phase 3 — sharing & concurrency:** reference-cell value kind, Shared/Mutex/RwLock/tasks,
-  seed-swept scheduling Nondet; B6/B9/B10 spectests. **v1.5 — executable well-formedness
-  checker** (retires `adjudicator: production-v1`). Then mechanization prep (Aeneas trial on
-  eval.rs).
+- **Phase 0 — walking skeleton.** Elaborator+evaluator for the HONEST subset the target
+  fixtures actually use (measured, pass 2): binds/aliases/mutation-severing; Vector/struct/
+  String/**Option+Result with `.unwrap()`**; bare/&/! params; **concrete equip method→call**;
+  **f-strings (int/string interpolations; no float-printing fixtures exist in the target
+  families — float formatting deferred to §8.2 without blocking phase 0)**; for-loops;
+  imports + the v1 shim list; by-value closures; scope drops; print. **Exclusions are a
+  HARDCODED fixture list, not `features:`** (frontmatter is phase 1): the 3 generic-equip
+  cow fixtures (`cow_element_borrow_alias_mutate`, `cow_p3_alias_chain_mutate`,
+  `cow_p3_index_mutate`) unless the minimal generic-equip-on-Vector slice proves cheap.
+  Acceptance: (a) runs the cow_* family (95 programs) minus the exclusion list with output
+  matching the ratified expectations (C1–C10); (b) **the deadwrite_* PROGRAMS execute under
+  ggdef with their D1/D2-implied stdout** (expectations newly ratified; the lint's stderr
+  assertions remain production-side — DeadBareParamWrite is a production diagnostic, not GGC
+  semantics); (c) adjudicates the two smith bugs (`9` / `ablog`) and the EMove question
+  (pre-mutation value, per D1) from the definition. Import ratchet lands with the crate.
+  W3a-d String shapes are IN; their clone-count side is D1-allowed variation → annexe.
+- **Phase 1 — FULL v1 coverage + floors:** everything in §2.6 rows 1-2 not in phase 0
+  (match/enums beyond Option/Result, closures with capture lists, traits/generics/trait
+  objects, statics, comprehensions, ranges); frontmatter migration (converter from the
+  ~1,212 literal run_gg pairs → `ggdef -- gen` regeneration → human-reviewed diff — blocked
+  for float-printing fixtures on §8.2); per-impl conformance reports + floors; ggdef verdict
+  lane in smith; D4/D5/D6 rejections in elaboration + production + negative fixtures;
+  diagnostic-code registry.
+- **Phase 2 — annexe + `gg explain` v0 + minimal spec meta.**
+- **Phase 3 — sharing & concurrency** (reference cells, scheduler Nondet, B6/B9/B10).
+  **v1.5 — executable well-formedness checker** (retires `adjudicator: production-v1`).
+  Then mechanization prep (Aeneas trial on eval.rs).
 
 ## 7. Risks and guards
 Rot → ggdef in CI day 0. Spec-lags-impl → same-PR gate + coverage lint. Divergence-by-
 convenience → generated expectations + intent-based review + fresh-pass gauntlet. Perf creep →
-charter; sim absorbs speed pressure. Scope creep → §2.6 is the fence; changing it is a
-reviewed spec change. Miri trap → import ratchet. Freeze → §5.2. Coverage illusion → smith
-across all lanes + seed sweeps.
+charter. Scope creep → §2.6 is the fence. Miri trap → import ratchet. Freeze → §5.2.
+Coverage illusion → smith across all lanes + seed sweeps.
 
 ## 8. Remaining open items
-1. **Owner ratification of the §2.5 capture-list syntax** (delegated to this RFC by D5;
-   flagged for explicit sign-off at RFC approval).
-2. Formatting appendix contents (float formatting normative choice: the C backend's `%g`
-   behavior vs a spec-owned algorithm — needs one decision when the appendix is written).
-3. The `E_`-code numbering scheme (bikeshed; Phase 1).
+1. **Owner ratification of §2.5** (capture-list syntax + the liveness-based exclusivity
+   duration + the two-spellings-of-move asymmetry).
+2. **Float formatting decision** (needed before Phase-1 converts float-printing fixtures;
+   phase 0 unaffected): current reality is `%f` fixed-6 on print across C/LLVM/sim, `%g` on
+   `float_to_str` — an internal inconsistency to resolve alongside the choice between
+   blessing fixed-6 and a spec-owned shortest-round-trip algorithm.
+3. `E_`-code numbering scheme (bikeshed; Phase 1).

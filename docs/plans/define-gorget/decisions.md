@@ -93,11 +93,13 @@ placeholder `&(): ...` / `(&name)(...)`). Body-driven INFERENCE of mutable captu
 mutation inside a bare closure mutates the closure's own copy (uniform bare-binding rule; the
 DeadBareParamWrite lint family applies).
 **Consequences:** docs stop calling by-value captures "immutable borrows" (naming fix:
-language-design §7.3, book ch.4/16); migration sweep for closures relying on inferred
+language-design §7.3 AND §7.4 — whose V2 capture-list examples show bare-name borrow captures,
+doubly wrong under D5 — book ch.4/16); migration sweep for closures relying on inferred
 write-through (self-host/gorget-js/arena) — loud where the new rule rejects, silent-behavior-
 change where a bare closure mutates-then-reads (sweep needed, same shape as D2's); closure KIND
 classification (Callable/MutCallable/ConsumeCallable) is a separate axis and may remain
-body-inferred — only outer-aliasing becomes explicit.
+body-inferred — only outer-aliasing becomes explicit. Syntax designed in RFC §2.5 (per-variable
+capture list, liveness-based exclusivity) — pending owner ratification at RFC approval.
 
 ### D6. Unbound bare `Ok(e)`/`Error(e)` carrier chains = REJECT with annotation fix-it
 A bare carrier chain with no inferable `E` (from destination type, function return, or
