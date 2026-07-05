@@ -4654,3 +4654,65 @@ fn owning_param_ctor_move_helper_site_count() {
          Route the new site through the shared helper, then bump EXPECTED_CALL_SITES.",
     );
 }
+
+/// The **ggdef import ratchet** — the project's most important fence
+/// (`docs/plans/define-gorget/` RFC §2.4/§7, HANDOVER.md rule 5).
+///
+/// `ggdef` (the executable language definition, `spec/ggdef/`) shares the
+/// production **lexer + parser + AST + span** ONLY. It must NEVER reach into
+/// the root crate's `ir` / `semantic` / `lir` / `bir` / `backend` modules —
+/// those encode the compiler's OWN decisions, and a definition that consumed
+/// them would be circular (the Miri trap). This is a **SOURCE-discipline
+/// fence, not a link fence**: ggdef links the whole `gorget` lib, and root
+/// modules like `src/errors.rs` internally reference `crate::semantic` (fine,
+/// not ggdef's concern) — the fence applies only to ggdef's OWN `use` lines.
+///
+/// DENYLIST semantics, budget = 0, **fatal from day one**. Legal imports are
+/// `gorget::{lexer, parser (incl. ast), span, errors, intern, compiler_data}`
+/// + std; anything resolving into `ir`/`semantic`/`lir`/`bir`/`backend` fails.
+#[test]
+fn ggdef_import_ratchet() {
+    const FORBIDDEN: &[&str] = &["ir", "semantic", "lir", "bir", "backend"];
+
+    // A `use`/`pub use` item, capturing its path across possible line breaks
+    // (grouped imports may span lines). `(?s)` lets `.`/`[^;]` cross newlines.
+    let use_item = regex::Regex::new(r"(?s)\b(?:pub\s+)?use\s+([^;]+);").unwrap();
+    // A forbidden module appearing as a `::`- / `{`- / `,`-delimited path
+    // segment (so `intern` doesn't trip `ir`, and `bird` can't trip `bir`).
+    let alternation = FORBIDDEN.join("|");
+    let forbidden_seg =
+        regex::Regex::new(&format!(r"[:{{,]\s*(?:{alternation})\b")).unwrap();
+
+    let mut violations = Vec::new();
+    visit("spec/ggdef/src", &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for cap in use_item.captures_iter(&content) {
+            let item = &cap[1];
+            // Only the ROOT crate (`gorget::...`) is fenced; `crate::` is ggdef
+            // itself, `std::` is the standard library.
+            if !item.contains("gorget") {
+                continue;
+            }
+            if forbidden_seg.is_match(item) {
+                let flat: String = item.split_whitespace().collect::<Vec<_>>().join(" ");
+                violations.push(format!("{}: `use {flat};`", path.display()));
+            }
+        }
+    });
+
+    assert!(
+        violations.is_empty(),
+        "ggdef import ratchet TRIPPED (budget = 0, fatal): ggdef's own `use` lines may import \
+         `gorget::{{lexer, parser, span, errors, intern, compiler_data}}` + std ONLY — never \
+         `ir`/`semantic`/`lir`/`bir`/`backend`. A definition that consumes the compiler's own \
+         decisions is circular (the Miri trap; RFC §2.4). Remove the import or add the metadata \
+         ggdef needs to the shared lexer/parser/AST.\n\nViolations:\n{}",
+        violations.join("\n"),
+    );
+}

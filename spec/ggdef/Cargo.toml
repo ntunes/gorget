@@ -1,0 +1,30 @@
+# ggdef — the definitional interpreter for Gorget Core (GGC).
+#
+# Charter (RFC §1, verbatim): "ggdef is written for clarity and simplicity, not
+# speed. It is a device for nailing down exact semantics, not a runtime."
+#
+# It shares the production *lexer + parser + AST* only (path dep on `gorget`).
+# It MUST NOT reach into `ir`/`semantic`/`lir`/`bir`/`backend` — that fence is
+# enforced by the `ggdef_import_ratchet` lint in `tests/lints.rs`, not by this
+# manifest (ggdef links the whole gorget lib; the fence is a SOURCE fence).
+[package]
+name = "ggdef"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "ggdef"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ggdef"
+path = "src/main.rs"
+
+[dependencies]
+# Path dep on the root crate — for the shared lexer/parser/AST/span ONLY.
+gorget = { path = "../.." }
+
+# Replicated from the root manifest (RFC §3 layout note): warnings are hard
+# errors here too, so a stray `dead_code`/`unused` cannot ride along.
+[lints.rust]
+warnings = "deny"
