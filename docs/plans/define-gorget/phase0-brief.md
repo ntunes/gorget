@@ -1,8 +1,9 @@
 # EXECUTOR BRIEF: ggdef phase 0 — the walking skeleton (Increments A/B/C)
 
-> **STATUS: v3 — pass 1 (Opus, 5 reservations) + pass 2 (Opus, 3 reservations) folded; passes
-> cleared: 0 clean of ≥3 (update this line per pass).**
-> **Executor launches: A: not launched · B: not launched · C: not launched** (update in place).
+> **STATUS: v4 — passes 1 (5 res) + 2 (3 res) folded; pass 3 (Opus) = SIGN OFF FOR INCREMENT A
+> (2 non-blocking findings folded into v4). B/C need one confirming pass on their sections
+> before launching (the F2 report-homes fix landed post-sign-off).**
+> **Executor launches: A: LAUNCHED 2026-07-05 (Opus) · B: not launched · C: not launched.**
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
 > This brief is deliberately self-contained enough for an Opus-class executor: where the RFC
@@ -55,10 +56,10 @@ Commit per increment. An increment's gates must be green before the next launche
    `.unwrap()` are B — A avoids fixtures needing Option); for→explicit loop;
    **operators → intrinsic calls per C9** (int/bool comparisons → bool-returning intrinsics —
    the for-desugar's bound check `i < n` needs this; String `+` → concat intrinsic; int
-   arithmetic already covered by the checked ops); **`from std.collections import
-   {Vector,Set,Dict}` is a parse-and-DISCARD NO-OP in A** (those types are prelude-available
-   per RFC §2.6; 5 of the 8 named fixtures start with this line — the full shim mechanism,
-   incl. `std.conv.int_to_str`, stays B).
+   arithmetic already covered by the checked ops); **`from std.collections import ...` lines are a
+   parse-and-DISCARD NO-OP in A, name-agnostic** (e.g. `from std.collections import Vector`,
+   which 5 of the 8 named fixtures carry; those types are prelude-available per RFC §2.6 —
+   the full shim mechanism, incl. `std.conv.int_to_str`, stays B).
 6. **CLI**: `cargo run -p ggdef -- run file.gg` (prints program stdout; exit code per
    outcome: Value→0, Trap→101, IllFormed→102, FuelExhausted→103 — pin these in a const with
    a doc comment; they are provisional until the trap-normalization spec text lands in B) and
@@ -154,6 +155,12 @@ run = no diff); full-workspace `cargo build`/`--lib`/`lints` green. The parent (
 runs the full integration sweep after merge — executors never do.
 
 ---
+
+## Report homes (all increments)
+
+Increment reports, B's `deadwrite_spec_expectations.md`, and C's `adjudications.md` live in
+**`spec/ggdef/reports/`** (in-zone: `spec/**`; `docs/**` is orchestrator-owned). Increment A's
+report = the agent's final message + the fixture-rationale doc-comment in `corpus_a.rs`.
 
 ## Operational rules (all increments — the CLAUDE.md digest)
 
