@@ -662,6 +662,29 @@ lost. Rule 9 is both halves: checkpoint scout prototypes to `/tmp` early and
 often, and run final validation gates as FOREGROUND commands with explicit
 generous timeouts.
 
+Third, the **nested-fork collision** (round 43). An output-reviewer — itself a
+worktree-isolated subagent — spawned two of its *own* verification forks
+WITHOUT `isolation: "worktree"`. The forks contended over the reviewer's
+assigned worktree and reverted it mid-test: a freshly-built self-host `driver`
+vanished between build and use, and the "fixed" tree reproduced the exact
+*baseline* CC-FAILs — i.e. the fork was compiling fixed source against a
+stale/baseline binary. The reviewer caught it (the tell: a fixed tree showing
+baseline errors), traced it via reflog, aborted the forks, and redid all
+empirical work in a dedicated isolated worktree. The orchestrator verified tree
+integrity was intact (main, every track commit, and the stash were all clean —
+the collision was confined to that one reviewer's environment) and then ran a
+SOLO redo with an explicit anti-collision protocol: a dedicated
+`CARGO_TARGET_DIR`, no sub-forks, and a **stability guard** that re-checks
+`git rev-parse HEAD` and the built artifact's presence around every build,
+aborting on any unexpected revert. Two lessons: (1) rule 1 (`isolation:
+"worktree"`) applies to NESTED subagent-spawned forks too, not just top-level
+`Agent` calls — brief any agent that may spawn its own helpers that THOSE must
+be worktree-isolated (a shared worktree/target-dir under concurrent builds
+silently reverts the tree); (2) when a self-host flip won't reproduce, re-check
+HEAD and `rm` the `driver{,.c}` build artifacts before trusting the result — a
+"fixed tree shows baseline behavior" reading is the signature of a reverted
+tree or a stale driver, not a failed fix.
+
 ---
 
 ## The playbook in one paragraph
