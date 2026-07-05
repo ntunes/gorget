@@ -1,7 +1,8 @@
 # RFC: Gorget Core (GGC) and `ggdef` — the executable definition of Gorget
 
-> **STATUS: DRAFT v5 — under sequential fresh-agent review (passes 1-4 folded; pass 5 pending).
-> Do not implement from this document until it says APPROVED.**
+> **STATUS: v5 + polish — REVIEW COMPLETE (5 sequential fresh passes; pass 5 = clean SIGN OFF,
+> 2026-07-05). PENDING OWNER APPROVAL + ratification of §8 items 1-2. Do not implement until
+> this line says APPROVED.**
 > Companion: [`decisions.md`](decisions.md) (D1–D6 normative), [`scouts/`](scouts/).
 
 ## 1. Goals and non-goals
@@ -199,7 +200,7 @@ spec/
     src/elaborate/  src/ggc.rs  src/eval.rs  src/trace.rs  src/shims.rs
   prose/            # section-per-construct, cross-citing eval.rs (HaMLet-style)
 spectests/
-  run/  static-error/  parse-error/  annexe/  staging/
+  run/  static-error/  parse-error/  annexe/  staging/   # staging = low-bar tier, no gate
 ```
 `cargo run -p ggdef -- run|gen|trace file.gg`.
 
@@ -265,8 +266,8 @@ diagnostics; registry maps code → prose section → fixtures; production adopt
   ratified; the lint's stderr assertions remain production-side — DeadBareParamWrite is a
   production diagnostic, not GGC semantics); (c) adjudicates the two smith bugs (`9` /
   `ablog`) and the EMove question (pre-mutation value, per D1) from the definition. Import
-  ratchet lands with the crate. W3a-d String shapes are IN; their clone-count side is
-  D1-allowed variation → annexe.
+  ratchet lands with the crate. W3a-d String shapes (devbook/11's W-table, ~:563-566) are IN;
+  their clone-count side is D1-allowed variation → annexe.
 - **Phase 1 — coverage completion + floors:** the §2.6 rows-1-2 remainder beyond the phase-0
   subset (closures with capture lists, traits/generics/trait objects, comprehensions, the
   long tail of stdlib-free constructs) plus row 3's statics; frontmatter migration (converter
