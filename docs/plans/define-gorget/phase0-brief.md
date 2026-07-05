@@ -1,7 +1,7 @@
 # EXECUTOR BRIEF: ggdef phase 0 — the walking skeleton (Increments A/B/C)
 
-> **STATUS: v2 — pass 1 (Opus) raised 5 reservations, all folded; passes cleared: 0 clean of ≥3
-> (update this line per pass).**
+> **STATUS: v3 — pass 1 (Opus, 5 reservations) + pass 2 (Opus, 3 reservations) folded; passes
+> cleared: 0 clean of ≥3 (update this line per pass).**
 > **Executor launches: A: not launched · B: not launched · C: not launched** (update in place).
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
@@ -52,7 +52,13 @@ Commit per increment. An increment's gates must be green before the next launche
    (without this only ~16 cow fixtures qualify for A; with it ~34 — measured in review
    pass 1); f-strings with int/string interpolations → concat/print forms; method→call for
    the builtin Vector/String methods the A fixture set uses (len/push/set/index; Option and
-   `.unwrap()` are B — A avoids fixtures needing Option); for→explicit loop.
+   `.unwrap()` are B — A avoids fixtures needing Option); for→explicit loop;
+   **operators → intrinsic calls per C9** (int/bool comparisons → bool-returning intrinsics —
+   the for-desugar's bound check `i < n` needs this; String `+` → concat intrinsic; int
+   arithmetic already covered by the checked ops); **`from std.collections import
+   {Vector,Set,Dict}` is a parse-and-DISCARD NO-OP in A** (those types are prelude-available
+   per RFC §2.6; 5 of the 8 named fixtures start with this line — the full shim mechanism,
+   incl. `std.conv.int_to_str`, stays B).
 6. **CLI**: `cargo run -p ggdef -- run file.gg` (prints program stdout; exit code per
    outcome: Value→0, Trap→101, IllFormed→102, FuelExhausted→103 — pin these in a const with
    a doc comment; they are provisional until the trap-normalization spec text lands in B) and
@@ -124,8 +130,13 @@ spec expectations.
 1. **The three adjudications, from the definition** (RFC §6(c)): run ggdef on
    `tests/fixtures/known_gaps/cow_dead_branch_alias_bind.gg` (expect `9`),
    `tests/fixtures/known_gaps/move_param_concat.gg` (expect `ablog`), and a minimal EMove
-   witness (write it: move a vector, bind an element-derived String BEFORE a mutation through
-   the new owner, print — ggdef must print the PRE-mutation value). Produce
+   witness. **The EMove shape is precise (devbook/11:716-733; fixtures `cow_lazy_move_bind.gg`
+   / `cow_lazy_move_reassign.gg`): (1) bind `String s = v.get(0).unwrap()` from the PRE-move
+   name `v`; (2) THEN `Vector[String] w = !v`; (3) THEN mutate through the POST-move name
+   (`w.set(0, "mutated")`); (4) THEN print `s`. The bind-source name MUST differ from the
+   mutation-target name — that asymmetry IS the EMove phenomenon (the lazy binding is keyed
+   by `v` but the mutation goes through `w`). A same-name variant (`s = w[0]` after the move)
+   is degenerate and does NOT witness it.** ggdef must print the PRE-mutation value. Produce
    `adjudications.md` recording each verdict with the trace excerpt that justifies it.
 2. **`spectests/` skeleton**: directory layout per RFC §3; move NOTHING yet (migration is
    phase 1) — just the layout, a README quoting the frontmatter schema from RFC §4, and
