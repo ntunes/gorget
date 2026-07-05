@@ -287,11 +287,10 @@ convenience → generated expectations + intent-based review + fresh-pass gauntl
 charter. Scope creep → §2.6 is the fence. Miri trap → import ratchet. Freeze → §5.2.
 Coverage illusion → smith across all lanes + seed sweeps.
 
-## 8. Remaining open items
-1. **Owner ratification of §2.5** (capture-list syntax + the liveness-based exclusivity
-   duration + the two-spellings-of-move asymmetry).
-2. **Float formatting decision** (needed before Phase-1 converts float-printing fixtures;
-   phase 0 unaffected): current reality is `%f` fixed-6 on print across C/LLVM/sim, `%g` on
-   `float_to_str` — an internal inconsistency to resolve alongside the choice between
-   blessing fixed-6 and a spec-owned shortest-round-trip algorithm.
-3. `E_`-code numbering scheme (bikeshed; Phase 1).
+## 8. Open items — status
+1. **§2.5 capture package: RATIFIED by owner 2026-07-05 (ledger D7).** Liveness-based
+   exclusivity included; production's scope-based behavior = filed conformance gap.
+2. **Float formatting: DECIDED — shortest round-trip everywhere (ledger D8),** for both
+   `print` and `float_to_str`; the formatting appendix specifies the algorithm; Phase-1
+   converter unblocked (float-fixture expectations regenerate under the new rule).
+3. `E_`-code numbering scheme (bikeshed; Phase 1) — still open.

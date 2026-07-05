@@ -109,6 +109,27 @@ rejection + negative fixtures (today: silent miscompile in both, TODO:153).
 **Consequences:** docs write-through to `docs/plans/error-model.md` §9 Q17 (mark resolved) +
 language-design §6; belongs to the bounded-rejection phase per the C12 gating rule.
 
+## DECIDED (owner, 2026-07-05 — batch 3, at RFC review completion)
+
+### D7. Capture-syntax package RATIFIED (completes D5)
+Per-variable capture lists (`(&count)(): ...`, `(!name, &total)(x): ...`) promoting the §7.4
+V2 reservation; bare names REJECTED in capture lists (disambiguates `(f)(x):`); `!():`
+move-all sugar kept (accepted asymmetry); **`&`-capture exclusivity is LIVENESS-based**
+(borrow ends at the closure's last use) — production's current scope-based behavior is a
+filed conformance gap. Grammar work (two-group lookahead) belongs to the D5 implementation
+track, not spec phase 0. RFC §2.5 is the normative text.
+
+### D8. Float formatting = SHORTEST ROUND-TRIP, everywhere
+One normative algorithm (Ryū/Grisu-class shortest representation that parses back exactly)
+for BOTH `print` and `float_to_str` — healing the current `%f`-fixed-6 vs `%g` inconsistency.
+Load-bearing rationale: distinct floats must always print distinctly, or stdout-diff
+conformance can hide real divergences. Migration rides Phase 1's converter (expectations
+regenerate via `ggdef -- gen` anyway). Docs write-through: the spec formatting appendix +
+language-design/book examples showing float output.
+
+**RFC status note:** the RFC itself is ON HOLD pending the owner's personal read
+(2026-07-05); D7/D8 are decided regardless and fold into the final text.
+
 ## OPEN — queue (later batches; from scout-B List A, scout-A tiers)
 
 - A5 resource-valued `Dict.get_or`/`get_or_put` ownership (both compilers double-free today)
