@@ -29,6 +29,7 @@ regex = "1"
 insta = "1"
 pretty_assertions = "1"
 serial_test = "3.4.0"
+ggdef = { path = "spec/ggdef" }
 
 [lints.rust]
 # Warnings are errors (owner-directed 2026-06-15). The 3 pre-existing
