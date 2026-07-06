@@ -219,6 +219,13 @@ B9 lock = single-owner Resource, B10 Task join-on-drop, B16 arena escape = rejec
 - Static semantics v1 = prose + expected-error-code fixtures; executable typecheck later.
 
 ## LOG
+- 2026-07-06: PHASE 1 opened. P1-infra scout complete (float sequencing = hold-floats OPTION A
+  w/ 3 prerequisites; ggdef adjudicable ceiling measured; smith ggdef-lane prototype caught the
+  A29 same-call-aliasing check-accepts hole — filed HIGH; 2 ggdef defects filed HIGH as
+  converter prerequisites). RFC §4 MECHANICS AMENDMENT (no semantic change): conformance
+  MATCH-floors are inline dynamic floors per runner (c_emit_comparison precedent) — lints.rs
+  ratchets are static/grep-based and unsuitable; RFC wording "floors in tests/lints.rs" is
+  superseded on that point.
 - 2026-07-05: project approved; 3 scouts ran (docs sweep, bug sweep, prior art); batch-1
   decisions D1–D3 taken; batch-2 questions O1–O3 put to owner; ledger created.
 - 2026-07-05 (later): batch-2 decided → D4 (drop-purity), D5 (explicit capture sigil),
