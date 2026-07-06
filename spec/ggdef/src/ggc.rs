@@ -28,6 +28,11 @@ pub struct Program {
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
     pub closures: Vec<ClosureDef>,
+    /// `equip T with Drop` custom-drop functions: `(type-name, drop-fn-name)`.
+    /// The evaluator runs the named function (self moved in) at each scope-exit
+    /// drop of a value of that type (RFC §2.2 D4: custom drops run in reverse
+    /// declaration order). `eval::Ctx` resolves the fn-name to its index.
+    pub drop_fns: Vec<(String, String)>,
 }
 
 /// A struct's field names, in declaration order (the ctor is positional).
@@ -99,6 +104,12 @@ pub enum Stmt {
     Assign { target: Expr, value: Source, span: Span },
     /// A bare expression evaluated for effect (e.g. a mutating method call).
     Expr { expr: Expr, span: Span },
+    /// `with <source> as name:` — a scoped resource bind (RFC §2.6 sugar). The
+    /// resource is bound in a FRESH scope; at block exit it drops (custom drop
+    /// included) AFTER the body's own locals, in reverse declaration order. It
+    /// is deliberately NOT inlined as a plain `Bind` — that would drop-time the
+    /// resource at the enclosing function's exit rather than the block's.
+    With { name: String, source: Source, body: Block, span: Span },
     /// The `print` output effect (RFC §2.1): formats + a trailing newline.
     Print { expr: Expr, span: Span },
     If { cond: Expr, then_: Block, else_: Block, span: Span },

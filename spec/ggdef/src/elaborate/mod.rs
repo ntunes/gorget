@@ -21,7 +21,7 @@
 //!   * `from std.collections import ...` → a parse-and-DISCARD no-op (the
 //!     imported types are prelude-available in A; the full shim list is B).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use gorget::lexer::token::{StringKind, StringSegment};
 use gorget::parser::ast;
@@ -29,7 +29,7 @@ use gorget::span::{Span, Spanned};
 
 use crate::ggc::{
     BinOp, BuiltinMethod, CastTarget, ClosureDef, ConstructKind, EnumDef, Expr, ExprArm, FPart,
-    Function, Param, Pattern, Program, Source, Stmt, StmtArm, StructDef, UnOp,
+    Function, Mode, Param, Pattern, Program, Source, Stmt, StmtArm, StructDef, UnOp,
 };
 
 /// A faithful-elaboration failure: a surface construct outside the A subset,
@@ -53,34 +53,55 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
     let mut el = Elaborator::default();
     let items = module.all_items();
 
-    // Pass 1: collect struct layouts, enum variant arities, and function names
-    // (the tiny resolver).
+    // Pass 1: collect struct/enum layouts (+ field/payload TYPES for inference
+    // and taint), function + method signatures, `equip` methods, and the
+    // `equip T with Drop` registry (the tiny resolver).
     for item in &items {
         match item {
             ast::Item::Struct(sd) => {
                 let name = sd.name.node.clone();
-                let fields = sd.fields.iter().map(|f| f.node.name.node.clone()).collect();
+                let fields: Vec<String> = sd.fields.iter().map(|f| f.node.name.node.clone()).collect();
+                let field_types: Vec<(String, Ty)> = sd
+                    .fields
+                    .iter()
+                    .map(|f| (f.node.name.node.clone(), ty_of_type(&f.node.type_.node)))
+                    .collect();
+                el.struct_field_types.insert(name.clone(), field_types);
                 el.structs.push(StructDef { name: name.clone(), fields });
                 el.struct_names.insert(name);
             }
             ast::Item::Enum(ed) => {
                 let name = ed.name.node.clone();
+                let mut payloads: Vec<Ty> = Vec::new();
                 let variants = ed
                     .variants
                     .iter()
                     .map(|v| {
                         let arity = match &v.node.fields {
                             ast::VariantFields::Unit => 0,
-                            ast::VariantFields::Tuple(ts) => ts.len(),
+                            ast::VariantFields::Tuple(ts) => {
+                                for t in ts {
+                                    payloads.push(ty_of_type(&t.node));
+                                }
+                                ts.len()
+                            }
                         };
                         (v.node.name.node.clone(), arity)
                     })
                     .collect();
+                el.enum_payload_types.insert(name.clone(), payloads);
                 el.enums.push(EnumDef { name, variants });
             }
             ast::Item::Function(fd) => {
-                el.func_names.insert(fd.name.node.clone());
+                let name = fd.name.node.clone();
+                el.func_names.insert(name.clone());
+                el.fn_param_names.insert(
+                    name.clone(),
+                    fd.params.iter().map(|p| p.node.name.node.clone()).collect(),
+                );
+                el.fn_ret.insert(name, ty_of_type(&fd.return_type.node));
             }
+            ast::Item::Equip(eq) => el.register_equip(eq)?,
             // Imports are a discard no-op (types are prelude-available; the
             // `std.conv.int_to_str` shim is handled at the call site).
             ast::Item::Import(_) => {}
@@ -95,28 +116,115 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
         }
     }
 
-    // Pass 2: elaborate each function body.
+    // Pass 1b: the D4 transitive drop-taint fixpoint (seed = types with a
+    // custom `Drop`; propagate through struct fields + enum payloads).
+    el.compute_taint();
+
+    // Pass 2: elaborate free-function bodies AND `equip` method bodies (the
+    // latter as GGC functions named `Type__method`, with `self` in scope).
     let mut functions = Vec::new();
     for item in &items {
-        if let ast::Item::Function(fd) = item {
-            functions.push(el.elaborate_function(fd)?);
+        match item {
+            ast::Item::Function(fd) => functions.push(el.elaborate_function(fd, None)?),
+            ast::Item::Equip(eq) => {
+                let type_name = equip_type_name(eq)?;
+                for m in &eq.items {
+                    functions.push(el.elaborate_equip_method(&type_name, &m.node)?);
+                }
+            }
+            _ => {}
         }
     }
 
-    Ok(Program { functions, structs: el.structs, enums: el.enums, closures: el.closures })
+    Ok(Program {
+        functions,
+        structs: el.structs,
+        enums: el.enums,
+        closures: el.closures,
+        drop_fns: el.drop_fns,
+    })
+}
+
+/// An elaboration-inferred type, carried in the per-function env so a method
+/// call can dispatch a USER `equip` method vs a builtin (the corpus has
+/// user `get`/`set_name` colliding with the builtins) and so the D4 taint
+/// check can classify a source place. Gorget is type-first, so this is
+/// READ-THE-ANNOTATION for decls/params plus small projection inference.
+#[derive(Clone, Debug, PartialEq)]
+enum Ty {
+    /// Any non-collection scalar/primitive (int/bool/float/…).
+    Prim,
+    Str,
+    Vector(Box<Ty>),
+    Dict(Box<Ty>, Box<Ty>),
+    Set(Box<Ty>),
+    Tuple(Vec<Ty>),
+    /// A user struct/enum (or `Option`/`Result` — those carry no user methods).
+    Named(String),
+    /// Not inferable at this position — dispatch falls through to the builtins.
+    Unknown,
+}
+
+/// A binding's mode in the env — the D4 materialize-on-write check needs to
+/// know a write's root local is a BORROW binding (bare param / for-var /
+/// match-binding / plain `self`), the only bindings that materialize.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum BindMode {
+    /// An owned `let` binding — writes land in place, never materialize.
+    Owned,
+    /// A bare param / for-var / match-binding / plain `self` — a view that
+    /// MATERIALIZES a private copy on first write (RFC §2.2).
+    Borrow,
+    /// A `&` alias — writes reach the owner, no materialize.
+    WriteThrough,
+    /// A `!` move binding.
+    Move,
+}
+
+/// A resolved `equip` method: its GGC function name (`Type__method`) and the
+/// mode its `self` param binds under (D2: plain `self` = Borrow).
+#[derive(Clone, Debug)]
+struct MethodInfo {
+    mangled: String,
+    self_mode: Mode,
 }
 
 #[derive(Default)]
 struct Elaborator {
     structs: Vec<StructDef>,
     struct_names: HashSet<String>,
+    /// `struct-name → [(field-name, field-type)]` — for projection type
+    /// inference (`v[0].inner` → the element/field type) and D4 taint.
+    struct_field_types: HashMap<String, Vec<(String, Ty)>>,
     enums: Vec<EnumDef>,
+    /// `enum-name → [payload-type…]` flattened across variants — D4 taint only.
+    enum_payload_types: HashMap<String, Vec<Ty>>,
     func_names: HashSet<String>,
+    /// Signature registry (pass 1): free-fn / method name → explicit param
+    /// names in decl order — serves the call-side named-arg REORDER.
+    fn_param_names: HashMap<String, Vec<String>>,
+    /// Signature registry: fn / method name → return type — serves receiver
+    /// type inference for method-call-result receivers.
+    fn_ret: HashMap<String, Ty>,
+    /// `(type-name, method-name) → MethodInfo` for user `equip` methods.
+    equip_methods: HashMap<(String, String), MethodInfo>,
+    /// `equip T with Drop` registry: `(type-name, drop-fn-name)`.
+    drop_fns: Vec<(String, String)>,
+    /// Transitively drop-tainted NAMED types (D4): a type with a custom `Drop`
+    /// anywhere in its field/payload graph.
+    tainted: HashSet<String>,
     closures: Vec<ClosureDef>,
     /// Local names bound anywhere in the CURRENT function (params + var decls +
     /// for-vars). Used to distinguish a closure-value call (`f()`) from an
     /// unknown-function error, and to compute closure capture sets.
     local_names: HashSet<String>,
+    /// Per-function type env (built incrementally as bindings are elaborated):
+    /// local → its inferred type. Read for method dispatch + D4 taint.
+    local_ty: HashMap<String, Ty>,
+    /// Per-function mode env: local → its binding mode (D4 materialize check).
+    local_mode: HashMap<String, BindMode>,
+    /// The type name of `self` while elaborating an `equip` method body.
+    current_self_type: Option<String>,
     gensym: usize,
 }
 
@@ -127,10 +235,33 @@ impl Elaborator {
         format!("__{hint}_{n}")
     }
 
-    fn elaborate_function(&mut self, fd: &ast::FunctionDef) -> ElabResult<Function> {
-        // Reset + populate the per-function local-name set (params + all bound
-        // names) so closure detection and capture computation are scoped.
+    /// A free function: elaborate its body, keeping its own name.
+    fn elaborate_function(&mut self, fd: &ast::FunctionDef, self_type: Option<&str>) -> ElabResult<Function> {
+        let (params, body) = self.elaborate_fn_body(fd, self_type)?;
+        Ok(Function { name: fd.name.node.clone(), params, body, span: fd.span })
+    }
+
+    /// An `equip` method: elaborate its body with `self: type_name` in scope,
+    /// naming the GGC function `Type__method` (concrete static dispatch).
+    fn elaborate_equip_method(&mut self, type_name: &str, fd: &ast::FunctionDef) -> ElabResult<Function> {
+        let (params, body) = self.elaborate_fn_body(fd, Some(type_name))?;
+        Ok(Function { name: format!("{type_name}__{}", fd.name.node), params, body, span: fd.span })
+    }
+
+    /// Shared body elaboration for free functions and `equip` methods: reset the
+    /// per-function name/type/mode env, resolve param modes + types, and lower
+    /// the body. `self_type` is `Some(T)` inside an `equip T` method.
+    fn elaborate_fn_body(
+        &mut self,
+        fd: &ast::FunctionDef,
+        self_type: Option<&str>,
+    ) -> ElabResult<(Vec<Param>, Vec<Stmt>)> {
+        // Reset + populate the per-function name/type/mode env (params + all
+        // bound names) so closure detection, dispatch, and D4 are scoped.
         self.local_names.clear();
+        self.local_ty.clear();
+        self.local_mode.clear();
+        self.current_self_type = self_type.map(|s| s.to_string());
         for p in &fd.params {
             self.local_names.insert(p.node.name.node.clone());
         }
@@ -143,16 +274,24 @@ impl Elaborator {
             if p.node.is_meta_op {
                 return Err(ElabError::new("`meta op` params are phase 2", p.span));
             }
-            params.push(Param {
-                name: p.node.name.node.clone(),
-                mode: mode_of(p.node.ownership),
-                span: p.span,
-            });
+            let name = p.node.name.node.clone();
+            let pty = if matches!(p.node.type_.node, ast::Type::SelfType) {
+                self_type.map(|s| Ty::Named(s.to_string())).unwrap_or(Ty::Unknown)
+            } else {
+                ty_of_type(&p.node.type_.node)
+            };
+            // Params are BORROW-mode views (materialize-on-write) unless `&`
+            // (WriteThrough) / `!` (Move). Plain `self` is a bare binding (D2).
+            self.local_ty.insert(name.clone(), pty);
+            self.local_mode.insert(name.clone(), bindmode_of(p.node.ownership));
+            params.push(Param { name, mode: mode_of(p.node.ownership), span: p.span });
         }
         let body = match &fd.body {
             ast::FunctionBody::Block(block) => self.elaborate_block(block)?,
             ast::FunctionBody::Expression(e) => {
                 // Expression-body function: evaluate and return the value.
+                // (D4 position 4 — return of a live tainted place is rejected.)
+                self.reject_if_tainted_live_place(&e.node, e.span, "return")?;
                 vec![Stmt::Return { value: Some(self.elaborate_expr(e)?), span: e.span }]
             }
             ast::FunctionBody::Declaration | ast::FunctionBody::Extern(_) => {
@@ -162,7 +301,193 @@ impl Elaborator {
                 ));
             }
         };
-        Ok(Function { name: fd.name.node.clone(), params, body, span: fd.span })
+        Ok((params, body))
+    }
+
+    // ── Pass-1 collection helpers (equip + taint) ──────────────────────────
+
+    /// Register an `equip` block's methods into the signature/method registries
+    /// and (for `equip T with Drop`) the custom-drop registry + taint seed.
+    fn register_equip(&mut self, eq: &ast::EquipBlock) -> ElabResult<()> {
+        if eq.generic_params.is_some() {
+            return Err(ElabError::new(
+                "generic `equip` blocks are excluded from phase 0 (the 3 generic-equip cow \
+                 fixtures are the standing exclusions)",
+                eq.span,
+            ));
+        }
+        let type_name = equip_type_name(eq)?;
+        let is_drop = eq.trait_.as_ref().is_some_and(|t| trait_is_drop(&t.trait_name.node));
+        for m in &eq.items {
+            let mname = m.node.name.node.clone();
+            let mangled = format!("{type_name}__{mname}");
+            let self_mode = self_param_mode(&m.node)?;
+            let param_names: Vec<String> = m
+                .node
+                .params
+                .iter()
+                .filter(|p| !is_self_param(&p.node))
+                .map(|p| p.node.name.node.clone())
+                .collect();
+            self.func_names.insert(mangled.clone());
+            self.fn_param_names.insert(mangled.clone(), param_names);
+            self.fn_ret.insert(mangled.clone(), ty_of_type(&m.node.return_type.node));
+            self.equip_methods.insert(
+                (type_name.clone(), mname.clone()),
+                MethodInfo { mangled: mangled.clone(), self_mode },
+            );
+            if is_drop && mname == "drop" {
+                self.drop_fns.push((type_name.clone(), mangled));
+            }
+        }
+        if is_drop {
+            // Seed the D4 taint set: a type with a custom `Drop` is tainted.
+            self.tainted.insert(type_name);
+        }
+        Ok(())
+    }
+
+    /// The D4 transitive drop-taint fixpoint: a struct/enum is tainted if any
+    /// field / variant payload is (transitively) tainted. Seeds are the types
+    /// with a custom `Drop` (set in `register_equip`).
+    fn compute_taint(&mut self) {
+        loop {
+            let mut changed = false;
+            let struct_names: Vec<String> = self.struct_field_types.keys().cloned().collect();
+            for n in struct_names {
+                if self.tainted.contains(&n) {
+                    continue;
+                }
+                let fields = self.struct_field_types[&n].clone();
+                if fields.iter().any(|(_, t)| self.ty_tainted(t)) {
+                    self.tainted.insert(n);
+                    changed = true;
+                }
+            }
+            let enum_names: Vec<String> = self.enum_payload_types.keys().cloned().collect();
+            for n in enum_names {
+                if self.tainted.contains(&n) {
+                    continue;
+                }
+                let payloads = self.enum_payload_types[&n].clone();
+                if payloads.iter().any(|t| self.ty_tainted(t)) {
+                    self.tainted.insert(n);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    // ── Type inference + D4 (the mode-carrying env in action) ──────────────
+
+    /// Whether a type is (transitively) drop-tainted — a NAMED tainted type, or
+    /// a container/tuple carrying one.
+    fn ty_tainted(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Named(n) => self.tainted.contains(n),
+            Ty::Vector(el) | Ty::Set(el) => self.ty_tainted(el),
+            Ty::Dict(k, v) => self.ty_tainted(k) || self.ty_tainted(v),
+            Ty::Tuple(ts) => ts.iter().any(|t| self.ty_tainted(t)),
+            Ty::Prim | Ty::Str | Ty::Unknown => false,
+        }
+    }
+
+    /// The declared type of `field` on struct `type_name` (for projection
+    /// inference), or `Unknown`.
+    fn field_ty(&self, type_name: &str, field: &str) -> Ty {
+        self.struct_field_types
+            .get(type_name)
+            .and_then(|fs| fs.iter().find(|(n, _)| n == field))
+            .map(|(_, t)| t.clone())
+            .unwrap_or(Ty::Unknown)
+    }
+
+    /// Infer the type of a surface expression from the env — enough to dispatch
+    /// a user `equip` method (receiver type name) and to classify a D4 source.
+    /// Read-the-annotation for locals; small projection inference for the rest.
+    fn infer_ast_ty(&self, e: &ast::Expr) -> Ty {
+        match e {
+            ast::Expr::Identifier(n) => self.local_ty.get(n).cloned().unwrap_or(Ty::Unknown),
+            ast::Expr::SelfExpr => {
+                self.current_self_type.clone().map(Ty::Named).unwrap_or(Ty::Unknown)
+            }
+            ast::Expr::FieldAccess { object, field } => match self.infer_ast_ty(&object.node) {
+                Ty::Named(t) => self.field_ty(&t, &field.node),
+                _ => Ty::Unknown,
+            },
+            ast::Expr::TupleFieldAccess { object, index } => match self.infer_ast_ty(&object.node) {
+                Ty::Tuple(ts) => ts.get(*index).cloned().unwrap_or(Ty::Unknown),
+                _ => Ty::Unknown,
+            },
+            ast::Expr::Index { object, index } => {
+                if matches!(index.node, ast::Expr::Range { .. }) {
+                    // A slice keeps the container kind (`v[a..b]` → Vector,
+                    // `s[a..b]` → Str).
+                    return self.infer_ast_ty(&object.node);
+                }
+                match self.infer_ast_ty(&object.node) {
+                    Ty::Vector(el) | Ty::Set(el) => *el,
+                    Ty::Dict(_, v) => *v,
+                    Ty::Str => Ty::Str,
+                    _ => Ty::Unknown,
+                }
+            }
+            ast::Expr::StructLiteral { name, .. } => Ty::Named(name.node.clone()),
+            ast::Expr::Call { callee, .. } => {
+                if let ast::Expr::Identifier(name) = &callee.node {
+                    if self.struct_names.contains(name) {
+                        return Ty::Named(name.clone());
+                    }
+                    if let Some(t) = self.fn_ret.get(name) {
+                        return t.clone();
+                    }
+                }
+                Ty::Unknown
+            }
+            ast::Expr::Move { expr } | ast::Expr::MutableBorrow { expr } => {
+                self.infer_ast_ty(&expr.node)
+            }
+            ast::Expr::IntLiteral(_) | ast::Expr::FloatLiteral(_) | ast::Expr::BoolLiteral(_) => {
+                Ty::Prim
+            }
+            ast::Expr::StringLiteral(..) => Ty::Str,
+            _ => Ty::Unknown,
+        }
+    }
+
+    /// The ONE centralized D4 rejection (RFC §2.2). An implicit copy of a
+    /// LIVE-PLACE source of drop-tainted type at any of the six positions
+    /// (bind / ctor-init / collection-put / return / capture /
+    /// materialize-on-write) is `E_MoveWithoutOperator`. Fresh temps move and
+    /// never reach here (their sources are `Value`/`Move`, not places).
+    fn reject_if_tainted_live_place(&self, e: &ast::Expr, span: Span, position: &str) -> ElabResult<()> {
+        if ast_is_place(e) && self.ty_tainted(&self.infer_ast_ty(e)) {
+            return Err(ElabError::new(
+                format!(
+                    "E_MoveWithoutOperator: implicit copy of a drop-tainted value at {position}; \
+                     a type with a custom `Drop` is single-owner — write `!<src>` to move or \
+                     `<src>.clone()` to copy"
+                ),
+                span,
+            ));
+        }
+        Ok(())
+    }
+
+    /// D4 position 6 (materialize-on-write): a write whose target roots at a
+    /// BORROW-mode binding of a tainted type would privatise (copy) that value.
+    /// Routes through the ONE helper on the root-local place.
+    fn reject_materialize_on_write(&self, target: &ast::Expr, span: Span) -> ElabResult<()> {
+        if let Some(root) = root_local_name(target) {
+            if self.local_mode.get(root) == Some(&BindMode::Borrow) {
+                let root_expr = ast::Expr::Identifier(root.to_string());
+                return self.reject_if_tainted_live_place(&root_expr, span, "materialize-on-write");
+            }
+        }
+        Ok(())
     }
 
     fn elaborate_block(&mut self, block: &ast::Block) -> ElabResult<Vec<Stmt>> {
@@ -178,13 +503,25 @@ impl Elaborator {
     fn elaborate_stmt(&mut self, stmt: &Spanned<ast::Stmt>) -> ElabResult<Vec<Stmt>> {
         let span = stmt.span;
         match &stmt.node {
-            ast::Stmt::VarDecl { pattern, value, .. } => {
+            ast::Stmt::VarDecl { pattern, value, type_, .. } => {
                 let name = binding_name(pattern)?;
+                // D4 position 1 (bind) fires inside `bind_source`'s Copy branch.
                 let source = self.bind_source(value)?;
+                // Record the binding's type + mode in the env (annotation, or
+                // inferred from the initializer for `auto`).
+                let ty = match &type_.node {
+                    ast::Type::Inferred => self.infer_ast_ty(&value.node),
+                    other => ty_of_type(other),
+                };
+                self.local_ty.insert(name.clone(), ty);
+                self.local_mode.insert(name.clone(), bindmode_of_source(&source));
                 Ok(vec![Stmt::Bind { name, source, span }])
             }
 
             ast::Stmt::Assign { target, value } => {
+                // D4 position 6 (materialize-on-write): a write rooted at a
+                // tainted Borrow binding privatises it — rejected.
+                self.reject_materialize_on_write(&target.node, span)?;
                 let target_expr = self.elaborate_expr(target)?;
                 let value_src = self.owning_source_from_expr(value)?;
                 Ok(vec![Stmt::Assign { target: target_expr, value: value_src, span }])
@@ -192,6 +529,7 @@ impl Elaborator {
 
             ast::Stmt::CompoundAssign { target, op, value } => {
                 // `x op= e`  →  `x = x op e`
+                self.reject_materialize_on_write(&target.node, span)?;
                 let target_expr = self.elaborate_expr(target)?;
                 let lhs = self.elaborate_expr(target)?;
                 let rhs = self.elaborate_expr(value)?;
@@ -210,11 +548,17 @@ impl Elaborator {
 
             ast::Stmt::Return(opt) => {
                 let value = match opt {
-                    Some(e) => Some(self.elaborate_expr(e)?),
+                    Some(e) => {
+                        // D4 position 4 (return of a live tainted place).
+                        self.reject_if_tainted_live_place(&e.node, e.span, "return")?;
+                        Some(self.elaborate_expr(e)?)
+                    }
                     None => None,
                 };
                 Ok(vec![Stmt::Return { value, span }])
             }
+
+            ast::Stmt::With { bindings, body } => self.desugar_with(bindings, body, span),
 
             ast::Stmt::Break(None) => Ok(vec![Stmt::Break { span }]),
             ast::Stmt::Break(Some(_)) => {
@@ -307,6 +651,9 @@ impl Elaborator {
                 None => return Err(ElabError::new("`for` over an open-ended range is unsupported", span)),
             };
             let cmp = if *inclusive { BinOp::LtEq } else { BinOp::Lt };
+            // The range loop var is a fresh int, owned per iteration.
+            self.local_ty.insert(var.clone(), Ty::Prim);
+            self.local_mode.insert(var.clone(), BindMode::Owned);
             let mut while_body = self.elaborate_block(body)?;
             while_body.push(Stmt::Assign {
                 target: Expr::Local(var.clone()),
@@ -329,6 +676,23 @@ impl Elaborator {
 
         let coll = self.fresh("coll");
         let idx = self.fresh("i");
+
+        // Env: the element var is a Borrow view of the collection's element
+        // type; the synthesized `__coll`/`__i` are owned scratch.
+        let elem_ty = match self.infer_ast_ty(&iterable.node) {
+            Ty::Vector(el) | Ty::Set(el) => *el,
+            Ty::Dict(_, v) => *v,
+            Ty::Str => Ty::Str,
+            _ => Ty::Unknown,
+        };
+        self.local_ty.insert(var.clone(), elem_ty);
+        self.local_mode.insert(var.clone(), BindMode::Borrow);
+        self.local_ty.insert(coll.clone(), self.infer_ast_ty(&iterable.node));
+        self.local_mode.insert(coll.clone(), BindMode::Owned);
+        self.local_ty.insert(idx.clone(), Ty::Prim);
+        self.local_mode.insert(idx.clone(), BindMode::Owned);
+        self.local_names.insert(coll.clone());
+        self.local_names.insert(idx.clone());
 
         // `__coll = <iterable owning source>`
         let coll_src = self.owning_source_from_expr(iterable)?;
@@ -376,22 +740,52 @@ impl Elaborator {
         ])
     }
 
+    /// `with expr as name:` → a NEW scoped `Stmt::With` (RFC §2.6). Multiple
+    /// bindings nest outer→inner so each drops at block exit in reverse order.
+    /// The resource is NOT inlined as a plain `Bind` — that would drop it at the
+    /// enclosing function's exit, not the block's.
+    fn desugar_with(
+        &mut self,
+        bindings: &[ast::WithBinding],
+        body: &ast::Block,
+        span: Span,
+    ) -> ElabResult<Vec<Stmt>> {
+        let Some((first, rest)) = bindings.split_first() else {
+            return self.elaborate_block(body);
+        };
+        let name = first.name.node.clone();
+        // Same source classification as a `let` bind — `with Res(1) as r` is a
+        // fresh-temp Move (constructor temp, not a place ⇒ `Value`, never a D4
+        // rejection); `with somePlace as r` would be a live-place copy.
+        let source = self.bind_source(&first.expr)?;
+        self.local_ty.insert(name.clone(), self.infer_ast_ty(&first.expr.node));
+        self.local_mode.insert(name.clone(), bindmode_of_source(&source));
+        self.local_names.insert(name.clone());
+        let inner = self.desugar_with(rest, body, span)?;
+        Ok(vec![Stmt::With { name, source, body: inner, span }])
+    }
+
     // ── Source classification (the copy/move/borrow decision) ──────────────
 
     /// The RHS of a `let` binding (an implicit-copy position, but `&` makes a
-    /// write-through alias and `!` a move).
+    /// write-through alias and `!` a move). D4 position 1 (bind) lives on the
+    /// Copy branch.
     fn bind_source(&mut self, value: &Spanned<ast::Expr>) -> ElabResult<Source> {
         match &value.node {
             ast::Expr::Move { expr } => Ok(Source::Move(self.elaborate_expr(expr)?)),
             ast::Expr::MutableBorrow { expr } => Ok(Source::WriteThrough(self.elaborate_expr(expr)?)),
             _ if is_clone_call(&value.node) => Ok(Source::Value(self.elaborate_expr(value)?)),
-            _ if ast_is_place(&value.node) => Ok(Source::Copy(self.elaborate_expr(value)?)),
+            _ if ast_is_place(&value.node) => {
+                self.reject_if_tainted_live_place(&value.node, value.span, "bind")?;
+                Ok(Source::Copy(self.elaborate_expr(value)?))
+            }
             _ => Ok(Source::Value(self.elaborate_expr(value)?)),
         }
     }
 
-    /// A value in an OWNING position from a bare expression (assign RHS, array
-    /// element). No write-through alias is permitted here.
+    /// A value in an OWNING position from a bare expression (assign RHS, array/
+    /// tuple/struct-literal element). No write-through alias is permitted here.
+    /// D4 positions 2/3 (ctor-init / collection-put) live on the Copy branch.
     fn owning_source_from_expr(&mut self, value: &Spanned<ast::Expr>) -> ElabResult<Source> {
         match &value.node {
             ast::Expr::Move { expr } => Ok(Source::Move(self.elaborate_expr(expr)?)),
@@ -399,13 +793,17 @@ impl Elaborator {
                 Err(ElabError::new("`&`-alias in an owning position is not valid", value.span))
             }
             _ if is_clone_call(&value.node) => Ok(Source::Value(self.elaborate_expr(value)?)),
-            _ if ast_is_place(&value.node) => Ok(Source::Copy(self.elaborate_expr(value)?)),
+            _ if ast_is_place(&value.node) => {
+                self.reject_if_tainted_live_place(&value.node, value.span, "ctor-init/collection-put")?;
+                Ok(Source::Copy(self.elaborate_expr(value)?))
+            }
             _ => Ok(Source::Value(self.elaborate_expr(value)?)),
         }
     }
 
     /// A value in an OWNING position from a call-arg (collection put, struct/
-    /// enum field init): the sigil rides `CallArg.ownership`.
+    /// enum field init): the sigil rides `CallArg.ownership`. D4 positions 2/3
+    /// live on the Copy branch.
     fn owning_source_from_arg(&mut self, arg: &ast::CallArg) -> ElabResult<Source> {
         match arg.ownership {
             ast::Ownership::Move => Ok(Source::Move(self.elaborate_expr(&arg.value)?)),
@@ -416,6 +814,11 @@ impl Elaborator {
                 if is_clone_call(&arg.value.node) {
                     Ok(Source::Value(self.elaborate_expr(&arg.value)?))
                 } else if ast_is_place(&arg.value.node) {
+                    self.reject_if_tainted_live_place(
+                        &arg.value.node,
+                        arg.value.span,
+                        "ctor-init/collection-put",
+                    )?;
                     Ok(Source::Copy(self.elaborate_expr(&arg.value)?))
                 } else {
                     Ok(Source::Value(self.elaborate_expr(&arg.value)?))
@@ -469,6 +872,8 @@ impl Elaborator {
             ast::Expr::StringLiteral(lit, interps) => self.elaborate_string(lit, interps, span),
 
             ast::Expr::Identifier(name) => Ok(Expr::Local(name.clone())),
+            // `self` inside an `equip` method body is the `self` binding.
+            ast::Expr::SelfExpr => Ok(Expr::Local("self".to_string())),
 
             ast::Expr::FieldAccess { object, field } => {
                 Ok(Expr::Field(Box::new(self.elaborate_expr(object)?), field.node.clone()))
@@ -678,13 +1083,11 @@ impl Elaborator {
             }
             return Ok(Expr::CallValue { callee: Box::new(Expr::Local(name.clone())), args: out });
         }
-        // Ordinary function call.
+        // Ordinary function call — (B2, from B1 output-review R2) named args
+        // are REORDERED to the callee's param order via the pass-1 signature
+        // registry, replacing the B1-interim rejection.
         if self.func_names.contains(name) {
-            self.reject_named_args(args, "function call")?;
-            let mut out = Vec::with_capacity(args.len());
-            for a in args {
-                out.push(self.call_arg_source(&a.node)?);
-            }
+            let out = self.call_args_reordered(name, args)?;
             return Ok(Expr::Call { func: name.clone(), args: out });
         }
         Err(ElabError::new(
@@ -736,6 +1139,47 @@ impl Elaborator {
         Ok(out)
     }
 
+    /// Elaborate ordinary function-call args, honouring named args by reordering
+    /// them to the callee's declared param order (mirrors `struct_ctor_args`,
+    /// but classifies each arg with the borrow-view call rule). Positional args
+    /// pass through unchanged.
+    fn call_args_reordered(
+        &mut self,
+        func_name: &str,
+        args: &[Spanned<ast::CallArg>],
+    ) -> ElabResult<Vec<Source>> {
+        let any_named = args.iter().any(|a| a.node.name.is_some());
+        if !any_named {
+            let mut out = Vec::with_capacity(args.len());
+            for a in args {
+                out.push(self.call_arg_source(&a.node)?);
+            }
+            return Ok(out);
+        }
+        let order = self.fn_param_names.get(func_name).cloned().unwrap_or_default();
+        let mut by_name: Vec<(String, Source)> = Vec::with_capacity(args.len());
+        for a in args {
+            let name = a
+                .node
+                .name
+                .as_ref()
+                .ok_or_else(|| {
+                    ElabError::new("mixed positional/named call args are unsupported", a.span)
+                })?
+                .node
+                .clone();
+            by_name.push((name, self.call_arg_source(&a.node)?));
+        }
+        let mut out = Vec::with_capacity(order.len());
+        for p in &order {
+            let pos = by_name.iter().position(|(n, _)| n == p).ok_or_else(|| {
+                ElabError::new(format!("missing argument `{p}` in `{func_name}(...)`"), args[0].span)
+            })?;
+            out.push(by_name.remove(pos).1);
+        }
+        Ok(out)
+    }
+
     /// The enum a user-declared variant belongs to (for bare-spelled ctors).
     fn user_enum_of_variant(&self, variant: &str) -> Option<String> {
         self.enums
@@ -772,6 +1216,10 @@ impl Elaborator {
                         span,
                     ));
                 }
+                // Enum-variant payloads bind POSITIONALLY — named args would
+                // silently mis-bind, so reject (call-side reorder is for
+                // ordinary function/method calls only).
+                self.reject_named_args(args, "enum variant constructor")?;
                 let mut out = Vec::with_capacity(args.len());
                 for a in args {
                     out.push(self.owning_source_from_arg(&a.node)?);
@@ -781,6 +1229,17 @@ impl Elaborator {
                     variant: method.to_string(),
                     args: out,
                 });
+            }
+        }
+
+        // User `equip` method dispatch — via RECEIVER-TYPE INFERENCE (read the
+        // annotation). This precedes the builtin table so a user method whose
+        // name COLLIDES with a builtin (`get`, `set`) resolves to the user
+        // method — the corpus has exactly this collision (`cow_named_recv_gate_*`),
+        // which name-matching cannot disambiguate.
+        if let Ty::Named(type_name) = self.infer_ast_ty(&receiver.node) {
+            if let Some(minfo) = self.equip_methods.get(&(type_name, method.to_string())).cloned() {
+                return self.elaborate_user_method_call(receiver, &minfo, args, span);
             }
         }
 
@@ -817,11 +1276,56 @@ impl Elaborator {
                 return Err(ElabError::new(format!("`.{method}` takes {n} arg(s)"), span));
             }
         }
+        // A mutating builtin on a tainted Borrow root would materialize it (D4
+        // position 6). Read-only builtins never reach here.
+        if matches!(
+            bm,
+            BuiltinMethod::Push
+                | BuiltinMethod::Set
+                | BuiltinMethod::Pop
+                | BuiltinMethod::Clear
+                | BuiltinMethod::Fill
+                | BuiltinMethod::Add
+        ) {
+            self.reject_materialize_on_write(&receiver.node, span)?;
+        }
         let mut out = Vec::with_capacity(args.len());
         for a in args {
             out.push(self.owning_source_from_arg(&a.node)?);
         }
         Ok(Expr::Method { recv, method: bm, args: out })
+    }
+
+    /// Lower a user `equip` method call to a `Type__method` GGC function call.
+    /// The receiver becomes `self`, bound per the method's self-mode (D2: plain
+    /// `self` = a bare Borrow view that materializes on write; `&self` =
+    /// WriteThrough; `!self` = Move). Non-self args follow the ordinary
+    /// borrow-view call rule and honour named-arg reorder.
+    fn elaborate_user_method_call(
+        &mut self,
+        receiver: &Spanned<ast::Expr>,
+        minfo: &MethodInfo,
+        args: &[Spanned<ast::CallArg>],
+        _span: Span,
+    ) -> ElabResult<Expr> {
+        let self_src = self.self_source(receiver, minfo.self_mode)?;
+        let mut out = vec![self_src];
+        out.extend(self.call_args_reordered(&minfo.mangled, args)?);
+        Ok(Expr::Call { func: minfo.mangled.clone(), args: out })
+    }
+
+    /// Bind a method receiver as the `self` source per the resolved self-mode.
+    fn self_source(&mut self, receiver: &Spanned<ast::Expr>, self_mode: Mode) -> ElabResult<Source> {
+        let is_place = ast_is_place(&receiver.node);
+        let e = self.elaborate_expr(receiver)?;
+        Ok(match self_mode {
+            Mode::WriteThrough => Source::WriteThrough(e),
+            Mode::Move => Source::Move(e),
+            // Plain `self` is a bare binding: a view of a place, a fresh temp
+            // otherwise (a temp receiver is moved into `self`).
+            Mode::Borrow if is_place => Source::BorrowView(e),
+            Mode::Borrow => Source::Value(e),
+        })
     }
 
     /// Elaborate a `match` in statement position (arm bodies are blocks).
@@ -929,6 +1433,22 @@ impl Elaborator {
             .cloned()
             .collect();
         captures.sort();
+        // D4 position 5 (closure capture): capturing a drop-tainted local by
+        // value is an implicit copy — rejected (capture `!name` to move).
+        for c in &captures {
+            if let Some(ty) = self.local_ty.get(c) {
+                if self.ty_tainted(ty) {
+                    return Err(ElabError::new(
+                        format!(
+                            "E_MoveWithoutOperator: closure captures the drop-tainted local `{c}` \
+                             by value; a type with a custom `Drop` is single-owner — capture \
+                             `!{c}` to move or `{c}.clone()` to copy"
+                        ),
+                        span,
+                    ));
+                }
+            }
+        }
         let id = self.closures.len();
         self.closures.push(ClosureDef { params: cparams, captures, body: cbody, span });
         Ok(Expr::Closure(id))
@@ -1014,6 +1534,12 @@ fn collect_stmt_bound_names(stmt: &ast::Stmt, out: &mut HashSet<String>) {
         ast::Stmt::While { body, .. } | ast::Stmt::Loop { body } => collect_bound_names(body, out),
         ast::Stmt::For { pattern, body, .. } => {
             pattern_names(&pattern.node, out);
+            collect_bound_names(body, out);
+        }
+        ast::Stmt::With { bindings, body } => {
+            for b in bindings {
+                out.insert(b.name.node.clone());
+            }
             collect_bound_names(body, out);
         }
         ast::Stmt::Match { arms, else_arm, .. } => {
@@ -1132,11 +1658,101 @@ fn collect_source_locals(s: &Source, closures: &[ClosureDef], out: &mut HashSet<
     }
 }
 
-fn mode_of(o: ast::Ownership) -> crate::ggc::Mode {
+fn mode_of(o: ast::Ownership) -> Mode {
     match o {
-        ast::Ownership::Borrow => crate::ggc::Mode::Borrow,
-        ast::Ownership::MutableBorrow => crate::ggc::Mode::WriteThrough,
-        ast::Ownership::Move => crate::ggc::Mode::Move,
+        ast::Ownership::Borrow => Mode::Borrow,
+        ast::Ownership::MutableBorrow => Mode::WriteThrough,
+        ast::Ownership::Move => Mode::Move,
+    }
+}
+
+/// A param's env BINDING mode: a bare param is a BORROW view (materialize-on-
+/// write, D2 for plain `self`); `&` = WriteThrough; `!` = Move.
+fn bindmode_of(o: ast::Ownership) -> BindMode {
+    match o {
+        ast::Ownership::Borrow => BindMode::Borrow,
+        ast::Ownership::MutableBorrow => BindMode::WriteThrough,
+        ast::Ownership::Move => BindMode::Move,
+    }
+}
+
+/// A `let` / `with` binding's env mode from its classified source: a Copy/Value/
+/// Move binding OWNS its value (never materializes); a `&` binding is a
+/// WriteThrough alias. (`BorrowView` is never produced at a `let`.)
+fn bindmode_of_source(s: &Source) -> BindMode {
+    match s {
+        Source::WriteThrough(_) => BindMode::WriteThrough,
+        Source::Move(_) => BindMode::Move,
+        Source::BorrowView(_) => BindMode::Borrow,
+        Source::Copy(_) | Source::Value(_) => BindMode::Owned,
+    }
+}
+
+/// Map a surface type annotation to an inferred `Ty`. `SelfType` resolves to
+/// `Unknown` here (it is only meaningful inside a method, where the caller
+/// special-cases it against the current self-type).
+fn ty_of_type(t: &ast::Type) -> Ty {
+    use gorget::parser::ast::PrimitiveType as P;
+    match t {
+        ast::Type::Primitive(P::StringType) => Ty::Str,
+        ast::Type::Primitive(_) => Ty::Prim,
+        ast::Type::Named { name, generic_args } => {
+            let arg = |i: usize| generic_args.get(i).map(|t| ty_of_type(&t.node)).unwrap_or(Ty::Unknown);
+            match name.node.as_str() {
+                "Vector" => Ty::Vector(Box::new(arg(0))),
+                "Set" | "HashSet" => Ty::Set(Box::new(arg(0))),
+                "Dict" | "HashMap" => Ty::Dict(Box::new(arg(0)), Box::new(arg(1))),
+                "String" => Ty::Str,
+                // Option/Result carry no user methods — a Named type with no
+                // equip entries just falls through dispatch to the builtins.
+                other => Ty::Named(other.to_string()),
+            }
+        }
+        ast::Type::Tuple(ts) => Ty::Tuple(ts.iter().map(|t| ty_of_type(&t.node)).collect()),
+        ast::Type::Ref(inner) | ast::Type::Owned(inner) => ty_of_type(&inner.node),
+        _ => Ty::Unknown,
+    }
+}
+
+/// The named target of an `equip` block (`equip Res:` / `equip Res with Drop:`).
+fn equip_type_name(eq: &ast::EquipBlock) -> ElabResult<String> {
+    match &eq.type_.node {
+        ast::Type::Named { name, .. } => Ok(name.node.clone()),
+        _ => Err(ElabError::new("`equip` target must be a named type in phase 0", eq.type_.span)),
+    }
+}
+
+/// Whether an `equip … with <trait>` trait is `Drop`.
+fn trait_is_drop(t: &ast::Type) -> bool {
+    matches!(t, ast::Type::Named { name, .. } if name.node == "Drop")
+}
+
+/// Whether a param is the method receiver `self`.
+fn is_self_param(p: &ast::Param) -> bool {
+    matches!(p.type_.node, ast::Type::SelfType) || p.name.node == "self"
+}
+
+/// The self-param's binding mode for an `equip` method (D2: plain `self` =
+/// Borrow; `&self` = WriteThrough; `!self`/`consuming self` = Move).
+fn self_param_mode(fd: &ast::FunctionDef) -> ElabResult<Mode> {
+    for p in &fd.params {
+        if is_self_param(&p.node) {
+            return Ok(mode_of(p.node.ownership));
+        }
+    }
+    Err(ElabError::new("`equip` method without a `self` param is outside phase 0", fd.span))
+}
+
+/// The root local a place expression is rooted at (`v[0].name` → `v`,
+/// `self.field` → `self`), or `None` for a non-place.
+fn root_local_name(e: &ast::Expr) -> Option<&str> {
+    match e {
+        ast::Expr::Identifier(n) => Some(n),
+        ast::Expr::SelfExpr => Some("self"),
+        ast::Expr::FieldAccess { object, .. }
+        | ast::Expr::TupleFieldAccess { object, .. }
+        | ast::Expr::Index { object, .. } => root_local_name(&object.node),
+        _ => None,
     }
 }
 
