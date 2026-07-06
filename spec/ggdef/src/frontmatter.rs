@@ -333,7 +333,7 @@ fn parse_features(rest: &str) -> Result<Vec<String>, FrontmatterError> {
 /// `\" \\ \n \r \t`, so any other escape (or an unquoted / unterminated value)
 /// is a LOUD error rather than a lenient best-effort decode that could mask a
 /// corrupt expectation.
-fn parse_json_string(raw: &str) -> Result<String, FrontmatterError> {
+pub(crate) fn parse_json_string(raw: &str) -> Result<String, FrontmatterError> {
     let bytes = raw.as_bytes();
     if bytes.len() < 2 || bytes[0] != b'"' || bytes[bytes.len() - 1] != b'"' {
         return Err(FrontmatterError::BadStdout(format!("expected a double-quoted string, got {raw}")));

@@ -12,15 +12,22 @@
 //! `String`, `Vector`, structs, tuples; bare/`&`/`!` modes; materialize-on-
 //! write). See `docs/plans/define-gorget/phase0-brief.md`.
 
+pub mod classify;
 pub mod elaborate;
 pub mod eval;
 pub mod frontmatter;
 pub mod ggc;
 pub mod trace;
 
+pub use classify::{
+    classifiable_fixture_names, classify_fixture, Classification, CLASSIFY_EXCLUDE, CLASSIFY_FUEL,
+};
 pub use elaborate::{elaborate, ElabError};
 pub use eval::{run, Fault, Outcome, Run, EXIT_FUEL, EXIT_ILLFORMED, EXIT_TRAP, EXIT_VALUE};
 pub use frontmatter::{parse_frontmatter, Expect, Frontmatter, FrontmatterError};
+
+use std::collections::BTreeMap;
+use std::path::Path;
 
 use gorget::parser::Parser;
 
@@ -128,10 +135,19 @@ pub fn gen_frontmatter(source: &str, fuel: u64) -> Result<String, GenError> {
 /// plus `stdout:` as a JSON-escaped string (a canonical, unambiguous, and thus
 /// idempotent serialisation of arbitrary bytes, incl. newlines).
 fn render_expect_block(run: &Run) -> Vec<String> {
+    render_expect_block_from(run.outcome.exit_code(), &run.stdout)
+}
+
+/// The `expect:` block from a bare `(exit, stdout)` pair — the same
+/// serialisation `render_expect_block` uses, factored out so a future
+/// serializer (D2) can produce a block WITHOUT reconstructing a `Run`, on the
+/// SAME `json_escape` the frontmatter reader inverts. The round-trip
+/// (`json_escape` ⇄ `parse_json_string`) is unit-tested (`src/tests.rs`).
+pub fn render_expect_block_from(exit: i32, stdout: &str) -> Vec<String> {
     vec![
         "# expect:".to_string(),
-        format!("#   exit: {}", run.outcome.exit_code()),
-        format!("#   stdout: \"{}\"", json_escape(&run.stdout)),
+        format!("#   exit: {exit}"),
+        format!("#   stdout: \"{}\"", json_escape(stdout)),
     ]
 }
 
@@ -191,6 +207,126 @@ fn json_escape(s: &str) -> String {
             c => out.push(c),
         }
     }
+    out
+}
+
+// ── `ggdef -- migrate` — populate `spectests/run/` from the AGREE set (D1) ─────
+//
+// The migration copies every ggdef-adjudicated AGREE fixture (`classify_fixture`
+// == `Agree`) out of `tests/fixtures/` into `spectests/run/`, prepends a
+// `#!spectest` frontmatter block (`mode: run`, `adjudicator: ggdef`), and fills
+// the `expect:` block IN-PROCESS via `gen_frontmatter` — the expectation flows
+// FROM the definition (RFC §4), never copied off a backend. Selection is EXACTLY
+// the `Agree` bucket the `converter_agreement` gate asserts on (the SAME
+// predicate), so the migrated set and the agreement floor can never diverge.
+
+/// The outcome of a `migrate` run: the fixtures written, and a census of the
+/// non-`Agree` verdicts (for the CLI report — they are NOT migrated).
+#[derive(Debug, Default)]
+pub struct MigrateReport {
+    /// Fixture file names written into `spectests/run/`, sorted.
+    pub migrated: Vec<String>,
+    /// Count of each non-`Agree` verdict encountered in the walk.
+    pub skipped: BTreeMap<&'static str, usize>,
+}
+
+/// A `migrate` failure. `NonzeroExit` is the tripwire the brief mandates: an
+/// `Agree` fixture is a `run_gg` pair, so its ggdef outcome is a `Value` (exit
+/// 0) by construction — a nonzero exit would silently activate a filed dormant
+/// hazard in the C/LLVM lanes, so we STOP and report instead of writing it.
+#[derive(Debug)]
+pub enum MigrateError {
+    Io(std::io::Error),
+    Gen(String, GenError),
+    Frontmatter(String, FrontmatterError),
+    NonzeroExit { name: String, exit: i32 },
+}
+
+impl std::fmt::Display for MigrateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MigrateError::Io(e) => write!(f, "I/O error: {e}"),
+            MigrateError::Gen(name, e) => write!(f, "gen `{name}`: {e}"),
+            MigrateError::Frontmatter(name, e) => write!(f, "re-parse `{name}`: {e}"),
+            MigrateError::NonzeroExit { name, exit } => write!(
+                f,
+                "`{name}` generated a NONZERO exit ({exit}) — an AGREE fixture must be exit-0 by \
+                 construction. STOP: this would activate the filed dormant exit≠0 branch in the \
+                 C/LLVM run lanes. Triage before migrating."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MigrateError {}
+
+/// Run the D1 migration. `ws_root` is the workspace root; the tool reads
+/// `tests/fixtures/` + `tests/integration.rs` and writes `spectests/run/`.
+/// Runs the whole walk in a 2 GiB-stack thread (ggdef's big-step eval recurses
+/// on the native stack).
+pub fn migrate(ws_root: &Path) -> Result<MigrateReport, MigrateError> {
+    let ws = ws_root.to_path_buf();
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024 * 1024)
+        .name("ggdef-migrate".to_string())
+        .spawn(move || migrate_body(&ws))
+        .unwrap()
+        .join()
+        .unwrap()
+}
+
+fn migrate_body(ws_root: &Path) -> Result<MigrateReport, MigrateError> {
+    let fixtures_dir = ws_root.join("tests/fixtures");
+    let run_dir = ws_root.join("spectests/run");
+    let integ =
+        std::fs::read_to_string(ws_root.join("tests/integration.rs")).map_err(MigrateError::Io)?;
+
+    let mut report = MigrateReport::default();
+    for name in classify::classifiable_fixture_names(&fixtures_dir) {
+        let src = std::fs::read_to_string(fixtures_dir.join(&name)).map_err(MigrateError::Io)?;
+        match classify::classify_fixture(&name, &src, &integ) {
+            Classification::Agree => {
+                // Frame the body with a run-tier `#!spectest` block, then let
+                // `gen_frontmatter` splice the `expect:` (kept LAST) from a
+                // fresh definitional run.
+                let framed = prepend_frontmatter(&src, &name);
+                let generated = gen_frontmatter(&framed, DEFAULT_FUEL)
+                    .map_err(|e| MigrateError::Gen(name.clone(), e))?;
+                // Exit-0 tripwire (brief): re-read the just-written expectation.
+                let fm = parse_frontmatter(&generated)
+                    .map_err(|e| MigrateError::Frontmatter(name.clone(), e))?;
+                if fm.expect.exit != 0 {
+                    return Err(MigrateError::NonzeroExit { name, exit: fm.expect.exit });
+                }
+                std::fs::write(run_dir.join(&name), &generated).map_err(MigrateError::Io)?;
+                report.migrated.push(name);
+            }
+            Classification::Float => *report.skipped.entry("float-hold").or_default() += 1,
+            Classification::Other { .. } => *report.skipped.entry("other-mismatch").or_default() += 1,
+            Classification::NotValue => *report.skipped.entry("not-value").or_default() += 1,
+            Classification::NoPair => *report.skipped.entry("no-run_gg-pair").or_default() += 1,
+            Classification::FrontendError => {
+                *report.skipped.entry("frontend-error").or_default() += 1
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// Frame a fixture body with a run-tier `#!spectest` frontmatter block. The
+/// `expect:` line is intentionally ABSENT — `gen_frontmatter` inserts it just
+/// before the closing fence (`splice_expect`), keeping it LAST per the fence
+/// convention. `doc:` records the legacy-harness provenance (inline scalar).
+fn prepend_frontmatter(src: &str, name: &str) -> String {
+    let mut out = String::new();
+    out.push_str(FENCE_OPEN);
+    out.push('\n');
+    out.push_str("# mode: run\n");
+    out.push_str("# adjudicator: ggdef\n");
+    out.push_str(&format!("# doc: migrated from tests/fixtures/{name} (run_gg pair)\n"));
+    out.push_str(FENCE_CLOSE);
+    out.push('\n');
+    out.push_str(src);
     out
 }
 

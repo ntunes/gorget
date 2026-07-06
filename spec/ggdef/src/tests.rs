@@ -1399,3 +1399,24 @@ void main():
     );
     elab_rejects(&src, "expression-body tail", "expr-body tail capture");
 }
+
+// ── the `render_expect_block_from` seam round-trips json_escape (D2 prep) ─────
+#[test]
+fn render_expect_block_from_round_trips_json_escape() {
+    use crate::frontmatter::parse_json_string;
+    use crate::render_expect_block_from;
+    // Cover the five escapes json_escape emits plus passthrough + the empty
+    // string. The stdout line's quoted payload, decoded by the reader's inverse
+    // (parse_json_string), must equal the original — so a value serialized by
+    // render_expect_block_from always parses back byte-exact.
+    for s in ["", "9\n", "plain", "a\"b\\c\nd\te\r", "line1\nline2\n", "tab\tend"] {
+        let block = render_expect_block_from(0, s);
+        assert_eq!(block.len(), 3);
+        assert_eq!(block[0], "# expect:");
+        assert_eq!(block[1], "#   exit: 0");
+        let quoted = &block[2][block[2].find('"').expect("stdout line has a quote")..];
+        assert_eq!(parse_json_string(quoted).unwrap(), s, "round-trip failed for {s:?}");
+    }
+    // The exit code is threaded verbatim (not hardcoded to 0).
+    assert_eq!(render_expect_block_from(101, "")[1], "#   exit: 101");
+}
