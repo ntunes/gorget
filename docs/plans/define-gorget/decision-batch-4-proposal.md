@@ -198,7 +198,23 @@ medium-high.
 
 ---
 
-### D14 (PROPOSED) — A5 `get_or`/`get_or_put`: **"get_or is not special"** — reads return views, uniformly
+### D14 (RATIFIED 2026-07-06 — VIEW) — A5 `get_or`/`get_or_put`: **"get_or is not special"** — reads return views, uniformly
+
+> **Owner ruling 2026-07-06: it's a view.** Ratified with the read/write split that answers
+> "how do you write through?": **`get_or_put` IS the write-through form** — its result is
+> always dict-resident (stores the default on miss), so mutating methods through it write
+> through via receiver auto-borrow, the language's one sanctioned write-through channel
+> (`d.get_or_put(k, Vector()).push(x)` ≡ Python's `d.setdefault(k, []).append(x)`).
+> **`get_or` is READ-ONLY**: mutating through its result is a compile error with a fix-it
+> ("did you mean get_or_put?") — on a miss its view aliases the CALLER'S default local, so
+> write-through would mutate the local on miss but the dict on hit: the context-dependent
+> surprise class the language kills. Scalar counters: `d[k] = d.get_or(k, 0) + 1`
+> (double-lookup = optimization concern, fusable invisibly — same stance as D15 slices).
+> Consequences: retire the round-8 unconditional clone; temp-default rule (default must be
+> a live place or the result consumed within the full expression, else reject — the
+> TODO:143 view-of-temp class); D4 governs a tainted default at the put boundary as at any
+> `put`. One sentence for the book: **"`get_or` reads with a fallback; `get_or_put` makes
+> the entry exist so you can write to it."**
 
 The executing double-free is already fixed (round-8) — but the fix was an *unconditional
 clone*, which is wasteful for plain types and a D4 violation for tainted ones (measured: the
