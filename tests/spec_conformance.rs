@@ -220,10 +220,12 @@ enum Verdict {
 ///     (pre-trap) stdout is a PREFIX of the observed stdout. The exact code is
 ///     deliberately NOT compared: ggdef's 101/102/103 are PROVISIONAL
 ///     (spec/ggdef/src/eval.rs:40) and the production C runtime always exits 1
-///     on a trap via `gorget_panic`, so the codes can never be equal. All 5
-///     current seeds are exit-0, so this branch is wired DEFENSIVELY and is
-///     currently unexercised; revisit once a nonzero-exit seed lands and the
-///     production trap-exit convention is pinned.
+///     on a trap via `gorget_panic`, so the codes can never be equal. All 187
+///     current fixtures are exit-0, so this branch is wired DEFENSIVELY and is
+///     currently unexercised; revisit once a nonzero-exit fixture lands — the
+///     trap-exit convention is now RATIFIED (D11: uncaught trap = exit 101,
+///     trap[T_X] stderr line; decisions.md LOG 2026-07-06) and the
+///     trap-normalization track (TODO High) tightens this branch.
 fn adjudicate(expect: &Expect, out: &Output) -> Verdict {
     let stdout = String::from_utf8_lossy(&out.stdout);
     if expect.exit == 0 {
