@@ -271,7 +271,13 @@ hot path demands it. Confidence: high.
 
 ---
 
-### D16 (PROPOSED) — A11 UFCS: remove GENERAL UFCS from the design targets; keep the curated trait-mediated dual spellings
+### D16 (RATIFIED 2026-07-06) — A11 UFCS: remove GENERAL UFCS from the design targets; keep the curated trait-mediated dual spellings
+
+> **Owner ruling 2026-07-06: abandon the stated design promise.** Docs write-through DONE
+> same commit: `language-design.md:85`'s Design-Target cell rewritten to the curated
+> reality (trait-exposed duals: `len`/`Measurable`, `map`/`filter`) with the abandonment
+> rationale inline. The narrower future possibility (immutable-receiver-only free-fns-as-
+> methods) remains un-foreclosed but is NOT a target. A11 closes.
 
 The design doc is internally contradictory: :85 promises `arr.filter(f)` ≡ `filter(arr, f)`
 universally, while :86 lists "multiple incompatible ways to do the same task" under AVOID.
@@ -331,6 +337,11 @@ cleanup. Confidence: medium (owner taste call on the feature itself).
 ---
 
 ### D20 (PROPOSED) — Canonical text-conversion: f-strings are THE way; reject the impostors with fix-its
+
+> Write-through note (found during D16's edit): `language-design.md:80` claims f-string
+> interpolation "calls `.to_string()`" — stale/wrong (interpolation goes through
+> `Displayable`/`display`, and `.to_string()` on primitives is rejected). Fix with D20's
+> write-through.
 
 The corpus already voted: ~3885 f-string uses vs 30 `.to_string()` (self-host: zero) vs 40
 `.display()`. Ratify: `f"{x}"` (and `.display()` where a String is needed programmatically)

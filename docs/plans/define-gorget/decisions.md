@@ -227,6 +227,14 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D16 RATIFIED by owner: general UFCS ABANDONED as a design target**
+  (language-design.md:85 rewritten same commit — curated trait-exposed duals stay:
+  `len`/`Measurable`, `map`/`filter`). Rationale: universal free-fn↔method equivalence
+  would (a) let any `&`-taking free fn mutate through method syntax with no `&` at the
+  call site — gutting the §4.5 mutation-acknowledgment invariant — and (b) manufacture a
+  second spelling for every call, the "multiple ways" the same design table rejects.
+  Narrower immutable-receiver-only variant un-foreclosed, not a target. A11 CLOSED.
+
 - 2026-07-06 — **D14 RATIFIED by owner (held once for the write-through interrogation,
   re-confirmed): `get_or`/`get_or_put`/`get_or_else` return VIEWS** (uniform with `.get()`;
   retires the round-8 unconditional clone). **`get_or_put` IS the write-through form**
