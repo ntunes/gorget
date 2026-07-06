@@ -64,9 +64,10 @@ choice, cite precedent).
 - New `run_gg_panics` pairs (exit≠0 — these CANNOT be spectests run-tier until D11's
   `trap:` field lands; the helper at integration.rs:6125 asserts non-zero + stderr-
   contains, which fits): `unwrap_none_traps` (None literal + `v.get(i).unwrap()` on
-  empty), `unwrap_error_result_traps`, `expect_none_traps` (NOTE: currently prints the
-  generic unwrap message — the dropped-expect-message bug is FILED separately; assert
-  the generic text and cite the TODO), `unwrap_error_on_ok_traps`, `get_unwrap_empty_traps`.
+  empty), `unwrap_error_result_traps`, `expect_none_traps` (⚡ per pass-1 R3: assert ONLY
+  bug-agnostic substrings — non-zero exit + a fragment like `` `None` value `` — NEVER the
+  full generic text; cite the filed expect-message TODO in the fixture comment),
+  `unwrap_error_on_ok_traps`, `get_unwrap_empty_traps`.
 
 ## ⚡ PASS-1 FOLDS (2026-07-06) — these OVERRIDE conflicting text above/below
 
