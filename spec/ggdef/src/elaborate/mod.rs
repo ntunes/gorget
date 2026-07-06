@@ -426,6 +426,24 @@ impl Elaborator {
 
     /// A function-call argument: bare params are BORROW **views**, so a bare
     /// place becomes a view (not a copy). `&`/`!` ride `CallArg.ownership`.
+    /// Reject named arguments at positions that bind POSITIONALLY (ordinary
+    /// calls, enum/collection constructors, closure-value calls). Silently
+    /// dropping the name would mis-bind (RFC discipline: never silently
+    /// mis-evaluate). Struct construction reorders named args and does not
+    /// come through here; call-side named-arg REORDER is an Increment-B2
+    /// deliverable.
+    fn reject_named_args(&self, args: &[gorget::span::Spanned<ast::CallArg>], what: &str) -> ElabResult<()> {
+        for a in args {
+            if let Some(n) = &a.node.name {
+                return Err(ElabError::new(
+                    format!("named argument `{}` is not supported at a {what} in ggdef Increment B1 (positional binding would silently mis-bind; named-arg reorder for calls is Increment B2)", n.node),
+                    a.span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn call_arg_source(&mut self, arg: &ast::CallArg) -> ElabResult<Source> {
         match arg.ownership {
             ast::Ownership::Move => Ok(Source::Move(self.elaborate_expr(&arg.value)?)),
@@ -615,6 +633,7 @@ impl Elaborator {
         }
         // Prelude enum constructors: `Some(x)`, `None()`, `Ok(v)`, `Error(e)`.
         if let Some(type_name) = prelude_enum_of(name) {
+            self.reject_named_args(args, "prelude enum constructor")?;
             let mut out = Vec::with_capacity(args.len());
             for a in args {
                 out.push(self.owning_source_from_arg(&a.node)?);
@@ -628,6 +647,7 @@ impl Elaborator {
         // Collection constructors: `Vector[T]()`, `Dict[K,V]()`, `Set[T]()`.
         if has_generic_args {
             if let Some(kind) = collection_ctor_kind(name) {
+                self.reject_named_args(args, "collection constructor")?;
                 let mut out = Vec::with_capacity(args.len());
                 for a in args {
                     out.push(self.owning_source_from_arg(&a.node)?);
@@ -637,6 +657,7 @@ impl Elaborator {
         }
         // User-enum variant constructor spelled bare (rare): `Variant(args)`.
         if let Some(type_name) = self.user_enum_of_variant(name) {
+            self.reject_named_args(args, "enum variant constructor")?;
             let mut out = Vec::with_capacity(args.len());
             for a in args {
                 out.push(self.owning_source_from_arg(&a.node)?);
@@ -650,6 +671,7 @@ impl Elaborator {
         }
         // A first-class closure value stored in a local: `f()`, `grow()`.
         if self.local_names.contains(name) && !self.func_names.contains(name) {
+            self.reject_named_args(args, "closure-value call")?;
             let mut out = Vec::with_capacity(args.len());
             for a in args {
                 out.push(self.call_arg_source(&a.node)?);
@@ -658,6 +680,7 @@ impl Elaborator {
         }
         // Ordinary function call.
         if self.func_names.contains(name) {
+            self.reject_named_args(args, "function call")?;
             let mut out = Vec::with_capacity(args.len());
             for a in args {
                 out.push(self.call_arg_source(&a.node)?);

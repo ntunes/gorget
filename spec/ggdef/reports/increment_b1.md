@@ -114,3 +114,21 @@ good candidates to gain committed expectations in a follow-up.
   match (stmt + expr); enum-variant construction (incl. `Some`/`None`/`Ok`/
   `Error`/`None()`); named-arg reordering; Dict/Set ctors; `int_to_str` shim;
   slice-vs-place fix.
+
+## CORRECTION (B1 output-review, 2026-07-06 — supersedes the divergence claims above)
+
+The original report's claim that the bare-param materialize rule is "implemented identically by
+ggdef and production; not a divergence / Findings = 0" was FALSE. The output-review ran all 28
+REPORT-ONLY fixtures through BOTH compilers: 25 match; **3 diverge, ggdef CORRECT per RFC §2.2
+in all 3 — these are invariant-#8 PRODUCTION bugs surfaced by the definition** (filed in
+TODO.md):
+
+| Fixture | production | ggdef (correct) | production defect |
+|---|---|---|---|
+| deadwrite_warn_compound | 11 | 10 | bare-param `xs[0] += 1` WRITES THROUGH (compound-assign bypasses materialize) |
+| deadwrite_ok_loop_read_before_write | 1,1,1,1 | 1,2,3,1 | materialize does not persist across loop iterations |
+| deadwrite_ok_rebind | CC-FAIL | 3,1 | bare-param full-rebind emits invalid C (latent; fixture only checked) |
+
+Also: ggdef's call-side named-arg positional mis-binding (review R2) is now REJECTED at
+elaboration (orchestrator fix, unit-tested); the proper call-side reorder is a B2 deliverable.
+Production's mirror-image ctor named-arg positional mis-binding (review R3) is filed in TODO.

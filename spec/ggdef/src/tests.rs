@@ -644,3 +644,21 @@ void main():
 "#;
     assert_eq!(out(src), "44\n-56");
 }
+
+#[test]
+fn named_args_rejected_at_function_calls() {
+    // R2 (B1 output-review): positional binding of named call args silently
+    // mis-binds (`sub(b=3, a=10)` evaluated as sub(3, 10)). Until B2 lands the
+    // call-side reorder, elaboration must REJECT, never mis-evaluate.
+    let src = r#"
+int sub(int a, int b):
+    return a - b
+
+void main():
+    print(sub(b=3, a=10))
+"#;
+    match run_source(src, FUEL) {
+        Err(e) => assert!(e.to_string().contains("named argument"), "got: {e}"),
+        Ok(_) => panic!("named call args must be rejected in B1, not evaluated"),
+    }
+}
