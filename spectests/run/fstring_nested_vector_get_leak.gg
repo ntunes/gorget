@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/fstring_nested_vector_get_leak.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "abc\nxyz\n"
+#!end
+# Print-temp leak class, nested-collection-read shape: a String read
+# through `Vector[Vector[String]]` and interpolated into an f-string
+# materializes a `gorget_string_copy_cow` temp that must be registered at
+# its birth (the 2026-05-17 "3-byte leak" — not a pop bug, reproduces on a
+# plain nested get).
+void main():
+    Vector[Vector[String]] outer = Vector[Vector[String]]()
+    Vector[String] inner = Vector[String]()
+    inner.push("abc")
+    inner.push("xyz")
+    outer.push(inner)
+    print(f"{outer.get(0).unwrap().get(0).unwrap()}")
+    print(f"{outer.get(0).unwrap().get(1).unwrap()}")

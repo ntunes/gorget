@@ -1,0 +1,20 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/witness_cond_straightline.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "s = hello\nv.len() = 2\n"
+#!end
+# WITNESS: NON-loop conditional source-mutation, cond FALSE.
+# `s` borrows v[0]; the push is gated on a false condition, NO loop.
+# Eager-clone today: 1 clone at the bind. LAZY target: 0 (push never runs).
+# Output unchanged: s = hello, v.len() = 2.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    bool cond = false
+    if cond:
+        v.push("filler")
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

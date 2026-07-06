@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_conditional_move.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "consumed: 3\nv2: 2\ndone\n"
+#!end
+# Test: move in one branch means value is moved after the branch merge
+void consume(Vector[int] !v):
+    print(f"consumed: {v.len()}")
+
+void main():
+    # Move in both branches — value definitely moved
+    Vector[int] v1 = [1, 2, 3]
+    bool flag = true
+    if flag:
+        consume(!v1)
+    else:
+        consume(!v1)
+
+    # Reassign after conditional move — should be fine
+    Vector[int] v2 = [4, 5]
+    print(f"v2: {v2.len()}")
+
+    print("done")

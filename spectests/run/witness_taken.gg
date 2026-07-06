@@ -1,0 +1,22 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/witness_taken.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "s = hello\nv.len() = 3\n"
+#!end
+# WITNESS: loop-body conditional source-mutation, TAKEN once.
+# `s` borrows v[0]; the push fires on exactly one iteration (i==1).
+# LAZY target: exactly 1 clone (the first/only mutating iteration), no UAF.
+# Output: s = hello, v.len() = 3.
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 2:
+        if i == 1:
+            v.push("filler")
+        i = i + 1
+    print(f"s = {s}")
+    print(f"v.len() = {v.len()}")

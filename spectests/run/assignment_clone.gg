@@ -1,0 +1,39 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/assignment_clone.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n4\n3\n3\n2\ndone\n"
+#!end
+from std.collections import Vector
+
+# Assignment with .clone() produces independent copies.
+
+void main():
+    # Variable-to-variable: explicit deep clone
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = a.clone()
+    b.push(4)
+    print(a.len())          # 3 — a unaffected by b's push
+    print(b.len())          # 4
+
+    # Function return: move (zero cost, no clone)
+    Vector[int] c = make_vec()
+    print(c.len())          # 3
+
+    # Reassignment: explicit deep clone
+    Vector[int] d = [10, 20]
+    Vector[int] e = d.clone()
+    d.push(30)
+    print(d.len())          # 3 — modified original
+    print(e.len())          # 2 — clone, unaffected
+
+    print("done")
+
+Vector[int] make_vec():
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    return v

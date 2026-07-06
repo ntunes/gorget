@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_struct_field_access.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "Alice\n0\n1\nAlice\n100\n2\nAlice\n200\n3\n"
+#!end
+struct Player:
+    String name
+    int score
+    int level
+
+void show_stats(Player p):
+    print(p.name)
+    print(p.score)
+    print(p.level)
+
+void level_up(Player &p):
+    p.level = p.level + 1
+    p.score = p.score + 100
+
+void main():
+    Player p = Player("Alice", 0, 1)
+    show_stats(p)
+    level_up(&p)
+    show_stats(p)
+    level_up(&p)
+    show_stats(p)

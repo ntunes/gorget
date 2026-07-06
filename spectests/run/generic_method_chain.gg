@@ -1,0 +1,76 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_method_chain.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42\nhello\n42\nequal\nnot equal\n10\n"
+#!end
+struct Box2[T]:
+    T value
+
+equip Box2[T]:
+    T get(self):
+        return self.value
+
+    Box2[T] rewrap(self):
+        return Box2[T](self.value)
+
+# Generic function that calls methods on a generic struct
+T unwrap_box[T](Box2[T] b):
+    return b.get()
+
+# Generic function that chains method calls
+T unwrap_rewrapped[T](Box2[T] b):
+    Box2[T] inner = b.rewrap()
+    return inner.get()
+
+# Generic function that operates on two generic struct instances
+bool same_value[T](Box2[T] a, Box2[T] b):
+    # Compare via formatted output — works for int and String
+    return a.get() == b.get()
+
+struct Pair2[A, B]:
+    A first
+    B second
+
+equip Pair2[A, B]:
+    A get_first(self):
+        return self.first
+
+    B get_second(self):
+        return self.second
+
+# Generic function using a multi-param generic struct
+A extract_first[A, B](Pair2[A, B] p):
+    return p.get_first()
+
+void main():
+    # Test generic function calling method on generic struct (single type param)
+    Box2[int] b1 = Box2[int](42)
+    int v1 = unwrap_box[int](b1)
+    print(f"{v1}")
+
+    Box2[String] b2 = Box2[String]("hello")
+    String v2 = unwrap_box[String](b2)
+    print(v2)
+
+    # Test generic function with method chaining
+    int v3 = unwrap_rewrapped[int](b1)
+    print(f"{v3}")
+
+    # Test same_value with ints
+    Box2[int] b3 = Box2[int](42)
+    bool eq = same_value[int](b1, b3)
+    if eq:
+        print("equal")
+
+    Box2[int] b4 = Box2[int](99)
+    bool neq = same_value[int](b1, b4)
+    if not neq:
+        print("not equal")
+
+    # Test multi-param generic struct in generic function
+    Pair2[int, String] p = Pair2[int, String](10, "world")
+    int first = extract_first[int, String](p)
+    print(f"{first}")

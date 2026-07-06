@@ -1,0 +1,65 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/test_struct_methods.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n4\n7\n13\n24\ntrue\nfalse\n(3, 4)\n50\n30\n0\n3\n1\n7\n"
+#!end
+struct Point:
+    int x
+    int y
+
+equip Point:
+    int manhattan(self):
+        return self.x + self.y
+
+    Point translate(self, int dx, int dy):
+        return Point(self.x + dx, self.y + dy)
+
+    bool equals(self, Point other):
+        return self.x == other.x and self.y == other.y
+
+    String to_string(self):
+        return f"({self.x}, {self.y})"
+
+struct Rect:
+    Point origin
+    int width
+    int height
+
+equip Rect:
+    int area(self):
+        return self.width * self.height
+
+    int perimeter(self):
+        return 2 * (self.width + self.height)
+
+void main():
+    Point p1 = Point(3, 4)
+    print(p1.x)
+    print(p1.y)
+    print(p1.manhattan())
+
+    Point p2 = p1.translate(10, 20)
+    print(p2.x)
+    print(p2.y)
+
+    print(p1.equals(p1))
+    print(p1.equals(p2))
+
+    print(p1.to_string())
+
+    Rect r = Rect(Point(0, 0), 10, 5)
+    print(r.area())
+    print(r.perimeter())
+    print(r.origin.x)
+
+    # Vector of structs
+    Vector[Point] points = Vector[Point]()
+    points.push(Point(1, 2))
+    points.push(Point(3, 4))
+    points.push(Point(5, 6))
+    print(points.len())
+    print(points[0].x)
+    print(points[1].manhattan())

@@ -32,12 +32,15 @@ use ggdef::{parse_frontmatter, run_source, DEFAULT_FUEL};
 ///
 /// Seeded from a run regenerated IN THIS WORKTREE (never a dated number):
 ///   cargo test -p ggdef --test spec_conformance_ggdef -- --nocapture
-///   → total=5 · MATCH=5 · MISMATCH=0 · GGDEF-SKIP=0
+///   → total=187 · MATCH=187 · MISMATCH=0 · GGDEF-SKIP=0
+///
+/// (5 original seeds + the 182-fixture P1-D "AGREE" migration — every migrated
+/// fixture is a ggdef-adjudicated run_gg pair, so total == MATCH by construction.)
 ///
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 5;
+const GGDEF_MATCH_FLOOR: usize = 187;
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")

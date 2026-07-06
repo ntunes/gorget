@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/fstring_if_block_leak.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "got hello\nstill hello\n"
+#!end
+# Print-temp leak class, if-block shape: an f-string interp temp born
+# inside a conditional block is registered at birth and dropped at the
+# block's scope exit on whichever branch ran.
+void main():
+    Vector[String] v = ["hello"]
+    if v.len() > 0:
+        print(f"got {v.get(0).unwrap()}")
+    else:
+        print("empty")
+    if v.len() > 99:
+        print("huge")
+    else:
+        print(f"still {v.get(0).unwrap()}")

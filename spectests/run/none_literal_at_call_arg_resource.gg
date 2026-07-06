@@ -1,0 +1,44 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/none_literal_at_call_arg_resource.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "5\nnone\nsome hi\n"
+#!end
+# Sibling of `none_literal_at_call_arg.gg`, which covers Option[int] — a
+# PRIMITIVE payload that is never Ptr-wrapped at a bare param, so it cannot
+# reach this bug. This fixture exercises the RESOURCE-payload shape:
+# `Option[String]` appears as a struct field, which registers it in the
+# self-host lowerer's `optionlike_resource_types`, so `lower_function`
+# Ptr-wraps the bare `Option[String]` param (by-pointer ABI). The wrapped
+# tid is what `GirFunction.param_types` records; without peeling it back to
+# the VALUE type at the call-arg expected-type writer, a bare `None` arg
+# types its dst local as the Ptr tid → scalar LIR slot → the prelude-variant
+# intercept falls back → cc-invalid `(Option__T){.tag=1}` assigned into an
+# int64 temp (the lower.gg-split's stage-1 cc failure, 146 sites).
+#
+# The callee is textually BEFORE the caller on purpose: the forward-callee
+# shape is a separate latent class (see none_literal_forward_callee.gg).
+
+public struct Tag:
+    Option[String] label
+
+int check(Option[String] o):
+    match o:
+        case Some(s):
+            return s.len()
+        case None:
+            return 5
+
+String describe(Option[String] o):
+    match o:
+        case Some(s):
+            return f"some {s}"
+        case None:
+            return "none"
+
+void main():
+    print(check(None))
+    print(describe(None))
+    print(describe(Some("hi")))

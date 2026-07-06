@@ -1,0 +1,19 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_fn_arg_not_last_use.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n3\n"
+#!end
+int vec_len(Vector[int] v):
+    return v.len()
+
+void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(1)
+    nums.push(2)
+    nums.push(3)
+    int n = vec_len(nums)
+    print(n)
+    print(nums.len())

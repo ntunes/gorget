@@ -1,0 +1,35 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_nested_struct_move.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42: alpha (2), beta (3)\ndone\n"
+#!end
+# Nested struct with resource fields — move the outer struct and verify
+# no double-free of inner resource fields.
+
+struct Inner:
+    String name
+    Vector[int] data
+
+struct Outer:
+    Inner first
+    Inner second
+    int tag
+
+void consume(Outer !o):
+    print(f"{o.tag}: {o.first.name} ({o.first.data.len()}), {o.second.name} ({o.second.data.len()})")
+
+void main():
+    Vector[int] d1 = Vector[int]()
+    d1.push(1)
+    d1.push(2)
+    Vector[int] d2 = Vector[int]()
+    d2.push(3)
+    d2.push(4)
+    d2.push(5)
+    Outer o = Outer(Inner("alpha", d1), Inner("beta", d2), 42)
+    consume(!o)
+    # o is dead after consume — no double-free of Inner strings/vectors
+    print("done")

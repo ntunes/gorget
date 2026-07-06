@@ -1,0 +1,19 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/struct_single_field.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42\n42\n42\n"
+#!end
+struct Wrapper:
+    int value
+
+int unwrap(Wrapper w):
+    return w.value
+
+void main():
+    Wrapper w = Wrapper(42)
+    print(unwrap(w))
+    print(unwrap(w))
+    print(w.value)

@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_and_reinit.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "consumed 3\nreinitialized: 4\nconsumed 4\ntemp: 0\ntemp: 1\ntemp: 2\ndone\n"
+#!end
+# Test: move value, then reinitialize and use again
+void consume(Vector[int] !v):
+    print(f"consumed {v.len()}")
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    consume(!v)
+
+    # Reinitialize with new value
+    Vector[int] v2 = [4, 5, 6, 7]
+    print(f"reinitialized: {v2.len()}")
+
+    # Can use again
+    consume(!v2)
+
+    # Reinitialize and use in loop
+    for i in 0..3:
+        Vector[int] temp = [i]
+        print(f"temp: {temp[0]}")
+
+    print("done")

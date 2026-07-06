@@ -1,0 +1,52 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/test_recursion.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "0\n1\n55\n1\n1\n3628800\n15\n6\n25\n1\n"
+#!end
+int fibonacci(int n):
+    if n <= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
+
+int factorial(int n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+int sum_list(Vector[int] v, int idx):
+    if idx >= v.len():
+        return 0
+    return v[idx] + sum_list(v, idx + 1)
+
+int gcd(int a, int b):
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+void main():
+    # Fibonacci
+    print(fibonacci(0))
+    print(fibonacci(1))
+    print(fibonacci(10))
+
+    # Factorial
+    print(factorial(0))
+    print(factorial(1))
+    print(factorial(10))
+
+    # Recursive list sum
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    v.push(4)
+    v.push(5)
+    print(sum_list(v, 0))
+
+    # GCD
+    print(gcd(48, 18))
+    print(gcd(100, 75))
+    print(gcd(7, 13))

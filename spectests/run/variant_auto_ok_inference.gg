@@ -1,0 +1,38 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/variant_auto_ok_inference.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "ok 99\nok 42\nerr boom\nnone\n"
+#!end
+# Path A: variant calls type precisely at the typecheck level.
+#
+# Pre-fix: `Ok(99)` typed as `error_id`; downstream consumers reading
+# the type saw `<error>` and silently accepted anything.
+#
+# Post-fix: `Ok(99)` types as `Result[int, ?fresh_E]`. When the
+# destination supplies `E`, the helper seeds bindings from the
+# expected type up front; without one, `?E` stays a fresh type var so
+# subsequent unification at the consumer site can pin it. This
+# fixture exercises the destination-driven case (explicit `String`),
+# the unifier-driven case (call-arg expected `String`), and a None
+# variant (no payload).
+void show(Result[int, String] r):
+    match r:
+        case Ok(v): print(f"ok {v}")
+        case Error(e): print(f"err {e}")
+
+void main():
+    # explicit-destination form: hint flows into the helper directly
+    Result[int, String] r = Ok(99)
+    show(r)
+    # arg-position form: helper returns Result[int, ?E]; unify against
+    # show's param binds ?E = String
+    show(Ok(42))
+    show(Error("boom"))
+    # None variant (no payload, no arg-based binding)
+    Option[int] none = None
+    match none:
+        case Some(v): print(f"some {v}")
+        case None: print("none")

@@ -1,0 +1,30 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/snag49d_throws_while_cond.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "count: 3\n"
+#!end
+# Snag #49d — auto-propagate `Result[bool, E]` at a while-condition
+# position. Sibling to Snag #43 / #46 / #48. Loop guard reads the
+# Result struct's bytes as bool without auto-prop.
+
+struct E:
+    String msg
+
+bool keep_going(int i) throws E:
+    return i < 3
+
+int counter() throws E:
+    int i = 0
+    while keep_going(i):
+        i = i + 1
+    return i
+
+void main():
+    match counter():
+        case Ok(n):
+            print(f"count: {n}")
+        case Error(_):
+            print("err")

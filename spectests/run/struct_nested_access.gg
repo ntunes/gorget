@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/struct_nested_access.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "1\ntest\n42\n"
+#!end
+struct Inner:
+    int value
+
+struct Middle:
+    Inner inner
+    String name
+
+struct Outer:
+    Middle mid
+    int id
+
+void main():
+    Inner i = Inner(42)
+    Middle m = Middle(i, "test")
+    Outer o = Outer(m, 1)
+    print(o.id)
+    print(o.mid.name)
+    print(o.mid.inner.value)

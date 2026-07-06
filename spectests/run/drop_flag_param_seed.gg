@@ -1,0 +1,61 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_flag_param_seed.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "got late\ndrop late\nlate-done\n---\nlate-done\n---\nconsume ck\ndrop ck\nck-done\n---\nck-done\ndrop ck\n"
+#!end
+# Drop-flag dataflow seeding (Tier E §8.1).
+#
+# The drop-flag instrumentation now seeds bb0 from the dataflow's
+# bb0 in-state directly: parameter slots are `Initialized` at entry
+# (caller-supplied), every other slot is `Uninitialized`. The bb0
+# flag-init code reads this state and emits `flag := true` for
+# unconditionally-init slots and `flag := false` otherwise.
+#
+# This fixture exercises the dataflow precision in two ways:
+#
+# 1. `late_init(cond)` declares a local `R r` only inside the `if`,
+#    so the slot is `Uninitialized` for the whole bb0 prelude and
+#    only becomes `Initialized` on the true-branch SlotStore. With
+#    the prior `bb0 = false; SlotStore → true` instrumentation this
+#    worked too, but only because the bb0 false matched what the
+#    dataflow now derives explicitly.
+#
+# 2. `consume_or_keep(cond)` is the partial-move shape: unconditional
+#    init at bb0, conditional consume, post-merge drop. The drop
+#    flag must be `true` at bb0 for the drop on the no-consume path
+#    to fire correctly.
+
+struct R:
+    String name
+
+equip R with Drop:
+    void drop(!self):
+        String n = self.name
+        print(f"drop {n}")
+
+void consume(R !r):
+    print(f"consume {r.name}")
+
+void late_init(bool cond):
+    if cond:
+        R r = R("late")
+        print(f"got {r.name}")
+    print("late-done")
+
+void consume_or_keep(bool cond):
+    R r = R("ck")
+    if cond:
+        consume(!r)
+    print("ck-done")
+
+void main():
+    late_init(true)
+    print("---")
+    late_init(false)
+    print("---")
+    consume_or_keep(true)
+    print("---")
+    consume_or_keep(false)

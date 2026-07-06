@@ -1,0 +1,15 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/shared_keyword_local.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "10\n42\n50\n"
+#!end
+void main():
+    shared int x = 10
+    print(x)
+    x = 42
+    print(x)
+    x += 8
+    print(x)

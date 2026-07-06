@@ -1,0 +1,60 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/index_ref_auto_clone.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "21\n3\n4\n3\n3\n3\ndone\n"
+#!end
+from std.collections import Vector
+
+# IndexLoad returns Ptr(T) for resource-type elements.
+# auto → reference (zero cost), explicit T → auto-clone.
+
+int sum_nested(Vector[Vector[int]] matrix):
+    int total = 0
+    int i = 0
+    while i < matrix.len():
+        # auto → Ptr(Vector[int]), reference into matrix
+        auto row = matrix[i]
+        int j = 0
+        while j < row.len():
+            total = total + row[j]
+            j = j + 1
+        i = i + 1
+    return total
+
+void main():
+    Vector[Vector[int]] matrix = Vector[Vector[int]]()
+    Vector[int] row1 = [1, 2, 3]
+    Vector[int] row2 = [4, 5, 6]
+    matrix.push(!row1)
+    matrix.push(!row2)
+
+    # Read through Ptr reference (zero cost)
+    print(sum_nested(matrix))
+
+    # Direct method call on index result (via pointee_type)
+    print(matrix[0].len())
+
+    # Explicit type → auto-clone (owned copy)
+    Vector[int] owned_row = matrix[1]
+    owned_row.push(7)
+    print(owned_row.len())
+    # Original unchanged (clone, not shared)
+    print(matrix[1].len())
+
+    # Return auto-clone: function returns T, operand is Ptr(T)
+    print(get_first(matrix).len())
+
+    # Move call auto-clone: !(ptr_expr) clones for ownership transfer
+    auto ref_row = matrix[0]
+    consume_vec(!ref_row)
+
+    print("done")
+
+Vector[int] get_first(Vector[Vector[int]] m):
+    return m[0]
+
+void consume_vec(Vector[int] !v):
+    print(v.len())

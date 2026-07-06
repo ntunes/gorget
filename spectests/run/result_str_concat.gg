@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/result_str_concat.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "file not found: test.txt\n"
+#!end
+Result[int, String] make_error(String prefix, String suffix):
+    return Error(prefix + ": " + suffix)
+
+void main():
+    auto r = make_error("file not found", "test.txt")
+    match r:
+        case Ok(n):
+            print(n)
+        case Error(msg):
+            print(msg)

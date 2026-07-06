@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/result_whole_bind_identifier.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "5\nhello\n"
+#!end
+# Whole-enum identifier bind: `Result[int, String] x = src` (and
+# Option[String]) used to SIGSEGV — var-decl Branch C retypes `x` to
+# Ptr(enum) + emit_borrow, and the trailing value-into-Ptr-slot assign was
+# mis-classified by the LIR `try_enum_payload_extract` (its same-enum dst
+# check matched only GirType::Named, a Ptr(enum) dst fell through) into an
+# auto-unwrap payload extraction stored into the pointer slot.
+# Non-resource payloads (Option[int]) and direct match were unaffected.
+# This is the regression fixture the parked (3)(b) chain could not add
+# ("no valid oracle reference") — the oracle is now fixed.
+void main():
+    Result[int, String] src = Ok(5)
+    Result[int, String] x = src
+    match x:
+        case Ok(v): print(v)
+        case Error(e): print(e)
+    Option[String] osrc = Some("hello")
+    Option[String] y = osrc
+    match y:
+        case Some(s): print(s)
+        case None: print("none")

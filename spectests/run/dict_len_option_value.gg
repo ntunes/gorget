@@ -1,0 +1,66 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/dict_len_option_value.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "--- A: Dict[String, Option[int]] ---\n3\n--- B: Dict[String, Option[String]] ---\n3\n--- C: Dict[int, Option[int]] ---\n3\n--- D: Dict[String, Option[Vector[int]]] ---\n3\ndone\n"
+#!end
+from std.collections import Dict, Vector
+
+# Regression fixture for Dict[K, Option[V]].len().
+#
+# Background: test_collections_nested_advanced.gg carried a workaround
+# from 2026-03-11 that used scores.keys().len() instead of scores.len()
+# on a Dict[String, Option[int]], with a comment claiming a "Dict.len()
+# codegen bug with Option value type". When this fixture was written
+# (2026-05-04), the natural .len() call returned the correct count for
+# all four variants below — the bug appears to have been fixed
+# incidentally by intervening LIR / CoW / drop-insertion work.
+#
+# Wired as a normal #[test] in tests/integration.rs to lock the
+# now-correct behavior down.
+
+void main():
+    # --- Variant A: Dict[String, Option[int]] (matches the workaround) ---
+    print("--- A: Dict[String, Option[int]] ---")
+    Dict[String, Option[int]] a = Dict[String, Option[int]]()
+    a.put("alice", Some(95))
+    Option[int] no_score = None()
+    a.put("bob", no_score)
+    a.put("carol", Some(88))
+    print(f"{a.len()}")
+
+    # --- Variant B: Dict[String, Option[String]] ---
+    print("--- B: Dict[String, Option[String]] ---")
+    Dict[String, Option[String]] b = Dict[String, Option[String]]()
+    b.put("k1", Some("v1"))
+    Option[String] no_v = None()
+    b.put("k2", no_v)
+    b.put("k3", Some("v3"))
+    print(f"{b.len()}")
+
+    # --- Variant C: Dict[int, Option[int]] (int key, not String) ---
+    print("--- C: Dict[int, Option[int]] ---")
+    Dict[int, Option[int]] c = Dict[int, Option[int]]()
+    c.put(1, Some(10))
+    Option[int] no_i = None()
+    c.put(2, no_i)
+    c.put(3, Some(30))
+    print(f"{c.len()}")
+
+    # --- Variant D: Dict[String, Option[Vector[int]]] (nested resource) ---
+    print("--- D: Dict[String, Option[Vector[int]]] ---")
+    Dict[String, Option[Vector[int]]] d = Dict[String, Option[Vector[int]]]()
+    Vector[int] v1 = Vector[int]()
+    v1.push(1)
+    v1.push(2)
+    d.put("a", Some(v1))
+    Option[Vector[int]] no_vec = None()
+    d.put("b", no_vec)
+    Vector[int] v3 = Vector[int]()
+    v3.push(7)
+    d.put("c", Some(v3))
+    print(f"{d.len()}")
+
+    print("done")

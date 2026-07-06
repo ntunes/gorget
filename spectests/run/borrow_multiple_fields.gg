@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_multiple_fields.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n4\n12\n12\ntrue\n"
+#!end
+struct Matrix:
+    int rows
+    int cols
+    int total
+
+Matrix make_matrix(int r, int c):
+    return Matrix(r, c, r * c)
+
+void main():
+    Matrix m = make_matrix(3, 4)
+    # Access all fields — all are borrows
+    print(m.rows)
+    print(m.cols)
+    print(m.total)
+    # Use in expressions
+    int area = m.rows * m.cols
+    print(area)
+    print(area == m.total)

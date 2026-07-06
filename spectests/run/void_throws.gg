@@ -1,0 +1,20 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/void_throws.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "set foo on obj 1\ndone\n"
+#!end
+struct RuntimeException:
+    String msg
+
+void define_own_property(int obj_id, String key) throws RuntimeException:
+    print(f"set {key} on obj {obj_id}")
+
+void main():
+    match define_own_property(1, "foo"):
+        case Ok(_):
+            print("done")
+        case Error(_):
+            print("err")

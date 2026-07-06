@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_reassign_after.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n2\n"
+#!end
+from std.collections import Vector
+
+void consume(Vector[int] !v):
+    print(v.len())
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    consume(!v)
+    Vector[int] v2 = [4, 5]
+    print(v2.len())

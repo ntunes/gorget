@@ -1,0 +1,101 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/owning_param_drop_at_exit.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "simple p1\ndrop p1\n---\nconsume p2\ndrop p2\ncond-done true\n---\ncond-done false\ndrop p3\n---\ninner p4\ndrop p4\nouter-done\n---\nearly-short p5\ndrop p5\nearly-1 false\n---\nearly-full p6\ndrop p6\nearly-2 true\n"
+#!end
+# An owning `!` parameter must drop EXACTLY ONCE: at the callee's exit when
+# it is NOT transferred onward, OR inside the inner callee (and not again at
+# this exit) when it IS transferred onward by `!`.
+#
+# Rust gg is correct here — it drops each `!`-param once. This fixture guards
+# a SELF-HOST double-drop that the runtime-parity harness surfaced: when an
+# owning `!`-param was moved ONWARD (passed `!` to another consuming call at
+# its last use, e.g. `conditional`'s `consume(!r)` and `outer`'s `inner(!r)`),
+# the self-host lowerer CLONED it at the onward-move site AND still dropped
+# the param slot at function exit → the resource was dropped TWICE (once
+# inside the callee, once at the caller's exit). It surfaced as an EXTRA
+# `drop p2` (after `cond-done true`) and an EXTRA `drop p4` (after
+# `outer-done`) versus the Rust oracle.
+#
+# Root cause + fix: the `GtMutPtr(inner)` arm of
+# `decide_operand_at_consuming_arg` (self_host_lowerer/lower.gg) routed BOTH
+# `&`-borrow and `!`-move params to clone-through, ignoring the typed
+# `GirLocal.owning_param` bit and `is_last_use`. The fix moves an owning
+# `!`-param on its last use (`owning_param and is_last_use` → `OpMove`) — the
+# slot already holds a `T*`, so OpMove forwards the pointer and triggers
+# `mark_local_moved` + `GIMoveZero`, flipping the param's drop flag to dead.
+# The existing drop_elab drop-flag dataflow then suppresses the exit drop.
+# Mirrors Rust's `is_owning_param` onward-move fast-path (calls.rs:90-105).
+#
+# This is a LIVE `#[test]` (run_gg, asserting the Rust oracle output below)
+# AND is locked into the self_host_runtime net via
+# runtime_snapshots/owning_param_drop_at_exit.out, so the self-host fix can't
+# regress. Each `!`-param drops exactly once in the expected positions.
+
+struct R:
+    String name
+
+equip R with Drop:
+    void drop(!self):
+        String n = self.name
+        print(f"drop {n}")
+
+void consume(R !r):
+    print(f"consume {r.name}")
+
+# Case 1: simplest — no transfer, just use. Expect drop at exit.
+void simple(R !r):
+    print(f"simple {r.name}")
+
+# Case 2: conditional consume — drop on the no-consume branch only.
+void conditional(R !r, bool yes):
+    if yes:
+        consume(!r)
+    print(f"cond-done {yes}")
+
+# Case 3: chained transfer — pass !r through one layer of indirection.
+# Drop must fire in `inner` (the chain end), not at `outer`.
+void inner(R !r):
+    print(f"inner {r.name}")
+
+void outer(R !r):
+    inner(!r)
+    print("outer-done")
+
+# Case 4: early-return — function returns before any transfer. Drop at the
+# return-edge, not the function-exit-edge (must work for both).
+bool early(R !r, bool short):
+    if short:
+        print(f"early-short {r.name}")
+        return false
+    print(f"early-full {r.name}")
+    return true
+
+void main():
+    R r1 = R("p1")
+    simple(!r1)
+    print("---")
+
+    R r2 = R("p2")
+    conditional(!r2, true)
+    print("---")
+
+    R r3 = R("p3")
+    conditional(!r3, false)
+    print("---")
+
+    R r4 = R("p4")
+    outer(!r4)
+    print("---")
+
+    R r5 = R("p5")
+    bool b1 = early(!r5, true)
+    print(f"early-1 {b1}")
+    print("---")
+
+    R r6 = R("p6")
+    bool b2 = early(!r6, false)
+    print(f"early-2 {b2}")

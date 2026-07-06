@@ -1,0 +1,36 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_early_return.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "drop alpha\na=1\nusing alpha\ndrop alpha\nb=2\n"
+#!end
+# Early return after a resource is initialized — drop must fire on the
+# return path, not just at the bottom of the function.
+#
+# This exercises a path through the drop-elaboration dataflow that the
+# existing drop_*.gg fixtures don't: the slot is unconditionally
+# Initialized before the early return; the drop guard sits on the
+# return edge.
+
+struct R:
+    String name
+
+equip R with Drop:
+    void drop(!self):
+        String n = self.name
+        print(f"drop {n}")
+
+int compute(bool early):
+    R r = R("alpha")
+    if early:
+        return 1
+    print(f"using {r.name}")
+    return 2
+
+void main():
+    int a = compute(true)
+    print(f"a={a}")
+    int b = compute(false)
+    print(f"b={b}")

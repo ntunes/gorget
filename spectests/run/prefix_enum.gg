@@ -1,0 +1,52 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/prefix_enum.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "Call name=frobnicate len=2\n10\n20\nCallExtern name=syscall len=1\n99\n"
+#!end
+# Both-backend parity guard for the LLVM union-payload field-offset bug.
+#
+# The FieldPtr enum-payload offset loop grouped a variant's payload fields
+# by `f.0.starts_with(prefix)`. For an enum whose variant name is a strict
+# PREFIX of another (here `Call` ⊂ `CallExtern`, mirroring the self-host
+# GIR's `GICall`/`GICallExtern`, `GIDeref`/`GIDerefStore`), the shorter
+# variant's payload offsets wrongly counted the longer variant's fields too,
+# so payload reads/writes landed at the wrong byte offsets -> stack smash ->
+# corrupted String/Vector headers -> "allocation failed"/SIGSEGV. The fix
+# groups by EXACT variant-name equality, mirroring the C backend.
+#
+# Standalone user enums largely self-mask the corruption (init and extract
+# use the SAME offset, and allocation slack absorbs the overrun), so the
+# load-bearing regression guard is `self_host_no_unnamed_collection_struct`,
+# which runs the LLVM-COMPILED self-host driver (whose own dense GIR enum
+# DOES bite) on tensor_basic/ecs_basics/type_alias_struct_ctor. This fixture
+# is the small both-backend parity smoke-test for the prefix-named-variant
+# codegen path: C and LLVM must agree.
+
+enum Op:
+    Call(String, Vector[int])
+    CallExtern(String, Vector[int])
+
+void describe(Op op):
+    match op:
+        case Call(name, args):
+            print(f"Call name={name} len={args.len()}")
+            print(args.get(0).unwrap())
+            print(args.get(1).unwrap())
+        case CallExtern(name, args):
+            print(f"CallExtern name={name} len={args.len()}")
+            print(args.get(0).unwrap())
+
+void main():
+    Vector[int] xs = Vector[int]()
+    xs.push(10)
+    xs.push(20)
+    Op a = Call("frobnicate", xs)
+    describe(a)
+
+    Vector[int] ys = Vector[int]()
+    ys.push(99)
+    Op b = CallExtern("syscall", ys)
+    describe(b)

@@ -1,0 +1,22 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generics.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "30\n99\n"
+#!end
+struct Pair[A, B]:
+    A first
+    B second
+
+int identity(int x): x
+
+void main():
+    Pair[int, int] p = Pair[int, int](10, 20)
+    int a = p.first
+    int b = p.second
+    int sum = a + b
+    print(f"{sum}")
+    int v = identity(99)
+    print(f"{v}")

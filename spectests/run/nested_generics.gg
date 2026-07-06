@@ -1,0 +1,52 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/nested_generics.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "2\n1\n2\n3\n4\n10\n2\n2\n2\n4\n"
+#!end
+from std.collections import Vector, Dict
+
+void main():
+    # Vector[Vector[int]] — nested collections
+    Vector[Vector[int]] grid = Vector[Vector[int]]()
+    Vector[int] row1 = Vector[int]()
+    row1.push(1)
+    row1.push(2)
+    Vector[int] row2 = Vector[int]()
+    row2.push(3)
+    row2.push(4)
+    grid.push(row1)
+    grid.push(row2)
+    print(f"{grid.len()}")
+    auto first_row = grid.get(0).unwrap()
+    print(f"{first_row.get(0).unwrap()}")
+    print(f"{first_row.get(1).unwrap()}")
+    auto second_row = grid.get(1).unwrap()
+    print(f"{second_row.get(0).unwrap()}")
+    print(f"{second_row.get(1).unwrap()}")
+
+    # Option[Vector[int]] — Option wrapping a collection
+    Vector[int] nums = Vector[int]()
+    nums.push(10)
+    nums.push(20)
+    Option[Vector[int]] some_vec = Some(nums)
+    Vector[int] unwrapped = some_vec.unwrap()
+    print(f"{unwrapped.get(0).unwrap()}")
+    print(f"{unwrapped.len()}")
+
+    # Dict[String, Vector[int]] — Dict with collection values
+    Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
+    Vector[int] evens = Vector[int]()
+    evens.push(2)
+    evens.push(4)
+    groups.put("evens", evens)
+    Vector[int] odds = Vector[int]()
+    odds.push(1)
+    odds.push(3)
+    groups.put("odds", odds)
+    print(f"{groups.len()}")
+    Vector[int] got_evens = groups.get("evens").unwrap()
+    print(f"{got_evens.get(0).unwrap()}")
+    print(f"{got_evens.get(1).unwrap()}")

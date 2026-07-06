@@ -1,0 +1,23 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/vector_callable_two_locals.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "1\n2\n"
+#!end
+# Two Callable[Sig] locals declared from the same Vector source — exercises the
+# IR closure-call dispatch lookup. Before the fix, the second declaration's type
+# was cached as Named("Callable__GorgetClosure") via resolve_inner_type's
+# Option__Ref__Callable__… unwrap path, instead of resolving fresh to FnPtr.
+# That caused the f2() call site to fall through to a regular function call by
+# name (`call @f2`), tripping the IR validator with "undefined function @f2".
+
+void main():
+    Vector[Callable[int()]] fns = []
+    fns.push((): 1)
+    fns.push((): 2)
+    Callable[int()] f1 = fns.get(0).unwrap().clone()
+    Callable[int()] f2 = fns.get(1).unwrap().clone()
+    print(f1())
+    print(f2())

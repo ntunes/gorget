@@ -1,0 +1,16 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/recursion_fibonacci.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "0\n1\n1\n2\n3\n5\n8\n13\n21\n34\n"
+#!end
+int fib(int n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+void main():
+    for i in 0..10:
+        print(fib(i))

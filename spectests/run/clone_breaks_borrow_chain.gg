@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/clone_breaks_borrow_chain.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "20\n"
+#!end
+# `.clone()` on a borrowed value (e.g. `vec.get(i).unwrap()`) produces a
+# fresh independently-allocated copy. Returning the cloned local should be
+# allowed — its env is its own malloc, not a borrow of the source.
+#
+# Before the fix, the borrow checker propagated the receiver chain's
+# origin through `.clone()` as a passthrough, so `return f` flagged
+# `f borrows from vec which will be dropped`. The runtime path
+# (`gorget_closure_clone_to_owned`) already produced an owned result —
+# only the static analysis lagged.
+
+Callable[int(int)] pick(Vector[Callable[int(int)]] !fns, int idx):
+    Callable[int(int)] f = fns.get(idx).unwrap().clone()
+    return f
+
+void main():
+    Vector[Callable[int(int)]] fns = []
+    fns.push((int x): x + 1)
+    fns.push((int x): x * 2)
+    Callable[int(int)] g = pick(!fns, 1)
+    print(g(10))

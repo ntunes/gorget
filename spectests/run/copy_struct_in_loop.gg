@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/copy_struct_in_loop.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "35\n"
+#!end
+struct Pair:
+    int a
+    int b
+
+int sum(Pair p):
+    return p.a + p.b
+
+void main():
+    Pair p = Pair(3, 4)
+    int total = 0
+    for i in 0..5:
+        total = total + sum(p)
+    print(total)

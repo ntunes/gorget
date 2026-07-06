@@ -1,0 +1,34 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_conditional_branches.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "sent: original (pri=5)\ndone\nredirect: redirected\ndone\nskip: original\ndone\n"
+#!end
+# Conditional move across multiple branches — tests MaybeInitialized
+# with more complex control flow than drop_flag.gg.
+
+struct Message:
+    String text
+    int priority
+
+void send(Message !msg):
+    print(f"sent: {msg.text} (pri={msg.priority})")
+
+void process(bool should_send, bool should_redirect):
+    Message msg = Message("original", 5)
+    if should_send:
+        send(!msg)
+    elif should_redirect:
+        msg = Message("redirected", 3)
+        print(f"redirect: {msg.text}")
+    else:
+        print(f"skip: {msg.text}")
+    # scope exit: msg is MaybeInitialized (moved on first branch only)
+    print("done")
+
+void main():
+    process(true, false)
+    process(false, true)
+    process(false, false)

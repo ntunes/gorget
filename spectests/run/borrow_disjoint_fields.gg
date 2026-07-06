@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_disjoint_fields.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "10\n20\n30\n20\ndone\n"
+#!end
+# Test borrowing different struct fields independently
+struct Pair:
+    int x
+    int y
+
+void main():
+    Pair p = Pair(10, 20)
+
+    # Access different fields — no conflict
+    int a = p.x
+    int b = p.y
+    print(f"{a}")
+    print(f"{b}")
+
+    # Use both fields in expressions
+    int sum = p.x + p.y
+    print(f"{sum}")
+
+    # Use field multiple times
+    int doubled = p.x + p.x
+    print(f"{doubled}")
+
+    print("done")

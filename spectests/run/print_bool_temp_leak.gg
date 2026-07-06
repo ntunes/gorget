@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/print_bool_temp_leak.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "true\nfalse\nfalse\n"
+#!end
+# Print-temp leak class, bool-print shape: `print(b)` synthesizes a String
+# temp at the LIR layer (`gorget_bool_to_str` → `gorget_string_adopt`),
+# below GIR drop registration — the printf-like call emitter must free it
+# right after the consuming call (`printf_str_temps` drain).
+void main():
+    bool t = true
+    bool f = false
+    print(t)
+    print(f)
+    print(1 > 2)

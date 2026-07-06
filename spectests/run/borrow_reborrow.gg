@@ -1,0 +1,32 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_reborrow.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n3\n3\n4\n5\ndone\n"
+#!end
+# Test that reborrowing works: taking a borrow of an already-borrowed value
+void read_len(Vector[int] v):
+    print(f"{v.len()}")
+
+void modify(Vector[int] &v):
+    v.push(99)
+
+void main():
+    Vector[int] v = [1, 2, 3]
+
+    # borrow, then borrow again — should be fine
+    read_len(v)
+    read_len(v)
+    read_len(v)
+
+    # mutable borrow, then immutable borrow — sequential is fine
+    modify(&v)
+    read_len(v)
+
+    # mutable borrow again
+    modify(&v)
+    read_len(v)
+
+    print("done")

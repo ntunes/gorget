@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/enum_variant_clone_loop.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "x\nxx\nxxx\n"
+#!end
+enum Segment:
+    Literal(String)
+    Interp(String)
+
+void main():
+    Vector[Segment] segments = []
+    String current = ""
+    int i = 0
+    while i < 3:
+        current = current + "x"
+        segments.push(Segment.Literal(current))
+        i = i + 1
+    int j = 0
+    while j < segments.len():
+        Segment seg = segments.get(j).unwrap()
+        match seg:
+            case Literal(s):
+                print(s)
+            case Interp(s):
+                print(s)
+        j = j + 1

@@ -1,0 +1,51 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_typearg_well_typed.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "ok: 7\n1\n1:hello\n"
+#!end
+# Companion to the *_mismatch_error fixtures: well-typed forms of the same
+# patterns must continue to compile and run correctly. Guards against an
+# overzealous fix that rejects valid generic instantiations, AND verifies
+# that BOTH explicit-targs and inferred-targs forms reach codegen and run.
+
+enum AppError:
+    NotFound
+    BadInput
+
+Result[T, E] passthrough[T, E](Result[T, E] r):
+    return r
+
+Result[int, AppError] producer():
+    return Ok(7)
+
+Vector[T] wrap_one[T](T x):
+    Vector[T] v = []
+    v.push(x)
+    return v
+
+struct Pair[A, B]:
+    A first
+    B second
+
+Pair[A, B] make_pair[A, B](A a, B b):
+    return Pair[A, B](a, b)
+
+void main():
+    # Result[int, AppError] — inferred from arg + LHS context.
+    Result[int, AppError] r = passthrough(producer())
+    match r:
+        case Ok(v):
+            print(f"ok: {v}")
+        case Error(_e):
+            print("err")
+
+    # Vector[int] — inferred from arg.
+    Vector[int] v = wrap_one(42)
+    print(v.len())
+
+    # Pair[int, String] — inferred from args.
+    Pair[int, String] p = make_pair(1, "hello")
+    print(f"{p.first}:{p.second}")

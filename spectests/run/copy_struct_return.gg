@@ -1,0 +1,25 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/copy_struct_return.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "127\n0\n127\n255\n"
+#!end
+struct Color:
+    int r
+    int g
+    int b
+
+Color mix(Color a, Color b):
+    return Color((a.r + b.r) / 2, (a.g + b.g) / 2, (a.b + b.b) / 2)
+
+void main():
+    Color red = Color(255, 0, 0)
+    Color blue = Color(0, 0, 255)
+    Color purple = mix(red, blue)
+    print(purple.r)
+    print(purple.g)
+    print(purple.b)
+    Color also_red = mix(red, red)
+    print(also_red.r)

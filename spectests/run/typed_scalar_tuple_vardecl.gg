@@ -1,0 +1,37 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/typed_scalar_tuple_vardecl.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "5\n7\n1\n2\n3\ntrue\n99\n7\nhi\n1\n9\n"
+#!end
+# Regression: a typed VarDecl-init for an all-scalar (or scalar-first) tuple
+# must register the `Tuple__…` TypeDef so the declared local is tuple-typed,
+# not `unit`. Previously `(int, int) t = (5, 7)` declared `t` as unit, the
+# `t = copy <tuple temp>` memcpy read garbage, and `t.0`/`t.1` printed junk.
+# The `auto`/`return`/Vector-first forms already worked; this covers the
+# typed-VarDecl-init path that diverged.
+
+void main():
+    # all-scalar pair
+    (int, int) a = (5, 7)
+    print(a.0)
+    print(a.1)
+    # all-scalar triple
+    (int, int, int) b = (1, 2, 3)
+    print(b.0)
+    print(b.1)
+    print(b.2)
+    # bool-first
+    (bool, int) c = (true, 99)
+    print(c.0)
+    print(c.1)
+    # scalar-first with a resource second element
+    (int, String) d = (7, "hi")
+    print(d.0)
+    print(d.1)
+    # resource-first (already worked; guards against regression)
+    (Vector[int], int) e = ([1], 9)
+    print(e.0.len())
+    print(e.1)

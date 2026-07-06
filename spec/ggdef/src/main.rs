@@ -12,9 +12,10 @@
 //!   0   Value          101 Trap          102 IllFormed      103 FuelExhausted
 //!   2   usage / frontend (parse or elaboration) error — NOT an outcome.
 
+use std::path::Path;
 use std::process::ExitCode;
 
-use ggdef::{gen_frontmatter, run_source, FrontendError, Outcome, DEFAULT_FUEL};
+use ggdef::{gen_frontmatter, migrate, run_source, FrontendError, Outcome, DEFAULT_FUEL};
 
 const EXIT_USAGE: u8 = 2;
 
@@ -24,8 +25,30 @@ fn main() -> ExitCode {
         (Some("run"), Some(file)) => cmd(file, false),
         (Some("trace"), Some(file)) => cmd(file, true),
         (Some("gen"), Some(file)) => cmd_gen(file),
+        // `migrate` walks the corpus itself — it takes no file argument.
+        (Some("migrate"), _) => cmd_migrate(),
         _ => {
-            eprintln!("usage: ggdef run|trace|gen <file.gg>");
+            eprintln!("usage: ggdef run|trace|gen <file.gg> | migrate");
+            ExitCode::from(EXIT_USAGE)
+        }
+    }
+}
+
+/// `ggdef migrate`: populate `spectests/run/` from the ggdef-adjudicated AGREE
+/// set (D1). Expectations flow FROM the definition (RFC §4) via `gen`.
+fn cmd_migrate() -> ExitCode {
+    // The workspace root, relative to this crate's manifest (spec/ggdef).
+    let ws_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    match migrate(&ws_root) {
+        Ok(report) => {
+            println!("ggdef migrate: wrote {} fixture(s) into spectests/run/", report.migrated.len());
+            for (verdict, n) in &report.skipped {
+                println!("  skipped {verdict}: {n}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("ggdef migrate: {e}");
             ExitCode::from(EXIT_USAGE)
         }
     }

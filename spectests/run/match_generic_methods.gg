@@ -1,0 +1,19 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/match_generic_methods.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "2\n10\n"
+#!end
+void main():
+    Vector[int] nums = Vector[int]()
+    nums.push(10)
+    nums.push(20)
+    Option[Vector[int]] opt = Some(nums)
+    match opt:
+        case Some(v):
+            print(v.len())
+            print(v.get(0).unwrap())
+        else:
+            print("none")

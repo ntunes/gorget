@@ -1,0 +1,15 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/shadowing_nested.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "1\n2\n1\n"
+#!end
+void main():
+    int x = 1
+    print(x)
+    if true:
+        int x = 2
+        print(x)
+    print(x)

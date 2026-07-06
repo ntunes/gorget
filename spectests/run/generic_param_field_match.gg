@@ -1,0 +1,48 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_param_field_match.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42\n105\n-1\n"
+#!end
+# R37-T2A (Strategy 2B): a `match` on a GENERIC-PARAM field of a generic struct
+# used to FALSE-REJECT with "missing return". `kind` has type `T` (the struct's
+# generic param); at `GNode[Kind] g`, `T` = the `Kind` enum. R36-D session-1 left
+# generic-param fields typed `error_id`, so `match g.kind` scrutinized `<error>`,
+# the exhaustiveness check silently bailed, and definite-return concluded the
+# total match could fall through -> false "missing return".
+#
+# Strategy 2B substitutes `T` = Kind into the field's AST type, so `g.kind` types
+# to the `Kind` enum, the match is seen as exhaustive over its three variants, and
+# the false "missing return" is gone.
+#
+# DIRECT construction (`GNode[Kind] g = GNode[Kind](...)`), NOT a Vector/array
+# literal: the array-literal shape hits a separate self-host lowerer discovery gap
+# (`discover_generic_calls_expr` missing `EArrayLiteral`); direct ctors are
+# discovered correctly, so this MATCHes the Rust-gg oracle in runtime_diff.
+enum Kind:
+    Value()
+    Next()
+    Halt()
+
+struct GNode[T]:
+    T kind         # generic-param field T (here instantiated as the Kind enum)
+    int payload
+
+int classify(GNode[Kind] g):
+    match g.kind:
+        case Kind.Value():
+            return g.payload
+        case Kind.Next():
+            return g.payload + 100
+        case Kind.Halt():
+            return -1
+
+void main():
+    GNode[Kind] a = GNode[Kind](Kind.Value(), 42)
+    GNode[Kind] b = GNode[Kind](Kind.Next(), 5)
+    GNode[Kind] c = GNode[Kind](Kind.Halt(), 0)
+    print(classify(a))
+    print(classify(b))
+    print(classify(c))

@@ -1,0 +1,47 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/dict_value_struct_named_v.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "a=7 tag=alpha\nb=42 tag=beta\nlen=2\n"
+#!end
+# Round-32: a user `struct V` stored in a container must monomorphize and
+# emit like any other concrete struct.
+#
+# Two retired name-shape heuristics collided with 1-2-letter user type
+# names in container monos:
+#   - the LIR placeholder probe (`ends_with("__V")` ⇒ unmonomorphized
+#     template leak) misread `Dict__GorgetString__V` as a template leak,
+#     so its runtime alias was never registered and the mono's put/get
+#     symbols stayed unmapped (CC-FAIL);
+#   - the discovery heuristic (`name.len() <= 2` ⇒ type variable) skipped
+#     the instance outright.
+# The meaning decision now reads the typed decl registry (a declared
+# `struct V` is a concrete type) and declared-param membership.
+#
+# The String field is deliberate: it makes V resource-bearing, so the
+# mono's drop/clone paths are exercised too, not just the field layout.
+
+from std.collections import Dict
+
+struct V:
+    int n
+    String tag
+
+int main():
+    Dict[String, V] d = Dict[String, V]()
+    d.put("a", V(7, "alpha"))
+    d.put("b", V(42, "beta"))
+    match d.get("a"):
+        case Some(va):
+            print(f"a={va.n} tag={va.tag}")
+        case None:
+            print("miss a")
+    match d.get("b"):
+        case Some(vb):
+            print(f"b={vb.n} tag={vb.tag}")
+        case None:
+            print("miss b")
+    print(f"len={d.len()}")
+    return 0

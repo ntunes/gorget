@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_fn_arg_last_use.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "60\n"
+#!end
+struct Collector:
+    Vector[int] items
+
+equip Collector:
+    int total(self):
+        int sum = 0
+        int i = 0
+        while i < self.items.len():
+            sum = sum + self.items.get(i).unwrap()
+            i = i + 1
+        return sum
+
+int compute_total(Collector !c):
+    return c.total()
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    Collector c = Collector(v)
+    int t = compute_total(!c)
+    print(t)

@@ -1,0 +1,33 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/control_nested_match.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "zero\none\nother number\nempty string\nstring: hi\n"
+#!end
+enum Outer:
+    A(int)
+    B(String)
+
+String classify(Outer o):
+    match o:
+        case A(n):
+            match n:
+                case 0:
+                    return "zero"
+                case 1:
+                    return "one"
+                else:
+                    return "other number"
+        case B(s):
+            if s == "":
+                return "empty string"
+            return f"string: {s}"
+
+void main():
+    print(classify(Outer.A(0)))
+    print(classify(Outer.A(1)))
+    print(classify(Outer.A(99)))
+    print(classify(Outer.B("")))
+    print(classify(Outer.B("hi")))

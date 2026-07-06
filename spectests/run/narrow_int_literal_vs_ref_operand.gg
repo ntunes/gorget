@@ -1,0 +1,51 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/narrow_int_literal_vs_ref_operand.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "local: seven\nplain: seven\ninline: seven\ninline: zero\n"
+#!end
+# Regression fixture for the int-literal-vs-Ref-operand narrowing bug.
+#
+# An int literal must narrow to a `uint8` operand in a comparison even when that
+# operand resolves to a Ref/Owned-wrapped integer (e.g. an inline
+# `Vector[uint8].get(i).unwrap()` chain, which types as `Ref(uint8)`), not only
+# when the operand is a bare `Primitive(uint8)` (a declared local / plain-fn return).
+#
+# The narrowing gate in src/semantic/typecheck.rs (BinaryOp arm) historically matched
+# only bare `Primitive`, so the inline-chain form (case 3 below) failed to type-check
+# with "cannot implicitly convert `int` to `uint8`". Fix = peel Ref/Owned before the
+# Primitive check (mirror the cast auto-deref at typecheck.rs:~2667). See
+# docs/plans/uint8_literal_narrow_ref_operand.md. Surfaced in gorget-arena
+# (md3.gg:32, bsp.gg:171/403) after c462cffa stopped masking imported-module errors.
+#
+# All three narrowing forms must type-check, AND the inline-chain comparison branch
+# must actually be taken at runtime (so this guards both the type-check and the value).
+
+uint8 plain_byte():
+    return 7 as uint8
+
+int main():
+    Vector[uint8] data = Vector[uint8]()
+    data.push(7 as uint8)
+    data.push(0 as uint8)
+    int i0 = 0
+    int i1 = 1
+
+    # (1) declared uint8 local vs literal — narrows today
+    uint8 b = data.get(i0).unwrap()
+    if b == 7:
+        print("local: seven")
+
+    # (2) plain-fn uint8 return vs literal — narrows today
+    if plain_byte() == 7:
+        print("plain: seven")
+
+    # (3) inline generic .get().unwrap() result (Ref(uint8)) vs literal — THE BUG
+    if data.get(i0).unwrap() == 7:
+        print("inline: seven")
+    if data.get(i1).unwrap() == 0:
+        print("inline: zero")
+
+    return 0

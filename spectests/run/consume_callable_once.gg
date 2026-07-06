@@ -1,0 +1,22 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/consume_callable_once.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "10\n101\ndone\n"
+#!end
+int apply_once(ConsumeCallable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    # Direct call to ConsumeCallable local
+    ConsumeCallable[int(int)] doubler = !(n): n * 2
+    int r1 = doubler(5)
+    print(f"{r1}")
+
+    # Pass to function taking ConsumeCallable param (single call inside)
+    int r2 = apply_once((n): n + 100, 1)
+    print(f"{r2}")
+
+    print("done")

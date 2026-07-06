@@ -1,0 +1,23 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/collection_types.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "alice\nbob\n30\n"
+#!end
+from std.collections import Vector, Dict
+
+void main():
+    Vector[String] names = Vector[String]()
+    names.push("alice")
+    names.push("bob")
+    String first = names.get(0).unwrap()
+    print(first)
+    String popped = names.pop().unwrap()
+    print(popped)
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("alice", 30)
+    ages.put("bob", 25)
+    int age = ages.get("alice").unwrap()
+    print(f"{age}")

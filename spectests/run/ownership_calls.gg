@@ -1,0 +1,30 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/ownership_calls.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42\nmoved\nborrowed\ndone\n"
+#!end
+void consume(String !s):
+    print(f"{s}")
+
+void borrow_it(String &s):
+    print(f"{s}")
+
+void look(int x):
+    print(f"{x}")
+
+void main():
+    # Bare borrow of copy type
+    int n = 42
+    look(n)
+
+    # Move ownership
+    String a = "moved"
+    consume(!a)
+
+    # Mutable borrow
+    String b = "borrowed"
+    borrow_it(&b)
+    print("done")

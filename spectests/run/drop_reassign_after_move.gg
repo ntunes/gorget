@@ -1,0 +1,30 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_reassign_after_move.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello\nworld\nfoo\nbar\n"
+#!end
+# Reassignment after move in a loop — the pattern that broke V5.
+# tokens.push(current) moves current, then current = "" reassigns it.
+# The inline reassignment drop must check is_moved() to avoid double-free.
+
+Vector[String] tokenize(String input):
+    Vector[String] tokens = Vector[String]()
+    String current = ""
+    for ch in input:
+        if ch == " ":
+            if current.len() > 0:
+                tokens.push(current)
+                current = ""
+        else:
+            current = current + ch
+    if current.len() > 0:
+        tokens.push(current)
+    return tokens
+
+void main():
+    Vector[String] tokens = tokenize("hello world foo bar")
+    for t in tokens:
+        print(t)

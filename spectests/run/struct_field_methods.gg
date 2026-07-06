@@ -1,0 +1,32 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/struct_field_methods.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n10\n20\n30\n"
+#!end
+from std.collections import Vector
+
+struct NumberList:
+    Vector[int] values
+
+equip NumberList:
+    void add(&self, int x):
+        self.values.push(x)
+
+    int length(self):
+        return self.values.len()
+
+    int get(self, int i):
+        return self.values[i]
+
+void main():
+    NumberList list = NumberList(Vector[int]())
+    list.add(10)
+    list.add(20)
+    list.add(30)
+    print(list.length())
+    print(list.get(0))
+    print(list.get(1))
+    print(list.get(2))

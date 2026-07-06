@@ -1,0 +1,30 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/snag43_throws_call_inline_arg.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "text: 'hello'\n"
+#!end
+from std.collections import Vector
+
+struct T:
+    String text
+
+struct E:
+    String msg
+
+T sub() throws E:
+    return T("hello")
+
+Vector[T] outer() throws E:
+    Vector[T] v = Vector[T]()
+    v.push(sub())
+    return v
+
+void main():
+    match outer():
+        case Ok(ts):
+            print(f"text: '{ts.get(0).unwrap().text}'")
+        case Error(_):
+            print("err")

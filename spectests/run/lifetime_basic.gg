@@ -1,0 +1,45 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/lifetime_basic.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello\nworld\na\nchained\nhello\nworld\nforwarded\nlive_a\nall lifetime checks passed\n"
+#!end
+# Lifetime inference — positive tests (should compile and run without errors)
+
+# Returning a string literal is always safe (Static origin)
+String get_greeting(): "hello"
+
+# Returning a parameter directly is safe (Param origin)
+String identity(String s): s
+
+# Chaining through multiple functions — origin propagates
+String first(String a, String b): a
+
+String chain(String s): identity(s)
+
+# Using String views from string literals — always safe
+void use_literal_views():
+    String a = "hello"
+    String b = "world"
+    print(a)
+    print(b)
+
+# String from param forwarded through a local
+String forward(String s):
+    String local = s
+    return local
+
+# Explicit parameter forwarding
+String first_live(String a, String b): a
+
+void main():
+    print(get_greeting())
+    print(identity("world"))
+    print(first("a", "b"))
+    print(chain("chained"))
+    use_literal_views()
+    print(forward("forwarded"))
+    print(first_live("live_a", "live_b"))
+    print("all lifetime checks passed")

@@ -1,0 +1,38 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/bare_param_immutable.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3,4\n50\n3,4 50\n"
+#!end
+# Tests that bare struct params are read-only: field reads, passing to other
+# bare-param functions, and printing all work without mutation.
+
+struct Point:
+    int x
+    int y
+
+struct Rect:
+    Point origin
+    int width
+    int height
+
+int area(Rect r):
+    return r.width * r.height
+
+String describe(Point p):
+    return f"{p.x},{p.y}"
+
+String rect_info(Rect r):
+    String origin = describe(r.origin)
+    int a = area(r)
+    return f"{origin} {a}"
+
+void main():
+    Point p1 = Point(x=3, y=4)
+    print(describe(p1))
+    Point p2 = Point(x=3, y=4)
+    Rect r = Rect(origin=p2, width=10, height=5)
+    print(area(r))
+    print(rect_info(r))

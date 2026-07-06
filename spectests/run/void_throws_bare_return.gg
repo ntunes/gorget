@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/void_throws_bare_return.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "set foo on obj 1\nok path\nbare-return ok\ndone\n"
+#!end
+struct RuntimeException:
+    String msg
+
+void define_own_property(int obj_id, String key) throws RuntimeException:
+    if obj_id < 0:
+        return
+    print(f"set {key} on obj {obj_id}")
+
+void main():
+    match define_own_property(1, "foo"):
+        case Ok(_):
+            print("ok path")
+        case Error(_):
+            print("err path")
+    match define_own_property(-1, "bar"):
+        case Ok(_):
+            print("bare-return ok")
+        case Error(_):
+            print("bare-return err")
+    print("done")

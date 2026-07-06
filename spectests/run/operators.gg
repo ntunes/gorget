@@ -1,0 +1,65 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/operators.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n1\n-5\n-5\nfalse\ntrue\n-4\n-21\n-10\n7\n-10\nfalse\ntrue\n3\n2\n"
+#!end
+void main():
+    # integer division
+    int d = 10 / 3
+    print(f"{d}")
+
+    # modulo
+    int m = 10 % 3
+    print(f"{m}")
+
+    # unary negation
+    int neg = -5
+    print(f"{neg}")
+
+    int neg2 = -(3 + 2)
+    print(f"{neg2}")
+
+    # logical not
+    bool a = not true
+    print(f"{a}")
+
+    bool b = not (5 > 10)
+    print(f"{b}")
+
+    # combined precedence
+    int x = 7
+    int y = 3
+    int result = -x + y
+    print(f"{result}")
+
+    # -x * y should be (-x) * y, not -(x * y)
+    int p1 = -x * y
+    print(f"{p1}")
+
+    # -x - y should be (-x) - y
+    int p2 = -x - y
+    print(f"{p2}")
+
+    # double negation
+    int p3 = - -x
+    print(f"{p3}")
+
+    # negation with parenthesized addition (unchanged)
+    int p4 = -(x + y)
+    print(f"{p4}")
+
+    # not binds tighter than and: not false and false = (not false) and false = false
+    bool c1 = not false and false
+    print(f"{c1}")
+
+    # not binds tighter than or: not true or true = (not true) or true = true
+    bool c2 = not true or true
+    print(f"{c2}")
+
+    int q = 17 / 5
+    int r = 17 % 5
+    print(f"{q}")
+    print(f"{r}")

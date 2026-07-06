@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/struct_string_coerce.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello\n5\nlabel\nvalue\n5\n"
+#!end
+# Test str→String coercion in struct constructors
+
+struct Holder:
+    String name
+
+struct Pair:
+    String label
+    String value
+
+void main():
+    # String literal → String field: should emit gorget_string_new()
+    Holder h = Holder("hello")
+    print(h.name)
+    print(h.name.len())
+
+    # Mixed: String field stays String, String field gets coerced
+    Pair p = Pair("label", "value")
+    print(p.label)
+    print(p.value)
+    print(p.value.len())

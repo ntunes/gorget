@@ -1,0 +1,47 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/ownership_keywords.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42\n42\n1\n2\nmoved\nborrowed\n99\ndone\n"
+#!end
+struct Point:
+    int x
+    int y
+
+void consume(String !s):
+    print(f"{s}")
+
+void borrow_it(String &s):
+    print(f"{s}")
+
+void look(int x):
+    print(f"{x}")
+
+void main():
+    # Primitives are Copy — no move needed
+    int a = 42
+    int b = a
+    print(f"{a}")
+    print(f"{b}")
+
+    # Structs use move semantics with `!` sigil
+    Point p = Point(1, 2)
+    Point q = !p
+    print(f"{q.x}")
+    print(f"{q.y}")
+
+    # Move ownership with sigil
+    String s1 = "moved"
+    consume(!s1)
+
+    # Mutable borrow with sigil
+    String s2 = "borrowed"
+    borrow_it(&s2)
+
+    # Bare borrow of copy type
+    int n = 99
+    look(n)
+
+    print("done")

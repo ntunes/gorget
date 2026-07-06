@@ -1,0 +1,52 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/else_if.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "positive\nnegative\nzero\nfirst\nsecond\nthird\nother\none\ntwo\nthree\nfour\nbig\n"
+#!end
+void classify(int x):
+    if x > 0:
+        print("positive")
+    else if x < 0:
+        print("negative")
+    else:
+        print("zero")
+
+void multi_branch(String s):
+    if s == "a":
+        print("first")
+    else if s == "b":
+        print("second")
+    else if s == "c":
+        print("third")
+    else:
+        print("other")
+
+# mixed elif and else if
+void mixed(int x):
+    if x == 1:
+        print("one")
+    elif x == 2:
+        print("two")
+    else if x == 3:
+        print("three")
+    elif x == 4:
+        print("four")
+    else:
+        print("big")
+
+void main():
+    classify(5)
+    classify(-3)
+    classify(0)
+    multi_branch("a")
+    multi_branch("b")
+    multi_branch("c")
+    multi_branch("d")
+    mixed(1)
+    mixed(2)
+    mixed(3)
+    mixed(4)
+    mixed(99)

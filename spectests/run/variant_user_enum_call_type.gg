@@ -1,0 +1,33 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/variant_user_enum_call_type.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "red\nblue\n"
+#!end
+# User-defined-enum variant constructor: `auto c = Color.Red()`.
+#
+# Pre-fix: typed as `Defined(Red_def_id)` (the *variant*'s own DefId).
+# Methods on the parent enum couldn't resolve; downstream consumers
+# reading the type saw the variant DefId, not the parent enum's.
+#
+# Post-fix: types as `Defined(Color_def_id)` — the parent enum.
+# `match c` against Color's variants type-checks; trait/method
+# resolution on `c` dispatches to the parent enum's impls.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+String name_of(Color c):
+    return match c:
+        case Color.Red(): "red"
+        case Color.Green(): "green"
+        case Color.Blue(): "blue"
+
+void main():
+    auto c1 = Color.Red()
+    auto c2 = Color.Blue()
+    print(name_of(c1))
+    print(name_of(c2))

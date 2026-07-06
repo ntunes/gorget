@@ -1,0 +1,10 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/hello.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "Hello, World!\n"
+#!end
+void main():
+    print("Hello, World!")

@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/print_trim_view_temp.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "padded\n[padded]\n10\n"
+#!end
+# Print-temp leak class, view-source shape: `s.trim()` returns a cap=0
+# VIEW into `s` — the printf materialization copies the 32-byte view
+# struct (no heap), and `gorget_string_free` no-ops on cap=0. Pins that
+# registering print temps unconditionally is safe for views: no
+# double-free of the source's heap, output unchanged.
+void main():
+    String s = "  padded  "
+    print(s.trim())
+    print(f"[{s.trim()}]")
+    print(s.len())

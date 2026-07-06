@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/enum_with_collections.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "numbers: 3\ntext: hello\nempty\n"
+#!end
+# Enum variants carrying collection types
+enum Data:
+    Numbers(Vector[int])
+    Text(String)
+    Empty
+
+void describe(Data d):
+    match d:
+        case Data.Numbers(nums):
+            print(f"numbers: {nums.len()}")
+        case Data.Text(s):
+            print(f"text: {s}")
+        case Data.Empty():
+            print("empty")
+
+void main():
+    Data d1 = Data.Numbers([1, 2, 3])
+    Data d2 = Data.Text("hello")
+    Data d3 = Data.Empty()
+
+    describe(d1)
+    describe(d2)
+    describe(d3)

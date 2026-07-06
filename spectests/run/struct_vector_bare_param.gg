@@ -1,0 +1,71 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/struct_vector_bare_param.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "id=42\nlen=4\nv[0]=100\nv[1]=200\nv[2]=300\nv[3]=400\ntrailer=99\nsum=1000\ninner_id=42\ninner_v[2]=300\n"
+#!end
+# Test: accessing Vector fields inside a struct passed as a bare parameter.
+# This pattern was crashing in the arena: the struct becomes const T*,
+# auto-deref copies the whole struct, then field access reads the Vector.
+
+struct Data:
+    int id
+    Vector[int] values
+    int trailer
+
+Data make_data():
+    Vector[int] v = Vector[int]()
+    v.push(100)
+    v.push(200)
+    v.push(300)
+    v.push(400)
+    return Data(42, v, 99)
+
+int read_value(Data d, int idx):
+    return d.values.get(idx).unwrap()
+
+int read_len(Data d):
+    return d.values.len()
+
+int read_id(Data d):
+    return d.id
+
+int read_trailer(Data d):
+    return d.trailer
+
+# Nested: struct containing another struct with a Vector
+struct Outer:
+    int prefix
+    Data inner
+    int suffix
+
+int read_inner_value(Outer o, int idx):
+    return o.inner.values.get(idx).unwrap()
+
+int read_inner_id(Outer o):
+    return o.inner.id
+
+void main():
+    Data d = make_data()
+    print(f"id={read_id(d)}")
+    print(f"len={read_len(d)}")
+    print(f"v[0]={read_value(d, 0)}")
+    print(f"v[1]={read_value(d, 1)}")
+    print(f"v[2]={read_value(d, 2)}")
+    print(f"v[3]={read_value(d, 3)}")
+    print(f"trailer={read_trailer(d)}")
+
+    # Multi-access: read from the same data multiple times
+    int sum = 0
+    int i = 0
+    while i < read_len(d):
+        sum = sum + read_value(d, i)
+        i = i + 1
+    print(f"sum={sum}")
+
+    # Nested struct
+    Outer o = Outer(10, d, 20)
+    print(f"inner_id={read_inner_id(o)}")
+    print(f"inner_v[2]={read_inner_value(o, 2)}")

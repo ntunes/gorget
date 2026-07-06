@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/match_result_chain.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "got 42\nerr: bad: abc\n"
+#!end
+Result[int, String] parse(String s):
+    if s == "42":
+        return Ok(42)
+    return Error(f"bad: {s}")
+
+void main():
+    auto r1 = parse("42")
+    auto r2 = parse("abc")
+
+    match r1:
+        case Ok(v):
+            print(f"got {v}")
+        case Error(e):
+            print(f"err: {e}")
+
+    match r2:
+        case Ok(v):
+            print(f"got {v}")
+        case Error(e):
+            print(f"err: {e}")

@@ -1,0 +1,42 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/mutable_borrow_params.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "5\n8\n0\n0\n20\n10\n"
+#!end
+struct Counter:
+    int value
+    String name
+
+void increment(Counter &c, int amount):
+    c.value = c.value + amount
+
+void reset(Counter &c):
+    c.value = 0
+
+int get_value(Counter c):
+    return c.value
+
+void swap_values(Counter &a, Counter &b):
+    int tmp = a.value
+    a.value = b.value
+    b.value = tmp
+
+void main():
+    Counter c = Counter(0, "test")
+    increment(&c, 5)
+    print(c.value)
+    increment(&c, 3)
+    print(c.value)
+    reset(&c)
+    print(c.value)
+    # Immutable borrow (by value) doesn't mutate
+    print(get_value(c))
+    # Two mutable borrows
+    Counter a = Counter(10, "a")
+    Counter b = Counter(20, "b")
+    swap_values(&a, &b)
+    print(a.value)
+    print(b.value)

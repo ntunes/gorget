@@ -1,0 +1,16 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/control_nested_loops.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "15\n"
+#!end
+void main():
+    int count = 0
+    for i in 0..5:
+        for j in 0..5:
+            if j == 3:
+                break
+            count = count + 1
+    print(count)

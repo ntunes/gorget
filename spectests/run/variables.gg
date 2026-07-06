@@ -1,0 +1,19 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/variables.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "30\n20\ngorget\n"
+#!end
+void main():
+    int x = 10
+    const int y = 20
+    float pi = 3.14
+    bool flag = true
+    int sum = x + y
+    int product = x * 2
+    print(f"{sum}")
+    print(f"{product}")
+    auto name = "gorget"
+    print(f"{name}")

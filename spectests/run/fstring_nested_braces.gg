@@ -1,0 +1,37 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/fstring_nested_braces.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42\n{literal braces}\n50\nlen=5\nmsg: hello world\n10 + 20 = 30\nflag: true\n"
+#!end
+# f-string edge cases with braces and complex expressions
+void main():
+    int x = 42
+    # basic
+    print(f"{x}")
+
+    # escaped braces
+    print(f"{{literal braces}}")
+
+    # expression with operators
+    print(f"{x + 8}")
+
+    # method call in f-string
+    String s = "hello"
+    print(f"len={s.len()}")
+
+    # nested f-string in concatenation
+    String name = "world"
+    String msg = f"hello {name}"
+    print(f"msg: {msg}")
+
+    # multiple interpolations
+    int a = 10
+    int b = 20
+    print(f"{a} + {b} = {a + b}")
+
+    # bool in f-string
+    bool flag = true
+    print(f"flag: {flag}")

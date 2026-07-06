@@ -1,0 +1,34 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_short_user_type_arg.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "wrap 9\nwrap 42\n"
+#!end
+# Round-32: 1-2-letter USER type names used as generic args must be
+# treated as CONCRETE types, never as type variables.
+#
+# The retired name-shape heuristic (`name.len() <= 2` ⇒ "type variable")
+# classified `Id` in `Wrap[Id]` as an unresolved type variable, so the
+# instance was never discovered/monomorphized. Field reads then came back
+# as zeroed placeholders — this program printed `wrap 0` instead of
+# `wrap 9`, a SILENT MISCOMPILE (no error, wrong output).
+#
+# Type-variable-ness is membership in the enclosing template's DECLARED
+# type params (Rust: src/ir/lowering/generics/mod.rs type_has_generic_param;
+# self-host: lower_generics.gg has_type_variable_ctx) — `Id` is declared
+# nowhere as a param, so `Wrap[Id]` is a concrete instance.
+
+struct Wrap[T]:
+    T item
+
+struct Id:
+    int n
+
+int main():
+    Wrap[Id] w = Wrap[Id](Id(9))
+    print(f"wrap {w.item.n}")
+    Wrap[Id] w2 = Wrap[Id](Id(41))
+    print(f"wrap {w2.item.n + 1}")
+    return 0

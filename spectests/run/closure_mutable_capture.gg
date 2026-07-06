@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/closure_mutable_capture.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "15\n30\n29\n"
+#!end
+int apply_mut(MutCallable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    int base = 10
+    # Mutable callable that captures base
+    int r1 = apply_mut((int n): n + base, 5)
+    print(r1)
+    # Chained mutable calls
+    int r2 = apply_mut((int n): n * 2, r1)
+    print(r2)
+    int r3 = apply_mut((int n): n - 1, r2)
+    print(r3)

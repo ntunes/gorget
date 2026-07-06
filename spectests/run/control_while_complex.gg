@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/control_while_complex.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "9\n1\n"
+#!end
+void main():
+    int n = 1
+    int steps = 0
+    while n != 1 or steps == 0:
+        steps = steps + 1
+        if n % 2 == 0:
+            n = n / 2
+        else:
+            n = n * 3 + 1
+        if steps == 1:
+            n = 6
+    print(steps)
+    print(n)

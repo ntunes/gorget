@@ -1,0 +1,98 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/string_ownership_loop.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "word_0\nword_99\ncount: 100\ndots: 100\nfound entry_25: true\nfizzbuzz count: 9\nkey_5 = 50\nall ownership ok\n"
+#!end
+# String ownership in loops: move, scope drops, reassignment, vector interactions
+from std.collections import Vector
+
+void main():
+
+    # --- Reassign in loop (old value must be freed) ---
+    int i = 0
+    while i < 1000:
+        String s = f"value_{i}"
+        i = i + 1
+
+    # --- Move into vector, vector dropped each iteration ---
+    i = 0
+    while i < 500:
+        Vector[String] v = Vector[String]()
+        v.push(f"item_{i}_a")
+        v.push(f"item_{i}_b")
+        v.push(f"item_{i}_c")
+        # v dropped here, all strings freed
+        i = i + 1
+
+    # --- Build vector of strings, read back ---
+    Vector[String] words = Vector[String]()
+    for i in 0..100:
+        words.push(f"word_{i}")
+    # Verify first and last
+    print(words[0])
+    print(words[99])
+    print(f"count: {words.len()}")
+
+    # --- String returned from function in loop ---
+    i = 0
+    while i < 500:
+        String s = make_string(i)
+        # s dropped here
+        i = i + 1
+
+    # --- Nested scopes with string drops ---
+    i = 0
+    while i < 200:
+        String outer = f"outer_{i}"
+        if i % 2 == 0:
+            String inner = f"inner_{i}"
+            # inner dropped here
+        # outer dropped here
+        i = i + 1
+
+    # --- String concatenation in loop (intermediate drops) ---
+    String acc = ""
+    for i in 0..100:
+        acc = acc + "."
+    print(f"dots: {acc.len()}")
+
+    # --- Vector of strings built then searched ---
+    Vector[String] haystack = Vector[String]()
+    for i in 0..50:
+        haystack.push(f"entry_{i}")
+    bool found = false
+    for entry in haystack:
+        if entry == "entry_25":
+            found = true
+    print(f"found entry_25: {found}")
+
+    # --- Conditional string creation (some paths don't allocate) ---
+    Vector[String] results = Vector[String]()
+    for i in 0..20:
+        if i % 3 == 0:
+            results.push(f"fizz_{i}")
+        else:
+            if i % 5 == 0:
+                results.push(f"buzz_{i}")
+    print(f"fizzbuzz count: {results.len()}")
+
+    # --- String as dict-like key (in vector of pairs) ---
+    Vector[String] keys = Vector[String]()
+    Vector[int] vals = Vector[int]()
+    for i in 0..10:
+        keys.push(f"key_{i}")
+        vals.push(i * 10)
+    # Lookup "key_5"
+    int found_val = -1
+    for i in 0..keys.len():
+        if keys[i] == "key_5":
+            found_val = vals[i]
+    print(f"key_5 = {found_val}")
+
+    print("all ownership ok")
+
+String make_string(int n):
+    return f"generated_{n}"

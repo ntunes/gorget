@@ -1,0 +1,32 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_pair_methods.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "10\n20\nhello\nworld\ntrue\nfalse\n"
+#!end
+# Generic struct with methods
+struct Pair[T]:
+    T first
+    T second
+
+equip Pair[T]:
+    T get_first(self):
+        return self.first
+
+    T get_second(self):
+        return self.second
+
+void main():
+    Pair[int] ip = Pair[int](10, 20)
+    print(f"{ip.get_first()}")
+    print(f"{ip.get_second()}")
+
+    Pair[String] sp = Pair[String]("hello", "world")
+    print(sp.get_first())
+    print(sp.get_second())
+
+    Pair[bool] bp = Pair[bool](true, false)
+    print(f"{bp.get_first()}")
+    print(f"{bp.get_second()}")

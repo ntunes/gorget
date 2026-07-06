@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/interp_method_call.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "2\n10\n5\n"
+#!end
+from std.collections import Vector
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    print(f"{v.len()}")
+    print(f"{v.get(0).unwrap()}")
+    String s = "hello"
+    print(f"{s.len()}")

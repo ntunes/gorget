@@ -1,0 +1,49 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_match_in_loop.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "120\n"
+#!end
+# Match on enum with resource fields inside a loop.
+# V6 found a liveness bug here: the match scrutinee was falsely marked as
+# last-use, causing the extracted payload to take ownership instead of being
+# a view. On the next iteration the original had stale pointers.
+
+struct TypedData:
+    Vector[int] values
+    Vector[bool] mask
+
+enum DataCol:
+    IntData(TypedData)
+    Empty()
+
+int sum_valid(DataCol col, int iters):
+    int total = 0
+    int i = 0
+    while i < iters:
+        match col:
+            case IntData(td):
+                int j = 0
+                while j < td.values.len():
+                    if td.mask.get(j).unwrap():
+                        total = total + td.values.get(j).unwrap()
+                    j = j + 1
+            case Empty():
+                pass
+        i = i + 1
+    return total
+
+void main():
+    Vector[int] vals = Vector[int]()
+    vals.push(10)
+    vals.push(20)
+    vals.push(30)
+    Vector[bool] mask = Vector[bool]()
+    mask.push(true)
+    mask.push(false)
+    mask.push(true)
+    DataCol col = DataCol.IntData(TypedData(vals, mask))
+    # Sum 3 times — catches use-after-free on 2nd+ iteration
+    print(sum_valid(col, 3))

@@ -1,0 +1,72 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/test_while_loops.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "0\n1\n2\n3\n4\n0\n1\n2\nbroke at 3\n1\n3\n5\n7\n0,0\n0,1\n0,2\n1,0\n1,1\n1,2\n2,0\n2,1\n2,2\nand-stop: 7\nor-stop: 5\ndid not run: 0\n5\n0\n10\n20\n30\n40\n"
+#!end
+# Comprehensive while loop tests
+
+void main():
+    # 1. Basic while with counter
+    int i = 0
+    while i < 5:
+        print(i)
+        i += 1
+
+    # 2. While with break
+    int j = 0
+    while j < 100:
+        if j == 3:
+            break
+        print(j)
+        j += 1
+    print(f"broke at {j}")
+
+    # 3. While with continue (skip even numbers)
+    int k = 0
+    while k < 8:
+        k += 1
+        if k % 2 == 0:
+            continue
+        print(k)
+
+    # 4. Nested while loops
+    int outer = 0
+    while outer < 3:
+        int inner = 0
+        while inner < 3:
+            print(f"{outer},{inner}")
+            inner += 1
+        outer += 1
+
+    # 5. While with complex condition (and, or)
+    int m = 0
+    while m < 10 and m != 7:
+        m += 1
+    print(f"and-stop: {m}")
+
+    int n = 10
+    while n > 5 or n == 3:
+        n -= 1
+    print(f"or-stop: {n}")
+
+    # 6. While that does not execute (false condition)
+    int skip = 0
+    while skip > 100:
+        print("should not print")
+        skip += 1
+    print(f"did not run: {skip}")
+
+    # 7. While with mutation of collection (push to vector in loop)
+    Vector[int] nums = Vector[int]()
+    int idx = 0
+    while idx < 5:
+        nums.push(idx * 10)
+        idx += 1
+    print(nums.len())
+    int vi = 0
+    while vi < nums.len():
+        print(nums[vi])
+        vi += 1

@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/copy_struct_match.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "square\n10\nrect\n5\n"
+#!end
+struct Dims:
+    int w
+    int h
+
+String classify(Dims d):
+    if d.w == d.h:
+        return "square"
+    else:
+        return "rect"
+
+void main():
+    Dims d = Dims(10, 10)
+    String shape = classify(d)
+    print(shape)
+    print(d.w)
+    Dims d2 = Dims(3, 5)
+    print(classify(d2))
+    print(d2.h)
