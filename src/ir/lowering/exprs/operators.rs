@@ -9,15 +9,39 @@ use crate::span::Spanned;
 use super::super::context::LoweringContext;
 use super::{lower_expr, infer_operand_type_full, resolve_none_tag};
 
-/// If an operand is a CoW alias (Ptr(T) in ref_locals), emit a LoadRef to dereference it.
-/// Returns the dereferenced operand (type T), or the original if not a Ptr.
+/// If an operand is a by-ref alias, emit a LoadRef to dereference it to the
+/// underlying value. Two cases:
+///   1. a CoW alias — `Ptr(T)` in ref_locals (bare-borrow propagation);
+///   2. a `!`-move resource param slot — `MutPtr(T)` tagged `is_owning_param`.
+///
+/// Case 2 is why a `String !p` used as a binop operand must deref here. Unlike a
+/// `&`-mut-borrow param (which auto-derefs at the identifier read, per
+/// `is_param_borrow_unique`), a `!`-move resource param keeps `ownership = Owned`
+/// (so the exit-drop frees the pointee exactly once — moving it to `Borrowed`
+/// would route it through the leaky shared-mutation drop path). Its identifier
+/// read therefore yields the raw `MutPtr` slot, and the binop is the consume site
+/// that must shape it — mirroring the self-host, which detects the string by
+/// unwrapping the ptr and borrows the operand at the concat/eq call
+/// (`is_string_type_id` + `op_consume(CkCallArgBorrow)`). Without this deref a
+/// `p + "..."` operand stays `MutPtr(String)`, `is_string` (exact
+/// `== owned_string_type`) goes false, and the concat mis-lowers to integer
+/// `(void*)a + (void*)b` — which cc/llc reject. The LoadRef is a shallow
+/// borrow-read (no zero, no drop-registration), so `*p` stays owned and is
+/// dropped once at function exit — no double-free, no leak.
+///
+/// Returns the dereferenced operand (type T), or the original if not by-ref.
 fn cow_deref_if_ptr(
     ctx: &LoweringContext,
     builder: &mut FunctionBuilder,
     operand: Operand,
 ) -> Operand {
     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
-        if place.projections.is_empty() && ctx.is_ref_local(builder, place.local) {
+        let idx = place.local.0 as usize;
+        let is_owning_param_slot = idx < builder.locals.len()
+            && builder.locals[idx].is_owning_param;
+        if place.projections.is_empty()
+            && (ctx.is_ref_local(builder, place.local) || is_owning_param_slot)
+        {
             let ptr_type = builder.local_type(place.local);
             if let Some(inner) = ctx.pointee_type(ptr_type) {
                 let derefed = builder.load_ref(place.clone(), inner);

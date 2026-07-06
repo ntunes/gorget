@@ -1,0 +1,7 @@
+String f(String !p, String !q):
+    return p + q
+
+void main():
+    String a = "ab"
+    String b = "cd"
+    print(f(!a, !b))

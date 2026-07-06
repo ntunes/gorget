@@ -27,7 +27,10 @@
 //!                       cc / driver / llc stage error). A distinct verdict from
 //!                       MISMATCH: a fixture that never ran did not "disagree",
 //!                       it failed to compile. This is a first-class outcome, NOT
-//!                       an error — see the floor note on `smith_move_param_concat`.
+//!                       an error — a check-accepted program that fails at
+//!                       cc/llc is a both-backend defect the lane surfaces
+//!                       (core invariant #8), and the floor treats it as a
+//!                       non-MATCH until it is fixed.
 //!
 //! The per-fixture table is ALWAYS printed (a diagnostic). Then each lane
 //! enforces an INLINE, monotone MATCH-count floor with a fixtures-count guard,
@@ -40,16 +43,17 @@
 //!
 //!   cargo test --test spec_conformance -- --test-threads=1 --nocapture
 //!
-//! seeds C=4, LLVM=4, self-host=5. The C and LLVM lanes floor at 4 (not 5)
-//! because `smith_move_param_concat.gg` is a KNOWN, FILED both-backend defect
-//! (TODO.md HIGH; `String !p` move-param + concat): the C backend emits an
-//! invalid pointer-add `(void*)a + (void*)b` (cc rejects), the LLVM backend an
-//! invalid `add ptr` — while the SELF-HOST lowerer is reference-correct, so its
-//! lane floors at the full 5. This persistent BUILD-FAIL is the lane WORKING AS
-//! INTENDED (core invariant #8: a check-accepted program both backends
-//! miscompile must stay VISIBLE, never dodged or force-passed). When that bug's
-//! own track lands the fix, the SAME commit bumps `C_MATCH_FLOOR` / `LLVM_MATCH_FLOOR`
-//! to 5.
+//! All three lanes floor at MIN_FIXTURES — every committed seed MATCHes on
+//! every impl. The C and LLVM lanes previously floored one below the self-host
+//! lane because `smith_move_param_concat.gg` (`String !p` move-param + concat)
+//! was a both-backend BUILD-FAIL: the C backend emitted an invalid pointer-add
+//! `(void*)a + (void*)b` (cc rejected), the LLVM backend an invalid `add ptr`
+//! (llc rejected), while the self-host lowerer was already reference-correct.
+//! That defect is FIXED (the `!`-move String binop operand now derefs its
+//! `MutPtr` slot at the consume site, `src/ir/lowering/exprs/operators.rs`
+//! `cow_deref_if_ptr`), so the SAME commit ratcheted `C_MATCH_FLOOR` /
+//! `LLVM_MATCH_FLOOR` up to equal the self-host floor. All lanes now floor at
+//! MIN_FIXTURES.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,14 +64,14 @@ use std::time::{Duration, Instant};
 use ggdef::{parse_frontmatter, Expect};
 
 // ── Floors — regenerated in-worktree (see the module-doc command). ──────────
-const C_MATCH_FLOOR: usize = 186;
-const LLVM_MATCH_FLOOR: usize = 186;
+const C_MATCH_FLOOR: usize = 187;
+const LLVM_MATCH_FLOOR: usize = 187;
 const SELFHOST_MATCH_FLOOR: usize = 187;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the seed COUNT, independent of a lane's MATCH floor (the C/LLVM floors sit
-/// one below it because of the known `smith_move_param_concat` BUILD-FAIL).
+/// the seed COUNT; all three lane MATCH floors currently equal it (every seed
+/// MATCHes on every impl).
 const MIN_FIXTURES: usize = 187;
 
 // ─────────────────────────── infrastructure ────────────────────────────
