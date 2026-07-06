@@ -1,10 +1,43 @@
 # EXECUTOR BRIEF: Define Gorget PHASE 1 — conformance infrastructure (P1-A..P1-G)
 
-> **STATUS: v1 (scout draft, adopted 2026-07-06) — review passes cleared: 0 of >=3. Executors: none launched.**
+> **STATUS: v2 — pass 1 (Opus, 10 reservations) folded via the OVERRIDE section below; 0 clean of >=3. Executors: none launched.**
 > Scout artifacts: /tmp/recover_p1infra/ (findings, prototypes, probes). Prerequisite HIGH filed in
 > TODO: ggdef throw-drop + native-recursion (P1-A must close them before P1-D's converter runs).
 > RFC §4 amendment noted in ledger: conformance floors are INLINE dynamic floors per runner (the
 > c_emit_comparison precedent), not tests/lints.rs static ratchets.
+
+## ⚡ REVIEW PASS-1 FOLDS (2026-07-06) — these OVERRIDE the corresponding draft text below
+
+- **R1 (P1-A gate)**: the scout probes are /tmp-only. P1-A PROMOTES them to committed tests:
+  `spec/ggdef/tests/coverage_histogram.rs` + `converter_agreement.rs` (from
+  /tmp/recover_p1infra/scout_probe.rs) — the coverage/agreement gates cite THOSE, not /tmp.
+- **R2 (P1-E taxonomy)**: full ggdef-outcome map — Value-agree→MATCH; Value-disagree→
+  SPEC-DIVERGE; **IllFormed where gg-check ACCEPTED→SPEC-DIVERGE** (the flagship class);
+  Trap→compare exits (agree→MATCH else SPEC-DIVERGE); FuelExhausted→GGDEF-SKIP;
+  ElabError/ParseError→GGDEF-SKIP.
+- **R3 (P1-E eval/compare split)**: EVALUATE ggdef after classify() step 1 (cheap; the
+  IllFormed-vs-check-accepts verdict can fire there); the Value-vs-C-stdout COMPARISON lands
+  after step 3 (needs `c_out`).
+- **R4 (SAFETY — gates P1-E)**: ggdef runs IN-PROCESS in smith; a deep-recursion seed SIGABRTs
+  the whole run (uncatchable). The ggdef native-recursion fix (TODO, filed w/ throw-drop) is a
+  P1-E prerequisite TOO (not just P1-D) — or P1-E must subprocess-isolate/depth-bound eval.
+- **R5**: the 3 float prerequisites are FILED in TODO as of this fold (D8 formatting appendix;
+  ggdef format_value D8-compliance incl. 3.0→"3.0" decision; production print+float_to_str fix
+  both backends). Float migration stays HELD behind all three.
+- **R6**: P1-G threading site = `src/errors.rs:275` (`report_semantic_error`), not :205.
+- **R7**: the ggdef lane (spec/ggdef/tests/) gets its OWN inline floor + escape env (cannot call
+  root `parity_floor_active`; doesn't need its carve-outs). P1-C note: under GG_BACKEND=llvm the
+  floor is diagnostic-only (parity_floor_active→false) — matches the c_emit precedent, expected.
+- **R8**: the ggdef root dev-dep is NOT committed (apply /tmp/recover_p1infra/
+  scout_cargo_devdep.patch in P1-E); P1-C's root-crate `parse_frontmatter` use depends on it →
+  explicit ordering: the shared reader lands with P1-B (spec/ggdef), P1-C consumes it via the
+  dev-dep, so **P1-E's Cargo change (or an equivalent dep commit) precedes P1-C**.
+- **R9 (zones)**: `src/semantic/errors.rs` is SHARED with the concurrent materialize-cluster
+  track (DeadBareParamWrite) — P1-G adds a code() method only, coordinate at merge; P1-C lives
+  in a NEW `tests/spec_conformance.rs` (never appended to integration.rs).
+- **R10**: `parse_frontmatter` tolerates the `doc: |` multiline block scalar + unknown keys
+  (present in committed seeds).
+
 
 # DRAFT executor brief — Define Gorget PHASE 1, conformance-infrastructure track
 
