@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: production materialize-on-write cluster (4 roots, 1 track, 4 sequenced commits)
 
-> **STATUS: v2 — pass 1 (Opus, 6 reservations) folded via the OVERRIDE section below; 0 clean of >=3. Executor: not launched.**
+> **STATUS: v3 — passes 1 (6 res) + 2 (2 blocking + 2 minor) folded; 0 clean of >=3. Executor: not launched.**
 > ggdef-RATIFIED expected outputs: #1 warn_compound=10 · #2 loop_read_before_write=1,2,3,1 ·
 > #3 ok_rebind=3,1 · #4 dead_branch_alias_bind=9. Scout artifacts: /tmp/recover_matcluster/
 > (findings incl. the full draft brief + the measured #1 prototype patch).
@@ -25,12 +25,36 @@
   lower_index_compound_assign (no target_expr param there). EFieldAccess arm (:1241) as drafted.
   Reminder: #1's "proto ready" is RUST-only; the self-host mirror is unprototyped and MUST be
   bootstrap-gated before landing.
-- **R3 (#3 shape)**: skip the pre-clone/slot-upgrade ONLY when the RHS does not reference the
-  rebound local — `xs = [9,9]` (independent) skips; `xs = xs.slice(...)` (self-derived) keeps the
-  pre-clone. Study the self-host's correct rebind arm (~lower_stmt.gg:880-1012). REQUIRED
-  negative fixture: self-derived rebind still works.
+- **R3 (#3 shape) — SUPERSEDED BY PASS-2 (the pass-1 wording contradicted the draft: "keep the
+  pre-clone" retains the :92 slot-upgrade, which IS the bug)**: mirror the self-host oracle's
+  UNIFORM shape — on a bare-param full rebind, re-point the NAME to a FRESH owned local
+  (register_local); the param slot stays `void*`; the `builder.locals[..].type_id = inner`
+  upgrade at assigns.rs:92 is REMOVED for all bare-param full rebinds; NO independent-vs-
+  self-derived distinction (the self-host has none — lower_stmt.gg:945-953 drop_old=false for
+  LoBorrowed → uniform consume+assign). REQUIRED #3 MINI-PROTOTYPE before commit: `xs=[9,9]`→
+  3,1 AND `xs=xs.slice(...)`→correct, BOTH backends. Only if the prototype proves a distinction
+  necessary: the RHS-references-local test is a recursive AST walk of `value` for
+  Expr::Identifier == `name` (both in scope at :76-98) — and :92 is retained in NEITHER branch.
 - **R4**: the compound-arm ratchet (mirror container_literal_arms_count) is a REQUIRED #1
   deliverable, same commit — not optional.
+
+### Pass-2 folds (override precedence: pass-2 > pass-1 > draft)
+- **#4 MECHANISM NAMED (was two unchosen options — now ONE, write-site, layer-correct):**
+  `restore_locals` (context.rs:1654-1670) drops CollectionElement|FieldPath|CowBorrowPending|
+  View for branch-local locals but KEEPS `Alias` — the :1635-1637 comment's "already severed by
+  runtime CoW" claim is FALSE for a dead-branch bind (the alias slot is NULL on the not-taken
+  path). FIX: add `BorrowOrigin::Alias(_)` to the :1659-1666 drop_state match → branch-local v5
+  resets to unowned at scope exit → cow_aliases_of(v0) skips it → no clone(NULL). The runtime
+  alias-live-flag option is DROPPED (read-side patch, wrong layer). Oracle: the self-host
+  prints 9. Gates: fixture→9 with ZERO clones; NO regression on cow_lazy_d1_alias_deadpath
+  (different topology — verified NOT covered by this change); ASan.
+- **Stale remnant struck**: draft FIX DIRECTIONS #1's "inside lower_index_compound_assign
+  (1932)" is superseded by pass-1 R2 (the :1254 arm with target_expr). Do not edit :1932.
+- **R1 stop-condition named**: PROCEED = a contained extension of the cow_lazy_mat_flag
+  substrate to the is_bare_param branch that measures 1,2,3,1 on both backends; RE-SCOPE = it
+  requires a new whole-function pre-loop analysis pass.
+- **Self-host #1 EFieldAccess placement**: top of the :1241 arm, before the :1246 read
+  (faithful mirror of SAssign :1023).
 - **R5 (zones)**: tests/integration.rs is SHARED with the concurrent P1-infra track — both
   additive; parent reconciles at merge. (P1-C was re-pointed to a new tests/spec_conformance.rs
   on the other track, reducing this further.)
