@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: `String !p` move-param concat fix (conformance 186→187 both backends)
 
-> **STATUS: v3 — pass 1 (3 minor, folded) + pass 2 = RESERVATIONS (1 minor: missing concurrent-track note → folded in the Zone section). Pass-2 ALSO independently verified: patch applies clean, repro+siblings green on both backends AND vs the ggdef oracle, valgrind clean ×4 shapes, root-cause chain traced (set_owned at functions.rs:932-935 after set_owning_param at :924-927). Pass 3 pending — launch-gate.**
+> **STATUS: v4 — passes 1 (3 minor) + 2 (1 minor) folded; pass 3 = RESERVATIONS (1 BLOCKING: the '(floors only)' scope locked in doc-drift — the BUILD-FAIL narrative in spec_conformance.rs + the smith/main.rs Round-1 list would go stale/false post-fix; the cited promotion precedent ALREADY left this exact fossil for cow_dead_branch) → FOLDED below as ⚡ PASS-3 FOLDS. Pass 4 (confirming) pending.**
 > Scout: full report + measured prototype at `/tmp/recover_strmove/` (FINDINGS.md,
 > proto_fix_FINAL.patch, operators.rs.fixed, spec_conf logs). Scout ran the fix end-to-end on
 > BOTH backends: 24-shape matrix correct, 12-case ASan clean, no clone regression,
@@ -62,6 +62,28 @@ still holds, and understand the `LoadRef` emission you're adding.
 - **R3 (regenerate the baseline):** BEFORE applying the fix, run the spec_conformance
   lanes in-worktree and confirm the pre-change baseline is C=186 / LLVM=186 /
   self-host=187 (Core #5: no un-regenerated number). Then fix, then confirm 187/187/187.
+
+## ⚡ PASS-3 FOLDS (2026-07-06) — override the Zone line and extend the deliverables
+
+- **The Zone entry `tests/spec_conformance.rs (floors only)` is STRUCK — the same commit
+  RETIRES the BUILD-FAIL narrative** that becomes false post-fix: the module-doc floor
+  note (:43-52 — "KNOWN, FILED both-backend defect … persistent BUILD-FAIL … the SAME
+  commit bumps the floors" → rewrite to record the fix landing and all lanes now flooring
+  at MIN_FIXTURES=187), the MIN_FIXTURES comment (:67-71 — "C/LLVM floors sit one below
+  it" → equal now), the :30 pointer, AND the stale seed-era numbers ("C=4, LLVM=4,
+  self-host=5") while there.
+- **`tests/smith/main.rs` JOINS the zone (doc-comment only):** its Round-1 findings list
+  (:98-108) cites `tests/fixtures/known_gaps/move_param_concat.gg` (invalidated by the
+  promotion) and asserts "Both TODO.md HIGH entries" (only one remains post-fix) — update
+  both. **Also fix the SAME pre-existing fossil one line up**: `cow_dead_branch_alias_bind`
+  is still listed at its `known_gaps/` path (:100-102) though it was promoted weeks ago —
+  retire both stale paths in one sweep (fix the class; do not replicate the fossil).
+- **Promotion mechanics:** `git mv tests/fixtures/known_gaps/move_param_concat.gg
+  tests/fixtures/move_param_concat.gg` (no target collision), then the run_gg path arg at
+  integration.rs:5045 → `"move_param_concat.gg"`.
+- **Slice widening (cheap):** add the `operator_overload*` and `cow_amp*` fixture families
+  to the core slice on BOTH backends — they exercise the shared shaping step the fix
+  touches and are not covered by the current slice substrings.
 
 ## Deliverables (ONE commit)
 
