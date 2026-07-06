@@ -95,17 +95,23 @@
 //! That gate is on TIER WIDENING; running ggdef in-process at tier 0 is safe
 //! now, so this lane adds no depth-bound of its own.
 //!
-//! ## Round-1 findings (locked as `#[ignore]`d fixtures)
+//! ## Round-1 findings (both FIXED and promoted into `tests/fixtures/`)
 //!
-//! - `tests/fixtures/known_gaps/cow_dead_branch_alias_bind.gg` — alias bind
-//!   in a never-taken branch → later source mutation SIGSEGVs in
-//!   `gorget_array_clone` on BOTH backends (test: `cow_dead_branch_alias_bind`).
-//! - `tests/fixtures/known_gaps/move_param_concat.gg` — `String !p` +
-//!   concat in the callee: check-accepted, C backend emits `(void*)a +
-//!   (void*)b` (cc rejects), llc invalid-operand on LLVM (test:
-//!   `move_param_concat`).
+//! Round 1 surfaced two check-accepted programs that both production backends
+//! miscompiled while the self-host lowerer was reference-correct. Both were
+//! filed TODO.md HIGH, both were fixed, and both fixtures were promoted out of
+//! `known_gaps/` and un-ignored (they now MATCH on both backends):
 //!
-//! Both TODO.md HIGH entries; the self-host is reference-correct on both.
+//! - alias bind in a never-taken branch → a later source mutation SIGSEGVed in
+//!   `gorget_array_clone` on BOTH backends. Fixed at the write site
+//!   (`restore_locals` resets a branch-local `Alias(_)` to unowned at scope
+//!   exit) — test `cow_dead_branch_alias_bind` (`tests/fixtures/cow_dead_branch_alias_bind.gg`).
+//! - `String !p` move-param + concat in the callee: check-accepted, the C
+//!   backend emitted `(void*)a + (void*)b` (cc rejected), the LLVM backend an
+//!   invalid `add ptr` (llc rejected). Fixed at the binop consume site (the
+//!   `!`-move `MutPtr(String)` operand now derefs in `cow_deref_if_ptr`,
+//!   `src/ir/lowering/exprs/operators.rs`) — test `move_param_concat`
+//!   (`tests/fixtures/move_param_concat.gg`).
 //!
 //! Why this tool exists: ASan is NOT the safety net for the CoW/ownership
 //! bug class (devbook/11) — the fixture corpus only covers shapes someone

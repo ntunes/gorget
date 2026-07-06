@@ -1,0 +1,6 @@
+String f(String !p):
+    return p + "a" + "b"
+
+void main():
+    String s = "X"
+    print(f(!s))

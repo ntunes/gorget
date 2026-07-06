@@ -5030,19 +5030,40 @@ fn cow_dead_branch_alias_bind() {
     run_gg("cow_dead_branch_alias_bind.gg", "9");
 }
 
+// Was a known BOTH-BACKEND bug (gorget-smith fuzzer, round 1): `String !p`
+// move-param + concat in the callee (`String f(String !p): return p + "log"`)
+// was `gg check`-accepted but the C backend emitted `(void*)a + (void*)b` (cc
+// rejects) and the LLVM backend an invalid `add ptr` (llc rejects), while the
+// self-host lowerer printed `ablog` correctly. Root cause: a `!`-move String
+// param keeps `ownership=Owned` (raw MutPtr slot, no auto-deref at read, unlike
+// a `&`-mut-borrow), so the binop `is_string` check (exact `== owned_string_type`,
+// no ptr-unwrap) went false and the concat mis-lowered to integer pointer-add.
+// Fixed at the binop consume site: `cow_deref_if_ptr` now LoadRef-derefs an
+// `is_owning_param` MutPtr operand to a Str value (matching the self-host oracle),
+// so `is_string` goes true and the `gorget_str_cat` path fires. The Owned
+// exit-drop is preserved (no double-free, no leak).
 #[test]
-#[ignore = "known BOTH-BACKEND bug (found by the gorget-smith fuzzer, round 1): \
-`String !p` move-param + concat inside the callee (`String f(String !p): return \
-p + \"log\"`) is `gg check`-accepted but the C backend emits `(void*)a + \
-(void*)b` (cc rejects: invalid operands to binary +) and the LLVM backend dies \
-in llc (invalid operand type). A check-accepted program that fails at cc/llc \
-means the front and back ends disagree about validity (Core invariant #8 \
-adjacent). The self-host prints `ablog` correctly, so this is a Rust-gg-side \
-fix. Asserts the language-intended output `ablog`; lives in \
-tests/fixtures/known_gaps/ so it stays OUT of the runtime-diff corpus. \
-Un-ignore when the move-param concat ABI is fixed. See TODO.md HIGH entry."]
 fn move_param_concat() {
-    run_gg("known_gaps/move_param_concat.gg", "ablog");
+    run_gg("move_param_concat.gg", "ablog");
+}
+
+// Sibling coverage for the `String !p` move-param concat fix (values ASan-verified
+// by the scout). Two move-String params concatenated in the callee.
+#[test]
+fn move_param_concat_two() {
+    run_gg("move_param_concat_two.gg", "abcd");
+}
+
+// Self-concat of a single move-String param (`p + p`).
+#[test]
+fn move_param_concat_self() {
+    run_gg("move_param_concat_self.gg", "abab");
+}
+
+// Chained concat of a move-String param with two literals (`p + "a" + "b"`).
+#[test]
+fn move_param_concat_chained() {
+    run_gg("move_param_concat_chained.gg", "Xab");
 }
 
 #[test]
