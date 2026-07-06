@@ -26,6 +26,22 @@ sequential fresh-review gauntlet.
   bring NEW decision needs to the owner as option-questions (owner directive: ask along the
   way, with recommendations and previews).
 - **RFC**: APPROVED (status line at top of `rfc-ggc-ggdef.md`). §2.2 is the semantic core.
+- **Phase 1 INFRA: ✅ COMPLETE 2026-07-06** — all six `phase1-infra-brief.md` tracks landed
+  (P1-A throws desugar + §10.3 capture; P1-B frontmatter reader + ggdef lane; P1-C C/LLVM/
+  self-host lanes; P1-D/D1 the 182-fixture migration, corpus 5→187; P1-E smith ggdef verdict
+  lane; P1-G E_/W_ diagnostic registry). **Conformance state: 4 lanes over 187 fixtures —
+  ggdef 187/187 · self-host 187/187 · C 186/187 · LLVM 186/187 (the one BUILD-FAIL = the
+  held-open `String !p`+concat HIGH, floors deliberately pinned one below total until its fix
+  earns the bump). ggdef and both production backends are BYTE-IDENTICAL on all 182 migrated
+  fixtures.** Regenerate: `cargo test -p ggdef` + `GG_BUILD_TIMEOUT_SECS=600 cargo test --test
+  spec_conformance -- --test-threads=1 --nocapture`. Remaining RFC-§6 phase-1 scope (NOT in
+  the infra brief): D4/D5/D6 rejections in BOTH production compilers (now framed as the D12
+  mandate in `decision-batch-4-proposal.md`, awaiting owner ruling), the float chain (HELD
+  behind its 3 filed prerequisites), and P1-D/D2 (production-v1 bulk — own scout, filed in
+  TODO with the detonation census).
+- **Decision batch 4: PROPOSED** — `decision-batch-4-proposal.md` (D10–D21 + a
+  dissolved-questions table), synthesized from 3 probe-verified scouts 2026-07-06. Awaiting
+  owner ruling; ratified items get D-numbers in `decisions.md` + docs write-through.
 - **Phase 0: ✅ COMPLETE 2026-07-06** (A 26/26 · B1 75/75 · B2 87/87 full corpus · C
   adjudications `9`/`ablog`/`hello` + spectests skeleton + gen + prose stubs; RFC §6(a)(b)(c)
   satisfied per independent output-review re-runs). `phase0-brief.md` is CLOSED/sealed.
