@@ -6,7 +6,7 @@
 > **Executor launches: A: ✅ LANDED + MERGED (Opus; 26/26 MATCH; output-review SIGN OFF) ·
 > B: SPLIT into B1/B2 per the B/C confirming pass (6 reservations folded 2026-07-06);
 > B1: ✅ LANDED + MERGED 2026-07-06 (75/75 gate MATCH; output-review folds applied: report corrected, call-side named args rejected pending B2 reorder; ggdef surfaced 4 PRODUCTION bugs — filed) ·
-> B2: after B1 lands · C: after B2.**
+> B2: two confirming passes (final clean modulo one fixture-name typo, corrected with the reviewer's verbatim wording) — LAUNCHED (Opus) 2026-07-06 · C: after B2.**
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
 > This brief is deliberately self-contained enough for an Opus-class executor: where the RFC
@@ -131,7 +131,7 @@ alongside `func_names` — there is no signature store today, `func_names` is a 
 it serves BOTH the named-arg reorder (mirror `struct_ctor_args` against it) AND
 **receiver-type inference** — called out explicitly because B1's elaborator has ZERO type
 tracking (`local_names: HashSet<String>`) and name-matching dispatch is IMPOSSIBLE (the corpus
-contains `cow_named_recv_gate_name_collision`/`_projected`, whose user `get(&self)` collides
+contains `cow_named_recv_gate_name_collision` + `cow_named_recv_gate_projected_name_collision`, whose user `get(&self)` collides
 with the builtin `.get()`). Good news: Gorget is type-first, so this is READ-THE-ANNOTATION
 for user decls/params (`VarDecl.type_`, `Param.type_` in the AST) plus small context inference
 for the elaborator's own synthesized binds (`__coll`/`__i`/`__match`, captures) and `auto`.
