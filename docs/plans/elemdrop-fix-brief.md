@@ -1,7 +1,8 @@
 # EXECUTOR BRIEF: collection-element destructor fix (P1 drop-lost + P2 field-leak), BOTH compilers
 
-> **STATUS: v1 (scout draft, adopted by orchestrator 2026-07-06) — review passes cleared: 0 of >=3
-> (update per pass). Executor: not launched.**
+> **STATUS: v2 — pass 1 (Opus) independently reproduced ALL measurements (incl. P2 leak pre/post,
+> double-drop ASan) and raised 5 reservations, folded below; passes cleared: 0 clean of >=3.
+> Executor: not launched.**
 > Scout artifacts: /tmp/recover_elemdrop/ (findings, measured prototype patch, ready fixture).
 > This brief was drafted by the scout that prototyped and MEASURED the Rust fix end-to-end
 > (probe matrix, ASan, bootstrap 446s PASS); reviews verify, executor lands.
@@ -22,9 +23,13 @@ messages: fix(drop): ... Full integration sweep + runtime_diff = parent's job.
 Rust fix was a pure READER change because Rust type_drop_fns already records Custom-fieldless.
 Self-host needs TWO changes:
 1. lir_lower.gg:5505 — also record fieldless custom-Drop structs in type_drop_fns with
-   drop_fn_name={T}__drop (no fields => user body is the whole drop; __gorget_dtor_{T} is NOT
-   emitted for fieldless so must NOT be the name). Verify emit_type_drop_fns/emit_struct_drops
-   don't double-define {T}__drop (fn_exists guard should cover it).
+   **drop_fn_name = `__gorget_dtor_{T}` — MIRROR RUST** (review pass 1 verified in emitted C
+   that Rust DOES emit + wire `__gorget_dtor_{T}` for the fieldless case, and the self-host's
+   own emit_type_drop_fns (lir_codegen.gg:7590-7617) will emit it once the type is recorded;
+   the earlier `{T}__drop` justification was FALSE and is retracted — using the user-body name
+   would silently diverge from the Rust reference and relies fragilely on fn_exists to avoid
+   self-recursion). Verify `__gorget_dtor_{T}` emission for a fieldless type in the self-host's
+   emitted C as an explicit Phase-S check.
 2. lir_codegen.gg lc_collection_drop_fn (1970) + lc_collection_clone_fn (2016): replace the
    `recursive_drop_structs.contains OR recursive_drop_enums.contains` gate (lines 1999 / 2044)
    with `m.type_drop_fns.contains(type_name)` and use
@@ -94,8 +99,9 @@ Fix BOTH the Rust gg AND the self-host (invariant #8 — both are identically br
    on drop_collections at integration.rs:5338 using run_gg). Ready-made fixture at
    /tmp/scout_elemdrop_fixture.gg; exact expected stdout captured (see fixture section above).
 3. tests/fixtures/drop_collection_custom_elem_leak.gg (NEW) — String-field + HEAP string
-   (`"aa"+"bb"`) element; wire it into an ASan lane (the self_host_emit_cc lane already ASans, or
-   add a `--sanitize` assertion) to lock P2. Normal integration does NOT ASan.
+   (`"aa"+"bb"`) element; the P2 assertion uses the RUST `gg build --sanitize` path in Phase R
+   (the self-host-driver ASan lane will NOT be clean until Phase S lands — sequence the
+   self-host-lane assertion into Phase S gates). Normal integration does NOT ASan.
 4. SELF-HOST (see "SELF-HOST FIX SHAPE" above):
    - tests/fixtures/self_host_lowerer/lir_lower.gg:5505 — also record fieldless custom-Drop
      structs in type_drop_fns (drop_fn_name = `{T}__drop`).
@@ -107,6 +113,8 @@ Fix BOTH the Rust gg AND the self-host (invariant #8 — both are identically br
 
 ## Fixture battery (temp / named-move / named-clone × Vector / Dict-value / Dict-key / Set)
 Use Noisy{int id} + `equip Drop` (print) + `@derive(Equatable,Hashable)` (needed for Set/Dict-key).
+ALSO (pass-1 R4): Dict `.remove()` and Set `.remove()` move-out shapes under ASan (the pop-out
+double-drop check extended to the map/set families).
 Expected drop counts (measured on the fixed compiler, all ASan-clean):
   - Vector temp / named-move: element fires once at collection drop.
   - Vector named-clone (local live after push): TWO drops (local's own + collection's clone).
@@ -123,6 +131,13 @@ Derive exact expected stdout by RUNNING the fixed compiler (trustworthy now) AND
 - ASan (`gg build --sanitize`) on the leak fixture: MUST be clean (proves P2).
 - Parent runs full integration + self_host_bootstrap_fixed_point + GG_RUNTIME_DIFF=1 sweep.
 
+## Additional deliverable (pass-1 R3, Core #4 rule 3)
+An arm-count ratchet in tests/lints.rs: the collection families in
+`infer_fn_ptr_stores_from_types` must route element drop wiring through `type_drop_fns` — budget
+the count of legacy `elem_drop_fn_for_type`/`recursive_drop_*.contains` gates in that function at
+its post-fix value so a new sibling can't reintroduce the hole. (tests/lints.rs is shared with the
+define-gorget track's B2 increment — coordinate via the orchestrator if both are in flight.)
+
 ## Non-goals
 - Do NOT touch the clone-vs-borrow decision at assignment/consuming positions (works correctly).
 - Do NOT rename {T}__drop or __gorget_dtor_{T} conventions.
@@ -133,8 +148,8 @@ Derive exact expected stdout by RUNNING the fixed compiler (trustworthy now) AND
 - P2 (field leak) is a SECOND, ASan-only bug unmasked by the same wiring; without an ASan lane it
   passes silently. Ensure a sanitized assertion exists.
 - Self-host needs a populate change too (not a pure reader change like Rust) — budget DEBUG time.
-- The TODO entry's diagnosis (named-local vs temp) is WRONG; the real axis is field triviality.
-  Update/replace the TODO entry when landing.
+- The TODO entry was ALREADY corrected by the orchestrator (2026-07-06) — the executor does NOT
+  touch TODO.md (zone rule).
 
 ## FINAL GATE RESULT
 self_host_bootstrap_fixed_point (release, with Rust fix applied): PASS (1 passed / 0 failed, 446s).
