@@ -198,7 +198,37 @@ medium-high.
 
 ---
 
-### D14 (PROPOSED) — A5 `get_or`/`get_or_put`: **"get_or is not special"** — reads return views, uniformly
+### D14 (RATIFIED 2026-07-06 — VIEW, re-confirmed after the write-through discussion) — A5 `get_or`/`get_or_put`: **"get_or is not special"** — reads return views, uniformly
+
+> **Owner ruling 2026-07-06 (ratified twice — held once to interrogate the write-through
+> story, re-confirmed after it): it's a view.** Ratified WITH the write-through story:
+>
+> **There is deliberately NO storable write-through variable in Gorget** (§3.5 + D10):
+> names bind values; PLACES accept writes; borrows live only at call boundaries. The
+> invariant this buys: *you can never mutate `d` through a name that isn't rooted at `d`*
+> — every dict mutation is syntactically visible at the write site. The three write
+> channels, all place-rooted: (1) place assignment `d[k] = v` / `d[k] += 1`;
+> (2) mutating method on a place — `d[k].push(x)`, and the ensure-then-mutate one-liner
+> `d.get_or_put(k, Vector()).push(x)` (receiver auto-borrow; ≡ Python's
+> `setdefault(k, []).append(x)`); (3) `&`-arg of a place — `f(&d[k])`, frame-scoped.
+>
+> Family mapping: `d[k]` read = trap-on-missing · `.get(k)` = safe read (Option view) ·
+> `.get_or(k, def)` / `.get_or_else(k, fn)` = read with (lazy) fallback, VIEW, READ-ONLY
+> (mutating through it = compile error + "did you mean get_or_put?" — on miss its view
+> aliases the CALLER'S default local, so write-through would be context-dependent) ·
+> `.get_or_put(k, def)` = ensure-exists, THE write-through anchor.
+>
+> Multi-statement mutation idiom = read-modify-writeback: `Config c = d.get_or(k,
+> Config())` (CoW alias, free until written) → mutate (severs: ONE clone) → `d[k] = c`
+> (c dead → MOVE). Exactly one clone, elidable later via exclusivity-powered in-place
+> proof — same optimization stance as D15 slices and the counter double-lookup
+> (`d[k] = d.get_or(k, 0) + 1`).
+>
+> Consequences: retire the round-8 unconditional clone (wasteful plain / D4-violating
+> observable double-drop tainted); temp-default rule (live place or consumed-within-
+> expression, else reject — the TODO:143 view-of-temp class); D4 governs a tainted
+> default at the put boundary. Book one-liner: **"`get_or` reads with a fallback;
+> `get_or_put` makes the entry exist so you can write to it."**
 
 The executing double-free is already fixed (round-8) — but the fix was an *unconditional
 clone*, which is wasteful for plain types and a D4 violation for tainted ones (measured: the

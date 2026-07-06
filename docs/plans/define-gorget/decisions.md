@@ -227,6 +227,17 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D14 RATIFIED by owner (held once for the write-through interrogation,
+  re-confirmed): `get_or`/`get_or_put`/`get_or_else` return VIEWS** (uniform with `.get()`;
+  retires the round-8 unconditional clone). **`get_or_put` IS the write-through form**
+  (always dict-resident → receiver auto-borrow; Python setdefault precedent);
+  **`get_or` is read-only — mutation through it REJECTED + fix-it** (miss-path aliases the
+  caller's default). Ratified WITH the no-stored-write-through-variable story: mutation
+  flows through PLACES (`d[k] = v`, `d[k].push(x)`, `f(&d[k])`) — "you can never mutate
+  `d` through a name that isn't rooted at `d`"; multi-statement idiom = read-modify-
+  writeback (one clone, exclusivity-elidable later). Temp-default: live place or
+  consumed-within-expression, else reject. Implementation track filed HIGH in TODO.
+
 - 2026-07-06 — **D13 RATIFIED by owner: allocators go TWO-STEP.** Step 1 now: REJECT bare
   (non-`with`) allocator locals at check (closes the silent safe-code heap-UAF —
   `.destroy()` while a backed RAII value lives — AND the leak, immediately); docs
