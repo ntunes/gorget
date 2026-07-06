@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: unwrap/expect panic-by-default (🔥 both-backend + self-host, 4 zones)
 
-> **STATUS: v1 DRAFT — review passes: (none yet; ≥3 sequential fresh passes required before launch).**
+> **STATUS: v2 — pass 1 = RESERVATIONS (6: R1 HIGH self-host class-split, R2-R4 load-bearing corrections, R5-R6 hardening) → ALL FOLDED as ⚡ PASS-1 FOLDS (override conflicting draft text below). Pass 2 pending.**
 > Scout: full report + measured prototype at `/tmp/recover_unwrap/` (proto_FINAL.patch,
 > probes/ with emitted C + ASan bins both backends, integ_full_c.log, clean_stage0.c).
 > Scout measured: fix green on BOTH backends, ASan clean, lib 1105/0, full C sweep 1539/4
@@ -49,8 +49,8 @@ that entry, nothing more.
 self-host as a COMPILER must emit the same check):** the self-host's plain-unwrap emit
 path (its own comment admits it does not emit the None panic) must emit the tag-check +
 `gorget_panic_at` branch for user `unwrap()`/`expect()`/`unwrap_error()`, mirroring
-Zone 1's shape and message text. (NOT `lir_codegen.gg`'s `__option_unwrap` case — that's
-a secondary path; direct `o.unwrap()` emits inline.) Add a guard test: a user program
+Zone 1's shape and message text. (⚡ STRUCK by pass-1 R1: lir_codegen.gg IS in scope — see the FOLDS section; the
+combinator cases there are the ONLY unwrap_error path and are also unguarded.) Add a guard test: a user program
 compiled BY the self-host driver must trap on unwrap-None with the same stderr (the
 spec_conformance selfhost lane pattern or a targeted integration test — executor's
 choice, cite precedent).
@@ -67,6 +67,48 @@ choice, cite precedent).
   empty), `unwrap_error_result_traps`, `expect_none_traps` (NOTE: currently prints the
   generic unwrap message — the dropped-expect-message bug is FILED separately; assert
   the generic text and cite the TODO), `unwrap_error_on_ok_traps`, `get_unwrap_empty_traps`.
+
+## ⚡ PASS-1 FOLDS (2026-07-06) — these OVERRIDE conflicting text above/below
+
+- **R1 (HIGH — Zone 3 corrected: the self-host class is SPLIT across two files).** The
+  `lower_expr.gg:3280` intercept handles only `unwrap`/`unwrap_or`/`expect` — `unwrap_error`
+  is NOT there; its SOLE self-host emit path is **`lir_codegen.gg:5135`**
+  (`case "__result_unwrap_error"`), which reads the Error payload with NO tag check. The
+  adjacent `__result_unwrap` (:5127) / `__result_expect` (:5163) / `__option_unwrap`
+  combinator cases are also unguarded (the fallback path behind the inline route). Zone 3
+  therefore = **BOTH** the `lower_expr.gg` inline path AND the `lir_codegen.gg`
+  combinator cases (the draft's "NOT lir_codegen.gg" is STRUCK). Guard-test coverage must
+  include an `unwrap_error`-on-Ok program compiled by the self-host driver, not just
+  unwrap-None.
+- **R2 (Zone 2 is a BEHAVIOR CHANGE, flagged):** `RTError` is variant index 13; the
+  pre-fix `get_rtype_at(v,-1)` extracted a zeroed payload = tag 0 = `RTPrimitive("")`
+  garbage. The guard changes that garbage to `RTError` — the CORRECT direction (aligns
+  with Rust's reserved `error_id` → `ResolvedType::Error`, types.rs:156-157), but it may
+  move `c_emit_comparison`/`runtime_diff` (UP = expected improvement; DOWN = STOP).
+  **Guard shape: `if i < 0` ONLY** — the prototype's extra `or i >= v.len()` upper bound
+  is DROPPED for Rust-parity (Rust's `get` is a bare index that panics on positive OOB;
+  masking positive OOB would hide real bugs). Re-measure stage-0 + bootstrap with the
+  narrowed guard.
+- **R3 (expect fixture must not cement the dropped-message bug):** `expect_none_traps`
+  asserts only bug-agnostic substrings (non-zero exit + a stderr fragment like
+  `` `None` value `` that stays true once the message-threading bug is fixed) — NEVER the
+  full generic unwrap text as the expected canonical output. Cite the filed expect-message
+  TODO in the fixture comment.
+- **R4 (ggdef gate scoped):** ggdef's phase-0 Method surface is `Unwrap`/`UnwrapOr` only —
+  the ggdef cross-check applies to unwrap-None/unwrap-Error probes ONLY; `unwrap_error`/
+  `expect` yield ggdef elaboration errors (outside subset) and that is NOT a gate failure.
+  The `` `Ok` value `` message text is compiler-chosen (reference-§15.2-consistent), not
+  ggdef-ratified.
+- **R5 (Zone 3 idiom + decoupling trigger):** Zone 3 was NOT in the scout prototype — it
+  is the highest-risk zone (bootstrap-critical emit path). The self-host GIR has **no
+  GTUnreachable**: follow the ASSERT-LOWERING idiom (`lower_stmt.gg:1407-1445` — noreturn
+  `gorget_panic` + `GTJump` dead-edge), NOT a literal mirror of Zone 1's
+  `Term::Unreachable`. If `self_host_bootstrap_fixed_point`/`runtime_diff` fails on
+  Zone 3, DECOUPLE: ship proven Zones 1+2+4, report Zone 3 with the failure evidence for
+  its own track — do not block the round.
+- **R6 (fallback guard gating):** the no-StructId fallback branch (insts.rs:4154) also
+  serves `unwrap_or` — gate the panic guard on `!is_unwrap_or` (a defaulting extractor
+  must never panic), or add a debug assertion that unwrap_or never reaches the fallback.
 
 ## Zone summary + hazards
 
