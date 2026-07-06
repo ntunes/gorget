@@ -3,9 +3,10 @@
 > **STATUS: v4 — passes 1 (5 res) + 2 (3 res) folded; pass 3 (Opus) = SIGN OFF FOR INCREMENT A
 > (2 non-blocking findings folded into v4). B/C need one confirming pass on their sections
 > before launching (the F2 report-homes fix landed post-sign-off).**
-> **Executor launches: A: ✅ LANDED + MERGED to main 2026-07-05 (Opus; 26/26 MATCH; output-review
-> SIGN OFF with 2 LOW findings folded into B below) · B: not launched (needs one confirming
-> review pass on the B/C sections first) · C: not launched.**
+> **Executor launches: A: ✅ LANDED + MERGED (Opus; 26/26 MATCH; output-review SIGN OFF) ·
+> B: SPLIT into B1/B2 per the B/C confirming pass (6 reservations folded 2026-07-06);
+> B1: pending one targeted confirming pass on the folded B1/B2 text, then launch ·
+> B2: after B1 lands · C: after B2.**
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
 > This brief is deliberately self-contained enough for an Opus-class executor: where the RFC
@@ -100,38 +101,57 @@ fresh-temp-move, drop order); the corpus_a run with its MATCH list printed.
 
 ---
 
-## Increment B — the full phase-0 surface
+## Increment B — the full phase-0 surface (SPLIT into B1/B2 per the B/C confirming pass;
+## sequential — B2 depends on B1)
 
-**Deliverables:** extend ggc/eval/elaborate to the FULL phase-0 subset (RFC §6 phase 0,
-verbatim list): Dict/Set values (insertion-ordered); Option/Result as ordinary enums +
-`.unwrap()`/`.unwrap_or()` (Trap on unwrap-None with the normalized panic shape); match +
-user payload enums + pattern bindings (Borrow-mode per §2.2); concrete `equip` method→call
-including `equip T with Drop` (custom drops run per §2.2; the `drop_tainted` bit computed
-transitively; D4 rejections at all six positions with live-place sources — emit the
-`E_MoveWithoutOperator`-family error text); full sized-int matrix + `as`-cast saturation
-rules; ranges + string slices `s[a..b]` (the W3c view shapes — values per D1); named-arg
-construction; `with expr as name:` (scoped bind via fresh-temp Move + drop-at-exit); while
-loops; the v1 shim list (`std.collections.{Vector,Set,Dict}` import mapping +
-`std.conv.int_to_str` as a GGC intrinsic); by-value closures (no capture lists — D5 capture
-lists are a phase-1/production item; bare closures capture by value at creation).
+### Increment B1 — the non-equip surface (~103 gate fixtures)
 
-**Also in B (from Increment-A output-review, LOW findings F1/F2):** (F1) harden the import
-ratchet with a second scan over FULL source text for bare `gorget::(ir|semantic|lir|bir|backend)::`
-path segments — the use-line-only scan misses inline fully-qualified paths (confirmed
-reachable); (F2) either emit a structural-move trace event for fresh-temp binds (more faithful
-to §2.2's "fresh temps move") or fix the stale `trace.rs:28-29` doc-comment — pick the event
-(preferred; provenance completeness) and update the `fresh_temp_bind_is_a_move_not_a_copy`
-unit test accordingly.
+**Deliverables:** extend ggc/eval/elaborate to: Option/Result as ordinary enums +
+`.get()`/`.unwrap()`/`.unwrap_or()` (Trap on unwrap-None with the normalized panic shape —
+the single biggest feature, ~47 fixtures); match + user payload enums + pattern bindings
+(new `Proj::Payload`; bindings are Borrow-mode per §2.2); Dict/Set values (insertion-ordered);
+ranges + string slices `s[a..b]` (values per D1); named-arg construction; the v1 shim list
+(`std.collections` import mapping + `std.conv.int_to_str` as a GGC intrinsic); **the corpus's
+full builtin-method set — including `fill`, `pop`, `clear`, `trim`, `substring`** (measured
+in the confirming pass; the gate + stop-and-report force any stragglers); full sized-int
+matrix + `as`-cast saturation rules (**unit-tested only — zero corpus fixtures**); by-value
+closures (bare closures capture by value at creation; D5 capture lists are phase-1 —
+**gated by whichever corpus fixtures use them, else unit-tested only**).
 
-**Gates B:** everything from A, plus `spec/ggdef/tests/corpus_b.rs` running the **entire
-cow_* family minus the RFC's 3 generic-equip cow exclusions** (`cow_element_borrow_alias_mutate`,
-`cow_p3_alias_chain_mutate`, `cow_p3_index_mutate`) and the **deadwrite_* programs minus
-`deadwrite_ok_atomic_add`** (the 4th RFC exclusion, a deadwrite fixture not a cow one). Acceptance per RFC §6(a)+(b) with the divergence table applied;
-the increment report MUST list every fixture in each divergence category (expected-D2,
-expected-D1/EMove, smith, findings). For the deadwrite programs the executor generates a
-`deadwrite_spec_expectations.md` (program → ggdef stdout + which D-decision explains any
-delta vs production) for orchestrator/owner review — these become the newly-ratified
-spec expectations.
+**Gate B1:** every cow_*/deadwrite_* corpus fixture **without an `equip` block** MATCHes
+(minus the standing exclusions), via `spec/ggdef/tests/corpus_b1.rs`; divergence table
+applied; all prior gates green.
+
+### Increment B2 — equip, Drop, and the D4 rejections (~13 equip fixtures + full corpus)
+
+**Deliverables:** **receiver-type inference** — called out explicitly because A has ZERO type
+inference and name-matching dispatch is IMPOSSIBLE (the corpus contains
+`cow_named_recv_gate_name_collision`/`_projected`, whose user `get(&self)` collides with the
+builtin `.get()`): the elaborator gains a per-function type environment (locals are typed at
+bind sites; GGC is monomorphic, so this is propagation, not unification); concrete `equip`
+method→call with self-mode handling (D2: plain `self` = bare binding); `equip T with Drop`
+with custom-drop EXECUTION (mechanical note from the confirming pass: `drop_scope` must
+thread `Ctx` and become `Result<(), Halt>` — a custom drop can Trap/recurse/exhaust fuel);
+transitive `drop_tainted` computation; **D4 rejections at all six implicit-copy positions
+with LIVE-PLACE sources** (fresh temps move, never rejected — e.g.
+`cow_element_borrow_source_mutate_with`'s `with Res(1) as r:` is a fresh-temp Move and must
+keep running) — emit the `E_MoveWithoutOperator`-family error text; **B's D4 testing =
+ggdef unit tests** (production-side rejections + negative conformance fixtures are phase 1
+per RFC §6); `with expr as name:` (scoped bind via fresh-temp Move + drop-at-exit); (F1)
+ratchet hardening — second scan over FULL source text for bare
+`gorget::(ir|semantic|lir|bir|backend)::` path segments (use-line-only scan is bypassable,
+confirmed); (F2) emit a structural-move trace event for fresh-temp binds + update the
+`fresh_temp_bind_is_a_move_not_a_copy` unit test (preferred over comment-fixing; provenance
+completeness).
+
+**Gate B2:** the **entire corpus** — cow_* minus the 3 generic-equip exclusions
+(`cow_element_borrow_alias_mutate`, `cow_p3_alias_chain_mutate`, `cow_p3_index_mutate`) and
+deadwrite_* minus `deadwrite_ok_atomic_add` — via `spec/ggdef/tests/corpus_b.rs`. Acceptance
+per RFC §6(a)+(b) with the divergence table applied; the increment report MUST list every
+fixture per divergence category (expected-D2, expected-D1/EMove, smith, findings). The
+executor generates `spec/ggdef/reports/deadwrite_spec_expectations.md` (program → ggdef
+stdout + which D-decision explains any delta vs production) for orchestrator/owner review —
+these become the newly-ratified spec expectations.
 
 ---
 
