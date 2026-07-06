@@ -227,6 +227,20 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D12 RATIFIED by owner: D4 enforcement lands in production, STRAIGHT TO
+  ERROR** (scout measures blast radius first — surprises are reports, not downgrades).
+  `E_MoveWithoutOperator` for drop-tainted types at the six implicit-copy positions,
+  matching ggdef exactly + negative fixtures per position + the D4 docs write-through
+  (reference/design/book still show the closed single-owner set). Compound-assign rides
+  along: `v[i] += x` moves the dead element (D4 move-at-last-use — no residual question;
+  clone would be the violation); the resource-element ICE dies with it.
+- 2026-07-06 — **D15 RATIFIED by owner: slices are owned values + `int[]`/`T[]` REMOVED
+  from the surface entirely** (supersedes the filed reject-escape; owner: simplify and
+  uniformize now, re-add later as a widening if C-interop demands — then as a dedicated
+  FFI type, not the general slice). One sequence type; the fat pointer survives only as
+  a possible future INVISIBLE CoW optimization. Removal track gated on a live-use scan.
+  A6 CLOSED.
+
 - 2026-07-06 — **D17 RATIFIED by owner: `read_file` is FALLIBLE (`throws`).** Owner:
   avoid panics, keep the server running, recover where possible — recorded as the
   **stdlib fallibility principle** (environmental failures = throws; explicit `_or_panic`

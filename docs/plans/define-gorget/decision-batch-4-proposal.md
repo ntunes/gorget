@@ -151,7 +151,14 @@ the 101-vs-1 pick is yours.
 
 ---
 
-### D12 (PROPOSED, as a MANDATE) — D4 ENFORCEMENT LANDS IN PRODUCTION  *(not a new decision — the missing half of ratified D4)*
+### D12 (RATIFIED 2026-07-06 — STRAIGHT TO ERROR) — D4 ENFORCEMENT LANDS IN PRODUCTION  *(the missing half of ratified D4)*
+
+> **Owner ruling 2026-07-06: straight to error** (no warning period; the track's scout
+> still MEASURES the corpus/self-host/gorget-arena blast radius first — if it shocks,
+> that's a report back, not a silent downgrade). The compound-assign ruling rides along
+> with no residual question: the element in `v[i] += x` is dead at the read, so
+> move-out/apply/move-back is plain D4 move-at-last-use conformance — no implicit copy,
+> no sigil owed; clone would be the D4 violation. The ICE dies with it.
 
 The resources scout's highest-leverage finding: **ggdef already enforces D4 at the six
 implicit-copy positions (`elaborate/mod.rs:566-596`); production does not.** Production
@@ -266,7 +273,17 @@ medium-high.
 
 ---
 
-### D15 (PROPOSED) — A6 slices: **slices are owned values**; the fat pointer is an invisible optimization, never a surface type
+### D15 (RATIFIED 2026-07-06 — WITH FULL `int[]` REMOVAL) — A6 slices: **slices are owned values**; the fat pointer is an invisible optimization, never a surface type
+
+> **Owner ruling 2026-07-06: remove `int[]`/`T[]` from the surface ENTIRELY** ("I believe
+> it was left there for C-interop. but we can add later if required… let's simplify and
+> uniformize for now") — superseding the filed reject-escape fix with the stronger
+> uniform move: ONE sequence type (`Vector[T]`), slices are values, the vestigial
+> fat-pointer type leaves the grammar/typechecker (pending the removal track's
+> live-use scan; if C-interop ever needs a raw-view type it returns as a WIDENING,
+> preferably as a dedicated FFI type in an interop phase, not as the general slice).
+> Slicing syntax sugar (`v[a:b]`) remains an unopened future ergonomics question,
+> orthogonal to these semantics. A6 CLOSES.
 
 `.slice()` already returns owned copies — the language is already at the reference-grade
 shape. The decisive discovery: under value semantics + CoW, an owned-copy slice and a lazy
