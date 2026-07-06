@@ -99,7 +99,10 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
                     name.clone(),
                     fd.params.iter().map(|p| p.node.name.node.clone()).collect(),
                 );
-                el.fn_ret.insert(name, ty_of_type(&fd.return_type.node));
+                el.fn_ret.insert(name.clone(), ty_of_type(&fd.return_type.node));
+                if fd.throws.is_some() {
+                    el.fn_throws.insert(name);
+                }
             }
             ast::Item::Equip(eq) => el.register_equip(eq)?,
             // Imports are a discard no-op (types are prelude-available; the
@@ -206,6 +209,11 @@ struct Elaborator {
     /// Signature registry: fn / method name → return type — serves receiver
     /// type inference for method-call-result receivers.
     fn_ret: HashMap<String, Ty>,
+    /// Functions / methods (by GGC name) declared `throws E`: their observable
+    /// return type is widened to `Result[T, E]` and a call to one auto-
+    /// propagates (RFC §2.6 row 1). One source of truth for the throws→Result
+    /// desugar; read at call sites to decide propagate-vs-consume.
+    fn_throws: HashSet<String>,
     /// `(type-name, method-name) → MethodInfo` for user `equip` methods.
     equip_methods: HashMap<(String, String), MethodInfo>,
     /// `equip T with Drop` registry: `(type-name, drop-fn-name)`.
@@ -225,6 +233,15 @@ struct Elaborator {
     local_mode: HashMap<String, BindMode>,
     /// The type name of `self` while elaborating an `equip` method body.
     current_self_type: Option<String>,
+    /// Whether the function CURRENTLY being elaborated is `throws E`: its
+    /// `return`/`throw`/fall-off are wrapped `Ok`/`Error`, and a nested throws-
+    /// call in a non-Result-consuming position auto-propagates.
+    current_fn_throws: bool,
+    /// Set for the direct scrutinee of a `match` whose arms consume the
+    /// `Result` itself (`case Ok(..)` / `case Error(..)`): a throws-call there
+    /// yields the `Result` value rather than auto-propagating. Consumed (reset)
+    /// by the outermost call so nested sub-expression calls still propagate.
+    autoprop_suppressed: bool,
     gensym: usize,
 }
 
@@ -262,6 +279,11 @@ impl Elaborator {
         self.local_ty.clear();
         self.local_mode.clear();
         self.current_self_type = self_type.map(|s| s.to_string());
+        // A `throws E` function's return type is widened to `Result[T, E]`:
+        // `return`/`throw`/fall-off wrap `Ok`/`Error`, and nested throws-calls
+        // auto-propagate (RFC §2.6 row 1). `autoprop_suppressed` starts clear.
+        self.current_fn_throws = fd.throws.is_some();
+        self.autoprop_suppressed = false;
         for p in &fd.params {
             self.local_names.insert(p.node.name.node.clone());
         }
@@ -286,13 +308,18 @@ impl Elaborator {
             self.local_mode.insert(name.clone(), bindmode_of(p.node.ownership));
             params.push(Param { name, mode: mode_of(p.node.ownership), span: p.span });
         }
-        let body = match &fd.body {
+        let mut body = match &fd.body {
             ast::FunctionBody::Block(block) => self.elaborate_block(block)?,
             ast::FunctionBody::Expression(e) => {
                 // Expression-body function: evaluate and return the value.
                 // (D4 position 4 — return of a live tainted place is rejected.)
                 self.reject_if_tainted_live_place(&e.node, e.span, "return")?;
-                vec![Stmt::Return { value: Some(self.elaborate_expr(e)?), span: e.span }]
+                let tail = self.elaborate_expr(e)?;
+                // A `throws` expression-body fn wraps its tail in `Ok(...)`
+                // exactly once (a throws-call tail already auto-propagated to
+                // the bare `T`, which this re-wraps — never a double-`Ok`).
+                let value = if self.current_fn_throws { ok_wrap(tail) } else { tail };
+                vec![Stmt::Return { value: Some(value), span: e.span }]
             }
             ast::FunctionBody::Declaration | ast::FunctionBody::Extern(_) => {
                 return Err(ElabError::new(
@@ -301,6 +328,12 @@ impl Elaborator {
                 ));
             }
         };
+        // Fall-off in a `throws` function returns `Ok(())` (the `void … throws
+        // E` success path, and dead-but-harmless after a body that always
+        // returns). Block bodies only — an expr body always returns above.
+        if self.current_fn_throws && matches!(fd.body, ast::FunctionBody::Block(_)) {
+            body.push(Stmt::Return { value: Some(ok_wrap(Expr::Unit)), span: fd.span });
+        }
         Ok((params, body))
     }
 
@@ -332,6 +365,9 @@ impl Elaborator {
             self.func_names.insert(mangled.clone());
             self.fn_param_names.insert(mangled.clone(), param_names);
             self.fn_ret.insert(mangled.clone(), ty_of_type(&m.node.return_type.node));
+            if m.node.throws.is_some() {
+                self.fn_throws.insert(mangled.clone());
+            }
             self.equip_methods.insert(
                 (type_name.clone(), mname.clone()),
                 MethodInfo { mangled: mangled.clone(), self_mode },
@@ -551,11 +587,32 @@ impl Elaborator {
                     Some(e) => {
                         // D4 position 4 (return of a live tainted place).
                         self.reject_if_tainted_live_place(&e.node, e.span, "return")?;
-                        Some(self.elaborate_expr(e)?)
+                        let inner = self.elaborate_expr(e)?;
+                        // A `throws` fn returns `Result[T, E]`: wrap the value in
+                        // `Ok(...)`. A throws-call inside `e` already auto-
+                        // propagated to the bare `T`, which this re-wraps once.
+                        Some(if self.current_fn_throws { ok_wrap(inner) } else { inner })
                     }
+                    // Bare `return`: `Ok(())` in a throws fn, `Unit` otherwise.
+                    None if self.current_fn_throws => Some(ok_wrap(Expr::Unit)),
                     None => None,
                 };
                 Ok(vec![Stmt::Return { value, span }])
+            }
+
+            // `throw e` desugars to `return Error(e)` — the throws→Result error
+            // path (RFC §2.6 row 1). Only valid inside a `throws` function; a
+            // `throw` anywhere else is a LOUD elaboration error (never silently
+            // dropped, the flagship silent-wrong bug this closes).
+            ast::Stmt::Throw(e) => {
+                if !self.current_fn_throws {
+                    return Err(ElabError::new(
+                        "`throw` outside a `throws` function is ill-formed",
+                        span,
+                    ));
+                }
+                let inner = self.elaborate_expr(e)?;
+                Ok(vec![Stmt::Return { value: Some(error_wrap(inner)), span }])
             }
 
             ast::Stmt::With { bindings, body } => self.desugar_with(bindings, body, span),
@@ -955,7 +1012,12 @@ impl Elaborator {
             }
 
             ast::Expr::Match { scrutinee, arms, else_arm } => {
+                // See `elaborate_match_stmt`: suppress auto-prop on the scrutinee
+                // iff the arms consume the `Result` itself (`case Ok/Error`).
+                let consumes = arms.iter().any(|a| pattern_consumes_result(&a.pattern.node));
+                self.autoprop_suppressed = consumes;
                 let scrut = self.elaborate_expr(scrutinee)?;
+                self.autoprop_suppressed = false;
                 let mut ggc_arms = Vec::with_capacity(arms.len());
                 for arm in arms {
                     if arm.guard.is_some() {
@@ -1087,12 +1149,50 @@ impl Elaborator {
         // are REORDERED to the callee's param order via the pass-1 signature
         // registry, replacing the B1-interim rejection.
         if self.func_names.contains(name) {
+            // Consume the Result-consuming flag for THIS (outermost) call before
+            // its args elaborate, so a nested throws-call in an arg still
+            // auto-propagates.
+            let suppressed = std::mem::take(&mut self.autoprop_suppressed);
             let out = self.call_args_reordered(name, args)?;
-            return Ok(Expr::Call { func: name.clone(), args: out });
+            let call = Expr::Call { func: name.clone(), args: out };
+            return self.maybe_wrap_throws_call(call, name, callee.span, suppressed);
         }
         Err(ElabError::new(
             format!("unresolved callee `{name}` (unknown function/struct/enum; may need Increment B2)"),
             callee.span,
+        ))
+    }
+
+    /// Apply the throws→Result auto-propagate wrap to a `call` to the GGC
+    /// function/method `callee_name` (RFC §2.6 row 1). A call to a NON-throws
+    /// callee passes through untouched. For a throws callee:
+    ///   * `suppressed` (a Result-consuming match scrutinee, `case Ok/Error`)
+    ///     → yield the `Result` value directly (the consumer destructures it);
+    ///   * else inside a `throws` fn → wrap in `Propagate` (`?` semantics:
+    ///     `Ok(x)` peels to `x`, `Error(e)` early-returns from the caller);
+    ///   * else (non-`throws` context, not consumed) → LOUD ElabError. In real
+    ///     Gorget this is a type error; ggdef refuses it rather than silently
+    ///     mis-evaluating the dropped `throws` effect (the flagship safety bug).
+    fn maybe_wrap_throws_call(
+        &self,
+        call: Expr,
+        callee_name: &str,
+        span: Span,
+        suppressed: bool,
+    ) -> ElabResult<Expr> {
+        if !self.fn_throws.contains(callee_name) || suppressed {
+            return Ok(call);
+        }
+        if self.current_fn_throws {
+            return Ok(Expr::Propagate(Box::new(call)));
+        }
+        Err(ElabError::new(
+            format!(
+                "call to `throws` function `{callee_name}` in a non-`throws` context that does \
+                 not consume the `Result` (no `match … case Ok/Error`); ggdef does not model \
+                 `catch`/`??`/`rethrow` error recovery yet"
+            ),
+            span,
         ))
     }
 
@@ -1306,7 +1406,7 @@ impl Elaborator {
         receiver: &Spanned<ast::Expr>,
         minfo: &MethodInfo,
         args: &[Spanned<ast::CallArg>],
-        _span: Span,
+        span: Span,
     ) -> ElabResult<Expr> {
         // D4 position 6, user-method sibling (B2 output-review R2): a `&self`
         // mutator writing through a TAINTED Borrow-rooted receiver would
@@ -1315,10 +1415,14 @@ impl Elaborator {
         if minfo.self_mode == Mode::WriteThrough {
             self.reject_materialize_on_write(&receiver.node, receiver.span)?;
         }
+        // Consume the Result-consuming flag for THIS call before receiver/args
+        // elaborate (a nested throws-call in them still auto-propagates).
+        let suppressed = std::mem::take(&mut self.autoprop_suppressed);
         let self_src = self.self_source(receiver, minfo.self_mode)?;
         let mut out = vec![self_src];
         out.extend(self.call_args_reordered(&minfo.mangled, args)?);
-        Ok(Expr::Call { func: minfo.mangled.clone(), args: out })
+        let call = Expr::Call { func: minfo.mangled.clone(), args: out };
+        self.maybe_wrap_throws_call(call, &minfo.mangled, span, suppressed)
     }
 
     /// Bind a method receiver as the `self` source per the resolved self-mode.
@@ -1343,7 +1447,17 @@ impl Elaborator {
         else_arm: Option<&ast::Block>,
         span: Span,
     ) -> ElabResult<Stmt> {
+        // A scrutinee that is a throws-call yields the `Result` value (no auto-
+        // propagate) exactly when the arms destructure `Result` (`case
+        // Ok/Error`); otherwise the throws-call auto-propagates and the arms see
+        // the inner value.
+        let consumes = arms
+            .iter()
+            .filter_map(|i| i.arm())
+            .any(|a| pattern_consumes_result(&a.pattern.node));
+        self.autoprop_suppressed = consumes;
         let scrut = self.elaborate_expr(scrutinee)?;
+        self.autoprop_suppressed = false;
         let mut out_arms = Vec::with_capacity(arms.len());
         for item in arms {
             let arm = item
@@ -1477,6 +1591,33 @@ fn enum_construct(type_name: &str, variant: &str, args: Vec<Source>) -> Expr {
     Expr::EnumConstruct { type_name: type_name.to_string(), variant: variant.to_string(), args }
 }
 
+/// `Ok(inner)` — the throws→Result success wrap (RFC §2.6 row 1). `inner` moves
+/// into the payload (a fresh value at this owning position).
+fn ok_wrap(inner: Expr) -> Expr {
+    enum_construct("Result", "Ok", vec![Source::Value(inner)])
+}
+
+/// `Error(inner)` — the `throw`-statement desugar (`throw e` → `return
+/// Error(e)`).
+fn error_wrap(inner: Expr) -> Expr {
+    enum_construct("Result", "Error", vec![Source::Value(inner)])
+}
+
+/// Whether a `match` arm pattern destructures the `Result` itself (`case
+/// Ok(..)` / `case Error(..)`) — the signal that a throws-call scrutinee should
+/// yield the `Result` value rather than auto-propagate.
+fn pattern_consumes_result(pat: &ast::Pattern) -> bool {
+    match pat {
+        ast::Pattern::Constructor { path, .. } => {
+            path.last().map(|s| s.node == "Ok" || s.node == "Error").unwrap_or(false)
+        }
+        ast::Pattern::DotShorthand { variant, .. } => {
+            variant.node == "Ok" || variant.node == "Error"
+        }
+        _ => false,
+    }
+}
+
 /// The prelude enum a bare constructor name belongs to (`Some`/`None` →
 /// `Option`, `Ok`/`Error` → `Result`).
 fn prelude_enum_of(name: &str) -> Option<&'static str> {
@@ -1592,7 +1733,7 @@ fn collect_expr_locals(e: &Expr, closures: &[ClosureDef], out: &mut HashSet<Stri
         Expr::Local(n) => {
             out.insert(n.clone());
         }
-        Expr::Int(_) | Expr::Bool(_) | Expr::Float(_) | Expr::Str(_) => {}
+        Expr::Int(_) | Expr::Bool(_) | Expr::Float(_) | Expr::Str(_) | Expr::Unit => {}
         Expr::FString(parts) => {
             for p in parts {
                 if let FPart::Interp(e) = p {
@@ -1618,9 +1759,11 @@ fn collect_expr_locals(e: &Expr, closures: &[ClosureDef], out: &mut HashSet<Stri
             collect_expr_locals(l, closures, out);
             collect_expr_locals(r, closures, out);
         }
-        Expr::Unary(_, e) | Expr::Cast { expr: e, .. } | Expr::IntToStr(e) | Expr::Clone(e) => {
-            collect_expr_locals(e, closures, out)
-        }
+        Expr::Unary(_, e)
+        | Expr::Cast { expr: e, .. }
+        | Expr::IntToStr(e)
+        | Expr::Clone(e)
+        | Expr::Propagate(e) => collect_expr_locals(e, closures, out),
         Expr::Call { args, .. } | Expr::Construct { args, .. } | Expr::EnumConstruct { args, .. } => {
             for a in args {
                 collect_source_locals(a, closures, out);

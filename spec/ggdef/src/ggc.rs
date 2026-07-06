@@ -234,6 +234,10 @@ pub enum Expr {
     Float(f64),
     Str(String),
     FString(Vec<FPart>),
+    /// The unit value `()`. Elaboration's ONLY producer is the throws→Result
+    /// desugar's `Ok(())` for a bare/fall-off `return` in a `void … throws E`
+    /// function (there is no unit literal on the surface).
+    Unit,
 
     // ── Places ──
     Local(String),
@@ -265,6 +269,14 @@ pub enum Expr {
     IntToStr(Box<Expr>),
     /// An explicit `.clone()` deep copy of a place (emits `ExplicitClone`).
     Clone(Box<Expr>),
+    /// Error-propagation of a `Result` value — the elaboration home of the
+    /// implicit `throws`-call auto-propagate (RFC §2.6 row 1, "throws/Result").
+    /// The inner expression MUST evaluate to a `Result`: `Ok(x)` yields `x`;
+    /// `Error(e)` performs an early function-level `return Error(e)` from the
+    /// enclosing `throws` function (the `?`-operator semantics). Elaboration
+    /// only emits this inside a `throws` function; a stray one reaching the top
+    /// frame is `IllFormed` (defensive).
+    Propagate(Box<Expr>),
 }
 
 impl Expr {
