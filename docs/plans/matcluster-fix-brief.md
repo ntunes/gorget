@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: production materialize-on-write cluster (4 roots, 1 track, 4 sequenced commits)
 
-> **STATUS: v1 (scout draft adopted 2026-07-06) — review passes cleared: 0 of >=3. Executor: not launched.**
+> **STATUS: v2 — pass 1 (Opus, 6 reservations) folded via the OVERRIDE section below; 0 clean of >=3. Executor: not launched.**
 > ggdef-RATIFIED expected outputs: #1 warn_compound=10 · #2 loop_read_before_write=1,2,3,1 ·
 > #3 ok_rebind=3,1 · #4 dead_branch_alias_bind=9. Scout artifacts: /tmp/recover_matcluster/
 > (findings incl. the full draft brief + the measured #1 prototype patch).
@@ -8,6 +8,34 @@
 > (self-host is the reference oracle). D2 plain-self is OUT (separate track, TODO:952).
 > ⚠ Scout caveat: the self-host #1/#2 mirror was NOT bootstrap-gated in the scout session —
 > the executor rebuilds the self-host and gates bootstrap_fixed_point before landing #1/#2.
+
+
+## ⚡ REVIEW PASS-1 FOLDS (2026-07-06) — OVERRIDE the corresponding draft text below
+
+- **R1 (#2 gate)**: #2 is the ONLY unprototyped root and the substrate extension is heavier than
+  "add a branch" (the lazy machinery triggers at a `for s in coll` VarDecl via set_collection_ref;
+  a bare param has NO VarDecl trigger — a NEW pre-loop analysis is needed: detect bare param
+  mutated-in-loop w/ loop-carried read-after-write → pre-loop flag+slot → clone-once; self-host
+  mirror: LazyMember is SVarDecl-only, lower_stmt.gg:695). The executor MUST build a Rust
+  mini-prototype that measures `1,2,3,1` end-to-end BEFORE committing to the approach; if the
+  trigger proves heavier than budgeted, RE-SCOPE #2 to its own track (pre-authorized) and land
+  #1/#3/#4 without it.
+- **R2 (self-host #1 mirror)**: the index-compound call goes at the **EIndex compound arm,
+  lower_stmt.gg:1254, with `target_expr`** (exact mirror of SAssign :1032) — NOT inside
+  lower_index_compound_assign (no target_expr param there). EFieldAccess arm (:1241) as drafted.
+  Reminder: #1's "proto ready" is RUST-only; the self-host mirror is unprototyped and MUST be
+  bootstrap-gated before landing.
+- **R3 (#3 shape)**: skip the pre-clone/slot-upgrade ONLY when the RHS does not reference the
+  rebound local — `xs = [9,9]` (independent) skips; `xs = xs.slice(...)` (self-derived) keeps the
+  pre-clone. Study the self-host's correct rebind arm (~lower_stmt.gg:880-1012). REQUIRED
+  negative fixture: self-derived rebind still works.
+- **R4**: the compound-arm ratchet (mirror container_literal_arms_count) is a REQUIRED #1
+  deliverable, same commit — not optional.
+- **R5 (zones)**: tests/integration.rs is SHARED with the concurrent P1-infra track — both
+  additive; parent reconciles at merge. (P1-C was re-pointed to a new tests/spec_conformance.rs
+  on the other track, reducing this further.)
+- **R6**: post-fix, MOVE cow_dead_branch_alias_bind.gg from known_gaps/ into tests/fixtures/
+  proper (it stops being a gap; promotes it into the runtime-diff corpus) — plus its test un-ignored.
 
 ## Operational rules
 Worktree preamble verbatim (CLAUDE.md rule 2): pwd + rev-parse inside YOUR worktree; never touch
