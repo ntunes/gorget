@@ -99,6 +99,10 @@ definition ratifies `ablog`; the fix is Rust-gg-side.
 
 ## Adjudication #3 — the EMove witness → `hello` (pre-mutation value, D1)
 
+> NOTE (output-review): the trace spans below are PROGRAM-RELATIVE — the seed fixture carries
+> ~651 bytes of spectest frontmatter, so file-relative spans from the cited command are offset
+> by that amount. Events, places, and the verdict are exact.
+
 The witness, written to the pinned shape (devbook/11:716-733; the name asymmetry
 is mandatory) as `spectests/run/emove_lazy_bind_witness.gg`:
 
