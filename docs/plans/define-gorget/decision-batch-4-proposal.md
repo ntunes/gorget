@@ -398,7 +398,17 @@ cleanup. Confidence: medium (owner taste call on the feature itself).
 
 ---
 
-### D20 (PROPOSED) — Canonical text-conversion: f-strings are THE way; reject the impostors with fix-its
+### D20 (RATIFIED 2026-07-06 — as recommended) — Canonical text-conversion: f-strings are THE way; reject the impostors with fix-its
+
+> **Owner ruling 2026-07-06: "I agree with whatever you recommend."** Ratified as
+> recommended: `f"{x}"` is the canonical surface; `.display()` remains as the trait
+> method it desugars to (ONE concept, two positions — like `+` and `Add`; legitimate
+> when a String value is needed programmatically — NOT a second way); `x.to_string()`
+> on primitives stays rejected and gains a fix-it naming both forms; `String(x)` joins
+> the rejection (today a silent empty-string miscompile contradicting reference :3224);
+> UUID/DateTime keep type-specific `to_string` as ordinary API. Docs write-through
+> includes the `language-design.md:80` falsehood (f-strings desugar via
+> `Displayable`/`display`, not `.to_string()`). A7 CLOSES.
 
 > Write-through note (found during D16's edit): `language-design.md:80` claims f-string
 > interpolation "calls `.to_string()`" — stale/wrong (interpolation goes through

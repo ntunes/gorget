@@ -227,6 +227,15 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D20 RATIFIED by owner (as recommended): f-strings are THE canonical
+  text conversion.** `.display()` = the underlying trait method (one concept, two
+  positions, not a second way); reject `to_string`-on-primitives AND `String(x)` with
+  fix-its naming `f"{x}"` / `.display()`; type-specific `to_string` (UUID/DateTime)
+  stays as API. Corpus evidence: ~3885 f-string uses vs 30 `.to_string()` (self-host 0).
+  Write-through: language-design:80 ("calls .to_string()" — false; it's Displayable).
+  A7 CLOSED. Track = the two already-filed bug entries (String(3) silent miscompile M;
+  fix-it polish L) + the doc fix, consolidated.
+
 - 2026-07-06 — **D18 RATIFIED by owner AS THE GENERAL RULE: const-eval mirrors runtime
   semantics exactly, except runtime FAULTS become COMPILE ERRORS.** (Owner: "keep it
   simple, consistent and coherent" — never revisit per-operation.) Falls out: const `+`
