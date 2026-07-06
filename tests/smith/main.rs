@@ -5,8 +5,14 @@
 //! each other, per seed, in cost order:
 //!
 //!   1. `gg check`               — front-end accepts the program
+//!   1b. ggdef (the definition)  — evaluate in-process (RFC §4): an `IllFormed`
+//!                                 outcome where `gg check` accepted is an
+//!                                 immediate SPEC-DIVERGE; else the value/trap
+//!                                 outcome is held as an oracle for step 3
 //!   2. `gg build` (C backend)   — reference build must succeed
-//!   3. run the C binary         — must exit 0; stdout becomes the oracle
+//!   3. run the C binary         — must exit 0; stdout becomes the oracle, and
+//!                                 the held ggdef value/trap oracle is checked
+//!                                 against it here (c_out now exists)
 //!   4. self-host lane           — `driver --emit-c` → `cc` → run, diff vs C
 //!   5. LLVM lane                — `gg build --backend=llvm` → run, diff vs C
 //!
@@ -32,6 +38,15 @@
 //! | BUILD-FAIL(llvm) | C built but `--backend=llvm` didn't                  |
 //! | DIVERGE(C,llvm)  | LLVM binary's stdout/exit differs from C             |
 //! | TIMEOUT          | some lane hit its deadline                           |
+//! | SPEC-DIVERGE     | ggdef (the definition) and an impl disagree: a       |
+//! |                  | check-accepted program ggdef calls IllFormed, or a   |
+//! |                  | value/trap outcome differing from the C oracle. A    |
+//! |                  | both-compiler finding (invariant #8); tri-state      |
+//! |                  | triage: impl-bug / spec-bug / spec-silent            |
+//! | GGDEF-SKIP       | ggdef could not adjudicate (out of GGC surface or    |
+//! |                  | non-terminating under fuel); the cross-impl lanes    |
+//! |                  | still ran and agreed. Benign — recorded so ggdef     |
+//! |                  | coverage gaps stay visible                           |
 //!
 //! ## How to run
 //!
@@ -65,6 +80,20 @@
 //! - tier 2 (future): traits/equip, closures, generics.
 //!
 //! Tier is selected with `GG_SMITH_TIER` (default 0); only tier 0 exists.
+//!
+//! ## ggdef verdict lane (RFC §4)
+//!
+//! The definitional interpreter `ggdef` runs IN-PROCESS as a fifth oracle (see
+//! the flow above). For tier 0 this is provably safe: tier-0 output is shallow
+//! (a fixed helper set), and over 200 seeds ggdef hits 0 `FuelExhausted` at
+//! `GGDEF_FUEL` = 2,000,000 — no seed drives ggdef deep enough to overflow its
+//! native stack. That safety is a property of tier 0, NOT of ggdef: ggdef
+//! bounds STEP count, not eval/elaboration recursion DEPTH, so a deep seed
+//! would SIGABRT the whole (in-process) smith run uncatchably. Widening the
+//! generator past tier 0 is therefore GATED on the ggdef native-recursion-guard
+//! fix (filed HIGH in TODO.md) — do NOT enable a deeper tier before it lands.
+//! That gate is on TIER WIDENING; running ggdef in-process at tier 0 is safe
+//! now, so this lane adds no depth-bound of its own.
 //!
 //! ## Round-1 findings (locked as `#[ignore]`d fixtures)
 //!
@@ -240,6 +269,16 @@ enum Verdict {
     DivergeSh { detail: String },
     BuildFailLlvm { detail: String },
     DivergeLlvm { detail: String },
+    /// ggdef (the definition, RFC §4) and an implementation disagree: ggdef
+    /// flags a program `gg check` ACCEPTED as `IllFormed`, or ggdef's value/
+    /// trap outcome differs from the C oracle. A both-compiler finding
+    /// (invariant #8) — triage impl-bug vs spec-bug vs spec-silent, never
+    /// silently accept.
+    SpecDiverge { detail: String },
+    /// ggdef could not adjudicate this seed (out of the GGC surface, or
+    /// non-terminating under fuel); the cross-impl differential still ran and
+    /// agreed. Benign, recorded distinctly so ggdef-coverage gaps stay visible.
+    GgdefSkip { detail: String },
 }
 
 impl Verdict {
@@ -255,7 +294,17 @@ impl Verdict {
             Verdict::DivergeSh { .. } => "DIVERGE(C,SH)",
             Verdict::BuildFailLlvm { .. } => "BUILD-FAIL(llvm)",
             Verdict::DivergeLlvm { .. } => "DIVERGE(C,llvm)",
+            Verdict::SpecDiverge { .. } => "SPEC-DIVERGE",
+            Verdict::GgdefSkip { .. } => "GGDEF-SKIP",
         }
+    }
+
+    /// A benign verdict: the seed exhibits no cross-impl or spec divergence.
+    /// `GgdefSkip` is benign (the differential agreed; ggdef merely abstained),
+    /// so it is treated like `Match` for scratch-dir cleanup and progressive
+    /// reporting, and is NOT counted as suspicious.
+    fn is_benign(&self) -> bool {
+        matches!(self, Verdict::Match | Verdict::GgdefSkip { .. })
     }
 
     /// First error/diff line for the report (empty for MATCH).
@@ -269,7 +318,9 @@ impl Verdict {
             | Verdict::CcFail { detail }
             | Verdict::DivergeSh { detail }
             | Verdict::BuildFailLlvm { detail }
-            | Verdict::DivergeLlvm { detail } => detail.clone(),
+            | Verdict::DivergeLlvm { detail }
+            | Verdict::SpecDiverge { detail }
+            | Verdict::GgdefSkip { detail } => detail.clone(),
             Verdict::Timeout { lane } => format!("lane: {lane}"),
         }
     }
@@ -279,6 +330,7 @@ impl Verdict {
 struct Timings {
     generate: Duration,
     check: Duration,
+    ggdef: Duration,
     cbuild: Duration,
     crun: Duration,
     driver: Duration,
@@ -292,6 +344,7 @@ impl Timings {
     fn add(&mut self, o: &Timings) {
         self.generate += o.generate;
         self.check += o.check;
+        self.ggdef += o.ggdef;
         self.cbuild += o.cbuild;
         self.crun += o.crun;
         self.driver += o.driver;
@@ -304,6 +357,7 @@ impl Timings {
     fn total(&self) -> Duration {
         self.generate
             + self.check
+            + self.ggdef
             + self.cbuild
             + self.crun
             + self.driver
@@ -417,6 +471,30 @@ fn first_diff(a_name: &str, a: &str, b_name: &str, b: &str, a_exit: i32, b_exit:
 
 // ───────────────────────────── per-seed flow ───────────────────────────
 
+/// Fuel bound for the in-process ggdef verdict-lane evaluation. Tier-0 output
+/// is provably shallow: over 200 seeds, 0 `FuelExhausted` at this bound (scout
+/// measurement, phase1-infra P1-E). This bounds ggdef's STEP count only — the
+/// native-recursion DEPTH is bounded by the tier-0 grammar, and widening past
+/// tier 0 is gated on the ggdef native-recursion-guard fix (see the module
+/// docs "ggdef verdict lane"), NOT on this constant.
+const GGDEF_FUEL: u64 = 2_000_000;
+
+/// The ggdef oracle for one seed, captured right after `gg check` accepts.
+/// `IllFormed` never reaches this enum — it is an immediate SPEC-DIVERGE (the
+/// definition rejects a program production accepted). `Value`/`Trap` are
+/// checked against the C oracle once `c_out` exists (step 3); `Skip` means
+/// ggdef abstained and the seed falls back to the cross-impl differential.
+enum GgdefOracle {
+    /// ggdef ran to a value; its stdout must match the C oracle's.
+    Value(String),
+    /// ggdef faulted (a defined Trap); the C run must NOT exit 0 cleanly. The
+    /// held string is the fault message, for the SPEC-DIVERGE detail line.
+    Trap { fault: String },
+    /// ggdef could not adjudicate (FuelExhausted / ElabError / ParseError). The
+    /// held string is the reason, surfaced in the GGDEF-SKIP detail line.
+    Skip { reason: String },
+}
+
 /// Classify one program source through the full differential. `work` is a
 /// scratch dir owned by the caller (created here; cleaned by the caller).
 /// SHORT-CIRCUIT: the first failing oracle is the verdict — cross-lane
@@ -446,6 +524,43 @@ fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict
         Ok(_) => {}
     }
 
+    // (1b) ggdef verdict lane — the definitional interpreter (RFC §4) as an
+    // in-process oracle, evaluated right after `gg check` accepts. `gg check`
+    // passing means production considers the program well-formed, so a ggdef
+    // `IllFormed` outcome here is a SPEC-DIVERGE reported IMMEDIATELY (the
+    // flagship class — e.g. the A29 same-call-aliasing hole where production
+    // accepts a program the definition rejects). Value/Trap outcomes are HELD
+    // and reconciled against the C oracle after step 3 (c_out). Anything ggdef
+    // cannot adjudicate is a GGDEF-SKIP: the seed falls back to the cross-impl
+    // differential unchanged — ggdef ADDS an oracle, it never removes a lane.
+    // In-process is safe at tier 0 (module docs "ggdef verdict lane").
+    let t0 = Instant::now();
+    let ggdef_res = ggdef::run_source(source, GGDEF_FUEL);
+    t.ggdef += t0.elapsed();
+    let ggdef_oracle = match ggdef_res {
+        Ok(run) => match run.outcome {
+            ggdef::Outcome::IllFormed(msg) => {
+                return Verdict::SpecDiverge {
+                    detail: truncate_chars(
+                        &format!("gg check ACCEPTED but ggdef IllFormed: {msg}"),
+                        240,
+                    ),
+                };
+            }
+            ggdef::Outcome::Value(_) => GgdefOracle::Value(run.stdout),
+            ggdef::Outcome::Trap(f) => GgdefOracle::Trap { fault: f.message().to_string() },
+            ggdef::Outcome::FuelExhausted => {
+                GgdefOracle::Skip { reason: "ggdef FuelExhausted".to_string() }
+            }
+        },
+        Err(ggdef::FrontendError::Parse(errs)) => GgdefOracle::Skip {
+            reason: truncate_chars(&format!("ggdef ParseError ({} error/s)", errs.len()), 240),
+        },
+        Err(ggdef::FrontendError::Elaborate(e)) => GgdefOracle::Skip {
+            reason: truncate_chars(&format!("ggdef ElabError: {}", e.message), 240),
+        },
+    };
+
     // (2) C build (default backend — never --backend, never GG_BACKEND).
     // Check-accepted + ANY build failure (gg stage or cc stage) is a
     // compiler bug: BUILD-FAIL(C).
@@ -471,6 +586,32 @@ fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict
         }
         Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
     };
+
+    // (3b) ggdef oracle reconciliation — the C oracle (a clean exit 0 + stdout)
+    // now exists. A held ggdef `Value` whose stdout disagrees, or a held `Trap`
+    // the C run did NOT reproduce (it exited 0 cleanly above), is a
+    // SPEC-DIVERGE. A C-side fault would already have short-circuited to CRASH
+    // above and that verdict stands — ggdef ADDS an oracle, it never softens a
+    // real crash. tier-0 emits no floats (generator.rs, integer arithmetic
+    // only), so a Value stdout diff is never spurious float-rendering skew.
+    match &ggdef_oracle {
+        GgdefOracle::Value(g_out) => {
+            if g_out.trim_end() != c_out.trim_end() {
+                return Verdict::SpecDiverge {
+                    detail: first_diff("ggdef", g_out, "c", &c_out, 0, "0".to_string()),
+                };
+            }
+        }
+        GgdefOracle::Trap { fault } => {
+            return Verdict::SpecDiverge {
+                detail: truncate_chars(
+                    &format!("ggdef Trap ({fault}) but C ran to a clean exit 0"),
+                    240,
+                ),
+            };
+        }
+        GgdefOracle::Skip { .. } => {}
+    }
 
     // (4) self-host lane: driver --emit-c → cc → run, diff vs C (mirrors
     // self_host_emit_cc_run, integration.rs:19388-19476).
@@ -573,11 +714,19 @@ fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict
         }
     }
 
-    Verdict::Match
+    // All lanes agreed. If ggdef adjudicated (Value stdout matched, or a Trap
+    // that C reproduced — neither reached here as a divergence), that is a full
+    // MATCH; if ggdef ABSTAINED (Skip), record GGDEF-SKIP so the ggdef-coverage
+    // gap for this shape stays visible even though the cross-impl diff passed.
+    match ggdef_oracle {
+        GgdefOracle::Skip { reason } => Verdict::GgdefSkip { detail: reason },
+        GgdefOracle::Value(_) | GgdefOracle::Trap { .. } => Verdict::Match,
+    }
 }
 
-/// Generate + classify one seed. The seed's scratch dir is removed on MATCH
-/// (repro dirs are kept only for non-MATCH seeds).
+/// Generate + classify one seed. The seed's scratch dir is removed when the
+/// verdict is benign (MATCH or GGDEF-SKIP); repro dirs are kept only for
+/// divergent/suspicious seeds.
 fn run_seed(seed: u64, cfg: &Config, tmp_root: &Path) -> (Verdict, Timings, PathBuf) {
     let mut t = Timings::default();
     let t0 = Instant::now();
@@ -585,7 +734,7 @@ fn run_seed(seed: u64, cfg: &Config, tmp_root: &Path) -> (Verdict, Timings, Path
     t.generate += t0.elapsed();
     let dir = tmp_root.join(format!("s{seed}"));
     let v = classify(&src, &dir, cfg, &mut t);
-    if matches!(v, Verdict::Match) {
+    if v.is_benign() {
         let _ = std::fs::remove_dir_all(&dir);
     }
     (v, t, dir)
@@ -610,9 +759,11 @@ fn parallel_map_seeds(
                         .iter()
                         .map(|&seed| {
                             let (v, t, dir) = run_seed(seed, cfg, tmp_root);
-                            if !matches!(v, Verdict::Match) {
+                            if !v.is_benign() {
                                 // Progressive report (one print! call so the
                                 // two lines never interleave across workers).
+                                // Benign verdicts (MATCH / GGDEF-SKIP) are
+                                // quiet — their scratch dir is already gone.
                                 print!(
                                     "seed {seed}: {} [{}]\n    repro: {}\n",
                                     v.label(),
@@ -723,11 +874,16 @@ fn smith_batch() {
     let mut totals = Timings::default();
     let mut suspicious: Vec<u64> = Vec::new();
     let mut gen_invalid: Vec<u64> = Vec::new();
+    let mut ggdef_skip: Vec<u64> = Vec::new();
     for (seed, v, t, _dir) in &results {
         *counts.entry(v.label()).or_insert(0) += 1;
         totals.add(t);
         match v {
             Verdict::Match => {}
+            // Benign: cross-impl lanes agreed; ggdef merely abstained. Tracked
+            // separately so a ggdef-coverage gap is visible without polluting
+            // the suspicious list (a GGDEF-SKIP is NOT a divergence).
+            Verdict::GgdefSkip { .. } => ggdef_skip.push(*seed),
             Verdict::GenInvalid { .. } => gen_invalid.push(*seed),
             _ => suspicious.push(*seed),
         }
@@ -741,10 +897,11 @@ fn smith_batch() {
         counts.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("  "),
     );
     println!(
-        "avg per seed: gen={:.3}s check={:.3}s cbuild={:.3}s crun={:.3}s driver={:.3}s \
-         cc={:.3}s shrun={:.3}s lbuild={:.3}s lrun={:.3}s total={:.3}s",
+        "avg per seed: gen={:.3}s check={:.3}s ggdef={:.4}s cbuild={:.3}s crun={:.3}s \
+         driver={:.3}s cc={:.3}s shrun={:.3}s lbuild={:.3}s lrun={:.3}s total={:.3}s",
         totals.generate.as_secs_f64() / n,
         totals.check.as_secs_f64() / n,
+        totals.ggdef.as_secs_f64() / n,
         totals.cbuild.as_secs_f64() / n,
         totals.crun.as_secs_f64() / n,
         totals.driver.as_secs_f64() / n,
@@ -756,11 +913,12 @@ fn smith_batch() {
     );
     println!("divergent/suspicious seeds: {suspicious:?}");
     println!("gen-invalid seeds: {gen_invalid:?}");
+    println!("ggdef-skip (out-of-surface) seeds: {ggdef_skip:?}");
     if suspicious.is_empty() && gen_invalid.is_empty() {
         let _ = std::fs::remove_dir_all(&tmp_root);
-        println!("all seeds MATCH — repro root removed");
+        println!("all seeds benign (MATCH / GGDEF-SKIP) — repro root removed");
     } else {
-        println!("repro root (non-MATCH seed dirs kept): {}", tmp_root.display());
+        println!("repro root (divergent/suspicious seed dirs kept): {}", tmp_root.display());
         println!(
             "minimize a seed with: GG_SMITH_MINIMIZE=<seed> cargo test --test smith -- --nocapture"
         );
@@ -817,8 +975,8 @@ fn smith_minimize() {
         baseline.detail(),
         src.lines().count(),
     );
-    if matches!(baseline, Verdict::Match) {
-        println!("seed {seed} is MATCH — nothing to minimize");
+    if baseline.is_benign() {
+        println!("seed {seed} is {} (benign) — nothing to minimize", baseline.label());
         let _ = std::fs::remove_dir_all(&tmp_root);
         return;
     }
