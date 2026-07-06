@@ -1,0 +1,10 @@
+# Panic-by-default: `expect(msg)` on a `None` value traps (reference §15.2).
+# NOTE: the test asserts ONLY a bug-agnostic substring (`` `None` value ``),
+# NOT the full message. Threading the user-supplied `expect` message through to
+# the panic text is a SEPARATE filed TODO — until it lands, `expect` reuses the
+# generic `unwrap()` message, so pinning the full text here would cement the
+# dropped-message bug as canonical output. Once the threading lands, this fixture
+# should assert the user message ("need a value") instead.
+void main():
+    Option[int] o = None
+    print(o.expect("need a value"))

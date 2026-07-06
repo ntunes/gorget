@@ -1,0 +1,5 @@
+# Panic-by-default: `unwrap()` on a `Result` that is `Error` traps
+# (reference §15.2 — unwrap extracts Ok, panics on Error).
+void main():
+    Result[int, String] r = Error("boom")
+    print(r.unwrap())
