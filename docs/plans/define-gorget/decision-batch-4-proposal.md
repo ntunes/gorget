@@ -424,7 +424,24 @@ way. Confidence: high.
 
 ---
 
-### D21 (PROPOSED) — A17: RETIRE `gg sim`
+### D21 (RATIFIED 2026-07-06 — GO) — A17: RETIRE `gg sim`
+
+> **Owner ruling 2026-07-06** (delegated the excellence judgment: "happy to remove it if
+> you think we can arrive at supreme excellence without it" — judgment: YES, remove).
+> The rationale of record: Miri exists to police Rust's `unsafe` trapdoor, to run its
+> aliasing-model research, and to stand in for the executable spec Rust lacks. Gorget
+> has no unsafe surface (UB inexpressible by construction, four-outcomes contract), a
+> one-sentence statically-enforced aliasing rule (D10), and an ACTUAL executable spec
+> (ggdef) — Miri approximates a definition; ggdef IS one. The Miri role maps onto the
+> existing triad: ggdef+lanes+smith (semantic oracle) · ASan/LSan/valgrind on emitted C
+> (memory-UB) · 4-implementation differential (compiler-correctness). sim's GIR-consuming
+> architecture was circular as an oracle regardless. **Deletion track: salvage scan
+> FIRST (one agent, ~1hr: confirm nothing in src/sim's UB-detection/isolation/backtrace
+> phases is worth porting), then delete src/sim + the `sim` command + sim-only tests +
+> doc mentions; git history keeps everything. PHASE-3 NOTE (pinned): the one future gap
+> is data-race detection for `shared`/Task — the right shape there is a ggdef
+> INTERLEAVING extension + TSan on implementations, never a GIR interpreter.** A17
+> CLOSES.
 
 ggdef now occupies exactly the role sim was reaching for (an independent semantic oracle),
 with the architecture sim never got (definitional, frontend-shared, IR-independent) — while

@@ -227,6 +227,16 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D21 RATIFIED (owner GO, judgment delegated + rendered): `gg sim` is
+  RETIRED.** Miri's three reasons-to-exist (unsafe trapdoor, aliasing research, no
+  executable spec) all map to Gorget non-needs: no unsafe surface, D10's static
+  one-sentence aliasing rule, and ggdef — the definition Miri only approximates. The
+  Miri ROLE is covered: ggdef/lanes/smith (semantic oracle), sanitizers on emitted C
+  (memory-UB), 4-impl differential (compiler correctness). Deletion track = salvage
+  scan first, then remove src/sim + command + tests + doc mentions. PHASE-3 PIN:
+  data-race detection returns as a ggdef interleaving extension + TSan — not a GIR
+  interpreter. A17 CLOSED.
+
 - 2026-07-06 — **D20 RATIFIED by owner (as recommended): f-strings are THE canonical
   text conversion.** `.display()` = the underlying trait method (one concept, two
   positions, not a second way); reject `to_string`-on-primitives AND `String(x)` with

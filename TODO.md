@@ -676,6 +676,9 @@ Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (
 
 ## Medium
 
+- **⚙️ [D21 RATIFIED 2026-07-06 → deletion track] Retire `gg sim`.** (1) SALVAGE SCAN first (one agent, bounded: read src/sim's UB-detection/isolation/backtrace phases — confirm nothing worth porting as a future ggdef extension; expectation per the ledger: nothing); (2) delete `src/sim/` + the `sim` subcommand + sim-only tests + doc/README mentions (git history preserves all); (3) the filed sim-parse_int inconsistency note becomes moot; (4) memory note ref_async_shared_sim stays as history. PHASE-3 PIN rides the ledger: data-race detection = ggdef interleaving extension + TSan, never a GIR interpreter. Build-time and maintenance win; parity/conformance unaffected (sim was never a lane).
+
+
 - **⚙️ [D18 RATIFIED 2026-07-06 → implementation track] Const-eval fault mirror: runtime faults become compile errors.** The general rule (ledger LOG): const-eval mirrors runtime exactly, except faults → rejection. (1) `src/semantic/meta.rs:1278` drops `wrapping_add/sub/mul` for checked ops → `E_` compile error on overflow (message mirrors the runtime trap text); (2) sweep the const-eval fault surface for the CLASS: div-by-zero, mod-zero, shift-overflow if runtime-checked — each rejects; (3) const `+%`/`-%`/`*%` wrap (verify support exists in const context; add if missing); (4) const float overflow → `inf` (verify mirrors runtime — no fault either side); (5) fixtures: negative (const INT_MAX+1 rejected; const 1/0 rejected) + positive (const `+%` wraps; const float inf); (6) docs write-through: the meta/comptime section states the one-sentence rule; (7) self-host meta-eval mirror (verify its const-eval path — same rule, both compilers). Small track; probe evidence /tmp/recover_scout_errmodel/q6_*.
 
 
