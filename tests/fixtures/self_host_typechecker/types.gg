@@ -30,6 +30,15 @@ enum ResolvedType:
 # ── Typed accessors ─────────────────────────────────────────
 
 ResolvedType get_rtype_at(Vector[ResolvedType] v, int i):
+    # An unresolved type is carried as the sentinel id -1 (mirrors the Rust
+    # typechecker's `ResolvedType::Error` for an unresolved/invalid TypeId —
+    # Rust's u32 ids can't be -1, so the self-host guards it here). Reading a
+    # negative (sentinel) id yields the Error type rather than trapping on
+    # unwrap-None. A positive out-of-range id is deliberately NOT masked — it
+    # would be a real bug and should trap, matching Rust's bare-index panic.
+    # The -1 inflow itself is filed for its own investigation (TODO).
+    if i < 0:
+        return RTError()
     return v.get(i).unwrap()
 
 SpannedType get_stype_at(Vector[SpannedType] v, int i):
