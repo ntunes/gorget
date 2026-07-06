@@ -90,6 +90,7 @@ Commit per increment. An increment's gates must be green before the next launche
 | the fixture relies on plain-`self` write-through | EXPECTED (D2): record in the increment report; the fixture's spec-expectation regenerates under D2; do NOT change ggdef |
 | the fixture is an EMove lazy-read shape (post-mutation value) | EXPECTED (D1): ggdef's pre-mutation value is correct; Rust gg is the bug |
 | the fixture is one of the two smith bugs (`cow_dead_branch_alias_bind` → 9, `move_param_concat` → ablog) | EXPECTED: ggdef MUST produce the correct value — this is acceptance (c) |
+| the fixture is one of the 3 PRE-ADJUDICATED deadwrite deltas (increment_b1.md CORRECTION: warn_compound→10, ok_loop_read_before_write→1,2,3,1, ok_rebind→3,1) | EXPECTED (RFC §2.2, production bugs filed): ratify with the D-rule citation; do not STOP or re-derive |
 | anything else | POTENTIAL GGDEF BUG or spec finding: STOP on that fixture, write a minimal repro, report it in the increment report for orchestrator triage. Never silently patch eval.rs to match production output |
 
 **Gates A** (foreground, tee to /tmp/ggdef_a_*_$RANDOM.log): `cargo build --workspace` clean
@@ -124,20 +125,31 @@ applied; all prior gates green.
 
 ### Increment B2 — equip, Drop, and the D4 rejections (~13 equip fixtures + full corpus)
 
-**Deliverables:** **receiver-type inference** — called out explicitly because A has ZERO type
-inference and name-matching dispatch is IMPOSSIBLE (the corpus contains
-`cow_named_recv_gate_name_collision`/`_projected`, whose user `get(&self)` collides with the
-builtin `.get()`): the elaborator gains a per-function type environment (locals are typed at
-bind sites; GGC is monomorphic, so this is propagation, not unification); concrete `equip`
+**Deliverables (with the B2-confirming-pass precisions folded, 2026-07-06):**
+**Pass-1 function-signature registry** (param names in decl order + param types + return type,
+alongside `func_names` — there is no signature store today, `func_names` is a name set only);
+it serves BOTH the named-arg reorder (mirror `struct_ctor_args` against it) AND
+**receiver-type inference** — called out explicitly because B1's elaborator has ZERO type
+tracking (`local_names: HashSet<String>`) and name-matching dispatch is IMPOSSIBLE (the corpus
+contains `cow_named_recv_gate_name_collision`/`_projected`, whose user `get(&self)` collides
+with the builtin `.get()`). Good news: Gorget is type-first, so this is READ-THE-ANNOTATION
+for user decls/params (`VarDecl.type_`, `Param.type_` in the AST) plus small context inference
+for the elaborator's own synthesized binds (`__coll`/`__i`/`__match`, captures) and `auto`.
+**The per-local env must carry binding MODE as well as type** (needed for D4's
+materialize-on-write detection); concrete `equip`
 method→call with self-mode handling (D2: plain `self` = bare binding); `equip T with Drop`
 with custom-drop EXECUTION (mechanical note from the confirming pass: `drop_scope` must
 thread `Ctx` and become `Result<(), Halt>` — a custom drop can Trap/recurse/exhaust fuel);
 transitive `drop_tainted` computation; **D4 rejections at all six implicit-copy positions
 with LIVE-PLACE sources** (fresh temps move, never rejected — e.g.
 `cow_element_borrow_source_mutate_with`'s `with Res(1) as r:` is a fresh-temp Move and must
-keep running) — emit the `E_MoveWithoutOperator`-family error text; **B's D4 testing =
-ggdef unit tests** (production-side rejections + negative conformance fixtures are phase 1
-per RFC §6); `with expr as name:` (scoped bind via fresh-temp Move + drop-at-exit); (F1)
+keep running) — ⚠ SIBLING-DRIFT WARNING (confirming pass): only bind/ctor-init/collection-put
+route through the Source helpers today; **return, closure capture, and materialize-on-write do
+NOT** — centralize ONE `reject_if_tainted_live_place(...)` helper and call it at ALL SIX
+enumerated sites (materialize-on-write detection is what needs the mode-carrying env above);
+emit the `E_MoveWithoutOperator`-family error text; **B's D4 testing = ggdef unit tests, ONE
+PER POSITION (six minimum)** (production-side rejections + negative conformance fixtures are
+phase 1 per RFC §6); `with expr as name:` (scoped bind via fresh-temp Move + drop-at-exit); (F1)
 ratchet hardening — second scan over FULL source text for bare
 `gorget::(ir|semantic|lir|bir|backend)::` path segments (use-line-only scan is bypassable,
 confirmed); (F2) emit a structural-move trace event for fresh-temp binds + update the
@@ -154,7 +166,11 @@ per RFC §6(a)+(b) with the divergence table applied; the increment report MUST 
 fixture per divergence category (expected-D2, expected-D1/EMove, smith, findings). The
 executor generates `spec/ggdef/reports/deadwrite_spec_expectations.md` (program → ggdef
 stdout + which D-decision explains any delta vs production) for orchestrator/owner review —
-these become the newly-ratified spec expectations.
+these become the newly-ratified spec expectations. **Three deltas are PRE-ADJUDICATED — carry
+them forward from `spec/ggdef/reports/increment_b1.md`'s CORRECTION table, do NOT re-derive,
+do NOT STOP, do NOT patch eval.rs:** `deadwrite_warn_compound`→10,
+`deadwrite_ok_loop_read_before_write`→1,2,3,1, `deadwrite_ok_rebind`→3,1 (ggdef-correct per
+RFC §2.2 bare-param materialize; production bugs already filed in TODO).
 
 ---
 
