@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: `String !p` move-param concat fix (conformance 186→187 both backends)
 
-> **STATUS: v5 — passes 1-3 folded; pass 4 (confirming) = RESERVATIONS (2: fold-3's own "only one remains" count was FALSE — ZERO of the Round-1 pair remain open post-fix — and the Zone list needed in-place reconciliation) → BOTH FOLDED (pass-4 corrections inline). Pass 5 (confirming) = CLEAN SIGN OFF 2026-07-06. EXECUTOR LAUNCHED. Non-blocking note for the PARENT at merge: the git-mv dead-links 4 illustrative paths in spec/ggdef/reports/{phase0_completion.md:29, adjudications.md:15,16,66} — historical reports, out of executor zone, parent's call.**
+> **STATUS: v5 — passes 1-3 folded; pass 4 (confirming) = RESERVATIONS (2: fold-3's own "only one remains" count was FALSE — ZERO of the Round-1 pair remain open post-fix — and the Zone list needed in-place reconciliation) → BOTH FOLDED (pass-4 corrections inline). Pass 5 = CLEAN SIGN OFF. ✅ LANDED 2026-07-06 (executor 09fb6b6e → output-review SIGN OFF, no reservations → merged; lanes 187/187/187 on main; String !p HIGH → DONE). Brief CLOSED. Non-blocking note for the PARENT at merge: the git-mv dead-links 4 illustrative paths in spec/ggdef/reports/{phase0_completion.md:29, adjudications.md:15,16,66} — historical reports, out of executor zone, parent's call.**
 > Scout: full report + measured prototype at `/tmp/recover_strmove/` (FINDINGS.md,
 > proto_fix_FINAL.patch, operators.rs.fixed, spec_conf logs). Scout ran the fix end-to-end on
 > BOTH backends: 24-shape matrix correct, 12-case ASan clean, no clone regression,

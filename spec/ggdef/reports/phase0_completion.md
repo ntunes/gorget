@@ -26,7 +26,7 @@ cargo test --test lints                                  # all lints
 cargo test --lib                                         # root package — unaffected
 # the three adjudications (see adjudications.md for the trace justifications):
 cargo run -p ggdef -- run tests/fixtures/known_gaps/cow_dead_branch_alias_bind.gg   # 9
-cargo run -p ggdef -- run tests/fixtures/known_gaps/move_param_concat.gg            # ablog
+cargo run -p ggdef -- run tests/fixtures/move_param_concat.gg            # ablog
 cargo run -p ggdef -- run spectests/run/emove_lazy_bind_witness.gg                  # hello
 ```
 

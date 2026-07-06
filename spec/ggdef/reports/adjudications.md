@@ -12,8 +12,8 @@ converged (EMove) or still diverges (the two smith bugs), that history is cited.
 ```
 cargo run -p ggdef -- run   tests/fixtures/known_gaps/cow_dead_branch_alias_bind.gg   # 9
 cargo run -p ggdef -- trace tests/fixtures/known_gaps/cow_dead_branch_alias_bind.gg
-cargo run -p ggdef -- run   tests/fixtures/known_gaps/move_param_concat.gg            # ablog
-cargo run -p ggdef -- trace tests/fixtures/known_gaps/move_param_concat.gg
+cargo run -p ggdef -- run   tests/fixtures/move_param_concat.gg            # ablog
+cargo run -p ggdef -- trace tests/fixtures/move_param_concat.gg
 cargo run -p ggdef -- run   spectests/run/emove_lazy_bind_witness.gg                  # hello
 cargo run -p ggdef -- trace spectests/run/emove_lazy_bind_witness.gg
 ```
@@ -63,7 +63,7 @@ Rust-gg-side.
 
 ## Adjudication #2 — `String !p` move-param + concat → `ablog`
 
-`tests/fixtures/known_gaps/move_param_concat.gg` (mirrored as the seed
+`tests/fixtures/move_param_concat.gg` (mirrored as the seed
 `spectests/run/smith_move_param_concat.gg`):
 
 ```gorget
