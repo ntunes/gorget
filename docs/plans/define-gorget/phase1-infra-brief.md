@@ -2,7 +2,8 @@
 
 > **STATUS: v3 — passes 1 (10 res) + 2 (2 blocking + 4 minor) folded; 0 clean of >=3. Pass 3 (Opus) = SIGN OFF FOR WAVE 1. WAVE 1 = {P1-A, P1-E, P1-G} — LAUNCHED 2026-07-06.**
 > **P1-E: ✅ LANDED 2026-07-06** (merged to main; output-review SIGN OFF w/ lane-reversal causality proof; post-merge smith smoke 16 seeds = 14 MATCH / 1 pre-existing CRASH s103 / 1 SPEC-DIVERGE s110 / 0 GGDEF-SKIP).
-> **P1-G: ✅ LANDED 2026-07-06** (merged; review SIGN OFF conditional on 3 follow-ups — ALL FILED in TODO: full-code-list pin test M, self-host header parity M, lex/parse codes L; "never churn" wording hardened in the registry at integration). P1-A executor DONE, output-review in flight.
+> **P1-G: ✅ LANDED 2026-07-06** (merged; review SIGN OFF conditional on 3 follow-ups — ALL FILED in TODO: full-code-list pin test M, self-host header parity M, lex/parse codes L; "never churn" wording hardened in the registry at integration).
+> **P1-A: ✅ LANDED 2026-07-06** (merge cf9c7399 = 5c5c6d99 + fold 2afb452b; pass-1 review raised BLOCKING §10.3 silent-wrong → folded (CaptureCtx typed-dest capture, 11 s103 pinning tests, floors 182/341/277) → pass-2 SIGN OFF w/ full fold-defect hunt. 2 production findings filed from the fold: nested-Result garbage HIGH + return/expr-body asymmetry decision; closure-throws ggdef hardening L filed from pass-2. Corpus count guards bumped 118/105 at integration for matcluster's +2 fixtures). **WAVE 1 COMPLETE. P1-D's throw-drop gate is CLEARED. Next: P1-B (solo, spec/ggdef zone), then {P1-C, P1-D}.**
 > Scout artifacts: /tmp/recover_p1infra/ (findings, prototypes, probes). Prerequisite HIGH filed in
 > TODO: ggdef throw-drop + native-recursion (P1-A must close them before P1-D's converter runs).
 > RFC §4 amendment noted in ledger: conformance floors are INLINE dynamic floors per runner (the

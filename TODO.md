@@ -750,6 +750,8 @@ Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (
 
 ## Low
 
+- **🧹 [ggdef hardening, from P1-A pass-2 review 2026-07-06; PRE-EXISTING, unreachable via `gg check`] Closure bodies inherit the enclosing fn's `current_fn_throws`.** A closure body containing a bare throws call is silently evaluated by ggdef (garbled `ok Error(neg)` on the throwing path) where production REJECTS at typecheck (`E_TypeMismatch`) — so no check-accepted program reaches it, but the loudness invariant should hold unconditionally. Fix: scope/reset `current_fn_throws` (and capture_ctx state) at closure boundaries, or make unmodeled closure-throws a loud ElabError. spec/ggdef elaborate/mod.rs.
+
 - **🧹 [P1-G follow-up] Extend diagnostic codes to lex/parse time.** `LexErrorKind`/`ParseErrorKind` still render bare `error:` (noted in `spec/prose/diagnostic-codes.md` §Follow-up). Same recipe as P1-G: catch-all-free `code()` per enum, thread at the reporter, register in the prose table.
 
 - **🐛 (G1 follow-up, PRE-EXISTING) N1 — `while: v.push(x)` on a non-materialized value-param LOSES the pushes.** Reproduces at base `d68afcf5`; memory-SAFE; CoW loop-materialize-scoping limitation (lazy re-materialize per iter); wrong-result not UAF; unrolled pushes fine, only the loop form; the shape WITH a preceding projected store now correctly accumulates on the private copy post-G1.
