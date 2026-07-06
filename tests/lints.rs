@@ -747,6 +747,83 @@ fn container_literal_arms_count() {
     );
 }
 
+/// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rule 3 "one source of
+/// truth per axis"): every collection family in `infer_fn_ptr_stores_from_types`
+/// (`src/lir/lower/insts.rs`) must wire its element/value/key DROP slot through
+/// the unified `self.type_drop_fns` map — NEVER through the legacy
+/// `recursive_drop_structs`/`recursive_drop_enums` `.contains_key` gate.
+///
+/// The legacy gate is populated ONLY for types with a NON-EMPTY droppable-field
+/// list, so a custom-Drop type with only trivial (int/float/bool/ptr) fields
+/// fell through and its `drop()` was silently LOST when used as a collection
+/// element (P1 — fd/lock-leak class); and where it DID fire it named
+/// `{T}__drop` (the user body) instead of the composite `__gorget_dtor_{T}`, so
+/// droppable fields LEAKED (P2 — ASan-only). `type_drop_fns` records
+/// custom-with-trivial-fields AND carries the correct composite `drop_fn_name`,
+/// so routing through it fixes BOTH. Full context: docs/plans/elemdrop-fix-brief.md.
+///
+/// **If this fails:**
+///   - `recursive_drop_*` reintroduced → a new sibling family re-opened the P1/P2
+///     hole. Route its drop slot through `self.type_drop_fns.get(t).drop_fn_name`.
+///   - route count changed → a new collection family / drop slot was added (or
+///     removed). Confirm it routes through `type_drop_fns` (not a name-match) and
+///     re-pin `EXPECTED_TYPE_DROP_FNS_ROUTES` with a justification.
+///
+/// Precedent: `container_literal_arms_count` above.
+#[test]
+fn collection_elem_drop_routes_through_type_drop_fns() {
+    let src = fs::read_to_string("src/lir/lower/insts.rs")
+        .expect("read src/lir/lower/insts.rs");
+    let sig = "fn infer_fn_ptr_stores_from_types(";
+    let start = src.find(sig).expect("locate infer_fn_ptr_stores_from_types");
+    // The body ends at the next sibling method in the impl block.
+    let after_sig = start + sig.len();
+    let end = src[after_sig..]
+        .find("\n    pub(super) fn ")
+        .map(|i| after_sig + i)
+        .unwrap_or(src.len());
+    // Strip line comments so the ratchet reasons about EXECUTABLE code only —
+    // the explanatory comment inside this fn legitimately names
+    // `recursive_drop_structs` while the gate itself is gone.
+    let body: String = src[start..end]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // (1) The buggy legacy gate must be GONE from executable code.
+    for legacy in ["recursive_drop_structs", "recursive_drop_enums"] {
+        assert!(
+            !body.contains(legacy),
+            "collection element drop wiring reintroduced the `{legacy}` gate in \
+             `infer_fn_ptr_stores_from_types` (src/lir/lower/insts.rs). That gate \
+             misses custom-Drop-with-trivial-fields element types (P1 lost-drop) \
+             and its `{{T}}__drop` name is the user body, not the composite \
+             `__gorget_dtor_{{T}}` (P2 field-leak). Route the drop slot through \
+             `self.type_drop_fns.get(t).drop_fn_name` instead. See \
+             docs/plans/elemdrop-fix-brief.md.",
+        );
+    }
+
+    // (2) Ratchet the number of `type_drop_fns` routes across the families.
+    //     Post-fix baseline 2026-07-06: Vector (drop .get + clone .contains_key),
+    //     Dict value (drop .get + clone .contains_key), Dict key (drop .get),
+    //     Set key (drop .get) = 6. A new collection family / drop slot MUST route
+    //     through `type_drop_fns` and bump this — never a name-match or the
+    //     legacy recursive_drop_* gate.
+    const EXPECTED_TYPE_DROP_FNS_ROUTES: usize = 6;
+    let routes = body.matches("self.type_drop_fns").count();
+    assert_eq!(
+        routes, EXPECTED_TYPE_DROP_FNS_ROUTES,
+        "`self.type_drop_fns` route count in `infer_fn_ptr_stores_from_types` \
+         changed: {routes} vs expected {EXPECTED_TYPE_DROP_FNS_ROUTES}. A new \
+         collection family / drop slot MUST route its element drop+clone wiring \
+         through `type_drop_fns` (the one source of truth for per-type destructor \
+         names) — never a name-match or the legacy recursive_drop_* gate. Bump \
+         the budget with a justification if you added a legitimate new route.",
+    );
+}
+
 /// Ratchet (Core #2 "No name matching" / Core #6 "convert the bug class to a
 /// guard"): the consuming-position NAME match in `lower_method_call`
 /// (`src/ir/lowering/exprs/methods.rs`) must stay GATED on the typed

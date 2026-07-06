@@ -1,0 +1,43 @@
+# Remaining battery shapes for the collection-element custom-Drop class:
+#   A) named-clone — local live PAST the push ⇒ TWO independent drops
+#      (the local's own scope drop + the collection's cloned copy). Pre-fix only
+#      the local dropped (the collection's clone was never wired).
+#   B) Dict KEY of a custom-Drop-with-trivial-fields type ⇒ key fires at dict drop.
+#   C) enum with a custom Drop + trivial (int) payload as a Vector element ⇒
+#      fires once per element, no dangling clone (edge case).
+# Deterministic stdout, asserted via run_gg (drop_collection_custom_elem_clone).
+
+@derive(Equatable, Hashable)
+struct Noisy:
+    int id
+
+equip Noisy with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+enum Shape:
+    Circle(int)
+    Square(int)
+
+equip Shape with Drop:
+    void drop(!self):
+        print("drop shape")
+
+void main():
+    print("A: named-clone")
+    Vector[Noisy] v = Vector[Noisy]()
+    Noisy n = Noisy(7)
+    v.push(n)
+    print(f"alive {n.id}")
+
+    print("B: dict key")
+    Dict[Noisy, int] dk = Dict[Noisy, int]()
+    Noisy k = Noisy(8)
+    dk[k] = 100
+
+    print("C: enum payload")
+    Vector[Shape] vs = Vector[Shape]()
+    vs.push(Shape.Circle(1))
+    vs.push(Shape.Square(2))
+
+    print("done")

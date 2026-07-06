@@ -5346,6 +5346,100 @@ drop elem-b",
     );
 }
 
+// ── Collection-element custom-Drop wiring (fix(drop): P1 drop-lost + P2 field-leak) ──
+// A droppable struct/enum used as a COLLECTION ELEMENT must fire its CORRECT
+// destructor when the collection drops. Two coupled defects, both fixed at the
+// shared LIR write site `infer_fn_ptr_stores_from_types` (src/lir/lower/insts.rs)
+// by routing elem/val/key drop wiring through the unified `type_drop_fns` map:
+//   P1 — a custom-Drop type with ONLY trivial fields (int/float/bool/ptr) had
+//        NO elem_drop wired at all ⇒ its drop() was silently LOST (fd/lock-leak
+//        class). Pre-fix the main fixture printed ZERO of the numeric drops.
+//   P2 — a custom-Drop type WITH a droppable field had elem_drop wired to the
+//        user body `{T}__drop` instead of the composite `__gorget_dtor_{T}`
+//        ⇒ the field LEAKED (ASan-only; the `*_asan` gates below catch it).
+// Shared LIR ⇒ both C and LLVM backends. See docs/plans/elemdrop-fix-brief.md.
+
+#[test]
+fn drop_collection_custom_elem() {
+    // P1 core: temp-push + named-move-push × Vector / Dict-value / Set-key, over
+    // a custom-Drop type with a single trivial (int) field. Every element must
+    // fire its drop() exactly once at collection scope-exit (LIFO). Pre-fix all
+    // four numeric drops were LOST (0 fired after "done").
+    run_gg(
+        "drop_collection_custom_elem.gg",
+        "\
+A: vector temp
+B: vector named-move
+C: dict value named-move
+D: set key named-move
+done
+drop 40
+drop 30
+drop 20
+drop 10",
+    );
+}
+
+#[test]
+fn drop_collection_custom_elem_clone() {
+    // Remaining battery shapes: (A) named-clone — a local live PAST the push ⇒
+    // TWO drops (the local + the collection's cloned copy); pre-fix only the
+    // local dropped. (B) custom-Drop type as a Dict KEY. (C) a custom-Drop enum
+    // with a trivial (int) payload as a Vector element (fires once, no dangling
+    // clone). All deterministic.
+    run_gg(
+        "drop_collection_custom_elem_clone.gg",
+        "\
+A: named-clone
+alive 7
+B: dict key
+C: enum payload
+done
+drop shape
+drop shape
+drop 8
+drop 7
+drop 7",
+    );
+}
+
+#[test]
+fn drop_collection_custom_elem_field_leak_asan() {
+    // P2 gate: a custom-Drop element WITH a droppable (heap String) field held
+    // in a Vector must fire the COMPOSITE destructor `__gorget_dtor_Holder`
+    // (user body THEN field frees), not the user body alone. The leaked field is
+    // stdout-INVISIBLE — only the sanitizer sees it. Pre-fix LeakSanitizer
+    // reported a direct leak from gorget_str_cat; post-fix ASan-clean.
+    assert_gg_sanitize_clean(
+        "drop_collection_custom_elem_leak",
+        "\
+start
+done
+drop 1
+drop 2",
+    );
+}
+
+#[test]
+fn drop_collection_custom_elem_pop_asan() {
+    // R4 move-out double-free gate: a custom-Drop element (heap String field)
+    // MOVED OUT via Vector.pop() / Dict.remove() (both return Option[T!]) must
+    // be dropped exactly ONCE by the caller — the drained collection slot must
+    // NOT re-drop it (double-free) and the moved-out value's composite dtor must
+    // free its String field (no leak). ASan-clean both directions.
+    assert_gg_sanitize_clean(
+        "drop_collection_custom_elem_pop",
+        "\
+start
+popped 2
+taken 3
+end
+drop 3
+drop 2
+drop 1",
+    );
+}
+
 #[test]
 fn drop_struct_collection_fields() {
     run_gg(
@@ -20739,6 +20833,82 @@ fn assert_box_deref_asan_clean(stem: &str) {
     assert_eq!(
         asan_stdout, rust_out,
         "{stem}: self-host stdout != Rust gg stdout",
+    );
+}
+
+/// Build a fixture through the RUST `gg build --sanitize` path (ASan + UBSan),
+/// run it under LeakSanitizer, and assert it exits cleanly with NO sanitizer
+/// report AND its stdout matches `expected`.
+///
+/// This is the load-bearing gate for the collection-element custom-Drop FIELD
+/// LEAK class (P2): a custom-Drop element with a droppable (heap String) field
+/// held in a collection must fire the COMPOSITE destructor `__gorget_dtor_{T}`
+/// (user body THEN field frees), not the user body `{T}__drop` alone. The leaked
+/// field is stdout-INVISIBLE — a plain `run_gg` cannot see it; only the sanitizer
+/// can. Also gates the pop/remove move-out double-free (a moved-out element must
+/// be dropped exactly once, never re-freed by the drained collection slot).
+///
+/// `ASAN_OPTIONS=detect_leaks=1` makes LeakSanitizer (default under ASan on
+/// Linux) a hard failure; `exitcode=99` makes any ASan/LSan error a nonzero exit
+/// so the check does not rely on string-scraping alone. Mirrors
+/// `assert_box_deref_asan_clean` but on the Rust `gg build --sanitize` path (not
+/// the self-host driver → cc -fsanitize lane).
+fn assert_gg_sanitize_clean(stem: &str, expected: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures").join(format!("{stem}.gg"));
+    assert!(fixture.exists(), "fixture not found: {}", fixture.display());
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_elemdrop_asan_{}_{}_{}",
+        stem,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let bin = tmp_root.join(format!("{stem}_asan"));
+
+    // Build with the Rust `gg build --sanitize` path (-fsanitize=address,undefined).
+    let build = build_with_timeout(
+        gg_command("build")
+            .arg("--sanitize")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&bin),
+        stem,
+    );
+    assert!(
+        build.status.success(),
+        "{stem}: gg build --sanitize failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+
+    // Run under LeakSanitizer.
+    let mut run_cmd = Command::new(&bin);
+    run_cmd.env("ASAN_OPTIONS", "detect_leaks=1:abort_on_error=0:exitcode=99");
+    let run = run_with_timeout(&mut run_cmd, stem);
+    let asan_stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    let has_report = asan_stderr.contains("LeakSanitizer")
+        || asan_stderr.contains("AddressSanitizer")
+        || asan_stderr.contains("ERROR:")
+        || asan_stderr.contains("SUMMARY:");
+    assert!(
+        run.status.success() && !has_report,
+        "{stem}: gg --sanitize ASan FAILED (exit={:?}). Leak/UAF report:\n{}",
+        run.status.code(),
+        asan_stderr,
+    );
+    assert_eq!(
+        stdout,
+        expected.trim(),
+        "{stem}: stdout mismatch under --sanitize",
     );
 }
 

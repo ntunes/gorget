@@ -1,0 +1,31 @@
+# R4 double-free / move-out gate: a custom-Drop element (with a heap String
+# field) MOVED OUT of a collection via Vector.pop() / Dict.remove() (both return
+# Option[T!]) must be dropped exactly ONCE by the caller — the collection must
+# NOT also drop the moved-out slot (double-free), and the moved-out value's
+# composite destructor must free its String field (no leak). ASan-gated via
+# `gg build --sanitize` (drop_collection_custom_elem_pop_asan). Set.remove drops
+# its key in-place (returns bool) — a single drop, no move-out.
+struct Holder:
+    int id
+    String name
+
+equip Holder with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+void main():
+    print("start")
+    # Vector.pop() moves the element OUT — dropped once by the caller, not the vec.
+    Vector[Holder] v = Vector[Holder]()
+    v.push(Holder(1, "aa" + "bb"))
+    v.push(Holder(2, "cc" + "dd"))
+    Holder popped = v.pop().unwrap()
+    print(f"popped {popped.id}")
+
+    # Dict.remove() moves the value OUT — dropped once by the caller.
+    Dict[String, Holder] d = Dict[String, Holder]()
+    d["x"] = Holder(3, "ee" + "ff")
+    Holder taken = d.remove("x").unwrap()
+    print(f"taken {taken.id}")
+
+    print("end")

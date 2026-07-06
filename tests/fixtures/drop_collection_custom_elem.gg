@@ -1,0 +1,37 @@
+# Custom-Drop element with ONLY trivially-droppable fields (int) must still
+# fire its drop() when held as a collection element. Regression for the
+# "elem_drop lost for Custom-drop-with-trivial-fields" class (P1): temp-push
+# and named-move-push shapes across Vector / Dict-value / Dict-key / Set.
+# Before the fix, the collection element's drop() silently never ran
+# (fd/lock-leak class). Fix: src/lir/lower/insts.rs infer_fn_ptr_stores_from_types
+# routes elem/val/key drop wiring through the unified type_drop_fns map.
+
+@derive(Equatable, Hashable)
+struct Noisy:
+    int id
+
+equip Noisy with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+void main():
+    print("A: vector temp")
+    Vector[Noisy] va = Vector[Noisy]()
+    va.push(Noisy(10))
+
+    print("B: vector named-move")
+    Vector[Noisy] vb = Vector[Noisy]()
+    Noisy nb = Noisy(20)
+    vb.push(nb)
+
+    print("C: dict value named-move")
+    Dict[String, Noisy] dv = Dict[String, Noisy]()
+    Noisy nc = Noisy(30)
+    dv["k"] = nc
+
+    print("D: set key named-move")
+    Set[Noisy] sk = Set[Noisy]()
+    Noisy nd = Noisy(40)
+    sk.add(nd)
+
+    print("done")
