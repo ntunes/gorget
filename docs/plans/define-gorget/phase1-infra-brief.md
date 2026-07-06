@@ -108,6 +108,34 @@ The §P1-D draft's "~1218 pairs in one run" scope is a BRIEF DEFECT. P1-D SPLITS
   with_args=1, with_stdin=1, dir=20, bench=1, panics=19, panics_with_stdout=5,
   panics_with_flags=1, test=14, test_with_flags=4, test_with_tags=2.
 
+**⚡ D1 FOLD-2 (2026-07-06, from the re-review pass — R1 was BLOCKING; these override D1 items above where they conflict):**
+1. **R1 (the selection mechanism):** the converter_agreement run prints only the AGREE *count*,
+   never the 182 names, and the classification predicate (`parse_rust_str_lit`,
+   `has_decimal_number`, the run_gg-needle extractor, the EXCLUDE list, fuel=3_000_000,
+   `.trim()` compare) lives ONLY in tests/ binaries (already copy-pasted 4×) — unreachable from
+   a lib.rs `migrate`. D1 therefore HOISTS the classification into `spec/ggdef/src/lib.rs` (or a
+   new lib module) as pub helpers + a `classify_fixture(...) -> Agree|Float|Other|NotValue|NoPair`,
+   and BOTH converter_agreement.rs AND `migrate` call them (one source of truth; retires the 4-way
+   duplication in the same commit). Migrate selects exactly the `Agree` fixtures via the SAME
+   predicate; the test's AGREE count becomes the cross-check assertion, not the list source.
+2. **R5 (set arithmetic):** the `Agree` bucket IS the exact migration set — the D1 EXCLUDE list
+   above is DESCRIPTIVE of what Agree already omits (cow_*/deadwrite_* are outside the walk
+   universe; floats/OTHER are disjoint buckets). Do NOT apply it as a second filter.
+3. **R3 (gate + zone-lock):** D1's gate = `cargo test -p ggdef` ONLY (all ggdef suites incl. the
+   frontmatter unit tests over the grown corpus) — explicitly NOT the root spec_conformance_c/
+   _llvm/_selfhost lanes (P1-C's zone). `git add` named spec/ggdef + spectests/run files only;
+   TODO.md/DONE.md are parent-only.
+4. **R4 (orchestrator note, not an executor task):** P1-C lanes READ spectests/run/; whoever
+   merges second re-seeds the other track's floors from the merged corpus, and the parent runs
+   the root lanes over the merged set. Expected clean EXCEPT trailing-whitespace-only AGREE
+   fixtures (converter_agreement compares `.trim()`ed; the lanes compare exact) — any such
+   MISMATCH is a reference-grade FINDING to triage (invariant #8), never a floor to lower.
+5. **R6:** `render_expect_block_from(exit, stdout)` ships WITH a lib unit test (round-trip vs
+   json_escape/parse_json_string) so the D2 seam isn't untested dead code. D2-scout breadcrumb:
+   enumerate ALL adjudicator-assuming gates before landing production-v1 seeds —
+   `gen_idempotent.rs:40-42` AND `frontmatter.rs:401` (`all_committed_seeds_parse`) both assume
+   `adjudicator: ggdef` today.
+
 
 # DRAFT executor brief — Define Gorget PHASE 1, conformance-infrastructure track
 
@@ -189,17 +217,20 @@ mode isn't `run` for the run lanes.
 from a regenerated run in-worktree (never a cached number).
 
 ## P1-D — the converter (zone: spectests/ + a migration tool)
-**Why.** Migrate the ~1218 literal harness pairs (`run_gg` 1213 + with_args 2 + with_stdin 2 + dir 21 +
-panics 20 + bench 2) → spectests frontmatter fixtures, expectations regenerated via `ggdef -- gen`.
+**[SUPERSEDED by the ⚡ P1-D FOLD + FOLD-2 above: census corrected there; D1 = AGREE-set only.]**
+**Why.** Migrate the literal harness pairs (census: see the fold) → spectests frontmatter fixtures,
+expectations regenerated via `ggdef -- gen`.
 **Work.**
-1. A migration tool (recommend a Rust bin in spec/ggdef, e.g. `ggdef -- migrate`, OR a `tests/`-adjacent
-   script) that, per fixture: copies the .gg into spectests/run/, prepends frontmatter, assigns
-   `adjudicator:` per the rule below, and runs `ggdef -- gen` on the ggdef set.
+1. A migration tool: `pub fn migrate` in spec/ggdef/src/lib.rs dispatched via `ggdef -- migrate`
+   [FOLD-2 R1 — the "OR a tests/-adjacent script" option is STRUCK: out of D1's zone, collides with
+   P1-C]; per fixture: copies the .gg into spectests/run/, prepends frontmatter, assigns
+   `adjudicator:` per the rule below, and runs gen IN-PROCESS on the ggdef set.
 2. **adjudicator assignment (MEASURED split, scout_converter_agreement):**
    - **ggdef** — ggdef elaborates to Value AND stdout AGREES with the committed run_gg string (modulo
      float rendering). (Agree=174 of the sampled in-surface set.)
    - **production-v1** — ggdef ElabErrors (out of surface) OR is out-of-spec-v1: expect: filled from the
      EXTRACTED run_gg string. Retired to ggdef as P1-A coverage lands. (This is the majority — the ~75%.)
+     **[D2 ONLY — D1 migrates ONLY adjudicator:ggdef AGREE fixtures, per the fold.]**
    - **HOLD (do NOT migrate this round)** — float-output fixtures (~60-79; MEASURED
      scout_float_output_prevalence: 63 fixed-6 + noise). BLOCKED on the D8 production fix landing in
      BOTH backends. See "Float sequencing" below.
@@ -210,7 +241,9 @@ panics 20 + bench 2) → spectests frontmatter fixtures, expectations regenerate
 4. **Transition policy (decision point for the brief-review):** keep integration.rs's literal pairs
    IN PLACE (spectests ADDITIVE) during transition; retiring the ~1218 pairs is a later, separate,
    risky delete — do NOT couple it to the migration.
-**Gate.** spec_conformance_* lanes green on the migrated set; `cargo test -p ggdef gen_idempotent`.
+**Gate.** [D1: `cargo test -p ggdef` ONLY, per FOLD-2 R3 — the root spec_conformance_c/_llvm/_selfhost
+lanes are P1-C's zone and run at the parent's merge.] D2-era: spec_conformance_* lanes green on the
+migrated set; `cargo test -p ggdef gen_idempotent`.
 
 ### Float sequencing (Q1 recommendation — OPTION A: migrate non-float first, HOLD floats)
 CONFIRMED: ggdef prints floats via Rust `format!("{f}")` (eval.rs:1576 — shortest round-trip, D8's
