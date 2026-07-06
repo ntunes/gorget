@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: `String !p` move-param concat fix (conformance 186→187 both backends)
 
-> **STATUS: v4 — passes 1 (3 minor) + 2 (1 minor) folded; pass 3 = RESERVATIONS (1 BLOCKING: the '(floors only)' scope locked in doc-drift — the BUILD-FAIL narrative in spec_conformance.rs + the smith/main.rs Round-1 list would go stale/false post-fix; the cited promotion precedent ALREADY left this exact fossil for cow_dead_branch) → FOLDED below as ⚡ PASS-3 FOLDS. Pass 4 (confirming) pending.**
+> **STATUS: v5 — passes 1-3 folded; pass 4 (confirming) = RESERVATIONS (2: fold-3's own "only one remains" count was FALSE — ZERO of the Round-1 pair remain open post-fix — and the Zone list needed in-place reconciliation) → BOTH FOLDED (pass-4 corrections inline). Pass 5 (confirming) pending. Non-blocking note for the PARENT at merge: the git-mv dead-links 4 illustrative paths in spec/ggdef/reports/{phase0_completion.md:29, adjudications.md:15,16,66} — historical reports, out of executor zone, parent's call.**
 > Scout: full report + measured prototype at `/tmp/recover_strmove/` (FINDINGS.md,
 > proto_fix_FINAL.patch, operators.rs.fixed, spec_conf logs). Scout ran the fix end-to-end on
 > BOTH backends: 24-shape matrix correct, 12-case ASan clean, no clone regression,
@@ -72,12 +72,14 @@ still holds, and understand the `LoadRef` emission you're adding.
   at MIN_FIXTURES=187), the MIN_FIXTURES comment (:67-71 — "C/LLVM floors sit one below
   it" → equal now), the :30 pointer, AND the stale seed-era numbers ("C=4, LLVM=4,
   self-host=5") while there.
-- **`tests/smith/main.rs` JOINS the zone (doc-comment only):** its Round-1 findings list
-  (:98-108) cites `tests/fixtures/known_gaps/move_param_concat.gg` (invalidated by the
-  promotion) and asserts "Both TODO.md HIGH entries" (only one remains post-fix) — update
-  both. **Also fix the SAME pre-existing fossil one line up**: `cow_dead_branch_alias_bind`
-  is still listed at its `known_gaps/` path (:100-102) though it was promoted weeks ago —
-  retire both stale paths in one sweep (fix the class; do not replicate the fossil).
+- **`tests/smith/main.rs` JOINS the zone (doc-comment only):** rewrite the Round-1
+  findings block (:98-108) FULLY PAST-TENSE — ⚡ PASS-4 CORRECTION: **ZERO of the pair
+  remain open post-fix, not "one"** (cow_dead_branch_alias_bind is FIXED — promoted,
+  un-ignored, absent from TODO.md; move_param_concat is fixed BY THIS TRACK). The header's
+  "(locked as `#[ignore]`d fixtures)" is also stale — post-fix NEITHER is ignored. New
+  text: both were Round-1 smith findings, both were filed TODO.md HIGH, both are now
+  FIXED and promoted into tests/fixtures/ (self-host was reference-correct on both);
+  retire BOTH stale `known_gaps/` paths.
 - **Promotion mechanics:** `git mv tests/fixtures/known_gaps/move_param_concat.gg
   tests/fixtures/move_param_concat.gg` (no target collision), then the run_gg path arg at
   integration.rs:5045 → `"move_param_concat.gg"`.
@@ -100,8 +102,10 @@ still holds, and understand the `LoadRef` emission you're adding.
 
 ## Zone
 
-`src/ir/lowering/exprs/operators.rs` + `tests/spec_conformance.rs` (floors only) +
-`tests/integration.rs` (un-ignore + 3 new pairs) + `tests/fixtures/` (promote + 3 new).
+`src/ir/lowering/exprs/operators.rs` + `tests/spec_conformance.rs` (floors + the
+BUILD-FAIL-narrative retirement per PASS-3 FOLDS) + `tests/smith/main.rs` (doc-comment
+only, per PASS-3/4 FOLDS) + `tests/integration.rs` (un-ignore + 3 new pairs) +
+`tests/fixtures/` (promote + 3 new).
 **Do NOT touch the self-host (already reference-correct), spec/ggdef, spectests/, or
 TODO.md/DONE.md (parent-only).**
 **⚡ PASS-2 FOLD (concurrent-track hazard, CLAUDE.md rule 5):** the concurrent UNWRAP track
