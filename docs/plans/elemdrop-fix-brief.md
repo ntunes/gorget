@@ -16,8 +16,8 @@ touch /workspace/gorget or /workspace/gorget-1; worktree-RELATIVE paths; never g
 (checkpoint via git diff > /tmp/elemdrop_exec_state.patch); Edit-desync -> re-Read + retry;
 non-Edit writes -> check main status and STOP on surprises. Zones: src/lir/lower/insts.rs,
 tests/fixtures/drop_collection_custom_elem*.gg (NEW), tests/integration.rs (your test fns only),
-tests/fixtures/self_host_lowerer/{lir_lower,lir_codegen}.gg. NEVER: TODO.md, docs/**, spec/**
-(concurrent ggdef track). TWO PHASES, commit each: Phase R (Rust fix, from the proven patch) then
+tests/lints.rs (the arm-count ratchet, additive). NEVER: TODO.md, docs/**, spec/** (concurrent
+ggdef track), tests/fixtures/self_host_lowerer/** (Phase S changes NO self-host source). TWO PHASES, commit each: Phase R (Rust fix, from the proven patch) then
 Phase S (self-host regression LOCK — no self-host source changes; see SELF-HOST STATUS). Gates
 FOREGROUND, teed to /tmp/elemdrop_*_$RANDOM.log; no bootstrap gate needed (no self-host source
 is touched). Commit
