@@ -1,8 +1,11 @@
 # EXECUTOR BRIEF: collection-element destructor fix (P1 drop-lost + P2 field-leak), BOTH compilers
 
-> **STATUS: v2 — pass 1 (Opus) independently reproduced ALL measurements (incl. P2 leak pre/post,
-> double-drop ASan) and raised 5 reservations, folded below; passes cleared: 0 clean of >=3.
-> Executor: not launched.**
+> **STATUS: v3 — pass 2 (Opus) EMPIRICALLY REFUTED the "both compilers identically broken"
+> premise by running the pristine self-host driver: THE SELF-HOST IS ALREADY CORRECT (the
+> 2026-06-22 fadb2259 fold routes every equip-Drop type into resource_types -> type_drop_fns ->
+> __gorget_dtor_{T} wiring; the scout source-read a STALE comment at lir_lower.gg:5514-5517
+> predating the fold). Phase S re-scoped accordingly. Passes: 1 (5 res) + 2 (3 res) folded;
+> 0 clean of >=3. Executor: not launched.**
 > Scout artifacts: /tmp/recover_elemdrop/ (findings, measured prototype patch, ready fixture).
 > This brief was drafted by the scout that prototyped and MEASURED the Rust fix end-to-end
 > (probe matrix, ASan, bootstrap 446s PASS); reviews verify, executor lands.
@@ -15,27 +18,30 @@ non-Edit writes -> check main status and STOP on surprises. Zones: src/lir/lower
 tests/fixtures/drop_collection_custom_elem*.gg (NEW), tests/integration.rs (your test fns only),
 tests/fixtures/self_host_lowerer/{lir_lower,lir_codegen}.gg. NEVER: TODO.md, docs/**, spec/**
 (concurrent ggdef track). TWO PHASES, commit each: Phase R (Rust fix, from the proven patch) then
-Phase S (self-host mirror). Gates FOREGROUND, teed to /tmp/elemdrop_*_$RANDOM.log; Phase-S final
-gate = self_host_bootstrap_fixed_point (release, GG_BUILD_TIMEOUT_SECS=600, foreground). Commit
+Phase S (self-host regression LOCK — no self-host source changes; see SELF-HOST STATUS). Gates
+FOREGROUND, teed to /tmp/elemdrop_*_$RANDOM.log; no bootstrap gate needed (no self-host source
+is touched). Commit
 messages: fix(drop): ... Full integration sweep + runtime_diff = parent's job.
 
-## SELF-HOST FIX SHAPE (mirror, for the brief)
-Rust fix was a pure READER change because Rust type_drop_fns already records Custom-fieldless.
-Self-host needs TWO changes:
-1. lir_lower.gg:5505 — also record fieldless custom-Drop structs in type_drop_fns with
-   **drop_fn_name = `__gorget_dtor_{T}` — MIRROR RUST** (review pass 1 verified in emitted C
-   that Rust DOES emit + wire `__gorget_dtor_{T}` for the fieldless case, and the self-host's
-   own emit_type_drop_fns (lir_codegen.gg:7590-7617) will emit it once the type is recorded;
-   the earlier `{T}__drop` justification was FALSE and is retracted — using the user-body name
-   would silently diverge from the Rust reference and relies fragilely on fn_exists to avoid
-   self-recursion). Verify `__gorget_dtor_{T}` emission for a fieldless type in the self-host's
-   emitted C as an explicit Phase-S check.
-2. lir_codegen.gg lc_collection_drop_fn (1970) + lc_collection_clone_fn (2016): replace the
-   `recursive_drop_structs.contains OR recursive_drop_enums.contains` gate (lines 1999 / 2044)
-   with `m.type_drop_fns.contains(type_name)` and use
-   `m.type_drop_fns.get(type_name).unwrap().drop_fn_name` for the drop name (clone stays
-   type_name+"__clone_inplace"). This fixes BOTH the missing-elem-drop and the user-body-only
-   field-leak in the self-host.
+## SELF-HOST STATUS (corrected by review pass 2 — empirical)
+The self-host is ALREADY CORRECT for both P1 and P2: pristine driver emits AND wires
+`__gorget_dtor_Noisy` for fieldless custom-Drop (elem_drop/val_drop/key_drop all wired across
+Vector/Dict/Set), and the composite frees String fields (no P2 leak; the self-host ASan lane is
+already clean). Mechanism: lower.gg:3629 (fadb2259) folds every `equip T with Drop` into
+resource_types -> lir_lower.gg:5505 block records it in type_drop_fns -> lc_collection_drop_fn
+returns `__gorget_dtor_{T}`. Evidence C files: /tmp/elemdrop_probe/selfhost_{pvt,str,full}.c.
+INVARIANT-#8 BOOKKEEPING: Rust is the broken side; the self-host is the reference. Fix Rust
+toward it (which the proven Phase-R patch does — both then emit `__gorget_dtor_{T}`).
+
+**Phase S (re-scoped): LOCK the self-host's correct behavior, change NO self-host source.**
+Add a targeted self-host regression test (model: the existing self-host emit-lane tests in
+tests/integration.rs): run the driver on the new fixture (`driver <fixture.gg> lib --lir-c`),
+assert the emitted C wires `.elem_drop`/`.val_drop`/`.key_drop` to `__gorget_dtor_Noisy`, then
+cc + run + assert stdout. No bootstrap gate needed (no self-host source changes). The
+reader-alignment refactor (migrate lc_collection_drop_fn/clone_fn + emit_dict_ctor_wiring:1935
+from recursive_drop_* to type_drop_fns — behavior-preserving, architectural) is DEFERRED OUT of
+this track: filed as a LOW self-host-elegance TODO item, gated on byte-identical driver output +
+bootstrap if ever done.
 
 ## READY-MADE FIXTURE (saved /tmp/scout_elemdrop_fixture.gg)
 tests/fixtures/drop_collection_custom_elem.gg — temp/named-move × Vector/Dict-value/Set-key,
@@ -77,7 +83,8 @@ correct destructor when the collection drops. Two coupled defects:
   (P2) Custom-drop type WITH droppable fields: elem_drop wired to `{T}__drop`
        (USER BODY ONLY) instead of the composite `__gorget_dtor_{T}` => fields LEAK
        (ASan-confirmed).
-Fix BOTH the Rust gg AND the self-host (invariant #8 — both are identically broken).
+Fix RUST (the broken side); the self-host is ALREADY CORRECT and is the reference (pass-2
+empirical verdict — see SELF-HOST STATUS). Phase S locks it with a regression test.
 
 ## Root cause (verified file:line)
 - Element drop/clone wiring: `infer_fn_ptr_stores_from_types`, src/lir/lower/insts.rs:2346.
@@ -99,17 +106,12 @@ Fix BOTH the Rust gg AND the self-host (invariant #8 — both are identically br
    on drop_collections at integration.rs:5338 using run_gg). Ready-made fixture at
    /tmp/scout_elemdrop_fixture.gg; exact expected stdout captured (see fixture section above).
 3. tests/fixtures/drop_collection_custom_elem_leak.gg (NEW) — String-field + HEAP string
-   (`"aa"+"bb"`) element; the P2 assertion uses the RUST `gg build --sanitize` path in Phase R
-   (the self-host-driver ASan lane will NOT be clean until Phase S lands — sequence the
-   self-host-lane assertion into Phase S gates). Normal integration does NOT ASan.
-4. SELF-HOST (see "SELF-HOST FIX SHAPE" above):
-   - tests/fixtures/self_host_lowerer/lir_lower.gg:5505 — also record fieldless custom-Drop
-     structs in type_drop_fns (drop_fn_name = `{T}__drop`).
-   - tests/fixtures/self_host_lowerer/lir_codegen.gg:1970 (lc_collection_drop_fn) + :2016
-     (lc_collection_clone_fn) — replace the recursive_drop_* gate with `m.type_drop_fns` lookup;
-     drop name from `type_drop_fns.get(t).unwrap().drop_fn_name`.
-   - Verify emit_type_drop_fns / emit_struct_drops don't double-define `{T}__drop` for the newly
-     recorded fieldless types (fn_exists guard should already cover it — CONFIRM).
+   (`"aa"+"bb"`) element; the P2 assertion uses the RUST `gg build --sanitize` path in Phase R.
+   (The self-host lane is ALREADY ASan-clean for this shape — pass-2 verified; the Phase-S
+   regression test locks it.) Normal integration does NOT ASan.
+4. SELF-HOST: per "SELF-HOST STATUS" above — NO source changes; ONE new regression test in
+   tests/integration.rs locking the driver's correct elem/val/key_drop wiring + runtime output
+   for the new fixture (zone: your test fns only).
 
 ## Fixture battery (temp / named-move / named-clone × Vector / Dict-value / Dict-key / Set)
 Use Noisy{int id} + `equip Drop` (print) + `@derive(Equatable,Hashable)` (needed for Set/Dict-key).
