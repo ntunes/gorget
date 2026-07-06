@@ -1,0 +1,24 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, lazy-bind, emove]
+# doc: |
+#   The EMove witness (RFC §6(c) adjudication #3; devbook/11:716-733). `s` is
+#   bound from the PRE-move name `v`; the vector is then moved to `w` and
+#   mutated through `w` — a name asymmetry (bind keyed by `v`, mutation via
+#   `w`) that is the essence of the EMove phenomenon. Under value semantics
+#   (D1) `s` holds the bind-time snapshot, so the PRE-mutation value `hello`
+#   prints. Production converged on this after its Expr::Move read-through bug
+#   was fixed (B1 finding).
+# expect:
+#   exit: 0
+#   stdout: "hello\n"
+#!end
+
+void main():
+    Vector[String] v = ["hello", "world"]
+    String s = v.get(0).unwrap()
+    Vector[String] w = !v
+    w.set(0, "mutated")
+    print(s)

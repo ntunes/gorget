@@ -1,8 +1,12 @@
-//! `ggdef` CLI (deliverable 6).
+//! `ggdef` CLI (deliverable 6; `gen` added in Increment C).
 //!
 //!   ggdef run   file.gg   — run; print stdout; exit code per outcome.
 //!   ggdef trace file.gg   — run; print stdout, then `---trace---`, then the
 //!                           provenance events as JSONL.
+//!   ggdef gen   file.gg   — run a `spectests/` fixture and write the observed
+//!                           outcome into its frontmatter `expect:` block, in
+//!                           place. Idempotent (RFC §4 "expectations flow FROM
+//!                           the definition").
 //!
 //! Exit codes (provisional until the trap-normalization spec lands in B):
 //!   0   Value          101 Trap          102 IllFormed      103 FuelExhausted
@@ -10,7 +14,7 @@
 
 use std::process::ExitCode;
 
-use ggdef::{run_source, FrontendError, Outcome, DEFAULT_FUEL};
+use ggdef::{gen_frontmatter, run_source, FrontendError, Outcome, DEFAULT_FUEL};
 
 const EXIT_USAGE: u8 = 2;
 
@@ -19,11 +23,40 @@ fn main() -> ExitCode {
     match (args.get(1).map(String::as_str), args.get(2)) {
         (Some("run"), Some(file)) => cmd(file, false),
         (Some("trace"), Some(file)) => cmd(file, true),
+        (Some("gen"), Some(file)) => cmd_gen(file),
         _ => {
-            eprintln!("usage: ggdef run|trace <file.gg>");
+            eprintln!("usage: ggdef run|trace|gen <file.gg>");
             ExitCode::from(EXIT_USAGE)
         }
     }
+}
+
+/// `ggdef gen <file.gg>`: regenerate the fixture's frontmatter `expect:` block
+/// from the observed outcome and write it back in place.
+fn cmd_gen(file: &str) -> ExitCode {
+    let source = match std::fs::read_to_string(file) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("ggdef: cannot read `{file}`: {e}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    let updated = match gen_frontmatter(&source, DEFAULT_FUEL) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("ggdef: gen `{file}`: {e}");
+            return ExitCode::from(EXIT_USAGE);
+        }
+    };
+    if updated == source {
+        // Idempotent no-op: leave the file (and its mtime) untouched.
+        return ExitCode::SUCCESS;
+    }
+    if let Err(e) = std::fs::write(file, &updated) {
+        eprintln!("ggdef: cannot write `{file}`: {e}");
+        return ExitCode::from(EXIT_USAGE);
+    }
+    ExitCode::SUCCESS
 }
 
 fn cmd(file: &str, emit_trace: bool) -> ExitCode {

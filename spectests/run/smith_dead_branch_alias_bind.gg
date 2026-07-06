@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [cow, alias, dead-branch]
+# doc: |
+#   smith repro (decisions.md B1; RFC §6(c) adjudication #1). A bare-assign
+#   alias `v5 = v0` lives in a branch whose guard is false, so it never runs;
+#   `v0` is never aliased and the later `v0[2] = 9` write lands. Correct value
+#   is 9 (production SIGSEGV'd here; ggdef adjudicates). Ratifies C1.
+# expect:
+#   exit: 0
+#   stdout: "9\n"
+#!end
+
+void main():
+    Vector[int] v0 = [1, 2, 3]
+    if v0.len() < 3:
+        Vector[int] v5 = v0
+    v0[2] = 9
+    print(v0[2])

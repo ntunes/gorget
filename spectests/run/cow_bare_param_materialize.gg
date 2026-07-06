@@ -1,0 +1,22 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [cow, materialize, bare-param]
+# doc: |
+#   materialize-on-write through a bare parameter (RFC §2.2 Borrow-write rule;
+#   decisions.md D2/C4). `grow` receives `xs` as a bare (Borrow) binding; the
+#   `xs.push(4)` write materialises a private copy inside the callee, so the
+#   caller's `v` still has length 3.
+# expect:
+#   exit: 0
+#   stdout: "3\n"
+#!end
+
+void grow(Vector[int] xs):
+    xs.push(4)
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    grow(v)
+    print(v.len())

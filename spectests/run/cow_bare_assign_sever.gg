@@ -1,0 +1,20 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [cow, alias, sever]
+# doc: |
+#   Core CoW rule (RFC §2.2; decisions.md C2). `b = a` is a bare-assign copy;
+#   the first write through `b` materialises a private copy, so `a` is
+#   untouched. `a[0]` stays 1, `b[0]` becomes 99.
+# expect:
+#   exit: 0
+#   stdout: "1\n99\n"
+#!end
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = a
+    b.set(0, 99)
+    print(a.get(0).unwrap())
+    print(b.get(0).unwrap())

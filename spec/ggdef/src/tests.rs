@@ -1010,3 +1010,41 @@ void main():
     assert_eq!(out(src), "9
 bye 9");
 }
+
+// ── `ggdef -- gen` — frontmatter expectation generation (Increment C) ──────
+
+#[test]
+fn gen_inserts_expect_block_when_missing() {
+    // No `# expect:` yet → gen inserts one before the closing fence, with the
+    // observed exit code + JSON-escaped stdout.
+    let src = "#!spectest\n# mode: run\n#!end\n\nvoid main():\n    print(9)\n";
+    let got = crate::gen_frontmatter(src, FUEL).unwrap();
+    assert!(got.contains("# expect:\n#   exit: 0\n#   stdout: \"9\\n\"\n"), "got:\n{got}");
+    // And the program still runs after gen (frontmatter is comments).
+    assert_eq!(out(&got), "9");
+}
+
+#[test]
+fn gen_is_idempotent_and_replaces_stale_expect() {
+    // A STALE expect block is overwritten, and a second gen is a byte no-op.
+    let stale = "#!spectest\n# mode: run\n# expect:\n#   exit: 0\n#   stdout: \"WRONG\"\n#!end\n\nvoid main():\n    print(9)\n";
+    let once = crate::gen_frontmatter(stale, FUEL).unwrap();
+    assert!(once.contains("#   stdout: \"9\\n\""), "stale not replaced:\n{once}");
+    assert!(!once.contains("WRONG"), "stale value survived:\n{once}");
+    let twice = crate::gen_frontmatter(&once, FUEL).unwrap();
+    assert_eq!(once, twice, "gen is not idempotent");
+}
+
+#[test]
+fn gen_without_fence_is_an_error() {
+    let src = "void main():\n    print(9)\n";
+    assert!(matches!(crate::gen_frontmatter(src, FUEL), Err(crate::GenError::NoFrontmatter)));
+}
+
+#[test]
+fn gen_escapes_multiline_stdout() {
+    // Multi-line stdout round-trips through JSON escaping.
+    let src = "#!spectest\n# mode: run\n#!end\n\nvoid main():\n    print(1)\n    print(2)\n";
+    let got = crate::gen_frontmatter(src, FUEL).unwrap();
+    assert!(got.contains("#   stdout: \"1\\n2\\n\""), "got:\n{got}");
+}

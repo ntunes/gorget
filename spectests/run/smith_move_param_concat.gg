@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, string-concat]
+# doc: |
+#   smith repro (decisions.md B2; RFC §6(c) adjudication #2). A `String !p`
+#   move parameter concatenated with a literal: `p + "log"` on `"ab"` is
+#   "ablog". Correct value is `ablog` (ggdef adjudicates). Ratifies the
+#   move-then-concat shape.
+# expect:
+#   exit: 0
+#   stdout: "ablog\n"
+#!end
+
+String f(String !p):
+    return p + "log"
+
+void main():
+    String s = "ab"
+    print(f(!s))
