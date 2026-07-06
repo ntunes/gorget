@@ -7497,6 +7497,12 @@ fn deadwrite_ok_while_drain() {
 #[test]
 fn deadwrite_ok_rebind() {
     check_gg_silent_for("deadwrite_ok_rebind.gg", DEADWRITE_MSG);
+    // matcluster #3: a full rebind of a bare-VALUE param (`xs = [9,9]`) binds
+    // the name to a fresh owned local; the param slot stays `void*`. Pre-fix the
+    // in-place slot-upgrade retro-typed the entry binding `void* __v0 =
+    // (void*)__p0` → invalid C at cc / invalid LLVM at llc. Now runs: the rebound
+    // `xs` (len 3 after push) is private; the caller's `a` stays len 1.
+    run_gg("deadwrite_ok_rebind.gg", "3\n1");
 }
 
 #[test]

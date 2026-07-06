@@ -26,7 +26,7 @@ pub(super) fn lower_assign(
 ) {
     match &target.node {
         Expr::Identifier(name) => {
-            if let Some((local_id, _type_id)) = ctx.lookup_local(name) {
+            if let Some((mut local_id, _type_id)) = ctx.lookup_local(name) {
                 // Shared variable: dispatch based on wrapper kind
                 if let Some(info) = ctx.shared.locals.get(&local_id) {
                     let (hidden_local, inner_type, kind) = (info.hidden_local, info.inner_type, info.kind);
@@ -82,17 +82,29 @@ pub(super) fn lower_assign(
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                                 ctx.warn_clone_and_hit(builder, value.span, inner, crate::ir::ImplicitCloneReason::NamedToNamed);
                                 let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(local_id)], inner);
-                                // Phase C: cloned is a fresh owned local, dead at this single
-                                // use — Move transfers ownership into local_id.
-                                builder.assign_mode(
-                                    crate::ir::instructions::AssignMode::Move,
-                                    Place::local(local_id),
-                                    FunctionBuilder::copy(cloned),
-                                );
-                                builder.locals[local_id.0 as usize].type_id = inner;
-                                ctx.register_local(name, local_id, inner);
-                                ctx.drops.update_or_register_type(local_id, inner, &ctx.type_registry);
-                                ctx.set_owned(builder, local_id);
+                                // matcluster #3: a full rebind of a bare-VALUE Ptr param
+                                // (`xs = <expr>`, `xs` a `Vector[T]`/resource param stored
+                                // as `void* __v0 = (void*)__p0`) binds the name to the FRESH
+                                // owned `cloned` local; the param slot (`local_id`) stays
+                                // `void*` and untouched. `cloned` reads the OLD binding, so a
+                                // self-referential RHS (`xs = xs.slice(..)`) still slices the
+                                // caller's live buffer before the tail clones/moves it in.
+                                //
+                                // REMOVED (was the bug): the old `assign_mode(Move, local_id,
+                                // cloned)` + `builder.locals[local_id].type_id = inner` in-place
+                                // slot upgrade. Upgrading the param slot retro-typed the entry
+                                // binding `void* __v0 = (void*)__p0` to the owned type — invalid
+                                // C (`GorgetArray = (void*)` at cc) / invalid LLVM (ptr vs
+                                // aggregate at llc) — AND marked the borrowed param slot owned,
+                                // double-freeing the caller's buffer at fn exit. Mirrors the
+                                // self-host oracle (lower_stmt.gg:945-994: a bare param is
+                                // LoBorrowed → drop_old=false → consume+assign into the binding),
+                                // which lowers `xs = [9,9]` correctly (3,1). No independent-vs-
+                                // self-derived distinction: uniform for every bare-param rebind.
+                                ctx.register_local(name, cloned, inner);
+                                ctx.drops.register_local(cloned, inner, &ctx.type_registry);
+                                ctx.set_owned(builder, cloned);
+                                local_id = cloned;
                             }
                         }
                     }
