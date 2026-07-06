@@ -227,16 +227,6 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
-- 2026-07-06 — **D14 RATIFIED by owner: `get_or`/`get_or_put` return VIEWS** (uniform with
-  `.get()`; retires the round-8 unconditional clone — wasteful for plain types, an
-  observable D4-violating double-drop for tainted). The write-through form is
-  **`get_or_put`** (always dict-resident → receiver auto-borrow writes through; Python
-  `setdefault` precedent). **`get_or` is read-only — mutating through it is REJECTED with a
-  fix-it** (miss-path aliases the caller's default local; write-through would be
-  context-dependent). Temp-default rule: live place or consumed-within-expression, else
-  reject. Counters: `d[k] = d.get_or(k, 0) + 1`; double-lookup is a fusable optimization,
-  not semantics. Implementation track filed in TODO.
-
 - 2026-07-06 — **D13 RATIFIED by owner: allocators go TWO-STEP.** Step 1 now: REJECT bare
   (non-`with`) allocator locals at check (closes the silent safe-code heap-UAF —
   `.destroy()` while a backed RAII value lives — AND the leak, immediately); docs
