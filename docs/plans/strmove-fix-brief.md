@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: `String !p` move-param concat fix (conformance 186→187 both backends)
 
-> **STATUS: v1 DRAFT — review passes: (none yet; ≥3 sequential fresh passes required before launch).**
+> **STATUS: v2 — pass 1 = RESERVATIONS (3 minor, all brief-text tightenings; fix mechanism VERIFIED SOUND end-to-end by the reviewer incl. blast-radius probes) → FOLDED below as ⚡ PASS-1 FOLDS. Pass 2 pending.**
 > Scout: full report + measured prototype at `/tmp/recover_strmove/` (FINDINGS.md,
 > proto_fix_FINAL.patch, operators.rs.fixed, spec_conf logs). Scout ran the fix end-to-end on
 > BOTH backends: 24-shape matrix correct, 12-case ASan clean, no clone regression,
@@ -44,6 +44,24 @@ TODO Medium). Keep `Owned`; shape at the binop.
 Reference patch: `/tmp/recover_strmove/proto_fix_FINAL.patch` (+27/−3, one file).
 **Re-derive it against current main — do not blind-apply**; verify each hunk's context
 still holds, and understand the `LoadRef` emission you're adding.
+
+**⚡ PASS-1 FOLDS (2026-07-06):**
+- **R1 (blast radius, full enumeration):** `cow_deref_if_ptr` has SIX call sites, not two —
+  binop lhs/rhs (operators.rs:63-64), short-circuit `and`/`or` operands (:382, :406, :422),
+  and unary op (:444). The new `is_owning_param` branch is INERT at all but the target
+  shape because (verified pass-1, by trace AND probes): only a free-function String-move
+  param ever reaches these sites as a raw `is_owning_param` MutPtr slot — struct/Vector
+  move params keep `borrow_unique` (no `set_owned`, which is String-specific +
+  free-fn-only) and auto-deref into a fresh temp at the identifier read (mod.rs:148-177)
+  BEFORE reaching the shaping step, and String never participates in `and`/`or`/unary.
+  Moved-Vector concat (`4`) and a moved resource-struct with an `Add` overload (`foobar`)
+  were probed green on both backends with the patch applied.
+- **R2 (promotion mechanics):** the `#[ignore]`d test's body is
+  `run_gg("known_gaps/move_param_concat.gg", "ablog")` (integration.rs:5045) — when you
+  promote the fixture out of known_gaps/, UPDATE THE PATH ARGUMENT too.
+- **R3 (regenerate the baseline):** BEFORE applying the fix, run the spec_conformance
+  lanes in-worktree and confirm the pre-change baseline is C=186 / LLVM=186 /
+  self-host=187 (Core #5: no un-regenerated number). Then fix, then confirm 187/187/187.
 
 ## Deliverables (ONE commit)
 
