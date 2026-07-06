@@ -14,11 +14,13 @@
 
 pub mod elaborate;
 pub mod eval;
+pub mod frontmatter;
 pub mod ggc;
 pub mod trace;
 
 pub use elaborate::{elaborate, ElabError};
 pub use eval::{run, Fault, Outcome, Run, EXIT_FUEL, EXIT_ILLFORMED, EXIT_TRAP, EXIT_VALUE};
+pub use frontmatter::{parse_frontmatter, Expect, Frontmatter, FrontmatterError};
 
 use gorget::parser::Parser;
 
