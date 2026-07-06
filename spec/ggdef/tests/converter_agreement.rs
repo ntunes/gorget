@@ -39,7 +39,7 @@ const EXCLUDE: &[&str] = &["stack_guard_deep_recursion.gg"];
 // Regenerate with:
 //   cargo test -p ggdef --test converter_agreement -- --nocapture
 // and read the "AGREE" count. NEVER lower it without a cited reason.
-const AGREE_FLOOR: usize = 181;
+const AGREE_FLOOR: usize = 182;
 
 #[test]
 fn converter_agreement() {

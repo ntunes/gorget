@@ -1048,3 +1048,354 @@ fn gen_escapes_multiline_stdout() {
     let got = crate::gen_frontmatter(src, FUEL).unwrap();
     assert!(got.contains("#   stdout: \"1\\n2\\n\""), "got:\n{got}");
 }
+
+// ── §10.3 Type-Directed Result Capture (language-reference.md) ─────────────
+//
+// A throws-call at a destination DECLARED `Result[_,_]` captures the full
+// `Result` instead of auto-propagating (§10.1). Every expectation below is
+// the GROUND-TRUTHED production output (`gg run`, probed 2026-07-06) — never
+// invented. The `RISKY` prelude is the shared throws helper.
+
+const RISKY: &str = r#"
+int risky(int x) throws String:
+    if x < 0:
+        throw "negative"
+    return x * 2
+"#;
+
+/// Assert the frontend rejects `src` with an ElabError containing `needle`.
+fn elab_rejects(src: &str, needle: &str, hint: &str) {
+    match run_source(src, FUEL) {
+        Err(e) => {
+            let s = e.to_string();
+            assert!(s.contains(needle), "{hint}: expected `{needle}` in: {s}");
+        }
+        Ok(r) => panic!("{hint}: must be a LOUD frontend error, got {:?}", r.outcome),
+    }
+}
+
+#[test]
+fn s103_vardecl_captures_in_throws_fn() {
+    // The R1 falsifying repro: `Result[int, String] r = risky(x)` inside a
+    // throws fn CAPTURES (error path recovers locally; ok path is a Value —
+    // both were wrong before: silent propagate / false IllFormed).
+    let src = format!(
+        "{RISKY}
+int compute(int x) throws String:
+    Result[int, String] r = risky(x)
+    match r:
+        case Ok(v):
+            return v
+        case Error(e):
+            print(f\"recovered from {{e}}\")
+            return -1
+
+void main():
+    match compute(-5):
+        case Ok(v):
+            print(f\"got {{v}}\")
+        case Error(e):
+            print(f\"propagated {{e}}\")
+    match compute(5):
+        case Ok(v):
+            print(f\"got {{v}}\")
+        case Error(e):
+            print(f\"propagated {{e}}\")
+"
+    );
+    assert_eq!(out(&src), "recovered from negative\ngot -1\ngot 10");
+}
+
+#[test]
+fn s103_vardecl_captures_in_non_throws_fn() {
+    // §10.3 is type-directed, not context-directed: capture also fires in a
+    // NON-throws fn (where propagate would be ill-formed).
+    let src = format!(
+        "{RISKY}
+void main():
+    Result[int, String] r = risky(-5)
+    match r:
+        case Ok(v):
+            print(f\"ok {{v}}\")
+        case Error(e):
+            print(f\"err {{e}}\")
+    Result[int, String] r2 = risky(5)
+    match r2:
+        case Ok(v):
+            print(f\"ok {{v}}\")
+        case Error(e):
+            print(f\"err {{e}}\")
+"
+    );
+    assert_eq!(out(&src), "err negative\nok 10");
+}
+
+#[test]
+fn s103_assign_target_result_captures() {
+    let src = format!(
+        "{RISKY}
+int compute(int x) throws String:
+    Result[int, String] r = Ok(0)
+    r = risky(x)
+    match r:
+        case Ok(v):
+            return v
+        case Error(e):
+            print(f\"recovered from {{e}}\")
+            return -1
+
+void main():
+    match compute(-5):
+        case Ok(v):
+            print(f\"got {{v}}\")
+        case Error(e):
+            print(f\"propagated {{e}}\")
+"
+    );
+    assert_eq!(out(&src), "recovered from negative\ngot -1");
+}
+
+#[test]
+fn s103_return_captures_in_non_throws_result_fn() {
+    // `return risky(x)` in a NON-throws fn declared `Result[int, String]`:
+    // the return slot is Result-typed → capture (production runs this).
+    let src = format!(
+        "{RISKY}
+Result[int, String] wrap(int x):
+    return risky(x)
+
+void main():
+    match wrap(-5):
+        case Ok(v):
+            print(f\"ok {{v}}\")
+        case Error(e):
+            print(f\"err {{e}}\")
+    match wrap(5):
+        case Ok(v):
+            print(f\"ok {{v}}\")
+        case Error(e):
+            print(f\"err {{e}}\")
+"
+    );
+    assert_eq!(out(&src), "err negative\nok 10");
+}
+
+#[test]
+fn s103_param_arg_result_captures() {
+    // A throws-call arg into a param DECLARED `Result[int, String]` captures —
+    // from a non-throws caller AND from inside a throws fn.
+    let src = format!(
+        "{RISKY}
+void show(Result[int, String] r):
+    match r:
+        case Ok(v):
+            print(f\"ok {{v}}\")
+        case Error(e):
+            print(f\"err {{e}}\")
+
+int go() throws String:
+    show(risky(-5))
+    show(risky(5))
+    return 0
+
+void main():
+    show(risky(-7))
+    match go():
+        case Ok(_):
+            print(\"go done\")
+        case Error(e):
+            print(f\"go propagated {{e}}\")
+"
+    );
+    assert_eq!(out(&src), "err negative\nerr negative\nok 10\ngo done");
+}
+
+#[test]
+fn s103_struct_field_result_captures() {
+    // A throws-call into a struct-ctor field DECLARED `Result[int, String]`
+    // captures (production ground truth: the field init is a typed dest).
+    let src = format!(
+        "{RISKY}
+struct Holder:
+    Result[int, String] r
+
+int go() throws String:
+    Holder h = Holder(risky(-5))
+    match h.r:
+        case Ok(v):
+            print(f\"ok {{v}}\")
+        case Error(e):
+            print(f\"err {{e}}\")
+    return 0
+
+void main():
+    match go():
+        case Ok(_):
+            print(\"go done\")
+        case Error(e):
+            print(f\"go propagated {{e}}\")
+"
+    );
+    assert_eq!(out(&src), "err negative\ngo done");
+}
+
+#[test]
+fn s103_return_in_throws_fn_with_result_t_captures() {
+    // A throws fn whose declared T is ITSELF `Result[int, String]`, returning
+    // a throws-callee whose own T is NOT Result: the callee's full Result is
+    // captured as the T value, then Ok-wrapped → `Ok(Error("negative"))`.
+    let src = format!(
+        "{RISKY}
+Result[int, String] outer(int x) throws String:
+    return risky(x)
+
+void main():
+    match outer(-5):
+        case Ok(inner):
+            match inner:
+                case Ok(v):
+                    print(f\"inner ok {{v}}\")
+                case Error(e):
+                    print(f\"inner err {{e}}\")
+        case Error(e):
+            print(f\"outer err {{e}}\")
+    match outer(5):
+        case Ok(inner):
+            match inner:
+                case Ok(v):
+                    print(f\"inner ok {{v}}\")
+                case Error(e):
+                    print(f\"inner err {{e}}\")
+        case Error(e):
+            print(f\"outer err {{e}}\")
+"
+    );
+    assert_eq!(out(&src), "inner err negative\ninner ok 10");
+}
+
+#[test]
+fn s103_return_in_throws_fn_callee_t_result_propagates() {
+    // The complement: the throws-callee's own declared T IS `Result` — its
+    // outer Result auto-propagates (peel) and the INNER Result is the T value
+    // (re-wrapped once). `f(0)` throws → outer Error; `f(-3)`/`f(3)` →
+    // Ok(inner).
+    let src = "
+Result[int, String] g(int x) throws String:
+    if x == 0:
+        throw \"zero\"
+    if x < 0:
+        return Error(\"inner-neg\")
+    return Ok(x * 2)
+
+Result[int, String] f(int x) throws String:
+    return g(x)
+
+void main():
+    match f(0):
+        case Ok(inner):
+            match inner:
+                case Ok(v):
+                    print(f\"inner ok {v}\")
+                case Error(e):
+                    print(f\"inner err {e}\")
+        case Error(e):
+            print(f\"outer err {e}\")
+    match f(-3):
+        case Ok(inner):
+            match inner:
+                case Ok(v):
+                    print(f\"inner ok {v}\")
+                case Error(e):
+                    print(f\"inner err {e}\")
+        case Error(e):
+            print(f\"outer err {e}\")
+    match f(3):
+        case Ok(inner):
+            match inner:
+                case Ok(v):
+                    print(f\"inner ok {v}\")
+                case Error(e):
+                    print(f\"inner err {e}\")
+        case Error(e):
+            print(f\"outer err {e}\")
+";
+    assert_eq!(out(src), "outer err zero\ninner err inner-neg\ninner ok 6");
+}
+
+#[test]
+fn s103_nested_arg_still_propagates_inside_capture() {
+    // The capture flag binds to the OUTERMOST call only: a nested throws-call
+    // in the captured call's args still auto-propagates (§10.1).
+    let src = format!(
+        "{RISKY}
+int go(int x) throws String:
+    Result[int, String] r = risky(risky(x))
+    match r:
+        case Ok(v):
+            return v
+        case Error(e):
+            print(f\"captured {{e}}\")
+            return -1
+
+void main():
+    match go(3):
+        case Ok(v):
+            print(f\"got {{v}}\")
+        case Error(e):
+            print(f\"propagated {{e}}\")
+    match go(-3):
+        case Ok(v):
+            print(f\"got {{v}}\")
+        case Error(e):
+            print(f\"propagated {{e}}\")
+"
+    );
+    assert_eq!(out(&src), "got 12\npropagated negative");
+}
+
+#[test]
+fn s103_callee_t_result_at_typed_dest_is_loud() {
+    // A throws-callee whose declared T is ITSELF Result, feeding a Result-
+    // typed VarDecl: name-level types cannot tell capture (outer) from
+    // propagate (inner) apart — and production MISCOMPILES this shape
+    // (garbage payloads, probed 2026-07-06). LOUD, never modeled.
+    let src = "
+Result[int, String] g(int x) throws String:
+    if x == 0:
+        throw \"zero\"
+    return Ok(x * 2)
+
+int go(int x) throws String:
+    Result[int, String] r = g(x)
+    return 0
+
+void main():
+    match go(3):
+        case Ok(_):
+            pass
+        case Error(_):
+            pass
+";
+    elab_rejects(src, "undecidable", "callee-T-Result at a typed dest");
+}
+
+#[test]
+fn s103_expr_body_tail_throws_call_into_result_ret_is_loud() {
+    // Production REJECTS a throws-call expression-body tail where the declared
+    // return is Result (capture does not apply at expr-body tails; probed:
+    // "type mismatch: expected Result[int, String], found int"). Mirrored as
+    // a loud ElabError, not a silently differently-shaped value.
+    let src = format!(
+        "{RISKY}
+Result[int, String] outer(int x) throws String: risky(x)
+
+void main():
+    match outer(5):
+        case Ok(_):
+            pass
+        case Error(_):
+            pass
+"
+    );
+    elab_rejects(&src, "expression-body tail", "expr-body tail capture");
+}

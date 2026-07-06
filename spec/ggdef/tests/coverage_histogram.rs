@@ -51,9 +51,9 @@ const EXCLUDE: &[&str] = &["stack_guard_deep_recursion.gg"];
 
 /// Fixtures whose frontend (parse+elaborate) succeeds so eval produces an
 /// outcome (Value/Trap/IllFormed/FuelExhausted). The honest "in reach" count.
-const ELABORATES_FLOOR: usize = 340;
+const ELABORATES_FLOOR: usize = 341;
 /// Fixtures reaching a clean `Value` outcome.
-const VALUE_FLOOR: usize = 276;
+const VALUE_FLOOR: usize = 277;
 
 fn fixture_names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(dir)
