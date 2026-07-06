@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_owning_param_snag1.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "xa\nxb\n"
+#!end
+# Regression pin — gorget-arena snag #1: an owning `!` (move) resource param
+# forwarded into a collection at its single-use LAST use MOVES, not clones.
+# Bare AND explicit-`!` push are both move-eligible -> 0 implicit clones.
+# HEAP-owned Strings (built via concat) so the string free path is exercised:
+# a clone-instead-of-move is output-identical + ASan-silent, hence the count gate.
+struct S:
+    String name
+
+void sink_bare(Vector[S] &out, S !item):
+    out.push(item)
+
+void sink_bang(Vector[S] &out, S !item):
+    out.push(!item)
+
+void main():
+    Vector[S] out = []
+    String base = "x"
+    S a = S(base + "a")
+    sink_bare(&out, !a)
+    S b = S(base + "b")
+    sink_bang(&out, !b)
+    print(out[0].name)
+    print(out[1].name)

@@ -1,0 +1,33 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/deep_nest_fstring.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "L1 L2 L3 7\nbefore=7 mid=inner 10 after=3\n21 done\n"
+#!end
+# Regression guard for the nested-f-string synthetic-span write-back fix.
+#
+# The self-host parser assigns each f-string interpolation a synthetic span
+# window from a monotonic counter (`next_interp_offset`). A nested f-string is
+# parsed by a SUB-parser; the fix threads the shared counter into the sub-parser
+# AND writes its final value back, so windows stay globally disjoint. Without the
+# write-back, a parent segment placed AFTER a nested f-string would re-use (and
+# collide with) windows the sub-parser already consumed — and the checked
+# arithmetic of the self-host would trap under Rust's `base<<20` escalation at
+# depth. This fixture exercises depth-3 nesting plus a parent segment that comes
+# after a nested one, which is exactly the post-nested-window path.
+void main():
+    int x = 7
+    int y = 3
+
+    # Depth-3 nested f-string: L1 wraps L2 wraps L3.
+    print(f"L1 {f"L2 {f"L3 {x}"}"}")
+
+    # A nested f-string followed by a plain top-level segment in the SAME
+    # parent f-string: `after={y}` uses a parent window placed after the
+    # sub-parser's consumed windows — the write-back path.
+    print(f"before={x} mid={f"inner {x + y}"} after={y}")
+
+    # Depth-2 nesting with a trailing parent segment too.
+    print(f"{f"{x * y}"} done")

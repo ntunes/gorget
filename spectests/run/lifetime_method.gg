@@ -1,0 +1,20 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/lifetime_method.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello\n"
+#!end
+# Positive test: method borrows from self, receiver stays alive
+struct Holder:
+    String name
+
+equip Holder:
+    String get_name(self):
+        return self.name
+
+void main():
+    Holder h = Holder("hello")
+    String v = h.get_name()
+    print(v)

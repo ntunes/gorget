@@ -1,0 +1,24 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_trait_bound.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "true\nfalse\ntrue\nfalse\n"
+#!end
+@derive(Equatable)
+struct Point:
+    int x
+    int y
+
+bool are_equal[Equatable T](T a, T b):
+    return a == b
+
+void main():
+    print(are_equal[int](1, 1))
+    print(are_equal[int](1, 2))
+    Point p1 = Point(1, 2)
+    Point p2 = Point(1, 2)
+    Point p3 = Point(3, 4)
+    print(are_equal[Point](p1, p2))
+    print(are_equal[Point](p1, p3))

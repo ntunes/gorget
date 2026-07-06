@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/dict_callable_get_clone.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "2\n11\ndone\n"
+#!end
+# Regression: Dict[K, Callable].get().unwrap().clone() must not double-free.
+#
+# Background (security-flagged in TODO 2026-04-28): Dict.get() returns
+# Option[V] BY VALUE. After deep-clone work landed `needs_drop=true` for
+# Callable, the unwrap result of Dict.get() shared its `env` pointer with
+# the Dict slot. The unwrap result got a scope-exit drop registered, which
+# called gorget_closure_free on the shared env. The next free (caller's
+# clone result OR the Dict's val_drop on its own slot) hit a freed env →
+# `free(): double free detected in tcache 2`.
+#
+# Strings dodge the same shape via CoW (cap=0 views skip free); Callable
+# has no view/owner distinction, so it had to be plumbed at the IR level.
+from std.collections import Dict
+
+void main():
+    Dict[String, Callable[int(int)]] d = Dict[String, Callable[int(int)]]()
+    d.put("k", (int x): x + 1)
+    Callable[int(int)] g = d.get("k").unwrap().clone()
+    print(g(1))           # expected: 2
+    print(g(10))          # expected: 11 — confirms env still valid after clone
+    print("done")

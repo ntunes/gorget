@@ -1,0 +1,34 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/range_operations.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "0\n1\n2\n3\n4\ninc:0\ninc:1\ninc:2\ninc:3\nin range\nin inclusive\nneg:-2\nneg:-1\nneg:0\nneg:1\nmultiples: 4\n"
+#!end
+void main():
+    # half-open range in for loop
+    for i in 0..5:
+        print(f"{i}")
+
+    # inclusive range
+    for i in 0..=3:
+        print(f"inc:{i}")
+
+    # range used with conditions
+    int x = 5
+    if x >= 1 and x < 10:
+        print("in range")
+    if x >= 1 and x <= 5:
+        print("in inclusive")
+
+    # range with negative bounds
+    for i in -2..2:
+        print(f"neg:{i}")
+
+    # range with step-like patterns (manual)
+    int count = 0
+    for i in 0..10:
+        if i % 3 == 0:
+            count += 1
+    print(f"multiples: {count}")

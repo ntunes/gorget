@@ -1,0 +1,27 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/empty_literal_struct_field.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "Alice\nBob\nCarol\n"
+#!end
+# Regression: empty `[]` as struct constructor argument inherits the
+# declared field type for elem_size. Confirms field-assign + constructor
+# paths both honor contextual type propagation for empty literals.
+
+struct Bag:
+    Vector[String] items
+
+void main():
+    Bag b = Bag([])
+    b.items.push("Alice")
+    b.items.push("Bob")
+    String first = b.items.get(0).unwrap()
+    String second = b.items.get(1).unwrap()
+    print(first)
+    print(second)
+    # Field-assign rebinds; second empty literal must also size correctly.
+    b.items = []
+    b.items.push("Carol")
+    print(b.items.get(0).unwrap())

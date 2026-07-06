@@ -1,0 +1,12 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/auto_string_vector_for.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "2\n3\n"
+#!end
+void main():
+    auto v = ["ab", "cde"]
+    for s in v:
+        print(s.len())

@@ -1,0 +1,38 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_last_use_safety.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "original\noriginal\n1\n1\noriginal\n1\ndone\n"
+#!end
+# Safety test: bare param borrows must NOT be zeroed by the callee.
+# The caller may still use the argument after the call returns.
+
+struct Data:
+    Vector[int] items
+    String name
+
+Data identity(Data d):
+    return d
+
+String get_name(Data d):
+    return d.name
+
+void main():
+    Data d = Data(Vector[int](), "original")
+    d.items.push(42)
+
+    # Caller uses d after passing it to identity
+    Data d2 = identity(d)
+    print(d.name)
+    print(d2.name)
+    print(f"{d.items.len()}")
+    print(f"{d2.items.len()}")
+
+    # Caller uses d2 after passing it to get_name
+    String n = get_name(d2)
+    print(n)
+    print(f"{d2.items.len()}")
+
+    print("done")

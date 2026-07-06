@@ -1,0 +1,34 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/snag49c_throws_index.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "got: 30\n"
+#!end
+# Snag #49c — auto-propagate `Result[int, E]` at an index-expression
+# position. Sibling to Snag #43 / #46 / #48 — the "consumer-site
+# whack-a-mole" class.
+
+from std.collections import Vector
+
+struct E:
+    String msg
+
+int pick() throws E:
+    return 2
+
+int read_throws() throws E:
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    v.push(40)
+    return v[pick()]
+
+void main():
+    match read_throws():
+        case Ok(n):
+            print(f"got: {n}")
+        case Error(_):
+            print("err")

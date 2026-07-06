@@ -1,0 +1,24 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/print_struct_string_field_leak.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "world\nworld\n"
+#!end
+# Print-temp leak class, field-print shape: `print(s.f)` on an OWNED-heap
+# String field materializes a printf temp via `gorget_string_copy_cow`
+# (format_for_printf Ptr(String) branch). The temp owns its heap and must
+# be drop-registered at its birth — the field must use a runtime-built
+# String (a literal-initialized field is a static cap=0 view, leak-free
+# either way). Pins both the output and the no-double-free of the
+# registration (leak direction is checked by the ASan battery).
+struct S:
+    String f
+
+void main():
+    String stem = "wor"
+    String heap = stem + "ld"
+    S s = S(heap)
+    print(s.f)
+    print(s.f)

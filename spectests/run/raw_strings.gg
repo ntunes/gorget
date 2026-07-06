@@ -1,0 +1,15 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/raw_strings.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "C:\\Users\\test\n\\d+\\.\\d+\nno {interp} here\n"
+#!end
+void main():
+    String path = r"C:\Users\test"
+    print(path)
+    String regex = r"\d+\.\d+"
+    print(regex)
+    String braces = r"no {interp} here"
+    print(braces)

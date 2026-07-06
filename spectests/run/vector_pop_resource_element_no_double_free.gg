@@ -1,0 +1,51 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/vector_pop_resource_element_no_double_free.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "charlie\nbravo\nalpha\ndone\n"
+#!end
+# Regression sentinel: `Vector[T].pop()` on resource-typed `T` must
+# transfer ownership cleanly. Locks in the truncate-by-pop rollback
+# shape that the parser typed-Diagnostic migration (2026-05-17,
+# commit 8103afe) avoided in favor of a speculation-depth gate.
+#
+# Contract: `gorget_array_safe_pop` decrements `len`, returns a ptr
+# to the now-past-len slot. The LIR lift for consuming methods
+# (lifts.rs `is_consuming_method`) moves bytes out into the Some
+# payload without cloning; the array's eventual drop iterates only
+# 0..len, so the popped slot is never re-dropped. Resource fields
+# (here: `String name`) end up owned exactly by the popped Option
+# and freed exactly once at Option drop.
+#
+# Tested under `--sanitize` (AddressSanitizer + UBSan): zero
+# heap-use-after-free / double-free / leak. See 2026-05-17 DONE entry.
+
+struct Item:
+    String name
+
+void main():
+    Vector[Item] items = []
+    items.push(Item("alpha"))
+    items.push(Item("bravo"))
+    items.push(Item("charlie"))
+
+    # Pop into a named binding, then read the resource field.
+    Option[Item] popped = items.pop()
+    match popped:
+        case Some(top):
+            print(top.name)
+        case None:
+            print("empty")
+
+    # Drain the rest via the truncate-by-pop loop shape — the parser
+    # rollback pattern that prompted this regression fixture.
+    while items.len() > 0:
+        Option[Item] tail = items.pop()
+        match tail:
+            case Some(t):
+                print(t.name)
+            case None:
+                print("none")
+    print("done")

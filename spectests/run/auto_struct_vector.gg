@@ -1,0 +1,16 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/auto_struct_vector.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n7\n11\n"
+#!end
+struct Point:
+    int x
+    int y
+
+void main():
+    auto pts = [Point(1, 2), Point(3, 4), Point(5, 6)]
+    for p in pts:
+        print(p.x + p.y)

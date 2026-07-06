@@ -1,0 +1,39 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/ref_param_reassign.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "int:15\nstr:hi!\nbool:true\nstruct:99\n"
+#!end
+from std.conv import int_to_str
+
+struct S:
+    int v
+
+void bump_int(int &x):
+    x = x + 10
+
+void append_str(String &s):
+    s = s + "!"
+
+void flip(bool &b):
+    b = true
+
+void set_v(S &s, int n):
+    s.v = n      # struct field-write — already works (regression guard)
+
+void main():
+    int i = 5
+    bump_int(&i)
+    print("int:" + int_to_str(i))      # int:15
+    String t = "hi"
+    append_str(&t)
+    print("str:" + t)                  # str:hi!
+    bool b = false
+    flip(&b)
+    if b: print("bool:true")
+    else: print("bool:false")          # bool:true
+    S s = S(0)
+    set_v(&s, 99)
+    print("struct:" + int_to_str(s.v)) # struct:99

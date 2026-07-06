@@ -1,0 +1,17 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/copy_struct_closure_capture.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "480000\n800\n"
+#!end
+struct Config:
+    int width
+    int height
+
+void main():
+    Config c = Config(800, 600)
+    auto area = (): c.width * c.height
+    print(area())
+    print(c.width)

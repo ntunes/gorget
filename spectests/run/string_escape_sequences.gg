@@ -1,0 +1,17 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/string_escape_sequences.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "11\nsay \"hi\"\nback\\slash\n11\n"
+#!end
+void main():
+    String s = "hello\tworld"
+    print(s.len())
+    String q = "say \"hi\""
+    print(q)
+    String bs = "back\\slash"
+    print(bs)
+    String nl = "line1\nline2"
+    print(nl.len())

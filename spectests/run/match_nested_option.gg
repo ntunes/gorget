@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/match_nested_option.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "value: 42\ninner none\nouter none\n"
+#!end
+void describe(Option[Option[int]] x):
+    match x:
+        case Some(inner):
+            match inner:
+                case Some(v):
+                    print(f"value: {v}")
+                case None:
+                    print("inner none")
+        case None:
+            print("outer none")
+
+void main():
+    Option[Option[int]] a = Some(Some(42))
+    Option[Option[int]] b = Some(None)
+    Option[Option[int]] c = None
+    describe(a)
+    describe(b)
+    describe(c)

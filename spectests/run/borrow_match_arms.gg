@@ -1,0 +1,38 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_match_arms.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "first: 1\nafter: 3\nnested: 1\ndone\n"
+#!end
+# Test borrow semantics across match arms
+void main():
+    Vector[int] v = [1, 2, 3]
+    int x = 2
+
+    # borrow v in different match arms — each arm is independent
+    match x:
+        case 1:
+            print(f"len: {v.len()}")
+        case 2:
+            print(f"first: {v[0]}")
+        else:
+            print(f"last: {v[v.len() - 1]}")
+
+    # v still usable after match
+    print(f"after: {v.len()}")
+
+    # nested match with borrows
+    int y = 1
+    match x:
+        case 2:
+            match y:
+                case 1:
+                    print(f"nested: {v[0]}")
+                else:
+                    print("other")
+        else:
+            print("outer else")
+
+    print("done")

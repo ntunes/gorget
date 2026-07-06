@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_in_branch.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\ndone\n"
+#!end
+from std.collections import Vector
+
+void consume(Vector[int] !v):
+    print(v.len())
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    bool flag = true
+    if flag:
+        consume(!a)
+    else:
+        consume(!a)
+    print("done")

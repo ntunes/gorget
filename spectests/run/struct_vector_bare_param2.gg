@@ -1,0 +1,99 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/struct_vector_bare_param2.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "Built: vbo=42 ebo=84 white=999\n  face_draws: 5\n  lightmaps: 3\n  diffuse: 5\n  shaders: 2\n--- Pass 1 ---\n  bind diffuse[0]=100\n  bind lightmap[0]=1000\n  bind diffuse[1]=200\n  bind lightmap[1]=2000\n  bind diffuse[2]=300\n  bind lightmap[2]=3000\n  bind diffuse[3]=400\n  bind diffuse[4]=500\n--- Pass 2 (verify data stable) ---\n  bind diffuse[0]=100\n  bind lightmap[0]=1000\n  bind diffuse[1]=200\n  bind lightmap[1]=2000\n  bind diffuse[2]=300\n  bind lightmap[2]=3000\n  bind diffuse[3]=400\n  bind diffuse[4]=500\n--- Multi 3x ---\n  bind diffuse[0]=100\n  bind lightmap[0]=1000\n  bind diffuse[1]=200\n  bind lightmap[1]=2000\n  bind diffuse[2]=300\n  bind lightmap[2]=3000\n  bind diffuse[3]=400\n  bind diffuse[4]=500\n  bind diffuse[0]=100\n  bind lightmap[0]=1000\n  bind diffuse[1]=200\n  bind lightmap[1]=2000\n  bind diffuse[2]=300\n  bind lightmap[2]=3000\n  bind diffuse[3]=400\n  bind diffuse[4]=500\n  bind diffuse[0]=100\n  bind lightmap[0]=1000\n  bind diffuse[1]=200\n  bind lightmap[1]=2000\n  bind diffuse[2]=300\n  bind lightmap[2]=3000\n  bind diffuse[3]=400\n  bind diffuse[4]=500\ndone\n"
+#!end
+# Test: more complex pattern matching the arena crash scenario.
+# BspGpuData-like struct with multiple Vectors, returned from a function,
+# then accessed through bare params in a rendering-like loop.
+
+struct TextureSet:
+    int vbo
+    int ebo
+    Vector[int] face_draws
+    Vector[int] lightmap_textures
+    int white_texture
+    int patch_offset
+    Vector[int] diffuse_textures
+    Vector[String] shader_names
+
+TextureSet build_texture_set():
+    Vector[int] draws = Vector[int]()
+    draws.push(0)
+    draws.push(1)
+    draws.push(2)
+    draws.push(3)
+    draws.push(4)
+
+    Vector[int] lightmaps = Vector[int]()
+    lightmaps.push(1000)
+    lightmaps.push(2000)
+    lightmaps.push(3000)
+
+    Vector[int] diffuse = Vector[int]()
+    diffuse.push(100)
+    diffuse.push(200)
+    diffuse.push(300)
+    diffuse.push(400)
+    diffuse.push(500)
+
+    Vector[String] names = Vector[String]()
+    names.push("tex0")
+    names.push("tex1")
+
+    return TextureSet(42, 84, draws, lightmaps, 999, 10, diffuse, names)
+
+# Simulates render_world_culled — takes the texture set as bare param
+void render_pass(TextureSet ts):
+    int i = 0
+    int last_tex = -2
+    while i < ts.face_draws.len():
+        int draw_idx = ts.face_draws.get(i).unwrap()
+
+        # Access diffuse_textures through the bare param
+        int tex_idx = draw_idx
+        if tex_idx != last_tex:
+            if tex_idx >= 0 and tex_idx < ts.diffuse_textures.len():
+                int diffuse_id = ts.diffuse_textures.get(tex_idx).unwrap()
+                if diffuse_id > 0:
+                    print(f"  bind diffuse[{tex_idx}]={diffuse_id}")
+                else:
+                    print(f"  bind white={ts.white_texture}")
+            else:
+                print(f"  bind white={ts.white_texture}")
+            last_tex = tex_idx
+
+        # Also access lightmap_textures
+        if draw_idx < ts.lightmap_textures.len():
+            int lm_id = ts.lightmap_textures.get(draw_idx).unwrap()
+            print(f"  bind lightmap[{draw_idx}]={lm_id}")
+
+        i = i + 1
+
+# Multiple calls to ensure the data survives
+void render_multi(TextureSet ts, int count):
+    int frame = 0
+    while frame < count:
+        render_pass(ts)
+        frame = frame + 1
+
+void main():
+    TextureSet ts = build_texture_set()
+    print(f"Built: vbo={ts.vbo} ebo={ts.ebo} white={ts.white_texture}")
+    print(f"  face_draws: {ts.face_draws.len()}")
+    print(f"  lightmaps: {ts.lightmap_textures.len()}")
+    print(f"  diffuse: {ts.diffuse_textures.len()}")
+    print(f"  shaders: {ts.shader_names.len()}")
+
+    print("--- Pass 1 ---")
+    render_pass(ts)
+
+    print("--- Pass 2 (verify data stable) ---")
+    render_pass(ts)
+
+    print("--- Multi 3x ---")
+    render_multi(ts, 3)
+    print("done")

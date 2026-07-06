@@ -1,0 +1,42 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/fstring_basic.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "{name}\nHello, Alice!\n\\n stays\nhello world\nHi, Bob!\n"
+#!end
+# Tests for f-string (Format string) opt-in interpolation.
+#
+# Key behaviours:
+#   - Plain "..."  strings: { is a literal character, no interpolation
+#   - f"..." strings: {expr} interpolates (produces String / GorgetString)
+#   - r"..." strings: raw, no escapes, no interpolation (unchanged)
+#   - Single-quoted 'hello' strings: literal String, no interpolation
+#   - f'hello {x}' single-quoted format strings: interpolate
+#
+# Expected output:
+#   {name}
+#   Hello, Alice!
+#   \n stays
+#   hello world
+#   Hi, Bob!
+
+void main():
+    String name = "Alice"
+
+    # Plain string: { is literal, no interpolation
+    print("{name}")
+
+    # f-string: interpolation ON
+    print(f"Hello, {name}!")
+
+    # Raw string: no escape processing (unchanged behaviour)
+    print(r"\n stays")
+
+    # Single-quoted string: raw String, no interpolation
+    print('hello world')
+
+    # Single-quoted f-string: interpolation ON
+    String who = "Bob"
+    print(f'Hi, {who}!')

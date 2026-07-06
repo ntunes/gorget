@@ -1,0 +1,84 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/match_nested_enum.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "some red\nsome green\nno color\ncircle r=5\nrect 3x4\nok: 42\nerr: oops\n"
+#!end
+enum Color:
+    Red
+    Green
+    Blue
+
+enum Shape:
+    Circle(int)
+    Rect(int, int)
+
+void main():
+    # match on Option containing enum — tests inner discriminant
+    Option[Color] c1 = Some(Color.Red())
+    Option[Color] c2 = Some(Color.Green())
+    Option[Color] c3 = None
+
+    match c1:
+        case Some(Color.Red()):
+            print("some red")
+        case Some(Color.Green()):
+            print("some green")
+        case Some(Color.Blue()):
+            print("some blue")
+        case None:
+            print("none")
+
+    match c2:
+        case Some(Color.Red()):
+            print("some red")
+        case Some(Color.Green()):
+            print("some green")
+        case Some(Color.Blue()):
+            print("some blue")
+        case None:
+            print("none")
+
+    match c3:
+        case Some(c):
+            print("has color")
+        case None:
+            print("no color")
+
+    # nested enum with payload — inner discriminant + field extraction
+    Option[Shape] s1 = Some(Shape.Circle(5))
+    Option[Shape] s2 = Some(Shape.Rect(3, 4))
+
+    match s1:
+        case Some(Shape.Circle(r)):
+            print(f"circle r={r}")
+        case Some(Shape.Rect(w, h)):
+            print(f"rect {w}x{h}")
+        case None:
+            print("no shape")
+
+    match s2:
+        case Some(Shape.Circle(r)):
+            print(f"circle r={r}")
+        case Some(Shape.Rect(w, h)):
+            print(f"rect {w}x{h}")
+        case None:
+            print("no shape")
+
+    # Result matching
+    Result[int, String] r1 = Ok(42)
+    Result[int, String] r2 = Error("oops")
+
+    match r1:
+        case Ok(n):
+            print(f"ok: {n}")
+        case Error(e):
+            print(f"err: {e}")
+
+    match r2:
+        case Ok(n):
+            print(f"ok: {n}")
+        case Error(e):
+            print(f"err: {e}")

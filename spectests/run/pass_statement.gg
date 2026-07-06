@@ -1,0 +1,47 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/pass_statement.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "else branch\nelif branch\nafter empty for\n1\n3\nafter match pass\n"
+#!end
+void main():
+    # pass in empty function body is implicit, test in branches
+    int x = 5
+
+    # pass in if branch
+    if x > 10:
+        pass
+    else:
+        print("else branch")
+
+    # pass in elif
+    if x > 10:
+        pass
+    elif x > 3:
+        print("elif branch")
+    else:
+        pass
+
+    # pass in for loop body
+    for i in 0..3:
+        pass
+    print("after empty for")
+
+    # pass in while loop
+    int n = 0
+    while n < 3:
+        n += 1
+        if n == 2:
+            pass
+        else:
+            print(f"{n}")
+
+    # pass in match arm
+    match x:
+        case 5:
+            pass
+        else:
+            print("BAD")
+    print("after match pass")

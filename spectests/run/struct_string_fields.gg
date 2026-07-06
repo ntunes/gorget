@@ -1,0 +1,23 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/struct_string_fields.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "alice is 30\nbob is 25\nalice\n25\n"
+#!end
+struct Person:
+    String name
+    int age
+
+String describe(Person p):
+    return f"{p.name} is {p.age}"
+
+void main():
+    Person alice = Person("alice", 30)
+    Person bob = Person("bob", 25)
+    print(describe(alice))
+    print(describe(bob))
+    # Struct fields accessible directly
+    print(alice.name)
+    print(bob.age)

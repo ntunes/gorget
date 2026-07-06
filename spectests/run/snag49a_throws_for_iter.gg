@@ -1,0 +1,38 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/snag49a_throws_for_iter.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "sum: 6\n"
+#!end
+# Snag #49a — auto-propagate `Result[T, E]` at a for-loop iterable
+# position. Sibling to Snag #43 / #46 / #48 — the "consumer-site
+# whack-a-mole" class. Without the centralized hook (or an explicit
+# consumer-side `maybe_auto_propagate`) the loop reads the Result
+# struct's bytes as if they were the iterable's layout.
+
+from std.collections import Vector
+
+struct E:
+    String msg
+
+Vector[int] make() throws E:
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    return v
+
+int sum_throws() throws E:
+    int s = 0
+    for x in make():
+        s = s + x
+    return s
+
+void main():
+    match sum_throws():
+        case Ok(s):
+            print(f"sum: {s}")
+        case Error(_):
+            print("err")

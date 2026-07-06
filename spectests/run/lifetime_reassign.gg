@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/lifetime_reassign.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "world\n"
+#!end
+# Positive test: reassignment then re-borrow works fine.
+# After `s` is reassigned, creating a new borrow from `s` is valid.
+
+String get_view(String s): s
+
+void main():
+    String s = "hello"
+    s = "world"
+    String v = get_view(s)
+    print(v)

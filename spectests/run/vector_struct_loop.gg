@@ -1,0 +1,23 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/vector_struct_loop.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "apples: 3\nbananas: 5\ncherries: 2\ntotal: 10\n"
+#!end
+struct Item:
+    String label
+    int count
+
+void main():
+    Vector[Item] items = [Item("apples", 3), Item("bananas", 5), Item("cherries", 2)]
+    # Index-based loop over vector of structs with String fields
+    int i = 0
+    int total = 0
+    while i < items.len():
+        Item item = items.get(i).unwrap()
+        print(f"{item.label}: {item.count}")
+        total = total + item.count
+        i = i + 1
+    print(f"total: {total}")

@@ -1,0 +1,14 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/multiline_strings.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello\nworld\none line\n"
+#!end
+void main():
+    String text = """hello
+world"""
+    print(text)
+    String single = """one line"""
+    print(single)

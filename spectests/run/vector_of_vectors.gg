@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/vector_of_vectors.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "rows: 3\nrow sum: 6\nrow sum: 15\nrow sum: 24\nfirst len: 3\nfirst[0]: 1\nfirst[2]: 3\nagain len: 3\n"
+#!end
+# Nested vector ownership and operations
+void main():
+    Vector[Vector[int]] matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+
+    print(f"rows: {matrix.len()}")
+    for row in matrix:
+        int sum = 0
+        for val in row:
+            sum += val
+        print(f"row sum: {sum}")
+
+    # Index access after iteration — auto borrows, no clone
+    auto first = matrix[0]
+    print(f"first len: {first.len()}")
+    print(f"first[0]: {first[0]}")
+    print(f"first[2]: {first[2]}")
+
+    # Multiple reads from same index
+    auto again = matrix[0]
+    print(f"again len: {again.len()}")

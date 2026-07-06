@@ -1,0 +1,106 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_across_branches.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "if_elif b=x\nif_else b=y\nthree_way b=z\nmatch b=m\nfirst_branch a=first\ndone\n"
+#!end
+# Test: a non-Copy local moved into a struct field across alternative
+# branches (if/elif/else, match) emits move_zero on EACH branch — not just
+# the first lowered one. Snag #8 (2026-05-05).
+#
+# Root cause was flow-insensitive `drops.is_moved`: the field-store path
+# in `emit_field_store_with_cleanup` only emits `move_zero` when
+# `!ctx.drops.is_moved(p.local)`. Lowering processes the then-branch first
+# and calls `mark_moved(items)`, which sets the flag on a function-scope
+# entry; when the elif-branch is lowered next, `is_moved(items) == true`
+# and `move_zero` is skipped. At runtime the field aliases `items`'s heap
+# buffer, and at scope-exit `drop_if_alive items` AND the field's drop
+# both free the same buffer → heap corruption.
+#
+# Fix: `lower_if` and `lower_match_stmt` now snapshot the `maybe_moved`
+# flags before each branch, restore them between branches, and union the
+# post-branch snapshots after all branches finish — so each branch sees
+# the same pre-branch view, and the post-join state is the conservative
+# union ("may have been moved on at least one path").
+
+from std.collections import Vector
+
+struct Foo:
+    Vector[String] a
+    Vector[String] b
+    Vector[String] c
+
+Vector[String] make(String tag):
+    Vector[String] v = Vector[String]()
+    v.push(tag)
+    return v
+
+# (1) if/elif: elif branch runs.
+void via_if_elif():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    String key = "B"
+    Vector[String] items = make("x")
+    if key == "A":
+        f.a = items
+    elif key == "B":
+        f.b = items
+    print(f"if_elif b={f.b.get(0).unwrap()}")
+
+# (2) if/else: else branch runs.
+void via_if_else():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    bool flag = false
+    Vector[String] items = make("y")
+    if flag:
+        f.a = items
+    else:
+        f.b = items
+    print(f"if_else b={f.b.get(0).unwrap()}")
+
+# (3) if/elif/else: middle elif runs.
+void via_three_way():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    int key = 2
+    Vector[String] items = make("z")
+    if key == 1:
+        f.a = items
+    elif key == 2:
+        f.b = items
+    else:
+        f.c = items
+    print(f"three_way b={f.b.get(0).unwrap()}")
+
+# (4) match: a non-first arm runs.
+void via_match():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    int key = 2
+    Vector[String] items = make("m")
+    match key:
+        case 1:
+            f.a = items
+        case 2:
+            f.b = items
+        else:
+            f.c = items
+    print(f"match b={f.b.get(0).unwrap()}")
+
+# (5) sanity: matched-first-branch case (was OK pre-fix, must stay OK).
+void first_branch_still_works():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    String key = "A"
+    Vector[String] items = make("first")
+    if key == "A":
+        f.a = items
+    elif key == "B":
+        f.b = items
+    print(f"first_branch a={f.a.get(0).unwrap()}")
+
+void main():
+    via_if_elif()
+    via_if_else()
+    via_three_way()
+    via_match()
+    first_branch_still_works()
+    print("done")

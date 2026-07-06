@@ -1,0 +1,25 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_after_method_mut.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n1\n4\n4\n10\n"
+#!end
+from std.collections import Vector
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    print(v.len())
+    print(v[0])
+    v.push(4)
+    print(v.len())
+    print(v[3])
+    # v still usable after all mutations
+    int sum = 0
+    for x in v:
+        sum = sum + x
+    print(sum)

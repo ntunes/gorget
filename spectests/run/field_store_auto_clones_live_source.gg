@@ -1,0 +1,98 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/field_store_auto_clones_live_source.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "after_use items=hello f.a=hello\nlast_use_move f.a=only\nchained_ifs f.b=x\nexplicit_move f.a=forced\nexplicit_clone items=cloned f.a=cloned\nindex_store_live inner=idx outer[0]=idx\ndone\n"
+#!end
+# Test: assigning a non-Copy local into a struct field is a CoW
+# transfer — the compiler picks per the 3-way rule:
+#
+#   (1) source dead at this assign  → auto-move (zero-cost)
+#   (2) source live past this assign → auto-clone (independent copy)
+#   (3) explicit `!source`           → forced move (source dead after)
+#
+# Same rule that already governs `push` / `put` / `set` / struct init /
+# enum variant init — see docs/devbook/11-copy-on-write.md (post-call
+# ownership transfer) and AGENTS.md "Ownership at Consuming Positions". Field-store
+# was the only outlier prior to 2026-05-05; this fixture locks the
+# consistency in.
+#
+# Pre-fix behaviour:
+#   - `f.a = items; print(items)` panicked with `local _N read after
+#     MoveZero in bbX` GIR validation failure (Compiler internal panic).
+#   - Chained `if`s that each store `items` into a different field
+#     silently double-freed the heap buffer at scope exit (snag #8 sibling).
+# Post-fix: both shapes auto-clone the live source. `--clones=sites` reports
+# one implicit clone per field-store with a still-live source.
+
+from std.collections import Vector
+
+struct Foo:
+    Vector[String] a
+    Vector[String] b
+    Vector[String] c
+
+Vector[String] make(String tag):
+    Vector[String] v = Vector[String]()
+    v.push(tag)
+    return v
+
+# (1) Auto-clone: source live after the field-store.
+void after_use():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    Vector[String] items = make("hello")
+    f.a = items
+    print(f"after_use items={items.get(0).unwrap()} f.a={f.a.get(0).unwrap()}")
+
+# (2) Auto-move: source dead at the field-store.
+void last_use_move():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    Vector[String] items = make("only")
+    f.a = items
+    print(f"last_use_move f.a={f.a.get(0).unwrap()}")
+
+# (3) Chained ifs — both can fire; first store auto-clones (live for the
+# second if's read), second store is last use → auto-move.
+void chained_ifs():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    String key = "B"
+    Vector[String] items = make("x")
+    if key == "A":
+        f.a = items
+    if key == "B":
+        f.b = items
+    print(f"chained_ifs f.b={f.b.get(0).unwrap()}")
+
+# (4) Explicit `!` forces a move; source must not be used after.
+void explicit_move():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    Vector[String] items = make("forced")
+    f.a = !items
+    print(f"explicit_move f.a={f.a.get(0).unwrap()}")
+
+# (5) Explicit `.clone()` is redundant but accepted (source stays live).
+void explicit_clone():
+    Foo f = Foo(Vector[String](), Vector[String](), Vector[String]())
+    Vector[String] items = make("cloned")
+    f.a = items.clone()
+    print(f"explicit_clone items={items.get(0).unwrap()} f.a={f.a.get(0).unwrap()}")
+
+# (6) Index-store should follow the same rule (already did pre-fix).
+void index_store_live():
+    Vector[Vector[String]] outer = Vector[Vector[String]]()
+    outer.push(Vector[String]())
+    Vector[String] inner = Vector[String]()
+    inner.push("idx")
+    outer.set(0, inner)
+    print(f"index_store_live inner={inner.get(0).unwrap()} outer[0]={outer.get(0).unwrap().get(0).unwrap()}")
+
+void main():
+    after_use()
+    last_use_move()
+    chained_ifs()
+    explicit_move()
+    explicit_clone()
+    index_store_live()
+    print("done")

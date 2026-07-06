@@ -1,0 +1,22 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_pair_swap.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "1\nhello\nhello\n1\n"
+#!end
+struct Pair[T, U]:
+    T first
+    U second
+
+Pair[U, T] swap_pair[T, U](Pair[T, U] p):
+    return Pair[U, T](p.second, p.first)
+
+void main():
+    Pair[int, String] p = Pair[int, String](1, "hello")
+    print(p.first)
+    print(p.second)
+    auto swapped = swap_pair[int, String](p)
+    print(swapped.first)
+    print(swapped.second)

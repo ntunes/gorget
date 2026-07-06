@@ -1,0 +1,20 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/string_concat.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello world\nhi there\nfoobar\nabc\nhello world\n"
+#!end
+void main():
+    auto a = "hello"
+    auto b = " world"
+    auto c = a + b
+    print(c)
+    auto greeting = "hi"
+    greeting += " there"
+    print(greeting)
+    print("foo" + "bar")
+    auto x = "a" + "b" + "c"
+    print(x)
+    print(f"{a + b}")

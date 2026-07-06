@@ -1,0 +1,34 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/vec_struct_get.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3,4\nnone-oob\n"
+#!end
+# REGRESSION GUARD for the fault-catch Inc2 case-(c) fix (Fault.Bounds on a
+# Vector of PLAIN STRUCT elements). That fix routes the FAULTABLE struct EIndex
+# read through `gorget_array_safe_get` + a `GIDeref` aggregate copy-out. This
+# fixture proves the change did NOT perturb the ORDINARY `Vector[Struct].get()`
+# path — which flows through its OWN Option-wrap routing (`.get()` arrives as
+# `gorget_array_safe_get`, NOT the raw `gorget_array_get` the EIndex arm emits),
+# so an in-bounds `.get()` returns `Some(struct)` and an OOB `.get()` returns
+# `None`. Expected output = exactly what Rust gg yields (the language spec).
+struct Point:
+    int x
+    int y
+
+void main():
+    Vector[Point] pts = [Point(1, 2), Point(3, 4)]
+    # In-bounds → Some(Point(3, 4)).
+    match pts.get(1):
+        case Some(p):
+            print(f"{p.x},{p.y}")
+        case None:
+            print("none-in")
+    # Out-of-bounds → None.
+    match pts.get(9):
+        case Some(p):
+            print(f"{p.x},{p.y}")
+        case None:
+            print("none-oob")

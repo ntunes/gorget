@@ -1,0 +1,17 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/closure_as_callback.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "18\n"
+#!end
+int apply(int x, int(int) f):
+    return f(x)
+
+int apply_twice(int x, int(int) f):
+    return apply(apply(x, f), f)
+
+void main():
+    int result = apply_twice(2, (int x): x * 3)
+    print(result)

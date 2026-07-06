@@ -1,0 +1,84 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_param_positive.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "60\n10\n60\n4\n4\nhello\n3\n2\ndone\n"
+#!end
+from std.collections import Vector
+
+# ── Bare borrow: read-only access ──────────────────
+
+int sum_vec(Vector[int] v):
+    int total = 0
+    for n in v:
+        total = total + n
+    return total
+
+int first_or_zero(Vector[int] v):
+    if v.len() == 0:
+        return 0
+    return v.get(0).unwrap()
+
+# ── Bare borrow: pass to another function ──────────
+
+int sum_via_helper(Vector[int] v):
+    return sum_vec(v)
+
+# ── & param: mutation via method call ──────────────
+
+void add_item(Vector[int] &v, int x):
+    v.push(x)
+
+# ── & param: read access ──────────────────────────
+
+int len_mut(Vector[int] &v):
+    return v.len()
+
+# ── & param: f-string formatting ──────────────────
+
+void print_ref(String &s):
+    print(f"{s}")
+
+# ── ! param: stored in struct (callee owns) ───────
+
+struct Wrapper:
+    Vector[int] data
+
+Wrapper wrap_owned(Vector[int] !v):
+    return Wrapper(v)
+
+# ── ! param: returned (callee owns) ──────────────
+
+Vector[int] identity_owned(Vector[int] !v):
+    return v
+
+void main():
+    Vector[int] a = [10, 20, 30]
+
+    # Bare borrow: read-only
+    print(sum_vec(a))
+    print(first_or_zero(a))
+    print(sum_via_helper(a))
+
+    # & param: mutate
+    add_item(&a, 40)
+    print(a.len())
+    print(len_mut(&a))
+
+    # & param: f-string
+    String msg = "hello"
+    print_ref(&msg)
+
+    # ! param: store in struct
+    Vector[int] b = [1, 2, 3]
+    Wrapper w = wrap_owned(!b)
+    print(w.data.len())
+
+    # ! param: return owned
+    Vector[int] c = [5, 6]
+    Vector[int] d = identity_owned(!c)
+    print(d.len())
+
+    print("done")

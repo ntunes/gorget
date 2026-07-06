@@ -1,0 +1,23 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/recursion_mutual.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "true\nfalse\ntrue\ntrue\n"
+#!end
+bool is_even(int n):
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+bool is_odd(int n):
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+void main():
+    print(is_even(0))
+    print(is_even(5))
+    print(is_even(10))
+    print(is_odd(7))

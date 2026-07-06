@@ -1,0 +1,46 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_last_use_struct.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\nhello\n3\nhello\n3\n3\nhello\ndone\n"
+#!end
+# Last-use move optimization: when a struct with resource fields is returned
+# from a function and the source is the last use, move instead of deep-cloning.
+
+struct Data:
+    Vector[int] items
+    String name
+
+Data make_data():
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(2)
+    v.push(3)
+    String s = "hello"
+    return Data(v, s)
+
+# Pass-through: bare param is Ptr(Data), last use → move, not clone
+Data pass_through(Data d):
+    return d
+
+# Non-last-use: param is used after, must clone
+Data use_then_return(Data d):
+    print(f"{d.items.len()}")
+    return d
+
+void main():
+    Data d1 = make_data()
+    print(f"{d1.items.len()}")
+    print(d1.name)
+
+    Data d2 = pass_through(d1)
+    print(f"{d2.items.len()}")
+    print(d2.name)
+
+    Data d3 = use_then_return(d2)
+    print(f"{d3.items.len()}")
+    print(d3.name)
+
+    print("done")

@@ -1,0 +1,13 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/string_methods.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "5\n0\n"
+#!end
+void main():
+    String s = "hello"
+    print(f"{s.len()}")
+    String empty = ""
+    print(f"{empty.len()}")

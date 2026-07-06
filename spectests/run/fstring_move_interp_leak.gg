@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/fstring_move_interp_leak.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "name=gorget\nagain=gorget!\n"
+#!end
+# Print-temp leak class, Move-shape interp: `f"{make_name()}"` stages the
+# call-result temp into the interp slot with AssignMode::Move — the source
+# registration is retired (`move_zero_and_mark`) and the interp temp now
+# owns the heap, so it must be registered at its birth (lower_interp_segment
+# branch 2). Pins the no-double-free of move + registration: exactly one
+# free per temp.
+String make_name():
+    String stem = "go"
+    return stem + "rget"
+
+void main():
+    print(f"name={make_name()}")
+    print(f"again={make_name()}!")

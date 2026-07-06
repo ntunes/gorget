@@ -1,0 +1,27 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/fn_trait.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "10\n21\n12\ndone\n"
+#!end
+int apply(Callable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    # Non-capturing closure — auto-wrapped to GorgetClosure
+    int r1 = apply((n): n * 2, 5)
+    print(f"{r1}")
+
+    # Capturing closure — already GorgetClosure
+    int factor = 3
+    int r2 = apply((n): n * factor, 7)
+    print(f"{r2}")
+
+    # Callable-typed local variable
+    Callable[int(int)] triple = (n): n * 3
+    int r3 = triple(4)
+    print(f"{r3}")
+
+    print("done")

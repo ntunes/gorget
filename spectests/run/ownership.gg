@@ -1,0 +1,23 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/ownership.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42\n42\n1\n2\n"
+#!end
+struct Point:
+    int x
+    int y
+
+void main():
+    # Primitives are Copy — no ! needed
+    int a = 42
+    int b = a
+    print(f"{a}")
+    print(f"{b}")
+    # Structs use move semantics
+    Point p = Point(1, 2)
+    Point q = !p
+    print(f"{q.x}")
+    print(f"{q.y}")

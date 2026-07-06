@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/closure_partial_application.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "8\n12\n11\n12\n21\n21\n"
+#!end
+# Partial application: return closure that captures some args
+int(int) make_adder(int base):
+    return (int x): base + x
+
+int(int) make_multiplier(int factor):
+    return (int x): x * factor
+
+void main():
+    auto add5 = make_adder(5)
+    auto add10 = make_adder(10)
+    auto times3 = make_multiplier(3)
+
+    print(f"{add5(3)}")
+    print(f"{add5(7)}")
+    print(f"{add10(1)}")
+    print(f"{times3(4)}")
+    print(f"{times3(7)}")
+
+    # compose partial applications
+    int result = times3(add5(2))
+    print(f"{result}")

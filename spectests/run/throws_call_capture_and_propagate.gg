@@ -1,0 +1,47 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/throws_call_capture_and_propagate.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "capture: 10\nvardecl-prop: 11\nargprop: 20\narg-capture: 10\n"
+#!end
+# Snag #35: the four accept-paths for `throws E` calls.
+#
+# (1) Explicit capture as `Result[T, E]` — destination opt-in.
+# (2) Auto-propagation from inside a throws function (VarDecl).
+# (3) Auto-propagation from inside a throws function (arg position).
+# (4) Capture into a function param typed `Result[T, E]`.
+
+int might(int x) throws String:
+    return x * 2
+
+int double_it(int x):
+    return x * 2
+
+int unwrap_or_zero(Result[int, String] r):
+    return match r:
+        case Ok(v): v
+        case Error(_): 0
+
+int caller_vardecl(int x) throws String:
+    int v = might(x)            # case (2): auto-prop in VarDecl
+    return v + 1
+
+int caller_argprop(int x) throws String:
+    return double_it(might(x))  # case (3): auto-prop at arg position
+
+int extract(Result[int, String] r):
+    return match r:
+        case Ok(v): v
+        case Error(_): -1
+
+void main():
+    Result[int, String] r1 = might(5)          # case (1)
+    Result[int, String] r2 = caller_vardecl(5) # case (2)
+    Result[int, String] r3 = caller_argprop(5) # case (3)
+    int n4 = unwrap_or_zero(might(5))          # case (4)
+    print(f"capture: {extract(r1)}")
+    print(f"vardecl-prop: {extract(r2)}")
+    print(f"argprop: {extract(r3)}")
+    print(f"arg-capture: {n4}")

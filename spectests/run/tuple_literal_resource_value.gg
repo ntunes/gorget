@@ -1,0 +1,24 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/tuple_literal_resource_value.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "3\n42\n"
+#!end
+# Regression: Tuple literal with resource-typed element in a bare-init
+# context. `(Vector[int], int) p = ([1, 2, 3], 42)` pre-fix failed
+# typecheck with `expected Vector[int], found int[3]` because TupleLiteral
+# inferred each element type without reading decl_type_hint.
+#
+# Parallel to dict_literal_resource_value.gg's typecheck side: container
+# literals (Dict, Tuple) must propagate per-element type hints from the
+# declared type so nested collection literals coerce correctly.
+#
+# Fix: TupleLiteral typecheck reads decl_type_hint when it's a Tuple of
+# matching arity, sets each element's decl_type_hint to the corresponding
+# declared element type before recursive infer.
+void main():
+    (Vector[int], int) p = ([1, 2, 3], 42)
+    print(p.0.len())   # expected: 3
+    print(p.1)         # expected: 42

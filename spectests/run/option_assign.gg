@@ -1,0 +1,16 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/option_assign.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello\n"
+#!end
+void main():
+    Option[String] msg = None()
+    msg = Some("hello")
+    match msg:
+        case Some(s):
+            print(s)
+        else:
+            print("none")

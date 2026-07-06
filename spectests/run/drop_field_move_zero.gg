@@ -1,0 +1,65 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_field_move_zero.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "pushed 2\nextracted 3\ntaken 3\nchained 1\ndone\n"
+#!end
+from std.collections import Vector
+
+struct Holder:
+    String label
+    Vector[int] data
+
+# Test 3: self.field zeroing in equip method (mutable borrow)
+struct DataHolder:
+    String name
+    Vector[int] payload
+
+equip DataHolder:
+    Vector[int] take_payload(&self):
+        return self.payload.clone()
+
+# Test 4: chained field access (obj.nested.items)
+struct Inner:
+    Vector[int] items
+
+struct Outer:
+    Inner nested
+
+void main():
+    # Test 1: push field into collection (was double-free without fix)
+    Vector[Vector[int]] items = Vector[Vector[int]]()
+
+    Holder h1 = Holder("h1", Vector[int]())
+    h1.data.push(10)
+    h1.data.push(20)
+    items.push(h1.data)
+
+    auto inner = items.get(0).unwrap()
+    print(f"pushed {inner.len()}")
+
+    # Test 2: assign field to new variable (enables ownership transfer)
+    Holder h2 = Holder("h2", Vector[int]())
+    h2.data.push(30)
+    h2.data.push(40)
+    h2.data.push(50)
+    auto extracted = h2.data
+    print(f"extracted {extracted.len()}")
+
+    # Test 3: self.field
+    DataHolder dh = DataHolder("test", Vector[int]())
+    dh.payload.push(100)
+    dh.payload.push(200)
+    dh.payload.push(300)
+    Vector[int] taken = dh.take_payload()
+    print(f"taken {taken.len()}")
+
+    # Test 4: chained access
+    Outer o = Outer(Inner(Vector[int]()))
+    o.nested.items.push(42)
+    auto chained = o.nested.items
+    print(f"chained {chained.len()}")
+
+    print("done")

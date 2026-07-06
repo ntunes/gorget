@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_field_nongeneric.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "99\n"
+#!end
+# Non-generic struct with a `Ref[T]` field. Phase 1 initially only handled
+# generic structs (via monomorphization's map_ast_type_mut path); this locks
+# in the fix to `register_struct_type` so non-generic structs also get the
+# correct 8-byte pointer storage for borrow fields.
+
+struct Point:
+    int x
+    int y
+
+struct Holder:
+    Ref[Point] pt
+    int cursor
+
+int main():
+    Point p = Point(3, 4)
+    Holder h = Holder(p, 99)
+    print(h.cursor)
+    return 0

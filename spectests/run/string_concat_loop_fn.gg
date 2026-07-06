@@ -1,0 +1,32 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/string_concat_loop_fn.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "ababab\none, two, three\n\n"
+#!end
+String repeat(String s, int n):
+    String result = ""
+    int i = 0
+    while i < n:
+        result = result + s
+        i = i + 1
+    return result
+
+String join(Vector[String] parts, String sep):
+    if parts.len() == 0:
+        return ""
+    String result = parts.get(0).unwrap()
+    int i = 1
+    while i < parts.len():
+        result = result + sep + parts.get(i).unwrap()
+        i = i + 1
+    return result
+
+void main():
+    print(repeat("ab", 3))
+    Vector[String] parts = ["one", "two", "three"]
+    print(join(parts, ", "))
+    Vector[String] empty = []
+    print(join(empty, "-"))

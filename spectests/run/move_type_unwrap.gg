@@ -1,0 +1,22 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/move_type_unwrap.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "1\n2\n2\n"
+#!end
+void main():
+    Vector[Vector[int]] grid = Vector[Vector[int]]()
+    Vector[int] row1 = Vector[int]()
+    row1.push(1)
+    row1.push(2)
+    grid.push(row1)
+    Vector[int] row2 = Vector[int]()
+    row2.push(3)
+    row2.push(4)
+    grid.push(row2)
+    auto first = grid.get(0).unwrap()
+    print(first.get(0).unwrap())
+    print(first.get(1).unwrap())
+    print(grid.len())

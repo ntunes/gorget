@@ -1,0 +1,22 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/int_range.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "255\n0\n-128\n127\n65535\n-32768\n"
+#!end
+void main():
+    # Valid assignments — these should compile and run
+    uint8 a = 255
+    uint8 b = 0
+    int8 c = -128
+    int8 d = 127
+    uint16 e = 65535
+    int16 f = -32768
+    print(f"{a}")
+    print(f"{b}")
+    print(f"{c}")
+    print(f"{d}")
+    print(f"{e}")
+    print(f"{f}")

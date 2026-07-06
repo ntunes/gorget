@@ -1,0 +1,22 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/enums.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "red\n"
+#!end
+enum Color:
+    Red
+    Green
+    Blue
+
+void main():
+    Color c = Red()
+    match c:
+        case Red:
+            print("red")
+        case Green:
+            print("green")
+        case Blue:
+            print("blue")

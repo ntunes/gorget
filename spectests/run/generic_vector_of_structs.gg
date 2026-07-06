@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_vector_of_structs.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "270\n"
+#!end
+from std.collections import Vector
+
+struct Score:
+    String name
+    int value
+
+int sum_values(Vector[Score] scores):
+    int total = 0
+    for s in scores:
+        total = total + s.value
+    return total
+
+void main():
+    Vector[Score] scores = Vector[Score]()
+    scores.push(Score("Alice", 90))
+    scores.push(Score("Bob", 85))
+    scores.push(Score("Charlie", 95))
+    print(sum_values(scores))

@@ -1,0 +1,14 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/closure_capture_loop_var.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "30\n"
+#!end
+void main():
+    auto sq = (int x): x * x
+    int total = 0
+    for i in 0..5:
+        total = total + sq(i)
+    print(total)

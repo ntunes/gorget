@@ -1,0 +1,15 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/fstring_bool_interp_leak.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "flag=true\nboth: true and false\n"
+#!end
+# Print-temp leak class, f-string-bool shape: a bool interpolated into an
+# f-string routes through the same LIR-layer `gorget_bool_to_str` temp as
+# a bare `print(b)`; the temp is drained after the printf-like call.
+void main():
+    bool flag = 3 > 2
+    print(f"flag={flag}")
+    print(f"both: {flag} and {not flag}")

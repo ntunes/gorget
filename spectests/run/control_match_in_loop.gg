@@ -1,0 +1,33 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/control_match_in_loop.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "12\n13\n"
+#!end
+from std.collections import Vector
+
+enum Command:
+    Add(int)
+    Sub(int)
+    Print()
+
+void main():
+    Vector[Command] cmds = Vector[Command]()
+    cmds.push(Command.Add(10))
+    cmds.push(Command.Add(5))
+    cmds.push(Command.Sub(3))
+    cmds.push(Command.Print())
+    cmds.push(Command.Add(1))
+    cmds.push(Command.Print())
+
+    int acc = 0
+    for cmd in cmds:
+        match cmd:
+            case Add(n):
+                acc = acc + n
+            case Sub(n):
+                acc = acc - n
+            case Print():
+                print(acc)

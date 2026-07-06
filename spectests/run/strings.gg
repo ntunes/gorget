@@ -1,0 +1,15 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/strings.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello world\nx is 42\nsum is 52\nescape: \\n is newline\n"
+#!end
+void main():
+    int x = 42
+    int y = 10
+    print("hello world")
+    print(f"x is {x}")
+    print(f"sum is {x + y}")
+    print("escape: \\n is newline")

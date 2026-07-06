@@ -1,0 +1,49 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/option_result_nested.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "found: 42\nnot found\nerror: empty\n"
+#!end
+Result[Option[int], String] find_number(String s):
+    if s == "":
+        return Error("empty")
+    if s == "none":
+        return Ok(None())
+    return Ok(Some(42))
+
+void main():
+    auto r1 = find_number("hello")
+    auto r2 = find_number("none")
+    auto r3 = find_number("")
+
+    match r1:
+        case Ok(opt):
+            match opt:
+                case Some(v):
+                    print(f"found: {v}")
+                case None:
+                    print("not found")
+        case Error(e):
+            print(f"error: {e}")
+
+    match r2:
+        case Ok(opt):
+            match opt:
+                case Some(v):
+                    print(f"found: {v}")
+                case None:
+                    print("not found")
+        case Error(e):
+            print(f"error: {e}")
+
+    match r3:
+        case Ok(opt):
+            match opt:
+                case Some(v):
+                    print(f"found: {v}")
+                case None:
+                    print("not found")
+        case Error(e):
+            print(f"error: {e}")

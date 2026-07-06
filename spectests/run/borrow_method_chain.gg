@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/borrow_method_chain.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "8\n3\n6\n8\n"
+#!end
+from std.collections import Vector
+
+void main():
+    Vector[int] v = [3, 1, 4, 1, 5, 9, 2, 6]
+    int length = v.len()
+    print(length)
+    print(v[0])
+    print(v[length - 1])
+    # v should still be valid after all these borrows
+    print(v.len())

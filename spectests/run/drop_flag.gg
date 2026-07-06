@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_flag.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "consumed: test (42)\ndone\ndone\n"
+#!end
+# Drop flag test — exercises MaybeInitialized drop elaboration (V3).
+# The `Resource` struct has a Recursive drop strategy (contains String fields).
+# Inside `maybe_consume`, the resource is conditionally moved:
+# the LIR forward dataflow sees Memset (moved) on one path and no-op on the other,
+# producing MaybeInitialized at the scope-exit drop site.
+# V3 replaces the runtime memcmp guard with a stack-local bool drop flag.
+
+struct Resource:
+    String name
+    int value
+
+void consume(Resource !r):
+    print(f"consumed: {r.name} ({r.value})")
+
+void maybe_consume(bool cond):
+    Resource _r = Resource("test", 42)
+    if cond:
+        consume(!_r)
+    print("done")
+
+void main():
+    maybe_consume(true)
+    maybe_consume(false)

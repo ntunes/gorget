@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/chars.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "A\nA < B\nequal\n\\\ntrue\n"
+#!end
+void main():
+    String c = "A"
+    print(f"{c}")
+
+    # String comparison (single-char strings compare lexicographically)
+    if "A" < "B":
+        print("A < B")
+
+    if c == "A":
+        print("equal")
+
+    # escape sequences work in String
+    String backslash = "\\"
+    print(f"{backslash}")
+
+    String tab = "\t"
+    String zero = "\0"
+
+    # String ordering for single chars
+    bool is_upper = c >= "A" and c <= "Z"
+    print(f"{is_upper}")

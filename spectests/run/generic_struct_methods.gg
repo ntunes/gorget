@@ -1,0 +1,53 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/generic_struct_methods.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "42\nhello\n42\n10\nworld\n99\n"
+#!end
+struct Container[T]:
+    T value
+
+equip Container[T]:
+    T get(self):
+        return self.value
+
+    Container[T] wrap(self):
+        return Container[T](self.value)
+
+struct Pair[A, B]:
+    A first
+    B second
+
+equip Pair[A, B]:
+    A get_first(self):
+        return self.first
+
+    B get_second(self):
+        return self.second
+
+void main():
+    # Basic generic struct method calls
+    Container[int] c1 = Container[int](42)
+    print(f"{c1.get()}")
+
+    Container[String] c2 = Container[String]("hello")
+    String s1 = c2.get()
+    print(f"{s1}")
+
+    # Wrap returns a new Container of the same type
+    Container[int] c3 = c1.wrap()
+    print(f"{c3.get()}")
+
+    # Pair with two different type args
+    Pair[int, String] p = Pair[int, String](10, "world")
+    print(f"{p.get_first()}")
+    String s2 = p.get_second()
+    print(f"{s2}")
+
+    # Nested: Container[Container[int]]
+    Container[int] inner = Container[int](99)
+    Container[Container[int]] outer = Container[Container[int]](inner)
+    Container[int] got_inner = outer.get()
+    print(f"{got_inner.get()}")

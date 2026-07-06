@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/char_str_coerce.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "A\ntrue\nA\n"
+#!end
+# Tests for single-char String literals.
+# Single-quoted literals 'A' are now String (same as "A").
+#
+# Expected output:
+#   A
+#   true
+#   A
+
+void main():
+    # single-char literal assigned to String variable
+    String s = 'A'
+    print(s)
+
+    # single-char literal compared with double-quoted String
+    String t = 'A'
+    print(t == "A")
+
+    # single-char literal is a String
+    String result = 'A'
+    print(result)

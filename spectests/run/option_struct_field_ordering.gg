@@ -1,0 +1,35 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/option_struct_field_ordering.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "255\nno color\n"
+#!end
+# Test emission ordering: Option[UserStruct] as a struct field
+# requires the generic enum to be emitted between the user struct and the containing struct.
+
+struct Color:
+    int r
+    int g
+    int b
+
+struct Pixel:
+    int x
+    int y
+    Option[Color] color
+
+void main():
+    Color red = Color(255, 0, 0)
+    Pixel p1 = Pixel(10, 20, Some(red))
+    match p1.color:
+        case Some(c):
+            print(f"{c.r}")
+        case None():
+            pass
+    Pixel p2 = Pixel(0, 0, None)
+    match p2.color:
+        case Some(c):
+            print("unexpected")
+        else:
+            print("no color")

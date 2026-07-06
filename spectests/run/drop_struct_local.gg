@@ -1,0 +1,27 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/drop_struct_local.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "200\ndrop R\n"
+#!end
+# RAII guard: a FIELDLESS (non-resource) Drop-bearing struct local must be
+# dropped exactly once at scope exit. The self-host droppability classifier
+# once keyed only on the resource-FIELD axis, so `R a = R(100)` — a struct
+# with no resource field but a user `Drop` impl — was never registered for
+# drop and `R__drop` was DCE'd (silent RAII violation). Rust gg has always
+# scanned `equip T with Drop:` UNCONDITIONALLY (copy_semantics=Resource), so
+# this prints `200\ndrop R`. Guards the self-host fold of types_with_user_drop
+# into resource_types.
+struct R:
+    int n
+
+equip R with Drop:
+    void drop(!self):
+        print("drop R")
+
+void main():
+    R a = R(100)
+    int x = a.n * 2
+    print(f"{x}")

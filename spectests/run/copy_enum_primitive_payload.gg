@@ -1,0 +1,32 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/copy_enum_primitive_payload.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "N\nN\nN\n"
+#!end
+enum Direction:
+    North
+    South
+    East
+    West
+
+String name(Direction d):
+    String result = ""
+    match d:
+        case North:
+            result = "N"
+        case South:
+            result = "S"
+        case East:
+            result = "E"
+        case West:
+            result = "W"
+    return result
+
+void main():
+    Direction d = Direction.North()
+    print(name(d))
+    print(name(d))
+    print(name(d))

@@ -1,0 +1,36 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/option_struct_field.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "hello (1)\nno message (no priority)\nworld (no priority)\n"
+#!end
+# Test Option[T] as struct field — constructor mangling + None codegen
+
+struct Greeting:
+    Option[String] message
+    Option[int] priority
+
+String describe(Greeting g):
+    String msg = "no message"
+    match g.message:
+        case Some(m):
+            msg = m
+        case None():
+            pass
+    String pri = "no priority"
+    match g.priority:
+        case Some(p):
+            pri = f"{p}"
+        case None():
+            pass
+    return f"{msg} ({pri})"
+
+void main():
+    Greeting a = Greeting(Some("hello"), Some(1))
+    print(describe(a))
+    Greeting b = Greeting(None, None)
+    print(describe(b))
+    Greeting c = Greeting(Some("world"), None)
+    print(describe(c))

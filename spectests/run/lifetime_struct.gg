@@ -1,0 +1,52 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/lifetime_struct.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "literal\nfrom param\nmixed\nliteral\nfrom param\nmixed\nstruct lifetime ok\n"
+#!end
+# Lifetime inference — struct borrowing (Phase 4, positive tests)
+
+struct View:
+    String name
+
+struct Tagged:
+    String label
+    int count
+
+struct Nested:
+    View inner
+
+# Struct with String field from string literal — always safe
+View make_view_literal(): View("hello")
+
+# Struct with String field from parameter — safe (borrows from param)
+View make_view(String s): View(s)
+
+# Struct with mixed fields — safe when source is a literal
+Tagged make_tagged(): Tagged("tag", 42)
+
+void main():
+    # Literal source
+    View v1 = View("literal")
+    print(v1.name)
+
+    # Param forwarding through function
+    View v2 = make_view("from param")
+    print(v2.name)
+
+    # Mixed fields
+    Tagged t = Tagged("mixed", 10)
+    print(t.label)
+
+    # Nested struct
+    View inner = View("nested")
+    Nested n = Nested(inner)
+
+    # Using struct after creation — all borrows are from literals
+    print(v1.name)
+    print(v2.name)
+    print(t.label)
+
+    print("struct lifetime ok")

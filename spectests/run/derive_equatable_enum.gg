@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/derive_equatable_enum.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "true\nfalse\ntrue\nfalse\nfalse\n"
+#!end
+@derive(Equatable)
+enum Color:
+    Rgb(int, int, int)
+    Named(String)
+
+void main():
+    Color a = Color.Rgb(255, 0, 0)
+    Color b = Color.Rgb(255, 0, 0)
+    Color c = Color.Rgb(0, 255, 0)
+    Color d = Color.Named("red")
+    Color e = Color.Named("red")
+    Color f = Color.Named("blue")
+
+    print(a == b)
+    print(a == c)
+    print(d == e)
+    print(d == f)
+    print(a == d)

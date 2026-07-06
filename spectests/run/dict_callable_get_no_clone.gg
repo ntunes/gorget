@@ -1,0 +1,21 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: migrated from tests/fixtures/dict_callable_get_no_clone.gg (run_gg pair)
+# expect:
+#   exit: 0
+#   stdout: "2\n11\ndone\n"
+#!end
+# Companion: same pattern as dict_callable_get_clone.gg but without `.clone()`.
+# After the fix, the unwrap result already owns its env via the lift's deep
+# clone, so the explicit `.clone()` is just a redundant deep-clone — but
+# the user shouldn't *need* `.clone()` for safety.
+from std.collections import Dict
+
+void main():
+    Dict[String, Callable[int(int)]] d = Dict[String, Callable[int(int)]]()
+    d.put("k", (int x): x + 1)
+    Callable[int(int)] g = d.get("k").unwrap()
+    print(g(1))
+    print(g(10))
+    print("done")
