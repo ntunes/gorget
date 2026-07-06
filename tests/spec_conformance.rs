@@ -60,15 +60,15 @@ use std::time::{Duration, Instant};
 use ggdef::{parse_frontmatter, Expect};
 
 // ── Floors — regenerated in-worktree (see the module-doc command). ──────────
-const C_MATCH_FLOOR: usize = 4;
-const LLVM_MATCH_FLOOR: usize = 4;
-const SELFHOST_MATCH_FLOOR: usize = 5;
+const C_MATCH_FLOOR: usize = 186;
+const LLVM_MATCH_FLOOR: usize = 186;
+const SELFHOST_MATCH_FLOOR: usize = 187;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
 /// the seed COUNT, independent of a lane's MATCH floor (the C/LLVM floors sit
 /// one below it because of the known `smith_move_param_concat` BUILD-FAIL).
-const MIN_FIXTURES: usize = 5;
+const MIN_FIXTURES: usize = 187;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs
