@@ -24,3 +24,7 @@ exact code that IS the rule). The prose and `ggdef` are merge-gated together
 Related normative pieces that get their own prose sections in phase 1: the four
 evaluator outcomes (RFC §2.3), the formatting appendix (D8 shortest round-trip),
 and trap normalization (RFC §4).
+
+The **diagnostic-code registry** (RFC §5.5) is now authored:
+[`diagnostic-codes.md`](diagnostic-codes.md) maps each stable `E_`/`W_` code to
+its diagnostic kind and prose section.

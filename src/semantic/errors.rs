@@ -113,6 +113,40 @@ pub enum SemanticWarningKind {
     },
 }
 
+impl SemanticWarningKind {
+    /// A stable, symbolic diagnostic code for this warning kind, mirroring
+    /// `SemanticErrorKind::code()` (uniform `W_<VariantName>` — the `W_` prefix
+    /// distinguishes non-fatal warnings from `E_` errors).
+    ///
+    /// **Phase 1: NOT rendered.** Per the RFC/brief (pass-2 fold R-e), warning
+    /// codes are deferred — `report_semantic_warning` (`src/errors.rs`) does not
+    /// yet thread `.with_code(...)`, so this method exists only for the exhaustive
+    /// ratchet (a new warning variant without a code is a build error) and to let
+    /// the registry (`spec/prose/diagnostic-codes.md`) enumerate warning codes.
+    /// This match has **no catch-all `_`** — rustc exhaustiveness is the guard.
+    pub fn code(&self) -> &'static str {
+        match self {
+            SemanticWarningKind::UnnecessaryShared { .. } => "W_UnnecessaryShared",
+            SemanticWarningKind::StaleSharedCondition { .. } => "W_StaleSharedCondition",
+            SemanticWarningKind::WithCheckThenAct { .. } => "W_WithCheckThenAct",
+            SemanticWarningKind::StaleSharedWriteBack { .. } => "W_StaleSharedWriteBack",
+            SemanticWarningKind::SharedIteratorInvalidation { .. } => "W_SharedIteratorInvalidation",
+            SemanticWarningKind::SpawnWithTrackedBinding { .. } => "W_SpawnWithTrackedBinding",
+            SemanticWarningKind::CompoundYieldRace { .. } => "W_CompoundYieldRace",
+            SemanticWarningKind::ClosureCapturesWithBinding { .. } => "W_ClosureCapturesWithBinding",
+            SemanticWarningKind::UnreachableCode => "W_UnreachableCode",
+            SemanticWarningKind::UnusedVariable { .. } => "W_UnusedVariable",
+            SemanticWarningKind::UnusedImport { .. } => "W_UnusedImport",
+            SemanticWarningKind::UncheckedUnwrap { .. } => "W_UncheckedUnwrap",
+            SemanticWarningKind::CouldBeConst { .. } => "W_CouldBeConst",
+            SemanticWarningKind::NeedlessMutableBorrow { .. } => "W_NeedlessMutableBorrow",
+            SemanticWarningKind::DeadBareParamWrite { .. } => "W_DeadBareParamWrite",
+            SemanticWarningKind::CowBorrowMutation { .. } => "W_CowBorrowMutation",
+            SemanticWarningKind::SuggestThrowsRefactor { .. } => "W_SuggestThrowsRefactor",
+        }
+    }
+}
+
 impl std::fmt::Display for SemanticWarning {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
@@ -587,6 +621,122 @@ pub enum SemanticErrorKind {
     MutexDoubleLock { mutex_name: String, prior_guard_name: String, prior_lock_at: Span },
 }
 
+impl SemanticErrorKind {
+    /// A stable, symbolic diagnostic code for this error kind, rendered by the
+    /// error reporter as `error[E_...]:` (see `src/errors.rs::report_semantic_error`)
+    /// and referenced by the diagnostic registry (`spec/prose/diagnostic-codes.md`).
+    ///
+    /// # Why symbolic names, not numbers
+    /// The scheme is uniform `E_<VariantName>` — mechanically derived from the
+    /// variant identity, so it is simultaneously *systematic* (exhaustive by
+    /// construction) and *meaningful* (the variant names are descriptive). Tying
+    /// the code to the variant identity — not a sequence number — means codes
+    /// never churn or collide across branches (the RFC §8 numbering bikeshed is
+    /// sidestepped; the one normative anchor is `E_MoveWithoutOperator`, RFC §5.5).
+    ///
+    /// # Ratchet (CLAUDE.md core-invariant #6)
+    /// This match MIRRORS the `Display` impl's arms and has **no catch-all `_`**,
+    /// so `rustc`'s exhaustiveness check is the guard: a new `SemanticErrorKind`
+    /// variant added without a code here is a hard build error, not a silent gap.
+    pub fn code(&self) -> &'static str {
+        match self {
+            SemanticErrorKind::UndefinedName { .. } => "E_UndefinedName",
+            SemanticErrorKind::DuplicateDefinition { .. } => "E_DuplicateDefinition",
+            SemanticErrorKind::TypeMismatch { .. } => "E_TypeMismatch",
+            SemanticErrorKind::WrongArgCount { .. } => "E_WrongArgCount",
+            SemanticErrorKind::NotAFunction { .. } => "E_NotAFunction",
+            SemanticErrorKind::NotAType { .. } => "E_NotAType",
+            SemanticErrorKind::NotAStruct { .. } => "E_NotAStruct",
+            SemanticErrorKind::MissingTraitMethod { .. } => "E_MissingTraitMethod",
+            SemanticErrorKind::NoMethodFound { .. } => "E_NoMethodFound",
+            SemanticErrorKind::UnwrapOnNonOptional { .. } => "E_UnwrapOnNonOptional",
+            SemanticErrorKind::DerefNonBox { .. } => "E_DerefNonBox",
+            SemanticErrorKind::DefaultOpNonOptional { .. } => "E_DefaultOpNonOptional",
+            SemanticErrorKind::MethodGenericInferenceFailed { .. } => "E_MethodGenericInferenceFailed",
+            SemanticErrorKind::CannotInferType => "E_CannotInferType",
+            SemanticErrorKind::NoFieldFound { .. } => "E_NoFieldFound",
+            SemanticErrorKind::TupleIndexOutOfBounds { .. } => "E_TupleIndexOutOfBounds",
+            SemanticErrorKind::OrPatternBindingMismatch { .. } => "E_OrPatternBindingMismatch",
+            SemanticErrorKind::DuplicateImpl { .. } => "E_DuplicateImpl",
+            SemanticErrorKind::PrimitiveTraitImpl { .. } => "E_PrimitiveTraitImpl",
+            SemanticErrorKind::RecursiveTypeNeedsBox { .. } => "E_RecursiveTypeNeedsBox",
+            SemanticErrorKind::TraitCycle { .. } => "E_TraitCycle",
+            SemanticErrorKind::MethodSignatureMismatch { .. } => "E_MethodSignatureMismatch",
+            SemanticErrorKind::BreakOutsideLoop => "E_BreakOutsideLoop",
+            SemanticErrorKind::ContinueOutsideLoop => "E_ContinueOutsideLoop",
+            SemanticErrorKind::ReturnOutsideFunction => "E_ReturnOutsideFunction",
+            SemanticErrorKind::ThrowInNonThrowingFunction => "E_ThrowInNonThrowingFunction",
+            SemanticErrorKind::RethrowInNonThrowingFunction => "E_RethrowInNonThrowingFunction",
+            SemanticErrorKind::OnErrorInNonThrowingFunction => "E_OnErrorInNonThrowingFunction",
+            SemanticErrorKind::MainThrowsNonInt => "E_MainThrowsNonInt",
+            SemanticErrorKind::UnconvertibleErrorPropagation { .. } => "E_UnconvertibleErrorPropagation",
+            SemanticErrorKind::AwaitOutsideAsync => "E_AwaitOutsideAsync",
+            SemanticErrorKind::SelectOutsideAsync => "E_SelectOutsideAsync",
+            SemanticErrorKind::AwaitNonFuture => "E_AwaitNonFuture",
+            SemanticErrorKind::SpawnNonFuture => "E_SpawnNonFuture",
+            SemanticErrorKind::BorrowAcrossAwait { .. } => "E_BorrowAcrossAwait",
+            SemanticErrorKind::SpawnWithBorrowedRef { .. } => "E_SpawnWithBorrowedRef",
+            SemanticErrorKind::SpawnRequiresDirectCall => "E_SpawnRequiresDirectCall",
+            SemanticErrorKind::SpawnClosureCaptureBorrowed { .. } => "E_SpawnClosureCaptureBorrowed",
+            SemanticErrorKind::SpawnClosureCaptureMutable { .. } => "E_SpawnClosureCaptureMutable",
+            SemanticErrorKind::SpawnClosureCaptureShared { .. } => "E_SpawnClosureCaptureShared",
+            SemanticErrorKind::UseAfterMove { .. } => "E_UseAfterMove",
+            SemanticErrorKind::MoveWithoutOperator { .. } => "E_MoveWithoutOperator",
+            SemanticErrorKind::BorrowConflict { .. } => "E_BorrowConflict",
+            SemanticErrorKind::MoveInLoop { .. } => "E_MoveInLoop",
+            SemanticErrorKind::DoubleMove { .. } => "E_DoubleMove",
+            SemanticErrorKind::NonPrintableInterpolation { .. } => "E_NonPrintableInterpolation",
+            SemanticErrorKind::OwnershipMismatch { .. } => "E_OwnershipMismatch",
+            SemanticErrorKind::UnsatisfiedTraitBound { .. } => "E_UnsatisfiedTraitBound",
+            SemanticErrorKind::NonExhaustiveMatch { .. } => "E_NonExhaustiveMatch",
+            SemanticErrorKind::MissingReturn { .. } => "E_MissingReturn",
+            SemanticErrorKind::NoreturnBodyReturns { .. } => "E_NoreturnBodyReturns",
+            SemanticErrorKind::NoreturnWithThrows { .. } => "E_NoreturnWithThrows",
+            SemanticErrorKind::StringIndexAssign => "E_StringIndexAssign",
+            SemanticErrorKind::UnloweredBuiltinCall { .. } => "E_UnloweredBuiltinCall",
+            SemanticErrorKind::UnknownNamedArg { .. } => "E_UnknownNamedArg",
+            SemanticErrorKind::DuplicateNamedArg { .. } => "E_DuplicateNamedArg",
+            SemanticErrorKind::MissingRequiredArg { .. } => "E_MissingRequiredArg",
+            SemanticErrorKind::PositionalAfterNamed => "E_PositionalAfterNamed",
+            SemanticErrorKind::UnknownDirective { .. } => "E_UnknownDirective",
+            SemanticErrorKind::UnderivableTrait { .. } => "E_UnderivableTrait",
+            SemanticErrorKind::DeriveFromRequiresSingleField { .. } => "E_DeriveFromRequiresSingleField",
+            SemanticErrorKind::FieldMissingDerivedTrait { .. } => "E_FieldMissingDerivedTrait",
+            SemanticErrorKind::AssignmentToConst { .. } => "E_AssignmentToConst",
+            SemanticErrorKind::NonConstantConstInitializer { .. } => "E_NonConstantConstInitializer",
+            SemanticErrorKind::ViaWithoutTrait => "E_ViaWithoutTrait",
+            SemanticErrorKind::ViaFieldNotFound { .. } => "E_ViaFieldNotFound",
+            SemanticErrorKind::ViaFieldTypeMissingTrait { .. } => "E_ViaFieldTypeMissingTrait",
+            SemanticErrorKind::DuplicateSuiteBlock { .. } => "E_DuplicateSuiteBlock",
+            SemanticErrorKind::InvalidFnTraitArg => "E_InvalidFnTraitArg",
+            SemanticErrorKind::ClosureKindMismatch { .. } => "E_ClosureKindMismatch",
+            SemanticErrorKind::ValueOutOfRange { .. } => "E_ValueOutOfRange",
+            SemanticErrorKind::UnsafeIntegerConversion { .. } => "E_UnsafeIntegerConversion",
+            SemanticErrorKind::DanglingReturn { .. } => "E_DanglingReturn",
+            SemanticErrorKind::UseAfterSourceMoved { .. } => "E_UseAfterSourceMoved",
+            SemanticErrorKind::MutationWhileBorrowed { .. } => "E_MutationWhileBorrowed",
+            SemanticErrorKind::TemporaryBorrow { .. } => "E_TemporaryBorrow",
+            SemanticErrorKind::InvalidParameterMode { .. } => "E_InvalidParameterMode",
+            SemanticErrorKind::UnresolvedBorrowOrigin { .. } => "E_UnresolvedBorrowOrigin",
+            SemanticErrorKind::ArenaEscape { .. } => "E_ArenaEscape",
+            SemanticErrorKind::MetaEvalError { .. } => "E_MetaEvalError",
+            SemanticErrorKind::OrphanImpl { .. } => "E_OrphanImpl",
+            SemanticErrorKind::DoubleAwait => "E_DoubleAwait",
+            SemanticErrorKind::ReadWhileMutCaptured { .. } => "E_ReadWhileMutCaptured",
+            SemanticErrorKind::WriteWhileMutCaptured { .. } => "E_WriteWhileMutCaptured",
+            SemanticErrorKind::PrivateImport { .. } => "E_PrivateImport",
+            SemanticErrorKind::UnresolvedImport { .. } => "E_UnresolvedImport",
+            SemanticErrorKind::PrivateTypeInPublicSignature { .. } => "E_PrivateTypeInPublicSignature",
+            SemanticErrorKind::RequiredAfterDefault { .. } => "E_RequiredAfterDefault",
+            SemanticErrorKind::DuplicateStructField { .. } => "E_DuplicateStructField",
+            SemanticErrorKind::DuplicateStructFieldDecl { .. } => "E_DuplicateStructFieldDecl",
+            SemanticErrorKind::WrongFieldCount { .. } => "E_WrongFieldCount",
+            SemanticErrorKind::ClosureEscapesScope { .. } => "E_ClosureEscapesScope",
+            SemanticErrorKind::MutexDoubleLock { .. } => "E_MutexDoubleLock",
+        }
+    }
+}
+
 impl std::fmt::Display for SemanticError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
@@ -1024,5 +1174,75 @@ impl std::fmt::Display for SemanticError {
                 write!(f, "cannot lock `{mutex_name}`: already locked — guard `{prior_guard_name}` is still in scope (would deadlock at runtime; non-reentrant)")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod code_tests {
+    use super::*;
+    use crate::span::Span;
+
+    fn sp() -> Span {
+        Span { start: 0, end: 0 }
+    }
+
+    /// The one normative anchor (RFC §5.5 / CLAUDE.md core-invariant #3): the
+    /// move-without-operator diagnostic is `E_MoveWithoutOperator`.
+    #[test]
+    fn normative_move_without_operator_code() {
+        let k = SemanticErrorKind::MoveWithoutOperator { name: "x".into() };
+        assert_eq!(k.code(), "E_MoveWithoutOperator");
+    }
+
+    /// Representative sample across unit variants, struct variants, and the
+    /// D4/D5/D6-relevant ownership family — codes are the `E_<VariantName>` form.
+    #[test]
+    fn representative_error_codes() {
+        let cases: Vec<(SemanticErrorKind, &str)> = vec![
+            (SemanticErrorKind::UseAfterMove { name: "x".into(), moved_at: sp() }, "E_UseAfterMove"),
+            (SemanticErrorKind::DoubleMove { name: "x".into(), first_move: sp() }, "E_DoubleMove"),
+            (SemanticErrorKind::MoveInLoop { name: "x".into() }, "E_MoveInLoop"),
+            (SemanticErrorKind::BorrowConflict { name: "x".into(), detail: "d".into() }, "E_BorrowConflict"),
+            (SemanticErrorKind::TypeMismatch { expected: "int".into(), found: "str".into() }, "E_TypeMismatch"),
+            (SemanticErrorKind::CannotInferType, "E_CannotInferType"),
+            (SemanticErrorKind::BreakOutsideLoop, "E_BreakOutsideLoop"),
+            (SemanticErrorKind::StringIndexAssign, "E_StringIndexAssign"),
+            (SemanticErrorKind::DoubleAwait, "E_DoubleAwait"),
+            (SemanticErrorKind::NonExhaustiveMatch { missing_variants: vec![] }, "E_NonExhaustiveMatch"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.code(), expected, "code mismatch for {kind:?}");
+        }
+    }
+
+    /// Every error code is non-empty and carries the `E_` namespace prefix.
+    #[test]
+    fn error_codes_are_e_prefixed_nonempty() {
+        let samples = [
+            SemanticErrorKind::UndefinedName { name: "n".into(), suggestion: None },
+            SemanticErrorKind::MutexDoubleLock { mutex_name: "m".into(), prior_guard_name: "g".into(), prior_lock_at: sp() },
+            SemanticErrorKind::ArenaEscape { name: "n".into(), kind: ArenaEscapeKind::Return },
+            SemanticErrorKind::MetaEvalError { message: "m".into() },
+        ];
+        for k in &samples {
+            let c = k.code();
+            assert!(c.starts_with("E_"), "`{c}` should start with E_");
+            assert!(c.len() > 2, "`{c}` should be non-empty after the prefix");
+        }
+    }
+
+    /// Warning codes use the `W_` namespace (not rendered in phase 1, but the
+    /// exhaustive match is the ratchet and the registry enumerates them).
+    #[test]
+    fn representative_warning_codes() {
+        assert_eq!(SemanticWarningKind::UnreachableCode.code(), "W_UnreachableCode");
+        assert_eq!(
+            SemanticWarningKind::UnusedVariable { name: "x".into() }.code(),
+            "W_UnusedVariable"
+        );
+        assert_eq!(
+            SemanticWarningKind::DeadBareParamWrite { name: "x".into(), param_span: sp() }.code(),
+            "W_DeadBareParamWrite"
+        );
     }
 }
