@@ -227,8 +227,11 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
-- 2026-07-06 — **D11 RATIFIED IN FULL (registry shape approved; owner: one registry =
-  the CLAUDE.md single-source-of-truth rule applied).** ONE closed `TrapKind` registry
+- 2026-07-06 — **D11 RATIFIED IN FULL (registry shape approved; owner clarified the
+  governing rule: CLAUDE.md's NO NAME-MATCHING / NO SIDECARS discipline — typed metadata
+  on a closed enum with derived codes, read through one accessor, never string-matched
+  message formats or hand-synced parallel lists; today's three stderr formats are
+  exactly the rule-2 violation the registry retires).** ONE closed `TrapKind` registry
   (Overflow, DivByZero, Bounds, UnwrapNone, UnwrapError, UnwrapErrorOnOk, AssertFailed,
   Panic), T_ codes derived from variant identity (E_ convention), rendered
   `trap[T_X]: detail at file:line:col` + exit 101; §10.9 `Fault` re-founded as the

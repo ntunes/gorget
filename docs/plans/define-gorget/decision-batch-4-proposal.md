@@ -102,7 +102,12 @@ direction is a widening). Confidence: high.
 
 > **Owner ruling 2026-07-06 (completing D11): the registry shape is APPROVED — "One
 > registry is exactly the single source of truth we like and have written a rule about
-> it on CLAUDE.md."** The ratified shape: ONE closed `TrapKind` registry naming every
+> it on CLAUDE.md" — owner clarified the rule meant: the NO NAME-MATCHING / NO SIDECARS
+> discipline (Layering rule 2 + its no-parallel-lists corollary). Apt: the current trap
+> surface (three ad-hoc stderr formats) is a standing rule-2 violation — any tool
+> classifying traps today must string-match message text; the typed registry with
+> derived codes is the prescribed fix-shape from that rule applied to the runtime
+> boundary.** The ratified shape: ONE closed `TrapKind` registry naming every
 > trap class (initial: Overflow, DivByZero, Bounds, UnwrapNone, UnwrapError,
 > UnwrapErrorOnOk, AssertFailed, Panic) with catch-all-free `code()` (T_ codes DERIVE
 > from variant identity — the E_ convention, so `Fault.Bounds` renders `trap[T_Bounds]:
