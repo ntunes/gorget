@@ -20950,6 +20950,133 @@ fn box_deref_fresh_expr() {
     assert_box_deref_asan_clean("box_deref_fresh_expr");
 }
 
+/// Phase S regression LOCK for the collection-element custom-Drop wiring: the
+/// SELF-HOST driver is ALREADY CORRECT for this class (the 2026-06-22 fadb2259
+/// fold routes every `equip T with Drop` type through resource_types →
+/// type_drop_fns → `__gorget_dtor_{T}`), and this test pins that so a future
+/// self-host regression can't silently reintroduce the Rust-side hole the
+/// companion `fix(drop)` patch closed. Modeled on `assert_box_deref_asan_clean`
+/// (self-host driver → `--emit-c --runtime-dir` → cc -fsanitize=address → run),
+/// with an ADDED grep of the emitted C: the Vector `.elem_drop`, Dict `.val_drop`
+/// and Set `.key_drop` slots for a custom-Drop element with ONLY trivial fields
+/// must ALL wire to `__gorget_dtor_Noisy` (the composite destructor), never be
+/// unwired (the P1 lost-drop shape) or wired to a user-body-only `Noisy__drop`
+/// (the P2 field-leak shape). NO self-host source changes accompany this test —
+/// it is a lock on existing correct behavior. Uses the main P1 fixture
+/// (drop_collection_custom_elem.gg: temp/named-move × Vector/Dict-value/Set-key).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_collection_custom_elem_drop_wiring() {
+    let stem = "drop_collection_custom_elem";
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures").join(format!("{stem}.gg"));
+    assert!(fixture.exists(), "fixture not found: {}", fixture.display());
+
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_elemdrop_{}_{}_{}",
+        stem,
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    // ---- Rust oracle: `gg run <fixture>` ----
+    let rust = run_with_timeout(gg_command("run").arg(&fixture), stem);
+    assert!(
+        rust.status.success(),
+        "{stem}: Rust gg run failed (oracle must be correct):\n{}",
+        String::from_utf8_lossy(&rust.stderr),
+    );
+    let rust_out = String::from_utf8_lossy(&rust.stdout).trim_end().to_string();
+
+    // ---- self-host: emit C ----
+    let c_path = tmp_root.join(format!("{stem}.c"));
+    let emit = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--emit-c")
+            .arg(format!("--runtime-dir={}", runtime_dir.display())),
+        stem,
+    );
+    assert!(
+        emit.status.success(),
+        "{stem}: self-host driver --emit-c failed:\n{}",
+        String::from_utf8_lossy(&emit.stderr),
+    );
+    let c_src = String::from_utf8_lossy(&emit.stdout).to_string();
+    std::fs::write(&c_path, &c_src).expect("write .c");
+
+    // ---- grep the emitted C for the composite-dtor wiring ----
+    // Each collection family's drop slot for the custom-Drop element `Noisy`
+    // (a struct with ONLY a trivial `int` field) MUST wire to
+    // `__gorget_dtor_Noisy`. Missing lines ⇒ the P1 lost-drop regression;
+    // a `Noisy__drop` (user-body-only) wiring ⇒ the P2 field-leak regression.
+    for (slot, why) in [
+        ("elem_drop = (__gorget_drop_fn)__gorget_dtor_Noisy", "Vector elem_drop"),
+        ("val_drop = (__gorget_drop_fn)__gorget_dtor_Noisy", "Dict val_drop"),
+        ("key_drop = (__gorget_drop_fn)__gorget_dtor_Noisy", "Set key_drop"),
+    ] {
+        assert!(
+            c_src.contains(slot),
+            "{stem}: self-host emitted C is MISSING the {why} composite-dtor \
+             wiring (`{slot}`). The collection-element custom-Drop wiring \
+             regressed in the self-host lowerer (P1 lost-drop or P2 field-leak).",
+        );
+    }
+
+    // ---- compile WITH AddressSanitizer ----
+    let asan_bin = tmp_root.join(format!("{stem}_asan"));
+    let cc = Command::new("cc")
+        .arg("-O0")
+        .arg("-g")
+        .arg("-fsanitize=address")
+        .arg("-o")
+        .arg(&asan_bin)
+        .arg(&c_path)
+        .arg("-lm")
+        .arg("-lpthread")
+        .output()
+        .expect("spawn cc -fsanitize=address");
+    assert!(
+        cc.status.success(),
+        "{stem}: cc -fsanitize=address failed:\n{}",
+        String::from_utf8_lossy(&cc.stderr),
+    );
+
+    // ---- run under ASan ----
+    let mut run_cmd = Command::new(&asan_bin);
+    run_cmd.env("ASAN_OPTIONS", "detect_leaks=1:abort_on_error=0:exitcode=99");
+    let run = run_with_timeout(&mut run_cmd, stem);
+    let asan_stderr = String::from_utf8_lossy(&run.stderr).to_string();
+    let asan_stdout = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
+
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    let has_report = asan_stderr.contains("LeakSanitizer")
+        || asan_stderr.contains("AddressSanitizer")
+        || asan_stderr.contains("ERROR:")
+        || asan_stderr.contains("SUMMARY:");
+    assert!(
+        run.status.success() && !has_report,
+        "{stem}: self-host ASan FAILED (exit={:?}). Leak/UAF report:\n{}",
+        run.status.code(),
+        asan_stderr,
+    );
+
+    // stdout must byte-match the Rust oracle.
+    assert_eq!(
+        asan_stdout, rust_out,
+        "{stem}: self-host stdout != Rust gg stdout",
+    );
+}
+
 /// Snapshot regeneration (GG_REGEN_RUNTIME_SNAPSHOT=1). For every non-excluded
 /// fixture, runs the stability gate (self-host binary twice + oracle `gg run`
 /// twice, all identical) and — only on a STABLE MATCH — writes the trimmed Rust
