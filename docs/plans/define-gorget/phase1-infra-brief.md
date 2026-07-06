@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: Define Gorget PHASE 1 — conformance infrastructure (P1-A..P1-G)
 
-> **STATUS: v2 — pass 1 (Opus, 10 reservations) folded via the OVERRIDE section below; 0 clean of >=3. Executors: none launched.**
+> **STATUS: v3 — passes 1 (10 res) + 2 (2 blocking + 4 minor) folded; 0 clean of >=3. Executors: none launched. WAVE 1 = {P1-A, P1-E, P1-G} per pass-2 DAG.**
 > Scout artifacts: /tmp/recover_p1infra/ (findings, prototypes, probes). Prerequisite HIGH filed in
 > TODO: ggdef throw-drop + native-recursion (P1-A must close them before P1-D's converter runs).
 > RFC §4 amendment noted in ledger: conformance floors are INLINE dynamic floors per runner (the
@@ -37,6 +37,27 @@
   in a NEW `tests/spec_conformance.rs` (never appended to integration.rs).
 - **R10**: `parse_frontmatter` tolerates the `doc: |` multiline block scalar + unknown keys
   (present in committed seeds).
+
+### Pass-2 folds (override precedence over BOTH the draft and pass-1 where they conflict)
+- **R-a (P1-E wave-1 status)**: P1-E runs ggdef IN-PROCESS for wave 1 — tier-0 is provably
+  shallow (fixed helper set; 200 seeds, 0 FuelExhausted at fuel=2,000,000 — USE THAT CONSTANT).
+  The native-recursion fix (TODO) is a HARD ordering prerequisite before the smith generator
+  widens past tier-0 — NOT a P1-E deliverable; the "depth-bound eval" option is DROPPED for
+  P1-E (out of its zone; collides with P1-A).
+- **R-b (P1-A scope)**: items 8 (transitive-drop) + 9 (native-recursion) are STRIPPED from
+  P1-A's work list — separate tracks (TODO HIGHs), coordinate, do not do there. P1-A item 1
+  (the silent-wrong→loud-ElabError safety audit, throw-drop foremost) is the MANDATORY
+  deliverable that GATES P1-D; items 2-7 are "climb the coverage histogram as far as fits"
+  (gate = monotone improvement via the promoted coverage_histogram test, not 100%).
+- **R-c**: P1-G step 2's ":205" in the draft body is STALE — the semantic-error threading site
+  is src/errors.rs:275 (report_semantic_error).
+- **R-d**: the ggdef root dev-dep lands as a STANDALONE prerequisite commit (1-line, additive)
+  before BOTH P1-E and P1-C — decouples P1-C from P1-E completion.
+- **R-e**: warning-code rendering (report_semantic_warning:281; 13 check_gg_warns) is DEFERRED
+  — P1-G threads the error path only; SemanticWarningKind::code() may exist but is not rendered
+  in phase 1 (state in the registry prose).
+- **R-f**: pass-1 R2 EXTENDS the draft's P1-E step-1 outcome list (additive); "Value-agree" is
+  not a smith verdict — it means "no SPEC-DIVERGE, continue the lanes".
 
 
 # DRAFT executor brief — Define Gorget PHASE 1, conformance-infrastructure track
