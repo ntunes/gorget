@@ -26,8 +26,11 @@
 //! Design rules (P1-B brief):
 //!   * `doc: |` is a block scalar — its body is consumed by indentation and is
 //!     NEVER scanned for keys.
-//!   * Unknown top-level keys (forward-compat: `args`/`stdin`/`files`/`nondet`…)
-//!     are preserved-and-ignored, never an error.
+//!   * Unknown INLINE top-level keys (forward-compat: `args`, a scalar `stdin`…)
+//!     are preserved-and-ignored, never an error. LIMIT (filed in TODO): an
+//!     unknown key with a nested/`|`-block value currently errors LOUDLY
+//!     (`MalformedKey`) — block-shaped future keys (`files:`, RFC §4) need the
+//!     `other` arm to consume-and-discard indented children.
 //!   * `expect:` is REQUIRED with nested `exit` (int) + `stdout` (a JSON-escaped
 //!     string, the exact inverse of the writer's `json_escape`). Malformed
 //!     frontmatter (missing/short `expect`, non-int `exit`, bad escape) is a
@@ -64,8 +67,9 @@ pub struct Frontmatter {
     pub doc: Option<String>,
     /// The required `expect:` block.
     pub expect: Expect,
-    /// Unknown top-level keys, preserved verbatim `(key, raw_value)` for
-    /// forward-compat (`args`/`stdin`/`files`/`nondet`…). Never an error.
+    /// Unknown INLINE top-level keys, preserved verbatim `(key, raw_value)`
+    /// for forward-compat (`args`, scalar `stdin`…). Block-shaped unknown keys
+    /// currently error loudly — see the module-doc LIMIT note.
     pub unknown: Vec<(String, String)>,
 }
 

@@ -750,6 +750,10 @@ Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (
 
 ## Low
 
+- **🧹 [P1-B review follow-up, 2026-07-06] ggdef frontmatter reader: unknown TOP-LEVEL keys with nested/`|`-block values error (`MalformedKey`) instead of being tolerated.** Loud, never silent — no seed trips it today — but RFC §4's `files:` is a future block-shaped key. Fix: make the `other` arm (`spec/ggdef/src/frontmatter.rs:192` at filing) consume-and-discard an unknown key's indented children. Doc-comments were narrowed to inline-only at integration (module doc LIMIT note cites this entry).
+
+- **🧹 [P1-B review follow-up, 2026-07-06] ggdef frontmatter `Expect{exit,stdout}` is RUN-TIER-ONLY — not the all-tier contract.** RFC §4 static-error/parse-error tiers express `expect:` as a diagnostic code (`expect: code: E_…`, no exit/stdout). The tier-track that populates those directories must refactor `Expect` into a tier-discriminated enum (breaking change to the 4-lane-shared type, `frontmatter.rs:41-46` at filing) — do not treat the run-tier shape as final.
+
 - **🧹 [ggdef hardening, from P1-A pass-2 review 2026-07-06; PRE-EXISTING, unreachable via `gg check`] Closure bodies inherit the enclosing fn's `current_fn_throws`.** A closure body containing a bare throws call is silently evaluated by ggdef (garbled `ok Error(neg)` on the throwing path) where production REJECTS at typecheck (`E_TypeMismatch`) — so no check-accepted program reaches it, but the loudness invariant should hold unconditionally. Fix: scope/reset `current_fn_throws` (and capture_ctx state) at closure boundaries, or make unmodeled closure-throws a loud ElabError. spec/ggdef elaborate/mod.rs.
 
 - **🧹 [P1-G follow-up] Extend diagnostic codes to lex/parse time.** `LexErrorKind`/`ParseErrorKind` still render bare `error:` (noted in `spec/prose/diagnostic-codes.md` §Follow-up). Same recipe as P1-G: catch-all-free `code()` per enum, thread at the reporter, register in the prose table.
