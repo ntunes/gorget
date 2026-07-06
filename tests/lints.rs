@@ -747,6 +747,59 @@ fn container_literal_arms_count() {
     );
 }
 
+/// Ratchet (Core #4 "one fix, all siblings" / Layering-discipline "Sibling-site
+/// drift — fix the class, not the instance"): every PROJECTED-mutation target
+/// arm in `lower_compound_assign` (`obj.field OP= x`, `obj[i] OP= x`) must call
+/// `materialize_assign_target_root` FIRST, so a bare-value-param / alias / element
+/// root materializes a private owned copy before the read-modify-write instead of
+/// writing THROUGH the caller. This is the sibling of the plain-store prologue in
+/// `lower_field_assign` / `lower_index_assign`; the matcluster #1 fix added it to
+/// the two compound arms (previously `xs[0] += 1` / `s.counts[0] += 1` on a bare
+/// param wrote through, printing 11 instead of 10). The scalar `Expr::Identifier`
+/// arm (`x += 1` / whole-local rebind) is NOT counted — a whole-local mutation is
+/// handled by the rebind path, not a projection-root materialize.
+///
+/// **If this fails:**
+///   - A NEW projected-mutation compound arm was added WITHOUT the prologue →
+///     add `materialize_assign_target_root(ctx, builder, object);` at the TOP of
+///     the arm (before it lowers `object`) and bump EXPECTED with a justification.
+///   - The count went DOWN (a prologue was removed) → the write-through hole is
+///     re-opened; restore the call, do not lower EXPECTED.
+#[test]
+fn compound_assign_root_materialize_arms_count() {
+    let src = fs::read_to_string("src/ir/lowering/stmts/assigns.rs")
+        .expect("read src/ir/lowering/stmts/assigns.rs");
+    let sig = "pub(super) fn lower_compound_assign(";
+    let start = src.find(sig).expect("locate lower_compound_assign");
+    // Body ends at the next top-level `fn ` (compound_op_to_gir).
+    let after_sig = start + sig.len();
+    let end = src[after_sig..]
+        .find("\nfn ")
+        .map(|i| after_sig + i)
+        .unwrap_or(src.len());
+    // Strip line comments so the ratchet reasons about EXECUTABLE code only —
+    // the arm comments legitimately mention the helper name in prose.
+    let body: String = src[start..end]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // One call per projected-mutation arm: FieldAccess + Index = 2.
+    const EXPECTED: usize = 2;
+    let calls = body.matches("materialize_assign_target_root(").count();
+    assert_eq!(
+        calls, EXPECTED,
+        "`materialize_assign_target_root` call count in `lower_compound_assign` \
+         changed: {calls} vs expected {EXPECTED}. Every PROJECTED-mutation compound \
+         arm (`obj.field OP= x`, `obj[i] OP= x`) must materialize the root FIRST so \
+         a bare-value-param / alias / element root gets a private owned copy instead \
+         of writing THROUGH the caller (matcluster #1). If you added a legitimate \
+         new projected arm, add the prologue and bump EXPECTED with a justification; \
+         if a prologue was removed, RESTORE it — do not lower EXPECTED.",
+    );
+}
+
 /// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rule 3 "one source of
 /// truth per axis"): every collection family in `infer_fn_ptr_stores_from_types`
 /// (`src/lir/lower/insts.rs`) must wire its element/value/key DROP slot through
@@ -4530,7 +4583,18 @@ fn g1_projected_materialize_sites_untrack() {
     // Whole-value reassign (`x = y`): `cow_before_mutation` severs the target's
     // own element refs before its buffer is replaced — no projection-chain / arg
     // element handles into a private copy, so no untrack needed.
-    const UNTRACK_EXEMPT: &[&str] = &["lower_assign"];
+    //
+    // `materialize_assign_target_root` (matcluster #1): a root-materialize-ONLY
+    // helper — it calls `cow_before_mutation(root)` (+ `cow_before_field_mutation`
+    // to sever field-path refs) and NOTHING ELSE. It does NOT lower a projected
+    // store / args / RHS, so it mints no transient element handles into the
+    // private copy. The projected-store untrack is the CALLER's job: both
+    // `lower_compound_assign` projected arms (FieldAccess + Index) call this
+    // helper FIRST, then capture `stmt_locals_start` and call
+    // `untrack_transient_element_refs_in_range` at the arm's exit — so the
+    // transient handles they mint ARE untracked (verified: 3 untrack sites in
+    // lower_compound_assign). Exempt because the pairing lives one layer up.
+    const UNTRACK_EXEMPT: &[&str] = &["lower_assign", "materialize_assign_target_root"];
 
     let files = [
         "src/ir/lowering/stmts/assigns.rs",

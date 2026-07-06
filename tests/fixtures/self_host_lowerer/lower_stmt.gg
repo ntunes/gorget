@@ -1243,6 +1243,14 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # Lower as: self.field = self.field <op> value.
                     # Read via lower_expr on the original field-access
                     # expression (reuses __field_read), binop, field write.
+                    # #1 (matcluster): PROJECTED compound field-store
+                    # (`v[i].f += x`, `o.inner.f += x`) through a bare param
+                    # materializes the immutable-in-context ROOT first (caller
+                    # untouched) — exact mirror of the SAssign EFieldAccess arm
+                    # (:1023) and Rust assigns.rs compound FieldAccess arm. Must
+                    # run BEFORE the :1246 field read so it reads the private
+                    # copy. A `&self`/owned root is skipped by the helper.
+                    cow_materialize_projected_root(&ctx, &gmod, target_expr)
                     int lhs_val = lower_expr(&ctx, target_expr, &gmod)
                     int lhs_type = ctx.locals.get(lhs_val).unwrap().type_id
                     int rhs_val = lower_expr(&ctx, value_expr, &gmod)
@@ -1255,6 +1263,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # v[i] OP= x / d[k] OP= x — desugar to read-binop-write on
                     # the collection, evaluating base+idx once. Mirrors Rust
                     # lower_compound_assign's Expr::Index arm (assigns.rs:1345).
+                    # #1 (matcluster): a bare-param root (`xs[i] += x`,
+                    # `s.counts[i] += x`) materializes the root collection FIRST
+                    # (caller untouched) — exact mirror of the SAssign EIndex arm
+                    # (:1032) with `target_expr` (NOT inside
+                    # lower_index_compound_assign — no target_expr there). A
+                    # `&`/owned root is skipped by the helper.
+                    cow_materialize_projected_root(&ctx, &gmod, target_expr)
                     lower_index_compound_assign(&ctx, *base_box, *idx_box, op, value_expr, &gmod)
                 else:
                     lower_fail("SCompoundAssign target is neither EIdentifier, EFieldAccess, nor EIndex (got: " + expr_kind(target_expr.expr) + ")")

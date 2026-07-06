@@ -1632,9 +1632,16 @@ impl<'a> LoweringContext<'a> {
     /// register the local with `cow_before_field_mutation` / `cow_before_mutation`,
     /// and a later mutation of the (still-live) source collection would re-
     /// materialise the now-out-of-scope local, reading dead slot memory.
-    /// Other ownership states (Owned, Ref, Alias, BareParam, ViewOf) are kept
+    /// Other ownership states (Owned, Ref, BareParam, ViewOf) are kept
     /// — they're either pure metadata or reference aliasing that's already
-    /// severed by runtime CoW on mutation of the aliased source.
+    /// severed by runtime CoW on mutation of the aliased source. `Alias`,
+    /// though, is dropped for branch-local locals (matcluster #4): an alias
+    /// BOUND in a never-taken branch (`if cond: Vector v5 = v0`) leaves v5's
+    /// alias slot NULL on the not-taken path, so a LATER `cow_aliases_of(v0)`
+    /// at a merge-point mutation would blind-clone the NULL alias
+    /// (`gorget_array_clone(NULL)` → SIGSEGV, both backends). Resetting a
+    /// branch-local alias to unowned at scope exit makes `cow_aliases_of` skip
+    /// it — no clone of a maybe-uninitialized alias.
     ///
     /// Phase D4.5 step 5c: writes through `builder.locals[i].ownership` —
     /// the FxHashMap snapshot is gone; the typed field IS the live store.
@@ -1653,14 +1660,20 @@ impl<'a> LoweringContext<'a> {
                 }
             } else {
                 // Post-save (branch-local). Drop CollectionElement /
-                // FieldPath / CowBorrowPending / View states so
-                // cow_before_field_mutation doesn't issue a materialise-read
-                // on a dead slot once we leave the scope.
+                // FieldPath / CowBorrowPending / Alias / View states so
+                // cow_before_field_mutation / cow_aliases_of don't issue a
+                // materialise-read (or clone) on a dead slot once we leave the
+                // scope. matcluster #4: `Alias(_)` is included — a dead-branch
+                // alias bind (`if cond: Vector v5 = v0`) NULLs v5's alias slot
+                // on the not-taken path; without this reset a merge-point
+                // `v0[i] = x` fires `cow_aliases_of(v0)` and clones the NULL
+                // alias (`gorget_array_clone(NULL)` → SIGSEGV, both backends).
                 let drop_state = matches!(&builder.locals[idx].ownership,
                     crate::ir::LocalOwnership::Borrowed {
                         origin: crate::ir::BorrowOrigin::CollectionElement(_)
                               | crate::ir::BorrowOrigin::FieldPath(_)
-                              | crate::ir::BorrowOrigin::CowBorrowPending,
+                              | crate::ir::BorrowOrigin::CowBorrowPending
+                              | crate::ir::BorrowOrigin::Alias(_),
                         ..
                     } | crate::ir::LocalOwnership::View { .. }
                 );

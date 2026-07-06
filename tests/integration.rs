@@ -5016,20 +5016,18 @@ A",
     );
 }
 
+// matcluster #4 (was a known BOTH-BACKEND bug, found by the gorget-smith fuzzer,
+// round 1): an alias BIND in a never-taken branch (`if v0.len() < 3: Vector[int]
+// v5 = v0`) left v5's alias slot NULL on the not-taken path, and the LATER source
+// mutation `v0[2] = 9` fired `cow_aliases_of(v0)` at the merge point and blind-
+// cloned that NULL alias (`gorget_array_clone(NULL)` → SIGSEGV, both backends).
+// Sibling of cow_lazy_d1_alias_deadpath (that = mutation-in-dead-branch; this =
+// BIND-in-dead-branch). Fixed at the write site: restore_locals now resets a
+// branch-local `Alias(_)` to unowned at scope exit, so `cow_aliases_of` skips it
+// → zero clones (the dead branch never ran; v0 was never aliased). Prints 9.
 #[test]
-#[ignore = "known BOTH-BACKEND bug (found by the gorget-smith fuzzer, round 1): \
-an alias bind in a never-taken branch (`if v0.len() < 3: Vector[int] v5 = v0`) \
-corrupts the LATER source mutation — `v0[2] = 9` SIGSEGVs in gorget_array_clone \
-on BOTH the C and LLVM backends (ASan: near-null SEGV, frame #0 \
-gorget_array_clone — the mutation-site CoW materialize walks an alias slot that \
-was never initialized because the bind lives in a dead branch). Missing sibling \
-of cow_lazy_d1_alias_deadpath (that fixture = mutation-in-dead-branch; this = \
-BIND-in-dead-branch). The self-host prints `9` correctly, so this is a \
-Rust-gg-side fix. Asserts the language-intended output `9`; lives in \
-tests/fixtures/known_gaps/ so it stays OUT of the runtime-diff corpus. \
-Un-ignore when the dead-path alias-slot class is fixed. See TODO.md HIGH entry."]
 fn cow_dead_branch_alias_bind() {
-    run_gg("known_gaps/cow_dead_branch_alias_bind.gg", "9");
+    run_gg("cow_dead_branch_alias_bind.gg", "9");
 }
 
 #[test]
@@ -7405,10 +7403,15 @@ fn deadwrite_warn_string_push() {
 
 #[test]
 fn deadwrite_warn_compound() {
+    // The lint still FIRES (the compound write IS dead — it lands on a private
+    // copy). matcluster #1: it now ALSO runs correctly — `xs[0] += 1` on a bare
+    // param materializes a private copy, so the caller's `a[0]` stays 10 (was
+    // 11 = write-through, on BOTH backends). The warning text is now TRUE.
     check_gg_warns(
         "deadwrite_warn_compound.gg",
         "write to bare parameter `xs` lands on a private copy that is discarded",
     );
+    run_gg("deadwrite_warn_compound.gg", "10");
 }
 
 #[test]
@@ -7492,6 +7495,12 @@ fn deadwrite_ok_while_drain() {
 #[test]
 fn deadwrite_ok_rebind() {
     check_gg_silent_for("deadwrite_ok_rebind.gg", DEADWRITE_MSG);
+    // matcluster #3: a full rebind of a bare-VALUE param (`xs = [9,9]`) binds
+    // the name to a fresh owned local; the param slot stays `void*`. Pre-fix the
+    // in-place slot-upgrade retro-typed the entry binding `void* __v0 =
+    // (void*)__p0` → invalid C at cc / invalid LLVM at llc. Now runs: the rebound
+    // `xs` (len 3 after push) is private; the caller's `a` stays len 1.
+    run_gg("deadwrite_ok_rebind.gg", "3\n1");
 }
 
 #[test]
@@ -26790,6 +26799,23 @@ fn cow_amp_owned_writethrough() {
         "cow_amp_owned_writethrough.gg",
         "\
 4
+done",
+    );
+}
+
+/// matcluster #1 negative: `&`-param COMPOUND write-through is PRESERVED. The
+/// compound-arm root-materialize prologue (added for #1) is a no-op on a
+/// unique-borrow root, so `xs[i] += x` (index) and `c.counts[i] += x` (projected
+/// field-index) reach the caller through the & chain (11, 11). Guards that the #1
+/// fix — which stops BARE-param compound write-through — does NOT break the `&`
+/// path. Same output on both backends.
+#[test]
+fn cow_amp_compound_writethrough() {
+    run_gg(
+        "cow_amp_compound_writethrough.gg",
+        "\
+11
+11
 done",
     );
 }
