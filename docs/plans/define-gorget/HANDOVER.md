@@ -39,9 +39,19 @@ sequential fresh-review gauntlet.
   mandate in `decision-batch-4-proposal.md`, awaiting owner ruling), the float chain (HELD
   behind its 3 filed prerequisites), and P1-D/D2 (production-v1 bulk — own scout, filed in
   TODO with the detonation census).
-- **Decision batch 4: PROPOSED** — `decision-batch-4-proposal.md` (D10–D21 + a
-  dissolved-questions table), synthesized from 3 probe-verified scouts 2026-07-06. Awaiting
-  owner ruling; ratified items get D-numbers in `decisions.md` + docs write-through.
+- **Decision batch 4: ✅ CLOSED 2026-07-06 — D10–D21 ALL RATIFIED** (each ruling +
+  rationale in `decisions.md` LOG + the annotated `decision-batch-4-proposal.md`;
+  implementation tracks filed in TODO.md, each requiring its own scout→brief→gauntlet).
+  The big ones: D10 exclusivity (one place-overlap rule; local `&`-binds REMOVED),
+  D11 trap normalization (ONE TrapKind registry, T_ codes, exit 101, `Fault` = the
+  catchable subset), D12 D4-production-enforcement (straight to error), D13 allocators
+  two-step, D14 get_or views, D15 slices-are-values + `int[]` removal, D17 read_file
+  throws + the stdlib fallibility principle, D21 sim retired. Residual: D22 (colon-slice
+  package: `v[a:b]` canonical, `.slice()` removed) proposed in-conversation, one word out.
+  ENFORCEMENT-WAVE ORDER (after the in-flight unwrap+strmove fixes merge):
+  trap-normalization (unblocks exact-code conformance + D2 panics) → D12 (scout measures
+  blast radius first) → D10 tracks (bind-removal is bootstrap-gated) → D13/D14/D17 →
+  the small riders (D15+D22 slice-surface, D18, D19, D20, D21 salvage-scan deletion).
 - **Phase 0: ✅ COMPLETE 2026-07-06** (A 26/26 · B1 75/75 · B2 87/87 full corpus · C
   adjudications `9`/`ablog`/`hello` + spectests skeleton + gen + prose stubs; RFC §6(a)(b)(c)
   satisfied per independent output-review re-runs). `phase0-brief.md` is CLOSED/sealed.
