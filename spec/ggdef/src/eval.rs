@@ -97,6 +97,13 @@ enum Halt {
     Trap(Fault),
     IllFormed(String),
     FuelExhausted,
+    /// Error-propagation from an `Expr::Propagate` (`throws`-call auto-prop /
+    /// the `?` operator): unwind the CURRENT function activation and make it
+    /// return this `Error(e)` `Result` value. Caught at the `call_function`
+    /// boundary (NOT a terminal outcome) — it is function-local control flow
+    /// that just happens to originate deep inside expression evaluation, which
+    /// `Flow` (statement-level) cannot express.
+    Propagate(Value),
 }
 
 /// Normal (non-terminal) control flow within a function body.
@@ -244,6 +251,12 @@ pub fn run(program: &Program, fuel: u64) -> Run {
         Err(Halt::Trap(f)) => Outcome::Trap(f),
         Err(Halt::IllFormed(m)) => Outcome::IllFormed(m),
         Err(Halt::FuelExhausted) => Outcome::FuelExhausted,
+        // A propagate that escapes `main` means the elaborator emitted an
+        // `Expr::Propagate` outside any `throws` function — a spec bug, surfaced
+        // loudly rather than silently swallowed.
+        Err(Halt::Propagate(_)) => {
+            Outcome::IllFormed("error-propagation (`?`) outside a `throws` function".to_string())
+        }
     };
     Run { outcome, stdout: state.stdout, trace: state.trace }
 }
@@ -269,20 +282,36 @@ fn call_function(
     // The body runs directly in the root scope (mark 0).
     let body = func.body.clone();
     let mut flow = Flow::Normal;
+    // A `Halt::Propagate` unwinding out of an `Expr::Propagate` deep in this
+    // function's body is caught HERE (the function boundary) and turned into a
+    // return of the `Error(e)` value — the `throws`-call auto-propagate / `?`.
+    let mut propagated: Option<Value> = None;
     for stmt in &body {
-        flow = exec_stmt(ctx, state, stmt)?;
-        if !matches!(flow, Flow::Normal) {
-            break;
+        match exec_stmt(ctx, state, stmt) {
+            Ok(f) => {
+                flow = f;
+                if !matches!(flow, Flow::Normal) {
+                    break;
+                }
+            }
+            Err(Halt::Propagate(v)) => {
+                propagated = Some(v);
+                break;
+            }
+            Err(h) => return Err(h),
         }
     }
-    let ret = match flow {
-        Flow::Return(v) => v,
-        Flow::Normal => Value::Unit,
-        // break/continue reaching a function top would be ill-formed; the
-        // elaborator only emits them inside loops, so this is defensive.
-        Flow::Break | Flow::Continue => {
-            return Err(Halt::IllFormed("break/continue outside a loop".to_string()));
-        }
+    let ret = match propagated {
+        Some(v) => v,
+        None => match flow {
+            Flow::Return(v) => v,
+            Flow::Normal => Value::Unit,
+            // break/continue reaching a function top would be ill-formed; the
+            // elaborator only emits them inside loops, so this is defensive.
+            Flow::Break | Flow::Continue => {
+                return Err(Halt::IllFormed("break/continue outside a loop".to_string()));
+            }
+        },
     };
     drop_scope(ctx, state, 0)?;
     state.frames.pop();
@@ -764,6 +793,7 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
         Expr::Bool(b) => Ok(Value::Bool(*b)),
         Expr::Float(f) => Ok(Value::Float(*f)),
         Expr::Str(s) => Ok(Value::Str(s.clone())),
+        Expr::Unit => Ok(Value::Unit),
         Expr::FString(parts) => {
             let mut out = String::new();
             for part in parts {
@@ -932,7 +962,32 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
                 other => Err(Halt::IllFormed(format!("`int_to_str` on {}", other.kind_name()))),
             }
         }
+
+        Expr::Propagate(inner) => {
+            // `?` / `throws`-call auto-propagate: the inner MUST be a `Result`.
+            // `Ok(x)` yields `x`; `Error(e)` unwinds to the enclosing `throws`
+            // function's boundary (caught in `call_function`) as its return.
+            let v = eval_expr(ctx, state, inner)?;
+            match v {
+                Value::Enum { type_name, variant, mut payload }
+                    if type_name == "Result" && variant == "Ok" =>
+                {
+                    // `Ok(x)` — a well-formed Result carries exactly one payload.
+                    Ok(payload.pop().unwrap_or(Value::Unit))
+                }
+                v @ Value::Enum { .. } if is_result_error(&v) => Err(Halt::Propagate(v)),
+                other => Err(Halt::IllFormed(format!(
+                    "error-propagation of a non-Result value ({})",
+                    other.kind_name()
+                ))),
+            }
+        }
     }
+}
+
+/// Whether `v` is a `Result.Error(_)` value (the propagate-early-return case).
+fn is_result_error(v: &Value) -> bool {
+    matches!(v, Value::Enum { type_name, variant, .. } if type_name == "Result" && variant == "Error")
 }
 
 /// The element/codepoint count of a sliceable value.
@@ -1353,7 +1408,19 @@ fn exec_match_stmt(
     }
     let flow = match else_arm {
         Some(b) => exec_block(ctx, state, b)?,
-        None => Flow::Normal,
+        // No arm matched and there is no `else`: the scrutinee's value was not
+        // covered. In a well-typed program `match` is exhaustive, so reaching
+        // here means the program was statically ill-formed (a non-exhaustive
+        // match) — detected dynamically (RFC §2.3 `IllFormed`). This must be
+        // LOUD, never a silent fall-through: a silent fall-through is exactly
+        // how a `match result: case Ok/case Error` on a mis-typed (throws-
+        // dropped) scrutinee produced empty output and a bogus `Value`.
+        None => {
+            drop_scope(ctx, state, mark)?;
+            return Err(Halt::IllFormed(
+                "no `match` arm matched the scrutinee (non-exhaustive match)".to_string(),
+            ));
+        }
     };
     drop_scope(ctx, state, mark)?;
     Ok(flow)
@@ -1379,7 +1446,15 @@ fn eval_match_expr(
     }
     let result = match else_arm {
         Some(e) => eval_expr(ctx, state, e)?,
-        None => return Err(Halt::Trap(Fault::Panic("no match arm matched".to_string()))),
+        // No arm matched, no `else` — a non-exhaustive match reached at runtime:
+        // statically ill-formed, detected dynamically (RFC §2.3). Mirrors the
+        // statement-`match` case; both are LOUD, never a silent bogus value.
+        None => {
+            drop_scope(ctx, state, mark)?;
+            return Err(Halt::IllFormed(
+                "no `match` arm matched the scrutinee (non-exhaustive match)".to_string(),
+            ));
+        }
     };
     drop_scope(ctx, state, mark)?;
     Ok(result)

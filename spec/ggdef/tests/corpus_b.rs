@@ -242,7 +242,8 @@ fn corpus_b_all_match() {
         failures.join("\n")
     );
 
-    // Guard the gate's shape: the full phase-0 corpus is 116 fixtures
-    // (120 cow_*/deadwrite_* minus the 4 standing exclusions).
-    assert_eq!(fixtures.len(), 116, "B2 gate set drifted from 116 fixtures");
+    // Guard the gate's shape: the full corpus is 118 fixtures
+    // (122 cow_*/deadwrite_* minus the 4 standing exclusions; +2 matcluster
+    // fixtures 2026-07-06: cow_amp_compound_writethrough, cow_dead_branch_alias_bind).
+    assert_eq!(fixtures.len(), 118, "B2 gate set drifted from 118 fixtures");
 }

@@ -99,7 +99,14 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
                     name.clone(),
                     fd.params.iter().map(|p| p.node.name.node.clone()).collect(),
                 );
-                el.fn_ret.insert(name, ty_of_type(&fd.return_type.node));
+                el.fn_param_tys.insert(
+                    name.clone(),
+                    fd.params.iter().map(|p| ty_of_type(&p.node.type_.node)).collect(),
+                );
+                el.fn_ret.insert(name.clone(), ty_of_type(&fd.return_type.node));
+                if fd.throws.is_some() {
+                    el.fn_throws.insert(name);
+                }
             }
             ast::Item::Equip(eq) => el.register_equip(eq)?,
             // Imports are a discard no-op (types are prelude-available; the
@@ -189,6 +196,29 @@ struct MethodInfo {
     self_mode: Mode,
 }
 
+/// Why auto-propagation is suppressed for the throws-call currently being
+/// elaborated (language-reference §10.3 "Type-Directed Result Capture" +
+/// the `match … case Ok/Error` consumer). Set by the destination position
+/// JUST before its value expression elaborates; consumed (`mem::take`) by the
+/// outermost function/method call so nested calls in args still propagate
+/// (ground-truthed: production propagates a nested throws-call inside a
+/// captured call's args).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum CaptureCtx {
+    /// Not a capturing destination: a throws-call auto-propagates (§10.1)
+    /// inside a `throws` fn, and is a LOUD error elsewhere.
+    #[default]
+    None,
+    /// The direct scrutinee of a `match` whose arms destructure `Result`
+    /// (`case Ok/Error`): the call yields its full widened `Result` value.
+    Scrutinee,
+    /// A destination whose DECLARED type is `Result[_,_]` (§10.3): VarDecl,
+    /// assign target, return slot, declared fn/method param, struct field.
+    /// The call yields its full `Result` — with the callee-T-is-itself-Result
+    /// ambiguity rejected loudly (see `maybe_wrap_throws_call`).
+    TypedDest,
+}
+
 #[derive(Default)]
 struct Elaborator {
     structs: Vec<StructDef>,
@@ -206,6 +236,16 @@ struct Elaborator {
     /// Signature registry: fn / method name → return type — serves receiver
     /// type inference for method-call-result receivers.
     fn_ret: HashMap<String, Ty>,
+    /// Functions / methods (by GGC name) declared `throws E`: their observable
+    /// return type is widened to `Result[T, E]` and a call to one auto-
+    /// propagates (RFC §2.6 row 1). One source of truth for the throws→Result
+    /// desugar; read at call sites to decide propagate-vs-capture-vs-consume.
+    fn_throws: HashSet<String>,
+    /// Signature registry: fn / method name → declared param types, in decl
+    /// order (methods exclude `self`, aligning with `fn_param_names`). Serves
+    /// §10.3 type-directed capture at call args (a throws-call arg whose param
+    /// is declared `Result[_,_]` captures instead of auto-propagating).
+    fn_param_tys: HashMap<String, Vec<Ty>>,
     /// `(type-name, method-name) → MethodInfo` for user `equip` methods.
     equip_methods: HashMap<(String, String), MethodInfo>,
     /// `equip T with Drop` registry: `(type-name, drop-fn-name)`.
@@ -225,6 +265,18 @@ struct Elaborator {
     local_mode: HashMap<String, BindMode>,
     /// The type name of `self` while elaborating an `equip` method body.
     current_self_type: Option<String>,
+    /// Whether the function CURRENTLY being elaborated is `throws E`: its
+    /// `return`/`throw`/fall-off are wrapped `Ok`/`Error`, and a nested throws-
+    /// call in a non-capturing position auto-propagates.
+    current_fn_throws: bool,
+    /// Whether the current function's DECLARED return type is `Result[_,_]`
+    /// (for a `throws` fn this is the declared success type `T`, as written) —
+    /// drives §10.3 capture at return positions.
+    current_fn_ret_is_result: bool,
+    /// The capture context for the throws-call currently being elaborated
+    /// (see `CaptureCtx`). Set by a destination position just before its value
+    /// elaborates; consumed by the outermost call.
+    capture_ctx: CaptureCtx,
     gensym: usize,
 }
 
@@ -262,6 +314,12 @@ impl Elaborator {
         self.local_ty.clear();
         self.local_mode.clear();
         self.current_self_type = self_type.map(|s| s.to_string());
+        // A `throws E` function's return type is widened to `Result[T, E]`:
+        // `return`/`throw`/fall-off wrap `Ok`/`Error`, and nested throws-calls
+        // auto-propagate (RFC §2.6 row 1). `capture_ctx` starts clear.
+        self.current_fn_throws = fd.throws.is_some();
+        self.current_fn_ret_is_result = ty_is_result(&ty_of_type(&fd.return_type.node));
+        self.capture_ctx = CaptureCtx::None;
         for p in &fd.params {
             self.local_names.insert(p.node.name.node.clone());
         }
@@ -286,13 +344,43 @@ impl Elaborator {
             self.local_mode.insert(name.clone(), bindmode_of(p.node.ownership));
             params.push(Param { name, mode: mode_of(p.node.ownership), span: p.span });
         }
-        let body = match &fd.body {
+        let mut body = match &fd.body {
             ast::FunctionBody::Block(block) => self.elaborate_block(block)?,
             ast::FunctionBody::Expression(e) => {
                 // Expression-body function: evaluate and return the value.
                 // (D4 position 4 — return of a live tainted place is rejected.)
                 self.reject_if_tainted_live_place(&e.node, e.span, "return")?;
-                vec![Stmt::Return { value: Some(self.elaborate_expr(e)?), span: e.span }]
+                // §10.3 capture does NOT apply at an expression-body tail —
+                // production REJECTS a throws-call tail whose peeled `T` does
+                // not match a Result-declared return ("type mismatch: expected
+                // Result[…], found <T>"; probed 2026-07-06 on both the
+                // non-throws and the throws-with-T=Result shapes). Auto-prop
+                // would silently produce a differently-shaped value here, so
+                // this is a LOUD error, mirroring the production rejection.
+                // (A throws-call tail whose declared T is ITSELF Result
+                // propagates+rewraps — the inner Result matches T; that is the
+                // block-`return mk(x)` sibling and stays modeled.)
+                if self.current_fn_throws && self.current_fn_ret_is_result {
+                    if let Some(callee) = self.root_throws_callee(&e.node) {
+                        if !self.callee_ret_is_result(&callee) {
+                            return Err(ElabError::new(
+                                format!(
+                                    "expression-body tail call to `throws` function `{callee}` \
+                                     where the declared return type is `Result[…]`: production \
+                                     rejects this shape (capture does not apply at expression-\
+                                     body tails); use a block body with `return`"
+                                ),
+                                e.span,
+                            ));
+                        }
+                    }
+                }
+                let tail = self.elaborate_expr(e)?;
+                // A `throws` expression-body fn wraps its tail in `Ok(...)`
+                // exactly once (a throws-call tail already auto-propagated to
+                // the bare `T`, which this re-wraps — never a double-`Ok`).
+                let value = if self.current_fn_throws { ok_wrap(tail) } else { tail };
+                vec![Stmt::Return { value: Some(value), span: e.span }]
             }
             ast::FunctionBody::Declaration | ast::FunctionBody::Extern(_) => {
                 return Err(ElabError::new(
@@ -301,6 +389,12 @@ impl Elaborator {
                 ));
             }
         };
+        // Fall-off in a `throws` function returns `Ok(())` (the `void … throws
+        // E` success path, and dead-but-harmless after a body that always
+        // returns). Block bodies only — an expr body always returns above.
+        if self.current_fn_throws && matches!(fd.body, ast::FunctionBody::Block(_)) {
+            body.push(Stmt::Return { value: Some(ok_wrap(Expr::Unit)), span: fd.span });
+        }
         Ok((params, body))
     }
 
@@ -329,9 +423,20 @@ impl Elaborator {
                 .filter(|p| !is_self_param(&p.node))
                 .map(|p| p.node.name.node.clone())
                 .collect();
+            let param_tys: Vec<Ty> = m
+                .node
+                .params
+                .iter()
+                .filter(|p| !is_self_param(&p.node))
+                .map(|p| ty_of_type(&p.node.type_.node))
+                .collect();
             self.func_names.insert(mangled.clone());
             self.fn_param_names.insert(mangled.clone(), param_names);
+            self.fn_param_tys.insert(mangled.clone(), param_tys);
             self.fn_ret.insert(mangled.clone(), ty_of_type(&m.node.return_type.node));
+            if m.node.throws.is_some() {
+                self.fn_throws.insert(mangled.clone());
+            }
             self.equip_methods.insert(
                 (type_name.clone(), mname.clone()),
                 MethodInfo { mangled: mangled.clone(), self_mode },
@@ -505,8 +610,18 @@ impl Elaborator {
         match &stmt.node {
             ast::Stmt::VarDecl { pattern, value, type_, .. } => {
                 let name = binding_name(pattern)?;
+                // §10.3 type-directed capture: a throws-call initializer whose
+                // DECLARED binding type is `Result[_,_]` captures the full
+                // Result instead of auto-propagating (`auto` never captures —
+                // there is no declared Result to direct it).
+                if ty_is_result(&ty_of_type(&type_.node))
+                    && self.root_throws_callee(&value.node).is_some()
+                {
+                    self.capture_ctx = CaptureCtx::TypedDest;
+                }
                 // D4 position 1 (bind) fires inside `bind_source`'s Copy branch.
                 let source = self.bind_source(value)?;
+                self.capture_ctx = CaptureCtx::None;
                 // Record the binding's type + mode in the env (annotation, or
                 // inferred from the initializer for `auto`).
                 let ty = match &type_.node {
@@ -522,8 +637,30 @@ impl Elaborator {
                 // D4 position 6 (materialize-on-write): a write rooted at a
                 // tainted Borrow binding privatises it — rejected.
                 self.reject_materialize_on_write(&target.node, span)?;
+                // The target elaborates FIRST (it may itself contain calls,
+                // e.g. `v[idx()] = …`, which must not consume the RHS's
+                // capture flag).
                 let target_expr = self.elaborate_expr(target)?;
+                // §10.3 type-directed capture at an assignment: a throws-call
+                // RHS whose TARGET's type is `Result[_,_]` captures. A target
+                // whose type cannot be resolved is a LOUD error (capture-vs-
+                // propagate would be a coin flip — never silent).
+                if self.root_throws_callee(&value.node).is_some() {
+                    match self.infer_ast_ty(&target.node) {
+                        t if ty_is_result(&t) => self.capture_ctx = CaptureCtx::TypedDest,
+                        Ty::Unknown => {
+                            return Err(ElabError::new(
+                                "cannot resolve the assignment target's type for a `throws`-\
+                                 call RHS (capture-vs-propagate is type-directed, §10.3); \
+                                 bind through an explicitly-typed local instead",
+                                span,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
                 let value_src = self.owning_source_from_expr(value)?;
+                self.capture_ctx = CaptureCtx::None;
                 Ok(vec![Stmt::Assign { target: target_expr, value: value_src, span }])
             }
 
@@ -551,11 +688,54 @@ impl Elaborator {
                     Some(e) => {
                         // D4 position 4 (return of a live tainted place).
                         self.reject_if_tainted_live_place(&e.node, e.span, "return")?;
-                        Some(self.elaborate_expr(e)?)
+                        // §10.3 capture at the return slot, ground-truthed
+                        // against production (probes 2026-07-06):
+                        //  * non-throws fn, declared ret Result[_,_], value is
+                        //    a throws-call → CAPTURE the full Result (the
+                        //    callee-T-itself-Result variant miscompiles in
+                        //    production and is rejected loudly by the shared
+                        //    guard in `maybe_wrap_throws_call`);
+                        //  * throws fn with declared T = Result[_,_]: a throws-
+                        //    callee whose OWN declared T is NOT Result captures
+                        //    (→ `Ok(<callee's full Result>)`); one whose T IS
+                        //    Result keeps auto-prop (peel outer, re-wrap) — the
+                        //    inner Result is exactly T.
+                        if self.current_fn_ret_is_result {
+                            if let Some(callee) = self.root_throws_callee(&e.node) {
+                                if !self.current_fn_throws || !self.callee_ret_is_result(&callee)
+                                {
+                                    self.capture_ctx = CaptureCtx::TypedDest;
+                                }
+                            }
+                        }
+                        let inner = self.elaborate_expr(e)?;
+                        self.capture_ctx = CaptureCtx::None;
+                        // A `throws` fn returns `Result[T, E]`: wrap the value in
+                        // `Ok(...)`. A throws-call inside `e` already auto-
+                        // propagated (or captured) to the declared `T`, which
+                        // this re-wraps once.
+                        Some(if self.current_fn_throws { ok_wrap(inner) } else { inner })
                     }
+                    // Bare `return`: `Ok(())` in a throws fn, `Unit` otherwise.
+                    None if self.current_fn_throws => Some(ok_wrap(Expr::Unit)),
                     None => None,
                 };
                 Ok(vec![Stmt::Return { value, span }])
+            }
+
+            // `throw e` desugars to `return Error(e)` — the throws→Result error
+            // path (RFC §2.6 row 1). Only valid inside a `throws` function; a
+            // `throw` anywhere else is a LOUD elaboration error (never silently
+            // dropped, the flagship silent-wrong bug this closes).
+            ast::Stmt::Throw(e) => {
+                if !self.current_fn_throws {
+                    return Err(ElabError::new(
+                        "`throw` outside a `throws` function is ill-formed",
+                        span,
+                    ));
+                }
+                let inner = self.elaborate_expr(e)?;
+                Ok(vec![Stmt::Return { value: Some(error_wrap(inner)), span }])
             }
 
             ast::Stmt::With { bindings, body } => self.desugar_with(bindings, body, span),
@@ -955,7 +1135,16 @@ impl Elaborator {
             }
 
             ast::Expr::Match { scrutinee, arms, else_arm } => {
+                // See `elaborate_match_stmt`: a throws-call scrutinee whose
+                // arms consume the `Result` itself (`case Ok/Error`) yields the
+                // full Result (no auto-prop).
+                if arms.iter().any(|a| pattern_consumes_result(&a.pattern.node))
+                    && self.root_throws_callee(&scrutinee.node).is_some()
+                {
+                    self.capture_ctx = CaptureCtx::Scrutinee;
+                }
                 let scrut = self.elaborate_expr(scrutinee)?;
+                self.capture_ctx = CaptureCtx::None;
                 let mut ggc_arms = Vec::with_capacity(arms.len());
                 for arm in arms {
                     if arm.guard.is_some() {
@@ -1087,13 +1276,132 @@ impl Elaborator {
         // are REORDERED to the callee's param order via the pass-1 signature
         // registry, replacing the B1-interim rejection.
         if self.func_names.contains(name) {
+            // Consume the capture flag for THIS (outermost) call before its
+            // args elaborate, so a nested throws-call in an arg still auto-
+            // propagates (ground-truthed against production, probe j).
+            let capture = std::mem::take(&mut self.capture_ctx);
             let out = self.call_args_reordered(name, args)?;
-            return Ok(Expr::Call { func: name.clone(), args: out });
+            let call = Expr::Call { func: name.clone(), args: out };
+            return self.maybe_wrap_throws_call(call, name, callee.span, capture);
         }
         Err(ElabError::new(
             format!("unresolved callee `{name}` (unknown function/struct/enum; may need Increment B2)"),
             callee.span,
         ))
+    }
+
+    /// Apply the throws→Result treatment to a `call` to the GGC function/
+    /// method `callee_name` (RFC §2.6 row 1; language-reference §10.1/§10.3).
+    /// A call to a NON-throws callee passes through untouched. For a throws
+    /// callee, by capture context:
+    ///   * `Scrutinee` (a `match … case Ok/Error` consumer) → yield the full
+    ///     widened `Result` (the arms destructure it);
+    ///   * `TypedDest` (§10.3: a `Result[_,_]`-declared destination) → yield
+    ///     the full `Result` (capture) — UNLESS the callee's own declared T is
+    ///     itself `Result`, where name-level types cannot tell capture (outer)
+    ///     from propagate (inner) apart AND production miscompiles the shape
+    ///     (probes k/c2 2026-07-06 print garbage payloads) → LOUD error;
+    ///   * `None` inside a `throws` fn → wrap in `Propagate` (`?` semantics:
+    ///     `Ok(x)` peels to `x`, `Error(e)` early-returns from the caller);
+    ///   * `None` elsewhere → LOUD ElabError. In real Gorget this is a type
+    ///     error; ggdef refuses it rather than silently mis-evaluating the
+    ///     dropped `throws` effect (the flagship safety bug).
+    fn maybe_wrap_throws_call(
+        &self,
+        call: Expr,
+        callee_name: &str,
+        span: Span,
+        capture: CaptureCtx,
+    ) -> ElabResult<Expr> {
+        if !self.fn_throws.contains(callee_name) {
+            return Ok(call);
+        }
+        match capture {
+            CaptureCtx::Scrutinee => Ok(call),
+            CaptureCtx::TypedDest => {
+                if self.callee_ret_is_result(callee_name) {
+                    return Err(ElabError::new(
+                        format!(
+                            "`throws` function `{callee_name}` whose declared success type is \
+                             itself `Result[…]` used at a `Result[…]`-typed destination: \
+                             capture-vs-propagate is undecidable at ggdef's name-level types, \
+                             and production miscompiles this shape (garbage payloads observed \
+                             2026-07-06) — restructure via an intermediate binding"
+                        ),
+                        span,
+                    ));
+                }
+                Ok(call)
+            }
+            CaptureCtx::None if self.current_fn_throws => Ok(Expr::Propagate(Box::new(call))),
+            CaptureCtx::None => Err(ElabError::new(
+                format!(
+                    "call to `throws` function `{callee_name}` in a non-`throws` context that \
+                     does not consume or capture the `Result` (no `match … case Ok/Error`, no \
+                     `Result[…]`-typed destination); ggdef does not model `catch`/`??`/\
+                     `rethrow` error recovery yet"
+                ),
+                span,
+            )),
+        }
+    }
+
+    /// If `e`'s ROOT is a call that will dispatch to a `throws` function or
+    /// `equip` method, the resolved GGC callee name. Mirrors the dispatch in
+    /// `elaborate_call` (Identifier callee in `fn_throws`) and
+    /// `elaborate_method` (receiver-type inference + `equip_methods`) exactly,
+    /// so the §10.3 capture decision and the actual call resolution can never
+    /// disagree. `None` for non-call roots, non-throws callees, ctors, and
+    /// closure-value calls (closure signatures are untyped locals).
+    fn root_throws_callee(&self, e: &ast::Expr) -> Option<String> {
+        match e {
+            ast::Expr::Call { callee, .. } => match &callee.node {
+                ast::Expr::Identifier(n) if self.fn_throws.contains(n) => Some(n.clone()),
+                _ => None,
+            },
+            ast::Expr::MethodCall { receiver, method, .. } => {
+                if let Ty::Named(t) = self.infer_ast_ty(&receiver.node) {
+                    if let Some(mi) = self.equip_methods.get(&(t, method.node.clone())) {
+                        if self.fn_throws.contains(&mi.mangled) {
+                            return Some(mi.mangled.clone());
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the callee's DECLARED (success) return type is itself
+    /// `Result[_,_]` — the §10.3 capture-vs-propagate discriminator at return
+    /// positions and the ambiguity guard at typed destinations.
+    fn callee_ret_is_result(&self, callee_name: &str) -> bool {
+        self.fn_ret.get(callee_name).map(ty_is_result).unwrap_or(false)
+    }
+
+    /// Shared §10.3 decision for one destination slot with declared type `ty`
+    /// (`None` = no registry entry), about to receive a value whose ROOT is a
+    /// throws-call. `Result[_,_]` → set `TypedDest` (capture). An unresolvable
+    /// declared type is a LOUD error (capture-vs-propagate would be a coin
+    /// flip). Anything else → leave `None` (§10.1 auto-propagation default).
+    /// Call ONLY when `root_throws_callee` matched the incoming value.
+    fn set_typed_dest_capture(&mut self, ty: Option<&Ty>, what: &str, span: Span) -> ElabResult<()> {
+        match ty {
+            Some(t) if ty_is_result(t) => {
+                self.capture_ctx = CaptureCtx::TypedDest;
+                Ok(())
+            }
+            Some(Ty::Unknown) => Err(ElabError::new(
+                format!(
+                    "cannot resolve the declared type of {what} for a `throws`-call argument \
+                     (capture-vs-propagate is type-directed, §10.3); bind through an \
+                     explicitly-typed local instead"
+                ),
+                span,
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// Elaborate struct-construction args, honouring named args (`Point(x=1,
@@ -1106,8 +1414,24 @@ impl Elaborator {
         let any_named = args.iter().any(|a| a.node.name.is_some());
         if !any_named {
             let mut out = Vec::with_capacity(args.len());
-            for a in args {
+            for (i, a) in args.iter().enumerate() {
+                // §10.3 capture at a struct-ctor field: a throws-call into a
+                // field DECLARED `Result[_,_]` captures (ground-truthed,
+                // probe e — production captures at the field init).
+                if self.root_throws_callee(&a.node.value.node).is_some() {
+                    let fty = self
+                        .struct_field_types
+                        .get(struct_name)
+                        .and_then(|fs| fs.get(i))
+                        .map(|(_, t)| t.clone());
+                    self.set_typed_dest_capture(
+                        fty.as_ref(),
+                        &format!("field {i} of `{struct_name}`"),
+                        a.span,
+                    )?;
+                }
                 out.push(self.owning_source_from_arg(&a.node)?);
+                self.capture_ctx = CaptureCtx::None;
             }
             return Ok(out);
         }
@@ -1126,7 +1450,21 @@ impl Elaborator {
                 .ok_or_else(|| ElabError::new("mixed positional/named struct args are unsupported", a.span))?
                 .node
                 .clone();
+            // §10.3 capture, named-field form.
+            if self.root_throws_callee(&a.node.value.node).is_some() {
+                let fty = self
+                    .struct_field_types
+                    .get(struct_name)
+                    .and_then(|fs| fs.iter().find(|(n, _)| n == &name))
+                    .map(|(_, t)| t.clone());
+                self.set_typed_dest_capture(
+                    fty.as_ref(),
+                    &format!("field `{name}` of `{struct_name}`"),
+                    a.span,
+                )?;
+            }
             by_name.push((name, self.owning_source_from_arg(&a.node)?));
+            self.capture_ctx = CaptureCtx::None;
         }
         let mut out = Vec::with_capacity(field_order.len());
         for f in &field_order {
@@ -1151,8 +1489,19 @@ impl Elaborator {
         let any_named = args.iter().any(|a| a.node.name.is_some());
         if !any_named {
             let mut out = Vec::with_capacity(args.len());
-            for a in args {
+            for (i, a) in args.iter().enumerate() {
+                // §10.3 capture at a call arg: a throws-call into a param
+                // DECLARED `Result[_,_]` captures (ground-truthed, probe d).
+                if self.root_throws_callee(&a.node.value.node).is_some() {
+                    let pty = self.fn_param_tys.get(func_name).and_then(|v| v.get(i)).cloned();
+                    self.set_typed_dest_capture(
+                        pty.as_ref(),
+                        &format!("parameter {i} of `{func_name}`"),
+                        a.span,
+                    )?;
+                }
                 out.push(self.call_arg_source(&a.node)?);
+                self.capture_ctx = CaptureCtx::None;
             }
             return Ok(out);
         }
@@ -1168,7 +1517,20 @@ impl Elaborator {
                 })?
                 .node
                 .clone();
+            // §10.3 capture, named-arg form: the param index is the name's
+            // position in the declared order (a missing name errors below).
+            if self.root_throws_callee(&a.node.value.node).is_some() {
+                if let Some(i) = order.iter().position(|p| p == &name) {
+                    let pty = self.fn_param_tys.get(func_name).and_then(|v| v.get(i)).cloned();
+                    self.set_typed_dest_capture(
+                        pty.as_ref(),
+                        &format!("parameter `{name}` of `{func_name}`"),
+                        a.span,
+                    )?;
+                }
+            }
             by_name.push((name, self.call_arg_source(&a.node)?));
+            self.capture_ctx = CaptureCtx::None;
         }
         let mut out = Vec::with_capacity(order.len());
         for p in &order {
@@ -1306,7 +1668,7 @@ impl Elaborator {
         receiver: &Spanned<ast::Expr>,
         minfo: &MethodInfo,
         args: &[Spanned<ast::CallArg>],
-        _span: Span,
+        span: Span,
     ) -> ElabResult<Expr> {
         // D4 position 6, user-method sibling (B2 output-review R2): a `&self`
         // mutator writing through a TAINTED Borrow-rooted receiver would
@@ -1315,10 +1677,14 @@ impl Elaborator {
         if minfo.self_mode == Mode::WriteThrough {
             self.reject_materialize_on_write(&receiver.node, receiver.span)?;
         }
+        // Consume the capture flag for THIS call before receiver/args
+        // elaborate (a nested throws-call in them still auto-propagates).
+        let capture = std::mem::take(&mut self.capture_ctx);
         let self_src = self.self_source(receiver, minfo.self_mode)?;
         let mut out = vec![self_src];
         out.extend(self.call_args_reordered(&minfo.mangled, args)?);
-        Ok(Expr::Call { func: minfo.mangled.clone(), args: out })
+        let call = Expr::Call { func: minfo.mangled.clone(), args: out };
+        self.maybe_wrap_throws_call(call, &minfo.mangled, span, capture)
     }
 
     /// Bind a method receiver as the `self` source per the resolved self-mode.
@@ -1343,7 +1709,21 @@ impl Elaborator {
         else_arm: Option<&ast::Block>,
         span: Span,
     ) -> ElabResult<Stmt> {
+        // A scrutinee that is a throws-call yields the `Result` value (no auto-
+        // propagate) exactly when the arms destructure `Result` (`case
+        // Ok/Error`); otherwise the throws-call auto-propagates and the arms see
+        // the inner value. Gated on the ROOT being a throws-call so the flag
+        // can never leak into a nested call inside a non-call scrutinee (e.g.
+        // a throws-call payload inside `match Ok(f(x)):` still propagates).
+        let consumes = arms
+            .iter()
+            .filter_map(|i| i.arm())
+            .any(|a| pattern_consumes_result(&a.pattern.node));
+        if consumes && self.root_throws_callee(&scrutinee.node).is_some() {
+            self.capture_ctx = CaptureCtx::Scrutinee;
+        }
         let scrut = self.elaborate_expr(scrutinee)?;
+        self.capture_ctx = CaptureCtx::None;
         let mut out_arms = Vec::with_capacity(arms.len());
         for item in arms {
             let arm = item
@@ -1477,6 +1857,39 @@ fn enum_construct(type_name: &str, variant: &str, args: Vec<Source>) -> Expr {
     Expr::EnumConstruct { type_name: type_name.to_string(), variant: variant.to_string(), args }
 }
 
+/// `Ok(inner)` — the throws→Result success wrap (RFC §2.6 row 1). `inner` moves
+/// into the payload (a fresh value at this owning position).
+fn ok_wrap(inner: Expr) -> Expr {
+    enum_construct("Result", "Ok", vec![Source::Value(inner)])
+}
+
+/// `Error(inner)` — the `throw`-statement desugar (`throw e` → `return
+/// Error(e)`).
+fn error_wrap(inner: Expr) -> Expr {
+    enum_construct("Result", "Error", vec![Source::Value(inner)])
+}
+
+/// Whether an elaboration type is `Result[_,_]` (name-level — `Ty` erases
+/// generic args; `Result` is a prelude enum users cannot shadow).
+fn ty_is_result(t: &Ty) -> bool {
+    matches!(t, Ty::Named(n) if n == "Result")
+}
+
+/// Whether a `match` arm pattern destructures the `Result` itself (`case
+/// Ok(..)` / `case Error(..)`) — the signal that a throws-call scrutinee should
+/// yield the `Result` value rather than auto-propagate.
+fn pattern_consumes_result(pat: &ast::Pattern) -> bool {
+    match pat {
+        ast::Pattern::Constructor { path, .. } => {
+            path.last().map(|s| s.node == "Ok" || s.node == "Error").unwrap_or(false)
+        }
+        ast::Pattern::DotShorthand { variant, .. } => {
+            variant.node == "Ok" || variant.node == "Error"
+        }
+        _ => false,
+    }
+}
+
 /// The prelude enum a bare constructor name belongs to (`Some`/`None` →
 /// `Option`, `Ok`/`Error` → `Result`).
 fn prelude_enum_of(name: &str) -> Option<&'static str> {
@@ -1592,7 +2005,7 @@ fn collect_expr_locals(e: &Expr, closures: &[ClosureDef], out: &mut HashSet<Stri
         Expr::Local(n) => {
             out.insert(n.clone());
         }
-        Expr::Int(_) | Expr::Bool(_) | Expr::Float(_) | Expr::Str(_) => {}
+        Expr::Int(_) | Expr::Bool(_) | Expr::Float(_) | Expr::Str(_) | Expr::Unit => {}
         Expr::FString(parts) => {
             for p in parts {
                 if let FPart::Interp(e) = p {
@@ -1618,9 +2031,11 @@ fn collect_expr_locals(e: &Expr, closures: &[ClosureDef], out: &mut HashSet<Stri
             collect_expr_locals(l, closures, out);
             collect_expr_locals(r, closures, out);
         }
-        Expr::Unary(_, e) | Expr::Cast { expr: e, .. } | Expr::IntToStr(e) | Expr::Clone(e) => {
-            collect_expr_locals(e, closures, out)
-        }
+        Expr::Unary(_, e)
+        | Expr::Cast { expr: e, .. }
+        | Expr::IntToStr(e)
+        | Expr::Clone(e)
+        | Expr::Propagate(e) => collect_expr_locals(e, closures, out),
         Expr::Call { args, .. } | Expr::Construct { args, .. } | Expr::EnumConstruct { args, .. } => {
             for a in args {
                 collect_source_locals(a, closures, out);

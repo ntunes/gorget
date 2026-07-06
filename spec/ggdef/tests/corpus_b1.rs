@@ -236,6 +236,7 @@ fn corpus_b1_all_match() {
         failures.join("\n")
     );
 
-    // Guard the gate's shape: the B1 non-equip surface is ~103 fixtures.
-    assert_eq!(fixtures.len(), 103, "B1 gate set drifted from 103 fixtures");
+    // Guard the gate's shape: the B1 non-equip surface is ~105 fixtures
+    // (+2 matcluster fixtures 2026-07-06).
+    assert_eq!(fixtures.len(), 105, "B1 gate set drifted from 105 fixtures");
 }
