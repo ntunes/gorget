@@ -227,6 +227,15 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D17 RATIFIED by owner: `read_file` is FALLIBLE (`throws`).** Owner:
+  avoid panics, keep the server running, recover where possible — recorded as the
+  **stdlib fallibility principle** (environmental failures = throws; explicit `_or_panic`
+  variants are the opt-in, never the default). Record correction: the docs (book/10,
+  language-design §6.4) already said throws; the IMPL is what lags (bare String +
+  runtime exit(1)) — the track is impl + doc sweep, and it sweeps the CLASS (all
+  env-failure-panicking stdlib fns), not the instance. `parse_int` book typo
+  (Result[int,String] → ParseError) rides the same sweep. A12 CLOSED.
+
 - 2026-07-06 — **D10 RATIFIED by owner (deletion rider SIGNED): the exclusivity package.**
   One rule at three sites: for any two access paths in a call, bind, or live capture
   whose PLACES overlap (root + projection prefix), at most one writer (`&`) or mover

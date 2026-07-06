@@ -310,7 +310,20 @@ spellings for every call. Confidence: high.
 
 ---
 
-### D17 (PROPOSED) — A12 `read_file` becomes FALLIBLE (`throws IoError`); `parse_int` book typo fixed
+### D17 (RATIFIED 2026-07-06) — A12 `read_file` becomes FALLIBLE (`throws IoError`); `parse_int` book typo fixed
+
+> **Owner ruling 2026-07-06: throws.** Owner context: "Initially it panic'ed, then we
+> evolved to throw, but not all docs caught up. I am trying to avoid panics (keep the
+> server running) and recover where possible." Correction of record: the probe shows the
+> evolution ran the OTHER way — the DOCS evolved to throws (book/10, language-design
+> §6.4), the IMPL never caught up (lib/std/fs.gg returns bare String; runtime_file.c
+> exit(1)s). So the track is an implementation change + doc sweep. **The owner's
+> stated philosophy is recorded as the STDLIB FALLIBILITY PRINCIPLE: environmental
+> failures throw — panics are avoided wherever recovery is possible (keep the server
+> running).** The track therefore sweeps the CLASS: every stdlib fn that panics on an
+> environmental failure (not just read_file) converts or gets an explicit `_or_panic`
+> opt-in variant. Forward note: this principle leans the future deep-fault catchability
+> question toward recoverable-at-boundaries — record it as input when that phase opens.
 
 The impl (`read_file` returns bare `String`, panics `exit(1)` on failure) violates the
 design's own error model (§6.4: environmental failures — file I/O — MUST surface as Result;
