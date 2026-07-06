@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: unwrap/expect panic-by-default (🔥 both-backend + self-host, 4 zones)
 
-> **STATUS: v3 FINAL — pass 3 (launch-gate) = CLEAN SIGN OFF 2026-07-06 (all anchors re-verified; both fresh-eyes seeds dismissed: Term::Unreachable+noreturn pattern already live+tested both backends via panic_builtin; the witness position-proxy is the ONLY textual assertion in the blast zone). EXECUTOR LAUNCHED w/ pass-3 notes: Zone-3 insertion = lower_expr.gg:3502-3504 disjoint from the lir_codegen combinator routes; Zone-1 guard wrapped in `!is_unwrap_or` at BOTH :4126 and :4153 (prototype lacks it).**
+> **STATUS: v3 FINAL — pass 3 (launch-gate) = CLEAN SIGN OFF 2026-07-06 (all anchors re-verified; both fresh-eyes seeds dismissed: Term::Unreachable+noreturn pattern already live+tested both backends via panic_builtin; the witness position-proxy is the ONLY textual assertion in the blast zone). ✅ LANDED 2026-07-06 (executor 0cad419a+9382cab0+5024e538 → output-review SIGN OFF, reference-grade gate passed → merged; parent battery running: floors reconcile on the combined tip). Was: EXECUTOR LAUNCHED w/ pass-3 notes: Zone-3 insertion = lower_expr.gg:3502-3504 disjoint from the lir_codegen combinator routes; Zone-1 guard wrapped in `!is_unwrap_or` at BOTH :4126 and :4153 (prototype lacks it).**
 > Scout: full report + measured prototype at `/tmp/recover_unwrap/` (proto_FINAL.patch,
 > probes/ with emitted C + ASan bins both backends, integ_full_c.log, clean_stage0.c).
 > Scout measured: fix green on BOTH backends, ASan clean, lib 1105/0, full C sweep 1539/4
