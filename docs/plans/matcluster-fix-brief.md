@@ -1,6 +1,7 @@
 # EXECUTOR BRIEF: production materialize-on-write cluster (4 roots, 1 track, 4 sequenced commits)
 
-> **STATUS: v4 — pass 3 (Opus) = CLEAN SIGN OFF 2026-07-06 (the #4 mechanism empirically
+> **STATUS: ✅ LANDED 2026-07-06 (merge 47207f8e) — #1/#3/#4 fixed both-backends, output-review SIGN OFF (independent 48/48 both-backend slices, own ASan, ggdef cross-check, ratchet drift-proven); #2 RE-SCOPED per the pre-authorized gate (measured entry-binding conflict, /tmp/matx_p3) → own-track HIGH filed in TODO.md w/ fix shape (pre-header fresh owned local, mirror #3). Resolved HIGHs moved to DONE.md. Brief CLOSED.**
+> Prior header: v4 — pass 3 (Opus) = CLEAN SIGN OFF 2026-07-06 (the #4 mechanism empirically
 > verified by the reviewer: baseline SIGSEGV → 9/exit-0 on BOTH backends, sibling unregressed,
 > ASan clean). Executor: LAUNCHED. Pass-3 notes folded: the draft's OLD #4 two-option framing
 > (at its FIX DIRECTIONS section) is a STALE REMNANT — the pass-2 restore_locals mechanism is
