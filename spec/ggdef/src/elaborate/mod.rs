@@ -28,8 +28,8 @@ use gorget::parser::ast;
 use gorget::span::{Span, Spanned};
 
 use crate::ggc::{
-    BinOp, BuiltinMethod, ConstructKind, Expr, FPart, Function, Param, Program, Source, Stmt,
-    StructDef, UnOp,
+    BinOp, BuiltinMethod, CastTarget, ClosureDef, ConstructKind, EnumDef, Expr, ExprArm, FPart,
+    Function, Param, Pattern, Program, Source, Stmt, StmtArm, StructDef, UnOp,
 };
 
 /// A faithful-elaboration failure: a surface construct outside the A subset,
@@ -53,7 +53,8 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
     let mut el = Elaborator::default();
     let items = module.all_items();
 
-    // Pass 1: collect struct layouts and function names (the tiny resolver).
+    // Pass 1: collect struct layouts, enum variant arities, and function names
+    // (the tiny resolver).
     for item in &items {
         match item {
             ast::Item::Struct(sd) => {
@@ -62,16 +63,32 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
                 el.structs.push(StructDef { name: name.clone(), fields });
                 el.struct_names.insert(name);
             }
+            ast::Item::Enum(ed) => {
+                let name = ed.name.node.clone();
+                let variants = ed
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        let arity = match &v.node.fields {
+                            ast::VariantFields::Unit => 0,
+                            ast::VariantFields::Tuple(ts) => ts.len(),
+                        };
+                        (v.node.name.node.clone(), arity)
+                    })
+                    .collect();
+                el.enums.push(EnumDef { name, variants });
+            }
             ast::Item::Function(fd) => {
                 el.func_names.insert(fd.name.node.clone());
             }
-            // Imports are a discard no-op in A (types are prelude-available).
+            // Imports are a discard no-op (types are prelude-available; the
+            // `std.conv.int_to_str` shim is handled at the call site).
             ast::Item::Import(_) => {}
             // Nested modules are already flattened by `all_items`.
             ast::Item::Module { .. } => {}
             other => {
                 return Err(ElabError::new(
-                    format!("item kind {} is outside the Increment-A subset", item_kind(other)),
+                    format!("item kind {} is outside the phase-0 subset", item_kind(other)),
                     item_span(other),
                 ));
             }
@@ -86,14 +103,20 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
         }
     }
 
-    Ok(Program { functions, structs: el.structs })
+    Ok(Program { functions, structs: el.structs, enums: el.enums, closures: el.closures })
 }
 
 #[derive(Default)]
 struct Elaborator {
     structs: Vec<StructDef>,
     struct_names: HashSet<String>,
+    enums: Vec<EnumDef>,
     func_names: HashSet<String>,
+    closures: Vec<ClosureDef>,
+    /// Local names bound anywhere in the CURRENT function (params + var decls +
+    /// for-vars). Used to distinguish a closure-value call (`f()`) from an
+    /// unknown-function error, and to compute closure capture sets.
+    local_names: HashSet<String>,
     gensym: usize,
 }
 
@@ -105,6 +128,16 @@ impl Elaborator {
     }
 
     fn elaborate_function(&mut self, fd: &ast::FunctionDef) -> ElabResult<Function> {
+        // Reset + populate the per-function local-name set (params + all bound
+        // names) so closure detection and capture computation are scoped.
+        self.local_names.clear();
+        for p in &fd.params {
+            self.local_names.insert(p.node.name.node.clone());
+        }
+        if let ast::FunctionBody::Block(block) = &fd.body {
+            collect_bound_names(block, &mut self.local_names);
+        }
+
         let mut params = Vec::with_capacity(fd.params.len());
         for p in &fd.params {
             if p.node.is_meta_op {
@@ -211,8 +244,12 @@ impl Elaborator {
                 self.desugar_for(pattern, *ownership, iterable, body, else_body.as_ref(), span)
             }
 
+            ast::Stmt::Match { scrutinee, arms, else_arm } => {
+                Ok(vec![self.elaborate_match_stmt(scrutinee, arms, else_arm.as_ref(), span)?])
+            }
+
             other => Err(ElabError::new(
-                format!("statement `{}` is outside the Increment-A subset", stmt_kind(other)),
+                format!("statement `{}` is outside the phase-0 subset", stmt_kind(other)),
                 span,
             )),
         }
@@ -250,13 +287,46 @@ impl Elaborator {
         span: Span,
     ) -> ElabResult<Vec<Stmt>> {
         if else_body.is_some() {
-            return Err(ElabError::new("`for ... else` is outside the A subset", span));
+            return Err(ElabError::new("`for ... else` is outside the phase-0 subset", span));
         }
         if ownership != ast::Ownership::Borrow {
-            // `for x in &coll` / `for x in !coll` (write-through / draining) is B.
-            return Err(ElabError::new("`for &`/`for !` iteration is Increment B", span));
+            // `for x in &coll` / `for x in !coll` (write-through / draining) is B2.
+            return Err(ElabError::new("`for &`/`for !` iteration is Increment B2", span));
         }
         let var = binding_name(pattern)?;
+
+        // `for i in a..b:` → a numeric `while` loop (the loop variable is a
+        // fresh int per iteration, not a Borrow view of an element).
+        if let ast::Expr::Range { start, end, inclusive } = &iterable.node {
+            let start_e = match start {
+                Some(e) => self.elaborate_expr(e)?,
+                None => Expr::Int(0),
+            };
+            let end_e = match end {
+                Some(e) => self.elaborate_expr(e)?,
+                None => return Err(ElabError::new("`for` over an open-ended range is unsupported", span)),
+            };
+            let cmp = if *inclusive { BinOp::LtEq } else { BinOp::Lt };
+            let mut while_body = self.elaborate_block(body)?;
+            while_body.push(Stmt::Assign {
+                target: Expr::Local(var.clone()),
+                value: Source::Value(Expr::Binary(
+                    BinOp::Add,
+                    Box::new(Expr::Local(var.clone())),
+                    Box::new(Expr::Int(1)),
+                )),
+                span,
+            });
+            return Ok(vec![
+                Stmt::Bind { name: var.clone(), source: Source::Value(start_e), span },
+                Stmt::While {
+                    cond: Expr::Binary(cmp, Box::new(Expr::Local(var)), Box::new(end_e)),
+                    body: while_body,
+                    span,
+                },
+            ]);
+        }
+
         let coll = self.fresh("coll");
         let idx = self.fresh("i");
 
@@ -388,10 +458,20 @@ impl Elaborator {
             ast::Expr::TupleFieldAccess { object, index } => {
                 Ok(Expr::TupleField(Box::new(self.elaborate_expr(object)?), *index))
             }
-            ast::Expr::Index { object, index } => Ok(Expr::Index(
-                Box::new(self.elaborate_expr(object)?),
-                Box::new(self.elaborate_expr(index)?),
-            )),
+            ast::Expr::Index { object, index } => {
+                // `s[a..b]` / `v[a..b]` → a `Slice`; `x[i]` → an `Index`.
+                if let ast::Expr::Range { start, end, inclusive } = &index.node {
+                    let object = Box::new(self.elaborate_expr(object)?);
+                    let start = self.opt_expr(start.as_deref())?;
+                    let end = self.opt_expr(end.as_deref())?;
+                    Ok(Expr::Slice { object, start, end, inclusive: *inclusive })
+                } else {
+                    Ok(Expr::Index(
+                        Box::new(self.elaborate_expr(object)?),
+                        Box::new(self.elaborate_expr(index)?),
+                    ))
+                }
+            }
 
             ast::Expr::BinaryOp { left, op, right } => Ok(Expr::Binary(
                 map_binop(*op, span)?,
@@ -439,8 +519,39 @@ impl Elaborator {
                 Ok(Expr::Construct { kind: ConstructKind::Struct(name.node.clone()), args: out })
             }
 
+            ast::Expr::NoneLiteral => Ok(enum_construct("Option", "None", Vec::new())),
+
+            ast::Expr::As { expr, type_ } => {
+                let inner = self.elaborate_expr(expr)?;
+                let target = cast_target(&type_.node, type_.span)?;
+                Ok(Expr::Cast { expr: Box::new(inner), target })
+            }
+
+            ast::Expr::Closure { is_async, params, body, .. } => {
+                self.elaborate_closure(*is_async, params, body, span)
+            }
+
+            ast::Expr::Match { scrutinee, arms, else_arm } => {
+                let scrut = self.elaborate_expr(scrutinee)?;
+                let mut ggc_arms = Vec::with_capacity(arms.len());
+                for arm in arms {
+                    if arm.guard.is_some() {
+                        return Err(ElabError::new("match guards are outside the phase-0 subset", arm.span));
+                    }
+                    ggc_arms.push(ExprArm {
+                        pattern: self.elaborate_pattern(&arm.pattern)?,
+                        body: self.elaborate_expr(&arm.body)?,
+                    });
+                }
+                let else_arm = match else_arm {
+                    Some(e) => Some(Box::new(self.elaborate_expr(e)?)),
+                    None => None,
+                };
+                Ok(Expr::Match { scrutinee: Box::new(scrut), arms: ggc_arms, else_arm, span })
+            }
+
             other => Err(ElabError::new(
-                format!("expression `{}` is outside the Increment-A subset", expr_kind(other)),
+                format!("expression `{}` is outside the phase-0 subset", expr_kind(other)),
                 span,
             )),
         }
@@ -484,29 +595,66 @@ impl Elaborator {
         callee: &Spanned<ast::Expr>,
         has_generic_args: bool,
         args: &[Spanned<ast::CallArg>],
-        span: Span,
+        _span: Span,
     ) -> ElabResult<Expr> {
+        // `None()` — the callee is a `NoneLiteral`, not an identifier.
+        if matches!(callee.node, ast::Expr::NoneLiteral) {
+            return Ok(enum_construct("Option", "None", Vec::new()));
+        }
         let ast::Expr::Identifier(name) = &callee.node else {
-            return Err(ElabError::new("only named callees are supported in A", callee.span));
+            return Err(ElabError::new("only named callees are supported in phase 0", callee.span));
         };
+        // `print(...)` in expression position (e.g. a closure body). In
+        // statement position it is lowered to `Stmt::Print` upstream.
         if name == "print" {
-            return Err(ElabError::new("`print` may only appear as a statement in A", span));
+            let mut out = Vec::with_capacity(args.len());
+            for a in args {
+                out.push(self.call_arg_source(&a.node)?);
+            }
+            return Ok(Expr::Call { func: "print".to_string(), args: out });
         }
-        // `Vector[T]()` — an empty (or literal-seeded) collection construct.
-        if name == "Vector" && has_generic_args {
+        // Prelude enum constructors: `Some(x)`, `None()`, `Ok(v)`, `Error(e)`.
+        if let Some(type_name) = prelude_enum_of(name) {
             let mut out = Vec::with_capacity(args.len());
             for a in args {
                 out.push(self.owning_source_from_arg(&a.node)?);
             }
-            return Ok(Expr::Construct { kind: ConstructKind::Vector, args: out });
+            return Ok(Expr::EnumConstruct { type_name: type_name.to_string(), variant: name.clone(), args: out });
         }
-        // Struct construction: `Res("x")`, `Person("Alice", 30)`.
+        // The `std.conv.int_to_str` shim intrinsic (§2.6 shim list).
+        if name == "int_to_str" && args.len() == 1 {
+            return Ok(Expr::IntToStr(Box::new(self.elaborate_expr(&args[0].node.value)?)));
+        }
+        // Collection constructors: `Vector[T]()`, `Dict[K,V]()`, `Set[T]()`.
+        if has_generic_args {
+            if let Some(kind) = collection_ctor_kind(name) {
+                let mut out = Vec::with_capacity(args.len());
+                for a in args {
+                    out.push(self.owning_source_from_arg(&a.node)?);
+                }
+                return Ok(Expr::Construct { kind, args: out });
+            }
+        }
+        // User-enum variant constructor spelled bare (rare): `Variant(args)`.
+        if let Some(type_name) = self.user_enum_of_variant(name) {
+            let mut out = Vec::with_capacity(args.len());
+            for a in args {
+                out.push(self.owning_source_from_arg(&a.node)?);
+            }
+            return Ok(Expr::EnumConstruct { type_name, variant: name.clone(), args: out });
+        }
+        // Struct construction: `Res("x")`, `Person("Alice", 30)`, `Point(x=1, y=2)`.
         if self.struct_names.contains(name) {
+            let out = self.struct_ctor_args(name, args)?;
+            return Ok(Expr::Construct { kind: ConstructKind::Struct(name.clone()), args: out });
+        }
+        // A first-class closure value stored in a local: `f()`, `grow()`.
+        if self.local_names.contains(name) && !self.func_names.contains(name) {
             let mut out = Vec::with_capacity(args.len());
             for a in args {
-                out.push(self.owning_source_from_arg(&a.node)?);
+                out.push(self.call_arg_source(&a.node)?);
             }
-            return Ok(Expr::Construct { kind: ConstructKind::Struct(name.clone()), args: out });
+            return Ok(Expr::CallValue { callee: Box::new(Expr::Local(name.clone())), args: out });
         }
         // Ordinary function call.
         if self.func_names.contains(name) {
@@ -517,9 +665,71 @@ impl Elaborator {
             return Ok(Expr::Call { func: name.clone(), args: out });
         }
         Err(ElabError::new(
-            format!("unresolved callee `{name}` (unknown function/struct; may need Increment B)"),
+            format!("unresolved callee `{name}` (unknown function/struct/enum; may need Increment B2)"),
             callee.span,
         ))
+    }
+
+    /// Elaborate struct-construction args, honouring named args (`Point(x=1,
+    /// y=2)`): reorder to the struct's declaration order.
+    fn struct_ctor_args(
+        &mut self,
+        struct_name: &str,
+        args: &[Spanned<ast::CallArg>],
+    ) -> ElabResult<Vec<Source>> {
+        let any_named = args.iter().any(|a| a.node.name.is_some());
+        if !any_named {
+            let mut out = Vec::with_capacity(args.len());
+            for a in args {
+                out.push(self.owning_source_from_arg(&a.node)?);
+            }
+            return Ok(out);
+        }
+        let field_order: Vec<String> = self
+            .structs
+            .iter()
+            .find(|s| s.name == struct_name)
+            .map(|s| s.fields.clone())
+            .unwrap_or_default();
+        let mut by_name: Vec<(String, Source)> = Vec::with_capacity(args.len());
+        for a in args {
+            let name = a
+                .node
+                .name
+                .as_ref()
+                .ok_or_else(|| ElabError::new("mixed positional/named struct args are unsupported", a.span))?
+                .node
+                .clone();
+            by_name.push((name, self.owning_source_from_arg(&a.node)?));
+        }
+        let mut out = Vec::with_capacity(field_order.len());
+        for f in &field_order {
+            let pos = by_name
+                .iter()
+                .position(|(n, _)| n == f)
+                .ok_or_else(|| ElabError::new(format!("missing field `{f}` in `{struct_name}(...)`"), args[0].span))?;
+            out.push(by_name.remove(pos).1);
+        }
+        Ok(out)
+    }
+
+    /// The enum a user-declared variant belongs to (for bare-spelled ctors).
+    fn user_enum_of_variant(&self, variant: &str) -> Option<String> {
+        self.enums
+            .iter()
+            .find(|e| e.variants.iter().any(|(v, _)| v == variant))
+            .map(|e| e.name.clone())
+    }
+
+    /// The arity of `variant` in enum `type_name`, if that enum exists.
+    fn enum_variant_arity(&self, type_name: &str, variant: &str) -> Option<usize> {
+        self.enums
+            .iter()
+            .find(|e| e.name == type_name)?
+            .variants
+            .iter()
+            .find(|(v, _)| v == variant)
+            .map(|(_, a)| *a)
     }
 
     fn elaborate_method(
@@ -529,52 +739,375 @@ impl Elaborator {
         args: &[Spanned<ast::CallArg>],
         span: Span,
     ) -> ElabResult<Expr> {
+        // Enum-variant construction is parsed as a method call on the type name
+        // (`Token.Ident("x")` → MethodCall{ recv: Token, method: Ident }).
+        if let ast::Expr::Identifier(type_name) = &receiver.node {
+            if let Some(arity) = self.enum_variant_arity(type_name, method) {
+                if arity != args.len() {
+                    return Err(ElabError::new(
+                        format!("variant `{type_name}.{method}` expects {arity} field(s), got {}", args.len()),
+                        span,
+                    ));
+                }
+                let mut out = Vec::with_capacity(args.len());
+                for a in args {
+                    out.push(self.owning_source_from_arg(&a.node)?);
+                }
+                return Ok(Expr::EnumConstruct {
+                    type_name: type_name.clone(),
+                    variant: method.to_string(),
+                    args: out,
+                });
+            }
+        }
+
         let recv = Box::new(self.elaborate_expr(receiver)?);
-        match method {
-            "push" => {
-                if args.len() != 1 {
-                    return Err(ElabError::new("`.push` takes 1 arg", span));
-                }
-                Ok(Expr::Method {
-                    recv,
-                    method: BuiltinMethod::Push,
-                    args: vec![self.owning_source_from_arg(&args[0].node)?],
-                })
-            }
-            "set" => {
-                if args.len() != 2 {
-                    return Err(ElabError::new("`.set` takes 2 args", span));
-                }
-                Ok(Expr::Method {
-                    recv,
-                    method: BuiltinMethod::Set,
-                    args: vec![
-                        self.owning_source_from_arg(&args[0].node)?,
-                        self.owning_source_from_arg(&args[1].node)?,
-                    ],
-                })
-            }
-            "len" => {
-                if !args.is_empty() {
-                    return Err(ElabError::new("`.len` takes no args", span));
-                }
-                Ok(Expr::Method { recv, method: BuiltinMethod::Len, args: Vec::new() })
-            }
+        // `(method, expected-arg-count)` for the fixed-arity builtins.
+        let (bm, argn): (BuiltinMethod, Option<usize>) = match method {
+            "push" => (BuiltinMethod::Push, Some(1)),
+            "set" | "put" => (BuiltinMethod::Set, Some(2)),
+            "len" => (BuiltinMethod::Len, Some(0)),
+            "get" => (BuiltinMethod::Get, Some(1)),
+            "unwrap" => (BuiltinMethod::Unwrap, Some(0)),
+            "unwrap_or" => (BuiltinMethod::UnwrapOr, Some(1)),
+            "pop" => (BuiltinMethod::Pop, Some(0)),
+            "clear" => (BuiltinMethod::Clear, Some(0)),
+            "fill" => (BuiltinMethod::Fill, Some(2)),
+            "add" => (BuiltinMethod::Add, Some(1)),
+            "trim" => (BuiltinMethod::Trim, Some(0)),
+            "substring" => (BuiltinMethod::Substring, Some(2)),
             "clone" => {
                 if !args.is_empty() {
                     return Err(ElabError::new("`.clone` takes no args", span));
                 }
-                Ok(Expr::Clone(recv))
+                return Ok(Expr::Clone(recv));
             }
-            other => Err(ElabError::new(
-                format!("method `.{other}()` is outside the Increment-A subset (may need Increment B)"),
-                span,
-            )),
+            other => {
+                return Err(ElabError::new(
+                    format!("method `.{other}()` is outside the phase-0 subset (may need Increment B2)"),
+                    span,
+                ));
+            }
+        };
+        if let Some(n) = argn {
+            if args.len() != n {
+                return Err(ElabError::new(format!("`.{method}` takes {n} arg(s)"), span));
+            }
+        }
+        let mut out = Vec::with_capacity(args.len());
+        for a in args {
+            out.push(self.owning_source_from_arg(&a.node)?);
+        }
+        Ok(Expr::Method { recv, method: bm, args: out })
+    }
+
+    /// Elaborate a `match` in statement position (arm bodies are blocks).
+    fn elaborate_match_stmt(
+        &mut self,
+        scrutinee: &Spanned<ast::Expr>,
+        arms: &[ast::MatchItem],
+        else_arm: Option<&ast::Block>,
+        span: Span,
+    ) -> ElabResult<Stmt> {
+        let scrut = self.elaborate_expr(scrutinee)?;
+        let mut out_arms = Vec::with_capacity(arms.len());
+        for item in arms {
+            let arm = item
+                .arm()
+                .ok_or_else(|| ElabError::new("`meta for` match arms are phase 2", span))?;
+            if arm.guard.is_some() {
+                return Err(ElabError::new("match guards are outside the phase-0 subset", arm.span));
+            }
+            out_arms.push(StmtArm {
+                pattern: self.elaborate_pattern(&arm.pattern)?,
+                body: self.arm_body_block(&arm.body)?,
+            });
+        }
+        let else_ = match else_arm {
+            Some(b) => Some(self.elaborate_block(b)?),
+            None => None,
+        };
+        Ok(Stmt::Match { scrutinee: scrut, arms: out_arms, else_arm: else_, span })
+    }
+
+    /// A statement-match arm body: a block, or a single expression treated as
+    /// a statement (so `case 0: print("x")` lowers to a `Print`).
+    fn arm_body_block(&mut self, body: &Spanned<ast::Expr>) -> ElabResult<Vec<Stmt>> {
+        if let ast::Expr::Block(b) = &body.node {
+            return self.elaborate_block(b);
+        }
+        if let Some(arg) = as_print_call(body) {
+            return Ok(vec![Stmt::Print { expr: self.elaborate_expr(arg)?, span: body.span }]);
+        }
+        Ok(vec![Stmt::Expr { expr: self.elaborate_expr(body)?, span: body.span }])
+    }
+
+    fn elaborate_pattern(&mut self, pat: &Spanned<ast::Pattern>) -> ElabResult<Pattern> {
+        match &pat.node {
+            ast::Pattern::Wildcard => Ok(Pattern::Wildcard),
+            ast::Pattern::Binding(name) => Ok(Pattern::Binding(name.clone())),
+            ast::Pattern::Literal(e) => Ok(Pattern::Literal(Box::new(self.elaborate_expr(e)?))),
+            ast::Pattern::Constructor { path, fields } => {
+                let variant = path
+                    .last()
+                    .ok_or_else(|| ElabError::new("empty constructor path", pat.span))?
+                    .node
+                    .clone();
+                let mut fs = Vec::with_capacity(fields.len());
+                for f in fields {
+                    fs.push(self.elaborate_pattern(f)?);
+                }
+                Ok(Pattern::Variant { variant, fields: fs })
+            }
+            ast::Pattern::DotShorthand { variant, fields } => {
+                let mut fs = Vec::with_capacity(fields.len());
+                for f in fields {
+                    fs.push(self.elaborate_pattern(f)?);
+                }
+                Ok(Pattern::Variant { variant: variant.node.clone(), fields: fs })
+            }
+            _ => Err(ElabError::new("pattern shape is outside the phase-0 subset", pat.span)),
+        }
+    }
+
+    /// Elaborate a bare (by-value) closure into `Program.closures`, computing
+    /// its capture set (free enclosing-locals referenced in the body).
+    fn elaborate_closure(
+        &mut self,
+        is_async: bool,
+        params: &[Spanned<ast::ClosureParam>],
+        body: &Spanned<ast::Expr>,
+        span: Span,
+    ) -> ElabResult<Expr> {
+        if is_async {
+            return Err(ElabError::new("async closures are phase 3", span));
+        }
+        let mut cparams = Vec::with_capacity(params.len());
+        for p in params {
+            if p.node.destructure.is_some() {
+                return Err(ElabError::new("closure param destructuring is outside phase 0", p.span));
+            }
+            cparams.push(Param {
+                name: p.node.name.node.clone(),
+                mode: mode_of(p.node.ownership),
+                span: p.span,
+            });
+        }
+        let cbody = self.elaborate_expr(body)?;
+        // Capture set: enclosing locals referenced in the body, minus the
+        // closure's own params. Deterministic order (sorted).
+        let mut used = HashSet::new();
+        collect_expr_locals(&cbody, &self.closures, &mut used);
+        let cparam_names: HashSet<String> = cparams.iter().map(|p| p.name.clone()).collect();
+        let mut captures: Vec<String> = self
+            .local_names
+            .iter()
+            .filter(|n| used.contains(*n) && !cparam_names.contains(*n))
+            .cloned()
+            .collect();
+        captures.sort();
+        let id = self.closures.len();
+        self.closures.push(ClosureDef { params: cparams, captures, body: cbody, span });
+        Ok(Expr::Closure(id))
+    }
+
+    /// Elaborate an optional sub-expression (range endpoints), boxing it.
+    fn opt_expr(&mut self, e: Option<&Spanned<ast::Expr>>) -> ElabResult<Option<Box<Expr>>> {
+        match e {
+            Some(e) => Ok(Some(Box::new(self.elaborate_expr(e)?))),
+            None => Ok(None),
         }
     }
 }
 
 // ── Small helpers ──────────────────────────────────────────────────────────
+
+/// Build an `EnumConstruct` expression.
+fn enum_construct(type_name: &str, variant: &str, args: Vec<Source>) -> Expr {
+    Expr::EnumConstruct { type_name: type_name.to_string(), variant: variant.to_string(), args }
+}
+
+/// The prelude enum a bare constructor name belongs to (`Some`/`None` →
+/// `Option`, `Ok`/`Error` → `Result`).
+fn prelude_enum_of(name: &str) -> Option<&'static str> {
+    match name {
+        "Some" | "None" => Some("Option"),
+        "Ok" | "Error" => Some("Result"),
+        _ => None,
+    }
+}
+
+/// The construct kind for a generic collection constructor call.
+fn collection_ctor_kind(name: &str) -> Option<ConstructKind> {
+    match name {
+        "Vector" => Some(ConstructKind::Vector),
+        "Dict" | "HashMap" => Some(ConstructKind::Dict),
+        "Set" | "HashSet" => Some(ConstructKind::Set),
+        _ => None,
+    }
+}
+
+/// Map a surface type to an `as`-cast target (unit-tested only).
+fn cast_target(ty: &ast::Type, span: Span) -> ElabResult<CastTarget> {
+    use gorget::parser::ast::PrimitiveType as P;
+    let ast::Type::Primitive(p) = ty else {
+        return Err(ElabError::new("`as`-cast target must be a numeric primitive", span));
+    };
+    Ok(match p {
+        P::Int8 => CastTarget::Int { bits: 8, signed: true },
+        P::Int16 => CastTarget::Int { bits: 16, signed: true },
+        P::Int32 => CastTarget::Int { bits: 32, signed: true },
+        P::Int | P::Int64 => CastTarget::Int { bits: 64, signed: true },
+        P::Uint8 => CastTarget::Int { bits: 8, signed: false },
+        P::Uint16 => CastTarget::Int { bits: 16, signed: false },
+        P::Uint32 => CastTarget::Int { bits: 32, signed: false },
+        P::Uint | P::Uint64 => CastTarget::Int { bits: 64, signed: false },
+        P::Float32 => CastTarget::Float32,
+        P::Float | P::Float64 => CastTarget::Float64,
+        _ => return Err(ElabError::new("`as`-cast target must be a numeric primitive", span)),
+    })
+}
+
+/// Pre-pass: collect every name bound (var decls, for-vars) in a block, for the
+/// per-function local-name set. Recurses through nested blocks.
+fn collect_bound_names(block: &ast::Block, out: &mut HashSet<String>) {
+    for stmt in &block.stmts {
+        collect_stmt_bound_names(&stmt.node, out);
+    }
+}
+
+fn collect_stmt_bound_names(stmt: &ast::Stmt, out: &mut HashSet<String>) {
+    match stmt {
+        ast::Stmt::VarDecl { pattern, .. } => pattern_names(&pattern.node, out),
+        ast::Stmt::If { then_body, elif_branches, else_body, .. } => {
+            collect_bound_names(then_body, out);
+            for (_, b) in elif_branches {
+                collect_bound_names(b, out);
+            }
+            if let Some(b) = else_body {
+                collect_bound_names(b, out);
+            }
+        }
+        ast::Stmt::While { body, .. } | ast::Stmt::Loop { body } => collect_bound_names(body, out),
+        ast::Stmt::For { pattern, body, .. } => {
+            pattern_names(&pattern.node, out);
+            collect_bound_names(body, out);
+        }
+        ast::Stmt::Match { arms, else_arm, .. } => {
+            for item in arms {
+                if let Some(arm) = item.arm() {
+                    if let ast::Expr::Block(b) = &arm.body.node {
+                        collect_bound_names(b, out);
+                    }
+                }
+            }
+            if let Some(b) = else_arm {
+                collect_bound_names(b, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn pattern_names(pat: &ast::Pattern, out: &mut HashSet<String>) {
+    match pat {
+        ast::Pattern::Binding(n) => {
+            out.insert(n.clone());
+        }
+        ast::Pattern::Tuple(ps) => {
+            for p in ps {
+                pattern_names(&p.node, out);
+            }
+        }
+        ast::Pattern::Constructor { fields, .. } | ast::Pattern::DotShorthand { fields, .. } => {
+            for f in fields {
+                pattern_names(&f.node, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect the local names referenced in a GGC expression (for closure capture
+/// sets). Recurses through sub-expressions and sources; a nested closure
+/// contributes its own (already-computed) capture names transitively.
+fn collect_expr_locals(e: &Expr, closures: &[ClosureDef], out: &mut HashSet<String>) {
+    match e {
+        Expr::Local(n) => {
+            out.insert(n.clone());
+        }
+        Expr::Int(_) | Expr::Bool(_) | Expr::Float(_) | Expr::Str(_) => {}
+        Expr::FString(parts) => {
+            for p in parts {
+                if let FPart::Interp(e) = p {
+                    collect_expr_locals(e, closures, out);
+                }
+            }
+        }
+        Expr::Field(o, _) | Expr::TupleField(o, _) => collect_expr_locals(o, closures, out),
+        Expr::Index(o, i) => {
+            collect_expr_locals(o, closures, out);
+            collect_expr_locals(i, closures, out);
+        }
+        Expr::Slice { object, start, end, .. } => {
+            collect_expr_locals(object, closures, out);
+            if let Some(s) = start {
+                collect_expr_locals(s, closures, out);
+            }
+            if let Some(en) = end {
+                collect_expr_locals(en, closures, out);
+            }
+        }
+        Expr::Binary(_, l, r) => {
+            collect_expr_locals(l, closures, out);
+            collect_expr_locals(r, closures, out);
+        }
+        Expr::Unary(_, e) | Expr::Cast { expr: e, .. } | Expr::IntToStr(e) | Expr::Clone(e) => {
+            collect_expr_locals(e, closures, out)
+        }
+        Expr::Call { args, .. } | Expr::Construct { args, .. } | Expr::EnumConstruct { args, .. } => {
+            for a in args {
+                collect_source_locals(a, closures, out);
+            }
+        }
+        Expr::CallValue { callee, args } => {
+            collect_expr_locals(callee, closures, out);
+            for a in args {
+                collect_source_locals(a, closures, out);
+            }
+        }
+        Expr::Method { recv, args, .. } => {
+            collect_expr_locals(recv, closures, out);
+            for a in args {
+                collect_source_locals(a, closures, out);
+            }
+        }
+        Expr::Closure(id) => {
+            for c in &closures[*id].captures {
+                out.insert(c.clone());
+            }
+        }
+        Expr::Match { scrutinee, arms, else_arm, .. } => {
+            collect_expr_locals(scrutinee, closures, out);
+            for a in arms {
+                collect_expr_locals(&a.body, closures, out);
+            }
+            if let Some(e) = else_arm {
+                collect_expr_locals(e, closures, out);
+            }
+        }
+    }
+}
+
+fn collect_source_locals(s: &Source, closures: &[ClosureDef], out: &mut HashSet<String>) {
+    match s {
+        Source::Copy(e)
+        | Source::Move(e)
+        | Source::BorrowView(e)
+        | Source::WriteThrough(e)
+        | Source::Value(e) => collect_expr_locals(e, closures, out),
+    }
+}
 
 fn mode_of(o: ast::Ownership) -> crate::ggc::Mode {
     match o {
@@ -589,9 +1122,13 @@ fn mode_of(o: ast::Ownership) -> crate::ggc::Mode {
 fn ast_is_place(e: &ast::Expr) -> bool {
     match e {
         ast::Expr::Identifier(_) | ast::Expr::SelfExpr => true,
-        ast::Expr::FieldAccess { object, .. }
-        | ast::Expr::TupleFieldAccess { object, .. }
-        | ast::Expr::Index { object, .. } => ast_is_place(&object.node),
+        ast::Expr::FieldAccess { object, .. } | ast::Expr::TupleFieldAccess { object, .. } => {
+            ast_is_place(&object.node)
+        }
+        // `x[i]` is a place, but `x[a..b]` (a slice) is a fresh value.
+        ast::Expr::Index { object, index } => {
+            !matches!(index.node, ast::Expr::Range { .. }) && ast_is_place(&object.node)
+        }
         _ => false,
     }
 }

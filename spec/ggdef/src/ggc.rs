@@ -2,19 +2,32 @@
 //! (RFC §2.1). The production surface AST elaborates *into* this (see
 //! `elaborate`); `eval` walks only GGC, never the surface AST.
 //!
-//! This is the Increment-A subset: int64/bool/float64 scalars, `String`,
-//! `Vector`, structs, tuples; the three mode tags; and the operations the
-//! first ~20 `cow_*` fixtures use. The full sized-int matrix, `Dict`/`Set`,
-//! enums/`match`, `equip`, ranges and closures are Increment B/C.
+//! This is the Increment-B1 subset: it extends Increment A (int64/bool/float64
+//! scalars, `String`, `Vector`, structs, tuples; the three mode tags; and the
+//! first ~20 `cow_*` fixtures' operations) with the **non-equip** phase-0
+//! surface:
+//!   * Option/Result (ordinary enums) + `.get()`/`.unwrap()`/`.unwrap_or()`;
+//!   * user payload enums + `match` + pattern bindings (Borrow-mode; a new
+//!     `Proj::Payload` at the eval layer);
+//!   * `Dict`/`Set` (insertion-ordered);
+//!   * ranges/string slices `s[a..b]`; named-arg construction;
+//!   * the full corpus builtin-method set (`push`/`set`/`len`/`get`/`unwrap`/
+//!     `unwrap_or`/`pop`/`clear`/`fill`/`add`/`trim`/`substring`);
+//!   * sized-int `as`-cast saturation (unit-tested only);
+//!   * by-value closures + the `std.conv.int_to_str` shim.
+//!
+//! `equip`/`Drop`/receiver-type-inference/D4-rejections stay Increment B2.
 
 use gorget::span::Span;
 
-/// A whole GGC program: the functions plus the struct field layouts needed to
-/// construct/read struct values by name.
+/// A whole GGC program: the functions plus the struct field layouts, enum
+/// variant arities, and closure definitions needed to construct/read values.
 #[derive(Debug, Clone)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
+    pub closures: Vec<ClosureDef>,
 }
 
 /// A struct's field names, in declaration order (the ctor is positional).
@@ -22,6 +35,28 @@ pub struct Program {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<String>,
+}
+
+/// A user enum's variants, each with its payload arity (positional).
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<(String, usize)>,
+}
+
+/// A closure definition (RFC §2.1: "a closure value = code ref + environment
+/// record"). Elaboration lifts every surface closure into `Program.closures`
+/// and refers to it by index; the environment (`captured`) is built at the
+/// creation site from `captures` (D5: capture-by-value at creation).
+#[derive(Debug, Clone)]
+pub struct ClosureDef {
+    pub params: Vec<Param>,
+    /// Free variables captured by value at the closure's creation site.
+    pub captures: Vec<String>,
+    /// The closure body is a single expression (surface closures always have
+    /// expression bodies; a block body is `Expr::Block` on the surface).
+    pub body: Expr,
+    pub span: Span,
 }
 
 /// A GGC function.
@@ -69,9 +104,40 @@ pub enum Stmt {
     If { cond: Expr, then_: Block, else_: Block, span: Span },
     While { cond: Expr, body: Block, span: Span },
     Loop { body: Block, span: Span },
+    /// `match <scrutinee>:` in statement position — each arm body is a block.
+    Match { scrutinee: Expr, arms: Vec<StmtArm>, else_arm: Option<Block>, span: Span },
     Return { value: Option<Expr>, span: Span },
     Break { span: Span },
     Continue { span: Span },
+}
+
+/// A `match`-statement arm: a pattern and a statement block body.
+#[derive(Debug, Clone)]
+pub struct StmtArm {
+    pub pattern: Pattern,
+    pub body: Block,
+}
+
+/// A `match`-expression arm: a pattern and a value-producing expression body.
+#[derive(Debug, Clone)]
+pub struct ExprArm {
+    pub pattern: Pattern,
+    pub body: Expr,
+}
+
+/// A GGC pattern. Bindings introduced by a pattern are Borrow-mode views into
+/// the scrutinee (RFC §2.2), reached via `Proj::Payload` at the eval layer.
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    /// `_` — matches anything, binds nothing.
+    Wildcard,
+    /// A literal to compare by value (`case 0:`, `case "seven":`).
+    Literal(Box<Expr>),
+    /// A bare name — matches anything, binds the whole scrutinee.
+    Binding(String),
+    /// An enum-variant destructure (`Token.Ident(s)`, `Some(x)`). Matches an
+    /// `Enum` value with the same variant + arity; sub-patterns bind payloads.
+    Variant { variant: String, fields: Vec<Pattern> },
 }
 
 /// A value-or-alias operand with its ownership discipline. This is how the
@@ -104,17 +170,48 @@ pub enum ConstructKind {
     Struct(String),
     Vector,
     Tuple,
+    Dict,
+    Set,
 }
 
-/// The builtin collection/string methods the Increment-A fixtures use.
+/// The builtin collection/string methods the phase-0 fixtures use. Several are
+/// overloaded across receiver types (e.g. `.get`/`.set`/`.len` on Vector vs
+/// Dict vs String) and dispatch on the runtime receiver value at eval time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinMethod {
-    /// `v.push(x)` — append (a collection-put, so the arg is an owning copy/move).
+    /// `v.push(x)` — append (a collection-put: the arg is an owning copy/move).
     Push,
-    /// `v.set(i, x)` — replace element `i`.
+    /// `v.set(i, x)` (Vector) / `d.set(k, v)` (Dict) — replace/insert.
     Set,
-    /// `v.len()` — element count (a read).
+    /// `v.len()` — element/codepoint count (a read).
     Len,
+    /// `v.get(i)` (Vector) / `d.get(k)` (Dict) — read → `Option`.
+    Get,
+    /// `o.unwrap()` — extract Some/Ok payload; Trap on None/Error.
+    Unwrap,
+    /// `o.unwrap_or(default)` — payload or the default.
+    UnwrapOr,
+    /// `v.pop()` — remove+return last → `Option` (mutates).
+    Pop,
+    /// `v.clear()` — remove all elements (mutates).
+    Clear,
+    /// `v.fill(n, x)` — replace contents with `n` copies of `x` (mutates).
+    Fill,
+    /// `s.add(x)` — Set insert if absent (mutates).
+    Add,
+    /// `s.trim()` — String, trailing/leading whitespace removed (→ new String).
+    Trim,
+    /// `s.substring(a, b)` — String codepoint slice `[a, b)` (→ new String).
+    Substring,
+}
+
+/// The target of an `as`-cast (unit-tested only — no phase-0 corpus fixture).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CastTarget {
+    /// A sized integer: `(bits, signed)`. `int`==(64,true), `byte`==(8,false).
+    Int { bits: u32, signed: bool },
+    Float32,
+    Float64,
 }
 
 /// A GGC expression.
@@ -132,15 +229,29 @@ pub enum Expr {
     Field(Box<Expr>, String),
     TupleField(Box<Expr>, usize),
     Index(Box<Expr>, Box<Expr>),
+    /// `s[a..b]` codepoint/element slice (`start`/`end` optional, open ends).
+    Slice { object: Box<Expr>, start: Option<Box<Expr>>, end: Option<Box<Expr>>, inclusive: bool },
 
     // ── Pure operators ──
     Binary(BinOp, Box<Expr>, Box<Expr>),
     Unary(UnOp, Box<Expr>),
+    /// `expr as T` — sized-int / float cast (saturating float→int).
+    Cast { expr: Box<Expr>, target: CastTarget },
 
     // ── Value producers ──
     Call { func: String, args: Vec<Source> },
+    /// A call of a first-class closure value (`f()` where `f` is a local).
+    CallValue { callee: Box<Expr>, args: Vec<Source> },
     Construct { kind: ConstructKind, args: Vec<Source> },
+    /// An enum variant value (`Some(x)`, `None`, `Ok(v)`, `Token.Ident(s)`).
+    EnumConstruct { type_name: String, variant: String, args: Vec<Source> },
     Method { recv: Box<Expr>, method: BuiltinMethod, args: Vec<Source> },
+    /// A closure value: index into `Program.closures`. Captures resolve at eval.
+    Closure(usize),
+    /// A `match` in expression position — each arm body yields a value.
+    Match { scrutinee: Box<Expr>, arms: Vec<ExprArm>, else_arm: Option<Box<Expr>>, span: Span },
+    /// The `std.conv.int_to_str` shim intrinsic.
+    IntToStr(Box<Expr>),
     /// An explicit `.clone()` deep copy of a place (emits `ExplicitClone`).
     Clone(Box<Expr>),
 }
@@ -173,7 +284,7 @@ impl Expr {
     }
 }
 
-/// The binary operators the A subset needs.
+/// The binary operators the subset needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Add,
@@ -191,7 +302,7 @@ pub enum BinOp {
     Or,
 }
 
-/// The unary operators the A subset needs.
+/// The unary operators the subset needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnOp {
     Neg,
@@ -210,6 +321,14 @@ pub enum Value {
     Vector(Vec<Value>),
     Tuple(Vec<Value>),
     Struct { name: String, fields: Vec<(String, Value)> },
+    /// An enum value (Option/Result/user enums are all ordinary enums).
+    Enum { type_name: String, variant: String, payload: Vec<Value> },
+    /// An insertion-ordered map (Dict). Keys compared by value equality.
+    Dict(Vec<(Value, Value)>),
+    /// An insertion-ordered set (Set). Elements compared by value equality.
+    Set(Vec<Value>),
+    /// A first-class closure: a code ref (`def`) + its captured environment.
+    Closure { def: usize, captured: Vec<(String, Value)> },
 }
 
 impl Value {
@@ -224,6 +343,10 @@ impl Value {
             Value::Vector(_) => "Vector",
             Value::Tuple(_) => "tuple",
             Value::Struct { .. } => "struct",
+            Value::Enum { .. } => "enum",
+            Value::Dict(_) => "Dict",
+            Value::Set(_) => "Set",
+            Value::Closure { .. } => "closure",
         }
     }
 }

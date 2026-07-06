@@ -31,7 +31,8 @@ use std::collections::HashMap;
 use gorget::span::Span;
 
 use crate::ggc::{
-    BinOp, BuiltinMethod, ConstructKind, Expr, FPart, Function, Program, Source, Stmt, UnOp, Value,
+    BinOp, BuiltinMethod, CastTarget, ClosureDef, ConstructKind, Expr, ExprArm, FPart, Function,
+    Pattern, Program, Source, Stmt, StmtArm, UnOp, Value,
 };
 use crate::trace::TraceEvent;
 
@@ -47,20 +48,23 @@ pub const EXIT_ILLFORMED: i32 = 102;
 /// The fuel bound was reached (non-termination guard).
 pub const EXIT_FUEL: i32 = 103;
 
-/// A catchable fault (RFC §2.3 Trap(Fault)).
+/// A catchable fault (RFC §2.3 Trap(Fault)). `Panic` is the normalized
+/// uncaught-panic shape — an `.unwrap()` on `None`/`Error`, or `assert`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
     Overflow,
     DivByZero,
     Bounds,
+    Panic(String),
 }
 
 impl Fault {
-    pub fn message(&self) -> &'static str {
+    pub fn message(&self) -> &str {
         match self {
             Fault::Overflow => "arithmetic overflow",
             Fault::DivByZero => "division by zero",
             Fault::Bounds => "index out of bounds",
+            Fault::Panic(m) => m,
         }
     }
 }
@@ -109,6 +113,8 @@ enum Flow {
 enum Proj {
     Field(String),
     Index(usize),
+    /// The i-th payload slot of an `Enum` value (a `match` pattern binding).
+    Payload(usize),
 }
 
 /// A storage location: a local in a frame, plus a projection path.
@@ -200,6 +206,10 @@ impl<'a> Ctx<'a> {
     fn struct_fields(&self, name: &str) -> Option<&'a [String]> {
         self.structs.get(name).map(|&i| self.prog.structs[i].fields.as_slice())
     }
+
+    fn closure(&self, idx: usize) -> &'a ClosureDef {
+        &self.prog.closures[idx]
+    }
 }
 
 /// The result of a whole run: the outcome, the observable stdout, and the
@@ -290,7 +300,9 @@ fn drop_scope(state: &mut State, mark: usize) {
     state.frames[frame].locals.truncate(mark);
 }
 
-/// Non-scalar values carry a (possibly custom, in B) drop. Scalars are `Copy`.
+/// Non-scalar values carry a (possibly custom, in B2) drop. Scalars are
+/// `Copy`. A closure's captured environment carries drops too, but no phase-0
+/// fixture observes a closure drop, so it is treated uniformly here.
 fn is_droppable(v: &Value) -> bool {
     !matches!(v, Value::Unit | Value::Int(_) | Value::Bool(_) | Value::Float(_))
 }
@@ -374,6 +386,10 @@ fn exec_stmt(ctx: &Ctx, state: &mut State, stmt: &Stmt) -> Result<Flow, Halt> {
                 Flow::Return(v) => return Ok(Flow::Return(v)),
             }
         },
+        Stmt::Match { scrutinee, arms, else_arm, span } => {
+            state.cur_span = *span;
+            exec_match_stmt(ctx, state, scrutinee, arms, else_arm.as_deref())
+        }
         Stmt::Return { value, span } => {
             state.cur_span = *span;
             let v = match value {
@@ -439,8 +455,13 @@ fn eval_source_to_value(ctx: &Ctx, state: &mut State, source: &Source, span: Spa
             Ok(v)
         }
         Source::Value(expr) => eval_expr(ctx, state, expr),
-        Source::BorrowView(_) | Source::WriteThrough(_) => {
-            Err(Halt::IllFormed("internal: alias source in an owning position".to_string()))
+        // A borrow/write-through source in a value position is a READ (a
+        // copy-out of the aliased place) — this reaches here only from the
+        // `print(...)`-as-expression / closure-argument paths, where the arg is
+        // formatted/consumed by value.
+        Source::BorrowView(place) | Source::WriteThrough(place) => {
+            let p = eval_place(ctx, state, place)?;
+            resolve_read(ctx, state, &p)
         }
     }
 }
@@ -565,7 +586,7 @@ fn resolve_write(ctx: &Ctx, state: &mut State, place: &Place, newval: Value, spa
 
 fn navigate_read(v: &Value, proj: &[Proj]) -> Result<Value, Halt> {
     let mut cur = v;
-    for p in proj {
+    for (k, p) in proj.iter().enumerate() {
         cur = match (cur, p) {
             (Value::Struct { fields, .. }, Proj::Field(name)) => fields
                 .iter()
@@ -574,6 +595,16 @@ fn navigate_read(v: &Value, proj: &[Proj]) -> Result<Value, Halt> {
                 .ok_or_else(|| Halt::IllFormed(format!("no field `{name}`")))?,
             (Value::Vector(items), Proj::Index(i)) | (Value::Tuple(items), Proj::Index(i)) => {
                 items.get(*i).ok_or(Halt::Trap(Fault::Bounds))?
+            }
+            (Value::Enum { payload, .. }, Proj::Payload(i)) => {
+                payload.get(*i).ok_or_else(|| Halt::IllFormed("bad payload projection".to_string()))?
+            }
+            // A String codepoint read (`s[i]`, `for c in s`): fresh 1-char
+            // value, so it terminates the projection walk (a `str` is not a
+            // place you can project further into).
+            (Value::Str(s), Proj::Index(i)) => {
+                let ch = str_codepoint(s, *i).ok_or(Halt::Trap(Fault::Bounds))?;
+                return navigate_read(&Value::Str(ch), &proj[k + 1..]);
             }
             (other, p) => {
                 return Err(Halt::IllFormed(format!(
@@ -584,6 +615,12 @@ fn navigate_read(v: &Value, proj: &[Proj]) -> Result<Value, Halt> {
         };
     }
     Ok(cur.clone())
+}
+
+/// The i-th codepoint of `s` as a fresh 1-char `String`, or `None` if out of
+/// range (negative or past the end).
+fn str_codepoint(s: &str, i: usize) -> Option<String> {
+    s.chars().nth(i).map(|c| c.to_string())
 }
 
 fn navigate_write(v: &mut Value, proj: &[Proj], newval: Value) -> Result<(), Halt> {
@@ -601,6 +638,9 @@ fn navigate_write(v: &mut Value, proj: &[Proj], newval: Value) -> Result<(), Hal
                     .ok_or_else(|| Halt::IllFormed(format!("no field `{name}`")))?,
                 (Value::Vector(items), Proj::Index(i)) | (Value::Tuple(items), Proj::Index(i)) => {
                     items.get_mut(*i).ok_or(Halt::Trap(Fault::Bounds))?
+                }
+                (Value::Enum { payload, .. }, Proj::Payload(i)) => {
+                    payload.get_mut(*i).ok_or_else(|| Halt::IllFormed("bad payload projection".to_string()))?
                 }
                 (other, p) => {
                     return Err(Halt::IllFormed(format!(
@@ -709,6 +749,185 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
             state.trace.push(TraceEvent::ExplicitClone { place: inner.place_str(), span: state.cur_span });
             Ok(v)
         }
+
+        Expr::Slice { object, start, end, inclusive } => {
+            let base = eval_recv_value(ctx, state, object)?;
+            let n = seq_len(&base)?;
+            let a = match start {
+                Some(e) => as_index(&eval_expr(ctx, state, e)?)?,
+                None => 0,
+            };
+            let mut b = match end {
+                Some(e) => as_index(&eval_expr(ctx, state, e)?)?,
+                None => n,
+            };
+            if *inclusive {
+                b += 1;
+            }
+            match base {
+                Value::Str(s) => Ok(Value::Str(str_slice(&s, a, b))),
+                Value::Vector(items) => {
+                    let a = a.min(items.len());
+                    let b = b.min(items.len()).max(a);
+                    Ok(Value::Vector(items[a..b].to_vec()))
+                }
+                other => Err(Halt::IllFormed(format!("slice of {}", other.kind_name()))),
+            }
+        }
+
+        Expr::Cast { expr, target } => {
+            let v = eval_expr(ctx, state, expr)?;
+            eval_cast(v, *target)
+        }
+
+        Expr::EnumConstruct { type_name, variant, args } => {
+            let mut payload = Vec::with_capacity(args.len());
+            for a in args {
+                payload.push(eval_source_to_value(ctx, state, a, state.cur_span)?);
+            }
+            Ok(Value::Enum { type_name: type_name.clone(), variant: variant.clone(), payload })
+        }
+
+        Expr::Closure(idx) => {
+            // Capture-by-value at creation (D5): snapshot each free variable
+            // from the current frame into the closure's environment record.
+            let def: &ClosureDef = ctx.closure(*idx);
+            let mut captured = Vec::with_capacity(def.captures.len());
+            for name in &def.captures {
+                let p = eval_place(ctx, state, &Expr::Local(name.clone()))?;
+                let v = resolve_read(ctx, state, &p)?;
+                captured.push((name.clone(), v));
+            }
+            Ok(Value::Closure { def: *idx, captured })
+        }
+
+        Expr::CallValue { callee, args } => {
+            let callee_val = eval_expr(ctx, state, callee)?;
+            let (def_idx, captured) = match callee_val {
+                Value::Closure { def, captured } => (def, captured),
+                other => {
+                    return Err(Halt::IllFormed(format!(
+                        "call of non-closure value ({})",
+                        other.kind_name()
+                    )));
+                }
+            };
+            let mut slots = Vec::with_capacity(args.len());
+            for a in args {
+                slots.push(eval_source_to_slot(ctx, state, a, state.cur_span)?);
+            }
+            call_closure(ctx, state, def_idx, captured, slots)
+        }
+
+        Expr::Match { scrutinee, arms, else_arm, span } => {
+            state.cur_span = *span;
+            eval_match_expr(ctx, state, scrutinee, arms, else_arm.as_deref())
+        }
+
+        Expr::IntToStr(inner) => {
+            let v = eval_expr(ctx, state, inner)?;
+            match v {
+                Value::Int(i) => Ok(Value::Str(i.to_string())),
+                other => Err(Halt::IllFormed(format!("`int_to_str` on {}", other.kind_name()))),
+            }
+        }
+    }
+}
+
+/// The element/codepoint count of a sliceable value.
+fn seq_len(v: &Value) -> Result<usize, Halt> {
+    match v {
+        Value::Str(s) => Ok(s.chars().count()),
+        Value::Vector(items) => Ok(items.len()),
+        other => Err(Halt::IllFormed(format!("slice of {}", other.kind_name()))),
+    }
+}
+
+/// A closure call: push a frame holding a fresh copy of the captured
+/// environment (per-call — a bare closure's write is to its own copy, D5) plus
+/// the argument slots, then evaluate the single-expression body.
+fn call_closure(
+    ctx: &Ctx,
+    state: &mut State,
+    def_idx: usize,
+    captured: Vec<(String, Value)>,
+    param_slots: Vec<Slot>,
+) -> Result<Value, Halt> {
+    state.tick()?;
+    let def: &ClosureDef = ctx.closure(def_idx);
+    let body = def.body.clone();
+    let span = def.span;
+    let mut locals = Vec::new();
+    for (name, v) in captured {
+        locals.push(Local { name, slot: Slot::Owned(v), span });
+    }
+    for (param, slot) in def.params.iter().zip(param_slots) {
+        locals.push(Local { name: param.name.clone(), slot, span: param.span });
+    }
+    state.frames.push(Frame { locals });
+    let result = eval_expr(ctx, state, &body);
+    drop_scope(state, 0);
+    state.frames.pop();
+    result
+}
+
+/// The `as`-cast rules (RFC §2.1): float→int **saturates** (the ratified
+/// 2026-04-24 both-backend fix), int→int truncates/wraps (two's-complement),
+/// widening/int→float is exact-ish. Unit-tested only — no phase-0 fixture.
+fn eval_cast(v: Value, target: CastTarget) -> Result<Value, Halt> {
+    match (v, target) {
+        (Value::Float(f), CastTarget::Int { bits, signed }) => {
+            Ok(Value::Int(saturate_float_to_int(f, bits, signed)))
+        }
+        (Value::Int(i), CastTarget::Int { bits, signed }) => {
+            Ok(Value::Int(wrap_int(i, bits, signed)))
+        }
+        (Value::Int(i), CastTarget::Float32) => Ok(Value::Float(i as f32 as f64)),
+        (Value::Int(i), CastTarget::Float64) => Ok(Value::Float(i as f64)),
+        (Value::Float(f), CastTarget::Float32) => Ok(Value::Float(f as f32 as f64)),
+        (Value::Float(f), CastTarget::Float64) => Ok(Value::Float(f)),
+        (other, _) => Err(Halt::IllFormed(format!("cannot cast {}", other.kind_name()))),
+    }
+}
+
+/// The inclusive range `[min, max]` of a `bits`-wide integer of the sign.
+fn int_range(bits: u32, signed: bool) -> (i128, i128) {
+    if signed {
+        let m = 1i128 << (bits - 1);
+        (-m, m - 1)
+    } else {
+        (0, (1i128 << bits) - 1)
+    }
+}
+
+/// Saturating float→int (NaN→0), matching the ratified both-backend rule.
+fn saturate_float_to_int(f: f64, bits: u32, signed: bool) -> i64 {
+    let (lo, hi) = int_range(bits, signed);
+    if f.is_nan() {
+        return 0;
+    }
+    let r = f.trunc();
+    if r <= lo as f64 {
+        lo as i64
+    } else if r >= hi as f64 {
+        hi as i64
+    } else {
+        r as i64
+    }
+}
+
+/// Two's-complement int→int narrowing (Rust `as` semantics), kept in the i64
+/// value domain.
+fn wrap_int(i: i64, bits: u32, signed: bool) -> i64 {
+    if bits >= 64 {
+        return i;
+    }
+    let mask = (1i128 << bits) - 1;
+    let m = (i as i128) & mask;
+    if signed && (m & (1i128 << (bits - 1))) != 0 {
+        (m - (1i128 << bits)) as i64
+    } else {
+        m as i64
     }
 }
 
@@ -745,6 +964,33 @@ fn eval_construct(ctx: &Ctx, state: &mut State, kind: &ConstructKind, args: &[So
             }
             Ok(Value::Tuple(items))
         }
+        ConstructKind::Dict => {
+            // Phase-0 fixtures construct empty dicts (`Dict[K,V]()`); values are
+            // populated via `.set()`. A dict literal desugars to pushes too.
+            let mut entries = Vec::with_capacity(args.len());
+            for a in args {
+                if let Value::Tuple(mut kv) = eval_source_to_value(ctx, state, a, state.cur_span)? {
+                    if kv.len() == 2 {
+                        let v = kv.pop().unwrap();
+                        let k = kv.pop().unwrap();
+                        entries.push((k, v));
+                        continue;
+                    }
+                }
+                return Err(Halt::IllFormed("dict entry must be a (key, value) pair".to_string()));
+            }
+            Ok(Value::Dict(entries))
+        }
+        ConstructKind::Set => {
+            let mut items: Vec<Value> = Vec::with_capacity(args.len());
+            for a in args {
+                let v = eval_source_to_value(ctx, state, a, state.cur_span)?;
+                if !items.contains(&v) {
+                    items.push(v);
+                }
+            }
+            Ok(Value::Set(items))
+        }
         ConstructKind::Struct(name) => {
             let field_names: Vec<String> = ctx
                 .struct_fields(name)
@@ -768,63 +1014,339 @@ fn eval_construct(ctx: &Ctx, state: &mut State, kind: &ConstructKind, args: &[So
 }
 
 fn eval_method(ctx: &Ctx, state: &mut State, recv: &Expr, method: BuiltinMethod, args: &[Source]) -> Result<Value, Halt> {
+    use BuiltinMethod as M;
     match method {
-        BuiltinMethod::Len => {
-            let p = eval_place(ctx, state, recv)?;
-            let v = resolve_read(ctx, state, &p)?;
+        // ── Read-only methods: operate on the receiver's VALUE, so they work
+        //    on both places (`v.get(0)`) and temps (`v.get(0).unwrap()`). ──
+        M::Len => {
+            let v = eval_recv_value(ctx, state, recv)?;
             match v {
-                Value::Vector(items) => Ok(Value::Int(items.len() as i64)),
+                Value::Vector(items) | Value::Set(items) => Ok(Value::Int(items.len() as i64)),
+                Value::Dict(entries) => Ok(Value::Int(entries.len() as i64)),
+                Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
                 other => Err(Halt::IllFormed(format!("`.len()` on {}", other.kind_name()))),
             }
         }
-        BuiltinMethod::Push => {
-            // Collection put: the arg is an owning copy/move.
-            let arg = args
-                .first()
-                .ok_or_else(|| Halt::IllFormed("push expects 1 arg".to_string()))?;
-            let elem = eval_source_to_value(ctx, state, arg, state.cur_span)?;
-            let p = eval_place(ctx, state, recv)?;
-            let mut vec = match resolve_read(ctx, state, &p)? {
-                Value::Vector(items) => items,
-                other => return Err(Halt::IllFormed(format!("`.push()` on {}", other.kind_name()))),
-            };
-            vec.push(elem);
-            resolve_write(ctx, state, &p, Value::Vector(vec), state.cur_span)?;
-            state.trace.push(TraceEvent::Write { place: recv.place_str(), span: state.cur_span });
-            Ok(Value::Unit)
+        M::Get => {
+            let key = eval_source_to_value(ctx, state, arg_at(args, 0)?, state.cur_span)?;
+            let v = eval_recv_value(ctx, state, recv)?;
+            match v {
+                Value::Vector(items) => {
+                    let i = as_index(&key)?;
+                    Ok(option_of(items.into_iter().nth(i)))
+                }
+                Value::Dict(entries) => {
+                    Ok(option_of(entries.into_iter().find(|(k, _)| k == &key).map(|(_, val)| val)))
+                }
+                other => Err(Halt::IllFormed(format!("`.get()` on {}", other.kind_name()))),
+            }
         }
-        BuiltinMethod::Set => {
-            if args.len() != 2 {
-                return Err(Halt::IllFormed("set expects 2 args".to_string()));
+        M::Unwrap => {
+            let v = eval_recv_value(ctx, state, recv)?;
+            match v {
+                Value::Enum { variant, mut payload, .. } if variant == "Some" || variant == "Ok" => {
+                    Ok(payload.pop().unwrap_or(Value::Unit))
+                }
+                Value::Enum { variant, .. } if variant == "None" || variant == "Error" => {
+                    Err(Halt::Trap(Fault::Panic(format!("called `unwrap()` on a `{variant}` value"))))
+                }
+                other => Err(Halt::IllFormed(format!("`.unwrap()` on {}", other.kind_name()))),
             }
-            let idx = match &args[0] {
-                Source::Value(e) => eval_index(ctx, state, e)?,
-                other => eval_index_source(ctx, state, other)?,
-            };
-            let elem = eval_source_to_value(ctx, state, &args[1], state.cur_span)?;
-            let p = eval_place(ctx, state, recv)?;
-            let mut vec = match resolve_read(ctx, state, &p)? {
-                Value::Vector(items) => items,
-                other => return Err(Halt::IllFormed(format!("`.set()` on {}", other.kind_name()))),
-            };
-            if idx >= vec.len() {
-                return Err(Halt::Trap(Fault::Bounds));
+        }
+        M::UnwrapOr => {
+            let default = eval_source_to_value(ctx, state, arg_at(args, 0)?, state.cur_span)?;
+            let v = eval_recv_value(ctx, state, recv)?;
+            match v {
+                Value::Enum { variant, mut payload, .. } if variant == "Some" || variant == "Ok" => {
+                    Ok(payload.pop().unwrap_or(default))
+                }
+                Value::Enum { .. } => Ok(default),
+                other => Err(Halt::IllFormed(format!("`.unwrap_or()` on {}", other.kind_name()))),
             }
-            vec[idx] = elem;
-            resolve_write(ctx, state, &p, Value::Vector(vec), state.cur_span)?;
-            state.trace.push(TraceEvent::Write { place: recv.place_str(), span: state.cur_span });
-            Ok(Value::Unit)
+        }
+        M::Trim => {
+            let v = eval_recv_value(ctx, state, recv)?;
+            match v {
+                Value::Str(s) => Ok(Value::Str(s.trim().to_string())),
+                other => Err(Halt::IllFormed(format!("`.trim()` on {}", other.kind_name()))),
+            }
+        }
+        M::Substring => {
+            let a = as_index(&eval_source_to_value(ctx, state, arg_at(args, 0)?, state.cur_span)?)?;
+            let b = as_index(&eval_source_to_value(ctx, state, arg_at(args, 1)?, state.cur_span)?)?;
+            let v = eval_recv_value(ctx, state, recv)?;
+            match v {
+                Value::Str(s) => Ok(Value::Str(str_slice(&s, a, b))),
+                other => Err(Halt::IllFormed(format!("`.substring()` on {}", other.kind_name()))),
+            }
+        }
+        // ── Mutating methods: read-modify-write through the receiver place
+        //    (materialise-on-write if it is a Borrow binding). On a temp
+        //    receiver the mutation is simply discarded (only the return used). ─
+        M::Push | M::Set | M::Pop | M::Clear | M::Fill | M::Add => {
+            eval_mut_method(ctx, state, recv, method, args)
         }
     }
 }
 
-/// Evaluate a `Source` in index position to a `usize` (for `.set(i, x)`).
-fn eval_index_source(ctx: &Ctx, state: &mut State, source: &Source) -> Result<usize, Halt> {
-    let v = eval_source_to_value(ctx, state, source, state.cur_span)?;
+/// Read the receiver's value, following borrows when it is a place and
+/// evaluating it as a temp otherwise (so chained calls like
+/// `v.get(0).unwrap()` work — the middle receiver is a fresh `Option`).
+fn eval_recv_value(ctx: &Ctx, state: &mut State, recv: &Expr) -> Result<Value, Halt> {
+    if recv.is_place() {
+        let p = eval_place(ctx, state, recv)?;
+        resolve_read(ctx, state, &p)
+    } else {
+        eval_expr(ctx, state, recv)
+    }
+}
+
+/// A mutating collection method. On a place receiver it reads the current
+/// collection, applies the mutation, and writes back through the store (so a
+/// bare-param Borrow materialises a private copy on the write). The trace
+/// records a `Write`, exactly as a direct assignment would.
+fn eval_mut_method(ctx: &Ctx, state: &mut State, recv: &Expr, method: BuiltinMethod, args: &[Source]) -> Result<Value, Halt> {
+    // Evaluate arguments to values first (element / index / key / value).
+    let mut argvals = Vec::with_capacity(args.len());
+    for a in args {
+        argvals.push(eval_source_to_value(ctx, state, a, state.cur_span)?);
+    }
+    let is_place = recv.is_place();
+    let (mut coll, place) = if is_place {
+        let p = eval_place(ctx, state, recv)?;
+        (resolve_read(ctx, state, &p)?, Some(p))
+    } else {
+        (eval_expr(ctx, state, recv)?, None)
+    };
+    let result = apply_mut(&mut coll, method, argvals)?;
+    if let Some(p) = place {
+        resolve_write(ctx, state, &p, coll, state.cur_span)?;
+        state.trace.push(TraceEvent::Write { place: recv.place_str(), span: state.cur_span });
+    }
+    Ok(result)
+}
+
+/// Apply a mutating method to a collection value in place, returning the
+/// method's own result value.
+fn apply_mut(coll: &mut Value, method: BuiltinMethod, argvals: Vec<Value>) -> Result<Value, Halt> {
+    use BuiltinMethod as M;
+    let mut args = argvals.into_iter();
+    match (method, coll) {
+        (M::Push, Value::Vector(items)) => {
+            items.push(args.next().ok_or_else(|| illf("push expects 1 arg"))?);
+            Ok(Value::Unit)
+        }
+        (M::Push, Value::Str(s)) => {
+            // `String.push(x)` appends `x`'s text.
+            match args.next().ok_or_else(|| illf("push expects 1 arg"))? {
+                Value::Str(x) => s.push_str(&x),
+                other => return Err(illf(&format!("`String.push` of {}", other.kind_name()))),
+            }
+            Ok(Value::Unit)
+        }
+        (M::Add, Value::Set(items)) => {
+            let x = args.next().ok_or_else(|| illf("add expects 1 arg"))?;
+            if !items.contains(&x) {
+                items.push(x);
+            }
+            Ok(Value::Unit)
+        }
+        (M::Set, Value::Vector(items)) => {
+            let i = as_index(&args.next().ok_or_else(|| illf("set expects 2 args"))?)?;
+            let x = args.next().ok_or_else(|| illf("set expects 2 args"))?;
+            if i >= items.len() {
+                return Err(Halt::Trap(Fault::Bounds));
+            }
+            items[i] = x;
+            Ok(Value::Unit)
+        }
+        (M::Set, Value::Dict(entries)) => {
+            let k = args.next().ok_or_else(|| illf("set expects 2 args"))?;
+            let v = args.next().ok_or_else(|| illf("set expects 2 args"))?;
+            if let Some(slot) = entries.iter_mut().find(|(ek, _)| ek == &k) {
+                slot.1 = v; // update preserves insertion order
+            } else {
+                entries.push((k, v));
+            }
+            Ok(Value::Unit)
+        }
+        (M::Pop, Value::Vector(items)) => Ok(option_of(items.pop())),
+        (M::Clear, Value::Vector(items)) => {
+            items.clear();
+            Ok(Value::Unit)
+        }
+        (M::Clear, Value::Set(items)) => {
+            items.clear();
+            Ok(Value::Unit)
+        }
+        (M::Fill, Value::Vector(items)) => {
+            let n = as_index(&args.next().ok_or_else(|| illf("fill expects 2 args"))?)?;
+            let x = args.next().ok_or_else(|| illf("fill expects 2 args"))?;
+            *items = std::iter::repeat_n(x, n).collect();
+            Ok(Value::Unit)
+        }
+        (m, other) => Err(illf(&format!("`.{m:?}()` on {}", other.kind_name()))),
+    }
+}
+
+fn illf(m: &str) -> Halt {
+    Halt::IllFormed(m.to_string())
+}
+
+/// Wrap an optional value in `Option`: `Some(v)` or `None`.
+fn option_of(v: Option<Value>) -> Value {
     match v {
-        Value::Int(i) if i >= 0 => Ok(i as usize),
+        Some(v) => Value::Enum { type_name: "Option".to_string(), variant: "Some".to_string(), payload: vec![v] },
+        None => Value::Enum { type_name: "Option".to_string(), variant: "None".to_string(), payload: Vec::new() },
+    }
+}
+
+/// Interpret a value as a non-negative index; a negative int is out-of-bounds.
+fn as_index(v: &Value) -> Result<usize, Halt> {
+    match v {
+        Value::Int(i) if *i >= 0 => Ok(*i as usize),
         Value::Int(_) => Err(Halt::Trap(Fault::Bounds)),
         other => Err(Halt::IllFormed(format!("index must be int, got {}", other.kind_name()))),
+    }
+}
+
+/// A codepoint slice `s[a..b)` (clamped to the string's codepoint length).
+fn str_slice(s: &str, a: usize, b: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let a = a.min(chars.len());
+    let b = b.min(chars.len()).max(a);
+    chars[a..b].iter().collect()
+}
+
+/// The i-th argument source, or an ill-formed error naming the shortfall.
+fn arg_at(args: &[Source], i: usize) -> Result<&Source, Halt> {
+    args.get(i).ok_or_else(|| illf("missing method argument"))
+}
+
+// ── Match (statement + expression) ─────────────────────────────────────────
+//
+// A `match` scrutinee is a Borrow-mode view (RFC §2.2): pattern bindings are
+// `BorrowView`s into the scrutinee's payload (a new `Proj::Payload`), so
+// materialise-on-write applies to them exactly as to a bare param. A non-place
+// scrutinee is snapshotted into a synthetic local so the bindings still name a
+// stable place. All arm-scope locals (bindings + the synthetic scrutinee) drop
+// at the match's end, in reverse declaration order.
+
+fn exec_match_stmt(
+    ctx: &Ctx,
+    state: &mut State,
+    scrutinee: &Expr,
+    arms: &[StmtArm],
+    else_arm: Option<&[Stmt]>,
+) -> Result<Flow, Halt> {
+    let mark = state.frames[state.cur_frame()].locals.len();
+    let scrut_place = scrutinee_place(ctx, state, scrutinee)?;
+    let scrut_val = resolve_read(ctx, state, &scrut_place)?;
+    for arm in arms {
+        if let Some(binds) = match_pattern(ctx, state, &scrut_val, &arm.pattern)? {
+            push_pattern_bindings(state, &scrut_place, binds);
+            let flow = exec_block(ctx, state, &arm.body)?;
+            drop_scope(state, mark);
+            return Ok(flow);
+        }
+    }
+    let flow = match else_arm {
+        Some(b) => exec_block(ctx, state, b)?,
+        None => Flow::Normal,
+    };
+    drop_scope(state, mark);
+    Ok(flow)
+}
+
+fn eval_match_expr(
+    ctx: &Ctx,
+    state: &mut State,
+    scrutinee: &Expr,
+    arms: &[ExprArm],
+    else_arm: Option<&Expr>,
+) -> Result<Value, Halt> {
+    let mark = state.frames[state.cur_frame()].locals.len();
+    let scrut_place = scrutinee_place(ctx, state, scrutinee)?;
+    let scrut_val = resolve_read(ctx, state, &scrut_place)?;
+    for arm in arms {
+        if let Some(binds) = match_pattern(ctx, state, &scrut_val, &arm.pattern)? {
+            push_pattern_bindings(state, &scrut_place, binds);
+            let result = eval_expr(ctx, state, &arm.body)?;
+            drop_scope(state, mark);
+            return Ok(result);
+        }
+    }
+    let result = match else_arm {
+        Some(e) => eval_expr(ctx, state, e)?,
+        None => return Err(Halt::Trap(Fault::Panic("no match arm matched".to_string()))),
+    };
+    drop_scope(state, mark);
+    Ok(result)
+}
+
+/// Resolve the scrutinee to a stable place: its own place if it is one,
+/// otherwise a synthetic `Owned` local holding the evaluated value.
+fn scrutinee_place(ctx: &Ctx, state: &mut State, scrutinee: &Expr) -> Result<Place, Halt> {
+    if scrutinee.is_place() {
+        eval_place(ctx, state, scrutinee)
+    } else {
+        let v = eval_expr(ctx, state, scrutinee)?;
+        let frame = state.cur_frame();
+        let local = state.frames[frame].locals.len();
+        state.frames[frame].locals.push(Local {
+            name: "__match".to_string(),
+            slot: Slot::Owned(v),
+            span: state.cur_span,
+        });
+        Ok(Place { frame, local, proj: Vec::new() })
+    }
+}
+
+/// Try to match `val` against `pat`; on success, return the pattern's bindings
+/// as `(name, projection-path-relative-to-the-scrutinee)` pairs.
+#[allow(clippy::type_complexity)]
+fn match_pattern(
+    ctx: &Ctx,
+    state: &mut State,
+    val: &Value,
+    pat: &Pattern,
+) -> Result<Option<Vec<(String, Vec<Proj>)>>, Halt> {
+    match pat {
+        Pattern::Wildcard => Ok(Some(Vec::new())),
+        Pattern::Binding(name) => Ok(Some(vec![(name.clone(), Vec::new())])),
+        Pattern::Literal(e) => {
+            let lit = eval_expr(ctx, state, e)?;
+            Ok(if values_eq(&lit, val) { Some(Vec::new()) } else { None })
+        }
+        Pattern::Variant { variant, fields } => match val {
+            Value::Enum { variant: v, payload, .. } if v == variant && payload.len() == fields.len() => {
+                let mut binds = Vec::new();
+                for (i, (fp, fv)) in fields.iter().zip(payload).enumerate() {
+                    match match_pattern(ctx, state, fv, fp)? {
+                        Some(sub) => {
+                            for (n, proj) in sub {
+                                let mut full = vec![Proj::Payload(i)];
+                                full.extend(proj);
+                                binds.push((n, full));
+                            }
+                        }
+                        None => return Ok(None),
+                    }
+                }
+                Ok(Some(binds))
+            }
+            _ => Ok(None),
+        },
+    }
+}
+
+/// Push each pattern binding as a `BorrowView` into the scrutinee's place.
+fn push_pattern_bindings(state: &mut State, scrut_place: &Place, binds: Vec<(String, Vec<Proj>)>) {
+    let frame = state.cur_frame();
+    let span = state.cur_span;
+    for (name, proj) in binds {
+        let place = scrut_place.extend(&proj);
+        state.frames[frame].locals.push(Local { name, slot: Slot::BorrowView(place), span });
     }
 }
 
@@ -964,5 +1486,23 @@ fn format_value(v: &Value) -> String {
             let inner: Vec<String> = fields.iter().map(|(n, vv)| format!("{n}: {}", format_value(vv))).collect();
             format!("{name}{{{}}}", inner.join(", "))
         }
+        Value::Enum { variant, payload, .. } => {
+            if payload.is_empty() {
+                variant.clone()
+            } else {
+                let inner: Vec<String> = payload.iter().map(format_value).collect();
+                format!("{variant}({})", inner.join(", "))
+            }
+        }
+        Value::Dict(entries) => {
+            let inner: Vec<String> =
+                entries.iter().map(|(k, v)| format!("{}: {}", format_value(k), format_value(v))).collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        Value::Set(items) => {
+            let inner: Vec<String> = items.iter().map(format_value).collect();
+            format!("{{{}}}", inner.join(", "))
+        }
+        Value::Closure { .. } => "<closure>".to_string(),
     }
 }
