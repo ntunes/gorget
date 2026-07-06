@@ -227,6 +227,15 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D11 RATIFIED IN FULL (registry shape approved; owner: one registry =
+  the CLAUDE.md single-source-of-truth rule applied).** ONE closed `TrapKind` registry
+  (Overflow, DivByZero, Bounds, UnwrapNone, UnwrapError, UnwrapErrorOnOk, AssertFailed,
+  Panic), T_ codes derived from variant identity (E_ convention), rendered
+  `trap[T_X]: detail at file:line:col` + exit 101; §10.9 `Fault` re-founded as the
+  catchable SUBSET (the three; fault-catch untouched; parity lint); no-drops-on-trap
+  normative v1; per-code catchability deferred to deep-fault; SIGSEGV/OOM outside v1.
+  **WITH THIS, DECISION BATCH 4 CLOSES — D10 through D21 all ratified 2026-07-06.**
+
 - 2026-07-06 — **D21 RATIFIED (owner GO, judgment delegated + rendered): `gg sim` is
   RETIRED.** Miri's three reasons-to-exist (unsafe trapdoor, aliasing research, no
   executable spec) all map to Gorget non-needs: no unsafe surface, D10's static

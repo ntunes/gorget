@@ -1,6 +1,9 @@
 # Decision Batch 4 — Proposal (2026-07-06)
 
-> **STATUS: PROPOSED — awaiting owner ruling.** Prepared from three probe-verified decision
+> **STATUS: ✅ BATCH CLOSED 2026-07-06 — ALL of D10–D21 RATIFIED** (each section carries
+> its owner-ruling block; ledger LOG has the entries; implementation tracks filed in
+> TODO). Residual: D22 (colon-slice package) proposed in-conversation, one word out.
+> Original header follows for the record: PROPOSED — awaiting owner ruling. Prepared from three probe-verified decision
 > scouts (error model / aliasing & borrows / resources & ownership; probe corpora preserved at
 > `/tmp/recover_scout_errmodel/`, `/tmp/recover_scout_aliasing/`, `/tmp/recover_scout_resources/`)
 > plus the orchestrator's synthesis. Every current-behavior claim below was reproduced this
@@ -95,7 +98,24 @@ direction is a widening). Confidence: high.
 
 ---
 
-### D11 (PROPOSED — exit-code sub-decision RATIFIED 2026-07-06: **101**) — TRAP NORMALIZATION: the `T_` registry, one exit code, a `trap:` conformance field
+### D11 (RATIFIED IN FULL 2026-07-06) — TRAP NORMALIZATION: the `T_` registry, one exit code, a `trap:` conformance field
+
+> **Owner ruling 2026-07-06 (completing D11): the registry shape is APPROVED — "One
+> registry is exactly the single source of truth we like and have written a rule about
+> it on CLAUDE.md."** The ratified shape: ONE closed `TrapKind` registry naming every
+> trap class (initial: Overflow, DivByZero, Bounds, UnwrapNone, UnwrapError,
+> UnwrapErrorOnOk, AssertFailed, Panic) with catch-all-free `code()` (T_ codes DERIVE
+> from variant identity — the E_ convention, so `Fault.Bounds` renders `trap[T_Bounds]:
+> … at file:line:col`, exit 101); **§10.9's `Fault` is RE-FOUNDED as the catchable
+> SUBSET** (exactly the three, fault-`catch` semantics untouched — the scrutinee type
+> only having catchable variants keeps uncatchable arms unwritable by construction) with
+> a parity lint pinning the correspondence; **no-drops-on-uncaught-trap is normative
+> v1** (matches ggdef + production; observable, so conformance needs it pinned);
+> catchability of future codes = per-code annotation deferred to the deep-fault phase;
+> stack-overflow SIGSEGV (C11, signal death) and OOM stay outside v1. Registry prose:
+> spec/prose/trap-codes.md mirroring diagnostic-codes.md. Implementation track filed
+> HIGH — it unblocks exact-code conformance, the P1-C dormant exit≠0 branch, and the
+> panics-family (D2) migration.
 
 > **Owner ruling 2026-07-06 (brainstorm session): the uncaught-trap exit code is `101`.**
 > Reasoning recorded so it is never re-derived: (a) the MSB-set range (≥128) is REJECTED —
