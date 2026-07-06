@@ -1,0 +1,22 @@
+# P2 regression: a custom-Drop element WITH a droppable (String) field, held in
+# a collection, must fire the COMPOSITE destructor (__gorget_dtor_Holder = user
+# body THEN field frees), not the user body alone. Before the fix the collection
+# wired elem_drop to `Holder__drop` (user body only) → the heap String field
+# LEAKED. This is ASan-invisible on a plain stdout run; it is gated by the
+# `gg build --sanitize` + detect_leaks=1 path (drop_collection_custom_elem_field_leak_asan).
+# The heap strings ("aa"+"bb") force real allocations LeakSanitizer can see.
+struct Holder:
+    int id
+    String name
+
+equip Holder with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+void main():
+    print("start")
+    Vector[Holder] v = Vector[Holder]()
+    String s = "aa" + "bb"
+    v.push(Holder(1, s))
+    v.push(Holder(2, "cc" + "dd"))
+    print("done")

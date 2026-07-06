@@ -2358,16 +2358,17 @@ impl<'a> FuncLowering<'a> {
                 // GorgetArray offsets: elem_drop=40, elem_clone=48, elem_materialize=56
                 if let Some(drop_fn) = super::types::elem_drop_fn_for_type(elem_type, self.gir_types) {
                     stores.push((40, drop_fn));
-                } else if self.recursive_drop_structs.contains_key(elem_type)
-                    || self.recursive_drop_enums.contains_key(elem_type)
-                {
-                    stores.push((40, format!("{elem_type}__drop")));
+                } else if let Some(info) = self.type_drop_fns.get(elem_type) {
+                    // Custom-drop element types register `__gorget_dtor_{name}`
+                    // (user body + field recursion); Recursive types register
+                    // `{name}__drop`. type_drop_fns is the one source of truth —
+                    // covers Custom-with-trivial-fields (empty field_drops), which
+                    // recursive_drop_structs skips (see populate_recursive_drop_structs).
+                    stores.push((40, info.drop_fn_name.clone()));
                 }
                 if let Some(clone_fn) = super::types::elem_clone_fn_for_type(elem_type, self.gir_types) {
                     stores.push((48, clone_fn));
-                } else if self.recursive_drop_structs.contains_key(elem_type)
-                    || self.recursive_drop_enums.contains_key(elem_type)
-                {
+                } else if self.type_drop_fns.contains_key(elem_type) {
                     stores.push((48, format!("{elem_type}__clone_inplace")));
                 }
                 if elem_type == "GorgetString" {
@@ -2379,24 +2380,19 @@ impl<'a> FuncLowering<'a> {
                 let val_type = val_type.unwrap_or("");
                 if let Some(drop_fn) = super::types::elem_drop_fn_for_type(val_type, self.gir_types) {
                     stores.push((104, drop_fn));
-                } else if self.recursive_drop_structs.contains_key(val_type)
-                    || self.recursive_drop_enums.contains_key(val_type)
-                {
-                    stores.push((104, format!("{val_type}__drop")));
+                } else if let Some(info) = self.type_drop_fns.get(val_type) {
+                    stores.push((104, info.drop_fn_name.clone()));
                 }
                 if let Some(clone_fn) = super::types::elem_clone_fn_for_type(val_type, self.gir_types) {
                     stores.push((112, clone_fn));
-                } else if self.recursive_drop_structs.contains_key(val_type)
-                    || self.recursive_drop_enums.contains_key(val_type)
-                {
+                } else if self.type_drop_fns.contains_key(val_type) {
                     stores.push((112, format!("{val_type}__clone_inplace")));
                 }
-                if !str_keyed
-                    && (self.recursive_drop_structs.contains_key(elem_type)
-                        || self.recursive_drop_enums.contains_key(elem_type))
-                {
-                    stores.push((120, format!("{elem_type}__drop")));
-                    stores.push((128, format!("{elem_type}__clone_inplace")));
+                if !str_keyed {
+                    if let Some(info) = self.type_drop_fns.get(elem_type) {
+                        stores.push((120, info.drop_fn_name.clone()));
+                        stores.push((128, format!("{elem_type}__clone_inplace")));
+                    }
                 }
                 if val_type == "GorgetString" {
                     stores.push((136, "gorget_string_materialize_inplace".into()));
@@ -2404,12 +2400,11 @@ impl<'a> FuncLowering<'a> {
             }
             CollectionCtorKind::Set | CollectionCtorKind::HashSet => {
                 // GorgetSet: key_drop=120, key_clone=128 (same offsets as GorgetMap)
-                if !str_keyed
-                    && (self.recursive_drop_structs.contains_key(elem_type)
-                        || self.recursive_drop_enums.contains_key(elem_type))
-                {
-                    stores.push((120, format!("{elem_type}__drop")));
-                    stores.push((128, format!("{elem_type}__clone_inplace")));
+                if !str_keyed {
+                    if let Some(info) = self.type_drop_fns.get(elem_type) {
+                        stores.push((120, info.drop_fn_name.clone()));
+                        stores.push((128, format!("{elem_type}__clone_inplace")));
+                    }
                 }
             }
         }
