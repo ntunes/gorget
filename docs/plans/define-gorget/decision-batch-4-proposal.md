@@ -323,7 +323,16 @@ rejection** (`meta.rs:1278` drops its `wrapping_*` calls). Uniform with "the typ
 
 ---
 
-### D19 (PROPOSED) — A13: REMOVE `break <value>` / loop-as-expression from the v1 surface
+### D19 (RATIFIED 2026-07-06) — A13: REMOVE `break <value>` / loop-as-expression from the v1 surface
+
+> **Owner ruling 2026-07-06: "remove for now. no loop-as-expression in gorget as for
+> now."** Removal track filed (grammar `break_stmt` loses its optional expr; the
+> `Stmt::Break(Some(e))` arms leave the typecheck return-walks — typecheck.rs:7338/
+> :7526/:7760 at filing; self-host already has no SBreak arm; reference §6.7:1188-1193
+> rewritten; negative fixture: `break <expr>` = parse/check error with a message noting
+> the removal). Re-adding later, properly (loop-typed collect targets, self-host arm,
+> fixtures), is a pure widening. A13 closes as a decision; the residual is the removal
+> track.
 
 It's in the grammar, barely wired (loop-as-expression doesn't even parse in assignment
 position), untested (zero fixtures), and its type inference is unsound-by-sharing (break

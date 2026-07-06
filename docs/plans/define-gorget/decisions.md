@@ -227,6 +227,14 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D19 RATIFIED by owner: `break <value>` / loop-as-expression REMOVED from
+  the v1 surface** ("no loop-as-expression in gorget as for now"). It was a half-wired
+  grammar stub: zero fixtures, loop-as-expression unparseable in assignment position, and
+  break-value type inference unsound-by-sharing (walked against the FUNCTION return type).
+  Removing the half-feature = uniformity; re-adding properly later = pure widening.
+  Removal track filed in TODO (grammar + typecheck arms + reference §6.7 + negative
+  fixture). A13 CLOSED as a decision.
+
 - 2026-07-06 — **D16 RATIFIED by owner: general UFCS ABANDONED as a design target**
   (language-design.md:85 rewritten same commit — curated trait-exposed duals stay:
   `len`/`Measurable`, `map`/`filter`). Rationale: universal free-fn↔method equivalence
