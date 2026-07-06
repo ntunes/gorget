@@ -24,8 +24,11 @@ The scheme is uniform **`E_<VariantName>`** (errors) / **`W_<VariantName>`**
 This is simultaneously **systematic** (derived, exhaustive by construction) and
 **meaningful** (the variant names are descriptive), so it needs no separate
 "meaningful vs. placeholder" split. Tying the code to the variant identity — not a
-sequence number — means codes never churn or collide across branches, which
-**sidesteps the `E_`-numbering bikeshed left open in RFC §8 (item 3)**. The one
+sequence number — means codes are stable against re-numbering and never collide
+across branches, which **sidesteps the `E_`-numbering bikeshed left open in RFC §8
+(item 3)**. Stability is modulo variant RENAME: renaming a variant changes its
+code, so **this registry file is the stability contract** — a rename that touches
+a published code is a breaking spec change and must be recorded here. The one
 normative anchor, `E_MoveWithoutOperator` (RFC §5.5 / §2.2 bullet 4), matches
 exactly.
 
