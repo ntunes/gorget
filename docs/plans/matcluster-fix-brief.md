@@ -1,6 +1,12 @@
 # EXECUTOR BRIEF: production materialize-on-write cluster (4 roots, 1 track, 4 sequenced commits)
 
-> **STATUS: v3 — passes 1 (6 res) + 2 (2 blocking + 2 minor) folded; 0 clean of >=3. Executor: not launched.**
+> **STATUS: v4 — pass 3 (Opus) = CLEAN SIGN OFF 2026-07-06 (the #4 mechanism empirically
+> verified by the reviewer: baseline SIGSEGV → 9/exit-0 on BOTH backends, sibling unregressed,
+> ASan clean). Executor: LAUNCHED. Pass-3 notes folded: the draft's OLD #4 two-option framing
+> (at its FIX DIRECTIONS section) is a STALE REMNANT — the pass-2 restore_locals mechanism is
+> the ONLY #4 fix; the #3 mini-prototype's `xs=xs.slice(...)` check is a UAF-safety PROBE (no
+> committed expected value), not a gate; the executor also updates the now-stale doc-comment at
+> context.rs:1635-1637 (Alias moves from "kept" to "dropped").**
 > ggdef-RATIFIED expected outputs: #1 warn_compound=10 · #2 loop_read_before_write=1,2,3,1 ·
 > #3 ok_rebind=3,1 · #4 dead_branch_alias_bind=9. Scout artifacts: /tmp/recover_matcluster/
 > (findings incl. the full draft brief + the measured #1 prototype patch).
