@@ -1,11 +1,11 @@
 # EXECUTOR BRIEF: ggdef phase 0 — the walking skeleton (Increments A/B/C)
 
-> **STATUS: v4 — passes 1 (5 res) + 2 (3 res) folded; pass 3 (Opus) = SIGN OFF FOR INCREMENT A
+> **STATUS: v5 (v4 + B1/B2 split fold, confirmed 2026-07-06) — passes 1 (5 res) + 2 (3 res) folded; pass 3 (Opus) = SIGN OFF FOR INCREMENT A
 > (2 non-blocking findings folded into v4). B/C need one confirming pass on their sections
 > before launching (the F2 report-homes fix landed post-sign-off).**
 > **Executor launches: A: ✅ LANDED + MERGED (Opus; 26/26 MATCH; output-review SIGN OFF) ·
 > B: SPLIT into B1/B2 per the B/C confirming pass (6 reservations folded 2026-07-06);
-> B1: pending one targeted confirming pass on the folded B1/B2 text, then launch ·
+> B1: ✅ confirming pass SIGN OFF 2026-07-06 — LAUNCHED (Opus) ·
 > B2: after B1 lands · C: after B2.**
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
