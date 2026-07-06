@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: `String !p` move-param concat fix (conformance 186→187 both backends)
 
-> **STATUS: v2 — pass 1 = RESERVATIONS (3 minor, all brief-text tightenings; fix mechanism VERIFIED SOUND end-to-end by the reviewer incl. blast-radius probes) → FOLDED below as ⚡ PASS-1 FOLDS. Pass 2 pending.**
+> **STATUS: v3 — pass 1 (3 minor, folded) + pass 2 = RESERVATIONS (1 minor: missing concurrent-track note → folded in the Zone section). Pass-2 ALSO independently verified: patch applies clean, repro+siblings green on both backends AND vs the ggdef oracle, valgrind clean ×4 shapes, root-cause chain traced (set_owned at functions.rs:932-935 after set_owning_param at :924-927). Pass 3 pending — launch-gate.**
 > Scout: full report + measured prototype at `/tmp/recover_strmove/` (FINDINGS.md,
 > proto_fix_FINAL.patch, operators.rs.fixed, spec_conf logs). Scout ran the fix end-to-end on
 > BOTH backends: 24-shape matrix correct, 12-case ASan clean, no clone regression,
@@ -82,6 +82,11 @@ still holds, and understand the `LoadRef` emission you're adding.
 `tests/integration.rs` (un-ignore + 3 new pairs) + `tests/fixtures/` (promote + 3 new).
 **Do NOT touch the self-host (already reference-correct), spec/ggdef, spectests/, or
 TODO.md/DONE.md (parent-only).**
+**⚡ PASS-2 FOLD (concurrent-track hazard, CLAUDE.md rule 5):** the concurrent UNWRAP track
+also edits `tests/integration.rs` (a DIFFERENT region: the witness tests ~:29235 + new
+panics fixtures near :6226), `src/lir/lower/insts.rs`, and self-host files — append your
+3 new `run_gg` pairs ADJACENT to `move_param_concat` (~:5044) to stay clear of it, and do
+NOT touch `insts.rs` or any self-host file.
 
 ## Gates (foreground, tee to /tmp/strmove_*)
 
