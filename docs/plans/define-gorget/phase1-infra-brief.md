@@ -115,14 +115,22 @@ The §P1-D draft's "~1218 pairs in one run" scope is a BRIEF DEFECT. P1-D SPLITS
    `.trim()` compare) lives ONLY in tests/ binaries (already copy-pasted 4×) — unreachable from
    a lib.rs `migrate`. D1 therefore HOISTS the classification into `spec/ggdef/src/lib.rs` (or a
    new lib module) as pub helpers + a `classify_fixture(...) -> Agree|Float|Other|NotValue|NoPair`,
-   and BOTH converter_agreement.rs AND `migrate` call them (one source of truth; retires the 4-way
-   duplication in the same commit). Migrate selects exactly the `Agree` fixtures via the SAME
-   predicate; the test's AGREE count becomes the cross-check assertion, not the list source.
+   and BOTH converter_agreement.rs AND `migrate` call them. **Scope of the dedup (FOLD-3, pass-3
+   R1 option A): delete ONLY converter_agreement.rs's private copies and route it + `migrate`
+   through the hoisted helpers; corpus_a/b/b1's three private copies are OUT of D1's critical
+   path (corpus_a's is a DIVERGENT implementation shape — rewiring it needs an equivalence
+   proof) — their dedup is a FILED follow-up, do NOT rewire them this round.** Migrate selects
+   exactly the `Agree` fixtures via the SAME predicate; the test's AGREE count becomes the
+   cross-check assertion, not the list source. **The hoist is a PURE CODE-MOVE — no
+   classification-logic change; after it, `cargo test -p ggdef --test converter_agreement --
+   --nocapture` MUST still print AGREE=182 (floor unchanged).**
 2. **R5 (set arithmetic):** the `Agree` bucket IS the exact migration set — the D1 EXCLUDE list
    above is DESCRIPTIVE of what Agree already omits (cow_*/deadwrite_* are outside the walk
    universe; floats/OTHER are disjoint buckets). Do NOT apply it as a second filter.
-3. **R3 (gate + zone-lock):** D1's gate = `cargo test -p ggdef` ONLY (all ggdef suites incl. the
-   frontmatter unit tests over the grown corpus) — explicitly NOT the root spec_conformance_c/
+3. **R3 (gate + zone-lock):** D1's gate = `cargo test -p ggdef` (all ggdef suites incl. the
+   frontmatter unit tests over the grown corpus) **PLUS `cargo test --test lints
+   ggdef_import_ratchet` (FOLD-3 pass-3 R4: D1 adds code to the ratchet's scanned dir — cheap,
+   run it before declaring done)** — explicitly NOT the root spec_conformance_c/
    _llvm/_selfhost lanes (P1-C's zone). `git add` named spec/ggdef + spectests/run files only;
    TODO.md/DONE.md are parent-only.
 4. **R4 (orchestrator note, not an executor task):** P1-C lanes READ spectests/run/; whoever
@@ -131,7 +139,9 @@ The §P1-D draft's "~1218 pairs in one run" scope is a BRIEF DEFECT. P1-D SPLITS
    fixtures (converter_agreement compares `.trim()`ed; the lanes compare exact) — any such
    MISMATCH is a reference-grade FINDING to triage (invariant #8), never a floor to lower.
 5. **R6:** `render_expect_block_from(exit, stdout)` ships WITH a lib unit test (round-trip vs
-   json_escape/parse_json_string) so the D2 seam isn't untested dead code. D2-scout breadcrumb:
+   json_escape/parse_json_string) so the D2 seam isn't untested dead code. **(FOLD-3 pass-3 R3:
+   `parse_json_string` is frontmatter.rs-private — make it `pub(crate)` or site the round-trip
+   test inside frontmatter.rs's own `#[cfg(test)]` mod so escape + inverse are co-reachable.)** D2-scout breadcrumb:
    enumerate ALL adjudicator-assuming gates before landing production-v1 seeds —
    `gen_idempotent.rs:40-42` AND `frontmatter.rs:401` (`all_committed_seeds_parse`) both assume
    `adjudicator: ggdef` today.

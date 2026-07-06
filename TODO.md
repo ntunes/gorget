@@ -750,6 +750,8 @@ Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (
 
 ## Low
 
+- **🧹 [P1-D pass-3 follow-up, 2026-07-06] Dedup the 3 remaining private copies of the fixture-classification helpers in spec/ggdef/tests/{corpus_a,corpus_b,corpus_b1}.rs** (`parse_rust_str_lit` at corpus_a.rs:79 / corpus_b.rs:51 / corpus_b1.rs:41 + the run_gg-extraction/`.trim()` logic) onto the lib.rs pub helpers D1 hoists (one source of truth; CLAUDE.md sibling-drift). ⚠ corpus_a's copy is a DIVERGENT implementation shape (explicit bounds-check loop vs `match b.get(i)?`) — prove byte-equivalent behavior and keep every corpus gate green (`cargo test -p ggdef`) when rewiring. Deliberately kept OUT of D1's critical path per its pass-3 review.
+
 - **🧹 [P1-B review follow-up, 2026-07-06] ggdef frontmatter reader: unknown TOP-LEVEL keys with nested/`|`-block values error (`MalformedKey`) instead of being tolerated.** Loud, never silent — no seed trips it today — but RFC §4's `files:` is a future block-shaped key. Fix: make the `other` arm (`spec/ggdef/src/frontmatter.rs:192` at filing) consume-and-discard an unknown key's indented children. Doc-comments were narrowed to inline-only at integration (module doc LIMIT note cites this entry).
 
 - **🧹 [P1-B review follow-up, 2026-07-06] ggdef frontmatter `Expect{exit,stdout}` is RUN-TIER-ONLY — not the all-tier contract.** RFC §4 static-error/parse-error tiers express `expect:` as a diagnostic code (`expect: code: E_…`, no exit/stdout). The tier-track that populates those directories must refactor `Expect` into a tier-discriminated enum (breaking change to the 4-lane-shared type, `frontmatter.rs:41-46` at filing) — do not treat the run-tier shape as final.
