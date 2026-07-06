@@ -227,6 +227,20 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D10 RATIFIED by owner (deletion rider SIGNED): the exclusivity package.**
+  One rule at three sites: for any two access paths in a call, bind, or live capture
+  whose PLACES overlap (root + projection prefix), at most one writer (`&`) or mover
+  (`!`) during the borrow's live range — a compile error otherwise. Exclusivity is
+  production's LICENSE for lazy CoW (violations = the lazy/eager divergence channel; not
+  Rust-style lifetime safety — ggdef cannot even observe them). Consequences: duration =
+  liveness-normative (extends D7), scope-based permitted as stricter impl; **local
+  `&`-binds rejected in v1 — both forms — retiring the round-38 T-D write-through**
+  (owner: "should not be legal and it also conflicts with only one exclusive writer";
+  reviewed live examples incl. the ASLR-garbage read-back); same-call rejection keyed on
+  place overlap, all sigil pairs (closes the accepted-and-miscompiled `f(v,!v)` and the
+  name-exact `f(b.data,&b)` miss). Frame-scoped borrows untouched. A29 + A3 CLOSED;
+  implementation tracks filed HIGH.
+
 - 2026-07-06 — **D19 RATIFIED by owner: `break <value>` / loop-as-expression REMOVED from
   the v1 surface** ("no loop-as-expression in gorget as for now"). It was a half-wired
   grammar stub: zero fixtures, loop-as-expression unparseable in assignment position, and

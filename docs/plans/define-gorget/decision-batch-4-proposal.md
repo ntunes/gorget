@@ -37,7 +37,20 @@ answer, or already closed. All are filed in TODO.md. Listed so the queue can be 
 
 ## Part I — The decisions (recommendations, ranked by structural weight)
 
-### D10 (PROPOSED) — THE EXCLUSIVITY RULE: one place-overlap law at three sites  *(consolidates A29 a+b+c and A3)*
+### D10 (RATIFIED 2026-07-06 — deletion rider SIGNED) — THE EXCLUSIVITY RULE: one place-overlap law at three sites  *(consolidates A29 a+b+c and A3)*
+
+> **Owner ruling 2026-07-06: "Agreed, remove 'bind a borrow to a local variable'. This
+> should not be legal and it also conflicts with only one exclusive writer."** The full
+> package is ratified: (1) the place-overlap rule (readers XOR one writer/mover over
+> overlapping places during the borrow's live range) as the normative exclusivity law;
+> (2) duration = liveness-based normative, scope-based permitted as a stricter
+> implementation (filed conformance gap, converging); (3) **local `&`-binds REJECTED in
+> v1 — both `auto r = &b` and `T &a = b` forms — deleting the round-38 T-D write-through
+> intercept** (owner reviewed the three live examples: the working write-through, the
+> ASLR-garbage read-back twin, and the silent-copy LHS form); (4) same-call aliasing
+> rejection normative, keyed on PLACE overlap across all sigil pairs. Frame-scoped
+> borrows (`f(&b)`, `&`-params, `&self.field`, method auto-borrow, `for x in &b`) are
+> untouched. A29 + A3 CLOSE. Implementation tracks filed.
 
 **The reframe that makes this simple.** Exclusivity in Gorget is not Rust's
 memory-safety-via-lifetimes. Under D1, ggdef cannot even *detect* an aliasing violation —
