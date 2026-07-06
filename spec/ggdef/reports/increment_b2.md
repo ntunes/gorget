@@ -134,3 +134,22 @@ With B2 landed, phase-0 acceptance (a)+(b) is met: the cow_* family (minus the 3
 generic-equip exclusions) and the deadwrite_* programs (minus atomic_add) all run
 under ggdef with their ratified expectations. Acceptance (c) — the two smith
 adjudications + the EMove witness from the definition — is **Increment C**.
+
+## CORRECTION (B2 output-review, 2026-07-06 — discloses what the report above over-claimed)
+
+1. **Custom-drop execution is TRANSITIVELY INCOMPLETE in B2.** `run_custom_drop` runs the
+   type's OWN drop body only — it does NOT enumerate droppable FIELDS or COLLECTION ELEMENTS
+   of the dropped value. Verified divergence from correct production: nested Drop types miss
+   the inner drop; `Vector[R]` of a Drop type misses all element drops. RFC §2.2 makes drop
+   count/order normative, so this is a PHASE-1 MUST (filed in TODO.md) — not exercised by the
+   phase-0 corpus (the only Drop fixture has a scalar field + `pass` body), so the gate is
+   legitimately green, but "custom-drop EXECUTION" above should read "top-level custom-drop
+   execution."
+2. **D4 position 6 user-method sibling closed post-review**: a user `&self` mutator through a
+   tainted Borrow-rooted receiver is now rejected (orchestrator fix + 2 pinning tests). The
+   plain-`self`-write case needs method-body write analysis — phase 1 (filed).
+3. Position-5 (capture) uses an inline check, not the centralized helper — functionally
+   correct; consolidation is a phase-1 tidy.
+4. deadwrite_spec_expectations.md precision: the 24-row table is 21 match + 3 pre-adjudicated
+   deltas (not "remaining 21 are match"). The 5 cow_* REPORT-ONLY outputs live in the
+   corpus_b --nocapture table.

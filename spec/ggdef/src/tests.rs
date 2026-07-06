@@ -956,3 +956,57 @@ void main():
 "#;
     assert_eq!(out(src), "1");
 }
+
+#[test]
+fn d4_position_6_user_amp_self_mutator_on_tainted_borrow_rejected() {
+    // B2 output-review R2: a user `&self` mutator through a tainted
+    // Borrow-rooted receiver is the user-method sibling of position 6.
+    let src = r#"
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print("bye")
+
+equip R:
+    void bump(&self):
+        self.id = 9
+
+void poke(R s):
+    s.bump()
+
+void main():
+    R r = R(1)
+    poke(r)
+"#;
+    match run_source(src, FUEL) {
+        Err(e) => assert!(e.to_string().contains("materialize-on-write"), "got: {e}"),
+        Ok(_) => panic!("tainted &self mutator on a bare param must be rejected (D4 pos 6)"),
+    }
+}
+
+#[test]
+fn d4_user_amp_self_mutator_on_owned_tainted_local_allowed() {
+    // Counterpart: `&self` on an OWNED tainted local writes through the owner
+    // — no materialize, no implicit copy, legal.
+    let src = r#"
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print(f"bye {self.id}")
+
+equip R:
+    void bump(&self):
+        self.id = 9
+
+void main():
+    R r = R(1)
+    r.bump()
+    print(r.id)
+"#;
+    assert_eq!(out(src), "9
+bye 9");
+}

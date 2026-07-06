@@ -1308,6 +1308,13 @@ impl Elaborator {
         args: &[Spanned<ast::CallArg>],
         _span: Span,
     ) -> ElabResult<Expr> {
+        // D4 position 6, user-method sibling (B2 output-review R2): a `&self`
+        // mutator writing through a TAINTED Borrow-rooted receiver would
+        // materialize it — same rejection as the builtin-mutator site. (The
+        // plain-`self`-write case needs method-body write analysis: phase 1.)
+        if minfo.self_mode == Mode::WriteThrough {
+            self.reject_materialize_on_write(&receiver.node, receiver.span)?;
+        }
         let self_src = self.self_source(receiver, minfo.self_mode)?;
         let mut out = vec![self_src];
         out.extend(self.call_args_reordered(&minfo.mangled, args)?);
