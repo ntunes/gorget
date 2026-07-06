@@ -26,17 +26,20 @@ sequential fresh-review gauntlet.
   bring NEW decision needs to the owner as option-questions (owner directive: ask along the
   way, with recommendations and previews).
 - **RFC**: APPROVED (status line at top of `rfc-ggc-ggdef.md`). §2.2 is the semantic core.
-- **Phase 0**: brief at `phase0-brief.md` (3 increments; its STATUS header is the live
-  tracker). **Increments A + B1 + B2: LANDED + MERGED** (A: 26/26; B1: 75/75; B2: 87/87
-  full-corpus gate incl. all equip fixtures — receiver-type inference, equip/Drop, D2, the
-  six D4 rejection positions). ggdef's transitive-drop gap is a filed phase-1 HIGH
-  (spec/ggdef/reports/increment_b2.md CORRECTION). **ggdef has surfaced 4 production bugs** (3 bare-param
+- **Phase 0: ✅ COMPLETE 2026-07-06** (A 26/26 · B1 75/75 · B2 87/87 full corpus · C
+  adjudications `9`/`ablog`/`hello` + spectests skeleton + gen + prose stubs; RFC §6(a)(b)(c)
+  satisfied per independent output-review re-runs). `phase0-brief.md` is CLOSED/sealed.
+  Definition scorecard so far: 4 production bugs surfaced+filed, 3 ratified expectations
+  production can't yet meet, 1 production memory-safety fix landed (elemdrop), EMove settled. **ggdef has surfaced 4 production bugs** (3 bare-param
   materialize holes + ctor named-args — TODO HIGH entries, ggdef-adjudicated expected
   outputs in spec/ggdef/reports/increment_b1.md's CORRECTION table). Call-side named args
-  are REJECTED in ggdef pending B2's reorder. **Next: Increment C** (adjudications + spectests skeleton + `-- gen` + prose
-  stubs — the phase-0 closer; its brief section was review-confirmed in the B/C pass).
-  The elemdrop production fix LANDED + full-sweep-confirmed 2026-07-06 (P1+P2 closed,
-  D4-spectest prerequisite satisfied).
+  are REJECTED in ggdef pending B2's reorder. **Next: PHASE 1** — scope per RFC §6: coverage completion (§2.6 rows-1-2
+  remainder + statics), frontmatter migration of the ~1,218 harness pairs (float fixtures
+  unblocked by D8), per-impl conformance reports + monotone floors, ggdef as smith's VERDICT
+  lane, D4/D5/D6 rejections in BOTH production compilers + negative fixtures, ggdef
+  transitive-drop completion (filed HIGH — spectest prerequisite), diagnostic-code registry.
+  START with a phase-1 scout+brief (new file, e.g. phase1-brief.md) through the full
+  gauntlet; the elemdrop production fix already LANDED (P1+P2 closed).
 - **Known prerequisite bug** (do not lose): collection-element custom-Drop lost on named-local
   push — TODO.md HIGH entry (grep `custom Drop LOST`) — must be fixed before D4 drop-count
   spectests can gate implementations. Its fix is a SEPARATE track (src/ir zone; disjoint from
