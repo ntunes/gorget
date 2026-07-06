@@ -194,13 +194,21 @@ struct Ctx<'a> {
     prog: &'a Program,
     funcs: HashMap<&'a str, usize>,
     structs: HashMap<&'a str, usize>,
+    /// `type-name → drop-fn index` for `equip T with Drop` custom drops.
+    drop_fns: HashMap<&'a str, usize>,
 }
 
 impl<'a> Ctx<'a> {
     fn new(prog: &'a Program) -> Self {
-        let funcs = prog.functions.iter().enumerate().map(|(i, f)| (f.name.as_str(), i)).collect();
+        let funcs: HashMap<&'a str, usize> =
+            prog.functions.iter().enumerate().map(|(i, f)| (f.name.as_str(), i)).collect();
         let structs = prog.structs.iter().enumerate().map(|(i, s)| (s.name.as_str(), i)).collect();
-        Ctx { prog, funcs, structs }
+        let drop_fns = prog
+            .drop_fns
+            .iter()
+            .filter_map(|(ty, fname)| funcs.get(fname.as_str()).map(|&idx| (ty.as_str(), idx)))
+            .collect();
+        Ctx { prog, funcs, structs, drop_fns }
     }
 
     fn struct_fields(&self, name: &str) -> Option<&'a [String]> {
@@ -276,28 +284,85 @@ fn call_function(
             return Err(Halt::IllFormed("break/continue outside a loop".to_string()));
         }
     };
-    drop_scope(state, 0);
+    drop_scope(ctx, state, 0)?;
     state.frames.pop();
     Ok(ret)
 }
 
-/// Drop every local from `mark`.. in reverse declaration order, emitting a
-/// `Drop` event for each owned, droppable value, then truncate the frame's
-/// locals to `mark`. Scalars are `Copy` and do not drop.
-fn drop_scope(state: &mut State, mark: usize) {
-    let frame = state.cur_frame();
-    let mut i = state.frames[frame].locals.len();
-    while i > mark {
-        i -= 1;
-        let local = &state.frames[frame].locals[i];
-        if let Slot::Owned(v) = &local.slot {
-            if is_droppable(v) {
+/// Drop every local from `mark`.. in reverse declaration order (RFC §2.1),
+/// emitting a `Drop` event for each owned, droppable value and RUNNING its
+/// custom `Drop` body (D4) when its type has one. Scalars are `Copy` and do not
+/// drop. Threads `Ctx` and returns `Result` because a custom drop is arbitrary
+/// code — it can Trap, recurse, or exhaust fuel.
+///
+/// Locals are popped ONE AT A TIME (not bulk-truncated) so a custom drop, which
+/// pushes its own frame and may itself drop values, never re-observes the local
+/// being dropped.
+fn drop_scope(ctx: &Ctx, state: &mut State, mark: usize) -> Result<(), Halt> {
+    loop {
+        let frame = state.cur_frame();
+        if state.frames[frame].locals.len() <= mark {
+            break;
+        }
+        let local = state.frames[frame].locals.pop().expect("locals.len() > mark");
+        if let Slot::Owned(v) = local.slot {
+            if is_droppable(&v) {
                 // Drop provenance is the binding's declaration site.
                 state.trace.push(TraceEvent::Drop { place: local.name.clone(), span: local.span });
+                run_custom_drop(ctx, state, v, local.span)?;
             }
         }
     }
-    state.frames[frame].locals.truncate(mark);
+    Ok(())
+}
+
+/// If `val`'s type has an `equip T with Drop` custom drop, run it with `val`
+/// moved in as `self` (D4: `drop(!self)`). `self` is killed before the drop
+/// body's own scope exits, so a value's custom drop never recurses on itself
+/// (phase-0 tainted types have scalar/loop-free fields, so transitive
+/// field-drop is a no-op and is left to phase 1). Body-declared locals inside
+/// the drop DO drop transitively (they route back through `drop_scope`).
+fn run_custom_drop(ctx: &Ctx, state: &mut State, val: Value, span: Span) -> Result<(), Halt> {
+    let tyname = match &val {
+        Value::Struct { name, .. } => name.clone(),
+        Value::Enum { type_name, .. } => type_name.clone(),
+        _ => return Ok(()),
+    };
+    let Some(&fn_idx) = ctx.drop_fns.get(tyname.as_str()) else {
+        return Ok(());
+    };
+    state.tick()?;
+    let func: &Function = &ctx.prog.functions[fn_idx];
+    let self_span = func.params.first().map(|p| p.span).unwrap_or(span);
+    let body = func.body.clone();
+    state.frames.push(Frame {
+        locals: vec![Local { name: "self".to_string(), slot: Slot::Owned(val), span: self_span }],
+    });
+    // Run the drop body; a Halt (trap / fuel) propagates AFTER we unwind the
+    // frame stack via `?` at the caller (state is discarded on any Halt).
+    let mut body_result: Result<(), Halt> = Ok(());
+    for stmt in &body {
+        match exec_stmt(ctx, state, stmt) {
+            Ok(Flow::Normal) => {}
+            // `return`/`break`/`continue` in a drop body just ends it.
+            Ok(_) => break,
+            Err(h) => {
+                body_result = Err(h);
+                break;
+            }
+        }
+    }
+    // Kill `self` so the drop body's scope exit does NOT re-invoke this custom
+    // drop, then drop the body's own locals (transitive). On a Halt we skip the
+    // remaining drops (consistent with Halt short-circuiting elsewhere).
+    let frame = state.cur_frame();
+    if let Some(slot0) = state.frames[frame].locals.first_mut() {
+        slot0.slot = Slot::Moved;
+    }
+    body_result?;
+    drop_scope(ctx, state, 0)?;
+    state.frames.pop();
+    Ok(())
 }
 
 /// Non-scalar values carry a (possibly custom, in B2) drop. Scalars are
@@ -319,7 +384,7 @@ fn exec_block(ctx: &Ctx, state: &mut State, block: &[Stmt]) -> Result<Flow, Halt
         }
     }
     // Leaving the block drops its locals even on an early return/break/continue.
-    drop_scope(state, mark);
+    drop_scope(ctx, state, mark)?;
     Ok(flow)
 }
 
@@ -329,9 +394,30 @@ fn exec_stmt(ctx: &Ctx, state: &mut State, stmt: &Stmt) -> Result<Flow, Halt> {
         Stmt::Bind { name, source, span } => {
             state.cur_span = *span;
             let slot = eval_source_to_slot(ctx, state, source, *span)?;
+            emit_fresh_temp_move(state, source, &slot, name, *span);
             let frame = state.cur_frame();
             state.frames[frame].locals.push(Local { name: name.clone(), slot, span: *span });
             Ok(Flow::Normal)
+        }
+        Stmt::With { name, source, body, span } => {
+            state.cur_span = *span;
+            // The resource lives in a fresh scope: bind it, run the body, then
+            // drop the body's locals AND the resource (reverse declaration
+            // order ⇒ the resource, bound first, drops LAST — RFC §2.6).
+            let mark = state.frames[state.cur_frame()].locals.len();
+            let slot = eval_source_to_slot(ctx, state, source, *span)?;
+            emit_fresh_temp_move(state, source, &slot, name, *span);
+            let frame = state.cur_frame();
+            state.frames[frame].locals.push(Local { name: name.clone(), slot, span: *span });
+            let mut flow = Flow::Normal;
+            for stmt in body {
+                flow = exec_stmt(ctx, state, stmt)?;
+                if !matches!(flow, Flow::Normal) {
+                    break;
+                }
+            }
+            drop_scope(ctx, state, mark)?;
+            Ok(flow)
         }
         Stmt::Assign { target, value, span } => {
             state.cur_span = *span;
@@ -404,6 +490,21 @@ fn exec_stmt(ctx: &Ctx, state: &mut State, stmt: &Stmt) -> Result<Flow, Halt> {
 }
 
 // ── Sources (the copy/move/borrow decision, realised) ──────────────────────
+
+/// (F2) A fresh-temp bind (`S a = S(..)`, `with Res(1) as r`) is a STRUCTURAL
+/// MOVE of the temp into the binding — never a live-place copy — so it emits a
+/// `Move` provenance event (whose `from` names the destination, per the trace
+/// doc) rather than a `BindCopy`. Scalars are `Copy`, so only droppable values
+/// carry the event (matching the copy/move axis that structural moves live on).
+fn emit_fresh_temp_move(state: &mut State, source: &Source, slot: &Slot, name: &str, span: Span) {
+    if matches!(source, Source::Value(_)) {
+        if let Slot::Owned(v) = slot {
+            if is_droppable(v) {
+                state.trace.push(TraceEvent::Move { from: name.to_string(), span });
+            }
+        }
+    }
+}
 
 /// Resolve a `Source` into a fresh slot (for `let` bindings and param setup).
 fn eval_source_to_slot(ctx: &Ctx, state: &mut State, source: &Source, span: Span) -> Result<Slot, Halt> {
@@ -865,10 +966,10 @@ fn call_closure(
         locals.push(Local { name: param.name.clone(), slot, span: param.span });
     }
     state.frames.push(Frame { locals });
-    let result = eval_expr(ctx, state, &body);
-    drop_scope(state, 0);
+    let result = eval_expr(ctx, state, &body)?;
+    drop_scope(ctx, state, 0)?;
     state.frames.pop();
-    result
+    Ok(result)
 }
 
 /// The `as`-cast rules (RFC §2.1): float→int **saturates** (the ratified
@@ -1246,7 +1347,7 @@ fn exec_match_stmt(
         if let Some(binds) = match_pattern(ctx, state, &scrut_val, &arm.pattern)? {
             push_pattern_bindings(state, &scrut_place, binds);
             let flow = exec_block(ctx, state, &arm.body)?;
-            drop_scope(state, mark);
+            drop_scope(ctx, state, mark)?;
             return Ok(flow);
         }
     }
@@ -1254,7 +1355,7 @@ fn exec_match_stmt(
         Some(b) => exec_block(ctx, state, b)?,
         None => Flow::Normal,
     };
-    drop_scope(state, mark);
+    drop_scope(ctx, state, mark)?;
     Ok(flow)
 }
 
@@ -1272,7 +1373,7 @@ fn eval_match_expr(
         if let Some(binds) = match_pattern(ctx, state, &scrut_val, &arm.pattern)? {
             push_pattern_bindings(state, &scrut_place, binds);
             let result = eval_expr(ctx, state, &arm.body)?;
-            drop_scope(state, mark);
+            drop_scope(ctx, state, mark)?;
             return Ok(result);
         }
     }
@@ -1280,7 +1381,7 @@ fn eval_match_expr(
         Some(e) => eval_expr(ctx, state, e)?,
         None => return Err(Halt::Trap(Fault::Panic("no match arm matched".to_string()))),
     };
-    drop_scope(state, mark);
+    drop_scope(ctx, state, mark)?;
     Ok(result)
 }
 

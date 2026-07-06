@@ -4683,6 +4683,16 @@ fn ggdef_import_ratchet() {
     let forbidden_seg =
         regex::Regex::new(&format!(r"[:{{,]\s*(?:{alternation})\b")).unwrap();
 
+    // (F1 hardening, Increment B2) A SECOND scan over the FULL source text for a
+    // bare fully-qualified `gorget::<forbidden>::` path segment — an inline
+    // `gorget::semantic::TypeChecker` usage carries NO `use` line, so the
+    // use-line-only scan above is trivially bypassable. This catches the fenced
+    // modules however they are named. `\b` keeps `intern` from tripping `ir` and
+    // `bird` from tripping `bir`; the trailing `::` requires a real path INTO the
+    // module (so a doc-comment mention like "the `semantic` module" is ignored).
+    let inline_path =
+        regex::Regex::new(&format!(r"gorget\s*::\s*(?:{alternation})\s*::")).unwrap();
+
     let mut violations = Vec::new();
     visit("spec/ggdef/src", &mut |path| {
         if path.extension().map_or(true, |e| e != "rs") {
@@ -4692,6 +4702,7 @@ fn ggdef_import_ratchet() {
             Ok(s) => s,
             Err(_) => return,
         };
+        // Scan 1: `use`/`pub use` items.
         for cap in use_item.captures_iter(&content) {
             let item = &cap[1];
             // Only the ROOT crate (`gorget::...`) is fenced; `crate::` is ggdef
@@ -4704,15 +4715,20 @@ fn ggdef_import_ratchet() {
                 violations.push(format!("{}: `use {flat};`", path.display()));
             }
         }
+        // Scan 2: any inline fully-qualified forbidden path (bypasses `use`).
+        for m in inline_path.find_iter(&content) {
+            violations.push(format!("{}: inline path `{}…`", path.display(), m.as_str().trim()));
+        }
     });
 
     assert!(
         violations.is_empty(),
-        "ggdef import ratchet TRIPPED (budget = 0, fatal): ggdef's own `use` lines may import \
+        "ggdef import ratchet TRIPPED (budget = 0, fatal): ggdef's own source may reference \
          `gorget::{{lexer, parser, span, errors, intern, compiler_data}}` + std ONLY — never \
-         `ir`/`semantic`/`lir`/`bir`/`backend`. A definition that consumes the compiler's own \
-         decisions is circular (the Miri trap; RFC §2.4). Remove the import or add the metadata \
-         ggdef needs to the shared lexer/parser/AST.\n\nViolations:\n{}",
+         `ir`/`semantic`/`lir`/`bir`/`backend`, whether via a `use` line OR an inline \
+         fully-qualified path. A definition that consumes the compiler's own decisions is \
+         circular (the Miri trap; RFC §2.4). Remove the import or add the metadata ggdef needs \
+         to the shared lexer/parser/AST.\n\nViolations:\n{}",
         violations.join("\n"),
     );
 }

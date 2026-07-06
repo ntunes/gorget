@@ -46,7 +46,8 @@ void main():
 #[test]
 fn fresh_temp_bind_is_a_move_not_a_copy() {
     // A constructor result has no continuing owner ⇒ tagged Move, so binding it
-    // emits NO BindCopy (it is not a live-place copy).
+    // emits NO BindCopy (it is not a live-place copy) and DOES emit a structural
+    // `Move` provenance event (F2) — a fresh-temp bind is a move, not a copy.
     let src = r#"
 struct S:
     String text
@@ -55,7 +56,9 @@ void main():
     print(a.text)
 "#;
     let run = go(src);
-    assert!(!kinds(&run).contains(&"bind_copy"), "fresh-temp bind must not BindCopy");
+    let k = kinds(&run);
+    assert!(!k.contains(&"bind_copy"), "fresh-temp bind must not BindCopy");
+    assert!(k.contains(&"move"), "fresh-temp bind of a droppable value emits a structural Move (F2)");
 }
 
 #[test]
@@ -645,20 +648,311 @@ void main():
     assert_eq!(out(src), "44\n-56");
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// Increment B2 — equip, Drop, D4 rejections, with-resource, call reorder
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── (B1 output-review R2) call-side named-arg REORDER, both ways ────────────
+
 #[test]
-fn named_args_rejected_at_function_calls() {
-    // R2 (B1 output-review): positional binding of named call args silently
-    // mis-binds (`sub(b=3, a=10)` evaluated as sub(3, 10)). Until B2 lands the
-    // call-side reorder, elaboration must REJECT, never mis-evaluate.
+fn named_args_reordered_at_function_calls() {
+    // B2 replaces the B1-interim rejection: named call args are REORDERED to the
+    // callee's param order via the pass-1 signature registry. `sub(b=3, a=10)`
+    // must evaluate as `sub(10, 3)` = 7, NOT the mis-bound `sub(3, 10)` = -7.
     let src = r#"
 int sub(int a, int b):
     return a - b
 
 void main():
     print(sub(b=3, a=10))
+    print(sub(a=10, b=3))
+    print(sub(10, 3))
+"#;
+    assert_eq!(out(src), "7\n7\n7");
+}
+
+#[test]
+fn named_args_still_rejected_at_enum_ctor() {
+    // Enum-variant/collection-ctor positions keep the B1 rejection (positional
+    // binding there would silently mis-bind).
+    let src = r#"
+enum Pair:
+    P(int, int)
+void main():
+    Pair p = Pair.P(b=1, a=2)
+    print("x")
 "#;
     match run_source(src, FUEL) {
         Err(e) => assert!(e.to_string().contains("named argument"), "got: {e}"),
-        Ok(_) => panic!("named call args must be rejected in B1, not evaluated"),
+        Ok(_) => panic!("named args at an enum ctor must be rejected"),
     }
+}
+
+// ── equip method dispatch + D2 (plain self = materialize-on-write) ─────────
+
+#[test]
+fn equip_amp_self_mutator_on_bare_param_materializes() {
+    // A `&self` mutator called on a bare-value param materializes a private
+    // copy (the caller is untouched) — the R38 named-receiver shape.
+    let src = r#"
+struct Rec:
+    String name
+equip Rec:
+    void set_name(&self, String n):
+        self.name = n
+String touch(Rec r):
+    r.set_name("Y")
+    return r.name
+void main():
+    Rec orig = Rec("A")
+    print(touch(orig))
+    print(orig.name)
+"#;
+    assert_eq!(out(src), "Y\nA");
+}
+
+#[test]
+fn equip_plain_self_write_materializes_d2() {
+    // D2: a write through PLAIN `self` materializes a private copy — the caller
+    // is untouched, exactly like a bare param.
+    let src = r#"
+struct Box:
+    int n
+equip Box:
+    void bump(self):
+        self.n = self.n + 1
+void main():
+    Box b = Box(1)
+    b.bump()
+    print(b.n)
+"#;
+    assert_eq!(out(src), "1");
+}
+
+#[test]
+fn equip_user_method_name_collision_with_builtin_get() {
+    // A user `get(&self)` mutator COLLIDES with the builtin `.get()`; receiver-
+    // type inference (`c: Holder`) must dispatch the USER method, not the
+    // builtin. Mirrors cow_named_recv_gate_name_collision.
+    let src = r#"
+struct Holder:
+    String name
+equip Holder:
+    void get(&self):
+        self.name = "Y"
+String touch(Holder c):
+    c.get()
+    return c.name
+void main():
+    Holder orig = Holder("A")
+    print(touch(orig))
+    print(orig.name)
+"#;
+    assert_eq!(out(src), "Y\nA");
+}
+
+// ── equip T with Drop — custom-drop EXECUTION (side-effecting + trapping) ───
+
+#[test]
+fn custom_drop_side_effect_runs_at_scope_exit() {
+    // The corpus's Drop bodies are all `pass`; a side-effecting body proves the
+    // custom drop actually EXECUTES at scope exit (after the body prints).
+    let src = r#"
+struct Loud:
+    int id
+equip Loud with Drop:
+    void drop(!self):
+        print("dropped")
+void main():
+    Loud a = Loud(1)
+    print("body")
+"#;
+    assert_eq!(out(src), "body\ndropped");
+}
+
+#[test]
+fn custom_drops_run_in_reverse_declaration_order() {
+    let src = r#"
+struct Loud:
+    String tag
+equip Loud with Drop:
+    void drop(!self):
+        print(self.tag)
+void main():
+    Loud a = Loud("a")
+    Loud b = Loud("b")
+    print("body")
+"#;
+    // Reverse declaration order: b drops before a.
+    assert_eq!(out(src), "body\nb\na");
+}
+
+#[test]
+fn custom_drop_that_traps_propagates_the_trap() {
+    // A custom drop is arbitrary code — a Trap inside it must escape (drop_scope
+    // threads the Halt), overriding the otherwise-Value outcome.
+    let src = r#"
+struct Bomb:
+    int id
+equip Bomb with Drop:
+    void drop(!self):
+        int z = 0
+        int r = 1 / z
+        print(r)
+void main():
+    print("before")
+    Bomb b = Bomb(1)
+"#;
+    let run = go(src);
+    assert_eq!(run.outcome, Outcome::Trap(Fault::DivByZero));
+    assert_eq!(run.stdout, "before\n", "output up to the trapping drop is preserved");
+}
+
+#[test]
+fn custom_drop_does_not_recurse_on_itself() {
+    // `drop(!self)` moves self in; self must NOT re-trigger its own custom drop
+    // at the drop body's scope exit (else infinite recursion → FuelExhausted).
+    let src = r#"
+struct Res:
+    int id
+equip Res with Drop:
+    void drop(!self):
+        pass
+void main():
+    Res r = Res(1)
+    print("ok")
+"#;
+    assert_eq!(out(src), "ok");
+}
+
+// ── with <expr> as name: — scoped bind + drop-at-block-exit ────────────────
+
+#[test]
+fn with_resource_drops_at_block_exit_not_function_exit() {
+    // The resource drops at the END of the with-block (before the trailing
+    // print), not at function exit — that timing is why `with` is a scoped
+    // statement, not an inlined bind.
+    let src = r#"
+struct Guard:
+    int id
+equip Guard with Drop:
+    void drop(!self):
+        print("released")
+void main():
+    print("open")
+    with Guard(1) as g:
+        print("inside")
+    print("after")
+"#;
+    assert_eq!(out(src), "open\ninside\nreleased\nafter");
+}
+
+#[test]
+fn with_fresh_temp_resource_is_a_move_not_a_copy() {
+    // A `with Res(1) as r` resource is a fresh-temp Move — a drop-tainted type is
+    // single-owner, but a fresh temp is never a live-place copy, so it is NOT a
+    // D4 rejection (mirrors cow_element_borrow_source_mutate_with). It must run.
+    let src = r#"
+struct Res:
+    int id
+equip Res with Drop:
+    void drop(!self):
+        pass
+void main():
+    Vector[String] coll = ["alpha"]
+    String s = coll.get(0).unwrap()
+    with Res(1) as r:
+        coll.push("beta")
+    print(s)
+    print(coll.len())
+"#;
+    assert_eq!(out(src), "alpha\n2");
+}
+
+// ── D4 rejections — ONE unit test per implicit-copy position (six) ─────────
+//
+// A drop-tainted type (custom `Drop`) is single-owner: an implicit copy of a
+// LIVE PLACE at any of the six positions is `E_MoveWithoutOperator`. Fresh
+// temps move and are never rejected.
+
+/// A drop-tainted `struct R` used across the six D4 tests.
+const D4_PRELUDE: &str = r#"
+struct R:
+    int id
+equip R with Drop:
+    void drop(!self):
+        pass
+"#;
+
+fn d4_rejects(body: &str, position_hint: &str) {
+    let src = format!("{D4_PRELUDE}\n{body}");
+    match run_source(&src, FUEL) {
+        Err(e) => {
+            let s = e.to_string();
+            assert!(s.contains("E_MoveWithoutOperator"), "{position_hint}: got: {s}");
+        }
+        Ok(_) => panic!("{position_hint}: a live-place copy of a drop-tainted value must be rejected"),
+    }
+}
+
+#[test]
+fn d4_position_1_bind() {
+    d4_rejects("void main():\n    R a = R(1)\n    R b = a\n", "bind");
+}
+
+#[test]
+fn d4_position_2_ctor_init() {
+    d4_rejects(
+        "struct W:\n    R inner\nvoid main():\n    R a = R(1)\n    W w = W(a)\n",
+        "ctor-init",
+    );
+}
+
+#[test]
+fn d4_position_3_collection_put() {
+    d4_rejects(
+        "void main():\n    R a = R(1)\n    Vector[R] v = Vector[R]()\n    v.push(a)\n",
+        "collection-put",
+    );
+}
+
+#[test]
+fn d4_position_4_return() {
+    d4_rejects("R make():\n    R a = R(1)\n    return a\nvoid main():\n    print(\"x\")\n", "return");
+}
+
+#[test]
+fn d4_position_5_capture() {
+    d4_rejects(
+        "void main():\n    R a = R(1)\n    auto f = (): use(a)\n    f()\nvoid use(R x):\n    print(x.id)\n",
+        "capture",
+    );
+}
+
+#[test]
+fn d4_position_6_materialize_on_write() {
+    // A write through a bare-param BORROW binding of a tainted type would
+    // materialize (privatise) it — rejected.
+    d4_rejects(
+        "void f(R s):\n    s.id = 9\nvoid main():\n    R a = R(1)\n    f(a)\n",
+        "materialize-on-write",
+    );
+}
+
+#[test]
+fn d4_allows_fresh_temp_move_and_explicit_move() {
+    // The counterpart: fresh temps move (never rejected), and an explicit `!`
+    // move at a bind is allowed. Neither is a live-place implicit copy.
+    let src = r#"
+struct R:
+    int id
+equip R with Drop:
+    void drop(!self):
+        pass
+void main():
+    R a = R(1)
+    R b = !a
+    print(b.id)
+"#;
+    assert_eq!(out(src), "1");
 }
