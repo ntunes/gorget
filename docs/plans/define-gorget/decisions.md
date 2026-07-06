@@ -218,7 +218,16 @@ B9 lock = single-owner Resource, B10 Task join-on-drop, B16 arena escape = rejec
   never by "matches the implementation" (invariant #8 promoted into spec process).
 - Static semantics v1 = prose + expected-error-code fixtures; executable typecheck later.
 
+### D9. Float formatting detail: integral-valued floats print with ".0" (owner, 2026-07-06)
+Under D8's shortest-round-trip rule, `print(3.0)` → `"3.0"` (never `"3"`): the printed form must
+parse back AS A FLOAT in Gorget itself ("3" parses as int), preserving D8's round-trip rationale
+and type visibility. Gates the D8 formatting appendix; ggdef `format_value` needs the
+integral-float fix (Rust `{}` prints "3" — use `{:?}`-style or ryu-with-".0"). Recorded at the
+P1-infra reviewers' recommendation.
+
 ## LOG
+- 2026-07-06 (later): D9 decided (3.0 → "3.0"); P1-infra brief at v3 (2 passes folded);
+  matcluster brief at v2 (1 pass folded).
 - 2026-07-06: PHASE 1 opened. P1-infra scout complete (float sequencing = hold-floats OPTION A
   w/ 3 prerequisites; ggdef adjudicable ceiling measured; smith ggdef-lane prototype caught the
   A29 same-call-aliasing check-accepts hole — filed HIGH; 2 ggdef defects filed HIGH as
