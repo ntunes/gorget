@@ -63,6 +63,49 @@
 - **R-f**: pass-1 R2 EXTENDS the draft's P1-E step-1 outcome list (additive); "Value-agree" is
   not a smith verdict — it means "no SPEC-DIVERGE, continue the lanes".
 
+### ⚡ P1-D PRE-LAUNCH FOLD (2026-07-06, from the RESERVATIONS review pass) — OVERRIDES §P1-D below
+
+The §P1-D draft's "~1218 pairs in one run" scope is a BRIEF DEFECT. P1-D SPLITS:
+
+**D1 — the launchable increment (zone: spec/ggdef/ + spectests/run/; nothing in tests/):**
+1. Migrate ONLY the ggdef-adjudicated AGREE set (regenerate the list:
+   `cargo test -p ggdef --test converter_agreement -- --nocapture`; 182 at fold time).
+   EXCLUDE: `cow_*`/`deadwrite_*` (the 122-fixture phase-0 corpus), all float fixtures
+   (predicate `has_decimal_number` on EITHER side, converter_agreement.rs:189-197 — float
+   HOLD still binding, D8 production fix NOT landed, only the D9 decision is), and the
+   OTHER-mismatch triage names (12 at fold time, printed by the same run — real ggdef gaps
+   routed to the P1-A coverage list, e.g. core_traits = user-Display, NEVER migrated blind).
+2. Tool = `pub fn migrate(...)` in spec/ggdef/src/lib.rs (must reach the private
+   `render_expect_block`/`json_escape`/`splice_expect`), dispatched from the existing
+   `main.rs` arg match; call `gen_frontmatter` IN-PROCESS per fixture (never shell out N×);
+   `expect:` stays LAST in the fence (lib.rs:141 convention); flat layout in spectests/run/
+   (both lanes glob flat — do NOT change globs); add a `render_expect_block_from(exit,
+   stdout)` seam now (D2 will need it; keeps D2's serialization on the SAME json_escape the
+   reader inverts).
+3. **`gen_idempotent` MUST become adjudicator-aware IN D1** — today gen_idempotent.rs:40-42
+   panics on any fixture ggdef can't gen (production-v1 landing in D2 would detonate the
+   gate); assert idempotence only for `adjudicator: ggdef`, count-and-report the rest.
+4. Bump `GGDEF_MATCH_FLOOR` (spec_conformance_ggdef.rs:40) 5 → the REGENERATED in-worktree
+   count (expected ≈ 5 seeds + AGREE set; never quote a cached number). No seed collisions
+   (verified: the 5 seeds don't exist under tests/fixtures/).
+5. Transition stays ADDITIVE: integration.rs literal pairs untouched; retirement = separate
+   later track.
+
+**D2 — DEFERRED, needs its own scout→brief→gauntlet (do NOT fold into D1):**
+- The production-v1 bulk (~900 single-file run_gg where ggdef ElabErrors) — blocked on the
+  expect-source fork: grammar-complete literal extraction (+ per-fixture round-trip
+  validation; current parse_rust_str_lit drops raw strings) VS production-run capture
+  (crosses into tests/ zone — coordinate with P1-C). Resolve by scout, not hand-wave.
+- args/stdin families (reader ignores unknown inline keys but run_source can't consume
+  them), dir/multi-file (`files:` is block-shaped — reader errors, filed LIMIT seam),
+  `gg test`/bench families (fragments, not run-tier).
+- ALL panics families (25 call sites): `Expect` has no stderr field; migrating would DROP
+  the panic-message assertion (a "don't redesign around a gap" violation). Wait for RFC §4
+  trap-normalization + a stderr/code field (tier-discriminated Expect, filed TODO).
+- Corrected corpus census (call sites, fn-def lines excluded): run_gg=1216,
+  with_args=1, with_stdin=1, dir=20, bench=1, panics=19, panics_with_stdout=5,
+  panics_with_flags=1, test=14, test_with_flags=4, test_with_tags=2.
+
 
 # DRAFT executor brief — Define Gorget PHASE 1, conformance-infrastructure track
 
