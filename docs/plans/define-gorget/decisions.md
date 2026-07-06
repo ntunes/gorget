@@ -227,6 +227,14 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D13 RATIFIED by owner: allocators go TWO-STEP.** Step 1 now: REJECT bare
+  (non-`with`) allocator locals at check (closes the silent safe-code heap-UAF —
+  `.destroy()` while a backed RAII value lives — AND the leak, immediately); docs
+  write-through: book §19 bare-local example + reference `alloc=`/Fallback examples →
+  `with` form, phantom `checkpoint`/`restore` removed. Step 2 target (filed): full RAII
+  drop-registration with value→allocator ordering via the existing `borrow_deps` primitive;
+  bare locals return as a widening. Owner: "safety holes don't wait politely."
+
 - 2026-07-06 — **D11 exit-code sub-decision RATIFIED by owner: uncaught-trap exit = `101`.**
   MSB-range (e.g. 129) rejected: collides with the shell `128+N` signal-death convention AND
   WASI's 0–125 restriction (Wasm-grade bar). `70`/EX_SOFTWARE considered, declined (moribund

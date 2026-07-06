@@ -164,7 +164,15 @@ D4 is already ratified; this is execution.
 
 ---
 
-### D13 (PROPOSED) — A10 allocators: REJECT bare allocator locals in v1; full RAII is the target state
+### D13 (RATIFIED 2026-07-06 — TWO-STEP) — A10 allocators: REJECT bare allocator locals in v1; full RAII is the target state
+
+> **Owner ruling 2026-07-06: two-step, as recommended** ("safety holes don't wait politely").
+> Step 1 (now): bare allocator locals = compile error pointing at `with` / `alloc=`-inside-
+> `with`; book §19 + reference `alloc=`/Fallback examples rewritten to the RAII form; phantom
+> `checkpoint`/`restore` API removed from the book; negative fixtures. Step 2 (filed target):
+> full RAII drop-registration with value→allocator ordering (the `borrow_deps` topo-sort is
+> the primitive), `.destroy()` becomes reject-or-no-op under registration; bare locals then
+> return as a widening. The LLVM `alloc=` divergence is an independent parity bug (filed).
 
 Both filed behaviors confirmed: bare `Arena` leaks (4176B), and `.destroy()` while a backed
 value lives is a **silent heap-UAF from safe code** (prints fine, exits 0; ASan sees it).
