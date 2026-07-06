@@ -355,7 +355,17 @@ error model's flagship contract. Confidence: high.
 
 ---
 
-### D18 (PROPOSED) — const-eval/meta integer overflow = COMPILE ERROR
+### D18 (RATIFIED 2026-07-06 — AS THE GENERAL RULE) — const-eval/meta integer overflow = COMPILE ERROR
+
+> **Owner ruling 2026-07-06: ratify the general rule so it is never revisited
+> per-operation.** THE RULE: **const-eval mirrors runtime semantics exactly, except
+> runtime faults become compile errors** (there is no boundary to catch a compile-time
+> fault; reject is the degenerate form of fault). Settled by it, now and forever:
+> const `+` overflow → compile error · const `+%`/`-%`/`*%` → wraps (the explicit
+> spelling means wrap, at compile time too) · const division-by-zero → compile error ·
+> const float overflow → `inf` (IEEE — runtime doesn't fault, so const doesn't either) ·
+> and every future const-eval question answers itself by the same mirror. One sentence,
+> zero per-op relitigating.
 
 `const int BIG = INT_MAX + 1` today: check OK, silently **wraps** — while the identical
 expression at runtime **faults**. Compile-time inputs are determinate and there is no runtime

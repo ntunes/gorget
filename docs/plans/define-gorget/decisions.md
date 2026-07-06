@@ -227,6 +227,13 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D18 RATIFIED by owner AS THE GENERAL RULE: const-eval mirrors runtime
+  semantics exactly, except runtime FAULTS become COMPILE ERRORS.** (Owner: "keep it
+  simple, consistent and coherent" — never revisit per-operation.) Falls out: const `+`
+  overflow rejects (today it silently WRAPS — semantic/meta.rs:1278 wrapping_* is the
+  bug); const `+%` wraps; const div-zero rejects; const float overflow → inf (IEEE,
+  mirrors runtime). Implementation track filed; A16's last live residual closes.
+
 - 2026-07-06 — **D12 RATIFIED by owner: D4 enforcement lands in production, STRAIGHT TO
   ERROR** (scout measures blast radius first — surprises are reports, not downgrades).
   `E_MoveWithoutOperator` for drop-tainted types at the six implicit-copy positions,
