@@ -226,6 +226,14 @@ integral-float fix (Rust `{}` prints "3" — use `{:?}`-style or ryu-with-".0").
 P1-infra reviewers' recommendation.
 
 ## LOG
+
+- 2026-07-06 — **D11 exit-code sub-decision RATIFIED by owner: uncaught-trap exit = `101`.**
+  MSB-range (e.g. 129) rejected: collides with the shell `128+N` signal-death convention AND
+  WASI's 0–125 restriction (Wasm-grade bar). `70`/EX_SOFTWARE considered, declined (moribund
+  standard, no recognition). 101 = Rust-panic precedent, exact semantic match, massive
+  acquired recognition incl. LLM training priors. Language contract = {program's own code,
+  101}; ggdef 102/103 stay tool-level; signal deaths stay OS-reported. Full D11 (T_ registry,
+  normalized stderr line, `trap:` frontmatter) still PROPOSED in decision-batch-4-proposal.md.
 - 2026-07-06 (later): D9 decided (3.0 → "3.0"); P1-infra brief at v3 (2 passes folded);
   matcluster brief at v2 (1 pass folded).
 - 2026-07-06: PHASE 1 opened. P1-infra scout complete (float sequencing = hold-floats OPTION A

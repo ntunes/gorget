@@ -82,7 +82,24 @@ direction is a widening). Confidence: high.
 
 ---
 
-### D11 (PROPOSED) — TRAP NORMALIZATION: the `T_` registry, one exit code, a `trap:` conformance field
+### D11 (PROPOSED — exit-code sub-decision RATIFIED 2026-07-06: **101**) — TRAP NORMALIZATION: the `T_` registry, one exit code, a `trap:` conformance field
+
+> **Owner ruling 2026-07-06 (brainstorm session): the uncaught-trap exit code is `101`.**
+> Reasoning recorded so it is never re-derived: (a) the MSB-set range (≥128) is REJECTED —
+> `128+N` is the shell/CI/container convention for "killed by signal N" (129=SIGHUP,
+> 130=SIGINT, 134=SIGABRT, 139=SIGSEGV), so an MSB trap code would be *ambiguous with signal
+> deaths*, the opposite of the differentiation goal; (b) **WASI restricts exit codes to
+> 0–125** (≥126 reserved) — anything ≥126 is unrepresentable on a plausible future Wasm
+> target, and the assurance bar is Wasm-grade; (c) within the safe band (3–125 minus
+> sysexits 64–78), 101 has no intrinsic meaning (Rust picked it semi-arbitrarily pre-1.0 and
+> stability froze it) but enormous ACQUIRED meaning: Rust's panic is the exact semantic
+> precedent for a Gorget trap, and the recognition (humans, CI tooling, LLM training data)
+> comes free; (d) the principled alternative `70` (`EX_SOFTWARE`, sysexits) was considered
+> and declined — semantically apt but the standard is moribund and recognition negligible.
+> Scope notes ratified with it: only `0` and `101` are the LANGUAGE contract (ggdef's
+> 102/103 stay tool-level verdicts production never emits); signal deaths (the by-design
+> stack-guard SIGSEGV→139) remain OS-reported, outside the exit-code contract. The rest of
+> D11 (the `T_` registry + stderr line + `trap:` frontmatter field) remains PROPOSED.
 
 **Current reality (surveyed):** three incompatible stderr formats (`gorget: panic: …` with no
 location / `file:line:col: …` / `<unknown>:0:0: …` for asserts) and three exit codes (1, 134
