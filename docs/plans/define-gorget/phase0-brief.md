@@ -5,7 +5,7 @@
 > before launching (the F2 report-homes fix landed post-sign-off).**
 > **Executor launches: A: ✅ LANDED + MERGED (Opus; 26/26 MATCH; output-review SIGN OFF) ·
 > B: SPLIT into B1/B2 per the B/C confirming pass (6 reservations folded 2026-07-06);
-> B1: ✅ confirming pass SIGN OFF 2026-07-06 — LAUNCHED (Opus) ·
+> B1: ✅ LANDED + MERGED 2026-07-06 (75/75 gate MATCH; output-review folds applied: report corrected, call-side named args rejected pending B2 reorder; ggdef surfaced 4 PRODUCTION bugs — filed) ·
 > B2: after B1 lands · C: after B2.**
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
@@ -142,7 +142,10 @@ ratchet hardening — second scan over FULL source text for bare
 `gorget::(ir|semantic|lir|bir|backend)::` path segments (use-line-only scan is bypassable,
 confirmed); (F2) emit a structural-move trace event for fresh-temp binds + update the
 `fresh_temp_bind_is_a_move_not_a_copy` unit test (preferred over comment-fixing; provenance
-completeness).
+completeness); **(from B1 output-review R2) call-side named-arg REORDER** — replace the
+B1-interim elaboration rejection (`reject_named_args`) for ORDINARY function calls with the
+proper reorder keyed on param names (mirror `struct_ctor_args`); enum-variant/collection-ctor
+positions may keep the rejection (owner call in review if contested); + unit tests both ways.
 
 **Gate B2:** the **entire corpus** — cow_* minus the 3 generic-equip exclusions
 (`cow_element_borrow_alias_mutate`, `cow_p3_alias_chain_mutate`, `cow_p3_index_mutate`) and

@@ -27,12 +27,14 @@ sequential fresh-review gauntlet.
   way, with recommendations and previews).
 - **RFC**: APPROVED (status line at top of `rfc-ggc-ggdef.md`). §2.2 is the semantic core.
 - **Phase 0**: brief at `phase0-brief.md` (3 increments; its STATUS header is the live
-  tracker). **Increment A: LANDED + MERGED to main 2026-07-05** — `spec/ggdef` exists
-  (workspace member), the import ratchet is live in `tests/lints.rs`, 26/26 cow fixtures
-  MATCH under the definition, output-review signed off after independent gg-vs-ggdef
-  cross-validation. **Next action: one confirming review pass (Opus) on the brief's B/C
-  sections** (post-A folds: F1 ratchet hardening, F2 trace event, report homes), then launch
-  the Increment-B executor (Opus, worktree).
+  tracker). **Increments A + B1: LANDED + MERGED** (A: 26/26; B1: 75/75 non-equip gate,
+  28 REPORT-ONLY recorded). **ggdef has surfaced 4 production bugs** (3 bare-param
+  materialize holes + ctor named-args — TODO HIGH entries, ggdef-adjudicated expected
+  outputs in spec/ggdef/reports/increment_b1.md's CORRECTION table). Call-side named args
+  are REJECTED in ggdef pending B2's reorder. **Next: B2** (equip/Drop/D4/receiver-type
+  inference — its brief section is review-confirmed; fold any new items, launch executor).
+  The elemdrop production-fix track runs in parallel (docs/plans/elemdrop-fix-brief.md,
+  signed off, executor launched 2026-07-06).
 - **Known prerequisite bug** (do not lose): collection-element custom-Drop lost on named-local
   push — TODO.md HIGH entry (grep `custom Drop LOST`) — must be fixed before D4 drop-count
   spectests can gate implementations. Its fix is a SEPARATE track (src/ir zone; disjoint from
