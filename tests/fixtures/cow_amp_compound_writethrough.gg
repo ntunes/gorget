@@ -1,0 +1,26 @@
+# matcluster #1 negative: a `&` (mutable-borrow) param COMPOUND write-through is
+# PRESERVED. The compound-arm root-materialize prologue is a no-op on a
+# unique-borrow root, so `xs[i] += x` (index compound) and `c.counts[i] += x`
+# (projected field-index compound) reach the caller's collection through the &
+# chain. Guards that the #1 fix (which stops BARE-param compound write-through)
+# does NOT break `&`-param write-through. Same output on both backends.
+from std.collections import Vector
+
+struct Counter:
+    Vector[int] counts
+
+void bump_index(Vector[int] &xs):
+    xs[0] += 1
+
+void bump_field(Counter &c):
+    c.counts[0] += 1
+
+void main():
+    Vector[int] a = [10]
+    bump_index(&a)
+    print(a[0])            # 11  (caller SEES it — & write-through)
+
+    Counter c = Counter([10])
+    bump_field(&c)
+    print(c.counts[0])     # 11  (caller SEES it — & write-through)
+    print("done")

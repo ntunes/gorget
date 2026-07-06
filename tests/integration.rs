@@ -7405,10 +7405,15 @@ fn deadwrite_warn_string_push() {
 
 #[test]
 fn deadwrite_warn_compound() {
+    // The lint still FIRES (the compound write IS dead — it lands on a private
+    // copy). matcluster #1: it now ALSO runs correctly — `xs[0] += 1` on a bare
+    // param materializes a private copy, so the caller's `a[0]` stays 10 (was
+    // 11 = write-through, on BOTH backends). The warning text is now TRUE.
     check_gg_warns(
         "deadwrite_warn_compound.gg",
         "write to bare parameter `xs` lands on a private copy that is discarded",
     );
+    run_gg("deadwrite_warn_compound.gg", "10");
 }
 
 #[test]
@@ -26790,6 +26795,23 @@ fn cow_amp_owned_writethrough() {
         "cow_amp_owned_writethrough.gg",
         "\
 4
+done",
+    );
+}
+
+/// matcluster #1 negative: `&`-param COMPOUND write-through is PRESERVED. The
+/// compound-arm root-materialize prologue (added for #1) is a no-op on a
+/// unique-borrow root, so `xs[i] += x` (index) and `c.counts[i] += x` (projected
+/// field-index) reach the caller through the & chain (11, 11). Guards that the #1
+/// fix — which stops BARE-param compound write-through — does NOT break the `&`
+/// path. Same output on both backends.
+#[test]
+fn cow_amp_compound_writethrough() {
+    run_gg(
+        "cow_amp_compound_writethrough.gg",
+        "\
+11
+11
 done",
     );
 }

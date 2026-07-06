@@ -1407,6 +1407,10 @@ pub(super) fn lower_compound_assign(
     } else if let Expr::FieldAccess { object, field } = &target.node {
         // Compound assign on struct field: obj.field OP= val
         // Desugar to: read field → compute → write field back
+        // SCOUT-PROTO #1: root-materialize prologue (mirror lower_field_assign
+        // 604-625) — the compound arm previously skipped it, so `v[i].n += 1` /
+        // `s.field += x` on a bare param WROTE THROUGH the caller.
+        materialize_assign_target_root(ctx, builder, object);
         // Snapshot for the same round-33 CoW untrack the plain field-assign does:
         // `try_resolve_field_place`'s `Expr::Index` arm resolves `v[i].field OP= x`
         // / `PTS[i].field OP= x` to a write-through element pointer, and a
@@ -1480,6 +1484,11 @@ pub(super) fn lower_compound_assign(
     } else if let Expr::Index { object, index } = &target.node {
         // Compound assign on index: obj[i] OP= val
         // Desugar to: current = obj[i]; result = current OP val; obj[i] = result
+        //
+        // SCOUT-PROTO #1: root-materialize prologue (mirror lower_index_assign
+        // 931-947) — the compound arm previously skipped it, so `xs[0] += 1` /
+        // `s.counts[0] += 1` on a bare param WROTE THROUGH the caller.
+        materialize_assign_target_root(ctx, builder, object);
         //
         // Sibling of the FieldAccess arm: the `try_resolve_field_place` call
         // below (`m[i].field[key] OP= x`) can fire the new `Expr::Index` arm when
@@ -1785,5 +1794,30 @@ fn compound_op_to_gir(op: ast::BinaryOp) -> BinOp {
         ast::BinaryOp::Shl => BinOp::Shl,
         ast::BinaryOp::Shr => BinOp::Shr,
         _ => BinOp::Add,
+    }
+}
+
+/// SCOUT-PROTO #1: shared root-materialize prologue for compound-assign target
+/// objects. Mirrors the prologue in `lower_field_assign` (604-625) and
+/// `lower_index_assign` (931-947) so that `xs[i] OP= x` / `obj.field OP= x` on
+/// an immutable-in-context (bare-param / alias / element) root materialize a
+/// private owned copy before the read-modify-write, instead of writing through
+/// to the caller. A no-op on `&`/owned roots (write-through preserved).
+fn materialize_assign_target_root(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    object: &Spanned<Expr>,
+) {
+    if let Expr::Identifier(obj_name) = &object.node {
+        if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
+            ctx.cow_before_mutation(builder, local_id, object.span);
+        }
+    } else {
+        if let Some(root_local) = resolve_projection_root_local(ctx, &object.node) {
+            ctx.cow_before_mutation(builder, root_local, object.span);
+        }
+        if let Some(field_path) = extract_field_path_string(&object.node) {
+            ctx.cow_before_field_mutation(builder, &field_path, object.span);
+        }
     }
 }
