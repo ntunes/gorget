@@ -5124,16 +5124,26 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
         else:
             pass
 
-    # ── unwrap / expect: return payload (no tag check — panics at runtime if wrong) ──
+    # ── unwrap / expect: panic-by-default tag check, THEN return payload ──
+    # Reference §15.2: `unwrap`/`expect` panic on None/Error, `unwrap_error`
+    # panics on Ok. Prepend a tag guard that calls `gorget_panic` (the same
+    # runtime entry the inline unwrap path + asserts use), mirroring the shared
+    # LIR guard (src/lir/lower/insts.rs `emit_unwrap_panic_guard`) and its
+    # message text. Valid tag = 0 (Some/Ok) for unwrap/expect; = 1 (Error) for
+    # unwrap_error. `__result_unwrap` is NOT here — bare `Result.unwrap` routes
+    # through the inline lower_expr.gg path, which already guards.
     match name:
         case "__option_unwrap" | "__option_expect":
             if dst >= 0:
                 # Payload is at offset sizeof(int32_t), aligned to 8.
                 # Use generic memcpy from offset 8 (covers all payload types).
-                return "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+                String ou_guard = "if ((*(int32_t*)" + src + ") != 0) { gorget_panic(\"called `unwrap()` on a `None` value\"); } "
+                return ou_guard + "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
             return ";"
         case "__result_unwrap_error":
             if dst >= 0:
+                # Valid tag = 1 (Error). Trap on Ok before reading Error_0.
+                String ue_guard = "if ((*(int32_t*)" + src + ") != 1) { gorget_panic(\"called `unwrap_error()` on a `Ok` value\"); } "
                 # Error payload is the Result's THIRD field (`{ tag; Ok_0;
                 # Error_0; }`), NOT offset 8 — that is the Ok_0 slot (a
                 # String-Err Result read offset-8 yielded a garbage/zero Str).
@@ -5155,13 +5165,17 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
                         if rc_def.fields.len() >= 3:
                             String rc_efty = field_type_str(rc_def.fields.get(2).unwrap().ty, &sn)
                             if rc_efty == "Str" or rc_efty == "GorgetString":
-                                return v(dst) + " = gorget_string_clone_to_owned(&" + rc_cast + "->Error_0);"
-                    return v(dst) + " = " + rc_cast + "->Error_0;"
-                return "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+                                return ue_guard + v(dst) + " = gorget_string_clone_to_owned(&" + rc_cast + "->Error_0);"
+                    return ue_guard + v(dst) + " = " + rc_cast + "->Error_0;"
+                return ue_guard + "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
             return ";"
         case "__result_expect":
             if dst >= 0:
-                return "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+                # Valid tag = 0 (Ok). Trap on Error before reading Ok_0. Uses the
+                # generic unwrap message (the expect user-message threading is a
+                # separate filed TODO — the self-host does not yet plumb it here).
+                String re_guard = "if ((*(int32_t*)" + src + ") != 0) { gorget_panic(\"called `unwrap()` on a `Error` value\"); } "
+                return re_guard + "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
             return ";"
         else:
             pass
