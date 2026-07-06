@@ -353,3 +353,294 @@ void main():
 "#;
     assert_eq!(out(src), "1");
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// Increment B1 — the non-equip surface
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Option / Result + .get()/.unwrap()/.unwrap_or() ────────────────────────
+
+#[test]
+fn option_some_none_unwrap_or() {
+    let src = r#"
+void main():
+    Option[int] a = Some(5)
+    Option[int] b = None
+    print(a.unwrap())
+    print(a.unwrap_or(0))
+    print(b.unwrap_or(99))
+"#;
+    assert_eq!(out(src), "5\n5\n99");
+}
+
+#[test]
+fn unwrap_none_traps() {
+    let src = r#"
+void main():
+    Option[int] b = None
+    print(b.unwrap())
+"#;
+    assert!(matches!(go(src).outcome, Outcome::Trap(Fault::Panic(_))), "unwrap-None must Trap(Panic)");
+}
+
+#[test]
+fn result_ok_error_unwrap() {
+    // Result is an ordinary enum too (unit-tested — no phase-0 corpus fixture).
+    let src = r#"
+void main():
+    Result[int, String] a = Ok(7)
+    print(a.unwrap())
+    print(a.unwrap_or(0))
+    Result[int, String] e = Error("boom")
+    print(e.unwrap_or(42))
+"#;
+    assert_eq!(out(src), "7\n7\n42");
+}
+
+#[test]
+fn vector_get_out_of_bounds_is_none() {
+    let src = r#"
+void main():
+    Vector[int] v = [10, 20]
+    print(v.get(0).unwrap())
+    print(v.get(5).unwrap_or(-1))
+"#;
+    assert_eq!(out(src), "10\n-1");
+}
+
+#[test]
+fn vector_pop_clear_fill() {
+    let src = r#"
+void main():
+    Vector[int] v = [1, 2, 3]
+    print(v.pop().unwrap())
+    print(v.len())
+    v.fill(4, 7)
+    print(v.len())
+    print(v.get(0).unwrap())
+    v.clear()
+    print(v.len())
+"#;
+    assert_eq!(out(src), "3\n2\n4\n7\n0");
+}
+
+// ── Dict / Set (insertion-ordered) ─────────────────────────────────────────
+
+#[test]
+fn dict_set_get_len_and_update_preserves_order() {
+    let src = r#"
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d.set("a", 1)
+    d.set("b", 2)
+    d.set("a", 9)
+    print(d.len())
+    print(d.get("a").unwrap())
+    print(d.get("b").unwrap())
+    print(d.get("z").unwrap_or(-1))
+"#;
+    assert_eq!(out(src), "2\n9\n2\n-1");
+}
+
+#[test]
+fn set_add_dedups_and_clones_independently() {
+    let src = r#"
+void main():
+    Set[String] s1 = Set[String]()
+    s1.add("x")
+    s1.add("x")
+    s1.add("y")
+    print(s1.len())
+    Set[String] s2 = s1.clone()
+    s2.add("z")
+    print(s1.len())
+    print(s2.len())
+"#;
+    assert_eq!(out(src), "2\n2\n3");
+}
+
+// ── match + user payload enums + pattern bindings ──────────────────────────
+
+#[test]
+fn match_expression_binds_payload() {
+    let src = r#"
+enum Token:
+    Ident(String)
+    Number(int)
+String describe(Token t):
+    return match t:
+        case Token.Ident(s): s
+        case Token.Number(_): "num"
+void main():
+    print(describe(Token.Ident("hi")))
+    print(describe(Token.Number(42)))
+"#;
+    assert_eq!(out(src), "hi\nnum");
+}
+
+#[test]
+fn match_statement_literal_and_else() {
+    let src = r#"
+void main():
+    int sel = 2
+    match sel:
+        case 1:
+            print("one")
+        case 2:
+            print("two")
+        else:
+            print("other")
+"#;
+    assert_eq!(out(src), "two");
+}
+
+#[test]
+fn match_binding_reads_payload_view() {
+    // A pattern binding is a Borrow view of the scrutinee's payload (reached
+    // via `Proj::Payload`); reading it copies the payload out at the return.
+    let src = r#"
+enum Wrap:
+    W(String)
+    Empty()
+String peek(Wrap w):
+    return match w:
+        case Wrap.W(inner): inner
+        else: "none"
+void main():
+    Wrap a = Wrap.W("hello")
+    print(peek(a))
+    Wrap b = Wrap.Empty()
+    print(peek(b))
+"#;
+    assert_eq!(out(src), "hello\nnone");
+}
+
+// ── ranges + string slices / indexing ──────────────────────────────────────
+
+#[test]
+fn string_index_and_slice() {
+    let src = r#"
+void main():
+    String s = "hello"
+    print(s[1])
+    print(s[0..3])
+    print(s.substring(1, 4))
+    print(s.trim())
+"#;
+    assert_eq!(out(src), "e\nhel\nell\nhello");
+}
+
+#[test]
+fn for_over_range_and_string() {
+    let src = r#"
+void main():
+    int total = 0
+    for i in 0..4:
+        total = total + i
+    print(total)
+    String out = ""
+    for c in "abc":
+        out = out + c
+    print(out)
+"#;
+    assert_eq!(out(src), "6\nabc");
+}
+
+// ── named-arg construction ─────────────────────────────────────────────────
+
+#[test]
+fn named_arg_construction_reorders() {
+    let src = r#"
+struct Point:
+    int x
+    int y
+void main():
+    Point p = Point(y=2, x=1)
+    print(p.x)
+    print(p.y)
+"#;
+    assert_eq!(out(src), "1\n2");
+}
+
+// ── by-value closures ──────────────────────────────────────────────────────
+
+#[test]
+fn closure_captures_by_value_at_creation() {
+    // The closure snapshots `v` at creation; a later mutation of the outer `v`
+    // is invisible to the closure, and the closure's own push does not leak
+    // out (per-call private copy). Mirrors cow_closure_deferred_mutate.
+    let src = r#"
+void main():
+    Vector[int] v = [1, 2]
+    auto grow = (): v.push(9)
+    String snap = "x"
+    grow()
+    grow()
+    print(v.len())
+    print(snap)
+"#;
+    assert_eq!(out(src), "2\nx");
+}
+
+#[test]
+fn closure_reads_captured_snapshot() {
+    let src = r#"
+void main():
+    String s = "hello"
+    auto f = (): print(s)
+    f()
+    print(s)
+"#;
+    assert_eq!(out(src), "hello\nhello");
+}
+
+// ── std.conv.int_to_str shim ───────────────────────────────────────────────
+
+#[test]
+fn int_to_str_shim() {
+    let src = r#"
+from std.conv import int_to_str
+void main():
+    String s = int_to_str(42)
+    print(s + "!")
+"#;
+    assert_eq!(out(src), "42!");
+}
+
+// ── sized ints + `as`-cast saturation (unit-tested only — no corpus) ────────
+
+#[test]
+fn cast_float_to_int_saturates() {
+    // float→int SATURATES (the ratified 2026-04-24 both-backend rule), not
+    // wraps: 5e9 clamps to int8's max, and a negative float clamps to 0 for
+    // an unsigned target.
+    let src = r#"
+void main():
+    float big = 5000000000.0
+    int8 a = big as int8
+    print(a)
+    float small = 3.9
+    int b = small as int
+    print(b)
+    float neg = 0.0 - 10.0
+    uint8 c = neg as uint8
+    print(c)
+"#;
+    assert_eq!(out(src), "127\n3\n0");
+}
+
+#[test]
+fn cast_int_narrowing_wraps() {
+    // int→int narrowing truncates/wraps (two's-complement, Rust `as`): 300 as
+    // int8 = 44 (300 - 256), and 200 as int8 = -56.
+    let src = r#"
+void main():
+    int x = 300
+    int8 a = x as int8
+    print(a)
+    int y = 200
+    int8 b = y as int8
+    print(b)
+"#;
+    assert_eq!(out(src), "44\n-56");
+}
