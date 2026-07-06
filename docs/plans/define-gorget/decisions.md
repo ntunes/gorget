@@ -227,6 +227,15 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-06 — **D22 RATIFIED by owner: colon-slice `v[a:b]` is canonical; `.slice()`
+  removed after migration.** Four open forms v1 (`a:b`, `a:`, `:b`, `:`); bounds CLAMP
+  (Python-style, not a fault); strings slice by CODEPOINT; desugars to D15 owned-value
+  semantics. Negatives + step DEFERRED — design reasons, not difficulty: negatives
+  collide with §10.9's negative-index-is-a-Bounds-fault (a ratified safety net against
+  underflow bugs) and deserve their own decision with usage data; step's real use is
+  `.reversed()`'s job and a stride breaks the future offset+len CoW-share repr. Both
+  pure widenings later. D15's removal track becomes the COMBINED slice-surface track.
+
 - 2026-07-06 — **D11 RATIFIED IN FULL (registry shape approved; owner clarified the
   governing rule: CLAUDE.md's NO NAME-MATCHING / NO SIDECARS discipline — typed metadata
   on a closed enum with derived codes, read through one accessor, never string-matched

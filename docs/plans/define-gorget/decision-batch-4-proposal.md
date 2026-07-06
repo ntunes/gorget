@@ -480,7 +480,29 @@ awaits your explicit go.
 
 ---
 
+### D22 (RATIFIED 2026-07-06 — added post-batch from the owner's `v[1:3]` question) — COLON-SLICE SYNTAX IS CANONICAL; `.slice()` REMOVED
+
+> **Owner ruling 2026-07-06:** `v[a:b]` is the one way to slice; `.slice()` is removed
+> after mechanical migration (unlike `.display()`, it has no capability the syntax
+> lacks — and Python itself has no .slice method, so it serves nobody's muscle memory).
+> **v1 forms**: `v[a:b]`, `v[a:]`, `v[:b]`, `v[:]`. **Bounds CLAMP** (Python-style:
+> `v[1:999]` works — load-bearing for the easiness pillar; NOT a Bounds fault).
+> **Strings slice by codepoint** (consistent with the UTF-8 codepoint semantics).
+> Desugars to the D15 owned-value semantics (fresh value now; O(1) CoW sub-range share
+> later, invisibly). **Negatives (`v[-1:]`) and step (`v[::2]`) DEFERRED** — not for
+> implementation difficulty (both are trivial arithmetic) but for design reasons:
+> negatives INTERACT with just-ratified fault semantics (§10.9 defines a negative index
+> as a Bounds fault today — Python-negatives would either fork slicing from indexing or
+> reverse a ratified fault, and they trade away the underflow-bug safety net; own small
+> decision later, with usage data); step's main real use (`[::-1]`) is better served by
+> a `.reversed()` one-way, and a STRIDE does not fit the future offset+len CoW-share
+> repr — contiguous-only keeps the D15 optimization path clean. Both are pure widenings
+> later. **The D15 removal track is UPDATED to the combined slice-surface scope**
+> (remove `int[]` + add colon syntax + migrate-and-remove `.slice()` + one docs section).
+
 ## Part II — Stays queued (no ruling sought now)
+
+
 
 - **A18–A28** "ratify the rejection" batch — gated by your C12 phasing rule, unchanged.
 - **Result-vs-Fault reconciliation + catchable-fault set** — rides the deep-fault phase; the
