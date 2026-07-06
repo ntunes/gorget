@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF: unwrap/expect panic-by-default (🔥 both-backend + self-host, 4 zones)
 
-> **STATUS: v2 — pass 1 = RESERVATIONS (6: R1 HIGH self-host class-split, R2-R4 load-bearing corrections, R5-R6 hardening) → ALL FOLDED as ⚡ PASS-1 FOLDS (override conflicting draft text below). Pass 2 pending.**
+> **STATUS: v3 — pass 1 (6 res) + pass 2 (3 res: R-A Zone-2 contingency, R-B gate both sites, R-C unwrap_error message) BOTH FOLDED (⚡ sections override draft text). Pass 3 pending — launch-gate.**
 > Scout: full report + measured prototype at `/tmp/recover_unwrap/` (proto_FINAL.patch,
 > probes/ with emitted C + ASan bins both backends, integ_full_c.log, clean_stage0.c).
 > Scout measured: fix green on BOTH backends, ASan clean, lib 1105/0, full C sweep 1539/4
@@ -110,6 +110,40 @@ choice, cite precedent).
 - **R6 (fallback guard gating):** the no-StructId fallback branch (insts.rs:4154) also
   serves `unwrap_or` — gate the panic guard on `!is_unwrap_or` (a defaulting extractor
   must never panic), or add a debug assertion that unwrap_or never reaches the fallback.
+
+## ⚡ PASS-2 FOLDS (2026-07-06) — same override precedence as PASS-1 FOLDS
+
+- **R-A (Zone-2 contingency — mirror R5's decoupling for the OTHER unproven leg):** the
+  narrowed `i < 0` guard + the FULL fixed-point combination is UNMEASURED (the prototype
+  measured stage-0 only, WITH the upper bound). If the fixed-point traps in Zone-2
+  territory — the narrowed `get_rtype_at`, positive OOB, or a SIBLING typed accessor
+  (`get_int_at`/`get_stype_at` at types.gg:35/38 share the identical `v.get(i).unwrap()`
+  shape, called throughout infer.gg) — the playbook is: investigate the specific inflow,
+  guard the CLASS (all three accessors, each with its natural error/default sentinel —
+  RTError for the ResolvedType one), FILE the root cause, and do NOT silently restore the
+  `i >= v.len()` upper bound (it masks positive-OOB bugs Rust would panic on). Fix the
+  class, never redesign around the gap.
+- **R-B (gate BOTH guard call sites on `!is_unwrap_or`):** the prototype calls the guard
+  at the with-StructId branch (insts.rs:4126) AND the fallback (:4153); `unwrap_or` can
+  reach the with-StructId branch when `lir_args.len() <= 1` (:4063 else-arm). Apply the
+  `!is_unwrap_or` gate at BOTH sites (or centralize the decision) — a defaulting
+  extractor must never panic, at either site.
+- **R-C (the `unwrap_error` message names `unwrap_error()`):** the message for
+  unwrap_error-on-Ok is `` called `unwrap_error()` on a `Ok` value `` (per the measured
+  prototype) — NOT `unwrap()`. This path is outside ggdef's subset (R4) and the fixtures
+  assert substrings (R3), so no gate catches a wrong method name — get it right at the
+  write site. The draft's "matches ggdef exactly" applies to the unwrap-None/Error
+  messages only.
+- **Citation corrections (cosmetic):** lir_codegen.gg has NO `case "__result_unwrap"` —
+  :5127 is a section comment; bare `Result.unwrap` routes through the INLINE path (the
+  live combinator routes are `__option_unwrap|__option_expect` :5129, `__result_expect`
+  :5162, `__result_unwrap_error` :5135). The assert-idiom GTJump dead-edge is at
+  lower_stmt.gg:1446. `move_param_concat` (integration.rs:5044) is a live run_gg test
+  (the strmove track un-gaps its fixture) — still a disjoint region from this track's
+  integration.rs edits.
+- **Optional (cheap, recommended):** diff the narrowed-guard stage-0 emitted C against
+  the scout's `clean_stage0.c` to localize the RTError-vs-`RTPrimitive("")` behavioral
+  delta before running the heavy fixed-point.
 
 ## Zone summary + hazards
 
