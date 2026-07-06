@@ -5016,20 +5016,18 @@ A",
     );
 }
 
+// matcluster #4 (was a known BOTH-BACKEND bug, found by the gorget-smith fuzzer,
+// round 1): an alias BIND in a never-taken branch (`if v0.len() < 3: Vector[int]
+// v5 = v0`) left v5's alias slot NULL on the not-taken path, and the LATER source
+// mutation `v0[2] = 9` fired `cow_aliases_of(v0)` at the merge point and blind-
+// cloned that NULL alias (`gorget_array_clone(NULL)` → SIGSEGV, both backends).
+// Sibling of cow_lazy_d1_alias_deadpath (that = mutation-in-dead-branch; this =
+// BIND-in-dead-branch). Fixed at the write site: restore_locals now resets a
+// branch-local `Alias(_)` to unowned at scope exit, so `cow_aliases_of` skips it
+// → zero clones (the dead branch never ran; v0 was never aliased). Prints 9.
 #[test]
-#[ignore = "known BOTH-BACKEND bug (found by the gorget-smith fuzzer, round 1): \
-an alias bind in a never-taken branch (`if v0.len() < 3: Vector[int] v5 = v0`) \
-corrupts the LATER source mutation — `v0[2] = 9` SIGSEGVs in gorget_array_clone \
-on BOTH the C and LLVM backends (ASan: near-null SEGV, frame #0 \
-gorget_array_clone — the mutation-site CoW materialize walks an alias slot that \
-was never initialized because the bind lives in a dead branch). Missing sibling \
-of cow_lazy_d1_alias_deadpath (that fixture = mutation-in-dead-branch; this = \
-BIND-in-dead-branch). The self-host prints `9` correctly, so this is a \
-Rust-gg-side fix. Asserts the language-intended output `9`; lives in \
-tests/fixtures/known_gaps/ so it stays OUT of the runtime-diff corpus. \
-Un-ignore when the dead-path alias-slot class is fixed. See TODO.md HIGH entry."]
 fn cow_dead_branch_alias_bind() {
-    run_gg("known_gaps/cow_dead_branch_alias_bind.gg", "9");
+    run_gg("cow_dead_branch_alias_bind.gg", "9");
 }
 
 #[test]
