@@ -5,7 +5,8 @@
 > 2026-06-22 fadb2259 fold routes every equip-Drop type into resource_types -> type_drop_fns ->
 > __gorget_dtor_{T} wiring; the scout source-read a STALE comment at lir_lower.gg:5514-5517
 > predating the fold). Phase S re-scoped accordingly. Passes: 1 (5) + 2 (3) + 3 (3) folded;
-> 0 clean of >=3 — pass 4 pending. Executor: not launched.**
+> pass 4 (Opus) = CLEAN SIGN OFF 2026-07-06. Executor: LAUNCHED (Opus).**
+> Ready fixture templates: /tmp/elemdrop_probe/{leak_strfield,pop_strfield}.gg + /tmp/recover_elemdrop/scout_elemdrop_fixture.gg.
 > Scout artifacts: /tmp/recover_elemdrop/ (findings, measured prototype patch, ready fixture).
 > This brief was drafted by the scout that prototyped and MEASURED the Rust fix end-to-end
 > (probe matrix, ASan, bootstrap 446s PASS); reviews verify, executor lands.
