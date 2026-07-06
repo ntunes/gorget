@@ -1,11 +1,11 @@
 # EXECUTOR BRIEF: collection-element destructor fix (P1 drop-lost + P2 field-leak), BOTH compilers
 
-> **STATUS: v3 — pass 2 (Opus) EMPIRICALLY REFUTED the "both compilers identically broken"
+> **STATUS: v4 — pass 3 folded (R1 stale remnant, R2 emit-lane mechanics, R3 persistent ASan helper). pass 2 (Opus) EMPIRICALLY REFUTED the "both compilers identically broken"
 > premise by running the pristine self-host driver: THE SELF-HOST IS ALREADY CORRECT (the
 > 2026-06-22 fadb2259 fold routes every equip-Drop type into resource_types -> type_drop_fns ->
 > __gorget_dtor_{T} wiring; the scout source-read a STALE comment at lir_lower.gg:5514-5517
-> predating the fold). Phase S re-scoped accordingly. Passes: 1 (5 res) + 2 (3 res) folded;
-> 0 clean of >=3. Executor: not launched.**
+> predating the fold). Phase S re-scoped accordingly. Passes: 1 (5) + 2 (3) + 3 (3) folded;
+> 0 clean of >=3 — pass 4 pending. Executor: not launched.**
 > Scout artifacts: /tmp/recover_elemdrop/ (findings, measured prototype patch, ready fixture).
 > This brief was drafted by the scout that prototyped and MEASURED the Rust fix end-to-end
 > (probe matrix, ASan, bootstrap 446s PASS); reviews verify, executor lands.
@@ -34,10 +34,12 @@ INVARIANT-#8 BOOKKEEPING: Rust is the broken side; the self-host is the referenc
 toward it (which the proven Phase-R patch does — both then emit `__gorget_dtor_{T}`).
 
 **Phase S (re-scoped): LOCK the self-host's correct behavior, change NO self-host source.**
-Add a targeted self-host regression test (model: the existing self-host emit-lane tests in
-tests/integration.rs): run the driver on the new fixture (`driver <fixture.gg> lib --lir-c`),
-assert the emitted C wires `.elem_drop`/`.val_drop`/`.key_drop` to `__gorget_dtor_Noisy`, then
-cc + run + assert stdout. No bootstrap gate needed (no self-host source changes). The
+Add a targeted self-host regression test **modeled EXACTLY on `assert_box_deref_asan_clean`
+(tests/integration.rs:20652)**: run the driver with `--emit-c --runtime-dir=<runtime_dir>`
+(NOT `--lir-c`, which emits body-only non-runnable C), grep the emitted C for the
+`.elem_drop`/`.val_drop`/`.key_drop` → `__gorget_dtor_Noisy` wiring, then cc + run + assert
+stdout (and ASan-clean, since that lane already sanitizes). No bootstrap gate needed (no
+self-host source changes). The
 reader-alignment refactor (migrate lc_collection_drop_fn/clone_fn + emit_dict_ctor_wiring:1935
 from recursive_drop_* to type_drop_fns — behavior-preserving, architectural) is DEFERRED OUT of
 this track: filed as a LOW self-host-elegance TODO item, gated on byte-identical driver output +
@@ -134,7 +136,8 @@ Derive exact expected stdout by RUNNING the fixed compiler (trustworthy now) AND
 - Parent runs full integration + self_host_bootstrap_fixed_point + GG_RUNTIME_DIFF=1 sweep.
 
 ## Additional deliverable (pass-1 R3, Core #4 rule 3)
-An arm-count ratchet in tests/lints.rs: the collection families in
+An arm-count ratchet in tests/lints.rs (model: `container_literal_arms_count`,
+tests/lints.rs:725 — the CLAUDE.md-cited pattern): the collection families in
 `infer_fn_ptr_stores_from_types` must route element drop wiring through `type_drop_fns` — budget
 the count of legacy `elem_drop_fn_for_type`/`recursive_drop_*.contains` gates in that function at
 its post-fix value so a new sibling can't reintroduce the hole. (tests/lints.rs is shared with the
@@ -144,12 +147,17 @@ define-gorget track's B2 increment — coordinate via the orchestrator if both a
 - Do NOT touch the clone-vs-borrow decision at assignment/consuming positions (works correctly).
 - Do NOT rename {T}__drop or __gorget_dtor_{T} conventions.
 - Do NOT expand type_drop_fns semantics beyond recording fieldless-custom (self-host) — the Rust
-  side already records them; only the READER changes there.
+  side already records them; only the READER changes there. (Self-host: no change at all.)
 
 ## Bigger-than-it-looks flags
-- P2 (field leak) is a SECOND, ASan-only bug unmasked by the same wiring; without an ASan lane it
-  passes silently. Ensure a sanitized assertion exists.
-- Self-host needs a populate change too (not a pure reader change like Rust) — budget DEBUG time.
+- P2 (field leak) is a SECOND, ASan-only bug; without a sanitized gate it passes silently.
+  The gate is a PERSISTENT integration test (Core #6 — not a one-shot manual check), on the
+  RUST path, modeled on `assert_box_deref_asan_clean`: `gg build --sanitize <leak_fixture> -o
+  <bin>` → run with `ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:exitcode=99` → assert exit 0
+  AND no `LeakSanitizer`/`AddressSanitizer`/`SUMMARY:` on stderr. (The self-host ASan lane
+  cannot lock a RUST P2 regression — the self-host is already clean either way.)
+- Self-host is ALREADY CORRECT (pass-2); Phase S is a regression LOCK only — no source change,
+  no DEBUG populate budget.
 - The TODO entry was ALREADY corrected by the orchestrator (2026-07-06) — the executor does NOT
   touch TODO.md (zone rule).
 
