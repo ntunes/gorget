@@ -6,7 +6,7 @@
 > **Executor launches: A: ✅ LANDED + MERGED (Opus; 26/26 MATCH; output-review SIGN OFF) ·
 > B: SPLIT into B1/B2 per the B/C confirming pass (6 reservations folded 2026-07-06);
 > B1: ✅ LANDED + MERGED 2026-07-06 (75/75 gate MATCH; output-review folds applied: report corrected, call-side named args rejected pending B2 reorder; ggdef surfaced 4 PRODUCTION bugs — filed) ·
-> B2: two confirming passes (final clean modulo one fixture-name typo, corrected with the reviewer's verbatim wording) — LAUNCHED (Opus) 2026-07-06 · C: after B2.**
+> B2: ✅ LANDED + MERGED 2026-07-06 (87/87 full-corpus gate; output-review folds applied: D4 &self hole closed, transitive-drop gap disclosed + filed phase-1 HIGH) · C: READY TO LAUNCH.**
 > Normative sources: [`rfc-ggc-ggdef.md`](rfc-ggc-ggdef.md) (APPROVED — §2 is the semantics,
 > §3 layout, §6 phase-0 scope/acceptance), [`decisions.md`](decisions.md) (D1–D8).
 > This brief is deliberately self-contained enough for an Opus-class executor: where the RFC
