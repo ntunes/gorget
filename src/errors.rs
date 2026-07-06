@@ -273,6 +273,7 @@ impl ErrorReporter {
         }
 
         let diag = diagnostic::Diagnostic::error()
+            .with_code(err.kind.code())
             .with_message(err.to_string())
             .with_labels(labels);
         self.emit(&diag);
