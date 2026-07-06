@@ -3499,6 +3499,32 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # DropIfAlive no-ops.
                         register_local_for_drop(&ctx, uo_dst, uo_slot_tid, &gmod)
                         return uo_dst
+                    # Panic-by-default (reference §15.2): a plain `unwrap()` /
+                    # `expect()` on a `None` / `Error` value TRAPS rather than
+                    # dereffing a zeroed payload. Emit the tag check + a
+                    # `gorget_panic` branch BEFORE the payload read — mirrors the
+                    # shared LIR guard (src/lir/lower/insts.rs `emit_unwrap_panic_guard`)
+                    # and message text (matches ggdef). `unwrap_error` is NOT in this
+                    # intercept (its self-host emit path is the lir_codegen.gg
+                    # combinator case); `unwrap_or` already returned above. Valid
+                    # tag = 0 (Some/Ok); the invalid word is None (Option) / Error
+                    # (Result). Uses the ASSERT-LOWERING idiom (lower_stmt.gg
+                    # SAssert): noreturn gorget_panic + a GTJump dead edge (the
+                    # self-host GIR has no GTUnreachable).
+                    int uw_tag = emit_tag_read(&ctx, scr_ptr, recv_tn, &gmod)
+                    int uw_cmp = add_local(&ctx, BOOL_TYPE, None)
+                    emit(&ctx, GICmp(uw_cmp, CMP_EQ, I64_TYPE, OpCopy(uw_tag), OpConstI64(0)))
+                    int uw_ok_bb = new_block(&ctx)
+                    int uw_panic_bb = new_block(&ctx)
+                    set_terminator(&ctx, GTBranch(OpCopy(uw_cmp), uw_ok_bb, uw_panic_bb))
+                    switch_to(&ctx, uw_panic_bb)
+                    String uw_word = "None"
+                    if recv_ec.category == ENUM_CAT_RESULT:
+                        uw_word = "Error"
+                    String uw_msg = "called `unwrap()` on a `" + uw_word + "` value"
+                    emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(uw_msg)]))
+                    set_terminator(&ctx, GTJump(uw_ok_bb))
+                    switch_to(&ctx, uw_ok_bb)
                     # Plain unwrap: emit a real field read through the
                     # scrutinee-ptr helper, matching PConstructor destructure.
                     int field_val = emit_payload_read(&ctx, scr_ptr, recv_tn, variant_name, 0, inner_tid, &gmod)

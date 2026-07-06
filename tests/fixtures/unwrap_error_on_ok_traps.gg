@@ -1,0 +1,5 @@
+# Panic-by-default: `unwrap_error()` on an `Ok` value traps (reference §15.2 —
+# unwrap_error extracts the Error payload, panics on Ok).
+void main():
+    Result[int, String] r = Ok(7)
+    print(r.unwrap_error())

@@ -1,0 +1,6 @@
+# Panic-by-default: `unwrap()` on the `None` from a `.get()` past the end of an
+# empty vector traps (reference §15.2). Exercises the borrow-getter route
+# (`Vector.get` returns an Option borrow) distinct from the `None`-literal route.
+void main():
+    Vector[int] v = []
+    print(v.get(0).unwrap())

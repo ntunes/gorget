@@ -1,0 +1,6 @@
+# Panic-by-default: `unwrap()` on a `None` value traps (reference §15.2).
+# Before the fix, both backends silently read a zeroed payload and printed `0`
+# at exit 0 — a check-accepted program producing garbage. Now it must trap.
+void main():
+    Option[int] o = None
+    print(o.unwrap())

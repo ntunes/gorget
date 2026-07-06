@@ -6307,6 +6307,42 @@ fn div_by_zero() {
     run_gg_panics("div_by_zero.gg", "division by zero");
 }
 
+// ── Panic-by-default: unwrap/expect/unwrap_error on the wrong variant ──
+// Reference §15.2 says these panic. Before the fix, both backends emitted NO
+// tag check — a check-accepted program silently read a zeroed payload (garbage
+// `0` / empty String) at exit 0. Each fixture must now trap with a non-zero
+// exit and the message-substring below (matches ggdef for the unwrap/None and
+// unwrap/Error cases; the `Ok` message is compiler-chosen, reference-consistent).
+
+#[test]
+fn unwrap_none_traps() {
+    run_gg_panics("unwrap_none_traps.gg", "called `unwrap()` on a `None` value");
+}
+
+#[test]
+fn get_unwrap_empty_traps() {
+    run_gg_panics("get_unwrap_empty_traps.gg", "called `unwrap()` on a `None` value");
+}
+
+#[test]
+fn unwrap_error_result_traps() {
+    run_gg_panics("unwrap_error_result_traps.gg", "called `unwrap()` on a `Error` value");
+}
+
+#[test]
+fn unwrap_error_on_ok_traps() {
+    run_gg_panics("unwrap_error_on_ok_traps.gg", "called `unwrap_error()` on a `Ok` value");
+}
+
+#[test]
+fn expect_none_traps() {
+    // Bug-agnostic substring ONLY: the expect user-message threading is a
+    // separate filed TODO, so `expect` currently reuses the generic `unwrap`
+    // message. Assert only `` `None` value `` (stays true once the message is
+    // threaded); do NOT pin the full generic text (would cement the bug).
+    run_gg_panics("expect_none_traps.gg", "`None` value");
+}
+
 #[test]
 fn iterator_trait() {
     run_gg("iterator.gg", "\
@@ -29246,12 +29282,20 @@ fn move_owning_param_into_ctor_zero_clones() {
 
 // Clone-count lock-in (the property stdout tests can't see): in
 // witness_never's emitted C, `main` must (a) bind via
-// gorget_string_borrow_view, (b) contain EXACTLY ONE
+// gorget_string_borrow_view and (b) contain EXACTLY ONE
 // gorget_string_clone_to_owned callsite — the flag-guarded materialize
-// inside the loop, statically present, dynamically dead — and (c) the
-// borrow_view bind must textually precede it. The eager lowering had the
-// clone in the bind block and no borrow_view. Narrow on purpose (one
+// inside the loop, statically present, dynamically dead. The eager lowering
+// had the clone in the bind block and no borrow_view. Narrow on purpose (one
 // fixture) so it doesn't rot.
+//
+// The former textual-position proxy — "borrow_view must precede the clone" —
+// was DROPPED when unwrap/expect gained the panic-by-default tag guard: the
+// guard splits the `v.get(0).unwrap()` block and appends a high-ID panic
+// block, so the emitted-C block order now places the in-loop clone textually
+// before the bind's borrow_view. That order is NOT load-bearing — it reflects
+// block-emission order, not semantics; both real invariants (borrow_view
+// present + exactly one clone) still hold, stdout is unchanged, and the
+// behavioral twin `witness_never` + MALLOC_CHECK gate the runtime.
 #[test]
 fn witness_never_emitted_c_clone_shape() {
     // C-only: asserts on the emitted-C clone shape (the C-backend contract); it
@@ -29318,10 +29362,9 @@ fn witness_never_emitted_c_clone_shape() {
          flag-guarded in-loop materialize); found {}",
         cto_sites.len()
     );
-    assert!(
-        bv.unwrap() < cto_sites[0],
-        "borrow_view bind must precede the guarded materialize"
-    );
+    // (Textual borrow_view-precedes-clone position proxy intentionally dropped —
+    // see the doc comment above: the unwrap panic guard reorders block emission
+    // without changing semantics. `bv.is_some()` above still gates presence.)
 
     let _ = std::fs::remove_file(&c_path);
     let _ = std::fs::remove_file(&exe_path);
@@ -29672,6 +29715,59 @@ fn witness_never_self_host_emitted_c_clone_shape() {
          flag-guarded materialize); found {}",
         cto_sites.len()
     );
+}
+
+/// Zone-3 guard: the self-host AS A COMPILER must emit the panic-by-default
+/// tag check for user `unwrap()` / `unwrap_error()`, so a program compiled by
+/// the self-host driver TRAPS (non-zero exit) on the wrong variant instead of
+/// reading a zeroed payload. Covers BOTH self-host emit routes:
+///   - `unwrap_none_traps.gg`     → the INLINE path (lower_expr.gg tag guard)
+///   - `unwrap_error_on_ok_traps.gg` → the COMBINATOR path (lir_codegen.gg
+///     `__result_unwrap_error` case, the sole self-host `unwrap_error` route).
+/// Bug-agnostic substrings only (mirrors the Rust-side `expect_none_traps`
+/// discipline); the self-host `gorget_panic` prints `<unknown>:0:0:` +
+/// message (it does not yet thread source spans — filed separately).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_unwrap_traps() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_unwrap_traps_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    // (fixture, tag, required stderr substring)
+    let cases = [
+        ("unwrap_none_traps.gg", "shtrap_none", "`None` value"),
+        ("unwrap_error_on_ok_traps.gg", "shtrap_okerr", "`Ok` value"),
+    ];
+    for (fx, tag, needle) in cases {
+        let fixture = manifest_dir.join("tests/fixtures").join(fx);
+        match self_host_emit_cc_run(
+            &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, tag,
+        ) {
+            Ok(stdout) => panic!(
+                "self-host-compiled {fx} was expected to TRAP but ran cleanly \
+                 (stdout: {stdout:?}) — Zone-3 tag guard missing on this route"
+            ),
+            Err(RuntimeParityOutcome::Crashed { exit_code, stderr_first }) => {
+                assert!(
+                    stderr_first.contains(needle),
+                    "self-host-compiled {fx} trapped but with the wrong message: \
+                     expected substring {needle:?}, got exit={exit_code:?} \
+                     stderr={stderr_first:?}"
+                );
+            }
+            Err(other) => panic!(
+                "self-host-compiled {fx} expected a runtime trap (Crashed), got {other:?}"
+            ),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
 // ── stack guards (CLAUDE.md rule 6: the silent environment-coupled stack

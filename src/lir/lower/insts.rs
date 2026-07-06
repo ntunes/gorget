@@ -3578,6 +3578,65 @@ impl<'a> FuncLowering<'a> {
         Some(bb)
     }
 
+    /// Emit the panic-by-default tag check that precedes a plain
+    /// `unwrap()` / `expect()` / `unwrap_error()` payload extraction.
+    ///
+    /// Splits `bb`: loads the enum tag (I32 at field 0), compares it against
+    /// the *valid* tag (`0` = Some/Ok for unwrap/expect; `1` = Error for
+    /// unwrap_error), and branches to a fresh `ok` block (returned — the
+    /// caller emits the extraction there) or a panic block that calls
+    /// `gorget_panic(msg)` and is `Unreachable`.
+    ///
+    /// Tag convention (the actual runtime layout, established by the existing
+    /// `unwrap_or` / `__option_is_some` emit paths below: Some/Ok = tag 0,
+    /// Error = tag 1, consumed sentinel = tag 2). NOTE: `EnumKind::Option`'s
+    /// doc comment claiming "Tag 0 = None" is STALE/WRONG — filed as its own
+    /// cleanup; do not trust it, trust the emit paths.
+    ///
+    /// The message mirrors the executable definition (ggdef):
+    /// `` called `unwrap()` on a `None` value ``, etc. Trap normalization
+    /// (D11, proposed) will later re-format panic text via the `T_` registry;
+    /// this keeps the current `gorget_panic` format so the fix doesn't
+    /// pre-empt it. `gorget_panic(msg)` is auto-rewritten to
+    /// `gorget_panic_at(file,line,col,msg)` at the C/LLVM emit boundary and to
+    /// `unreachable` after the call.
+    fn emit_unwrap_panic_guard(
+        &mut self,
+        bb: BlockId,
+        arg_ptr: ValueId,
+        is_unwrap_err: bool,
+        variant_word: &str,
+    ) -> BlockId {
+        let tag_val = self.lir_func.next_value();
+        self.push_inst(bb, Inst::Load {
+            dst: tag_val, ptr: arg_ptr, ty: LirType::I32,
+        });
+        let valid_tag = self.emit_i32_const(bb, if is_unwrap_err { 1 } else { 0 });
+        let is_valid = self.lir_func.next_value();
+        self.push_inst(bb, Inst::Cmp {
+            dst: is_valid, op: CmpOp::Eq, lhs: tag_val, rhs: valid_tag,
+        });
+        let ok_bb = self.lir_func.add_block();
+        let panic_bb = self.lir_func.add_block();
+        self.set_terminator(bb, Term::Branch {
+            cond: is_valid,
+            then_block: ok_bb, then_args: vec![],
+            else_block: panic_bb, else_args: vec![],
+        });
+        // Panic block: gorget_panic(msg); unreachable.
+        let method = if is_unwrap_err { "unwrap_error" } else { "unwrap" };
+        let msg = format!("called `{method}()` on a `{variant_word}` value");
+        let msg_val = self.lower_constant(&Constant::Str(msg), panic_bb);
+        self.push_inst(panic_bb, Inst::CallExtern {
+            dst: None,
+            name: "gorget_panic".to_string(),
+            args: vec![msg_val],
+            arg_abis: vec![crate::ir::abi::AbiKind::CStr],
+        });
+        self.set_terminator(panic_bb, Term::Unreachable);
+        ok_bb
+    }
+
     /// Shared extern-call emitter used by both `Instruction::Call` (unresolved)
     /// and `Instruction::CallExtern`.  Handles sizeof synthesis for collection
     /// and concurrency constructors, and struct-return rewriting for mutex lock /
@@ -4124,7 +4183,27 @@ impl<'a> FuncLowering<'a> {
                             self.emit_post_call_zeros(args, merge_bb);
                             return merge_bb;
                         } else {
-                            // Plain unwrap/expect: just extract payload (no tag check)
+                            // Plain unwrap/expect/unwrap_error: panic-by-default
+                            // tag check, THEN extract payload in the ok block.
+                            // (Reference §15.2: unwrap panics on None/Error,
+                            // unwrap_error panics on Ok.) `unwrap_or` can reach
+                            // this else-arm when it has no default arg
+                            // (`lir_args.len() <= 1`) — a defaulting extractor
+                            // must never panic, so gate the guard on
+                            // `!is_unwrap_or`.
+                            let bb = if !is_unwrap_or {
+                                let variant_word = if is_unwrap_err {
+                                    "Ok"
+                                } else {
+                                    match self.module_structs.get(sid.0 as usize).map(|s| s.enum_kind) {
+                                        Some(crate::lir::EnumKind::Option) => "None",
+                                        _ => "Error",
+                                    }
+                                };
+                                self.emit_unwrap_panic_guard(bb, arg_ptr, is_unwrap_err, variant_word)
+                            } else {
+                                bb
+                            };
                             let fptr = self.lir_func.next_value();
                             self.push_inst(bb, Inst::FieldPtr {
                                 dst: fptr, base: arg_ptr, struct_id: sid, field: payload_field,
@@ -4151,9 +4230,24 @@ impl<'a> FuncLowering<'a> {
                             return bb;
                         }
                     } else {
-                        // Fallback: no StructId known. Load payload via raw pointer
-                        // arithmetic: tag is I32 at offset 0, payload at offset 8
-                        // (4 bytes tag + 4 bytes padding for 8-byte alignment).
+                        // Fallback: no StructId known. Panic-by-default tag check
+                        // first (tag is I32 at offset 0), THEN load payload via raw
+                        // pointer arithmetic: payload at offset 8 (4 bytes tag +
+                        // 4 bytes padding for 8-byte alignment). `unwrap_or` also
+                        // reaches this fallback — a defaulting extractor must never
+                        // panic, so gate the guard on `!is_unwrap_or`.
+                        let bb = if !is_unwrap_or {
+                            let variant_word = if is_unwrap_err {
+                                "Ok"
+                            } else if emit_name.contains("option") || emit_name.contains("Option") {
+                                "None"
+                            } else {
+                                "Error"
+                            };
+                            self.emit_unwrap_panic_guard(bb, arg_ptr, is_unwrap_err, variant_word)
+                        } else {
+                            bb
+                        };
                         let payload_offset = if is_unwrap_err { 16i64 } else { 8i64 };
                         let offset_val = self.emit_i64_const(bb, payload_offset);
                         // Cast arg_ptr to i64 for pointer arithmetic
