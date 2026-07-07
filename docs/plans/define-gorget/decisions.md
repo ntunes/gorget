@@ -148,8 +148,7 @@ language-design/book examples showing float output.
 
 ## OPEN — queue (later batches; from scout-B List A, scout-A tiers)
 
-- **A30 (D-TOTALITY candidate — ratify EARLY; prerequisite to A31/A32): the throws
-  totality invariant.** Normative sentence: "a throws call is an expression of type T in
+- **A30 → RATIFIED 2026-07-07 as D23 (see LOG): the throws totality invariant.** Normative sentence: "a throws call is an expression of type T in
   EVERY position; its Result-ness is unobservable except at a Result-typed binding or a
   catch." Plus the diagnostic contract: the checker never says "found Result[T,E]" —
   always "this call throws E; declare `throws E` or catch it." Enforcement: ggdef models
@@ -174,7 +173,11 @@ language-design/book examples showing float output.
   T_-code-carrying fault value convertible to a catchable Error at a defined isolation
   point (Task join is the natural site) — so the phase-3 supervised boundary composes
   with ratified D11 instead of re-litigating it. Keep panic-by-default + lexical
-  fault-catch exactly as-is.
+  fault-catch exactly as-is. **⚡ OWNER RIDER (ratified 2026-07-07 with D23): faults
+  enter the error/value world ONLY via explicit conversion points (lexical catch, the
+  boundary, explicitly fallible APIs) — NEVER by implicit membership in signatures or
+  inferred sets. Binding on any A31 union design; revisit only when catchable faults
+  are implemented.**
 
 - **A29 (owner question, 2026-07-05): CONSOLIDATE the `&`-exclusivity rules into one
   static-semantics prose section + fixtures.** The intended rule is Rust-style (readers XOR
@@ -254,6 +257,26 @@ integral-float fix (Rust `{}` prints "3" — use `{:?}`-style or ryu-with-".0").
 P1-infra reviewers' recommendation.
 
 ## LOG
+
+- 2026-07-07 — **D23 RATIFIED by owner (was queue item A30): THE THROWS TOTALITY
+  INVARIANT.** Normative: "a throws call is an expression of type T in EVERY position;
+  its Result-ness is unobservable except at a Result-typed binding or a catch." Plus the
+  diagnostic contract: the checker never surfaces the desugar ("found Result[T,E]" is
+  banned from user-facing diagnostics) — violations of the virality rule say "this call
+  throws E; declare `throws E` or handle it (catch/rethrow/Result capture)."
+  NO semantic change — the virality is pre-existing; this pins coverage totality + UX.
+  Enforcement rides the trap-normalization wave: ggdef models the invariant; smith gains
+  a throws-in-every-expression-position fuzz tier (leaks = SPEC-DIVERGE); a diagnostics
+  ratchet asserts no unhandled-throws message contains "Result["; reference §10.1 gains
+  the sentence. Retroactively owns the seam-bug class (gorget-js snags #9/#10/#13, the
+  expr-body asymmetry).
+- 2026-07-07 — **A33 RIDER PINNED by owner (ratified alongside D23): faults may enter
+  the error/value world ONLY via explicit conversion points** — lexical fault-catch, the
+  future supervised boundary, or explicitly fallible APIs (try_-style contracts) —
+  **never by implicit membership in signatures or inferred error sets.** Preserves
+  §10.9's "arithmetic doesn't infect types" under any future A31 union design while
+  keeping fault handling (incl. OOM) permanently reachable by choice. Owner: revisit
+  when/if catchable faults are implemented.
 
 - 2026-07-07 — **gorget-js DOGFOOD FINDINGS on the error model fed to the ledger** (owner
   relayed the project agent's field report; per the standing dogfood directive). Evidence
