@@ -148,6 +148,34 @@ language-design/book examples showing float output.
 
 ## OPEN — queue (later batches; from scout-B List A, scout-A tiers)
 
+- **A30 (D-TOTALITY candidate — ratify EARLY; prerequisite to A31/A32): the throws
+  totality invariant.** Normative sentence: "a throws call is an expression of type T in
+  EVERY position; its Result-ness is unobservable except at a Result-typed binding or a
+  catch." Plus the diagnostic contract: the checker never says "found Result[T,E]" —
+  always "this call throws E; declare `throws E` or catch it." Enforcement: ggdef models
+  the invariant; smith gains a throws-in-every-expression-position fuzz tier (leaks
+  become SPEC-DIVERGE mechanically). Retroactively reclassifies the snag-#9/#10/#13
+  class + the expr-body asymmetry as violations of ONE rule.
+- **A31 (error composition): inferred error sets (Zig-style) as the TARGET; explicit
+  From-conversion as the FALLBACK.** Scout-first: the hard core Zig doesn't have is
+  PAYLOADS — Gorget errors are owned enums, so an inferred union {IoError, ParseError}
+  = anonymous tagged union-of-enums + member-type match syntax + ownership/drop through
+  it (phase-scale type-system feature). Also the semver story (public APIs must narrow
+  to a named type — lint). Evidence pro: kills the conversion tax+soundness surface AND
+  the error-type zoo; single-currency dogfood proof says optimize the common case, the
+  sets serve stdlib-composition boundaries (which the D17 class sweep will create).
+- **A32 (HOF effect-polymorphism — design BEFORE the surface calcifies): a HOF throws
+  iff its function argument throws** (rethrows-style, but designed as real effect
+  polymorphism since async composes: throws × async × faults as one effect algebra is
+  the phase-3 research bet — async semantics land there anyway). Compiler evidence the
+  retrofit is already hurting: the ad-hoc fault-slot closure adapters + the wild-write
+  adapter fix.
+- **A33 (deep-fault prep, small): spec the supervised-boundary HOOK now** — a
+  T_-code-carrying fault value convertible to a catchable Error at a defined isolation
+  point (Task join is the natural site) — so the phase-3 supervised boundary composes
+  with ratified D11 instead of re-litigating it. Keep panic-by-default + lexical
+  fault-catch exactly as-is.
+
 - **A29 (owner question, 2026-07-05): CONSOLIDATE the `&`-exclusivity rules into one
   static-semantics prose section + fixtures.** The intended rule is Rust-style (readers XOR
   one writer, language-design §3.5) and is a PREMISE of D1's refinement claim (same-call
@@ -226,6 +254,19 @@ integral-float fix (Rust `{}` prints "3" — use `{:?}`-style or ryu-with-".0").
 P1-infra reviewers' recommendation.
 
 ## LOG
+
+- 2026-07-07 — **gorget-js DOGFOOD FINDINGS on the error model fed to the ledger** (owner
+  relayed the project agent's field report; per the standing dogfood directive). Evidence
+  of record: (a) the type-directed-propagation holes all sat at positions where the
+  expected type wasn't threaded inward (binary operands, match-arm tails, scrutinees) and
+  the no-marker failure mode LEAKS THE DESUGAR ("expected T, found Result[T,E]"); (b)
+  gorget-js PRE-CHECKS BOUNDS to dodge faults it cannot catch across calls — a
+  workaround-idiom proving lexical-only fault recovery is an insufficient ceiling for
+  runtime/server authors; (c) single-error-currency scaled beautifully (one error type,
+  zero conversion boilerplate) — the common case is healthy; the multi-type story is the
+  gap; (d) cross-type propagation via conversion was both a tax and a soundness surface
+  (the fixed bit-cast miscompile). THREE NEW OPEN-QUEUE CANDIDATES filed below (A30-A32);
+  the earlier From-conversion idea is DEMOTED to explicit fallback inside A31.
 
 - 2026-07-07 — **D14 why-a-view ADDENDUM recorded** (owner second-guessed the ruling; the
   re-derivation that settled it is now saved in decision-batch-4-proposal.md §D14: the

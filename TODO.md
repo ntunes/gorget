@@ -678,6 +678,9 @@ Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (
 
 ## Medium
 
+- **🧹 [error-model review 2026-07-07, LOW-M] Dead fault-catch lint.** `(expr) catch Fault.X: fallback` where the wrapped expression contains NO directly-faultable op (recovery is lexical-only per §10.5 — calls inside the expression are NOT covered) — the catch is provably dead and the syntax reads like it covers the calls. Warn. Docs: §10.5's locality note gets the book-side warning too.
+
+
 - **⚙️ [D21 RATIFIED 2026-07-06 → deletion track] Retire `gg sim`.** (1) SALVAGE SCAN first (one agent, bounded: read src/sim's UB-detection/isolation/backtrace phases — confirm nothing worth porting as a future ggdef extension; expectation per the ledger: nothing); (2) delete `src/sim/` + the `sim` subcommand + sim-only tests + doc/README mentions (git history preserves all); (3) the filed sim-parse_int inconsistency note becomes moot; (4) memory note ref_async_shared_sim stays as history. PHASE-3 PIN rides the ledger: data-race detection = ggdef interleaving extension + TSan, never a GIR interpreter. Build-time and maintenance win; parity/conformance unaffected (sim was never a lane).
 
 
