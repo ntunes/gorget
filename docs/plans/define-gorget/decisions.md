@@ -227,6 +227,14 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-07 — **D14 why-a-view ADDENDUM recorded** (owner second-guessed the ruling; the
+  re-derivation that settled it is now saved in decision-batch-4-proposal.md §D14: the
+  collection owns → copy/move/view are the only possible read-returns; the owned copy is
+  the option that silently BREAKS `.push()` chaining (throwaway mutation + the measured
+  round-8 double-drop); the view is what ENABLES receiver-position write-through; the
+  sole rejected chain (`get_or(...).push`) guards miss-path aliasing, not view-ness.
+  The addendum is flagged MUST-REACH-THE-BOOK in the D14 write-through.
+
 - 2026-07-06 — **D22 RATIFIED by owner: colon-slice `v[a:b]` is canonical; `.slice()`
   removed after migration.** Four open forms v1 (`a:b`, `a:`, `:b`, `:`); bounds CLAMP
   (Python-style, not a fault); strings slice by CODEPOINT; desugars to D15 owned-value

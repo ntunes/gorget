@@ -274,6 +274,40 @@ medium-high.
 > expression, else reject — the TODO:143 view-of-temp class); D4 governs a tainted
 > default at the put boundary. Book one-liner: **"`get_or` reads with a fallback;
 > `get_or_put` makes the entry exist so you can write to it."**
+>
+> **WHY-A-VIEW ADDENDUM (owner re-derivation 2026-07-07 — saved verbatim-in-substance
+> because the ruling was second-guessed twice and this is what settled it; MUST reach
+> the book chapter in the write-through):**
+>
+> *The misconception to kill first: views are not what prevents chaining a mutating
+> method — views are what ENABLES it.* `d.get_or_put(k, Vector()).push(x)` writes
+> through. The derivation is forced by ownership. The collection owns the value, so a
+> read can only return one of three shapes:
+> 1. **An owned COPY** — the only "ownable" non-theft option, and the WORST for
+>    write-through: `d.get(k).push(x)` on a copy pushes into a throwaway that dies at
+>    statement end (mutation silently lost — the classic surprise). Also a clone per
+>    read, and for drop-tainted types an observably doubled drop (the round-8 clone —
+>    MEASURED, the D4 violation that motivated this ruling).
+> 2. **An owned MOVE** — takes the value out of the collection. That is `pop()`, not a
+>    read.
+> 3. **A VIEW of the resident value** — reads free, and a mutating method chained in
+>    RECEIVER position (the language's one sanctioned write-through channel, same
+>    mechanism as `v[i].push(x)`) mutates the entry in place.
+>
+> What chains: `d[k].push(x)` ✓ · `d.get(k).unwrap().push(v)` ✓ ·
+> `d.get_or_put(k, def).push(x)` ✓ (THE idiom) · `d.get_or(k, fallback).push(x)` ✗
+> REJECTED — not because of view-ness, but because on a MISS that view points at the
+> caller's `fallback` local: the push would hit the dict on hit and your local on miss,
+> behavior decided by runtime contents. The rejection guards the one ambiguous shape;
+> `get_or_put` is the same operation with the ambiguity removed. The only genuinely
+> unavailable thing is BINDING the handle to a name for multi-statement mutation —
+> that is D10's ruling (a stored write-through name = the local borrow that printed
+> garbage), not D14's.
+>
+> Closing sentence: **reads return views BECAUSE the collection owns — and the view,
+> consumed in receiver position, is exactly the thing you can chain a `push()` onto;
+> the only rejected shapes are those where "which object am I mutating?" would depend
+> on runtime state.**
 
 The executing double-free is already fixed (round-8) — but the fix was an *unconditional
 clone*, which is wasteful for plain types and a D4 violation for tainted ones (measured: the
