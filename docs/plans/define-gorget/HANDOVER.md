@@ -29,26 +29,30 @@ sequential fresh-review gauntlet.
 - **Phase 1 INFRA: ✅ COMPLETE 2026-07-06** — all six `phase1-infra-brief.md` tracks landed
   (P1-A throws desugar + §10.3 capture; P1-B frontmatter reader + ggdef lane; P1-C C/LLVM/
   self-host lanes; P1-D/D1 the 182-fixture migration, corpus 5→187; P1-E smith ggdef verdict
-  lane; P1-G E_/W_ diagnostic registry). **Conformance state: 4 lanes over 187 fixtures —
-  ggdef 187/187 · self-host 187/187 · C 186/187 · LLVM 186/187 (the one BUILD-FAIL = the
-  held-open `String !p`+concat HIGH, floors deliberately pinned one below total until its fix
-  earns the bump). ggdef and both production backends are BYTE-IDENTICAL on all 182 migrated
-  fixtures.** Regenerate: `cargo test -p ggdef` + `GG_BUILD_TIMEOUT_SECS=600 cargo test --test
+  lane; P1-G E_/W_ diagnostic registry). **Conformance state: 4 lanes over 187 fixtures,
+  ALL FULL — ggdef · C · LLVM · self-host each 187/187, zero BUILD-FAIL, every floor pinned
+  at MIN_FIXTURES=187 (the formerly held-open `String !p`+concat BUILD-FAIL was FIXED and
+  landed 2026-07-06, which earned the floor bump). ggdef and both production backends are
+  BYTE-IDENTICAL on all 182 migrated fixtures.** Regenerate: `cargo test -p ggdef` + `GG_BUILD_TIMEOUT_SECS=600 cargo test --test
   spec_conformance -- --test-threads=1 --nocapture`. Remaining RFC-§6 phase-1 scope (NOT in
   the infra brief): D4/D5/D6 rejections in BOTH production compilers (now framed as the D12
   mandate in `decision-batch-4-proposal.md`, awaiting owner ruling), the float chain (HELD
   behind its 3 filed prerequisites), and P1-D/D2 (production-v1 bulk — own scout, filed in
   TODO with the detonation census).
-- **Decision batch 4: ✅ CLOSED 2026-07-06 — D10–D21 ALL RATIFIED** (each ruling +
-  rationale in `decisions.md` LOG + the annotated `decision-batch-4-proposal.md`;
-  implementation tracks filed in TODO.md, each requiring its own scout→brief→gauntlet).
+- **Decision batch 4: ✅ CLOSED — D10–D23 ALL RATIFIED** (D10–D21 on 2026-07-06; D22
+  colon-slice and D23 throws-totality on 2026-07-06/07; each ruling + rationale in
+  `decisions.md` LOG + the annotated `decision-batch-4-proposal.md`; implementation
+  tracks filed in TODO.md, each requiring its own scout→brief→gauntlet).
   The big ones: D10 exclusivity (one place-overlap rule; local `&`-binds REMOVED),
   D11 trap normalization (ONE TrapKind registry, T_ codes, exit 101, `Fault` = the
   catchable subset), D12 D4-production-enforcement (straight to error), D13 allocators
   two-step, D14 get_or views, D15 slices-are-values + `int[]` removal, D17 read_file
-  throws + the stdlib fallibility principle, D21 sim retired. Residual: D22 (colon-slice
-  package: `v[a:b]` canonical, `.slice()` removed) proposed in-conversation, one word out.
-  ENFORCEMENT-WAVE ORDER (after the in-flight unwrap+strmove fixes merge):
+  throws + the stdlib fallibility principle, D21 sim retired, D22 colon-slice `v[a:b]`
+  canonical + `.slice()` removed (combined with D15 as ONE slice-surface track), D23
+  throws TOTALITY INVARIANT + diagnostic contract + the A33 rider (faults enter the
+  error/value world only via explicit conversion points). Design queue after this
+  batch: A31 inferred error sets, A32 HOF effect-polymorphism, A33 boundary hook spec.
+  ENFORCEMENT-WAVE ORDER (the unwrap + strmove production fixes both MERGED 2026-07-06):
   trap-normalization (unblocks exact-code conformance + D2 panics) → D12 (scout measures
   blast radius first) → D10 tracks (bind-removal is bootstrap-gated) → D13/D14/D17 →
   the small riders (D15+D22 slice-surface, D18, D19, D20, D21 salvage-scan deletion).
@@ -108,7 +112,8 @@ Phase 1 (coverage completion + conformance floors + smith verdict lane + D4/D5/D
 in BOTH compilers + diagnostic-code registry) → Phase 2 (annexe probes + `gg explain` v0 +
 context pack + the LLM-correctness KPI harness) → Phase 3 (sharing/concurrency). Full phase
 definitions: RFC §6. Decision queue for the next owner batches: `decisions.md` "OPEN — queue"
-(A5 get_or ownership, A10 allocator lifetimes, A12 book contracts are the likely batch 4).
+(batch 4 CLOSED; the live queue is A31 inferred error sets, A32 HOF effect-polymorphism,
+A33 supervised-boundary hook spec).
 
 ## Commands (regenerate, never trust cached numbers)
 
