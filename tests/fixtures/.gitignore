@@ -80,6 +80,8 @@
 # (R38 generic-equip &self-mutator write-through). Keep only the .gg sources.
 !known_gaps/
 !known_gaps/*.gg
+!known_gaps/*/
+!known_gaps/*/*.gg
 !security/
 !security/*.gg
 !security/*.expected

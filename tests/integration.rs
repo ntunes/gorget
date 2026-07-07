@@ -3725,6 +3725,60 @@ fn equip_on_primitive_scalar_variants() {
     );
 }
 
+// ── gorget-sheets snags (filed 2026-07-07) — see docs/plans/gorget-sheets-snag-report.md ──
+
+#[test]
+#[ignore = "gorget-sheets snag #53: nested struct field mutation through \
+`&outer.inner` is a silent no-op (got empty, expect `=1+2`). Fixture in \
+known_gaps/ so it stays OUT of the runtime-diff corpus. Un-ignore when \
+nested `&field` write-through aliases the live sub-object."]
+fn snag53_nested_struct_field_mut() {
+    run_gg("known_gaps/snag53_nested_struct_field_mut.gg", "=1+2");
+}
+
+#[test]
+#[ignore = "gorget-sheets snag #54: `Result` local assigned in branches then \
+`return out` returns wrong variant (got 0, expect 3). Un-ignore when exit \
+phi/merge preserves the branch-assigned Result."]
+fn snag54_result_out_fallthrough() {
+    run_gg("known_gaps/snag54_result_out_fallthrough.gg", "3");
+}
+
+#[test]
+#[ignore = "gorget-sheets snag #55: `Dict.get_or` inside a callee mis-reads \
+(got `3` + `empty`, expect `3` + `3`). Un-ignore when callee `get_or` matches \
+caller behavior; pairs with D14 get_or view ruling."]
+fn snag55_dict_get_or_in_callee() {
+    run_gg("known_gaps/snag55_dict_get_or_in_callee.gg", "3\n3");
+}
+
+#[test]
+#[ignore = "gorget-sheets snag #56: `.contains()` on module-level `String` \
+constant CC-FAILs (`str__contains` arg types). Un-ignore when module-level \
+String receivers lower like literals."]
+fn snag56_module_string_contains() {
+    run_gg("known_gaps/snag56_module_string_contains.gg", "true\ntrue");
+}
+
+#[test]
+#[ignore = "gorget-sheets snag #58 positive: cross-module int import works \
+only with `public`. Documents the workaround; un-ignore + promote when \
+module-level ints are public-by-default per spec."]
+fn snag58_public_int_import_ok() {
+    run_gg_dir("known_gaps/snag52b", "decode.gg", "enter");
+}
+
+#[test]
+#[ignore = "gorget-sheets snag #58 negative: `from codes import KEY_ENTER` \
+must fail without `public int` in the exporter (E_PrivateImport). Un-ignore \
+when visibility matches language-reference or the check is relaxed."]
+fn snag58_private_int_import_fails() {
+    check_gg_fails(
+        "known_gaps/snag58_private_int_import/decode.gg",
+        "cannot import private item `KEY_ENTER`",
+    );
+}
+
 #[test]
 fn equip_supertrait_split() {
     run_gg(

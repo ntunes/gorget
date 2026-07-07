@@ -1,0 +1,5 @@
+# Snag #58: cross-module `int` bindings require `public` (E_PrivateImport otherwise).
+from codes import KEY_ENTER
+
+void main():
+    print(KEY_ENTER)

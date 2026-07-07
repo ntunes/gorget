@@ -1,0 +1,15 @@
+# Snag #56: calling `.contains()` on a module-level `String` constant mis-lowers
+# (C compile: wrong `str__contains` arg types). Literal receiver works.
+# gorget-sheets: `SHEET_WS.contains(ch)` failed; `" \t".contains(ch)` or `ch == " "` works.
+
+String SHEET_WS = " \t"
+
+bool is_space_module(String ch):
+    return SHEET_WS.contains(ch)
+
+bool is_space_literal(String ch):
+    return " \t".contains(ch)
+
+void main():
+    print(is_space_literal(" "))
+    print(is_space_module(" "))

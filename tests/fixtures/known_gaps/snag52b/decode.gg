@@ -1,0 +1,24 @@
+from codes import KEY_ENTER
+
+enum KeyKind:
+    Enter()
+    Unknown()
+
+struct Key:
+    KeyKind kind
+    int ch
+
+Key decode_key(int code):
+    match code:
+        case KEY_ENTER:
+            return Key(KeyKind.Enter(), 0)
+        else:
+            return Key(KeyKind.Unknown(), code)
+
+void main():
+    Key k = decode_key(260)
+    match k.kind:
+        case KeyKind.Enter():
+            print("enter")
+        case KeyKind.Unknown():
+            print("unknown")

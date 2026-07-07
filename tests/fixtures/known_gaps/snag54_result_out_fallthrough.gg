@@ -1,0 +1,31 @@
+# Snag #54: assigning a `Result` to a local `out` in if/elif branches then `return out`
+# can silently return the wrong variant. gorget-sheets `sheet_get_value` returned Ok(0)
+# for literal cells while direct `return parse_float(...)` worked. Workaround: early
+# `return` per branch.
+
+from std.conv import parse_float
+
+enum E:
+    Parse(String)
+
+Result[float, E] eval_cell(Dict[String, String] raw, String addr):
+    String text = raw.get_or(addr, "")
+    Result[float, E] out = Error(E.Parse("empty"))
+    if text.is_empty():
+        out = Ok(0.0)
+    else:
+        match parse_float(text):
+            case Ok(v):
+                out = Ok(v)
+            case Error(_):
+                out = Error(E.Parse("bad"))
+    return out
+
+void main():
+    Dict[String, String] raw = Dict[String, String]()
+    raw["A1"] = "3"
+    match eval_cell(raw, "A1"):
+        case Ok(v):
+            print(v)
+        case Error(_):
+            print("err")

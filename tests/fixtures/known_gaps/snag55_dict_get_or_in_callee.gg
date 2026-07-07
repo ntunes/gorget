@@ -1,0 +1,24 @@
+# Snag #55: `Dict.get_or` inside a callee mis-reads or mis-lowers (callee sees empty).
+from std.conv import parse_float
+# gorget-sheets `sheet_cell_display` with `sh.raw.get_or(addr, "")` returned "" while
+# the same `get_or` in `main` printed the stored value. Workaround: `Option.get` + unwrap.
+
+Result[float, String] cell_value(Dict[String, String] raw, String addr):
+    String text = raw.get_or(addr, "")
+    if text.is_empty():
+        return Error("empty")
+    match parse_float(text):
+        case Ok(v):
+            return Ok(v)
+        case Error(_):
+            return Error("bad")
+
+void main():
+    Dict[String, String] raw = Dict[String, String]()
+    raw["A1"] = "3"
+    print(raw.get_or("A1", ""))
+    match cell_value(raw, "A1"):
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)

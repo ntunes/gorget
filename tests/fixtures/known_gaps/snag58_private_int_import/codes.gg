@@ -1,0 +1,2 @@
+# Snag #58 negative arm: module-level int without `public` is not importable.
+int KEY_ENTER = 260

@@ -1,0 +1,21 @@
+# Snag #53: mutating a nested struct field through `&outer.inner` is a silent no-op.
+# gorget-sheets: `sheet_set(&st.view.sheet, addr, text)` and `st.view.sheet.raw[k]=v`
+# did not persist; `st.sheet.raw[k]=v` on a flattened AppState did.
+# Reference-grade: nested field `&` should alias the live sub-object.
+
+struct Inner:
+    Dict[String, String] raw
+
+struct Outer:
+    Inner inner
+
+void set_nested(Outer &o, String k, String v):
+    o.inner.raw[k] = v
+
+String get_nested(Outer &o, String k):
+    return o.inner.raw.get_or(k, "")
+
+void main():
+    Outer o = Outer(Inner(Dict[String, String]()))
+    set_nested(&o, "A1", "=1+2")
+    print(get_nested(&o, "A1"))

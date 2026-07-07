@@ -1,0 +1,2 @@
+# Snag #58 positive arm: `public` required for cross-module int import.
+public int KEY_ENTER = 260
