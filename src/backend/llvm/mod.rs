@@ -4644,6 +4644,15 @@ fn emit_inst(
                     let file_idx = str_globals.intern(&loc.0);
                     writeln!(out, "  %v{} = call ptr @gorget_array_get_at(ptr %v{}, i64 %v{}, ptr @.str.{code_idx}, ptr @.str.{file_idx}, i32 {}, i32 {})",
                         d.0, args[0].0, args[1].0, loc.1, loc.2).unwrap();
+                    // This early return bypasses the generic CallExtern tail's
+                    // `else { *trap_counter += 1; }` bump that the phi-predecessor
+                    // pre-pass (block_exit_labels) counts for EVERY CallExtern.
+                    // Omitting it desyncs the `ov.{bid}.{counter}.ok` labels for any
+                    // block that reads `arr[i]` before an overflow-checked op (e.g.
+                    // `sum += arr[i]` in a loop) → `llc: use of undefined value`.
+                    // (Second instance of the trap_counter twin-drift class — see the
+                    // block_exit_labels structural-guard TODO.)
+                    *trap_counter += 1;
                     return;
                 }
             }
