@@ -10,13 +10,13 @@
 > .c shape; lints at HEAD = 52/0 — the scout's 45 was stale).
 > **Scout:** report `/tmp/scout_rr_b_report.md`, prototype `/tmp/scout_rr_b_prototype.patch`
 > (7 files, +106/−83), measured end-to-end at `cab529cd`.
-> **Status:** v3 — pass-1 folds (D1 phantom gate count; D2 two-test fixture —
-> P3 heap-UAF proven DETERMINISTIC + ASan-verified; D3 zone wording) + pass-2
-> folds (stale "trap 30/0" remnant reworded; harness entry name PINNED
-> `test_trap_detail_matching` with post-landing gate counts 85/11/8; `int x = 42`
-> declared in the fixture spec). Pass-2 re-verified every empirical claim
-> (pre-fix test 2 fails deterministically 4/4, ASan heap-use-after-free in
-> StrstrCheck; post-fix 2/2 both backends). Awaiting pass 3.
+> **Status:** v4 — pass-1 folds (D1/D2/D3) + pass-2 folds (stale remnant; pinned
+> harness name + counts 85/11/8; `x = 42`) + pass-3 folds (R1 the R-B↔R-C
+> trap-filter cross-track clause on gates 4/5; R2 gate-6 mechanics: pre-fix
+> oracle saved BEFORE patching + the false-PASS scratch shape spelled). Pass-3
+> reproduced every pinned count exactly, confirmed the truncation/buffer-bleed/
+> empty-message adversarial probes clean, and verified the R-D/R-A interaction
+> claims. Awaiting pass 4 (confirming pass on the folds).
 
 ## Verified premises (scout, empirical)
 
@@ -126,8 +126,13 @@ regenerated per-filter count) · LLVM `trap` (skip self_host) 7/0.
 Worktree-isolated; worktree-relative paths only; no `git stash`; checkpoint diff
 to /tmp after each work item; stage by explicit file name; final gates FOREGROUND
 with generous timeouts (`GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600` for
-anything matching `self_host`). Base: apply `/tmp/scout_rr_b_prototype.patch`,
-re-derive judgment hunk by hunk (you own it), add the regression fixture.
+anything matching `self_host`). **FIRST (pass-3 R2i): before applying the patch,
+`cargo build` and copy `target/debug/gg` to /tmp as the PRE-FIX ORACLE for gate
+6's "before" transcript** — a naive later revert of `panic_test.c` alone yields
+an uncompilable test-mode runtime (the 27 migrated producers call
+`gorget_trap_fmt`, whose test-mode definition lives in the reverted file). Then:
+apply `/tmp/scout_rr_b_prototype.patch`, re-derive judgment hunk by hunk (you
+own it), add the regression fixture.
 
 ## Gate list (executor, foreground, tee'd)
 
@@ -139,12 +144,22 @@ re-derive judgment hunk by hunk (you own it), add the regression fixture.
    — **11/0** (7 direct `*_traps` + 3 self_host-substring tests + the new
    `test_trap_detail_matching`; the pre-fixture baseline is 10 — pass-1 D1
    regenerated via `--list`; the scout's "30/0" was a different OR-filter's
-   figure, do NOT gate against it)
+   figure, do NOT gate against it). **+1 (=12/0) if track R-C has landed first**
+   — its `unwrap_error_on_ok_combinator_traps` fixture also matches this filter
+   (pass-3 R1 cross-track reconciliation).
 5. `GG_BACKEND=llvm cargo test --test integration --release trap -- --test-threads=4 --skip self_host` — 8/0
    (7 direct + the new `test_trap_detail_matching`; `gg_command` auto-applies
-   `--backend=llvm`)
+   `--backend=llvm`). **+1 (=9/0) if R-C has landed first** (same cross-track
+   fixture, pass-3 R1).
 6. The new fixture under BOTH backends, plus a paste of the before/after repro
-   transcript (false-FAIL and false-PASS both demonstrated fixed).
+   transcript (false-FAIL and false-PASS both demonstrated fixed). Mechanics
+   (pass-3 R2): run the "before" against the PRE-FIX ORACLE binary saved in the
+   protocol's first step. The false-PASS half needs a SCRATCH shape (not the
+   landed fixture, whose tests both FAIL pre-fix): two tests each hitting the
+   SAME-depth OOB — the first `@should_panic` on a SHORT substring (garbage-FAILs
+   pre-fix), the second `@should_panic` on the FULL detail string (false-PASSes
+   off the first's dead-stack bytes; reproduced 3/3 by pass-3). Delete the
+   scratch after the transcript.
 7. `cargo test --test lints` — no ratchet deltas expected.
 
 Parent (NOT executor): full both-backend sweep + bootstrap at integration.
