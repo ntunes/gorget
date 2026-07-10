@@ -1,0 +1,21 @@
+# Pins @should_panic DETAIL matching against trap/panic messages (R-B).
+# The test-mode runtime must COPY the failure detail before running cleanup
+# and longjmp'ing back to the runner:
+#   - runtime bounds details are snprintf'd into the trapping frame's stack
+#     (gorget_trap_at consumer) — longjmp abandons that frame;
+#   - a user panic(String) passes a heap pointer that the cleanup run frees
+#     (gorget_panic_at consumer).
+# Pre-fix, detail matching was use-after-scope/use-after-free roulette in
+# BOTH directions: garbage FAIL text AND false PASSes off stale dead bytes.
+
+@should_panic("index out of bounds: index 10, length 3")
+test "oob vector index panics with exact detail":
+    Vector[int] v = [1, 2, 3]
+    int y = v[10]
+    print(f"unreachable {y}")
+
+@should_panic("boom with dynamic payload 42")
+test "dynamic panic message survives cleanup":
+    int x = 42
+    String msg = f"boom with dynamic payload {x}"
+    panic(msg)

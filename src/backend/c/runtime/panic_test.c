@@ -26,9 +26,27 @@ static volatile int __gorget_in_test = 0;
 // while the test function's stack frame is still valid.
 static volatile int __gorget_test_cleanup_mark = 0;
 
+// Fail-message copy buffer. gorget_panic_at / gorget_trap_at longjmp back to
+// the test runner, abandoning the trapping call's stack frame — but `msg` /
+// `detail` frequently point INTO that frame (the runtime's snprintf'd bounds
+// details) or into test-body heap values that __gorget_cleanup_run frees
+// (user `panic(str)` marshals `(const char*)str.data`). Copy into a static
+// buffer BEFORE cleanup + longjmp so __gorget_test_fail_msg never dangles.
+// _Thread_local matches the cleanup-stack convention above. Overlong
+// messages truncate — acceptable for a test-failure line.
+static _Thread_local char __gorget_test_fail_buf[256];
+static inline const char* __gorget_test_msg_copy(const char* msg) {
+    // Never return NULL: a NULL __gorget_test_fail_msg means "test passed".
+    if (!msg) msg = "";
+    snprintf(__gorget_test_fail_buf, sizeof(__gorget_test_fail_buf), "%s", msg);
+    return __gorget_test_fail_buf;
+}
+
 static inline void gorget_panic_at(const char* file, int line, int col, const char* msg) {
     if (__gorget_in_test) {
-        __gorget_test_fail_msg = msg;
+        // Copy first: msg may point into this test's stack frame or into a
+        // heap value the cleanup run below is about to free.
+        __gorget_test_fail_msg = __gorget_test_msg_copy(msg);
         // Run test-body cleanup while stack frame is still valid (locals not yet abandoned).
         __gorget_cleanup_run(__gorget_test_cleanup_mark);
         longjmp(__gorget_test_jmp, 1);
@@ -49,7 +67,12 @@ static inline void gorget_panic(const char* msg) {
 // Argument order is (code, detail, file, line, col) — code-first.
 static inline void gorget_trap_at(const char* code, const char* detail, const char* file, int line, int col) {
     if (__gorget_in_test) {
-        __gorget_test_fail_msg = detail;
+        // Copy first (see __gorget_test_msg_copy): the D11 bounds/offset
+        // details are snprintf'd into `char __gg_detail[96]` stack buffers in
+        // the trapping frame, which longjmp abandons — storing the raw
+        // pointer left __gorget_test_fail_msg dangling (garbage FAIL text,
+        // nondeterministic @should_panic matching).
+        __gorget_test_fail_msg = __gorget_test_msg_copy(detail);
         __gorget_cleanup_run(__gorget_test_cleanup_mark);
         longjmp(__gorget_test_jmp, 1);
     }
@@ -58,6 +81,32 @@ static inline void gorget_trap_at(const char* code, const char* detail, const ch
 }
 static inline void gorget_trap(const char* code, const char* detail) {
     gorget_trap_at(code, detail, "<unknown>", 0, 0);
+}
+
+// ── Formatted trap helpers ───────────────────────────────────
+// One-line replacement for the copy-pasted producer pattern
+//     char __gg_detail[96]; snprintf(__gg_detail, ..., ...); gorget_trap(code, __gg_detail);
+// The formatted detail lives in a local buffer; safe in test mode because
+// gorget_trap_at copies it (above) before longjmp. Mirrored in panic_normal.c
+// (exactly one of the two panic runtimes is emitted per binary).
+static inline void gorget_trap_fmt(const char* code, const char* fmt, ...) {
+    char __gg_detail[256];
+    va_list __gg_ap;
+    va_start(__gg_ap, fmt);
+    vsnprintf(__gg_detail, sizeof(__gg_detail), fmt, __gg_ap);
+    va_end(__gg_ap);
+    gorget_trap(code, __gg_detail);
+}
+// Span-carrying variant. Argument order deviates from gorget_trap_at
+// (code, detail, file, line, col) because varargs must trail: span first,
+// then the format.
+static inline void gorget_trap_at_fmt(const char* code, const char* file, int line, int col, const char* fmt, ...) {
+    char __gg_detail[256];
+    va_list __gg_ap;
+    va_start(__gg_ap, fmt);
+    vsnprintf(__gg_detail, sizeof(__gg_detail), fmt, __gg_ap);
+    va_end(__gg_ap);
+    gorget_trap_at(code, __gg_detail, file, line, col);
 }
 
 // ── Timeout support (SIGALRM + setitimer) ────────────────────

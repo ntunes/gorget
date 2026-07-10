@@ -30,9 +30,7 @@ static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
 
 static inline void* gorget_array_get(const GorgetArray* arr, size_t index) {
     if (index >= arr->len) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "index out of bounds: index %zu, length %zu", index, arr->len);
-        gorget_trap(GG_T_BOUNDS, __gg_detail);
+        gorget_trap_fmt(GG_T_BOUNDS, "index out of bounds: index %zu, length %zu", index, arr->len);
     }
     return (char*)arr->data + index * arr->elem_size;
 }
@@ -48,9 +46,7 @@ static inline void* gorget_array_get(const GorgetArray* arr, size_t index) {
 // subscript reports its real value rather than a wrapped `size_t`.
 static inline void* gorget_array_get_at(const GorgetArray* arr, int64_t index, const char* code, const char* file, int line, int col) {
     if (index < 0 || (size_t)index >= arr->len) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "index out of bounds: index %" PRId64 ", length %zu", index, arr->len);
-        gorget_trap_at(code, __gg_detail, file, line, col);
+        gorget_trap_at_fmt(code, file, line, col, "index out of bounds: index %" PRId64 ", length %zu", index, arr->len);
     }
     return (char*)arr->data + (size_t)index * arr->elem_size;
 }
@@ -97,9 +93,7 @@ static inline void gorget_map_materialize_keys(GorgetMap* m) {
 
 static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* elem) {
     if (index >= arr->len) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "index out of bounds: index %zu, length %zu", index, arr->len);
-        gorget_trap(GG_T_BOUNDS, __gg_detail);
+        gorget_trap_fmt(GG_T_BOUNDS, "index out of bounds: index %zu, length %zu", index, arr->len);
     }
     void* slot = (char*)arr->data + index * arr->elem_size;
     // Drop old element before overwriting (prevents resource leak).
@@ -111,9 +105,7 @@ static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* 
 
 static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
     if (index >= arr->len) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "index out of bounds: index %zu, length %zu", index, arr->len);
-        gorget_trap(GG_T_BOUNDS, __gg_detail);
+        gorget_trap_fmt(GG_T_BOUNDS, "index out of bounds: index %zu, length %zu", index, arr->len);
     }
     if (arr->elem_drop) {
         arr->elem_drop((char*)arr->data + index * arr->elem_size);
@@ -174,9 +166,7 @@ static inline void* gorget_array_pop(GorgetArray* arr) {
 // out-of-bounds.
 static inline void gorget_array_swap_remove(GorgetArray* arr, size_t index) {
     if (index >= arr->len) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "swap_remove index out of bounds: index %zu, length %zu", index, arr->len);
-        gorget_trap(GG_T_BOUNDS, __gg_detail);
+        gorget_trap_fmt(GG_T_BOUNDS, "swap_remove index out of bounds: index %zu, length %zu", index, arr->len);
     }
     void* slot = (char*)arr->data + index * arr->elem_size;
     if (arr->elem_drop) {
@@ -398,9 +388,7 @@ static inline void gorget_array_dedup(GorgetArray* arr) {
 
 static inline void gorget_array_insert(GorgetArray* arr, size_t index, const void* elem) {
     if (index > arr->len) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "insert index out of bounds: index %zu, length %zu", index, arr->len);
-        gorget_trap(GG_T_BOUNDS, __gg_detail);
+        gorget_trap_fmt(GG_T_BOUNDS, "insert index out of bounds: index %zu, length %zu", index, arr->len);
     }
     if (arr->len >= arr->cap) {
         size_t old_cap = arr->cap;
@@ -464,9 +452,7 @@ static inline void gorget_string_clone_inplace(void* p) {
 
 static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t start, int64_t end) {
     if (start < 0 || end < 0 || (size_t)start > arr->len || (size_t)end > arr->len || start > end) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "vector slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu", start, end, arr->len);
-        gorget_trap(GG_T_BOUNDS, __gg_detail);
+        gorget_trap_fmt(GG_T_BOUNDS, "vector slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu", start, end, arr->len);
     }
     size_t slice_len = (size_t)(end - start);
     GorgetAllocator* a = __gorget_current_alloc;

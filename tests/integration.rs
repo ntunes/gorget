@@ -10015,6 +10015,22 @@ fn test_should_panic() {
 }
 
 #[test]
+fn test_trap_detail_matching() {
+    // R-B: @should_panic DETAIL matching against trap/panic messages.
+    // Pins the test-mode consumer fix in panic_test.c: the runner must copy
+    // the failure detail BEFORE __gorget_cleanup_run + longjmp. The detail
+    // may point into the trapping frame's stack (runtime bounds messages via
+    // gorget_trap_at) or into heap the cleanup run frees (user panic(String)
+    // via gorget_panic_at). Pre-fix, matching was UAF roulette in BOTH
+    // directions: garbage FAIL text and false PASSes off stale dead bytes.
+    run_gg_test(
+        "test_trap_detail_matching.gg",
+        &["Running 2 tests", "2 passed, 0 failed", "PASS"],
+        true,
+    );
+}
+
+#[test]
 fn test_skip_attribute() {
     run_gg_test(
         "test_skip.gg",

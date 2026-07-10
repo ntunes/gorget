@@ -96,18 +96,14 @@ static inline int gorget_weak_upgrade(GorgetShared* w) {
 static inline void* gorget_shared_array_get(GorgetShared* s, size_t index) {
     GorgetArray* arr = (GorgetArray*)s->data;
     if (index >= (size_t)arr->len) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "shared array index out of bounds: %zu >= %lld", index, (long long)arr->len);
-        gorget_trap(GG_T_BOUNDS, __gg_detail);
+        gorget_trap_fmt(GG_T_BOUNDS, "shared array index out of bounds: %zu >= %lld", index, (long long)arr->len);
     }
     return (char*)arr->data + index * arr->elem_size;
 }
 static inline void gorget_shared_array_set(GorgetShared* s, size_t index, const void* elem, size_t elem_size) {
     GorgetArray* arr = (GorgetArray*)s->data;
     if (index >= (size_t)arr->len) {
-        char __gg_detail[96];
-        snprintf(__gg_detail, sizeof(__gg_detail), "shared array index out of bounds: %zu >= %lld", index, (long long)arr->len);
-        gorget_trap(GG_T_BOUNDS, __gg_detail);
+        gorget_trap_fmt(GG_T_BOUNDS, "shared array index out of bounds: %zu >= %lld", index, (long long)arr->len);
     }
     memcpy((char*)arr->data + index * elem_size, elem, elem_size);
 }
