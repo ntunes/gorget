@@ -73,13 +73,28 @@
 //!
 //! ## Tier roadmap
 //!
-//! - tier 0 (this round): scalars/strings/vectors, aliases, views, moves,
-//!   helper fns, control flow — the CoW/ownership core.
-//! - tier 1 (future): the mutation-route class table of devbook/11 (§
-//!   "materialization points") — structs, nested collections, Dict, slices.
-//! - tier 2 (future): traits/equip, closures, generics.
+//! - tier 0 (default): scalars/strings/vectors, aliases, views, moves,
+//!   helper fns, control flow — the CoW/ownership core (the DIFFERENTIAL shape).
+//! - tier 1 = `TIER_THROWS` (this round, T3b): the throws-position REJECTION
+//!   tier — one unhandled `throws` call per program, in a fuzzed position, that
+//!   production must REJECT with `E_UnhandledThrows`. A DIFFERENT ORACLE than
+//!   the differential (see the "throws-position rejection tier" section below);
+//!   CHECK-ONLY, no ggdef / build / self-host / LLVM lane.
+//! - future: widen the differential grammar — the mutation-route class table of
+//!   devbook/11 (§ "materialization points"); traits/equip, closures, generics.
 //!
-//! Tier is selected with `GG_SMITH_TIER` (default 0); only tier 0 exists.
+//! Tier is selected with `GG_SMITH_TIER` (default 0).
+//!
+//! ## throws-position rejection tier (T3b, `GG_SMITH_TIER=1`)
+//!
+//! Tier 1 inverts the differential: each seed is a program well-formed EXCEPT
+//! for ONE unhandled `throws` call (`generator::program_throws_positions`), and
+//! `classify` runs an INVERTED oracle (`classify_throws`) — production is
+//! REQUIRED to reject with `E_UnhandledThrows`. Verdicts:
+//! `UNHANDLED-THROWS-REJECTED` is the benign PASS; `UNHANDLED-THROWS-SLIP`
+//! (check accepted an unhandled throws) is a real T3a enforcement hole;
+//! `THROWS-DESUGAR-LEAK` (`found `Result[`) is a D23 diagnostic regression.
+//! Both non-benign verdicts gate the green report.
 //!
 //! ## ggdef verdict lane (RFC §4)
 //!
@@ -285,6 +300,19 @@ enum Verdict {
     /// non-terminating under fuel); the cross-impl differential still ran and
     /// agreed. Benign, recorded distinctly so ggdef-coverage gaps stay visible.
     GgdefSkip { detail: String },
+    // ── throws-position rejection tier (T3b, `TIER_THROWS`) verdicts ──
+    /// The BENIGN PASS: production correctly REJECTED the one unhandled `throws`
+    /// call with `E_UnhandledThrows` (and no `found `Result[` desugar leak).
+    /// The whole point of the tier — treated like `Match` for cleanup/reporting.
+    UnhandledThrowsRejected,
+    /// NON-BENIGN: `gg check` ACCEPTED a program with an unhandled `throws`
+    /// call — a real T3a enforcement hole (silent swallow / miscompile). Must
+    /// surface distinctly from a generator bug; blocks the green gate.
+    UnhandledThrowsSlip { detail: String },
+    /// NON-BENIGN: `gg check` rejected but the diagnostic LEAKED the `Result[T,
+    /// E]` desugar (`found `Result[`) instead of the clean `E_UnhandledThrows`
+    /// — the pre-D23 desugar surfacing as the found type. A regression; blocks.
+    ThrowsDesugarLeak { detail: String },
 }
 
 impl Verdict {
@@ -302,6 +330,9 @@ impl Verdict {
             Verdict::DivergeLlvm { .. } => "DIVERGE(C,llvm)",
             Verdict::SpecDiverge { .. } => "SPEC-DIVERGE",
             Verdict::GgdefSkip { .. } => "GGDEF-SKIP",
+            Verdict::UnhandledThrowsRejected => "UNHANDLED-THROWS-REJECTED",
+            Verdict::UnhandledThrowsSlip { .. } => "UNHANDLED-THROWS-SLIP",
+            Verdict::ThrowsDesugarLeak { .. } => "THROWS-DESUGAR-LEAK",
         }
     }
 
@@ -310,13 +341,16 @@ impl Verdict {
     /// so it is treated like `Match` for scratch-dir cleanup and progressive
     /// reporting, and is NOT counted as suspicious.
     fn is_benign(&self) -> bool {
-        matches!(self, Verdict::Match | Verdict::GgdefSkip { .. })
+        matches!(
+            self,
+            Verdict::Match | Verdict::GgdefSkip { .. } | Verdict::UnhandledThrowsRejected
+        )
     }
 
     /// First error/diff line for the report (empty for MATCH).
     fn detail(&self) -> String {
         match self {
-            Verdict::Match => String::new(),
+            Verdict::Match | Verdict::UnhandledThrowsRejected => String::new(),
             Verdict::GenInvalid { detail }
             | Verdict::BuildFailC { detail }
             | Verdict::Crash { detail }
@@ -326,7 +360,9 @@ impl Verdict {
             | Verdict::BuildFailLlvm { detail }
             | Verdict::DivergeLlvm { detail }
             | Verdict::SpecDiverge { detail }
-            | Verdict::GgdefSkip { detail } => detail.clone(),
+            | Verdict::GgdefSkip { detail }
+            | Verdict::UnhandledThrowsSlip { detail }
+            | Verdict::ThrowsDesugarLeak { detail } => detail.clone(),
             Verdict::Timeout { lane } => format!("lane: {lane}"),
         }
     }
@@ -522,6 +558,19 @@ fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict
     let t0 = Instant::now();
     let check = run_cmd(Command::new(gg_binary()).arg("check").arg(&cprog), build_timeout());
     t.check += t0.elapsed();
+
+    // Throws-position rejection tier (TIER_THROWS, T3b): the generated program
+    // is well-formed EXCEPT for one unhandled `throws` call, so production MUST
+    // reject it with `E_UnhandledThrows`. This is an INVERTED oracle and a
+    // CHECK-ONLY tier — none of the ggdef / build / self-host / LLVM lanes below
+    // run for it (the program never compiles). `classify_throws` returns before
+    // the tier-0 `match check` (which would mislabel the expected rejection as
+    // GEN-INVALID); the move of `check` is on a diverging branch, so the tier-0
+    // path below still owns it.
+    if cfg.tier == generator::TIER_THROWS {
+        return classify_throws(check);
+    }
+
     match check {
         Err(TimedOut) => return Verdict::Timeout { lane: "gg check" },
         Ok(o) if !o.status.success() => {
@@ -730,6 +779,52 @@ fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict
     }
 }
 
+/// Inverted oracle for the throws-position rejection tier (`TIER_THROWS`, T3b).
+/// The generated program is well-formed EXCEPT for one unhandled `throws` call,
+/// so production is REQUIRED to reject it with `E_UnhandledThrows`. Four
+/// verdicts via an ORDERED decision tree (mirrors `check_gg_fails_no_desugar`,
+/// tests/integration.rs):
+///
+///   check SUCCEEDS                       → UnhandledThrowsSlip   (a real T3a hole)
+///   check FAILS, stderr `found `Result[` → ThrowsDesugarLeak    (CHECK THIS FIRST)
+///   check FAILS, cites throws / E_…      → UnhandledThrowsRejected (the BENIGN PASS)
+///   check FAILS, unrelated reason        → GenInvalid            (a generator bug)
+///
+/// The desugar-LEAK arm MUST precede the throws / GEN-INVALID arms: a leak is a
+/// plain type-mismatch diagnostic (`expected `int`, found `Result[int, String]`)
+/// that need NOT contain the word `throws`, so it ALSO satisfies the
+/// GEN-INVALID predicate; ordering leak-first routes a real compiler regression
+/// to the non-benign `ThrowsDesugarLeak` instead of hiding it as a generator bug.
+fn classify_throws(check: Result<Output, TimedOut>) -> Verdict {
+    let o = match check {
+        Err(TimedOut) => return Verdict::Timeout { lane: "gg check" },
+        Ok(o) => o,
+    };
+    // check SUCCEEDS → production wrongly accepted an unhandled `throws`: a real
+    // T3a enforcement hole (silent swallow / miscompile). NOT a generator bug —
+    // must surface distinctly, never folded into GEN-INVALID.
+    if o.status.success() {
+        return Verdict::UnhandledThrowsSlip {
+            detail: "gg check ACCEPTED an unhandled `throws` call (T3a enforcement hole)"
+                .to_string(),
+        };
+    }
+    // check FAILS → inspect the diagnostic. Strip ANSI first: `gg` colorizes
+    // even to a pipe, so a raw substring test would miss the signal.
+    let stderr = strip_ansi(&String::from_utf8_lossy(&o.stderr));
+    // (1) desugar leak — CHECKED FIRST (its predicate overlaps GEN-INVALID's).
+    if stderr.contains("found `Result[") {
+        return Verdict::ThrowsDesugarLeak { detail: error_lines(&o) };
+    }
+    // (2) the D23 signal → the BENIGN PASS.
+    if stderr.contains("E_UnhandledThrows") || stderr.contains("throws") {
+        return Verdict::UnhandledThrowsRejected;
+    }
+    // (3) rejected for an UNRELATED reason → a generator bug (a malformed
+    // program). Kept for triage, same bucket as tier 0's check-reject.
+    Verdict::GenInvalid { detail: error_lines(&o) }
+}
+
 /// Generate + classify one seed. The seed's scratch dir is removed when the
 /// verdict is benign (MATCH or GGDEF-SKIP); repro dirs are kept only for
 /// divergent/suspicious seeds.
@@ -841,6 +936,33 @@ fn generator_determinism() {
     }
 }
 
+/// Always-on: the throws-position rejection tier (`TIER_THROWS`, T3b) is
+/// byte-reproducible per seed, and every generated program actually carries a
+/// `throws` helper + an unhandled `risky()` call (so the inverted oracle has
+/// something to reject). Cheap insurance the batch diagnostic wouldn't surface.
+#[test]
+fn generator_determinism_throws() {
+    for seed in [0u64, 1, 7, 36, 42, 99, 1000, 123_456] {
+        let a = generator::generate(seed, generator::TIER_THROWS);
+        let b = generator::generate(seed, generator::TIER_THROWS);
+        assert_eq!(
+            a, b,
+            "throws-tier generator is not deterministic for (v{}, seed {seed})",
+            generator::GENERATOR_VERSION
+        );
+        assert!(a.contains("void main():"), "seed {seed}: throws program lost its main()");
+        assert!(
+            a.contains("throws String:"),
+            "seed {seed}: throws program lost its `throws` helper"
+        );
+        assert!(a.contains("risky("), "seed {seed}: throws program lost its risky() call");
+        assert!(
+            a.trim_end().ends_with("print(\"end\")"),
+            "seed {seed}: throws program lost its end sentinel"
+        );
+    }
+}
+
 /// Env-gated batch differential — an always-pass DIAGNOSTIC (prints a
 /// verdict table, a divergent-seed list, repro paths, and the first
 /// error/diff line per non-MATCH seed; never asserts counts).
@@ -872,7 +994,12 @@ fn smith_batch() {
 
     // One-time driver build BEFORE the parallel fan-out (OnceLock would
     // serialize the stampede anyway, but this keeps per-seed timing honest).
-    let _ = driver_paths();
+    // SKIPPED for the throws-position rejection tier: it is CHECK-ONLY, never
+    // reaches the self-host lane, and the ~57s build would otherwise be paid for
+    // nothing (and would spuriously PANIC if the driver were broken unrelatedly).
+    if cfg.tier != generator::TIER_THROWS {
+        let _ = driver_paths();
+    }
 
     let results = parallel_map_seeds(&seeds, &cfg, &tmp_root);
 
@@ -881,6 +1008,11 @@ fn smith_batch() {
     let mut suspicious: Vec<u64> = Vec::new();
     let mut gen_invalid: Vec<u64> = Vec::new();
     let mut ggdef_skip: Vec<u64> = Vec::new();
+    // throws-position tier (TIER_THROWS) — kept in DISTINCT lists so a slip and
+    // a leak read apart (the acceptance criterion counts them separately), and
+    // BOTH gate the green report below (a slip could otherwise silently green).
+    let mut throws_slip: Vec<u64> = Vec::new();
+    let mut throws_leak: Vec<u64> = Vec::new();
     for (seed, v, t, _dir) in &results {
         *counts.entry(v.label()).or_insert(0) += 1;
         totals.add(t);
@@ -890,7 +1022,14 @@ fn smith_batch() {
             // separately so a ggdef-coverage gap is visible without polluting
             // the suspicious list (a GGDEF-SKIP is NOT a divergence).
             Verdict::GgdefSkip { .. } => ggdef_skip.push(*seed),
+            // Benign PASS of the throws-position tier — no-op arm (mirror the
+            // `Match` arm) so the `_ =>` catch-all does NOT sweep it into
+            // `suspicious`; without this the report never greens.
+            Verdict::UnhandledThrowsRejected => {}
             Verdict::GenInvalid { .. } => gen_invalid.push(*seed),
+            // NON-BENIGN throws-tier verdicts — surfaced distinctly AND gated.
+            Verdict::UnhandledThrowsSlip { .. } => throws_slip.push(*seed),
+            Verdict::ThrowsDesugarLeak { .. } => throws_leak.push(*seed),
             _ => suspicious.push(*seed),
         }
     }
@@ -920,9 +1059,19 @@ fn smith_batch() {
     println!("divergent/suspicious seeds: {suspicious:?}");
     println!("gen-invalid seeds: {gen_invalid:?}");
     println!("ggdef-skip (out-of-surface) seeds: {ggdef_skip:?}");
-    if suspicious.is_empty() && gen_invalid.is_empty() {
+    if cfg.tier == generator::TIER_THROWS {
+        // Both are REAL findings for the throws tier: a slip is a T3a
+        // enforcement hole; a leak is a D23 diagnostic regression.
+        println!("throws-SLIP (production ACCEPTED an unhandled throws) seeds: {throws_slip:?}");
+        println!("throws-desugar-LEAK (`found `Result[`) seeds: {throws_leak:?}");
+    }
+    if suspicious.is_empty()
+        && gen_invalid.is_empty()
+        && throws_slip.is_empty()
+        && throws_leak.is_empty()
+    {
         let _ = std::fs::remove_dir_all(&tmp_root);
-        println!("all seeds benign (MATCH / GGDEF-SKIP) — repro root removed");
+        println!("all seeds benign — repro root removed");
     } else {
         println!("repro root (divergent/suspicious seed dirs kept): {}", tmp_root.display());
         println!(
