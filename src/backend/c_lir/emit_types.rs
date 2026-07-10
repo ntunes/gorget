@@ -243,7 +243,14 @@ pub(super) fn emit_option_result_combinator_helpers(out: &mut String, module: &L
                 writeln!(out, "    if (__src.tag == 1) {{").unwrap();
                 writeln!(out, "        return __src.{err_field};").unwrap();
                 writeln!(out, "    }}").unwrap();
-                writeln!(out, "    fprintf(stderr, \"<unknown>:0:0: unwrap_err on Ok\\n\"); abort();").unwrap();
+                // D11: `.unwrap_error()` on an `Ok` is `T_UnwrapErrorOnOk` — route
+                // through the registry (`gorget_trap`, exit 101), NOT a bare
+                // `abort()` (exit 134, off the normalized set). The trailing return
+                // is unreachable (`gorget_trap` exits) but keeps the non-void
+                // function well-formed under `-Wreturn-type`.
+                writeln!(out, "    gorget_trap(\"{}\", \"unwrap_error on Ok\");",
+                    crate::trap::TrapKind::UnwrapErrorOnOk.code()).unwrap();
+                writeln!(out, "    return __src.{err_field};").unwrap();
                 writeln!(out, "}}").unwrap();
             }
             "map_err" => {

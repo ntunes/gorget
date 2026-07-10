@@ -5023,16 +5023,22 @@ fn trap_kind_parity_prod_vs_ggdef() {
 /// count and forces review. (A match-arm count does NOT apply — the emit sites
 /// are `write!`-based inline strings across two backends, not enum arms.)
 ///
-/// Baselines (2026-07-10, post T2a-rust reroute):
+/// Baselines (2026-07-10, post T2a-rust + T2b reroute):
 ///   * `c_lir/mod.rs` `exit(1)` = 0  — ALL inline arith/shift now route through
 ///     `gorget_trap_at`; a new one is a registry bypass.
-///   * `c_lir/mod.rs` `abort()` = 3  — the T2b bounds / div0 / generic-trap
-///     `abort()` (exit-134) sites, NOT rerouted here. When T2b normalizes them,
-///     lower this baseline.
-///   * `llvm/mod.rs` `call void @exit(i32 1)` = 4 — BoundsCheck (T2b), DivCheck,
-///     `Inst::Trap`, and the InlineC-fallback fatal (`; InlineC fatal`). None are
-///     rerouted arithmetic sites; the InlineC one is a deliberate non-trap abort
-///     kept in the baseline DELIBERATELY (it is not a trap to reroute).
+///   * `c_lir/mod.rs` `abort()` = 3  — the `abort()` bodies of the DEAD
+///     `Inst::BoundsCheck` / `Inst::DivCheck` / `Inst::Trap` match arms
+///     (`c_lir/mod.rs:3123/3132/3138`). These variants are NEVER constructed
+///     anywhere in lowering (grep-verified), so T2b deliberately left them alone —
+///     the runtime-library bounds path T2b normalized is a DIFFERENT set of files
+///     (`runtime_array.c` etc.) + the `emit_hof.rs`/`emit_types.rs` unwrap-on-Ok
+///     folds, none counted here. The baseline STAYS 3 (retiring the dead arms is
+///     out of scope; deleting them would be a wider cleanup).
+///   * `llvm/mod.rs` `call void @exit(i32 1)` = 4 — the DEAD `Inst::BoundsCheck` /
+///     `Inst::DivCheck` / `Inst::Trap` arms (never constructed, sibling of the C
+///     ones above) plus the InlineC-fallback fatal (`; InlineC fatal`). None are
+///     rerouted by T2b; the InlineC one is a deliberate non-trap abort kept in the
+///     baseline DELIBERATELY (it is not a trap to reroute).
 ///
 /// If this fails: a new raw trap emit was added. Route it through
 /// `crate::trap::TrapKind` + `gorget_trap_at` (the registry), OR — if it is a
@@ -5060,7 +5066,9 @@ fn raw_trap_exit_sites_ratchet() {
     assert_eq!(
         c_abort, C_ABORT_BASELINE,
         "c_lir/mod.rs `abort()` trap count changed: {c_abort} vs {C_ABORT_BASELINE}. \
-         These are the T2b bounds/div0/generic sites; adjust the baseline when T2b reroutes them.",
+         These 3 are the `abort()` bodies of the DEAD Inst::BoundsCheck/DivCheck/Trap \
+         arms (never constructed); T2b left them intentionally. A new abort must route \
+         through gorget_trap_at (crate::trap::TrapKind), not a bare abort().",
     );
     assert_eq!(
         llvm_exit1, LLVM_EXIT1_BASELINE,

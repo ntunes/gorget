@@ -152,10 +152,14 @@ pub(super) fn try_emit_option_result_combinator(
                     }
                 }
                 "unwrap_err" | "unwrap_error" => {
+                    // D11: `.unwrap_error()` on an `Ok` is `T_UnwrapErrorOnOk` — route
+                    // through the registry (`gorget_trap_at`, exit 101 + real span),
+                    // NOT a bare `abort()` (exit 134, off the normalized set).
                     write!(out, "{} = ({{ {src_ty} __om_src = *({src_ty}*){opt_ptr}; \
-                        if (__om_src.tag != 1) {{ fprintf(stderr, \"{f}:{ln}:{cl}: unwrap_error on Ok\\n\"); abort(); }} \
+                        if (__om_src.tag != 1) {{ gorget_trap_at(\"{code}\", \"unwrap_error on Ok\", \"{f}\", {ln}, {cl}); }} \
                         __om_src.{err_f}; }});",
-                        v(*d), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                        v(*d), code = crate::trap::TrapKind::UnwrapErrorOnOk.code(),
+                        f = loc.0, ln = loc.1, cl = loc.2).unwrap();
                 }
                 "map_err" => {
                     // map_err may change the error type (cross-type error mapping)

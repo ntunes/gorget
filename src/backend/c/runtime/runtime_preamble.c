@@ -43,6 +43,19 @@
 #include <pthread.h>
 #include <signal.h>
 
+// ── D11 trap codes (shared single-source) ───────────────────
+// The `T_` code for the index/bounds trap class (out-of-bounds index on
+// Vector / String / shared array / bytes buffer). Single-sourced here so a
+// future `TrapKind::Bounds` rename can't PARTIALLY drift across the ~30
+// span-less bounds sites in runtime_array.c / runtime_string.c /
+// shared_runtime.c / bytes*_runtime.c. Mirrors `TrapKind::Bounds.code()`
+// (src/trap.rs) / ggdef's `TrapKind::Bounds` — the `trap_bounds.gg`
+// conformance fixture is the executable guard for the `gorget_array_get`
+// path. The Layer-B `gorget_array_get_at` reroute threads the code as DATA
+// from `TrapKind::Bounds.code()` at the emit boundary; this define is the
+// span-less fallback used by the runtime-internal callers + the self-host.
+#define GG_T_BOUNDS "T_Bounds"
+
 // ── Allocator ───────────────────────────────────────────────
 typedef struct GorgetAllocator {
     void* (*alloc)(void* ctx, size_t size);

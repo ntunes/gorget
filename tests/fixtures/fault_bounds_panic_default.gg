@@ -1,6 +1,8 @@
-# Panic-by-default preserved: an UNCAUGHT out-of-bounds array index still
-# panics `index out of bounds` and exit(1), exactly as today — the Fault.Bounds
-# machinery must not perturb the plain index-read path (error-model.md §11).
+# Panic-by-default preserved: an UNCAUGHT out-of-bounds array index still halts
+# the program — post-D11/T2b it emits the normative `trap[T_Bounds]: index out of
+# bounds: index 10, length 3 at <file>:<line>:<col>` and exits 101 (the flagship
+# `v[i]` READ carries a real source location) — the Fault.Bounds machinery must
+# not perturb the plain index-read path (error-model.md §11).
 void main():
     Vector[int] xs = [10, 20, 30]
     int r = xs[10]

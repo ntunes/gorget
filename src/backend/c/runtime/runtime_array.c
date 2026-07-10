@@ -30,10 +30,29 @@ static inline void gorget_array_push(GorgetArray* arr, const void* elem) {
 
 static inline void* gorget_array_get(const GorgetArray* arr, size_t index) {
     if (index >= arr->len) {
-        fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "index out of bounds: index %zu, length %zu", index, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     return (char*)arr->data + index * arr->elem_size;
+}
+
+// Location-aware Vector element read (D11 Layer B). The compiler reroutes the
+// `v[i]` READ `gorget_array_get` CallExtern to this at the C / LLVM emit
+// boundary (src/backend/c_lir/emit_call_extern.rs, src/backend/llvm/mod.rs),
+// threading `TrapKind::Bounds.code()` + the resolved `file:line:col`. On OOB it
+// emits the normative `trap[<code>]: <detail> at file:line:col` + exit 101 via
+// the shared `gorget_trap_at`; the in-bounds fast path is identical to
+// `gorget_array_get` (returns the element `void*` — the downstream shared LIR
+// `Inst::Load` derefs). `index` is `int64_t` (the LIR passes I64) so a negative
+// subscript reports its real value rather than a wrapped `size_t`.
+static inline void* gorget_array_get_at(const GorgetArray* arr, int64_t index, const char* code, const char* file, int line, int col) {
+    if (index < 0 || (size_t)index >= arr->len) {
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "index out of bounds: index %" PRId64 ", length %zu", index, arr->len);
+        gorget_trap_at(code, __gg_detail, file, line, col);
+    }
+    return (char*)arr->data + (size_t)index * arr->elem_size;
 }
 
 // Non-panicking bounds-checked get — returns NULL for out-of-bounds.
@@ -78,8 +97,9 @@ static inline void gorget_map_materialize_keys(GorgetMap* m) {
 
 static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* elem) {
     if (index >= arr->len) {
-        fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "index out of bounds: index %zu, length %zu", index, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     void* slot = (char*)arr->data + index * arr->elem_size;
     // Drop old element before overwriting (prevents resource leak).
@@ -91,8 +111,9 @@ static inline void gorget_array_set(GorgetArray* arr, size_t index, const void* 
 
 static inline void gorget_array_remove(GorgetArray* arr, size_t index) {
     if (index >= arr->len) {
-        fprintf(stderr, "gorget: panic: index out of bounds: index %zu, length %zu\n", index, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "index out of bounds: index %zu, length %zu", index, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     if (arr->elem_drop) {
         arr->elem_drop((char*)arr->data + index * arr->elem_size);
@@ -153,8 +174,9 @@ static inline void* gorget_array_pop(GorgetArray* arr) {
 // out-of-bounds.
 static inline void gorget_array_swap_remove(GorgetArray* arr, size_t index) {
     if (index >= arr->len) {
-        fprintf(stderr, "gorget: panic: swap_remove index out of bounds: index %zu, length %zu\n", index, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "swap_remove index out of bounds: index %zu, length %zu", index, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     void* slot = (char*)arr->data + index * arr->elem_size;
     if (arr->elem_drop) {
@@ -170,8 +192,7 @@ static inline void gorget_array_swap_remove(GorgetArray* arr, size_t index) {
 // Swap two elements by index. Panics on out-of-bounds.
 static inline void gorget_array_swap(GorgetArray* arr, size_t i, size_t j) {
     if (i >= arr->len || j >= arr->len) {
-        fprintf(stderr, "gorget: panic: swap index out of bounds\n");
-        exit(1);
+        gorget_trap(GG_T_BOUNDS, "swap index out of bounds");
     }
     if (i == j) return;
     static _Thread_local char __swap_buf[4096];
@@ -377,8 +398,9 @@ static inline void gorget_array_dedup(GorgetArray* arr) {
 
 static inline void gorget_array_insert(GorgetArray* arr, size_t index, const void* elem) {
     if (index > arr->len) {
-        fprintf(stderr, "gorget: panic: insert index out of bounds: index %zu, length %zu\n", index, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "insert index out of bounds: index %zu, length %zu", index, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     if (arr->len >= arr->cap) {
         size_t old_cap = arr->cap;
@@ -442,8 +464,9 @@ static inline void gorget_string_clone_inplace(void* p) {
 
 static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t start, int64_t end) {
     if (start < 0 || end < 0 || (size_t)start > arr->len || (size_t)end > arr->len || start > end) {
-        fprintf(stderr, "gorget: panic: vector slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu\n", start, end, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "vector slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu", start, end, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     size_t slice_len = (size_t)(end - start);
     GorgetAllocator* a = __gorget_current_alloc;
