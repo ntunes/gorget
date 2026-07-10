@@ -90,11 +90,13 @@
 //! Tier 1 inverts the differential: each seed is a program well-formed EXCEPT
 //! for ONE unhandled `throws` call (`generator::program_throws_positions`), and
 //! `classify` runs an INVERTED oracle (`classify_throws`) — production is
-//! REQUIRED to reject with `E_UnhandledThrows`. Verdicts:
-//! `UNHANDLED-THROWS-REJECTED` is the benign PASS; `UNHANDLED-THROWS-SLIP`
-//! (check accepted an unhandled throws) is a real T3a enforcement hole;
-//! `THROWS-DESUGAR-LEAK` (`found `Result[`) is a D23 diagnostic regression.
-//! Both non-benign verdicts gate the green report.
+//! REQUIRED to reject with the EXACT diagnostic code `error[E_UnhandledThrows]`.
+//! Verdicts: `UNHANDLED-THROWS-REJECTED` is the benign PASS (the exact code,
+//! never a loose "mentions throws" match); `UNHANDLED-THROWS-SLIP` (check
+//! accepted an unhandled throws) is a real T3a enforcement hole;
+//! `THROWS-DESUGAR-LEAK` (`found `Result[`) is a D23 diagnostic regression; any
+//! other rejection is `GEN-INVALID` (a generator bug or a mis-coded rejection).
+//! All three non-benign verdicts gate the green report.
 //!
 //! ## ggdef verdict lane (RFC §4)
 //!
@@ -302,7 +304,9 @@ enum Verdict {
     GgdefSkip { detail: String },
     // ── throws-position rejection tier (T3b, `TIER_THROWS`) verdicts ──
     /// The BENIGN PASS: production correctly REJECTED the one unhandled `throws`
-    /// call with `E_UnhandledThrows` (and no `found `Result[` desugar leak).
+    /// call with the EXACT code `error[E_UnhandledThrows]` (and no `found
+    /// `Result[` desugar leak). A rejection without that code routes to
+    /// `GenInvalid`, never here (`classify_throws_routing` pins this).
     /// The whole point of the tier — treated like `Match` for cleanup/reporting.
     UnhandledThrowsRejected,
     /// NON-BENIGN: `gg check` ACCEPTED a program with an unhandled `throws`
@@ -785,16 +789,24 @@ fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict
 /// verdicts via an ORDERED decision tree (mirrors `check_gg_fails_no_desugar`,
 /// tests/integration.rs):
 ///
-///   check SUCCEEDS                       → UnhandledThrowsSlip   (a real T3a hole)
-///   check FAILS, stderr `found `Result[` → ThrowsDesugarLeak    (CHECK THIS FIRST)
-///   check FAILS, cites throws / E_…      → UnhandledThrowsRejected (the BENIGN PASS)
-///   check FAILS, unrelated reason        → GenInvalid            (a generator bug)
+///   check SUCCEEDS                                → UnhandledThrowsSlip   (a real T3a hole)
+///   check FAILS, stderr `found `Result[`          → ThrowsDesugarLeak    (CHECK THIS FIRST)
+///   check FAILS, code `error[E_UnhandledThrows]`  → UnhandledThrowsRejected (the BENIGN PASS)
+///   check FAILS, any other diagnostic             → GenInvalid  (generator bug OR mis-coded rejection)
 ///
-/// The desugar-LEAK arm MUST precede the throws / GEN-INVALID arms: a leak is a
+/// The desugar-LEAK arm MUST precede the PASS / GEN-INVALID arms: a leak is a
 /// plain type-mismatch diagnostic (`expected `int`, found `Result[int, String]`)
-/// that need NOT contain the word `throws`, so it ALSO satisfies the
-/// GEN-INVALID predicate; ordering leak-first routes a real compiler regression
-/// to the non-benign `ThrowsDesugarLeak` instead of hiding it as a generator bug.
+/// that could in principle co-occur with the exact code; ordering leak-first
+/// routes a real compiler regression to the non-benign `ThrowsDesugarLeak`
+/// instead of greening it as the PASS.
+///
+/// The PASS arm requires the EXACT diagnostic code, never a loose
+/// `contains("throws")`: any rejection whose text merely mentions "throws" (a
+/// parse error quoting the generated `int risky() throws String:` helper line,
+/// a throws-adjacent diagnostic like `E_ThrowInNonThrowingFunction`) would
+/// otherwise be silently misrouted into the benign PASS — an inverted oracle
+/// that loses precision without failing. Routing pinned by
+/// `classify_throws_routing` below.
 fn classify_throws(check: Result<Output, TimedOut>) -> Verdict {
     let o = match check {
         Err(TimedOut) => return Verdict::Timeout { lane: "gg check" },
@@ -816,12 +828,21 @@ fn classify_throws(check: Result<Output, TimedOut>) -> Verdict {
     if stderr.contains("found `Result[") {
         return Verdict::ThrowsDesugarLeak { detail: error_lines(&o) };
     }
-    // (2) the D23 signal → the BENIGN PASS.
-    if stderr.contains("E_UnhandledThrows") || stderr.contains("throws") {
+    // (2) the D23 signal → the BENIGN PASS. The EXACT diagnostic code is
+    // required (`error[E_UnhandledThrows]` — `report_semantic_error` renders
+    // `.with_code(kind.code())`, src/errors.rs, inside ONE color span, so the
+    // substring is contiguous after `strip_ansi`). A rejection that merely
+    // MENTIONS "throws" — a parse error whose snippet quotes the
+    // `int risky() throws String:` helper line, an
+    // `E_ThrowInNonThrowingFunction`, any throws-adjacent diagnostic — is NOT
+    // the tier's pass and falls through to GEN-INVALID.
+    if stderr.contains("error[E_UnhandledThrows]") {
         return Verdict::UnhandledThrowsRejected;
     }
-    // (3) rejected for an UNRELATED reason → a generator bug (a malformed
-    // program). Kept for triage, same bucket as tier 0's check-reject.
+    // (3) rejected WITHOUT the exact code → a generator bug (a malformed
+    // program) OR a compiler regression that re-coded the rejection. Both
+    // block the green gate; triage from the detail line, same bucket as
+    // tier 0's check-reject.
     Verdict::GenInvalid { detail: error_lines(&o) }
 }
 
@@ -961,6 +982,75 @@ fn generator_determinism_throws() {
             "seed {seed}: throws program lost its end sentinel"
         );
     }
+}
+
+/// Always-on: `classify_throws` routing (T3b's inverted oracle). The benign
+/// PASS requires the EXACT diagnostic code — `error[E_UnhandledThrows]` — not
+/// any mention of "throws": a parse error whose snippet quotes the
+/// `int risky() throws String:` helper line, or a throws-ADJACENT diagnostic
+/// (`E_ThrowInNonThrowingFunction`), must route to GEN-INVALID, never silently
+/// green. Also pins slip-on-accept, the leak-FIRST arm ordering, and that the
+/// code substring survives `gg`'s ANSI-colored output (via `strip_ansi`).
+#[cfg(unix)]
+#[test]
+fn classify_throws_routing() {
+    use std::os::unix::process::ExitStatusExt;
+    fn checked(exit_code: i32, stderr: &str) -> Result<Output, TimedOut> {
+        Ok(Output {
+            status: std::process::ExitStatus::from_raw(exit_code << 8),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        })
+    }
+    // check ACCEPTED → a T3a enforcement hole, never a pass.
+    assert_eq!(classify_throws(checked(0, "")).label(), "UNHANDLED-THROWS-SLIP");
+    // Leak-FIRST ordering: when the desugar leak and the exact code are BOTH
+    // present, the leak (a D23 regression) must win over the benign PASS.
+    assert_eq!(
+        classify_throws(checked(
+            1,
+            "error[E_UnhandledThrows]: this call throws `String`\n\
+             error[E_TypeMismatch]: type mismatch: expected `int`, found `Result[int, String]`\n",
+        ))
+        .label(),
+        "THROWS-DESUGAR-LEAK",
+    );
+    // The benign PASS: the exact code, ANSI-colored exactly as `gg` renders it
+    // (one color span wraps the whole `error[E_...]` header — src/errors.rs
+    // `report_semantic_error` + codespan-reporting).
+    assert_eq!(
+        classify_throws(checked(
+            1,
+            "\x1b[0m\x1b[1m\x1b[38;5;9merror[E_UnhandledThrows]\x1b[0m\x1b[1m: this call throws \
+             `String` but the error is not handled here\x1b[0m\n",
+        ))
+        .label(),
+        "UNHANDLED-THROWS-REJECTED",
+    );
+    // A parse error whose SNIPPET quotes the `throws` helper line mentions
+    // "throws" but carries NO diagnostic code → a generator bug (GEN-INVALID),
+    // NOT the tier's pass. (The pre-tightening `contains("throws")` predicate
+    // misrouted this to the benign PASS.)
+    assert_eq!(
+        classify_throws(checked(
+            1,
+            "error: expected identifier, found ')'\n  \u{250c}\u{2500} prog.gg:1:14\n\
+             1 \u{2502} int risky(int) throws String:\n",
+        ))
+        .label(),
+        "GEN-INVALID",
+    );
+    // A throws-ADJACENT diagnostic with a DIFFERENT code → GEN-INVALID.
+    assert_eq!(
+        classify_throws(checked(
+            1,
+            "error[E_ThrowInNonThrowingFunction]: throw in function that doesn't declare \
+             `throws`\n",
+        ))
+        .label(),
+        "GEN-INVALID",
+    );
+    assert_eq!(classify_throws(Err(TimedOut)).label(), "TIMEOUT");
 }
 
 /// Env-gated batch differential — an always-pass DIAGNOSTIC (prints a

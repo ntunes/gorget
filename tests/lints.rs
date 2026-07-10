@@ -4946,40 +4946,49 @@ fn ggdef_import_ratchet() {
 /// (production "integer overflow" vs ggdef "arithmetic overflow" is a
 /// sanctioned, conformance-ignored divergence, so `message()` is never fed in).
 ///
-/// The two `_exhaustive` matches have NO catch-all, so a new variant added to
-/// EITHER registry is a hard compile error here until this pin is updated in
-/// lockstep — rustc exhaustiveness IS the ratchet.
+/// ONE macro-expanded variant list drives BOTH the rustc-exhaustiveness
+/// ratchet (two generated catch-all-free `match`es) AND the arrays every check
+/// below iterates, so the ratchet REACHES the assertions: adding a variant to
+/// EITHER enum is a hard compile error AT the `trap_parity_pin!` list, and
+/// extending that list is the only fix — which extends the arrays in the same
+/// keystroke. (Pre-macro, the `_p_exhaustive`/`_g_exhaustive` guards were
+/// SEPARATE from hand-listed arrays: a developer could fix the match and leave
+/// every check running vacuously over the stale list — the new variant
+/// invisible to (a), (b), and (c).)
 #[test]
 fn trap_kind_parity_prod_vs_ggdef() {
     use std::collections::BTreeSet;
     use gorget::trap::TrapKind as P;
     use ggdef::TrapKind as G;
 
-    // Exhaustiveness guards — adding a variant to either enum breaks compile
-    // here (no catch-all), forcing the lists below to be updated in lockstep.
-    #[allow(dead_code)]
-    fn _p_exhaustive(t: P) {
-        match t {
-            P::Overflow | P::DivByZero | P::Bounds | P::UnwrapNone | P::UnwrapError
-            | P::UnwrapErrorOnOk | P::AssertFailed | P::Panic => {}
-        }
-    }
-    #[allow(dead_code)]
-    fn _g_exhaustive(t: &G) {
-        match t {
-            G::Overflow | G::DivByZero | G::Bounds | G::UnwrapNone | G::UnwrapError
-            | G::UnwrapErrorOnOk | G::AssertFailed(_) | G::Panic(_) => {}
-        }
+    /// `$name` must exist in BOTH enums; `$name(payload)` marks the
+    /// ggdef-side payload variants (production variants are all unit — a
+    /// future payload-carrying production variant fails to compile here and
+    /// the macro grows a marker then). The `V { .. }` patterns bind any
+    /// variant shape, so the generated matches stay exhaustive-and-only-
+    /// exhaustive: rustc errors HERE on a variant missing from the list.
+    macro_rules! trap_parity_pin {
+        ( $( $name:ident $( ( $($gp:expr),* ) )? ),+ $(,)? ) => {{
+            #[allow(dead_code)]
+            fn _p_exhaustive(t: P) {
+                match t { $( P::$name { .. } => {} ),+ }
+            }
+            #[allow(dead_code)]
+            fn _g_exhaustive(t: &G) {
+                match t { $( G::$name { .. } => {} ),+ }
+            }
+            (
+                [ $( P::$name ),+ ],
+                [ $( G::$name $( ( $($gp),* ) )? ),+ ],
+            )
+        }};
     }
 
-    // Same order on both sides so the zip pairs matching codes (asserted below).
-    let prod = [
-        P::Overflow, P::DivByZero, P::Bounds, P::UnwrapNone, P::UnwrapError,
-        P::UnwrapErrorOnOk, P::AssertFailed, P::Panic,
-    ];
-    let ggd = [
-        G::Overflow, G::DivByZero, G::Bounds, G::UnwrapNone, G::UnwrapError,
-        G::UnwrapErrorOnOk, G::AssertFailed(String::new()), G::Panic(String::new()),
+    // Same order on both sides so the zip pairs matching codes (asserted
+    // below). THE single source of truth for the registry pin.
+    let (prod, ggd) = trap_parity_pin![
+        Overflow, DivByZero, Bounds, UnwrapNone, UnwrapError, UnwrapErrorOnOk,
+        AssertFailed(String::new()), Panic(String::new()),
     ];
 
     // (a) code() SETS identical.

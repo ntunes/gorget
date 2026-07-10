@@ -4733,13 +4733,13 @@ fn throws_call_into_bare_t_error() {
     // — that fixture locked in the leak as canonical. The bind of an unhandled
     // `throws` call to a bare `T` now REJECTS with `E_UnhandledThrows` and never
     // surfaces the `Result[T, E]` desugar as the found type.
-    check_gg_fails_no_desugar("throws_call_into_bare_t_error.gg", "throws");
+    check_gg_fails_no_desugar("throws_call_into_bare_t_error.gg");
 }
 
 #[test]
 fn throws_call_arg_into_bare_t_error() {
     // D23: same correction as `throws_call_into_bare_t_error`, arg position.
-    check_gg_fails_no_desugar("throws_call_arg_into_bare_t_error.gg", "throws");
+    check_gg_fails_no_desugar("throws_call_arg_into_bare_t_error.gg");
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -4748,7 +4748,8 @@ fn throws_call_arg_into_bare_t_error() {
 // A `throws` call is an expression of type `T` in EVERY position; its
 // `Result[T, E]` desugar is unobservable except at a `Result`-typed binding or
 // a `catch`. Each negative fixture asserts (i) `gg check` FAILS, (ii) stderr
-// says `throws`, (iii) stderr does NOT leak `found `Result[`. The
+// does NOT leak `found `Result[`, (iii) stderr carries the EXACT diagnostic
+// code `error[E_UnhandledThrows]` (never a loose `"throws"` substring). The
 // scrutinee/statement/method(/traitdefault) fixtures are LOAD-BEARING: they
 // pin the invariant-#8 gate — the pre-D23 silent SWALLOW (scrutinee/statement)
 // and silent MISCOMPILE-to-garbage (method) now REJECT.
@@ -4756,55 +4757,55 @@ fn throws_call_arg_into_bare_t_error() {
 
 #[test]
 fn d23_unhandled_binop() {
-    check_gg_fails_no_desugar("d23_unhandled_binop.gg", "throws");
+    check_gg_fails_no_desugar("d23_unhandled_binop.gg");
 }
 
 #[test]
 fn d23_unhandled_arg() {
-    check_gg_fails_no_desugar("d23_unhandled_arg.gg", "throws");
+    check_gg_fails_no_desugar("d23_unhandled_arg.gg");
 }
 
 #[test]
 fn d23_unhandled_bind() {
-    check_gg_fails_no_desugar("d23_unhandled_bind.gg", "throws");
+    check_gg_fails_no_desugar("d23_unhandled_bind.gg");
 }
 
 #[test]
 fn d23_unhandled_scrutinee() {
     // Was a SILENT SWALLOW (no diagnostic; `throw` discarded at runtime).
-    check_gg_fails_no_desugar("d23_unhandled_scrutinee.gg", "throws");
+    check_gg_fails_no_desugar("d23_unhandled_scrutinee.gg");
 }
 
 #[test]
 fn d23_unhandled_statement() {
     // Was a SILENT SWALLOW (bare-statement discard).
-    check_gg_fails_no_desugar("d23_unhandled_statement.gg", "throws");
+    check_gg_fails_no_desugar("d23_unhandled_statement.gg");
 }
 
 #[test]
 fn d23_unhandled_matcharm() {
-    check_gg_fails_no_desugar("d23_unhandled_matcharm.gg", "throws");
+    check_gg_fails_no_desugar("d23_unhandled_matcharm.gg");
 }
 
 #[test]
 fn d23_unhandled_method() {
     // Was the WORST mode: SILENT MISCOMPILE to garbage (`int x = 1 + s.risky()`
     // passed `gg check`, printed garbage). Concrete equip-method dispatch path.
-    check_gg_fails_no_desugar("d23_unhandled_method.gg", "throws");
+    check_gg_fails_no_desugar("d23_unhandled_method.gg");
 }
 
 #[test]
 fn d23_unhandled_method_traitdefault() {
     // Fallback path #1: a `throws` TRAIT-DEFAULT method (throws read from the
     // trait's `DefaultMethodSig`, not `function_info`). Was silent garbage.
-    check_gg_fails_no_desugar("d23_unhandled_method_traitdefault.gg", "throws");
+    check_gg_fails_no_desugar("d23_unhandled_method_traitdefault.gg");
 }
 
 #[test]
 fn d23_unhandled_method_xmod() {
     // Fallback path #2: a `throws` equip method imported ACROSS a module
     // boundary, called in an unhandled position.
-    check_gg_fails_dir_no_desugar("d23_unhandled_method_xmod", "main.gg", "throws");
+    check_gg_fails_dir_no_desugar("d23_unhandled_method_xmod", "main.gg");
 }
 
 #[test]
@@ -7197,15 +7198,25 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     );
 }
 
+/// The exact D23 diagnostic-code pin shared by `check_gg_fails_no_desugar` and
+/// `check_gg_fails_dir_no_desugar`. `report_semantic_error` renders
+/// `.with_code(kind.code())` (src/errors.rs) and codespan-reporting wraps the
+/// whole `error[E_...]` header in ONE color span, so this substring is
+/// contiguous in the raw (ANSI-colored) stderr — no stripping needed.
+const D23_CODE: &str = "error[E_UnhandledThrows]";
+
 /// D23 (throws totality) negative-fixture harness. `gg check` must FAIL, its
-/// stderr must contain `expect` (use `"throws"` — the `E_UnhandledThrows`
-/// message), AND it must NOT contain the desugar leak `found `Result[` — i.e.
-/// the diagnostic never surfaces the `Result[T, E]` desugar as the found type.
+/// stderr must NOT contain the desugar leak `found `Result[` (checked FIRST so
+/// a leak regression reports as the leak, not as a missing code), AND it must
+/// carry the EXACT diagnostic code `error[E_UnhandledThrows]` — never a loose
+/// substring like `"throws"`, which any throws-mentioning rejection (a parse
+/// error quoting a `throws` signature, a re-coded diagnostic) would satisfy,
+/// letting a D23 regression keep the suite green.
 /// This is BEHAVIORAL: it guards every unhandled-throws position (free-fn AND
 /// method, present and future) rather than a single patched site, and it makes
 /// the invariant-#8 gate executable — the scrutinee/statement/method fixtures
 /// assert the pre-D23 silent swallow / silent miscompile now REJECTS.
-fn check_gg_fails_no_desugar(fixture: &str, expect: &str) {
+fn check_gg_fails_no_desugar(fixture: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
 
@@ -7224,24 +7235,28 @@ fn check_gg_fails_no_desugar(fixture: &str, expect: &str) {
     );
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains(expect),
-        "Expected stderr to contain '{expect}' for {fixture}, got:\n{stderr}",
-    );
-    // The desugar-leak ratchet (Q2): the ban is on surfacing the `Result[T, E]`
-    // desugar as the FOUND type — never on naming `Result` in teaching prose, so
-    // it is scoped to the `found `Result[` substring, not any `Result[`.
+    // The desugar-leak ratchet (Q2), checked FIRST: the ban is on surfacing the
+    // `Result[T, E]` desugar as the FOUND type — never on naming `Result` in
+    // teaching prose, so it is scoped to the `found `Result[` substring, not
+    // any `Result[`.
     assert!(
         !stderr.contains("found `Result["),
         "D23 desugar leak: stderr for {fixture} surfaced the `Result[T, E]` \
-         desugar as the found type (should be `E_UnhandledThrows`), got:\n{stderr}",
+         desugar as the found type (should be `{D23_CODE}`), got:\n{stderr}",
+    );
+    assert!(
+        stderr.contains(D23_CODE),
+        "Expected the exact D23 diagnostic code `{D23_CODE}` in stderr for \
+         {fixture} (a rejection with any OTHER diagnostic is a D23 regression), \
+         got:\n{stderr}",
     );
 }
 
 /// Directory variant of `check_gg_fails_no_desugar` — for the cross-module D23
 /// gate (a `throws` equip method imported across a module boundary): `gg check
-/// <dir>/<main>` must FAIL, contain `expect`, and NOT leak `found `Result[`.
-fn check_gg_fails_dir_no_desugar(dir_name: &str, main_file: &str, expect: &str) {
+/// <dir>/<main>` must FAIL, NOT leak `found `Result[` (checked FIRST), and
+/// carry the EXACT code `error[E_UnhandledThrows]` (see `D23_CODE`).
+fn check_gg_fails_dir_no_desugar(dir_name: &str, main_file: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let main_path = manifest_dir
         .join("tests/fixtures")
@@ -7267,13 +7282,15 @@ fn check_gg_fails_dir_no_desugar(dir_name: &str, main_file: &str, expect: &str) 
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains(expect),
-        "Expected stderr to contain '{expect}' for {dir_name}/{main_file}, got:\n{stderr}",
-    );
-    assert!(
         !stderr.contains("found `Result["),
         "D23 desugar leak: stderr for {dir_name}/{main_file} surfaced the \
          `Result[T, E]` desugar as the found type, got:\n{stderr}",
+    );
+    assert!(
+        stderr.contains(D23_CODE),
+        "Expected the exact D23 diagnostic code `{D23_CODE}` in stderr for \
+         {dir_name}/{main_file} (a rejection with any OTHER diagnostic is a \
+         D23 regression), got:\n{stderr}",
     );
 }
 
