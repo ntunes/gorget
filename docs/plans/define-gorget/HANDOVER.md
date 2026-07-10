@@ -57,14 +57,24 @@ sequential fresh-review gauntlet.
     rejection-oracle fuzz tier (`GG_SMITH_TIER=1`, canary-proven the gate blocks a slip); D23 enforcement
     now complete (diagnostic + fuzz). **NOW 3/4 lanes emit the trap format; only `trap_bounds` remains
     on ALL lanes.**
-  - **LAST D11 slice = T2b** (in progress): flip `trap_bounds` on all 4 lanes AND thread the REAL source
-    location into the bounds trap (owner ruling — bounds gets real locations, unlike the span-less
-    inline traps) across all THREE emit paths (Rust C `runtime_array.c`/`c_lir`, Rust LLVM, self-host
-    `lir_codegen.gg`) + fold the c_lir `abort()`/134 sites → all floors 194→195=MIN_FIXTURES, D11
-    COMPLETE. Own scout (measure the current bounds emit + prototype span-threading). **After T2b: the
-    round is DONE — per owner 2026-07-10, HAND OFF to a fresh agent** (D12/D10/D13-17/riders are the
-    NEXT round; do NOT start them). Handover-prep: regenerate all numbers, verify commit hashes, fresh
-    verification pass on this snapshot.
+  - **T2b LANDED — 🎯 D11 COMPLETE** (merge `c3962cd2`): `trap_bounds` flips on all lanes →
+    `spec_conformance` **C/LLVM/self-host each 195/0/0 = MIN_FIXTURES**. The flagship `v[i]` bounds
+    trap carries a REAL location (byte-identical C↔LLVM, owner ruling); self-host flipped FOR FREE
+    (shared runtime helper). Fault re-panic descoped to a both-compiler follow-up. Output-review caught
+    a blocking LLVM `trap_counter` twin-drift build-fail (2nd instance of that class) — fixed `feee30d3`.
+    **All 4 implementation lanes now emit the ratified `trap[T_X]: … at file:line:col` + exit 101.**
+  - **✅ THE ROUND IS DONE (2026-07-10).** This round landed T1 · T2a-rust · T2a-selfhost · T2b (D11
+    complete) + T3a · T3b (D23 enforcement complete). **Per the owner directive, HAND OFF to a fresh
+    agent for the NEXT round.** Do NOT start D12/D10/D13-17/riders — those are the next round's work.
+    Enforcement-wave order for the next agent: **D12** (D4 drop-purity — blast-radius scout first) →
+    **D10** exclusivity tracks (bootstrap-gated) → D13/D14/D17 → small riders (D15+D22 slice-surface,
+    D18-D21); A31/A32 design scouts interleave. Open trap/throws follow-ups in TODO (each own gauntlet):
+    the both-compiler fault-re-panic normalization; rarer-bounds-sites real locations; self-host
+    shift-parity guard; the block_exit_labels structural guard (now ≥2 instances — escalated); D23's
+    T3c positive-throws differential smith tier. **Regenerate before quoting any number:**
+    `cargo test -p ggdef` + `GG_BUILD_TIMEOUT_SECS=600 cargo test --test spec_conformance --
+    --test-threads=1 --nocapture` (expect 195/195/195/195) + `cargo test --lib` + `--test lints` +
+    `self_host_bootstrap_fixed_point`.
 - **Decisions D1–D8**: all recorded in `decisions.md` with rationale. Do not relitigate; do
   bring NEW decision needs to the owner as option-questions (owner directive: ask along the
   way, with recommendations and previews).
