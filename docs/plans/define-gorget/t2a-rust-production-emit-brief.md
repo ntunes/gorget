@@ -31,13 +31,20 @@ reroute end-to-end: a prototype `gorget_trap_at` on the C `Inst::Add` site produ
   the earlier "thread locations now" ruling — NOT this brief; bounds stays MISMATCH here.)
 
 ## Scope fences (do NOT cross)
-- Touch ONLY: NEW `src/trap.rs`; `src/ir/lowering/*` (the compiler-emit sites); `src/lir/lower/insts.rs`
-  (unwrap); `src/backend/c_lir/*` (inline arith + the `gorget_panic`→ rewrite); `src/backend/llvm/mod.rs`
+- Touch ONLY: NEW `src/trap.rs`; `src/ir/lowering/*` (the compiler-emit sites — incl. registering
+  `gorget_trap`'s ABI `[CStr, CStr]` in `fn_extern_abi_kinds` at `src/ir/lowering/mod.rs:~991`, mirroring
+  the `gorget_panic` `[CStr]` registration; without it the new 2-`Str`-arg extern gets default ABIs);
+  `src/lir/lower/insts.rs` (unwrap); **`src/lir/runtime.rs`** (only if W3 approach (a) — the 4-arg
+  `AssertFailValues` sig); `src/backend/c_lir/*` (inline arith + the `gorget_panic`→ rewrite); `src/backend/llvm/mod.rs`
   (inline arith + shift check + the rewrite + decls); `src/backend/c/runtime/panic_normal.c` +
-  `panic_test.c` (the new `gorget_trap`/`gorget_trap_at` entries); `tests/lints.rs` (parity lint +
-  the arm-count lint); `tests/spec_conformance.rs` (floor bumps ONLY); targeted `tests/fixtures/*.gg`
-  / `tests/integration.rs` for the shift test. Cargo.toml if a `[dev-dependency]` on ggdef is needed
-  for the parity lint (the scout says ggdef is ALREADY a dev-dep — verify).
+  `panic_test.c` (the new `gorget_trap`/`gorget_trap_at` entries); **`runtime_string.c`** (add the
+  `gorget_trap`/`gorget_trap_at` forward-decls next to the existing `gorget_panic`/`gorget_panic_at`
+  ones at `runtime_string.c:~457-459`, since runtime files concatenate with `runtime_string.c` BEFORE
+  `panic_normal.c`); **`runtime_tostr.c`** (the message-less comparison-assert reroute, W3);
+  `tests/lints.rs` (parity + source-scan ratchet lints); `tests/spec_conformance.rs` (floor bumps
+  ONLY); targeted `tests/fixtures/*.gg` / `tests/integration.rs` for the shift + message-less-assert
+  tests. `Cargo.toml` if a `[dev-dependency]` on ggdef is needed for the parity lint (the scout says
+  ggdef is ALREADY a dev-dep — verify).
 - Do NOT touch: the self-host `.gg` lowering (T2a-selfhost), the runtime-library `fprintf...exit(1)`
   bounds/OOM/channel sites + `runtime_array.c` (T2b), the c_lir `abort()`/134 sites (T2b),
   `spec/ggdef/*`, `spectests/*`, reference §10.9/§10.1. Do NOT change the 1-arg `gorget_panic`
@@ -65,8 +72,20 @@ reroute end-to-end: a prototype `gorget_trap_at` on the C `Inst::Add` site produ
   emit sites that lack a span, symmetric to `gorget_panic`/`gorget_panic_at`. The C/LLVM boundary
   rewrite (W3) rewrites `gorget_trap`→`gorget_trap_at` threading the span, exactly as it does
   `gorget_panic`→`gorget_panic_at` today (`emit_call_extern.rs:45-68`, `llvm/mod.rs:4507-4530`).
-- Mirror both in `panic_test.c` (the setjmp `#[test]` capture path) so tests that trigger a trap under
-  the test harness capture identically.
+- Mirror both in `panic_test.c` (the setjmp `#[test]` capture path). **⚠ Capture the BARE `detail`
+  argument** into `__gorget_test_fail_msg` (exactly as `gorget_panic_at` captures `msg`) and take the
+  `__gorget_in_test` longjmp branch — do NOT `exit(101)` and do NOT capture the `trap[...]`-wrapped
+  string. If you capture the wrapped string, `test_failure` (`tests/integration.rs:~9713`, which asserts
+  `FAIL: assertion failed: left == right` on a message-less `assert 1 == 2`, the exact
+  `gorget_assert_fail_values` path W3 reroutes) BREAKS — and the base gate battery does NOT run it, so a
+  wrong capture ships green and only the parent's full sweep catches it. (`helpers.rs:~1286` prints
+  `FAIL: %s` from the captured pointer; `helpers.rs:~1261` `@should_panic` mid-string `strstr` survives
+  either way, but `test_failure`'s anchored substring does not.)
+- **⚠ LLVM arg-order footgun:** the LLVM decl must match the C signature — `declare void
+  @gorget_trap_at(ptr, ptr, ptr, i32, i32)` = **(code, detail, file, line, col)**. Do NOT copy the
+  ADJACENT `gorget_panic_at`'s order, which is `(ptr file, i32 line, i32 col, ptr msg)` — file-first,
+  a DIFFERENT order. The inline-arith LLVM reroute that calls `gorget_trap_at` directly must pass args
+  in the (code, detail, file, line, col) order.
 - LEAVE the existing 1-arg `gorget_panic`/`gorget_panic_at` (exit 1) untouched.
 
 ### W3 — reroute the compiler-emit trap sites (the core)
@@ -85,8 +104,32 @@ Two mechanisms (per the scout §3):
 - **(B) `gorget_panic`-based sites — via the new `gorget_trap`/`gorget_trap_at` extern.** Reroute:
   unwrap `src/lir/lower/insts.rs:3603-3638` (None → `T_UnwrapNone`, Error → `T_UnwrapError`, unwrap_error
   on Ok → `T_UnwrapErrorOnOk`; the variant words are at `:4195-4247` — keep them in detail, Q-C);
-  assert `src/ir/lowering/stmts/mod.rs:2550-2561` → `T_AssertFailed` AND thread the real span (Q-D —
-  it currently emits `<unknown>:0:0`); user `panic()` `src/ir/lowering/exprs/calls.rs:573-577` → `T_Panic`.
+  assert-with-message `src/ir/lowering/stmts/mod.rs:2550-2561` → `T_AssertFailed` AND thread the real
+  span (Q-D — it currently emits `<unknown>:0:0`); user `panic()` `src/ir/lowering/exprs/calls.rs:573-577` → `T_Panic`.
+- **⚠ ALSO reroute the MESSAGE-LESS comparison-assert path — do NOT leave it (invariant #8).** A
+  message-less `assert a == b` takes a DIFFERENT route: `src/ir/lowering/stmts/mod.rs:2524-2534` →
+  `gorget_assert_fail_values` (`src/backend/c/runtime/runtime_tostr.c:~125`), which internally calls
+  the 1-arg `gorget_panic` → `<unknown>:0:0: assertion failed…` + exit 1. This is a USER-FACING assert,
+  semantically identical to the message form — NOT a runtime-internal caller, so the T2a/T2b seam does
+  NOT excuse it. Reroute it too, so BOTH assert forms → `trap[T_AssertFailed]` + exit 101.
+  **⚠ `gorget_assert_fail_values` is a REGISTERED runtime fn** — `src/lir/runtime.rs:~563` gives it a
+  canonical 3-arg sig `(CStr, GorgetString, GorgetString)` that `resolve_lir_sig` OVERWRITES the LIR
+  extern's `params`/`param_abis` from (`src/lir/lower/operands.rs:~211-217`). So you can NOT just
+  prepend a `code` arg at the GIR emit site — a 4-arg GIR call against the 3-arg canonical sig fails LIR
+  validation or mis-tags the ABIs. Two acceptable approaches; **prefer (a) for layering consistency**:
+  **(a)** make `AssertFailValues`' sig 4-arg — prepend `(T::Ptr, A::CStr)` at `runtime.rs:~563`, update
+  the C signature at `runtime_tostr.c:~125`, and pass `TrapKind::AssertFailed.code()` from the emit site
+  (`:2524`) so the code is typed data uniform with every other reroute (parity-lint-covered). **This
+  requires `src/lir/runtime.rs` in the scope fence (added below).** **(b) fallback ONLY if (a)
+  entangles:** keep the 3-arg sig and let `gorget_assert_fail_values` pass a `"T_AssertFailed"` literal
+  to `gorget_trap` internally — a single-caller single-meaning constant, BUT it's a hardcoded C string
+  NOT sourced from `TrapKind::code()` and NOT pinned by the W4 parity lint (drift risk on a variant
+  rename), so the W4 source-scan ratchet must explicitly cover it. Add a `tests/integration.rs` test
+  asserting `assert 1 == 2` (message-less) traps `T_AssertFailed` + exit 101 on BOTH backends. **FILE a T1-zone
+  follow-up:** a ggdef-generated `spectests/run/trap_assert_cmp.gg` conformance fixture for the
+  message-less form (ggdef already models `Stmt::Assert`, so it's generatable — but adding a spectests
+  fixture crosses into T1's zone + shifts MIN_FIXTURES/floors, so do it as a separate small follow-up,
+  NOT in this brief).
   These call the new `gorget_trap`(code, detail) extern; the C/LLVM rewrite (extend
   `emit_call_extern.rs:45-68` + `llvm/mod.rs:4507-4530` + the `@gorget_trap_at` decl near
   `llvm/mod.rs:1506`) rewrites it to `gorget_trap_at` threading the span — the SAME machinery the
@@ -100,12 +143,19 @@ Two mechanisms (per the scout §3):
 - A lint pinning **(a) production `TrapKind` ↔ ggdef `TrapKind`**: import both (ggdef is a `[dev-dependency]`
   — verify `Cargo.toml`) and assert the `code()` string SETS are identical and `is_catchable()` agrees
   variant-for-variant. **(b) the §10.9 `Fault` LANGUAGE prelude enum ↔ `is_catchable()` subset**: the
-  prelude fault set is `builtin_fault_enum()` (`src/semantic/substitute.rs:323-347` = {Overflow,DivByZero,Bounds});
-  assert it equals exactly the `is_catchable()`-true variants. NO message-text matching — compare typed
-  code sets.
-- An **arm-count lint** pinning the compiler-emit reroute sites through the registry (so the next new
-  trap emit can't silently reintroduce a raw `fprintf;exit(1)` or a bare `gorget_panic`). Model on
-  `container_literal_arms_count`.
+  prelude fault set is `builtin_fault_enum()` (**`src/ir/lowering/generics/substitute.rs:323-347`** =
+  {Overflow,DivByZero,Bounds} — NOT `src/semantic/`, a corrected citation); assert it equals exactly
+  the `is_catchable()`-true variants. **NO message-text matching — the lint compares the typed `code()`
+  SETS ONLY, never `detail()`/message wording** (production's `"integer overflow"` vs ggdef's
+  `"arithmetic overflow"` is a sanctioned, conformance-ignored divergence — do NOT feed `detail()` in).
+- A **source-scan ratchet lint** (NOT a match-arm count — the emit sites are `write!`-based inline
+  strings across two backends, so `container_literal_arms_count`'s arm-counting shape does NOT apply).
+  Assert the exact remaining count of raw trap-`exit(1)`/`fprintf`-trap occurrences in `c_lir/mod.rs` +
+  `llvm/mod.rs` (post-reroute), so a NEW raw trap emit (a bare `fprintf;exit(1)` that bypasses the
+  registry) forces review by tripping the count. Adjust the count deliberately when a site is
+  legitimately added/removed. **Include the legacy `Inst::InlineC` fatal `call void @exit(i32 1)` at
+  `llvm/mod.rs:~6975-6977` in the baseline COUNT DELIBERATELY** — it is NOT a rerouted trap site (it's
+  the InlineC-fallback abort), so the baseline must expect it, not read it as "one trap left to reroute."
 
 ### W5 — floor bumps (`tests/spec_conformance.rs`)
 - The 7 non-bounds trap fixtures (overflow, divzero, unwrap_none, unwrap_error, unwrap_error_on_ok,
@@ -122,6 +172,7 @@ cargo test --test lints 2>&1 | tee /tmp/t2ar_lints_$$.log   # parity + arm-count
 GG_BUILD_TIMEOUT_SECS=600 cargo test --test spec_conformance -- --test-threads=1 --nocapture 2>&1 | tee /tmp/t2ar_conf_$$.log
 # both backends agree on the trap format — spot-run a few by hand + the shift test:
 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration trap -- --nocapture 2>&1 | tee /tmp/t2ar_trap_$$.log
+GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration test_failure test_should_panic assert_fails -- --nocapture 2>&1 | tee /tmp/t2ar_assert_$$.log  # the #[test]-harness assert-capture path (panic_test.c) — NOT in the base gates, catches a wrong `detail` capture
 GG_BACKEND=llvm GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration self_host_bootstrap_fixed_point -- --nocapture 2>&1 | tee /tmp/t2ar_boot_$$.log
 ```
 Acceptance: builds (both backends); `--lib` + lints green (incl. the new parity + arm-count lints);
