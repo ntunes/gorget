@@ -2576,6 +2576,8 @@ enum Fault:
     Bounds           # out-of-bounds index
 ```
 
+`Fault` is the **catchable subset** of the language's closed trap registry (D11 trap normalization; the full `code → class → catchable` table is [`spec/prose/trap-codes.md`](../spec/prose/trap-codes.md)). Its three variants — `Overflow`, `DivByZero`, `Bounds` — are exactly the catchable traps; the uncatchable classes (`.unwrap()` on `None`/`Error`, `.unwrap_error()` on `Ok`, a failing `assert`, and `panic`) are traps that panic uncatchably and cannot appear as a fault `catch` scrutinee. Every uncaught trap — catchable or not — renders `trap[T_X]: detail at file:line:col` on stderr and exits 101.
+
 Faults panic by default; a fault `catch` (§10.5) is the only way to recover one, and only locally. The variants are spelled qualified (`Fault.Overflow`, `Fault.DivByZero`, `Fault.Bounds`).
 
 - **`Fault.Overflow`** — an overflowing checked `+`/`-`/`*` (the wrapping `+%`/`-%`/`*%` forms never fault). It also covers signed division overflow: `INT_MIN / -1` and `INT_MIN % -1` are `Fault.Overflow`, **not** `Fault.DivByZero`.

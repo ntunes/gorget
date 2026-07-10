@@ -43,17 +43,21 @@
 //!
 //!   cargo test --test spec_conformance -- --test-threads=1 --nocapture
 //!
-//! All three lanes floor at MIN_FIXTURES — every committed seed MATCHes on
-//! every impl. The C and LLVM lanes previously floored one below the self-host
-//! lane because `smith_move_param_concat.gg` (`String !p` move-param + concat)
-//! was a both-backend BUILD-FAIL: the C backend emitted an invalid pointer-add
-//! `(void*)a + (void*)b` (cc rejected), the LLVM backend an invalid `add ptr`
-//! (llc rejected), while the self-host lowerer was already reference-correct.
-//! That defect is FIXED (the `!`-move String binop operand now derefs its
-//! `MutPtr` slot at the consume site, `src/ir/lowering/exprs/operators.rs`
-//! `cow_deref_if_ptr`), so the SAME commit ratcheted `C_MATCH_FLOOR` /
-//! `LLVM_MATCH_FLOOR` up to equal the self-host floor. All lanes now floor at
-//! MIN_FIXTURES.
+//! The three PRODUCTION floors (C/LLVM/self-host) are the count of exit-0
+//! baseline fixtures every production impl reproduces today. `MIN_FIXTURES` is
+//! the TOTAL committed corpus count (the glob-emptiness guard) — since the D11
+//! trap-normalization fixtures landed, it EXCEEDS the three production floors:
+//! a trap fixture MATCHes the ggdef lane (expectation generated from ggdef) but
+//! MISMATCHes the production lanes until T2 makes production emit the normative
+//! `trap[T_X]` + exit-101 shape. When T2 lands, it ratchets the three
+//! production floors up to `MIN_FIXTURES` in the same commit.
+//!
+//! (History: the C and LLVM lanes once floored one below self-host because
+//! `smith_move_param_concat.gg` was a both-backend BUILD-FAIL — the C backend
+//! emitted an invalid pointer-add, the LLVM backend an invalid `add ptr`, while
+//! the self-host lowerer was already correct. That defect is FIXED
+//! (`src/ir/lowering/exprs/operators.rs` `cow_deref_if_ptr`), which is why all
+//! three production floors are equal today.)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -70,9 +74,11 @@ const SELFHOST_MATCH_FLOOR: usize = 187;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the seed COUNT; all three lane MATCH floors currently equal it (every seed
-/// MATCHes on every impl).
-const MIN_FIXTURES: usize = 187;
+/// the TOTAL seed COUNT. Since the D11 trap fixtures landed it EXCEEDS the three
+/// production MATCH floors (187): those trap fixtures MATCH the ggdef lane but
+/// MISMATCH the production lanes until T2 lands the `trap[T_X]`+exit-101 emit,
+/// which then ratchets the production floors up to this count.
+const MIN_FIXTURES: usize = 195;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs
@@ -216,16 +222,17 @@ enum Verdict {
 /// already carries its exact trailing newlines; we capture RAW stdout and do
 /// NOT inherit `self_host_emit_cc_run`'s `trim_end`):
 ///   * `expect.exit == 0` → require process exit 0 AND byte-exact stdout.
-///   * `expect.exit != 0` → require a NON-ZERO exit and that the expected
-///     (pre-trap) stdout is a PREFIX of the observed stdout. The exact code is
-///     deliberately NOT compared: ggdef's 101/102/103 are PROVISIONAL
-///     (spec/ggdef/src/eval.rs:40) and the production C runtime always exits 1
-///     on a trap via `gorget_panic`, so the codes can never be equal. All 187
-///     current fixtures are exit-0, so this branch is wired DEFENSIVELY and is
-///     currently unexercised; revisit once a nonzero-exit fixture lands — the
-///     trap-exit convention is now RATIFIED (D11: uncaught trap = exit 101,
-///     trap[T_X] stderr line; decisions.md LOG 2026-07-06) and the
-///     trap-normalization track (TODO High) tightens this branch.
+///   * a TRAP fixture (`expect.trap` present ⟺ `expect.exit == 101`, D11) →
+///     require process exit **101**, the `trap[<code>]` marker on stderr (the
+///     trailing ` at file:line:col` and the human detail are IGNORED — never
+///     compared, Q1), AND the pre-trap `expect.stdout` as a PREFIX of observed
+///     stdout. **This is the POST-T2 contract**: T1 DEFINES it (and the ggdef
+///     lane meets it by construction); production meets it in T2 (until then a
+///     trap fixture MISMATCHes the C/LLVM/self-host lanes — they still exit 1
+///     with no `trap[` line — which is expected and holds each production floor
+///     at the 187 exit-0 baseline).
+///   * any other nonzero, NON-trap exit (102 IllFormed / 103 FuelExhausted; no
+///     production fixture today) → the defensive "nonzero exit + stdout prefix".
 fn adjudicate(expect: &Expect, out: &Output) -> Verdict {
     let stdout = String::from_utf8_lossy(&out.stdout);
     if expect.exit == 0 {
@@ -237,6 +244,24 @@ fn adjudicate(expect: &Expect, out: &Output) -> Verdict {
                 exit_str(out),
                 stdout,
                 expect.stdout
+            ))
+        }
+    } else if let Some(code) = expect.trap.as_deref() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let marker = format!("trap[{code}]");
+        if out.status.code() == Some(101)
+            && stderr.contains(&marker)
+            && stdout.starts_with(expect.stdout.as_str())
+        {
+            Verdict::Match
+        } else {
+            Verdict::Mismatch(format!(
+                "trap: want exit 101 + stderr⊇{marker:?} + stdout prefix {:?} · got exit {} · \
+                 stdout {:?} · stderr {:?}",
+                expect.stdout,
+                exit_str(out),
+                stdout,
+                stderr,
             ))
         }
     } else if !out.status.success() && stdout.starts_with(expect.stdout.as_str()) {

@@ -26,21 +26,23 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use ggdef::{parse_frontmatter, run_source, DEFAULT_FUEL};
+use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 
 /// The monotone MATCH-count floor.
 ///
 /// Seeded from a run regenerated IN THIS WORKTREE (never a dated number):
 ///   cargo test -p ggdef --test spec_conformance_ggdef -- --nocapture
-///   → total=187 · MATCH=187 · MISMATCH=0 · GGDEF-SKIP=0
+///   → total=195 · MATCH=195 · MISMATCH=0 · GGDEF-SKIP=0
 ///
-/// (5 original seeds + the 182-fixture P1-D "AGREE" migration — every migrated
-/// fixture is a ggdef-adjudicated run_gg pair, so total == MATCH by construction.)
+/// (5 original seeds + the 182-fixture P1-D "AGREE" migration + the 8 D11
+/// trap-normalization fixtures. Every fixture's `expect:` is ggdef-generated, so
+/// on the ggdef lane total == MATCH by construction — including the trap
+/// fixtures, whose `T_` code + exit 101 the interpreter reproduces exactly.)
 ///
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 187;
+const GGDEF_MATCH_FLOOR: usize = 195;
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
@@ -90,7 +92,17 @@ fn spec_conformance_ggdef() {
         match run_source(&src, DEFAULT_FUEL) {
             Ok(run) => {
                 let got_exit = run.outcome.exit_code();
-                if got_exit == fm.expect.exit && run.stdout == fm.expect.stdout {
+                // On a Trap, also compare the `T_` code (the expectation was
+                // GENERATED from ggdef, so this matches by construction — but the
+                // check must actually verify the code, not just the exit).
+                let got_trap: Option<&str> = match &run.outcome {
+                    Outcome::Trap(kind) => Some(kind.code()),
+                    _ => None,
+                };
+                if got_exit == fm.expect.exit
+                    && run.stdout == fm.expect.stdout
+                    && got_trap == fm.expect.trap.as_deref()
+                {
                     matched += 1;
                     table.push_str(&format!(
                         "  MATCH        [{:<12}] {name}\n",
@@ -100,8 +112,8 @@ fn spec_conformance_ggdef() {
                     mismatched += 1;
                     table.push_str(&format!("  MISMATCH     {name}\n"));
                     mismatches.push(format!(
-                        "  {name}: exit {got_exit} vs expect {} · stdout {:?} vs expect {:?}",
-                        fm.expect.exit, run.stdout, fm.expect.stdout
+                        "  {name}: exit {got_exit} vs expect {} · trap {:?} vs expect {:?} · stdout {:?} vs expect {:?}",
+                        fm.expect.exit, got_trap, fm.expect.trap, run.stdout, fm.expect.stdout
                     ));
                 }
             }

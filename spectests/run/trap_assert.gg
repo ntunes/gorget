@@ -1,0 +1,17 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [trap]
+# doc: |
+#   Trap registry (D11): a failing `assert` Traps `T_AssertFailed` and exits
+#   101. Output before the assert is preserved (stdout prefix).
+# expect:
+#   exit: 101
+#   stdout: "checking\n"
+#   trap: T_AssertFailed
+#!end
+
+void main():
+    print("checking")
+    assert 1 > 2, "one is not greater than two"

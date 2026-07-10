@@ -1,0 +1,17 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [trap]
+# doc: |
+#   Trap registry (D11): an explicit `panic(msg)` Traps `T_Panic` (an
+#   UNcatchable trap) and exits 101. Output before the panic is preserved.
+# expect:
+#   exit: 101
+#   stdout: "start\n"
+#   trap: T_Panic
+#!end
+
+void main():
+    print("start")
+    panic("explicit panic")

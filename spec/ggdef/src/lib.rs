@@ -23,7 +23,7 @@ pub use classify::{
     classifiable_fixture_names, classify_fixture, Classification, CLASSIFY_EXCLUDE, CLASSIFY_FUEL,
 };
 pub use elaborate::{elaborate, ElabError};
-pub use eval::{run, Fault, Outcome, Run, EXIT_FUEL, EXIT_ILLFORMED, EXIT_TRAP, EXIT_VALUE};
+pub use eval::{run, Outcome, Run, TrapKind, EXIT_FUEL, EXIT_ILLFORMED, EXIT_TRAP, EXIT_VALUE};
 pub use frontmatter::{parse_frontmatter, Expect, Frontmatter, FrontmatterError};
 
 use std::collections::BTreeMap;
@@ -133,22 +133,34 @@ pub fn gen_frontmatter(source: &str, fuel: u64) -> Result<String, GenError> {
 
 /// The canonical `expect:` block for a run outcome — `exit:` (the outcome code)
 /// plus `stdout:` as a JSON-escaped string (a canonical, unambiguous, and thus
-/// idempotent serialisation of arbitrary bytes, incl. newlines).
+/// idempotent serialisation of arbitrary bytes, incl. newlines), plus a `trap:`
+/// `T_` code line when (and only when) the outcome is a Trap.
 fn render_expect_block(run: &Run) -> Vec<String> {
-    render_expect_block_from(run.outcome.exit_code(), &run.stdout)
+    let trap = match &run.outcome {
+        Outcome::Trap(kind) => Some(kind.code()),
+        _ => None,
+    };
+    render_expect_block_from(run.outcome.exit_code(), &run.stdout, trap)
 }
 
-/// The `expect:` block from a bare `(exit, stdout)` pair — the same
+/// The `expect:` block from a bare `(exit, stdout, trap)` triple — the same
 /// serialisation `render_expect_block` uses, factored out so a future
 /// serializer (D2) can produce a block WITHOUT reconstructing a `Run`, on the
 /// SAME `json_escape` the frontmatter reader inverts. The round-trip
 /// (`json_escape` ⇄ `parse_json_string`) is unit-tested (`src/tests.rs`).
-pub fn render_expect_block_from(exit: i32, stdout: &str) -> Vec<String> {
-    vec![
+/// `trap` is the `TrapKind::code()` on a Trap outcome, `None` otherwise; the
+/// `#   trap:` line is emitted (at index 3) ONLY when it is `Some`, so a no-trap
+/// block stays exactly `exit` (index 1) + `stdout` (index 2).
+pub fn render_expect_block_from(exit: i32, stdout: &str, trap: Option<&str>) -> Vec<String> {
+    let mut block = vec![
         "# expect:".to_string(),
         format!("#   exit: {exit}"),
         format!("#   stdout: \"{}\"", json_escape(stdout)),
-    ]
+    ];
+    if let Some(code) = trap {
+        block.push(format!("#   trap: {code}"));
+    }
+    block
 }
 
 /// Replace the `# expect:` sub-block (everything from the `# expect:` line up to

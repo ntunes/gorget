@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [trap]
+# doc: |
+#   Trap registry (D11): an out-of-bounds Vector index Traps `T_Bounds` and
+#   exits 101. Output before the trap is preserved (stdout prefix).
+# expect:
+#   exit: 101
+#   stdout: "indexing\n"
+#   trap: T_Bounds
+#!end
+
+void main():
+    print("indexing")
+    Vector[int] a = [1, 2, 3]
+    print(a[5])

@@ -772,6 +772,17 @@ impl Elaborator {
                 Ok(vec![self.elaborate_match_stmt(scrutinee, arms, else_arm.as_ref(), span)?])
             }
 
+            // `assert cond` / `assert cond, msg` — Traps `T_AssertFailed` at eval
+            // when the condition is false (RFC trap registry; §10.9).
+            ast::Stmt::Assert { condition, message } => {
+                let cond = self.elaborate_expr(condition)?;
+                let message = match message {
+                    Some(m) => Some(self.elaborate_expr(m)?),
+                    None => None,
+                };
+                Ok(vec![Stmt::Assert { cond, message, span }])
+            }
+
             other => Err(ElabError::new(
                 format!("statement `{}` is outside the phase-0 subset", stmt_kind(other)),
                 span,
@@ -1225,6 +1236,17 @@ impl Elaborator {
             }
             return Ok(Expr::Call { func: "print".to_string(), args: out });
         }
+        // `panic(msg)` — an uncatchable trap (`T_Panic`). Modeled as a dedicated
+        // GGC node (not a name-dispatched `Call`) so no name-match leaks into
+        // eval's ordinary call path.
+        if name == "panic" {
+            if args.len() != 1 {
+                return Err(ElabError::new("`panic` takes exactly 1 argument (a message)", callee.span));
+            }
+            self.reject_named_args(args, "panic")?;
+            let msg = self.elaborate_expr(&args[0].node.value)?;
+            return Ok(Expr::Panic(Box::new(msg)));
+        }
         // Prelude enum constructors: `Some(x)`, `None()`, `Ok(v)`, `Error(e)`.
         if let Some(type_name) = prelude_enum_of(name) {
             self.reject_named_args(args, "prelude enum constructor")?;
@@ -1613,6 +1635,7 @@ impl Elaborator {
             "len" => (BuiltinMethod::Len, Some(0)),
             "get" => (BuiltinMethod::Get, Some(1)),
             "unwrap" => (BuiltinMethod::Unwrap, Some(0)),
+            "unwrap_error" => (BuiltinMethod::UnwrapError, Some(0)),
             "unwrap_or" => (BuiltinMethod::UnwrapOr, Some(1)),
             "pop" => (BuiltinMethod::Pop, Some(0)),
             "clear" => (BuiltinMethod::Clear, Some(0)),
@@ -2035,6 +2058,7 @@ fn collect_expr_locals(e: &Expr, closures: &[ClosureDef], out: &mut HashSet<Stri
         | Expr::Cast { expr: e, .. }
         | Expr::IntToStr(e)
         | Expr::Clone(e)
+        | Expr::Panic(e)
         | Expr::Propagate(e) => collect_expr_locals(e, closures, out),
         Expr::Call { args, .. } | Expr::Construct { args, .. } | Expr::EnumConstruct { args, .. } => {
             for a in args {
