@@ -1518,6 +1518,26 @@ pub fn call_extern(
         }
 
         // ── Lifecycle ──────────────────────────────────────────────────────────
+        "gorget_trap" => {
+            // D11: the lowering routes panic()/message-asserts through
+            // gorget_trap(code, detail) — was gorget_panic(detail). Surface it
+            // in the normative trap[T_X] shape; the user detail stays verbatim
+            // so contains-style @should_panic matching keeps working.
+            let code = match args.first() {
+                Some(Value::Str(s)) => s.as_str().to_string(),
+                Some(Value::String(s)) => s.as_str().to_string(),
+                Some(Value::CStr(s)) => s.as_str().to_string(),
+                _ => "T_Panic".to_string(),
+            };
+            let msg = match args.get(1) {
+                Some(Value::Str(s)) => s.as_str().to_string(),
+                Some(Value::String(s)) => s.as_str().to_string(),
+                Some(Value::CStr(s)) => s.as_str().to_string(),
+                _ => "panic".to_string(),
+            };
+            Err(SimError::Panic(format!("trap[{code}]: {msg}")))
+        }
+
         "gorget_panic" => {
             let msg = match args.first() {
                 Some(Value::Str(s)) => s.as_str().to_string(),

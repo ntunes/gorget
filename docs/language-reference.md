@@ -2582,7 +2582,7 @@ enum Fault:
 
 Faults panic by default; a fault `catch` (§10.5) is the only way to recover one, and only locally. The variants are spelled qualified (`Fault.Overflow`, `Fault.DivByZero`, `Fault.Bounds`).
 
-- **`Fault.Overflow`** — an overflowing checked `+`/`-`/`*` (the wrapping `+%`/`-%`/`*%` forms never fault). It also covers signed division overflow: `INT_MIN / -1` and `INT_MIN % -1` are `Fault.Overflow`, **not** `Fault.DivByZero`.
+- **`Fault.Overflow`** — an overflowing checked `+`/`-`/`*` (the wrapping `+%`/`-%`/`*%` forms never fault). It also covers signed division overflow: `INT_MIN / -1` and `INT_MIN % -1` are `Fault.Overflow`, **not** `Fault.DivByZero`. An out-of-range shift count (e.g. `x << 64` on a 64-bit operand) normalizes into this class too — there is no separate shift trap.
 - **`Fault.DivByZero`** — a `/` or `%` whose divisor is zero.
 - **`Fault.Bounds`** — an out-of-bounds index read of an indexed array-backed collection (`Vector`, `Deque`). A negative index is a catchable `Bounds` inside a fault `catch` (and a panic outside one). Dict lookups, string indexing, and range slices are not covered.
 

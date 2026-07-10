@@ -114,10 +114,20 @@ fn cmd(file: &str, emit_trace: bool) -> ExitCode {
     // readable signal is the exit code.
     match &run.outcome {
         Outcome::Value(_) => {}
-        // Render the normative `trap[T_X]: detail` shape (§10.9 / trap-codes.md).
-        // This is a human diagnostic (NOT conformance-compared — Q1), but the
-        // definition's own tool should model the format it normativizes.
-        Outcome::Trap(k) => eprintln!("trap[{}]: {}", k.code(), k.message()),
+        // Render the normative `trap[T_X]: detail at file:line:col` shape
+        // (§10.9 / trap-codes.md "Rendering"). This is a human diagnostic (NOT
+        // conformance-compared — Q1), but the definition's own tool should
+        // model the format it normativizes. The location resolves from the
+        // run's trap provenance (statement-granular); a missing span renders
+        // without the suffix rather than a bogus location.
+        Outcome::Trap(k) => {
+            let loc = run.trap_span.and_then(|sp| {
+                let fi = gorget::span::FileInfo::new(file.to_string(), source.clone(), 0);
+                gorget::span::offset_to_location(&[fi], sp.start)
+                    .map(|(f, line, col)| format!(" at {f}:{line}:{col}"))
+            });
+            eprintln!("trap[{}]: {}{}", k.code(), k.message(), loc.unwrap_or_default());
+        }
         Outcome::IllFormed(m) => eprintln!("ggdef: ill-formed: {m}"),
         Outcome::FuelExhausted => eprintln!("ggdef: fuel exhausted (non-termination guard)"),
     }

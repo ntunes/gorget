@@ -62,7 +62,12 @@ pub const EXIT_FUEL: i32 = 103;
 /// variant identity already fixes their message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrapKind {
-    /// `T_Overflow` — an overflowing checked `+`/`-`/`*`/`/`/`%`/unary-neg.
+    /// `T_Overflow` — an overflowing checked `+`/`-`/`*`/`/`/`%`/unary-neg, a
+    /// signed `TYPE_MIN / -1`, or an out-of-range shift count (owner ruling
+    /// 2026-07-10: shift-out-of-range normalizes to `T_Overflow`). NOTE: ggdef
+    /// does not yet MODEL shift operators (filed: the `trap_shift.gg` fixture
+    /// is blocked on that) — this doc pins the CLASS so the registry copies
+    /// agree; the evaluator arm lands with shift support.
     Overflow,
     /// `T_DivByZero` — a `/` or `%` with a zero divisor.
     DivByZero,
@@ -287,6 +292,13 @@ pub struct Run {
     pub outcome: Outcome,
     pub stdout: String,
     pub trace: Vec<TraceEvent>,
+    /// The `cur_span` of the trapping statement when `outcome` is a Trap —
+    /// RUN PROVENANCE for the rendered ` at file:line:col` suffix (trap-codes.md
+    /// "Rendering"), deliberately NOT part of `Outcome` identity: conformance
+    /// compares `{T_ code, exit 101}` only (Q1), and two runs trapping on
+    /// different lines are the SAME outcome. Statement-granular (the enclosing
+    /// statement, not the faulting sub-expression) — an impl-defined detail.
+    pub trap_span: Option<Span>,
 }
 
 /// Evaluate a program from `main`, bounded by `fuel`.
@@ -297,6 +309,7 @@ pub fn run(program: &Program, fuel: u64) -> Run {
             outcome: Outcome::IllFormed("no `main` function".to_string()),
             stdout: String::new(),
             trace: Vec::new(),
+            trap_span: None,
         };
     };
     let mut state = State::new(fuel);
@@ -312,7 +325,13 @@ pub fn run(program: &Program, fuel: u64) -> Run {
             Outcome::IllFormed("error-propagation (`?`) outside a `throws` function".to_string())
         }
     };
-    Run { outcome, stdout: state.stdout, trace: state.trace }
+    // Trap provenance: the span of the statement that was executing when the
+    // trap unwound (dummy = never stamped → no location to report).
+    let trap_span = match &outcome {
+        Outcome::Trap(_) if state.cur_span != Span::dummy() => Some(state.cur_span),
+        _ => None,
+    };
+    Run { outcome, stdout: state.stdout, trace: state.trace, trap_span }
 }
 
 // ── Function calls ─────────────────────────────────────────────────────────
