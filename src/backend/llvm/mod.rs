@@ -1475,7 +1475,7 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
 /// Names that are declared as libc builtins — skip if they also appear in module externs.
 const LIBC_BUILTINS: &[&str] = &[
     "printf", "fprintf", "abort", "memset", "memcpy", "exit", "malloc", "free", "realloc", "calloc",
-    "gorget_panic", "gorget_panic_at", "gorget_init_args",
+    "gorget_panic", "gorget_panic_at", "gorget_trap", "gorget_trap_at", "gorget_init_args",
     // Printf-like functions — we call them with (ptr, ...) signature, skip extern declaration
     "gorget_string_format", "gorget_string_format_alloc", "fprintf_stderr",
     // gorget_bool_to_str — declared with sret in libc section
@@ -1504,6 +1504,13 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // message carries `file:line:col`. Mirrors the C-backend declaration
     // at `src/backend/c/c_runtime.rs` (PANIC_NORMAL / test variant).
     writeln!(out, "declare void @gorget_panic_at(ptr, i32, i32, ptr)").unwrap();
+    // Trap normalization (D11): `gorget_trap_at(code, detail, file, line, col)`
+    // emits the normative `trap[<code>]: <detail> at file:line:col` + exit 101.
+    // The arg order is code-first (NOT gorget_panic_at's file-first order).
+    // `gorget_trap` is the span-less form; both are also runtime-defined in
+    // panic_normal.c / panic_test.c.
+    writeln!(out, "declare void @gorget_trap(ptr, ptr)").unwrap();
+    writeln!(out, "declare void @gorget_trap_at(ptr, ptr, ptr, i32, i32)").unwrap();
     // Trace runtime — declared unconditionally; the linker drops unused
     // declares. Provides the envelope emitters used at function entry,
     // block entry/exit, and branch/return points when `directive trace`
@@ -3057,6 +3064,20 @@ fn emit_function(
                         label = format!("dc.{bid}.{counter}.ok");
                         counter += 1;
                     }
+                    // D11 shift range-check (owner ruling 2026-07-10): every
+                    // Shl/Shr now emits a guard that splits the block + bumps
+                    // trap_counter, exiting at `sh{l,r}.{bid}.{uid}.ok`. This
+                    // pre-pass TWINS that emit exactly (layering: same counter,
+                    // same exit label) — omitting it desyncs phi predecessor
+                    // labels (an `llc: use of undefined value %ov.*.ok`).
+                    Inst::Shl { .. } => {
+                        label = format!("shl.{bid}.{counter}.ok");
+                        counter += 1;
+                    }
+                    Inst::Shr { .. } => {
+                        label = format!("shr.{bid}.{counter}.ok");
+                        counter += 1;
+                    }
                     // DropGuardOpen (Bool) creates body + join labels.
                     Inst::DropGuardOpen { kind: DropGuardKind::Bool, .. } => {
                         df_stack.push(counter);
@@ -3765,12 +3786,12 @@ fn emit_inst(
                 writeln!(out, "  %{cmp} = icmp eq {lty} %v{}, 0", rhs.0).unwrap();
                 writeln!(out, "  br i1 %{cmp}, label %{trap_label}, label %{ok_label}").unwrap();
                 writeln!(out, "{trap_label}:").unwrap();
-                let panic_msg = format!("{}:{}:{}: division by zero\n", loc.0, loc.1, loc.2);
-                let panic_msg_idx = str_globals.intern(&panic_msg);
-                let stderr_name = format!("divz.{block_id}.{uid}.stderr");
-                writeln!(out, "  %{stderr_name} = load ptr, ptr @stderr").unwrap();
-                writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{stderr_name}, ptr @.str.{panic_msg_idx})").unwrap();
-                writeln!(out, "  call void @exit(i32 1)").unwrap();
+                // D11: normalize div-by-zero to `trap[T_DivByZero]` + exit 101
+                // via gorget_trap_at — byte-identical with the C backend.
+                let dz_code_idx = str_globals.intern(crate::trap::TrapKind::DivByZero.code());
+                let dz_detail_idx = str_globals.intern("division by zero");
+                let dz_file_idx = str_globals.intern(&loc.0);
+                writeln!(out, "  call void @gorget_trap_at(ptr @.str.{dz_code_idx}, ptr @.str.{dz_detail_idx}, ptr @.str.{dz_file_idx}, i32 {}, i32 {})", loc.1, loc.2).unwrap();
                 writeln!(out, "  unreachable").unwrap();
                 writeln!(out, "{ok_label}:").unwrap();
                 *current_label = ok_label;
@@ -3800,12 +3821,11 @@ fn emit_inst(
                 writeln!(out, "  %{cmp} = icmp eq {lty} %v{}, 0", rhs.0).unwrap();
                 writeln!(out, "  br i1 %{cmp}, label %{trap_label}, label %{ok_label}").unwrap();
                 writeln!(out, "{trap_label}:").unwrap();
-                let rem_panic = format!("{}:{}:{}: division by zero\n", loc.0, loc.1, loc.2);
-                let rem_panic_idx = str_globals.intern(&rem_panic);
-                let stderr_name = format!("remz.{block_id}.{uid}.stderr");
-                writeln!(out, "  %{stderr_name} = load ptr, ptr @stderr").unwrap();
-                writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{stderr_name}, ptr @.str.{rem_panic_idx})").unwrap();
-                writeln!(out, "  call void @exit(i32 1)").unwrap();
+                // D11: normalize rem-by-zero to `trap[T_DivByZero]` + exit 101.
+                let dz_code_idx = str_globals.intern(crate::trap::TrapKind::DivByZero.code());
+                let dz_detail_idx = str_globals.intern("division by zero");
+                let dz_file_idx = str_globals.intern(&loc.0);
+                writeln!(out, "  call void @gorget_trap_at(ptr @.str.{dz_code_idx}, ptr @.str.{dz_detail_idx}, ptr @.str.{dz_file_idx}, i32 {}, i32 {})", loc.1, loc.2).unwrap();
                 writeln!(out, "  unreachable").unwrap();
                 writeln!(out, "{ok_label}:").unwrap();
                 *current_label = ok_label;
@@ -3846,12 +3866,11 @@ fn emit_inst(
                 writeln!(out, "  %{zcmp} = icmp eq {lty} %v{}, 0", rhs.0).unwrap();
                 writeln!(out, "  br i1 %{zcmp}, label %{ztrap}, label %{zok}").unwrap();
                 writeln!(out, "{ztrap}:").unwrap();
-                let mod_panic = format!("{}:{}:{}: division by zero\n", loc.0, loc.1, loc.2);
-                let mod_panic_idx = str_globals.intern(&mod_panic);
-                let zstderr = format!("modz.{block_id}.{uid}.stderr");
-                writeln!(out, "  %{zstderr} = load ptr, ptr @stderr").unwrap();
-                writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{zstderr}, ptr @.str.{mod_panic_idx})").unwrap();
-                writeln!(out, "  call void @exit(i32 1)").unwrap();
+                // D11: normalize mod-by-zero to `trap[T_DivByZero]` + exit 101.
+                let dz_code_idx = str_globals.intern(crate::trap::TrapKind::DivByZero.code());
+                let dz_detail_idx = str_globals.intern("division by zero");
+                let dz_file_idx = str_globals.intern(&loc.0);
+                writeln!(out, "  call void @gorget_trap_at(ptr @.str.{dz_code_idx}, ptr @.str.{dz_detail_idx}, ptr @.str.{dz_file_idx}, i32 {}, i32 {})", loc.1, loc.2).unwrap();
                 writeln!(out, "  unreachable").unwrap();
                 writeln!(out, "{zok}:").unwrap();
                 *current_label = zok;
@@ -3985,10 +4004,49 @@ fn emit_inst(
         }
         Inst::Shl { dst, ty, lhs, rhs } => {
             let lty = llvm_type(ty);
+            // D11 + owner ruling 2026-07-10: guard shift-count out of range
+            // (>= bit width, or negative via the unsigned comparison). LLVM
+            // `shl` by an out-of-range count is poison/UB — the C backend
+            // already traps it, so ADD the check here so both backends agree on
+            // `x << 64` and both normalize to `trap[T_Overflow]` + exit 101.
+            let bits = int_bits(ty);
+            let uid = *trap_counter;
+            *trap_counter += 1;
+            let cmp = format!("shl.{block_id}.{uid}.cmp");
+            let trap_label = format!("shl.{block_id}.{uid}.trap");
+            let ok_label = format!("shl.{block_id}.{uid}.ok");
+            writeln!(out, "  %{cmp} = icmp uge {lty} %v{}, {bits}", rhs.0).unwrap();
+            writeln!(out, "  br i1 %{cmp}, label %{trap_label}, label %{ok_label}").unwrap();
+            writeln!(out, "{trap_label}:").unwrap();
+            let sh_code_idx = str_globals.intern(crate::trap::TrapKind::Overflow.code());
+            let sh_detail_idx = str_globals.intern("shift out of range");
+            let sh_file_idx = str_globals.intern(&loc.0);
+            writeln!(out, "  call void @gorget_trap_at(ptr @.str.{sh_code_idx}, ptr @.str.{sh_detail_idx}, ptr @.str.{sh_file_idx}, i32 {}, i32 {})", loc.1, loc.2).unwrap();
+            writeln!(out, "  unreachable").unwrap();
+            writeln!(out, "{ok_label}:").unwrap();
+            *current_label = ok_label;
             writeln!(out, "  %v{} = shl {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
         }
         Inst::Shr { dst, ty, lhs, rhs } => {
             let lty = llvm_type(ty);
+            // D11: same out-of-range shift-count guard as Shl (owner ruling
+            // 2026-07-10 → T_Overflow), matching the C backend.
+            let bits = int_bits(ty);
+            let uid = *trap_counter;
+            *trap_counter += 1;
+            let cmp = format!("shr.{block_id}.{uid}.cmp");
+            let trap_label = format!("shr.{block_id}.{uid}.trap");
+            let ok_label = format!("shr.{block_id}.{uid}.ok");
+            writeln!(out, "  %{cmp} = icmp uge {lty} %v{}, {bits}", rhs.0).unwrap();
+            writeln!(out, "  br i1 %{cmp}, label %{trap_label}, label %{ok_label}").unwrap();
+            writeln!(out, "{trap_label}:").unwrap();
+            let sh_code_idx = str_globals.intern(crate::trap::TrapKind::Overflow.code());
+            let sh_detail_idx = str_globals.intern("shift out of range");
+            let sh_file_idx = str_globals.intern(&loc.0);
+            writeln!(out, "  call void @gorget_trap_at(ptr @.str.{sh_code_idx}, ptr @.str.{sh_detail_idx}, ptr @.str.{sh_file_idx}, i32 {}, i32 {})", loc.1, loc.2).unwrap();
+            writeln!(out, "  unreachable").unwrap();
+            writeln!(out, "{ok_label}:").unwrap();
+            *current_label = ok_label;
             if is_signed(ty) {
                 writeln!(out, "  %v{} = ashr {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
             } else {
@@ -4525,6 +4583,38 @@ fn emit_inst(
                     format!("%v{}", a.0)
                 };
                 writeln!(out, "  call void @gorget_panic_at(ptr @.str.{file_idx}, i32 {}, i32 {}, ptr {msg_arg})",
+                    loc.1, loc.2).unwrap();
+                return;
+            }
+
+            // ── Trap with source location (D11) ─────────────────────
+            // Compiler-emit `gorget_trap(code, detail)` is rewritten to
+            // `gorget_trap_at(code, detail, file, line, col)` threading the
+            // call-site span — the SAME machinery as the gorget_panic rewrite
+            // above. Both args are marshalled to `const char*` (a str literal
+            // is already an opaque ptr; a GorgetString/Str goes through
+            // gorget_str_to_cstr).
+            if name == "gorget_trap" && args.len() == 2 {
+                let file_idx = str_globals.intern(&loc.0);
+                let mut marshal_cstr = |a: ValueId| -> String {
+                    let aty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                    let is_str_struct = matches!(aty,
+                        Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid))
+                        if snames.get(&sid.0).map_or(false, |n| n == "GorgetString" || n == "Str"));
+                    if is_str_struct {
+                        let uid = *trap_counter;
+                        *trap_counter += 1;
+                        let cstr_name = format!("gt.{block_id}.{uid}.cstr");
+                        let str_attr_call = gorget_string_byval_attr(snames);
+                        writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {str_attr_call}%v{})", a.0).unwrap();
+                        format!("%{cstr_name}")
+                    } else {
+                        format!("%v{}", a.0)
+                    }
+                };
+                let code_arg = marshal_cstr(args[0]);
+                let detail_arg = marshal_cstr(args[1]);
+                writeln!(out, "  call void @gorget_trap_at(ptr {code_arg}, ptr {detail_arg}, ptr @.str.{file_idx}, i32 {}, i32 {})",
                     loc.1, loc.2).unwrap();
                 return;
             }
@@ -7304,16 +7394,15 @@ fn emit_overflow_check(
     writeln!(out, "  %{flag} = extractvalue {{ {lty}, i1 }} %{result}, 1").unwrap();
     writeln!(out, "  br i1 %{flag}, label %{trap_label}, label %{ok_label}").unwrap();
     writeln!(out, "{trap_label}:").unwrap();
-    // Match C backend: emit `file:line:col: integer overflow\n`. The full
-    // message string is built at codegen time per panic site and interned
-    // — late-added globals are emitted after the function body (see
-    // `pre_intern_count` handling in `generate_llvm_ir`).
-    let ov_se = format!("ov.{block_id}.{trap_id}.stderr");
-    writeln!(out, "  %{ov_se} = load ptr, ptr @stderr").unwrap();
-    let ov_msg = format!("{}:{}:{}: integer overflow\n", loc.0, loc.1, loc.2);
-    let ov_msg_idx = str_globals.intern(&ov_msg);
-    writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{ov_se}, ptr @.str.{ov_msg_idx})").unwrap();
-    writeln!(out, "  call void @exit(i32 1)").unwrap();
+    // Trap normalization (D11): emit the normative `trap[T_Overflow]: integer
+    // overflow at file:line:col` + exit 101 via the shared `gorget_trap_at`
+    // runtime entry — byte-identical with the C backend. The `T_` code is DATA
+    // from `TrapKind::code()` (src/trap.rs), interned as a string global; there
+    // is no LLVM-side name table. Arg order is (code, detail, file, line, col).
+    let ov_code_idx = str_globals.intern(crate::trap::TrapKind::Overflow.code());
+    let ov_detail_idx = str_globals.intern("integer overflow");
+    let ov_file_idx = str_globals.intern(&loc.0);
+    writeln!(out, "  call void @gorget_trap_at(ptr @.str.{ov_code_idx}, ptr @.str.{ov_detail_idx}, ptr @.str.{ov_file_idx}, i32 {}, i32 {})", loc.1, loc.2).unwrap();
     writeln!(out, "  unreachable").unwrap();
     writeln!(out, "{ok_label}:").unwrap();
     writeln!(out, "  %v{} = add {lty} 0, %{val}", dst.0).unwrap();
@@ -7358,12 +7447,12 @@ fn emit_div_overflow_trap(
     writeln!(out, "  %{flag} = and i1 %{lmin}, %{rneg1}").unwrap();
     writeln!(out, "  br i1 %{flag}, label %{trap_label}, label %{ok_label}").unwrap();
     writeln!(out, "{trap_label}:").unwrap();
-    let ov_se = format!("ovf{op}.{block_id}.{uid}.stderr");
-    writeln!(out, "  %{ov_se} = load ptr, ptr @stderr").unwrap();
-    let ov_msg = format!("{}:{}:{}: integer overflow\n", loc.0, loc.1, loc.2);
-    let ov_msg_idx = str_globals.intern(&ov_msg);
-    writeln!(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %{ov_se}, ptr @.str.{ov_msg_idx})").unwrap();
-    writeln!(out, "  call void @exit(i32 1)").unwrap();
+    // D11: signed TYPE_MIN/-1 overflow normalizes to T_Overflow, same as the
+    // checked-arith overflow path — byte-identical with the C backend.
+    let ov_code_idx = str_globals.intern(crate::trap::TrapKind::Overflow.code());
+    let ov_detail_idx = str_globals.intern("integer overflow");
+    let ov_file_idx = str_globals.intern(&loc.0);
+    writeln!(out, "  call void @gorget_trap_at(ptr @.str.{ov_code_idx}, ptr @.str.{ov_detail_idx}, ptr @.str.{ov_file_idx}, i32 {}, i32 {})", loc.1, loc.2).unwrap();
     writeln!(out, "  unreachable").unwrap();
     writeln!(out, "{ok_label}:").unwrap();
     *current_label = ok_label;

@@ -572,7 +572,12 @@ pub(super) fn lower_call(
         // `lower_call_extern` would handle indirect uses too.
         if name == "panic" && args.len() == 1 {
             let msg_op = lower_expr(ctx, builder, &args[0].node.value);
-            builder.call_void("gorget_panic", vec![msg_op]);
+            // D11: route through gorget_trap(T_Panic, msg) — was gorget_panic.
+            // The C/LLVM boundary rewrites gorget_trap→gorget_trap_at threading
+            // the span, the same machinery gorget_panic used.
+            let code_op = Operand::Constant(Constant::Str(
+                crate::trap::TrapKind::Panic.code().to_string()));
+            builder.call_void("gorget_trap", vec![code_op, msg_op]);
             builder.unreachable();
             return Operand::Constant(Constant::Unit);
         }

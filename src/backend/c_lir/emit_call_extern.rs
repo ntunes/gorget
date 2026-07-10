@@ -67,6 +67,30 @@ pub(super) fn emit_call_extern(
                 return;
             }
 
+            // Route compiler-emit `gorget_trap(code, detail)` through
+            // `gorget_trap_at(code, detail, file, line, col)` threading the
+            // call-site span — the SAME machinery as the gorget_panic rewrite
+            // above (D11 trap normalization). Both args marshal to const char*.
+            if name == "gorget_trap" && args.len() == 2 {
+                let marshal = |a: ValueId| -> String {
+                    let arg_ty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
+                    let is_gs_struct = matches!(arg_ty, Some(LirType::Struct(sid))
+                        if module.structs.get(sid.0 as usize).map_or(false, |s| s.name == "GorgetString" || s.name == "Str"));
+                    if ctx.is_str_lit(a) || is_gs_struct {
+                        format!("(const char*){}.data", v(a))
+                    } else if matches!(arg_ty, Some(LirType::Ptr)) {
+                        format!("(const char*)((Str*){})->data", v(a))
+                    } else {
+                        format!("(const char*){}", v(a))
+                    }
+                };
+                let code_expr = marshal(args[0]);
+                let detail_expr = marshal(args[1]);
+                write!(out, "gorget_trap_at({code_expr}, {detail_expr}, \"{f}\", {ln}, {cl});",
+                    f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                return;
+            }
+
             // ── Inline string codepoint helpers (synthetic GIR functions) ──
             if name == "gorget_utf8_codepoint_len_at" && args.len() == 2 {
                 // gorget_utf8_codepoint_len_at(Str s, int64_t byte_pos) → int64_t

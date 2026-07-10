@@ -122,8 +122,12 @@ static inline Str gorget_codepoint_to_utf8(int64_t cp) {
 
 
 // ── Assert failure with pre-formatted value strings ─────────
-static inline void gorget_assert_fail_values(const char* op, Str left, Str right) {
-    gorget_panic(gorget_format("assertion failed: left %s right\n  left:  %.*s\n  right: %.*s",
+// D11: `code` is the T_AssertFailed trap code (typed data from src/trap.rs).
+// Routes through gorget_trap (span-less — this runtime helper has no source
+// location) → trap[T_AssertFailed]: <detail> at <unknown>:0:0 + exit 101, or
+// the test-mode longjmp capturing the bare detail.
+static inline void gorget_assert_fail_values(const char* code, const char* op, Str left, Str right) {
+    gorget_trap(code, gorget_format("assertion failed: left %s right\n  left:  %.*s\n  right: %.*s",
             op, (int)left.len, (const char*)left.data, (int)right.len, (const char*)right.data));
 }
 

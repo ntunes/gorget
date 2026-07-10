@@ -6397,6 +6397,38 @@ fn div_by_zero() {
     run_gg_panics("div_by_zero.gg", "division by zero");
 }
 
+// ── D11 trap normalization: the `trap[T_X]` marker + exit 101 ──
+// These pin the NORMATIVE production trap format on BOTH backends (the sweep
+// runs the whole file once for C and once for GG_BACKEND=llvm, so a single
+// `run_gg_panics` — which asserts nonzero exit + the stderr substring — covers
+// both lanes across the two sweeps). Owner ruling 2026-07-10: an out-of-range
+// shift normalizes to `T_Overflow`; the C backend already trapped it, and the
+// LLVM shift-range check was ADDED so both agree on `x << 64`.
+
+#[test]
+fn shift_oob_traps() {
+    run_gg_panics("shift_oob_traps.gg", "trap[T_Overflow]: shift out of range");
+}
+
+// The MESSAGE-LESS comparison assert (`assert 1 == 2`) takes the
+// `gorget_assert_fail_values` route (distinct from the message form) — it must
+// ALSO normalize to `trap[T_AssertFailed]` + exit 101 (invariant #8: it is a
+// user-facing assert, semantically identical to the message form).
+#[test]
+fn assert_cmp_traps() {
+    run_gg_panics("assert_cmp_traps.gg", "trap[T_AssertFailed]");
+}
+
+// Regression: a shift + a checked add in ONE conditional block, whose result
+// feeds an if-merge phi. The D11 LLVM shift range-check splits the block +
+// bumps the shared trap_counter, which MUST be mirrored in the
+// `block_exit_labels` twin pre-pass or llc rejects the phi. Runs on both
+// backends across the sweep (the LLVM lane is the one that catches the desync).
+#[test]
+fn shift_then_overflow_phi() {
+    run_gg("shift_then_overflow_phi.gg", "41\n0\n");
+}
+
 // ── Panic-by-default: unwrap/expect/unwrap_error on the wrong variant ──
 // Reference §15.2 says these panic. Before the fix, both backends emitted NO
 // tag check — a check-accepted program silently read a zeroed payload (garbage

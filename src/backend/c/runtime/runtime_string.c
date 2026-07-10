@@ -457,6 +457,11 @@ static inline const char* gorget_str_concat(const char* a, const char* b) {
 // Forward declarations — defined in the panic handler section.
 static void gorget_panic(const char* msg);
 static void gorget_panic_at(const char* file, int line, int col, const char* msg);
+// Trap normalization (D11): forward-declared here because runtime files
+// concatenate with runtime_string.c BEFORE panic_normal.c, and gorget_tostr.c
+// (gorget_assert_fail_values) calls gorget_trap before its definition.
+static void gorget_trap(const char* code, const char* detail);
+static void gorget_trap_at(const char* code, const char* detail, const char* file, int line, int col);
 
 // Build a Str from a literal C string. Allocation helper used by the C
 // backend when a string value must be materialized at runtime from a raw

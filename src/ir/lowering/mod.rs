@@ -989,6 +989,10 @@ pub fn lower_module(
     {
         use crate::ir::abi::AbiKind;
         ctx.fn_extern_abi_kinds.insert("gorget_panic".to_string(), vec![AbiKind::CStr]);
+        // gorget_trap(code, detail) — both const char* (D11). Without this the
+        // new 2-Str-arg extern gets default ABIs; the C/LLVM boundary rewrites
+        // it to gorget_trap_at threading the span (mirrors gorget_panic).
+        ctx.fn_extern_abi_kinds.insert("gorget_trap".to_string(), vec![AbiKind::CStr, AbiKind::CStr]);
         // File operations: gorget_file_open(path, mode), gorget_file_write(file*, content)
         ctx.fn_extern_abi_kinds.insert("gorget_file_open".to_string(), vec![AbiKind::CStr, AbiKind::CStr]);
         ctx.fn_extern_abi_kinds.insert("gorget_file_write".to_string(), vec![AbiKind::Auto, AbiKind::CStr]);

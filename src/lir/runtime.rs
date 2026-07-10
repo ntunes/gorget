@@ -560,7 +560,9 @@ runtime_table! {
 
     // ── Panic / abort ─────────────────────────────────────────────────────
     AssertFail       => "gorget_assert_fail",        sig(&[(T::Ptr, A::CStr), (T::Ptr, A::CStr), (T::I64, A::Scalar)], T::Void, F::Aborts);
-    AssertFailValues => "gorget_assert_fail_values", sig(&[(T::Ptr, A::CStr), (T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Void, F::Aborts);
+    // 4-arg (D11): the leading CStr is the `T_AssertFailed` code (typed data
+    // from src/trap.rs, approach (a)); then op, left, right as before.
+    AssertFailValues => "gorget_assert_fail_values", sig(&[(T::Ptr, A::CStr), (T::Ptr, A::CStr), (T::Str, A::GorgetString), (T::Str, A::GorgetString)], T::Void, F::Aborts);
     OverflowAdd      => "gorget_overflow_add",       sig(&[], T::Void, F::Aborts);
     OverflowMul      => "gorget_overflow_mul",       sig(&[], T::Void, F::Aborts);
     OverflowSub      => "gorget_overflow_sub",       sig(&[], T::Void, F::Aborts);

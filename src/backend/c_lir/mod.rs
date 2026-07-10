@@ -5,6 +5,7 @@
 //! explicit in LIR instructions.
 
 use crate::lir::*;
+use crate::trap::TrapKind;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
@@ -2456,8 +2457,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
         Inst::Add { dst, ty, lhs, rhs, overflow } => {
             if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_add_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                write!(out, "if (__builtin_add_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
                 write!(out, "{d} = ({ct}){l} + ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
@@ -2466,8 +2467,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
         Inst::Sub { dst, ty, lhs, rhs, overflow } => {
             if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_sub_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                write!(out, "if (__builtin_sub_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
                 write!(out, "{d} = ({ct}){l} - ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
@@ -2476,8 +2477,8 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
         Inst::Mul { dst, ty, lhs, rhs, overflow } => {
             if *overflow == Overflow::Trap && matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (__builtin_mul_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                write!(out, "if (__builtin_mul_overflow(({ct}){l}, ({ct}){r}, &{d})) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
                 write!(out, "{d} = ({ct}){l} * ({ct}){r};", d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
@@ -2501,14 +2502,14 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                     _ => unreachable!(),
                 };
                 write!(out,
-                    "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} \
-                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }} \
+                    "if (({ct}){r} == 0) {{ gorget_trap_at(\"{dz}\", \"division by zero\", \"{f}\", {ln}, {cl}); }} \
+                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }} \
                      {d} = ({ct}){l} / ({ct}){r};",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), dz = TrapKind::DivByZero.code(), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else if matches!(ty, LirType::U64 | LirType::U32 | LirType::U16 | LirType::U8) {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} / ({ct}){r};",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                write!(out, "if (({ct}){r} == 0) {{ gorget_trap_at(\"{dz}\", \"division by zero\", \"{f}\", {ln}, {cl}); }} {d} = ({ct}){l} / ({ct}){r};",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), dz = TrapKind::DivByZero.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 write!(out, "{} = {} / {};", v(*dst), v(*lhs), v(*rhs)).unwrap();
             }
@@ -2531,14 +2532,14 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                     _ => unreachable!(),
                 };
                 write!(out,
-                    "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} \
-                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ fprintf(stderr, \"{f}:{ln}:{cl}: integer overflow\\n\"); exit(1); }} \
+                    "if (({ct}){r} == 0) {{ gorget_trap_at(\"{dz}\", \"division by zero\", \"{f}\", {ln}, {cl}); }} \
+                     if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ gorget_trap_at(\"{ov}\", \"integer overflow\", \"{f}\", {ln}, {cl}); }} \
                      {d} = ({ct}){l} % ({ct}){r};",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), dz = TrapKind::DivByZero.code(), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             } else {
                 let ct = c_type_named(ty, sn);
-                write!(out, "if (({ct}){r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} {d} = ({ct}){l} % ({ct}){r};",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                write!(out, "if (({ct}){r} == 0) {{ gorget_trap_at(\"{dz}\", \"division by zero\", \"{f}\", {ln}, {cl}); }} {d} = ({ct}){l} % ({ct}){r};",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), dz = TrapKind::DivByZero.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
             }
         }
         Inst::Mod { dst, ty, lhs, rhs, .. } => {
@@ -2564,17 +2565,17 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                 };
                 write!(
                     out,
-                    "if ({r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} \
+                    "if ({r} == 0) {{ gorget_trap_at(\"{dz}\", \"division by zero\", \"{f}\", {ln}, {cl}); }} \
                      if (({ct}){l} == {tmin} && ({ct}){r} == -1) {{ {d} = 0; }} else \
                      {{ __typeof__({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), dz = TrapKind::DivByZero.code(), f = loc.0, ln = loc.1, cl = loc.2
                 ).unwrap();
             } else {
                 // Unsigned path — no TYPE_MIN issue.
                 write!(
                     out,
-                    "if ({r} == 0) {{ fprintf(stderr, \"{f}:{ln}:{cl}: division by zero\\n\"); exit(1); }} {{ __typeof__({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
-                    d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2
+                    "if ({r} == 0) {{ gorget_trap_at(\"{dz}\", \"division by zero\", \"{f}\", {ln}, {cl}); }} {{ __typeof__({l}) __t = {l} % {r}; {d} = __t + (__t != 0 && (__t ^ {r}) < 0 ? {r} : 0); }}",
+                    d = v(*dst), l = v(*lhs), r = v(*rhs), dz = TrapKind::DivByZero.code(), f = loc.0, ln = loc.1, cl = loc.2
                 ).unwrap();
             }
         }
@@ -2645,15 +2646,15 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                 LirType::I8  | LirType::U8  => "uint8_t",
                 _ => ct.as_str(),
             };
-            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ fprintf(stderr, \"{f}:{ln}:{cl}: shift out of range\\n\"); exit(1); }} {d} = ({ct})(({uct}){l} << {r});",
-                d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ gorget_trap_at(\"{ov}\", \"shift out of range\", \"{f}\", {ln}, {cl}); }} {d} = ({ct})(({uct}){l} << {r});",
+                d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
         }
         Inst::Shr { dst, ty, lhs, rhs } => {
             // C `>>` on signed negatives is implementation-defined (arithmetic shift on
             // every real target), so only the shift-count needs guarding.
             let ct = c_type_named(ty, sn);
-            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ fprintf(stderr, \"{f}:{ln}:{cl}: shift out of range\\n\"); exit(1); }} {d} = ({ct}){l} >> {r};",
-                d = v(*dst), l = v(*lhs), r = v(*rhs), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+            write!(out, "if ((uint64_t){r} >= (uint64_t)(sizeof({ct}) * 8)) {{ gorget_trap_at(\"{ov}\", \"shift out of range\", \"{f}\", {ln}, {cl}); }} {d} = ({ct}){l} >> {r};",
+                d = v(*dst), l = v(*lhs), r = v(*rhs), ov = TrapKind::Overflow.code(), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
         }
 
         // Comparison & logic (purely scalar — string comparisons are lowered
