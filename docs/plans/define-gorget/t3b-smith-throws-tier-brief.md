@@ -153,7 +153,8 @@ the generated program so it can be triaged (it may be a genuine position T3a mis
 the full `cargo test --test integration` (parent's job).
 
 ## Scope fences
-- Touch ONLY: `tests/smith/{generator,main}.rs`, `decisions.md` (the one LOG-sentence fix), `TODO.md`
+- Touch ONLY: `tests/smith/{generator,main}.rs`, `decisions.md` (the two SPEC-DIVERGE mechanism-clause
+  fixes — BOTH occurrences per W3: the A30/D23 open-queue entry `~:155-156` AND the D23 LOG `~:269`), `TODO.md`
   (the T3c follow-up). Do NOT touch `spec/ggdef/*` (ggdef already models D23 — no change), the
   self-host `.gg` lowering (T2a-selfhost), `src/backend/*` (T2b), or `src/semantic/*` (T3a is landed).
 
