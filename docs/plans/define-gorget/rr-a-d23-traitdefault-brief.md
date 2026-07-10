@@ -7,15 +7,17 @@
 > R-D rewrites `trap_kind_parity_prod_vs_ggdef` only).
 > **Scout:** report `/tmp/scout_rr_a_report.md`, prototype `/tmp/scout_rr_a_prototype.patch`
 > (2 files, +93/−28), measured end-to-end at `cab529cd`.
-> **Status:** v4 — pass-1 folds F1-F5 applied (F6 filed to TODO: the
-> `ast_type_to_resolved` Import-placeholder cousin); pass-2 verified all folds +
-> the design (generic-receiver substitution resolves CORRECTLY; sequencing
-> consistent; "no read-site patch" strictly true) and raised 1 blocking bundle,
-> now folded: fixture 5 RE-SPECCED to the `E_MissingTraitMethod` coupling pin
-> (`:909` is a consistency sibling, mutation-proven; the original
-> supertrait-default premise was wrong — that is a PRE-EXISTING un-gated hole,
-> filed in TODO) + N3 coordinate note + N4 phrasing tightened. Awaiting pass 3.
-> (v2 was the R-D sequencing fold, applied mid-pass-1.)
+> **Status:** v5 — pass-3 (executor-simulation + adversarial) CONFIRMED the
+> design on every fresh angle (import alias, re-export chains — covered for free,
+> nested genericity — degrades to rejection never silence, 375-test blast-radius
+> canary CLEAN) and folded 4 executability items: R1 fixture-5's LOAD-BEARING
+> `from parent import Parent` (without it the mutant doesn't flip); R2 fixtures
+> 3/4 positives are CHECK-LEVEL + `#[ignore]`d run-twins — a NEW pre-existing
+> lowering gap (generic-trait-default `throws E` UNSUBSTITUTED in bodies →
+> propagation silently prints 0) is filed HIGH in TODO; R3 the
+> `tests/fixtures/.gitignore` whitelist stanzas; R4 gates 3-5 read as
+> baseline+delta. Prior history: pass-1 F1-F5 folds (+F6 filed); pass-2 fixture-5
+> re-spec + supertrait-default hole filed (a3). Awaiting pass 4 (confirming).
 
 ## The corrected root-cause picture (the scout REFUTED the review's mechanism for mode 1)
 
@@ -132,8 +134,18 @@ this track's new lint).
 
 1. `d23_unhandled_method_traitdefault_xmod/` — negative, asserts `CalcError` in stderr.
 2. Its handled/propagated positive twin (runtime output `7`/`6`).
-3. Generic-throws positive (`Risky[E]` + `equip … Risky[String]`, valid propagation).
-4. Collision positive + collision-unhandled negative asserting `String`.
+3. Generic-throws positive (`Risky[E]` + `equip … Risky[String]`, valid
+   propagation). ⚠ **CHECK-LEVEL ONLY (pass-3 R2):** the RUNTIME half is blocked
+   by a PRE-EXISTING lowering gap — generic-trait-default `throws E` bodies lower
+   with UNSUBSTITUTED `E` (emitted C contains `__gg_Result__int64_t__E`); the
+   propagation shape BUILDS AND SILENTLY PRINTS `0` where `6` is correct, the
+   direct-catch shape cc-fails — identical at HEAD and post-prototype (filed HIGH
+   in TODO). Wire as a `check_gg_ok`-level positive (add the ~15-line harness,
+   mirror of `check_gg_fails`) PLUS an `#[ignore]`d `run_gg` twin asserting the
+   CORRECT `6` and citing the TODO entry — never wire `0` as expected (the
+   redesign-around-gap trap).
+4. Collision positive + collision-unhandled negative asserting `String` — same
+   R2 treatment for the positive's runtime half (check-level + `#[ignore]`d twin).
 5. **(re-specced by pass-2 — the original premise was WRONG)** The `:909` site is
    a load-bearing CONSISTENCY sibling, not a default-dispatch enabler: fixing
    `:868` alone while leaving `:909` value-first silently flips
@@ -141,6 +153,11 @@ this track's new lint).
    the `E_MissingTraitMethod` coupling pin: cross-module `equip S with Child`
    (where `Child extends Parent`) OMITTING Parent's required method → must REJECT
    `E_MissingTraitMethod`; plus the positive twin (method provided, runs `6`).
+   ⚠ **LOAD-BEARING IMPORT (pass-3 R1, measured both ways):** main.gg MUST contain
+   `from parent import Parent` ALONGSIDE `from child import Child` — the
+   value-namespace Import placeholder in the ROOT module's scope is what the
+   value-first extends lookup binds; without it the negative rejects under the
+   `:909` mutant too and pins NOTHING. The positive twin keeps the same imports.
    ⚠ Do NOT write a supertrait-DEFAULT rejection fixture — supertrait defaults
    are NOT gated even post-fix (the default fallback has no extends walk,
    `traits.rs:189-208`/`:292-308`; pre-existing hole, filed in TODO as its own
@@ -182,19 +199,36 @@ this track's new lint).
 Worktree-isolated; worktree-relative paths only; no `git stash`; checkpoint diff
 to /tmp after each work item; stage by explicit file name; final gates FOREGROUND
 with generous timeouts. Base: apply `/tmp/scout_rr_a_prototype.patch`, re-derive
-judgment hunk by hunk (you own it), then add the fixtures + the W3 lint.
+judgment hunk by hunk (you own it — incl. correcting the prototype's `:909`
+comment per fixture-5's note), then add the fixtures + the W3 lint + the
+`check_gg_ok` harness (R2). Pass-3's dry-run artifacts are reusable:
+`/tmp/rr_a_p3_dryrun.patch` + `/tmp/rr_a_p3_fixtures.tgz` (⚠ they carry the
+UNcorrected `:909` comment). **`.gitignore` (pass-3 R3, REQUIRED):**
+`tests/fixtures/.gitignore` ignores `*` by default — each new fixture DIRECTORY
+needs `!<dir>/` + `!<dir>/*.gg` whitelist stanzas (precedent:
+`d23_unhandled_method_xmod`, `.gitignore:41-42`; re-include `*.gg` ONLY so
+compiled `main`/`main.c` stay ignored). After staging, run `git status` and
+verify every new fixture source is tracked — a missed stanza ships tests that
+fail on a fresh clone.
 
 ## Gate list (executor, foreground, tee'd)
 
 1. `cargo build`
 2. `cargo test --lib` — 1105/0
-3. `cargo test --test integration d23_ -- --test-threads=4` — 11 pre-existing + new fixtures /0
-4. `cargo test --test integration throws -- --test-threads=4` — 36/0
+3. `cargo test --test integration d23_ -- --test-threads=4` — baseline 11 + the
+   new fixture fns, 0 failed (pass-3 measured 19/0/2ign with its naming; the 2
+   ignores are the R2 `#[ignore]`d run-twins — EXPECTED, cite the TODO entry in
+   each)
+4. `cargo test --test integration throws -- --test-threads=4` — baseline 36 +
+   any new fns whose names match, 0 failed (pass-3 R4: read gates 3-5 as
+   baseline+delta — your fixture NAMES inflate the filters; e.g. every natural
+   `d23_traitdefault_*` name also matches `trait`)
 5. `GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration trait -- --test-threads=4`
-   and same for `import`, `module` — at-600s expected counts (pass-1 F5,
-   regenerated): trait 41 passed / 0 failed / 1 ignored · import 15/0 ·
-   module 14/0. (The scout's 40/1, 14/1 figures were the 120s-default timeout
-   flake — do NOT gate against them.)
+   and same for `import`, `module` — at-600s BASELINES (pass-1 F5, regenerated):
+   trait 41 passed / 0 failed / 1 ignored · import 15/0 · module 14/0; read as
+   baseline+delta per R4 (pass-3's naming measured trait 49/0/3ign). ZERO new
+   FAILURES is the gate. (The scout's 40/1, 14/1 figures were the 120s-default
+   timeout flake — do NOT gate against them.)
 6. `cargo test --test lints` — 52 + 1 new /0; paste the W3 mutation evidence
 7. Before/after transcript of all six measured cases (build the repro programs,
    paste real output)
