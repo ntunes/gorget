@@ -8,15 +8,16 @@
 > `run_gg`) are untouched by R-D.
 > **Scout:** report `/tmp/scout_rr_c_report.md`, prototype `/tmp/scout_rr_c_prototype.patch`
 > (198 lines), measured end-to-end at `cab529cd`.
-> **Status:** v3 — pass-1 folds (sibling hole NAMED+FILED; 600s gates; 6th twin
-> pin) + pass-2 folds (phantom `T_UnwrapOnError`→`T_UnwrapError` corrected in the
-> sibling section AND TODO (c2), with the (c2) gate citation fixed `:1033`→`:878`
-> and the unwrap_or normative-default nit; the trap fixture's expected-stderr
-> HARDENED to `"trap[T_UnwrapErrorOnOk]: unwrap_error on Ok"` — code+detail, not
-> detail-only; the phi-acid probe PROMOTED to fixture 3; the R-D zone warning
-> marked MOOT — R-D landed). Pass-2 also constructed the aggregate-payload case
-> (correct both backends) and verified the tag convention is cross-pinned by the
-> fixture pair (an inversion fails both). Awaiting pass 3.
+> **Status:** v4 — pass-3 (executor-simulation + adversarial) re-proved the
+> design end-to-end at HEAD (fixture 3 writable from spec alone, first-try green;
+> .ll shape exact; guard exercised per-iteration, no hoisting; Ok-variant traps
+> both backends; all 6 twin pins statically verified in the patched source) and
+> folded 2 one-liners: F1 gate-3 count 15/0→16/0 (the acid promotion's own name
+> matches `unwrap`); F2 gate-4 landing-order clause vs R-B (mirror already in
+> R-B's v4) + the Ok-variant probe line in gate 6. Prior: pass-1 (sibling hole
+> filed (c2); 600s gates; 6th pin) + pass-2 (phantom code name; (c2) citation;
+> stderr hardened code+detail; acid promoted; R-D zone moot). Awaiting pass 4
+> (confirming).
 
 ## Verified premises (scout, empirical — with a significant sharpening)
 
@@ -155,17 +156,26 @@ val_types dst change).
 1. `cargo build`
 2. `cargo test --lib` — 1105/0
 3. `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test integration unwrap -- --test-threads=4`
-   — 15/0, then same under `GG_BACKEND=llvm --release` — 15/0 (pass-1: the 600s
-   prefix is REQUIRED on this box — the self-host-driver tests inside these
-   filters flake at the 120s default under multi-agent load)
+   — **16/0** (13 pre-existing + 3 new — pass-3 F1: fixture 3's name contains
+   "unwrap"; the old 15/0 predated the acid promotion), then same under
+   `GG_BACKEND=llvm --release` — 16/0 (pass-1: the 600s prefix is REQUIRED on
+   this box — the self-host-driver tests inside these filters flake at the 120s
+   default under multi-agent load)
 4. `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test integration trap -- --test-threads=4`
-   (C) and `GG_BACKEND=llvm --release` — 11/0 each (pass-1 measured the LLVM-lane
-   full set green through the patched backend, bootstrap included, 482.9s)
+   (C) and `GG_BACKEND=llvm --release` — 11/0 each PRE-R-B; **12/0 each if track
+   R-B's `test_trap_detail_matching` has landed first** (pass-3 F2 — check
+   `git log` and reconcile by test name; R-B's brief carries the mirror clause).
+   (pass-1 measured the LLVM-lane full set green through the patched backend,
+   bootstrap included, 482.9s)
 5. `GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration fault -- --test-threads=4`
-   C AND LLVM — 54/0 each (the phi/label hazard lives here)
+   C AND LLVM — 54/0 each (the phi/label hazard lives here; order-independent)
 6. The acid test transcript (loop + overflow-checked ops after the guard) on
    both backends + a diff of the two backends' stderr for the trap fixtures
-   (byte-identical expected)
+   (byte-identical expected). ALSO (pass-3, 30-second check): run the Ok-variant
+   probe of fixture 3 (`sed 's/Error(3)/Ok(7)/'` into a scratch copy) and
+   confirm BOTH backends trap `trap[T_UnwrapErrorOnOk]` + exit 101 on iteration
+   1 — then delete the scratch (the Error variant stays the landed fixture: it
+   additionally locks runtime payload extraction under the loop/phi shape).
 7. `cargo test --test lints` — no deltas expected.
 
 Parent (NOT executor): full both-backend sweep + bootstrap + spec_conformance at
