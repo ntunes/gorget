@@ -1,22 +1,22 @@
 # R-C brief — LLVM `T_UnwrapErrorOnOk` combinator guard (+ happy-path repair)
 
 > **Round:** review-residuals (xhigh review of `f42eea96..7aad1844`, TODO High entry
-> "D11/D23-wave RESIDUALS" item (c)). **Zone:** `src/backend/llvm/` + 2 new fixtures
-> + their harness wiring in `tests/integration.rs` (⚠ R-D also edits integration.rs
-> — DIFFERENT region: R-D touches the `check_gg_fails_no_desugar` harness ~:7208 and
-> its d23 call sites ~:4736-4807; R-C wires 2 fixtures ~:6459-6482. Textual
-> adjacency only; parent resolves at integration).
+> "D11/D23-wave RESIDUALS" item (c)). **Zone:** `src/backend/llvm/` + 3 new fixtures
+> + their harness wiring in `tests/integration.rs` (~:6456+). R-D's rewrite of the
+> `check_gg_fails_no_desugar` region has LANDED (`874b6371`) — the former
+> zone-collision warning is MOOT; R-C's harnesses (`run_gg_panics_with_stdout` /
+> `run_gg`) are untouched by R-D.
 > **Scout:** report `/tmp/scout_rr_c_report.md`, prototype `/tmp/scout_rr_c_prototype.patch`
 > (198 lines), measured end-to-end at `cab529cd`.
-> **Status:** v2 — pass-1 reviewed (every claim CONFIRMED incl. byte-identical
-> trap lines, the acid-test .ll shape, and the dst-None desync removal; the C-lane
-> self-host "failures" in review were the documented 120s-timeout contention flake
-> — LLVM-lane bootstrap ran green through the patched backend, 482.9s). Two folds
-> applied: the GIR unwrap-family sibling hole NAMED + FILED HIGH in TODO (static
-> receivers of `.unwrap()`/`.expect()`/`.unwrap_or()` return the receiver — both
-> backends, garbage exit 0; the `unwrap_error` asymmetry is why only IT reached
-> the backends); gate list hardened (600s timeouts + a 6th twin pin). Awaiting
-> pass 2.
+> **Status:** v3 — pass-1 folds (sibling hole NAMED+FILED; 600s gates; 6th twin
+> pin) + pass-2 folds (phantom `T_UnwrapOnError`→`T_UnwrapError` corrected in the
+> sibling section AND TODO (c2), with the (c2) gate citation fixed `:1033`→`:878`
+> and the unwrap_or normative-default nit; the trap fixture's expected-stderr
+> HARDENED to `"trap[T_UnwrapErrorOnOk]: unwrap_error on Ok"` — code+detail, not
+> detail-only; the phi-acid probe PROMOTED to fixture 3; the R-D zone warning
+> marked MOOT — R-D landed). Pass-2 also constructed the aggregate-payload case
+> (correct both backends) and verified the tag convention is cross-pinned by the
+> fixture pair (an inversion fails both). Awaiting pass 3.
 
 ## Verified premises (scout, empirical — with a significant sharpening)
 
@@ -88,9 +88,25 @@ adds — prints `15` on both, and the .ll confirms the guard consumed uid 0,
 shifted the add labels to `ov.2.1`/`ov.2.2`, and the loop phis reference
 `%ov.2.2.ok`: pre-pass and emit agree under exactly the drift hazard.
 
-New fixtures: `tests/fixtures/unwrap_error_on_ok_combinator_traps.gg` (trap
-route, `run_gg_panics_with_stdout`) + `unwrap_error_combinator_static.gg` (happy
-path, `42\nboom\n`), wired at `tests/integration.rs:6459-6482`.
+New fixtures (THREE — pass-2 added the acid promotion):
+1. `tests/fixtures/unwrap_error_on_ok_combinator_traps.gg` (trap route,
+   `run_gg_panics_with_stdout`) — ⚠ pass-2 fold: the expected-stderr substring
+   MUST be `"trap[T_UnwrapErrorOnOk]: unwrap_error on Ok"` (code + detail —
+   pinning only the detail is exactly the substring-weak class R-D just closed;
+   mirror the adjacent D11 pins at `integration.rs:6411`/`:6420`).
+2. `unwrap_error_combinator_static.gg` (happy path, `42\nboom\n`; `boom` = the
+   `RS = Error("boom")` static's payload).
+3. **`unwrap_error_combinator_phi_acid.gg` (pass-2: the acid probe PROMOTED to a
+   deterministic fixture — it lived only in the scout worktree):**
+   `Result[int, int] R = Error(3)` module-level static; `main` runs a
+   `while i < 5` loop whose body does `int e = R.unwrap_error()` (happy path —
+   Error receiver) then TWO overflow-checked adds (`total = total + e`,
+   `i = i + 1`); prints `15`. This is exactly the twin-drift hazard shape (guard
+   labels before `ov.*` labels inside a loop with phis). Expected stdout `15\n`,
+   both backends. The executor additionally eyeballs the emitted .ll ONCE: the
+   guard consumes a uid, downstream `ov.*` labels shift, loop phis reference the
+   shifted `.ok` label.
+Wired at `tests/integration.rs:~6456+`.
 
 ## Scout gates (all green this session)
 
@@ -117,7 +133,9 @@ LLVM 11/0 · fault C 54/0 / LLVM 54/0. Logs `/tmp/scout_rr_c_*.log`.
 Static/non-place-receiver `.unwrap()` / `.expect()` / `.unwrap_or()` never reach
 Tier-2a either — the GIR fallthrough `return recv` (`methods.rs:1004-1011`)
 covers the whole unwrap block for non-place receivers, so BOTH backends print
-garbage with exit 0 where `trap[T_UnwrapOnError]` etc. is normative (measured:
+garbage with exit 0 where `trap[T_UnwrapError]` (registry code, `src/trap.rs:66`
+— pass-2 corrected a phantom `T_UnwrapOnError` name) etc. is normative — and for
+`.unwrap_or()` the normative outcome is the DEFAULT VALUE, not a trap (measured:
 `Result[int,int] R = Error(3)` static; `R.unwrap()` → C `281474133152528`, LLVM
 `187650662859424`, both exit 0). The `unwrap_error` asymmetry (it falls to the
 generic MANGLE instead of `return recv`) is why only unwrap_error's shape reached
