@@ -37,9 +37,18 @@ sequential fresh-review gauntlet.
   - **NEXT:** T2a (new `src/trap.rs` closed `TrapKind` mirroring ggdef's + `gorget_trap_at` runtime
     entry + reroute compiler-emit sites + both-backend `gorget_panic`→`gorget_trap_at` rewrite +
     parity lint) → T2b. T3a executing in parallel. Then D12 blast-radius scout.
-  - **D23 dogfood-severity finding (T3a scout):** throws METHOD calls SILENTLY MISCOMPILE today
-    (`1 + s.risky()` passes `gg check`, prints garbage) — invariant-#8; T3a's method fix closes it
-    (turns garbage into an `E_UnhandledThrows` reject). Brief cleared 3-pass gauntlet; executing.
+  - **T3a (D23) LANDED** (merge `9d9a6d83`): unhandled `throws` in every position → clean
+    `E_UnhandledThrows`; closed the 3 modes (leak / swallow / throws-METHOD silent-miscompile incl.
+    a live trait-default hole) at one producer helper; expr-body widened to match block-body.
+    Follow-ons: T3b (smith throws tier), 2 minor items filed in TODO (generic-error trait-default
+    message substitution; general must-use-on-Result).
+  - **T2a is SPLIT** (scout `scout-t2a-production-emit.md` measured: overflow/divzero are emitted
+    INLINE, not via gorget_panic; self-host needs its OWN reroute): **T2a-rust** (C+LLVM inline-arith
+    + gorget_panic-based reroute + `src/trap.rs` mirror + parity lint; flips 7/8 fixtures, C/LLVM
+    floors 187→194; brief `t2a-rust-production-emit-brief.md` committed, gauntlet next) +
+    **T2a-selfhost** (mirror in `.gg` lowering; self-host floor →194) + **T2b** (bounds runtime path
+    → REAL locations + `abort()` fold → floors →195). Owner ruled shift-out-of-range → `T_Overflow`
+    (+ add the missing LLVM shift check).
 - **Decisions D1–D8**: all recorded in `decisions.md` with rationale. Do not relitigate; do
   bring NEW decision needs to the owner as option-questions (owner directive: ask along the
   way, with recommendations and previews).
