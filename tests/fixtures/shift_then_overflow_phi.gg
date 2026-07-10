@@ -1,9 +1,9 @@
-// Regression (T2a-rust, 2026-07-10): a shift (`a << n`) AND a checked add
-// (`+ 1`) in the SAME conditional block both split the LLVM block and bump the
-// shared trap_counter; the block's result feeds a phi at the if-merge. The new
-// D11 LLVM shift range-check must be mirrored in the `block_exit_labels` twin
-// pre-pass, or llc rejects the phi (`use of undefined value %ov.*.ok`). Only
-// the self-host bootstrap originally caught this; this pins it cheaply.
+# Regression (T2a-rust, 2026-07-10): a shift (`a << n`) AND a checked add
+# (`+ 1`) in the SAME conditional block both split the LLVM block and bump the
+# shared trap_counter; the block's result feeds a phi at the if-merge. The new
+# D11 LLVM shift range-check must be mirrored in the `block_exit_labels` twin
+# pre-pass, or llc rejects the phi (`use of undefined value %ov.*.ok`). Only the
+# self-host bootstrap originally caught this; this pins it cheaply.
 int g(int a, int n):
     int r = 0
     if a > 5:
