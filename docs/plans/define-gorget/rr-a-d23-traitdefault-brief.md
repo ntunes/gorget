@@ -7,12 +7,15 @@
 > R-D rewrites `trap_kind_parity_prod_vs_ggdef` only).
 > **Scout:** report `/tmp/scout_rr_a_report.md`, prototype `/tmp/scout_rr_a_prototype.patch`
 > (2 files, +93/−28), measured end-to-end at `cab529cd`.
-> **Status:** v3 — pass-1 reviewed (5 folds applied: F1 citation `:5583-5592`;
-> F2 single-module scope note + 6th fixture; F3 W3 lint-spec precision; F4 stale
-> lint-message refresh; F5 at-600s gate counts; F6 filed to TODO — the
-> `ast_type_to_resolved` Import-placeholder cousin). Pass-1 found NO design,
-> soundness, or measurement defect. Awaiting pass 2. (v2 was the R-D sequencing
-> fold, applied mid-pass-1.)
+> **Status:** v4 — pass-1 folds F1-F5 applied (F6 filed to TODO: the
+> `ast_type_to_resolved` Import-placeholder cousin); pass-2 verified all folds +
+> the design (generic-receiver substitution resolves CORRECTLY; sequencing
+> consistent; "no read-site patch" strictly true) and raised 1 blocking bundle,
+> now folded: fixture 5 RE-SPECCED to the `E_MissingTraitMethod` coupling pin
+> (`:909` is a consistency sibling, mutation-proven; the original
+> supertrait-default premise was wrong — that is a PRE-EXISTING un-gated hole,
+> filed in TODO) + N3 coordinate note + N4 phrasing tightened. Awaiting pass 3.
+> (v2 was the R-D sequencing fold, applied mid-pass-1.)
 
 ## The corrected root-cause picture (the scout REFUTED the review's mechanism for mode 1)
 
@@ -25,10 +28,11 @@ lossy, not the read site):
   cross-module program. Root: `collect_trait` keys the trait registry with
   value-first `scopes.lookup` (`src/semantic/traits.rs:868`) while `process_impl`
   resolves the equip's trait via `lookup_type` (`traits.rs:989`). An import
-  placeholder registers in BOTH namespaces (`scope.rs:71-92`) but
-  `export_non_private` (`scope.rs:686-707`) overwrites only the TYPE namespace —
-  the stale value-namespace placeholder wins the value-first lookup
-  (`scope.rs:311-313`). Measured: registry key = DefId(52) (kind=Import) vs the
+  placeholder registers in BOTH namespaces (`scope.rs:71-92`);
+  `export_non_private` overwrites placeholders in whichever namespaces the source
+  module actually EXPORTS (`scope.rs:717-730`) — a trait exports no
+  value-namespace entry, so the stale value-namespace placeholder survives and
+  wins the value-first lookup (`scope.rs:311-313`) (phrasing per pass-2 N4). Measured: registry key = DefId(52) (kind=Import) vs the
   equip's DefId(58) (kind=Trait) → `resolve_method`/`resolve_method_by_name` miss
   → the call types as `error_id` and unifies with anything.
   **Blast radius is bigger than throws: EVERY cross-module trait-default method is
@@ -83,8 +87,10 @@ traits.rs still LEGITIMATELY contains 2 value-first `scopes.lookup(` — `:1076`
 identity) and `:1703` (`build_function_sig` `Future` wrap; benign, falls back to
 the type namespace). The lint must pin the REGISTRATION functions specifically
 (or allowlist those two sites with a comment each) — a naive whole-file
-zero-count fails. Mutation-test it (flip one registration site back, watch the
-lint fail, revert). ALSO (pass-1 F4): the existing
+zero-count fails. (Coordinate note, pass-2 N3: `:1076`/`:1703` are HEAD
+coordinates — post-patch they sit at `:1092`/`:1719`; prefer pinning by function
+name over line number.) Mutation-test it (flip one registration site back, watch
+the lint fail, revert). ALSO (pass-1 F4): the existing
 `d23_method_throws_return_sites` failure message (`tests/lints.rs:747-748`)
 quotes the OLD 5-arg `resolve_throws_method_ret` signature — refresh it when
 adding the `receiver_type_id` param.
@@ -128,7 +134,19 @@ this track's new lint).
 2. Its handled/propagated positive twin (runtime output `7`/`6`).
 3. Generic-throws positive (`Risky[E]` + `equip … Risky[String]`, valid propagation).
 4. Collision positive + collision-unhandled negative asserting `String`.
-5. Optional: cross-module `extends` default-method sibling (covers the `:909` site).
+5. **(re-specced by pass-2 — the original premise was WRONG)** The `:909` site is
+   a load-bearing CONSISTENCY sibling, not a default-dispatch enabler: fixing
+   `:868` alone while leaving `:909` value-first silently flips
+   inherited-required-method validation to accept (mutation-tested). Fixture 5 =
+   the `E_MissingTraitMethod` coupling pin: cross-module `equip S with Child`
+   (where `Child extends Parent`) OMITTING Parent's required method → must REJECT
+   `E_MissingTraitMethod`; plus the positive twin (method provided, runs `6`).
+   ⚠ Do NOT write a supertrait-DEFAULT rejection fixture — supertrait defaults
+   are NOT gated even post-fix (the default fallback has no extends walk,
+   `traits.rs:189-208`/`:292-308`; pre-existing hole, filed in TODO as its own
+   track). The executor must also correct the prototype's `:909` comment: what
+   misses without it is inherited-required-method VALIDATION, not default-method
+   resolution (which misses regardless).
 6. **Single-module value-collision negative (pass-1 F2):** `trait Error` (name
    collides with the prelude bare `Error` variant) with a default method misused
    (`String y = e.describe()` on an int-returning default) — must REJECT
