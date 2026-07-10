@@ -6,7 +6,9 @@
 > `tests/lints.rs` (the trap parity lint). NO `src/` changes.
 > **Scout:** report `/tmp/scout_rr_d_report.md`, prototype `/tmp/scout_rr_d_prototype.patch`
 > (3 files, +191/−74), all premises CONFIRMED empirically at `cab529cd`.
-> **Status:** v1 — awaiting sequential fresh-review passes.
+> **Status:** v2 — pass-1 reviewed (2 reservations folded: the site count corrected
+> 12→11 throughout — the scout's figure was miscounted; the stray EOF-whitespace hunk
+> flagged for the executor to drop). Awaiting pass 2.
 
 ## Objective
 
@@ -24,23 +26,27 @@ mutation-style evidence (CLAUDE.md invariant #6: guards, not prose).
    snippet quotes the helper line; (b) an `E_ThrowInNonThrowingFunction` rejection.
    Both currently classify as the tier's benign PASS. The leak-first arm ordering
    (`main.rs:816`) is deliberate and must be preserved.
-2. **integration lost its diagnostic pin** — all 11 `check_gg_fails_no_desugar`
-   call sites (`tests/integration.rs:4736…4800`) + 1 dir-variant site (`:4807`)
-   pass the loose `"throws"`; the harness (`:7208-7239`) asserts only
-   fail + substring + no ``found `Result[`` leak. Sibling sweep done: the loose
-   class is exactly these 12; the three other throws-adjacent `check_gg_fails`
-   calls (`:22296`, `:22301`, `:26274`) pin full distinctive messages — leave them.
+2. **integration lost its diagnostic pin** — 10 file-variant
+   `check_gg_fails_no_desugar` call sites (`tests/integration.rs:4736, :4742,
+   :4759, :4764, :4769, :4775, :4781, :4786, :4793, :4800`) + 1 dir-variant site
+   (`:4807`) = **11 total** pass the loose `"throws"`; the harness (`:7208-7239`)
+   asserts only fail + substring + no ``found `Result[`` leak. Sibling sweep done
+   (re-verified by pass-1): the loose class is exactly these 11; the three other
+   throws-adjacent `check_gg_fails` calls (`:22296`, `:22301`, `:26274`) pin full
+   distinctive messages — leave them.
 3. **the parity lint's ratchet is vacuous over its arrays** — `tests/lints.rs:4952-5016`:
    the `_p_exhaustive`/`_g_exhaustive` matches force a compile error on a new
    variant, but all three CHECKS run over separate hand-listed `prod`/`ggd` arrays.
    Demonstrated: deleting `UnwrapErrorOnOk` (non-catchable, so check (c) is blind
    to it) from both arrays leaves the lint PASSING vacuously.
 
-**Load-bearing rendering fact (raw-bytes-verified):** the `E_` code DOES render in
-`gg check` stderr — `report_semantic_error` uses `.with_code(kind.code())`
-(`src/errors.rs:276`; code string `src/semantic/errors.rs:687`), and codespan wraps
-the whole `error[E_UnhandledThrows]` header in ONE ANSI color span, so it is a
-contiguous substring even un-stripped. Verified for all 12 affected fixtures.
+**Load-bearing rendering fact (raw-bytes-verified, independently re-verified by
+pass-1):** the `E_` code DOES render in `gg check` stderr —
+`report_semantic_error` uses `.with_code(kind.code())` (`src/errors.rs:276`; code
+string `src/semantic/errors.rs:687`), and codespan wraps the whole
+`error[E_UnhandledThrows]` header in ONE ANSI color span, so it is a contiguous
+substring even un-stripped. Verified for all 11 affected fixtures (10 files + the
+xmod dir): all exit 1, all carry the code, none leak.
 
 ## Work items (the scout's prototype is the base — apply, re-derive judgment, verify)
 
@@ -58,7 +64,9 @@ leak-beats-code ordering) — it FAILS against the old predicate (verified:
 `expect` parameter from `check_gg_fails_no_desugar` (+ the dir variant) entirely;
 both harnesses assert a shared `const D23_CODE = "error[E_UnhandledThrows]"`;
 reorder the leak-check FIRST for sharper failures. Future call sites structurally
-cannot be loose. All 12 call sites updated mechanically.
+cannot be loose. All 11 call sites updated mechanically. ⚠ Executor: DROP the
+prototype's final EOF-whitespace hunk in integration.rs (`@@ -30426,3 +30443,4 @@`
+— a stray blank line at EOF unrelated to the change; `git apply` warns on it).
 
 **W3 — lints (`tests/lints.rs`).** A local `trap_parity_pin!` macro: ONE variant
 list generates BOTH catch-all-free matches (`V { .. }` patterns — verified to
