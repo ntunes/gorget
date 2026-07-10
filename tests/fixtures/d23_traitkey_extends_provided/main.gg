@@ -1,0 +1,15 @@
+# Positive twin of d23_traitkey_extends_missing_method: providing Parent's
+# required method compiles and runs.
+from parent import Parent
+from child import Child
+
+struct S:
+    int v
+
+equip S with Child:
+    int must(self):
+        return self.v
+
+void main():
+    S s = S(6)
+    print(s.must())

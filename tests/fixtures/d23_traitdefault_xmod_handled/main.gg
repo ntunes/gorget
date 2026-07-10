@@ -1,0 +1,14 @@
+# Positive twin of d23_unhandled_method_traitdefault_xmod: the HANDLED
+# (catch) and PROPAGATED (throws CalcError fn) forms must still compile and
+# produce correct runtime values (pre-fix the same program shape ran garbage).
+from calc import Risky, S, CalcError
+
+int use(S s) throws CalcError:
+    return s.risky(5)
+
+void main():
+    S s = S(1)
+    int x = s.risky(5) catch (e): -1
+    print(x + 1)
+    int y = use(s) catch (e): -1
+    print(y)

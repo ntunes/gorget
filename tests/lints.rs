@@ -744,8 +744,9 @@ fn d23_method_throws_return_sites() {
          If you added a `throws`-carrying method-return site to the \
          `Expr::MethodCall` arm (a new dispatch fallback returning a method \
          sig's `return_type`), it MUST route through \
-         `self.resolve_throws_method_ret(def_id, &method.node, sig.return_type, \
-         suppress_auto_prop, expr.span)` — NOT return the bare `return_type` — \
+         `self.resolve_throws_method_ret(def_id, &method.node, resolved_receiver, \
+         sig.return_type, suppress_auto_prop, expr.span)` — NOT return the bare \
+         `return_type` — \
          so an unhandled `throws` method is gated (E_UnhandledThrows) instead of \
          silently miscompiling. Then bump EXPECTED_METHOD_RET_SITES.\n\
          If you removed one, lower it.",
@@ -759,6 +760,69 @@ fn d23_method_throws_return_sites() {
          `resolve_throws_method_ret`. A new direct caller (or a removed one) \
          changes this. Verify it's a genuine throws-producer position and bump.",
     );
+}
+
+/// D23 trait-registry keying ratchet (Fix 1; CLAUDE.md rule 4 "one fix, all
+/// siblings"). Trait-name → DefId resolution in the traits.rs REGISTRATION
+/// paths must use the TYPE namespace (`scopes.lookup_type`), never the
+/// value-first `scopes.lookup`: a `from mod import Trait` placeholder
+/// registers in BOTH namespaces but `export_non_private` overwrites it only
+/// in the namespaces the source module exports — a trait exports no value
+/// entry, so the stale value-namespace placeholder wins a value-first read
+/// and keys the registry under the Import def while `process_impl` resolves
+/// the REAL trait def via `lookup_type`. The key mismatch made every
+/// cross-module trait-DEFAULT method invisible to typecheck (typed as
+/// `error_id` — the D23 silent-miscompile hole).
+///
+/// Scoped to the registration FUNCTIONS (`register_builtin_traits`,
+/// `collect_trait`) — NOT a whole-file zero-count — because traits.rs keeps
+/// two legitimate value-first lookups elsewhere (orphan-rule self-type
+/// locality check; `build_function_sig`'s `Future` wrap, which falls back to
+/// the type namespace anyway).
+#[test]
+fn d23_trait_registration_lookup_type() {
+    let content = fs::read_to_string("src/semantic/traits.rs")
+        .expect("read src/semantic/traits.rs");
+    for func in ["register_builtin_traits", "collect_trait"] {
+        let sig = format!("fn {func}(");
+        let start = content.find(&sig).unwrap_or_else(|| {
+            panic!(
+                "traits.rs registration fn `{func}` not found — if it was \
+                 renamed, repoint this lint at the new registration path"
+            )
+        });
+        // Body extends to the next top-level `fn ` (all registration paths
+        // in traits.rs are free fns at column 0).
+        let rest = &content[start..];
+        let end = rest[sig.len()..]
+            .find("\nfn ")
+            .map(|i| i + sig.len())
+            .unwrap_or(rest.len());
+        let body = &rest[..end];
+        let value_first: usize = body
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.matches("scopes.lookup(").count())
+            .sum();
+        assert_eq!(
+            value_first, 0,
+            "trait registration fn `{func}` contains {value_first} value-first \
+             `scopes.lookup(` call(s). Registration must resolve trait names \
+             through `scopes.lookup_type(` — a value-first read can be diverted \
+             by a stale import placeholder (or any same-named value def) and \
+             keys the registry under the wrong DefId: every cross-module \
+             trait-default method then types as `error_id` (D23 silent \
+             miscompile). Use `scopes.lookup_type(` instead.",
+        );
+        let typed: usize = body.matches("scopes.lookup_type(").count();
+        assert!(
+            typed >= 1,
+            "trait registration fn `{func}` no longer contains any \
+             `scopes.lookup_type(` call — if name resolution moved elsewhere, \
+             repoint this lint at the new registration path (it pins the \
+             type-namespace keying invariant).",
+        );
+    }
 }
 
 /// Ratchet: the number of container-literal arms in `infer_expr` must

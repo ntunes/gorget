@@ -1,0 +1,20 @@
+# Fix-1 single-module scope pin: `trait Error` loses a value-first name lookup
+# to the prelude bare `Error` variant (value namespace), keying the trait
+# registry under the wrong def -- the int-returning default became invisible
+# and `String y = b.describe()` passed check. Post-fix: E_TypeMismatch.
+trait Error:
+    int code(self)
+    int describe(self):
+        return self.code() * 2
+
+struct Boom:
+    int c
+
+equip Boom with Error:
+    int code(self):
+        return self.c
+
+void main():
+    Boom b = Boom(3)
+    String y = b.describe()
+    print(y)

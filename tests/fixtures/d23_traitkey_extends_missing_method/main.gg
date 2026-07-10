@@ -1,0 +1,22 @@
+# E_MissingTraitMethod coupling pin for the trait-registry keying fix: the
+# extends site (collect_trait's parent-bound resolution) must use the SAME
+# type-namespace lookup as the registry key. With the extends site reverted to
+# a value-first lookup, `Parent` binds the import placeholder, the registry
+# misses, and this program silently passes check (mutation-tested).
+# LOAD-BEARING: `from parent import Parent` here creates the value-namespace
+# placeholder in THIS module's scope (where traits are collected); without the
+# import, the value-first lookup falls through to the type namespace and the
+# fixture pins nothing.
+from parent import Parent
+from child import Child
+
+struct S:
+    int v
+
+equip S with Child:
+    int own(self):
+        return self.v
+
+void main():
+    S s = S(6)
+    print(s.own())

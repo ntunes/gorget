@@ -1,0 +1,5 @@
+from parent import Parent
+
+trait Child extends Parent:
+    int extra(self):
+        return 1

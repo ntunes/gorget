@@ -1,0 +1,23 @@
+# Fix-2 collision negative: unhandled call must name the equip's REAL binding
+# `String` (never the colliding struct `E`, never `<error>`).
+struct E:
+    int code
+
+trait Risky[E]:
+    int base(self)
+    int risky(self, int x) throws E:
+        if x < 0:
+            throw "negative"
+        return self.base() + x
+
+struct S:
+    int v
+
+equip S with Risky[String]:
+    int base(self):
+        return self.v
+
+void main():
+    S s = S(1)
+    int y = 1 + s.risky(5)
+    print(y)

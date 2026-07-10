@@ -1,0 +1,21 @@
+# D23 fallback-path gate (cross-module TRAIT-DEFAULT): the throwing method body
+# lives IN the trait, in another module. Pre-fix the trait registry was keyed
+# under the import placeholder (value-first lookup) while process_impl resolved
+# the real trait def -> the default was invisible to typecheck and the call
+# typed as error_id (silent miscompile-to-garbage, measured 281474425222601).
+struct CalcError:
+    String msg
+
+trait Risky:
+    int base(self)
+    int risky(self, int x) throws CalcError:
+        if x < 0:
+            throw CalcError("negative")
+        return self.base() + x
+
+struct S:
+    int v
+
+equip S with Risky:
+    int base(self):
+        return self.v

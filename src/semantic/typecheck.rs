@@ -2403,6 +2403,7 @@ impl<'a> TypeChecker<'a> {
                     let ret = self.resolve_throws_method_ret(
                         stored_def_id,
                         &method.node,
+                        resolved_receiver,
                         sig.return_type,
                         suppress_auto_prop,
                         expr.span,
@@ -2458,6 +2459,7 @@ impl<'a> TypeChecker<'a> {
                         let ret = self.resolve_throws_method_ret(
                             def_id,
                             &method.node,
+                            resolved_receiver,
                             sig.return_type,
                             suppress_auto_prop,
                             expr.span,
@@ -2530,6 +2532,7 @@ impl<'a> TypeChecker<'a> {
                                     let ret = self.resolve_throws_method_ret(
                                         def_id,
                                         &method.node,
+                                        resolved_receiver,
                                         ret_ty,
                                         suppress_auto_prop,
                                         expr.span,
@@ -5311,6 +5314,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         method_def_id: DefId,
         method_name: &str,
+        receiver_type_id: TypeId,
         return_type: TypeId,
         suppress_auto_prop: bool,
         span: Span,
@@ -5329,13 +5333,41 @@ impl<'a> TypeChecker<'a> {
                 .and_then(|ti| ti.default_method_sigs.get(method_name))
                 .and_then(|ds| ds.throws_ast.clone())
             {
-                err_ty = super::types::ast_type_to_resolved(
-                    &throws_ast,
-                    span,
-                    self.scopes,
-                    self.types,
-                )
-                .ok();
+                // Substitute `Self`/trait generic params against the concrete
+                // receiver BEFORE resolving — the throws clause rides the SAME
+                // bindings as the default sig's return/param types
+                // (`default_sig_bindings`; one substitution mechanism per
+                // axis). Without it, `throws E` in `trait Risky[E]` resolved
+                // whatever `E` names in the CALLER's scope: a colliding
+                // top-level `struct E` mis-typed the error (spurious
+                // E_UnconvertibleErrorPropagation vs. the equip's real
+                // binding), and a non-colliding name resolved to `error_id`
+                // (diagnostics rendered "throws `<error>`").
+                let substituted = match self
+                    .default_sig_bindings(method_def_id, receiver_type_id)
+                {
+                    Some(bindings) => {
+                        super::traits::substitute_ast_type(&throws_ast, &bindings)
+                    }
+                    // No impl / unprojectable receiver — fall back to the raw
+                    // AST (concrete throws types still resolve; trait-param
+                    // ones degrade to error_id below, never to non-throws).
+                    None => throws_ast,
+                };
+                // D23 totality: a resolution FAILURE must never read as
+                // "non-throws" (the pre-D23 silent-miscompile hole). Map Err
+                // to error_id — the unhandled-position arm still fires, and
+                // the propagation gate's is_unsettled skip keeps genuinely
+                // unresolvable generic contexts permissive.
+                err_ty = Some(
+                    super::types::ast_type_to_resolved(
+                        &substituted,
+                        span,
+                        self.scopes,
+                        self.types,
+                    )
+                    .unwrap_or(self.types.error_id),
+                );
             }
         }
         match err_ty {
@@ -5606,25 +5638,19 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    /// When `resolve_method`/`resolve_method_by_name` returns a sig owned by
-    /// a trait default body, the stored sig has `Self` and the trait's own
-    /// generic `T` erased to `error_id` (they were out of scope at
-    /// registry-build time). Rebuild the sig by substituting both against
-    /// the concrete receiver so adapter constructors like `TakeIter[Self,
-    /// T] take(self, int n)` resolve to the concrete iterator type.
+    /// Compute the `Self`/trait-generic-param AST bindings of a trait against
+    /// a concrete receiver (the ONE substitution mechanism for everything a
+    /// trait-default sig carries — return type, param types, AND the `throws`
+    /// clause all resolve through these same bindings; one source of truth
+    /// per axis, docs/devbook/24 rule 3).
     ///
-    /// Returns `None` if any prerequisite is missing (no AST default sig,
-    /// no matching impl, receiver can't be projected back to AST). Callers
-    /// fall through to the unsubstituted sig in that case.
-    fn substitute_default_method_sig(
+    /// Returns `None` if any prerequisite is missing (no matching impl, or
+    /// the receiver can't be projected back to AST).
+    fn default_sig_bindings(
         &mut self,
         trait_def_id: DefId,
-        method: &str,
         receiver_type_id: TypeId,
-    ) -> Option<super::traits::FunctionSig> {
-        let default_sig = self.traits.traits.get(&trait_def_id)
-            .and_then(|t| t.default_method_sigs.get(method))
-            .cloned()?;
+    ) -> Option<FxHashMap<String, Type>> {
         let trait_generic_params = self.traits.traits.get(&trait_def_id)
             .map(|t| t.trait_generic_params.clone())
             .unwrap_or_default();
@@ -5680,6 +5706,29 @@ impl<'a> TypeChecker<'a> {
             let substituted = super::traits::substitute_ast_type(targ, &impl_bindings);
             full_bindings.insert(tparam.clone(), substituted);
         }
+        Some(full_bindings)
+    }
+
+    /// When `resolve_method`/`resolve_method_by_name` returns a sig owned by
+    /// a trait default body, the stored sig has `Self` and the trait's own
+    /// generic `T` erased to `error_id` (they were out of scope at
+    /// registry-build time). Rebuild the sig by substituting both against
+    /// the concrete receiver so adapter constructors like `TakeIter[Self,
+    /// T] take(self, int n)` resolve to the concrete iterator type.
+    ///
+    /// Returns `None` if any prerequisite is missing (no AST default sig,
+    /// no matching impl, receiver can't be projected back to AST). Callers
+    /// fall through to the unsubstituted sig in that case.
+    fn substitute_default_method_sig(
+        &mut self,
+        trait_def_id: DefId,
+        method: &str,
+        receiver_type_id: TypeId,
+    ) -> Option<super::traits::FunctionSig> {
+        let default_sig = self.traits.traits.get(&trait_def_id)
+            .and_then(|t| t.default_method_sigs.get(method))
+            .cloned()?;
+        let full_bindings = self.default_sig_bindings(trait_def_id, receiver_type_id)?;
 
         // Step 4: substitute default sig's return + params, then resolve
         // the AST back to TypeIds. Method-level generic placeholders stay

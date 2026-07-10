@@ -828,7 +828,10 @@ fn register_builtin_traits(
     ];
 
     for (name, methods) in builtin_traits {
-        if let Some(def_id) = scopes.lookup(name) {
+        // lookup_type for namespace consistency with collect_trait/process_impl
+        // (traits are type-namespace-only; a value-first lookup can be diverted
+        // by a same-named value-namespace def).
+        if let Some(def_id) = scopes.lookup_type(name) {
             let has_default_body: FxHashMap<String, bool> = methods
                 .keys()
                 .map(|k| (k.clone(), false))
@@ -847,10 +850,10 @@ fn register_builtin_traits(
     }
 
     // Wire Numeric's extends: Add + Sub + Mul + Div + Rem + Neg + Comparable + Default + One
-    if let Some(numeric_def_id) = scopes.lookup("Numeric") {
+    if let Some(numeric_def_id) = scopes.lookup_type("Numeric") {
         let parent_names = ["Add", "Sub", "Mul", "Div", "Rem", "Mod", "Neg", "Comparable", "Default", "One"];
         let parent_ids: Vec<DefId> = parent_names.iter()
-            .filter_map(|name| scopes.lookup(name))
+            .filter_map(|name| scopes.lookup_type(name))
             .collect();
         if let Some(info) = registry.traits.get_mut(&numeric_def_id) {
             info.extends = parent_ids;
@@ -865,7 +868,18 @@ fn collect_trait(
     registry: &mut TraitRegistry,
     errors: &mut Vec<SemanticError>,
 ) {
-    let Some(def_id) = scopes.lookup(&trait_def.name.node) else {
+    // TYPE-namespace lookup, NOT the value-first `lookup`: a `from mod import
+    // Trait` placeholder (DefKind::Import, registered in BOTH namespaces) is
+    // only overwritten by the module's `export_non_private` in the TYPE
+    // namespace (traits are type-namespace-only, so the module scope has no
+    // value entry to export). The stale value-namespace placeholder then wins
+    // a value-first `lookup`, keying the registry under the IMPORT def while
+    // `process_impl` resolves the equip's trait via `lookup_type` to the REAL
+    // trait def — the key mismatch made every cross-module trait-DEFAULT
+    // method invisible to `resolve_method`/`resolve_method_by_name` (the call
+    // typed as `error_id`, silently unifying with anything: the D23
+    // silent-miscompile hole, measured `int x = 1 + s.risky()` → garbage).
+    let Some(def_id) = scopes.lookup_type(&trait_def.name.node) else {
         return;
     };
 
@@ -903,10 +917,16 @@ fn collect_trait(
         }).collect()
     }).unwrap_or_default();
 
-    // Resolve extends
+    // Resolve extends — same type-namespace rule as the registry key above.
+    // A cross-module parent trait would otherwise bind the import placeholder
+    // and inherited-REQUIRED-method VALIDATION would silently flip to accept
+    // (`validate_trait_impls`' extends walk keys dead → a missing parent
+    // method passes check; mutation-tested). Supertrait DEFAULT-method
+    // resolution misses regardless of this site — the default fallback has no
+    // extends walk (pre-existing hole, filed in TODO as its own track).
     let mut extends = Vec::new();
     for bound in &trait_def.extends {
-        if let Some(parent_id) = scopes.lookup(&bound.node.name.node) {
+        if let Some(parent_id) = scopes.lookup_type(&bound.node.name.node) {
             extends.push(parent_id);
         }
     }

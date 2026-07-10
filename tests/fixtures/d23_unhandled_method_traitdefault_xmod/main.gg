@@ -1,0 +1,9 @@
+# D23: a cross-module trait-DEFAULT `throws` method called in an unhandled
+# position must REJECT with E_UnhandledThrows naming `CalcError` (never
+# `<error>`, never a silent pass).
+from calc import Risky, S, CalcError
+
+void main():
+    S s = S(1)
+    int x = 1 + s.risky(5)
+    print(x)

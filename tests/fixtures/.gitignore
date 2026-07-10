@@ -40,6 +40,18 @@
 # imported across a module boundary, called unhandled → E_UnhandledThrows).
 !d23_unhandled_method_xmod/
 !d23_unhandled_method_xmod/*.gg
+# D23 trait-registry keying (Fix 1) cross-module fixtures: trait-DEFAULT
+# throws negative + handled/propagated positive twin; E_MissingTraitMethod
+# extends-coupling pin + provided twin. Sources only — compiled main/main.c
+# stay ignored.
+!d23_unhandled_method_traitdefault_xmod/
+!d23_unhandled_method_traitdefault_xmod/*.gg
+!d23_traitdefault_xmod_handled/
+!d23_traitdefault_xmod_handled/*.gg
+!d23_traitkey_extends_missing_method/
+!d23_traitkey_extends_missing_method/*.gg
+!d23_traitkey_extends_provided/
+!d23_traitkey_extends_provided/*.gg
 # Known self-host gaps parked OUT of the top-level runtime_diff corpus (the
 # corpus reads tests/fixtures/*.gg non-recursively, so a subdir fixture is not
 # counted): the #[ignore]d negative fixtures documenting a filed residual

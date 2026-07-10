@@ -4809,6 +4809,95 @@ fn d23_unhandled_method_xmod() {
 }
 
 #[test]
+fn d23_unhandled_method_traitdefault_xmod() {
+    // Cross-module TRAIT-DEFAULT (registry-keying Fix 1): pre-fix the trait
+    // registry was keyed under the import placeholder, the default was
+    // invisible to typecheck, and this program silently ran garbage.
+    check_gg_fails_dir_no_desugar("d23_unhandled_method_traitdefault_xmod", "main.gg");
+    // Concrete-name pin (the no-desugar harness asserts only the exact code):
+    // the diagnostic must name `CalcError` — a regression to `<error>` fails.
+    check_gg_fails(
+        "d23_unhandled_method_traitdefault_xmod/main.gg",
+        "throws `CalcError`",
+    );
+}
+
+#[test]
+fn d23_traitdefault_xmod_handled() {
+    // Positive twin: handled (catch) + propagated (throws fn) forms of the
+    // cross-module trait-default compile and run CORRECT values.
+    run_gg_dir("d23_traitdefault_xmod_handled", "main.gg", "7\n6");
+}
+
+#[test]
+fn d23_traitdefault_generic_throws_check() {
+    // Fix-2 positive (CHECK level): `throws E` substituted through the
+    // equip's binding (E := String); valid propagation accepted.
+    check_gg_ok("d23_traitdefault_generic_throws.gg");
+}
+
+#[test]
+#[ignore = "pre-existing LOWERING gap (TODO: generic trait-default `throws E` \
+body never substitutes E — Result lowers as __gg_Result__int64_t__E; \
+propagation shape builds but runs 0, direct-catch shape fails cc). Expected \
+output is what the language SHOULD do; un-ignore when the lowering gap lands."]
+fn d23_traitdefault_generic_throws() {
+    run_gg("d23_traitdefault_generic_throws.gg", "6");
+}
+
+#[test]
+fn d23_traitdefault_generic_throws_collision_check() {
+    // Fix-2 positive (CHECK level) under a colliding top-level `struct E`:
+    // the equip binding wins (pre-fix: spurious
+    // E_UnconvertibleErrorPropagation `E` vs `String`).
+    check_gg_ok("d23_traitdefault_generic_throws_collision.gg");
+}
+
+#[test]
+#[ignore = "same pre-existing generic-default-throws LOWERING gap as \
+d23_traitdefault_generic_throws — un-ignore together."]
+fn d23_traitdefault_generic_throws_collision() {
+    run_gg("d23_traitdefault_generic_throws_collision.gg", "6");
+}
+
+#[test]
+fn d23_traitdefault_generic_collision_unhandled() {
+    check_gg_fails_no_desugar("d23_traitdefault_generic_collision_unhandled.gg");
+    // Concrete-name pin: must name the binding `String`, not struct `E`,
+    // not `<error>`.
+    check_gg_fails(
+        "d23_traitdefault_generic_collision_unhandled.gg",
+        "throws `String`",
+    );
+}
+
+#[test]
+fn d23_traitkey_extends_missing_method() {
+    // E_MissingTraitMethod coupling pin: the extends site of collect_trait
+    // must key parents through the same type-namespace lookup as the registry
+    // key — reverted to value-first, this silently passes check
+    // (mutation-tested). Requires `from parent import Parent` in main.gg to
+    // create the diverting value-ns placeholder.
+    check_gg_fails(
+        "d23_traitkey_extends_missing_method/main.gg",
+        "missing method `must` required by trait `Parent`",
+    );
+}
+
+#[test]
+fn d23_traitkey_extends_provided() {
+    run_gg_dir("d23_traitkey_extends_provided", "main.gg", "6");
+}
+
+#[test]
+fn d23_traitdefault_value_collision() {
+    // Fix-1 single-module scope pin: `trait Error` loses the value-first
+    // lookup to the prelude bare `Error` variant; pre-fix the int-returning
+    // default was invisible and the String-misuse passed check.
+    check_gg_fails("d23_traitdefault_value_collision.gg", "E_TypeMismatch");
+}
+
+#[test]
 fn d23_capture_freefn() {
     // Positive (over-rejection guard): free-fn whole-`Result` capture (§10.3) +
     // auto-propagation still compile.
@@ -7168,6 +7257,29 @@ fn fmt_binary_chain_round_trips() {
 // ══════════════════════════════════════════════════════════════
 // Semantic error tests (expected check failures)
 // ══════════════════════════════════════════════════════════════
+
+/// Positive CHECK-level harness: `gg check` must SUCCEED. For programs whose
+/// acceptance is the fixture's point but whose runtime is blocked by an
+/// unrelated (filed) gap — pair with an `#[ignore]`d `run_gg` asserting the
+/// CORRECT output per "Don't redesign around compiler gaps".
+fn check_gg_ok(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let output = build_with_timeout(gg_command("check").arg(&fixture_path), fixture);
+
+    assert!(
+        output.status.success(),
+        "Expected `gg check` to succeed for {fixture}, but it failed.\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
 
 fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
