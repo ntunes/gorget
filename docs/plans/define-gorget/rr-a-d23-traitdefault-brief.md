@@ -7,7 +7,12 @@
 > R-D rewrites `trap_kind_parity_prod_vs_ggdef` only).
 > **Scout:** report `/tmp/scout_rr_a_report.md`, prototype `/tmp/scout_rr_a_prototype.patch`
 > (2 files, +93/−28), measured end-to-end at `cab529cd`.
-> **Status:** v1 — awaiting sequential fresh-review passes.
+> **Status:** v3 — pass-1 reviewed (5 folds applied: F1 citation `:5583-5592`;
+> F2 single-module scope note + 6th fixture; F3 W3 lint-spec precision; F4 stale
+> lint-message refresh; F5 at-600s gate counts; F6 filed to TODO — the
+> `ast_type_to_resolved` Import-placeholder cousin). Pass-1 found NO design,
+> soundness, or measurement defect. Awaiting pass 2. (v2 was the R-D sequencing
+> fold, applied mid-pass-1.)
 
 ## The corrected root-cause picture (the scout REFUTED the review's mechanism for mode 1)
 
@@ -44,6 +49,15 @@ the builtin registrations (`:831`, `:850`, `:853`). This aligns the whole class
 with `process_impl`'s `lookup_type` and the EXISTING D23 gate then fires through
 the normal dispatch path — no read-site patch (CLAUDE.md invariant #1, devbook/24).
 
+⚠ **Scope note (pass-1 finding — the change is NOT cross-module-only):** Fix 1
+also corrects SINGLE-module traits whose NAME loses the value-first lookup to a
+value-namespace entry — demonstrated with `trait Error` (collides with the
+prelude bare `Result.Error` variant): at HEAD, `String y = e.describe()` on an
+int-returning trait-default passes check; after the fix it correctly rejects
+`E_TypeMismatch`. Prelude bare variants (`Ok`/`Error`/`Some`/`None`) and
+same-named fns/consts are the collision surface, and `Error` is a natural user
+trait name. Same-class CORRECT fix; fixture 6 pins it.
+
 **Fix 2 — `throws_ast` rides the established substitution mechanism.** Factor
 `default_sig_bindings()` out of `substitute_default_method_sig`;
 `resolve_throws_method_ret` gains `receiver_type_id` and substitutes `throws_ast`
@@ -62,9 +76,18 @@ a parallel mechanism for ONE axis of a sig whose other axes ride call-site
 substitution — the sidecar drift devbook/24 rule 3 bans.
 
 **W3 — sibling-drift lint (invariant #6).** A new `tests/lints.rs` lint pinning
-the traits.rs registration paths to `lookup_type` (the 5 sites above), so the
-next registration path can't reintroduce the value-first read. Mutation-test it
-(flip one site back, watch the lint fail, revert).
+the traits.rs registration paths to `lookup_type`, so the next registration path
+can't reintroduce the value-first read. ⚠ Spec precision (pass-1): after Fix 1,
+traits.rs still LEGITIMATELY contains 2 value-first `scopes.lookup(` — `:1076`
+(orphan-rule self-type locality; struct names are dual-namespace, not trait
+identity) and `:1703` (`build_function_sig` `Future` wrap; benign, falls back to
+the type namespace). The lint must pin the REGISTRATION functions specifically
+(or allowlist those two sites with a comment each) — a naive whole-file
+zero-count fails. Mutation-test it (flip one registration site back, watch the
+lint fail, revert). ALSO (pass-1 F4): the existing
+`d23_method_throws_return_sites` failure message (`tests/lints.rs:747-748`)
+quotes the OLD 5-arg `resolve_throws_method_ret` signature — refresh it when
+adding the `receiver_type_id` param.
 
 **Doc grounding:** D23 LOG `decisions.md:262-276` (totality invariant + diagnostic
 contract); `docs/language-reference.md` §10.1 ("uniformly across all positions …
@@ -106,6 +129,10 @@ this track's new lint).
 3. Generic-throws positive (`Risky[E]` + `equip … Risky[String]`, valid propagation).
 4. Collision positive + collision-unhandled negative asserting `String`.
 5. Optional: cross-module `extends` default-method sibling (covers the `:909` site).
+6. **Single-module value-collision negative (pass-1 F2):** `trait Error` (name
+   collides with the prelude bare `Error` variant) with a default method misused
+   (`String y = e.describe()` on an int-returning default) — must REJECT
+   `E_TypeMismatch`. Pins Fix 1's single-module scope.
 
 ## Risks / pins (first-class — read before executing)
 
@@ -121,7 +148,8 @@ this track's new lint).
   `resolve_method_by_name` band-aid.
 - **Accepted residual (file in TODO, small follow-up):** bindings-unavailable +
   trait-param throws degrades to `error_id` → `<error>` rendering on the unhandled
-  path / `is_unsettled` accept on the propagating path (`typecheck.rs:5619-5623`)
+  path / `is_unsettled` accept on the propagating path (`typecheck.rs:5583-5592`
+  — pass-1 corrected citation; `:5619` is `substitute_default_method_sig`'s header)
   — never silently-non-throws. Name-rendering polish from the AST is the follow-up.
 - **Self-host is the other half (note-only here, separate track):** the self-host
   typechecker LACKS the D23 gate entirely (no `UnhandledThrows` analog;
@@ -145,7 +173,10 @@ judgment hunk by hunk (you own it), then add the fixtures + the W3 lint.
 3. `cargo test --test integration d23_ -- --test-threads=4` — 11 pre-existing + new fixtures /0
 4. `cargo test --test integration throws -- --test-threads=4` — 36/0
 5. `GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration trait -- --test-threads=4`
-   and same for `import`, `module` — expect the scout's counts, NO new failures
+   and same for `import`, `module` — at-600s expected counts (pass-1 F5,
+   regenerated): trait 41 passed / 0 failed / 1 ignored · import 15/0 ·
+   module 14/0. (The scout's 40/1, 14/1 figures were the 120s-default timeout
+   flake — do NOT gate against them.)
 6. `cargo test --test lints` — 52 + 1 new /0; paste the W3 mutation evidence
 7. Before/after transcript of all six measured cases (build the repro programs,
    paste real output)

@@ -2,11 +2,19 @@
 
 > **Round:** review-residuals (xhigh review of `f42eea96..7aad1844`, TODO High entry
 > "D11/D23-wave RESIDUALS" items (b) + the `gorget_trap_fmt` part of (f)).
-> **Zone:** `src/backend/c/runtime/` ONLY (+ one new test fixture). No lint edits
-> (verified: the trap ratchets scan c_lir/llvm/self-host, not runtime .c shape).
+> **Zone:** `src/backend/c/runtime/` + one new test fixture + its `run_gg_test`
+> harness entry in `tests/integration.rs` (pass-1 D3 — the entry is required; note
+> `gg_command("test")` auto-applies `--backend=llvm` under `GG_BACKEND=llvm`,
+> `integration.rs:144-153`, so both-backend coverage needs no extra wiring). No
+> lint edits (verified: the trap ratchets scan c_lir/llvm/self-host, not runtime
+> .c shape; lints at HEAD = 52/0 — the scout's 45 was stale).
 > **Scout:** report `/tmp/scout_rr_b_report.md`, prototype `/tmp/scout_rr_b_prototype.patch`
 > (7 files, +106/−83), measured end-to-end at `cab529cd`.
-> **Status:** v1 — awaiting sequential fresh-review passes.
+> **Status:** v2 — pass-1 reviewed (3 folds: D1 gate-4 count corrected to 10/0 —
+> the "30/0" was the scout's OR-filter figure transplanted onto the `trap` filter;
+> D2 the regression fixture now pins BOTH consumers — pass-1 proved the P3
+> heap-UAF is DETERMINISTIC with a named String local, ASan-verified, not "luck";
+> D3 zone wording includes the harness entry). Awaiting pass 2.
 
 ## Verified premises (scout, empirical)
 
@@ -69,10 +77,18 @@ per-site stack-buffer pattern remains to copy-paste back into existence.
 
 ## New regression fixture (REQUIRED — today nothing pins trap-detail matching)
 
-A `@should_panic("index out of bounds: index 10, length 3")` test on an OOB
-`v[i]`, run under BOTH backends (only assert-message matching is pinned today,
-`test_should_panic.gg`). This fixture is what converts the false-PASS/false-FAIL
-roulette into a deterministic guard.
+ONE fixture, TWO tests, run under BOTH backends (only assert-message matching is
+pinned today, `test_should_panic.gg`):
+1. `@should_panic("index out of bounds: index 10, length 3")` on an OOB `v[i]` —
+   pins the `gorget_trap_at` consumer (P1).
+2. (pass-1 D2) `String msg = f"boom with dynamic payload {x}"` + `panic(msg)`
+   under `@should_panic("boom with dynamic payload 42")` — pins the
+   `gorget_panic_at` consumer (P3). Pass-1 demonstrated this case FAILS
+   deterministically pre-fix with a named String local (cleanup frees `str.data`
+   before the runner's `strstr`; ASan: heap-use-after-free) — without this test,
+   a partial revert of the panic_at hunk stays green.
+This fixture is what converts the false-PASS/false-FAIL roulette into a
+deterministic guard — for BOTH consumers.
 
 ## Measured after (scout prototype)
 
@@ -111,7 +127,10 @@ re-derive judgment hunk by hunk (you own it), add the regression fixture.
 2. `cargo test --lib` — 1105/0
 3. `cargo test --test integration test_ -- --test-threads=4` — 84 + new fixture /0
 4. `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test integration trap -- --test-threads=4`
-   — 30/0 (incl. the bootstrap-substring tests)
+   — **10/0** (7 direct `*_traps` + `self_host_bootstrap`,
+   `self_host_bootstrap_fixed_point`, `self_host_unwrap_traps`; pass-1 D1
+   regenerated via `--list` — the scout's "30/0" was a different OR-filter's
+   figure, do NOT gate against it)
 5. `GG_BACKEND=llvm cargo test --test integration --release trap -- --test-threads=4 --skip self_host` — 7/0
 6. The new fixture under BOTH backends, plus a paste of the before/after repro
    transcript (false-FAIL and false-PASS both demonstrated fixed).
