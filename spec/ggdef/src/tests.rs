@@ -3,7 +3,7 @@
 //! FuelExhausted) and the desugarings the elaborator performs.
 
 use crate::trace::TraceEvent;
-use crate::{run_source, Fault, Outcome, Run};
+use crate::{run_source, Outcome, Run, TrapKind};
 
 const FUEL: u64 = 10_000_000;
 
@@ -221,7 +221,7 @@ void main():
     assert!(kinds(&run).contains(&"explicit_clone"), "`.clone()` must emit ExplicitClone");
 }
 
-// ── Checked arithmetic ⇒ Trap(Fault) ───────────────────────────────────────
+// ── Checked arithmetic ⇒ Trap(TrapKind) ─────────────────────────────────────
 
 #[test]
 fn integer_overflow_traps() {
@@ -231,7 +231,7 @@ void main():
     int r = m + 1
     print(r)
 "#;
-    assert_eq!(go(src).outcome, Outcome::Trap(Fault::Overflow));
+    assert_eq!(go(src).outcome, Outcome::Trap(TrapKind::Overflow));
 }
 
 #[test]
@@ -242,7 +242,7 @@ void main():
     int r = 10 / z
     print(r)
 "#;
-    assert_eq!(go(src).outcome, Outcome::Trap(Fault::DivByZero));
+    assert_eq!(go(src).outcome, Outcome::Trap(TrapKind::DivByZero));
 }
 
 #[test]
@@ -252,7 +252,118 @@ void main():
     Vector[int] a = [1]
     print(a[5])
 "#;
-    assert_eq!(go(src).outcome, Outcome::Trap(Fault::Bounds));
+    assert_eq!(go(src).outcome, Outcome::Trap(TrapKind::Bounds));
+}
+
+// ── The trap registry: codes + the §10.9 catchable subset ──────────────────
+
+#[test]
+fn catchable_subset_is_exactly_overflow_divbyzero_bounds() {
+    // The §10.9 `Fault` subset (W1): a fault `catch` may recover EXACTLY these.
+    assert!(TrapKind::Overflow.is_catchable());
+    assert!(TrapKind::DivByZero.is_catchable());
+    assert!(TrapKind::Bounds.is_catchable());
+    // The uncatchable five (unwrap / assert / panic).
+    assert!(!TrapKind::UnwrapNone.is_catchable());
+    assert!(!TrapKind::UnwrapError.is_catchable());
+    assert!(!TrapKind::UnwrapErrorOnOk.is_catchable());
+    assert!(!TrapKind::AssertFailed(String::new()).is_catchable());
+    assert!(!TrapKind::Panic(String::new()).is_catchable());
+}
+
+#[test]
+fn trap_codes_are_mechanical_t_variant() {
+    // The `T_<VariantName>` code derives from variant identity, never detail.
+    assert_eq!(TrapKind::Overflow.code(), "T_Overflow");
+    assert_eq!(TrapKind::DivByZero.code(), "T_DivByZero");
+    assert_eq!(TrapKind::Bounds.code(), "T_Bounds");
+    assert_eq!(TrapKind::UnwrapNone.code(), "T_UnwrapNone");
+    assert_eq!(TrapKind::UnwrapError.code(), "T_UnwrapError");
+    assert_eq!(TrapKind::UnwrapErrorOnOk.code(), "T_UnwrapErrorOnOk");
+    assert_eq!(TrapKind::AssertFailed("x".into()).code(), "T_AssertFailed");
+    assert_eq!(TrapKind::Panic("x".into()).code(), "T_Panic");
+}
+
+// ── W2: the three implemented trap classes (assert / panic / unwrap_error) ──
+
+#[test]
+fn assert_false_traps_assert_failed() {
+    let src = r#"
+void main():
+    print("before")
+    assert 1 > 2, "math broke"
+    print("after")
+"#;
+    let run = go(src);
+    assert_eq!(run.outcome, Outcome::Trap(TrapKind::AssertFailed("math broke".to_string())));
+    assert_eq!(run.outcome.exit_code(), 101);
+    assert_eq!(run.stdout, "before\n", "output before the assert is preserved; `after` is not reached");
+}
+
+#[test]
+fn assert_true_continues() {
+    let src = r#"
+void main():
+    assert 2 > 1
+    print("ok")
+"#;
+    assert_eq!(out(src), "ok");
+}
+
+#[test]
+fn assert_false_no_message_uses_default_detail() {
+    let src = r#"
+void main():
+    assert 1 > 2
+"#;
+    assert_eq!(go(src).outcome, Outcome::Trap(TrapKind::AssertFailed("assertion failed".to_string())));
+}
+
+#[test]
+fn panic_traps_panic() {
+    let src = r#"
+void main():
+    print("start")
+    panic("boom")
+"#;
+    let run = go(src);
+    assert_eq!(run.outcome, Outcome::Trap(TrapKind::Panic("boom".to_string())));
+    assert_eq!(run.outcome.exit_code(), 101);
+    assert_eq!(run.stdout, "start\n");
+}
+
+#[test]
+fn unwrap_error_on_ok_traps() {
+    let src = r#"
+void main():
+    Result[int, String] a = Ok(7)
+    print(a.unwrap_error())
+"#;
+    assert_eq!(go(src).outcome, Outcome::Trap(TrapKind::UnwrapErrorOnOk));
+}
+
+#[test]
+fn unwrap_error_on_error_extracts_payload() {
+    let src = r#"
+void main():
+    Result[int, String] a = Error("nope")
+    print(a.unwrap_error())
+"#;
+    assert_eq!(out(src), "nope");
+}
+
+#[test]
+fn unwrap_error_traps_uncatchable() {
+    // A Trap outcome is exit 101 and NOT in the catchable subset.
+    let src = r#"
+void main():
+    Result[int, String] a = Ok(1)
+    print(a.unwrap_error())
+"#;
+    match go(src).outcome {
+        Outcome::Trap(k) => assert!(!k.is_catchable()),
+        other => panic!("expected Trap, got {other:?}"),
+    }
 }
 
 // ── FuelExhausted is a distinct outcome ────────────────────────────────────
@@ -383,7 +494,7 @@ void main():
     Option[int] b = None
     print(b.unwrap())
 "#;
-    assert!(matches!(go(src).outcome, Outcome::Trap(Fault::Panic(_))), "unwrap-None must Trap(Panic)");
+    assert_eq!(go(src).outcome, Outcome::Trap(TrapKind::UnwrapNone), "unwrap-None must Trap(UnwrapNone)");
 }
 
 #[test]
@@ -804,7 +915,7 @@ void main():
     Bomb b = Bomb(1)
 "#;
     let run = go(src);
-    assert_eq!(run.outcome, Outcome::Trap(Fault::DivByZero));
+    assert_eq!(run.outcome, Outcome::Trap(TrapKind::DivByZero));
     assert_eq!(run.stdout, "before\n", "output up to the trapping drop is preserved");
 }
 
@@ -1410,7 +1521,8 @@ fn render_expect_block_from_round_trips_json_escape() {
     // (parse_json_string), must equal the original — so a value serialized by
     // render_expect_block_from always parses back byte-exact.
     for s in ["", "9\n", "plain", "a\"b\\c\nd\te\r", "line1\nline2\n", "tab\tend"] {
-        let block = render_expect_block_from(0, s);
+        // No-trap outcome: a 3-line block (no `trap:` line).
+        let block = render_expect_block_from(0, s, None);
         assert_eq!(block.len(), 3);
         assert_eq!(block[0], "# expect:");
         assert_eq!(block[1], "#   exit: 0");
@@ -1418,5 +1530,10 @@ fn render_expect_block_from_round_trips_json_escape() {
         assert_eq!(parse_json_string(quoted).unwrap(), s, "round-trip failed for {s:?}");
     }
     // The exit code is threaded verbatim (not hardcoded to 0).
-    assert_eq!(render_expect_block_from(101, "")[1], "#   exit: 101");
+    assert_eq!(render_expect_block_from(101, "", None)[1], "#   exit: 101");
+    // A Trap outcome appends the `trap:` line at index 3, keeping exit@1/stdout@2.
+    let trap_block = render_expect_block_from(101, "pre\n", Some("T_Overflow"));
+    assert_eq!(trap_block.len(), 4);
+    assert_eq!(trap_block[1], "#   exit: 101");
+    assert_eq!(trap_block[3], "#   trap: T_Overflow");
 }

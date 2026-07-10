@@ -46,6 +46,9 @@ pub struct Expect {
     pub exit: i32,
     /// The expected stdout, with the writer's JSON escapes already decoded.
     pub stdout: String,
+    /// The expected trap `T_` code (`TrapKind::code()`), present IFF the outcome
+    /// is a Trap (`exit == 101`). The reader enforces that biconditional.
+    pub trap: Option<String>,
 }
 
 /// A parsed `#!spectest` frontmatter block. A successful parse ALWAYS carries an
@@ -96,6 +99,12 @@ pub enum FrontmatterError {
     BadStdout(String),
     /// `features:` was not an inline `[..]` list.
     BadFeatures(String),
+    /// A `trap:` code was present but `exit` was not 101 — a trap is EXACTLY the
+    /// exit-101 outcome (`{code, exit}` field of the trap contract).
+    TrapCodeNonTrapExit { code: String, exit: i32 },
+    /// `exit: 101` (a trap) but no `trap:` code — an uncaught trap MUST carry its
+    /// `T_` code so conformance can compare it.
+    TrapExitWithoutCode,
 }
 
 impl std::fmt::Display for FrontmatterError {
@@ -121,6 +130,15 @@ impl std::fmt::Display for FrontmatterError {
             FrontmatterError::BadFeatures(v) => {
                 write!(f, "`features:` must be an inline `[..]` list, got {v}")
             }
+            FrontmatterError::TrapCodeNonTrapExit { code, exit } => write!(
+                f,
+                "`expect.trap: {code}` requires `exit: 101` (a trap is exactly the exit-101 \
+                 outcome), but `exit` is {exit}"
+            ),
+            FrontmatterError::TrapExitWithoutCode => write!(
+                f,
+                "`expect.exit: 101` is a trap but no `expect.trap:` `T_` code is declared"
+            ),
         }
     }
 }
@@ -139,6 +157,7 @@ pub fn parse_frontmatter(source: &str) -> Result<Frontmatter, FrontmatterError> 
     let mut doc = None;
     let mut expect_exit = None;
     let mut expect_stdout = None;
+    let mut expect_trap = None;
     let mut saw_expect = false;
     let mut unknown = Vec::new();
 
@@ -182,6 +201,7 @@ pub fn parse_frontmatter(source: &str) -> Result<Frontmatter, FrontmatterError> 
                             );
                         }
                         "stdout" => expect_stdout = Some(parse_json_string(cv)?),
+                        "trap" => expect_trap = Some(cv.to_string()),
                         // Tolerate unknown nested keys (forward-compat).
                         _ => {}
                     }
@@ -204,7 +224,27 @@ pub fn parse_frontmatter(source: &str) -> Result<Frontmatter, FrontmatterError> 
     let exit = expect_exit.ok_or(FrontmatterError::MissingExpectField("exit"))?;
     let stdout = expect_stdout.ok_or(FrontmatterError::MissingExpectField("stdout"))?;
 
-    Ok(Frontmatter { mode, adjudicator, since, features, doc, expect: Expect { exit, stdout }, unknown })
+    // Enforce `trap: present ⟺ exit == 101` — a trap is exactly the exit-101
+    // outcome. The two non-trap nonzero exits (102 IllFormed / 103 FuelExhausted)
+    // legitimately carry no code, so the rule keys on `== 101`, not `!= 0`.
+    match (&expect_trap, exit) {
+        (Some(_), 101) => {}
+        (None, 101) => return Err(FrontmatterError::TrapExitWithoutCode),
+        (Some(code), _) => {
+            return Err(FrontmatterError::TrapCodeNonTrapExit { code: code.clone(), exit });
+        }
+        (None, _) => {}
+    }
+
+    Ok(Frontmatter {
+        mode,
+        adjudicator,
+        since,
+        features,
+        doc,
+        expect: Expect { exit, stdout, trap: expect_trap },
+        unknown,
+    })
 }
 
 /// Return the normalized (comment-stripped) content lines strictly between the
@@ -443,7 +483,7 @@ mod tests {
         assert_eq!(fm.since.as_deref(), Some("spec-v0.1"));
         assert_eq!(fm.features, vec!["cow", "alias", "sever"]);
         assert_eq!(fm.doc.as_deref(), Some("line one\nline two"));
-        assert_eq!(fm.expect, Expect { exit: 0, stdout: "1\n99\n".to_string() });
+        assert_eq!(fm.expect, Expect { exit: 0, stdout: "1\n99\n".to_string(), trap: None });
         assert!(fm.unknown.is_empty());
     }
 
@@ -469,7 +509,7 @@ mod tests {
                    #   duration_ms: 12\n\
                    #!end\n";
         let fm = parse_frontmatter(src).expect("unknown keys must be tolerated, not error");
-        assert_eq!(fm.expect, Expect { exit: 0, stdout: "ok\n".to_string() });
+        assert_eq!(fm.expect, Expect { exit: 0, stdout: "ok\n".to_string(), trap: None });
         // Unknown top-level keys are preserved, not dropped.
         let keys: Vec<&str> = fm.unknown.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&"args"), "unknown keys: {keys:?}");
@@ -538,6 +578,52 @@ mod tests {
     fn open_without_close_is_malformed() {
         let src = "#!spectest\n# mode: run\n";
         assert!(matches!(parse_frontmatter(src), Err(FrontmatterError::MalformedFence(_))));
+    }
+
+    // ── the `trap:` field: present IFF exit == 101 ─────────────────────────
+    #[test]
+    fn trap_bearing_expect_parses() {
+        let src = "#!spectest\n# expect:\n#   exit: 101\n#   stdout: \"pre\\n\"\n#   trap: T_Overflow\n#!end\n";
+        let fm = parse_frontmatter(src).expect("a trap fixture must parse");
+        assert_eq!(
+            fm.expect,
+            Expect { exit: 101, stdout: "pre\n".to_string(), trap: Some("T_Overflow".to_string()) }
+        );
+    }
+
+    #[test]
+    fn no_trap_fixture_has_none_trap() {
+        // The exit-0 baseline shape: `trap` is absent → `None`, not an error.
+        let src = "#!spectest\n# expect:\n#   exit: 0\n#   stdout: \"ok\\n\"\n#!end\n";
+        assert_eq!(parse_frontmatter(src).unwrap().expect.trap, None);
+    }
+
+    #[test]
+    fn trap_code_with_non_trap_exit_is_an_error() {
+        // A `trap:` code but exit != 101 (here exit 0) — rejected.
+        let src = "#!spectest\n# expect:\n#   exit: 0\n#   stdout: \"\"\n#   trap: T_Overflow\n#!end\n";
+        assert_eq!(
+            parse_frontmatter(src),
+            Err(FrontmatterError::TrapCodeNonTrapExit { code: "T_Overflow".to_string(), exit: 0 })
+        );
+    }
+
+    #[test]
+    fn trap_exit_without_code_is_an_error() {
+        // exit 101 but no `trap:` code — rejected.
+        let src = "#!spectest\n# expect:\n#   exit: 101\n#   stdout: \"\"\n#!end\n";
+        assert_eq!(parse_frontmatter(src), Err(FrontmatterError::TrapExitWithoutCode));
+    }
+
+    #[test]
+    fn nonzero_non_trap_exit_needs_no_code() {
+        // 102 (IllFormed) / 103 (FuelExhausted) are nonzero NON-trap outcomes:
+        // they legitimately carry no `trap:` code (rule keys on == 101).
+        for exit in [102, 103] {
+            let src = format!("#!spectest\n# expect:\n#   exit: {exit}\n#   stdout: \"\"\n#!end\n");
+            let fm = parse_frontmatter(&src).unwrap_or_else(|e| panic!("exit {exit} must parse: {e}"));
+            assert_eq!(fm.expect.trap, None);
+        }
     }
 
     // ── the JSON decode is a tight inverse of the writer ───────────────────

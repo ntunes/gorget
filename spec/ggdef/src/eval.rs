@@ -37,34 +37,88 @@ use crate::ggc::{
 use crate::trace::TraceEvent;
 
 // ── Exit codes (deliverable 6) ─────────────────────────────────────────────
-// PROVISIONAL until the trap-normalization spec text lands in Increment B.
-// They exist so `ggdef run` is scriptable today.
+// The `T_`-code trap format + exit 101 are normative (D11 trap normalization);
+// the code→class→catchable registry is `spec/prose/trap-codes.md`.
 /// Program ran to completion with a value.
 pub const EXIT_VALUE: i32 = 0;
-/// A catchable fault escaped uncaught (defined panic).
+/// An uncaught trap (§10.9 catchable subset OR an uncatchable panic / unwrap /
+/// assert). All trap classes exit 101; the `T_` code discriminates them.
 pub const EXIT_TRAP: i32 = 101;
 /// A statically-ill-formed program was detected dynamically.
 pub const EXIT_ILLFORMED: i32 = 102;
 /// The fuel bound was reached (non-termination guard).
 pub const EXIT_FUEL: i32 = 103;
 
-/// A catchable fault (RFC §2.3 Trap(Fault)). `Panic` is the normalized
-/// uncaught-panic shape — an `.unwrap()` on `None`/`Error`, or `assert`.
+/// The closed registry of trap classes (RFC §2.3 `Trap(TrapKind)`; D11 trap
+/// normalization). Every variant's stable `T_<VariantName>` code derives
+/// mechanically from its identity (`code()`), mirroring `E_<VariantName>`
+/// (`SemanticErrorKind::code`). The §10.9 `Fault` catchable subset is exactly
+/// `Overflow | DivByZero | Bounds` (`is_catchable`); the rest
+/// (unwrap / assert / panic) are uncatchable.
+///
+/// A variant's detail payload is for the RENDERED human line only — it is
+/// NEVER compared by conformance (Q1: `{T_ code, exit 101}` is the contract,
+/// the human detail is impl-defined). The unwrap classes need no payload: the
+/// variant identity already fixes their message.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Fault {
+pub enum TrapKind {
+    /// `T_Overflow` — an overflowing checked `+`/`-`/`*`/`/`/`%`/unary-neg.
     Overflow,
+    /// `T_DivByZero` — a `/` or `%` with a zero divisor.
     DivByZero,
+    /// `T_Bounds` — an out-of-bounds index.
     Bounds,
+    /// `T_UnwrapNone` — `.unwrap()` on a `None`.
+    UnwrapNone,
+    /// `T_UnwrapError` — `.unwrap()` on an `Error`.
+    UnwrapError,
+    /// `T_UnwrapErrorOnOk` — `.unwrap_error()` on an `Ok`.
+    UnwrapErrorOnOk,
+    /// `T_AssertFailed` — a failing `assert`. Detail = the message if present,
+    /// else `"assertion failed"`.
+    AssertFailed(String),
+    /// `T_Panic` — an explicit `panic(msg)`. Detail = the user message.
     Panic(String),
 }
 
-impl Fault {
+impl TrapKind {
+    /// The stable `T_<VariantName>` code — an exhaustive, catch-all-free match
+    /// so `rustc`'s exhaustiveness check IS the registry ratchet (mirrors
+    /// `SemanticErrorKind::code`, `src/semantic/errors.rs`). Derives from the
+    /// variant identity alone, never the detail payload.
+    pub fn code(&self) -> &'static str {
+        match self {
+            TrapKind::Overflow => "T_Overflow",
+            TrapKind::DivByZero => "T_DivByZero",
+            TrapKind::Bounds => "T_Bounds",
+            TrapKind::UnwrapNone => "T_UnwrapNone",
+            TrapKind::UnwrapError => "T_UnwrapError",
+            TrapKind::UnwrapErrorOnOk => "T_UnwrapErrorOnOk",
+            TrapKind::AssertFailed(_) => "T_AssertFailed",
+            TrapKind::Panic(_) => "T_Panic",
+        }
+    }
+
+    /// The §10.9 `Fault` catchable subset — a fault `catch` may recover exactly
+    /// these; the rest panic uncatchably. A PURE registry accessor (ggdef models
+    /// no `catch`): its consumers are the §10.9 prose subset and the T2a parity
+    /// lint.
+    pub fn is_catchable(&self) -> bool {
+        matches!(self, TrapKind::Overflow | TrapKind::DivByZero | TrapKind::Bounds)
+    }
+
+    /// The human-readable detail for the rendered `trap[T_X]: <detail>` line.
+    /// NEVER compared by conformance (Q1) — impl-defined.
     pub fn message(&self) -> &str {
         match self {
-            Fault::Overflow => "arithmetic overflow",
-            Fault::DivByZero => "division by zero",
-            Fault::Bounds => "index out of bounds",
-            Fault::Panic(m) => m,
+            TrapKind::Overflow => "arithmetic overflow",
+            TrapKind::DivByZero => "division by zero",
+            TrapKind::Bounds => "index out of bounds",
+            TrapKind::UnwrapNone => "called `unwrap()` on a `None` value",
+            TrapKind::UnwrapError => "called `unwrap()` on an `Error` value",
+            TrapKind::UnwrapErrorOnOk => "called `unwrap_error()` on an `Ok` value",
+            TrapKind::AssertFailed(m) => m,
+            TrapKind::Panic(m) => m,
         }
     }
 }
@@ -73,7 +127,7 @@ impl Fault {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
     Value(Value),
-    Trap(Fault),
+    Trap(TrapKind),
     IllFormed(String),
     FuelExhausted,
 }
@@ -94,7 +148,7 @@ impl Outcome {
 /// Distinct from `Flow` (return/break/continue), which is normal control flow.
 #[derive(Debug, Clone)]
 enum Halt {
-    Trap(Fault),
+    Trap(TrapKind),
     IllFormed(String),
     FuelExhausted,
     /// Error-propagation from an `Expr::Propagate` (`throws`-call auto-prop /
@@ -513,6 +567,19 @@ fn exec_stmt(ctx: &Ctx, state: &mut State, stmt: &Stmt) -> Result<Flow, Halt> {
             };
             Ok(Flow::Return(v))
         }
+        Stmt::Assert { cond, message, span } => {
+            state.cur_span = *span;
+            if eval_bool(ctx, state, cond)? {
+                Ok(Flow::Normal)
+            } else {
+                // The message is evaluated ONLY on failure (short-circuit).
+                let detail = match message {
+                    Some(m) => format_value(&eval_expr(ctx, state, m)?),
+                    None => "assertion failed".to_string(),
+                };
+                Err(Halt::Trap(TrapKind::AssertFailed(detail)))
+            }
+        }
         Stmt::Break { .. } => Ok(Flow::Break),
         Stmt::Continue { .. } => Ok(Flow::Continue),
     }
@@ -645,7 +712,7 @@ fn lookup_local(state: &State, frame: usize, name: &str) -> Option<usize> {
 fn eval_index(ctx: &Ctx, state: &mut State, idx: &Expr) -> Result<usize, Halt> {
     match eval_expr(ctx, state, idx)? {
         Value::Int(i) if i >= 0 => Ok(i as usize),
-        Value::Int(_) => Err(Halt::Trap(Fault::Bounds)),
+        Value::Int(_) => Err(Halt::Trap(TrapKind::Bounds)),
         v => Err(Halt::IllFormed(format!("index must be int, got {}", v.kind_name()))),
     }
 }
@@ -724,7 +791,7 @@ fn navigate_read(v: &Value, proj: &[Proj]) -> Result<Value, Halt> {
                 .map(|(_, vv)| vv)
                 .ok_or_else(|| Halt::IllFormed(format!("no field `{name}`")))?,
             (Value::Vector(items), Proj::Index(i)) | (Value::Tuple(items), Proj::Index(i)) => {
-                items.get(*i).ok_or(Halt::Trap(Fault::Bounds))?
+                items.get(*i).ok_or(Halt::Trap(TrapKind::Bounds))?
             }
             (Value::Enum { payload, .. }, Proj::Payload(i)) => {
                 payload.get(*i).ok_or_else(|| Halt::IllFormed("bad payload projection".to_string()))?
@@ -733,7 +800,7 @@ fn navigate_read(v: &Value, proj: &[Proj]) -> Result<Value, Halt> {
             // value, so it terminates the projection walk (a `str` is not a
             // place you can project further into).
             (Value::Str(s), Proj::Index(i)) => {
-                let ch = str_codepoint(s, *i).ok_or(Halt::Trap(Fault::Bounds))?;
+                let ch = str_codepoint(s, *i).ok_or(Halt::Trap(TrapKind::Bounds))?;
                 return navigate_read(&Value::Str(ch), &proj[k + 1..]);
             }
             (other, p) => {
@@ -767,7 +834,7 @@ fn navigate_write(v: &mut Value, proj: &[Proj], newval: Value) -> Result<(), Hal
                     .map(|(_, vv)| vv)
                     .ok_or_else(|| Halt::IllFormed(format!("no field `{name}`")))?,
                 (Value::Vector(items), Proj::Index(i)) | (Value::Tuple(items), Proj::Index(i)) => {
-                    items.get_mut(*i).ok_or(Halt::Trap(Fault::Bounds))?
+                    items.get_mut(*i).ok_or(Halt::Trap(TrapKind::Bounds))?
                 }
                 (Value::Enum { payload, .. }, Proj::Payload(i)) => {
                     payload.get_mut(*i).ok_or_else(|| Halt::IllFormed("bad payload projection".to_string()))?
@@ -871,6 +938,13 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
         }
 
         Expr::Construct { kind, args } => eval_construct(ctx, state, kind, args),
+
+        Expr::Panic(msg) => {
+            // `panic(msg)` is noreturn: it unwinds as an uncatchable trap and
+            // never yields a value. The message is rendered as the human detail.
+            let v = eval_expr(ctx, state, msg)?;
+            Err(Halt::Trap(TrapKind::Panic(format_value(&v))))
+        }
 
         Expr::Method { recv, method, args } => eval_method(ctx, state, recv, *method, args),
 
@@ -1203,10 +1277,29 @@ fn eval_method(ctx: &Ctx, state: &mut State, recv: &Expr, method: BuiltinMethod,
                 Value::Enum { variant, mut payload, .. } if variant == "Some" || variant == "Ok" => {
                     Ok(payload.pop().unwrap_or(Value::Unit))
                 }
-                Value::Enum { variant, .. } if variant == "None" || variant == "Error" => {
-                    Err(Halt::Trap(Fault::Panic(format!("called `unwrap()` on a `{variant}` value"))))
+                // Split by receiver so each unwrap trap gets its own `T_` code
+                // (the code derives from variant identity, so a single `Panic`
+                // arm would collapse `T_UnwrapNone`/`T_UnwrapError` together).
+                Value::Enum { variant, .. } if variant == "None" => {
+                    Err(Halt::Trap(TrapKind::UnwrapNone))
+                }
+                Value::Enum { variant, .. } if variant == "Error" => {
+                    Err(Halt::Trap(TrapKind::UnwrapError))
                 }
                 other => Err(Halt::IllFormed(format!("`.unwrap()` on {}", other.kind_name()))),
+            }
+        }
+        M::UnwrapError => {
+            // The dual of `.unwrap()`: extract the `Error` payload; Trap on `Ok`.
+            let v = eval_recv_value(ctx, state, recv)?;
+            match v {
+                Value::Enum { variant, mut payload, .. } if variant == "Error" => {
+                    Ok(payload.pop().unwrap_or(Value::Unit))
+                }
+                Value::Enum { variant, .. } if variant == "Ok" => {
+                    Err(Halt::Trap(TrapKind::UnwrapErrorOnOk))
+                }
+                other => Err(Halt::IllFormed(format!("`.unwrap_error()` on {}", other.kind_name()))),
             }
         }
         M::UnwrapOr => {
@@ -1311,7 +1404,7 @@ fn apply_mut(coll: &mut Value, method: BuiltinMethod, argvals: Vec<Value>) -> Re
             let i = as_index(&args.next().ok_or_else(|| illf("set expects 2 args"))?)?;
             let x = args.next().ok_or_else(|| illf("set expects 2 args"))?;
             if i >= items.len() {
-                return Err(Halt::Trap(Fault::Bounds));
+                return Err(Halt::Trap(TrapKind::Bounds));
             }
             items[i] = x;
             Ok(Value::Unit)
@@ -1361,7 +1454,7 @@ fn option_of(v: Option<Value>) -> Value {
 fn as_index(v: &Value) -> Result<usize, Halt> {
     match v {
         Value::Int(i) if *i >= 0 => Ok(*i as usize),
-        Value::Int(_) => Err(Halt::Trap(Fault::Bounds)),
+        Value::Int(_) => Err(Halt::Trap(TrapKind::Bounds)),
         other => Err(Halt::IllFormed(format!("index must be int, got {}", other.kind_name()))),
     }
 }
@@ -1556,26 +1649,26 @@ fn eval_binary(ctx: &Ctx, state: &mut State, op: BinOp, l: &Expr, r: &Expr) -> R
     match (op, &lv, &rv) {
         // Integer arithmetic — checked (overflow ⇒ Trap(Overflow)).
         (BinOp::Add, Value::Int(a), Value::Int(b)) => {
-            a.checked_add(*b).map(Value::Int).ok_or(Halt::Trap(Fault::Overflow))
+            a.checked_add(*b).map(Value::Int).ok_or(Halt::Trap(TrapKind::Overflow))
         }
         (BinOp::Sub, Value::Int(a), Value::Int(b)) => {
-            a.checked_sub(*b).map(Value::Int).ok_or(Halt::Trap(Fault::Overflow))
+            a.checked_sub(*b).map(Value::Int).ok_or(Halt::Trap(TrapKind::Overflow))
         }
         (BinOp::Mul, Value::Int(a), Value::Int(b)) => {
-            a.checked_mul(*b).map(Value::Int).ok_or(Halt::Trap(Fault::Overflow))
+            a.checked_mul(*b).map(Value::Int).ok_or(Halt::Trap(TrapKind::Overflow))
         }
         (BinOp::Div, Value::Int(a), Value::Int(b)) => {
             if *b == 0 {
-                Err(Halt::Trap(Fault::DivByZero))
+                Err(Halt::Trap(TrapKind::DivByZero))
             } else {
-                a.checked_div(*b).map(Value::Int).ok_or(Halt::Trap(Fault::Overflow))
+                a.checked_div(*b).map(Value::Int).ok_or(Halt::Trap(TrapKind::Overflow))
             }
         }
         (BinOp::Rem, Value::Int(a), Value::Int(b)) => {
             if *b == 0 {
-                Err(Halt::Trap(Fault::DivByZero))
+                Err(Halt::Trap(TrapKind::DivByZero))
             } else {
-                a.checked_rem(*b).map(Value::Int).ok_or(Halt::Trap(Fault::Overflow))
+                a.checked_rem(*b).map(Value::Int).ok_or(Halt::Trap(TrapKind::Overflow))
             }
         }
 
@@ -1606,7 +1699,7 @@ fn eval_binary(ctx: &Ctx, state: &mut State, op: BinOp, l: &Expr, r: &Expr) -> R
 
 fn eval_unary(op: UnOp, v: Value) -> Result<Value, Halt> {
     match (op, v) {
-        (UnOp::Neg, Value::Int(i)) => i.checked_neg().map(Value::Int).ok_or(Halt::Trap(Fault::Overflow)),
+        (UnOp::Neg, Value::Int(i)) => i.checked_neg().map(Value::Int).ok_or(Halt::Trap(TrapKind::Overflow)),
         (UnOp::Neg, Value::Float(f)) => Ok(Value::Float(-f)),
         (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
         (op, v) => Err(Halt::IllFormed(format!("unary {op:?} on {}", v.kind_name()))),

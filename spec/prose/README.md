@@ -28,3 +28,9 @@ and trap normalization (RFC §4).
 The **diagnostic-code registry** (RFC §5.5) is now authored:
 [`diagnostic-codes.md`](diagnostic-codes.md) maps each stable `E_`/`W_` code to
 its diagnostic kind and prose section.
+
+The **trap-code registry** (RFC §4; D11 trap normalization) is now authored:
+[`trap-codes.md`](trap-codes.md) maps each stable `T_` code to its trap class and
+whether it is in the §10.9 `Fault` catchable subset. Uncaught traps render
+`trap[T_X]: detail at file:line:col` and exit 101; conformance compares the `T_`
+code + exit only.

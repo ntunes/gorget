@@ -1,0 +1,19 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [trap]
+# doc: |
+#   Trap registry (D11): a checked `+` that overflows Traps `T_Overflow` and
+#   exits 101. Output before the trap is preserved (stdout prefix).
+# expect:
+#   exit: 101
+#   stdout: "computing\n"
+#   trap: T_Overflow
+#!end
+
+void main():
+    print("computing")
+    int m = 9223372036854775807
+    int r = m + 1
+    print(r)

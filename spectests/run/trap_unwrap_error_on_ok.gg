@@ -1,0 +1,18 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [trap]
+# doc: |
+#   Trap registry (D11): `.unwrap_error()` on an `Ok` Traps `T_UnwrapErrorOnOk`
+#   (the dual of `.unwrap()`) and exits 101. Output before the trap is preserved.
+# expect:
+#   exit: 101
+#   stdout: "unwrapping\n"
+#   trap: T_UnwrapErrorOnOk
+#!end
+
+void main():
+    print("unwrapping")
+    Result[int, String] r = Ok(7)
+    print(r.unwrap_error())

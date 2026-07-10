@@ -120,6 +120,9 @@ pub enum Stmt {
     Return { value: Option<Expr>, span: Span },
     Break { span: Span },
     Continue { span: Span },
+    /// `assert cond` / `assert cond, msg` — Traps `T_AssertFailed` when `cond`
+    /// is false. The message (if present) is evaluated ONLY on failure.
+    Assert { cond: Expr, message: Option<Expr>, span: Span },
 }
 
 /// A `match`-statement arm: a pattern and a statement block body.
@@ -200,6 +203,9 @@ pub enum BuiltinMethod {
     Get,
     /// `o.unwrap()` — extract Some/Ok payload; Trap on None/Error.
     Unwrap,
+    /// `r.unwrap_error()` — the dual of `unwrap()`: extract the `Error` payload;
+    /// Trap (`T_UnwrapErrorOnOk`) on an `Ok` receiver.
+    UnwrapError,
     /// `o.unwrap_or(default)` — payload or the default.
     UnwrapOr,
     /// `v.pop()` — remove+return last → `Option` (mutates).
@@ -265,6 +271,9 @@ pub enum Expr {
     Closure(usize),
     /// A `match` in expression position — each arm body yields a value.
     Match { scrutinee: Box<Expr>, arms: Vec<ExprArm>, else_arm: Option<Box<Expr>>, span: Span },
+    /// `panic(msg)` — an uncatchable trap (`T_Panic`) carrying a user message.
+    /// Noreturn: evaluation unwinds and never yields a value.
+    Panic(Box<Expr>),
     /// The `std.conv.int_to_str` shim intrinsic.
     IntToStr(Box<Expr>),
     /// An explicit `.clone()` deep copy of a place (emits `ExplicitClone`).

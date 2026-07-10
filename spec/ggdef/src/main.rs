@@ -8,7 +8,8 @@
 //!                           place. Idempotent (RFC §4 "expectations flow FROM
 //!                           the definition").
 //!
-//! Exit codes (provisional until the trap-normalization spec lands in B):
+//! Exit codes (the `T_`-code trap format + exit 101 are normative — D11 trap
+//! normalization; see `spec/prose/trap-codes.md`):
 //!   0   Value          101 Trap          102 IllFormed      103 FuelExhausted
 //!   2   usage / frontend (parse or elaboration) error — NOT an outcome.
 
@@ -113,7 +114,10 @@ fn cmd(file: &str, emit_trace: bool) -> ExitCode {
     // readable signal is the exit code.
     match &run.outcome {
         Outcome::Value(_) => {}
-        Outcome::Trap(f) => eprintln!("ggdef: trap: {}", f.message()),
+        // Render the normative `trap[T_X]: detail` shape (§10.9 / trap-codes.md).
+        // This is a human diagnostic (NOT conformance-compared — Q1), but the
+        // definition's own tool should model the format it normativizes.
+        Outcome::Trap(k) => eprintln!("trap[{}]: {}", k.code(), k.message()),
         Outcome::IllFormed(m) => eprintln!("ggdef: ill-formed: {m}"),
         Outcome::FuelExhausted => eprintln!("ggdef: fuel exhausted (non-termination guard)"),
     }

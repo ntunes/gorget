@@ -1,0 +1,19 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [trap]
+# doc: |
+#   Trap registry (D11): a `/` by zero Traps `T_DivByZero` and exits 101.
+#   Output before the trap is preserved (stdout prefix).
+# expect:
+#   exit: 101
+#   stdout: "dividing\n"
+#   trap: T_DivByZero
+#!end
+
+void main():
+    print("dividing")
+    int z = 0
+    int r = 10 / z
+    print(r)
