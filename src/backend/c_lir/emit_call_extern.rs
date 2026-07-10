@@ -91,6 +91,29 @@ pub(super) fn emit_call_extern(
                 return;
             }
 
+            // ── Flagship `v[i]` READ: real source location (D11 Layer B) ──
+            // Reroute the compiler-emitted Vector element-read
+            // `gorget_array_get(arr, idx)` to the location-aware
+            // `gorget_array_get_at(arr, idx, code, file, line, col)` so an
+            // out-of-bounds subscript surfaces `trap[T_Bounds]: … at file:line:col`
+            // + exit 101 (owner ruling). The `T_Bounds` code is threaded as DATA
+            // from `TrapKind::Bounds.code()` (layering rule 2), the span from the
+            // resolved `loc` tuple. The dst stays `Ptr` — `gorget_array_get_at`
+            // returns the element `void*` and the downstream shared LIR
+            // `Inst::Load` (materialize_collection_element) derefs it, so this is a
+            // single early-return branch that does NOT deref here (a deref would
+            // double-deref). Runtime-internal / self-host callers keep the
+            // span-less `gorget_array_get` (normalized to `gorget_trap` in the
+            // shared runtime), so those flip to `trap[T_Bounds]` for free.
+            if name == "gorget_array_get" && args.len() == 2 {
+                if let Some(d) = dst {
+                    let code = crate::trap::TrapKind::Bounds.code();
+                    write!(out, "{} = gorget_array_get_at({}, {}, \"{code}\", \"{f}\", {ln}, {cl});",
+                        v(*d), v(args[0]), v(args[1]), f = loc.0, ln = loc.1, cl = loc.2).unwrap();
+                    return;
+                }
+            }
+
             // ── Inline string codepoint helpers (synthetic GIR functions) ──
             if name == "gorget_utf8_codepoint_len_at" && args.len() == 2 {
                 // gorget_utf8_codepoint_len_at(Str s, int64_t byte_pos) → int64_t

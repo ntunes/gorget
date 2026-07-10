@@ -698,7 +698,7 @@ static inline Str gorget_str_index(Str s, int64_t idx) {
     int64_t cp_count = gorget_str_codepoint_count(s);
     if (idx < 0) idx += cp_count;
     if (idx < 0 || idx >= cp_count) {
-        gorget_panic("str index out of bounds");
+        gorget_trap(GG_T_BOUNDS, "str index out of bounds");
     }
     const char* d = (const char*)s.data;
     size_t byte_off = 0;
@@ -720,7 +720,7 @@ static inline Str gorget_str_slice(Str s, int64_t start, int64_t end) {
     if (end > cp_count) end = cp_count;
     if (start >= end) return GORGET_EMPTY_STR;
     if (start > cp_count || end < 0) {
-        gorget_panic("str slice out of bounds");
+        gorget_trap(GG_T_BOUNDS, "str slice out of bounds");
     }
     const char* d = (const char*)s.data;
     // Walk to start byte offset
@@ -758,8 +758,9 @@ static inline StrView gorget_str_borrow_region_view(const char* data, size_t len
 // Return a byte-level owned copy of s[start..end].
 static inline Str gorget_str_byte_slice(Str s, int64_t start, int64_t end) {
     if (start < 0 || end < 0 || (size_t)start > s.len || (size_t)end > s.len || start > end) {
-        fprintf(stderr, "gorget: panic: string byte_slice out of bounds: [%" PRId64 "..%" PRId64 "], byte length %zu\n", start, end, s.len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "string byte_slice out of bounds: [%" PRId64 "..%" PRId64 "], byte length %zu", start, end, s.len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     return gorget_str_view_region((const char*)s.data + start, (size_t)(end - start));
 }
@@ -775,8 +776,9 @@ static inline Str gorget_str_char_at(Str s, int64_t index) {
 // Return the byte at index (byte-level). Bounds-checked against byte length.
 static inline uint8_t gorget_str_byte_at(Str s, int64_t index) {
     if (index < 0 || (size_t)index >= s.len) {
-        fprintf(stderr, "gorget: panic: string byte index out of bounds: index %" PRId64 ", byte length %zu\n", index, s.len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "string byte index out of bounds: index %" PRId64 ", byte length %zu", index, s.len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     return (uint8_t)((const char*)s.data)[index];
 }

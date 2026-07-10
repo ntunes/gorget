@@ -1511,6 +1511,12 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // panic_normal.c / panic_test.c.
     writeln!(out, "declare void @gorget_trap(ptr, ptr)").unwrap();
     writeln!(out, "declare void @gorget_trap_at(ptr, ptr, ptr, i32, i32)").unwrap();
+    // Location-aware Vector element read (D11 Layer B). The `v[i]` READ's
+    // `gorget_array_get` CallExtern is rerouted to this in the CallExtern
+    // handler, threading `TrapKind::Bounds.code()` + the call-site span so an
+    // out-of-bounds subscript emits `trap[T_Bounds]: … at file:line:col` + 101.
+    // Returns the element `void*` (ptr); defined in runtime_array.c.
+    writeln!(out, "declare ptr @gorget_array_get_at(ptr, i64, ptr, ptr, i32, i32)").unwrap();
     // Trace runtime — declared unconditionally; the linker drops unused
     // declares. Provides the envelope emitters used at function entry,
     // block entry/exit, and branch/return points when `directive trace`
@@ -4617,6 +4623,38 @@ fn emit_inst(
                 writeln!(out, "  call void @gorget_trap_at(ptr {code_arg}, ptr {detail_arg}, ptr @.str.{file_idx}, i32 {}, i32 {})",
                     loc.1, loc.2).unwrap();
                 return;
+            }
+
+            // ── Flagship `v[i]` READ: real source location (D11 Layer B) ──
+            // Symmetric to the C backend (src/backend/c_lir/emit_call_extern.rs):
+            // reroute the compiler-emitted Vector element-read
+            // `gorget_array_get(arr, idx)` to the location-aware
+            // `gorget_array_get_at(arr, idx, code, file, line, col)` so an OOB
+            // subscript emits `trap[T_Bounds]: … at file:line:col` + exit 101. The
+            // `T_Bounds` code (from `TrapKind::Bounds.code()`) and the file path are
+            // interned as string globals; line/col are i32 constants. `arr` is
+            // `ptr`; `idx` is `i64` (the array index is unified to `int` at
+            // typecheck). The dst stays `ptr` (the extern returns the element
+            // pointer and the downstream LIR Load derefs it) — a single early-return
+            // that does NOT deref here. Runtime-internal / self-host callers keep the
+            // span-less `gorget_array_get` (normalized in the shared runtime).
+            if name == "gorget_array_get" && args.len() == 2 {
+                if let Some(d) = dst {
+                    let code_idx = str_globals.intern(crate::trap::TrapKind::Bounds.code());
+                    let file_idx = str_globals.intern(&loc.0);
+                    writeln!(out, "  %v{} = call ptr @gorget_array_get_at(ptr %v{}, i64 %v{}, ptr @.str.{code_idx}, ptr @.str.{file_idx}, i32 {}, i32 {})",
+                        d.0, args[0].0, args[1].0, loc.1, loc.2).unwrap();
+                    // This early return bypasses the generic CallExtern tail's
+                    // `else { *trap_counter += 1; }` bump that the phi-predecessor
+                    // pre-pass (block_exit_labels) counts for EVERY CallExtern.
+                    // Omitting it desyncs the `ov.{bid}.{counter}.ok` labels for any
+                    // block that reads `arr[i]` before an overflow-checked op (e.g.
+                    // `sum += arr[i]` in a loop) → `llc: use of undefined value`.
+                    // (Second instance of the trap_counter twin-drift class — see the
+                    // block_exit_labels structural-guard TODO.)
+                    *trap_counter += 1;
+                    return;
+                }
             }
 
             // ── Newtype constructors ──────────────────────────────

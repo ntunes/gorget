@@ -68,23 +68,24 @@ use std::time::{Duration, Instant};
 use ggdef::{parse_frontmatter, Expect};
 
 // ── Floors — regenerated in-worktree (see the module-doc command). ──────────
-// T2a-rust (D11 production trap emit, Rust C+LLVM backends) AND T2a-selfhost
-// (the self-host `.gg` lowerer emit) both landed: the 7 non-bounds trap fixtures
-// (overflow, divbyzero, unwrap_none, unwrap_error, unwrap_error_on_ok, assert,
-// panic) now emit `trap[T_X]` + exit 101 and MATCH on ALL THREE lanes (C, LLVM,
-// self-host) → 187 + 7 = 194. `trap_bounds` still MISMATCHes all lanes (T2b
-// folds the runtime-library bounds path / the latent self-host abort() sites).
-const C_MATCH_FLOOR: usize = 194;
-const LLVM_MATCH_FLOOR: usize = 194;
-const SELFHOST_MATCH_FLOOR: usize = 194;
+// T2a-rust (D11 production trap emit, Rust C+LLVM backends), T2a-selfhost (the
+// self-host `.gg` lowerer emit), AND T2b (bounds trap normalization) all landed:
+// ALL 8 trap fixtures (overflow, divbyzero, bounds, unwrap_none, unwrap_error,
+// unwrap_error_on_ok, assert, panic) now emit `trap[T_X]` + exit 101 and MATCH on
+// ALL THREE lanes (C, LLVM, self-host). T2b normalized the shared runtime bounds
+// path (`gorget_array_get` → `gorget_trap` + the whole index/bounds class), so
+// `trap_bounds` flipped on every lane — the self-host FOR FREE (it links the same
+// runtime), no `.gg` edit — reaching 187 + 8 = 195 = the full corpus (MIN_FIXTURES).
+const C_MATCH_FLOOR: usize = 195;
+const LLVM_MATCH_FLOOR: usize = 195;
+const SELFHOST_MATCH_FLOOR: usize = 195;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the TOTAL seed COUNT. It EXCEEDS the three production MATCH floors: after
-/// T2a-rust AND T2a-selfhost all three lanes (C/LLVM/self-host) are at 194 —
-/// still 1 below the corpus, because `trap_bounds` MISMATCHes every lane pending
-/// T2b. That last MISMATCH ratchets all three floors to `MIN_FIXTURES` when T2b
-/// lands.
+/// the TOTAL seed COUNT. It EQUALS the three production MATCH floors: after
+/// T2a-rust, T2a-selfhost, AND T2b, all three lanes (C/LLVM/self-host) MATCH the
+/// whole corpus — `trap_bounds` was the last MISMATCH and T2b flipped it on every
+/// lane.
 const MIN_FIXTURES: usize = 195;
 
 // ─────────────────────────── infrastructure ────────────────────────────

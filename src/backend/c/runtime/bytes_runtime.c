@@ -80,8 +80,9 @@ static inline GorgetArray gorget_bytes_from_hex(const char* hex) {
 // Write a big-endian uint32 at offset into Vector[uint8]
 static inline void gorget_bytes_write_u32_be(GorgetArray* arr, int64_t offset, int64_t value) {
     if (offset < 0 || (size_t)(offset + 4) > arr->len) {
-        fprintf(stderr, "gorget: panic: bytes_write_u32_be: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "bytes_write_u32_be: offset %lld out of bounds (len %zu)", (long long)offset, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     uint8_t* p = (uint8_t*)arr->data + offset;
     uint32_t v = (uint32_t)value;
@@ -94,8 +95,9 @@ static inline void gorget_bytes_write_u32_be(GorgetArray* arr, int64_t offset, i
 // Read a big-endian uint32 from offset in Vector[uint8]
 static inline int64_t gorget_bytes_read_u32_be(const GorgetArray* arr, int64_t offset) {
     if (offset < 0 || (size_t)(offset + 4) > arr->len) {
-        fprintf(stderr, "gorget: panic: bytes_read_u32_be: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "bytes_read_u32_be: offset %lld out of bounds (len %zu)", (long long)offset, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     const uint8_t* p = (const uint8_t*)arr->data + offset;
     return (int64_t)(((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3]);
@@ -153,8 +155,9 @@ static inline GorgetArray gorget_random_bytes(int64_t n) {
 // Write a big-endian uint16 at offset
 static inline void gorget_bytes_write_u16_be(GorgetArray* arr, int64_t offset, int64_t value) {
     if (offset < 0 || (size_t)(offset + 2) > arr->len) {
-        fprintf(stderr, "gorget: panic: bytes_write_u16_be: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "bytes_write_u16_be: offset %lld out of bounds (len %zu)", (long long)offset, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     uint8_t* p = (uint8_t*)arr->data + offset;
     uint16_t v = (uint16_t)value;
@@ -165,8 +168,9 @@ static inline void gorget_bytes_write_u16_be(GorgetArray* arr, int64_t offset, i
 // Read a big-endian uint16 from offset
 static inline int64_t gorget_bytes_read_u16_be(const GorgetArray* arr, int64_t offset) {
     if (offset < 0 || (size_t)(offset + 2) > arr->len) {
-        fprintf(stderr, "gorget: panic: bytes_read_u16_be: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "bytes_read_u16_be: offset %lld out of bounds (len %zu)", (long long)offset, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     const uint8_t* p = (const uint8_t*)arr->data + offset;
     return (int64_t)(((uint16_t)p[0] << 8) | (uint16_t)p[1]);
@@ -175,8 +179,9 @@ static inline int64_t gorget_bytes_read_u16_be(const GorgetArray* arr, int64_t o
 // Write a little-endian uint32 at offset into Vector[uint8]
 static inline void gorget_bytes_write_u32_le(GorgetArray* arr, int64_t offset, int64_t value) {
     if (offset < 0 || (size_t)(offset + 4) > arr->len) {
-        fprintf(stderr, "gorget: panic: bytes_write_u32_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "bytes_write_u32_le: offset %lld out of bounds (len %zu)", (long long)offset, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     uint8_t* p = (uint8_t*)arr->data + offset;
     uint32_t v = (uint32_t)value;
@@ -189,8 +194,9 @@ static inline void gorget_bytes_write_u32_le(GorgetArray* arr, int64_t offset, i
 // Read a little-endian uint32 from offset in Vector[uint8]
 static inline int64_t gorget_bytes_read_u32_le(const GorgetArray* arr, int64_t offset) {
     if (offset < 0 || (size_t)(offset + 4) > arr->len) {
-        fprintf(stderr, "gorget: panic: bytes_read_u32_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "bytes_read_u32_le: offset %lld out of bounds (len %zu)", (long long)offset, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     const uint8_t* p = (const uint8_t*)arr->data + offset;
     return (int64_t)((uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24));
@@ -199,8 +205,9 @@ static inline int64_t gorget_bytes_read_u32_le(const GorgetArray* arr, int64_t o
 // Write a little-endian uint16 at offset
 static inline void gorget_bytes_write_u16_le(GorgetArray* arr, int64_t offset, int64_t value) {
     if (offset < 0 || (size_t)(offset + 2) > arr->len) {
-        fprintf(stderr, "gorget: panic: bytes_write_u16_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "bytes_write_u16_le: offset %lld out of bounds (len %zu)", (long long)offset, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     uint8_t* p = (uint8_t*)arr->data + offset;
     uint16_t v = (uint16_t)value;
@@ -211,8 +218,9 @@ static inline void gorget_bytes_write_u16_le(GorgetArray* arr, int64_t offset, i
 // Read a little-endian uint16 from offset
 static inline int64_t gorget_bytes_read_u16_le(const GorgetArray* arr, int64_t offset) {
     if (offset < 0 || (size_t)(offset + 2) > arr->len) {
-        fprintf(stderr, "gorget: panic: bytes_read_u16_le: offset %lld out of bounds (len %zu)\n", (long long)offset, arr->len);
-        exit(1);
+        char __gg_detail[96];
+        snprintf(__gg_detail, sizeof(__gg_detail), "bytes_read_u16_le: offset %lld out of bounds (len %zu)", (long long)offset, arr->len);
+        gorget_trap(GG_T_BOUNDS, __gg_detail);
     }
     const uint8_t* p = (const uint8_t*)arr->data + offset;
     return (int64_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
