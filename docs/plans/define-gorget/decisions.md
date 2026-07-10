@@ -152,8 +152,10 @@ language-design/book examples showing float output.
   EVERY position; its Result-ness is unobservable except at a Result-typed binding or a
   catch." Plus the diagnostic contract: the checker never says "found Result[T,E]" —
   always "this call throws E; declare `throws E` or catch it." Enforcement: ggdef models
-  the invariant; smith gains a throws-in-every-expression-position fuzz tier (leaks
-  become SPEC-DIVERGE mechanically). Retroactively reclassifies the snag-#9/#10/#13
+  the invariant; smith gains a throws-in-every-expression-position fuzz tier that
+  asserts production REJECTS each unhandled throws (an inverted rejection oracle — a
+  check-SUCCESS is a slip; ggdef's D23 rejection is an ElabError→GGDEF-SKIP, never
+  SPEC-DIVERGE). Retroactively reclassifies the snag-#9/#10/#13
   class + the expr-body asymmetry as violations of ONE rule.
 - **A31 (error composition): inferred error sets (Zig-style) as the TARGET; explicit
   From-conversion as the FALLBACK.** Scout-first: the hard core Zig doesn't have is
@@ -266,7 +268,9 @@ P1-infra reviewers' recommendation.
   throws E; declare `throws E` or handle it (catch/rethrow/Result capture)."
   NO semantic change — the virality is pre-existing; this pins coverage totality + UX.
   Enforcement rides the trap-normalization wave: ggdef models the invariant; smith gains
-  a throws-in-every-expression-position fuzz tier (leaks = SPEC-DIVERGE); a diagnostics
+  a throws-in-every-expression-position fuzz tier that asserts production REJECTS each
+  unhandled throws (an inverted rejection oracle — a check-SUCCESS is a slip; ggdef's D23
+  rejection is an ElabError→GGDEF-SKIP, never SPEC-DIVERGE); a diagnostics
   ratchet asserts no unhandled-throws message contains "Result["; reference §10.1 gains
   the sentence. Retroactively owns the seam-bug class (gorget-js snags #9/#10/#13, the
   expr-body asymmetry).
