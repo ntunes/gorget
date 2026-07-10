@@ -8,7 +8,15 @@
 > adjacency only; parent resolves at integration).
 > **Scout:** report `/tmp/scout_rr_c_report.md`, prototype `/tmp/scout_rr_c_prototype.patch`
 > (198 lines), measured end-to-end at `cab529cd`.
-> **Status:** v1 — awaiting sequential fresh-review passes.
+> **Status:** v2 — pass-1 reviewed (every claim CONFIRMED incl. byte-identical
+> trap lines, the acid-test .ll shape, and the dst-None desync removal; the C-lane
+> self-host "failures" in review were the documented 120s-timeout contention flake
+> — LLVM-lane bootstrap ran green through the patched backend, 482.9s). Two folds
+> applied: the GIR unwrap-family sibling hole NAMED + FILED HIGH in TODO (static
+> receivers of `.unwrap()`/`.expect()`/`.unwrap_or()` return the receiver — both
+> backends, garbage exit 0; the `unwrap_error` asymmetry is why only IT reached
+> the backends); gate list hardened (600s timeouts + a 6th twin pin). Awaiting
+> pass 2.
 
 ## Verified premises (scout, empirical — with a significant sharpening)
 
@@ -99,6 +107,22 @@ LLVM 11/0 · fault C 54/0 / LLVM 54/0. Logs `/tmp/scout_rr_c_*.log`.
 4. The removed `PtrTo(enum)` dst typing had NO green dependents (all reaching
    shapes were llc-broken) — re-verify with the full unwrap/fault suites.
 5. Self-host lane untouched (its combinator path is C-emit; no .gg edits).
+6. (pass-1 fold) The emit's guard must update `*current_label` to the `{pfx}.ok`
+   continuation label — load-bearing for a SECOND, emit-internal axis: same-block
+   inline-loop emitters read it as their phi predecessor (`mod.rs:4891`,
+   `:4921-4922`, …). Present in the prototype; the executor verifies it survives.
+
+## Out-of-scope sibling NAMED (pass-1 sweep finding — filed HIGH in TODO, do NOT chase here)
+
+Static/non-place-receiver `.unwrap()` / `.expect()` / `.unwrap_or()` never reach
+Tier-2a either — the GIR fallthrough `return recv` (`methods.rs:1004-1011`)
+covers the whole unwrap block for non-place receivers, so BOTH backends print
+garbage with exit 0 where `trap[T_UnwrapOnError]` etc. is normative (measured:
+`Result[int,int] R = Error(3)` static; `R.unwrap()` → C `281474133152528`, LLVM
+`187650662859424`, both exit 0). The `unwrap_error` asymmetry (it falls to the
+generic MANGLE instead of `return recv`) is why only unwrap_error's shape reached
+the backends and became R-C. The sibling fix is one layer up (GIR, shared, both
+backends at once) — its own track.
 
 ## Executor protocol (multi-agent rules in full)
 
@@ -112,13 +136,15 @@ val_types dst change).
 
 1. `cargo build`
 2. `cargo test --lib` — 1105/0
-3. `cargo test --test integration unwrap -- --test-threads=4` — 15/0, then same
-   under `GG_BACKEND=llvm --release` — 15/0
-4. `cargo test --test integration trap -- --test-threads=4` (C) and
-   `GG_BACKEND=llvm --release` — 11/0 each (skip self_host under LLVM if timeouts
-   bite; parent covers)
-5. `cargo test --test integration fault -- --test-threads=4` C AND LLVM — 54/0
-   each (the phi/label hazard lives here)
+3. `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test integration unwrap -- --test-threads=4`
+   — 15/0, then same under `GG_BACKEND=llvm --release` — 15/0 (pass-1: the 600s
+   prefix is REQUIRED on this box — the self-host-driver tests inside these
+   filters flake at the 120s default under multi-agent load)
+4. `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test integration trap -- --test-threads=4`
+   (C) and `GG_BACKEND=llvm --release` — 11/0 each (pass-1 measured the LLVM-lane
+   full set green through the patched backend, bootstrap included, 482.9s)
+5. `GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration fault -- --test-threads=4`
+   C AND LLVM — 54/0 each (the phi/label hazard lives here)
 6. The acid test transcript (loop + overflow-checked ops after the guard) on
    both backends + a diff of the two backends' stderr for the trap fixtures
    (byte-identical expected)
