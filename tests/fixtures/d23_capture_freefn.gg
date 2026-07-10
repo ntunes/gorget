@@ -1,0 +1,33 @@
+# D23 over-rejection guard (positive): a legitimate §10.3 whole-`Result` capture
+# of a free-fn `throws` call MUST still compile — the `dest_is_result` short-
+# circuit fires before the E_UnhandledThrows emit. Also exercises a `throws` fn
+# that AUTO-PROPAGATES an inner throws call.
+int risky(int x) throws String:
+    if x < 0:
+        throw "boom"
+    return x * 2
+
+# Auto-propagation: `risky(x)` in a throws fn peels to `int` (no handling needed).
+int doubler(int x) throws String:
+    int v = risky(x)
+    return v + 1
+
+void main():
+    # Whole-Result capture (§10.3) — the desugar IS observable here, by design.
+    Result[int, String] r = risky(5)
+    match r:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    Result[int, String] bad = risky(-1)
+    match bad:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    # Auto-propagated call captured at the boundary.
+    int d = doubler(4) catch (e): -1
+    print(d)

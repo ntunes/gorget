@@ -1,0 +1,10 @@
+# D23 (throws totality): a `throws` call as a BINARY OPERAND in a non-
+# propagating context is unhandled. Pre-D23 this leaked `found `Result[int,
+# String]`` (the desugar surfaced as the found type). Now: E_UnhandledThrows,
+# no desugar leak.
+int risky() throws String:
+    throw "boom"
+
+void main():
+    int x = 1 + risky()
+    print(x)

@@ -703,6 +703,64 @@ fn snag11_auto_prop_gate_site_count() {
     );
 }
 
+/// D23 (throws totality) sibling-guard ratchet (CLAUDE.md rule 4 "one fix, all
+/// siblings"). Every `throws`-carrying METHOD-return site in `infer_expr`'s
+/// `Expr::MethodCall` arm must route its return type through
+/// `resolve_throws_method_ret` (which forwards to the shared producer helper
+/// `resolve_throws_call_type`). Otherwise a `throws` method typed as bare `T`
+/// slips the totality gate → silent miscompile-to-garbage (the measured
+/// `int x = 1 + s.risky()`). The method arm has THREE dispatch paths that each
+/// return a method sig's `return_type`: the primary `resolve_method` hit, the
+/// name-based trait-default fallback, and the cross-module-equip fallback. All
+/// three are pinned here; a new method-return path added without the helper
+/// changes the count and trips this lint.
+///
+/// Also pins the producer-helper call count: exactly one FREE-FN emit site
+/// (`Expr::Call`) plus the one call inside `resolve_throws_method_ret` = 2.
+///
+/// Baseline 2026-07-10: 3 `resolve_throws_method_ret` call sites +
+/// 2 `resolve_throws_call_type` call sites.
+#[test]
+fn d23_method_throws_return_sites() {
+    const EXPECTED_METHOD_RET_SITES: usize = 3;
+    const EXPECTED_PRODUCER_CALLS: usize = 2;
+
+    let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
+    let mut method_ret_sites = 0usize;
+    let mut producer_calls = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        // `self.`-receiver calls only — excludes the `fn ...(` definitions.
+        method_ret_sites += line.matches(".resolve_throws_method_ret(").count();
+        producer_calls += line.matches(".resolve_throws_call_type(").count();
+    }
+    assert_eq!(
+        method_ret_sites, EXPECTED_METHOD_RET_SITES,
+        "D23 method throws-return site count changed: {method_ret_sites} vs \
+         {EXPECTED_METHOD_RET_SITES}.\n\n\
+         If you added a `throws`-carrying method-return site to the \
+         `Expr::MethodCall` arm (a new dispatch fallback returning a method \
+         sig's `return_type`), it MUST route through \
+         `self.resolve_throws_method_ret(def_id, &method.node, sig.return_type, \
+         suppress_auto_prop, expr.span)` — NOT return the bare `return_type` — \
+         so an unhandled `throws` method is gated (E_UnhandledThrows) instead of \
+         silently miscompiling. Then bump EXPECTED_METHOD_RET_SITES.\n\
+         If you removed one, lower it.",
+    );
+    assert_eq!(
+        producer_calls, EXPECTED_PRODUCER_CALLS,
+        "D23 producer-helper call count changed: {producer_calls} vs \
+         {EXPECTED_PRODUCER_CALLS}.\n\n\
+         `resolve_throws_call_type` is the single producer chokepoint: the \
+         free-fn `Expr::Call` emit site + the one call inside \
+         `resolve_throws_method_ret`. A new direct caller (or a removed one) \
+         changes this. Verify it's a genuine throws-producer position and bump.",
+    );
+}
+
 /// Ratchet: the number of container-literal arms in `infer_expr` must
 /// stay at the expected baseline. New arms require an audit for
 /// `decl_type_hint` propagation (see DictLiteral / TupleLiteral fixes

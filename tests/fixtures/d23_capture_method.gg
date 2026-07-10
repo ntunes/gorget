@@ -1,0 +1,34 @@
+# D23 over-rejection guard (positive) — the METHOD path is the newly-wired code,
+# so guard it directly: a whole-`Result` capture of a `throws` EQUIP METHOD
+# (`Result[int, String] r = s.risky()`) MUST still compile (the `dest_is_result`
+# short-circuit fires before the E_UnhandledThrows emit). Also exercises the
+# `catch` handling path on the method.
+struct S:
+    int v
+
+equip S:
+    int risky(self) throws String:
+        if self.v < 0:
+            throw "boom"
+        return self.v * 3
+
+void main():
+    S ok = S(4)
+    Result[int, String] r = ok.risky()
+    match r:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    S bad = S(-1)
+    Result[int, String] r2 = bad.risky()
+    match r2:
+        case Ok(v):
+            print(v)
+        case Error(e):
+            print(e)
+
+    # Handled via catch — still fine.
+    int c = ok.risky() catch (e): -1
+    print(c)

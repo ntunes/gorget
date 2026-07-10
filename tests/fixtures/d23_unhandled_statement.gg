@@ -1,0 +1,10 @@
+# D23 (LOAD-BEARING, invariant #8): a `throws` call as a BARE STATEMENT
+# (discarded), in a non-propagating context. Pre-D23 this SILENTLY SWALLOWED the
+# error (no diagnostic; ran and printed "done"). Now it must REJECT with
+# E_UnhandledThrows.
+int risky() throws String:
+    throw "boom"
+
+void main():
+    risky()
+    print("done")

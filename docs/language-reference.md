@@ -2415,6 +2415,8 @@ Data process(String path) throws AppError:
 
 Inside a `throws` function (or any function returning `Result`), calls to other throwing or `Result`-returning functions **auto-propagate** errors — if the callee fails, the caller immediately returns the error. No explicit unwrapping is needed; the compiler inserts the unwrap automatically.
 
+A `throws` call is an expression of type `T` in **every** position — its `Result[T, E]` desugar is never observable. In a `throws` (or `Result`-returning) function the error auto-propagates; anywhere else you must handle it with `catch`, `rethrow`, or by binding to a `Result[T, E]` (§10.3). A `throws` call whose error is neither propagated nor handled is a compile-time error (`E_UnhandledThrows`) — never a silently-typed `Result`. This holds uniformly across all positions (binding, binary operand, call argument, `return`/expression-body tail, match scrutinee or arm, bare statement) and for both free functions and methods.
+
 ### 10.2 Throw
 
 The `throw` keyword explicitly raises an error:

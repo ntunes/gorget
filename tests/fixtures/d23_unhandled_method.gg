@@ -1,0 +1,18 @@
+# D23 (LOAD-BEARING, invariant #8 — the WORST pre-D23 mode): a `throws` EQUIP
+# METHOD call in an unhandled position. Pre-D23 `s.risky()` typed as bare `int`
+# (throws-ness dropped entirely), so `int x = 1 + s.risky()` PASSED `gg check`
+# and produced GARBAGE at runtime (measured `x=281473914366657`) — a silent
+# miscompile from safe code. Now it must REJECT with E_UnhandledThrows.
+struct S:
+    int v
+
+equip S:
+    int risky(self) throws String:
+        if self.v > 0:
+            throw "boom"
+        return 5
+
+void main():
+    S s = S(3)
+    int x = 1 + s.risky()
+    print(x)

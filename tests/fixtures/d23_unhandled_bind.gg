@@ -1,0 +1,8 @@
+# D23: a `throws` call bound to a plain `T` (not `Result[T, E]`) in a non-
+# propagating context is unhandled. Pre-D23 leaked `found `Result[`.
+int risky() throws String:
+    throw "boom"
+
+void main():
+    int x = risky()
+    print(x)

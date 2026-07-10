@@ -1,0 +1,9 @@
+# D23: a cross-module `throws` equip method called in an unhandled position must
+# REJECT with E_UnhandledThrows (no `found `Result[` leak). Pre-D23 the method's
+# throws-ness was dropped → silent miscompile-to-garbage.
+from calc import Calc
+
+void main():
+    Calc c = Calc(10)
+    int x = 1 + c.risky(5)
+    print(x)

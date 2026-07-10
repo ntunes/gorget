@@ -2005,39 +2005,18 @@ impl<'a> TypeChecker<'a> {
                             //     raw-vs-peeled compare differs — is never
                             //     peeled, leaving `make(1) == make(1)` unchanged.)
                             // In a NON-propagating context the call cannot
-                            // propagate, so it stays `Result[T, E]` and the
-                            // user must handle it explicitly (`catch`, or a
-                            // `Result`-typed binding).
-                            match self.scopes.lookup("Result") {
-                                Some(result_def_id) => {
-                                    let raw_result = self.types.intern_generic(
-                                        result_def_id,
-                                        vec![return_type, err_ty],
-                                    );
-                                    let dest_is_result = self
-                                        .decl_type_hint
-                                        .map_or(false, |h| self.type_is_result(h));
-                                    if !suppress_auto_prop
-                                        && !dest_is_result
-                                        && self.current_fn_can_propagate()
-                                    {
-                                        // Snag #11: this is Route A — the
-                                        // producer-peel actually fires here.
-                                        // Gate the callee-E (`err_ty`) against
-                                        // the caller-E before discarding it:
-                                        // same → no-op; convertible → record a
-                                        // `From`; otherwise emit the teaching
-                                        // error. Keyed on the call expr span so
-                                        // the lowering's `lower_expr` hook reads
-                                        // the same key.
-                                        self.auto_prop_error_gate(err_ty, expr.span);
-                                        return_type
-                                    } else {
-                                        raw_result
-                                    }
-                                }
-                                None => return_type,
-                            }
+                            // propagate, so the error is unhandled — D23 emits
+                            // `E_UnhandledThrows` at the producer (below) rather
+                            // than letting the raw `Result[T, E]` leak into a
+                            // downstream `unify`. Shared with the method path via
+                            // `resolve_throws_call_type` (fix the class, not the
+                            // instance).
+                            self.resolve_throws_call_type(
+                                return_type,
+                                err_ty,
+                                suppress_auto_prop,
+                                expr.span,
+                            )
                         } else {
                             return_type
                         }
@@ -2419,8 +2398,17 @@ impl<'a> TypeChecker<'a> {
                     // Record the method call's own type so downstream consumers
                     // (generic method-instance discovery, borrow checker) can
                     // resolve chained call receivers back to concrete types.
-                    self.expr_types.insert(expr.span, sig.return_type);
-                    sig.return_type
+                    // D23: route a `throws` method through the producer helper
+                    // (was: bare `sig.return_type` → the silent miscompile).
+                    let ret = self.resolve_throws_method_ret(
+                        stored_def_id,
+                        &method.node,
+                        sig.return_type,
+                        suppress_auto_prop,
+                        expr.span,
+                    );
+                    self.expr_types.insert(expr.span, ret);
+                    ret
                 } else {
                     // Name-based trait-default fallback FIRST — for generic-
                     // template impls (`equip [T] VectorIter[T]:`) whose
@@ -2462,7 +2450,18 @@ impl<'a> TypeChecker<'a> {
                             let arg_type = self.infer_expr(&arg.node.value);
                             self.unify(param_type, arg_type, arg.span);
                         }
-                        let ret = sig.return_type;
+                        // D23: route through the producer helper. `def_id` here
+                        // is the TRAIT def_id (resolve_method_by_name returns
+                        // `trait_info.def_id` for a default) — the helper reads
+                        // the default's throws from the trait's
+                        // `DefaultMethodSig` (keyed by method name).
+                        let ret = self.resolve_throws_method_ret(
+                            def_id,
+                            &method.node,
+                            sig.return_type,
+                            suppress_auto_prop,
+                            expr.span,
+                        );
                         self.expr_types.insert(expr.span, ret);
                         return ret;
                     }
@@ -2519,8 +2518,22 @@ impl<'a> TypeChecker<'a> {
                             // Name-based fallback for cross-module equip methods
                             // where TypeId doesn't match.
                             if let Some(ref name) = base_name {
-                                if let Some((_def_id, sig)) = self.traits.resolve_method_by_name(name, &method.node) {
-                                    let ret = sig.return_type;
+                                if let Some((def_id, sig)) = self.traits.resolve_method_by_name(name, &method.node) {
+                                    // D23: for a concrete cross-module equip
+                                    // method `def_id` is the equip-method def_id
+                                    // (a `function_info` key with throws) — route
+                                    // through the producer helper. (For a trait-
+                                    // default it is the trait def_id, and the
+                                    // helper reads throws from the trait's
+                                    // `DefaultMethodSig`.)
+                                    let (def_id, ret_ty) = (*def_id, sig.return_type);
+                                    let ret = self.resolve_throws_method_ret(
+                                        def_id,
+                                        &method.node,
+                                        ret_ty,
+                                        suppress_auto_prop,
+                                        expr.span,
+                                    );
                                     self.expr_types.insert(expr.span, ret);
                                     ret
                                 } else {
@@ -3767,6 +3780,20 @@ impl<'a> TypeChecker<'a> {
 
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = declared_type;
+                // D23: `auto r = throws_call()` in a NON-propagating context
+                // captures the whole `Result[T, E]` (the inferred binding takes
+                // whatever the RHS produces; the user then handles it with a
+                // `match Ok/Error`). Signal the throws-call producer to keep the
+                // raw Result — the same one-shot `suppress_auto_prop` a
+                // match-scrutinee-with-Result-arms uses. In a PROPAGATING context
+                // we leave it unset so the call still auto-propagates (peels to
+                // `T`), preserving pre-D23 behavior. The flag is consumed at
+                // `infer_expr`'s top, so a throws call NESTED in a larger `auto`
+                // RHS (`auto x = 1 + risky()`) still sees no suppression and is
+                // correctly rejected as unhandled.
+                if matches!(&type_.node, Type::Inferred) && !self.current_fn_can_propagate() {
+                    self.suppress_auto_prop = true;
+                }
                 let value_type = self.infer_expr(value);
                 self.decl_type_hint = prev_hint;
 
@@ -3891,41 +3918,13 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 if let Some(expr) = expr {
-                    let prev_hint = self.decl_type_hint;
-                    self.decl_type_hint = self.current_return_type;
-                    let expr_type = self.infer_expr(expr);
-                    self.decl_type_hint = prev_hint;
-                    if let Some(ret_type) = self.current_return_type {
-                        // Snag #36: `return throws_fn(...)` from inside a
-                        // throws function should auto-propagate just like
-                        // `T x = throws_fn(...)` does. Same policy as
-                        // `Stmt::VarDecl` / `Stmt::Assign` / call-arg
-                        // passing: skip unify when the destination type
-                        // (here the function's declared return type)
-                        // matches the value's Ok type (auto-prop, with the
-                        // enclosing function's throws/Result-returning
-                        // gating that's already in
-                        // `is_auto_propagation_compatible`) OR when the
-                        // destination IS the wrapping Result[T, E]
-                        // (return-Result-typed function capturing the
-                        // whole Result directly).
-                        //
-                        // `is_collection_assignment`: mirror the
-                        // `Stmt::VarDecl` arm so `Vector[int] f(): return
-                        // [1, 2, 3]` (and `Set`/`Dict`) accepts a bare
-                        // collection literal in return position exactly
-                        // as `Vector[int] v = [1, 2, 3]` does in a
-                        // VarDecl. The `decl_type_hint` is already set to
-                        // the return type above; without this guard the
-                        // literal types as `int[N]` and fails to unify
-                        // with the declared collection return type.
-                        if !self.is_collection_assignment(ret_type, expr_type)
-                            && !self.auto_prop_skips_unify(ret_type, expr_type, expr.span)
-                            && !self.is_result_capture_compatible(ret_type, expr_type)
-                        {
-                            self.unify(ret_type, expr_type, expr.span);
-                        }
-                    }
+                    // Snag #36 + D23 §5.1: `return throws_fn(...)` auto-propagates
+                    // / captures just like `T x = throws_fn(...)`. Shared with the
+                    // expression-body tail via `check_return_value` — the guards
+                    // (auto-prop skip, collection-literal, whole-`Result` capture)
+                    // and the return-type hint live in one place so the two return
+                    // forms can't drift.
+                    self.check_return_value(self.current_return_type, expr);
                 }
             }
 
@@ -5223,6 +5222,163 @@ impl<'a> TypeChecker<'a> {
     /// centralized throws-fn-call peel (the producer-side Result→T inversion)
     /// and the legacy `is_auto_propagation_compatible` consumer guards share
     /// one source of truth.
+    /// D23 (throws totality): resolve the observable type of a `throws` call at
+    /// a consuming position. A `throws` call is an expression of type `T` in
+    /// EVERY position; its `Result[T, E]` desugar is never observable. This is
+    /// the single PRODUCER chokepoint shared by the free-fn (`Expr::Call`) and
+    /// method (`Expr::MethodCall`) paths — "fix the class, not the instance"
+    /// (CLAUDE.md). Three disjoint outcomes:
+    ///   - legit whole-`Result` positions (`Result[T,E]` capture per §10.3,
+    ///     match-scrutinee-with-`Result`-arms, `catch`/`rethrow` inner) keep the
+    ///     raw `Result[T, E]` — UNCHANGED;
+    ///   - a propagating context (enclosing fn is `throws`/`Result`-returning)
+    ///     peels to `T` (Route A), gating the callee-`E` against the caller-`E`;
+    ///   - anywhere else the error is UNHANDLED → emit `E_UnhandledThrows` and
+    ///     return `error_id`, which unifies with anything so the downstream
+    ///     `unify` stays silent (collapses the 1-2-error cascade to ONE clean
+    ///     diagnostic instead of leaking `found `Result[` / silently swallowing
+    ///     / silently miscompiling).
+    ///
+    /// PRESERVES the `match self.scopes.lookup("Result") { … None => return_type }`
+    /// fallback so a build where `Result` is out of scope does not regress.
+    fn resolve_throws_call_type(
+        &mut self,
+        return_type: TypeId,
+        err_ty: TypeId,
+        suppress_auto_prop: bool,
+        span: Span,
+    ) -> TypeId {
+        match self.scopes.lookup("Result") {
+            Some(result_def_id) => {
+                let raw_result = self
+                    .types
+                    .intern_generic(result_def_id, vec![return_type, err_ty]);
+                let dest_is_result = self
+                    .decl_type_hint
+                    .map_or(false, |h| self.type_is_result(h));
+                if suppress_auto_prop || dest_is_result {
+                    // Legit whole-Result position — capture / scrutinee /
+                    // catch / rethrow. Unchanged from pre-D23.
+                    raw_result
+                } else if self.current_fn_can_propagate() {
+                    // Route A: the producer-peel fires. Gate the callee-E
+                    // against the caller-E before discarding it.
+                    self.auto_prop_error_gate(err_ty, span);
+                    return_type
+                } else {
+                    // Unhandled throws: neither propagated nor handled. Emit the
+                    // one clean D23 diagnostic; return error_id so the downstream
+                    // unify short-circuits (no desugar leak, no swallow).
+                    self.error(
+                        SemanticErrorKind::UnhandledThrows {
+                            throws_type: self.describe_resolved_type(err_ty),
+                        },
+                        span,
+                    );
+                    self.types.error_id
+                }
+            }
+            None => return_type,
+        }
+    }
+
+    /// Method-path adapter for `resolve_throws_call_type` (D23). Resolves the
+    /// callee method's `throws E` and routes a throws method call through the
+    /// shared producer helper; a non-throws method keeps its bare `return_type`.
+    /// Called at EACH throws-carrying method-return site (the primary,
+    /// trait-default, and cross-module-equip dispatch paths) so the totality
+    /// gate is uniform — the `method_throws_return_sites` arm-count lint pins
+    /// the site count so a new method-return site can't silently reintroduce
+    /// the pre-D23 hole (a `throws` method typed as bare `T` → silent
+    /// miscompile-to-garbage, the measured `int x = 1 + s.risky()`).
+    ///
+    /// Two throws sources, because trait methods and equip methods register
+    /// through different passes:
+    ///   1. CONCRETE equip/extern methods — `throws_type_id` is in
+    ///      `function_info` (`resolve.rs:745`/`812`), keyed by the equip-method
+    ///      def_id. Reachable at the PRIMARY site (`resolve_method` returns the
+    ///      equip-method def_id) and the CROSS-MODULE site
+    ///      (`resolve_method_by_name` likewise).
+    ///   2. TRAIT-DEFAULT methods — BOTH `resolve_method` and
+    ///      `resolve_method_by_name` return the *trait* def_id
+    ///      (`traits.rs:199`/`297`), which is NOT a `function_info` key, so (1)
+    ///      yields None. The default's throws clause is carried (as AST, for
+    ///      call-site `Self`/`T` substitution) in the trait's `DefaultMethodSig`
+    ///      — resolve it here. Without this a trait-default that *itself* throws
+    ///      would slip the gate → silent miscompile-to-garbage (measured, and
+    ///      pinned by `d23_unhandled_method_traitdefault.gg`).
+    fn resolve_throws_method_ret(
+        &mut self,
+        method_def_id: DefId,
+        method_name: &str,
+        return_type: TypeId,
+        suppress_auto_prop: bool,
+        span: Span,
+    ) -> TypeId {
+        // (1) Concrete equip/extern method.
+        let mut err_ty = self
+            .function_info
+            .get(&method_def_id)
+            .and_then(|fi| fi.throws_type_id);
+        // (2) Trait-default method: `method_def_id` is the trait def_id here.
+        if err_ty.is_none() {
+            if let Some(throws_ast) = self
+                .traits
+                .traits
+                .get(&method_def_id)
+                .and_then(|ti| ti.default_method_sigs.get(method_name))
+                .and_then(|ds| ds.throws_ast.clone())
+            {
+                err_ty = super::types::ast_type_to_resolved(
+                    &throws_ast,
+                    span,
+                    self.scopes,
+                    self.types,
+                )
+                .ok();
+            }
+        }
+        match err_ty {
+            Some(e) => self.resolve_throws_call_type(return_type, e, suppress_auto_prop, span),
+            None => return_type,
+        }
+    }
+
+    /// Shared return-value check for BOTH `Stmt::Return` (block body) and an
+    /// expression-body function tail. Reference §5.1: an expression body is
+    /// "equivalent to a block body with `return`", so the two must type the
+    /// tail identically — folding them here kills the sibling-drift class (the
+    /// expr-body arm historically skipped the return-type hint + the auto-prop/
+    /// capture guards, so a `throws` tail leaked instead of peeling/capturing).
+    ///
+    /// Sets the declared return type as the inference hint (so a throws call
+    /// peels/captures against it and a bare collection/`Result` literal resolves
+    /// against it), then unifies UNLESS the value is an auto-propagated throws
+    /// result, a collection-literal assignment, or a legitimate whole-`Result`
+    /// capture (§10.3). Returns the inferred tail type (callers use it, e.g. for
+    /// the expr-body noreturn check). `return_type` is `Option` because a bare
+    /// `return` in a context with no declared return type has none — matching
+    /// the pre-fold `Stmt::Return` behavior (infer with no hint, skip unify).
+    fn check_return_value(
+        &mut self,
+        return_type: Option<TypeId>,
+        expr: &Spanned<Expr>,
+    ) -> TypeId {
+        let prev_hint = self.decl_type_hint;
+        self.decl_type_hint = return_type;
+        let expr_type = self.infer_expr(expr);
+        self.decl_type_hint = prev_hint;
+        if let Some(ret_type) = return_type {
+            if !self.is_collection_assignment(ret_type, expr_type)
+                && !self.auto_prop_skips_unify(ret_type, expr_type, expr.span)
+                && !self.is_result_capture_compatible(ret_type, expr_type)
+            {
+                self.unify(ret_type, expr_type, expr.span);
+            }
+        }
+        expr_type
+    }
+
     fn current_fn_can_propagate(&self) -> bool {
         if self.current_function_throws {
             return true;
@@ -6997,8 +7153,15 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             FunctionBody::Expression(expr) => {
-                let expr_type = self.infer_expr(expr);
-                self.unify(return_type, expr_type, expr.span);
+                // D23 §5.1: an expression body is equivalent to a block body
+                // with `return`, so type the tail through the SAME path as
+                // `Stmt::Return` — set the declared return type as the hint and
+                // apply the auto-prop / collection / whole-`Result`-capture
+                // guards. Widening: an expr-body `throws` tail now peels
+                // (propagating context) / captures (`Result`-typed return) /
+                // rejects with `E_UnhandledThrows` exactly as the block-body
+                // form does, instead of the old unconditional `unify` that leaked.
+                let expr_type = self.check_return_value(Some(return_type), expr);
                 // Expression-bodied noreturn: the body must itself diverge
                 // (type `Never`) — `noreturn void e(): print(1)` is the same
                 // lie-path as a block body that falls off the end.

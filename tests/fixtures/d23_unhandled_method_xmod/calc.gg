@@ -1,0 +1,10 @@
+# D23 fallback-path gate (module 2): a concrete equip `throws` method, imported
+# across a module boundary. Exercises the cross-module method-dispatch path.
+struct Calc:
+    int base
+
+equip Calc:
+    int risky(self, int x) throws String:
+        if x < 0:
+            throw "negative"
+        return self.base + x

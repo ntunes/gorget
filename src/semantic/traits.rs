@@ -55,6 +55,13 @@ pub struct DefaultMethodSig {
     pub param_types: Vec<Type>,
     /// AST return type.
     pub return_type: Type,
+    /// AST `throws E` clause (the error type `E`), if the default method is
+    /// `throws`. Kept as AST — like `return_type`/`param_types` — so it can be
+    /// resolved (and `Self`/trait-`T`-substituted) at the call site. D23: this
+    /// is the ONLY place a trait-DEFAULT method's throws is reachable by the
+    /// call-site totality gate, because `resolve_method`/`resolve_method_by_name`
+    /// hand back the *trait* def_id for a default (not a `function_info` key).
+    pub throws_ast: Option<Type>,
     /// Per-non-self-param ownership sigils.
     pub param_ownerships: Vec<Ownership>,
     pub has_self: bool,
@@ -949,6 +956,7 @@ pub fn build_default_method_sig(func: &FunctionDef) -> DefaultMethodSig {
         method_generic_params,
         param_types,
         return_type: func.return_type.node.clone(),
+        throws_ast: func.throws.as_ref().map(|t| t.node.clone()),
         param_ownerships,
         has_self,
         self_ownership,

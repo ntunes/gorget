@@ -3,13 +3,15 @@
 # `Result[T, E]`) is a compile error.
 #
 # Before Snag #35 was fixed, this typechecked silently and the IR
-# lowering coerced a Result handle into the int slot → C-level
-# pointer/int garbage at runtime.
+# lowering coerced a Result handle into the int slot -> C-level
+# pointer/int garbage at runtime. Under D23 the diagnostic is
+# E_UnhandledThrows (it no longer surfaces the Result desugar as the
+# found type).
 
 int might(int x) throws String:
     return x * 2
 
 int main():
-    int n = might(5)   # ERROR: type mismatch: expected `int`, found `Result[int, String]`
+    int n = might(5)   # ERROR: unhandled throws (declare `throws`, or capture/catch)
     print(f"n={n}")
     return 0
