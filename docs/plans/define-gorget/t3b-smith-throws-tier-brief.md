@@ -31,12 +31,13 @@ remove/handle the single unhandled throws.
 
 ## Owner-question rulings (decided; execute these)
 - **Q1/Q2:** T3b ships as a rejection tier (owner chose it; value = combinatorial hardening).
-- **Q3 (docs write-through — DO IT):** `decisions.md` LOG (~:269, the D23 entry) currently says the
-  smith enforcement is "leaks = SPEC-DIVERGE." That mechanism is now STALE: production REJECTS
-  post-T3a, and ggdef's D23 = ElabError → smith GGDEF-SKIP, never SPEC-DIVERGE. Correct that sentence
-  to the real mechanism: "the smith throws-position tier asserts production REJECTS each unhandled
-  throws (an inverted rejection oracle); a check-SUCCESS is a slip." (One-sentence LOG fix — do NOT
-  rewrite the ratified decision, just the enforcement-mechanism clause.)
+- **Q3 (docs write-through — DO IT):** `decisions.md` says the smith enforcement is "leaks =
+  SPEC-DIVERGE" at **BOTH** occurrences (grep `SPEC-DIVERGE`): `~:155-156` (A30/D23 open-queue entry)
+  AND `~:269` (D23 LOG entry). That mechanism is now STALE: production REJECTS post-T3a, and ggdef's
+  D23 = ElabError → smith GGDEF-SKIP, never SPEC-DIVERGE. Correct BOTH to the real mechanism: "the
+  smith throws-position tier asserts production REJECTS each unhandled throws (an inverted rejection
+  oracle); a check-SUCCESS is a slip." (The same one-sentence mechanism-clause fix at both
+  occurrences — do NOT rewrite the ratified decision; see W3 for the full instruction.)
 - **Q4:** a slip (production ACCEPTS an unhandled-throws program) = a DEDICATED non-benign verdict
   `Verdict::UnhandledThrowsSlip`, NOT `GenInvalid` (a slip is a real T3a hole; it must stand out).
 - **Q5:** the PASS assertion mirrors `check_gg_fails_no_desugar` (`tests/integration.rs:~7208-7239`):
@@ -80,36 +81,53 @@ remove/handle the single unhandled throws.
   cleanly surface; include it (or consciously omit with a one-line note — do not silently drop it).
 
 ### W2 — the inverted oracle (`tests/smith/main.rs` `classify`)
-For the throws-position tier ONLY, `classify` produces one of FOUR outcomes — **name ALL four as
-`Verdict` variants with an explicit `is_benign` classification** (`is_benign` is currently
-`Match | GgdefSkip` at `main.rs:312-314`; a benign verdict gets its repro dir removed at `:743-744`
-and lets the batch print "all seeds benign" at `:923-925` — so the PASS verdict MUST be benign or
-every passing seed lands in `suspicious`/`gen_invalid` and the report never goes green):
-1. **PASS** — `gg check` FAILS with stderr citing `throws`/`E_UnhandledThrows` and NO `found \`Result[`
-   leak (Q5, mirror `check_gg_fails_no_desugar`) → new **`Verdict::UnhandledThrowsRejected`**, wired
-   into `is_benign` (**`Match | GgdefSkip | UnhandledThrowsRejected`**) so it's quiet + repro-removed +
-   counts toward all-benign. (This is the load-bearing verdict — without the `is_benign` wiring the
-   report never greens.)
-2. **SLIP** — `gg check` SUCCEEDS (production wrongly accepted an unhandled throws — a real T3a hole)
-   → new **`Verdict::UnhandledThrowsSlip`**, NON-benign, listed, blocks the all-benign report.
-3. **LEAK** — `gg check` fails but stderr contains `found \`Result[` (correctly rejected, but the
-   message leaks the desugar — a diagnostic regression, distinct from a slip) → new
-   **`Verdict::ThrowsDesugarLeak`**, NON-benign, listed. (Do NOT fold into SLIP — the program WAS
-   rejected; only the message regressed.)
-4. **GEN-INVALID** — `gg check` fails for an UNRELATED reason (no `throws`/`E_UnhandledThrows` in
-   stderr → the generated program was malformed for some other reason, a generator bug) → the
-   EXISTING `Verdict::GenInvalid`.
-- Add the two new NON-benign variants (`UnhandledThrowsSlip`, `ThrowsDesugarLeak`) + the benign
-  `UnhandledThrowsRejected` to the `Verdict` enum, `is_benign`, and the report/listing paths (mirror
-  how `GenInvalid` is listed at `:893` + blocks the report at `:923-925`).
+For the throws-position tier ONLY, `classify` maps to one of four `Verdict`s via an **ORDERED
+decision tree** (order matters — the predicates OVERLAP; see the R2 hazard below):
+```
+gg check SUCCEEDS                                  → Verdict::UnhandledThrowsSlip   (production wrongly accepted an unhandled throws = a real T3a hole)
+gg check FAILS:
+    stderr contains "found `Result["               → Verdict::ThrowsDesugarLeak     (CHECK THIS FIRST)
+    stderr cites throws / E_UnhandledThrows        → Verdict::UnhandledThrowsRejected (the PASS)
+    else                                           → Verdict::GenInvalid            (rejected for an unrelated reason = a generator bug)
+```
+- **⚠ R2 — LEAK MUST be checked BEFORE the throws/GEN-INVALID arms.** A desugar leak is a plain
+  type-mismatch diagnostic (`type mismatch: expected \`int\`, found \`Result[int, String]\``, cf.
+  `integration.rs:~4937`) that need NOT contain the word `throws`. So a real leak satisfies BOTH
+  "found \`Result[`" AND "no throws" — if GEN-INVALID were checked first, a real compiler leak would
+  be mislabeled a generator bug (and silently pass the "ZERO spurious GenInvalid" criterion while the
+  leak hides). Evaluating `found \`Result[` first routes it to the non-benign `ThrowsDesugarLeak`.
+- **⚠ R1 — there are TWO independent benign-gating sites; wire the PASS verdict into BOTH.** (i)
+  `is_benign()` at `main.rs:312-314` (currently `Match | GgdefSkip`) governs repro-dir removal
+  (`:743-744`) + progressive-print suppression (`:768`). (ii) a SEPARATE categorization `match` at
+  `:887-895` populates `suspicious`/`gen_invalid`, whose emptiness is the actual all-benign green gate
+  (`:923`), and it has a `_ => suspicious.push(*seed)` catch-all at `:894`. So:
+  - `UnhandledThrowsRejected` (benign PASS): add it to `is_benign` (`Match | GgdefSkip | UnhandledThrowsRejected`)
+    AND add a **no-op arm `Verdict::UnhandledThrowsRejected => {}`** at `:887-895` (mirror the `Match`
+    arm) so the `_ =>` catch-all does NOT sweep it into `suspicious`. WITHOUT the no-op arm the report
+    never greens even with `is_benign` wired.
+  - `UnhandledThrowsSlip` + `ThrowsDesugarLeak` (non-benign, must BLOCK): they correctly fall through
+    the `_ => suspicious.push` catch-all (blocking) — but add explicit arms pushing to distinct lists
+    (or a labeled `suspicious` entry) so the report DISTINGUISHES a slip from a leak (the acceptance
+    criterion counts them separately). Do NOT add them to `is_benign`.
 - SKIP the ggdef/build/self-host/LLVM lanes for this tier (check-only, Q6). **⚠ The self-host driver
-  build is a SEPARATE unconditional call at `main.rs:875` (`let _ = driver_paths();`, which PANICS if
-  the build fails, `:242-246`) OUTSIDE `classify` — an in-`classify` lane-skip does NOT skip it.**
-  Gate that call on `cfg.tier != <throws-tier>` so the check-only tier doesn't pay the ~57s build (or
-  spuriously panic if the self-host driver is broken for an unrelated reason).
+  build has TWO call sites: an unconditional `let _ = driver_paths();` at `main.rs:875` (which PANICS
+  on build failure/timeout, `:242-259`) AND a call inside `classify` at `~:624` (the self-host lane).
+  The throws-tier early-return in `classify` avoids `:624`, but you MUST ALSO gate the `:875` call on
+  `cfg.tier != <throws-tier>`** — else the check-only tier still pays the ~57s build (or spuriously
+  panics if the self-host driver is broken for an unrelated reason; the panic region is the timeout
+  `panic!` at `:242-246` + the build-failure `assert!` at `:247-252`).
 
 ### W3 — docs write-through (Q3)
-- Correct the stale enforcement-mechanism clause in `decisions.md` (~:269, D23 LOG entry) per Q3.
+- Correct the stale "leaks = SPEC-DIVERGE" enforcement-mechanism clause in `decisions.md` at **BOTH**
+  occurrences (it appears twice — grep `SPEC-DIVERGE`): **(a) the OPEN-queue A30/D23 entry `~:155-156`**
+  ("smith gains a throws-in-every-expression-position fuzz tier (leaks become SPEC-DIVERGE
+  mechanically)") AND **(b) the D23 LOG entry `~:269`** ("leaks = SPEC-DIVERGE"). Post-T3a the real
+  mechanism is: production REJECTS each unhandled throws; the smith throws-position tier asserts that
+  rejection via an INVERTED oracle (a check-SUCCESS is a slip; a `found \`Result[` leak is a distinct
+  regression) — ggdef's D23 is an ElabError→GGDEF-SKIP, never SPEC-DIVERGE. Apply the same one-sentence
+  mechanism correction to each so the ledger doesn't self-contradict. (Do NOT rewrite the ratified
+  decision — just the enforcement-mechanism clause; the A30 entry is already annotated post-ratification
+  with the `→ RATIFIED … as D23` prefix, so it's a live record, not a frozen proposal.)
 
 ### W4 — file the T3c follow-up (Q7)
 - Add a TODO entry (Medium): a POSITIVE throws differential smith tier (T3c) — generate programs with
