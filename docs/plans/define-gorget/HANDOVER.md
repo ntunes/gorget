@@ -22,6 +22,24 @@ sequential fresh-review gauntlet.
 
 ## Current state (update this section IN PLACE as work lands)
 
+- **⚡ ENFORCEMENT WAVE — IN PROGRESS (started 2026-07-10).** Order: trap-normalization+D23 →
+  D12 → D10 → D13/D14/D17 → riders. Trap-normalization is SLICED **T1 (ggdef definition) →
+  T2a (production registry+emit) → T2b (runtime-lib fold + bounds REAL locations)**; D23 is the
+  DISJOINT parallel track **T3a (diagnostic+method+expr-body) + T3b (smith tier)**.
+  - **T1 LANDED** (merge `d412990a`): ggdef `Fault`→closed 8-variant `TrapKind` (`code()`→`T_<Variant>`
+    exhaustive-ratchet + `is_catchable()` = §10.9 subset), the 3 missing classes (assert/panic/
+    unwrap_error) as typed GGC nodes, `trap:` frontmatter (`trap ⟺ exit 101`), `adjudicate` compares
+    **T_ code + exit 101 ONLY** (detail impl-defined), `spec/prose/trap-codes.md`, 8 ggdef-generated
+    fixtures. Production lanes MISMATCH by design until T2 (floors STAY 187). Regenerate:
+    `cargo test -p ggdef` + `GG_BUILD_TIMEOUT_SECS=600 cargo test --test spec_conformance -- --test-threads=1 --nocapture`.
+  - **OWNER RULINGS this wave:** bounds traps get REAL source locations (T2b, not `<unknown>:0:0`);
+    conformance compares code+exit only; ggdef DUPLICATES the registry (parity lint in T2a).
+  - **NEXT:** T2a (new `src/trap.rs` closed `TrapKind` mirroring ggdef's + `gorget_trap_at` runtime
+    entry + reroute compiler-emit sites + both-backend `gorget_panic`→`gorget_trap_at` rewrite +
+    parity lint) → T2b. T3a executing in parallel. Then D12 blast-radius scout.
+  - **D23 dogfood-severity finding (T3a scout):** throws METHOD calls SILENTLY MISCOMPILE today
+    (`1 + s.risky()` passes `gg check`, prints garbage) — invariant-#8; T3a's method fix closes it
+    (turns garbage into an `E_UnhandledThrows` reject). Brief cleared 3-pass gauntlet; executing.
 - **Decisions D1–D8**: all recorded in `decisions.md` with rationale. Do not relitigate; do
   bring NEW decision needs to the owner as option-questions (owner directive: ask along the
   way, with recommendations and previews).
