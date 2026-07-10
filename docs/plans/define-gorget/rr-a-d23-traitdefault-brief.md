@@ -87,6 +87,18 @@ trait 40/1 · import 14/1 — the two failures are the SAME self-host-driver
 120s-timeout flake under box contention; both PASS at 600s (146.56s/148.57s
 measured). Executor MUST run those suites with `GG_BUILD_TIMEOUT_SECS=600`.
 
+## ⚠ Sequencing directive (from R-D pass-3, orchestrator-ratified): R-D lands FIRST
+
+R-D's landed change REMOVES the `expect` parameter from `check_gg_fails_no_desugar`
+and its dir variant — both now assert only the exact `error[E_UnhandledThrows]`
+code (+ no-leak). Consequences for THIS track's executor: (1) wire the new negative
+fixtures against the FINAL no-expect harness; (2) the concrete-name assertions the
+fixtures require (`CalcError`, `String` — no `<error>`) CANNOT be expressed through
+that harness — use a separate mechanism (`check_gg_fails` with the full distinctive
+message, or the harness call PLUS an explicit stderr-contains assert); (3) read
+gate counts as baseline+delta over the post-R-D tree (lints 52 after R-D → 53 with
+this track's new lint).
+
 ## Fixtures to add (all assert CONCRETE names — no `<error>`, no `Result[` leak)
 
 1. `d23_unhandled_method_traitdefault_xmod/` — negative, asserts `CalcError` in stderr.
