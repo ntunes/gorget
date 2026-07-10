@@ -5069,3 +5069,95 @@ fn raw_trap_exit_sites_ratchet() {
          BoundsCheck (T2b), DivCheck, Inst::Trap, and the InlineC fatal fallback.",
     );
 }
+
+/// D11 self-host trap-code parity ratchet (T2a-selfhost). The self-host lowerer
+/// HAND-SPELLS the `T_<Code>` strings as string literals at its `gorget_trap(…)`
+/// emit sites — it cannot import Rust's `gorget::trap::TrapKind`, so nothing but
+/// this lint keeps the two sides in agreement (layering rule 2: the code is
+/// typed data on the Rust side; this is the cross-language mitigation on the
+/// `.gg` side). The codes live in `lir_codegen.gg` (inline C-string arith +
+/// unwrap guards, mechanism A) and `lower_expr.gg` / `lower_stmt.gg`
+/// (GICallExtern reroutes, mechanism B). This lint pins them WITHOUT a
+/// hand-synced Rust-side list:
+///   (a) every quoted `"T_<Ident>"` the self-host emits is a REAL
+///       `gorget::trap::TrapKind::code()` — catches a typo (`"T_Overlfow"`) or a
+///       code retired on the Rust side.
+///   (b) all 7 non-Bounds codes appear at least once — catches a direct trap
+///       site silently regressing to `gorget_panic` (or being deleted).
+///       `T_Bounds` is intentionally NOT required: `trap_bounds` is T2b.
+///
+/// `lower_closures.gg` is scanned too: its cross-frame repanic DELIBERATELY
+/// stays `gorget_panic` (per the T2a-selfhost brief — rerouting it would diverge
+/// the self-host from un-rerouted Rust production), so it must contribute ZERO
+/// captures. Scanning it makes a stray `T_` literal there a failure.
+///
+/// The LIR type constants (`T_PTR`, `T_STRUCT`, `T_VOID`, …) are BARE
+/// identifiers, never quoted, so the quote-anchored match captures exactly the
+/// trap codes. The `_exhaustive` guard makes a new `TrapKind` variant a hard
+/// compile error here until this lint is revisited (rustc exhaustiveness IS the
+/// ratchet).
+#[test]
+fn self_host_trap_code_parity() {
+    use std::collections::BTreeSet;
+    use gorget::trap::TrapKind as T;
+
+    // Exhaustiveness guard: a new variant breaks compile here (no catch-all).
+    #[allow(dead_code)]
+    fn _t_exhaustive(t: T) {
+        match t {
+            T::Overflow | T::DivByZero | T::Bounds | T::UnwrapNone | T::UnwrapError
+            | T::UnwrapErrorOnOk | T::AssertFailed | T::Panic => {}
+        }
+    }
+    let all = [
+        T::Overflow, T::DivByZero, T::Bounds, T::UnwrapNone, T::UnwrapError,
+        T::UnwrapErrorOnOk, T::AssertFailed, T::Panic,
+    ];
+    let registry: BTreeSet<String> = all.iter().map(|t| t.code().to_string()).collect();
+    // The 7 non-Bounds codes production self-host MUST emit (trap_bounds is T2b).
+    let required: BTreeSet<String> = all.iter()
+        .map(|t| t.code().to_string())
+        .filter(|c| c.as_str() != "T_Bounds")
+        .collect();
+
+    // Match a quoted `T_<Ident>` in BOTH the inline C-string form
+    // (`\"T_Overflow\"`) and the OpConstStr form (`"T_Panic"`) via the
+    // optional-backslash quote on each side.
+    let re = regex::Regex::new(r##"\\?"(T_[A-Za-z]+)\\?""##).unwrap();
+    let files = [
+        "tests/fixtures/self_host_lowerer/lir_codegen.gg",
+        "tests/fixtures/self_host_lowerer/lower_expr.gg",
+        "tests/fixtures/self_host_lowerer/lower_stmt.gg",
+        "tests/fixtures/self_host_lowerer/lower_closures.gg",
+    ];
+    let mut found: BTreeSet<String> = BTreeSet::new();
+    for f in files {
+        let src = fs::read_to_string(f).unwrap_or_default();
+        for cap in re.captures_iter(&src) {
+            found.insert(cap[1].to_string());
+        }
+    }
+
+    // (a) every emitted code is a real registry code.
+    let bogus: Vec<&String> =
+        found.iter().filter(|c| !registry.contains(c.as_str())).collect();
+    assert!(
+        bogus.is_empty(),
+        "self-host emits trap code(s) NOT in gorget::trap::TrapKind: {bogus:?}.\n\
+         A hand-spelled `T_` literal drifted from the registry (typo, or a code \
+         retired on the Rust side). Fix the literal at the self-host .gg emit site \
+         (lir_codegen.gg / lower_expr.gg / lower_stmt.gg) or reconcile the registry.\n\
+         Registry: {registry:?}",
+    );
+
+    // (b) all 7 non-Bounds codes are present (no site silently dropped).
+    let missing: Vec<&String> =
+        required.iter().filter(|c| !found.contains(c.as_str())).collect();
+    assert!(
+        missing.is_empty(),
+        "self-host is MISSING trap code(s) it must emit: {missing:?}.\n\
+         A direct trap site regressed to gorget_panic (or was removed). \
+         (T_Bounds is intentionally NOT required — that is T2b.)\n\
+         Found: {found:?}",
+    );
+}

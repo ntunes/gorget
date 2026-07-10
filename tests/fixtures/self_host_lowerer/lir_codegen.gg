@@ -2734,6 +2734,10 @@ bool runtime_arg_is_cstr(String name, int arg_idx):
         # gorget_panic takes `const char*` (panic_normal.c:7); arg 0 = message.
         if name == "gorget_panic":
             return true
+        # gorget_trap(const char* code, const char* detail) — arg 0 is the T_ code
+        # literal (panic_normal.c:23; the D11 trap-emit reroute). arg 1 handled below.
+        if name == "gorget_trap":
+            return true
         if name == "gorget_mkdir" or name == "gorget_rmdir" or name == "gorget_remove":
             return true
         if name == "gorget_rename" or name == "gorget_copy_file":
@@ -2757,6 +2761,9 @@ bool runtime_arg_is_cstr(String name, int arg_idx):
         if name == "gorget_udp_bind" or name == "gorget_socket_connect":
             return true
     if arg_idx == 1:
+        # gorget_trap's arg 1 is the human detail message (const char*).
+        if name == "gorget_trap":
+            return true
         if name == "gorget_write_file" or name == "gorget_write_file_bytes" or name == "gorget_append_file":
             return true
         if name == "gorget_setenv":
@@ -4409,21 +4416,21 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
         case IAdd(dst, ty, lhs, rhs, overflow):
             if overflow == OVF_TRAP and lir_is_integer(ty):
                 String ct = c_type_name(ty, &sn)
-                return "if (__builtin_add_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }"
+                return "if (__builtin_add_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { gorget_trap(\"T_Overflow\", \"integer overflow\"); }"
             String ct = c_type_name(ty, &sn)
             return v(dst) + " = (" + ct + ")" + v(lhs) + " + (" + ct + ")" + v(rhs) + ";"
 
         case ISub(dst, ty, lhs, rhs, overflow):
             if overflow == OVF_TRAP and lir_is_integer(ty):
                 String ct = c_type_name(ty, &sn)
-                return "if (__builtin_sub_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }"
+                return "if (__builtin_sub_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { gorget_trap(\"T_Overflow\", \"integer overflow\"); }"
             String ct = c_type_name(ty, &sn)
             return v(dst) + " = (" + ct + ")" + v(lhs) + " - (" + ct + ")" + v(rhs) + ";"
 
         case IMul(dst, ty, lhs, rhs, overflow):
             if overflow == OVF_TRAP and lir_is_integer(ty):
                 String ct = c_type_name(ty, &sn)
-                return "if (__builtin_mul_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); }"
+                return "if (__builtin_mul_overflow((" + ct + ")" + v(lhs) + ", (" + ct + ")" + v(rhs) + ", &" + v(dst) + ")) { gorget_trap(\"T_Overflow\", \"integer overflow\"); }"
             String ct = c_type_name(ty, &sn)
             return v(dst) + " = (" + ct + ")" + v(lhs) + " * (" + ct + ")" + v(rhs) + ";"
 
@@ -4437,8 +4444,8 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
                 String dmin = signed_int_min_literal(ty)
                 String dovf = ""
                 if dmin != "":
-                    dovf = "if ((" + ct + ")" + v(lhs) + " == " + dmin + " && (" + ct + ")" + v(rhs) + " == -1) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); } "
-                return "if ((" + ct + ")" + v(rhs) + " == 0) { fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); } " + dovf + v(dst) + " = (" + ct + ")" + v(lhs) + " / (" + ct + ")" + v(rhs) + ";"
+                    dovf = "if ((" + ct + ")" + v(lhs) + " == " + dmin + " && (" + ct + ")" + v(rhs) + " == -1) { gorget_trap(\"T_Overflow\", \"integer overflow\"); } "
+                return "if ((" + ct + ")" + v(rhs) + " == 0) { gorget_trap(\"T_DivByZero\", \"division by zero\"); } " + dovf + v(dst) + " = (" + ct + ")" + v(lhs) + " / (" + ct + ")" + v(rhs) + ";"
             return v(dst) + " = " + v(lhs) + " / " + v(rhs) + ";"
 
         case IRem(dst, ty, lhs, rhs):
@@ -4451,8 +4458,8 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             String rmin = signed_int_min_literal(ty)
             String rovf = ""
             if rmin != "":
-                rovf = "if ((" + ct + ")" + v(lhs) + " == " + rmin + " && (" + ct + ")" + v(rhs) + " == -1) { fprintf(stderr, \"gorget: integer overflow\\n\"); exit(1); } "
-            return "if ((" + ct + ")" + v(rhs) + " == 0) { fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); } " + rovf + v(dst) + " = (" + ct + ")" + v(lhs) + " % (" + ct + ")" + v(rhs) + ";"
+                rovf = "if ((" + ct + ")" + v(lhs) + " == " + rmin + " && (" + ct + ")" + v(rhs) + " == -1) { gorget_trap(\"T_Overflow\", \"integer overflow\"); } "
+            return "if ((" + ct + ")" + v(rhs) + " == 0) { gorget_trap(\"T_DivByZero\", \"division by zero\"); } " + rovf + v(dst) + " = (" + ct + ")" + v(lhs) + " % (" + ct + ")" + v(rhs) + ";"
 
         case IMod(dst, ty, lhs, rhs):
             if lir_is_float(ty):
@@ -4467,7 +4474,7 @@ String emit_inst(LirInst &inst, LirModule &m, LirFunction &func, Vector[String] 
             String mod_ct = c_type_name(ty, &sn)
             String mod_min = signed_int_min_literal(ty)
             String mod_body = "{ __typeof__(" + v(lhs) + ") __t = " + v(lhs) + " % " + v(rhs) + "; " + v(dst) + " = __t + (__t != 0 && (__t ^ " + v(rhs) + ") < 0 ? " + v(rhs) + " : 0); }"
-            String mod_dz = "if ((" + mod_ct + ")" + v(rhs) + " == 0) { fprintf(stderr, \"gorget: division by zero\\n\"); exit(1); } "
+            String mod_dz = "if ((" + mod_ct + ")" + v(rhs) + " == 0) { gorget_trap(\"T_DivByZero\", \"division by zero\"); } "
             if mod_min != "":
                 return mod_dz + "if ((" + mod_ct + ")" + v(lhs) + " == " + mod_min + " && (" + mod_ct + ")" + v(rhs) + " == -1) { " + v(dst) + " = 0; } else " + mod_body
             return mod_dz + mod_body
@@ -5137,13 +5144,13 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
             if dst >= 0:
                 # Payload is at offset sizeof(int32_t), aligned to 8.
                 # Use generic memcpy from offset 8 (covers all payload types).
-                String ou_guard = "if ((*(int32_t*)" + src + ") != 0) { gorget_panic(\"called `unwrap()` on a `None` value\"); } "
+                String ou_guard = "if ((*(int32_t*)" + src + ") != 0) { gorget_trap(\"T_UnwrapNone\", \"called `unwrap()` on a `None` value\"); } "
                 return ou_guard + "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
             return ";"
         case "__result_unwrap_error":
             if dst >= 0:
                 # Valid tag = 1 (Error). Trap on Ok before reading Error_0.
-                String ue_guard = "if ((*(int32_t*)" + src + ") != 1) { gorget_panic(\"called `unwrap_error()` on a `Ok` value\"); } "
+                String ue_guard = "if ((*(int32_t*)" + src + ") != 1) { gorget_trap(\"T_UnwrapErrorOnOk\", \"called `unwrap_error()` on a `Ok` value\"); } "
                 # Error payload is the Result's THIRD field (`{ tag; Ok_0;
                 # Error_0; }`), NOT offset 8 — that is the Ok_0 slot (a
                 # String-Err Result read offset-8 yielded a garbage/zero Str).
@@ -5174,7 +5181,7 @@ String emit_option_result_combinator(int dst, String name, Vector[int] &args,
                 # Valid tag = 0 (Ok). Trap on Error before reading Ok_0. Uses the
                 # generic unwrap message (the expect user-message threading is a
                 # separate filed TODO — the self-host does not yet plumb it here).
-                String re_guard = "if ((*(int32_t*)" + src + ") != 0) { gorget_panic(\"called `unwrap()` on a `Error` value\"); } "
+                String re_guard = "if ((*(int32_t*)" + src + ") != 0) { gorget_trap(\"T_UnwrapError\", \"called `unwrap()` on a `Error` value\"); } "
                 return re_guard + "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
             return ";"
         else:

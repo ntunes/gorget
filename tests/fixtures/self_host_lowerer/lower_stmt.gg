@@ -1438,7 +1438,11 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         assert_msg = am
                     case None:
                         pass
-                emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(assert_msg)]))
+                # D11 trap normalization (was gorget_panic): a failing assert
+                # traps as trap[T_AssertFailed] + exit 101. The T_ code is a cstr
+                # literal prepended to the message. Mirrors Rust gg
+                # src/ir/lowering/stmts/mod.rs (gorget_trap(T_AssertFailed, msg)).
+                emit(&ctx, GICallExtern(-1, "gorget_trap", [OpConstStr("T_AssertFailed"), OpConstStr(assert_msg)]))
                 # gorget_panic is noreturn; this jump is a DEAD edge that keeps
                 # the CFG well-formed (Terminator has no GTUnreachable — Rust
                 # uses unreachable(); GTJump(pass_bb) is the faithful self-host
