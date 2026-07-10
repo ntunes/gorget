@@ -3522,7 +3522,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     if recv_ec.category == ENUM_CAT_RESULT:
                         uw_word = "Error"
                     String uw_msg = "called `unwrap()` on a `" + uw_word + "` value"
-                    emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(uw_msg)]))
+                    # D11 trap normalization (was gorget_panic): the T_ code is
+                    # derived from the receiver variant — None → T_UnwrapNone,
+                    # Error → T_UnwrapError. Mirrors src/lir/lower/insts.rs
+                    # emit_unwrap_panic_guard. gorget_trap exits 101 with trap[T_X].
+                    String uw_code = "T_UnwrapNone"
+                    if uw_word == "Error":
+                        uw_code = "T_UnwrapError"
+                    emit(&ctx, GICallExtern(-1, "gorget_trap", [OpConstStr(uw_code), OpConstStr(uw_msg)]))
                     set_terminator(&ctx, GTJump(uw_ok_bb))
                     switch_to(&ctx, uw_ok_bb)
                     # Plain unwrap: emit a real field read through the
@@ -7711,7 +7718,11 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
         # Borrow-only consume (gorget_panic reads the message, never owns it),
         # matching the format-arg / print String-to-extern idiom (CkFormatArg
         # lowers to OpBorrow, so the message is not moved).
-        emit(&ctx, GICallExtern(-1, "gorget_panic", [op_consume(&ctx, &gmod, panic_msg, CkFormatArg())]))
+        # D11 trap normalization (was gorget_panic): explicit `panic(msg)` traps
+        # as trap[T_Panic] + exit 101. The T_Panic code is prepended as a cstr
+        # literal; the message stays the borrowed arg. Mirrors Rust gg
+        # src/ir/lowering/exprs/calls.rs (gorget_trap(T_Panic, msg)).
+        emit(&ctx, GICallExtern(-1, "gorget_trap", [OpConstStr("T_Panic"), op_consume(&ctx, &gmod, panic_msg, CkFormatArg())]))
         # gorget_panic is noreturn. The self-host Terminator has no
         # GTUnreachable, so jump to a fresh dead block — the faithful
         # equivalent Rust's `builder.unreachable()` (the same idiom the

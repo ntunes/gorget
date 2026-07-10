@@ -68,22 +68,22 @@ use std::time::{Duration, Instant};
 use ggdef::{parse_frontmatter, Expect};
 
 // ── Floors — regenerated in-worktree (see the module-doc command). ──────────
-// T2a-rust (D11 production trap emit, Rust C+LLVM backends) landed: the 7
-// non-bounds trap fixtures (overflow, divbyzero, unwrap_none, unwrap_error,
-// unwrap_error_on_ok, assert, panic) now emit `trap[T_X]` + exit 101 and MATCH
-// on the C + LLVM lanes → 187 + 7 = 194. `trap_bounds` still MISMATCHes all
-// lanes (T2b folds the runtime-library bounds path). SELF-HOST stays 187 — its
-// `.gg` emit is a SEPARATE slice (T2a-selfhost) still on the old format.
+// T2a-rust (D11 production trap emit, Rust C+LLVM backends) AND T2a-selfhost
+// (the self-host `.gg` lowerer emit) both landed: the 7 non-bounds trap fixtures
+// (overflow, divbyzero, unwrap_none, unwrap_error, unwrap_error_on_ok, assert,
+// panic) now emit `trap[T_X]` + exit 101 and MATCH on ALL THREE lanes (C, LLVM,
+// self-host) → 187 + 7 = 194. `trap_bounds` still MISMATCHes all lanes (T2b
+// folds the runtime-library bounds path / the latent self-host abort() sites).
 const C_MATCH_FLOOR: usize = 194;
 const LLVM_MATCH_FLOOR: usize = 194;
-const SELFHOST_MATCH_FLOOR: usize = 187;
+const SELFHOST_MATCH_FLOOR: usize = 194;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
 /// the TOTAL seed COUNT. It EXCEEDS the three production MATCH floors: after
-/// T2a-rust the C/LLVM lanes are at 194 (still 1 below the corpus — `trap_bounds`
-/// MISMATCHes pending T2b) and self-host is at 187 (T2a-selfhost pending). Each
-/// remaining production MISMATCH ratchets its lane's floor up when its slice
+/// T2a-rust AND T2a-selfhost all three lanes (C/LLVM/self-host) are at 194 —
+/// still 1 below the corpus, because `trap_bounds` MISMATCHes every lane pending
+/// T2b. That last MISMATCH ratchets all three floors to `MIN_FIXTURES` when T2b
 /// lands.
 const MIN_FIXTURES: usize = 195;
 
