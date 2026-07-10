@@ -1,0 +1,18 @@
+# Acid probe for the LLVM twin-drift hazard on the COMBINATOR `unwrap_error`
+# route: the D11 tag guard splits the block and bumps the shared trap_counter
+# INSIDE a while loop, BEFORE two overflow-checked adds whose results feed the
+# loop-header phis. The `block_exit_labels` pre-pass must mirror the guard's
+# bump exactly — a desync shifts the `ov.*` labels and llc rejects the phi
+# (`use of undefined value %ov.*.ok`). The Error receiver keeps this on the
+# happy path (guard passes every iteration), additionally locking runtime
+# error-payload extraction under the loop/phi shape.
+Result[int, int] R = Error(3)
+
+void main():
+    int total = 0
+    int i = 0
+    while i < 5:
+        int e = R.unwrap_error()
+        total = total + e
+        i = i + 1
+    print(total)

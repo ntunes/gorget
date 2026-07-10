@@ -1,0 +1,15 @@
+# Panic-by-default on the COMBINATOR `unwrap_error` lowering (reference §15.2).
+#
+# A module-level static receiver is a `Constant::GlobalRef` — NOT a Copy/Move
+# place — so the GIR fast-path (`__result_unwrap_error` → the LIR Tier-2a tag
+# guard) does not fire; the call survives to the backends as a monomorphized
+# `Result__int64_t__int64_t__unwrap_error` CallExtern handled by each backend's
+# inline combinator arm. D11 normalizes this to trap[T_UnwrapErrorOnOk] +
+# exit 101 on BOTH backends (the LLVM lane shipped this arm with NO tag guard —
+# an Ok receiver silently kept running with a garbage payload load).
+Result[int, int] R = Ok(7)
+
+void main():
+    print("before")
+    R.unwrap_error()
+    print("unreachable")

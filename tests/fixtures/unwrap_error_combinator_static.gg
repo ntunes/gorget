@@ -1,0 +1,14 @@
+# Happy path of the COMBINATOR `unwrap_error` lowering: module-level static
+# receivers (GlobalRef constants) bypass the GIR fast-path / LIR Tier-2a
+# intercept, so `.unwrap_error()` reaches the backends as a monomorphized
+# `Result__T__E__unwrap_error` CallExtern. Locks the error-payload extraction
+# for BOTH payload kinds: scalar (int — the LLVM arm used to fall back to a
+# hardcoded `(offset 8, i64)` load off an untyped Ptr receiver, i.e. the OK
+# slot) and aggregate (String — interior pointer, no load).
+Result[int, int] RI = Error(42)
+Result[int, String] RS = Error("boom")
+
+void main():
+    int e = RI.unwrap_error()
+    print(e)
+    print(RS.unwrap_error())

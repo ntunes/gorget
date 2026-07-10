@@ -6547,6 +6547,43 @@ fn unwrap_error_on_ok_traps() {
 }
 
 #[test]
+fn unwrap_error_on_ok_combinator_traps() {
+    // COMBINATOR route (static-global receiver → monomorphized
+    // `Result__T__E__unwrap_error` CallExtern in the backend, NOT the LIR
+    // Tier-2a intercept): D11 trap[T_UnwrapErrorOnOk] + exit 101 on BOTH
+    // backends. Detail text is the combinator arm's ("unwrap_error on Ok"),
+    // distinct from Tier-2a's "called `unwrap_error()` on a `Ok` value".
+    // The pin is the hardened code+detail form (`trap[T_X]: detail`, like
+    // shift_oob_traps above) — a detail-only substring is exactly the
+    // substring-weak class the trap-normalization pins exist to prevent.
+    run_gg_panics_with_stdout(
+        "unwrap_error_on_ok_combinator_traps.gg",
+        "before",
+        "trap[T_UnwrapErrorOnOk]: unwrap_error on Ok",
+    );
+}
+
+#[test]
+fn unwrap_error_combinator_static() {
+    // Happy path of the combinator route: error payload extraction for a
+    // scalar (int) and an aggregate (String) payload off static receivers.
+    run_gg(
+        "unwrap_error_combinator_static.gg",
+        "42\nboom\n",
+    );
+}
+
+#[test]
+fn unwrap_error_combinator_phi_acid() {
+    // The exact twin-drift hazard shape: the combinator unwrap_error tag guard
+    // splits the block + bumps the shared trap_counter inside a while loop,
+    // BEFORE two overflow-checked adds feeding the loop-header phis. A
+    // `block_exit_labels` pre-pass desync shifts the `ov.*` labels → llc
+    // rejects the phi (the LLVM lane is the one that catches it; C is immune).
+    run_gg("unwrap_error_combinator_phi_acid.gg", "15\n");
+}
+
+#[test]
 fn expect_none_traps() {
     // Bug-agnostic substring ONLY: the expect user-message threading is a
     // separate filed TODO, so `expect` currently reuses the generic `unwrap`

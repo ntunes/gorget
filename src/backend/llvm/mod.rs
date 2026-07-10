@@ -2729,6 +2729,24 @@ fn emit_function(
                                 })
                             })
                         }
+                        "unwrap_err" | "unwrap_error" => {
+                            // unwrap_error returns the ERROR PAYLOAD (field 2),
+                            // not the enum struct. Typing dst as PtrTo(enum) —
+                            // the old `_` fallthrough — mis-drove consumers
+                            // (printf/SlotStore passed `ptr` where the scalar
+                            // payload flows → llc type error). Scalar payloads
+                            // are typed directly; aggregate payloads are
+                            // interior pointers (the emit handler geps, no load).
+                            if let Some(sid) = find_struct_by_prefix(type_prefix, module) {
+                                if let Some((_, t)) = module.structs[sid.0 as usize].fields.get(2) {
+                                    val_types[d.0 as usize] = Some(match t {
+                                        LirType::Struct(inner) => LirType::PtrTo(*inner),
+                                        other => other.clone(),
+                                    });
+                                }
+                            }
+                            None
+                        }
                         _ => find_struct_by_prefix(type_prefix, module),
                     };
                     if let Some(sid) = result_sid {
@@ -3153,6 +3171,17 @@ fn emit_function(
                             matches!(method, "filter" | "map") && dst.is_some()
                         } else { false };
 
+                        // D11 unwrap_error tag-guard (emit_inst handles these
+                        // names BEFORE the generic combinator arm and returns):
+                        // with a dst, the guard splits the block — trap block +
+                        // ok block — exiting at `unwraperr.{bid}.{uid}.ok` with
+                        // ONE counter bump. Without a dst the emit returns
+                        // having emitted (and bumped) NOTHING. Mirror both
+                        // exactly (layering: this pre-pass twins the emit).
+                        let is_unwrap_error_inline = (name == "__result_unwrap_error"
+                            || name.ends_with("__unwrap_error")
+                            || name.ends_with("__unwrap_err")) && !args.is_empty();
+
                         // Detect Option/Result combinator calls that generate branches
                         let is_opt_combinator = parse_option_result_combinator(name).is_some()
                             && dst.is_some() && !args.is_empty();
@@ -3164,7 +3193,14 @@ fn emit_function(
                         } else { false };
 
                         // Count ALL counter increments to stay in sync with emission
-                        if is_opt_combinator {
+                        if is_unwrap_error_inline {
+                            if dst.is_some() {
+                                label = format!("unwraperr.{bid}.{counter}.ok");
+                                counter += 1;
+                            }
+                            // dst None: emit returns without bumping — no bump here.
+                        }
+                        else if is_opt_combinator {
                             if opt_combinator_has_branch {
                                 // Branch-based combinators: emit labels and change exit label
                                 label = format!("comb.{bid}.{counter}.done");
@@ -5565,16 +5601,31 @@ fn emit_inst(
                 return;
             }
 
-            // Result unwrap_error — return error payload from Result struct
+            // Result unwrap_error — D11: guard the tag FIRST (`.unwrap_error()`
+            // on an `Ok` is `trap[T_UnwrapErrorOnOk]` + exit 101, mirroring the
+            // C twin's emit_hof.rs "unwrap_err"|"unwrap_error" arm — `tag != 1`
+            // traps via gorget_trap_at with the real span), THEN load the error
+            // payload in the ok block.
             if (name == "__result_unwrap_error" || name.ends_with("__unwrap_error")
                 || name.ends_with("__unwrap_err")) && !args.is_empty() {
                 if let Some(d) = dst {
                     let uid = *trap_counter;
                     *trap_counter += 1;
-                    // Find the Result struct and get the error field offset
+                    // Resolve the Result struct: the arg's val_type when typed,
+                    // else by the monomorphized name prefix (`Result__T__E__…`)
+                    // — the same registry the C twin reads. A bare-`Ptr`
+                    // receiver (e.g. the address of a static global) carries no
+                    // PtrTo struct info, and the old val_types-only resolution
+                    // silently fell back to `(8, "i64")` — wrong offset AND
+                    // wrong type for anything but Result[int, int]-shaped enums.
                     let arg_ty = val_types.get(args[0].0 as usize).and_then(|t| t.as_ref());
-                    let (err_offset, err_ty_str) = match arg_ty {
-                        Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => {
+                    let res_sid = match arg_ty {
+                        Some(LirType::PtrTo(sid)) | Some(LirType::Struct(sid)) => Some(*sid),
+                        _ => parse_option_result_combinator(name)
+                            .and_then(|(type_prefix, _)| find_struct_by_prefix(type_prefix, module)),
+                    };
+                    let (err_offset, err_ty_str) = match res_sid {
+                        Some(sid) => {
                             let sdef = &module.structs[sid.0 as usize];
                             // Error field is the last field (field 2+ in Result structs)
                             // Compute offset from struct layout
@@ -5610,6 +5661,22 @@ fn emit_inst(
                         _ => (8, "i64".to_string()),
                     };
                     let pfx = format!("unwraperr.{block_id}.{uid}");
+                    // D11 guard: tag(i32, offset 0) must be 1 (Error). Ok (0)
+                    // AND the consumed sentinel (2) trap — same `tag != 1`
+                    // condition the C twin emits. Splits the block: the exit
+                    // label becomes `{pfx}.ok`; the `block_exit_labels`
+                    // pre-pass MUST mirror this (see its unwrap_error arm).
+                    let code_idx = str_globals.intern(crate::trap::TrapKind::UnwrapErrorOnOk.code());
+                    let detail_idx = str_globals.intern("unwrap_error on Ok");
+                    let file_idx = str_globals.intern(&loc.0);
+                    writeln!(out, "  %{pfx}.tag = load i32, ptr %v{}", args[0].0).unwrap();
+                    writeln!(out, "  %{pfx}.bad = icmp ne i32 %{pfx}.tag, 1").unwrap();
+                    writeln!(out, "  br i1 %{pfx}.bad, label %{pfx}.trap, label %{pfx}.ok").unwrap();
+                    writeln!(out, "{pfx}.trap:").unwrap();
+                    writeln!(out, "  call void @gorget_trap_at(ptr @.str.{code_idx}, ptr @.str.{detail_idx}, ptr @.str.{file_idx}, i32 {}, i32 {})", loc.1, loc.2).unwrap();
+                    writeln!(out, "  unreachable").unwrap();
+                    writeln!(out, "{pfx}.ok:").unwrap();
+                    *current_label = format!("{pfx}.ok");
                     writeln!(out, "  %{pfx}.ptr = getelementptr i8, ptr %v{}, i64 {err_offset}", args[0].0).unwrap();
                     if err_ty_str.starts_with('%') {
                         // Aggregate payload: return pointer to inline struct (no load)
