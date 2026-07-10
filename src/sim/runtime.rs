@@ -727,11 +727,13 @@ pub fn call_extern(
         // formatted; sim returns an `unwrap on None/Err`-style error so the
         // outer test harness picks it up uniformly with the assertion site.
         "gorget_assert_fail_values" => {
-            let op = args.get(0).and_then(Value::try_to_sim_str)
+            // D11 (approach a): the leading arg is now the `T_AssertFailed`
+            // trap code — the op/left/right shifted to args[1..4].
+            let op = args.get(1).and_then(Value::try_to_sim_str)
                 .map(|s| s.as_str().to_string()).unwrap_or_else(|| "?".into());
-            let left = args.get(1).and_then(Value::try_to_sim_str)
+            let left = args.get(2).and_then(Value::try_to_sim_str)
                 .map(|s| s.as_str().to_string()).unwrap_or_default();
-            let right = args.get(2).and_then(Value::try_to_sim_str)
+            let right = args.get(3).and_then(Value::try_to_sim_str)
                 .map(|s| s.as_str().to_string()).unwrap_or_default();
             Err(super::error::SimError::Panic(format!(
                 "assertion failed: left {op} right\n  left:  {left}\n  right: {right}"

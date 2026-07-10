@@ -40,6 +40,26 @@ static inline void gorget_panic(const char* msg) {
     gorget_panic_at("<unknown>", 0, 0, msg);
 }
 
+// ── Trap helper (test mode) ──────────────────────────────────
+// D11 normalization. In test mode capture the BARE `detail` (NOT the
+// `trap[...]`-wrapped line) into __gorget_test_fail_msg and longjmp, exactly
+// as gorget_panic_at captures `msg` — so the #[test] harness's `FAIL: %s` and
+// @should_panic `strstr` see the same message the runtime-normal path would
+// print. Outside test mode, emit the normative trap line + exit 101.
+// Argument order is (code, detail, file, line, col) — code-first.
+static inline void gorget_trap_at(const char* code, const char* detail, const char* file, int line, int col) {
+    if (__gorget_in_test) {
+        __gorget_test_fail_msg = detail;
+        __gorget_cleanup_run(__gorget_test_cleanup_mark);
+        longjmp(__gorget_test_jmp, 1);
+    }
+    fprintf(stderr, "trap[%s]: %s at %s:%d:%d\n", code, detail, file, line, col);
+    exit(101);
+}
+static inline void gorget_trap(const char* code, const char* detail) {
+    gorget_trap_at(code, detail, "<unknown>", 0, 0);
+}
+
 // ── Timeout support (SIGALRM + setitimer) ────────────────────
 #include <signal.h>
 #include <sys/time.h>

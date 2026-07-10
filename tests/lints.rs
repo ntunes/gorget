@@ -4931,3 +4931,141 @@ fn ggdef_import_ratchet() {
         violations.join("\n"),
     );
 }
+
+/// D11 trap-registry parity ratchet: the PRODUCTION trap registry
+/// (`gorget::trap::TrapKind`, `src/trap.rs`) is a deliberate DUPLICATE of the
+/// DEFINITIONAL one (`ggdef::TrapKind`, `spec/ggdef/src/eval.rs`) — the import
+/// ratchet (`ggdef_import_ratchet`) forbids ggdef importing `src/`, so the two
+/// registries are separate types that must nonetheless AGREE. This lint pins
+/// the correspondence:
+///   (a) the `code()` string SETS are identical (same closed set of `T_<X>`);
+///   (b) `is_catchable()` agrees variant-for-variant;
+///   (c) the §10.9 `Fault` language-prelude enum (`builtin_fault_enum()`)
+///       equals EXACTLY the `is_catchable()`-true subset (bare variant names).
+/// It compares ONLY the typed `code()` — NEVER the human `detail`/message text
+/// (production "integer overflow" vs ggdef "arithmetic overflow" is a
+/// sanctioned, conformance-ignored divergence, so `message()` is never fed in).
+///
+/// The two `_exhaustive` matches have NO catch-all, so a new variant added to
+/// EITHER registry is a hard compile error here until this pin is updated in
+/// lockstep — rustc exhaustiveness IS the ratchet.
+#[test]
+fn trap_kind_parity_prod_vs_ggdef() {
+    use std::collections::BTreeSet;
+    use gorget::trap::TrapKind as P;
+    use ggdef::TrapKind as G;
+
+    // Exhaustiveness guards — adding a variant to either enum breaks compile
+    // here (no catch-all), forcing the lists below to be updated in lockstep.
+    #[allow(dead_code)]
+    fn _p_exhaustive(t: P) {
+        match t {
+            P::Overflow | P::DivByZero | P::Bounds | P::UnwrapNone | P::UnwrapError
+            | P::UnwrapErrorOnOk | P::AssertFailed | P::Panic => {}
+        }
+    }
+    #[allow(dead_code)]
+    fn _g_exhaustive(t: &G) {
+        match t {
+            G::Overflow | G::DivByZero | G::Bounds | G::UnwrapNone | G::UnwrapError
+            | G::UnwrapErrorOnOk | G::AssertFailed(_) | G::Panic(_) => {}
+        }
+    }
+
+    // Same order on both sides so the zip pairs matching codes (asserted below).
+    let prod = [
+        P::Overflow, P::DivByZero, P::Bounds, P::UnwrapNone, P::UnwrapError,
+        P::UnwrapErrorOnOk, P::AssertFailed, P::Panic,
+    ];
+    let ggd = [
+        G::Overflow, G::DivByZero, G::Bounds, G::UnwrapNone, G::UnwrapError,
+        G::UnwrapErrorOnOk, G::AssertFailed(String::new()), G::Panic(String::new()),
+    ];
+
+    // (a) code() SETS identical.
+    let prod_codes: BTreeSet<&str> = prod.iter().map(|t| t.code()).collect();
+    let ggd_codes: BTreeSet<&str> = ggd.iter().map(|t| t.code()).collect();
+    assert_eq!(
+        prod_codes, ggd_codes,
+        "production TrapKind::code() set must equal ggdef's (D11 registry parity)",
+    );
+
+    // (b) is_catchable() agrees variant-for-variant (paired by code()).
+    for (p, g) in prod.iter().zip(ggd.iter()) {
+        assert_eq!(p.code(), g.code(), "TrapKind ordering drift between prod and ggdef");
+        assert_eq!(
+            p.is_catchable(), g.is_catchable(),
+            "is_catchable() disagrees for {} (prod {} vs ggdef {})",
+            p.code(), p.is_catchable(), g.is_catchable(),
+        );
+    }
+
+    // (c) §10.9 Fault prelude enum == is_catchable()-true subset (by bare name).
+    let fault_variants: BTreeSet<String> =
+        gorget::ir::lowering::generics::builtin_fault_enum()
+            .variants.iter().map(|v| v.node.name.node.clone()).collect();
+    let catchable_bare: BTreeSet<String> = prod.iter()
+        .filter(|t| t.is_catchable())
+        .map(|t| t.code().strip_prefix("T_").unwrap().to_string())
+        .collect();
+    assert_eq!(
+        fault_variants, catchable_bare,
+        "§10.9 Fault enum (builtin_fault_enum) must equal the is_catchable()-true \
+         TrapKind subset (bare variant names)",
+    );
+}
+
+/// D11 raw-trap source-scan ratchet: after trap normalization, every reachable
+/// arithmetic/shift trap in the two Rust backends emits through the registry
+/// entry `gorget_trap_at` (typed `T_` code + exit 101). This lint pins the count
+/// of RAW trap-exit primitives that REMAIN, so a NEW bare `fprintf(...);exit(1)`
+/// / `call void @exit(i32 1)` / `abort()` that bypasses the registry trips the
+/// count and forces review. (A match-arm count does NOT apply — the emit sites
+/// are `write!`-based inline strings across two backends, not enum arms.)
+///
+/// Baselines (2026-07-10, post T2a-rust reroute):
+///   * `c_lir/mod.rs` `exit(1)` = 0  — ALL inline arith/shift now route through
+///     `gorget_trap_at`; a new one is a registry bypass.
+///   * `c_lir/mod.rs` `abort()` = 3  — the T2b bounds / div0 / generic-trap
+///     `abort()` (exit-134) sites, NOT rerouted here. When T2b normalizes them,
+///     lower this baseline.
+///   * `llvm/mod.rs` `call void @exit(i32 1)` = 4 — BoundsCheck (T2b), DivCheck,
+///     `Inst::Trap`, and the InlineC-fallback fatal (`; InlineC fatal`). None are
+///     rerouted arithmetic sites; the InlineC one is a deliberate non-trap abort
+///     kept in the baseline DELIBERATELY (it is not a trap to reroute).
+///
+/// If this fails: a new raw trap emit was added. Route it through
+/// `crate::trap::TrapKind` + `gorget_trap_at` (the registry), OR — if it is a
+/// legitimately-new non-registry abort — adjust the baseline with a one-line
+/// justification naming the site.
+#[test]
+fn raw_trap_exit_sites_ratchet() {
+    let c_lir = fs::read_to_string("src/backend/c_lir/mod.rs").unwrap_or_default();
+    let llvm = fs::read_to_string("src/backend/llvm/mod.rs").unwrap_or_default();
+
+    let c_exit1 = c_lir.matches("exit(1)").count();
+    let c_abort = c_lir.matches("abort()").count();
+    let llvm_exit1 = llvm.matches("call void @exit(i32 1)").count();
+
+    const C_EXIT1_BASELINE: usize = 0;
+    const C_ABORT_BASELINE: usize = 3;
+    const LLVM_EXIT1_BASELINE: usize = 4;
+
+    assert_eq!(
+        c_exit1, C_EXIT1_BASELINE,
+        "c_lir/mod.rs raw `exit(1)` trap count changed: {c_exit1} vs {C_EXIT1_BASELINE}. \
+         A new inline trap must route through gorget_trap_at (crate::trap::TrapKind), \
+         not a bare fprintf;exit(1). See tests/lints.rs::raw_trap_exit_sites_ratchet.",
+    );
+    assert_eq!(
+        c_abort, C_ABORT_BASELINE,
+        "c_lir/mod.rs `abort()` trap count changed: {c_abort} vs {C_ABORT_BASELINE}. \
+         These are the T2b bounds/div0/generic sites; adjust the baseline when T2b reroutes them.",
+    );
+    assert_eq!(
+        llvm_exit1, LLVM_EXIT1_BASELINE,
+        "llvm/mod.rs `call void @exit(i32 1)` count changed: {llvm_exit1} vs {LLVM_EXIT1_BASELINE}. \
+         A new arithmetic trap must route through gorget_trap_at; the 4 baseline sites are \
+         BoundsCheck (T2b), DivCheck, Inst::Trap, and the InlineC fatal fallback.",
+    );
+}

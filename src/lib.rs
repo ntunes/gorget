@@ -19,3 +19,4 @@ pub mod semantic;
 pub mod sim;
 pub mod span;
 pub mod stdlib;
+pub mod trap;

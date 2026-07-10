@@ -3623,15 +3623,28 @@ impl<'a> FuncLowering<'a> {
             then_block: ok_bb, then_args: vec![],
             else_block: panic_bb, else_args: vec![],
         });
-        // Panic block: gorget_panic(msg); unreachable.
+        // Panic block: gorget_trap(code, detail); unreachable. (D11 trap
+        // normalization — was gorget_panic(msg).) The `T_` code is typed data
+        // from the production TrapKind registry (src/trap.rs), derived from the
+        // (receiver, method) shape — NOT a name match: unwrap-on-None →
+        // T_UnwrapNone, unwrap-on-Error → T_UnwrapError, unwrap_error-on-Ok →
+        // T_UnwrapErrorOnOk. Detail keeps the variant word (Q-C).
         let method = if is_unwrap_err { "unwrap_error" } else { "unwrap" };
         let msg = format!("called `{method}()` on a `{variant_word}` value");
+        let trap_code = if is_unwrap_err {
+            crate::trap::TrapKind::UnwrapErrorOnOk
+        } else if variant_word == "None" {
+            crate::trap::TrapKind::UnwrapNone
+        } else {
+            crate::trap::TrapKind::UnwrapError
+        };
+        let code_val = self.lower_constant(&Constant::Str(trap_code.code().to_string()), panic_bb);
         let msg_val = self.lower_constant(&Constant::Str(msg), panic_bb);
         self.push_inst(panic_bb, Inst::CallExtern {
             dst: None,
-            name: "gorget_panic".to_string(),
-            args: vec![msg_val],
-            arg_abis: vec![crate::ir::abi::AbiKind::CStr],
+            name: "gorget_trap".to_string(),
+            args: vec![code_val, msg_val],
+            arg_abis: vec![crate::ir::abi::AbiKind::CStr, crate::ir::abi::AbiKind::CStr],
         });
         self.set_terminator(panic_bb, Term::Unreachable);
         ok_bb

@@ -68,16 +68,23 @@ use std::time::{Duration, Instant};
 use ggdef::{parse_frontmatter, Expect};
 
 // ── Floors — regenerated in-worktree (see the module-doc command). ──────────
-const C_MATCH_FLOOR: usize = 187;
-const LLVM_MATCH_FLOOR: usize = 187;
+// T2a-rust (D11 production trap emit, Rust C+LLVM backends) landed: the 7
+// non-bounds trap fixtures (overflow, divbyzero, unwrap_none, unwrap_error,
+// unwrap_error_on_ok, assert, panic) now emit `trap[T_X]` + exit 101 and MATCH
+// on the C + LLVM lanes → 187 + 7 = 194. `trap_bounds` still MISMATCHes all
+// lanes (T2b folds the runtime-library bounds path). SELF-HOST stays 187 — its
+// `.gg` emit is a SEPARATE slice (T2a-selfhost) still on the old format.
+const C_MATCH_FLOOR: usize = 194;
+const LLVM_MATCH_FLOOR: usize = 194;
 const SELFHOST_MATCH_FLOOR: usize = 187;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the TOTAL seed COUNT. Since the D11 trap fixtures landed it EXCEEDS the three
-/// production MATCH floors (187): those trap fixtures MATCH the ggdef lane but
-/// MISMATCH the production lanes until T2 lands the `trap[T_X]`+exit-101 emit,
-/// which then ratchets the production floors up to this count.
+/// the TOTAL seed COUNT. It EXCEEDS the three production MATCH floors: after
+/// T2a-rust the C/LLVM lanes are at 194 (still 1 below the corpus — `trap_bounds`
+/// MISMATCHes pending T2b) and self-host is at 187 (T2a-selfhost pending). Each
+/// remaining production MISMATCH ratchets its lane's floor up when its slice
+/// lands.
 const MIN_FIXTURES: usize = 195;
 
 // ─────────────────────────── infrastructure ────────────────────────────

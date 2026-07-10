@@ -2519,10 +2519,17 @@ fn lower_assert(
                 let lhs_str = assert_value_to_string(ctx, builder, lhs_local, lhs_type);
                 let rhs_str = assert_value_to_string(ctx, builder, rhs_local, rhs_type);
 
-                // Call gorget_assert_fail_values(op, left_str, right_str)
+                // Call gorget_assert_fail_values(code, op, left_str, right_str)
+                // (D11: the message-less comparison-assert is a USER-FACING
+                // assert, semantically identical to the message form — so it
+                // routes to trap[T_AssertFailed]+exit 101 too. The T_ code is
+                // typed data from the production TrapKind registry, prepended
+                // as the first arg — the 4-arg canonical sig is in
+                // src/lir/runtime.rs, approach (a).)
                 builder.call_extern_void(
                     "gorget_assert_fail_values",
                     vec![
+                        FunctionBuilder::const_str(crate::trap::TrapKind::AssertFailed.code()),
                         FunctionBuilder::const_str(op_str),
                         FunctionBuilder::copy(lhs_str),
                         FunctionBuilder::copy(rhs_str),
@@ -2545,9 +2552,17 @@ fn lower_assert(
     // Fail path: panic with message (allows test-mode setjmp to catch it).
     builder.switch_to(fail_bb);
     if let Some(msg) = message {
-        // Custom message provided — lower it and pass to gorget_panic.
+        // Custom message provided — lower it and pass to gorget_trap (D11:
+        // T_AssertFailed + exit 101). Was gorget_panic. NOTE(Q-D): the trap
+        // LOCATION renders `<unknown>:0:0` — a PRE-EXISTING GIR→LIR span-
+        // propagation gap for these branch-target trap blocks (the old
+        // gorget_panic assert emitted `<unknown>:0:0` too). Not conformance-
+        // compared (location is impl-defined) and byte-identical across
+        // backends; filed as a follow-up.
         let msg_op = lower_expr(ctx, builder, msg);
-        builder.call_extern("gorget_panic", vec![msg_op], UNIT_TYPE);
+        let code_op = Operand::Constant(Constant::Str(
+            crate::trap::TrapKind::AssertFailed.code().to_string()));
+        builder.call_extern("gorget_trap", vec![code_op, msg_op], UNIT_TYPE);
         builder.unreachable();
         builder.switch_to(pass_bb);
         return;
@@ -2555,8 +2570,12 @@ fn lower_assert(
     // No custom message: generate a static message based on the expression shape.
     let panic_msg = generate_assert_static_msg(condition);
     builder.call_extern(
-        "gorget_panic",
-        vec![Operand::Constant(Constant::Str(panic_msg))],
+        "gorget_trap",
+        vec![
+            Operand::Constant(Constant::Str(
+                crate::trap::TrapKind::AssertFailed.code().to_string())),
+            Operand::Constant(Constant::Str(panic_msg)),
+        ],
         UNIT_TYPE,
     );
     builder.unreachable();
