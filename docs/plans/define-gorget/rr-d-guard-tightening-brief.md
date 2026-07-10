@@ -6,9 +6,11 @@
 > `tests/lints.rs` (the trap parity lint). NO `src/` changes.
 > **Scout:** report `/tmp/scout_rr_d_report.md`, prototype `/tmp/scout_rr_d_prototype.patch`
 > (3 files, +191/−74), all premises CONFIRMED empirically at `cab529cd`.
-> **Status:** v2 — pass-1 reviewed (2 reservations folded: the site count corrected
-> 12→11 throughout — the scout's figure was miscounted; the stray EOF-whitespace hunk
-> flagged for the executor to drop). Awaiting pass 2.
+> **Status:** v3 — pass-1 reviewed (2 reservations folded: site count 12→11
+> throughout; EOF-whitespace hunk flagged for executor drop); pass-2 CLEAN SIGN OFF
+> (folds verified correct+complete; ordering/D23_CODE/check-(c)/gate-counts all
+> independently confirmed; one nit folded: gate 7 names the mutation variant).
+> Awaiting pass 3 (the ≥3-pass minimum's confirming pass).
 
 ## Objective
 
@@ -111,8 +113,10 @@ base, then re-derive judgment on each hunk (you own the result, not the scout).
 5. `cargo test --test smith` — 5/0 (4 pre-existing + the new routing unit test)
 6. `GG_SMITH_TIER=1 GG_SMITH_SEEDS=1..100 cargo test --test smith -- --nocapture`
    — exactly 100 UNHANDLED-THROWS-REJECTED, empty slip/leak/gen-invalid lists
-7. The E0004 mutation re-check (comment a variant out of the macro list, observe
-   the compile error at both matches, revert) — paste the evidence.
+7. The E0004 mutation re-check (comment `UnwrapErrorOnOk` out of the macro list —
+   the variant premise 3 used, non-catchable so it also proves check (c)'s former
+   blind spot is covered — observe the compile error at BOTH generated matches,
+   revert) — paste the evidence.
 
 Full integration sweep + bootstrap stay with the parent (the change is test-only,
 but the parent re-runs the standard sweep at round close).
