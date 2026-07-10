@@ -29,8 +29,10 @@ Re-verify each site:line before editing (the self-host files drift; re-grep the 
 ## Work items
 
 ### W1 — Mechanism A: inline C-string reroute (`lir_codegen.gg`)
-Replace the raw `{ fprintf(stderr, "gorget: <msg>\n"); exit(1); }` C-text these sites emit with
-`{ gorget_trap("T_<Code>", "<detail>"); }` (span-less — the inline path has no `loc`; conformance
+Replace the inline abort-emitting C-text these sites emit — **fprintf/exit for the ARITH sites**
+(`{ fprintf(stderr, "gorget: <msg>\n"); exit(1); }`), **inline `gorget_panic("...")` for the UNWRAP
+GUARDS** (5140/5146/5177 emit e.g. `{ gorget_panic("called \`unwrap()\` on a \`None\` value"); }`) —
+with `{ gorget_trap("T_<Code>", "<detail>"); }` (span-less — the inline path has no `loc`; conformance
 ignores location per Q1). Sites + codes:
 - Arith overflow → `T_Overflow`: `lir_codegen.gg:4412` (IAdd), 4419 (ISub), 4426 (IMul), 4440 (IDiv
   INT_MIN), 4454 (IRem INT_MIN). (The scout used `replace_all` on the `"integer overflow"` guard text
@@ -44,10 +46,19 @@ Change `GICallExtern(-1, "gorget_panic", [msg])` → `GICallExtern(-1, "gorget_t
 - `lower_expr.gg:3525` unwrap → code from `uw_word` (`"None"`→`T_UnwrapNone`, `"Error"`→`T_UnwrapError`).
 - `lower_stmt.gg:1441` assert → `T_AssertFailed`.
 - `lower_expr.gg:7714` user panic → `T_Panic`.
-- **Fault-scope SIBLINGS (fix the class, not the instance — reroute these too, Q-D; not in corpus but
-  same mechanism):** `lower_closures.gg:93` closure panic-by-default → `T_Panic`; `lower_expr.gg:7412`
-  fault-repanic → code from the category the callers already pass (`:7376`="integer overflow"→`T_Overflow`,
-  `:7385`="division by zero"→`T_DivByZero`, bounds→`T_Bounds`).
+- **Do NOT reroute the fault-scope cross-frame repanic siblings** (`lower_closures.gg:93`,
+  `lower_expr.gg:7412`) — leave them emitting `gorget_panic` (revised from an earlier Q-D ruling that
+  was WRONG on two counts): (1) T2a-rust did NOT reroute the Rust TWIN of this path
+  (`src/ir/lowering/functions.rs` `fill_fault_return_block` still emits `gorget_panic` at ~:88/96/103/189-191),
+  so rerouting only the self-host side would DIVERGE the self-host from Rust production on an
+  un-gated cross-frame-fault path (Core #7/#8) — the opposite of the goal; (2) these sites are
+  PER-CATEGORY fault repanics (Overflow/DivByZero/Bounds), so `T_Panic` would emit the
+  self-contradicting `trap[T_Panic]: integer overflow`. Leaving them as `gorget_panic` matches current
+  Rust production AND still flips all 7 corpus fixtures (they hit the DIRECT sites above, never this
+  cross-frame repanic — scout-measured). **FILE a TODO (Medium):** reroute the cross-frame fault
+  repanic in BOTH compilers together (`functions.rs` + the two self-host helpers), category-correct
+  (variant → `T_Overflow`/`T_DivByZero`/`T_Bounds`, NEVER `T_Panic`) — that is the honest "fix the
+  class," since the class spans Rust + self-host.
 - **The ONE table edit that makes Mechanism B marshal correctly:** `runtime_arg_is_cstr`
   (`lir_codegen.gg:2724`) — add `gorget_trap` returning true for `arg_idx == 0` AND `arg_idx == 1`
   (both the code literal and the message are C-strings). The generic arg loop (`lir_codegen.gg:6167-6210`)
