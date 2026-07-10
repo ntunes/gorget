@@ -10,11 +10,13 @@
 > .c shape; lints at HEAD = 52/0 — the scout's 45 was stale).
 > **Scout:** report `/tmp/scout_rr_b_report.md`, prototype `/tmp/scout_rr_b_prototype.patch`
 > (7 files, +106/−83), measured end-to-end at `cab529cd`.
-> **Status:** v2 — pass-1 reviewed (3 folds: D1 gate-4 count corrected to 10/0 —
-> the "30/0" was the scout's OR-filter figure transplanted onto the `trap` filter;
-> D2 the regression fixture now pins BOTH consumers — pass-1 proved the P3
-> heap-UAF is DETERMINISTIC with a named String local, ASan-verified, not "luck";
-> D3 zone wording includes the harness entry). Awaiting pass 2.
+> **Status:** v3 — pass-1 folds (D1 phantom gate count; D2 two-test fixture —
+> P3 heap-UAF proven DETERMINISTIC + ASan-verified; D3 zone wording) + pass-2
+> folds (stale "trap 30/0" remnant reworded; harness entry name PINNED
+> `test_trap_detail_matching` with post-landing gate counts 85/11/8; `int x = 42`
+> declared in the fixture spec). Pass-2 re-verified every empirical claim
+> (pre-fix test 2 fails deterministically 4/4, ASan heap-use-after-free in
+> StrstrCheck; post-fix 2/2 both backends). Awaiting pass 3.
 
 ## Verified premises (scout, empirical)
 
@@ -81,14 +83,19 @@ ONE fixture, TWO tests, run under BOTH backends (only assert-message matching is
 pinned today, `test_should_panic.gg`):
 1. `@should_panic("index out of bounds: index 10, length 3")` on an OOB `v[i]` —
    pins the `gorget_trap_at` consumer (P1).
-2. (pass-1 D2) `String msg = f"boom with dynamic payload {x}"` + `panic(msg)`
-   under `@should_panic("boom with dynamic payload 42")` — pins the
-   `gorget_panic_at` consumer (P3). Pass-1 demonstrated this case FAILS
+2. (pass-1 D2) `int x = 42` then `String msg = f"boom with dynamic payload {x}"`
+   + `panic(msg)` under `@should_panic("boom with dynamic payload 42")` — pins
+   the `gorget_panic_at` consumer (P3). Pass-1 demonstrated this case FAILS
    deterministically pre-fix with a named String local (cleanup frees `str.data`
    before the runner's `strstr`; ASan: heap-use-after-free) — without this test,
    a partial revert of the panic_at hunk stays green.
 This fixture is what converts the false-PASS/false-FAIL roulette into a
 deterministic guard — for BOTH consumers.
+
+**Harness entry name is PINNED (pass-2 fold): `test_trap_detail_matching`** — it
+deliberately contains "trap" so the trap-filter gates exercise the new pin. This
+shifts the post-landing filter counts: gate 4 becomes 11/0, gate 5 becomes 8/0
+(the `test_` filter in gate 3 also matches it — 84 + 1).
 
 ## Measured after (scout prototype)
 
@@ -98,10 +105,11 @@ verified `main.rs:1256-1442`); a mismatched expectation now FAILs readably
 @should_panic PASSes (P3 class); normal mode byte-identical
 (`trap[T_Bounds]: … at file:3:13`, exit 101).
 
-Scout gates: lib 1105/0 · integration `test_` 84/0 · `trap` 30/0 incl.
-`self_host_bootstrap_fixed_point` (with `GG_BUILD/TEST_TIMEOUT_SECS=600` — the
-120s default flakes under multi-agent contention) · LLVM `trap` (skip self_host)
-7/0.
+Scout gates: lib 1105/0 · integration `test_` 84/0 · the trap-filter suite green
+incl. `self_host_bootstrap_fixed_point` (with `GG_BUILD/TEST_TIMEOUT_SECS=600` —
+the 120s default flakes under multi-agent contention; the scout's raw "30/0" was
+its `self_host_` OR-filter rerun, NOT the `trap` filter — gate 4 below has the
+regenerated per-filter count) · LLVM `trap` (skip self_host) 7/0.
 
 ## Risks / accepted residuals
 
@@ -125,13 +133,16 @@ re-derive judgment hunk by hunk (you own it), add the regression fixture.
 
 1. `cargo build`
 2. `cargo test --lib` — 1105/0
-3. `cargo test --test integration test_ -- --test-threads=4` — 84 + new fixture /0
+3. `cargo test --test integration test_ -- --test-threads=4` — 85/0 (84 + the
+   new `test_trap_detail_matching` entry)
 4. `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test integration trap -- --test-threads=4`
-   — **10/0** (7 direct `*_traps` + `self_host_bootstrap`,
-   `self_host_bootstrap_fixed_point`, `self_host_unwrap_traps`; pass-1 D1
-   regenerated via `--list` — the scout's "30/0" was a different OR-filter's
+   — **11/0** (7 direct `*_traps` + 3 self_host-substring tests + the new
+   `test_trap_detail_matching`; the pre-fixture baseline is 10 — pass-1 D1
+   regenerated via `--list`; the scout's "30/0" was a different OR-filter's
    figure, do NOT gate against it)
-5. `GG_BACKEND=llvm cargo test --test integration --release trap -- --test-threads=4 --skip self_host` — 7/0
+5. `GG_BACKEND=llvm cargo test --test integration --release trap -- --test-threads=4 --skip self_host` — 8/0
+   (7 direct + the new `test_trap_detail_matching`; `gg_command` auto-applies
+   `--backend=llvm`)
 6. The new fixture under BOTH backends, plus a paste of the before/after repro
    transcript (false-FAIL and false-PASS both demonstrated fixed).
 7. `cargo test --test lints` — no ratchet deltas expected.
