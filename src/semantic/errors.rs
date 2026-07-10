@@ -380,6 +380,20 @@ pub enum SemanticErrorKind {
     /// (gorget-js snag #11).
     UnconvertibleErrorPropagation { caller_err: String, callee_err: String },
 
+    /// D23 (throws totality): a `throws` call appears in a position where its
+    /// error is neither auto-propagated (the enclosing function is not
+    /// `throws`/`Result`-returning) nor handled (`catch`/`rethrow`/`Result`
+    /// capture). A `throws` call is an expression of type `T` in every
+    /// position; its `Result[T, E]` desugar is never observable. Emitting this
+    /// at the producer (the call site) — rather than letting the raw
+    /// `Result[T, E]` leak into a downstream `unify` — replaces the three
+    /// pre-D23 failure modes with one clean diagnostic: the `found `Result[`
+    /// desugar-leak (free-fn consumer positions), the silent swallow (match
+    /// scrutinee / bare statement), and the silent miscompile-to-garbage
+    /// (`throws` method calls, whose throws-ness was dropped entirely).
+    /// `throws_type` is the callee's error type `E`.
+    UnhandledThrows { throws_type: String },
+
     /// `await` used outside an `async` function.
     AwaitOutsideAsync,
 
@@ -670,6 +684,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::OnErrorInNonThrowingFunction => "E_OnErrorInNonThrowingFunction",
             SemanticErrorKind::MainThrowsNonInt => "E_MainThrowsNonInt",
             SemanticErrorKind::UnconvertibleErrorPropagation { .. } => "E_UnconvertibleErrorPropagation",
+            SemanticErrorKind::UnhandledThrows { .. } => "E_UnhandledThrows",
             SemanticErrorKind::AwaitOutsideAsync => "E_AwaitOutsideAsync",
             SemanticErrorKind::SelectOutsideAsync => "E_SelectOutsideAsync",
             SemanticErrorKind::AwaitNonFuture => "E_AwaitNonFuture",
@@ -899,6 +914,15 @@ impl std::fmt::Display for SemanticError {
                      Add `equip {caller_err} with From[{callee_err}]:` (defining \
                      `{caller_err} from({callee_err} e)`), or handle the error \
                      explicitly with `rethrow`/`catch` (language-design §36.3)"
+                )
+            }
+            SemanticErrorKind::UnhandledThrows { throws_type } => {
+                write!(
+                    f,
+                    "this call throws `{throws_type}` but the error is not handled \
+                     here; declare the enclosing function `throws {throws_type}`, or \
+                     handle it with `catch`, `rethrow`, or by binding the result to a \
+                     `Result[T, {throws_type}]`"
                 )
             }
             SemanticErrorKind::AwaitOutsideAsync => {

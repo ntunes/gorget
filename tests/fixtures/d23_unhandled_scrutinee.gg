@@ -1,0 +1,13 @@
+# D23 (LOAD-BEARING, invariant #8): a `throws` call as a MATCH SCRUTINEE with
+# non-Result arms, in a non-propagating context. Pre-D23 this SILENTLY SWALLOWED
+# the error (no diagnostic; the `throw` was discarded at runtime). Now it must
+# REJECT with E_UnhandledThrows.
+int risky() throws String:
+    throw "boom"
+
+void main():
+    match risky():
+        case 0:
+            print("zero")
+        else:
+            print("hit-else")

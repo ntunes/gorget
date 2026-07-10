@@ -1,0 +1,26 @@
+# D23 fallback-path gate: a `throws` TRAIT-DEFAULT method (body defined IN the
+# trait) called in an unhandled position. `resolve_method`/`resolve_method_by_name`
+# hand back the *trait* def_id for a default, which is NOT a `function_info` key,
+# so the concrete-method throws read (function_info) misses — the throws is read
+# instead from the trait's `DefaultMethodSig.throws_ast`. Pre-fix this SILENTLY
+# MISCOMPILED to garbage (measured `281474382189985`); now it must REJECT.
+# (The HANDLED form — `s.risky() catch (e): ...` — still compiles and runs; the
+# lowering already desugars the default to return `Result`.)
+trait Risky:
+    int base(self)
+    int risky(self) throws String:
+        if self.base() < 0:
+            throw "boom"
+        return self.base() * 2
+
+struct S:
+    int v
+
+equip S with Risky:
+    int base(self):
+        return self.v
+
+void main():
+    S s = S(3)
+    int x = 1 + s.risky()
+    print(x)

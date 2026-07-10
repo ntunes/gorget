@@ -1,0 +1,11 @@
+# D23: a `throws` call as a FUNCTION ARGUMENT into a plain-`T` parameter, in a
+# non-propagating context, is unhandled. Pre-D23 leaked `found `Result[`.
+int risky() throws String:
+    throw "boom"
+
+int id(int x):
+    return x
+
+void main():
+    int n = id(risky())
+    print(n)

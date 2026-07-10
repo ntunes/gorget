@@ -4729,17 +4729,107 @@ fn dict_value_struct_named_v() {
 
 #[test]
 fn throws_call_into_bare_t_error() {
-    check_gg_fails(
-        "throws_call_into_bare_t_error.gg",
-        "expected `int`, found `Result[int, String]`",
-    );
+    // D23: was asserting the pre-D23 desugar LEAK (`found `Result[int, String]`)
+    // — that fixture locked in the leak as canonical. The bind of an unhandled
+    // `throws` call to a bare `T` now REJECTS with `E_UnhandledThrows` and never
+    // surfaces the `Result[T, E]` desugar as the found type.
+    check_gg_fails_no_desugar("throws_call_into_bare_t_error.gg", "throws");
 }
 
 #[test]
 fn throws_call_arg_into_bare_t_error() {
-    check_gg_fails(
-        "throws_call_arg_into_bare_t_error.gg",
-        "expected `int`, found `Result[int, String]`",
+    // D23: same correction as `throws_call_into_bare_t_error`, arg position.
+    check_gg_fails_no_desugar("throws_call_arg_into_bare_t_error.gg", "throws");
+}
+
+// ══════════════════════════════════════════════════════════════
+// D23 — throws-totality enforcement (E_UnhandledThrows)
+//
+// A `throws` call is an expression of type `T` in EVERY position; its
+// `Result[T, E]` desugar is unobservable except at a `Result`-typed binding or
+// a `catch`. Each negative fixture asserts (i) `gg check` FAILS, (ii) stderr
+// says `throws`, (iii) stderr does NOT leak `found `Result[`. The
+// scrutinee/statement/method(/traitdefault) fixtures are LOAD-BEARING: they
+// pin the invariant-#8 gate — the pre-D23 silent SWALLOW (scrutinee/statement)
+// and silent MISCOMPILE-to-garbage (method) now REJECT.
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn d23_unhandled_binop() {
+    check_gg_fails_no_desugar("d23_unhandled_binop.gg", "throws");
+}
+
+#[test]
+fn d23_unhandled_arg() {
+    check_gg_fails_no_desugar("d23_unhandled_arg.gg", "throws");
+}
+
+#[test]
+fn d23_unhandled_bind() {
+    check_gg_fails_no_desugar("d23_unhandled_bind.gg", "throws");
+}
+
+#[test]
+fn d23_unhandled_scrutinee() {
+    // Was a SILENT SWALLOW (no diagnostic; `throw` discarded at runtime).
+    check_gg_fails_no_desugar("d23_unhandled_scrutinee.gg", "throws");
+}
+
+#[test]
+fn d23_unhandled_statement() {
+    // Was a SILENT SWALLOW (bare-statement discard).
+    check_gg_fails_no_desugar("d23_unhandled_statement.gg", "throws");
+}
+
+#[test]
+fn d23_unhandled_matcharm() {
+    check_gg_fails_no_desugar("d23_unhandled_matcharm.gg", "throws");
+}
+
+#[test]
+fn d23_unhandled_method() {
+    // Was the WORST mode: SILENT MISCOMPILE to garbage (`int x = 1 + s.risky()`
+    // passed `gg check`, printed garbage). Concrete equip-method dispatch path.
+    check_gg_fails_no_desugar("d23_unhandled_method.gg", "throws");
+}
+
+#[test]
+fn d23_unhandled_method_traitdefault() {
+    // Fallback path #1: a `throws` TRAIT-DEFAULT method (throws read from the
+    // trait's `DefaultMethodSig`, not `function_info`). Was silent garbage.
+    check_gg_fails_no_desugar("d23_unhandled_method_traitdefault.gg", "throws");
+}
+
+#[test]
+fn d23_unhandled_method_xmod() {
+    // Fallback path #2: a `throws` equip method imported ACROSS a module
+    // boundary, called in an unhandled position.
+    check_gg_fails_dir_no_desugar("d23_unhandled_method_xmod", "main.gg", "throws");
+}
+
+#[test]
+fn d23_capture_freefn() {
+    // Positive (over-rejection guard): free-fn whole-`Result` capture (§10.3) +
+    // auto-propagation still compile.
+    run_gg(
+        "d23_capture_freefn.gg",
+        "\
+10
+boom
+9",
+    );
+}
+
+#[test]
+fn d23_capture_method() {
+    // Positive (over-rejection guard): the newly-wired METHOD path — a
+    // whole-`Result` capture of a `throws` equip method still compiles.
+    run_gg(
+        "d23_capture_method.gg",
+        "\
+12
+boom
+12",
     );
 }
 
@@ -7072,6 +7162,86 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     assert!(
         stderr.contains(expected_stderr),
         "Expected stderr to contain '{expected_stderr}' for {fixture}, got:\n{stderr}",
+    );
+}
+
+/// D23 (throws totality) negative-fixture harness. `gg check` must FAIL, its
+/// stderr must contain `expect` (use `"throws"` — the `E_UnhandledThrows`
+/// message), AND it must NOT contain the desugar leak `found `Result[` — i.e.
+/// the diagnostic never surfaces the `Result[T, E]` desugar as the found type.
+/// This is BEHAVIORAL: it guards every unhandled-throws position (free-fn AND
+/// method, present and future) rather than a single patched site, and it makes
+/// the invariant-#8 gate executable — the scrutinee/statement/method fixtures
+/// assert the pre-D23 silent swallow / silent miscompile now REJECTS.
+fn check_gg_fails_no_desugar(fixture: &str, expect: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let output = build_with_timeout(gg_command("check").arg(&fixture_path), fixture);
+
+    assert!(
+        !output.status.success(),
+        "Expected `gg check` to fail for {fixture}, but it succeeded.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(expect),
+        "Expected stderr to contain '{expect}' for {fixture}, got:\n{stderr}",
+    );
+    // The desugar-leak ratchet (Q2): the ban is on surfacing the `Result[T, E]`
+    // desugar as the FOUND type — never on naming `Result` in teaching prose, so
+    // it is scoped to the `found `Result[` substring, not any `Result[`.
+    assert!(
+        !stderr.contains("found `Result["),
+        "D23 desugar leak: stderr for {fixture} surfaced the `Result[T, E]` \
+         desugar as the found type (should be `E_UnhandledThrows`), got:\n{stderr}",
+    );
+}
+
+/// Directory variant of `check_gg_fails_no_desugar` — for the cross-module D23
+/// gate (a `throws` equip method imported across a module boundary): `gg check
+/// <dir>/<main>` must FAIL, contain `expect`, and NOT leak `found `Result[`.
+fn check_gg_fails_dir_no_desugar(dir_name: &str, main_file: &str, expect: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let main_path = manifest_dir
+        .join("tests/fixtures")
+        .join(dir_name)
+        .join(main_file);
+
+    assert!(
+        main_path.exists(),
+        "Fixture not found: {}",
+        main_path.display()
+    );
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&main_path),
+        &format!("{dir_name}/{main_file}"),
+    );
+
+    assert!(
+        !output.status.success(),
+        "Expected `gg check` to fail for {dir_name}/{main_file}, but it succeeded.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(expect),
+        "Expected stderr to contain '{expect}' for {dir_name}/{main_file}, got:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("found `Result["),
+        "D23 desugar leak: stderr for {dir_name}/{main_file} surfaced the \
+         `Result[T, E]` desugar as the found type, got:\n{stderr}",
     );
 }
 

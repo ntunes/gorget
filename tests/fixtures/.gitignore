@@ -36,6 +36,10 @@
 !equip_method_no_shadow_extern/**
 !type_alias_struct_dir/
 !type_alias_struct_dir/*.gg
+# D23 throws-totality cross-module negative fixture (a `throws` equip method
+# imported across a module boundary, called unhandled → E_UnhandledThrows).
+!d23_unhandled_method_xmod/
+!d23_unhandled_method_xmod/*.gg
 # Known self-host gaps parked OUT of the top-level runtime_diff corpus (the
 # corpus reads tests/fixtures/*.gg non-recursively, so a subdir fixture is not
 # counted): the #[ignore]d negative fixtures documenting a filed residual

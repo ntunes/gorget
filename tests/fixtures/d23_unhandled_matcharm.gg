@@ -1,0 +1,13 @@
+# D23: a `throws` call as a MATCH-ARM TAIL value (match-as-expression) in a
+# non-propagating context is unhandled. Pre-D23 leaked `found `Result[` (a noisy
+# cascade). Now: E_UnhandledThrows, no desugar leak.
+int risky() throws String:
+    throw "boom"
+
+void main():
+    int n = match 1:
+        case 0:
+            0
+        else:
+            risky()
+    print(n)
