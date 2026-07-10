@@ -50,12 +50,21 @@ sequential fresh-review gauntlet.
     spec_conformance -- --test-threads=1 --nocapture` (expect C/LLVM 194, self-host 187, bounds the
     sole per-lane MISMATCH). Assert real-span (Q-D) deferred LOW = a deeper pre-existing branch-block
     span gap (impl-defined, not conformance-compared).
-  - **NEXT to finish the trap wave:** **T2a-selfhost** (mirror the reroute in the self-host `.gg`
-    lowering — `lir_codegen.gg`/`lower_expr`/`lower_stmt`/`lower_closures`; self-host floor →194;
-    needs driver-rebuild + `bootstrap_fixed_point`; brief cleanest against the LANDED T2a-rust
-    patterns) + **T2b** (bounds runtime path → REAL locations [owner ruling] + c_lir `abort()`/134
-    fold → all floors →195=MIN_FIXTURES). Then **T3b** (smith throws tier, parallel). Then the wave
-    moves to **D12** (D4 drop-purity enforcement — blast-radius scout first).
+  - **T2a-selfhost LANDED** (merge `9bb33ec6`): self-host lane emits `trap[T_<Code>]` at the 7 direct
+    sites → `spec_conformance_selfhost` 194/1 (only `trap_bounds`); floor 187→194; `self_host_trap_code_parity`
+    lint pins the hand-spelled codes. Cross-frame repanic siblings LEFT as `gorget_panic` (matches
+    un-rerouted Rust; both-compiler reroute filed). **T3b LANDED** (merge `d70fefe1`): D23 smith
+    rejection-oracle fuzz tier (`GG_SMITH_TIER=1`, canary-proven the gate blocks a slip); D23 enforcement
+    now complete (diagnostic + fuzz). **NOW 3/4 lanes emit the trap format; only `trap_bounds` remains
+    on ALL lanes.**
+  - **LAST D11 slice = T2b** (in progress): flip `trap_bounds` on all 4 lanes AND thread the REAL source
+    location into the bounds trap (owner ruling — bounds gets real locations, unlike the span-less
+    inline traps) across all THREE emit paths (Rust C `runtime_array.c`/`c_lir`, Rust LLVM, self-host
+    `lir_codegen.gg`) + fold the c_lir `abort()`/134 sites → all floors 194→195=MIN_FIXTURES, D11
+    COMPLETE. Own scout (measure the current bounds emit + prototype span-threading). **After T2b: the
+    round is DONE — per owner 2026-07-10, HAND OFF to a fresh agent** (D12/D10/D13-17/riders are the
+    NEXT round; do NOT start them). Handover-prep: regenerate all numbers, verify commit hashes, fresh
+    verification pass on this snapshot.
 - **Decisions D1–D8**: all recorded in `decisions.md` with rationale. Do not relitigate; do
   bring NEW decision needs to the owner as option-questions (owner directive: ask along the
   way, with recommendations and previews).

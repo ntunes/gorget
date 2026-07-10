@@ -5089,7 +5089,10 @@ fn raw_trap_exit_sites_ratchet() {
 /// `lower_closures.gg` is scanned too: its cross-frame repanic DELIBERATELY
 /// stays `gorget_panic` (per the T2a-selfhost brief — rerouting it would diverge
 /// the self-host from un-rerouted Rust production), so it must contribute ZERO
-/// captures. Scanning it makes a stray `T_` literal there a failure.
+/// captures. Scanning it catches a stray *bogus* `T_` literal there (a code not in
+/// `TrapKind::code()`); note a valid-but-wrong reroute — e.g. `gorget_trap("T_Panic", …)`
+/// on the per-category repanic — would PASS this lint (it's a real code), so the
+/// "leave it as `gorget_panic`" invariant is enforced by review, not this lint.
 ///
 /// The LIR type constants (`T_PTR`, `T_STRUCT`, `T_VOID`, …) are BARE
 /// identifiers, never quoted, so the quote-anchored match captures exactly the
