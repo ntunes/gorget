@@ -117,10 +117,16 @@ trap-string changes are invisible — SAFE). Do NOT run the full `cargo test --t
 (parent's job).
 
 ## Scope fences
-- Touch ONLY: `tests/fixtures/self_host_lowerer/{lir_codegen,lower_expr,lower_stmt,lower_closures}.gg`,
-  `tests/lints.rs` (the new parity lint), `tests/spec_conformance.rs` (the floor bump), `TODO.md` (the
-  Q-C follow-up). Do NOT touch `src/` (T2a-rust landed; the runtime `gorget_trap`/`gorget_trap_at`
-  already exist), `spec/ggdef/*`, `spectests/*`, the reference, or the latent `abort()` sites (T2b).
+- EDIT ONLY these three `.gg` files: `tests/fixtures/self_host_lowerer/{lir_codegen,lower_expr,lower_stmt}.gg`
+  (the direct trap sites), plus `tests/lints.rs` (the new parity lint), `tests/spec_conformance.rs`
+  (the floor bump), `TODO.md` (BOTH the Q-C self-host-shift follow-up AND the cross-frame-repanic
+  follow-up).
+- **`lower_closures.gg` is READ by the W3 parity lint ONLY — do NOT EDIT it.** Its trap site (`:93`)
+  deliberately STAYS `gorget_panic` per W2 (rerouting it to `gorget_trap("T_Panic", …)` would
+  reintroduce the self-host/Rust divergence pass 1 removed — and NO gate catches it: the parity lint
+  accepts `T_Panic`, bootstrap stays green, no corpus fixture exercises the cross-frame path).
+- Do NOT touch `src/` (T2a-rust landed; the runtime `gorget_trap`/`gorget_trap_at` already exist),
+  `spec/ggdef/*`, `spectests/*`, the reference, or the latent `abort()` sites (T2b).
 
 ## Worktree & agent discipline (NON-NEGOTIABLE)
 `pwd` + `git rev-parse --show-toplevel` FIRST; confirm BOTH inside your worktree; STOP if either is
@@ -138,5 +144,6 @@ Claude-Session: https://claude.ai/code/session_01YWwxrY4NAvQ5uv43X4VjHL
 
 ## Deliverable
 Per work item: files+file:line and one-line what. PASTED gate output — the `spec_conformance_selfhost`
-194/1 summary, the parity-lint result, bootstrap green. The Q-C self-host-shift TODO you filed. Any
+194/1 summary, the parity-lint result, bootstrap green. The TWO TODOs you filed (the Q-C
+self-host-shift-parity follow-up AND the both-compiler cross-frame-repanic follow-up). Any
 site whose line/shape differed from the scout's map (corrected). Branch + commit hash.
