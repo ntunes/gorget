@@ -64,8 +64,33 @@ sequential fresh-review gauntlet.
     a blocking LLVM `trap_counter` twin-drift build-fail (2nd instance of that class) — fixed `feee30d3`.
     **All 4 implementation lanes now emit the ratified `trap[T_X]: … at file:line:col` + exit 101.**
   - **✅ THE ROUND IS DONE (2026-07-10).** This round landed T1 · T2a-rust · T2a-selfhost · T2b (D11
-    complete) + T3a · T3b (D23 enforcement complete). **Per the owner directive, HAND OFF to a fresh
-    agent for the NEXT round.** Do NOT start D12/D10/D13-17/riders — those are the next round's work.
+    complete) + T3a · T3b (D23 enforcement complete).
+  - **✅ REVIEW-RESIDUALS ROUND DONE (2026-07-10, same day — owner-directed).** An xhigh 30-agent
+    adversarial review of the D11/D23 wave (`f42eea96..7aad1844`) found 15 verified defects; ALL
+    fixable ones are now LANDED via 4 gauntlet tracks + an inline slice (see DONE.md entries R-A/R-B/
+    R-C/R-D + "Review-residuals INLINE slice"): R-D guard-tightening `874b6371` · R-A trait-registry
+    keying + trait-default throws substitution `6d12c5ad` (the review's mechanism was one layer OFF —
+    every cross-module trait-default method was invisible to typecheck; fixed at the write site) ·
+    R-B trap-detail lifetime + `gorget_trap_fmt` 27-site dedup `6e51fd18` · R-C LLVM
+    `T_UnwrapErrorOnOk` combinator guard + happy-path repair `dd05ebb8` · inline slice `38d28727`
+    (sim `gorget_trap` arm, shift→T_Overflow registry doc rows, ggdef location-suffixed trap render).
+    **Round-close verification (all regenerated 2026-07-10): full C sweep 1579/0/7ign · full LLVM
+    sweep 1579/0/7ign · spec_conformance C/LLVM/self-host each 195/195 MATCH 0 MISMATCH 0 BUILD-FAIL ·
+    lib 1105/0 · lints 53/0 · ggdef 104/0 · parity regen 1147/1219 = 94.1%** (MATCH +37 abs vs
+    post-R43; denom grew 1177→1219 with the waves' fixtures; WRONG 10 · CC-FAIL 51 · CRASH 11 —
+    2 of those are R-C's new combinator fixtures crashing on the SELF-HOST lane, filed (c3)).
+    **The gauntlet surfaced SIX new pre-existing defect classes, all FILED with measured repros, none
+    fixed this round: (a2) self-host lacks the D23 gate entirely · (a3) supertrait defaults un-gated
+    (no extends walk) · (a4) generic-trait-default `throws E` bodies lower unsubstituted → silent
+    wrong values · (c2) unwrap-family on static receivers returns garbage BOTH backends · (c3) the
+    self-host combinator-lane crash · the `ast_type_to_resolved` Import-placeholder cousin.** These +
+    the wave-2 (f) cleanup residue (cstr-marshal dedup, typed CallExtern routing, unwrap name-match
+    fallback) + the escalated `block_exit_labels` fix-(b) track (measured NOT drop-in, ~44-site
+    audit, 4 known instances) are the review-residuals backlog — each needs its own gauntlet.
+    PROCESS NOTE: FOUR rule-9 stalls this round, all on >600s gates; the sanctioned recovery is the
+    CHUNKED-FOREGROUND pattern (split suites by test name) — brief it explicitly in future executor
+    prompts. **Per the owner directive, the enforcement wave continues with a fresh agent's round.**
+    Do NOT start D12/D10/D13-17/riders — those are the next round's work.
     Enforcement-wave order for the next agent: **D12** (D4 drop-purity — blast-radius scout first) →
     **D10** exclusivity tracks (bootstrap-gated) → D13/D14/D17 → small riders (D15+D22 slice-surface,
     D18-D21); A31/A32 design scouts interleave. Open trap/throws follow-ups in TODO (each own gauntlet):
