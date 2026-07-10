@@ -42,13 +42,20 @@ sequential fresh-review gauntlet.
     a live trait-default hole) at one producer helper; expr-body widened to match block-body.
     Follow-ons: T3b (smith throws tier), 2 minor items filed in TODO (generic-error trait-default
     message substitution; general must-use-on-Result).
-  - **T2a is SPLIT** (scout `scout-t2a-production-emit.md` measured: overflow/divzero are emitted
-    INLINE, not via gorget_panic; self-host needs its OWN reroute): **T2a-rust** (C+LLVM inline-arith
-    + gorget_panic-based reroute + `src/trap.rs` mirror + parity lint; flips 7/8 fixtures, C/LLVM
-    floors 187→194; brief `t2a-rust-production-emit-brief.md` committed, gauntlet next) +
-    **T2a-selfhost** (mirror in `.gg` lowering; self-host floor →194) + **T2b** (bounds runtime path
-    → REAL locations + `abort()` fold → floors →195). Owner ruled shift-out-of-range → `T_Overflow`
-    (+ add the missing LLVM shift check).
+  - **T2a-rust LANDED** (merge `82d50b0f`): both Rust backends emit `trap[T_<Code>]: … + exit 101`;
+    7/8 fixtures MATCH on C+LLVM (floors 187→194; bounds=T2b, self-host=T2a-selfhost). `src/trap.rs`
+    mirrors ggdef (parity-lint-pinned); shift→`T_Overflow` + new LLVM shift check (owner ruling); a
+    block_exit_labels twin-drift phi bug the LLVM shift check exposed was caught ONLY by the bootstrap
+    (invariant #7) + fixed + pinned. Regenerate: `GG_BUILD_TIMEOUT_SECS=600 cargo test --test
+    spec_conformance -- --test-threads=1 --nocapture` (expect C/LLVM 194, self-host 187, bounds the
+    sole per-lane MISMATCH). Assert real-span (Q-D) deferred LOW = a deeper pre-existing branch-block
+    span gap (impl-defined, not conformance-compared).
+  - **NEXT to finish the trap wave:** **T2a-selfhost** (mirror the reroute in the self-host `.gg`
+    lowering — `lir_codegen.gg`/`lower_expr`/`lower_stmt`/`lower_closures`; self-host floor →194;
+    needs driver-rebuild + `bootstrap_fixed_point`; brief cleanest against the LANDED T2a-rust
+    patterns) + **T2b** (bounds runtime path → REAL locations [owner ruling] + c_lir `abort()`/134
+    fold → all floors →195=MIN_FIXTURES). Then **T3b** (smith throws tier, parallel). Then the wave
+    moves to **D12** (D4 drop-purity enforcement — blast-radius scout first).
 - **Decisions D1–D8**: all recorded in `decisions.md` with rationale. Do not relitigate; do
   bring NEW decision needs to the owner as option-questions (owner directive: ask along the
   way, with recommendations and previews).
