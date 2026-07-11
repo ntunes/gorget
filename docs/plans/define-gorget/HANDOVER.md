@@ -120,18 +120,18 @@ sequential fresh-review gauntlet.
       SIGN OFF (diff content-identical to the reviewed prototype); post-integration
       quick gates green (build, lib 1105/0, break 5/0, lints 53/0). Full sweep at batch
       close covers it. Detail: DONE.md.
-    - **A2-R (D12 drop-purity, Rust half): brief v5, pass 5 (confirming, Opus) in
-      flight with the SPLIT-DECISION mandate.** Brief `wave-a2-drop-purity-brief.md`
-      v5 = durable prototype (`scouts/patches/scout_wA2_prototype.patch`) + 22 folds
-      across 4 passes. Pass-3: the BLOCKING place-shape hole (measured double-drop on
-      `R c = hh.r`). Pass-4 EXECUTED the fix (implementation PINNED: the
-      `lvalue_value_type` reroute, 2 lines, zero collateral) + DESCOPED-and-FILED the
-      unbuildable ImplicitClosure `it.r` arm + shape-gated the fix-its + the
-      capture-rooted-tail skip. Pass-5 produces the executor's work-item CHECKLIST +
-      the one-track-vs-split call; orchestrator follows it. NEXT: pass-5 verdict →
-      executor(s) (`model:"opus"`). Filed en route: Shared[R]-payload-drop (HIGH) ·
-      builtin-handle name-list debt · generics-T-blind dodge · it-lambda tail dodge
-      (all MEDIUM).
+    - **A2 (D12 drop-purity): SPLIT per pass-5 (Opus) — A2-R1 EXECUTING (Opus), A2-R2 queued.**
+      Gauntlet: 5 passes, 22 folds; pass-5 BUILT the two riskiest items and ruled the split.
+      A2-R1 (brief `wave-a2-drop-purity-brief.md`, SPLIT header = scope): taint pass + six
+      positions (incl. expr-body `check_stmt.rs:1747` + closure tails with capture-rooted
+      skip) + `lvalue_value_type` place-shape reroute + full probe suite + ggdef parity
+      (Option gap, closure-tail, field-place rejection tests) + docs. Executor running with
+      9 milestones; commit lands with the current generic message (staged, Core-#8 clean).
+      A2-R2 (stub `wave-a2-r2-message-ice-brief.md`): position/shape-aware message (no-`!`
+      capture gate; dead `move` suggestion dies) + the compound-assign ICE fix (CORRECTED
+      anchors: `stmts/assigns.rs:1148`, `ir/builder.rs:258`, panic `mod.rs:1763`) — own
+      scout→gauntlet AFTER A2-R1. Filed en route: Shared[R]-payload-drop (HIGH) ·
+      builtin-handle name-list · generics-T-blind · it-lambda tail dodge (MEDIUM).
     - **A3 (D10a &-bind rejection): brief v4, pass 4 (confirming, Opus) in flight.**
       Pass-3 verified the substance sound on the post-A1 tree (composition, gates,
       bootstrap 501s, adversarial + A1-interaction probes) with 2 mechanical folds
