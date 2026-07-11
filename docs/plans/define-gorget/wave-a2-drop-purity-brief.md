@@ -29,7 +29,15 @@
 > post-track — pin-4's reason-field touches ALL of them. (5) the gate list now
 > enumerates the closure + field-place probes. (6) the ICE rider's TODO targets
 > NAMED precisely. Prior history: pass-1's 8 folds, pass-2's 5.
-> Awaiting pass 4.
+> **v5 (pass-4, Opus):** the place-shape fold EXECUTED AND PROVEN (implementation
+> pinned: the `lvalue_value_type` reroute — 2 lines, zero collateral across all
+> 26 Drop-equipping fixtures); the ImplicitClosure `it.r` arm DESCOPED-and-FILED
+> (not buildable without it-typing infra — `Expr::It`'s type is an unresolved
+> unification var invisible to the safety pass; runtime-safe false-negative;
+> ggdef can't express it-lambdas); pin-4 gains SHAPE-gating (field/index →
+> `.clone()` only; ggdef field tests REJECTION-only); the closure tail check
+> skips CAPTURE-rooted places (pass-4 measured the double-report).
+> Awaiting pass 5 (confirming).
 
 ## Verified premises
 
@@ -68,13 +76,19 @@
   FieldAccess/Index spans never are, and the fallback covers only
   Identifier/SelfExpr. Consequence (measured): `R c = hh.r` binds a field place
   UNREJECTED and the program runs R's custom drop TWICE; `return h.r` and
-  closure-tail `h.r` same; ggdef rejects all three. FIX AT THE WRITER (layering
-  rule 1): either record FieldAccess/Index expression types into `expr_types`
-  during typecheck, or resolve field chains from the typed
-  `DefInfo.field_types` the taint pass already populates — mirroring ggdef's
-  `infer_ast_ty` (`elaborate/mod.rs:522-542`). The prototype's "covers EVERY
-  place shape" comments are FALSE — correct them. ADD field-place + index-place
-  probe fixtures per position AND 1-2 field-place tests to ggdef's own suite so
+  closure-tail `h.r` same; ggdef rejects all three. THE IMPLEMENTATION (pass-4
+  executed it — a two-line reroute, zero collateral over all 26 Drop-equipping
+  fixtures): resolve places through the EXISTING `lvalue_value_type`
+  (`src/semantic/safety/helpers.rs:818` — already walks
+  identifier/self/field/tuple/index chains via `struct_field_names` +
+  `DefInfo.field_types`, exactly ggdef's `infer_ast_ty` shape, independent of
+  the sparse `expr_types`). Do NOT take the record-into-expr_types option (it
+  would require enumerating every expr_types reader). The prototype's "covers
+  EVERY place shape" comments are FALSE — correct them. ADD field-place +
+  index-place probe fixtures per position AND 1-2 field-place REJECTION-ONLY
+  tests to ggdef's own suite (pass-4: do NOT add a field-place `!`-move legal
+  counterpart — `!hh.r` is a PARTIAL MOVE and errors `E_UseAfterMove` in
+  production; ggdef's `!a` counterpart is identifier-shaped for this reason) so
   the parity is TEST-VISIBLE (the ported identifier-shaped suite stays green
   across this divergence — that's the trap).
 - **The six positions:** 1-2 (bare-assign, ctor/field-init) ride the EXISTING 2
@@ -92,11 +106,20 @@
   lines) AND — pass-2's Core-#4 ruling — CLOSURE returns, BOTH spellings: the
   `Stmt::Return` check already fires in closure block bodies (pass-3 verified);
   extend to closure EXPR-TAILS (`Expr::Closure` arm, `check_expr.rs:948`, ~9
-  lines, same `imported_module_depth == 0` gate) AND — pass-3's sibling — the
-  `Expr::ImplicitClosure` arm (`check_expr.rs:999`, the `hs.map(it.r)` shape)
-  via ONE SHARED tail-check helper for both arms; ggdef gains the matching
-  closure-tail check + an 11th/12th test pair — both sides agree before
-  landing**; 5 off `compute_capture_set`; 6 inside
+  lines, same `imported_module_depth == 0` gate; pass-4 proved `(HH h): h.r`
+  rejects with the shared helper). ⚠ Pass-4 DESCOPED the `Expr::ImplicitClosure`
+  `it.r` arm — NOT buildable as a shared-helper wiring: `it` is a distinct
+  `Expr::It` node (absent from `expr_is_place`) whose type lives only in the
+  typecheck-only `implicit_it_type` as an UNRESOLVED unification var
+  (`TypeTable::get` doesn't follow union-find; no post-pass resolves
+  `expr_types` vars) — closing it needs real it-typing infra. Core-#8-clean to
+  descope: `hs.map(it.r)` runs CORRECTLY today (exactly one drop, pass-4
+  verified — a false-negative, not a shipped double-drop), and ggdef cannot
+  express `it`-lambdas (`ggc.rs:236-271`). FILED as a follow-up with the
+  mechanism spelled out. The tail check MUST skip CAPTURE-ROOTED places
+  (position 5's domain — pass-4 measured `(): hh.r` double-reporting from both
+  positions; the tail arm fires only for param-rooted tails). ggdef gains the
+  matching closure-tail check + test pair for the shapes it CAN express**; 5 off `compute_capture_set`; 6 inside
   `mark_bare_param_write_def` (pre-filtered by `deadwrite_params`, which excludes
   `self` — pin 3 holds by construction; note: `_`-prefixed params also dodge
   position 6, a known micro-divergence from ggdef, acceptable).
@@ -152,10 +175,12 @@
    specified the mechanism):** extend the `MoveWithoutOperator` error variant
    with a reason/position field, rendered under the SAME `E_MoveWithoutOperator`
    code (no new code). Message content: name the drop-taint CAUSE (ggdef's
-   message is the model) + per-position remedies — positions 1-4/6 suggest `!x`
-   or `.clone()`; position 5 (captures) suggests PASS-AS-ARG or a `Shared[T]`
-   wrap ONLY (the `.clone()`-into-local suggestion does not compile — the clone
-   is equally tainted; capture-list syntax is D5/D7, unbuilt). **The current
+   message is the model) + per-position AND per-SHAPE remedies (pass-4):
+   positions 1-4/6 with a WHOLE-IDENTIFIER place suggest `!x` or `.clone()`;
+   FIELD/INDEX places suggest `.clone()` ONLY (`!hh.r` is a PARTIAL MOVE →
+   `E_UseAfterMove`, not a fix); position 5 (captures) suggests PASS-AS-ARG or a
+   `Shared[T]` wrap ONLY (the `.clone()`-into-local suggestion does not compile
+   — the clone is equally tainted; capture-list syntax is D5/D7, unbuilt). **The current
    message's `` `move` `` alternative is DEAD SYNTAX (does not parse —
    reserved-only) — remove it while touching the message.** GATE: the rendered
    capture-position message contains no `!` suggestion. (ggdef's own message
