@@ -112,7 +112,36 @@ sequential fresh-review gauntlet.
     coordination round (owner ruling). Every track: brief → ≥3 sequential fresh reviews →
     worktree executor → output-review → integrate; surprises are REPORTS, not downgrades.**
     After Batch C: the out-of-repo coordination round → D13/D14/D17 → remaining riders;
-    A31/A32 design scouts interleave. Open non-fault follow-ups in TODO (each own gauntlet):
+    A31/A32 design scouts interleave.
+  - **⚡ LIVE BATCH-A STATE (update IN PLACE at every track state-change — owner directive
+    2026-07-11: subagents run `model:"opus"`; Fable reserved for the orchestrator; this block
+    exists so ANY model can resume mid-batch):**
+    - **A1 (D19 break-value removal): EXECUTED, awaiting output-review.** Brief
+      `wave-a1-break-value-removal-brief.md` v3 (3-pass gauntlet clean). Executor commit
+      `68e21f79` on its worktree branch (`worktree-agent-ab50b8851fdd6bd3d`); final patch
+      `/tmp/wA1_exec_final.patch`; all 17 gates exact (incl. bootstrap fixed-point green,
+      5 comparison suites byte-identical, 3 residue greps empty). NEXT: output-review
+      (in flight) → parent cherry-picks onto gorget-1 → full sweep at batch close.
+    - **A2-R (D12 drop-purity, Rust half): brief v3 in gauntlet, pass 3 (confirming) in
+      flight.** Brief `wave-a2-drop-purity-brief.md` v3 = scout prototype
+      (`/tmp/scout_wA2_prototype.patch`) + 13 folds across 2 passes; executor must ALSO
+      build: the expr-body hunk (~11 lines, spec'd), the closure-tail extension BOTH
+      production+ggdef (+11th/12th tests), the position-aware message mechanism, the ICE
+      rider (un-prototyped), the ggdef Option-taint fix (+10th test). NEXT: pass-3 verdict
+      → fold-or-launch executor (`model:"opus"`).
+    - **A3 (D10a &-bind rejection): brief v1 in gauntlet, pass 1 in flight.** Brief
+      `wave-a3-amp-bind-rejection-brief.md`; scout prototype
+      `/tmp/scout_wA3_prototype.patch` (12-shape class; T-D intercept corrected to
+      self-host-only; bootstrap green chunked). NEXT: pass-1 verdict → folds → passes
+      2-3 → executor (`model:"opus"`).
+    - **Batch-A discoveries FILED during the gauntlets** (all in TODO High): self-host
+      parse-error surfacing (check/lowerer lanes drop ALL parse errors) · `return &v` of a
+      `&`-param double-free · `Shared[R]` payload custom-drop never runs · builtin-handle
+      name-list typed-marker debt · `Parser::error_at` prose-mangle (LOW) · decl-sigil
+      swallow noted in C3's mandate.
+    - **Integration order at batch close (parent):** cherry-pick A1 → A2-R → A3
+      sequentially (same-file disjoint hunks in src/semantic — resolve textual adjacency);
+      then full both-backend sweep + bootstrap + conformance + parity regen; then Batch B. Open non-fault follow-ups in TODO (each own gauntlet):
     rarer-bounds-sites real locations; self-host shift-parity guard; the block_exit_labels
     structural guard (≥2 instances — escalated); D23's T3c positive-throws smith tier. (The
     former fault-re-panic normalization + dead-catch-lint follow-ups are CANCELLED by D25 —
