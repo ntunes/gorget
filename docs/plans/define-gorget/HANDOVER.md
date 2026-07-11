@@ -132,15 +132,13 @@ sequential fresh-review gauntlet.
       executor(s) (`model:"opus"`). Filed en route: Shared[R]-payload-drop (HIGH) ·
       builtin-handle name-list debt · generics-T-blind dodge · it-lambda tail dodge
       (all MEDIUM).
-    - **A3 (D10a &-bind rejection): brief v3, pass 3 (confirming, Opus) in flight —
-      first pass on the post-A1 tree (A1×A3 composition check included).** Brief
-      `wave-a3-amp-bind-rejection-brief.md` v3: pass-1's expr-position fold + pass-2's
-      stmt-form-tail sibling (PROVEN extension staged at
-      `scouts/patches/wA3_pass2_stmt_tail_ext.patch`, composing with the base
-      prototype) + the multi-line do-fixture trap + 3 negative fixtures. Filed en
-      route: comprehension-over-`&a` empty vector (HIGH) · no-op-`&` value-position
-      family (MEDIUM) · typed borrow-provenance root cause (MEDIUM — Batch B's scout
-      evaluates building it FIRST). NEXT: pass-3 verdict → executor (`model:"opus"`).
+    - **A3 (D10a &-bind rejection): brief v4, pass 4 (confirming, Opus) in flight.**
+      Pass-3 verified the substance sound on the post-A1 tree (composition, gates,
+      bootstrap 501s, adversarial + A1-interaction probes) with 2 mechanical folds
+      (stmt-match indented-arms fixture trap; gate counts reconciled 10/33/EXACTLY-10;
+      patch-assembly instructions — naive sequential apply FAILS post-A1). Patches:
+      `scouts/patches/scout_wA3_prototype.patch` + `wA3_pass2_stmt_tail_ext.patch`.
+      NEXT: pass-4 verdict → executor (`model:"opus"`).
     - **Batch-A discoveries FILED during the gauntlets** (all in TODO High): self-host
       parse-error surfacing (check/lowerer lanes drop ALL parse errors) · `return &v` of a
       `&`-param double-free · `Shared[R]` payload custom-drop never runs · builtin-handle
