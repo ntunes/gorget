@@ -116,12 +116,10 @@ sequential fresh-review gauntlet.
   - **⚡ LIVE BATCH-A STATE (update IN PLACE at every track state-change — owner directive
     2026-07-11: subagents run `model:"opus"`; Fable reserved for the orchestrator; this block
     exists so ANY model can resume mid-batch):**
-    - **A1 (D19 break-value removal): EXECUTED, awaiting output-review.** Brief
-      `wave-a1-break-value-removal-brief.md` v3 (3-pass gauntlet clean). Executor commit
-      `68e21f79` on its worktree branch (`worktree-agent-ab50b8851fdd6bd3d`); final patch
-      `/tmp/wA1_exec_final.patch`; all 17 gates exact (incl. bootstrap fixed-point green,
-      5 comparison suites byte-identical, 3 residue greps empty). NEXT: output-review
-      (in flight) → parent cherry-picks onto gorget-1 → full sweep at batch close.
+    - **A1 (D19 break-value removal): ✅ LANDED `d59605fc` (2026-07-11)** — output-review
+      SIGN OFF (diff content-identical to the reviewed prototype); post-integration
+      quick gates green (build, lib 1105/0, break 5/0, lints 53/0). Full sweep at batch
+      close covers it. Detail: DONE.md.
     - **A2-R (D12 drop-purity, Rust half): brief v4 in gauntlet, pass 4 in flight
       (Opus).** Brief `wave-a2-drop-purity-brief.md` v4 = durable prototype
       (`scouts/patches/scout_wA2_prototype.patch`) + 19 folds across 3 passes. Pass-3
