@@ -180,6 +180,28 @@ language-design/book examples showing float output.
   boundary, explicitly fallible APIs) — NEVER by implicit membership in signatures or
   inferred sets. Binding on any A31 union design; revisit only when catchable faults
   are implemented.**
+  **⚡ OWNER UPDATE (2026-07-11 design discussion): SPEC PULLED FORWARD — scout NOW,
+  ruling next batch, census-based.** The discussion (triggered by the review-residuals
+  pushback on the lexical-catch ceiling + the finding-(b) pre-check idiom) settled
+  three things and widened the mandate to three coupled questions (ONE design: "where
+  may a fault become a value?"): (1) DEEP/dynamic fault catch REJECTED on the merits
+  (breaks D1-refinement, D11 no-drops, the A33 rider's spirit; imports 4-implementation
+  unwinding costs; conflates data errors [the channel's job] with bug containment
+  [isolation's job] — the eventual spec prose carries the full "why not dynamic
+  exceptions" argument); (2) the owner SECOND-GUESSES lexical fault-catch's existence
+  — the removal hypothesis (Swift model: faults uniformly uncatchable; boundary = the
+  ONLY conversion; catchable-subset concept deleted) goes to census (pre-census:
+  `catch Fault` in 39 fixture files, ZERO gorget-js files); (3) `checked_add()`-style
+  methods rejected on ergonomics — evaluate the FALLIBLE-OPERATOR family (`+?` `-?`
+  `*?` `/?` `%?`: `T` in every position per D23, throws a prelude arith error into
+  the ONE channel, auto-propagates, catchable via the existing `catch (e):` form) as
+  the replacement + innovation candidate. Errors-vs-faults taxonomy pinned: errors =
+  the one channel (throws/Result); faults = termination, NOT a channel; "catching" =
+  explicit conversion. Candidate catchability principle if the catch SURVIVES census:
+  implicit machine checks catchable, explicit programmer assertions never. Scout
+  mandate: [`a33-fault-model-scout-mandate.md`](a33-fault-model-scout-mandate.md)
+  (launched 2026-07-11); candidate rulings D24 (boundary spec) · D25 (fault-catch
+  disposition) · D26 (fallible operators).
 
 - **A29 (owner question, 2026-07-05): CONSOLIDATE the `&`-exclusivity rules into one
   static-semantics prose section + fixtures.** The intended rule is Rust-style (readers XOR
