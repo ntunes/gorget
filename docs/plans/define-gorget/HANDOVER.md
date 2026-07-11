@@ -129,11 +129,14 @@ sequential fresh-review gauntlet.
       production+ggdef (+11th/12th tests), the position-aware message mechanism, the ICE
       rider (un-prototyped), the ggdef Option-taint fix (+10th test). NEXT: pass-3 verdict
       → fold-or-launch executor (`model:"opus"`).
-    - **A3 (D10a &-bind rejection): brief v1 in gauntlet, pass 1 in flight.** Brief
-      `wave-a3-amp-bind-rejection-brief.md`; scout prototype
-      `/tmp/scout_wA3_prototype.patch` (12-shape class; T-D intercept corrected to
-      self-host-only; bootstrap green chunked). NEXT: pass-1 verdict → folds → passes
-      2-3 → executor (`model:"opus"`).
+    - **A3 (D10a &-bind rejection): brief v2 in gauntlet, pass 2 in flight.** Brief
+      `wave-a3-amp-bind-rejection-brief.md` v2 (pass-1's BLOCKING fold applied: the
+      expr-position class-hole — extend `expr_is_borrow_bind` to Match/Do/Block +2
+      fixtures + re-sweep; zone completed; framing corrected). Prototype DURABLE at
+      `scouts/patches/scout_wA3_prototype.patch` (all 3 scout prototypes staged there).
+      Discoveries filed: comprehension-over-`&a` empty vector (HIGH) + the no-op-`&`
+      value-position family (MEDIUM). NEXT: pass-2 verdict → fold → pass 3 → executor
+      (`model:"opus"`).
     - **Batch-A discoveries FILED during the gauntlets** (all in TODO High): self-host
       parse-error surfacing (check/lowerer lanes drop ALL parse errors) · `return &v` of a
       `&`-param double-free · `Shared[R]` payload custom-drop never runs · builtin-handle

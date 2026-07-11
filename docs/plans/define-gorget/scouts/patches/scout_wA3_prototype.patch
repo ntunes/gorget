@@ -1,0 +1,702 @@
+diff --git a/docs/language-design.md b/docs/language-design.md
+index 56dcb484..7798bf0d 100644
+--- a/docs/language-design.md
++++ b/docs/language-design.md
+@@ -480,7 +480,7 @@ For resource types, there are no implicit deep copies. Bare-identifier assignmen
+ | `Vector[int] b = !a` | Move — b takes ownership, a consumed | Zero cost |
+ | `Vector[int] b = a.clone()` | Clone — b is an independent deep copy up front | Heap allocation |
+ | `Vector[int] b = f()` | Move from temp — b owns the result | Zero cost |
+-| `a = &b` | Mutable reference — a aliases b | Zero cost |
++| `a = &b` | **Illegal** (D10) — `error[E_LocalBorrowBind]`: a named `&`-binding would alias a second writable path; pass `&b` at a call site instead | — |
+ 
+ ```gorget
+ Vector[int] a = [1, 2, 3]
+diff --git a/docs/language-reference.md b/docs/language-reference.md
+index db34f349..e2b25df8 100644
+--- a/docs/language-reference.md
++++ b/docs/language-reference.md
+@@ -1750,6 +1750,25 @@ Creates a mutable borrow of a value. The original variable remains valid but can
+ modify(&data)
+ ```
+ 
++A mutable borrow is formed **at a call boundary only** — as an argument to a
++parameter declared `&` (see [§9.1 Ownership](#91-ownership-rules)).
++**Local `&`-bindings are illegal** (D10, 2026-07-06): binding a borrow to a
++name — either form — is rejected, because a place has exactly one exclusive
++writer and a named `&`-binding would alias a second writable path to it for
++the rest of the scope:
++
++```gorget
++auto r = &b            # error[E_LocalBorrowBind]
++Vector[int] r = &b     # error[E_LocalBorrowBind]
++r = &b                 # error[E_LocalBorrowBind] (assignment re-bind)
++Vector[int] &r = b     # parse error (decl-sigil form)
++```
++
++Instead, pass the borrow directly at the call site (`modify(&b)`) or mutate
++the place itself (`b.push(x)`, `b.field = v`). Frame-scoped `&` parameters
++are unaffected — inside a function, a `&` parameter is already the exclusive
++writer for its frame.
++
+ ### 7.16 Type Cast
+ 
+ ```ebnf
+diff --git a/src/errors.rs b/src/errors.rs
+index f3941727..05c46e9b 100644
+--- a/src/errors.rs
++++ b/src/errors.rs
+@@ -94,6 +94,13 @@ pub enum ParseErrorKind {
+     /// at the declaration site (rather than letting `int x` fall through to
+     /// expression parsing, where `x` would resolve as an undefined name).
+     MissingInitializer,
++    /// D10(a) (docs/plans/define-gorget/decisions.md, ratified 2026-07-06): a
++    /// `&` decl-sigil on a local binding (`Vector[int] &r = a`) — the
++    /// decl-sigil form of a local `&`-bind, rejected in v1. Historically the
++    /// sigil was silently discarded (the binding was a plain value copy that
++    /// READ as a reference decl); the `= &expr` init form is rejected by the
++    /// typechecker as `E_LocalBorrowBind`.
++    LocalBorrowBindSigil,
+ }
+ 
+ impl std::fmt::Display for ParseError {
+@@ -126,6 +133,16 @@ impl std::fmt::Display for ParseError {
+                      help: write `Type name = value` (Gorget has no uninitialized-variable form)"
+                 )
+             }
++            ParseErrorKind::LocalBorrowBindSigil => {
++                write!(
++                    f,
++                    "local `&`-bindings are not supported: a `Type &name = ...` \
++                     declaration would alias a second writable path to the value \
++                     (a place has one exclusive writer); \
++                     help: pass the borrow at a call site (`f(&name)`) or mutate \
++                     the place directly (`name.push(..)`, `name.field = value`)"
++                )
++            }
+         }
+     }
+ }
+diff --git a/src/parser/stmt.rs b/src/parser/stmt.rs
+index e0024ab3..2b78867e 100644
+--- a/src/parser/stmt.rs
++++ b/src/parser/stmt.rs
+@@ -26,6 +26,12 @@ enum DeclName {
+     MissingInit {
+         span: Span,
+     },
++    /// D10(a): a `&` decl-sigil on a local binding (`Vector[int] &r = a`) —
++    /// the decl-sigil form of a local `&`-bind, rejected in v1 (one exclusive
++    /// writer per place). Carries the sigil's span for the diagnostic.
++    BorrowSigil {
++        span: Span,
++    },
+ }
+ 
+ fn make_var_decl(
+@@ -675,6 +681,15 @@ impl Parser {
+                 p.parse_type().ok()?
+             };
+ 
++            // D10(a) (decisions.md, ratified 2026-07-06): a `&` sigil between
++            // the type and the name (`Vector[int] &r = a`) is the decl-sigil
++            // form of a local `&`-bind — rejected. Historically the sigil was
++            // silently DISCARDED here (only `mutable` set `is_mutable`; `&`,
++            // `!`, `move` were consumed and dropped, so `T &r = a` bound a
++            // plain value copy while reading as a reference decl). Track the
++            // `&` span so the caller can raise the teaching diagnostic; the
++            // no-`=` shapes keep their existing diagnosis.
++            let mut amp_span: Option<Span> = None;
+             let is_mutable = if !has_mutable_prefix
+                 && (p.check(&Token::Ampersand)
+                     || p.check(&Token::Bang)
+@@ -682,6 +697,9 @@ impl Parser {
+                     || p.check_keyword(Keyword::Move))
+             {
+                 let ownership_tok = p.advance();
++                if matches!(ownership_tok.node, Token::Ampersand) {
++                    amp_span = Some(ownership_tok.span);
++                }
+                 matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable))
+             } else {
+                 has_mutable_prefix
+@@ -691,7 +709,11 @@ impl Parser {
+                 Token::Identifier(_) => {
+                     let name = p.expect_identifier().ok()?;
+                     if p.match_token(&Token::Eq) {
+-                        Some(DeclName::Name { is_mutable, type_, name })
++                        if let Some(span) = amp_span {
++                            Some(DeclName::BorrowSigil { span })
++                        } else {
++                            Some(DeclName::Name { is_mutable, type_, name })
++                        }
+                     } else {
+                         // `<type> <name>` with no `=`. There is no expression
+                         // statement of this shape (Gorget has no juxtaposition),
+@@ -730,6 +752,10 @@ impl Parser {
+                     kw.as_name()
+                 ),
+             )),
++            Some(DeclName::BorrowSigil { span }) => Err(ParseError {
++                kind: crate::errors::ParseErrorKind::LocalBorrowBindSigil,
++                span,
++            }),
+             Some(DeclName::MissingInit { span }) => Err(self.error_missing_init(span)),
+             None => self.parse_expr_or_assign_stmt(),
+         }
+diff --git a/src/semantic/errors.rs b/src/semantic/errors.rs
+index 65389c52..14a6f45b 100644
+--- a/src/semantic/errors.rs
++++ b/src/semantic/errors.rs
+@@ -289,6 +289,19 @@ pub enum SemanticErrorKind {
+     /// the wrong carrier type" guard class; AGENTS.md Core invariant #8.)
+     DefaultOpNonOptional { type_: String },
+ 
++    /// D10(a) (docs/plans/define-gorget/decisions.md, ratified 2026-07-06):
++    /// a mutable borrow (`&expr`) bound to a name — `auto r = &b`,
++    /// `Vector[int] r = &b.data`, `r = &b`, or a module-level
++    /// `static G = &BASE`. A named `&`-binding would create a second
++    /// writable path to the same place for the rest of the scope, violating
++    /// the one-exclusive-writer rule that licenses lazy CoW. The pre-D10
++    /// write-through half-worked in practice (the explicitly-typed form
++    /// ICE'd the consume-site validator; an element projection silently
++    /// wrote to a private copy), so the form is rejected outright in v1.
++    /// `&` forms a mutable borrow only at a call boundary (an argument to a
++    /// `&` parameter); frame-scoped `&` params are unaffected.
++    LocalBorrowBind,
++
+     /// A method-level generic param couldn't be inferred from the
+     /// call's arg types. Emitted by Phase 2c inference (see
+     /// `docs/devbook/09-type-checking.md`, method-level generic inference)
+@@ -666,6 +679,7 @@ impl SemanticErrorKind {
+             SemanticErrorKind::UnwrapOnNonOptional { .. } => "E_UnwrapOnNonOptional",
+             SemanticErrorKind::DerefNonBox { .. } => "E_DerefNonBox",
+             SemanticErrorKind::DefaultOpNonOptional { .. } => "E_DefaultOpNonOptional",
++            SemanticErrorKind::LocalBorrowBind => "E_LocalBorrowBind",
+             SemanticErrorKind::MethodGenericInferenceFailed { .. } => "E_MethodGenericInferenceFailed",
+             SemanticErrorKind::CannotInferType => "E_CannotInferType",
+             SemanticErrorKind::NoFieldFound { .. } => "E_NoFieldFound",
+@@ -817,6 +831,16 @@ impl std::fmt::Display for SemanticError {
+                      left-hand side, but `{type_}` is neither"
+                 )
+             }
++            SemanticErrorKind::LocalBorrowBind => {
++                write!(
++                    f,
++                    "cannot bind a mutable borrow (`&`) to a name — a place \
++                     has one exclusive writer, and a named `&`-binding would \
++                     alias a second writable path to it. Pass the borrow \
++                     directly at a call site (`f(&x)`) or mutate the place \
++                     itself (`x.push(..)`, `x.field = value`)"
++                )
++            }
+             SemanticErrorKind::MethodGenericInferenceFailed { method, type_, unresolved, reason } => {
+                 write!(
+                     f,
+diff --git a/src/semantic/typecheck.rs b/src/semantic/typecheck.rs
+index 1522f852..0517a295 100644
+--- a/src/semantic/typecheck.rs
++++ b/src/semantic/typecheck.rs
+@@ -3729,11 +3729,47 @@ impl<'a> TypeChecker<'a> {
+ 
+     // ─── Statement Checking ────────────────────────────────
+ 
++    /// D10(a) (docs/plans/define-gorget/decisions.md, ratified 2026-07-06):
++    /// does this initializer / assignment RHS bind a mutable borrow to a
++    /// name? True for a top-level `&expr` and for an if-expression whose
++    /// any branch is one (`&a if c else &b` must not dodge the check).
++    /// Deliberately NOT a deep walk: `&x` nested in a call (`f(&x)`) is the
++    /// legal call-arg form and is never visited here — this helper is only
++    /// invoked on VarDecl inits, assignment RHS, and static initializers.
++    fn expr_is_borrow_bind(expr: &Expr) -> bool {
++        match expr {
++            Expr::MutableBorrow { .. } => true,
++            Expr::If {
++                then_branch,
++                elif_branches,
++                else_branch,
++                ..
++            } => {
++                Self::expr_is_borrow_bind(&then_branch.node)
++                    || elif_branches
++                        .iter()
++                        .any(|(_, b)| Self::expr_is_borrow_bind(&b.node))
++                    || else_branch
++                        .as_ref()
++                        .map_or(false, |b| Self::expr_is_borrow_bind(&b.node))
++            }
++            _ => false,
++        }
++    }
++
+     fn check_stmt(&mut self, stmt: &Spanned<Stmt>) -> Option<TypeId> {
+         match &stmt.node {
+             Stmt::VarDecl {
+                 type_, pattern, value, shared, ..
+             } => {
++                // D10(a): local `&`-binds are rejected — both forms (the
++                // `T &name = ..` decl-sigil form is a parse error; this is
++                // the `name = &expr` init form). Emit and continue checking
++                // so downstream type output stays intact (one clean error,
++                // no cascade).
++                if Self::expr_is_borrow_bind(&value.node) {
++                    self.error(SemanticErrorKind::LocalBorrowBind, value.span);
++                }
+                 // Resolve declared type first so we can set the hint for literal coercion
+                 let declared_type = match &type_.node {
+                     Type::Inferred => None,
+@@ -3866,6 +3902,12 @@ impl<'a> TypeChecker<'a> {
+             }
+ 
+             Stmt::Assign { target, value } => {
++                // D10(a): `name = &expr` re-binds a mutable borrow to a
++                // name — same class as the VarDecl-init form, same
++                // rejection (see `expr_is_borrow_bind`).
++                if Self::expr_is_borrow_bind(&value.node) {
++                    self.error(SemanticErrorKind::LocalBorrowBind, value.span);
++                }
+                 self.check_string_index_assign(target);
+                 let target_type = self.infer_expr(target);
+                 let prev_hint = self.decl_type_hint;
+@@ -8237,6 +8279,12 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>])
+                 }
+             }
+             Item::StaticDecl(s) => {
++                // D10(a): a module-level `static G = &BASE` is the same
++                // named-`&`-bind class as the local form — rejected (see
++                // `expr_is_borrow_bind`).
++                if TypeChecker::expr_is_borrow_bind(&s.value.node) {
++                    checker.error(SemanticErrorKind::LocalBorrowBind, s.value.span);
++                }
+                 let value_ty = checker.infer_expr(&s.value);
+                 // Same as ConstDecl above: surface the static's type so
+                 // top-level decls like `public static File stdin = ...`
+diff --git a/tests/fixtures/amp_bind_assign_error.gg b/tests/fixtures/amp_bind_assign_error.gg
+new file mode 100644
+index 00000000..110846e8
+--- /dev/null
++++ b/tests/fixtures/amp_bind_assign_error.gg
+@@ -0,0 +1,12 @@
++# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): re-binding a mutable
++# borrow to an existing local through assignment (`r = &a`) is the same
++# named-`&`-bind class as the VarDecl-init form — rejected. Pre-D10 the `&`
++# was silently ignored (the assignment cloned, `a` was never written
++# through — a silent trap, not an alias).
++# Expected: error[E_LocalBorrowBind] at the `&a` RHS.
++void main():
++    Vector[int] a = [1, 2, 3]
++    auto r = a
++    r = &a
++    r.push(9)
++    print(a.len())
+diff --git a/tests/fixtures/amp_bind_declsigil_error.gg b/tests/fixtures/amp_bind_declsigil_error.gg
+new file mode 100644
+index 00000000..27ac42ca
+--- /dev/null
++++ b/tests/fixtures/amp_bind_declsigil_error.gg
+@@ -0,0 +1,11 @@
++# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): the decl-sigil form of
++# a local `&`-bind (`Vector[int] &r = a`) is a PARSE error. Pre-D10 the
++# parser silently DISCARDED the sigil (only `mutable` set the flag), so the
++# binding was a plain value copy that READ as a reference declaration —
++# mutations through `r` never reached `a`.
++# Expected: parse error "local `&`-bindings are not supported".
++void main():
++    Vector[int] a = [1, 2, 3]
++    Vector[int] &r = a
++    r.push(9)
++    print(a.len())
+diff --git a/tests/fixtures/amp_bind_static_error.gg b/tests/fixtures/amp_bind_static_error.gg
+new file mode 100644
+index 00000000..881a4b62
+--- /dev/null
++++ b/tests/fixtures/amp_bind_static_error.gg
+@@ -0,0 +1,9 @@
++# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): a module-level static
++# initialized with a mutable borrow (`Vector[int] G = &BASE`) is the same
++# named-`&`-bind class as the local forms — rejected.
++# Expected: error[E_LocalBorrowBind] at the `&BASE` initializer.
++Vector[int] BASE = [1, 2, 3]
++Vector[int] G = &BASE
++
++void main():
++    print(G.len())
+diff --git a/tests/fixtures/amp_bind_ternary_error.gg b/tests/fixtures/amp_bind_ternary_error.gg
+new file mode 100644
+index 00000000..90e6cd41
+--- /dev/null
++++ b/tests/fixtures/amp_bind_ternary_error.gg
+@@ -0,0 +1,12 @@
++# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): a local `&`-bind must
++# not dodge the rejection by hiding inside an if-expression — `if c: &a
++# else: &b` still binds a mutable borrow to a name (the check recurses
++# through if-expression branches).
++# Expected: error[E_LocalBorrowBind] at the initializer.
++void main():
++    Vector[int] a = [1, 2, 3]
++    Vector[int] b = [4, 5]
++    bool c = true
++    auto r = if c: &a else: &b
++    r.push(9)
++    print(r.len())
+diff --git a/tests/fixtures/amp_bind_typed_error.gg b/tests/fixtures/amp_bind_typed_error.gg
+new file mode 100644
+index 00000000..b4c1cf8d
+--- /dev/null
++++ b/tests/fixtures/amp_bind_typed_error.gg
+@@ -0,0 +1,11 @@
++# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): the explicitly-typed
++# local `&`-bind (`Vector[int] r = &a`) is rejected — same class as the
++# `auto` form. Pre-D10 this shape ICE'd the compiler (Tier 2a consume-site
++# validator panic: "untracked source consumed" at ir/lowering/mod.rs) — the
++# rejection turns a compiler crash into a clean teaching error.
++# Expected: error[E_LocalBorrowBind] at the `&a` initializer.
++void main():
++    Vector[int] a = [1, 2, 3]
++    Vector[int] r = &a
++    r.push(9)
++    print(r.len())
+diff --git a/tests/fixtures/cow_amp_bind_ref.gg b/tests/fixtures/cow_amp_bind_ref.gg
+index c2ca39b7..44d0252d 100644
+--- a/tests/fixtures/cow_amp_bind_ref.gg
++++ b/tests/fixtures/cow_amp_bind_ref.gg
+@@ -1,10 +1,13 @@
+-# CoW G2 site 2 (standalone `auto r = &name`): binding a `&` to a bare alias
+-# materializes a private copy, so a later `r.push` lands on the copy `b`.
++# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): binding a mutable
++# borrow to a local name (`auto r = &b`) is rejected — a place has one
++# exclusive writer, and a named `&`-binding would alias a second writable
++# path to it for the rest of the scope. The pre-D10 write-through bind is
++# retired. Expected: error[E_LocalBorrowBind] at the `&b` initializer.
+ void main():
+     Vector[int] a = [1, 2, 3]
+     Vector[int] b = a
+     auto r = &b
+     r.push(9)
+-    print(a.len())        # 3
+-    print(b.len())        # 4
++    print(a.len())
++    print(b.len())
+     print("done")
+diff --git a/tests/fixtures/cow_amp_bind_ref_field.gg b/tests/fixtures/cow_amp_bind_ref_field.gg
+index dee19704..35f5fcea 100644
+--- a/tests/fixtures/cow_amp_bind_ref_field.gg
++++ b/tests/fixtures/cow_amp_bind_ref_field.gg
+@@ -1,8 +1,8 @@
+-# CoW G2 site 3 (standalone projected `auto r = &s.field`): binding a `&` to a
+-# projected bare-alias root materializes the root `b` (private copy) before the
+-# borrow. The later `r.push` reaches `b.data`, not the shared source `a.data`.
+-# Closes the coverage hole flagged by the Track B output-review (the call-arg
+-# projected form was tested by cow_amp_field_arg; the standalone form was not).
++# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): binding a mutable
++# borrow of a projected place to a local name (`auto r = &b.data`) is
++# rejected — same class as the bare form (`cow_amp_bind_ref`): one exclusive
++# writer per place; a named `&`-binding would alias a second writable path.
++# Expected: error[E_LocalBorrowBind] at the `&b.data` initializer.
+ struct Holder:
+     Vector[int] data
+ 
+@@ -12,6 +12,6 @@ void main():
+     Holder b = a
+     auto r = &b.data
+     r.push(9)
+-    print(a.data.len())   # 3
+-    print(b.data.len())   # 4
++    print(a.data.len())
++    print(b.data.len())
+     print("done")
+diff --git a/tests/fixtures/security/attack_04_cow_mutate_ref_borrow.gg b/tests/fixtures/security/attack_04_cow_mutate_ref_borrow.gg
+index cdde258b..45e4444e 100644
+--- a/tests/fixtures/security/attack_04_cow_mutate_ref_borrow.gg
++++ b/tests/fixtures/security/attack_04_cow_mutate_ref_borrow.gg
+@@ -1,8 +1,12 @@
+-# Attack: same as 03 but with explicit `&` borrow. Borrow checker should catch
+-# MutationWhileBorrowed as ERROR here (not warning).
++# Attack: same as 03 but with explicit `&` borrow. Must be REJECTED — and
++# since D10(a) (decisions.md, ratified 2026-07-06) it is, at PARSE time: the
++# `int &borrowed = ...` decl-sigil form of a local `&`-bind is illegal (one
++# exclusive writer per place). Pre-D10 the parser silently discarded the
++# sigil, `borrowed` was a value copy, and this "attack" was misclassified
++# safe (printed 10).
+ 
+ void main():
+     Vector[int] v = [10, 20, 30, 40]
+     int &borrowed = v.get(0).unwrap()
+-    v.push(50)  # must reject: v is borrowed
++    v.push(50)  # unreachable: the decl above is rejected
+     print(borrowed)
+diff --git a/tests/fixtures/self_host_lowerer/lower_stmt.gg b/tests/fixtures/self_host_lowerer/lower_stmt.gg
+index 4035af31..8933657e 100644
+--- a/tests/fixtures/self_host_lowerer/lower_stmt.gg
++++ b/tests/fixtures/self_host_lowerer/lower_stmt.gg
+@@ -136,84 +136,14 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
+                 ctx.expected_type = declared_ty_pre
+             int val = lower_expr(&ctx, init_expr, &gmod)
+             ctx.expected_type = prev_expected_vd
+-            # ── `auto r = &b` / `auto r = &b.field` — a mutable-borrow BIND
+-            # (CoW G2 site 2/3). The parser keeps the `&` sigil in a NON-call-arg
+-            # position (call args strip it), so the init is `EMutableBorrow(...)`.
+-            # `lower_expr(&x)` STRIPS the sigil and returns x's read local: a
+-            # VALUE slot for a bare name, or a LoBorrowed `Ptr(field)` field/
+-            # element ref for a projected resource place. Falling through to
+-            # `decide_svardecl_emission` then mistakes it for a plain value bind —
+-            # a bare name MoveDirect-clones a live source; a projected field-ref
+-            # takes Branch C-pre whose substrate-(ii) flip DECLINES (`r.push`
+-            # mutates the bound name, failing the pristine gate) → CloneAndMove.
+-            # Either way `r` becomes a private COPY, so mutations through it never
+-            # reach the borrowed value (cow_amp_bind_ref / _bind_ref_field printed
+-            # the pre-mutation length). A `&`-bind must instead alias a
+-            # WRITE-THROUGH mutable-borrow POINTER to the source slot — the same
+-            # thing a call-arg `&b` / `&b.field` already does. Bind `r` as a
+-            # LoBorrowed `GtMutPtr(T)` (a `&`-shaped borrow local) whose value is
+-            # the address of the source slot, and do NOT register it for drop —
+-            # the borrowed value's owner drops it exactly once. A read/mutation
+-            # through `r` (e.g. `r.push(9)`) lowers via the LoBorrowed-RECEIVER
+-            # dispatch at `lower_expr.gg:~3909-3915`: a LoBorrowed method receiver
+-            # emits `OpBorrow(r)`, passing the pointer so the call mutates the
+-            # real source slot in place. Mirrors Rust gg binding `&b` to a `&mut
+-            # Vector` reference local. (A field/index STORE through `r` —
+-            # `r.field = x` — instead derefs via the SEPARATE `lower_field_write`
+-            # `is_ptr_type(base)` + `OpCopy(base)` path, not this receiver
+-            # dispatch; the two are distinct mechanisms — don't conflate them.)
+-            match init_expr.expr:
+-                case EMutableBorrow(mb_inner):
+-                    int mb_val_tid = ctx.locals.get(val).unwrap().type_id
+-                    bool mb_val_is_ptr = false
+-                    if mb_val_tid >= 0 and mb_val_tid < gmod.type_table.len():
+-                        match gmod.type_table.get(mb_val_tid).unwrap():
+-                            case GtPtr(_):
+-                                mb_val_is_ptr = true
+-                            case GtMutPtr(_):
+-                                mb_val_is_ptr = true
+-                            else:
+-                                pass
+-                    if mb_val_is_ptr:
+-                        # Projected `&b.field` / `&b[i]` on a RESOURCE place:
+-                        # `val` is ALREADY a pointer to the place (a LoBorrowed
+-                        # field/element ref, not registered for drop). Alias the
+-                        # pointer through as `r` — a pointer copy (`OpCopy`),
+-                        # never a resource clone.
+-                        int mb_rp = add_local_with(&ctx, mb_val_tid, Some(name), LoBorrowed(), BoAlias(val))
+-                        emit(&ctx, GIAssign(mb_rp, OpCopy(val)))
+-                        nl_put(&ctx, name, mb_rp)
+-                        return
+-                    # Bare `&b` ONLY: `val` is a VALUE slot. GATE on the inner
+-                    # being a bare `EIdentifier` (a genuine addressable named
+-                    # slot). A SCALAR projection (`&b.scalar` / `&b[scalar_i]`)
+-                    # also lands here value-typed — its field/element type is a
+-                    # scalar, so `lower_expr` returns a value LOAD TEMP, not a
+-                    # Ptr, and `mb_val_is_ptr` is false. Address-taking that
+-                    # function-scoped temp would write through to the WRONG
+-                    # location and never reach `b`. So a scalar projection must
+-                    # fall through to the safe existing value-bind path below;
+-                    # only a bare name gets the write-through pointer. (Resource
+-                    # projections already took the `mb_val_is_ptr` alias branch.)
+-                    bool mb_inner_is_ident = false
+-                    match (*mb_inner).expr:
+-                        case EIdentifier(_):
+-                            mb_inner_is_ident = true
+-                        else:
+-                            pass
+-                    if mb_inner_is_ident:
+-                        # Bind `r = GtMutPtr(T)` holding the ADDRESS of b's slot.
+-                        # The lir_lower D.1 `OpBorrow` + Ptr-typed-dst +
+-                        # value-typed-src dispatch emits `r = &b_slot`; `r.push`
+-                        # then writes through.
+-                        int mb_ptr_ty = register_type(&gmod, GtMutPtr(mb_val_tid))
+-                        int mb_r = add_local_with(&ctx, mb_ptr_ty, Some(name), LoBorrowed(), BoAlias(val))
+-                        emit(&ctx, GIAssign(mb_r, OpBorrow(val)))
+-                        nl_put(&ctx, name, mb_r)
+-                        return
+-                    # Scalar projection: fall through to the safe value-bind path.
+-                else:
+-                    pass
++            # D10(a) (decisions.md, ratified 2026-07-06): a mutable-borrow BIND
++            # (`auto r = &b` / `auto r = &b.field`) is a TYPECHECK ERROR
++            # (`E_LocalBorrowBind` in Rust gg; `DkLocalBorrowBind` in
++            # typecheck.gg's `check_local_borrow_bind`) — an `EMutableBorrow`
++            # init can no longer reach a valid lowering. The round-38 T-D
++            # write-through intercept that used to live here (bind `r` as a
++            # LoBorrowed `GtMutPtr` alias of the source slot) is RETIRED with
++            # the form itself.
+             # Auto-propagate a `throws` call captured into a non-Result local
+             # (`int v = might()` unwraps; `Result[int,E] r = might()` keeps the
+             # raw Result so the user can match/destructure it). Skip when the
+diff --git a/tests/fixtures/self_host_typechecker/diagnostic.gg b/tests/fixtures/self_host_typechecker/diagnostic.gg
+index f99fe75a..a568e8d1 100644
+--- a/tests/fixtures/self_host_typechecker/diagnostic.gg
++++ b/tests/fixtures/self_host_typechecker/diagnostic.gg
+@@ -54,6 +54,7 @@ enum DiagKind:
+     DkTypeMismatch         # expected vs actual type disagreement
+     DkControlFlow          # break/continue/return/throw in invalid context
+     DkPrimitiveTraitImpl   # `equip <scalar-primitive> with Trait` — no addressable self
++    DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
+ 
+     # Reserved for future migrators (kept so the type doesn't churn
+     # when lowerer sites migrate).
+@@ -113,6 +114,8 @@ String diag_kind_str(DiagKind kind):
+             return "control-flow"
+         case DkPrimitiveTraitImpl():
+             return "primitive-trait-impl"
++        case DkLocalBorrowBind():
++            return "local-borrow-bind"
+         case DkUnreachable():
+             return "unreachable"
+ 
+diff --git a/tests/fixtures/self_host_typechecker/typecheck.gg b/tests/fixtures/self_host_typechecker/typecheck.gg
+index aad50acb..3170ab25 100644
+--- a/tests/fixtures/self_host_typechecker/typecheck.gg
++++ b/tests/fixtures/self_host_typechecker/typecheck.gg
+@@ -35,7 +35,7 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
+ from resolve import ResolveContext
+ from infer import infer_expr_type, infer_closure_return_type
+ from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution
+-from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition
++from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition, DkLocalBorrowBind
+ 
+ # ── Fallback def lookup by name ──────────────────────────────
+ # Scans all definitions for a matching name (and optionally DkFunction kind).
+@@ -468,6 +468,19 @@ void check_deref_operand(SpannedExpr operand, int scope_id, ScopeTable &scopes,
+     if not is_box:
+         ctx.diagnostics.push(Diagnostic.error(operand.span, DkTypeMismatch(), "cannot dereference `*` a non-`Box[T]` value"))
+ 
++# D10(a) (decisions.md, ratified 2026-07-06): a mutable borrow (`&expr`)
++# bound to a name — `auto r = &b`, `r = &b`. A named `&`-binding would alias
++# a second writable path to the place (one exclusive writer). Mirrors Rust
++# gg's `E_LocalBorrowBind` (`src/semantic/typecheck.rs`, `expr_is_borrow_bind`).
++# Top-level shape only — `&x` nested inside a call is the legal call-arg form
++# and is never visited here (this fires on VarDecl inits / assignment RHS).
++void check_local_borrow_bind(SpannedExpr init, ResolveContext &ctx):
++    match init.expr:
++        case EMutableBorrow(_inner):
++            ctx.diagnostics.push(Diagnostic.error(init.span, DkLocalBorrowBind(), "cannot bind a mutable borrow (`&`) to a name — pass the borrow at a call site (`f(&x)`) or mutate the place directly"))
++        else:
++            pass
++
+ # Exhaustive statement walker — visits every expression position in a body.
+ void check_carrier_ops_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+     for s in stmts:
+@@ -476,9 +489,11 @@ void check_carrier_ops_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scope
+ void check_carrier_ops_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+     match s:
+         case SVarDecl(_stype, _name, init_expr, _line, _col, _flags):
++            check_local_borrow_bind(init_expr, &ctx)
+             check_carrier_ops_expr(init_expr, scope_id, &scopes, &types, &ctx)
+         case SAssign(target, value):
+             check_carrier_ops_expr(target, scope_id, &scopes, &types, &ctx)
++            check_local_borrow_bind(value, &ctx)
+             check_carrier_ops_expr(value, scope_id, &scopes, &types, &ctx)
+         case SCompoundAssign(target, _op, value):
+             check_carrier_ops_expr(target, scope_id, &scopes, &types, &ctx)
+diff --git a/tests/integration.rs b/tests/integration.rs
+index 362cbb35..5a9fe02b 100644
+--- a/tests/integration.rs
++++ b/tests/integration.rs
+@@ -27154,35 +27154,65 @@ done",
+     );
+ }
+ 
+-/// CoW G2 site 2 (standalone `auto r = &name`): binding a `&` to a bare alias
+-/// materializes a private copy, so a later `r.push` lands on the copy.
++/// D10(a) (decisions.md, ratified 2026-07-06): a standalone `auto r = &name`
++/// bind must REJECT with `E_LocalBorrowBind` — local `&`-binds are retired
++/// (one exclusive writer per place; the pre-D10 write-through bind is gone).
+ #[test]
+ fn cow_amp_bind_ref() {
+-    run_gg(
+-        "cow_amp_bind_ref.gg",
+-        "\
+-3
+-4
+-done",
+-    );
++    check_gg_fails("cow_amp_bind_ref.gg", "error[E_LocalBorrowBind]");
+ }
+ 
+-/// CoW G2 site 3 (STANDALONE projected `auto r = &s.field`): binding a `&` to a
+-/// projected bare-alias root materializes the root before the borrow, so the
+-/// later `r.push` reaches the private copy's field, not the shared source's.
+-/// Closes the coverage hole the Track B output-review flagged (the call-arg
+-/// projected form is `cow_amp_field_arg`; this is the standalone form).
++/// D10(a): the projected form (`auto r = &s.field`) is the same class as the
++/// bare form — must REJECT with `E_LocalBorrowBind`. (The call-arg projected
++/// form stays legal and positive: `cow_amp_field_arg`.)
+ #[test]
+ fn cow_amp_bind_ref_field() {
+-    run_gg(
+-        "cow_amp_bind_ref_field.gg",
+-        "\
+-3
+-4
+-done",
++    check_gg_fails("cow_amp_bind_ref_field.gg", "error[E_LocalBorrowBind]");
++}
++
++/// D10(a): the explicitly-typed local `&`-bind (`Vector[int] r = &a`) must
++/// REJECT with `E_LocalBorrowBind`. Pre-D10 this shape ICE'd the compiler
++/// (Tier 2a consume-site validator panic, ir/lowering/mod.rs "untracked
++/// source consumed") — the rejection replaces a crash with a teaching error.
++#[test]
++fn amp_bind_typed_error() {
++    check_gg_fails("amp_bind_typed_error.gg", "error[E_LocalBorrowBind]");
++}
++
++/// D10(a): re-binding a borrow through assignment (`r = &a`) is the same
++/// named-`&`-bind class — must REJECT with `E_LocalBorrowBind`. Pre-D10 the
++/// sigil was silently ignored (the assignment cloned; no write-through).
++#[test]
++fn amp_bind_assign_error() {
++    check_gg_fails("amp_bind_assign_error.gg", "error[E_LocalBorrowBind]");
++}
++
++/// D10(a): the decl-sigil form (`Vector[int] &r = a`) is a PARSE error.
++/// Pre-D10 the parser silently DISCARDED the sigil (a plain value copy that
++/// read as a reference decl).
++#[test]
++fn amp_bind_declsigil_error() {
++    check_gg_fails(
++        "amp_bind_declsigil_error.gg",
++        "local `&`-bindings are not supported",
+     );
+ }
+ 
++/// D10(a): a module-level `static G = &BASE` initializer is the same
++/// named-`&`-bind class — must REJECT with `E_LocalBorrowBind`.
++#[test]
++fn amp_bind_static_error() {
++    check_gg_fails("amp_bind_static_error.gg", "error[E_LocalBorrowBind]");
++}
++
++/// D10(a): an if-expression initializer whose branch is a `&`-borrow
++/// (`auto r = if c: &a else: &b`) must not dodge the rejection — the check
++/// recurses through if-expression branches.
++#[test]
++fn amp_bind_ternary_error() {
++    check_gg_fails("amp_bind_ternary_error.gg", "error[E_LocalBorrowBind]");
++}
++
+ /// CoW G2 site 3 (projected `&s.field` call-arg): the projection ROOT is a bare
+ /// alias, so `&b.data` materializes the root before the borrow — the push
+ /// reaches the copy's field, not the shared source's. Pre-fix both printed 4.
+diff --git a/tests/security.rs b/tests/security.rs
+index 1331937a..2a27e0e0 100644
+--- a/tests/security.rs
++++ b/tests/security.rs
+@@ -517,9 +517,17 @@ fn sec_03_cow_mutate_while_borrowed() {
+     security_safe("attack_03_cow_mutate_while_borrowed", "alpha\ndelta");
+ }
+ 
++/// D10(a) (decisions.md, ratified 2026-07-06): the fixture's `int &borrowed =
++/// ...` decl-sigil bind is now a parse-time rejection — which matches the
++/// fixture's ORIGINAL intent ("must reject"). Pre-D10 the parser silently
++/// discarded the sigil, `borrowed` was a value copy, and the fixture was
++/// (mis)classified safe with output "10".
+ #[test]
+ fn sec_04_cow_mutate_ref_borrow() {
+-    security_safe("attack_04_cow_mutate_ref_borrow", "10");
++    security_rejected(
++        "attack_04_cow_mutate_ref_borrow",
++        "local `&`-bindings are not supported",
++    );
+ }
+ 
+ #[test]

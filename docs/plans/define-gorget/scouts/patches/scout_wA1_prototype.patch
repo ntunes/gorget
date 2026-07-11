@@ -1,0 +1,914 @@
+diff --git a/docs/language-design.md b/docs/language-design.md
+index 56dcb484..853d9d38 100644
+--- a/docs/language-design.md
++++ b/docs/language-design.md
+@@ -1207,15 +1207,7 @@ else:
+     print("no match found")     # runs if loop completes without break
+ ```
+ 
+-### 5.9 Loop as Expression
+-
+-```gorget
+-int result = loop:
+-    if compute() is Some(v):
+-        break v                  # break with a value
+-```
+-
+-### 5.10 Comprehensions (Python-style)
++### 5.9 Comprehensions (Python-style)
+ 
+ ```gorget
+ Vector[int] squares = [x * x for x in 0..10]
+@@ -3321,7 +3313,7 @@ statement      = var_decl | expr_stmt | return_stmt | throw_stmt
+                | match_stmt | with_stmt | break_stmt | continue_stmt ;
+ throw_stmt     = "throw" expr NEWLINE ;
+ return_stmt    = "return" [ expr ] NEWLINE ;
+-break_stmt     = "break" [ expr ] NEWLINE ;
++break_stmt     = "break" NEWLINE ;
+ continue_stmt  = "continue" NEWLINE ;
+ var_decl       = [ "const" ] ( type | "auto" ) IDENT "=" expr NEWLINE ;
+ for_stmt       = "for" IDENT "in" [ "&" | "!" ] expr block [ "else" block ] ;
+diff --git a/docs/language-reference.md b/docs/language-reference.md
+index db34f349..3352ca9d 100644
+--- a/docs/language-reference.md
++++ b/docs/language-reference.md
+@@ -1186,11 +1186,11 @@ Record parse_line(String line) throws ParseError:
+ ### 6.7 Break and Continue
+ 
+ ```ebnf
+-break_stmt    = "break" [ expr ] NEWLINE ;
++break_stmt    = "break" NEWLINE ;
+ continue_stmt = "continue" NEWLINE ;
+ ```
+ 
+-- `break` exits the innermost enclosing loop. An optional expression provides the loop's value (for loop-as-expression).
++- `break` exits the innermost enclosing loop. It takes no value — loops are not expressions (`break <expr>` is a parse error; to yield a value from a loop, assign to a variable declared before it).
+ - `continue` skips to the next iteration of the innermost enclosing loop.
+ 
+ Both are compile-time errors outside a loop.
+@@ -6574,7 +6574,7 @@ compound_assign_stmt = expr ( "+=" | "-=" | "*=" | "/=" | "%="
+                             | "&=" | "|=" | "^=" | "<<=" | ">>=" ) expr NEWLINE ;
+ return_stmt         = "return" [ expr { "," expr } ] NEWLINE ;  (* bare tuple: return a, b *)
+ throw_stmt          = "throw" expr NEWLINE ;
+-break_stmt          = "break" [ expr ] NEWLINE ;
++break_stmt          = "break" NEWLINE ;
+ continue_stmt       = "continue" NEWLINE ;
+ pass_stmt           = "pass" NEWLINE ;
+ 
+diff --git a/spec/ggdef/src/elaborate/mod.rs b/spec/ggdef/src/elaborate/mod.rs
+index 8ce44578..bea2e33a 100644
+--- a/spec/ggdef/src/elaborate/mod.rs
++++ b/spec/ggdef/src/elaborate/mod.rs
+@@ -740,10 +740,9 @@ impl Elaborator {
+ 
+             ast::Stmt::With { bindings, body } => self.desugar_with(bindings, body, span),
+ 
+-            ast::Stmt::Break(None) => Ok(vec![Stmt::Break { span }]),
+-            ast::Stmt::Break(Some(_)) => {
+-                Err(ElabError::new("`break <value>` is outside the Increment-A subset", span))
+-            }
++            // `break <value>` no longer reaches elaboration: the parser
++            // rejects it (D19 -- loops are not expressions).
++            ast::Stmt::Break => Ok(vec![Stmt::Break { span }]),
+             ast::Stmt::Continue => Ok(vec![Stmt::Continue { span }]),
+             ast::Stmt::Pass => Ok(vec![]),
+ 
+diff --git a/src/errors.rs b/src/errors.rs
+index f3941727..e1860c43 100644
+--- a/src/errors.rs
++++ b/src/errors.rs
+@@ -94,6 +94,11 @@ pub enum ParseErrorKind {
+     /// at the declaration site (rather than letting `int x` fall through to
+     /// expression parsing, where `x` would resolve as an undefined name).
+     MissingInitializer,
++    /// `break <expr>` — break takes no value. Loop-as-expression was removed
++    /// from the v1 surface (D19, 2026-07-06): the form was a half-wired stub
++    /// (unparseable in assignment position, value silently discarded at
++    /// lowering). Rejected at parse with a teaching message.
++    BreakWithValue,
+ }
+ 
+ impl std::fmt::Display for ParseError {
+@@ -126,6 +131,13 @@ impl std::fmt::Display for ParseError {
+                      help: write `Type name = value` (Gorget has no uninitialized-variable form)"
+                 )
+             }
++            ParseErrorKind::BreakWithValue => {
++                write!(
++                    f,
++                    "break takes no value; loops are not expressions; \
++                     help: assign to a variable declared before the loop, then `break`"
++                )
++            }
+         }
+     }
+ }
+diff --git a/src/formatter/mod.rs b/src/formatter/mod.rs
+index 84b859dc..db2a0b5f 100644
+--- a/src/formatter/mod.rs
++++ b/src/formatter/mod.rs
+@@ -1160,15 +1160,10 @@ impl Formatter {
+                 self.format_expr(expr);
+                 self.emitter.newline();
+             }
+-            Stmt::Break(None) => {
++            Stmt::Break => {
+                 self.emitter.write("break");
+                 self.emitter.newline();
+             }
+-            Stmt::Break(Some(expr)) => {
+-                self.emitter.write("break ");
+-                self.format_expr(expr);
+-                self.emitter.newline();
+-            }
+             Stmt::Continue => {
+                 self.emitter.write("continue");
+                 self.emitter.newline();
+diff --git a/src/ir/lowering/stmts/mod.rs b/src/ir/lowering/stmts/mod.rs
+index d6c98d81..16b418b0 100644
+--- a/src/ir/lowering/stmts/mod.rs
++++ b/src/ir/lowering/stmts/mod.rs
+@@ -262,7 +262,7 @@ pub fn lower_stmt(
+             lower_loop(ctx, builder, body);
+         }
+ 
+-        Stmt::Break(_) => {
++        Stmt::Break => {
+             __kind_key = "lower_function::body::lower_block::stmt::break_continue";
+             lower_break(ctx, builder);
+         }
+@@ -3537,7 +3537,7 @@ mod tests {
+ 
+         let stmt = spanned(Stmt::Loop {
+             body: Block {
+-                stmts: vec![spanned(Stmt::Break(None))],
++                stmts: vec![spanned(Stmt::Break)],
+                 span: Span { start: 0, end: 0 },
+             },
+         });
+@@ -3563,7 +3563,7 @@ mod tests {
+         // loop: break
+         let stmt = spanned(Stmt::Loop {
+             body: Block {
+-                stmts: vec![spanned(Stmt::Break(None))],
++                stmts: vec![spanned(Stmt::Break)],
+                 span: Span { start: 0, end: 0 },
+             },
+         });
+@@ -3625,7 +3625,7 @@ mod tests {
+         //     break   <- should break inner loop only
+         let inner_loop = spanned(Stmt::Loop {
+             body: Block {
+-                stmts: vec![spanned(Stmt::Break(None))],
++                stmts: vec![spanned(Stmt::Break)],
+                 span: Span { start: 0, end: 0 },
+             },
+         });
+diff --git a/src/loader.rs b/src/loader.rs
+index ec625e60..3f40b176 100644
+--- a/src/loader.rs
++++ b/src/loader.rs
+@@ -1052,7 +1052,7 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
+             }
+         }
+         Stmt::Throw(e) => qualify_expr(e, vm),
+-        Stmt::Break(_) | Stmt::Continue | Stmt::Pass => {}
++        Stmt::Break | Stmt::Continue | Stmt::Pass => {}
+         Stmt::With { bindings, body } => {
+             for b in bindings { qualify_expr(&mut b.expr, vm); }
+             qualify_block(body, vm);
+diff --git a/src/parser/ast.rs b/src/parser/ast.rs
+index 3ad40bd6..ac736478 100644
+--- a/src/parser/ast.rs
++++ b/src/parser/ast.rs
+@@ -979,8 +979,8 @@ pub enum Stmt {
+         body: Block,
+     },
+ 
+-    /// break [expr]
+-    Break(Option<Spanned<Expr>>),
++    /// break (takes no value — loops are not expressions; D19)
++    Break,
+ 
+     /// continue
+     Continue,
+diff --git a/src/parser/expr.rs b/src/parser/expr.rs
+index c0111d87..7c7865a2 100644
+--- a/src/parser/expr.rs
++++ b/src/parser/expr.rs
+@@ -223,8 +223,8 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
+         Stmt::VarDecl { value, .. } => contains_it(value),
+         Stmt::Assign { target, value } => contains_it(target) || contains_it(value),
+         Stmt::CompoundAssign { target, value, .. } => contains_it(target) || contains_it(value),
+-        Stmt::Return(Some(e)) | Stmt::Throw(e) | Stmt::Break(Some(e)) => contains_it(e),
+-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => false,
++        Stmt::Return(Some(e)) | Stmt::Throw(e) => contains_it(e),
++        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => false,
+         Stmt::For { iterable, body, else_body, .. } => {
+             contains_it(iterable)
+                 || block_contains_it(body)
+diff --git a/src/parser/stmt.rs b/src/parser/stmt.rs
+index e0024ab3..550bed5d 100644
+--- a/src/parser/stmt.rs
++++ b/src/parser/stmt.rs
+@@ -173,15 +173,19 @@ impl Parser {
+         let start = self.peek_span();
+         self.expect_keyword(Keyword::Break)?;
+ 
+-        let value = if !self.check(&Token::Newline) && !self.check(&Token::Dedent) && self.is_expr_start() {
+-            Some(self.parse_expr()?)
+-        } else {
+-            None
+-        };
++        // `break <expr>` (loop-as-expression) was removed from the v1 surface
++        // (D19). Recognize the shape and reject with a teaching error rather
++        // than falling through to a generic "expected newline".
++        if !self.check(&Token::Newline) && !self.check(&Token::Dedent) && self.is_expr_start() {
++            return Err(ParseError {
++                kind: crate::errors::ParseErrorKind::BreakWithValue,
++                span: self.peek_span(),
++            });
++        }
+ 
+         let end = self.previous_span();
+         self.consume_newline();
+-        Ok(Spanned::new(Stmt::Break(value), start.merge(end)))
++        Ok(Spanned::new(Stmt::Break, start.merge(end)))
+     }
+ 
+     fn parse_assert_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
+diff --git a/src/parser/visitor.rs b/src/parser/visitor.rs
+index 88537ccb..c8782e3d 100644
+--- a/src/parser/visitor.rs
++++ b/src/parser/visitor.rs
+@@ -295,10 +295,10 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
+             v.visit_expr(target);
+             v.visit_expr(value);
+         }
+-        Stmt::Return(Some(expr)) | Stmt::Throw(expr) | Stmt::Break(Some(expr)) => {
++        Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+             v.visit_expr(expr);
+         }
+-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => {}
++        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => {}
+         Stmt::For {
+             iterable,
+             body,
+diff --git a/src/semantic/meta.rs b/src/semantic/meta.rs
+index d83c8056..837c1f1d 100644
+--- a/src/semantic/meta.rs
++++ b/src/semantic/meta.rs
+@@ -1569,7 +1569,7 @@ fn eval_meta_stmt(
+             Ok(MetaControlFlow::Return(val))
+         }
+ 
+-        Stmt::Break(_) => Ok(MetaControlFlow::Break),
++        Stmt::Break => Ok(MetaControlFlow::Break),
+         Stmt::Continue => Ok(MetaControlFlow::LoopContinue),
+ 
+         Stmt::Expr(expr) => {
+@@ -2208,8 +2208,7 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
+         }
+         Stmt::Return(Some(expr)) => substitute_expr(expr, env, type_env),
+         Stmt::Throw(expr) => substitute_expr(expr, env, type_env),
+-        Stmt::Break(Some(expr)) => substitute_expr(expr, env, type_env),
+-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => {}
++        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => {}
+         Stmt::For { iterable, body, else_body, .. } => {
+             substitute_expr(iterable, env, type_env);
+             substitute_block(body, env, type_env);
+diff --git a/src/semantic/resolve.rs b/src/semantic/resolve.rs
+index 96b33ec1..3de66064 100644
+--- a/src/semantic/resolve.rs
++++ b/src/semantic/resolve.rs
+@@ -1225,13 +1225,7 @@ fn resolve_stmt(
+             resolve_expr(expr, scopes, errors, resolution_map);
+         }
+ 
+-        Stmt::Break(expr) => {
+-            if let Some(expr) = expr {
+-                resolve_expr(expr, scopes, errors, resolution_map);
+-            }
+-        }
+-
+-        Stmt::Continue | Stmt::Pass => {}
++        Stmt::Break | Stmt::Continue | Stmt::Pass => {}
+ 
+         Stmt::For {
+             pattern,
+diff --git a/src/semantic/rewrite.rs b/src/semantic/rewrite.rs
+index 10383b1a..ee961659 100644
+--- a/src/semantic/rewrite.rs
++++ b/src/semantic/rewrite.rs
+@@ -160,12 +160,7 @@ fn rename_stmt(stmt: &mut Stmt, aliases: &rustc_hash::FxHashMap<String, String>)
+             }
+         }
+         Stmt::Throw(e) => rename_expr(e, aliases),
+-        Stmt::Break(opt) => {
+-            if let Some(v) = opt {
+-                rename_expr(v, aliases);
+-            }
+-        }
+-        Stmt::Continue | Stmt::Pass => {}
++        Stmt::Break | Stmt::Continue | Stmt::Pass => {}
+         Stmt::Assign { target, value } => {
+             rename_expr(target, aliases);
+             rename_expr(value, aliases);
+@@ -586,8 +581,7 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable, error
+         }
+         Stmt::Return(Some(expr)) => rewrite_expr(expr, res, scopes, errors),
+         Stmt::Throw(expr) => rewrite_expr(expr, res, scopes, errors),
+-        Stmt::Break(Some(expr)) => rewrite_expr(expr, res, scopes, errors),
+-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => {}
++        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => {}
+         Stmt::For { iterable, body, else_body, .. } => {
+             rewrite_expr(iterable, res, scopes, errors);
+             rewrite_block(body, res, scopes, errors);
+diff --git a/src/semantic/safety/check_stmt.rs b/src/semantic/safety/check_stmt.rs
+index 626da52d..0ecd171c 100644
+--- a/src/semantic/safety/check_stmt.rs
++++ b/src/semantic/safety/check_stmt.rs
+@@ -922,10 +922,7 @@ impl<'a> BorrowChecker<'a> {
+                 self.diverged = true;
+             }
+ 
+-            Stmt::Break(expr) => {
+-                if let Some(expr) = expr {
+-                    self.check_expr(expr);
+-                }
++            Stmt::Break => {
+                 self.diverged = true;
+             }
+ 
+diff --git a/src/semantic/typecheck.rs b/src/semantic/typecheck.rs
+index 1522f852..652e8ad3 100644
+--- a/src/semantic/typecheck.rs
++++ b/src/semantic/typecheck.rs
+@@ -3130,7 +3130,7 @@ impl<'a> TypeChecker<'a> {
+                 // monomorphization for returning trait methods.)
+                 let last_is_divergent = block.stmts.last().map_or(false, |s| matches!(
+                     &s.node,
+-                    Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break(_) | Stmt::Continue
++                    Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break | Stmt::Continue
+                 ));
+                 let block_ty = self.check_block(block);
+                 if last_is_divergent {
+@@ -3938,10 +3938,7 @@ impl<'a> TypeChecker<'a> {
+                 }
+             }
+ 
+-            Stmt::Break(expr) => {
+-                if let Some(expr) = expr {
+-                    self.infer_expr(expr);
+-                }
++            Stmt::Break => {
+                 if self.loop_depth == 0 {
+                     self.error(SemanticErrorKind::BreakOutsideLoop, stmt.span);
+                 }
+@@ -4394,7 +4391,7 @@ impl<'a> TypeChecker<'a> {
+     fn stmt_terminates(&self, stmt: &Spanned<Stmt>) -> bool {
+         match &stmt.node {
+             // Direct control transfer out of the fall-through path.
+-            Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break(_) | Stmt::Continue => true,
++            Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break | Stmt::Continue => true,
+ 
+             // Never-typed expression statements (panic, noreturn externs),
+             // or block expressions whose block terminates.
+@@ -7313,7 +7310,7 @@ fn block_has_loop_break(block: &Block) -> bool {
+ 
+ fn stmt_has_loop_break(stmt: &Stmt) -> bool {
+     match stmt {
+-        Stmt::Break(_) => true,
++        Stmt::Break => true,
+         Stmt::If { then_body, elif_branches, else_body, .. } => {
+             block_has_loop_break(then_body)
+                 || elif_branches.iter().any(|(_, b)| block_has_loop_break(b))
+@@ -7547,7 +7544,7 @@ pub fn apply_inferred_method_targs(
+     fn walk_stmt(s: &mut Stmt, inferred: &FxHashMap<usize, Vec<Type>>) {
+         match s {
+             Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, inferred),
+-            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => walk_expr(e, inferred),
++            Stmt::Return(Some(e)) => walk_expr(e, inferred),
+             Stmt::VarDecl { value, .. } => walk_expr(value, inferred),
+             Stmt::Assign { target, value } => {
+                 walk_expr(target, inferred);
+@@ -7735,7 +7732,7 @@ pub fn apply_inferred_call_targs(
+     fn walk_stmt(s: &mut Stmt, inferred: &FxHashMap<usize, Vec<Type>>) {
+         match s {
+             Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, inferred),
+-            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => walk_expr(e, inferred),
++            Stmt::Return(Some(e)) => walk_expr(e, inferred),
+             Stmt::VarDecl { value, .. } => walk_expr(value, inferred),
+             Stmt::Assign { target, value } => {
+                 walk_expr(target, inferred);
+@@ -7969,7 +7966,7 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
+                 }
+                 walk_expr(value, sigs);
+             }
+-            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => {
++            Stmt::Return(Some(e)) => {
+                 rewrite_collect(e, ret_ty);
+                 walk_expr(e, sigs);
+             }
+diff --git a/tests/fixtures/.gitignore b/tests/fixtures/.gitignore
+index ea35701d..5d8371c8 100644
+--- a/tests/fixtures/.gitignore
++++ b/tests/fixtures/.gitignore
+@@ -26,6 +26,11 @@
+ # tests/fixtures/*.gg only) doesn't reflow them (`gg fmt` corrupts long chains).
+ !expr_nesting_too_deep_error/
+ !expr_nesting_too_deep_error/*.gg
++# D19 `break <value>` removal negative fixture: unparseable BY DESIGN, kept in
++# a subdir so the top-level sweeps (fmt_idempotent, *_comparison, runtime_diff)
++# never feed it to the formatter/self-host drivers.
++!break_value_removed_error/
++!break_value_removed_error/*.gg
+ !expr_nesting_max_depth/
+ !expr_nesting_max_depth/*.gg
+ !imported_nonexhaustive_match/
+diff --git a/tests/fixtures/break_value_removed_error/main.gg b/tests/fixtures/break_value_removed_error/main.gg
+new file mode 100644
+index 00000000..2f6d3c86
+--- /dev/null
++++ b/tests/fixtures/break_value_removed_error/main.gg
+@@ -0,0 +1,9 @@
++# D19: `break <value>` / loop-as-expression was removed from the surface.
++# `break` takes no value; this must be rejected at parse with a teaching
++# error, never accepted (the old half-feature silently discarded the value
++# at lowering). Negative fixture: `gg check` must fail.
++void main():
++    int result = 0
++    loop:
++        break 42
++    print(result)
+diff --git a/tests/fixtures/self_host_lowerer/loader.gg b/tests/fixtures/self_host_lowerer/loader.gg
+index b4b61b60..a37e2c30 100644
+--- a/tests/fixtures/self_host_lowerer/loader.gg
++++ b/tests/fixtures/self_host_lowerer/loader.gg
+@@ -362,12 +362,8 @@ bool stmt_mentions_iter(Stmt s):
+                     return false
+         case SThrow(expr):
+             return expr_mentions_iter(expr)
+-        case SBreak(opt_e):
+-            match opt_e:
+-                case Some(e):
+-                    return expr_mentions_iter(e)
+-                case None:
+-                    return false
++        case SBreak():
++            return false
+         case SIf(cond, then_body, branches):
+             if expr_mentions_iter(cond):
+                 return true
+diff --git a/tests/fixtures/self_host_lowerer/lower.gg b/tests/fixtures/self_host_lowerer/lower.gg
+index 345109c3..62e8bd53 100644
+--- a/tests/fixtures/self_host_lowerer/lower.gg
++++ b/tests/fixtures/self_host_lowerer/lower.gg
+@@ -665,7 +665,7 @@ String stmt_kind(Stmt s):
+             return "SReturn"
+         case SThrow(_):
+             return "SThrow"
+-        case SBreak(_):
++        case SBreak():
+             return "SBreak"
+         case SContinue:
+             return "SContinue"
+@@ -1341,12 +1341,8 @@ bool mutinf_scan_stmts(Vector[Stmt] stmts, String target, GirModule &gmod, Vecto
+                         pass
+             case SThrow(te):
+                 if mutinf_scan_expr(te, target, &gmod, &callees): m = true
+-            case SBreak(opt_be):
+-                match opt_be:
+-                    case Some(be):
+-                        if mutinf_scan_expr(be, target, &gmod, &callees): m = true
+-                    case None:
+-                        pass
++            case SBreak():
++                pass
+             case SWhile(cond_e, body_w, else_w):
+                 if mutinf_scan_expr(cond_e, target, &gmod, &callees): m = true
+                 if mutinf_scan_stmts(body_w, target, &gmod, &callees): m = true
+diff --git a/tests/fixtures/self_host_lowerer/lower_closures.gg b/tests/fixtures/self_host_lowerer/lower_closures.gg
+index 834d2791..6c2760c4 100644
+--- a/tests/fixtures/self_host_lowerer/lower_closures.gg
++++ b/tests/fixtures/self_host_lowerer/lower_closures.gg
+@@ -1230,12 +1230,8 @@ bool closure_stmt_has_capture(Stmt stmt, Dict[String, bool] in_scope, GirModule
+                     return false
+         case SThrow(e):
+             return closure_expr_has_capture(e, in_scope, &gmod)
+-        case SBreak(opt_e):
+-            match opt_e:
+-                case Some(e):
+-                    return closure_expr_has_capture(e, in_scope, &gmod)
+-                case None:
+-                    return false
++        case SBreak():
++            return false
+         case SIf(cond, then_body, branches):
+             if closure_expr_has_capture(cond, in_scope, &gmod):
+                 return true
+@@ -1533,12 +1529,8 @@ void cc_collect_stmt(LowerCtx &ctx, Stmt stmt, Dict[String, bool] in_scope, GirM
+                     pass
+         case SThrow(e):
+             cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+-        case SBreak(opt_e):
+-            match opt_e:
+-                case Some(e):
+-                    cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
+-                case None:
+-                    pass
++        case SBreak():
++            pass
+         case SIf(cond, then_body, branches):
+             cc_collect_expr(&ctx, cond, in_scope, &gmod, &cc)
+             cc_collect_stmts(&ctx, then_body, in_scope, &gmod, &cc)
+@@ -1784,12 +1776,8 @@ bool stmt_has_nested_closure(Stmt stmt):
+                     return false
+         case SThrow(e):
+             return expr_has_nested_closure(e)
+-        case SBreak(opt_e):
+-            match opt_e:
+-                case Some(e):
+-                    return expr_has_nested_closure(e)
+-                case None:
+-                    return false
++        case SBreak():
++            return false
+         case SIf(cond, then_body, branches):
+             if expr_has_nested_closure(cond):
+                 return true
+diff --git a/tests/fixtures/self_host_lowerer/lower_cow.gg b/tests/fixtures/self_host_lowerer/lower_cow.gg
+index 3b7e8196..f605525e 100644
+--- a/tests/fixtures/self_host_lowerer/lower_cow.gg
++++ b/tests/fixtures/self_host_lowerer/lower_cow.gg
+@@ -323,12 +323,8 @@ void cow_scan_stmts(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] stmts, bool in_
+                         pass
+             case SThrow(te):
+                 cow_scan_expr(&ctx, &gmod, te, in_closure)
+-            case SBreak(opt_be):
+-                match opt_be:
+-                    case Some(be):
+-                        cow_scan_expr(&ctx, &gmod, be, in_closure)
+-                    case None:
+-                        pass
++            case SBreak():
++                pass
+             case SWhile(cond_e, body_w, else_w):
+                 cow_scan_expr(&ctx, &gmod, cond_e, in_closure)
+                 cow_scan_stmts(&ctx, &gmod, body_w, in_closure)
+diff --git a/tests/fixtures/self_host_lowerer/lower_expr.gg b/tests/fixtures/self_host_lowerer/lower_expr.gg
+index 04d2df81..a0504f39 100644
+--- a/tests/fixtures/self_host_lowerer/lower_expr.gg
++++ b/tests/fixtures/self_host_lowerer/lower_expr.gg
+@@ -6546,7 +6546,7 @@ int lower_set_any_all(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
+         guard = SpannedExpr(EUnaryOp("not", Box(cbody.clone())), span)
+     SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_name), span)
+     SpannedExpr setval = SpannedExpr(EBoolLiteral(not is_all), span)
+-    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak(None)]
++    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak()]
+     Vector[ElseBranch] no_elifs = []
+     Vector[Stmt] body = [SIf(guard, then_body, no_elifs)]
+     Vector[Stmt] no_else = []
+@@ -6704,7 +6704,7 @@ int lower_vector_any_all(LowerCtx &ctx, int recv, String recv_type_name, String
+     # then-body: `acc = <bool>; break`.
+     SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_name), span)
+     SpannedExpr setval = SpannedExpr(EBoolLiteral(not is_all), span)
+-    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak(None)]
++    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak()]
+     Vector[ElseBranch] no_elifs = []
+     Vector[Stmt] body = [SIf(guard, then_body, no_elifs)]
+     lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+@@ -6750,7 +6750,7 @@ int lower_vector_find(LowerCtx &ctx, int recv, String recv_type_name, String var
+     Vector[SpannedType] no_targs = []
+     SpannedExpr some_callee = SpannedExpr(EIdentifier("Some"), span)
+     SpannedExpr some_call = SpannedExpr(ECall(Box(some_callee), some_args, no_names, no_targs), span)
+-    Vector[Stmt] then_body = [SAssign(acc_lhs, some_call), SBreak(None)]
++    Vector[Stmt] then_body = [SAssign(acc_lhs, some_call), SBreak()]
+     Vector[ElseBranch] no_elifs = []
+     Vector[Stmt] body = [SIf(cbody.clone(), then_body, no_elifs)]
+     # Advance the position counter each iteration (after the check, so a
+diff --git a/tests/fixtures/self_host_lowerer/lower_stmt.gg b/tests/fixtures/self_host_lowerer/lower_stmt.gg
+index 4035af31..bc1cfe98 100644
+--- a/tests/fixtures/self_host_lowerer/lower_stmt.gg
++++ b/tests/fixtures/self_host_lowerer/lower_stmt.gg
+@@ -1073,7 +1073,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
+                             lower_fail("SAssign *deref target is not a Box (got: " + dbox_tname + ")")
+                 else:
+                     lower_fail("SAssign target is neither EIdentifier, EFieldAccess, EIndex, nor EDeref (got: " + expr_kind(target_expr.expr) + ")")
+-        case SBreak(_):
++        case SBreak():
+             # Jump to the innermost loop's break target. Silently dropped
+             # before, which caused while-loops in the self-host lexer to
+             # never exit on their closing-quote checks.
+diff --git a/tests/fixtures/self_host_parser/ast.gg b/tests/fixtures/self_host_parser/ast.gg
+index a107ae7c..f8652c5c 100644
+--- a/tests/fixtures/self_host_parser/ast.gg
++++ b/tests/fixtures/self_host_parser/ast.gg
+@@ -109,7 +109,7 @@ enum Stmt:
+     SExpr(SpannedExpr)
+     SReturn(Option[SpannedExpr])
+     SThrow(SpannedExpr)
+-    SBreak(Option[SpannedExpr])
++    SBreak
+     SContinue
+     SPass
+     SMeta
+diff --git a/tests/fixtures/self_host_parser/format.gg b/tests/fixtures/self_host_parser/format.gg
+index 9e78952e..e2382aa3 100644
+--- a/tests/fixtures/self_host_parser/format.gg
++++ b/tests/fixtures/self_host_parser/format.gg
+@@ -465,12 +465,8 @@ String format_stmt(Stmt s):
+                     return "return"
+         case SThrow(val):
+             return "throw " + format_expr(val)
+-        case SBreak(val):
+-            match val:
+-                case Some(v):
+-                    return "break " + format_expr(v)
+-                else:
+-                    return "break"
++        case SBreak():
++            return "break"
+         case SContinue:
+             return "continue"
+         case SPass:
+diff --git a/tests/fixtures/self_host_parser/parser.gg b/tests/fixtures/self_host_parser/parser.gg
+index c4b88d12..faca5a5d 100644
+--- a/tests/fixtures/self_host_parser/parser.gg
++++ b/tests/fixtures/self_host_parser/parser.gg
+@@ -2573,9 +2573,13 @@ equip Parser:
+         if self.check_kw(KW_BREAK):
+             self.advance()
+             if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+-                return SBreak(None)
+-            SpannedExpr val = self.parse_expr()
+-            return SBreak(Some(val))
++                return SBreak()
++            # `break <expr>` (loop-as-expression) was removed from the
++            # surface (D19). Report the teaching error, then parse and
++            # discard the value so recovery stays statement-local.
++            self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "break takes no value; loops are not expressions"))
++            self.parse_expr()
++            return SBreak()
+ 
+         # continue
+         if self.check_kw(KW_CONTINUE):
+diff --git a/tests/fixtures/self_host_resolver/ast.gg b/tests/fixtures/self_host_resolver/ast.gg
+index 26b4dc6e..d1711d80 100644
+--- a/tests/fixtures/self_host_resolver/ast.gg
++++ b/tests/fixtures/self_host_resolver/ast.gg
+@@ -114,7 +114,7 @@ enum Stmt:
+     SExpr(SpannedExpr)
+     SReturn(Option[SpannedExpr])
+     SThrow(SpannedExpr)
+-    SBreak(Option[SpannedExpr])
++    SBreak
+     SContinue
+     SPass
+     SMeta
+diff --git a/tests/fixtures/self_host_resolver/format.gg b/tests/fixtures/self_host_resolver/format.gg
+index 9e78952e..e2382aa3 100644
+--- a/tests/fixtures/self_host_resolver/format.gg
++++ b/tests/fixtures/self_host_resolver/format.gg
+@@ -465,12 +465,8 @@ String format_stmt(Stmt s):
+                     return "return"
+         case SThrow(val):
+             return "throw " + format_expr(val)
+-        case SBreak(val):
+-            match val:
+-                case Some(v):
+-                    return "break " + format_expr(v)
+-                else:
+-                    return "break"
++        case SBreak():
++            return "break"
+         case SContinue:
+             return "continue"
+         case SPass:
+diff --git a/tests/fixtures/self_host_resolver/parser.gg b/tests/fixtures/self_host_resolver/parser.gg
+index 1245e45a..f90b11b9 100644
+--- a/tests/fixtures/self_host_resolver/parser.gg
++++ b/tests/fixtures/self_host_resolver/parser.gg
+@@ -2556,9 +2556,13 @@ equip Parser:
+         if self.check_kw(KW_BREAK):
+             self.advance()
+             if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+-                return SBreak(None)
+-            SpannedExpr val = self.parse_expr()
+-            return SBreak(Some(val))
++                return SBreak()
++            # `break <expr>` (loop-as-expression) was removed from the
++            # surface (D19). Report the teaching error, then parse and
++            # discard the value so recovery stays statement-local.
++            self.errors.push("break takes no value; loops are not expressions")
++            self.parse_expr()
++            return SBreak()
+ 
+         # continue
+         if self.check_kw(KW_CONTINUE):
+diff --git a/tests/fixtures/self_host_resolver/resolve.gg b/tests/fixtures/self_host_resolver/resolve.gg
+index eedb45fb..f4d1eafc 100644
+--- a/tests/fixtures/self_host_resolver/resolve.gg
++++ b/tests/fixtures/self_host_resolver/resolve.gg
+@@ -494,9 +494,8 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
+         case SThrow(expr):
+             resolve_expr(expr, &scopes, &ctx)
+ 
+-        case SBreak(opt_expr):
+-            if opt_expr is Some(sexpr):
+-                resolve_expr(sexpr, &scopes, &ctx)
++        case SBreak():
++            pass
+ 
+         case SContinue():
+             pass
+@@ -959,9 +958,8 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
+         case SThrow(expr):
+             resolve_expr(expr, &scopes, &ctx)
+ 
+-        case SBreak(opt_expr):
+-            if opt_expr is Some(sexpr):
+-                resolve_expr(sexpr, &scopes, &ctx)
++        case SBreak():
++            pass
+ 
+         case SContinue():
+             pass
+diff --git a/tests/fixtures/self_host_typechecker/ast.gg b/tests/fixtures/self_host_typechecker/ast.gg
+index 40cf17d0..7e0c7464 100644
+--- a/tests/fixtures/self_host_typechecker/ast.gg
++++ b/tests/fixtures/self_host_typechecker/ast.gg
+@@ -114,7 +114,7 @@ enum Stmt:
+     SExpr(SpannedExpr)
+     SReturn(Option[SpannedExpr])
+     SThrow(SpannedExpr)
+-    SBreak(Option[SpannedExpr])
++    SBreak
+     SContinue
+     SPass
+     SMeta
+diff --git a/tests/fixtures/self_host_typechecker/format.gg b/tests/fixtures/self_host_typechecker/format.gg
+index aaad8e0e..185ef7f2 100644
+--- a/tests/fixtures/self_host_typechecker/format.gg
++++ b/tests/fixtures/self_host_typechecker/format.gg
+@@ -363,9 +363,7 @@ String format_stmt(Stmt s):
+             return "return"
+         case SThrow(val):
+             return f"throw {format_expr(val)}"
+-        case SBreak(val):
+-            if val is Some(v):
+-                return f"break {format_expr(v)}"
++        case SBreak():
+             return "break"
+         case SContinue:
+             return "continue"
+diff --git a/tests/fixtures/self_host_typechecker/meta.gg b/tests/fixtures/self_host_typechecker/meta.gg
+index 2fee846a..753a751a 100644
+--- a/tests/fixtures/self_host_typechecker/meta.gg
++++ b/tests/fixtures/self_host_typechecker/meta.gg
+@@ -282,7 +282,7 @@ int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth,
+                     case None:
+                         returned = true
+                         return 0
+-            case SBreak(_):
++            case SBreak():
+                 broke = true
+                 return 0
+             case SContinue:
+@@ -896,12 +896,8 @@ Vector[Stmt] rename_aliases_stmts(Vector[Stmt] stmts, Dict[String, String] &amap
+                 out.push(SCompoundAssign(rename_aliases_expr(lhs, &amap), op, rename_aliases_expr(rhs, &amap)))
+             case SThrow(e):
+                 out.push(SThrow(rename_aliases_expr(e, &amap)))
+-            case SBreak(oe):
+-                match oe:
+-                    case Some(e):
+-                        out.push(SBreak(Some(rename_aliases_expr(e, &amap))))
+-                    case None:
+-                        out.push(s)
++            case SBreak():
++                out.push(s)
+             case SLoop(body):
+                 out.push(SLoop(rename_aliases_stmts(body, &amap)))
+             case SWith(e, name, body):
+diff --git a/tests/fixtures/self_host_typechecker/parser.gg b/tests/fixtures/self_host_typechecker/parser.gg
+index 894c7b84..20169708 100644
+--- a/tests/fixtures/self_host_typechecker/parser.gg
++++ b/tests/fixtures/self_host_typechecker/parser.gg
+@@ -2897,9 +2897,13 @@ equip Parser:
+         if self.check_kw(KW_BREAK):
+             self.advance()
+             if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+-                return SBreak(None)
+-            SpannedExpr val = self.parse_expr()
+-            return SBreak(Some(val))
++                return SBreak()
++            # `break <expr>` (loop-as-expression) was removed from the
++            # surface (D19). Report the teaching error, then parse and
++            # discard the value so recovery stays statement-local.
++            self.errors.push("break takes no value; loops are not expressions")
++            self.parse_expr()
++            return SBreak()
+ 
+         # continue
+         if self.check_kw(KW_CONTINUE):
+diff --git a/tests/fixtures/self_host_typechecker/resolve.gg b/tests/fixtures/self_host_typechecker/resolve.gg
+index f8cc830a..394fb771 100644
+--- a/tests/fixtures/self_host_typechecker/resolve.gg
++++ b/tests/fixtures/self_host_typechecker/resolve.gg
+@@ -481,9 +481,8 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
+         case SThrow(expr):
+             resolve_expr(expr, &scopes, &ctx)
+ 
+-        case SBreak(opt_expr):
+-            if opt_expr is Some(sexpr):
+-                resolve_expr(sexpr, &scopes, &ctx)
++        case SBreak():
++            pass
+ 
+         case SContinue():
+             pass
+@@ -955,9 +954,8 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
+         case SThrow(expr):
+             resolve_expr(expr, &scopes, &ctx)
+ 
+-        case SBreak(opt_expr):
+-            if opt_expr is Some(sexpr):
+-                resolve_expr(sexpr, &scopes, &ctx)
++        case SBreak():
++            pass
+ 
+         case SContinue():
+             pass
+diff --git a/tests/fixtures/self_host_typechecker/typecheck.gg b/tests/fixtures/self_host_typechecker/typecheck.gg
+index aad50acb..84bb6cf0 100644
+--- a/tests/fixtures/self_host_typechecker/typecheck.gg
++++ b/tests/fixtures/self_host_typechecker/typecheck.gg
+@@ -490,9 +490,8 @@ void check_carrier_ops_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable
+                 check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+         case SThrow(sexpr):
+             check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+-        case SBreak(opt_expr):
+-            if opt_expr is Some(sexpr):
+-                check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
++        case SBreak():
++            pass
+         case SContinue():
+             pass
+         case SPass():
+@@ -1798,18 +1797,13 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
+             if opt_expr is Some(sexpr):
+                 walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
+ 
+-        case SBreak(opt_expr):
+-            # BreakOutsideLoop — mirrors src/semantic/typecheck.rs:2875
++        case SBreak():
++            # BreakOutsideLoop — mirrors src/semantic/typecheck.rs
+             # (SemanticErrorKind::BreakOutsideLoop). `loop_depth` is bumped
+             # at SFor/SWhile/SLoop entry, reset at function entry, and
+             # save/restored across closures.
+             if ctx.loop_depth == 0:
+-                Span br_span = Span(0, 0)
+-                if opt_expr is Some(bsp):
+-                    br_span = bsp.span
+-                ctx.diagnostics.push(Diagnostic.error(br_span, DkControlFlow(), "break outside of loop"))
+-            if opt_expr is Some(bexpr):
+-                walk_expr_closures(bexpr, scope_id, &scopes, &types, &ctx)
++                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkControlFlow(), "break outside of loop"))
+ 
+         case SContinue():
+             # ContinueOutsideLoop — mirrors src/semantic/typecheck.rs:2898
+diff --git a/tests/integration.rs b/tests/integration.rs
+index 362cbb35..08d3fde0 100644
+--- a/tests/integration.rs
++++ b/tests/integration.rs
+@@ -12985,8 +12985,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
+         Stmt::Return(Some(expr)) => format!("return {}", format_expr_canonical(&expr.node)),
+         Stmt::Return(None) => "return".to_string(),
+         Stmt::Throw(expr) => format!("throw {}", format_expr_canonical(&expr.node)),
+-        Stmt::Break(Some(expr)) => format!("break {}", format_expr_canonical(&expr.node)),
+-        Stmt::Break(None) => "break".to_string(),
++        Stmt::Break => "break".to_string(),
+         Stmt::Continue => "continue".to_string(),
+         Stmt::Pass => "pass".to_string(),
+         Stmt::For {
+@@ -26488,6 +26487,20 @@ fn break_outside_loop_error() {
+     check_gg_fails("break_outside_loop_error.gg", "break outside of loop");
+ }
+ 
++/// D19: `break <expr>` (loop-as-expression) was removed from the surface.
++/// The parser must reject the shape with the teaching error — not accept it
++/// and silently discard the value (the old half-wired behavior). The fixture
++/// lives in its own directory (like expr_nesting_too_deep_error/) so the
++/// unparseable source stays OUT of the top-level fixture sweeps
++/// (fmt_idempotent, *_comparison, runtime_diff).
++#[test]
++fn break_value_removed_error() {
++    check_gg_fails(
++        "break_value_removed_error/main.gg",
++        "break takes no value; loops are not expressions",
++    );
++}
++
+ #[test]
+ fn unknown_directive_error() {
+     check_gg_fails("unknown_directive_error.gg", "unknown directive");

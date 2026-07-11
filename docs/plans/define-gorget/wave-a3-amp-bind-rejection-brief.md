@@ -1,24 +1,34 @@
 # Wave A3 brief — D10(a): local `&`-bind REJECTION (the whole form class)
 
-> **Batch A, track 3** (ratified wave plan). **Zone:** `src/parser/stmt.rs`
-> (decl-sigil parse error) + `src/semantic/` (the bind rejection) +
+> **Batch A, track 3** (ratified wave plan). **Zone (pass-1 completed the list):**
+> `src/parser/stmt.rs` (decl-sigil parse error) + `src/semantic/` (the bind
+> rejection) + `src/errors.rs` (the two new error kinds) +
 > `tests/fixtures/self_host_lowerer/lower_stmt.gg` (the T-D intercept deletion) +
-> fixture flips + docs. ⚠ A1/A2-R touch the same semantic files with disjoint
-> hunks — parent integrates sequentially.
-> **Scout:** `/tmp/scout_wA3_report.md`, prototype `/tmp/scout_wA3_prototype.patch`
-> (19 files, +298/−116), measured end-to-end incl. bootstrap fixed-point.
-> **Status:** v1 — awaiting sequential fresh-review passes.
+> `self_host_typechecker/{typecheck,diagnostic}.gg` (the self-host check) +
+> `tests/security.rs` (attack_04 flip) + fixture flips + docs. ⚠ A1/A2-R touch
+> the same semantic files with disjoint hunks — parent integrates sequentially.
+> **Scout:** `/tmp/scout_wA3_report.md`; prototype DURABLE at
+> `docs/plans/define-gorget/scouts/patches/scout_wA3_prototype.patch` (19 files,
+> +298/−116; /tmp copy may rot), measured end-to-end incl. bootstrap fixed-point.
+> **Status:** v2 — pass-1 reviewed (1 BLOCKING fold: the expr-position class-hole
+> — `do:`-tail binds alias-and-write-through, match-expr binds garbage-link;
+> `expr_is_borrow_bind` recursed `Expr::If` only — now extends to
+> `Expr::Match`/`Expr::Do`/`Expr::Block` + 2 negative fixtures + re-sweep; plus
+> the "bind reach dead" claim corrected, framing softened, zone completed,
+> durable patch staged; D5/D6 discoveries filed). Awaiting pass 2.
 
 ## Verified premises — TWO CORRECTIONS over the wave plan's text
 
 1. **The round-38 T-D intercept is in the SELF-HOST lowerer**
    (`tests/fixtures/self_host_lowerer/lower_stmt.gg:139-216`), per DONE.md's own
-   T-D entry — NOT in the Rust lowering. **The Rust side has NO bind-specific
-   arm**: its behavior rides the SHARED `Expr::MutableBorrow` arm
-   (`src/ir/lowering/exprs/mod.rs:338-424`), which also serves call args,
-   `&*box`, match, and return positions — **it must NOT be deleted** (the wave
-   entry's "retire the T-D EMutableBorrow SVarDecl intercept" applies to the
-   self-host file only; the rejection makes the Rust arm's bind reach dead).
+   T-D entry — NOT in the Rust lowering (pass-1: this DISAMBIGUATES the wave
+   plan's compiler-unspecified wording; the census already said self-host).
+   **The Rust side has NO bind-specific arm**: its behavior rides the SHARED
+   `Expr::MutableBorrow` arm (`src/ir/lowering/exprs/mod.rs:338-424` — incl. the
+   snag-#26 `&*box` path), serving every expression position — **it must NOT be
+   deleted**. ⚠ Pass-1 CORRECTED the reach claim: the rejection makes the Rust
+   arm's bind reach dead ONLY once the expr-position class-hole (premise 3
+   below) is closed — `do:`-tails and match-arm initializers still reached it.
 2. **Census +1**: `tests/fixtures/security/attack_04_cow_mutate_ref_borrow.gg:6`
    carries the decl-sigil form (subdirectory the census missed) — it passed as
    `security_safe` only because the parser SILENTLY SWALLOWS `&`/`!`/`move`
@@ -36,6 +46,19 @@ the typed form was an ICE (Tier-2a validator panic, `ir/lowering/mod.rs:2105`);
 the element form was a SILENT WRONG-COPY WRITE — both now clean errors.
 **Stays accepted (probed):** call args `f(&x)`, `!`-move binds, `match &x`,
 `for x in &a`, ctor/literal `&` uses.
+
+**3. THE EXPR-POSITION CLASS-HOLE (pass-1 BLOCKING fold — Core #4, in-track):**
+`expr_is_borrow_bind` recursed `Expr::If` only. Pass-1 measured: `auto r = do: &a`
+is ACCEPTED and ALIASES (writes through — prints `4/4`); `auto r = match n:
+case 1: &a else: &b` typechecks then dies at link with a garbage
+monomorphization error. Both pre-existing (byte-identical pristine A/B), but the
+if-expr arm's own justification applies verbatim. EXTEND the helper with
+`Expr::Match` (recurse `arms[].body` — `MatchArm.body: Spanned<Expr>`,
+`ast.rs:833` — plus `else_arm`) and `Expr::Do`/`Expr::Block` (recurse the tail
+expr-statement); ADD 2 negative fixtures (`amp_bind_matchexpr_error`,
+`amp_bind_doexpr_error`); RE-RUN the zero-collateral sweep after. The self-host
+`check_local_borrow_bind` dodges identically — same permissive-residual class as
+its static/if-expr forms (note, don't chase; A2-S-era work).
 
 ## Scout-measured gates (executor re-runs; FOREGROUND, chunked)
 
