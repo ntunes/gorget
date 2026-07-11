@@ -8,12 +8,21 @@
 > assessment (scout): Rust-first creates no new OBSERVABLE divergence — it widens
 > the same pre-existing structural check-surface gap the entire Box/Task
 > single-owner family already has.
-> **Zone:** `src/semantic/` (scope.rs, mod.rs, type_utils.rs, typecheck.rs,
-> safety/) + `src/ir/lowering/` (the ICE rider in assigns.rs) + 3 fixture
-> migrations + new probe fixtures + docs. ⚠ A1/A3 touch the same semantic files
-> with disjoint hunks — parent integrates sequentially.
+> **Zone (pass-1 corrected):** `src/semantic/` (scope.rs, mod.rs, type_utils.rs,
+> errors.rs, safety/ — NOT typecheck.rs) + `src/ir/lowering/` (the ICE rider in
+> assigns.rs) + `spec/ggdef/` (the Option-taint gap fix + 10th test — small,
+> in-track) + 3 fixture migrations + probe fixtures + docs. ⚠ A1/A3 touch
+> adjacent semantic files with disjoint hunks — parent integrates sequentially.
 > **Scout:** `/tmp/scout_wA2_report.md`, prototype `/tmp/scout_wA2_prototype.patch`
-> (500 lines), measured end-to-end. **Status:** v1 — awaiting review passes.
+> (500 lines), measured end-to-end.
+> **Status:** v2 — pass-1 reviewed (8 folds, all applied below): the
+> expression-body return hole (the one model-fidelity defect); pin-4 fix-it
+> refuted+reworded; the name-matching claim struck (handle carve-out extends the
+> existing builtin name-list debt — typed-marker debt filed); pin-1's premise
+> corrected + the `Shared[R]`-payload-drop-never-runs bug FILED; the ggdef
+> Option-taint gap made an in-track work item (+10th test); gate-census holes
+> added; the ICE rider marked UN-prototyped; zone line corrected; probe set =
+> ALL 10 ggdef tests. Awaiting pass 2.
 
 ## Verified premises
 
@@ -33,9 +42,16 @@
 
 - **Typed plumbing:** `DefInfo.is_drop_tainted` (`scope.rs:47-54`) + new pass-3.55
   `compute_drop_taint` (semantic/mod.rs) seeding from `TraitRegistry.impls` Drop
-  equips, fixpointing over `field_types`/`variant_field_types`; accessor
-  `is_drop_tainted_type` mirroring ggdef's `ty_tainted`. Layering rule 2 clean —
-  no name-matching anywhere.
+  equips (cross-module + generic-equip shapes proven by pass-1's `VectorDrain`
+  probe), fixpointing over `field_types`/`variant_field_types` (enum payloads
+  proven; cycle-terminating — flags read, defs never re-entered); accessor
+  `is_drop_tainted_type` mirroring ggdef's `ty_tainted`. **Name-matching honesty
+  (pass-1 struck the "none anywhere" claim):** the refcounted/sync-handle
+  carve-out EXTENDS the existing builtin name-list
+  (`matches!(def.name.as_str(), "Channel"|"Shared"|"Weak"|"Mutex"|…)`) — same
+  pre-existing debt family as the Box/Task list; a user `struct Shared` would
+  dodge taint. Acceptable HERE only because it extends existing debt; the typed
+  builtin-marker fix is FILED (TODO), not this track's scope.
 - **Critical enabler:** `is_copy_type` gains the Copy∧Drop exclusion
   (`type_utils.rs:95` area) — without it, ggdef's all-scalar `struct R: int id`
   never reaches any check.
@@ -43,19 +59,37 @@
   `E_MoveWithoutOperator` sites by unioning taint into `needs_explicit_move` +
   place-shape pre-checks; 3 (collection puts) reuses the arena-ingest gate's
   TYPED classifiers (`is_mutating_builtin_method` + `is_buffer_owning_receiver`);
-  4 in `Stmt::Return`; 5 off `compute_capture_set`; 6 inside
-  `mark_bare_param_write_def` (the one producer).
+  **4 in `Stmt::Return` AND the `FunctionBody::Expression` tail arm
+  (`safety/check_stmt.rs:1726` — pass-1's blocking fold: ggdef rejects
+  `R passthru(R x): x` at the expression-body tail via `elaborate/mod.rs:639-642`;
+  the prototype covered only `Stmt::Return` — add the `tainted_place_name` check
+  with the same `imported_module_depth == 0` gate + a probe; fresh-temp expr
+  bodies `R make(): R(7)` stay legal)**; 5 off `compute_capture_set`; 6 inside
+  `mark_bare_param_write_def` (pre-filtered by `deadwrite_params`, which excludes
+  `self` — pin 3 holds by construction; note: `_`-prefixed params also dodge
+  position 6, a known micro-divergence from ggdef, acceptable).
 - **Fixture migrations:** the 12 sites, using CURRENT syntax (`!x` / `.clone()`)
   — D27's `^` re-sigils them in Batch C3 by design. Scout proved the migrated
   corpus runtime-stdout byte-identical AND parity-clean under the self-host
   oracle-diff.
-- **New probe fixtures:** the six ggdef-mirror rejection probes + three legal
-  counterparts (ggdef-exact outputs) — the position-per-fixture discipline.
-- **ICE rider (~20-40 lines, closes TODO:278 + :314):** in
-  `lower_compound_assign` (`assigns.rs:~1690-1727`), replace the shared
+- **New probe fixtures (pass-1 widened): port ALL of ggdef's normative suite**
+  (`tests.rs:961-1128` — 6 rejections + 3 legal counterparts + the
+  `&self`-borrow rejection sibling) PLUS the expression-body probes (reject +
+  fresh-temp-legal) — position-per-fixture discipline throughout.
+- **ggdef Option-taint gap (in-track, Core #8 both-ways):** production rejects
+  `Option[R]` bare-assign (principled per D4 — prelude Option is an enum
+  carrying R); ggdef ACCEPTS (phase-0 `Ty` has no Option → `Unknown` →
+  untainted, `elaborate/mod.rs:493-501`). Fix ggdef's taint model to cover
+  Option + add the 10th test so both sides agree BEFORE this lands.
+- **ICE rider (~20-40 lines, closes TODO:278 + :314) — ⚠ THE ONE UN-PROTOTYPED
+  HUNK (pass-1; the scout sized it, did not build it):** in
+  `lower_compound_assign` (`assigns.rs:1714-1721` confirmed), replace the shared
   vector/dict clone-read+shallow-assign branch with the existing
-  `index_load_borrow` for the `self` borrow; `__set`'s pre-drop gives drop-once.
-  `v[i] += x` thereby MOVES the dead element per the D12 ruling.
+  `index_load_borrow` (`validate.rs:1267-1269`) for the `self` borrow; `__set`'s
+  pre-drop gives drop-once. `v[i] += x` thereby MOVES the dead element per D12.
+  The executor derives this fresh and gates it with a NEW tainted-compound
+  fixture + ASan (pass-1 confirmed the ICE is live: `v[0] += Acc(5)` check-passes
+  then panics the build) + the 4 non-tainted compound fixtures byte-identical.
 - **Docs write-through:** reference:2266 + design:460 + book/11:59 stop
   enumerating the closed single-owner set — custom-Drop types join per D4;
   D4's ledger consequences text is the source.
@@ -63,27 +97,42 @@
 ## Pins the reviewers must hold (scout §7)
 
 1. **Shared/Weak/Mutex/Channel carve-out pinned EXPLICITLY**: refcounted/sync
-   types do NOT taint (their drops are runtime-managed; ggdef has no model) —
-   state it in code comment + brief; do not let the fixpoint swallow them.
+   handles do NOT taint. ⚠ Pass-1 corrected the RATIONALE: the old
+   "drop-count determinism is owned by the refcount" premise is FALSE-IN-FACT —
+   **`Shared[R]` never runs R's custom drop AT ALL today** (pre-existing
+   payload-drop bug, FILED HIGH in TODO; distinct from the Box2/`Shared[int]`
+   entry). The carve-out remains behaviorally safe (handle copies cannot
+   duplicate payload drops — there are currently zero either way) and consistent
+   with `is_copy_type`'s handle classification; cite the filed bug in the code
+   comment so the pin isn't ratified on a false premise.
 2. **Dict-key-at-index-store** is a shared ggdef+production model edge (neither
    rejects) — note, don't fix here.
 3. **Position 6 inherits the deliberate `self` exclusion** (the filed
    plain-`self` write-through bug / D2 track) — do NOT extend to `self` until
    that ruling's track runs.
-4. **Position-5 fix-it wording must NOT advertise capture-list syntax** (D5/D7
-   surface lands later) — suggest `!x` / `.clone()` only.
+4. **Position-5 fix-it wording (pass-1 REFUTED the draft):** the
+   `.clone()`-into-a-local suggestion DOES NOT COMPILE — the cloned local is
+   equally tainted and its capture equally rejects (probed). Until D5/D7 land,
+   the only viable remedies are PASS-AS-ARG or a `Shared[T]` wrap — the message
+   says exactly that, and must NOT advertise capture-list syntax. (ggdef's own
+   message advertises `!{c}` capture syntax neither implements — noted in the
+   ggdef-gap work item.)
 5. ggdef suite runs from `spec/ggdef/` (root `-p ggdef` selects 0 tests — scout
    measured; use `cd`-free invocation `cargo test --manifest-path spec/ggdef/Cargo.toml`).
 
 ## Gates (scout-measured; executor re-runs, FOREGROUND, chunked >600s)
 
-build · lib 1105/0 · the 6 rejection probes + 3 counterparts (ggdef-exact) ·
+build · lib 1105/0 · ALL ported ggdef probes (10 + expr-body pair, ggdef-exact) ·
 integration `drop` 40/0, `move` 56/0, `clone` 17/0 (3 known 120s self-host
-DEBUG-build stragglers — use `GG_BUILD_TIMEOUT_SECS=600`) · lints 53/0 · ggdef
-104/0 · the 4 fault_*_drop fixtures UNTOUCHED-green · migrated fixtures
-byte-identical stdout · `self_host_bootstrap_fixed_point` (bootstrap-inert
-expected — 0 self-host code changes — but run it: the semantic pass could
-surprise). Parent: full both-backend sweep at integration.
+DEBUG-build stragglers — use `GG_BUILD_TIMEOUT_SECS=600`) · **pass-1's
+census-hole fixtures EXPLICITLY (outside all the above filters):
+`cow_element_borrow_source_mutate_with` + `test_cleanup` + `test_with_clause` +
+`drop_struct_local` — byte-identical both binaries** · lints 53/0 · ggdef 104+
+new/0 (from `spec/ggdef/` or `--manifest-path`) · the 4 fault_*_drop fixtures
+UNTOUCHED-green · migrated fixtures byte-identical stdout · the ICE-rider
+fixture + ASan · `self_host_bootstrap_fixed_point` (bootstrap-inert expected —
+0 self-host code changes — but run it, chunked per stage). Parent: full
+both-backend sweep at integration.
 
 ## Executor protocol
 

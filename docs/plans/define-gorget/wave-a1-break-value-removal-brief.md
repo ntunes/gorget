@@ -88,7 +88,8 @@ if /tmp is gone, the Design section + the pass-1 review suffice to re-derive).
 **Three residue grep-gates, ALL must be empty at commit (pass-1 R2, inlined):**
 1. `grep -rn "SBreak(Some\|SBreak(None\|SBreak(_\|SBreak(opt\|SBreak(oe\|SBreak(val\|SBreak(Option" tests/fixtures --include="*.gg"`
 2. `grep -rn "Break(Some\|Break(None\|Break(_" src spec tests/*.rs`
-3. `grep -rn '"break" \[ expr \]' docs` Final gates: the table above + `self_host_bootstrap_fixed_point`
+3. `grep -rn '"break" \[ expr \]' docs`
+ Final gates: the table above + `self_host_bootstrap_fixed_point`
 (FOREGROUND, `GG_BUILD_TIMEOUT_SECS=600` — every touched self-host file is
 bootstrap surface). The parent runs the full both-backend sweep at integration.
 Commit message: `feat(lang): A1/D19 — remove break-value/loop-as-expression
