@@ -9,10 +9,13 @@
 > **Scout:** `/tmp/scout_wA1_report.md`, prototype `/tmp/scout_wA1_prototype.patch`
 > (38 files, +146/−172 per `git apply --stat`, applies clean; INCLUDES the fixture
 > + gitignore pair), measured end-to-end.
-> **Status:** v2 — pass-1 reviewed (3 folds: R1 the driver-diagnostic claim
-> corrected + the parse-error-surfacing gap FILED; R2 grep-gates inlined; R3 the
-> non-regenerating inventory counts dropped — completeness is proven by the
-> residue greps, not counts). Awaiting pass 2.
+> **Status:** v3 — pass-1 folds (R1 driver-diagnostic corrected + gap filed; R2
+> grep-gates inlined; R3 counts dropped) + pass-2 CLEAN except one one-line fold
+> (the TODO citation tag now greps: "(parse-error surfacing)" added to the entry
+> title). Pass-2 independently reproduced: both driver behaviors, all 3 grep-gates
+> incl. mutation tests, fmt idempotency, edge probes (`break -1`/`break (2)`
+> reject identically cross-compiler), doc-surface sweep, 2 spot gates exact.
+> Awaiting pass 3 (the ≥3-minimum confirming pass).
 
 ## Verified premises (scout, this session)
 
