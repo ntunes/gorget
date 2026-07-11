@@ -122,13 +122,19 @@ sequential fresh-review gauntlet.
       `/tmp/wA1_exec_final.patch`; all 17 gates exact (incl. bootstrap fixed-point green,
       5 comparison suites byte-identical, 3 residue greps empty). NEXT: output-review
       (in flight) → parent cherry-picks onto gorget-1 → full sweep at batch close.
-    - **A2-R (D12 drop-purity, Rust half): brief v3 in gauntlet, pass 3 (confirming) in
-      flight.** Brief `wave-a2-drop-purity-brief.md` v3 = scout prototype
-      (`/tmp/scout_wA2_prototype.patch`) + 13 folds across 2 passes; executor must ALSO
-      build: the expr-body hunk (~11 lines, spec'd), the closure-tail extension BOTH
-      production+ggdef (+11th/12th tests), the position-aware message mechanism, the ICE
-      rider (un-prototyped), the ggdef Option-taint fix (+10th test). NEXT: pass-3 verdict
-      → fold-or-launch executor (`model:"opus"`).
+    - **A2-R (D12 drop-purity, Rust half): brief v4 in gauntlet, pass 4 in flight
+      (Opus).** Brief `wave-a2-drop-purity-brief.md` v4 = durable prototype
+      (`scouts/patches/scout_wA2_prototype.patch`) + 19 folds across 3 passes. Pass-3
+      found the BLOCKING place-shape hole (field/index places dodged the check →
+      MEASURED double-drop on `R c = hh.r`; `expr_types` is sparse) — now a mandated
+      writer-side work item + ggdef field-place tests. Executor builds SIX items beyond
+      the prototype (expr-body hunk · closure+ImplicitClosure shared helper ·
+      place-shape fix · position-aware message mechanism · ICE rider · ggdef
+      Option/closure/field tests). Pass-4 (Opus) is executing-or-refuting the
+      place-shape spec + assessing whether to SPLIT the track. NEXT: pass-4 verdict →
+      fold-or-launch executor (`model:"opus"`), or split per its recommendation.
+      Filed en route: Shared[R]-payload-drop bug (HIGH) · builtin-handle name-list
+      debt (MEDIUM) · generics-T-blind dodge (MEDIUM).
     - **A3 (D10a &-bind rejection): brief v2 in gauntlet, pass 2 in flight.** Brief
       `wave-a3-amp-bind-rejection-brief.md` v2 (pass-1's BLOCKING fold applied: the
       expr-position class-hole — extend `expr_is_borrow_bind` to Match/Do/Block +2
