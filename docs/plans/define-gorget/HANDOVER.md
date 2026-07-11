@@ -132,15 +132,11 @@ sequential fresh-review gauntlet.
       anchors: `stmts/assigns.rs:1148`, `ir/builder.rs:258`, panic `mod.rs:1763`) — own
       scout→gauntlet AFTER A2-R1. Filed en route: Shared[R]-payload-drop (HIGH) ·
       builtin-handle name-list · generics-T-blind · it-lambda tail dodge (MEDIUM).
-    - **A3 (D10a &-bind rejection): gauntlet CLEAR (4 passes; pass-4 dry-ran the full flow
-      + signed off) — EXECUTOR RUNNING (Opus).** Brief v4 is the spec; patch assembly per
-      its instructions (base minus typecheck.rs/errors.rs + extension's full typecheck.rs
-      + errors.rs coexist with A1's BreakWithValue); 3 new fixtures + their integration.rs
-      test fns (pass-4 note); gates 10/10/33/45 + EXACTLY-10 oracle + chunked bootstrap.
-      EXECUTED: commit `254dd5ca` (22 files +437/−116, zero deviations; all gates
-      exact; zero-collateral oracle = exactly 13 predicted hits; bootstrap converged).
-      Output-review (Opus) IN FLIGHT. Parent integrates AFTER A2-R1 (sequential;
-      same-file adjacency in src/semantic + errors.rs).
+    - **A3 (D10a &-bind rejection): ✅ LANDED `414e652a` (2026-07-11)** — output-review
+      SIGN OFF (zones verified disjoint from A2-R1, so the old integrate-after-A2-R1
+      constraint was dropped); post-integration gates green (amp_bind 10/0, lints 53/0,
+      lib 1105/0). Commit message's decl-sigil overclaim corrected at cherry-pick
+      (only `&` rejects; `!`/`move` swallowing = C3's mandate). Detail: DONE.md.
     - **Batch-A discoveries FILED during the gauntlets** (all in TODO High): self-host
       parse-error surfacing (check/lowerer lanes drop ALL parse errors) · `return &v` of a
       `&`-param double-free · `Shared[R]` payload custom-drop never runs · builtin-handle
