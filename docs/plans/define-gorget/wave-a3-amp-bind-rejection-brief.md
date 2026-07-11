@@ -10,12 +10,19 @@
 > **Scout:** `/tmp/scout_wA3_report.md`; prototype DURABLE at
 > `docs/plans/define-gorget/scouts/patches/scout_wA3_prototype.patch` (19 files,
 > +298/−116; /tmp copy may rot), measured end-to-end incl. bootstrap fixed-point.
-> **Status:** v2 — pass-1 reviewed (1 BLOCKING fold: the expr-position class-hole
-> — `do:`-tail binds alias-and-write-through, match-expr binds garbage-link;
-> `expr_is_borrow_bind` recursed `Expr::If` only — now extends to
-> `Expr::Match`/`Expr::Do`/`Expr::Block` + 2 negative fixtures + re-sweep; plus
-> the "bind reach dead" claim corrected, framing softened, zone completed,
-> durable patch staged; D5/D6 discoveries filed). Awaiting pass 2.
+> **Status:** v3 — pass-2 (Opus) executed the pass-1 fold and found its LAST
+> sibling: statement-form `if`/`match` TAILS inside `do:`/block value positions
+> still dodged (→ garbage link, not the teaching error). Its PROVEN extension
+> (recurse `Stmt::If` then/elif/else bodies + `Stmt::Match` arm bodies/else_arm
+> in `block_tail_is_borrow_bind`; zero false positives, zero collateral over
+> 255 lib+spectests + fixtures) is staged DURABLY at
+> `scouts/patches/wA3_pass2_stmt_tail_ext.patch` and is now part of work-item 3.
+> Also folded: the do-fixture must use the MULTI-LINE `do:` form (the inline
+> shorthand is a parse error — a fixture wired inline would "pass" for the wrong
+> reason); a 3rd negative fixture `amp_bind_do_stmtmatch_error`; the typed
+> borrow-provenance root-cause FILED (why this walk kept sprouting siblings).
+> Prior: pass-1's blocking expr-position fold + zone/framing fixes.
+> Awaiting pass 3.
 
 ## Verified premises — TWO CORRECTIONS over the wave plan's text
 
@@ -54,9 +61,17 @@ case 1: &a else: &b` typechecks then dies at link with a garbage
 monomorphization error. Both pre-existing (byte-identical pristine A/B), but the
 if-expr arm's own justification applies verbatim. EXTEND the helper with
 `Expr::Match` (recurse `arms[].body` — `MatchArm.body: Spanned<Expr>`,
-`ast.rs:833` — plus `else_arm`) and `Expr::Do`/`Expr::Block` (recurse the tail
-expr-statement); ADD 2 negative fixtures (`amp_bind_matchexpr_error`,
-`amp_bind_doexpr_error`); RE-RUN the zero-collateral sweep after. The self-host
+`ast.rs:833` — plus `else_arm`) and `Expr::Do`/`Expr::Block` — recursing the
+tail STATEMENT'S VALUE, which INCLUDES statement-form `if`/`match` tails
+(pass-2: `Stmt::If` then/elif/else bodies + `Stmt::Match` arm bodies/else_arm
+via `block_tail_is_borrow_bind` — a `do:` tail ending in a stmt-form match whose
+arm yields `&a` dodged the expr-only recursion and GARBAGE-LINKED; the proven
+extension is staged at `scouts/patches/wA3_pass2_stmt_tail_ext.patch`, zero
+false positives on value-yielding statement tails, zero collateral). ADD 3
+negative fixtures (`amp_bind_matchexpr_error`, `amp_bind_doexpr_error` — ⚠ the
+do-form MUST be the MULTI-LINE `do:` block; the inline `do: &a` shorthand is a
+PARSE error and would pass for the wrong reason — and
+`amp_bind_do_stmtmatch_error`); RE-RUN the zero-collateral sweep after. The self-host
 `check_local_borrow_bind` dodges identically — same permissive-residual class as
 its static/if-expr forms (note, don't chase; A2-S-era work).
 
