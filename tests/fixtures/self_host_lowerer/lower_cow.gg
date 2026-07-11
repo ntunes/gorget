@@ -323,12 +323,8 @@ void cow_scan_stmts(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] stmts, bool in_
                         pass
             case SThrow(te):
                 cow_scan_expr(&ctx, &gmod, te, in_closure)
-            case SBreak(opt_be):
-                match opt_be:
-                    case Some(be):
-                        cow_scan_expr(&ctx, &gmod, be, in_closure)
-                    case None:
-                        pass
+            case SBreak():
+                pass
             case SWhile(cond_e, body_w, else_w):
                 cow_scan_expr(&ctx, &gmod, cond_e, in_closure)
                 cow_scan_stmts(&ctx, &gmod, body_w, in_closure)

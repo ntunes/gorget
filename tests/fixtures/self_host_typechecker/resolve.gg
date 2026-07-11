@@ -481,9 +481,8 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
         case SThrow(expr):
             resolve_expr(expr, &scopes, &ctx)
 
-        case SBreak(opt_expr):
-            if opt_expr is Some(sexpr):
-                resolve_expr(sexpr, &scopes, &ctx)
+        case SBreak():
+            pass
 
         case SContinue():
             pass
@@ -955,9 +954,8 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
         case SThrow(expr):
             resolve_expr(expr, &scopes, &ctx)
 
-        case SBreak(opt_expr):
-            if opt_expr is Some(sexpr):
-                resolve_expr(sexpr, &scopes, &ctx)
+        case SBreak():
+            pass
 
         case SContinue():
             pass

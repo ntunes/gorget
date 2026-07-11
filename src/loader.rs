@@ -1052,7 +1052,7 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
             }
         }
         Stmt::Throw(e) => qualify_expr(e, vm),
-        Stmt::Break(_) | Stmt::Continue | Stmt::Pass => {}
+        Stmt::Break | Stmt::Continue | Stmt::Pass => {}
         Stmt::With { bindings, body } => {
             for b in bindings { qualify_expr(&mut b.expr, vm); }
             qualify_block(body, vm);

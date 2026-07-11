@@ -1569,7 +1569,7 @@ fn eval_meta_stmt(
             Ok(MetaControlFlow::Return(val))
         }
 
-        Stmt::Break(_) => Ok(MetaControlFlow::Break),
+        Stmt::Break => Ok(MetaControlFlow::Break),
         Stmt::Continue => Ok(MetaControlFlow::LoopContinue),
 
         Stmt::Expr(expr) => {
@@ -2208,8 +2208,7 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
         }
         Stmt::Return(Some(expr)) => substitute_expr(expr, env, type_env),
         Stmt::Throw(expr) => substitute_expr(expr, env, type_env),
-        Stmt::Break(Some(expr)) => substitute_expr(expr, env, type_env),
-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => {}
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => {}
         Stmt::For { iterable, body, else_body, .. } => {
             substitute_expr(iterable, env, type_env);
             substitute_block(body, env, type_env);

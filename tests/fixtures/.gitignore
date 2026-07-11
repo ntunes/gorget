@@ -26,6 +26,11 @@
 # tests/fixtures/*.gg only) doesn't reflow them (`gg fmt` corrupts long chains).
 !expr_nesting_too_deep_error/
 !expr_nesting_too_deep_error/*.gg
+# D19 `break <value>` removal negative fixture: unparseable BY DESIGN, kept in
+# a subdir so the top-level sweeps (fmt_idempotent, *_comparison, runtime_diff)
+# never feed it to the formatter/self-host drivers.
+!break_value_removed_error/
+!break_value_removed_error/*.gg
 !expr_nesting_max_depth/
 !expr_nesting_max_depth/*.gg
 !imported_nonexhaustive_match/

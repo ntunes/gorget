@@ -1225,13 +1225,7 @@ fn resolve_stmt(
             resolve_expr(expr, scopes, errors, resolution_map);
         }
 
-        Stmt::Break(expr) => {
-            if let Some(expr) = expr {
-                resolve_expr(expr, scopes, errors, resolution_map);
-            }
-        }
-
-        Stmt::Continue | Stmt::Pass => {}
+        Stmt::Break | Stmt::Continue | Stmt::Pass => {}
 
         Stmt::For {
             pattern,

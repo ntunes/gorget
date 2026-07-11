@@ -979,8 +979,8 @@ pub enum Stmt {
         body: Block,
     },
 
-    /// break [expr]
-    Break(Option<Spanned<Expr>>),
+    /// break (takes no value — loops are not expressions; D19)
+    Break,
 
     /// continue
     Continue,

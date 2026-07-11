@@ -12985,8 +12985,7 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
         Stmt::Return(Some(expr)) => format!("return {}", format_expr_canonical(&expr.node)),
         Stmt::Return(None) => "return".to_string(),
         Stmt::Throw(expr) => format!("throw {}", format_expr_canonical(&expr.node)),
-        Stmt::Break(Some(expr)) => format!("break {}", format_expr_canonical(&expr.node)),
-        Stmt::Break(None) => "break".to_string(),
+        Stmt::Break => "break".to_string(),
         Stmt::Continue => "continue".to_string(),
         Stmt::Pass => "pass".to_string(),
         Stmt::For {
@@ -26486,6 +26485,20 @@ fn not_a_function_error() {
 #[test]
 fn break_outside_loop_error() {
     check_gg_fails("break_outside_loop_error.gg", "break outside of loop");
+}
+
+/// D19: `break <expr>` (loop-as-expression) was removed from the surface.
+/// The parser must reject the shape with the teaching error — not accept it
+/// and silently discard the value (the old half-wired behavior). The fixture
+/// lives in its own directory (like expr_nesting_too_deep_error/) so the
+/// unparseable source stays OUT of the top-level fixture sweeps
+/// (fmt_idempotent, *_comparison, runtime_diff).
+#[test]
+fn break_value_removed_error() {
+    check_gg_fails(
+        "break_value_removed_error/main.gg",
+        "break takes no value; loops are not expressions",
+    );
 }
 
 #[test]

@@ -490,9 +490,8 @@ void check_carrier_ops_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable 
                 check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
         case SThrow(sexpr):
             check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
-        case SBreak(opt_expr):
-            if opt_expr is Some(sexpr):
-                check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+        case SBreak():
+            pass
         case SContinue():
             pass
         case SPass():
@@ -1798,18 +1797,13 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             if opt_expr is Some(sexpr):
                 walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
 
-        case SBreak(opt_expr):
-            # BreakOutsideLoop — mirrors src/semantic/typecheck.rs:2875
+        case SBreak():
+            # BreakOutsideLoop — mirrors src/semantic/typecheck.rs
             # (SemanticErrorKind::BreakOutsideLoop). `loop_depth` is bumped
             # at SFor/SWhile/SLoop entry, reset at function entry, and
             # save/restored across closures.
             if ctx.loop_depth == 0:
-                Span br_span = Span(0, 0)
-                if opt_expr is Some(bsp):
-                    br_span = bsp.span
-                ctx.diagnostics.push(Diagnostic.error(br_span, DkControlFlow(), "break outside of loop"))
-            if opt_expr is Some(bexpr):
-                walk_expr_closures(bexpr, scope_id, &scopes, &types, &ctx)
+                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkControlFlow(), "break outside of loop"))
 
         case SContinue():
             # ContinueOutsideLoop — mirrors src/semantic/typecheck.rs:2898

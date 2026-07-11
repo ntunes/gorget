@@ -2556,9 +2556,13 @@ equip Parser:
         if self.check_kw(KW_BREAK):
             self.advance()
             if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
-                return SBreak(None)
-            SpannedExpr val = self.parse_expr()
-            return SBreak(Some(val))
+                return SBreak()
+            # `break <expr>` (loop-as-expression) was removed from the
+            # surface (D19). Report the teaching error, then parse and
+            # discard the value so recovery stays statement-local.
+            self.errors.push("break takes no value; loops are not expressions")
+            self.parse_expr()
+            return SBreak()
 
         # continue
         if self.check_kw(KW_CONTINUE):

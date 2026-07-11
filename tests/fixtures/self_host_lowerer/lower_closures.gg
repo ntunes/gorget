@@ -1230,12 +1230,8 @@ bool closure_stmt_has_capture(Stmt stmt, Dict[String, bool] in_scope, GirModule 
                     return false
         case SThrow(e):
             return closure_expr_has_capture(e, in_scope, &gmod)
-        case SBreak(opt_e):
-            match opt_e:
-                case Some(e):
-                    return closure_expr_has_capture(e, in_scope, &gmod)
-                case None:
-                    return false
+        case SBreak():
+            return false
         case SIf(cond, then_body, branches):
             if closure_expr_has_capture(cond, in_scope, &gmod):
                 return true
@@ -1533,12 +1529,8 @@ void cc_collect_stmt(LowerCtx &ctx, Stmt stmt, Dict[String, bool] in_scope, GirM
                     pass
         case SThrow(e):
             cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
-        case SBreak(opt_e):
-            match opt_e:
-                case Some(e):
-                    cc_collect_expr(&ctx, e, in_scope, &gmod, &cc)
-                case None:
-                    pass
+        case SBreak():
+            pass
         case SIf(cond, then_body, branches):
             cc_collect_expr(&ctx, cond, in_scope, &gmod, &cc)
             cc_collect_stmts(&ctx, then_body, in_scope, &gmod, &cc)
@@ -1784,12 +1776,8 @@ bool stmt_has_nested_closure(Stmt stmt):
                     return false
         case SThrow(e):
             return expr_has_nested_closure(e)
-        case SBreak(opt_e):
-            match opt_e:
-                case Some(e):
-                    return expr_has_nested_closure(e)
-                case None:
-                    return false
+        case SBreak():
+            return false
         case SIf(cond, then_body, branches):
             if expr_has_nested_closure(cond):
                 return true

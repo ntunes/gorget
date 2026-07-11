@@ -1160,13 +1160,8 @@ impl Formatter {
                 self.format_expr(expr);
                 self.emitter.newline();
             }
-            Stmt::Break(None) => {
+            Stmt::Break => {
                 self.emitter.write("break");
-                self.emitter.newline();
-            }
-            Stmt::Break(Some(expr)) => {
-                self.emitter.write("break ");
-                self.format_expr(expr);
                 self.emitter.newline();
             }
             Stmt::Continue => {

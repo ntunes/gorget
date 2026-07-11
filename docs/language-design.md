@@ -1207,15 +1207,7 @@ else:
     print("no match found")     # runs if loop completes without break
 ```
 
-### 5.9 Loop as Expression
-
-```gorget
-int result = loop:
-    if compute() is Some(v):
-        break v                  # break with a value
-```
-
-### 5.10 Comprehensions (Python-style)
+### 5.9 Comprehensions (Python-style)
 
 ```gorget
 Vector[int] squares = [x * x for x in 0..10]
@@ -3321,7 +3313,7 @@ statement      = var_decl | expr_stmt | return_stmt | throw_stmt
                | match_stmt | with_stmt | break_stmt | continue_stmt ;
 throw_stmt     = "throw" expr NEWLINE ;
 return_stmt    = "return" [ expr ] NEWLINE ;
-break_stmt     = "break" [ expr ] NEWLINE ;
+break_stmt     = "break" NEWLINE ;
 continue_stmt  = "continue" NEWLINE ;
 var_decl       = [ "const" ] ( type | "auto" ) IDENT "=" expr NEWLINE ;
 for_stmt       = "for" IDENT "in" [ "&" | "!" ] expr block [ "else" block ] ;

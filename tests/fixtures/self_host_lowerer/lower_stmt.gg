@@ -1073,7 +1073,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             lower_fail("SAssign *deref target is not a Box (got: " + dbox_tname + ")")
                 else:
                     lower_fail("SAssign target is neither EIdentifier, EFieldAccess, EIndex, nor EDeref (got: " + expr_kind(target_expr.expr) + ")")
-        case SBreak(_):
+        case SBreak():
             # Jump to the innermost loop's break target. Silently dropped
             # before, which caused while-loops in the self-host lexer to
             # never exit on their closing-quote checks.

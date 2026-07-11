@@ -160,12 +160,7 @@ fn rename_stmt(stmt: &mut Stmt, aliases: &rustc_hash::FxHashMap<String, String>)
             }
         }
         Stmt::Throw(e) => rename_expr(e, aliases),
-        Stmt::Break(opt) => {
-            if let Some(v) = opt {
-                rename_expr(v, aliases);
-            }
-        }
-        Stmt::Continue | Stmt::Pass => {}
+        Stmt::Break | Stmt::Continue | Stmt::Pass => {}
         Stmt::Assign { target, value } => {
             rename_expr(target, aliases);
             rename_expr(value, aliases);
@@ -586,8 +581,7 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable, error
         }
         Stmt::Return(Some(expr)) => rewrite_expr(expr, res, scopes, errors),
         Stmt::Throw(expr) => rewrite_expr(expr, res, scopes, errors),
-        Stmt::Break(Some(expr)) => rewrite_expr(expr, res, scopes, errors),
-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => {}
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => {}
         Stmt::For { iterable, body, else_body, .. } => {
             rewrite_expr(iterable, res, scopes, errors);
             rewrite_block(body, res, scopes, errors);

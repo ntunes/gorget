@@ -465,12 +465,8 @@ String format_stmt(Stmt s):
                     return "return"
         case SThrow(val):
             return "throw " + format_expr(val)
-        case SBreak(val):
-            match val:
-                case Some(v):
-                    return "break " + format_expr(v)
-                else:
-                    return "break"
+        case SBreak():
+            return "break"
         case SContinue:
             return "continue"
         case SPass:

@@ -1,0 +1,9 @@
+# D19: `break <value>` / loop-as-expression was removed from the surface.
+# `break` takes no value; this must be rejected at parse with a teaching
+# error, never accepted (the old half-feature silently discarded the value
+# at lowering). Negative fixture: `gg check` must fail.
+void main():
+    int result = 0
+    loop:
+        break 42
+    print(result)

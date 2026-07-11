@@ -922,10 +922,7 @@ impl<'a> BorrowChecker<'a> {
                 self.diverged = true;
             }
 
-            Stmt::Break(expr) => {
-                if let Some(expr) = expr {
-                    self.check_expr(expr);
-                }
+            Stmt::Break => {
                 self.diverged = true;
             }
 

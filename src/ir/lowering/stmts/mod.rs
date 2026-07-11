@@ -262,7 +262,7 @@ pub fn lower_stmt(
             lower_loop(ctx, builder, body);
         }
 
-        Stmt::Break(_) => {
+        Stmt::Break => {
             __kind_key = "lower_function::body::lower_block::stmt::break_continue";
             lower_break(ctx, builder);
         }
@@ -3537,7 +3537,7 @@ mod tests {
 
         let stmt = spanned(Stmt::Loop {
             body: Block {
-                stmts: vec![spanned(Stmt::Break(None))],
+                stmts: vec![spanned(Stmt::Break)],
                 span: Span { start: 0, end: 0 },
             },
         });
@@ -3563,7 +3563,7 @@ mod tests {
         // loop: break
         let stmt = spanned(Stmt::Loop {
             body: Block {
-                stmts: vec![spanned(Stmt::Break(None))],
+                stmts: vec![spanned(Stmt::Break)],
                 span: Span { start: 0, end: 0 },
             },
         });
@@ -3625,7 +3625,7 @@ mod tests {
         //     break   <- should break inner loop only
         let inner_loop = spanned(Stmt::Loop {
             body: Block {
-                stmts: vec![spanned(Stmt::Break(None))],
+                stmts: vec![spanned(Stmt::Break)],
                 span: Span { start: 0, end: 0 },
             },
         });

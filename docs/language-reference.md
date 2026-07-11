@@ -1186,11 +1186,11 @@ Record parse_line(String line) throws ParseError:
 ### 6.7 Break and Continue
 
 ```ebnf
-break_stmt    = "break" [ expr ] NEWLINE ;
+break_stmt    = "break" NEWLINE ;
 continue_stmt = "continue" NEWLINE ;
 ```
 
-- `break` exits the innermost enclosing loop. An optional expression provides the loop's value (for loop-as-expression).
+- `break` exits the innermost enclosing loop. It takes no value — loops are not expressions (`break <expr>` is a parse error; to yield a value from a loop, assign to a variable declared before it).
 - `continue` skips to the next iteration of the innermost enclosing loop.
 
 Both are compile-time errors outside a loop.
@@ -6574,7 +6574,7 @@ compound_assign_stmt = expr ( "+=" | "-=" | "*=" | "/=" | "%="
                             | "&=" | "|=" | "^=" | "<<=" | ">>=" ) expr NEWLINE ;
 return_stmt         = "return" [ expr { "," expr } ] NEWLINE ;  (* bare tuple: return a, b *)
 throw_stmt          = "throw" expr NEWLINE ;
-break_stmt          = "break" [ expr ] NEWLINE ;
+break_stmt          = "break" NEWLINE ;
 continue_stmt       = "continue" NEWLINE ;
 pass_stmt           = "pass" NEWLINE ;
 

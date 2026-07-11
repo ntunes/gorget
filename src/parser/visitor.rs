@@ -295,10 +295,10 @@ pub fn walk_stmt<V: ExprVisitor + ?Sized>(v: &mut V, stmt: &Spanned<Stmt>) {
             v.visit_expr(target);
             v.visit_expr(value);
         }
-        Stmt::Return(Some(expr)) | Stmt::Throw(expr) | Stmt::Break(Some(expr)) => {
+        Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
             v.visit_expr(expr);
         }
-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => {}
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => {}
         Stmt::For {
             iterable,
             body,

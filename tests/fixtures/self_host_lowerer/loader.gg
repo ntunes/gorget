@@ -362,12 +362,8 @@ bool stmt_mentions_iter(Stmt s):
                     return false
         case SThrow(expr):
             return expr_mentions_iter(expr)
-        case SBreak(opt_e):
-            match opt_e:
-                case Some(e):
-                    return expr_mentions_iter(e)
-                case None:
-                    return false
+        case SBreak():
+            return false
         case SIf(cond, then_body, branches):
             if expr_mentions_iter(cond):
                 return true

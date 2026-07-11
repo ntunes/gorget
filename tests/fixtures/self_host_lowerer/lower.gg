@@ -665,7 +665,7 @@ String stmt_kind(Stmt s):
             return "SReturn"
         case SThrow(_):
             return "SThrow"
-        case SBreak(_):
+        case SBreak():
             return "SBreak"
         case SContinue:
             return "SContinue"
@@ -1341,12 +1341,8 @@ bool mutinf_scan_stmts(Vector[Stmt] stmts, String target, GirModule &gmod, Vecto
                         pass
             case SThrow(te):
                 if mutinf_scan_expr(te, target, &gmod, &callees): m = true
-            case SBreak(opt_be):
-                match opt_be:
-                    case Some(be):
-                        if mutinf_scan_expr(be, target, &gmod, &callees): m = true
-                    case None:
-                        pass
+            case SBreak():
+                pass
             case SWhile(cond_e, body_w, else_w):
                 if mutinf_scan_expr(cond_e, target, &gmod, &callees): m = true
                 if mutinf_scan_stmts(body_w, target, &gmod, &callees): m = true

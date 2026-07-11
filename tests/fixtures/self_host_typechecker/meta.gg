@@ -282,7 +282,7 @@ int eval_stmts(Vector[Stmt] stmts, Dict[String, int] &env, Module &m, int depth,
                     case None:
                         returned = true
                         return 0
-            case SBreak(_):
+            case SBreak():
                 broke = true
                 return 0
             case SContinue:
@@ -896,12 +896,8 @@ Vector[Stmt] rename_aliases_stmts(Vector[Stmt] stmts, Dict[String, String] &amap
                 out.push(SCompoundAssign(rename_aliases_expr(lhs, &amap), op, rename_aliases_expr(rhs, &amap)))
             case SThrow(e):
                 out.push(SThrow(rename_aliases_expr(e, &amap)))
-            case SBreak(oe):
-                match oe:
-                    case Some(e):
-                        out.push(SBreak(Some(rename_aliases_expr(e, &amap))))
-                    case None:
-                        out.push(s)
+            case SBreak():
+                out.push(s)
             case SLoop(body):
                 out.push(SLoop(rename_aliases_stmts(body, &amap)))
             case SWith(e, name, body):

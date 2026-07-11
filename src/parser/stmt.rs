@@ -173,15 +173,19 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Break)?;
 
-        let value = if !self.check(&Token::Newline) && !self.check(&Token::Dedent) && self.is_expr_start() {
-            Some(self.parse_expr()?)
-        } else {
-            None
-        };
+        // `break <expr>` (loop-as-expression) was removed from the v1 surface
+        // (D19). Recognize the shape and reject with a teaching error rather
+        // than falling through to a generic "expected newline".
+        if !self.check(&Token::Newline) && !self.check(&Token::Dedent) && self.is_expr_start() {
+            return Err(ParseError {
+                kind: crate::errors::ParseErrorKind::BreakWithValue,
+                span: self.peek_span(),
+            });
+        }
 
         let end = self.previous_span();
         self.consume_newline();
-        Ok(Spanned::new(Stmt::Break(value), start.merge(end)))
+        Ok(Spanned::new(Stmt::Break, start.merge(end)))
     }
 
     fn parse_assert_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {

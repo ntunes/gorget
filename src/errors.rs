@@ -94,6 +94,11 @@ pub enum ParseErrorKind {
     /// at the declaration site (rather than letting `int x` fall through to
     /// expression parsing, where `x` would resolve as an undefined name).
     MissingInitializer,
+    /// `break <expr>` — break takes no value. Loop-as-expression was removed
+    /// from the v1 surface (D19, 2026-07-06): the form was a half-wired stub
+    /// (unparseable in assignment position, value silently discarded at
+    /// lowering). Rejected at parse with a teaching message.
+    BreakWithValue,
 }
 
 impl std::fmt::Display for ParseError {
@@ -124,6 +129,13 @@ impl std::fmt::Display for ParseError {
                     f,
                     "variable declaration requires an initializer; \
                      help: write `Type name = value` (Gorget has no uninitialized-variable form)"
+                )
+            }
+            ParseErrorKind::BreakWithValue => {
+                write!(
+                    f,
+                    "break takes no value; loops are not expressions; \
+                     help: assign to a variable declared before the loop, then `break`"
                 )
             }
         }

@@ -223,8 +223,8 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
         Stmt::VarDecl { value, .. } => contains_it(value),
         Stmt::Assign { target, value } => contains_it(target) || contains_it(value),
         Stmt::CompoundAssign { target, value, .. } => contains_it(target) || contains_it(value),
-        Stmt::Return(Some(e)) | Stmt::Throw(e) | Stmt::Break(Some(e)) => contains_it(e),
-        Stmt::Return(None) | Stmt::Break(None) | Stmt::Continue | Stmt::Pass => false,
+        Stmt::Return(Some(e)) | Stmt::Throw(e) => contains_it(e),
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass => false,
         Stmt::For { iterable, body, else_body, .. } => {
             contains_it(iterable)
                 || block_contains_it(body)

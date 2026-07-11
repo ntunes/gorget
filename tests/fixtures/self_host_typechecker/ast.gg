@@ -114,7 +114,7 @@ enum Stmt:
     SExpr(SpannedExpr)
     SReturn(Option[SpannedExpr])
     SThrow(SpannedExpr)
-    SBreak(Option[SpannedExpr])
+    SBreak
     SContinue
     SPass
     SMeta

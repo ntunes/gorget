@@ -3130,7 +3130,7 @@ impl<'a> TypeChecker<'a> {
                 // monomorphization for returning trait methods.)
                 let last_is_divergent = block.stmts.last().map_or(false, |s| matches!(
                     &s.node,
-                    Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break(_) | Stmt::Continue
+                    Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break | Stmt::Continue
                 ));
                 let block_ty = self.check_block(block);
                 if last_is_divergent {
@@ -3938,10 +3938,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Stmt::Break(expr) => {
-                if let Some(expr) = expr {
-                    self.infer_expr(expr);
-                }
+            Stmt::Break => {
                 if self.loop_depth == 0 {
                     self.error(SemanticErrorKind::BreakOutsideLoop, stmt.span);
                 }
@@ -4394,7 +4391,7 @@ impl<'a> TypeChecker<'a> {
     fn stmt_terminates(&self, stmt: &Spanned<Stmt>) -> bool {
         match &stmt.node {
             // Direct control transfer out of the fall-through path.
-            Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break(_) | Stmt::Continue => true,
+            Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break | Stmt::Continue => true,
 
             // Never-typed expression statements (panic, noreturn externs),
             // or block expressions whose block terminates.
@@ -7313,7 +7310,7 @@ fn block_has_loop_break(block: &Block) -> bool {
 
 fn stmt_has_loop_break(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Break(_) => true,
+        Stmt::Break => true,
         Stmt::If { then_body, elif_branches, else_body, .. } => {
             block_has_loop_break(then_body)
                 || elif_branches.iter().any(|(_, b)| block_has_loop_break(b))
@@ -7547,7 +7544,7 @@ pub fn apply_inferred_method_targs(
     fn walk_stmt(s: &mut Stmt, inferred: &FxHashMap<usize, Vec<Type>>) {
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, inferred),
-            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => walk_expr(e, inferred),
+            Stmt::Return(Some(e)) => walk_expr(e, inferred),
             Stmt::VarDecl { value, .. } => walk_expr(value, inferred),
             Stmt::Assign { target, value } => {
                 walk_expr(target, inferred);
@@ -7735,7 +7732,7 @@ pub fn apply_inferred_call_targs(
     fn walk_stmt(s: &mut Stmt, inferred: &FxHashMap<usize, Vec<Type>>) {
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, inferred),
-            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => walk_expr(e, inferred),
+            Stmt::Return(Some(e)) => walk_expr(e, inferred),
             Stmt::VarDecl { value, .. } => walk_expr(value, inferred),
             Stmt::Assign { target, value } => {
                 walk_expr(target, inferred);
@@ -7969,7 +7966,7 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
                 }
                 walk_expr(value, sigs);
             }
-            Stmt::Return(Some(e)) | Stmt::Break(Some(e)) => {
+            Stmt::Return(Some(e)) => {
                 rewrite_collect(e, ret_ty);
                 walk_expr(e, sigs);
             }

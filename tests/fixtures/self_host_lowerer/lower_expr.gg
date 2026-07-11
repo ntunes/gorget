@@ -6546,7 +6546,7 @@ int lower_set_any_all(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
         guard = SpannedExpr(EUnaryOp("not", Box(cbody.clone())), span)
     SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_name), span)
     SpannedExpr setval = SpannedExpr(EBoolLiteral(not is_all), span)
-    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak(None)]
+    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak()]
     Vector[ElseBranch] no_elifs = []
     Vector[Stmt] body = [SIf(guard, then_body, no_elifs)]
     Vector[Stmt] no_else = []
@@ -6704,7 +6704,7 @@ int lower_vector_any_all(LowerCtx &ctx, int recv, String recv_type_name, String 
     # then-body: `acc = <bool>; break`.
     SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_name), span)
     SpannedExpr setval = SpannedExpr(EBoolLiteral(not is_all), span)
-    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak(None)]
+    Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak()]
     Vector[ElseBranch] no_elifs = []
     Vector[Stmt] body = [SIf(guard, then_body, no_elifs)]
     lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
@@ -6750,7 +6750,7 @@ int lower_vector_find(LowerCtx &ctx, int recv, String recv_type_name, String var
     Vector[SpannedType] no_targs = []
     SpannedExpr some_callee = SpannedExpr(EIdentifier("Some"), span)
     SpannedExpr some_call = SpannedExpr(ECall(Box(some_callee), some_args, no_names, no_targs), span)
-    Vector[Stmt] then_body = [SAssign(acc_lhs, some_call), SBreak(None)]
+    Vector[Stmt] then_body = [SAssign(acc_lhs, some_call), SBreak()]
     Vector[ElseBranch] no_elifs = []
     Vector[Stmt] body = [SIf(cbody.clone(), then_body, no_elifs)]
     # Advance the position counter each iteration (after the check, so a

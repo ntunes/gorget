@@ -740,10 +740,9 @@ impl Elaborator {
 
             ast::Stmt::With { bindings, body } => self.desugar_with(bindings, body, span),
 
-            ast::Stmt::Break(None) => Ok(vec![Stmt::Break { span }]),
-            ast::Stmt::Break(Some(_)) => {
-                Err(ElabError::new("`break <value>` is outside the Increment-A subset", span))
-            }
+            // `break <value>` no longer reaches elaboration: the parser
+            // rejects it (D19 -- loops are not expressions).
+            ast::Stmt::Break => Ok(vec![Stmt::Break { span }]),
             ast::Stmt::Continue => Ok(vec![Stmt::Continue { span }]),
             ast::Stmt::Pass => Ok(vec![]),
 

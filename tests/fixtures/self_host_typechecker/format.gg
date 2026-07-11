@@ -363,9 +363,7 @@ String format_stmt(Stmt s):
             return "return"
         case SThrow(val):
             return f"throw {format_expr(val)}"
-        case SBreak(val):
-            if val is Some(v):
-                return f"break {format_expr(v)}"
+        case SBreak():
             return "break"
         case SContinue:
             return "continue"
