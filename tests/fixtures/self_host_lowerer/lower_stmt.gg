@@ -136,84 +136,14 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 ctx.expected_type = declared_ty_pre
             int val = lower_expr(&ctx, init_expr, &gmod)
             ctx.expected_type = prev_expected_vd
-            # ── `auto r = &b` / `auto r = &b.field` — a mutable-borrow BIND
-            # (CoW G2 site 2/3). The parser keeps the `&` sigil in a NON-call-arg
-            # position (call args strip it), so the init is `EMutableBorrow(...)`.
-            # `lower_expr(&x)` STRIPS the sigil and returns x's read local: a
-            # VALUE slot for a bare name, or a LoBorrowed `Ptr(field)` field/
-            # element ref for a projected resource place. Falling through to
-            # `decide_svardecl_emission` then mistakes it for a plain value bind —
-            # a bare name MoveDirect-clones a live source; a projected field-ref
-            # takes Branch C-pre whose substrate-(ii) flip DECLINES (`r.push`
-            # mutates the bound name, failing the pristine gate) → CloneAndMove.
-            # Either way `r` becomes a private COPY, so mutations through it never
-            # reach the borrowed value (cow_amp_bind_ref / _bind_ref_field printed
-            # the pre-mutation length). A `&`-bind must instead alias a
-            # WRITE-THROUGH mutable-borrow POINTER to the source slot — the same
-            # thing a call-arg `&b` / `&b.field` already does. Bind `r` as a
-            # LoBorrowed `GtMutPtr(T)` (a `&`-shaped borrow local) whose value is
-            # the address of the source slot, and do NOT register it for drop —
-            # the borrowed value's owner drops it exactly once. A read/mutation
-            # through `r` (e.g. `r.push(9)`) lowers via the LoBorrowed-RECEIVER
-            # dispatch at `lower_expr.gg:~3909-3915`: a LoBorrowed method receiver
-            # emits `OpBorrow(r)`, passing the pointer so the call mutates the
-            # real source slot in place. Mirrors Rust gg binding `&b` to a `&mut
-            # Vector` reference local. (A field/index STORE through `r` —
-            # `r.field = x` — instead derefs via the SEPARATE `lower_field_write`
-            # `is_ptr_type(base)` + `OpCopy(base)` path, not this receiver
-            # dispatch; the two are distinct mechanisms — don't conflate them.)
-            match init_expr.expr:
-                case EMutableBorrow(mb_inner):
-                    int mb_val_tid = ctx.locals.get(val).unwrap().type_id
-                    bool mb_val_is_ptr = false
-                    if mb_val_tid >= 0 and mb_val_tid < gmod.type_table.len():
-                        match gmod.type_table.get(mb_val_tid).unwrap():
-                            case GtPtr(_):
-                                mb_val_is_ptr = true
-                            case GtMutPtr(_):
-                                mb_val_is_ptr = true
-                            else:
-                                pass
-                    if mb_val_is_ptr:
-                        # Projected `&b.field` / `&b[i]` on a RESOURCE place:
-                        # `val` is ALREADY a pointer to the place (a LoBorrowed
-                        # field/element ref, not registered for drop). Alias the
-                        # pointer through as `r` — a pointer copy (`OpCopy`),
-                        # never a resource clone.
-                        int mb_rp = add_local_with(&ctx, mb_val_tid, Some(name), LoBorrowed(), BoAlias(val))
-                        emit(&ctx, GIAssign(mb_rp, OpCopy(val)))
-                        nl_put(&ctx, name, mb_rp)
-                        return
-                    # Bare `&b` ONLY: `val` is a VALUE slot. GATE on the inner
-                    # being a bare `EIdentifier` (a genuine addressable named
-                    # slot). A SCALAR projection (`&b.scalar` / `&b[scalar_i]`)
-                    # also lands here value-typed — its field/element type is a
-                    # scalar, so `lower_expr` returns a value LOAD TEMP, not a
-                    # Ptr, and `mb_val_is_ptr` is false. Address-taking that
-                    # function-scoped temp would write through to the WRONG
-                    # location and never reach `b`. So a scalar projection must
-                    # fall through to the safe existing value-bind path below;
-                    # only a bare name gets the write-through pointer. (Resource
-                    # projections already took the `mb_val_is_ptr` alias branch.)
-                    bool mb_inner_is_ident = false
-                    match (*mb_inner).expr:
-                        case EIdentifier(_):
-                            mb_inner_is_ident = true
-                        else:
-                            pass
-                    if mb_inner_is_ident:
-                        # Bind `r = GtMutPtr(T)` holding the ADDRESS of b's slot.
-                        # The lir_lower D.1 `OpBorrow` + Ptr-typed-dst +
-                        # value-typed-src dispatch emits `r = &b_slot`; `r.push`
-                        # then writes through.
-                        int mb_ptr_ty = register_type(&gmod, GtMutPtr(mb_val_tid))
-                        int mb_r = add_local_with(&ctx, mb_ptr_ty, Some(name), LoBorrowed(), BoAlias(val))
-                        emit(&ctx, GIAssign(mb_r, OpBorrow(val)))
-                        nl_put(&ctx, name, mb_r)
-                        return
-                    # Scalar projection: fall through to the safe value-bind path.
-                else:
-                    pass
+            # D10(a) (decisions.md, ratified 2026-07-06): a mutable-borrow BIND
+            # (`auto r = &b` / `auto r = &b.field`) is a TYPECHECK ERROR
+            # (`E_LocalBorrowBind` in Rust gg; `DkLocalBorrowBind` in
+            # typecheck.gg's `check_local_borrow_bind`) — an `EMutableBorrow`
+            # init can no longer reach a valid lowering. The round-38 T-D
+            # write-through intercept that used to live here (bind `r` as a
+            # LoBorrowed `GtMutPtr` alias of the source slot) is RETIRED with
+            # the form itself.
             # Auto-propagate a `throws` call captured into a non-Result local
             # (`int v = might()` unwraps; `Result[int,E] r = might()` keeps the
             # raw Result so the user can match/destructure it). Skip when the

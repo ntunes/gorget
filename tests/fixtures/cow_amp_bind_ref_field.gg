@@ -1,8 +1,8 @@
-# CoW G2 site 3 (standalone projected `auto r = &s.field`): binding a `&` to a
-# projected bare-alias root materializes the root `b` (private copy) before the
-# borrow. The later `r.push` reaches `b.data`, not the shared source `a.data`.
-# Closes the coverage hole flagged by the Track B output-review (the call-arg
-# projected form was tested by cow_amp_field_arg; the standalone form was not).
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): binding a mutable
+# borrow of a projected place to a local name (`auto r = &b.data`) is
+# rejected — same class as the bare form (`cow_amp_bind_ref`): one exclusive
+# writer per place; a named `&`-binding would alias a second writable path.
+# Expected: error[E_LocalBorrowBind] at the `&b.data` initializer.
 struct Holder:
     Vector[int] data
 
@@ -12,6 +12,6 @@ void main():
     Holder b = a
     auto r = &b.data
     r.push(9)
-    print(a.data.len())   # 3
-    print(b.data.len())   # 4
+    print(a.data.len())
+    print(b.data.len())
     print("done")

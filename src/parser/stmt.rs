@@ -26,6 +26,12 @@ enum DeclName {
     MissingInit {
         span: Span,
     },
+    /// D10(a): a `&` decl-sigil on a local binding (`Vector[int] &r = a`) —
+    /// the decl-sigil form of a local `&`-bind, rejected in v1 (one exclusive
+    /// writer per place). Carries the sigil's span for the diagnostic.
+    BorrowSigil {
+        span: Span,
+    },
 }
 
 fn make_var_decl(
@@ -679,6 +685,15 @@ impl Parser {
                 p.parse_type().ok()?
             };
 
+            // D10(a) (decisions.md, ratified 2026-07-06): a `&` sigil between
+            // the type and the name (`Vector[int] &r = a`) is the decl-sigil
+            // form of a local `&`-bind — rejected. Historically the sigil was
+            // silently DISCARDED here (only `mutable` set `is_mutable`; `&`,
+            // `!`, `move` were consumed and dropped, so `T &r = a` bound a
+            // plain value copy while reading as a reference decl). Track the
+            // `&` span so the caller can raise the teaching diagnostic; the
+            // no-`=` shapes keep their existing diagnosis.
+            let mut amp_span: Option<Span> = None;
             let is_mutable = if !has_mutable_prefix
                 && (p.check(&Token::Ampersand)
                     || p.check(&Token::Bang)
@@ -686,6 +701,9 @@ impl Parser {
                     || p.check_keyword(Keyword::Move))
             {
                 let ownership_tok = p.advance();
+                if matches!(ownership_tok.node, Token::Ampersand) {
+                    amp_span = Some(ownership_tok.span);
+                }
                 matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable))
             } else {
                 has_mutable_prefix
@@ -695,7 +713,11 @@ impl Parser {
                 Token::Identifier(_) => {
                     let name = p.expect_identifier().ok()?;
                     if p.match_token(&Token::Eq) {
-                        Some(DeclName::Name { is_mutable, type_, name })
+                        if let Some(span) = amp_span {
+                            Some(DeclName::BorrowSigil { span })
+                        } else {
+                            Some(DeclName::Name { is_mutable, type_, name })
+                        }
                     } else {
                         // `<type> <name>` with no `=`. There is no expression
                         // statement of this shape (Gorget has no juxtaposition),
@@ -734,6 +756,10 @@ impl Parser {
                     kw.as_name()
                 ),
             )),
+            Some(DeclName::BorrowSigil { span }) => Err(ParseError {
+                kind: crate::errors::ParseErrorKind::LocalBorrowBindSigil,
+                span,
+            }),
             Some(DeclName::MissingInit { span }) => Err(self.error_missing_init(span)),
             None => self.parse_expr_or_assign_stmt(),
         }

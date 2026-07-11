@@ -94,6 +94,13 @@ pub enum ParseErrorKind {
     /// at the declaration site (rather than letting `int x` fall through to
     /// expression parsing, where `x` would resolve as an undefined name).
     MissingInitializer,
+    /// D10(a) (docs/plans/define-gorget/decisions.md, ratified 2026-07-06): a
+    /// `&` decl-sigil on a local binding (`Vector[int] &r = a`) — the
+    /// decl-sigil form of a local `&`-bind, rejected in v1. Historically the
+    /// sigil was silently discarded (the binding was a plain value copy that
+    /// READ as a reference decl); the `= &expr` init form is rejected by the
+    /// typechecker as `E_LocalBorrowBind`.
+    LocalBorrowBindSigil,
     /// `break <expr>` — break takes no value. Loop-as-expression was removed
     /// from the v1 surface (D19, 2026-07-06): the form was a half-wired stub
     /// (unparseable in assignment position, value silently discarded at
@@ -129,6 +136,16 @@ impl std::fmt::Display for ParseError {
                     f,
                     "variable declaration requires an initializer; \
                      help: write `Type name = value` (Gorget has no uninitialized-variable form)"
+                )
+            }
+            ParseErrorKind::LocalBorrowBindSigil => {
+                write!(
+                    f,
+                    "local `&`-bindings are not supported: a `Type &name = ...` \
+                     declaration would alias a second writable path to the value \
+                     (a place has one exclusive writer); \
+                     help: pass the borrow at a call site (`f(&name)`) or mutate \
+                     the place directly (`name.push(..)`, `name.field = value`)"
                 )
             }
             ParseErrorKind::BreakWithValue => {

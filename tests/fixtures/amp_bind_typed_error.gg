@@ -1,0 +1,11 @@
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): the explicitly-typed
+# local `&`-bind (`Vector[int] r = &a`) is rejected — same class as the
+# `auto` form. Pre-D10 this shape ICE'd the compiler (Tier 2a consume-site
+# validator panic: "untracked source consumed" at ir/lowering/mod.rs) — the
+# rejection turns a compiler crash into a clean teaching error.
+# Expected: error[E_LocalBorrowBind] at the `&a` initializer.
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] r = &a
+    r.push(9)
+    print(r.len())

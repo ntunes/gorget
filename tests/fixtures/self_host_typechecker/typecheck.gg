@@ -35,7 +35,7 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution
-from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition
+from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition, DkLocalBorrowBind
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -468,6 +468,19 @@ void check_deref_operand(SpannedExpr operand, int scope_id, ScopeTable &scopes, 
     if not is_box:
         ctx.diagnostics.push(Diagnostic.error(operand.span, DkTypeMismatch(), "cannot dereference `*` a non-`Box[T]` value"))
 
+# D10(a) (decisions.md, ratified 2026-07-06): a mutable borrow (`&expr`)
+# bound to a name — `auto r = &b`, `r = &b`. A named `&`-binding would alias
+# a second writable path to the place (one exclusive writer). Mirrors Rust
+# gg's `E_LocalBorrowBind` (`src/semantic/typecheck.rs`, `expr_is_borrow_bind`).
+# Top-level shape only — `&x` nested inside a call is the legal call-arg form
+# and is never visited here (this fires on VarDecl inits / assignment RHS).
+void check_local_borrow_bind(SpannedExpr init, ResolveContext &ctx):
+    match init.expr:
+        case EMutableBorrow(_inner):
+            ctx.diagnostics.push(Diagnostic.error(init.span, DkLocalBorrowBind(), "cannot bind a mutable borrow (`&`) to a name — pass the borrow at a call site (`f(&x)`) or mutate the place directly"))
+        else:
+            pass
+
 # Exhaustive statement walker — visits every expression position in a body.
 void check_carrier_ops_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     for s in stmts:
@@ -476,9 +489,11 @@ void check_carrier_ops_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scope
 void check_carrier_ops_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match s:
         case SVarDecl(_stype, _name, init_expr, _line, _col, _flags):
+            check_local_borrow_bind(init_expr, &ctx)
             check_carrier_ops_expr(init_expr, scope_id, &scopes, &types, &ctx)
         case SAssign(target, value):
             check_carrier_ops_expr(target, scope_id, &scopes, &types, &ctx)
+            check_local_borrow_bind(value, &ctx)
             check_carrier_ops_expr(value, scope_id, &scopes, &types, &ctx)
         case SCompoundAssign(target, _op, value):
             check_carrier_ops_expr(target, scope_id, &scopes, &types, &ctx)

@@ -517,9 +517,17 @@ fn sec_03_cow_mutate_while_borrowed() {
     security_safe("attack_03_cow_mutate_while_borrowed", "alpha\ndelta");
 }
 
+/// D10(a) (decisions.md, ratified 2026-07-06): the fixture's `int &borrowed =
+/// ...` decl-sigil bind is now a parse-time rejection — which matches the
+/// fixture's ORIGINAL intent ("must reject"). Pre-D10 the parser silently
+/// discarded the sigil, `borrowed` was a value copy, and the fixture was
+/// (mis)classified safe with output "10".
 #[test]
 fn sec_04_cow_mutate_ref_borrow() {
-    security_safe("attack_04_cow_mutate_ref_borrow", "10");
+    security_rejected(
+        "attack_04_cow_mutate_ref_borrow",
+        "local `&`-bindings are not supported",
+    );
 }
 
 #[test]

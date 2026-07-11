@@ -289,6 +289,19 @@ pub enum SemanticErrorKind {
     /// the wrong carrier type" guard class; AGENTS.md Core invariant #8.)
     DefaultOpNonOptional { type_: String },
 
+    /// D10(a) (docs/plans/define-gorget/decisions.md, ratified 2026-07-06):
+    /// a mutable borrow (`&expr`) bound to a name — `auto r = &b`,
+    /// `Vector[int] r = &b.data`, `r = &b`, or a module-level
+    /// `static G = &BASE`. A named `&`-binding would create a second
+    /// writable path to the same place for the rest of the scope, violating
+    /// the one-exclusive-writer rule that licenses lazy CoW. The pre-D10
+    /// write-through half-worked in practice (the explicitly-typed form
+    /// ICE'd the consume-site validator; an element projection silently
+    /// wrote to a private copy), so the form is rejected outright in v1.
+    /// `&` forms a mutable borrow only at a call boundary (an argument to a
+    /// `&` parameter); frame-scoped `&` params are unaffected.
+    LocalBorrowBind,
+
     /// A method-level generic param couldn't be inferred from the
     /// call's arg types. Emitted by Phase 2c inference (see
     /// `docs/devbook/09-type-checking.md`, method-level generic inference)
@@ -666,6 +679,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::UnwrapOnNonOptional { .. } => "E_UnwrapOnNonOptional",
             SemanticErrorKind::DerefNonBox { .. } => "E_DerefNonBox",
             SemanticErrorKind::DefaultOpNonOptional { .. } => "E_DefaultOpNonOptional",
+            SemanticErrorKind::LocalBorrowBind => "E_LocalBorrowBind",
             SemanticErrorKind::MethodGenericInferenceFailed { .. } => "E_MethodGenericInferenceFailed",
             SemanticErrorKind::CannotInferType => "E_CannotInferType",
             SemanticErrorKind::NoFieldFound { .. } => "E_NoFieldFound",
@@ -815,6 +829,16 @@ impl std::fmt::Display for SemanticError {
                     f,
                     "default operator `??` requires an `Option` or `Result` \
                      left-hand side, but `{type_}` is neither"
+                )
+            }
+            SemanticErrorKind::LocalBorrowBind => {
+                write!(
+                    f,
+                    "cannot bind a mutable borrow (`&`) to a name — a place \
+                     has one exclusive writer, and a named `&`-binding would \
+                     alias a second writable path to it. Pass the borrow \
+                     directly at a call site (`f(&x)`) or mutate the place \
+                     itself (`x.push(..)`, `x.field = value`)"
                 )
             }
             SemanticErrorKind::MethodGenericInferenceFailed { method, type_, unresolved, reason } => {

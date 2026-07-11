@@ -480,7 +480,7 @@ For resource types, there are no implicit deep copies. Bare-identifier assignmen
 | `Vector[int] b = !a` | Move — b takes ownership, a consumed | Zero cost |
 | `Vector[int] b = a.clone()` | Clone — b is an independent deep copy up front | Heap allocation |
 | `Vector[int] b = f()` | Move from temp — b owns the result | Zero cost |
-| `a = &b` | Mutable reference — a aliases b | Zero cost |
+| `a = &b` | **Illegal** (D10) — `error[E_LocalBorrowBind]`: a named `&`-binding would alias a second writable path; pass `&b` at a call site instead | — |
 
 ```gorget
 Vector[int] a = [1, 2, 3]

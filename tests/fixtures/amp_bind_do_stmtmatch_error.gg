@@ -1,0 +1,21 @@
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): a local `&`-bind must
+# not dodge the rejection by hiding in a `do:` block whose TAIL is a
+# STATEMENT-FORM match whose arm yields a borrow. This shape dodged the
+# expr-only recursion and garbage-linked (undefined reference to
+# `int64_t__push`) before `block_tail_is_borrow_bind` recursed statement-form
+# `match` arm bodies / else. ⚠ The match arms must be INDENTED MULTI-LINE
+# bodies — an inline `case X: <body>` in a do-tail stmt-match is a parse error
+# regardless of `&`.
+# Expected: error[E_LocalBorrowBind] at the initializer.
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+    int n = 1
+    auto r = do:
+        match n:
+            case 1:
+                &a
+            else:
+                &b
+    r.push(9)
+    print(r.len())

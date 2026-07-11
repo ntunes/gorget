@@ -1,0 +1,12 @@
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): a local `&`-bind must
+# not dodge the rejection by hiding inside an if-expression — `if c: &a
+# else: &b` still binds a mutable borrow to a name (the check recurses
+# through if-expression branches).
+# Expected: error[E_LocalBorrowBind] at the initializer.
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+    bool c = true
+    auto r = if c: &a else: &b
+    r.push(9)
+    print(r.len())

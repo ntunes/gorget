@@ -1,0 +1,11 @@
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): the decl-sigil form of
+# a local `&`-bind (`Vector[int] &r = a`) is a PARSE error. Pre-D10 the
+# parser silently DISCARDED the sigil (only `mutable` set the flag), so the
+# binding was a plain value copy that READ as a reference declaration —
+# mutations through `r` never reached `a`.
+# Expected: parse error "local `&`-bindings are not supported".
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] &r = a
+    r.push(9)
+    print(a.len())

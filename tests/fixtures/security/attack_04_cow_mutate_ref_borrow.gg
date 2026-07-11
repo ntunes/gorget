@@ -1,8 +1,12 @@
-# Attack: same as 03 but with explicit `&` borrow. Borrow checker should catch
-# MutationWhileBorrowed as ERROR here (not warning).
+# Attack: same as 03 but with explicit `&` borrow. Must be REJECTED — and
+# since D10(a) (decisions.md, ratified 2026-07-06) it is, at PARSE time: the
+# `int &borrowed = ...` decl-sigil form of a local `&`-bind is illegal (one
+# exclusive writer per place). Pre-D10 the parser silently discarded the
+# sigil, `borrowed` was a value copy, and this "attack" was misclassified
+# safe (printed 10).
 
 void main():
     Vector[int] v = [10, 20, 30, 40]
     int &borrowed = v.get(0).unwrap()
-    v.push(50)  # must reject: v is borrowed
+    v.push(50)  # unreachable: the decl above is rejected
     print(borrowed)

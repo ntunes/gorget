@@ -1,0 +1,17 @@
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): a local `&`-bind must
+# not dodge the rejection by hiding inside a match-EXPRESSION — an arm (or the
+# `else`) that yields `&a` still binds a mutable borrow to a name (the check
+# recurses through match-expression arms). Pre-D10 this typechecked and then
+# died at link with a garbage monomorphization error (undefined reference).
+# Expected: error[E_LocalBorrowBind] at the initializer.
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+    int n = 1
+    auto r = match n:
+        case 1:
+            &a
+        else:
+            &b
+    r.push(9)
+    print(r.len())

@@ -1,0 +1,12 @@
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): re-binding a mutable
+# borrow to an existing local through assignment (`r = &a`) is the same
+# named-`&`-bind class as the VarDecl-init form — rejected. Pre-D10 the `&`
+# was silently ignored (the assignment cloned, `a` was never written
+# through — a silent trap, not an alias).
+# Expected: error[E_LocalBorrowBind] at the `&a` RHS.
+void main():
+    Vector[int] a = [1, 2, 3]
+    auto r = a
+    r = &a
+    r.push(9)
+    print(a.len())

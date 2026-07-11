@@ -1,0 +1,13 @@
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): a local `&`-bind must
+# not dodge the rejection by hiding in a `do:` block whose TAIL value is a
+# borrow (`do:` newline, then `&a`). The check recurses the block's tail
+# statement. ⚠ The MULTI-LINE `do:` form is mandatory — the inline `do: &a`
+# shorthand is a parse error and would "pass" for the wrong reason. Pre-D10
+# this ACCEPTED and wrote through (the bind aliased `a`, printed `4/4`).
+# Expected: error[E_LocalBorrowBind] at the initializer.
+void main():
+    Vector[int] a = [1, 2, 3]
+    auto r = do:
+        &a
+    r.push(9)
+    print(r.len())

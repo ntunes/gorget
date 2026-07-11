@@ -54,6 +54,7 @@ enum DiagKind:
     DkTypeMismatch         # expected vs actual type disagreement
     DkControlFlow          # break/continue/return/throw in invalid context
     DkPrimitiveTraitImpl   # `equip <scalar-primitive> with Trait` — no addressable self
+    DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
 
     # Reserved for future migrators (kept so the type doesn't churn
     # when lowerer sites migrate).
@@ -113,6 +114,8 @@ String diag_kind_str(DiagKind kind):
             return "control-flow"
         case DkPrimitiveTraitImpl():
             return "primitive-trait-impl"
+        case DkLocalBorrowBind():
+            return "local-borrow-bind"
         case DkUnreachable():
             return "unreachable"
 

@@ -1750,6 +1750,25 @@ Creates a mutable borrow of a value. The original variable remains valid but can
 modify(&data)
 ```
 
+A mutable borrow is formed **at a call boundary only** — as an argument to a
+parameter declared `&` (see [§9.1 Ownership](#91-ownership-rules)).
+**Local `&`-bindings are illegal** (D10, 2026-07-06): binding a borrow to a
+name — either form — is rejected, because a place has exactly one exclusive
+writer and a named `&`-binding would alias a second writable path to it for
+the rest of the scope:
+
+```gorget
+auto r = &b            # error[E_LocalBorrowBind]
+Vector[int] r = &b     # error[E_LocalBorrowBind]
+r = &b                 # error[E_LocalBorrowBind] (assignment re-bind)
+Vector[int] &r = b     # parse error (decl-sigil form)
+```
+
+Instead, pass the borrow directly at the call site (`modify(&b)`) or mutate
+the place itself (`b.push(x)`, `b.field = v`). Frame-scoped `&` parameters
+are unaffected — inside a function, a `&` parameter is already the exclusive
+writer for its frame.
+
 ### 7.16 Type Cast
 
 ```ebnf

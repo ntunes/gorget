@@ -1,10 +1,13 @@
-# CoW G2 site 2 (standalone `auto r = &name`): binding a `&` to a bare alias
-# materializes a private copy, so a later `r.push` lands on the copy `b`.
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): binding a mutable
+# borrow to a local name (`auto r = &b`) is rejected — a place has one
+# exclusive writer, and a named `&`-binding would alias a second writable
+# path to it for the rest of the scope. The pre-D10 write-through bind is
+# retired. Expected: error[E_LocalBorrowBind] at the `&b` initializer.
 void main():
     Vector[int] a = [1, 2, 3]
     Vector[int] b = a
     auto r = &b
     r.push(9)
-    print(a.len())        # 3
-    print(b.len())        # 4
+    print(a.len())
+    print(b.len())
     print("done")

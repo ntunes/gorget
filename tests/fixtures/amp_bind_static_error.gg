@@ -1,0 +1,9 @@
+# D10(a) NEGATIVE (decisions.md, ratified 2026-07-06): a module-level static
+# initialized with a mutable borrow (`Vector[int] G = &BASE`) is the same
+# named-`&`-bind class as the local forms — rejected.
+# Expected: error[E_LocalBorrowBind] at the `&BASE` initializer.
+Vector[int] BASE = [1, 2, 3]
+Vector[int] G = &BASE
+
+void main():
+    print(G.len())

@@ -27167,33 +27167,90 @@ done",
     );
 }
 
-/// CoW G2 site 2 (standalone `auto r = &name`): binding a `&` to a bare alias
-/// materializes a private copy, so a later `r.push` lands on the copy.
+/// D10(a) (decisions.md, ratified 2026-07-06): a standalone `auto r = &name`
+/// bind must REJECT with `E_LocalBorrowBind` — local `&`-binds are retired
+/// (one exclusive writer per place; the pre-D10 write-through bind is gone).
 #[test]
 fn cow_amp_bind_ref() {
-    run_gg(
-        "cow_amp_bind_ref.gg",
-        "\
-3
-4
-done",
+    check_gg_fails("cow_amp_bind_ref.gg", "error[E_LocalBorrowBind]");
+}
+
+/// D10(a): the projected form (`auto r = &s.field`) is the same class as the
+/// bare form — must REJECT with `E_LocalBorrowBind`. (The call-arg projected
+/// form stays legal and positive: `cow_amp_field_arg`.)
+#[test]
+fn cow_amp_bind_ref_field() {
+    check_gg_fails("cow_amp_bind_ref_field.gg", "error[E_LocalBorrowBind]");
+}
+
+/// D10(a): the explicitly-typed local `&`-bind (`Vector[int] r = &a`) must
+/// REJECT with `E_LocalBorrowBind`. Pre-D10 this shape ICE'd the compiler
+/// (Tier 2a consume-site validator panic, ir/lowering/mod.rs "untracked
+/// source consumed") — the rejection replaces a crash with a teaching error.
+#[test]
+fn amp_bind_typed_error() {
+    check_gg_fails("amp_bind_typed_error.gg", "error[E_LocalBorrowBind]");
+}
+
+/// D10(a): re-binding a borrow through assignment (`r = &a`) is the same
+/// named-`&`-bind class — must REJECT with `E_LocalBorrowBind`. Pre-D10 the
+/// sigil was silently ignored (the assignment cloned; no write-through).
+#[test]
+fn amp_bind_assign_error() {
+    check_gg_fails("amp_bind_assign_error.gg", "error[E_LocalBorrowBind]");
+}
+
+/// D10(a): the decl-sigil form (`Vector[int] &r = a`) is a PARSE error.
+/// Pre-D10 the parser silently DISCARDED the sigil (a plain value copy that
+/// read as a reference decl).
+#[test]
+fn amp_bind_declsigil_error() {
+    check_gg_fails(
+        "amp_bind_declsigil_error.gg",
+        "local `&`-bindings are not supported",
     );
 }
 
-/// CoW G2 site 3 (STANDALONE projected `auto r = &s.field`): binding a `&` to a
-/// projected bare-alias root materializes the root before the borrow, so the
-/// later `r.push` reaches the private copy's field, not the shared source's.
-/// Closes the coverage hole the Track B output-review flagged (the call-arg
-/// projected form is `cow_amp_field_arg`; this is the standalone form).
+/// D10(a): a module-level `static G = &BASE` initializer is the same
+/// named-`&`-bind class — must REJECT with `E_LocalBorrowBind`.
 #[test]
-fn cow_amp_bind_ref_field() {
-    run_gg(
-        "cow_amp_bind_ref_field.gg",
-        "\
-3
-4
-done",
-    );
+fn amp_bind_static_error() {
+    check_gg_fails("amp_bind_static_error.gg", "error[E_LocalBorrowBind]");
+}
+
+/// D10(a): an if-expression initializer whose branch is a `&`-borrow
+/// (`auto r = if c: &a else: &b`) must not dodge the rejection — the check
+/// recurses through if-expression branches.
+#[test]
+fn amp_bind_ternary_error() {
+    check_gg_fails("amp_bind_ternary_error.gg", "error[E_LocalBorrowBind]");
+}
+
+/// D10(a): a match-EXPRESSION initializer whose arm (or `else`) yields a
+/// `&`-borrow (`auto r = match n: case 1: &a else: &b`) must not dodge the
+/// rejection — the check recurses through match-expression arms. Pre-D10 this
+/// typechecked and garbage-linked (undefined reference).
+#[test]
+fn amp_bind_matchexpr_error() {
+    check_gg_fails("amp_bind_matchexpr_error.gg", "error[E_LocalBorrowBind]");
+}
+
+/// D10(a): a `do:` block whose TAIL value is a `&`-borrow (`auto r = do:` /
+/// newline `&a`) must not dodge the rejection — the check recurses the block's
+/// tail statement. Pre-D10 this ACCEPTED and wrote through (aliased `a`).
+#[test]
+fn amp_bind_doexpr_error() {
+    check_gg_fails("amp_bind_doexpr_error.gg", "error[E_LocalBorrowBind]");
+}
+
+/// D10(a): a `do:` block whose TAIL is a STATEMENT-FORM match whose arm yields
+/// a `&`-borrow must not dodge the rejection — `block_tail_is_borrow_bind`
+/// recurses statement-form `match` arm bodies / else. Pre-D10 this dodged the
+/// expr-only recursion and garbage-linked (undefined reference to
+/// `int64_t__push`).
+#[test]
+fn amp_bind_do_stmtmatch_error() {
+    check_gg_fails("amp_bind_do_stmtmatch_error.gg", "error[E_LocalBorrowBind]");
 }
 
 /// CoW G2 site 3 (projected `&s.field` call-arg): the projection ROOT is a bare
