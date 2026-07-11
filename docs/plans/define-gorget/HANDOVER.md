@@ -91,6 +91,21 @@ sequential fresh-review gauntlet.
     CHUNKED-FOREGROUND pattern (split suites by test name) — brief it explicitly in future executor
     prompts. **Per the owner directive, the enforcement wave continues with a fresh agent's round.**
     Do NOT start D12/D10/D13-17/riders — those are the next round's work.
+  - **⚡ DESIGN SESSION 2026-07-11 (owner + orchestrator, post-round): FOUR new rulings + the wave
+    RE-SEQUENCED.** The A33+fault-model design scout ran (mandate
+    `a33-fault-model-scout-mandate.md`, report preserved at `scouts/scout-a33-fault-model.md` —
+    headline: ZERO organic fault-catch uses anywhere; §10.5 is STALE, single-call-DEEP catch is
+    shipped; ~2,000-line machinery; Pony prior art for fallible operators). Ratified in-discussion:
+    **D27** (sigil economy: `^`=move [was `!`], `!`=error channel, `?`=optionals) + **D28** (`**`
+    power operator, full package). RECOMMENDED-pending-formal-ratification: **D24** (Task-join-only
+    supervised boundary, `TaskFault` all-8-codes) · **D25** (REMOVE fault-catch, Swift model, gated
+    on D26) · **D26** (fallible operators `+! -! *! /! %!` + `**!`, prelude `ArithError`). Deep/
+    dynamic catch REJECTED on the merits (ledger LOG + the scout's "why not dynamic exceptions"
+    appendix). **THE WAVE NOW OPENS WITH THE CENSUS SCOUT** (`wave-census-scout-mandate.md`):
+    blast-radius matrix + sequencing plan for ALL pending migrations (D12 · D10 · D15+D22 · D19 ·
+    D25 · D26+D28 · D27's ~870-site sigil migration), with the D24/D25/D26 ratification packet
+    bundled into the plan review. New wave order: **wave-census scout → owner ratifies plan+batch →
+    execute per plan** (the census absorbs the old "D12 blast-radius scout first" step).
     Enforcement-wave order for the next agent: **D12** (D4 drop-purity — blast-radius scout first) →
     **D10** exclusivity tracks (bootstrap-gated) → D13/D14/D17 → small riders (D15+D22 slice-surface,
     D18-D21); A31/A32 design scouts interleave. Open trap/throws follow-ups in TODO (each own gauntlet):
