@@ -120,19 +120,18 @@ sequential fresh-review gauntlet.
       SIGN OFF (diff content-identical to the reviewed prototype); post-integration
       quick gates green (build, lib 1105/0, break 5/0, lints 53/0). Full sweep at batch
       close covers it. Detail: DONE.md.
-    - **A2-R (D12 drop-purity, Rust half): brief v4 in gauntlet, pass 4 in flight
-      (Opus).** Brief `wave-a2-drop-purity-brief.md` v4 = durable prototype
-      (`scouts/patches/scout_wA2_prototype.patch`) + 19 folds across 3 passes. Pass-3
-      found the BLOCKING place-shape hole (field/index places dodged the check →
-      MEASURED double-drop on `R c = hh.r`; `expr_types` is sparse) — now a mandated
-      writer-side work item + ggdef field-place tests. Executor builds SIX items beyond
-      the prototype (expr-body hunk · closure+ImplicitClosure shared helper ·
-      place-shape fix · position-aware message mechanism · ICE rider · ggdef
-      Option/closure/field tests). Pass-4 (Opus) is executing-or-refuting the
-      place-shape spec + assessing whether to SPLIT the track. NEXT: pass-4 verdict →
-      fold-or-launch executor (`model:"opus"`), or split per its recommendation.
-      Filed en route: Shared[R]-payload-drop bug (HIGH) · builtin-handle name-list
-      debt (MEDIUM) · generics-T-blind dodge (MEDIUM).
+    - **A2-R (D12 drop-purity, Rust half): brief v5, pass 5 (confirming, Opus) in
+      flight with the SPLIT-DECISION mandate.** Brief `wave-a2-drop-purity-brief.md`
+      v5 = durable prototype (`scouts/patches/scout_wA2_prototype.patch`) + 22 folds
+      across 4 passes. Pass-3: the BLOCKING place-shape hole (measured double-drop on
+      `R c = hh.r`). Pass-4 EXECUTED the fix (implementation PINNED: the
+      `lvalue_value_type` reroute, 2 lines, zero collateral) + DESCOPED-and-FILED the
+      unbuildable ImplicitClosure `it.r` arm + shape-gated the fix-its + the
+      capture-rooted-tail skip. Pass-5 produces the executor's work-item CHECKLIST +
+      the one-track-vs-split call; orchestrator follows it. NEXT: pass-5 verdict →
+      executor(s) (`model:"opus"`). Filed en route: Shared[R]-payload-drop (HIGH) ·
+      builtin-handle name-list debt · generics-T-blind dodge · it-lambda tail dodge
+      (all MEDIUM).
     - **A3 (D10a &-bind rejection): brief v3, pass 3 (confirming, Opus) in flight —
       first pass on the post-A1 tree (A1×A3 composition check included).** Brief
       `wave-a3-amp-bind-rejection-brief.md` v3: pass-1's expr-position fold + pass-2's
