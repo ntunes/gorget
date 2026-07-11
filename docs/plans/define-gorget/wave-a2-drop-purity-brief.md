@@ -15,14 +15,16 @@
 > adjacent semantic files with disjoint hunks — parent integrates sequentially.
 > **Scout:** `/tmp/scout_wA2_report.md`, prototype `/tmp/scout_wA2_prototype.patch`
 > (500 lines), measured end-to-end.
-> **Status:** v2 — pass-1 reviewed (8 folds, all applied below): the
-> expression-body return hole (the one model-fidelity defect); pin-4 fix-it
-> refuted+reworded; the name-matching claim struck (handle carve-out extends the
-> existing builtin name-list debt — typed-marker debt filed); pin-1's premise
-> corrected + the `Shared[R]`-payload-drop-never-runs bug FILED; the ggdef
-> Option-taint gap made an in-track work item (+10th test); gate-census holes
-> added; the ICE rider marked UN-prototyped; zone line corrected; probe set =
-> ALL 10 ggdef tests. Awaiting pass 2.
+> **Status:** v3 — pass-1's 8 folds verified by pass-2 (which also executed the
+> expr-body hunk from the brief text alone — 11 lines, works, ggdef agrees) +
+> pass-2's 5 folds applied: (1) the CLOSURE-RETURN asymmetry RULED (Core #4):
+> position 4 extends to closure expr-tails in production AND ggdef gains the
+> closure-tail check + an 11th/12th test pair — both spellings of a closure
+> return reject identically; (2) the position/reason-aware message mechanism
+> specified (one E_ code, per-position rendering; the dead `move` suggestion
+> dies); (3) ggdef citation corrected `:639-642`→`:349-352`; (4) TODO refs →
+> greppable anchors; (5) the compound-fixture gate grep-anchored.
+> Awaiting pass 3.
 
 ## Verified premises
 
@@ -61,10 +63,15 @@
   TYPED classifiers (`is_mutating_builtin_method` + `is_buffer_owning_receiver`);
   **4 in `Stmt::Return` AND the `FunctionBody::Expression` tail arm
   (`safety/check_stmt.rs:1726` — pass-1's blocking fold: ggdef rejects
-  `R passthru(R x): x` at the expression-body tail via `elaborate/mod.rs:639-642`;
-  the prototype covered only `Stmt::Return` — add the `tainted_place_name` check
-  with the same `imported_module_depth == 0` gate + a probe; fresh-temp expr
-  bodies `R make(): R(7)` stay legal)**; 5 off `compute_capture_set`; 6 inside
+  `R passthru(R x): x` at the expression-body tail via `elaborate/mod.rs:349-352`
+  [pass-2 corrected the citation]; add the `tainted_place_name` check with the
+  same `imported_module_depth == 0` gate + a probe; fresh-temp expr bodies
+  `R make(): R(7)` stay legal; pass-2 derived this hunk from the spec alone — 11
+  lines) AND — pass-2's Core-#4 ruling — CLOSURE returns, BOTH spellings: the
+  `Stmt::Return` check already fires in closure block bodies; extend to closure
+  EXPR-TAILS so `(R x): return x` and `(R x): x` reject identically; ggdef gains
+  the matching closure-tail check (its closure eval path has none today) + an
+  11th/12th test pair — both sides agree before landing**; 5 off `compute_capture_set`; 6 inside
   `mark_bare_param_write_def` (pre-filtered by `deadwrite_params`, which excludes
   `self` — pin 3 holds by construction; note: `_`-prefixed params also dodge
   position 6, a known micro-divergence from ggdef, acceptable).
@@ -81,15 +88,19 @@
   carrying R); ggdef ACCEPTS (phase-0 `Ty` has no Option → `Unknown` →
   untainted, `elaborate/mod.rs:493-501`). Fix ggdef's taint model to cover
   Option + add the 10th test so both sides agree BEFORE this lands.
-- **ICE rider (~20-40 lines, closes TODO:278 + :314) — ⚠ THE ONE UN-PROTOTYPED
-  HUNK (pass-1; the scout sized it, did not build it):** in
+- **ICE rider (~20-40 lines; closes the two TODO entries grep-anchored by
+  "compound-assign" + "resource-element ICE" — line numbers drift, anchors
+  don't) — ⚠ THE ONE UN-PROTOTYPED HUNK (pass-1; the scout sized it, did not
+  build it):** in
   `lower_compound_assign` (`assigns.rs:1714-1721` confirmed), replace the shared
   vector/dict clone-read+shallow-assign branch with the existing
   `index_load_borrow` (`validate.rs:1267-1269`) for the `self` borrow; `__set`'s
   pre-drop gives drop-once. `v[i] += x` thereby MOVES the dead element per D12.
   The executor derives this fresh and gates it with a NEW tainted-compound
   fixture + ASan (pass-1 confirmed the ICE is live: `v[0] += Acc(5)` check-passes
-  then panics the build) + the 4 non-tainted compound fixtures byte-identical.
+  then panics the build at `ir/lowering/mod.rs:1763`) + ALL non-tainted
+  compound-assign fixtures byte-identical (grep-defined set:
+  `ls tests/fixtures | grep compound` — ~20 files; run them all, both binaries).
 - **Docs write-through:** reference:2266 + design:460 + book/11:59 stop
   enumerating the closed single-owner set — custom-Drop types join per D4;
   D4's ledger consequences text is the source.
@@ -110,13 +121,19 @@
 3. **Position 6 inherits the deliberate `self` exclusion** (the filed
    plain-`self` write-through bug / D2 track) — do NOT extend to `self` until
    that ruling's track runs.
-4. **Position-5 fix-it wording (pass-1 REFUTED the draft):** the
-   `.clone()`-into-a-local suggestion DOES NOT COMPILE — the cloned local is
-   equally tainted and its capture equally rejects (probed). Until D5/D7 land,
-   the only viable remedies are PASS-AS-ARG or a `Shared[T]` wrap — the message
-   says exactly that, and must NOT advertise capture-list syntax. (ggdef's own
-   message advertises `!{c}` capture syntax neither implements — noted in the
-   ggdef-gap work item.)
+4. **Position-aware diagnostics (pass-1 refuted the draft fix-it; pass-2
+   specified the mechanism):** extend the `MoveWithoutOperator` error variant
+   with a reason/position field, rendered under the SAME `E_MoveWithoutOperator`
+   code (no new code). Message content: name the drop-taint CAUSE (ggdef's
+   message is the model) + per-position remedies — positions 1-4/6 suggest `!x`
+   or `.clone()`; position 5 (captures) suggests PASS-AS-ARG or a `Shared[T]`
+   wrap ONLY (the `.clone()`-into-local suggestion does not compile — the clone
+   is equally tainted; capture-list syntax is D5/D7, unbuilt). **The current
+   message's `` `move` `` alternative is DEAD SYNTAX (does not parse —
+   reserved-only) — remove it while touching the message.** GATE: the rendered
+   capture-position message contains no `!` suggestion. (ggdef's own message
+   advertises `!{c}` capture syntax neither implements — noted in the ggdef-gap
+   work item.)
 5. ggdef suite runs from `spec/ggdef/` (root `-p ggdef` selects 0 tests — scout
    measured; use `cd`-free invocation `cargo test --manifest-path spec/ggdef/Cargo.toml`).
 
