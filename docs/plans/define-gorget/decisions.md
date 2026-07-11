@@ -282,6 +282,29 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-11 — **D10(a) ADDENDUM (owner, considered-and-DECLINED): local MOVE-binds
+  stay LEGAL — the rejection criterion is ALIASING, not sigils-at-binds.** Raised
+  after A3 landed the `&`-bind rejection: should `R b = !a` (post-D27: `^a`) be
+  rejected symmetrically? Ruled NO. The two constructs do OPPOSITE things to the
+  source: a `&`-bind creates a SECOND live writable path to a place (the
+  exclusivity violation — the lazy/eager divergence channel D10 exists to close),
+  while a move-bind KILLS the source — one live name before, one after; no
+  aliasing ever exists, so there is nothing for exclusivity or the D1 refinement
+  obligation to trip over. Rejecting move-binds would also contradict the
+  ratified ledger four ways: (1) `!a`-at-bind is D4/D12's PRESCRIBED remedy for
+  drop-tainted bare-assigns (the A2-R1 enforcement's primary fix-it); (2) ggdef's
+  normative D4 suite uses `R b = !a` as its LEGAL counterparts — the executable
+  definition blesses the spelling; (3) the single-owner family (Owned/Box/Task/
+  Guard) REQUIRES move-binds — `E_MoveWithoutOperator` exists to force them;
+  (4) the CoW contract's three move-eligible shapes treat bind- and call-position
+  moves identically. The genuinely dodgy neighbor — the PROJECTION move
+  `R b = !h.r` (a partial move) — is ALREADY rejected by the existing machinery
+  (`E_UseAfterMove`; `.clone()` is the remedy; measured by the A2-R gauntlet),
+  drawing the boundary where it belongs: whole-identifier moves at binds legal,
+  field/index-place moves rejected. Rust-style destructuring partial moves remain
+  a possible future WIDENING, undecided. (A pure-rename style lint — `R b = !a`
+  with `a` otherwise unused — was noted and deliberately NOT filed.)
+
 - 2026-07-11 — **DECISION BATCH 5 CLOSES: D24 + D25 + D26 RATIFIED by owner (census
   packet review, `scouts/scout-wave-census.md`) — with D27 + D28 (below), the full
   fault-model + operator-surface redesign is ruled.**
