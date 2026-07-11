@@ -101,17 +101,22 @@ sequential fresh-review gauntlet.
     supervised boundary, `TaskFault` all-8-codes) · **D25** (REMOVE fault-catch, Swift model, gated
     on D26) · **D26** (fallible operators `+! -! *! /! %!` + `**!`, prelude `ArithError`). Deep/
     dynamic catch REJECTED on the merits (ledger LOG + the scout's "why not dynamic exceptions"
-    appendix). **THE WAVE NOW OPENS WITH THE CENSUS SCOUT** (`wave-census-scout-mandate.md`):
-    blast-radius matrix + sequencing plan for ALL pending migrations (D12 · D10 · D15+D22 · D19 ·
-    D25 · D26+D28 · D27's ~870-site sigil migration), with the D24/D25/D26 ratification packet
-    bundled into the plan review. New wave order: **wave-census scout → owner ratifies plan+batch →
-    execute per plan** (the census absorbs the old "D12 blast-radius scout first" step).
-    Enforcement-wave order for the next agent: **D12** (D4 drop-purity — blast-radius scout first) →
-    **D10** exclusivity tracks (bootstrap-gated) → D13/D14/D17 → small riders (D15+D22 slice-surface,
-    D18-D21); A31/A32 design scouts interleave. Open trap/throws follow-ups in TODO (each own gauntlet):
-    the both-compiler fault-re-panic normalization; rarer-bounds-sites real locations; self-host
-    shift-parity guard; the block_exit_labels structural guard (now ≥2 instances — escalated); D23's
-    T3c positive-throws differential smith tier. **Regenerate before quoting any number:**
+    appendix). **THE CENSUS RAN AND THE PLAN IS RATIFIED (2026-07-11, same day):** report at
+    `scouts/scout-wave-census.md`; **D24 + D25 + D26 ratified in the packet review — DECISION
+    BATCH 5 CLOSED (D24-D28)**. **THE LIVE EXECUTION PLAN is TODO.md's "RATIFIED
+    ENFORCEMENT-WAVE PLAN" entry: Batch A (D19 + D12 straight-to-error + D10(a)) → Batch B
+    (D10(b) place-overlap + the in-repo hand-hoists) → Batch C (C1 D26+D28 operators → C2 D25
+    fault-catch removal [~2,000-line machinery deletion; ships the D24 spec prose + §10.5/§10.9
+    rewrite] → C3 the composed one-fmt-pass sweep: ~1,114 sigils + 208 `.slice()` + 7 `pow()`
+    per IN-REPO corpus). gorget-js/arena/gglox/gorget-conformance migrate in a LATER
+    coordination round (owner ruling). Every track: brief → ≥3 sequential fresh reviews →
+    worktree executor → output-review → integrate; surprises are REPORTS, not downgrades.**
+    After Batch C: the out-of-repo coordination round → D13/D14/D17 → remaining riders;
+    A31/A32 design scouts interleave. Open non-fault follow-ups in TODO (each own gauntlet):
+    rarer-bounds-sites real locations; self-host shift-parity guard; the block_exit_labels
+    structural guard (≥2 instances — escalated); D23's T3c positive-throws smith tier. (The
+    former fault-re-panic normalization + dead-catch-lint follow-ups are CANCELLED by D25 —
+    that machinery is deleted in C2.) **Regenerate before quoting any number:**
     `cargo test -p ggdef` + `GG_BUILD_TIMEOUT_SECS=600 cargo test --test spec_conformance --
     --test-threads=1 --nocapture` (expect 195/195/195/195) + `cargo test --lib` + `--test lints` +
     `self_host_bootstrap_fixed_point`.

@@ -282,6 +282,59 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-11 — **DECISION BATCH 5 CLOSES: D24 + D25 + D26 RATIFIED by owner (census
+  packet review, `scouts/scout-wave-census.md`) — with D27 + D28 (below), the full
+  fault-model + operator-surface redesign is ruled.**
+  - **D24 — THE SUPERVISED BOUNDARY, ADOPTED, ALL 8 CODES (spec-only now; impl =
+    phase 3):** Task join is the ONLY fault→value conversion point in the language.
+    A supervised task's death by ANY trap class (incl. AssertFailed/Panic/Unwrap*)
+    becomes a `TaskFault` error value — closed TrapCode mirroring the registry —
+    at an ordinary `throws` join, flowing through the existing `catch (e):`/D23
+    machinery. Whole-unit discard: no drops on the trap path (D11), no
+    continuation into partial state; `gg test`'s cleanup-stack boundary is the
+    in-repo mechanism precedent. Rationale for all-8: a boundary is BUG
+    containment, and asserts/unwraps are the most common bug class — a boundary
+    that lets `T_AssertFailed` kill the process is one nobody can rely on.
+    Panic-by-default unchanged for unsupervised code. The A33 rider TIGHTENS to
+    its final form: faults enter the error/value world ONLY via the supervised
+    boundary + explicitly fallible APIs (the lexical-catch conversion point is
+    deleted by D25). Docs write-through: §10.9 + book point at the sanctioned
+    shape; the "why not dynamic exceptions" prose (A33 scout appendix) ships
+    with it. A33 CLOSED.
+  - **D25 — LEXICAL/DEEP FAULT-CATCH REMOVED (Swift model), gated on D26 landing
+    with-or-before:** faults become uniformly uncatchable in-process; the
+    catchable-subset concept, the `Fault` prelude enum, `is_catchable()`, and the
+    registry's catchability column are DELETED. Census (twice-verified): ZERO
+    organic uses in any corpus — all 31 fixture files are feature-tests;
+    §10.5 was STALE (shipped behavior was half-deep via fault-slot params — the
+    worst of both). Removal retires ~2,000 lines of both-compiler machinery
+    (fault_participation.rs, fill_fault_return_block + re-panic sites, NULL-slot
+    closure adapters) and CANCELS 8 filed tracks. ggdef models no catch — the
+    definition is already complete under removal. ~10 fixtures migrate to D26
+    positives, 2-3 become rejection negatives, rest delete.
+  - **D26 — FALLIBLE OPERATORS ADOPTED:** `+! -! *! /! %!` + `<<! >>!` + `**!`
+    (D28), throwing the payload-free prelude `enum ArithError { Overflow,
+    DivByZero }` into the ONE error channel; D23-total (an `int` in every
+    position; auto-propagates; existing `catch (e):`; `Result` capture);
+    precedence = base operators; integer-only v1 (floats rejected + fix-it);
+    `INT_MIN / -1` and shift-range → `Overflow` (mirrors the registry); compound
+    `+!=` excluded v1; catch-in-const rejected v1. Glyphs pinned by D27. Prior
+    art: Pony's partial arithmetic (operators), Zig's std.math error unions
+    (semantics); the typed+auto-propagating operator combination is novel.
+  - **THE WAVE PLAN RATIFIED (out-of-repo DEFERRED):** Batch A (D19 + D12
+    straight-to-error + D10(a); near-zero blast — census: D12 ≤13 sites all in
+    the drop-fixture family, D19 zero + the self-host `format.gg:471` arm,
+    D10(a) the 2 known fixtures) → Batch B (D10(b) place-overlap: the IN-REPO
+    hand-hoists — self-host 8, lib 3 incl. the `p2p.gg:2057` double-writer,
+    fixtures' 2 existing negatives) → Batch C: C1 operators (D26+D28 combined
+    round; gates C2) → C2 fault-catch removal → C3 the composed `gg fmt` sweep
+    (D27 sigils + D22 `.slice()` + D28 `pow()` — composition test PASSED, one
+    pass per corpus) over the IN-REPO corpora (fixtures/spectests/self-host/lib).
+    **gorget-js (24 D10(b) sites + ~34 sigils), arena, gglox, gorget-conformance
+    migrate in a LATER coordination round with those projects** (owner ruling).
+    D28's xor-as-pow lint pinned to the GCC-12 2/10-literal-base shape (the
+    broad literal^literal form false-fires on the canonical XOR fixtures).
+
 - 2026-07-11 — **D28 RATIFIED by owner (in-discussion): THE POWER OPERATOR, full
   package.** `**` with Python precedence/associativity (right-assoc; tighter than
   unary minus: `-2**2 = -4`); `int ** int` → `int`, CHECKED → trap `T_Overflow`
