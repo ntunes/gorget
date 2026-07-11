@@ -282,6 +282,22 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-11 — **D28 RATIFIED by owner (in-discussion): THE POWER OPERATOR, full
+  package.** `**` with Python precedence/associativity (right-assoc; tighter than
+  unary minus: `-2**2 = -4`); `int ** int` → `int`, CHECKED → trap `T_Overflow`
+  on overflow AND on negative exponents (the registry's result-not-representable
+  class — the `INT_MIN / -1` precedent; no new trap class); `float ** float|int`
+  → IEEE pow, never faults (D8/D18 float philosophy); `**!` joins the D26
+  fallible family; `**=` compound (uniform with `+=`/`*=`); wrapping `**%`
+  DEFERRED (pure widening). `lib/std/math.gg pow()` RETIRES after migration
+  (D20 one-canonical-way pattern). Plus the xor-used-as-pow teaching lint
+  (GCC-12 precedent): `W_` diagnostic on `literal ^ literal` shapes (`2 ^ 8` is
+  XOR = 10 — "did you mean `2 ** 8`?") — permanently defuses the math-prior
+  misread of infix `^`, and settles `^` cleanly as XOR-infix/move-prefix
+  alongside D27. Origin: owner question during the D27 discussion revealed
+  Gorget had NO power operator and NO integer power at all (float-only free-fn
+  `pow`). Own implementation track, sequenced with the D26/D27 work.
+
 - 2026-07-11 — **D27 RATIFIED by owner (in-discussion, after the A33+fault-model
   scout's Q4 census): THE SIGIL ECONOMY.** `!` = the error channel (the D26
   fallible-operator family is glyph-pinned `+! -! *! /! %!`); `?` = optionals
