@@ -15,16 +15,21 @@
 > adjacent semantic files with disjoint hunks — parent integrates sequentially.
 > **Scout:** `/tmp/scout_wA2_report.md`, prototype `/tmp/scout_wA2_prototype.patch`
 > (500 lines), measured end-to-end.
-> **Status:** v3 — pass-1's 8 folds verified by pass-2 (which also executed the
-> expr-body hunk from the brief text alone — 11 lines, works, ggdef agrees) +
-> pass-2's 5 folds applied: (1) the CLOSURE-RETURN asymmetry RULED (Core #4):
-> position 4 extends to closure expr-tails in production AND ggdef gains the
-> closure-tail check + an 11th/12th test pair — both spellings of a closure
-> return reject identically; (2) the position/reason-aware message mechanism
-> specified (one E_ code, per-position rendering; the dead `move` suggestion
-> dies); (3) ggdef citation corrected `:639-642`→`:349-352`; (4) TODO refs →
-> greppable anchors; (5) the compound-fixture gate grep-anchored.
-> Awaiting pass 3.
+> **Status:** v4 — pass-3 (executor-simulation) confirmed the closure ruling +
+> message mechanism + all citations, and raised 6 reservations, ALL FOLDED:
+> **(1) BLOCKING — the PLACE-SHAPE hole**: `tainted_place_name` was
+> identifier-only in practice (`expr_types` is SPARSE — field/index spans never
+> recorded), so `R c = hh.r` was production-ACCEPTED while ggdef REJECTS, and
+> the accepted program DOUBLE-DROPS (measured: "drop R" printed twice). Now a
+> mandated work item (see Design). (2) the `Expr::ImplicitClosure` sibling arm
+> (`check_expr.rs:999` — `hs.map(it.r)`) joins via a SHARED tail-check helper.
+> (3) generics are T-BLIND (pre-mono check): pinned out-of-scope + FILED
+> (inherited single-owner-family debt). (4) site-count corrected: baseline has
+> exactly 2 `E_MoveWithoutOperator` construction sites (not "5"), 8-9
+> post-track — pin-4's reason-field touches ALL of them. (5) the gate list now
+> enumerates the closure + field-place probes. (6) the ICE rider's TODO targets
+> NAMED precisely. Prior history: pass-1's 8 folds, pass-2's 5.
+> Awaiting pass 4.
 
 ## Verified premises
 
@@ -57,9 +62,26 @@
 - **Critical enabler:** `is_copy_type` gains the Copy∧Drop exclusion
   (`type_utils.rs:95` area) — without it, ggdef's all-scalar `struct R: int id`
   never reaches any check.
-- **The six positions:** 1-2 (bare-assign, ctor/field-init) ride the existing 5
-  `E_MoveWithoutOperator` sites by unioning taint into `needs_explicit_move` +
-  place-shape pre-checks; 3 (collection puts) reuses the arena-ingest gate's
+- **⚠ THE PLACE-SHAPE WORK ITEM (pass-3 BLOCKING — a live double-drop):**
+  `tainted_place_name`'s primary lookup (`expr_types.get(&e.span)`) is SPARSE —
+  only call/method/scrutinee spans are recorded (`typecheck.rs:2272+`);
+  FieldAccess/Index spans never are, and the fallback covers only
+  Identifier/SelfExpr. Consequence (measured): `R c = hh.r` binds a field place
+  UNREJECTED and the program runs R's custom drop TWICE; `return h.r` and
+  closure-tail `h.r` same; ggdef rejects all three. FIX AT THE WRITER (layering
+  rule 1): either record FieldAccess/Index expression types into `expr_types`
+  during typecheck, or resolve field chains from the typed
+  `DefInfo.field_types` the taint pass already populates — mirroring ggdef's
+  `infer_ast_ty` (`elaborate/mod.rs:522-542`). The prototype's "covers EVERY
+  place shape" comments are FALSE — correct them. ADD field-place + index-place
+  probe fixtures per position AND 1-2 field-place tests to ggdef's own suite so
+  the parity is TEST-VISIBLE (the ported identifier-shaped suite stays green
+  across this divergence — that's the trap).
+- **The six positions:** 1-2 (bare-assign, ctor/field-init) ride the EXISTING 2
+  `E_MoveWithoutOperator` construction sites (pass-3 corrected the count:
+  baseline has exactly 2 — `check_expr.rs:33`, `check_stmt.rs:1460`; the track
+  grows them to 8-9, one per position — pin-4's reason-field change touches ALL
+  of them) by unioning taint into `needs_explicit_move` + place-shape pre-checks; 3 (collection puts) reuses the arena-ingest gate's
   TYPED classifiers (`is_mutating_builtin_method` + `is_buffer_owning_receiver`);
   **4 in `Stmt::Return` AND the `FunctionBody::Expression` tail arm
   (`safety/check_stmt.rs:1726` — pass-1's blocking fold: ggdef rejects
@@ -68,10 +90,13 @@
   same `imported_module_depth == 0` gate + a probe; fresh-temp expr bodies
   `R make(): R(7)` stay legal; pass-2 derived this hunk from the spec alone — 11
   lines) AND — pass-2's Core-#4 ruling — CLOSURE returns, BOTH spellings: the
-  `Stmt::Return` check already fires in closure block bodies; extend to closure
-  EXPR-TAILS so `(R x): return x` and `(R x): x` reject identically; ggdef gains
-  the matching closure-tail check (its closure eval path has none today) + an
-  11th/12th test pair — both sides agree before landing**; 5 off `compute_capture_set`; 6 inside
+  `Stmt::Return` check already fires in closure block bodies (pass-3 verified);
+  extend to closure EXPR-TAILS (`Expr::Closure` arm, `check_expr.rs:948`, ~9
+  lines, same `imported_module_depth == 0` gate) AND — pass-3's sibling — the
+  `Expr::ImplicitClosure` arm (`check_expr.rs:999`, the `hs.map(it.r)` shape)
+  via ONE SHARED tail-check helper for both arms; ggdef gains the matching
+  closure-tail check + an 11th/12th test pair — both sides agree before
+  landing**; 5 off `compute_capture_set`; 6 inside
   `mark_bare_param_write_def` (pre-filtered by `deadwrite_params`, which excludes
   `self` — pin 3 holds by construction; note: `_`-prefixed params also dodge
   position 6, a known micro-divergence from ggdef, acceptable).
@@ -88,10 +113,12 @@
   carrying R); ggdef ACCEPTS (phase-0 `Ty` has no Option → `Unknown` →
   untainted, `elaborate/mod.rs:493-501`). Fix ggdef's taint model to cover
   Option + add the 10th test so both sides agree BEFORE this lands.
-- **ICE rider (~20-40 lines; closes the two TODO entries grep-anchored by
-  "compound-assign" + "resource-element ICE" — line numbers drift, anchors
-  don't) — ⚠ THE ONE UN-PROTOTYPED HUNK (pass-1; the scout sized it, did not
-  build it):** in
+- **ICE rider (~20-40 lines) — ⚠ THE ONE UN-PROTOTYPED HUNK (pass-1; the scout
+  sized it, did not build it). Closes exactly TWO TODO entries (pass-3 named
+  them — the earlier grep anchors MISSED both): the 🐛💥 Compound-assign
+  resource-element ICE entry AND the operator-overload validator-panic sibling
+  (`assigns.rs:1665`). Do NOT close the D12 parent-track entry (this track only
+  half-closes it — A2-S remains):** in
   `lower_compound_assign` (`assigns.rs:1714-1721` confirmed), replace the shared
   vector/dict clone-read+shallow-assign branch with the existing
   `index_load_borrow` (`validate.rs:1267-1269`) for the `self` borrow; `__set`'s
@@ -139,7 +166,10 @@
 
 ## Gates (scout-measured; executor re-runs, FOREGROUND, chunked >600s)
 
-build · lib 1105/0 · ALL ported ggdef probes (10 + expr-body pair, ggdef-exact) ·
+build · lib 1105/0 · ALL ported ggdef probes (10 + expr-body pair + the CLOSURE
+pair + the FIELD-PLACE/INDEX-PLACE probes per position — pass-3 completed the
+enumeration; every probe ggdef-exact, and ggdef's own suite gains the closure +
+field-place tests) ·
 integration `drop` 40/0, `move` 56/0, `clone` 17/0 (3 known 120s self-host
 DEBUG-build stragglers — use `GG_BUILD_TIMEOUT_SECS=600`) · **pass-1's
 census-hole fixtures EXPLICITLY (outside all the above filters):
