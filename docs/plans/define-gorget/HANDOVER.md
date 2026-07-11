@@ -137,8 +137,10 @@ sequential fresh-review gauntlet.
       its instructions (base minus typecheck.rs/errors.rs + extension's full typecheck.rs
       + errors.rs coexist with A1's BreakWithValue); 3 new fixtures + their integration.rs
       test fns (pass-4 note); gates 10/10/33/45 + EXACTLY-10 oracle + chunked bootstrap.
-      NEXT: executor report → output-review (Opus) → parent integrates AFTER A2-R1
-      (sequential; same-file adjacency in src/semantic + errors.rs).
+      EXECUTED: commit `254dd5ca` (22 files +437/−116, zero deviations; all gates
+      exact; zero-collateral oracle = exactly 13 predicted hits; bootstrap converged).
+      Output-review (Opus) IN FLIGHT. Parent integrates AFTER A2-R1 (sequential;
+      same-file adjacency in src/semantic + errors.rs).
     - **Batch-A discoveries FILED during the gauntlets** (all in TODO High): self-host
       parse-error surfacing (check/lowerer lanes drop ALL parse errors) · `return &v` of a
       `&`-param double-free · `Shared[R]` payload custom-drop never runs · builtin-handle
