@@ -22,7 +22,13 @@
 > reason); a 3rd negative fixture `amp_bind_do_stmtmatch_error`; the typed
 > borrow-provenance root-cause FILED (why this walk kept sprouting siblings).
 > Prior: pass-1's blocking expr-position fold + zone/framing fixes.
-> Awaiting pass 3.
+> **v4 (pass-3, Opus, on the post-A1 tree):** substance VERIFIED SOUND
+> (composition, gates, bootstrap 501s green, 3 adversarial probes clean, A1×A3
+> interaction clean) — 2 mechanical folds applied: the stmt-match fixture's
+> INDENTED-MULTI-LINE-arms trap (with the proven shape) + the gate counts
+> reconciled to the 3-fixture reality (`amp_bind` 10/0, `amp` 33/0, the
+> zero-collateral oracle EXACTLY-10) + the PATCH-ASSEMBLY instructions (naive
+> sequential apply fails post-A1). Awaiting pass 4 (confirming).
 
 ## Verified premises — TWO CORRECTIONS over the wave plan's text
 
@@ -71,17 +77,36 @@ false positives on value-yielding statement tails, zero collateral). ADD 3
 negative fixtures (`amp_bind_matchexpr_error`, `amp_bind_doexpr_error` — ⚠ the
 do-form MUST be the MULTI-LINE `do:` block; the inline `do: &a` shorthand is a
 PARSE error and would pass for the wrong reason — and
-`amp_bind_do_stmtmatch_error`); RE-RUN the zero-collateral sweep after. The self-host
+`amp_bind_do_stmtmatch_error` — ⚠ pass-3: the stmt-form match arms must be
+INDENTED MULTI-LINE bodies; an inline `case X: <body>` inside a do-tail
+stmt-match is a parse error regardless of `&`. The proven shape:
+```
+auto r = do:
+    match n:
+        case 1:
+            &a
+        else:
+            &b
+```
+); RE-RUN the zero-collateral sweep after.
+**PATCH ASSEMBLY (pass-3, on the post-A1 tree — naive sequential `git apply`
+FAILS):** take the base prototype for all files EXCEPT `typecheck.rs`; take the
+extension patch's FULL `typecheck.rs` (it supersedes, not increments, the base's
+if-only helper — both anchor the same pristine hunk); hand-resolve `errors.rs`
+so `LocalBorrowBindSigil` COEXISTS with A1's landed `BreakWithValue` (both
+inserted at the same anchor after `MissingInitializer`, enum + Display). The self-host
 `check_local_borrow_bind` dodges identically — same permissive-residual class as
 its static/if-expr forms (note, don't chase; A2-S-era work).
 
 ## Scout-measured gates (executor re-runs; FOREGROUND, chunked)
 
-build · lib 1105/0 · lints 53/0 · integration `cow_amp` 10/0, `amp_bind` 7/0,
-`borrow` 45/0, `amp` 30/0, `cow` 91/0+1-ign (self-host driver rebuilds inside —
+build · lib 1105/0 · lints 53/0 · integration `cow_amp` 10/0, `amp_bind` **10/0**
+(pass-3 reconciled: 5 base `amp_bind_*` + 2 `cow_amp_bind_*` + the 3 new fixtures),
+`borrow` 45/0, `amp` **33/0**, `cow` 91/0+1-ign (self-host driver rebuilds inside —
 600s env) · security `sec_0*` 9/0. **Zero-collateral proof (re-run it):** a
 patched `gg check` sweep over fixtures+security+lib+spec+smith (1520+165+66
-files) — new rejections must be EXACTLY the 7 intended fixtures + attack_04
+files) — new rejections must be EXACTLY the **10** intended fixtures (7 original
++ the 3 new negatives; pass-3 reconciled the oracle) + attack_04
 (attack_07/09 were already parse-rejected; D10's message is additive there).
 **Bootstrap fixed-point GREEN — ⚠ TWO EXECUTOR TRAPS (keep):**
 1. CHUNK the bootstrap per stage (~150-170s each) — the single-test form dies at
