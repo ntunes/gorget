@@ -133,14 +133,15 @@ sequential fresh-review gauntlet.
       fold-or-launch executor (`model:"opus"`), or split per its recommendation.
       Filed en route: Shared[R]-payload-drop bug (HIGH) · builtin-handle name-list
       debt (MEDIUM) · generics-T-blind dodge (MEDIUM).
-    - **A3 (D10a &-bind rejection): brief v2 in gauntlet, pass 2 in flight.** Brief
-      `wave-a3-amp-bind-rejection-brief.md` v2 (pass-1's BLOCKING fold applied: the
-      expr-position class-hole — extend `expr_is_borrow_bind` to Match/Do/Block +2
-      fixtures + re-sweep; zone completed; framing corrected). Prototype DURABLE at
-      `scouts/patches/scout_wA3_prototype.patch` (all 3 scout prototypes staged there).
-      Discoveries filed: comprehension-over-`&a` empty vector (HIGH) + the no-op-`&`
-      value-position family (MEDIUM). NEXT: pass-2 verdict → fold → pass 3 → executor
-      (`model:"opus"`).
+    - **A3 (D10a &-bind rejection): brief v3, pass 3 (confirming, Opus) in flight —
+      first pass on the post-A1 tree (A1×A3 composition check included).** Brief
+      `wave-a3-amp-bind-rejection-brief.md` v3: pass-1's expr-position fold + pass-2's
+      stmt-form-tail sibling (PROVEN extension staged at
+      `scouts/patches/wA3_pass2_stmt_tail_ext.patch`, composing with the base
+      prototype) + the multi-line do-fixture trap + 3 negative fixtures. Filed en
+      route: comprehension-over-`&a` empty vector (HIGH) · no-op-`&` value-position
+      family (MEDIUM) · typed borrow-provenance root cause (MEDIUM — Batch B's scout
+      evaluates building it FIRST). NEXT: pass-3 verdict → executor (`model:"opus"`).
     - **Batch-A discoveries FILED during the gauntlets** (all in TODO High): self-host
       parse-error surfacing (check/lowerer lanes drop ALL parse errors) · `return &v` of a
       `&`-param double-free · `Shared[R]` payload custom-drop never runs · builtin-handle
