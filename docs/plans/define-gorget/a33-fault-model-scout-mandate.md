@@ -125,6 +125,55 @@ Design points the scout must settle or option-ize:
    new form (spot-sample 5, show before/after); the fault-catch removal track's
    fixture migration cost.
 
+## Q4 — Sigil economy: `!` = errors, `?` = optionals, move rehomed (owner proposal, 2026-07-11)
+
+Added mid-scout (owner discussion). Orchestrator pre-findings to verify and build on:
+Gorget uses the `not` KEYWORD for negation (prefix `!` is exclusively the move
+sigil, `Token::Bang`, 10 parser sites); the `?`-family is ALREADY Optional-flavored
+in the shipped surface (`?.` QuestionDot optional-chaining + `??` DoubleQuestion
+coalescing — `??` in 19 fixture files); bare postfix `?` is essentially DORMANT
+(one parser lookahead mention, `expr.rs:1468`; propagation is automatic — the
+`Expr::Propagate` node is elaboration-level). Therefore the owner's split is
+ALREADY the de-facto convention except for `!`-as-move, and Q3's fallible family
+should be re-glyphed **`+!` `-!` `*!` `/!` `%!`** (errors), NOT `+?` (which would
+collide with the in-language `?`=Option convention).
+
+Scout deliverables for Q4:
+
+1. **Census the `!`-move surface**: every move-sigil site class (call-site `!arg`,
+   bare-assign `!source`, param `T !name`, D7 capture lists `(!name, ...)` +
+   `!()` move-all sugar) counted across fixtures / self-host / gorget-js / arena.
+   Also confirm bare-`?` postfix liveness (grep + parser reading) and `??`/`?.`
+   usage counts. Frequency argument to test: moves are RARE-BY-DESIGN in
+   CoW-default-borrow Gorget (Huffman: the rare op can afford a keyword; the
+   common fallible ops deserve the glyph).
+2. **Move-rehoming candidates evaluated at ALL FOUR positions** (call, assign,
+   param, capture list): (a) `move` keyword (C++/Rust prior — strongest human+LLM
+   prior; check the param-position reading `void consume(Message move msg)` vs
+   the established sigil-before-name convention and the `&msg` asymmetry);
+   (b) `take` keyword; (c) `^` sigil (keeps sigil symmetry with `&`; weak/foreign
+   priors — Obj-C blocks, Go xor). Include the D7 impact (capture-list re-spelling
+   + move-all sugar redesign = a D7 rider) and the diagnostics/docs surface
+   (E_MoveWithoutOperator message, CLAUDE.md quick-ref, README, book).
+3. **Lexing/grammar for `+!` under the rehomed grammar**: once prefix `!` is gone
+   (negation is `not`, move rehomed), verify `+!` tokenizes without ambiguity
+   (incl. against `!=` and `a + !b` legacy shapes during migration); precedence =
+   base op; compound forms `+!=`? Recommend include/exclude.
+4. **Prior-collision analysis** (feeds the LLM-correctness KPI, an owner-directive
+   metric): Zig reads `!`=error-union (correct); Swift/TS/Kotlin read `!` as
+   force/non-null-assert (they may misread `+!` as trapping — but plain `+`
+   already traps, and a misused `+!` produces a LOUD D23 unhandled-throws
+   compile error, never a silent behavior surprise — verify this reasoning).
+5. **Candidate ruling D27** (sigil economy) drafted as an option-question:
+   full-swap (recommended?) vs `!`-stays-move + fallible ops get another glyph vs
+   status quo. Include migration-cost estimate from the census (mechanical,
+   grep-able classes).
+6. Q3's deliverables update accordingly: the fallible family is evaluated as `+!`
+   (primary) with `+?` documented as the rejected-for-collision alternative; the
+   optional-family future sugar (`v[i]?` → Option indexing, chaining with the
+   existing `??`) noted as a separate, later widening (do not spec it here beyond
+   one paragraph).
+
 ## Constraints
 
 - READ-ONLY everywhere. **gorget-js at `/workspace/gorget/.worktrees/gorget-js` is
