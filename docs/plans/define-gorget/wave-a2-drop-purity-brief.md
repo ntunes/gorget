@@ -1,4 +1,23 @@
-# Wave A2-R brief — D12: drop-purity enforcement, Rust half (straight to error)
+# Wave A2-R1 brief — D12: drop-purity enforcement, Rust core (SPLIT per pass-5)
+
+> **⚡ SPLIT RULING (pass-5, Opus, confirming — orchestrator-ratified 2026-07-11):**
+> this brief is now **A2-R1** = the taint pass + all six positions (incl. the
+> expr-body arm at `check_stmt.rs:1747`, the closure expr-tail + capture-rooted
+> skip, the `lvalue_value_type` place-shape reroute) + fixtures + ggdef parity +
+> docs — **reservation-free, empirically confirmed buildable** (pass-5 built the
+> two riskiest items: the reroute flips the field-place double-drops to
+> rejections; `(): hh.r` reports ONCE from position 5, `(HH h): h.r` ONCE from
+> the tail). A2-R1 lands with the CURRENT generic message (probes assert the
+> stable E_ code, not text — no dependency on A2-R2; the capture fix-it
+> suboptimality is a staged diagnostic-quality gap, Core-#8 clean).
+> **A2-R2** (position-aware message mechanism + the compound-assign ICE rider,
+> both un-prototyped, disjoint zones) = `wave-a2-r2-message-ice-brief.md`, own
+> scout→gauntlet. Pass-5's corrected anchors (vs this brief's stale ones):
+> `lvalue_value_type` = `helpers.rs:769-817` · pos-4 expr-body arm =
+> `check_stmt.rs:1747` (gate at `:1750`, insert before `:1787`) · baseline site
+> = `check_stmt.rs:1457` · ICE anchors moved to the A2-R2 brief. Pass-5's
+> 22-item checklist = the executor's MILESTONE LIST (items 19-20 excluded →
+> A2-R2).
 
 > **Batch A, track 2** (ratified wave plan). **SPLIT (scout finding, reported):**
 > the self-host has NO `E_MoveWithoutOperator` surface at all (no safety pass, no
