@@ -282,6 +282,31 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-11 — **D27 RATIFIED by owner (in-discussion, after the A33+fault-model
+  scout's Q4 census): THE SIGIL ECONOMY.** `!` = the error channel (the D26
+  fallible-operator family is glyph-pinned `+! -! *! /! %!`); `?` = optionals
+  (ratifying the already-shipped `?.`/`??` convention; bare postfix `?` stays
+  dormant/free for future Option sugar, e.g. `v[i]?`); **`^` = the MOVE sigil,
+  replacing `!`** (prefix-only; infix `^` stays XOR — the same prefix/infix
+  disambiguation `&` already uses for borrow-vs-bitand). Road-not-taken record:
+  `|` was the owner's first instinct (shell-pipe = "value flows to the next
+  consumer") — rejected because flow describes ALL argument passing while move
+  uniquely means THE SOURCE DIES; the direction breaks at assign/param positions;
+  `|` is Gorget's busiest glyph (bitor, `|=`, live or-patterns incl. a leading-`|`
+  parse arm, `pattern.rs:32-34`); and the flow prior is better saved for future
+  `|>`-style dataflow. `move` keyword rejected (owner prefers a sigil; it remains
+  the strongest-prior fallback — already reserved, already parses in closure
+  position). `take` rejected (live `.take(n)` method, 135+ hits). `~` disqualified
+  (prefix bitnot). `&&` runner-up (C++ rvalue prior, two chars). Scout census:
+  ~870 move-sigil sites across the four corpora; D7 capture lists have ZERO corpus
+  uses → the capture re-spelling (`(^name, &total)(x):`, `^():` move-all) is a
+  pure spec rider on D7. Implementation = its own bootstrap-gated track (lexer/
+  parser/formatter both compilers + `E_MoveWithoutOperator` and the `expr.rs:593`
+  move-hint diagnostics + docs sweep; `gg fmt` is the auto-migration vehicle).
+  D24 (boundary) / D25 (fault-catch removal) / D26 (fallible operators) remain
+  RECOMMENDED-pending-formal-ratification from the scout report
+  (`/tmp/scout_a33_report.md`, mandate `a33-fault-model-scout-mandate.md`).
+
 - 2026-07-07 — **D23 RATIFIED by owner (was queue item A30): THE THROWS TOTALITY
   INVARIANT.** Normative: "a throws call is an expression of type T in EVERY position;
   its Result-ness is unobservable except at a Result-typed binding or a catch." Plus the
