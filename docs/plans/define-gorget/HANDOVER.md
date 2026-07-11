@@ -132,13 +132,13 @@ sequential fresh-review gauntlet.
       anchors: `stmts/assigns.rs:1148`, `ir/builder.rs:258`, panic `mod.rs:1763`) — own
       scout→gauntlet AFTER A2-R1. Filed en route: Shared[R]-payload-drop (HIGH) ·
       builtin-handle name-list · generics-T-blind · it-lambda tail dodge (MEDIUM).
-    - **A3 (D10a &-bind rejection): brief v4, pass 4 (confirming, Opus) in flight.**
-      Pass-3 verified the substance sound on the post-A1 tree (composition, gates,
-      bootstrap 501s, adversarial + A1-interaction probes) with 2 mechanical folds
-      (stmt-match indented-arms fixture trap; gate counts reconciled 10/33/EXACTLY-10;
-      patch-assembly instructions — naive sequential apply FAILS post-A1). Patches:
-      `scouts/patches/scout_wA3_prototype.patch` + `wA3_pass2_stmt_tail_ext.patch`.
-      NEXT: pass-4 verdict → executor (`model:"opus"`).
+    - **A3 (D10a &-bind rejection): gauntlet CLEAR (4 passes; pass-4 dry-ran the full flow
+      + signed off) — EXECUTOR RUNNING (Opus).** Brief v4 is the spec; patch assembly per
+      its instructions (base minus typecheck.rs/errors.rs + extension's full typecheck.rs
+      + errors.rs coexist with A1's BreakWithValue); 3 new fixtures + their integration.rs
+      test fns (pass-4 note); gates 10/10/33/45 + EXACTLY-10 oracle + chunked bootstrap.
+      NEXT: executor report → output-review (Opus) → parent integrates AFTER A2-R1
+      (sequential; same-file adjacency in src/semantic + errors.rs).
     - **Batch-A discoveries FILED during the gauntlets** (all in TODO High): self-host
       parse-error surfacing (check/lowerer lanes drop ALL parse errors) · `return &v` of a
       `&`-param double-free · `Shared[R]` payload custom-drop never runs · builtin-handle
