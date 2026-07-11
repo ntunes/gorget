@@ -314,7 +314,10 @@ P1-infra reviewers' recommendation.
   the strongest-prior fallback — already reserved, already parses in closure
   position). `take` rejected (live `.take(n)` method, 135+ hits). `~` disqualified
   (prefix bitnot). `&&` runner-up (C++ rvalue prior, two chars). Scout census:
-  ~870 move-sigil sites across the four corpora; D7 capture lists have ZERO corpus
+  ~870 move-sigil sites across four corpora (⚠ CORRECTED by the wave-census scout
+  2026-07-11: **~1,114** — the A33 figure omitted `lib/` [224, a missing FIFTH
+  corpus], spectests [70], and the gglox/gorget-conformance projects [66]; see
+  `scouts/scout-wave-census.md`); D7 capture lists have ZERO corpus
   uses → the capture re-spelling (`(^name, &total)(x):`, `^():` move-all) is a
   pure spec rider on D7. Implementation = its own bootstrap-gated track (lexer/
   parser/formatter both compilers + `E_MoveWithoutOperator` and the `expr.rs:593`
