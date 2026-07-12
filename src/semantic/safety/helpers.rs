@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
-use crate::semantic::errors::SemanticErrorKind;
+use crate::semantic::errors::{MoveReason, MoveShape, SemanticErrorKind};
 use crate::semantic::ids::DefId;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types, ResolvedType};
@@ -30,13 +30,28 @@ pub(super) fn expr_is_place(e: &Expr) -> bool {
     }
 }
 
+/// D12: the PLACE SHAPE of a place expr — a WHOLE identifier/self, or a
+/// FIELD/INDEX sub-place. Decides the valid remedy in the
+/// `E_MoveWithoutOperator` message (pin-4): a whole place accepts `!x`/`.clone()`,
+/// a sub-place accepts `.clone()` only (a bare `!obj.f` is a partial move). A
+/// pure function of the expr — call it on an expr already known to be a place
+/// (`expr_is_place`); a non-place falls to `FieldIndex` (never reached for the
+/// tainted-place sites, which gate on `expr_is_place` first).
+pub(super) fn place_shape(e: &Expr) -> MoveShape {
+    match e {
+        Expr::Identifier(_) | Expr::SelfExpr => MoveShape::Whole,
+        _ => MoveShape::FieldIndex,
+    }
+}
+
 impl<'a> BorrowChecker<'a> {
     /// D4/D12: if `e` is a PLACE whose type is drop-tainted, return a display
-    /// name for the error. The implicit copy of a live drop-tainted place at
-    /// an ownership boundary is `E_MoveWithoutOperator` — write `!place` to
-    /// move or `.clone()` to copy. Mirrors ggdef's
-    /// `reject_if_tainted_live_place` (spec/ggdef/src/elaborate/mod.rs:571-583).
-    pub(super) fn tainted_place_name(&self, e: &Spanned<Expr>) -> Option<String> {
+    /// name for the error PLUS its place shape (Whole vs field/index sub-place),
+    /// which selects the remedy in the `E_MoveWithoutOperator` message. The
+    /// implicit copy of a live drop-tainted place at an ownership boundary is
+    /// `E_MoveWithoutOperator`. Mirrors ggdef's `reject_if_tainted_live_place`
+    /// (spec/ggdef/src/elaborate/mod.rs:571-583).
+    pub(super) fn tainted_place_name(&self, e: &Spanned<Expr>) -> Option<(String, MoveShape)> {
         if !expr_is_place(&e.node) {
             return None;
         }
@@ -54,12 +69,14 @@ impl<'a> BorrowChecker<'a> {
         if !crate::semantic::is_drop_tainted_type(tid, self.types, self.scopes) {
             return None;
         }
-        // Display name: the root binding's name (good enough for the fix-it).
+        // Display name: the root binding's name (good enough for the fix-it;
+        // the exact sub-place text `hh.r.clone()` vs `hh.clone()` is a filed
+        // LOW follow-up — `find_root_def_id` returns only the ROOT name).
         let name = self
             .find_root_def_id(e)
             .map(|d| self.scopes.get_def(d).name.clone())
             .unwrap_or_else(|| "<place>".to_string());
-        Some(name)
+        Some((name, place_shape(&e.node)))
     }
 
     pub(super) fn check_stale_condition(&mut self, condition: &Spanned<Expr>) {
@@ -916,7 +933,15 @@ impl<'a> BorrowChecker<'a> {
                 })
             {
                 let name = def.name.clone();
-                self.error(SemanticErrorKind::MoveWithoutOperator { name }, span);
+                // Materialize-on-write is always a WHOLE bare borrow-param place.
+                self.error(
+                    SemanticErrorKind::MoveWithoutOperator {
+                        name,
+                        reason: MoveReason::DropTaint,
+                        shape: MoveShape::Whole,
+                    },
+                    span,
+                );
             }
         }
         if !self.deadwrite_params.contains_key(&def_id) {

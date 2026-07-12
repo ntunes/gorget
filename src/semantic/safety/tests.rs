@@ -1549,7 +1549,7 @@ void main():
 ";
         let errors = check(source);
         assert!(
-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveWithoutOperator { name }
+            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveWithoutOperator { name, .. }
                 if name == "g")),
             "expected MoveWithoutOperator for a bare closure into a constructor, got: {:?}", errors
         );

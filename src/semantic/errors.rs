@@ -228,6 +228,37 @@ pub enum ArenaEscapeKind {
     IngestLiveOuter { target: String },
 }
 
+/// D12/D4: WHY a bare copy of a non-Copy value is rejected. Controls the
+/// "why" clause of `E_MoveWithoutOperator`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveReason {
+    /// The value's transitive drop graph carries a custom `Drop` — a resource,
+    /// single-owner by D4. (`is_drop_tainted_type`.)
+    DropTaint,
+    /// A single-owner-BY-DESIGN carve-out type (closure/`Callable`, `Owned[T]`,
+    /// `Box[T]`, `Task`/`TaskGroup`/`Guard`) — no clone path in the lowering.
+    SingleOwner,
+}
+
+/// D12/D4: the PLACE SHAPE of the rejected source, which decides the valid
+/// remedy in the `E_MoveWithoutOperator` message. A pure function of the place
+/// expr already in hand at the construction site (no new dataflow) — see
+/// `safety::helpers::place_shape`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveShape {
+    /// Whole-identifier / self / param place. Remedy: `!x` to move or
+    /// `x.clone()` to copy.
+    Whole,
+    /// Field / index SUB-place (`obj.f`, `v[i]`). A bare `!obj.f` is a PARTIAL
+    /// move (rejected), so the only remedy is `obj.f.clone()`.
+    FieldIndex,
+    /// A closure captures the value by value. Capture-list syntax (D5/D7) is
+    /// unbuilt and a `.clone()`-into-local is equally tainted, so NEITHER `!`
+    /// NOR `.clone()` is a valid remedy — pass it as an argument or wrap it in
+    /// `Shared[T]`.
+    Capture,
+}
+
 #[derive(Debug, Clone)]
 pub enum SemanticErrorKind {
     /// Name not found in any enclosing scope.
@@ -447,8 +478,10 @@ pub enum SemanticErrorKind {
     /// Variable used after ownership was moved.
     UseAfterMove { name: String, moved_at: Span },
 
-    /// Non-Copy type assigned or passed without `!` move operator.
-    MoveWithoutOperator { name: String },
+    /// Non-Copy type implicitly copied at an ownership boundary. `reason` is
+    /// WHY (drop-taint vs single-owner-by-design); `shape` is the place shape
+    /// that decides the valid remedy (Whole / field-index sub-place / capture).
+    MoveWithoutOperator { name: String, reason: MoveReason, shape: MoveShape },
 
     /// Borrow exclusivity violation.
     BorrowConflict { name: String, detail: String },
@@ -986,11 +1019,41 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")
             }
-            SemanticErrorKind::MoveWithoutOperator { name } => {
-                write!(
-                    f,
-                    "cannot copy `{name}`: non-Copy type requires `!` or `move` to transfer"
-                )
+            SemanticErrorKind::MoveWithoutOperator { name, reason, shape } => {
+                // The "why" clause depends on the reason; the REMEDY depends on
+                // the place shape (D12 pin-4). `!` is today's move sigil — a
+                // `# D27: !→^` breadcrumb marks it for D27's re-sigil sweep
+                // (do NOT switch to `^` here: it does not parse yet).
+                let why = match reason {
+                    MoveReason::DropTaint => "a resource (a type with a custom `Drop` is single-owner)",
+                    MoveReason::SingleOwner => "a single-owner type (no implicit copy)",
+                };
+                match shape {
+                    // D27: !→^
+                    MoveShape::Whole => write!(
+                        f,
+                        "cannot copy `{name}`: `{name}` is {why} — write `!{name}` to move \
+                         or `{name}.clone()` to copy"
+                    ),
+                    // Field / index sub-place: a bare `!` on the sub-place would
+                    // be a PARTIAL move (rejected), so `.clone()` is the only
+                    // remedy. `{name}` is the ROOT (the exact sub-place text is a
+                    // filed LOW follow-up). D27: !→^
+                    MoveShape::FieldIndex => write!(
+                        f,
+                        "cannot copy `{name}`: `{name}` is {why} — copy the sub-place with \
+                         `{name}.clone()` (a bare `!` on a field/index sub-place is a partial \
+                         move and is rejected)"
+                    ),
+                    // Capture: NEITHER `!` NOR `.clone()` is a valid remedy (no
+                    // capture-list syntax; a `.clone()`-into-local is equally
+                    // tainted). Pass it as an argument or share it. NO `!` here.
+                    MoveShape::Capture => write!(
+                        f,
+                        "cannot capture `{name}` by value: `{name}` is {why}, so the capture \
+                         would be an implicit copy — pass it as an argument or wrap it in `Shared[T]`"
+                    ),
+                }
             }
             SemanticErrorKind::BorrowConflict { name, detail } => {
                 write!(f, "borrow conflict on `{name}`: {detail}")
@@ -1238,8 +1301,62 @@ mod code_tests {
     /// move-without-operator diagnostic is `E_MoveWithoutOperator`.
     #[test]
     fn normative_move_without_operator_code() {
-        let k = SemanticErrorKind::MoveWithoutOperator { name: "x".into() };
+        let k = SemanticErrorKind::MoveWithoutOperator {
+            name: "x".into(),
+            reason: MoveReason::DropTaint,
+            shape: MoveShape::Whole,
+        };
         assert_eq!(k.code(), "E_MoveWithoutOperator");
+    }
+
+    fn mwo(name: &str, reason: MoveReason, shape: MoveShape) -> String {
+        // Message text is rendered by `impl Display for SemanticError`.
+        SemanticError {
+            kind: SemanticErrorKind::MoveWithoutOperator { name: name.into(), reason, shape },
+            span: sp(),
+        }
+        .to_string()
+    }
+
+    /// D12 pin-4: each place shape advertises the CORRECT remedy.
+    #[test]
+    fn move_without_operator_per_shape_messages() {
+        // Whole (drop-taint): both `!` move and `.clone()` are valid.
+        let whole = mwo("x", MoveReason::DropTaint, MoveShape::Whole);
+        assert!(whole.contains("!x"), "whole should offer `!x`: {whole}");
+        assert!(whole.contains("x.clone()"), "whole should offer clone: {whole}");
+        assert!(whole.contains("resource"), "whole drop-taint why-clause: {whole}");
+
+        // Whole (single-owner): the why-clause differs, remedies are the same.
+        let so = mwo("g", MoveReason::SingleOwner, MoveShape::Whole);
+        assert!(so.contains("single-owner"), "single-owner why-clause: {so}");
+        assert!(so.contains("!g") && so.contains("g.clone()"), "so remedies: {so}");
+
+        // Field/Index sub-place: `.clone()` ONLY — a bare `!` is a partial move.
+        let field = mwo("hh", MoveReason::DropTaint, MoveShape::FieldIndex);
+        assert!(field.contains("hh.clone()"), "sub-place offers clone: {field}");
+        assert!(field.contains("partial move"), "sub-place warns partial move: {field}");
+    }
+
+    /// D12 pin-4 GATE (reference-grade): the CAPTURE-position message must
+    /// advertise NEITHER `!` NOR `.clone()` — no capture-list syntax exists and
+    /// a `.clone()`-into-local is equally drop-tainted. Executable guard so a
+    /// future wording change cannot regress the remedy.
+    #[test]
+    fn move_without_operator_capture_message_has_no_bang() {
+        let cap = mwo("hh", MoveReason::DropTaint, MoveShape::Capture);
+        assert!(
+            !cap.contains('!'),
+            "capture message must contain no `!`: {cap}"
+        );
+        assert!(
+            !cap.contains(".clone()"),
+            "capture message must not advertise `.clone()`: {cap}"
+        );
+        assert!(
+            cap.contains("Shared[T]") && cap.contains("pass it as an argument"),
+            "capture message must offer pass-as-arg / Shared[T]: {cap}"
+        );
     }
 
     /// Representative sample across unit variants, struct variants, and the
