@@ -149,8 +149,14 @@ void main():
 }
 
 #[test]
-fn amp_bind_alias_writes_through() {
-    // `auto r = &b` is a write-through alias binding.
+fn amp_bind_local_alias_is_rejected() {
+    // D10(a) (decisions.md, ratified 2026-07-06): a WriteThrough alias reaches
+    // the owner at a CALL argument (the test above), but binding one to a LOCAL
+    // NAME (`auto r = &b`) is REJECTED — a place has one exclusive writer, and a
+    // named `&`-binding would alias a second writable path. Pre-D10 this
+    // write-through-aliased `b` (printed `3\n4`); the definition now models the
+    // ratified rejection (see the `d10a_*` cluster). Mirrors production
+    // `expr_is_borrow_bind` (src/semantic/typecheck.rs, landed by 414e652a).
     let src = r#"
 void main():
     Vector[int] a = [1, 2, 3]
@@ -160,7 +166,7 @@ void main():
     print(a.len())
     print(b.len())
 "#;
-    assert_eq!(out(src), "3\n4");
+    elab_rejects(src, "error[E_LocalBorrowBind]", "local `auto r = &b` bind");
 }
 
 #[test]
@@ -1592,6 +1598,83 @@ void main():
 "
     );
     elab_rejects(&src, "expression-body tail", "expr-body tail capture");
+}
+
+// ── D10(a): local `&`-binds are rejected in the definition ──────────────────
+//
+// The ratified exclusivity package (decisions.md, D10 2026-07-06 + the D10(a)
+// move-bind addendum 2026-07-11): a named `&`-binding aliases a second live
+// writable path to a place, so the definition REJECTS it — mirroring production
+// `expr_is_borrow_bind` / `block_tail_is_borrow_bind` (src/semantic/typecheck.rs,
+// landed by 414e652a). The diagnostic carries `error[E_LocalBorrowBind]`, the
+// code the corpus expectation greps. Move-binds (`R b = !a`) stay LEGAL — they
+// kill the source, so no aliasing exists (D10(a) addendum).
+
+#[test]
+fn d10a_bare_amp_bind_rejected() {
+    // `cow_amp_bind_ref` shape: `auto r = &b` — the standalone bare local
+    // `&`-bind. Pre-D10 this write-through-aliased `b`; now rejected.
+    let src = r#"
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = a
+    auto r = &b
+    r.push(9)
+    print(b.len())
+"#;
+    elab_rejects(src, "error[E_LocalBorrowBind]", "bare `auto r = &b`");
+}
+
+#[test]
+fn d10a_projected_amp_bind_rejected() {
+    // `cow_amp_bind_ref_field` shape: `auto r = &b.data` — a projected local
+    // `&`-bind. Same class as the bare form (one exclusive writer per place).
+    let src = r#"
+struct Holder:
+    Vector[int] data
+void main():
+    Vector[int] init = [1, 2, 3]
+    Holder a = Holder(init)
+    Holder b = a
+    auto r = &b.data
+    r.push(9)
+    print(b.data.len())
+"#;
+    elab_rejects(src, "error[E_LocalBorrowBind]", "projected `auto r = &b.data`");
+}
+
+#[test]
+fn d10a_do_tail_amp_bind_rejected() {
+    // The `do:`-tail dodge (`amp_bind_doexpr_error` shape): the block's value IS
+    // its tail statement, so a `&a` tail is the same named-`&`-bind. The check
+    // recurses the block tail and rejects BEFORE the subset guard would fire on
+    // `do:` — proving the recursion, not just the top-level `&expr` arm.
+    let src = r#"
+void main():
+    Vector[int] a = [1, 2, 3]
+    auto r = do:
+        &a
+    r.push(9)
+    print(r.len())
+"#;
+    elab_rejects(src, "error[E_LocalBorrowBind]", "`do:`-tail `&a`");
+}
+
+#[test]
+fn d10a_amp_arg_at_call_is_legal_control() {
+    // The legal control: `&a` at a CALL argument is a frame-scoped borrow, NOT
+    // a named bind — accepted and write-through (the caller sees the push). The
+    // rejection helper is deliberately NOT a deep walk, so `f(&a)` is never
+    // visited. Confirms the check does not over-fire on the legal `&`-arg form.
+    let src = r#"
+void grow(Vector[int] &v):
+    v.push(9)
+void main():
+    Vector[int] a = [1, 2, 3]
+    grow(&a)
+    print(a.len())
+"#;
+    assert_eq!(out(src), "4");
 }
 
 // ── the `render_expect_block_from` seam round-trips json_escape (D2 prep) ─────

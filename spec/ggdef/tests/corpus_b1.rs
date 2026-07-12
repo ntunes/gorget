@@ -84,30 +84,42 @@ fn parse_rust_str_lit(s: &str) -> Option<String> {
 enum Provenance {
     RunGg,
     SelfHost,
+    /// A NEGATIVE expectation: `check_gg_fails(fixture, "error[E_…]")`. The
+    /// fixture must be REJECTED at the frontend with that error code (D10(a):
+    /// `cow_amp_bind_ref{,_field}`). Carries the code, not a stdout string.
+    CheckFails,
     ReportOnly,
 }
 
-/// Whether the `"fixture.gg"` string literal starting at `pos` is the first
-/// argument of a `run_gg(...)` call (the previous non-whitespace text is
-/// exactly `run_gg(`, allowing the multi-line form).
-fn preceded_by_run_gg(integ: &str, pos: usize) -> bool {
+/// Whether the `"fixture.gg"` literal at `pos` is the first argument of a
+/// `<fn>(...)` call whose name is exactly `needle_fn` (the previous
+/// non-whitespace text ends with `<needle_fn>(`, allowing the multi-line form).
+fn preceded_by_call(integ: &str, pos: usize, needle_fn: &str) -> bool {
     let start = pos.saturating_sub(64);
-    integ[start..pos].trim_end().ends_with("run_gg(")
+    integ[start..pos].trim_end().ends_with(&format!("{needle_fn}("))
 }
 
 /// The committed expectation for `fixture` (e.g. `cow_x.gg`) and how it was
-/// sourced. `RunGg` reads the 2nd string of the `run_gg(...)` call; `SelfHost`
-/// reads the `assert_eq!(stdout, ...)` inside the fixture's self-host test.
+/// sourced. `RunGg` reads the 2nd string of the `run_gg(...)` call; `CheckFails`
+/// reads the error code of a `check_gg_fails(...)` rejection; `SelfHost` reads
+/// the `assert_eq!(stdout, ...)` inside the fixture's self-host test.
 fn expected_for(integ: &str, fixture: &str) -> (Provenance, Option<String>) {
     let needle = format!("\"{fixture}\"");
     let mut search = 0;
     while let Some(rel) = integ[search..].find(&needle) {
         let pos = search + rel;
-        if preceded_by_run_gg(integ, pos) {
+        let prov = if preceded_by_call(integ, pos, "run_gg") {
+            Some(Provenance::RunGg)
+        } else if preceded_by_call(integ, pos, "check_gg_fails") {
+            Some(Provenance::CheckFails)
+        } else {
+            None
+        };
+        if let Some(prov) = prov {
             let after = pos + needle.len();
             if let Some(q) = integ[after..].find('"') {
                 if let Some(exp) = parse_rust_str_lit(&integ[after + q..]) {
-                    return (Provenance::RunGg, Some(exp));
+                    return (prov, Some(exp));
                 }
             }
         }
@@ -175,10 +187,35 @@ fn corpus_b1_all_match() {
 
     for fixture in &fixtures {
         let src = fs::read_to_string(root.join("tests/fixtures").join(fixture)).unwrap();
-        let run = ggdef::run_source(&src, ggdef::DEFAULT_FUEL)
+        let (prov, expected) = expected_for(&integ, fixture);
+        let result = ggdef::run_source(&src, ggdef::DEFAULT_FUEL);
+
+        // A NEGATIVE expectation (`check_gg_fails(..., "error[E_…]")`): the
+        // fixture must be REJECTED at the frontend carrying that code — a run to
+        // a value is a MISMATCH. Handled before the unwrap so the STOP-and-report
+        // panic stays reserved for an UNEXPECTED frontend error.
+        if prov == Provenance::CheckFails {
+            let exp = expected.expect("CheckFails carries the error code");
+            let exp = exp.trim();
+            let (ok, detail) = match &result {
+                Err(e) => {
+                    let msg = e.to_string();
+                    (msg.contains(exp), msg)
+                }
+                Ok(run) => (false, format!("ran to {:?}; stdout {:?}", run.outcome, run.stdout)),
+            };
+            table.push_str(&format!("  {:<15} {}\n", if ok { "MATCH/check_fails" } else { "MISMATCH" }, fixture));
+            if ok {
+                matched += 1;
+            } else {
+                failures.push(format!("  {fixture}: expected rejection {exp:?}, got: {detail}"));
+            }
+            continue;
+        }
+
+        let run = result
             .unwrap_or_else(|e| panic!("{fixture}: frontend error (STOP-and-report): {e}"));
         let got = run.stdout.clone();
-        let (prov, expected) = expected_for(&integ, fixture);
 
         match expected {
             Some(exp) => {
@@ -186,7 +223,7 @@ fn corpus_b1_all_match() {
                 let tag = match prov {
                     Provenance::RunGg => "MATCH/run_gg",
                     Provenance::SelfHost => "MATCH/selfhost",
-                    Provenance::ReportOnly => unreachable!(),
+                    Provenance::CheckFails | Provenance::ReportOnly => unreachable!(),
                 };
                 table.push_str(&format!("  {:<15} {}\n", if ok { tag } else { "MISMATCH" }, fixture));
                 if ok {

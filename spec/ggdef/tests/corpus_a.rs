@@ -42,8 +42,8 @@ const CORPUS_A: &[(&str, &str)] = &[
     ("cow_amp_bare_alias_arg", "C3+G2: `&` of a bare alias — source untouched, private copy grows"),
     ("cow_amp_bare_param_arg", "C3+G2: `&` inside a bare-param fn; caller untouched"),
     ("cow_amp_live_alias", "C3+G2: source read AFTER the `&b` mutation — both stay live"),
-    ("cow_amp_bind_ref", "C3+G2: standalone `auto r = &b` write-through alias binding"),
-    ("cow_amp_bind_ref_field", "C3+G2: standalone projected `auto r = &s.field`"),
+    ("cow_amp_bind_ref", "D10(a): standalone `auto r = &b` local `&`-bind — REJECTED (E_LocalBorrowBind)"),
+    ("cow_amp_bind_ref_field", "D10(a): projected `auto r = &b.data` local `&`-bind — REJECTED (E_LocalBorrowBind)"),
     ("cow_amp_field_arg", "C3+G2: projected `&s.field` call-arg materialises the root"),
     ("cow_amp_index_side_effect_once", "C3: `&v[side()]` — index side effect runs exactly once"),
 
@@ -163,20 +163,38 @@ fn corpus_a_all_match() {
         let src = fs::read_to_string(ws_root().join("tests/fixtures").join(&fixture))
             .unwrap_or_else(|e| panic!("read fixture {fixture}: {e}"));
         let expected = expected_for(&integ, &fixture)
-            .unwrap_or_else(|| panic!("no `run_gg` expectation for {fixture} in integration.rs"));
+            .unwrap_or_else(|| panic!("no `run_gg`/`check_gg_fails` expectation for {fixture} in integration.rs"));
+        let expected = expected.trim();
 
-        let run = ggdef::run_source(&src, ggdef::DEFAULT_FUEL)
-            .unwrap_or_else(|e| panic!("{name}: frontend error: {e}"));
-        let got = run.stdout.clone();
-        let matched = got.trim() == expected.trim();
+        let result = ggdef::run_source(&src, ggdef::DEFAULT_FUEL);
+
+        // A NEGATIVE expectation (`check_gg_fails(..., "error[E_…]")`, D10(a)
+        // for `cow_amp_bind_ref{,_field}`): the fixture must be REJECTED at the
+        // frontend, and the diagnostic must carry the same `error[E_…]` code
+        // production greps. A run to a value is a MISMATCH.
+        let (matched, got) = if expected.starts_with("error[") {
+            match &result {
+                Err(e) => {
+                    let msg = e.to_string();
+                    (msg.contains(expected), msg)
+                }
+                Ok(run) => (
+                    false,
+                    format!("<ran to {:?}; stdout {:?}>", run.outcome, run.stdout),
+                ),
+            }
+        } else {
+            let run = result
+                .as_ref()
+                .unwrap_or_else(|e| panic!("{name}: frontend error: {e}"));
+            (run.stdout.trim() == expected, run.stdout.trim().to_string())
+        };
 
         table.push_str(&format!("  {:<9} {:<42} {}\n", if matched { "MATCH" } else { "MISMATCH" }, name, why));
         if !matched {
             failures.push(format!(
-                "  {name}: outcome={:?}\n    expected: {:?}\n    got:      {:?}",
-                run.outcome,
-                expected.trim(),
-                got.trim(),
+                "  {name}:\n    expected: {:?}\n    got:      {:?}",
+                expected, got,
             ));
         }
     }

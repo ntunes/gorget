@@ -623,6 +623,13 @@ impl Elaborator {
         let span = stmt.span;
         match &stmt.node {
             ast::Stmt::VarDecl { pattern, value, type_, .. } => {
+                // D10(a): a local `&`-bind (`auto r = &b`, projected `&b.data`,
+                // or one reached through an if/match/do tail) aliases a second
+                // writable path to a place — rejected. Fired FIRST so the
+                // subset guard never masks it. Mirrors production check_stmt.
+                if expr_is_borrow_bind(&value.node) {
+                    return Err(local_borrow_bind_error(value.span));
+                }
                 let name = binding_name(pattern)?;
                 // §10.3 type-directed capture: a throws-call initializer whose
                 // DECLARED binding type is `Result[_,_]` captures the full
@@ -648,6 +655,11 @@ impl Elaborator {
             }
 
             ast::Stmt::Assign { target, value } => {
+                // D10(a): `name = &expr` re-binds a mutable borrow to a name —
+                // the same class as the VarDecl-init form, same rejection.
+                if expr_is_borrow_bind(&value.node) {
+                    return Err(local_borrow_bind_error(value.span));
+                }
                 // D4 position 6 (materialize-on-write): a write rooted at a
                 // tainted Borrow binding privatises it — rejected.
                 self.reject_materialize_on_write(&target.node, span)?;
@@ -2267,6 +2279,80 @@ fn ast_is_place(e: &ast::Expr) -> bool {
 
 fn is_clone_call(e: &ast::Expr) -> bool {
     matches!(e, ast::Expr::MethodCall { method, args, .. } if method.node == "clone" && args.is_empty())
+}
+
+/// The D10(a) rejection (`docs/plans/define-gorget/decisions.md`, ratified
+/// 2026-07-06; move-bind addendum 2026-07-11). A named `&`-binding creates a
+/// SECOND live writable path to a place — the exclusivity violation D10 exists
+/// to close — so the definition rejects it, mirroring production's
+/// `expr_is_borrow_bind` in `src/semantic/typecheck.rs` (landed by `414e652a`).
+/// The message carries the `error[E_LocalBorrowBind]` code the corpus
+/// expectation greps (production surfaces the same code from
+/// `SemanticErrorKind::LocalBorrowBind`).
+fn local_borrow_bind_error(span: Span) -> ElabError {
+    ElabError::new(
+        "error[E_LocalBorrowBind]: cannot bind a mutable borrow (`&`) to a \
+         name — a place has one exclusive writer, and a named `&`-binding \
+         would alias a second writable path to it. Pass the borrow directly \
+         at a call site (`f(&x)`) or mutate the place itself (`x.push(..)`, \
+         `x.field = value`)",
+        span,
+    )
+}
+
+/// D10(a): does this initializer / assignment RHS bind a mutable borrow to a
+/// name? True for a top-level `&expr` and for any value-position expression
+/// whose result IS such a borrow: an if-expression branch, a match-expression
+/// arm (or its `else`), and the TAIL of a `do:` / block expression — each is a
+/// place where the whole expression's value is the branch/arm/tail value, so a
+/// `&expr` there is the same named-`&`-bind. Deliberately NOT a deep walk:
+/// `&x` nested in a call (`f(&x)`) is the legal call-arg form and is never
+/// visited here — this helper is only invoked on VarDecl inits and assignment
+/// RHS. Mirrors production `TypeChecker::expr_is_borrow_bind`.
+fn expr_is_borrow_bind(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::MutableBorrow { .. } => true,
+        ast::Expr::If { then_branch, elif_branches, else_branch, .. } => {
+            expr_is_borrow_bind(&then_branch.node)
+                || elif_branches.iter().any(|(_, b)| expr_is_borrow_bind(&b.node))
+                || else_branch.as_ref().is_some_and(|b| expr_is_borrow_bind(&b.node))
+        }
+        ast::Expr::Match { arms, else_arm, .. } => {
+            arms.iter().any(|arm| expr_is_borrow_bind(&arm.body.node))
+                || else_arm.as_ref().is_some_and(|b| expr_is_borrow_bind(&b.node))
+        }
+        ast::Expr::Do { body } => block_tail_is_borrow_bind(body),
+        ast::Expr::Block(block) => block_tail_is_borrow_bind(block),
+        _ => false,
+    }
+}
+
+/// The value of a `do:` / block expression is its TAIL statement. A tail whose
+/// value is a `&expr` makes the block a borrow-bind. The tail may be a plain
+/// expression OR a STATEMENT-FORM `if`/`match` used in value position, so
+/// recurse those too. Mirrors production `TypeChecker::block_tail_is_borrow_bind`.
+fn block_tail_is_borrow_bind(block: &ast::Block) -> bool {
+    match block.stmts.last() {
+        Some(last) => match &last.node {
+            ast::Stmt::Expr(e) => expr_is_borrow_bind(&e.node),
+            ast::Stmt::If { then_body, elif_branches, else_body, .. } => {
+                block_tail_is_borrow_bind(then_body)
+                    || elif_branches.iter().any(|(_, b)| block_tail_is_borrow_bind(b))
+                    || else_body.as_ref().is_some_and(block_tail_is_borrow_bind)
+            }
+            ast::Stmt::Match { arms, else_arm, .. } => {
+                arms.iter().any(|item| {
+                    let arm = match item {
+                        ast::MatchItem::Arm(a) => a,
+                        ast::MatchItem::MetaFor { arm_template, .. } => arm_template,
+                    };
+                    expr_is_borrow_bind(&arm.body.node)
+                }) || else_arm.as_ref().is_some_and(block_tail_is_borrow_bind)
+            }
+            _ => false,
+        },
+        None => false,
+    }
 }
 
 /// If `e` is a `print(arg)` call, return the single argument expression.
