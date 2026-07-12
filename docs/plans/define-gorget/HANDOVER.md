@@ -141,7 +141,9 @@ sequential fresh-review gauntlet.
       gains Ty::Option/Result payload taint + 6 tests → lib 110/0; docs done; NEW
       pre-existing bug DISCOVERED+to-file: closure-returned owned Drop temp not
       drop-registered — `R b = f()` build-panics, `use(f())` silently loses the
-      drop). OUTPUT-REVIEW (Opus) IN FLIGHT. ⚠ SEPARATE A3-REGRESSION FOUND at
+      drop). OUTPUT-REVIEW SIGNED OFF →
+      **✅ LANDED on gorget-1 2026-07-12** (post-integration gates green: d12 19/0+1ign,
+      ggdef 110/0, lints 53/0, lib 1105/0) — BATCH A: ALL THREE TRACKS LANDED. ⚠ SEPARATE A3-REGRESSION FOUND at
       integration-check: ggdef `corpus_a_all_match` RED on the tip — A3 flipped
       `cow_amp_bind_ref*` to expect `E_LocalBorrowBind` but ggdef never got the
       D10(a) rule (every A3 reviewer + the brief missed the DEFINITION lane); a
