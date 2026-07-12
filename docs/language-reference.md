@@ -2282,11 +2282,27 @@ Gorget enforces memory safety through compile-time ownership and borrowing rules
 7. A variable cannot be moved more than once (**double-move** error).
 8. A variable cannot be moved inside a loop body (**move-in-loop** error).
 9. Reassigning a moved variable revives it — the new value makes it live again.
-10. A small set of resource types still requires the explicit `!` operator on
-    bare-identifier assignment because they're single-owner-by-design:
-    `Box[T]`, `Task`, `TaskGroup`, `Guard`, `Owned[T]`, and closure/`Callable`
-    values. For these, `T b = a` is a **`MoveWithoutOperator`** error; write
-    `T b = !a` or `T b = a.clone()`.
+10. Some resource types still require the explicit `!` operator (or `.clone()`)
+    on bare-identifier assignment because they're single-owner. This is **one
+    principled rule plus a few by-design members**:
+    - **Drop-tainted types (D4 drop-purity):** any type with a custom `Drop`
+      anywhere in its transitive field/payload graph — including a collection,
+      tuple, `Option`, or `Result` carrying one. An implicit copy would run that
+      custom `drop` twice, so implicit clones are available only to types whose
+      transitive drop is side-effect-free. `.clone()` stays legal (Clone and
+      Drop coexist); a whole-identifier place moves with `!` or copies with
+      `.clone()`, while a **field/index place** (`s.field`, `v[i]`) of a tainted
+      type must use `.clone()` (`!s.field` would be a partial move).
+    - **By-design single-owner types:** `Box[T]`, `Task`, `TaskGroup`, `Guard`,
+      `Owned[T]`, and closure/`Callable` values (their drops are pure; they are
+      unique by construction).
+
+    For all of these, a bare `T b = a` of a live source is a
+    **`MoveWithoutOperator`** error; write `T b = !a` or `T b = a.clone()`. A
+    fresh temporary (`T b = make()`, `T b = T(1)`) is not a live place — it
+    moves and is never rejected. The refcounted/handle types (`Shared[T]`,
+    `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the sanctioned multi-owner escape
+    hatch and are **not** drop-tainted by their payload.
 
 ### 9.2 Borrowing Rules
 

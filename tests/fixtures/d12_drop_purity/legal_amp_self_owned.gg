@@ -1,0 +1,18 @@
+# D4/D12 legal counterpart (position 6): a `&self` mutator on an OWNED tainted
+# local writes through the owner — no materialize, no implicit copy — legal.
+# Ported from ggdef d4_user_amp_self_mutator_on_owned_tainted_local_allowed.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print(f"bye {self.id}")
+
+equip R:
+    void bump(&self):
+        self.id = 9
+
+void main():
+    R r = R(1)
+    r.bump()
+    print(r.id)

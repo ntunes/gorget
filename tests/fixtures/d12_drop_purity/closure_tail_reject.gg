@@ -1,0 +1,17 @@
+# D4/D12 position 4 (closure expression-tail): a closure whose body IS a bare
+# drop-tainted place returns a copy at the closure return boundary —
+# `E_MoveWithoutOperator`, reported exactly ONCE (the param-rooted tail; a
+# capture-rooted tail is owned by position 5). Fix: `(R x): !x`.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+void use(R x):
+    print(x.id)
+
+void main():
+    auto f = (R x): x
+    use(f(R(1)))

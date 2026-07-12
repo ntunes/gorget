@@ -1,0 +1,17 @@
+# D4/D12 position 1 INDEX-place: binding a live drop-tainted INDEX place
+# (`v[0]`) is an implicit copy — `E_MoveWithoutOperator`. Like the field-place
+# probe, this is caught only by the structural `lvalue_value_type` resolution
+# (the index span is absent from `expr_types`). No `!`-move counterpart (a
+# partial move out of a collection element); fix with `.clone()`.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+void main():
+    Vector[R] v = Vector[R]()
+    v.push(R(1))
+    R c = v[0]
+    print(c.id)

@@ -1,0 +1,17 @@
+# D4/D12 position 4 (return): returning a bare live drop-tainted place copies
+# at the return ownership boundary — `E_MoveWithoutOperator` (even
+# `R a = R(1); return a` forces `return !a`). Ported from ggdef
+# d4_position_4_return.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+R make():
+    R a = R(1)
+    return a
+
+void main():
+    print("x")

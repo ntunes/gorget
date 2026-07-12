@@ -41,6 +41,12 @@
 !equip_method_no_shadow_extern/**
 !type_alias_struct_dir/
 !type_alias_struct_dir/*.gg
+# D12 drop-purity enforcement probe fixtures (A2-R1): one position per file —
+# negative probes (`error[E_MoveWithoutOperator]`) plus legal counterparts.
+# Kept in a subdir so the top-level corpus sweeps (fmt_idempotent,
+# *_comparison, runtime_diff) don't feed the negative probes to those drivers.
+!d12_drop_purity/
+!d12_drop_purity/*.gg
 # D23 throws-totality cross-module negative fixture (a `throws` equip method
 # imported across a module boundary, called unhandled → E_UnhandledThrows).
 !d23_unhandled_method_xmod/

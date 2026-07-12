@@ -15,7 +15,7 @@ struct Wrapper:
 Container make_container(String label, int val):
     Container c = Container(label, Vector[int]())
     c.data.push(val)
-    return c
+    return !c
 
 void main():
     Vector[Container] items = Vector[Container]()
@@ -23,11 +23,11 @@ void main():
     Container c1 = Container("first", Vector[int]())
     c1.data.push(1)
     c1.data.push(2)
-    items.push(c1)
+    items.push(!c1)
 
     Container c2 = Container("second", Vector[int]())
     c2.data.push(3)
-    items.push(c2)
+    items.push(!c2)
 
     # Push from function return (non-Identifier argument)
     items.push(make_container("third", 42))
@@ -43,11 +43,11 @@ void main():
     old_c.data.push(10)
     old_c.data.push(20)
     Vector[Container] v2 = Vector[Container]()
-    v2.push(old_c)
+    v2.push(!old_c)
 
     Container new_c = Container("new", Vector[int]())
     new_c.data.push(99)
-    v2.set(0, new_c)
+    v2.set(0, !new_c)
 
     auto after = v2.get(0).unwrap()
     print(f"after set: {after.label}")
@@ -56,7 +56,7 @@ void main():
     Vector[Wrapper] wrappers = Vector[Wrapper]()
     Wrapper w1 = Wrapper(Container("wrapped", Vector[int]()), 1)
     w1.inner.data.push(100)
-    wrappers.push(w1)
+    wrappers.push(!w1)
 
     auto w = wrappers.get(0).unwrap()
     print(f"wrapper id={w.id}")
@@ -76,11 +76,11 @@ void main():
     Vector[Vector[Container]] nested_v = Vector[Vector[Container]]()
     Vector[Container] vc1 = Vector[Container]()
     vc1.push(Container("old-inner", Vector[int]()))
-    nested_v.push(vc1)
+    nested_v.push(!vc1)
 
     Vector[Container] vc2 = Vector[Container]()
     vc2.push(Container("new-inner", Vector[int]()))
-    nested_v.set(0, vc2)
+    nested_v.set(0, !vc2)
     print("after nested container set")
 
     print("done")

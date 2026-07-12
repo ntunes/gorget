@@ -457,10 +457,19 @@ String s4 = !s3          # explicit move, s3 is invalid
 # print(s3)              # COMPILE ERROR: use after move
 ```
 
-A few single-owner-by-design types still **require** `!` (or `.clone()`) on bare-assign,
-because aliasing them is unsafe: `Box[T]`, `Task`, `TaskGroup`, `Guard`, `Owned[T]`,
-`Callable[...]` and closure values. For these, `Box[int] b = a` is a compile error
-(`E_MoveWithoutOperator`) — write `Box[int] b = !a`.
+Some types still **require** `!` (or `.clone()`) on bare-assign — one principled rule
+plus a few by-design members. The rule (**D4 drop-purity**): a type with a custom `Drop`
+anywhere in its transitive field graph is **drop-tainted** and single-owner-by-default,
+because an implicit copy would run that custom `drop` twice. Implicit clones are available
+only to types whose transitive drop is side-effect-free; `.clone()` stays legal (Clone and
+Drop coexist, as in Rust). The by-design members — `Box[T]`, `Task`, `TaskGroup`, `Guard`,
+`Owned[T]`, `Callable[...]` and closure values — are single-owner because aliasing them is
+unsafe (their drops are pure; they are unique by construction). For all of these,
+`Box[int] b = a` (or `R b = a` for a custom-`Drop` `R`) is a compile error
+(`E_MoveWithoutOperator`) — write `Box[int] b = !a` or `b = a.clone()`. A fresh temporary
+(`R b = R(1)`) is not a live place and moves without an operator. The refcounted/handle
+types (`Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the sanctioned multi-owner
+escape hatch and are not drop-tainted by their payload.
 
 Trivial types (int, float, bool) are always copied automatically:
 ```gorget

@@ -48,6 +48,13 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
         }
         ResolvedType::Defined(def_id) => {
             let def = scopes.get_def(*def_id);
+            // D4 (D12): Copy and custom Drop are mutually exclusive (Rust
+            // precedent). A drop-tainted type is NEVER Copy — copying it would
+            // duplicate the drop side effect — even when all its fields are
+            // scalars.
+            if def.is_drop_tainted {
+                return false;
+            }
             // Enums: Copy if all variant fields are Copy
             if def.kind == crate::semantic::scope::DefKind::Enum {
                 if let Some(ref variant_types) = def.variant_field_types {
@@ -93,6 +100,13 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
 /// accepted by the checker and then panic the lowering as an untracked consumed
 /// source — so the checker must require the explicit move here.
 pub(super) fn needs_explicit_move(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool {
+    // D4 (D12): drop-tainted types join the single-owner set automatically —
+    // ONE PRINCIPLED RULE (side-effectful drop ⇒ single-owner) plus the
+    // by-design members below. Implicit clones are only available to types
+    // whose transitive drop is side-effect-free.
+    if crate::semantic::is_drop_tainted_type(type_id, types, scopes) {
+        return true;
+    }
     match types.get(type_id) {
         ResolvedType::Function { .. }
         | ResolvedType::CallableTrait(_)

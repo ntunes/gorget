@@ -1,0 +1,18 @@
+# D4/D12 legal counterpart: a `with Res(1) as r` resource is a fresh-temp MOVE
+# — a drop-tainted type is single-owner, but a fresh temp is never a live-place
+# copy, so it is NOT a D4 rejection. It must run. Ported from ggdef
+# with_fresh_temp_resource_is_a_move_not_a_copy.
+struct Res:
+    int id
+
+equip Res with Drop:
+    void drop(!self):
+        pass
+
+void main():
+    Vector[String] coll = ["alpha"]
+    String s = coll.get(0).unwrap()
+    with Res(1) as r:
+        coll.push("beta")
+    print(s)
+    print(coll.len())

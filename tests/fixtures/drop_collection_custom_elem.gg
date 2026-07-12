@@ -22,16 +22,16 @@ void main():
     print("B: vector named-move")
     Vector[Noisy] vb = Vector[Noisy]()
     Noisy nb = Noisy(20)
-    vb.push(nb)
+    vb.push(!nb)
 
     print("C: dict value named-move")
     Dict[String, Noisy] dv = Dict[String, Noisy]()
     Noisy nc = Noisy(30)
-    dv["k"] = nc
+    dv["k"] = !nc
 
     print("D: set key named-move")
     Set[Noisy] sk = Set[Noisy]()
     Noisy nd = Noisy(40)
-    sk.add(nd)
+    sk.add(!nd)
 
     print("done")

@@ -823,6 +823,21 @@ impl<'a> BorrowChecker<'a> {
                     self.check_expr(expr);
                     self.in_return_expr = saved_in_return;
 
+                    // D4/D12 position 4 (return): a bare return of a live
+                    // drop-tainted PLACE is an implicit copy at the return
+                    // ownership boundary — require `return !place` (or
+                    // `.clone()`). Fresh temps (`return R(1)`) are not places
+                    // and move. Mirrors ggdef position 4
+                    // (spec/ggdef/src/elaborate/mod.rs:689-690).
+                    if self.imported_module_depth == 0 {
+                        if let Some(name) = self.tainted_place_name(expr) {
+                            self.error(
+                                SemanticErrorKind::MoveWithoutOperator { name },
+                                expr.span,
+                            );
+                        }
+                    }
+
                     // Arena escape check — ONE PRODUCER (`arena_backed_source`)
                     // for every returned-source shape. One extra rule the
                     // producer can't decide alone: a bare borrow-param return
@@ -1418,6 +1433,17 @@ impl<'a> BorrowChecker<'a> {
         if self.in_destructuring_bind {
             return;
         }
+        // D4/D12 position 1 (bind): a bare bind of a drop-tainted PLACE is an
+        // implicit copy — require `!place` / `.clone()`. Unlike the by-design
+        // single-owner set below (identifier-local-only), `tainted_place_name`
+        // resolves the place's type STRUCTURALLY (via `lvalue_value_type`), so
+        // it covers field/index places (`obj.field`, `v[i]`) as well as
+        // identifier/self/param — mirroring ggdef's bind-position rejection
+        // (spec/ggdef/src/elaborate/mod.rs:970).
+        if let Some(name) = self.tainted_place_name(value) {
+            self.error(SemanticErrorKind::MoveWithoutOperator { name }, value.span);
+            return;
+        }
         if let Expr::Identifier(_) = &value.node {
             if let Some(&def_id) = self.resolution_map.get(&value.span.start) {
                 let def = self.scopes.get_def(def_id);
@@ -1757,6 +1783,19 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                     }
+                }
+
+                // D4/D12 position 4 (expression-body tail): an expression-body
+                // function `R passthru(R x): x` returns the place `x` at the
+                // return ownership boundary — the same implicit-copy rejection
+                // as `Stmt::Return`, mirroring ggdef's expr-body tail
+                // (spec/ggdef/src/elaborate/mod.rs:349-352). Fresh-temp bodies
+                // (`R make(): R(7)`) are not places and move — stay legal.
+                if let Some(name) = self.tainted_place_name(expr) {
+                    self.error(
+                        SemanticErrorKind::MoveWithoutOperator { name },
+                        expr.span,
+                    );
                 }
                 } // imported_module_depth == 0
 

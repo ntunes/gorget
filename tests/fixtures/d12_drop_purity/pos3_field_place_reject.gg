@@ -1,0 +1,19 @@
+# D4/D12 position 3 FIELD-place: pushing a live drop-tainted FIELD place
+# (`hh.r`) into a collection copies at the ownership boundary —
+# `E_MoveWithoutOperator`, caught by the structural `lvalue_value_type`
+# resolution. No `!`-move counterpart (partial move); fix with `.clone()`.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+struct HH:
+    R r
+
+void main():
+    HH hh = HH(R(1))
+    Vector[R] v = Vector[R]()
+    v.push(hh.r)
+    print(v.len())

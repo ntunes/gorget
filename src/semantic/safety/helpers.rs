@@ -12,7 +12,56 @@ use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, CaptureSet, EscapeCt
 use super::type_utils::is_ast_type_ref;
 use super::return_borrows::{CapturedRefOriginCollector, CapturedMutationCollector, CaptureSetCollector};
 
+/// D4/D12: whether an expression is a PLACE (identifier / self / field /
+/// non-range index chain). Fresh temps (ctor / call / method results,
+/// literals, slices) are not places — they move, never copy. Mirrors ggdef's
+/// `ast_is_place` (spec/ggdef/src/elaborate/mod.rs:2207-2219).
+pub(super) fn expr_is_place(e: &Expr) -> bool {
+    match e {
+        Expr::Identifier(_) | Expr::SelfExpr => true,
+        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
+            expr_is_place(&object.node)
+        }
+        // `x[i]` is a place; `x[a..b]` (slice) is a fresh value.
+        Expr::Index { object, index } => {
+            !matches!(index.node, Expr::Range { .. }) && expr_is_place(&object.node)
+        }
+        _ => false,
+    }
+}
+
 impl<'a> BorrowChecker<'a> {
+    /// D4/D12: if `e` is a PLACE whose type is drop-tainted, return a display
+    /// name for the error. The implicit copy of a live drop-tainted place at
+    /// an ownership boundary is `E_MoveWithoutOperator` — write `!place` to
+    /// move or `.clone()` to copy. Mirrors ggdef's
+    /// `reject_if_tainted_live_place` (spec/ggdef/src/elaborate/mod.rs:571-583).
+    pub(super) fn tainted_place_name(&self, e: &Spanned<Expr>) -> Option<String> {
+        if !expr_is_place(&e.node) {
+            return None;
+        }
+        // The place's VALUE type, resolved STRUCTURALLY through
+        // `lvalue_value_type` — NOT the sparse `expr_types` map. The
+        // typechecker records `expr_types` only at call / method / scrutinee
+        // spans; FieldAccess / Index / TupleField spans are never inserted
+        // (`typecheck.rs:2272+`), so an `expr_types`-primary lookup silently
+        // misses `hh.r` / `v[i]` and lets a live drop-tainted field-place
+        // bind UNREJECTED (a real double-drop). `lvalue_value_type` walks the
+        // identifier/self/field/tuple/index chain via `struct_field_names` +
+        // `DefInfo.field_types` (ggdef's `infer_ast_ty` shape) and covers
+        // every place shape this way.
+        let tid = self.lvalue_value_type(e)?;
+        if !crate::semantic::is_drop_tainted_type(tid, self.types, self.scopes) {
+            return None;
+        }
+        // Display name: the root binding's name (good enough for the fix-it).
+        let name = self
+            .find_root_def_id(e)
+            .map(|d| self.scopes.get_def(d).name.clone())
+            .unwrap_or_else(|| "<place>".to_string());
+        Some(name)
+    }
+
     pub(super) fn check_stale_condition(&mut self, condition: &Spanned<Expr>) {
         if let Some((info, condition_span)) = self.find_stale_in_condition(condition) {
             self.stale_warnings.push(crate::semantic::errors::SemanticWarning {
@@ -853,6 +902,23 @@ impl<'a> BorrowChecker<'a> {
     /// span). Must be called AFTER the target/receiver walk so the write's
     /// clock exceeds any read recorded by that walk.
     pub(super) fn mark_bare_param_write_def(&mut self, def_id: DefId, span: Span) {
+        // D4/D12 position 6 (materialize-on-write): a write through a bare
+        // BORROW-view param of a drop-tainted type would materialize
+        // (privatise) an implicit copy — rejected. Mirrors ggdef's
+        // `reject_materialize_on_write`
+        // (spec/ggdef/src/elaborate/mod.rs:588-596, :1664-1676).
+        {
+            let def = self.scopes.get_def(def_id);
+            if def.is_param
+                && def.param_ownership == Some(Ownership::Borrow)
+                && def.type_id.map_or(false, |t| {
+                    crate::semantic::is_drop_tainted_type(t, self.types, self.scopes)
+                })
+            {
+                let name = def.name.clone();
+                self.error(SemanticErrorKind::MoveWithoutOperator { name }, span);
+            }
+        }
         if !self.deadwrite_params.contains_key(&def_id) {
             return;
         }

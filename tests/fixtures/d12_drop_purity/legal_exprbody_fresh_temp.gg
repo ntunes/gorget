@@ -1,0 +1,15 @@
+# D4/D12 legal counterpart (expr-body): a fresh-temp expression-body tail
+# (`R make(): R(7)`) is a MOVE of a freshly-materialized value, never a
+# live-place copy — legal.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+R make(): R(7)
+
+void main():
+    R b = make()
+    print(b.id)

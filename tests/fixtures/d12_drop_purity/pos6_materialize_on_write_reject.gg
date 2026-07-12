@@ -1,0 +1,16 @@
+# D4/D12 position 6 (materialize-on-write): a write through a bare BORROW-view
+# param of a drop-tainted type would materialize (privatise) an implicit copy
+# — `E_MoveWithoutOperator`. Ported from ggdef d4_position_6_materialize.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+void f(R s):
+    s.id = 9
+
+void main():
+    R a = R(1)
+    f(a)

@@ -1122,6 +1122,89 @@ void main():
 bye 9");
 }
 
+// ── D4 taint parity extensions (A2-R1): prelude-enum payloads, closure-tail,
+//    field-place (REJECTION-ONLY) — each closes a production/ggdef divergence ──
+
+#[test]
+fn d4_position_1_bind_option_payload_tainted() {
+    // The 10th D4 test. Parity with production `is_drop_tainted_type`: an
+    // `Option[R]` (R custom `Drop`) is drop-tainted — the prelude enum carries
+    // R, so a bare bind is an implicit copy. ggdef phase-0 formerly ERASED
+    // Option's payload (Named("Option") → untainted) and ACCEPTED this where
+    // production rejects; the `Ty::Option` carrier + `ty_tainted` arm close it.
+    // The `Some(R(1))` initializer is a fresh temp (a Call, not a place) and is
+    // NOT rejected — only the live-place bind `b = a` is.
+    d4_rejects(
+        "void main():\n    Option[R] a = Some(R(1))\n    Option[R] b = a\n",
+        "bind-option-payload",
+    );
+}
+
+#[test]
+fn d4_bind_result_payload_tainted_both_arms() {
+    // Parity: production taints `Result[R,_]` AND `Result[_,R]` (recursion over
+    // both generic args). The `Ty::Result` carrier taints if EITHER arm is
+    // tainted. Rejection-only — a bare bind of a live Result carrying R copies.
+    d4_rejects(
+        "void main():\n    Result[R, int] a = Ok(R(1))\n    Result[R, int] b = a\n",
+        "bind-result-ok-payload",
+    );
+    d4_rejects(
+        "void main():\n    Result[int, R] a = Error(R(1))\n    Result[int, R] b = a\n",
+        "bind-result-error-payload",
+    );
+}
+
+#[test]
+fn d4_closure_tail_param_place_rejected() {
+    // Closure-tail (position 4): a closure whose body IS a bare tainted PARAM
+    // place (`(R x): x`) returns a copy at the closure return boundary. The
+    // rejection fires at closure ELABORATION, so the closure need not be
+    // called. Mirrors production's `Expr::Closure` tail arm.
+    d4_rejects(
+        "void main():\n    auto f = (R x): x\n    print(\"x\")\n",
+        "closure-tail-param-place",
+    );
+}
+
+#[test]
+fn d4_closure_tail_fresh_temp_allowed() {
+    // The closure-tail counterpart: a FRESH-TEMP tail (`(): R(7)`) moves the
+    // freshly-materialized value — never a live-place copy — so it is legal
+    // (elaboration succeeds). The tail arm gates on the body being a PLACE;
+    // `R(7)` is a ctor call, not a place.
+    let src = format!(
+        "{D4_PRELUDE}\nvoid main():\n    auto f = (): R(7)\n    print(\"ok\")\n"
+    );
+    if let Err(e) = run_source(&src, FUEL) {
+        panic!("closure fresh-temp tail must be legal, got: {e}");
+    }
+}
+
+#[test]
+fn d4_field_place_bind_rejected() {
+    // Field-place (position 1) REJECTION-ONLY: a live tainted FIELD place
+    // (`hh.r`) bound bare is an implicit copy — resolved via `infer_ast_ty`'s
+    // projection (`field_ty`), mirroring production's structural
+    // `lvalue_value_type`. No `!`-move legal counterpart: `!hh.r` is a PARTIAL
+    // MOVE (production `E_UseAfterMove`), so `.clone()` is the only fix.
+    d4_rejects(
+        "struct HH:\n    R r\nvoid main():\n    HH hh = HH(R(1))\n    R c = hh.r\n",
+        "field-place-bind",
+    );
+}
+
+#[test]
+fn d4_field_place_return_rejected() {
+    // Field-place (position 4) REJECTION-ONLY: returning a live tainted FIELD
+    // place (`return h.r`) is an implicit copy at the return boundary. Same
+    // structural projection; same rejection-only rationale as the bind shape.
+    d4_rejects(
+        "struct HH:\n    R r\nR get_r(HH h):\n    return h.r\nvoid main():\n    HH hh = HH(R(1))\n    get_r(hh)\n",
+        "field-place-return",
+    );
+}
+
 // ── `ggdef -- gen` — frontmatter expectation generation (Increment C) ──────
 
 #[test]

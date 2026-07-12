@@ -1,0 +1,21 @@
+# D4/D12 position 6 sibling (user `&self` mutator on a tainted Borrow-rooted
+# receiver): calling a `&self` mutator on a bare param of a drop-tainted type
+# would materialize an implicit copy — `E_MoveWithoutOperator`. Ported from
+# ggdef d4_position_6_user_amp_self_mutator_on_tainted_borrow_rejected.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print("bye")
+
+equip R:
+    void bump(&self):
+        self.id = 9
+
+void poke(R s):
+    s.bump()
+
+void main():
+    R r = R(1)
+    poke(r)

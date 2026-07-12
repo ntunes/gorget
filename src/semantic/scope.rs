@@ -44,6 +44,14 @@ pub struct DefInfo {
     /// For enum defs: variant field TypeIds (Vec per variant, in declaration order).
     /// Populated during type checking. Used by is_copy_type for transitive checks.
     pub variant_field_types: Option<Vec<Vec<TypeId>>>,
+    /// D4 drop-purity (D12 enforcement): true if this type has a custom `Drop`
+    /// anywhere in its transitive field/payload graph. Seeded from `equip T
+    /// with Drop` registrations and closed under the field-graph fixpoint by
+    /// `compute_drop_taint` (semantic/mod.rs); read via
+    /// `is_drop_tainted_type`. Typed metadata, never derived from names
+    /// (layering rule 2). Mirrors ggdef's `tainted` set
+    /// (spec/ggdef/src/elaborate/mod.rs:253-255, :458-487).
+    pub is_drop_tainted: bool,
 }
 
 /// A lexical scope.
@@ -205,6 +213,7 @@ impl ScopeTable {
             shared: crate::parser::ast::SharedKind::None,
             field_types: None,
             variant_field_types: None,
+            is_drop_tainted: false,
         });
         def_id
     }
@@ -281,6 +290,7 @@ impl ScopeTable {
             shared: crate::parser::ast::SharedKind::None,
             field_types: None,
             variant_field_types: None,
+            is_drop_tainted: false,
         });
         let scope = &mut self.scopes[self.current.0 as usize];
         match ns {

@@ -1,0 +1,22 @@
+# D4/D12 position 1 FIELD-place: binding a live drop-tainted FIELD place
+# (`hh.r`) is an implicit copy — `E_MoveWithoutOperator`. This shape is only
+# caught because `tainted_place_name` resolves the place STRUCTURALLY (via
+# `lvalue_value_type`); the sparse `expr_types` map records no field span, so
+# an `expr_types`-primary lookup would let it bind unrejected and double-drop.
+# FIELD places have NO `!`-move counterpart (`!hh.r` is a partial move →
+# `E_UseAfterMove`) — the only fix is `.clone()`.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+struct HH:
+    R r
+    int count
+
+void main():
+    HH hh = HH(R(1), 5)
+    R c = hh.r
+    print(c.id)

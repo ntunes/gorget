@@ -27,7 +27,7 @@ void main():
     print("A: named-clone")
     Vector[Noisy] v = Vector[Noisy]()
     Noisy n = Noisy(7)
-    v.push(n)
+    v.push(n.clone())
     print(f"alive {n.id}")
 
     print("B: dict key")

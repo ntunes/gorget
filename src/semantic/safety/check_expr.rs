@@ -22,6 +22,16 @@ impl<'a> BorrowChecker<'a> {
     /// goes through the `Ownership::Move` arm / `Expr::Move` walk and is never
     /// an `Expr::Identifier` here, so it is correctly not flagged.
     fn require_explicit_move_for_single_owner_init(&mut self, arg: &Spanned<Expr>) {
+        // D4/D12 position 2 (ctor / field-init): a bare drop-tainted PLACE
+        // rejects at an init boundary. `tainted_place_name` resolves the
+        // place STRUCTURALLY (via `lvalue_value_type`), so field/index places
+        // (`obj.field`, `v[i]`) are covered alongside identifier/self/param —
+        // mirroring ggdef's `owning_source_from_arg`
+        // (spec/ggdef/src/elaborate/mod.rs:988, :1008).
+        if let Some(name) = self.tainted_place_name(arg) {
+            self.error(SemanticErrorKind::MoveWithoutOperator { name }, arg.span);
+            return;
+        }
         if let Expr::Identifier(_) = &arg.node {
             if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
                 let def = self.scopes.get_def(var_def_id);
@@ -571,6 +581,30 @@ impl<'a> BorrowChecker<'a> {
                 //      gates use, so `d.put(k,v)` / `d[k]=v` / `d[k]+=v` are
                 //      behaviorally identical. `.clone()` is NOT suggested —
                 //      cloning into the in-scope arena UAFs too.
+                // D4/D12 position 3 (collection-put): a bare drop-tainted
+                // PLACE arg into an element-ingesting mutating builtin
+                // (push/put/insert/send/...) is an implicit copy at an
+                // ownership boundary — require `!arg` / `.clone()`. Reuses the
+                // SAME typed gates as the arena element-ingest position below
+                // (`is_mutating_builtin_method` + `is_buffer_owning_receiver`
+                // — no name-matching; Core #4 shared classification). Mirrors
+                // ggdef positions 2/3 (spec/ggdef/src/elaborate/mod.rs:1008).
+                if crate::ir::lowering::builtins::is_mutating_builtin_method(
+                    method.node.as_str(),
+                ) && self.is_buffer_owning_receiver(receiver)
+                {
+                    for arg in args {
+                        if arg.node.ownership == Ownership::Borrow {
+                            if let Some(name) = self.tainted_place_name(&arg.node.value) {
+                                self.error(
+                                    SemanticErrorKind::MoveWithoutOperator { name },
+                                    arg.node.value.span,
+                                );
+                            }
+                        }
+                    }
+                }
+
                 if self.arena_depth > 0
                     && crate::ir::lowering::builtins::is_mutating_builtin_method(
                         method.node.as_str(),
@@ -916,6 +950,55 @@ impl<'a> BorrowChecker<'a> {
                 // Compute the capture set before checking the body, so it's
                 // available for spawn enforcement via pending_capture_set.
                 let capture_set = self.compute_capture_set(params, body);
+
+                // D4/D12 position 5 (closure capture): capturing a
+                // drop-tainted local is an implicit copy — rejected. Mirrors
+                // ggdef position 5 (spec/ggdef/src/elaborate/mod.rs:1846-1861).
+                // (No capture-list syntax exists yet [D5/D7 land later], so
+                // the current fix-it is `.clone()` into a dedicated local or
+                // passing the value as an argument.)
+                let tainted_captures: Vec<String> = capture_set
+                    .captures
+                    .iter()
+                    .filter(|c| {
+                        let def = self.scopes.get_def(c.def_id);
+                        def.type_id.map_or(false, |t| {
+                            crate::semantic::is_drop_tainted_type(t, self.types, self.scopes)
+                        })
+                    })
+                    .map(|c| c.name.clone())
+                    .collect();
+                for name in tainted_captures {
+                    self.error(SemanticErrorKind::MoveWithoutOperator { name }, expr.span);
+                }
+
+                // D4/D12 position 4 (closure expression-tail): a closure whose
+                // body IS a bare drop-tainted PLACE (`(R x): x`) returns it at
+                // the closure's return ownership boundary — the same
+                // implicit-copy rejection as a function expr-body tail /
+                // `Stmt::Return`. The `return x` spelling `(R x): return x`
+                // rides the existing `Stmt::Return` check inside the block
+                // body; this arm covers the tail-expression spelling.
+                // PARAM-ROOTED tails only: a CAPTURE-rooted tail (`(): hh.r`)
+                // is already rejected by position 5 above, so skipping
+                // capture-rooted tails here avoids a double-report (pass-4
+                // measured it double-firing).
+                if self.imported_module_depth == 0 {
+                    if let Some(name) = self.tainted_place_name(body) {
+                        let root_is_capture = self
+                            .find_root_def_id(body)
+                            .map_or(false, |root| {
+                                capture_set.captures.iter().any(|c| c.def_id == root)
+                            });
+                        if !root_is_capture {
+                            self.error(
+                                SemanticErrorKind::MoveWithoutOperator { name },
+                                body.span,
+                            );
+                        }
+                    }
+                }
+
                 self.pending_capture_set = Some(capture_set);
 
                 // A closure definition must not leak state into the enclosing

@@ -166,7 +166,16 @@ enum Ty {
     Dict(Box<Ty>, Box<Ty>),
     Set(Box<Ty>),
     Tuple(Vec<Ty>),
-    /// A user struct/enum (or `Option`/`Result` — those carry no user methods).
+    /// `Option[T]` — a prelude enum carrying `T`. Payload-carrying (unlike the
+    /// other `Named` types) so D4 taint sees through it: `Option[R]` (R custom
+    /// `Drop`) is drop-tainted, matching production's `is_drop_tainted_type`
+    /// recursion over generic args.
+    Option(Box<Ty>),
+    /// `Result[T, E]` — a prelude enum carrying success `T` and error `E`.
+    /// Payload-carrying for the same D4-taint reason; taints if EITHER arm is
+    /// tainted (production taints both `Result[R,_]` and `Result[_,R]`).
+    Result(Box<Ty>, Box<Ty>),
+    /// A user struct/enum (carry no user methods that dispatch differently).
     Named(String),
     /// Not inferable at this position — dispatch falls through to the builtins.
     Unknown,
@@ -496,6 +505,11 @@ impl Elaborator {
             Ty::Vector(el) | Ty::Set(el) => self.ty_tainted(el),
             Ty::Dict(k, v) => self.ty_tainted(k) || self.ty_tainted(v),
             Ty::Tuple(ts) => ts.iter().any(|t| self.ty_tainted(t)),
+            // Prelude enums see through to their payload(s): `Option[R]` /
+            // `Result[R,_]` / `Result[_,R]` carry the tainted value, so an
+            // implicit copy duplicates R's drop just as a bare `R` would.
+            Ty::Option(el) => self.ty_tainted(el),
+            Ty::Result(ok, err) => self.ty_tainted(ok) || self.ty_tainted(err),
             Ty::Prim | Ty::Str | Ty::Unknown => false,
         }
     }
@@ -1858,6 +1872,37 @@ impl Elaborator {
                 }
             }
         }
+        // D4 position 4 (closure expression-tail): a closure whose body IS a
+        // bare tainted PLACE rooted at a closure PARAM (`(R x): x`) returns a
+        // copy at the closure return boundary — the same implicit-copy
+        // rejection as a function expr-body tail. CAPTURE-rooted tails
+        // (`(): hh.r`) are position 5's domain (already rejected above), so we
+        // gate on the root being a closure param — a param-rooted tail cannot
+        // be a capture, and this avoids double-reporting the capture case.
+        // (Mirrors production's `Expr::Closure` tail arm, which skips
+        // capture-rooted places; ggdef reads the param's declared Ty directly
+        // rather than scoping it into `local_ty`, since a param-rooted tail
+        // needs no body-env change.)
+        if ast_is_place(&body.node) {
+            if let Some(root) = root_local_name(&body.node) {
+                if let Some(pty) = params
+                    .iter()
+                    .find(|p| p.node.name.node == root)
+                    .and_then(|p| p.node.type_.as_ref())
+                {
+                    if self.ty_tainted(&ty_of_type(&pty.node)) {
+                        return Err(ElabError::new(
+                            format!(
+                                "E_MoveWithoutOperator: implicit copy of the drop-tainted place \
+                                 `{root}` at closure-tail; a type with a custom `Drop` is \
+                                 single-owner — write `!{root}` to move or `{root}.clone()` to copy"
+                            ),
+                            body.span,
+                        ));
+                    }
+                }
+            }
+        }
         let id = self.closures.len();
         self.closures.push(ClosureDef { params: cparams, captures, body: cbody, span });
         Ok(Expr::Closure(id))
@@ -1891,10 +1936,10 @@ fn error_wrap(inner: Expr) -> Expr {
     enum_construct("Result", "Error", vec![Source::Value(inner)])
 }
 
-/// Whether an elaboration type is `Result[_,_]` (name-level — `Ty` erases
-/// generic args; `Result` is a prelude enum users cannot shadow).
+/// Whether an elaboration type is `Result[_,_]` (`Result` is a prelude enum
+/// users cannot shadow; the payload arms are carried but irrelevant here).
 fn ty_is_result(t: &Ty) -> bool {
-    matches!(t, Ty::Named(n) if n == "Result")
+    matches!(t, Ty::Result(..))
 }
 
 /// Whether a `match` arm pattern destructures the `Result` itself (`case
@@ -2148,8 +2193,11 @@ fn ty_of_type(t: &ast::Type) -> Ty {
                 "Set" | "HashSet" => Ty::Set(Box::new(arg(0))),
                 "Dict" | "HashMap" => Ty::Dict(Box::new(arg(0)), Box::new(arg(1))),
                 "String" => Ty::Str,
-                // Option/Result carry no user methods — a Named type with no
-                // equip entries just falls through dispatch to the builtins.
+                // Prelude enums carry their payload(s) so D4 taint sees through
+                // them (`Option[R]` / `Result[R,E]`). They still carry no user
+                // methods — dispatch falls through to the builtin table.
+                "Option" => Ty::Option(Box::new(arg(0))),
+                "Result" => Ty::Result(Box::new(arg(0)), Box::new(arg(1))),
                 other => Ty::Named(other.to_string()),
             }
         }

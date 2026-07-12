@@ -58,8 +58,34 @@ String s4 = !s3    # explicit move — s3 now invalid
 
 ### When `!` is still required
 
-A few resource types still require the explicit `!` operator to
-transfer ownership:
+Some resource types still require the explicit `!` operator (or
+`.clone()`) to transfer ownership. This is **one principled rule plus a
+few by-design members**.
+
+The rule — **drop-purity**: a type with a custom `Drop` anywhere in its
+transitive field graph is *drop-tainted*. Copying it implicitly would run
+its custom `drop` code twice, so a bare `R b = a` is rejected:
+
+```gorget
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+R a = R(1)
+R b = a            # COMPILE ERROR: would run R's drop twice
+R c = !a           # OK — move (a is now invalid)
+R d = b.clone()    # OK — an independent, separately-dropped copy
+```
+
+Taint is transitive: a `Vector[R]`, a tuple `(R, int)`, an `Option[R]`,
+or a struct with an `R` field are all drop-tainted too. A **field or
+index place** of a tainted type (`hh.r`, `v[0]`) must use `.clone()` —
+`!hh.r` would be a partial move.
+
+The by-design single-owner members follow the same `!`/`.clone()` rule:
 
 - `Box[T]`, `Task`, `TaskGroup`, `Guard` — single-owner heap
   allocations whose value-semantics ARE move-semantics
@@ -68,8 +94,13 @@ transfer ownership:
 - `Owned[T]` — when you've explicitly asked the type system to track
   ownership transfers
 
-For these, `Box[int] b = a` is a compile error; write `Box[int] b = !a`
-(or `.clone()` for an independent copy).
+For all of these, `Box[int] b = a` is a compile error; write
+`Box[int] b = !a` (or `.clone()` for an independent copy). A fresh
+temporary (`R b = R(1)`, `Box[int] b = make()`) is not a live place — it
+moves without an operator and is never rejected. The refcounted/handle
+types (`Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the
+sanctioned multi-owner escape hatch and are not drop-tainted by their
+payload.
 
 ---
 

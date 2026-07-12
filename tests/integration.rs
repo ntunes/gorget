@@ -5662,6 +5662,139 @@ drop third len=1",
     );
 }
 
+// ══════════════════════════════════════════════════════════════
+// D12 drop-purity enforcement (A2-R1) — one position per fixture.
+//
+// A custom-`Drop` type is drop-TAINTED: an implicit COPY of a live tainted
+// PLACE at any ownership boundary (bind / ctor-init / collection-put / return /
+// expr-body-tail / closure-tail / closure-capture / materialize-on-write) is
+// rejected `error[E_MoveWithoutOperator]` — write `!place` (whole-identifier
+// places) or `.clone()`. These fixtures port ggdef's normative suite
+// (spec/ggdef/src/tests.rs) plus the field/index-place shapes that exercise the
+// structural `lvalue_value_type` place resolution (the sparse `expr_types` map
+// never records field/index spans, so an `expr_types`-primary lookup would let
+// `hh.r` / `v[0]` bind unrejected and double-drop). Negatives assert the stable
+// diagnostic CODE (message text is A2-R2's position-aware mechanism); legals run
+// with ggdef-exact stdout.
+// ──────────────────────────────────────────────────────────────
+const D12_MOVE_CODE: &str = "error[E_MoveWithoutOperator]";
+
+#[test]
+fn d12_pos1_bind_reject() {
+    check_gg_fails("d12_drop_purity/pos1_bind_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos1_field_place_reject() {
+    check_gg_fails("d12_drop_purity/pos1_field_place_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos1_index_place_reject() {
+    check_gg_fails("d12_drop_purity/pos1_index_place_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos2_ctor_init_reject() {
+    check_gg_fails("d12_drop_purity/pos2_ctor_init_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos3_collection_put_reject() {
+    check_gg_fails("d12_drop_purity/pos3_collection_put_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos3_field_place_reject() {
+    check_gg_fails("d12_drop_purity/pos3_field_place_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos4_return_reject() {
+    check_gg_fails("d12_drop_purity/pos4_return_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos4_field_place_reject() {
+    check_gg_fails("d12_drop_purity/pos4_field_place_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_exprbody_tail_reject() {
+    check_gg_fails("d12_drop_purity/exprbody_tail_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_closure_tail_reject() {
+    check_gg_fails("d12_drop_purity/closure_tail_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos5_capture_reject() {
+    check_gg_fails("d12_drop_purity/pos5_capture_reject.gg", D12_MOVE_CODE);
+}
+
+#[test]
+fn d12_pos6_materialize_on_write_reject() {
+    check_gg_fails(
+        "d12_drop_purity/pos6_materialize_on_write_reject.gg",
+        D12_MOVE_CODE,
+    );
+}
+
+#[test]
+fn d12_pos6_amp_self_mutator_reject() {
+    check_gg_fails(
+        "d12_drop_purity/pos6_amp_self_mutator_reject.gg",
+        D12_MOVE_CODE,
+    );
+}
+
+// ── D12 legal counterparts (accept + run) ──
+#[test]
+fn d12_legal_explicit_move() {
+    run_gg("d12_drop_purity/legal_explicit_move.gg", "1\ndrop 1");
+}
+
+#[test]
+fn d12_legal_with_fresh_temp() {
+    run_gg("d12_drop_purity/legal_with_fresh_temp.gg", "alpha\n2");
+}
+
+#[test]
+fn d12_legal_field_place_int_accept() {
+    run_gg("d12_drop_purity/legal_field_place_int_accept.gg", "5");
+}
+
+#[test]
+fn d12_legal_exprbody_fresh_temp() {
+    run_gg("d12_drop_purity/legal_exprbody_fresh_temp.gg", "7\ndrop 7");
+}
+
+#[test]
+fn d12_legal_amp_self_owned() {
+    run_gg("d12_drop_purity/legal_amp_self_owned.gg", "9\nbye 9");
+}
+
+// `(): R(7)` closure fresh-temp is ACCEPTED by D12 (the fixture's point — a
+// fresh temp in a closure tail MOVES, never a live-place copy). Its runtime is
+// blocked by an UNRELATED, pre-existing lowering gap: a closure-returned owned
+// Drop temp is not registered for drop/ownership at the call site (`R b = f()`
+// panics `Tier 2a consume-site violation`; `use(f())` silently loses the
+// `drop 7`). Per "Don't redesign around compiler gaps": assert acceptance here,
+// and pair with an `#[ignore]`d `run_gg` asserting the CORRECT output. Filed in
+// TODO.md (closure-returned owned temp drop/ownership registration).
+#[test]
+fn d12_legal_closure_fresh_temp_accepts() {
+    check_gg_ok("d12_drop_purity/legal_closure_fresh_temp.gg");
+}
+
+#[test]
+#[ignore = "pre-existing: closure-returned owned Drop temp not drop-registered (filed TODO.md); un-ignore when fixed"]
+fn d12_legal_closure_fresh_temp_run() {
+    run_gg("d12_drop_purity/legal_closure_fresh_temp.gg", "7\ndrop 7");
+}
+
 #[test]
 fn drop_field_move_zero() {
     run_gg(

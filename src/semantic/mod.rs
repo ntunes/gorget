@@ -286,6 +286,14 @@ pub fn analyze_with_source_dir(
         populate_def_field_types(module, &mut scopes, &mut types);
     });
 
+    // Pass 3.55: D4 drop-purity taint (D12 enforcement). Seed `is_drop_tainted`
+    // from `equip T with Drop` registrations, close under the field-graph
+    // fixpoint. Must run after populate_def_field_types (needs field TypeIds)
+    // and before the safety pass (which reads the flag).
+    time_pass(&mut pass_times, "compute_drop_taint", || {
+        compute_drop_taint(&mut scopes, &types, &trait_registry);
+    });
+
     // Pass 3.6: Detect unbounded recursive types BEFORE typecheck.
     time_pass(&mut pass_times, "cycle_check", || {
         cycle_check::check_recursive_type_cycles(module, &scopes, &types, &mut errors);
@@ -457,4 +465,106 @@ fn populate_def_field_types(
         }
     }
     scan_items(&module.items, scopes, types);
+}
+
+/// D4 drop-purity (D12): whether a type is (transitively) drop-tainted — a
+/// named type whose `DefInfo.is_drop_tainted` flag is set, or a container /
+/// tuple / array carrying one. Mirrors ggdef's `ty_tainted`
+/// (spec/ggdef/src/elaborate/mod.rs:493-501): `Vector[T]`/`Set[T]` taint on
+/// the element, `Dict[K,V]` on either side, tuples on any element.
+///
+/// Deliberate carve-outs (NOT tainted by a tainted type argument):
+/// - `Shared[T]`/`Weak[T]`/`Mutex[T]`/`Channel[T]`: refcounted / handle types
+///   — the sanctioned multi-owner escape hatch. Copying the HANDLE is a
+///   pointer copy (refcount), not a value clone; drop-count determinism is
+///   owned by the refcount, not by the copy site. (ggdef has no model for
+///   these; divergence is noted in the D12 scout report.)
+/// - `Ref[T]` / `T &`: borrows are not implicit copies.
+/// `Box[T]`/`Task`/`TaskGroup`/`Guard`/`Owned[T]`/closures are already
+/// single-owner via `needs_explicit_move` — the taint check unions with that
+/// set rather than replacing it.
+pub fn is_drop_tainted_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool {
+    match types.get(type_id) {
+        types::ResolvedType::Defined(def_id) => scopes.get_def(*def_id).is_drop_tainted,
+        types::ResolvedType::Generic(def_id, args) => {
+            let def = scopes.get_def(*def_id);
+            if def.is_drop_tainted {
+                return true;
+            }
+            // Handle types: copying the handle never duplicates a drop.
+            // (`is_copy_type`-Copy generics — Channel/Shared/Weak/Mutex.)
+            if matches!(def.name.as_str(), "Channel" | "Shared" | "Weak" | "Mutex") {
+                return false;
+            }
+            let args = args.clone();
+            args.iter().any(|&a| is_drop_tainted_type(a, types, scopes))
+        }
+        types::ResolvedType::Tuple(elems) => {
+            let elems = elems.clone();
+            elems.iter().any(|&e| is_drop_tainted_type(e, types, scopes))
+        }
+        types::ResolvedType::Array(elem, _) | types::ResolvedType::Slice(elem) => {
+            is_drop_tainted_type(*elem, types, scopes)
+        }
+        types::ResolvedType::Owned(inner) => is_drop_tainted_type(*inner, types, scopes),
+        // Borrows are not implicit copies; everything else can't carry a
+        // custom Drop.
+        _ => false,
+    }
+}
+
+/// D4 drop-purity taint computation (D12). Seeds `DefInfo.is_drop_tainted`
+/// on every type with an `equip T with Drop` impl, then runs the transitive
+/// fixpoint over struct-field / enum-variant-payload graphs: a type carrying
+/// a tainted type anywhere in its field graph is itself tainted. Mirrors
+/// ggdef's seed (spec/ggdef/src/elaborate/mod.rs:448-451) + `compute_taint`
+/// fixpoint (:458-487).
+fn compute_drop_taint(scopes: &mut ScopeTable, types: &TypeTable, registry: &TraitRegistry) {
+    // Seed: `equip T with Drop` impls. The Drop trait is a builtin registered
+    // by name (traits.rs builtin table); resolve the name ONCE here at the
+    // seed — every downstream read is the typed DefInfo flag.
+    let mut seeds: Vec<DefId> = Vec::new();
+    for impl_info in &registry.impls {
+        if impl_info.trait_name.as_deref() == Some("Drop") {
+            match types.get(impl_info.self_type) {
+                types::ResolvedType::Defined(d) | types::ResolvedType::Generic(d, _) => {
+                    seeds.push(*d)
+                }
+                _ => {}
+            }
+        }
+    }
+    if seeds.is_empty() {
+        return;
+    }
+    for d in seeds {
+        scopes.get_def_mut(d).is_drop_tainted = true;
+    }
+    // Transitive fixpoint over the field graph.
+    loop {
+        let mut changed = false;
+        for i in 0..scopes.def_count() {
+            let def_id = DefId(i as u32);
+            let def = scopes.get_def(def_id);
+            if def.is_drop_tainted {
+                continue;
+            }
+            let tainted = if let Some(fts) = &def.field_types {
+                fts.iter().any(|&t| is_drop_tainted_type(t, types, scopes))
+            } else if let Some(vts) = &def.variant_field_types {
+                vts.iter()
+                    .flatten()
+                    .any(|&t| is_drop_tainted_type(t, types, scopes))
+            } else {
+                false
+            };
+            if tainted {
+                scopes.get_def_mut(def_id).is_drop_tainted = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
 }
