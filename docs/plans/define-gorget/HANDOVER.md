@@ -127,7 +127,16 @@ sequential fresh-review gauntlet.
       SIGN OFF (diff content-identical to the reviewed prototype); post-integration
       quick gates green (build, lib 1105/0, break 5/0, lints 53/0). Full sweep at batch
       close covers it. Detail: DONE.md.
-    - **A2 (D12 drop-purity): SPLIT per pass-5 (Opus) — A2-R1 EXECUTING (Opus), A2-R2 queued.**
+    - **A2 (D12 drop-purity): ✅ FULLY LANDED — A2-R1 `b72ef446` + A2-R2 `b4b6124a` (2026-07-12, Opus successor).**
+      **A2-R2 LANDED** (merge `b4b6124a`): M1 the compound-assign resource-element ICE fix (borrow-in-place
+      + RHS-reorder closing the realloc UAF window — counterfactual-proven on both the local `v[0]+=grow(&v)`
+      AND the deeper field path `h.v[0]+=grow(&h)` the executor caught; ASan-clean drop-once, byte-identical
+      C↔LLVM) + M2 the position/shape-aware `E_MoveWithoutOperator` message (typed `MoveReason`/`MoveShape`;
+      capture-no-`!` GATE; dead `move` alt removed). 3-pass brief gauntlet (pass-1 caught the R1 UAF) +
+      output-review SIGN OFF. Closed TODO 290+326; **FILED HIGH (top successor items): the op-overload
+      resource-ARG leak + the reachable custom-indexable resource-element ICE sibling** (the "shallow copy
+      of resource" ICE class is NOT fully closed — Core #4). NEXT: A2-S (self-host D12 port). [Historical:
+      A2 split per pass-5 into A2-R1 (core, landed) + A2-R2 (riders, now landed).]
       Gauntlet: 5 passes, 22 folds; pass-5 BUILT the two riskiest items and ruled the split.
       A2-R1 (brief `wave-a2-drop-purity-brief.md`, SPLIT header = scope): taint pass + six
       positions (incl. expr-body `check_stmt.rs:1747` + closure tails with capture-rooted
@@ -272,9 +281,11 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    the new negative fixtures outside spectests), parity regen (the standard command in
    TODO's north-star block; expect denominator movement from the batch's new
    fixtures — floors are min-counts, safe), DONE/TODO reconciliation, worktree sweep.
-2. **A2-R2** (`wave-a2-r2-message-ice-brief.md` — a v0 STUB): scout first (the ICE
-   rider's lowering write-site re-verify), complete the brief, gauntlet, execute.
-3. **A2-S** (self-host drop-purity port — TODO High entry): own scout→gauntlet;
+2. ✅ **A2-R2 DONE 2026-07-12** (merge `b4b6124a`): M1 ICE fix + M2 shape-aware message,
+   full gauntlet + output-review SIGN OFF. Filed HIGH: op-overload arg-leak + the
+   reachable custom-indexable resource-element ICE sibling (work these — the ICE class
+   isn't fully closed).
+3. **← YOU ARE HERE: A2-S** (self-host drop-purity port — TODO High entry): own scout→gauntlet;
    bootstrap-gated; ~250-400 .gg lines; ggdef's 9-test suite is the model.
 4. **Batch B** (D10(b) place-overlap + in-repo hand-hoists — the wave-plan entry has
    the site list): the scout MUST first evaluate building the TYPED BORROW-PROVENANCE
