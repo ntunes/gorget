@@ -132,14 +132,15 @@ sequential fresh-review gauntlet.
       A2-R1 (brief `wave-a2-drop-purity-brief.md`, SPLIT header = scope): taint pass + six
       positions (incl. expr-body `check_stmt.rs:1747` + closure tails with capture-rooted
       skip) + `lvalue_value_type` place-shape reroute + full probe suite + ggdef parity
-      (Option gap, closure-tail, field-place rejection tests) + docs. Executor STALLED (found 2026-07-12:
-      last checkpoint 07-11 14:47, no gate logs, no commit; worktree holds M1-M5 work
-      incl. 19 d12_drop_purity probe fixtures) — diff CAPTURED to
-      /tmp/recover_wA2R1_partial.patch (550 lines) + resume message sent with
-      milestone-report + chunked-foreground reminders. If the resume stalls again:
-      PARENT TAKEOVER per the R40 T-C precedent (apply the recovery patch, finish
-      M6-M9 per the brief, commit). Commit lands with the current generic message
-      (staged, Core-#8 clean).
+      (Option gap, closure-tail, field-place rejection tests) + docs. Executor #1 DIED silently (no resume
+      possible — no tool rounds left); its M1-M5 work RECOVERED and staged DURABLY:
+      `scouts/patches/wA2R1_partial_m1-m5.patch` (550-line semantic core) +
+      `wA2R1_fixtures_m5.tgz` (19 probe fixtures — ⚠ gitignore-hidden until the
+      allowlist stanzas land, which executor #1 never added). TAKE-2 EXECUTOR
+      (Opus) RUNNING with the recovered base: R1 verify-M1-M5 → R2 wire fixture
+      test-fns → R3 ggdef parity → R4 docs → R5 gates → R6 commit. Dead worktree
+      removed post-capture. Commit lands with the current generic message (staged,
+      Core-#8 clean).
       A2-R2 (stub `wave-a2-r2-message-ice-brief.md`): position/shape-aware message (no-`!`
       capture gate; dead `move` suggestion dies) + the compound-assign ICE fix (CORRECTED
       anchors: `stmts/assigns.rs:1148`, `ir/builder.rs:258`, panic `mod.rs:1763`) — own
