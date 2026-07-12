@@ -222,6 +222,53 @@ sequential fresh-review gauntlet.
   write-through (= the D2 implementation track); Option[T] unknown-method link-explosion.
   All in TODO.md's STRATEGIC ASSESSMENT block.
 
+## 🎯 NEXT ORCHESTRATOR START HERE (written 2026-07-12 for the Opus successor)
+
+You are a fresh orchestrator (Opus) taking the enforcement wave mid-stride. The owner
+syncs main from gorget-1; **work on gorget-1 only**. Read order: this file top-to-bottom
+→ `decisions.md` (D1-D28 + the 2026-07-11 LOG entries) → TODO.md's "RATIFIED
+ENFORCEMENT-WAVE PLAN" entry (the live execution plan) → CLAUDE.md's multi-agent +
+review sections (the gauntlet you MUST run). Regenerate every number before quoting.
+
+**State you inherit (verify, don't trust):** Batch A of the wave — A1 (`d59605fc`) and
+A3 (`414e652a`) LANDED; A2-R1's status is in the LIVE BATCH-A STATE block above (it was
+in executor-recovery when this section was written — if unfinished, YOUR first job is
+completing it: the brief is `wave-a2-drop-purity-brief.md` [SPLIT header = scope], the
+base prototype is `scouts/patches/scout_wA2_prototype.patch`, partial work may be
+captured at `/tmp/recover_wA2R1_partial.patch` [550 lines, M1-M5: semantic core + 19
+`d12_drop_purity/` probe fixtures] — apply, finish M6-M9 per the brief, gauntlet the
+output). If A2-R1 landed and the batch-close verification passed, start at step 2.
+
+**Your work queue, in order (each item = scout→brief→≥3 sequential fresh reviews→
+worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"`):**
+1. Finish/verify A2-R1 + the BATCH-A CLOSE: full C+LLVM sweeps
+   (`GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test integration
+   -- --test-threads=4`, both backends), 4-lane `spec_conformance` (expect 195×3 +
+   the new negative fixtures outside spectests), parity regen (the standard command in
+   TODO's north-star block; expect denominator movement from the batch's new
+   fixtures — floors are min-counts, safe), DONE/TODO reconciliation, worktree sweep.
+2. **A2-R2** (`wave-a2-r2-message-ice-brief.md` — a v0 STUB): scout first (the ICE
+   rider's lowering write-site re-verify), complete the brief, gauntlet, execute.
+3. **A2-S** (self-host drop-purity port — TODO High entry): own scout→gauntlet;
+   bootstrap-gated; ~250-400 .gg lines; ggdef's 9-test suite is the model.
+4. **Batch B** (D10(b) place-overlap + in-repo hand-hoists — the wave-plan entry has
+   the site list): the scout MUST first evaluate building the TYPED BORROW-PROVENANCE
+   bit (TODO: grep "typed is-borrow signal") — A3's gauntlet identified it as the root
+   cause of the syntactic-walk fragility D10(b) would otherwise inherit.
+5. **Batch C** per the wave plan: C1 operators (D26+D28; wire every new token into
+   self-host `map_binop` + the anti-OP_ADD ratchet) → C2 fault-catch removal (D25;
+   ~2,000-line both-compiler deletion; ships D24 spec prose + §10.5/§10.9 rewrite) →
+   C3 the composed fmt sweep (D27 sigils ~1,114 + D22 slices 208 + D28 pows 7; ONE
+   fmt pass per in-repo corpus). Then the deferred out-of-repo coordination round.
+
+**Operational playbook (hard-won this wave):** every agent worktree-isolated with the
+CLAUDE.md preamble; briefs + prototypes live DURABLY in `scouts/patches/` (never
+/tmp-only); >600s gates are CHUNKED-FOREGROUND by test name (bootstrap per-stage
+~150-170s — five agents stalled by backgrounding; the SendMessage nudge-resume cures
+it; if an executor dies silently, capture-first then parent-takeover per the R40 T-C
+precedent); update THIS file's live block at every track state-change; TODO holds
+pending-only work; discoveries get filed with measured repros before moving on.
+
 ## The process you must run (non-negotiable, from CLAUDE.md)
 
 For every work item: **scout (verify premises, file:line, measure end-to-end) → brief →
