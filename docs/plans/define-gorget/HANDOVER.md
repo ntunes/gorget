@@ -113,6 +113,13 @@ sequential fresh-review gauntlet.
     worktree executor → output-review → integrate; surprises are REPORTS, not downgrades.**
     After Batch C: the out-of-repo coordination round → D13/D14/D17 → remaining riders;
     A31/A32 design scouts interleave.
+  - **🛑 OWNER DIRECTIVE (2026-07-12, BINDING): STOP AFTER A2-R1.** When A2-R1 is
+    landed + integrated + the BATCH-A CLOSE VERIFICATION passes (full C+LLVM sweeps,
+    4-lane spec_conformance, parity regen, bookkeeping, worktree sweep), this session
+    ENDS THE WAVE'S WORK — do NOT start A2-R2's scout, A2-S, Batch B, or anything else.
+    **The baton passes to a FRESH ORCHESTRATOR RUNNING OPUS** (Fable quota preserved);
+    the owner syncs main and continues from there. The "NEXT ORCHESTRATOR START HERE"
+    section below is that agent's entry point. All subagents stay on `model:"opus"`.
   - **⚡ LIVE BATCH-A STATE (update IN PLACE at every track state-change — owner directive
     2026-07-11: subagents run `model:"opus"`; Fable reserved for the orchestrator; this block
     exists so ANY model can resume mid-batch):**
