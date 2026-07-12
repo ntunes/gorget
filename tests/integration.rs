@@ -18440,6 +18440,128 @@ fn self_host_driver_rejects_invalid_program() {
     );
 }
 
+// ── D4/D12 drop-purity: the self-host driver REJECTS an implicit copy of a
+// live drop-tainted place at all six ownership boundaries (A2-S), exactly as
+// Rust gg (A2-R1 `b72ef446`) + ggdef do. Before A2-S the self-host silently
+// miscompiled these (`R b = a; print(a,b)` ran a DOUBLE-DROP — a live
+// memory-safety defect, Core #8). Data-driven over the shared A2-R1 corpus
+// (`tests/fixtures/d12_drop_purity/*.gg`) PLUS the 3 authored generic-payload
+// binds (the `RTGeneric` args-recursion no `.gg` fixture otherwise covers).
+// Contract per reject fixture: non-zero exit, a codespan diagnostic on stderr
+// (`cannot copy`/`cannot capture` + the box rule), and NO C on stdout (the
+// diagnostic gate halts BEFORE lowering). The self-host renderer has no
+// `error[E_…]` codes (a pre-existing property shared by every self-host
+// diagnostic), so the assertion is on the message TEXT + box rule, not a code.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_d12_drop_purity() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    // Every ggdef-rejected D4 shape has a self-host reject test here: the 13
+    // covered corpus fixtures PLUS the 3 authored generic-payload binds.
+    let reject_fixtures = [
+        // position 1 (bind) — whole / field / index / generic-payload
+        "pos1_bind_reject",
+        "pos1_field_place_reject",
+        "pos1_index_place_reject",
+        "pos1_option_payload_reject",
+        "pos1_result_ok_payload_reject",
+        "pos1_result_err_payload_reject",
+        // position 2 (ctor / field-init)
+        "pos2_ctor_init_reject",
+        // position 3 (collection put) — whole / field
+        "pos3_collection_put_reject",
+        "pos3_field_place_reject",
+        // position 4 (return / expr-body / closure-tail)
+        "pos4_return_reject",
+        "pos4_field_place_reject",
+        "exprbody_tail_reject",
+        "closure_tail_reject",
+        // position 5 (closure capture)
+        "pos5_capture_reject",
+        // position 6 (materialize-on-write / &self mutator)
+        "pos6_materialize_on_write_reject",
+        "pos6_amp_self_mutator_reject",
+    ];
+    for name in reject_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/d12_drop_purity/{name}.gg"));
+        assert!(fixture.exists(), "missing D12 reject fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_d12_drop_purity",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED a drop-tainted implicit copy `{name}` \
+             (D12 enforcement in self_host_typechecker/typecheck.gg regressed). \
+             exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            (stderr.contains("cannot copy") || stderr.contains("cannot capture"))
+                && stderr.contains('\u{250c}'),
+            "self-host driver rejected `{name}` but emitted no D12 codespan \
+             diagnostic (expected `cannot copy`/`cannot capture` + the box rule).\n\
+             stderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host driver emitted C for rejected `{name}` — the gate must halt \
+             BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+}
+
+// Over-rejection guard for A2-S: the self-host driver must ACCEPT the LEGAL
+// D4/D12 counterparts — an explicit `!`/`.clone()` move, a fresh-temp move, a
+// non-tainted field read, an owned-local `&self` mutator, AND a live tainted
+// place passed to a PLAIN call / non-collection method (a legal borrow). The
+// bootstrap proves no UNDER-rejection regression in self-host source, but is
+// silent to an OVER-rejection (self-host source has zero tainted types); this
+// fixture is the executable guard a pos-2/pos-3 over-rejection cannot pass.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_accepts_d12_legal() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let legal_fixtures = [
+        "legal_explicit_move",
+        "legal_with_fresh_temp",
+        "legal_exprbody_fresh_temp",
+        "legal_closure_fresh_temp",
+        "legal_field_place_int_accept",
+        "legal_amp_self_owned",
+        "legal_plain_call_borrow_accept",
+    ];
+    for name in legal_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/d12_drop_purity/{name}.gg"));
+        assert!(fixture.exists(), "missing D12 legal fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_accepts_d12_legal",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "self-host driver REJECTED a LEGAL D12 program `{name}` — an \
+             over-rejection in self_host_typechecker/typecheck.gg. exit={:?}\n\
+             stderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            !stdout.trim().is_empty(),
+            "self-host driver accepted `{name}` but emitted no C — the legal path \
+             must lower. stderr:\n{stderr}",
+        );
+    }
+}
+
 // Companion to `self_host_driver_rejects_invalid_program`, exercising the
 // positional-after-named diagnostic (the self-host typecheck now REJECTS
 // `f(a=1, 2)`, matching Rust gg — see `positional_after_named_error()` for

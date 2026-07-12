@@ -36,6 +36,18 @@ struct DefInfo:
     int type_id
     bool is_mutable
     bool is_param
+    # D4/D12 drop-purity taint (mirrors Rust `DefInfo.is_drop_tainted`):
+    # a type with a transitive custom `Drop` in its field/payload graph is
+    # single-owner; an implicit copy of a live tainted place is rejected.
+    # Seeded from `equip T with Drop` + closed under the field-graph fixpoint
+    # by `compute_drop_taint` (typecheck.gg). Read via `is_drop_tainted_type`.
+    bool is_drop_tainted
+    # Ownership sigil for a parameter def (OWN_BORROW/OWN_MUTABLE/OWN_MOVE
+    # from parser.gg), or -1 for non-params. Used by D12 position 6
+    # (materialize-on-write): a write through a bare BORROW param of a
+    # drop-tainted type would privatise an implicit copy. Mirrors Rust
+    # `DefInfo.param_ownership`.
+    int param_ownership
 
 # ── Scope kinds ─────────────────────────────────────────────
 
@@ -201,7 +213,7 @@ equip ScopeTable:
         if self.find_name_entry(self.current, name.clone()) is Some(ni):
             return self.define_replace_or_fail(ni, name, kind, span, is_mutable)
         int def_id = self.definitions.len()
-        DefInfo info = DefInfo(name.clone(), kind, span, self.current, NO_DEF, is_mutable, false)
+        DefInfo info = DefInfo(name.clone(), kind, span, self.current, NO_DEF, is_mutable, false, false, -1)
         self.definitions.push(info)
         # PERF index (A): the new entry lands at index `i` in the parallel
         # name table. Capture `i` and the key BEFORE the `name_keys.push`
@@ -240,7 +252,7 @@ equip ScopeTable:
 
         if allow_replace:
             int def_id = self.definitions.len()
-            DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, is_mutable, false)
+            DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, is_mutable, false, false, -1)
             self.definitions.push(info)
             self.name_def_ids.set(ni, def_id)
             return Some(def_id)
@@ -256,7 +268,7 @@ equip ScopeTable:
         # by the DefInfo ctor below.
         String vkey = name.clone()
         bool is_variant = def_kind_is_variant(kind)
-        DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, false, false)
+        DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, false, false, false, -1)
         self.definitions.push(info)
         if is_variant:
             if self.variant_name_index.contains(vkey):
@@ -409,6 +421,18 @@ equip ScopeTable:
     void set_def_type(&self, int id, int type_id):
         DefInfo d = self.definitions.get(id).unwrap()
         d.type_id = type_id
+        self.definitions.set(id, d)
+
+    # D4/D12: mark a type def as drop-tainted (set by `compute_drop_taint`).
+    void set_def_drop_tainted(&self, int id, bool tainted):
+        DefInfo d = self.definitions.get(id).unwrap()
+        d.is_drop_tainted = tainted
+        self.definitions.set(id, d)
+
+    # D12 position 6: record a parameter def's ownership sigil (OWN_*).
+    void set_def_param_ownership(&self, int id, int own):
+        DefInfo d = self.definitions.get(id).unwrap()
+        d.param_ownership = own
         self.definitions.set(id, d)
 
     void set_def_scope_id(&self, int id, int scope_id):

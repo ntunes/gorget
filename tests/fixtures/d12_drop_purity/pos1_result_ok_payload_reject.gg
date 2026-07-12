@@ -1,0 +1,16 @@
+# D4/D12 position 1 GENERIC payload (Result[R, int], Ok arm): binding a live
+# tainted generic-payload place is an implicit copy. Exercises the RTGeneric
+# args-recursion (Result[R, int] is tainted via its first type arg R). The
+# `Ok(R(1))` setup is a fresh temp → NOT rejected. Ported from ggdef
+# d4_bind_result_payload_tainted_both_arms (Ok arm).
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+void main():
+    Result[R, int] a = Ok(R(1))
+    Result[R, int] b = a
+    print("x")

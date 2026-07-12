@@ -1,0 +1,17 @@
+# D4/D12 position 1 GENERIC payload (Option[R]): binding a live tainted
+# generic-payload place is an implicit copy — `E_MoveWithoutOperator`.
+# Exercises the `RTGeneric` args-recursion in `is_drop_tainted_type`
+# (Option[R] is tainted via its R payload, not via Option itself). The
+# setup `Some(R(1))` is a fresh temp → NOT rejected; only the bind of the
+# live place `a` is. Ported from ggdef d4_position_1_bind_option_payload_tainted.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+void main():
+    Option[R] a = Some(R(1))
+    Option[R] b = a
+    print("x")

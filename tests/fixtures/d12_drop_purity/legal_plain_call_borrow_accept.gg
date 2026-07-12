@@ -1,0 +1,28 @@
+# D4/D12 OVER-rejection guard: a live drop-tainted place passed to a PLAIN
+# function call OR a plain (non-ingesting) user method is a legal BORROW —
+# it must NOT be rejected. Guards positions 2/3 against over-rejecting a
+# borrow (only a ctor / collection-ingest boundary consumes). Without this,
+# a naive "reject every call arg" would ship uncaught.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+struct Bag:
+    int n
+
+equip Bag:
+    void push(&self, R x):
+        print(x.id)
+
+void use(R x):
+    print(x.id)
+
+void main():
+    R a = R(1)
+    use(a)              # plain call: legal borrow, must accept
+    Bag b = Bag(0)
+    b.push(a)           # `push` name but Bag is NOT a collection → legal borrow
+    print(a.id)         # a still live after the borrows — valid

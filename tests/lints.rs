@@ -870,6 +870,47 @@ fn container_literal_arms_count() {
 }
 
 /// Ratchet (Core #4 "one fix, all siblings" / Layering-discipline "Sibling-site
+/// drift — fix the class, not the instance"): the self-host D4/D12 drop-purity
+/// enforcement (A2-S) rejects an implicit copy of a live drop-tainted place at
+/// the CONSUMING ownership boundaries via ONE shared producer,
+/// `reject_tainted_place`, in `self_host_typechecker/typecheck.gg`. Every
+/// enumerated consuming position must route through that shared helper so a new
+/// boundary can't silently skip the D12 check (an under-rejection = a Core-#8
+/// live memory-safety hole). The 8 call sites are:
+///   - position 1: SVarDecl init + SAssign value (bind / assign)
+///   - position 2: ECall ctor arg + EStructLiteral arg + EDotShorthand arg
+///   - position 3: EMethodCall ingest arg (collection put)
+///   - position 4: SReturn value (return / expr-body) + EClosure trailing SExpr
+///     (closure-tail)
+/// (positions 5 [capture] and 6 [materialize-on-write / &self mutator] use their
+/// own specialized producers — `reject_tainted_captures`,
+/// `reject_materialize_on_write`, `reject_amp_self_mutator` — since they gate on
+/// closure free-vars / param ownership rather than a plain place arg.)
+///
+/// **If this fails:**
+///   - A NEW consuming position was added → it MUST call `reject_tainted_place`
+///     (do not open-code the taint check); bump EXPECTED with a justification.
+///   - The count went DOWN → a D12 hook was removed, re-opening an
+///     under-rejection hole; restore the call, do not lower EXPECTED.
+#[test]
+fn self_host_d12_reject_hook_count() {
+    // 1 definition (`void reject_tainted_place(`) + 8 consuming-position calls.
+    const EXPECTED: usize = 9;
+    let src = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("read self_host_typechecker/typecheck.gg");
+    let count = src.matches("reject_tainted_place(").count();
+    assert_eq!(
+        count, EXPECTED,
+        "self-host D12 `reject_tainted_place` site count changed: {count} vs \
+         expected {EXPECTED} (1 def + 8 consuming-position hooks).\n\n\
+         If a new consuming ownership boundary was added, route it through the \
+         shared `reject_tainted_place` producer and bump EXPECTED. If a hook was \
+         removed, a D12 under-rejection hole re-opened — restore it, do NOT lower \
+         EXPECTED. See docs/plans/define-gorget/wave-a2-s-selfhost-drop-purity-brief.md.",
+    );
+}
+
+/// Ratchet (Core #4 "one fix, all siblings" / Layering-discipline "Sibling-site
 /// drift — fix the class, not the instance"): every PROJECTED-mutation target
 /// arm in `lower_compound_assign` (`obj.field OP= x`, `obj[i] OP= x`) must call
 /// `materialize_assign_target_root` FIRST, so a bare-value-param / alias / element

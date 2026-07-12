@@ -55,6 +55,7 @@ enum DiagKind:
     DkControlFlow          # break/continue/return/throw in invalid context
     DkPrimitiveTraitImpl   # `equip <scalar-primitive> with Trait` — no addressable self
     DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
+    DkMoveWithoutOperator  # D4/D12: implicit copy of a live drop-tainted place at an ownership boundary
 
     # Reserved for future migrators (kept so the type doesn't churn
     # when lowerer sites migrate).
@@ -116,6 +117,8 @@ String diag_kind_str(DiagKind kind):
             return "primitive-trait-impl"
         case DkLocalBorrowBind():
             return "local-borrow-bind"
+        case DkMoveWithoutOperator():
+            return "move-without-operator"
         case DkUnreachable():
             return "unreachable"
 
