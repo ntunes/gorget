@@ -1,0 +1,37 @@
+from std.collections import Vector
+
+struct Acc:
+    int total
+
+equip Acc with Drop:
+    void drop(!self):
+        print(f"drop Acc {self.total}")
+
+equip Acc with Add[Acc]:
+    Acc add(self, Acc other):
+        return Acc(self.total + other.total)
+
+struct Box2:
+    Acc a
+    Acc b
+
+equip Box2 with Index[int, Acc]:
+    Acc get(self, int key):
+        if key == 0:
+            return self.a.clone()
+        return self.b.clone()
+
+equip Box2 with IndexMut[int, Acc]:
+    void set(&self, int key, Acc value):
+        if key == 0:
+            self.a = !value
+        else:
+            self.b = !value
+
+Acc mk(int n):
+    return Acc(n)
+
+void main():
+    Box2 bx = Box2(Acc(1), Acc(2))
+    bx[0] += mk(5)
+    print(f"{bx[0].total}")

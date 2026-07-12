@@ -1,0 +1,142 @@
+diff --git a/src/ir/lowering/stmts/assigns.rs b/src/ir/lowering/stmts/assigns.rs
+index 3a472e41..09e1f534 100644
+--- a/src/ir/lowering/stmts/assigns.rs
++++ b/src/ir/lowering/stmts/assigns.rs
+@@ -1585,10 +1585,51 @@ pub(super) fn lower_compound_assign(
+             };
+             builder.assign_mode(idx_mode, Place::local(idx_local), idx_raw);
+ 
++            // Resource (non-string) vector/dict elements are read by BORROW (a
++            // Ptr aliasing the element in place) instead of by Clone: the
++            // operator-overload branch below borrows the element for its
++            // read-only `self` receiver, and the Clone path's shallow
++            // copy-into-self-local (`builder.assign(cur_local, cur_val)`) trips
++            // the resource-move validator (ICE at ir/lowering/mod.rs:1763,
++            // "shallow copy of resource"). The clone is also pure waste since
++            // `add`/`sub`/... only READ `self`; the write-back `__set`/`__put`
++            // pre-drops the old element → drop-once. Strings keep Clone (the
++            // concat path consumes+drops the owned old value); primitives keep
++            // Clone (Copy — no ICE).
++            let coll_elem_type = if is_vector || is_dict {
++                Some(infer_collection_element_type(ctx, obj_type))
++            } else {
++                None
++            };
++            let borrow_in_place = coll_elem_type.map_or(false, |et| {
++                ctx.type_registry.is_resource_type(et)
++                    && et != ctx.type_mapper.owned_string_type
++            });
++
++            // R1 — close the borrow-in-place aliasing window. Both the element
++            // `self`-Ptr AND the field-collection header copy (`read_place`
++            // below) are taken AFTER the RHS is lowered, so a RHS that reallocs
++            // the SAME collection (`v[0] += grow(&v)`, `h.v[0] += grow(&h)`,
++            // dict insert-realloc) cannot dangle either — a hazard the old Clone
++            // path was immune to (it materialized an owned clone before the
++            // RHS). D10(b) same-call place-overlap is FILED-but-unimplemented
++            // (won't reject it), so close the window here by lowering the RHS
++            // into an owned temp FIRST — BEFORE the `read_place` header capture
++            // and the borrow read. Only the borrow path reorders; the Clone
++            // paths keep read-then-RHS order so the non-tainted fixtures stay
++            // byte-identical.
++            let rhs_pre = if borrow_in_place {
++                Some(lower_expr(ctx, builder, value))
++            } else {
++                None
++            };
++
+             // For field-accessed collections (e.g. self.scores[i]), copy to a temp local
+             // so the C backend can determine the collection type from the local's TypeId.
+             // index_load doesn't handle Places with Field projections correctly.
+-            // Phase C: temp is a non-owning view of the field — Borrow.
++            // Phase C: temp is a non-owning view of the field — Borrow. Taken
++            // AFTER `rhs_pre` (above) so a realloc inside the RHS cannot stale
++            // this copied header (R1).
+             let read_place = if resolved_field_type.is_some() {
+                 let temp = builder.add_local(obj_type, None);
+                 let temp_mode = if ctx.type_registry.is_resource_type(obj_type) {
+@@ -1603,10 +1644,16 @@ pub(super) fn lower_compound_assign(
+             };
+ 
+             // Step 1: Read current value at index
+-            let (cur_val, elem_type) = if is_vector || is_dict {
+-                let elem_type = infer_collection_element_type(ctx, obj_type);
+-                let dst = builder.index_load(read_place, FunctionBuilder::copy(idx_local), elem_type);
+-                (FunctionBuilder::copy(dst), elem_type)
++            let (cur_val, elem_type, cur_is_borrow) = if is_vector || is_dict {
++                let elem_type = coll_elem_type.unwrap();
++                if borrow_in_place {
++                    let ptr_type = ctx.register_ptr_type(elem_type);
++                    let dst = builder.index_load_borrow(read_place, FunctionBuilder::copy(idx_local), ptr_type);
++                    (FunctionBuilder::copy(dst), elem_type, true)
++                } else {
++                    let dst = builder.index_load(read_place, FunctionBuilder::copy(idx_local), elem_type);
++                    (FunctionBuilder::copy(dst), elem_type, false)
++                }
+             } else {
+                 // Custom type: try Type__get / Index_for_Type__get
+                 let candidates = [
+@@ -1632,8 +1679,13 @@ pub(super) fn lower_compound_assign(
+                         break;
+                     }
+                 }
+-                if let Some(pair) = found {
+-                    pair
++                if let Some((cv, et)) = found {
++                    // Custom `__get` returns an OWNED value (Clone semantics) —
++                    // the legacy borrow-of-copy self path handles it. R2 NOTE:
++                    // a custom Index type with a RESOURCE (custom-Drop) element
++                    // AND an `add` overload still reaches the shallow-copy path
++                    // → the SAME ICE. See TODO (custom-indexable sibling).
++                    (cv, et, false)
+                 } else {
+                     // Fallback: string indexing or unknown type
+                     let elem_type = if obj_type == ctx.type_mapper.owned_string_type {
+@@ -1642,12 +1694,13 @@ pub(super) fn lower_compound_assign(
+                         I64_TYPE
+                     };
+                     let dst = builder.index_load(read_place, FunctionBuilder::copy(idx_local), elem_type);
+-                    (FunctionBuilder::copy(dst), elem_type)
++                    (FunctionBuilder::copy(dst), elem_type, false)
+                 }
+             };
+ 
+-            // Step 2: Lower RHS
+-            let rhs = lower_expr(ctx, builder, value);
++            // Step 2: Lower RHS (already lowered above for the borrow case, to
++            // close the R1 realloc window — reuse it there).
++            let rhs = rhs_pre.unwrap_or_else(|| lower_expr(ctx, builder, value));
+ 
+             // Step 3: Compute result
+             let is_string = elem_type == ctx.type_mapper.owned_string_type;
+@@ -1711,13 +1764,23 @@ pub(super) fn lower_compound_assign(
+                 });
+ 
+                 if let Some(effective_name) = overload_method {
+-                    // Borrow lhs for self parameter
+-                    let cur_local = builder.add_local(elem_type, None);
+-                    builder.assign(Place::local(cur_local), cur_val);
+-                    let ptr_type = ctx.register_ptr_type(elem_type);
+-                    let ptr_local = builder.add_local(ptr_type, None);
+-                    builder.emit_borrow(ptr_local, Place::local(cur_local));
+-                    let dst = builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], elem_type);
++                    let self_ptr = if cur_is_borrow {
++                        // `cur_val` already borrows the element in place (a Ptr
++                        // from index_load_borrow) — pass it straight as the
++                        // read-only `self` receiver. NO shallow copy of the
++                        // resource element (that copy is the ICE).
++                        cur_val
++                    } else {
++                        // Non-resource element (e.g. a Copy struct with an Add
++                        // overload): borrow a fresh copy for `self`.
++                        let cur_local = builder.add_local(elem_type, None);
++                        builder.assign(Place::local(cur_local), cur_val);
++                        let ptr_type = ctx.register_ptr_type(elem_type);
++                        let ptr_local = builder.add_local(ptr_type, None);
++                        builder.emit_borrow(ptr_local, Place::local(cur_local));
++                        FunctionBuilder::copy(ptr_local)
++                    };
++                    let dst = builder.call(effective_name, vec![self_ptr, rhs], elem_type);
+                     FunctionBuilder::copy(dst)
+                 } else {
+                     let gir_op = compound_op_to_gir(op);

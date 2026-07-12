@@ -1,7 +1,8 @@
 # CoW-by-default: bare-assign of a non-Copy user struct.
 #
-# Pre-fix (2026-05-12): `Spanned b = a` errored with "non-Copy type
-# requires `!` or `move` to transfer". Bare-assign was the only consume
+# Pre-fix (2026-05-12): `Spanned b = a` errored, rejecting the bare copy
+# of a non-Copy value (D12: `!x` to move or `x.clone()` to copy). Bare-assign
+# was the only consume
 # position that didn't permit borrowing — function params, match
 # scrutinees, closure captures all borrowed-by-default with CoW. Forcing
 # explicit `!` / `.clone()` here was an asymmetry, not a design choice.

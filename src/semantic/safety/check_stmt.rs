@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
 use crate::parser::ast::*;
 use crate::span::Spanned;
 
-use crate::semantic::errors::{ArenaEscapeKind, SemanticErrorKind};
+use crate::semantic::errors::{ArenaEscapeKind, MoveReason, MoveShape, SemanticErrorKind};
 use crate::semantic::ids::DefId;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types};
@@ -830,9 +830,13 @@ impl<'a> BorrowChecker<'a> {
                     // and move. Mirrors ggdef position 4
                     // (spec/ggdef/src/elaborate/mod.rs:689-690).
                     if self.imported_module_depth == 0 {
-                        if let Some(name) = self.tainted_place_name(expr) {
+                        if let Some((name, shape)) = self.tainted_place_name(expr) {
                             self.error(
-                                SemanticErrorKind::MoveWithoutOperator { name },
+                                SemanticErrorKind::MoveWithoutOperator {
+                                    name,
+                                    reason: MoveReason::DropTaint,
+                                    shape,
+                                },
                                 expr.span,
                             );
                         }
@@ -1440,8 +1444,15 @@ impl<'a> BorrowChecker<'a> {
         // it covers field/index places (`obj.field`, `v[i]`) as well as
         // identifier/self/param — mirroring ggdef's bind-position rejection
         // (spec/ggdef/src/elaborate/mod.rs:970).
-        if let Some(name) = self.tainted_place_name(value) {
-            self.error(SemanticErrorKind::MoveWithoutOperator { name }, value.span);
+        if let Some((name, shape)) = self.tainted_place_name(value) {
+            self.error(
+                SemanticErrorKind::MoveWithoutOperator {
+                    name,
+                    reason: MoveReason::DropTaint,
+                    shape,
+                },
+                value.span,
+            );
             return;
         }
         if let Expr::Identifier(_) = &value.node {
@@ -1482,6 +1493,8 @@ impl<'a> BorrowChecker<'a> {
                             self.error(
                                 SemanticErrorKind::MoveWithoutOperator {
                                     name: def.name.clone(),
+                                    reason: MoveReason::SingleOwner,
+                                    shape: MoveShape::Whole,
                                 },
                                 value.span,
                             );
@@ -1791,9 +1804,13 @@ impl<'a> BorrowChecker<'a> {
                 // as `Stmt::Return`, mirroring ggdef's expr-body tail
                 // (spec/ggdef/src/elaborate/mod.rs:349-352). Fresh-temp bodies
                 // (`R make(): R(7)`) are not places and move — stay legal.
-                if let Some(name) = self.tainted_place_name(expr) {
+                if let Some((name, shape)) = self.tainted_place_name(expr) {
                     self.error(
-                        SemanticErrorKind::MoveWithoutOperator { name },
+                        SemanticErrorKind::MoveWithoutOperator {
+                            name,
+                            reason: MoveReason::DropTaint,
+                            shape,
+                        },
                         expr.span,
                     );
                 }

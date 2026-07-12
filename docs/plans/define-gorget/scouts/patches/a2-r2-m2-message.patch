@@ -1,0 +1,447 @@
+diff --git a/src/semantic/errors.rs b/src/semantic/errors.rs
+index 14a6f45b..8819a6b4 100644
+--- a/src/semantic/errors.rs
++++ b/src/semantic/errors.rs
+@@ -228,6 +228,37 @@ pub enum ArenaEscapeKind {
+     IngestLiveOuter { target: String },
+ }
+ 
++/// D12/D4: WHY a bare copy of a non-Copy value is rejected. Controls the
++/// "why" clause of `E_MoveWithoutOperator`.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum MoveReason {
++    /// The value's transitive drop graph carries a custom `Drop` — a resource,
++    /// single-owner by D4. (`is_drop_tainted_type`.)
++    DropTaint,
++    /// A single-owner-BY-DESIGN carve-out type (closure/`Callable`, `Owned[T]`,
++    /// `Box[T]`, `Task`/`TaskGroup`/`Guard`) — no clone path in the lowering.
++    SingleOwner,
++}
++
++/// D12/D4: the PLACE SHAPE of the rejected source, which decides the valid
++/// remedy in the `E_MoveWithoutOperator` message. A pure function of the place
++/// expr already in hand at the construction site (no new dataflow) — see
++/// `safety::helpers::place_shape`.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum MoveShape {
++    /// Whole-identifier / self / param place. Remedy: `!x` to move or
++    /// `x.clone()` to copy.
++    Whole,
++    /// Field / index SUB-place (`obj.f`, `v[i]`). A bare `!obj.f` is a PARTIAL
++    /// move (rejected), so the only remedy is `obj.f.clone()`.
++    FieldIndex,
++    /// A closure captures the value by value. Capture-list syntax (D5/D7) is
++    /// unbuilt and a `.clone()`-into-local is equally tainted, so NEITHER `!`
++    /// NOR `.clone()` is a valid remedy — pass it as an argument or wrap it in
++    /// `Shared[T]`.
++    Capture,
++}
++
+ #[derive(Debug, Clone)]
+ pub enum SemanticErrorKind {
+     /// Name not found in any enclosing scope.
+@@ -447,8 +478,10 @@ pub enum SemanticErrorKind {
+     /// Variable used after ownership was moved.
+     UseAfterMove { name: String, moved_at: Span },
+ 
+-    /// Non-Copy type assigned or passed without `!` move operator.
+-    MoveWithoutOperator { name: String },
++    /// Non-Copy type implicitly copied at an ownership boundary. `reason` is
++    /// WHY (drop-taint vs single-owner-by-design); `shape` is the place shape
++    /// that decides the valid remedy (Whole / field-index sub-place / capture).
++    MoveWithoutOperator { name: String, reason: MoveReason, shape: MoveShape },
+ 
+     /// Borrow exclusivity violation.
+     BorrowConflict { name: String, detail: String },
+@@ -986,11 +1019,41 @@ impl std::fmt::Display for SemanticError {
+             SemanticErrorKind::UseAfterMove { name, .. } => {
+                 write!(f, "use of moved value `{name}`")
+             }
+-            SemanticErrorKind::MoveWithoutOperator { name } => {
+-                write!(
+-                    f,
+-                    "cannot copy `{name}`: non-Copy type requires `!` or `move` to transfer"
+-                )
++            SemanticErrorKind::MoveWithoutOperator { name, reason, shape } => {
++                // The "why" clause depends on the reason; the REMEDY depends on
++                // the place shape (D12 pin-4). `!` is today's move sigil — a
++                // `# D27: !→^` breadcrumb marks it for D27's re-sigil sweep
++                // (do NOT switch to `^` here: it does not parse yet).
++                let why = match reason {
++                    MoveReason::DropTaint => "a resource (a type with a custom `Drop` is single-owner)",
++                    MoveReason::SingleOwner => "a single-owner type (no implicit copy)",
++                };
++                match shape {
++                    // D27: !→^
++                    MoveShape::Whole => write!(
++                        f,
++                        "cannot copy `{name}`: `{name}` is {why} — write `!{name}` to move \
++                         or `{name}.clone()` to copy"
++                    ),
++                    // Field / index sub-place: a bare `!` on the sub-place would
++                    // be a PARTIAL move (rejected), so `.clone()` is the only
++                    // remedy. `{name}` is the ROOT (the exact sub-place text is a
++                    // filed LOW follow-up). D27: !→^
++                    MoveShape::FieldIndex => write!(
++                        f,
++                        "cannot copy `{name}`: `{name}` is {why} — copy the sub-place with \
++                         `{name}.clone()` (a bare `!` on a field/index sub-place is a partial \
++                         move and is rejected)"
++                    ),
++                    // Capture: NEITHER `!` NOR `.clone()` is a valid remedy (no
++                    // capture-list syntax; a `.clone()`-into-local is equally
++                    // tainted). Pass it as an argument or share it. NO `!` here.
++                    MoveShape::Capture => write!(
++                        f,
++                        "cannot capture `{name}` by value: `{name}` is {why}, so the capture \
++                         would be an implicit copy — pass it as an argument or wrap it in `Shared[T]`"
++                    ),
++                }
+             }
+             SemanticErrorKind::BorrowConflict { name, detail } => {
+                 write!(f, "borrow conflict on `{name}`: {detail}")
+@@ -1238,10 +1301,64 @@ mod code_tests {
+     /// move-without-operator diagnostic is `E_MoveWithoutOperator`.
+     #[test]
+     fn normative_move_without_operator_code() {
+-        let k = SemanticErrorKind::MoveWithoutOperator { name: "x".into() };
++        let k = SemanticErrorKind::MoveWithoutOperator {
++            name: "x".into(),
++            reason: MoveReason::DropTaint,
++            shape: MoveShape::Whole,
++        };
+         assert_eq!(k.code(), "E_MoveWithoutOperator");
+     }
+ 
++    fn mwo(name: &str, reason: MoveReason, shape: MoveShape) -> String {
++        // Message text is rendered by `impl Display for SemanticError`.
++        SemanticError {
++            kind: SemanticErrorKind::MoveWithoutOperator { name: name.into(), reason, shape },
++            span: sp(),
++        }
++        .to_string()
++    }
++
++    /// D12 pin-4: each place shape advertises the CORRECT remedy.
++    #[test]
++    fn move_without_operator_per_shape_messages() {
++        // Whole (drop-taint): both `!` move and `.clone()` are valid.
++        let whole = mwo("x", MoveReason::DropTaint, MoveShape::Whole);
++        assert!(whole.contains("!x"), "whole should offer `!x`: {whole}");
++        assert!(whole.contains("x.clone()"), "whole should offer clone: {whole}");
++        assert!(whole.contains("resource"), "whole drop-taint why-clause: {whole}");
++
++        // Whole (single-owner): the why-clause differs, remedies are the same.
++        let so = mwo("g", MoveReason::SingleOwner, MoveShape::Whole);
++        assert!(so.contains("single-owner"), "single-owner why-clause: {so}");
++        assert!(so.contains("!g") && so.contains("g.clone()"), "so remedies: {so}");
++
++        // Field/Index sub-place: `.clone()` ONLY — a bare `!` is a partial move.
++        let field = mwo("hh", MoveReason::DropTaint, MoveShape::FieldIndex);
++        assert!(field.contains("hh.clone()"), "sub-place offers clone: {field}");
++        assert!(field.contains("partial move"), "sub-place warns partial move: {field}");
++    }
++
++    /// D12 pin-4 GATE (reference-grade): the CAPTURE-position message must
++    /// advertise NEITHER `!` NOR `.clone()` — no capture-list syntax exists and
++    /// a `.clone()`-into-local is equally drop-tainted. Executable guard so a
++    /// future wording change cannot regress the remedy.
++    #[test]
++    fn move_without_operator_capture_message_has_no_bang() {
++        let cap = mwo("hh", MoveReason::DropTaint, MoveShape::Capture);
++        assert!(
++            !cap.contains('!'),
++            "capture message must contain no `!`: {cap}"
++        );
++        assert!(
++            !cap.contains(".clone()"),
++            "capture message must not advertise `.clone()`: {cap}"
++        );
++        assert!(
++            cap.contains("Shared[T]") && cap.contains("pass it as an argument"),
++            "capture message must offer pass-as-arg / Shared[T]: {cap}"
++        );
++    }
++
+     /// Representative sample across unit variants, struct variants, and the
+     /// D4/D5/D6-relevant ownership family — codes are the `E_<VariantName>` form.
+     #[test]
+diff --git a/src/semantic/safety/check_expr.rs b/src/semantic/safety/check_expr.rs
+index 8fefe685..832c9c42 100644
+--- a/src/semantic/safety/check_expr.rs
++++ b/src/semantic/safety/check_expr.rs
+@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
+ use crate::parser::ast::*;
+ use crate::span::{Span, Spanned};
+ 
+-use crate::semantic::errors::SemanticErrorKind;
++use crate::semantic::errors::{MoveReason, MoveShape, SemanticErrorKind};
+ use crate::semantic::ids::{DefId, ScopeId};
+ use crate::semantic::scope::DefKind;
+ 
+@@ -28,8 +28,15 @@ impl<'a> BorrowChecker<'a> {
+         // (`obj.field`, `v[i]`) are covered alongside identifier/self/param —
+         // mirroring ggdef's `owning_source_from_arg`
+         // (spec/ggdef/src/elaborate/mod.rs:988, :1008).
+-        if let Some(name) = self.tainted_place_name(arg) {
+-            self.error(SemanticErrorKind::MoveWithoutOperator { name }, arg.span);
++        if let Some((name, shape)) = self.tainted_place_name(arg) {
++            self.error(
++                SemanticErrorKind::MoveWithoutOperator {
++                    name,
++                    reason: MoveReason::DropTaint,
++                    shape,
++                },
++                arg.span,
++            );
+             return;
+         }
+         if let Expr::Identifier(_) = &arg.node {
+@@ -40,7 +47,11 @@ impl<'a> BorrowChecker<'a> {
+                         let name = def.name.clone();
+                         if needs_explicit_move(type_id, self.types, self.scopes) {
+                             self.error(
+-                                SemanticErrorKind::MoveWithoutOperator { name },
++                                SemanticErrorKind::MoveWithoutOperator {
++                                    name,
++                                    reason: MoveReason::SingleOwner,
++                                    shape: MoveShape::Whole,
++                                },
+                                 arg.span,
+                             );
+                         }
+@@ -595,9 +606,13 @@ impl<'a> BorrowChecker<'a> {
+                 {
+                     for arg in args {
+                         if arg.node.ownership == Ownership::Borrow {
+-                            if let Some(name) = self.tainted_place_name(&arg.node.value) {
++                            if let Some((name, shape)) = self.tainted_place_name(&arg.node.value) {
+                                 self.error(
+-                                    SemanticErrorKind::MoveWithoutOperator { name },
++                                    SemanticErrorKind::MoveWithoutOperator {
++                                        name,
++                                        reason: MoveReason::DropTaint,
++                                        shape,
++                                    },
+                                     arg.node.value.span,
+                                 );
+                             }
+@@ -969,7 +984,14 @@ impl<'a> BorrowChecker<'a> {
+                     .map(|c| c.name.clone())
+                     .collect();
+                 for name in tainted_captures {
+-                    self.error(SemanticErrorKind::MoveWithoutOperator { name }, expr.span);
++                    self.error(
++                        SemanticErrorKind::MoveWithoutOperator {
++                            name,
++                            reason: MoveReason::DropTaint,
++                            shape: MoveShape::Capture,
++                        },
++                        expr.span,
++                    );
+                 }
+ 
+                 // D4/D12 position 4 (closure expression-tail): a closure whose
+@@ -984,7 +1006,7 @@ impl<'a> BorrowChecker<'a> {
+                 // capture-rooted tails here avoids a double-report (pass-4
+                 // measured it double-firing).
+                 if self.imported_module_depth == 0 {
+-                    if let Some(name) = self.tainted_place_name(body) {
++                    if let Some((name, shape)) = self.tainted_place_name(body) {
+                         let root_is_capture = self
+                             .find_root_def_id(body)
+                             .map_or(false, |root| {
+@@ -992,7 +1014,11 @@ impl<'a> BorrowChecker<'a> {
+                             });
+                         if !root_is_capture {
+                             self.error(
+-                                SemanticErrorKind::MoveWithoutOperator { name },
++                                SemanticErrorKind::MoveWithoutOperator {
++                                    name,
++                                    reason: MoveReason::DropTaint,
++                                    shape,
++                                },
+                                 body.span,
+                             );
+                         }
+diff --git a/src/semantic/safety/check_stmt.rs b/src/semantic/safety/check_stmt.rs
+index cdb07abc..c60399a2 100644
+--- a/src/semantic/safety/check_stmt.rs
++++ b/src/semantic/safety/check_stmt.rs
+@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
+ use crate::parser::ast::*;
+ use crate::span::Spanned;
+ 
+-use crate::semantic::errors::{ArenaEscapeKind, SemanticErrorKind};
++use crate::semantic::errors::{ArenaEscapeKind, MoveReason, MoveShape, SemanticErrorKind};
+ use crate::semantic::ids::DefId;
+ use crate::semantic::scope::DefKind;
+ use crate::semantic::types::{self as types};
+@@ -830,9 +830,13 @@ impl<'a> BorrowChecker<'a> {
+                     // and move. Mirrors ggdef position 4
+                     // (spec/ggdef/src/elaborate/mod.rs:689-690).
+                     if self.imported_module_depth == 0 {
+-                        if let Some(name) = self.tainted_place_name(expr) {
++                        if let Some((name, shape)) = self.tainted_place_name(expr) {
+                             self.error(
+-                                SemanticErrorKind::MoveWithoutOperator { name },
++                                SemanticErrorKind::MoveWithoutOperator {
++                                    name,
++                                    reason: MoveReason::DropTaint,
++                                    shape,
++                                },
+                                 expr.span,
+                             );
+                         }
+@@ -1440,8 +1444,15 @@ impl<'a> BorrowChecker<'a> {
+         // it covers field/index places (`obj.field`, `v[i]`) as well as
+         // identifier/self/param — mirroring ggdef's bind-position rejection
+         // (spec/ggdef/src/elaborate/mod.rs:970).
+-        if let Some(name) = self.tainted_place_name(value) {
+-            self.error(SemanticErrorKind::MoveWithoutOperator { name }, value.span);
++        if let Some((name, shape)) = self.tainted_place_name(value) {
++            self.error(
++                SemanticErrorKind::MoveWithoutOperator {
++                    name,
++                    reason: MoveReason::DropTaint,
++                    shape,
++                },
++                value.span,
++            );
+             return;
+         }
+         if let Expr::Identifier(_) = &value.node {
+@@ -1482,6 +1493,8 @@ impl<'a> BorrowChecker<'a> {
+                             self.error(
+                                 SemanticErrorKind::MoveWithoutOperator {
+                                     name: def.name.clone(),
++                                    reason: MoveReason::SingleOwner,
++                                    shape: MoveShape::Whole,
+                                 },
+                                 value.span,
+                             );
+@@ -1791,9 +1804,13 @@ impl<'a> BorrowChecker<'a> {
+                 // as `Stmt::Return`, mirroring ggdef's expr-body tail
+                 // (spec/ggdef/src/elaborate/mod.rs:349-352). Fresh-temp bodies
+                 // (`R make(): R(7)`) are not places and move — stay legal.
+-                if let Some(name) = self.tainted_place_name(expr) {
++                if let Some((name, shape)) = self.tainted_place_name(expr) {
+                     self.error(
+-                        SemanticErrorKind::MoveWithoutOperator { name },
++                        SemanticErrorKind::MoveWithoutOperator {
++                            name,
++                            reason: MoveReason::DropTaint,
++                            shape,
++                        },
+                         expr.span,
+                     );
+                 }
+diff --git a/src/semantic/safety/helpers.rs b/src/semantic/safety/helpers.rs
+index fdc33928..b3e9bb1f 100644
+--- a/src/semantic/safety/helpers.rs
++++ b/src/semantic/safety/helpers.rs
+@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
+ use crate::parser::ast::*;
+ use crate::span::{Span, Spanned};
+ 
+-use crate::semantic::errors::SemanticErrorKind;
++use crate::semantic::errors::{MoveReason, MoveShape, SemanticErrorKind};
+ use crate::semantic::ids::DefId;
+ use crate::semantic::scope::DefKind;
+ use crate::semantic::types::{self as types, ResolvedType};
+@@ -30,13 +30,28 @@ pub(super) fn expr_is_place(e: &Expr) -> bool {
+     }
+ }
+ 
++/// D12: the PLACE SHAPE of a place expr — a WHOLE identifier/self, or a
++/// FIELD/INDEX sub-place. Decides the valid remedy in the
++/// `E_MoveWithoutOperator` message (pin-4): a whole place accepts `!x`/`.clone()`,
++/// a sub-place accepts `.clone()` only (a bare `!obj.f` is a partial move). A
++/// pure function of the expr — call it on an expr already known to be a place
++/// (`expr_is_place`); a non-place falls to `FieldIndex` (never reached for the
++/// tainted-place sites, which gate on `expr_is_place` first).
++pub(super) fn place_shape(e: &Expr) -> MoveShape {
++    match e {
++        Expr::Identifier(_) | Expr::SelfExpr => MoveShape::Whole,
++        _ => MoveShape::FieldIndex,
++    }
++}
++
+ impl<'a> BorrowChecker<'a> {
+     /// D4/D12: if `e` is a PLACE whose type is drop-tainted, return a display
+-    /// name for the error. The implicit copy of a live drop-tainted place at
+-    /// an ownership boundary is `E_MoveWithoutOperator` — write `!place` to
+-    /// move or `.clone()` to copy. Mirrors ggdef's
+-    /// `reject_if_tainted_live_place` (spec/ggdef/src/elaborate/mod.rs:571-583).
+-    pub(super) fn tainted_place_name(&self, e: &Spanned<Expr>) -> Option<String> {
++    /// name for the error PLUS its place shape (Whole vs field/index sub-place),
++    /// which selects the remedy in the `E_MoveWithoutOperator` message. The
++    /// implicit copy of a live drop-tainted place at an ownership boundary is
++    /// `E_MoveWithoutOperator`. Mirrors ggdef's `reject_if_tainted_live_place`
++    /// (spec/ggdef/src/elaborate/mod.rs:571-583).
++    pub(super) fn tainted_place_name(&self, e: &Spanned<Expr>) -> Option<(String, MoveShape)> {
+         if !expr_is_place(&e.node) {
+             return None;
+         }
+@@ -54,12 +69,14 @@ impl<'a> BorrowChecker<'a> {
+         if !crate::semantic::is_drop_tainted_type(tid, self.types, self.scopes) {
+             return None;
+         }
+-        // Display name: the root binding's name (good enough for the fix-it).
++        // Display name: the root binding's name (good enough for the fix-it;
++        // the exact sub-place text `hh.r.clone()` vs `hh.clone()` is a filed
++        // LOW follow-up — `find_root_def_id` returns only the ROOT name).
+         let name = self
+             .find_root_def_id(e)
+             .map(|d| self.scopes.get_def(d).name.clone())
+             .unwrap_or_else(|| "<place>".to_string());
+-        Some(name)
++        Some((name, place_shape(&e.node)))
+     }
+ 
+     pub(super) fn check_stale_condition(&mut self, condition: &Spanned<Expr>) {
+@@ -916,7 +933,15 @@ impl<'a> BorrowChecker<'a> {
+                 })
+             {
+                 let name = def.name.clone();
+-                self.error(SemanticErrorKind::MoveWithoutOperator { name }, span);
++                // Materialize-on-write is always a WHOLE bare borrow-param place.
++                self.error(
++                    SemanticErrorKind::MoveWithoutOperator {
++                        name,
++                        reason: MoveReason::DropTaint,
++                        shape: MoveShape::Whole,
++                    },
++                    span,
++                );
+             }
+         }
+         if !self.deadwrite_params.contains_key(&def_id) {
+diff --git a/src/semantic/safety/tests.rs b/src/semantic/safety/tests.rs
+index 2740f88e..9b529db0 100644
+--- a/src/semantic/safety/tests.rs
++++ b/src/semantic/safety/tests.rs
+@@ -1549,7 +1549,7 @@ void main():
+ ";
+         let errors = check(source);
+         assert!(
+-            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveWithoutOperator { name }
++            has_error(&errors, |k| matches!(k, SemanticErrorKind::MoveWithoutOperator { name, .. }
+                 if name == "g")),
+             "expected MoveWithoutOperator for a bare closure into a constructor, got: {:?}", errors
+         );
+diff --git a/tests/fixtures/cow_struct_bare_assign.gg b/tests/fixtures/cow_struct_bare_assign.gg
+index 331f7f3b..fcf1dc36 100644
+--- a/tests/fixtures/cow_struct_bare_assign.gg
++++ b/tests/fixtures/cow_struct_bare_assign.gg
+@@ -1,7 +1,8 @@
+ # CoW-by-default: bare-assign of a non-Copy user struct.
+ #
+-# Pre-fix (2026-05-12): `Spanned b = a` errored with "non-Copy type
+-# requires `!` or `move` to transfer". Bare-assign was the only consume
++# Pre-fix (2026-05-12): `Spanned b = a` errored, rejecting the bare copy
++# of a non-Copy value (D12: `!x` to move or `x.clone()` to copy). Bare-assign
++# was the only consume
+ # position that didn't permit borrowing — function params, match
+ # scrutinees, closure captures all borrowed-by-default with CoW. Forcing
+ # explicit `!` / `.clone()` here was an asymmetry, not a design choice.

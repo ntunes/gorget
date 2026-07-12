@@ -1,0 +1,41 @@
+# A2-R2 M1 regression: compound-assign (`v[i] += x` / `d[k] += x`) on a
+# drop-tainted (custom-`Drop`) RESOURCE element with an operator overload.
+# This used to ICE at ir/lowering/mod.rs ("shallow copy of resource") because
+# the element was read by Clone and then shallow-copied into a self-local. The
+# fix reads the element by BORROW (a Ptr aliasing it in place) for the
+# read-only `add` receiver; the write-back `__set`/`__put` pre-drops the old
+# element → drop-once. RHS is CALL-shaped (`mk(n)`) so the RHS-temp is drop-
+# registered (an inline-ctor RHS trips a SEPARATE, orthogonal op-overload
+# arg-leak — filed).
+from std.collections import Dict, Vector
+
+struct Acc:
+    int total
+    Vector[int] buf
+
+equip Acc with Drop:
+    void drop(!self):
+        print(f"drop Acc {self.total}")
+
+equip Acc with Add[Acc]:
+    Acc add(self, Acc other):
+        Vector[int] b = []
+        b.push(self.total + other.total)
+        return Acc(self.total + other.total, b)
+
+Acc mk(int n):
+    Vector[int] b = []
+    b.push(n)
+    return Acc(n, b)
+
+void main():
+    Vector[Acc] v = [mk(1), mk(2)]
+    v[0] += mk(5)
+    print(f"vec {v[0].total}")
+
+    Dict[String, Acc] d = {}
+    d["a"] = mk(10)
+    d["b"] = mk(20)
+    d["a"] += mk(50)
+    print(f"dict {d["a"].total}")
+    print("done")

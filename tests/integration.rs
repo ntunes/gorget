@@ -25453,6 +25453,31 @@ done",
     );
 }
 
+// A2-R2 M1: `v[i] += x` / `d[k] += x` on a drop-tainted (custom-`Drop`)
+// RESOURCE element with an operator overload. Used to ICE at
+// ir/lowering/mod.rs ("shallow copy of resource"); the fix reads the element
+// by borrow for the read-only `add` receiver, and the write-back pre-drops the
+// old element → drop-once (every Acc created is dropped exactly once). Runs on
+// both backends via GG_BACKEND (byte-identical).
+#[test]
+fn compound_index_resource_taint() {
+    run_gg(
+        "compound_index_resource_taint.gg",
+        "\
+drop Acc 1
+vec 6
+drop Acc 10
+dict 60
+done
+drop Acc 50
+drop Acc 60
+drop Acc 20
+drop Acc 5
+drop Acc 6
+drop Acc 2",
+    );
+}
+
 #[test]
 fn derive_ordinal() {
     run_gg(
@@ -26514,7 +26539,9 @@ fn use_after_move_error() {
 
 #[test]
 fn move_without_operator_error() {
-    check_gg_fails("move_without_operator_error.gg", "non-Copy type requires `!` or `move`");
+    // Box[int] is a single-owner carve-out → the whole-place single-owner
+    // message. (`move` alternative removed: it was parser-dead; D12 M2.)
+    check_gg_fails("move_without_operator_error.gg", "is a single-owner type");
 }
 
 #[test]

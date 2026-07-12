@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
-use crate::semantic::errors::SemanticErrorKind;
+use crate::semantic::errors::{MoveReason, MoveShape, SemanticErrorKind};
 use crate::semantic::ids::{DefId, ScopeId};
 use crate::semantic::scope::DefKind;
 
@@ -28,8 +28,15 @@ impl<'a> BorrowChecker<'a> {
         // (`obj.field`, `v[i]`) are covered alongside identifier/self/param —
         // mirroring ggdef's `owning_source_from_arg`
         // (spec/ggdef/src/elaborate/mod.rs:988, :1008).
-        if let Some(name) = self.tainted_place_name(arg) {
-            self.error(SemanticErrorKind::MoveWithoutOperator { name }, arg.span);
+        if let Some((name, shape)) = self.tainted_place_name(arg) {
+            self.error(
+                SemanticErrorKind::MoveWithoutOperator {
+                    name,
+                    reason: MoveReason::DropTaint,
+                    shape,
+                },
+                arg.span,
+            );
             return;
         }
         if let Expr::Identifier(_) = &arg.node {
@@ -40,7 +47,11 @@ impl<'a> BorrowChecker<'a> {
                         let name = def.name.clone();
                         if needs_explicit_move(type_id, self.types, self.scopes) {
                             self.error(
-                                SemanticErrorKind::MoveWithoutOperator { name },
+                                SemanticErrorKind::MoveWithoutOperator {
+                                    name,
+                                    reason: MoveReason::SingleOwner,
+                                    shape: MoveShape::Whole,
+                                },
                                 arg.span,
                             );
                         }
@@ -595,9 +606,13 @@ impl<'a> BorrowChecker<'a> {
                 {
                     for arg in args {
                         if arg.node.ownership == Ownership::Borrow {
-                            if let Some(name) = self.tainted_place_name(&arg.node.value) {
+                            if let Some((name, shape)) = self.tainted_place_name(&arg.node.value) {
                                 self.error(
-                                    SemanticErrorKind::MoveWithoutOperator { name },
+                                    SemanticErrorKind::MoveWithoutOperator {
+                                        name,
+                                        reason: MoveReason::DropTaint,
+                                        shape,
+                                    },
                                     arg.node.value.span,
                                 );
                             }
@@ -969,7 +984,14 @@ impl<'a> BorrowChecker<'a> {
                     .map(|c| c.name.clone())
                     .collect();
                 for name in tainted_captures {
-                    self.error(SemanticErrorKind::MoveWithoutOperator { name }, expr.span);
+                    self.error(
+                        SemanticErrorKind::MoveWithoutOperator {
+                            name,
+                            reason: MoveReason::DropTaint,
+                            shape: MoveShape::Capture,
+                        },
+                        expr.span,
+                    );
                 }
 
                 // D4/D12 position 4 (closure expression-tail): a closure whose
@@ -984,7 +1006,7 @@ impl<'a> BorrowChecker<'a> {
                 // capture-rooted tails here avoids a double-report (pass-4
                 // measured it double-firing).
                 if self.imported_module_depth == 0 {
-                    if let Some(name) = self.tainted_place_name(body) {
+                    if let Some((name, shape)) = self.tainted_place_name(body) {
                         let root_is_capture = self
                             .find_root_def_id(body)
                             .map_or(false, |root| {
@@ -992,7 +1014,11 @@ impl<'a> BorrowChecker<'a> {
                             });
                         if !root_is_capture {
                             self.error(
-                                SemanticErrorKind::MoveWithoutOperator { name },
+                                SemanticErrorKind::MoveWithoutOperator {
+                                    name,
+                                    reason: MoveReason::DropTaint,
+                                    shape,
+                                },
                                 body.span,
                             );
                         }
