@@ -170,9 +170,21 @@ sequential fresh-review gauntlet.
       `&`-param double-free · `Shared[R]` payload custom-drop never runs · builtin-handle
       name-list typed-marker debt · `Parser::error_at` prose-mangle (LOW) · decl-sigil
       swallow noted in C3's mandate.
-    - **Integration order at batch close (parent):** cherry-pick A1 → A2-R → A3
-      sequentially (same-file disjoint hunks in src/semantic — resolve textual adjacency);
-      then full both-backend sweep + bootstrap + conformance + parity regen; then Batch B. Open non-fault follow-ups in TODO (each own gauntlet):
+    - **✅ BATCH-A CLOSE VERIFICATION COMPLETE (2026-07-12, all regenerated on the
+      gorget-1 tip after `7ad88cd4`):** full C sweep **1607/0/8ign** · full LLVM sweep
+      **1607/0/8ign** (suite grew +28 with the batch's fixtures; bootstrap fixed-point
+      included and green; the 8th ignore = A2-R1's aspirational run-twin) ·
+      spec_conformance **195/195 ×3 production lanes** · ggdef **114/0** all runners
+      incl. corpus_a · lib 1105/0 · lints 53/0 · **parity 1145/1217 = 94.1%** (EXACTLY
+      the predicted −2 MATCH/−2 denom vs the pre-batch 1147/1219 — A3's two
+      `cow_amp_bind_ref*` fixtures moved to RustRejected and left both sides of the
+      ratio; WRONG 10 · CC-FAIL 51 · CRASH 11 all unchanged). Worktrees pruned, batch
+      bookkeeping in DONE.md. **BATCH A IS CLOSED. THE FABLE ORCHESTRATOR STOPPED HERE
+      per the owner directive — the successor starts at "NEXT ORCHESTRATOR START HERE"
+      step 2 (A2-R2).**
+    - ~~Integration order at batch close (parent): cherry-pick A1 → A2-R → A3, then
+      full both-backend sweep + bootstrap + conformance + parity regen~~ ✅ done as
+      written. Then Batch B (after A2-R2/A2-S). Open non-fault follow-ups in TODO (each own gauntlet):
     rarer-bounds-sites real locations; self-host shift-parity guard; the block_exit_labels
     structural guard (≥2 instances — escalated); D23's T3c positive-throws smith tier. (The
     former fault-re-panic normalization + dead-catch-lint follow-ups are CANCELLED by D25 —
@@ -245,18 +257,16 @@ syncs main from gorget-1; **work on gorget-1 only**. Read order: this file top-t
 ENFORCEMENT-WAVE PLAN" entry (the live execution plan) → CLAUDE.md's multi-agent +
 review sections (the gauntlet you MUST run). Regenerate every number before quoting.
 
-**State you inherit (verify, don't trust):** Batch A of the wave — A1 (`d59605fc`) and
-A3 (`414e652a`) LANDED; A2-R1's status is in the LIVE BATCH-A STATE block above (it was
-in executor-recovery when this section was written — if unfinished, YOUR first job is
-completing it: the brief is `wave-a2-drop-purity-brief.md` [SPLIT header = scope], the
-base prototype is `scouts/patches/scout_wA2_prototype.patch`, partial work may be
-captured at `/tmp/recover_wA2R1_partial.patch` [550 lines, M1-M5: semantic core + 19
-`d12_drop_purity/` probe fixtures] — apply, finish M6-M9 per the brief, gauntlet the
-output). If A2-R1 landed and the batch-close verification passed, start at step 2.
+**State you inherit (verify, don't trust):** Batch A of the wave is **FULLY LANDED AND
+CLOSED** — A1 (`d59605fc`), A3 (`414e652a`), A2-R1 (`b72ef446`), the A3 ggdef-lane
+regression fix (`7ad88cd4`), and the close verification all green (numbers + the exact
+predicted parity movement in the LIVE BATCH-A STATE block above; regenerate before
+quoting). **Start at step 2 (A2-R2).** Step 1 below is retained only as the
+verify-don't-trust checklist if you suspect drift after the owner's main sync.
 
 **Your work queue, in order (each item = scout→brief→≥3 sequential fresh reviews→
 worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"`):**
-1. Finish/verify A2-R1 + the BATCH-A CLOSE: full C+LLVM sweeps
+1. ✅ DONE 2026-07-12 (re-run only if you suspect drift) — A2-R1 + the BATCH-A CLOSE: full C+LLVM sweeps
    (`GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 cargo test --test integration
    -- --test-threads=4`, both backends), 4-lane `spec_conformance` (expect 195×3 +
    the new negative fixtures outside spectests), parity regen (the standard command in
