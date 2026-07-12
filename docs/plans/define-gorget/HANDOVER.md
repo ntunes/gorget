@@ -146,9 +146,12 @@ sequential fresh-review gauntlet.
       ggdef 110/0, lints 53/0, lib 1105/0) — BATCH A: ALL THREE TRACKS LANDED. ⚠ SEPARATE A3-REGRESSION FOUND at
       integration-check: ggdef `corpus_a_all_match` RED on the tip — A3 flipped
       `cow_amp_bind_ref*` to expect `E_LocalBorrowBind` but ggdef never got the
-      D10(a) rule (every A3 reviewer + the brief missed the DEFINITION lane); a
-      dedicated ggdef-fix executor (Opus) IS RUNNING (mirror the landed rejection
-      class in elaborate; corpus_a + spec_conformance ggdef-lane green as gates).
+      D10(a) rule (every A3 reviewer + the brief missed the DEFINITION lane); the
+      ggdef fix LANDED `7ad88cd4` 2026-07-12 (faithful class mirror in elaborate +
+      the write-through fossil retired + a CheckFails harness provenance; composed
+      with A2-R1's ggdef changes → lib 114/0, corpus_a GREEN, all lanes agree;
+      two honest divergences reported: decl-sigils inherit the parse error;
+      module statics are outside ggdef's phase-0 subset).
       LESSON for the playbook: any track that FLIPS fixture expectations must carry
       the FULL ggdef suite in its gate list. Dead worktree removed post-capture.
       Commit lands with the current generic message (staged, Core-#8 clean).
