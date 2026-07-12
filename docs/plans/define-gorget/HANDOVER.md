@@ -136,11 +136,20 @@ sequential fresh-review gauntlet.
       possible — no tool rounds left); its M1-M5 work RECOVERED and staged DURABLY:
       `scouts/patches/wA2R1_partial_m1-m5.patch` (550-line semantic core) +
       `wA2R1_fixtures_m5.tgz` (19 probe fixtures — ⚠ gitignore-hidden until the
-      allowlist stanzas land, which executor #1 never added). TAKE-2 EXECUTOR
-      (Opus) RUNNING with the recovered base: R1 verify-M1-M5 → R2 wire fixture
-      test-fns → R3 ggdef parity → R4 docs → R5 gates → R6 commit. Dead worktree
-      removed post-capture. Commit lands with the current generic message (staged,
-      Core-#8 clean).
+      allowlist stanzas land, which executor #1 never added). TAKE-2 EXECUTOR (Opus)
+      COMPLETED: commit `a79fda44` (36 files +1010/−31; all probes verified; ggdef
+      gains Ty::Option/Result payload taint + 6 tests → lib 110/0; docs done; NEW
+      pre-existing bug DISCOVERED+to-file: closure-returned owned Drop temp not
+      drop-registered — `R b = f()` build-panics, `use(f())` silently loses the
+      drop). OUTPUT-REVIEW (Opus) IN FLIGHT. ⚠ SEPARATE A3-REGRESSION FOUND at
+      integration-check: ggdef `corpus_a_all_match` RED on the tip — A3 flipped
+      `cow_amp_bind_ref*` to expect `E_LocalBorrowBind` but ggdef never got the
+      D10(a) rule (every A3 reviewer + the brief missed the DEFINITION lane); a
+      dedicated ggdef-fix executor (Opus) IS RUNNING (mirror the landed rejection
+      class in elaborate; corpus_a + spec_conformance ggdef-lane green as gates).
+      LESSON for the playbook: any track that FLIPS fixture expectations must carry
+      the FULL ggdef suite in its gate list. Dead worktree removed post-capture.
+      Commit lands with the current generic message (staged, Core-#8 clean).
       A2-R2 (stub `wave-a2-r2-message-ice-brief.md`): position/shape-aware message (no-`!`
       capture gate; dead `move` suggestion dies) + the compound-assign ICE fix (CORRECTED
       anchors: `stmts/assigns.rs:1148`, `ir/builder.rs:258`, panic `mod.rs:1763`) — own
