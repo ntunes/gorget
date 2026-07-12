@@ -282,6 +282,51 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-12 — **D10(b) ADDENDUM (owner RATIFIED): the place-overlap rule ranges over
+  LIVE ALIASES, not syntactic reads — Copy reads are value snapshots and participate
+  in no overlap.** Raised by the Batch-B scout: when one call arg is `&whole` (a
+  writer) and another is a bare READ of an overlapping sub-place, does the read
+  conflict? Ruled: **state the rule ONCE — the place-overlap check ranges over live
+  aliases (`&` writers, `!`/`^` movers, AND non-Copy bare reads); a Copy-typed bare
+  read is a value snapshot that participates in no overlap.** The principled reading,
+  NOT a carve-out: D10 exists to close the lazy/eager CoW-divergence channel, whose
+  hazard is a *live alias* that can observe or miss a mutation through the writer. A
+  bare read of a Copy scalar at a call position is evaluated at the call site into an
+  INDEPENDENT value before the callee runs — no memory edge remains between it and
+  the writer's region, so there is nothing to diverge against; rejecting
+  `f(&whole, whole.int_field)` would reject a program with zero observable hazard,
+  spelling the rule over syntax ("read overlapping a writer") instead of semantics
+  ("live alias overlapping a writer"). A non-Copy bare read IS a borrow under
+  CoW-default — a live pointer into the writer's region for the whole call — which is
+  exactly the divergence channel, so it is REJECTED. The cut falls precisely on
+  ALIAS vs VALUE, the axis D10 was ratified to police. **Reference sanity-check
+  (independent):** this is Rust's two-phase-borrow behavior — `f(&mut s, s.int_field)`
+  compiles (Copy read snapshots before the `&mut` activates); `f(&mut s, &s.vec)` is
+  rejected (live shared borrow overlapping a `&mut`). Our principled derivation and
+  the reference land on the same cut independently.
+  **Rider 1 (movers, uniform — owner):** extend the same cut to movers. `f(!x, x.copy_field)`
+  is LEGAL (snapshot pre-call; the move transfers after, per the ownership table); a
+  non-Copy bare read overlapping a mover is a live alias into a moved-away value —
+  REJECT. The addendum states writer AND mover cases together; do not leave the mover
+  case to be re-derived at the next fork.
+  **Rider 2 (implementation — owner):** the check MUST read the TYPED Copy axis
+  (A2-R1 just built the Copy∧Drop machinery — read the same accessor, rule 2, NO
+  shape heuristics); ggdef models the IDENTICAL rule in the same track, with fixtures
+  pinning BOTH directions per position (legal Copy-read positive + non-Copy-read
+  rejection negative); the track gates on the FULL ggdef suite (Batch A's lesson:
+  this track flips/adds expectations).
+  **Provenance-bit fork resolved (B), owner-confirmed ("not even a close call"):**
+  call args already carry typed `CallArg.ownership` at the exact site D10(b) consumes
+  (Batch-B scout, `src/parser/expr.rs`), so D10(b) reads typed metadata — no
+  shape-walk, no sibling-drift. Building the typed borrow-provenance bit now would be
+  a ~69-site moderate-HIGH-risk perturbation of type-equality/coercion (+ a self-host
+  twin) with ZERO D10(b) consumer — tripping the standing "build only with a real
+  consumer" principle. The bit's real motivation was A3's expression-shaped
+  tail-walking fragility (the value-position family, TODO no-op-`&`); the
+  value-position track's scout re-evaluates it there with a real consumer in hand and
+  builds it only if it wins. Deferring is the reference-grade choice, not the lazy
+  one.
+
 - 2026-07-11 — **D10(a) ADDENDUM (owner, considered-and-DECLINED): local MOVE-binds
   stay LEGAL — the rejection criterion is ALIASING, not sigils-at-binds.** Raised
   after A3 landed the `&`-bind rejection: should `R b = !a` (post-D27: `^a`) be

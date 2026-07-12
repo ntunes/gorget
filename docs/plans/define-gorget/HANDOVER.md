@@ -127,7 +127,12 @@ sequential fresh-review gauntlet.
       SIGN OFF (diff content-identical to the reviewed prototype); post-integration
       quick gates green (build, lib 1105/0, break 5/0, lints 53/0). Full sweep at batch
       close covers it. Detail: DONE.md.
-    - **A2 (D12 drop-purity): ✅ FULLY LANDED — A2-R1 `b72ef446` + A2-R2 `b4b6124a` (2026-07-12, Opus successor).**
+    - **A2 (D12 drop-purity): ✅ FULLY LANDED in BOTH compilers — A2-R1 `b72ef446` + A2-R2 `b4b6124a` + A2-S `3b741a8a` (2026-07-12, Opus successor).**
+      **A2-S LANDED** (merge `3b741a8a`): the self-host `.gg` compiler now rejects a drop-tainted implicit copy at
+      all six positions (full M1+M2), mirroring A2-R1+A2-R2 — closing a live double-drop the self-host previously
+      miscompiled (Core #8). 4-pass brief gauntlet (pass-1 caught the blocking closure-tail-is-SExpr miss; pass-2
+      caught two over-corrections; pass-3 caught the generic-payload fixture gap) + output-review SIGN OFF
+      verified-by-execution. Migration surface = 0 (bootstrap proves no over-taint).
       **A2-R2 LANDED** (merge `b4b6124a`): M1 the compound-assign resource-element ICE fix (borrow-in-place
       + RHS-reorder closing the realloc UAF window — counterfactual-proven on both the local `v[0]+=grow(&v)`
       AND the deeper field path `h.v[0]+=grow(&h)` the executor caught; ASan-clean drop-once, byte-identical
@@ -285,12 +290,32 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    full gauntlet + output-review SIGN OFF. Filed HIGH: op-overload arg-leak + the
    reachable custom-indexable resource-element ICE sibling (work these — the ICE class
    isn't fully closed).
-3. **← YOU ARE HERE: A2-S** (self-host drop-purity port — TODO High entry): own scout→gauntlet;
-   bootstrap-gated; ~250-400 .gg lines; ggdef's 9-test suite is the model.
-4. **Batch B** (D10(b) place-overlap + in-repo hand-hoists — the wave-plan entry has
-   the site list): the scout MUST first evaluate building the TYPED BORROW-PROVENANCE
-   bit (TODO: grep "typed is-borrow signal") — A3's gauntlet identified it as the root
-   cause of the syntactic-walk fragility D10(b) would otherwise inherit.
+3. ✅ **A2-S DONE 2026-07-12** (merge `3b741a8a`): self-host D12 drop-purity port, FULL
+   M1+M2 (all six positions), full brief gauntlet (4 passes) + output-review SIGN OFF
+   verified-by-execution (D12 lane 21/0, bootstrap fixed-point GREEN, arm-count lint).
+   Scout CORRECTED the filing (self-host already had the A3/D10a rejection plumbing →
+   ~180-320 lines hooking the existing walker, not a ~250-400-line new pass; migration
+   surface = 0). Brief `wave-a2-s-selfhost-drop-purity-brief.md`, scout `scouts/scout-a2-s.md`.
+   Filed: pos-3 receiver name-lists → folded into the typed-builtin-marker debt (TODO).
+4. **← YOU ARE HERE: Batch B** (D10(b) place-overlap). **SCOUT DONE + OWNER RULED**
+   (scout `scouts/scout-batch-b.md`; ruling `decisions.md` LOG 2026-07-12 "D10(b)
+   ADDENDUM"). Key corrections the scout made: (a) D10(b) is NOT greenfield — it EXTENDS
+   the existing `check_call_aliasing` (`src/semantic/safety/helpers.rs:1124-1186`); the
+   real gaps are `f(x,!x)` (missing matrix arm) + field/index args (only collects
+   `Identifier`) — sharpest `f(&n,&n.field)` silently drops a write. (b) The typed
+   borrow-provenance bit is NOT needed — call args already carry typed `CallArg.ownership`;
+   OWNER CONFIRMED (B) = read the typed metadata, DEFER the bit to the value-position
+   family. **Owner ruling (Copy-read exemption → the LIVE-ALIAS rule):** the place-overlap
+   check ranges over live aliases (`&` writers, `!`/`^` movers, non-Copy bare reads);
+   Copy reads are value snapshots, no overlap — extend uniformly to movers; read the
+   TYPED Copy axis; ggdef parity + full-suite gate. **Slicing (scout, 3 briefs, each own
+   gauntlet):** B0 = hand-hoists first (2 p2p double-writers `p2p.gg:2057/2067` restructured
+   to a socket selector + 4 self-host fn refactors — REAL refactors not hoists, D10(a)
+   forbids `&`-field-binds; the `add_local` sites are Copy-int → EXEMPT per the ruling);
+   B1 = Rust `check_call_aliasing` extension + per-arm fixtures + §9.4 docs (gates on B0);
+   B2 = self-host mirror in `check_carrier_ops` ECall/EMethodCall — REBASES onto A2-S's
+   walker, bootstrap-gated. Projection-aware keying is load-bearing (~30 self-host
+   disjoint-field pairs; overlap = one projection path is a prefix of the other).
 5. **Batch C** per the wave plan: C1 operators (D26+D28; wire every new token into
    self-host `map_binop` + the anti-OP_ADD ratchet) → C2 fault-catch removal (D25;
    ~2,000-line both-compiler deletion; ships D24 spec prose + §10.5/§10.9 rewrite) →
