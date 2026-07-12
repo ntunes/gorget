@@ -18468,11 +18468,16 @@ fn self_host_driver_rejects_d12_drop_purity() {
         "pos1_option_payload_reject",
         "pos1_result_ok_payload_reject",
         "pos1_result_err_payload_reject",
-        // position 2 (ctor / field-init)
-        "pos2_ctor_init_reject",
-        // position 3 (collection put) — whole / field
-        "pos3_collection_put_reject",
-        "pos3_field_place_reject",
+        // positions 2 (ctor / field-init) + 3 (collection put) TEMPORARILY OMITTED
+        // (2026-07-12): the self-host `parse_call_args` DISCARDS the `!`/`&` arg
+        // sigil (parser.gg `skip_ownership_markers`), so these two positions cannot
+        // tell a legal `W(!x)` / `coll.push(!x)` MOVE from a bare COPY and
+        // over-rejected the move — pos-2/pos-3 are DISABLED in
+        // self_host_typechecker/typecheck.gg pending the call-arg-sigil fix. The
+        // fixtures (pos2_ctor_init_reject, pos3_collection_put_reject,
+        // pos3_field_place_reject) still exist and Rust gg asserts they reject
+        // (`d12_pos2_ctor_init_reject` / `d12_pos3_*` above). Restore these three
+        // entries when the sigil fix re-enables pos-2/pos-3 on the self-host.
         // position 4 (return / expr-body / closure-tail)
         "pos4_return_reject",
         "pos4_field_place_reject",
