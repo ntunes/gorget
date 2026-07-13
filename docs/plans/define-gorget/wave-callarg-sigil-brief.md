@@ -24,15 +24,27 @@
 > comparison counts should be UNCHANGED-OR-IMPROVED (format round-trip fix), the
 > other three IDENTICAL — count-diff all 5 with `--nocapture`. **(R5)**
 > `is_collection_receiver` is :758 (was :766); the accept guard is a forward
-> regression guard (teeth only in the final combined state). Awaiting pass 2 (fresh)
-> on the CORRECTED + COMMITTED brief.
+> regression guard (teeth only in the final combined state).
+>
+> **v2 — pass-2 (Opus, fresh) folded.** Pass-2 verified ALL citations accurate
+> against source (the 6 exact skip-sites + the surviving type-context callers; the
+> re-enable = exact inverse of `5ea1c92b`; the accept-guard need; and CONFIRMED the
+> `move`-keyword note is sound — Rust rejects bare `move x` `expr.rs:585-593`, the
+> self-host divergence is pre-existing, file-not-chase) and raised **1 BLOCKING
+> reservation, FOLDED:** the R2 `mutable`-arm drop had left STALE remnants in §0
+> (:35), §5 gate 7 (:176), and §7 DoD (:194/:196) that still COMMANDED the arm —
+> contradicting §3 and, via the DoD, would have driven the executor to ship the exact
+> Core-#8 divergence R2 removed. All four scrubbed: §0 lists only `!`/`&`; gate 7 is
+> now a `f(mutable x)` PARSE-ERROR negative; the DoD requires `mutable`→parse-error,
+> no arm. Awaiting pass 3 (fresh, confirming the scrub is complete).
 
 ---
 
 ## 0. Decided: SHAPE (a), wrapper-based (not the `CallArg.ownership` field)
 
-The scout measured both shapes. **Shape (a) — wrap the arg** (`!arg`/`move arg` →
-`EMove`, `&arg`/`mutable arg` → `EMutableBorrow`) is the decision:
+The scout measured both shapes. **Shape (a) — wrap the arg** (`!arg` → `EMove`,
+`&arg` → `EMutableBorrow`, matching Rust's only two call-arg sigils — see §3 on the
+`move`/`mutable` keywords) is the decision:
 - PROVEN clean end-to-end (§ scout: `lowerer_comparison` byte-identical over 1524
   fixtures, `self_host_bootstrap_fixed_point` passes 439s, `box_deref` ASan 6/6),
   despite rewrapping 9059 `&ident` + 171 `!ident` call-arg sites.
@@ -173,8 +185,9 @@ bootstrap + `box_deref` ASan directly; **regenerate ALL count-diffs at execution
    pos-2/3 restored) + `self_host_driver_accepts_d12_legal` (incl. the NEW `!x`
    move-arg accept guard) + `self_host_d12_reject_hook_count` lint (== 9).
 6. **`box_deref` self-host ASan gates** (the `&*box` reroute the wrap touches): 6/6.
-7. A tiny `f(mutable x)` parse/format fixture to LOCK the new `mutable` arm (the one
-   path the scout's prototype didn't exercise — unused in-tree, so add coverage).
+7. A tiny NEGATIVE fixture asserting `f(mutable x)` is a PARSE ERROR (matching Rust —
+   `mutable` is not a call-arg sigil; the minimal patch already produces this, but
+   pin it so a future stray `mutable` arm can't silently diverge from Rust).
 8. Full integration sweep is the PARENT's job (`GG_BUILD_TIMEOUT_SECS=600
    GG_TEST_TIMEOUT_SECS=120`, quiet box — do NOT run review agents concurrently).
 
@@ -190,10 +203,13 @@ FOREGROUND with generous timeouts. On an Edit-tool desync, re-Read + retry.
 
 ## 7. Definition of done
 
-- [ ] The 3 real `parser.gg` files preserve all four call-arg sigils
-      (`!`/`move`→EMove, `&`/`mutable`→EMutableBorrow); `skip_ownership_markers`
+- [ ] The 3 real `parser.gg` files preserve the call-arg sigils Rust tracks —
+      `!`→EMove, `&`→EMutableBorrow (via the existing prefix parser); `mutable` at a
+      call arg is a PARSE ERROR (matching Rust); NO `mutable`-prefix arm added.
+      `skip_ownership_markers`
       dead-code removed or left per its other callers.
-- [ ] Named-arg values not double-wrapped; `f(mutable x)` parse/format fixture passes.
+- [ ] Named-arg values not double-wrapped; the `f(mutable x)` PARSE-ERROR negative
+      fixture passes.
 - [ ] A2-S pos-2/3 re-enabled; arm-count lint == 9; the 3 reject fixtures restored;
       the NEW `W(!x)`/`push(!x)` ACCEPT guard added + green.
 - [ ] D12 lanes: `W(!a)`/`v.push(!b)` ACCEPT, bare `W(a)`/`v.push(a)` REJECT.
