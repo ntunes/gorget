@@ -294,21 +294,31 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    full gauntlet + output-review SIGN OFF. Filed HIGH: op-overload arg-leak + the
    reachable custom-indexable resource-element ICE sibling (work these — the ICE class
    isn't fully closed).
-3. ⚠ **A2-S LANDED 4/6 2026-07-12** (merge `3b741a8a` + scope-down): self-host D12
-   drop-purity port. Positions 1/4/5/6 LIVE + correct (4-pass gauntlet + output-review
-   SIGN OFF; D12 lane, bootstrap GREEN, arm-count lint). **Positions 2/3 TEMPORARILY
-   DISABLED** — the full-sweep cert (Core #7 — NOT the D12 lane, NOT the bootstrap)
-   caught them OVER-REJECTING `vb.push(!nb)`. ROOT CAUSE + THE NEXT PREREQUISITE:
-   **the self-host `parse_call_args` DISCARDS the `!`/`&` arg sigil** (`parser.gg`
-   `skip_ownership_markers`), so a call-arg position can't tell a legal `!x` move from
-   a bare copy. **Filed HIGH: call-arg-sigil preservation** (TODO — the SHARED
-   prerequisite to re-enable pos-2/3 AND land Batch B B2). Do THAT first. Brief
-   `wave-a2-s-selfhost-drop-purity-brief.md`, scout `scouts/scout-a2-s.md`.
-4. **← YOU ARE HERE: Batch B** (D10(b) place-overlap). ⚠ **B2 (self-host mirror) is now
-   BLOCKED on the call-arg-sigil fix above** (same gap — the scout's "`EMove`→mover /
-   `EMutableBorrow`→writer at call args" assumption is FALSE today; the sigil is
-   discarded). B0 (hand-hoists) + B1 (Rust check) are UNAFFECTED and can proceed; B2
-   waits for the sigil fix. **SCOUT DONE + OWNER RULED**
+3. ⚠ **A2-S = 4/6 (pos-2/3 DISABLED)** (merge `3b741a8a` + scope-down): self-host D12
+   drop-purity. Pos-1/4/5/6 LIVE + correct. Pos-2/3 (the two call-arg positions)
+   disabled — the self-host `parse_call_args` DISCARDS the `!`/`&` arg sigil. The
+   minimal "wrapper" fix (wrap `!x`→EMove at call args) was landed THEN REVERTED
+   (`a2f6df25`) — it silently MISCOMPILED `&`/`!`-arg programs (the lowerer's
+   EMutableBorrow arm fired). **⇒ OWNER RATIFIED (firm): converge on Rust's typed
+   `CallArg{name,ownership,value}` record** (decisions.md LOG 2026-07-13) — value stays
+   BARE (lowerer unchanged → structurally no miscompile), retires the parallel
+   names-vector sidecar too. Scout: `scouts/scout-callarg-normalization.md` (proven
+   sound+tractable+safe; ~170 arity sites; `self_host_runtime` is now a MANDATORY gate).
+4. ✅ **FieldAccess soundness fix LANDED `f9a9da3d` (2026-07-13) — the CallArg
+   prerequisite is DONE.** The CallArg scout exposed a latent typechecker hole
+   (`FieldAccess` on a fieldless receiver returned `error_id` → bogus `v.value`
+   typechecked → uncompilable C); fixed at the write site + RETIRED the `str.data`
+   fossil (owner-decided). Fully gated (C 1619/0, LLVM 1619/0, bootstrap/self_host_runtime
+   green both backends) + output-review SIGN OFF. Brief `wave-fieldaccess-soundness-brief.md`.
+   Follow-up STAYS filed: deref-aware Strategy-2B (bogus field on wrapper/tuple).
+5. **← YOU ARE HERE: the CallArg normalization** (task #14) — write the brief from
+   `scouts/scout-callarg-normalization.md` (correct the proto's 7 `.value`-on-`Vector[CallArg]`
+   defects → `callarg_values(...)`), gauntlet, execute (MANDATORY `self_host_runtime` +
+   full-sweep gates — the saga's lesson), integrate → A2-S back to 6/6.
+6. **THEN Batch B** (D10(b) place-overlap; PAUSED by owner until the sigil path lands).
+   B2 (self-host mirror) consumes `arg.ownership` from the CallArg record (owner: B2
+   must HONOR the CallArg model). B0 (hand-hoists, gauntlet-clean brief) → B1 (Rust
+   check) → B2. **SCOUT DONE + OWNER RULED**
    (scout `scouts/scout-batch-b.md`; ruling `decisions.md` LOG 2026-07-12 "D10(b)
    ADDENDUM"). Key corrections the scout made: (a) D10(b) is NOT greenfield — it EXTENDS
    the existing `check_call_aliasing` (`src/semantic/safety/helpers.rs:1124-1186`); the
