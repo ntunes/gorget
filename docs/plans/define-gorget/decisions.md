@@ -282,6 +282,41 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-13 — **SELF-HOST ARG MODEL: converge on Rust's typed `CallArg{name,
+  ownership, value}` record (owner RATIFIED, FIRM — "make the sigil fix the CallArg
+  normalization itself").** The self-host call/method-argument representation moves
+  from `Vector[SpannedExpr] args` + a PARALLEL `Vector[String]` names sidecar (with
+  ownership encoded — or DROPPED — by wrapping the arg in `EMove`/`EMutableBorrow`) to
+  a single `Vector[CallArg]` where `CallArg{ name: Option[String], ownership, value }`
+  carries all per-arg passing metadata as TYPED FIELDS, mirroring Rust gg
+  (`Vec<Spanned<CallArg>>`, `src/parser/expr.rs:1992`). **Rationale (three-fold, and
+  the correctness leg is decisive):** (1) REFERENCE-GRADE — per-arg passing metadata
+  (name, ownership) are facts of the same category and belong as typed fields, not
+  split between a parallel-names-vector and an expression-shape wrapper; reading
+  ownership becomes `arg.ownership`, not `match arg.value: case EMove` (layering rule
+  2 typed-not-shape + rule 3 one-source-of-truth); it retires the parallel-names
+  sidecar (itself a rule-3 smell) in the same move. (2) SAFE — the arg VALUE stays a
+  BARE expression, so the self-host LOWERER sees exactly what it saw before → the
+  ownership refactor structurally CANNOT reproduce the miscompile class that reverted
+  the wrapper approach (see the dogfood finding below). (3) It is the natural shape
+  for B2's D10(b) place-overlap mirror (iterate args, read `arg.ownership`). **Scope
+  of the "expression-context `!x`" stays put:** `R b = !a` is genuinely a
+  value-producing move-EXPRESSION and remains `EMove`; ONLY call/method args get the
+  `CallArg` record. **B2 must HONOR this** (read `arg.ownership`, never shape-match) —
+  owner directive. **DOGFOOD FINDING that forced "now" (per the standing dogfood
+  directive):** the minimal wrapper fix (shape (a): wrap `!x`→EMove / `&x`→
+  EMutableBorrow at call args) SILENTLY MISCOMPILED `&`/`!`-arg programs on the
+  self-host (`mutarg_probe` → garbage, `static_ref_param` → `0` not `42`) — wrapping
+  a `&`-arg in `EMutableBorrow` made the LOWERER's `EMutableBorrow` arm fire where it
+  was dead for call args, changing lowering. It was reverted (`a2f6df25`) because the
+  scout's + executor's gates (lowerer_comparison emitted-C diff + bootstrap +
+  box_deref ASan) did NOT include `self_host_runtime` (the runtime-OUTPUT snapshot
+  suite that catches compiles-fine-runs-wrong). **Enforcement lesson pinned:
+  `self_host_runtime` + the full runtime-output suite are MANDATORY gates for any
+  self-host lowering-adjacent change.** The correctness failure of the wrapper is
+  exactly why the typed `CallArg` (bare value) is not merely more elegant but the only
+  safe model — so the convergence lands NOW, as the fix.
+
 - 2026-07-12 — **D10(b) ADDENDUM (owner RATIFIED): the place-overlap rule ranges over
   LIVE ALIASES, not syntactic reads — Copy reads are value snapshots and participate
   in no overlap.** Raised by the Batch-B scout: when one call arg is `&whole` (a
