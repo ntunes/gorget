@@ -1,0 +1,14 @@
+struct Inner:
+    int value
+
+int count(Vector[Inner] xs):
+    return xs.len()
+
+int main():
+    Vector[Inner] v = []
+    v.push(Inner(5))
+    v.push(Inner(9))
+    # .value on a Vector[Inner] — Vector has no `.value` field.
+    int n = count(v.value)
+    print(n)
+    return 0
