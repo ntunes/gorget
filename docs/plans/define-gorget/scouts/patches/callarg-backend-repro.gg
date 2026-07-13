@@ -1,0 +1,42 @@
+from std.collections import Vector
+
+struct Span:
+    int start
+    int end
+
+struct SpannedExpr:
+    int expr
+    Span span
+
+struct CallArg:
+    Option[String] name
+    int ownership
+    SpannedExpr value
+
+Vector[SpannedExpr] callarg_values(Vector[CallArg] args):
+    Vector[SpannedExpr] out = Vector[SpannedExpr]()
+    for a in args:
+        out.push(a.value)
+    return out
+
+int sum_exprs(Vector[CallArg] args):
+    int total = 0
+    int i = 0
+    while i < args.len():
+        total = total + args.get(i).unwrap().value.expr
+        total = total + args.get(i).unwrap().ownership
+        i = i + 1
+    Vector[SpannedExpr] vals = callarg_values(args)
+    for v in vals:
+        total = total + v.span.start
+    return total
+
+void main():
+    Vector[CallArg] args = Vector[CallArg]()
+    args.push(CallArg(None, 0, SpannedExpr(7, Span(1, 2))))
+    args.push(CallArg(Some("k"), 2, SpannedExpr(35, Span(3, 4))))
+    int r = sum_exprs(args)
+    if r == 48:
+        print("REPRO_OK_48")
+    else:
+        print("REPRO_WRONG")
