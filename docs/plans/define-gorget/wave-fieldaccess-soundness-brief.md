@@ -10,8 +10,19 @@
 > PROTOTYPED + validated). **Fix patch:** `scouts/patches/fieldaccess-reject-fix.patch`
 > (~74 lines, 1 file). **Minimal repro:** `scouts/patches/fieldaccess-fieldless-repro.gg`.
 >
-> **Status:** v0 (draft, orchestrator). Awaiting ≥3 SEQUENTIAL fresh brief-review
-> passes (fold after each; never stop on a pass with reservations) before launch.
+> **Status:** v1 — pass-1 (Opus, fresh) SIGN OFF, minor notes folded. Pass-1 applied
+> the fix patch, BUILT + RAN the over-rejection gate (`cargo test --lib` 1107/0;
+> field/struct/box/generic/enum/shared/deref slice 312/0; `self_host_runtime`/`_diff`
+> 2/0) and **exhaustively verified carve-out COMPLETENESS** — every late-resolving
+> field path enumerated + covered, with the clincher that Gorget has NO user-definable
+> `Deref` trait (closed builtin deref set → the name-match carve-out CAN be + IS
+> complete); `Rc`/`Arc`/`Cell` are not real types; `AtomicInt`/`Bool` are real structs
+> with normal field checking (no false-reject); bare-type-param `T.field` resolves to
+> `Var` → not rejected (tested). Folded the 3 minor notes: ENUMS named in the reject
+> set + an `enum.field` negative fixture; a generic-fn bare-type-param positive guard;
+> the typed-flag-vs-name-match layering acknowledgment (→ Strategy-2B follow-up).
+> Awaiting passes 2-3 (fresh, confirming — the ≥3-brief convention; carve-out
+> completeness independently re-derived).
 
 ---
 
@@ -19,8 +30,9 @@
 
 **Ship the TARGETED fix:** reject `E_NoFieldFound` for a named field access on a
 receiver that DEFINITELY has no such field — primitives (`int`/`String`/`bool`/…),
-builtin generics (`Vector`/`Dict`/`Set` — placeholder defs, absent from
-`struct_fields`), and user structs missing the field — while CARVING OUT
+builtin generics (`Vector`/`Dict`/`Set`/`Channel`/`Future`/`Task`/`TaskGroup` —
+placeholder defs, absent from `struct_fields`), **enums** (variants, no fields — use
+`match`), and user structs missing the field — while CARVING OUT
 smart-pointer / guard wrappers (`Box`/`Shared`/`Mutex`/`RWLock`/`Weak`/`ReadGuard`/
 `WriteGuard`/`Guard`) whose field resolves LATE (through a deref), and unresolved
 inference vars (`Var`) / already-`error_id` receivers. **Follow-ups FILED (not this
@@ -54,13 +66,25 @@ In `typecheck.rs` FieldAccess: unify ALL "absent field" reporting at one site an
 replace the `error_id` fallthrough (`:2767`) with a DEFINITELY-ABSENT check that
 reports `NoFieldFound` for:
 - primitives (no fields);
-- builtin generics `Vector`/`Dict`/`Set` (placeholder defs — no user fields);
+- builtin generics `Vector`/`Dict`/`Set`/`Channel`/`Future`/`Task`/`TaskGroup`
+  (placeholder defs — no user fields);
+- enums (variants, no fields — pass-1 verified `enum.value` correctly rejects;
+  enums use `match`, no in-repo reliance);
 - user structs missing the named field (the existing `:2685` case, now unified);
 and CARVES OUT (returns the permissive `error_id`/late-resolve, as today):
 - smart-pointer / guard wrappers whose field resolves through a deref
   (`Box`/`Shared`/`Mutex`/`RWLock`/`Weak`/`ReadGuard`/`WriteGuard`/`Guard`);
 - unresolved inference vars (`ResolvedType::Var`) and already-`error_id` receivers
   (suppress cascade — mirror the DerefNonBox guard `:2948-2963`).
+
+The carve-out is a NAME-MATCH (`is_field_deref_wrapper`) — a layering smell in the
+abstract, but CONSISTENT with the pervasive existing precedent in the same file
+(`unify` name-matches `Mutex`/`Shared`/`RWLock` at `:1061`/`:1078`; `Deref` matches
+`Box` at `:2944`; the wrapper family is name-matched across `cycle_check.rs`/
+`resolve.rs`/`safety/*`) — and it CAN be complete because Gorget has NO user-definable
+`Deref` trait (deref-coercion is a CLOSED compiler-builtin set — pass-1 clincher). The
+reference-grade typed-flag version (a `DefInfo.is_deref_wrapper` read instead of the
+name-list) folds into the already-filed Strategy-2B follow-up; NOT this track.
 
 ## 3. THE KEY RISK the gauntlet must hammer — carve-out COMPLETENESS
 
@@ -85,9 +109,12 @@ fix wrongly rejects valid code. The reviewers MUST:
 
 **Fixtures:** wire `scouts/patches/fieldaccess-fieldless-repro.gg` as a NEGATIVE
 (`assert E_NoFieldFound` on `Vector[T].value`) + add negatives for `int.foo` /
-`String.foo` (primitive) + `struct.nonexistent` (single error) + POSITIVE guards that
-`Box[T].field` / `shared T.field` / `struct.field` STILL typecheck (the carve-out
-regression net — these are the false-reject tripwires).
+`String.foo` (primitive), `struct.nonexistent` (single error), and **`enum.field`**
+(the new enum-reject surface — pin it, pass-1 note) + POSITIVE guards that
+`Box[T].field` / `shared T.field` / `struct.field` STILL typecheck, PLUS a
+**generic-fn bare-type-param** guard `foo[T](T val): val.x` (the subtlest carve-out
+path — a `T.field` resolves to `Var` → must NOT reject; pass-1 tested it passes +
+runs). These are the false-reject tripwires — the carve-out regression net.
 
 **Gates (this is a RUST production-compiler change — it changes what `gg` ACCEPTS, so
 it is bootstrap-gated in the sense that the self-host SOURCE + lib + all fixtures must
