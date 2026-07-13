@@ -1,0 +1,11 @@
+# FieldAccess over-rejection guard: a VALID field on a concrete user struct
+# must STILL typecheck (and run). The definitely-absent reject must not touch
+# the present-field path.
+struct P:
+    int x
+    int y
+
+int main():
+    P p = P(3, 4)
+    print(p.x + p.y)
+    return 0

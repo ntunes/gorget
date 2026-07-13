@@ -1,0 +1,13 @@
+# FieldAccess soundness (Core #8): an enum value has variants, NOT fields —
+# a named `.field` on it must be REJECTED with E_NoFieldFound (use `match`).
+# Enums are absent from `struct_fields`, so the definitely-absent fallthrough
+# now rejects them (previously silently accepted via the wildcard `error_id`).
+enum Color:
+    Red()
+    Blue()
+
+int main():
+    Color c = Color.Red()
+    int y = c.value
+    print(y)
+    return 0

@@ -2255,12 +2255,6 @@ fn lower_field_access(
 
             // Look up the type name, then the field info
             if let Some(type_name) = ctx.type_name_for_id(effective_type_id) {
-                // Special case: GorgetString.data — return the GorgetString itself.
-                // GorgetString TypeDef has no registered fields in GIR (it's opaque),
-                // but accessing .data is valid for printf (%.*s handles it correctly).
-                if type_name == "GorgetString" && field_name == "data" {
-                    return obj;
-                }
                 // First try the struct_fields cache
                 if let Some((field_idx, field_type)) = ctx.lookup_field(type_name, field_name) {
                     // !self consuming access: resource fields are moved out (owned),

@@ -1,0 +1,16 @@
+# FieldAccess over-rejection guard — THE subtlest carve-out path. A field
+# access on a bare generic type parameter (`T val; val.x`) resolves to a type
+# inference var (`ResolvedType::Var`), NOT a concrete fieldless type. The
+# definitely-absent check must fall through (`_ => false`) and NOT reject it —
+# monomorphization types `T` = `P` later, where `.x` is a real field. This
+# guards the load-bearing `Var` suppression (mirrors the DerefNonBox guard).
+struct P:
+    int x
+
+int getx[T](T val):
+    return val.x
+
+int main():
+    P p = P(11)
+    print(getx(p))
+    return 0

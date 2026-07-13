@@ -1,0 +1,13 @@
+# FieldAccess over-rejection guard: a field access on a `shared`-qualified
+# struct local must STILL typecheck (and run). The `shared` qualifier is
+# transparent to field resolution (`shared P` resolves to `P`), so `p.x` reads
+# the struct field normally — the definitely-absent reject must not touch it.
+# (Emits a benign "never crosses a concurrency boundary" warning on stderr;
+# `run_gg` asserts stdout only, so the "9" assertion is unaffected.)
+struct P:
+    int x
+
+int main():
+    shared P p = P(9)
+    print(p.x)
+    return 0

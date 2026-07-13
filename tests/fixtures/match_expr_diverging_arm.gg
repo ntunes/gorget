@@ -32,7 +32,7 @@ void main():
             s
         else:
             exit(3)
-    print(tag.data)
+    print(tag)
 
     # Int-typed match value with a diverging else.
     int code = match n:

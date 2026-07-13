@@ -4647,18 +4647,6 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     inner_tid = base_tid
                 case None:
                     pass
-            # Special case: GorgetString.data — return the GorgetString
-            # itself (identity). GorgetString has no registered `data` field
-            # in type_infos (it's an opaque runtime struct), so the field
-            # lookup below would fall through to the [bug] I64(0) placeholder.
-            # Accessing `.data` is valid for printf (`%.*s` handles it). For a
-            # value receiver `base` is already a value GorgetString; for a
-            # `&String`/`!String` borrow it is a Ptr(GorgetString) — both are
-            # returned AS-IS (the borrowed-String formatter deref handles the
-            # Ptr at the format site). Mirrors Rust
-            # `src/ir/lowering/exprs/mod.rs:2108` (`return obj;`).
-            if base_type_name == "GorgetString" and field_name == "data":
-                return base
             # Tuple-index reconciliation: the parser produces field-name `"_0"`
             # for `t._0` but a BARE DIGIT `"0"/"1"/…` for `t.0` (parser.gg:
             # 1802-1816). Tuple structs register their fields ONLY as `_N`

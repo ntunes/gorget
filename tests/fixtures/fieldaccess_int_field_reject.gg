@@ -1,0 +1,8 @@
+# FieldAccess soundness (Core #8): a named field on a PRIMITIVE (`int`) has no
+# fields and must be REJECTED with E_NoFieldFound (previously fell through to
+# the wildcard `error_id` and silently type-checked).
+int main():
+    int x = 5
+    int y = x.foo
+    print(y)
+    return 0

@@ -1,0 +1,7 @@
+# FieldAccess soundness (Core #8): a named field on a PRIMITIVE (`String`) has
+# no fields and must be REJECTED with E_NoFieldFound.
+int main():
+    String s = "hi"
+    int y = s.foo
+    print(y)
+    return 0

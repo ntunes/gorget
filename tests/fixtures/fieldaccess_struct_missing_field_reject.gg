@@ -1,0 +1,13 @@
+# FieldAccess soundness (Core #8): a named field ABSENT from a concrete user
+# struct must be REJECTED with a SINGLE E_NoFieldFound. The old code reported
+# this in the `Defined` branch; the fix unifies all "absent field" reporting at
+# one definitely-absent site (no cascade — `x.nonexistent` yields exactly one
+# error, then binds `error_id` which absorbs the downstream `int y =`).
+struct P:
+    int x
+
+int main():
+    P p = P(3)
+    int y = p.nonexistent
+    print(y)
+    return 0

@@ -1342,6 +1342,102 @@ fn generic_param_field_match() {
     run_gg("generic_param_field_match.gg", "42\n105\n-1");
 }
 
+// ══════════════════════════════════════════════════════════════
+// FieldAccess soundness (Track #17 / Core #8): reject a named field on a
+// DEFINITELY-FIELDLESS receiver. `Expr::FieldAccess` used to return the
+// wildcard `error_id` for primitives / builtin generics / enums / missing
+// struct fields, which then unified with ANY downstream parameter type — so
+// `count(v.value)` on a `Vector[Inner]` type-checked with 0 errors and the C
+// backend emitted uncompilable code. The fix reports E_NoFieldFound for those
+// while CARVING OUT late-resolving smart-pointer/guard wrappers (Box/Shared/…)
+// and still-inferring (`Var`) / already-errored receivers. The negatives pin
+// the reject; the positives are the over-rejection (false-reject) regression
+// net. The `error[E_NoFieldFound]` code substring is the diagnostic-code pin.
+// ══════════════════════════════════════════════════════════════
+const FIELDACCESS_CODE: &str = "error[E_NoFieldFound]";
+
+// NEGATIVE: `.value` on a `Vector[Inner]` (a fieldless builtin generic) — the
+// minimal repro that miscompiled the C backend. Must REJECT at check time.
+#[test]
+fn fieldaccess_vector_field_reject() {
+    check_gg_fails("fieldaccess_vector_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// NEGATIVE: `.foo` on an `int` (a primitive has no fields).
+#[test]
+fn fieldaccess_int_field_reject() {
+    check_gg_fails("fieldaccess_int_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// NEGATIVE: `.foo` on a `String` (a primitive has no fields).
+#[test]
+fn fieldaccess_string_field_reject() {
+    check_gg_fails("fieldaccess_string_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// NEGATIVE: a field ABSENT from a concrete user struct — a SINGLE E_NoFieldFound
+// (no cascade; the reporting is unified at one definitely-absent site).
+#[test]
+fn fieldaccess_struct_missing_field_reject() {
+    check_gg_fails("fieldaccess_struct_missing_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// NEGATIVE: `.field` on an enum value (variants, not fields — use `match`).
+// The new enum-reject surface: enums are absent from `struct_fields`, so the
+// definitely-absent fallthrough rejects them.
+#[test]
+fn fieldaccess_enum_field_reject() {
+    check_gg_fails("fieldaccess_enum_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// POSITIVE (over-rejection guard): a VALID field on a concrete user struct
+// must still typecheck AND run.
+#[test]
+fn fieldaccess_struct_field_ok() {
+    run_gg("fieldaccess_struct_field_ok.gg", "7");
+}
+
+// POSITIVE (over-rejection guard) — THE subtlest carve-out path. A field access
+// on a bare generic type parameter (`T val; val.x`) resolves to `Var`, NOT a
+// concrete fieldless type; the `_ => false` suppression must let it through so
+// monomorphization (T = P) types `.x` to a real field. Must typecheck AND run.
+#[test]
+fn fieldaccess_generic_param_field_ok() {
+    run_gg("fieldaccess_generic_param_field_ok.gg", "11");
+}
+
+// POSITIVE (over-rejection guard): a field on a `shared`-qualified struct local.
+// `shared P` is transparent to field resolution, so `p.x` reads the field
+// normally. Must typecheck AND run (a benign concurrency-boundary warning goes
+// to stderr; the "9" is stdout).
+#[test]
+fn fieldaccess_shared_field_ok() {
+    run_gg("fieldaccess_shared_field_ok.gg", "9");
+}
+
+// POSITIVE (over-rejection guard) — the smart-pointer WRAPPER carve-out. A
+// field access on a `Box[P]` (`b.x`) auto-derefs to the boxed `P`'s field and
+// resolves LATE; the receiver is `Generic(Box, [P])` at check time with `x`
+// absent from Box's own field list. `is_field_deref_wrapper("Box")` carves it
+// out of the reject, so `gg check` must SUCCEED. (Check-only: the auto-deref
+// field READ is the filed Strategy-2B follow-up — see the `#[ignore]`d runtime
+// twin below.)
+#[test]
+fn fieldaccess_box_field_ok() {
+    check_gg_ok("fieldaccess_box_field_ok.gg");
+}
+
+// Strategy-2B follow-up (filed): the Box auto-deref field READ must eventually
+// yield the CORRECT value (7). It currently yields 0 (late-resolve gap), so
+// this is `#[ignore]`d with the RIGHT expected output per "Don't redesign
+// around compiler gaps" — a ready regression test for when 2B lands. Do NOT
+// change the expected value to the buggy one to un-ignore it.
+#[test]
+#[ignore = "Strategy-2B: Box auto-deref field read resolves late; yields 0 not 7 (filed HIGH)"]
+fn fieldaccess_box_field_read_value() {
+    run_gg("fieldaccess_box_field_ok.gg", "7");
+}
+
 // A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
 // emits `unreachable` right after it, so a noreturn function that falls
 // off its end, executes a `return`, or has a non-diverging expression body

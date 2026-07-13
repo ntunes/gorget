@@ -1,0 +1,21 @@
+# FieldAccess over-rejection guard — the smart-pointer WRAPPER carve-out. A
+# field access on a `Box[P]` (`b.x`) auto-dereferences to the boxed `P`'s field
+# and resolves LATE (in lowering / monomorphization), so at typecheck the
+# receiver is `Generic(Box, [P])` with `x` absent from Box's own (empty) field
+# list. `is_field_deref_wrapper("Box")` carves it OUT of the definitely-absent
+# reject — `gg check` must SUCCEED (this is `check_gg_ok`, not `run_gg`).
+#
+# NOTE: the auto-deref field READ itself is the filed Strategy-2B follow-up —
+# it currently yields a wrong value (0 instead of 7) at runtime, which is why
+# the runtime assertion is `#[ignore]`d with the CORRECT expected output (per
+# "Don't redesign around compiler gaps"). This fixture's point is ACCEPTANCE at
+# check time; do NOT lock in the buggy runtime value.
+from std.collections import Box
+
+struct P:
+    int x
+
+int main():
+    Box[P] b = Box.new(P(7))
+    print(b.x)
+    return 0

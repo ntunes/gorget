@@ -69,9 +69,9 @@ void main():
     match dig_result:
         case Ok(rx):
             String replaced = rx.replace("abc 123 def 456", "NUM")
-            print(replaced.data)
+            print(replaced)
             String replaced_all = rx.replace_all("abc 123 def 456", "NUM")
-            print(replaced_all.data)
+            print(replaced_all)
         case Error(e):
             print("error")
 
@@ -130,7 +130,7 @@ void main():
 
     # Test 7: escape
     String escaped = regex_escape("hello.world[0]")
-    print(escaped.data)
+    print(escaped)
 
     # Test 8: convenience functions
     bool cim = regex_is_match(r"\d+", "abc 42 def")
@@ -144,7 +144,7 @@ void main():
             print("no match")
 
     String conv_r = regex_replace(r"\d+", "abc 42 def", "NUM")
-    print(conv_r.data)
+    print(conv_r)
 
     # Test 9: fullmatch
     Result[Regex, String] full_result = regex_compile(r"\d\d\d")

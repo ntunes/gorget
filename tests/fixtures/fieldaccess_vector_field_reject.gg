@@ -1,0 +1,21 @@
+# FieldAccess soundness (Core #8): a named field on a FIELDLESS builtin generic
+# (`Vector[Inner].value`) must be REJECTED at check time. Before the fix the
+# access returned the wildcard `error_id`, which unifies with any downstream
+# parameter type, so `count(v.value)` typechecked with 0 errors and the C
+# backend then emitted uncompilable code (`slot(GorgetArray) = int32_t 0` ->
+# "incompatible types: GorgetArray from int32_t"). Now `gg check` rejects it
+# with E_NoFieldFound. (The minimal repro from scouts/patches/.)
+struct Inner:
+    int value
+
+int count(Vector[Inner] xs):
+    return xs.len()
+
+int main():
+    Vector[Inner] v = []
+    v.push(Inner(5))
+    v.push(Inner(9))
+    # .value on a Vector[Inner] — Vector has no `.value` field.
+    int n = count(v.value)
+    print(n)
+    return 0
