@@ -28,9 +28,19 @@
 > internal leak, special-cased to `return obj` in both compilers). **Owner ruled
 > RETIRE** (Core #8) — §2b added: fix the 5 no-op call sites + delete the dead
 > special-case in both compilers, AFTER verifying it's truly dead. The core carve-out
-> fix is UNCHANGED + 3-pass-validated; the retire delta is the new scope. Awaiting a
-> fresh review pass on §2b (the dead-special-case verification is the crux) before
-> re-execute + re-gate (full C + LLVM + bootstrap).
+> fix is UNCHANGED + 3-pass-validated; the retire delta is the new scope.
+>
+> **v3 — retire-delta review (Opus, fresh): SIGN OFF.** Verified the `GorgetString.data`
+> special-case is TRULY DEAD (exhaustive trace): the "valid for printf" comment is a
+> FALSE red flag — print/format handles `.data` at the C-emit/LIR layer (the runtime
+> struct's pointer), NEVER via an AST `FieldAccess` node; the only AST synthesizers
+> (`field_value`/`field_set` meta-builtins) run BEFORE typecheck → a synthesized
+> `String.data` is rejected too; post-typecheck passes only recurse into `.object`. The
+> 5 call-site fixes are byte-identical (all `String` receivers); after them, ZERO
+> `String.data` remains in-repo → both compilers' special-cases safely deletable. Folded:
+> delete the orphaned comment blocks too (elegance-showcase). **EXECUTE-READY** — the
+> re-execution runs the FULL sweep + LLVM + bootstrap (the definitive over-rejection
+> gate that caught `str.data` — locked in this time).
 
 ---
 
@@ -111,10 +121,13 @@ user-visible `.data` field). Two in-repo fixtures rely on the fossil; retire it:
    — NOT a dodge, the special-case returned the string itself): `match_expr_diverging_arm.gg:35`
    (`tag.data`), `regex_basic.gg:72,74,133,147` (`replaced.data`/`replaced_all.data`/
    `escaped.data`/`conv_r.data`). Re-verify each fixture's expected stdout is unchanged.
-2. **DELETE the dead special-case in BOTH compilers:** Rust `src/ir/lowering/exprs/mod.rs:2261-2263`
-   (`if type_name == "GorgetString" && field_name == "data" { return obj }`) + self-host
+2. **DELETE the dead special-case in BOTH compilers** (+ its now-orphaned comment
+   block — leaving it is a false historical record, elegance-showcase): Rust
+   `src/ir/lowering/exprs/mod.rs:2261-2263` (the `if type_name == "GorgetString" &&
+   field_name == "data" { return obj }`) + the stale comment `:2258-2260`; self-host
    mirror `tests/fixtures/self_host_lowerer/lower_expr.gg:4660-4661`
-   (`if base_type_name == "GorgetString" and field_name == "data": return base`).
+   (`if base_type_name == "GorgetString" and field_name == "data": return base`) + the
+   orphaned comment block `:4650-4659`.
 3. **⚠ VERIFY THE SPECIAL-CASE IS TRULY DEAD before deleting** (the one real risk of
    the retire): the FieldAccess fix is in the TYPECHECKER (semantic); the special-case
    is in IR LOWERING. After the typechecker rejects user `str.data`, is the special-case
