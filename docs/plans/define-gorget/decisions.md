@@ -294,6 +294,20 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-13 — **`str.data` FOSSIL RETIRED (owner-decided; dogfood finding via the
+  FieldAccess soundness fix).** `str.data` (reading a `String`/`GorgetString`'s internal
+  `.data`) compiled+ran in BOTH compilers as a NO-OP — an undocumented
+  internal-representation leak special-cased to `return obj`/`return base` (Rust
+  `ir/lowering/exprs/mod.rs:2261-2263` + self-host `lower_expr.gg:4660-4661`), i.e.
+  `print(str.data)` ≡ `print(str)`. The FieldAccess soundness fix (rejects a bogus
+  field on a fieldless receiver) correctly rejects it; the full C sweep flushed out 2
+  fixtures relying on the fossil. **Owner ruled RETIRE** (Core #8 — the agreed-on
+  behavior in both compilers was itself wrong): reject `str.data`, fix the 5 no-op call
+  sites (`print(x.data)`→`print(x)`, byte-identical), delete the dead special-case in
+  both compilers. A `String` is opaque — no user-visible fields. LESSON pinned: SLICE
+  validation ≠ the over-rejection gate; the FULL sweep (Core #7) is the gate, and it
+  caught what the scout's slice + 3 empirical brief-passes missed.
+
 - 2026-07-13 — **SELF-HOST ARG MODEL: converge on Rust's typed `CallArg{name,
   ownership, value}` record (owner RATIFIED, FIRM — "make the sigil fix the CallArg
   normalization itself").** The self-host call/method-argument representation moves
