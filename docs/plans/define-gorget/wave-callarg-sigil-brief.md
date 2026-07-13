@@ -36,7 +36,16 @@
 > contradicting §3 and, via the DoD, would have driven the executor to ship the exact
 > Core-#8 divergence R2 removed. All four scrubbed: §0 lists only `!`/`&`; gate 7 is
 > now a `f(mutable x)` PARSE-ERROR negative; the DoD requires `mutable`→parse-error,
-> no arm. Awaiting pass 3 (fresh, confirming the scrub is complete).
+> no arm.
+>
+> **v3-FINAL — pass-3 (Opus, fresh, confirming): SIGN OFF.** Pass-3 confirmed the
+> `mutable` scrub is COMPLETE (all 18 mentions legitimate — gap/Rust-ref/correction/
+> negative-fixture, none command the arm), the `!`/`&`/`move`/`mutable` treatment is
+> uniform end-to-end, and re-verified the 6 skip-sites + surviving type-context
+> callers + the exact-inverse re-enable + the Core-#5 count-diff gates. Two
+> zero-impact polish nits folded (the §0 "reuse the prefix arm" phrasing; the
+> format.gg parser/resolver copy line is :375/:377). **The gauntlet is CLEAN — brief
+> is EXECUTOR-READY.**
 
 ---
 
@@ -50,7 +59,7 @@ The scout measured both shapes. **Shape (a) — wrap the arg** (`!arg` → `EMov
   despite rewrapping 9059 `&ident` + 171 `!ident` call-arg sites.
 - PROVEN to fix the bug (prototype re-enable: `W(!a)`/`v.push(!b)` ACCEPT, bare
   `W(a)`/`v.push(a)` REJECT).
-- Minimal (delete 2 skip calls + 1 prefix arm; the existing expression-context
+- Minimal (delete 2 skip calls per file; REUSE the existing expression-context
   prefix parser already builds the wrappers), mirrors the language's own `!x`/`&x`
   parsing, and is Layering-rule-1 correct (ownership stops being dropped at parse).
 
