@@ -24,6 +24,18 @@
   (fixed task suite; model given only the generated semantic context pack; score
   compiles-first-try and runs-correct rates) as a first-class language-quality metric. Filed
   in TODO; depends on the phase-2 context pack.
+- **Actively RETIRE sidecars + parallel structures (added 2026-07-13):** "all opportunities to
+  reduce sidecars and parallel structures should be taken." This UPGRADES layering rule 3 (one
+  source of truth per axis; no parallel sidecar maps) from a *don't-add* rule to a *hunt-and-fold*
+  mandate — when a single logical fact is split across index-aligned parallel vectors or a
+  hand-synced side-table, normalize it into one cohesive record/typed field. The `CallArg{name,
+  ownership, value}` normalization (LOG 2026-07-13) is the exemplar (retires the parallel
+  `Vector[String]` names-vector). A dedicated audit sweep (both compilers) is queued in TODO to
+  enumerate + rank the rest. **Caveat (do NOT conflate):** a SYSTEMATIC data-oriented layout
+  (arena/index-based nodes, ECS/struct-of-arrays for MEASURED cache-hot metadata, single node-id
+  indexing all component arrays with enforced/typed accessors) is NOT the ad-hoc hand-synced
+  sidecar this targets — it is the disciplined form. This directive kills the bug-prone kind;
+  perf-motivated SoA is a separate, MEASURE-FIRST decision (see the ECS profiling track in TODO).
 
 ## DECIDED (owner, 2026-07-05 — batch 1)
 
