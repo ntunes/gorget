@@ -1896,12 +1896,12 @@ equip Parser:
         Vector[String] names = Vector[String]()
         self.expect_tok(TOK_LPAREN, "expected '(' for call args")
         if not self.check_tok(TOK_RPAREN):
-            # Skip ownership markers before args
-            self.skip_ownership_markers()
+            # Preserve per-arg ownership sigils: parse_call_arg -> parse_expr wraps
+            # `!x`->EMove / `&x`->EMutableBorrow via the prefix parser (matches Rust gg;
+            # the sigil is no longer discarded at parse -- Layering rule 1).
             names.push(self.peek_arg_name())
             args.push(self.parse_call_arg())
             while self.match_tok(TOK_COMMA):
-                self.skip_ownership_markers()
                 names.push(self.peek_arg_name())
                 args.push(self.parse_call_arg())
         self.expect_tok(TOK_RPAREN, "expected ')' after call args")

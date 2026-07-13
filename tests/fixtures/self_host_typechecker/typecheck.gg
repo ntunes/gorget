@@ -1102,24 +1102,29 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes, 
             check_carrier_ops_expr(*operand, scope_id, &scopes, &types, &ctx)
         case ECall(callee, args, _names, _targs):
             check_carrier_ops_expr(*callee, scope_id, &scopes, &types, &ctx)
-            # D12 position 2 (ctor / field-init) TEMPORARILY DISABLED (2026-07-12):
-            # parse_call_args DISCARDS the `!`/`&` arg sigil (parser.gg
-            # `skip_ownership_markers`), so a ctor arg cannot be told apart as
-            # `W(!x)` (a legal move) vs `W(x)` (a copy) — enabling this OVER-REJECTED
-            # the move. Re-enable once the call-arg-sigil-preservation fix lands
-            # (TODO: self-host call-arg sigil). Rust gg + ggdef still enforce pos-2.
+            # D12 position 2 (ctor / field-init): a bare drop-tainted place used
+            # as a CONSTRUCTOR arg copies at the init boundary. GATE on ctor-ness
+            # — a plain function-call arg is a legal BORROW and must NOT reject.
+            # (An explicit `!x`/`&x` arg parses to EMove/EMutableBorrow, not a
+            # place, so reject_tainted_place naturally lets the move through.)
+            bool call_is_ctor = is_ctor_callee(*callee, scopes, ctx)
             for a in args:
+                if call_is_ctor:
+                    reject_tainted_place(a, scopes, &types, &ctx)
                 check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
         case EMethodCall(receiver, method_name, args, _names, _targs):
             check_carrier_ops_expr(*receiver, scope_id, &scopes, &types, &ctx)
+            # D12 position 3 (collection put): tainted-place args to a mutating
+            # element-ingest builtin on a collection receiver copy at the
+            # ownership boundary. A plain (non-ingesting) method arg is a legal
+            # borrow — gate on both the method AND the receiver type.
+            bool ingest = is_collection_ingest_method(method_name) and is_collection_receiver(*receiver, scopes, &types, &ctx)
             # D12 position 6 sibling: a `&self` mutator on a tainted borrow-
             # rooted receiver materialises an implicit copy.
             reject_amp_self_mutator(*receiver, method_name, scopes, &types, &ctx)
-            # D12 position 3 (collection put) TEMPORARILY DISABLED (2026-07-12):
-            # same call-arg-sigil gap as position 2 — parse_call_args discards the
-            # `!`/`&` sigil, so enabling this OVER-REJECTED `coll.push(!x)`. Re-enable
-            # after the call-arg-sigil fix. Rust gg + ggdef still enforce pos-3.
             for a in args:
+                if ingest:
+                    reject_tainted_place(a, scopes, &types, &ctx)
                 check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
         case EFieldAccess(object, _field):
             check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)

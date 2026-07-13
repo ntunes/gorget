@@ -1,0 +1,276 @@
+diff --git a/TODO.md b/TODO.md
+index 728e5eea..25fb5063 100644
+--- a/TODO.md
++++ b/TODO.md
+@@ -242,6 +242,7 @@ Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (
+   - **🆕 [MEDIUM — inherited structural debt, from A2-R pass-3 2026-07-11] The drop-purity check (and the WHOLE single-owner family) is GENERICS-T-BLIND** — `T id[T](T x): return x` called with a drop-tainted `R` is accepted (the check runs pre-monomorphization; `is_drop_tainted_type(T)` = false) while the monomorphic control rejects. Measured: no drop duplication in this shape (one drop), so no immediate unsoundness — but the dodge is real and pre-existing for Box/Task too. ggdef is generics-silent (phase-0). Fix direction: post-mono re-check or taint-polymorphic bounds — a design question; pairs with A31-era work. Out of A2-R's scope by pin.
+   - **🆕🧹 [MEDIUM — typed-metadata debt, from A2-R pass-1 2026-07-11] The builtin-handle carve-out list is NAME-MATCHED** (`matches!(def.name.as_str(), "Channel"|"Shared"|"Weak"|"Mutex"|…)` — extended by A2-R's taint carve-out; a user `struct Shared` silently dodges drop-taint). Same debt family as the Box/Task list. Fix = a typed builtin-marker on DefInfo set at registration (rule 2), retiring the name-list for ALL its readers. Own small track. **Now ALSO name-matched in the SELF-HOST** (`is_drop_tainted_type`, `self_host_typechecker/typecheck.gg` — `d.name == "Channel"|"Shared"|"Weak"|"Mutex"`), ported verbatim from Rust by A2-S (2026-07-12, Q4 ruling: identical taint sets keep the bootstrap safe). The typed-marker fix must retire BOTH readers. **Also filed here (A2-S output-review 2026-07-12): A2-S's pos-3 classifiers `is_collection_ingest_method` + `is_collection_receiver` (`self_host_typechecker/typecheck.gg:347-363`) are hardcoded name-lists** — the METHOD list faithfully mirrors Rust's `is_mutating_builtin_method` (`builtins.rs:1129`, also name-based), but the RECEIVER list (`n == "Vector"|"Dict"|…`) diverges from Rust's typed `lookup_protocol(...).collection_kind` registry (`helpers.rs:609`); the self-host typecheck stage has no protocol table, so a name-list was pragmatic. Correctly gated (over-rejection guard proves no false reject) — no Core-#8 impact; a fully-typed classifier needs protocol-registry infra beyond A2-S's scope. Fold into the same typed-builtin-marker follow-up.
+   - **🆕🐛 [HIGH — self-host layering gap, from A2-S full-sweep cert 2026-07-12] The self-host `parse_call_args` DISCARDS the `!`/`&` per-arg ownership sigil (`self_host_typechecker/parser.gg` `skip_ownership_markers` :2069, called before every arg in `parse_call_args` :2047/2051), so a call/method arg `f(!x)` / `coll.push(!x)` parses to the BARE inner place `x` — the move/borrow intent is lost.** Root cause of the A2-S regression the full sweep caught (`self_host_collection_custom_elem_drop_wiring` + `self_host_runtime` over-rejected `vb.push(!nb)` — Rust gg compiles it fine because it tracks `CallArg.ownership`). **CONSEQUENCE: A2-S's D12 positions 2 (ctor-arg) + 3 (collection-put) are TEMPORARILY DISABLED** (typecheck.gg ECall/EMethodCall arms, arm-count lint EXPECTED lowered 9→7, the 3 pos-2/3 fixtures dropped from `self_host_driver_rejects_d12_drop_purity`) because they cannot tell a legal `!x` move from a bare copy without the sigil. **ALSO BLOCKS Batch B B2** (the self-host D10(b) place-overlap mirror needs the same per-arg sigil — the scout's "`EMutableBorrow`→writer / `EMove`→mover" assumption is FALSE at call args today). Fix = PRESERVE the sigil (layering rule 1: lossless on the ownership invariant): either wrap `!arg`→`EMove` / `&arg`→`EMutableBorrow` in `parse_call_arg` (mirrors expression-context parsing; blast-radius = call-arg consumers, needs a full ASan sweep), OR thread a parallel per-arg ownership vector into `ECall`/`EMethodCall` (mirrors the existing `Vector[String]` arg-names field; AST-arity change across all match sites). **This is the SHARED PREREQUISITE for re-enabling A2-S pos-2/3 AND landing Batch B B2** — own scout→brief→≥3 reviews→executor→output-review; bootstrap-gated; the scout must weigh the two shapes + measure the blast radius end-to-end (a subtle call-arg miscompile is the risk). When it lands: re-enable pos-2/3 (restore the 2 reject calls + `call_is_ctor`/`ingest` gating in typecheck.gg, bump the lint to 9, restore the 3 fixtures) + add `coll.push(!x)` / `W(!x)` ACCEPT fixtures to the over-rejection guard (the hole that let this through).
++  - **🆕🐛 [MEDIUM — self-host parse-fidelity divergence, discovered by the call-arg-sigil fix 2026-07-13] The self-host DRIVER silently ACCEPTS `f(mutable x)` and `f(move x)` — both PARSE ERRORS in Rust gg (Core #8, self-host more permissive than the reference).** After the call-arg-sigil fix (shape (a): `parse_call_args` no longer skips sigils), `f(mutable x)` reaches `parse_expr` with no `mutable`-prefix arm → the parser pushes `expected expression` — but `parse_source` (`self_host_*/parser.gg` :4653-4655) DISCARDS `p.errors`, and BOTH the legacy `--lir-c` path (`self_host_lowerer/driver.gg` :655/:678) AND `check` mode (:789/:812) gate only on `has_errors(ctx.diagnostics)` (TYPECHECK diagnostics), never the parser's errors — so the driver emits C for a syntactically-invalid program (measured 2026-07-13: exit 0, 2109 bytes C). `f(move x)` similarly parses to `EMove(x)` (the prefix `move` arm `parser.gg` :2506) and is accepted, while Rust rejects it (`The 'move' keyword is only valid for closures`). **PRE-EXISTING and NOT introduced by the sigil fix** — before the fix `skip_ownership_markers` stripped `move`/`mutable` so both parsed as the valid `f(x)`; accept-STATUS is unchanged (the fix changes only HOW they're accepted). **BROADER than sigils: `parse_source` discards ALL parser errors, so the self-host accepts ANY syntactically-invalid program Rust rejects** — this is the real (larger) gap, deliberately OUT of the minimal sigil fix's gauntleted scope. Rust-side contract now LOCKED by `call_arg_mutable_sigil_parse_rejects` + fixture `tests/fixtures/d12_drop_purity/reject_mutable_call_arg.gg`; the self-host should eventually match. Fix direction = surface `p.errors` from `parse_source`/`parse_module` into the driver (report + `exit(1)` before typecheck, mirroring Rust gg's `N parse error(s) found`). Own scout→brief→gauntlet; re-run the `*_comparison` count-diff FIRST (some current top-level fixtures may rely on the lenient parse — measure before flipping). Repro: `tests/fixtures/self_host_lowerer/driver <prog-with-f(mutable x)>.gg lib --lir-c` exits 0 + emits C.
+   - **🆕🐛 [HIGH — drop-registration gap / lost side-effect, from A2-R1 execution 2026-07-12] A closure-returned OWNED Drop temp is not registered for drop/ownership at the call site.** Two facets of one pre-existing lowering gap (untouched by A2-R1 — it lives entirely in IR lowering, not the safety pass): (1) binding the result to a local — `auto f = (): R(7); R b = f()` (R with a custom Drop) — PANICS the build: `Tier 2a consume-site violation … AssignIntoOwnedSlot(dst: R) — untracked source consumed (ownership not decided)` at `src/ir/lowering/mod.rs:2105`; (2) passing the result directly to a borrowing call — `use(f())` — compiles but SILENTLY LOSES the drop (measured: prints `7`, never `drop 7`, where the equivalent named-fn `R make(): R(7)` correctly prints `7\ndrop 7`). Core invariant #3 (register ownership at the value's birth): the closure-return value's ownership is never decided, so main never registers it for drop. Exposed by the D12 legal fixture `tests/fixtures/d12_drop_purity/legal_closure_fresh_temp.gg` — wired as `d12_legal_closure_fresh_temp_accepts` (check-only, asserts D12 acceptance) + `#[ignore]`d `d12_legal_closure_fresh_temp_run` asserting the CORRECT `7\ndrop 7`; un-ignore when fixed. Own scout→brief→gauntlet; ASan + drop-count fixtures. NOTE this is a MISSING-drop (leak / lost side-effect) class, distinct from A2-R1's implicit-COPY (double-drop) enforcement.
+   - **🆕🐛 [HIGH — memory safety, from the A3 scout 2026-07-11] `return &v` of a `&`-param COMPILES AND DOUBLE-FREES at runtime.** Pre-existing, out of D10(a)'s bind scope — returning a mutable borrow of a borrowed param escapes the frame and both the caller's owner and the returned alias drop. D10(b)/return-borrows family (the safety pass's return_borrows module is the natural home). Measured by the A3 scout (report §discoveries). Own scout→brief→gauntlet; ASan fixture non-negotiable.
+   - **🆕🐛 [HIGH — silent wrong output, from A3 pass-1 review 2026-07-11] Comprehension over a `&`-iterable yields an EMPTY vector.** `auto r = [x * 2 for x in &a]` prints 0 elements; without the `&` prints 3 (pre-existing, identical pristine A/B; distinct from D10(a)). `for x in &a` statement-form iterates correctly — the comprehension desugar loses the borrowed iterable. Either make it match the statement form or reject `&` in comprehension iterables; invariant-#8: never leave it silently empty. Own scout→brief→gauntlet.
+diff --git a/tests/fixtures/d12_drop_purity/legal_move_arg_accept.gg b/tests/fixtures/d12_drop_purity/legal_move_arg_accept.gg
+new file mode 100644
+index 00000000..79d49dd3
+--- /dev/null
++++ b/tests/fixtures/d12_drop_purity/legal_move_arg_accept.gg
+@@ -0,0 +1,23 @@
++# D4/D12 over-rejection guard for the call-arg-sigil fix: an explicit `!` move
++# at a CTOR arg (pos-2, `W(!a)`) and at a collection put (pos-3, `v.push(!b)`)
++# transfers ownership — the source is dead, NOT a live-place implicit copy — so
++# both must ACCEPT. Before the sigil fix, `parse_call_args` discarded the `!`
++# and pos-2/pos-3 over-rejected these legal moves (the hole that regressed A2-S).
++struct R:
++    int id
++
++equip R with Drop:
++    void drop(!self):
++        print(f"drop {self.id}")
++
++struct W:
++    R inner
++
++void main():
++    R a = R(1)
++    W w = W(!a)
++    print(w.inner.id)
++    R b = R(2)
++    Vector[R] v = Vector[R]()
++    v.push(!b)
++    print(v.len())
+diff --git a/tests/fixtures/d12_drop_purity/reject_mutable_call_arg.gg b/tests/fixtures/d12_drop_purity/reject_mutable_call_arg.gg
+new file mode 100644
+index 00000000..e8eb5489
+--- /dev/null
++++ b/tests/fixtures/d12_drop_purity/reject_mutable_call_arg.gg
+@@ -0,0 +1,13 @@
++# Call-arg sigil contract: `mutable` is NOT a call-arg ownership sigil — only
++# `!` (move) and `&` (mutable borrow) are (Rust gg's parse_ownership_modifier).
++# `f(mutable x)` is therefore a PARSE ERROR, matching Rust. This fixture locks
++# the language contract so a stray `mutable`-prefix arm can never silently
++# accept it. NOTE: the self-host DRIVER currently accepts this (parse_source
++# discards parser errors — a pre-existing self-host parse-fidelity gap filed in
++# TODO.md); the contract is enforced Rust-side here, which the self-host should
++# eventually match.
++int id(int x): x
++
++void main():
++    int a = 5
++    print(id(mutable a))
+diff --git a/tests/fixtures/self_host_parser/parser.gg b/tests/fixtures/self_host_parser/parser.gg
+index faca5a5d..d870c331 100644
+--- a/tests/fixtures/self_host_parser/parser.gg
++++ b/tests/fixtures/self_host_parser/parser.gg
+@@ -1939,12 +1939,12 @@ equip Parser:
+         Vector[String] names = Vector[String]()
+         self.expect_tok(TOK_LPAREN, "expected '(' for call args")
+         if not self.check_tok(TOK_RPAREN):
+-            # Skip ownership markers before args
+-            self.skip_ownership_markers()
++            # Preserve per-arg ownership sigils: parse_call_arg -> parse_expr wraps
++            # `!x`->EMove / `&x`->EMutableBorrow via the prefix parser (matches Rust gg;
++            # the sigil is no longer discarded at parse -- Layering rule 1).
+             names.push(self.peek_arg_name())
+             args.push(self.parse_call_arg())
+             while self.match_tok(TOK_COMMA):
+-                self.skip_ownership_markers()
+                 names.push(self.peek_arg_name())
+                 args.push(self.parse_call_arg())
+         self.expect_tok(TOK_RPAREN, "expected ')' after call args")
+diff --git a/tests/fixtures/self_host_resolver/parser.gg b/tests/fixtures/self_host_resolver/parser.gg
+index f90b11b9..1cfc17db 100644
+--- a/tests/fixtures/self_host_resolver/parser.gg
++++ b/tests/fixtures/self_host_resolver/parser.gg
+@@ -1896,12 +1896,12 @@ equip Parser:
+         Vector[String] names = Vector[String]()
+         self.expect_tok(TOK_LPAREN, "expected '(' for call args")
+         if not self.check_tok(TOK_RPAREN):
+-            # Skip ownership markers before args
+-            self.skip_ownership_markers()
++            # Preserve per-arg ownership sigils: parse_call_arg -> parse_expr wraps
++            # `!x`->EMove / `&x`->EMutableBorrow via the prefix parser (matches Rust gg;
++            # the sigil is no longer discarded at parse -- Layering rule 1).
+             names.push(self.peek_arg_name())
+             args.push(self.parse_call_arg())
+             while self.match_tok(TOK_COMMA):
+-                self.skip_ownership_markers()
+                 names.push(self.peek_arg_name())
+                 args.push(self.parse_call_arg())
+         self.expect_tok(TOK_RPAREN, "expected ')' after call args")
+diff --git a/tests/fixtures/self_host_typechecker/parser.gg b/tests/fixtures/self_host_typechecker/parser.gg
+index 20169708..e74568e7 100644
+--- a/tests/fixtures/self_host_typechecker/parser.gg
++++ b/tests/fixtures/self_host_typechecker/parser.gg
+@@ -2043,12 +2043,12 @@ equip Parser:
+         Vector[String] names = Vector[String]()
+         self.expect_tok(TOK_LPAREN, "expected '(' for call args")
+         if not self.check_tok(TOK_RPAREN):
+-            # Skip ownership markers before args
+-            self.skip_ownership_markers()
++            # Preserve per-arg ownership sigils: parse_call_arg -> parse_expr wraps
++            # `!x`->EMove / `&x`->EMutableBorrow via the prefix parser (matches Rust gg;
++            # the sigil is no longer discarded at parse -- Layering rule 1).
+             names.push(self.peek_arg_name())
+             args.push(self.parse_call_arg())
+             while self.match_tok(TOK_COMMA):
+-                self.skip_ownership_markers()
+                 names.push(self.peek_arg_name())
+                 args.push(self.parse_call_arg())
+         self.expect_tok(TOK_RPAREN, "expected ')' after call args")
+diff --git a/tests/fixtures/self_host_typechecker/typecheck.gg b/tests/fixtures/self_host_typechecker/typecheck.gg
+index 9a4f3dbb..e7548217 100644
+--- a/tests/fixtures/self_host_typechecker/typecheck.gg
++++ b/tests/fixtures/self_host_typechecker/typecheck.gg
+@@ -1102,24 +1102,29 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes,
+             check_carrier_ops_expr(*operand, scope_id, &scopes, &types, &ctx)
+         case ECall(callee, args, _names, _targs):
+             check_carrier_ops_expr(*callee, scope_id, &scopes, &types, &ctx)
+-            # D12 position 2 (ctor / field-init) TEMPORARILY DISABLED (2026-07-12):
+-            # parse_call_args DISCARDS the `!`/`&` arg sigil (parser.gg
+-            # `skip_ownership_markers`), so a ctor arg cannot be told apart as
+-            # `W(!x)` (a legal move) vs `W(x)` (a copy) — enabling this OVER-REJECTED
+-            # the move. Re-enable once the call-arg-sigil-preservation fix lands
+-            # (TODO: self-host call-arg sigil). Rust gg + ggdef still enforce pos-2.
++            # D12 position 2 (ctor / field-init): a bare drop-tainted place used
++            # as a CONSTRUCTOR arg copies at the init boundary. GATE on ctor-ness
++            # — a plain function-call arg is a legal BORROW and must NOT reject.
++            # (An explicit `!x`/`&x` arg parses to EMove/EMutableBorrow, not a
++            # place, so reject_tainted_place naturally lets the move through.)
++            bool call_is_ctor = is_ctor_callee(*callee, scopes, ctx)
+             for a in args:
++                if call_is_ctor:
++                    reject_tainted_place(a, scopes, &types, &ctx)
+                 check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+         case EMethodCall(receiver, method_name, args, _names, _targs):
+             check_carrier_ops_expr(*receiver, scope_id, &scopes, &types, &ctx)
++            # D12 position 3 (collection put): tainted-place args to a mutating
++            # element-ingest builtin on a collection receiver copy at the
++            # ownership boundary. A plain (non-ingesting) method arg is a legal
++            # borrow — gate on both the method AND the receiver type.
++            bool ingest = is_collection_ingest_method(method_name) and is_collection_receiver(*receiver, scopes, &types, &ctx)
+             # D12 position 6 sibling: a `&self` mutator on a tainted borrow-
+             # rooted receiver materialises an implicit copy.
+             reject_amp_self_mutator(*receiver, method_name, scopes, &types, &ctx)
+-            # D12 position 3 (collection put) TEMPORARILY DISABLED (2026-07-12):
+-            # same call-arg-sigil gap as position 2 — parse_call_args discards the
+-            # `!`/`&` sigil, so enabling this OVER-REJECTED `coll.push(!x)`. Re-enable
+-            # after the call-arg-sigil fix. Rust gg + ggdef still enforce pos-3.
+             for a in args:
++                if ingest:
++                    reject_tainted_place(a, scopes, &types, &ctx)
+                 check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+         case EFieldAccess(object, _field):
+             check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)
+diff --git a/tests/integration.rs b/tests/integration.rs
+index a1b6ccda..eb315ac3 100644
+--- a/tests/integration.rs
++++ b/tests/integration.rs
+@@ -5795,6 +5795,32 @@ fn d12_legal_closure_fresh_temp_run() {
+     run_gg("d12_drop_purity/legal_closure_fresh_temp.gg", "7\ndrop 7");
+ }
+ 
++// Over-rejection ACCEPT guard for the call-arg-sigil-preservation fix, Rust
++// parity for the self-host `self_host_driver_accepts_d12_legal` guard: an
++// explicit `!` move at a CTOR arg (pos-2, `W(!a)`) AND at a collection put
++// (pos-3, `v.push(!b)`) transfers ownership — the source is dead, NOT a
++// live-place implicit copy — so both ACCEPT and run drop-correctly in BOTH
++// compilers. Before the sigil fix the self-host discarded the `!` and
++// over-rejected these (the hole that regressed A2-S pos-2/pos-3).
++#[test]
++fn d12_legal_move_arg_accept() {
++    run_gg("d12_drop_purity/legal_move_arg_accept.gg", "1\n1\ndrop 2\ndrop 1");
++}
++
++// Call-arg sigil contract (from the call-arg-sigil-preservation fix): `mutable`
++// is NOT a call-arg ownership sigil — only `!` (move) and `&` (mutable borrow)
++// are (Rust's parse_ownership_modifier). `f(mutable x)` is a PARSE ERROR. Locks
++// the language contract so a stray `mutable`-prefix arm can't silently accept it.
++// (The self-host DRIVER still accepts this because parse_source discards parser
++// errors — a pre-existing self-host parse-fidelity gap filed in TODO.md.)
++#[test]
++fn call_arg_mutable_sigil_parse_rejects() {
++    check_gg_fails(
++        "d12_drop_purity/reject_mutable_call_arg.gg",
++        "expected expression, found 'mutable'",
++    );
++}
++
+ #[test]
+ fn drop_field_move_zero() {
+     run_gg(
+@@ -13078,7 +13104,19 @@ fn format_expr_canonical(expr: &Expr) -> String {
+ }
+ 
+ fn format_callarg_canonical(arg: &Spanned<CallArg>) -> String {
+-    format_expr_canonical(&arg.node.value.node)
++    // Emit the per-arg ownership sigil (`&` MutableBorrow, `!` Move) the same way
++    // the REAL Rust formatter does (`src/formatter/mod.rs::format_call_arg` →
++    // `format_ownership_prefix`). The self-host parser now preserves this sigil in
++    // the AST (call-arg-sigil-preservation fix: `!x`→EMove / `&x`→EMutableBorrow),
++    // so its canonical format emits `modify(&t)` / `push(!x)`; this reference kept
++    // the OLD lossy behavior (bare `modify(t)`) and would spuriously mismatch every
++    // sigil call arg. Both sides now faithfully round-trip the sigil.
++    let prefix = match arg.node.ownership {
++        Ownership::Borrow => "",
++        Ownership::MutableBorrow => "&",
++        Ownership::Move => "!",
++    };
++    format!("{prefix}{}", format_expr_canonical(&arg.node.value.node))
+ }
+ 
+ fn format_stmt_canonical(stmt: &Stmt) -> String {
+@@ -18468,16 +18506,11 @@ fn self_host_driver_rejects_d12_drop_purity() {
+         "pos1_option_payload_reject",
+         "pos1_result_ok_payload_reject",
+         "pos1_result_err_payload_reject",
+-        // positions 2 (ctor / field-init) + 3 (collection put) TEMPORARILY OMITTED
+-        // (2026-07-12): the self-host `parse_call_args` DISCARDS the `!`/`&` arg
+-        // sigil (parser.gg `skip_ownership_markers`), so these two positions cannot
+-        // tell a legal `W(!x)` / `coll.push(!x)` MOVE from a bare COPY and
+-        // over-rejected the move — pos-2/pos-3 are DISABLED in
+-        // self_host_typechecker/typecheck.gg pending the call-arg-sigil fix. The
+-        // fixtures (pos2_ctor_init_reject, pos3_collection_put_reject,
+-        // pos3_field_place_reject) still exist and Rust gg asserts they reject
+-        // (`d12_pos2_ctor_init_reject` / `d12_pos3_*` above). Restore these three
+-        // entries when the sigil fix re-enables pos-2/pos-3 on the self-host.
++        // position 2 (ctor / field-init)
++        "pos2_ctor_init_reject",
++        // position 3 (collection put) — whole / field
++        "pos3_collection_put_reject",
++        "pos3_field_place_reject",
+         // position 4 (return / expr-body / closure-tail)
+         "pos4_return_reject",
+         "pos4_field_place_reject",
+@@ -18542,6 +18575,12 @@ fn self_host_driver_accepts_d12_legal() {
+         "legal_field_place_int_accept",
+         "legal_amp_self_owned",
+         "legal_plain_call_borrow_accept",
++        // Over-rejection guard for the call-arg-sigil fix: an explicit `!` move at
++        // a CTOR arg (pos-2, `W(!a)`) AND at a collection put (pos-3, `v.push(!b)`)
++        // must ACCEPT — before the sigil fix `parse_call_args` discarded the `!` and
++        // these over-rejected (the hole that regressed A2-S). This is the executable
++        // ratchet: a future sigil-drop re-breaks pos-2/pos-3 as an over-rejection here.
++        "legal_move_arg_accept",
+     ];
+     for name in legal_fixtures {
+         let fixture = manifest_dir.join(format!("tests/fixtures/d12_drop_purity/{name}.gg"));
+diff --git a/tests/lints.rs b/tests/lints.rs
+index 27f4ccf4..b43a0102 100644
+--- a/tests/lints.rs
++++ b/tests/lints.rs
+@@ -894,12 +894,8 @@ fn container_literal_arms_count() {
+ ///     under-rejection hole; restore the call, do not lower EXPECTED.
+ #[test]
+ fn self_host_d12_reject_hook_count() {
+-    // 1 definition (`void reject_tainted_place(`) + 6 consuming-position calls.
+-    // (Was 8; positions 2 (ctor-arg) + 3 (collection-put) are TEMPORARILY DISABLED
+-    // 2026-07-12 pending the self-host call-arg-sigil fix — parse_call_args discards
+-    // the `!`/`&` arg sigil so those two positions over-rejected `push(!x)`/`W(!x)`.
+-    // Rust gg + ggdef still enforce them; re-enabling here bumps EXPECTED back to 9.)
+-    const EXPECTED: usize = 7;
++    // 1 definition (`void reject_tainted_place(`) + 8 consuming-position calls.
++    const EXPECTED: usize = 9;
+     let src = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+         .expect("read self_host_typechecker/typecheck.gg");
+     let count = src.matches("reject_tainted_place(").count();

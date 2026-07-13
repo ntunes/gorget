@@ -5795,6 +5795,32 @@ fn d12_legal_closure_fresh_temp_run() {
     run_gg("d12_drop_purity/legal_closure_fresh_temp.gg", "7\ndrop 7");
 }
 
+// Over-rejection ACCEPT guard for the call-arg-sigil-preservation fix, Rust
+// parity for the self-host `self_host_driver_accepts_d12_legal` guard: an
+// explicit `!` move at a CTOR arg (pos-2, `W(!a)`) AND at a collection put
+// (pos-3, `v.push(!b)`) transfers ownership — the source is dead, NOT a
+// live-place implicit copy — so both ACCEPT and run drop-correctly in BOTH
+// compilers. Before the sigil fix the self-host discarded the `!` and
+// over-rejected these (the hole that regressed A2-S pos-2/pos-3).
+#[test]
+fn d12_legal_move_arg_accept() {
+    run_gg("d12_drop_purity/legal_move_arg_accept.gg", "1\n1\ndrop 2\ndrop 1");
+}
+
+// Call-arg sigil contract (from the call-arg-sigil-preservation fix): `mutable`
+// is NOT a call-arg ownership sigil — only `!` (move) and `&` (mutable borrow)
+// are (Rust's parse_ownership_modifier). `f(mutable x)` is a PARSE ERROR. Locks
+// the language contract so a stray `mutable`-prefix arm can't silently accept it.
+// (The self-host DRIVER still accepts this because parse_source discards parser
+// errors — a pre-existing self-host parse-fidelity gap filed in TODO.md.)
+#[test]
+fn call_arg_mutable_sigil_parse_rejects() {
+    check_gg_fails(
+        "d12_drop_purity/reject_mutable_call_arg.gg",
+        "expected expression, found 'mutable'",
+    );
+}
+
 #[test]
 fn drop_field_move_zero() {
     run_gg(
@@ -13078,7 +13104,19 @@ fn format_expr_canonical(expr: &Expr) -> String {
 }
 
 fn format_callarg_canonical(arg: &Spanned<CallArg>) -> String {
-    format_expr_canonical(&arg.node.value.node)
+    // Emit the per-arg ownership sigil (`&` MutableBorrow, `!` Move) the same way
+    // the REAL Rust formatter does (`src/formatter/mod.rs::format_call_arg` →
+    // `format_ownership_prefix`). The self-host parser now preserves this sigil in
+    // the AST (call-arg-sigil-preservation fix: `!x`→EMove / `&x`→EMutableBorrow),
+    // so its canonical format emits `modify(&t)` / `push(!x)`; this reference kept
+    // the OLD lossy behavior (bare `modify(t)`) and would spuriously mismatch every
+    // sigil call arg. Both sides now faithfully round-trip the sigil.
+    let prefix = match arg.node.ownership {
+        Ownership::Borrow => "",
+        Ownership::MutableBorrow => "&",
+        Ownership::Move => "!",
+    };
+    format!("{prefix}{}", format_expr_canonical(&arg.node.value.node))
 }
 
 fn format_stmt_canonical(stmt: &Stmt) -> String {
@@ -18468,16 +18506,11 @@ fn self_host_driver_rejects_d12_drop_purity() {
         "pos1_option_payload_reject",
         "pos1_result_ok_payload_reject",
         "pos1_result_err_payload_reject",
-        // positions 2 (ctor / field-init) + 3 (collection put) TEMPORARILY OMITTED
-        // (2026-07-12): the self-host `parse_call_args` DISCARDS the `!`/`&` arg
-        // sigil (parser.gg `skip_ownership_markers`), so these two positions cannot
-        // tell a legal `W(!x)` / `coll.push(!x)` MOVE from a bare COPY and
-        // over-rejected the move — pos-2/pos-3 are DISABLED in
-        // self_host_typechecker/typecheck.gg pending the call-arg-sigil fix. The
-        // fixtures (pos2_ctor_init_reject, pos3_collection_put_reject,
-        // pos3_field_place_reject) still exist and Rust gg asserts they reject
-        // (`d12_pos2_ctor_init_reject` / `d12_pos3_*` above). Restore these three
-        // entries when the sigil fix re-enables pos-2/pos-3 on the self-host.
+        // position 2 (ctor / field-init)
+        "pos2_ctor_init_reject",
+        // position 3 (collection put) — whole / field
+        "pos3_collection_put_reject",
+        "pos3_field_place_reject",
         // position 4 (return / expr-body / closure-tail)
         "pos4_return_reject",
         "pos4_field_place_reject",
@@ -18542,6 +18575,12 @@ fn self_host_driver_accepts_d12_legal() {
         "legal_field_place_int_accept",
         "legal_amp_self_owned",
         "legal_plain_call_borrow_accept",
+        // Over-rejection guard for the call-arg-sigil fix: an explicit `!` move at
+        // a CTOR arg (pos-2, `W(!a)`) AND at a collection put (pos-3, `v.push(!b)`)
+        // must ACCEPT — before the sigil fix `parse_call_args` discarded the `!` and
+        // these over-rejected (the hole that regressed A2-S). This is the executable
+        // ratchet: a future sigil-drop re-breaks pos-2/pos-3 as an over-rejection here.
+        "legal_move_arg_accept",
     ];
     for name in legal_fixtures {
         let fixture = manifest_dir.join(format!("tests/fixtures/d12_drop_purity/{name}.gg"));

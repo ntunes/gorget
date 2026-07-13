@@ -1,0 +1,13 @@
+# Call-arg sigil contract: `mutable` is NOT a call-arg ownership sigil — only
+# `!` (move) and `&` (mutable borrow) are (Rust gg's parse_ownership_modifier).
+# `f(mutable x)` is therefore a PARSE ERROR, matching Rust. This fixture locks
+# the language contract so a stray `mutable`-prefix arm can never silently
+# accept it. NOTE: the self-host DRIVER currently accepts this (parse_source
+# discards parser errors — a pre-existing self-host parse-fidelity gap filed in
+# TODO.md); the contract is enforced Rust-side here, which the self-host should
+# eventually match.
+int id(int x): x
+
+void main():
+    int a = 5
+    print(id(mutable a))
