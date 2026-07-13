@@ -127,16 +127,17 @@ sequential fresh-review gauntlet.
       SIGN OFF (diff content-identical to the reviewed prototype); post-integration
       quick gates green (build, lib 1105/0, break 5/0, lints 53/0). Full sweep at batch
       close covers it. Detail: DONE.md.
-    - **A2 (D12 drop-purity): Rust FULLY LANDED (A2-R1 `b72ef446` + A2-R2 `b4b6124a`); self-host A2-S `3b741a8a` = 4 of 6 positions (2026-07-12, Opus successor).**
-      **A2-S LANDED** (merge `3b741a8a` + scope-down): the self-host `.gg` compiler now rejects a drop-tainted
-      implicit copy at positions 1/4/5/6, mirroring A2-R1+A2-R2 — closing a live double-drop the self-host previously
-      miscompiled (Core #8). 4-pass brief gauntlet + output-review SIGN OFF verified-by-execution. **⚠ positions 2
-      (ctor-arg) + 3 (collection-put) TEMPORARILY DISABLED** (same day): the full-sweep cert caught them OVER-REJECTING
-      `vb.push(!nb)` — root cause is the self-host `parse_call_args` DISCARDING the `!`/`&` arg sigil
-      (`parser.gg skip_ownership_markers`), so a call-arg position can't tell a legal `!x` move from a bare copy. Filed
-      HIGH (call-arg-sigil preservation — the SHARED PREREQUISITE to re-enable pos-2/3 AND land Batch B B2). Rust gg +
-      ggdef still enforce all six. LESSON: the full sweep is the gate (Core #7) — the D12 lane + bootstrap passed but
-      the pre-existing `push(!x)` fixtures only surfaced in the full run; the over-rejection guard had a `push(!x)` hole.
+    - **A2 (D12 drop-purity): FULLY LANDED in BOTH compilers, 6/6 self-host — A2-R1 `b72ef446` + A2-R2 `b4b6124a` + A2-S `3b741a8a` + the call-arg-sigil fix `3681402c` (2026-07-13, Opus successor).**
+      **A2-S LANDED 6/6** (merge `3b741a8a`, briefly 4/6, restored to 6/6 by `3681402c`): the self-host `.gg` compiler
+      rejects a drop-tainted implicit copy at ALL SIX positions, mirroring A2-R1+A2-R2 — closing a live double-drop the
+      self-host previously miscompiled (Core #8). 4-pass brief gauntlet + output-review SIGN OFF verified-by-execution.
+      **⚠ HISTORY (resolved):** pos-2/3 (the two call-arg positions) were briefly disabled 2026-07-12 when the full-sweep
+      cert caught them OVER-REJECTING `vb.push(!nb)` — root cause: the self-host `parse_call_args` DISCARDED the `!`/`&`
+      arg sigil (`parser.gg skip_ownership_markers`). **FIXED `3681402c` (call-arg-sigil preservation, 2026-07-13):** the
+      parser now preserves the sigil (`!x`→EMove / `&x`→EMutableBorrow, matching Rust); pos-2/3 re-enabled + a new
+      `push(!x)`/`W(!x)` ACCEPT guard closes the hole. **This also UNBLOCKED Batch B B2** (the per-arg sigil is now in the
+      AST). LESSON (kept): the full sweep is the gate (Core #7) — the D12 lane + bootstrap passed but the pre-existing
+      `push(!x)` fixtures only surfaced in the full run; the over-rejection guard had a `push(!x)` hole.
       **A2-R2 LANDED** (merge `b4b6124a`): M1 the compound-assign resource-element ICE fix (borrow-in-place
       + RHS-reorder closing the realloc UAF window — counterfactual-proven on both the local `v[0]+=grow(&v)`
       AND the deeper field path `h.v[0]+=grow(&h)` the executor caught; ASan-clean drop-once, byte-identical
@@ -294,21 +295,21 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    full gauntlet + output-review SIGN OFF. Filed HIGH: op-overload arg-leak + the
    reachable custom-indexable resource-element ICE sibling (work these — the ICE class
    isn't fully closed).
-3. ⚠ **A2-S LANDED 4/6 2026-07-12** (merge `3b741a8a` + scope-down): self-host D12
-   drop-purity port. Positions 1/4/5/6 LIVE + correct (4-pass gauntlet + output-review
-   SIGN OFF; D12 lane, bootstrap GREEN, arm-count lint). **Positions 2/3 TEMPORARILY
-   DISABLED** — the full-sweep cert (Core #7 — NOT the D12 lane, NOT the bootstrap)
-   caught them OVER-REJECTING `vb.push(!nb)`. ROOT CAUSE + THE NEXT PREREQUISITE:
-   **the self-host `parse_call_args` DISCARDS the `!`/`&` arg sigil** (`parser.gg`
-   `skip_ownership_markers`), so a call-arg position can't tell a legal `!x` move from
-   a bare copy. **Filed HIGH: call-arg-sigil preservation** (TODO — the SHARED
-   prerequisite to re-enable pos-2/3 AND land Batch B B2). Do THAT first. Brief
-   `wave-a2-s-selfhost-drop-purity-brief.md`, scout `scouts/scout-a2-s.md`.
-4. **← YOU ARE HERE: Batch B** (D10(b) place-overlap). ⚠ **B2 (self-host mirror) is now
-   BLOCKED on the call-arg-sigil fix above** (same gap — the scout's "`EMove`→mover /
-   `EMutableBorrow`→writer at call args" assumption is FALSE today; the sigil is
-   discarded). B0 (hand-hoists) + B1 (Rust check) are UNAFFECTED and can proceed; B2
-   waits for the sigil fix. **SCOUT DONE + OWNER RULED**
+3. ✅ **A2-S LANDED 6/6 (2026-07-12 → 2026-07-13)** — self-host D12 drop-purity port,
+   ALL SIX positions. Pos-1/4/5/6 landed `3b741a8a`; pos-2/3 briefly disabled (the
+   full-sweep cert caught them over-rejecting `vb.push(!nb)` — the self-host
+   `parse_call_args` DISCARDED the `!`/`&` sigil) then RE-ENABLED by the
+   **call-arg-sigil fix `3681402c`** (2026-07-13): the parser now preserves the sigil
+   (`!x`→EMove / `&x`→EMutableBorrow, matching Rust), pos-2/3 restored + a new
+   `push(!x)`/`W(!x)` ACCEPT guard. Full gauntlet (scout→3-pass brief→executor→
+   output-review SIGN OFF; both Core-#8 deviations verified correct). Briefs
+   `wave-a2-s-selfhost-drop-purity-brief.md` + `wave-callarg-sigil-brief.md`.
+4. **← YOU ARE HERE: Batch B** (D10(b) place-overlap). **PAUSED by owner 2026-07-12
+   ("pause Batch B, do the sigil fix first") — the sigil fix is now DONE, so Batch B is
+   READY TO RESUME on owner's go.** ✅ **B2 (self-host mirror) is now UNBLOCKED** — the
+   per-arg sigil is in the AST (`3681402c`; `EMove`→mover / `EMutableBorrow`→writer at
+   call args now holds). B0 (hand-hoists — gauntlet-clean brief `wave-b0-handhoists-brief.md`)
+   → B1 (Rust check) → B2 (self-host mirror), each own gauntlet. **SCOUT DONE + OWNER RULED**
    (scout `scouts/scout-batch-b.md`; ruling `decisions.md` LOG 2026-07-12 "D10(b)
    ADDENDUM"). Key corrections the scout made: (a) D10(b) is NOT greenfield — it EXTENDS
    the existing `check_call_aliasing` (`src/semantic/safety/helpers.rs:1124-1186`); the
