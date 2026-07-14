@@ -311,10 +311,14 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    fossil (owner-decided). Fully gated (C 1619/0, LLVM 1619/0, bootstrap/self_host_runtime
    green both backends) + output-review SIGN OFF. Brief `wave-fieldaccess-soundness-brief.md`.
    Follow-up STAYS filed: deref-aware Strategy-2B (bogus field on wrapper/tuple).
-5. **← YOU ARE HERE: the CallArg normalization** (task #14) — write the brief from
-   `scouts/scout-callarg-normalization.md` (correct the proto's 7 `.value`-on-`Vector[CallArg]`
-   defects → `callarg_values(...)`), gauntlet, execute (MANDATORY `self_host_runtime` +
-   full-sweep gates — the saga's lesson), integrate → A2-S back to 6/6.
+5. ✅ **CallArg core LANDED `7dbb3f8d` (2026-07-14)** — self-host ECall/EMethodCall converged on Rust's
+   typed `CallArg{name,ownership,value}` (bare value → lowerer untouched → no wrapper miscompile);
+   names-vector sidecar retired; A2-S D12 pos-2 (ctor-call) + pos-3 RE-ENABLED via `a.ownership==OWN_BORROW`.
+   FULL C 1619/0 + FULL LLVM 1619/0 + self_host_runtime ok. The gate battery caught a real reorder
+   miscompile (self_host_runtime) + 2 Core-#4 sibling-drift sites (output-review) — both fixed. Brief
+   `wave-callarg-core-brief.md`, scout `scouts/scout-callarg-normalization.md`. Follow-ups filed:
+   parser/resolver copies, EStructLiteral/EDotShorthand extension (true 6/6), the HOF-direct guard
+   fixture (Core #4), the 2 compiler leniencies, Strategy-2B (deref-aware FieldAccess).
 6. **THEN Batch B** (D10(b) place-overlap; PAUSED by owner until the sigil path lands).
    B2 (self-host mirror) consumes `arg.ownership` from the CallArg record (owner: B2
    must HONOR the CallArg model). B0 (hand-hoists, gauntlet-clean brief) → B1 (Rust
