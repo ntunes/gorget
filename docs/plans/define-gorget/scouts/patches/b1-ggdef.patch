@@ -1,0 +1,205 @@
+diff --git a/spec/ggdef/src/elaborate/mod.rs b/spec/ggdef/src/elaborate/mod.rs
+index b2d04741..68f495f1 100644
+--- a/spec/ggdef/src/elaborate/mod.rs
++++ b/spec/ggdef/src/elaborate/mod.rs
+@@ -1063,13 +1063,101 @@ impl Elaborator {
+         Ok(())
+     }
+ 
++    /// D10(b) place-overlap check, mirroring production `check_call_aliasing`
++    /// (src/semantic/safety/helpers.rs). Within a single call, two PLACE args
++    /// whose roots+projection paths overlap under conflicting sigils are
++    /// rejected at elaboration. A Copy-typed bare read is a value SNAPSHOT (no
++    /// live alias) and is exempt. Two axes are deliberately kept OUT and handled
++    /// by the interpreter's liveness rule (the `Moved`→IllFormed slot):
++    /// `(Move, Move)` overlap and `f(!x, x.copy_field)` (move-then-Copy-read) —
++    /// both surface as `read of moved-out value` IllFormed at eval, matching
++    /// production's E_DoubleMove / E_UseAfterMove (a LIVENESS reject, one layer
++    /// before place-overlap).
++    fn check_arg_place_overlap(&self, args: &[Spanned<ast::CallArg>]) -> ElabResult<()> {
++        struct P {
++            root: String,
++            path: Vec<String>,
++            own: ast::Ownership,
++            is_copy: bool,
++            span: Span,
++        }
++        let mut places: Vec<P> = Vec::new();
++        for a in args {
++            let Some((root, path)) = ast_place(&a.node.value.node) else {
++                continue;
++            };
++            // Only actual LOCAL bindings (params + var decls + for-vars +
++            // match-bindings) and `self` are tracked places — mirrors
++            // production's `DefKind::Variable` root filter.
++            if root != "self" && !self.local_names.contains(&root) {
++                continue;
++            }
++            // Copy-ness of the arg VALUE via the TYPED axis (Rider 2 — NO
++            // name/shape heuristic): a scalar (`Ty::Prim`) is Copy; Str /
++            // collections / structs own a buffer and are NOT.
++            let is_copy = matches!(self.infer_ast_ty(&a.node.value.node), Ty::Prim);
++            places.push(P {
++                root,
++                path,
++                own: a.node.ownership,
++                is_copy,
++                span: a.node.value.span,
++            });
++        }
++        for i in 0..places.len() {
++            for j in (i + 1)..places.len() {
++                let (x, y) = (&places[i], &places[j]);
++                if x.root != y.root || !paths_overlap(&x.path, &y.path) {
++                    continue;
++                }
++                // Drop Copy bare readers (value snapshots).
++                let x_copy_reader = x.own == ast::Ownership::Borrow && x.is_copy;
++                let y_copy_reader = y.own == ast::Ownership::Borrow && y.is_copy;
++                if x_copy_reader || y_copy_reader {
++                    continue;
++                }
++                // `(Move, Move)` overlap is a liveness concern (IllFormed at
++                // eval), not place-overlap.
++                if x.own == ast::Ownership::Move && y.own == ast::Ownership::Move {
++                    continue;
++                }
++                let has_writer_or_mover =
++                    matches!(x.own, ast::Ownership::MutableBorrow | ast::Ownership::Move)
++                        || matches!(y.own, ast::Ownership::MutableBorrow | ast::Ownership::Move);
++                let both_bare =
++                    x.own == ast::Ownership::Borrow && y.own == ast::Ownership::Borrow;
++                if !has_writer_or_mover || both_bare {
++                    continue;
++                }
++                return Err(place_overlap_error(
++                    &sigil_place(x.own, &render_place(&x.root, &x.path)),
++                    &sigil_place(y.own, &render_place(&y.root, &y.path)),
++                    y.span,
++                ));
++            }
++        }
++        Ok(())
++    }
++
+     fn call_arg_source(&mut self, arg: &ast::CallArg) -> ElabResult<Source> {
+         match arg.ownership {
+             ast::Ownership::Move => Ok(Source::Move(self.elaborate_expr(&arg.value)?)),
+             ast::Ownership::MutableBorrow => Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?)),
+             ast::Ownership::Borrow => {
+                 if ast_is_place(&arg.value.node) {
+-                    Ok(Source::BorrowView(self.elaborate_expr(&arg.value)?))
++                    // D10(b) Copy-snapshot: a bare read of a COPY-typed place is
++                    // a VALUE SNAPSHOT evaluated eagerly at the call site into an
++                    // independent value — NOT a lazy view. This matches
++                    // production passing Copy scalars by value, and it makes the
++                    // rule evaluation-order-sensitive: `f(s.copy_field, !s)`
++                    // (read BEFORE move) is legal — the snapshot is taken before
++                    // the move kills the slot. A non-Copy bare read stays a live
++                    // `BorrowView` (the CoW-default borrow).
++                    if matches!(self.infer_ast_ty(&arg.value.node), Ty::Prim) {
++                        Ok(Source::Value(self.elaborate_expr(&arg.value)?))
++                    } else {
++                        Ok(Source::BorrowView(self.elaborate_expr(&arg.value)?))
++                    }
+                 } else {
+                     Ok(Source::Value(self.elaborate_expr(&arg.value)?))
+                 }
+@@ -1249,6 +1337,10 @@ impl Elaborator {
+         if matches!(callee.node, ast::Expr::NoneLiteral) {
+             return Ok(enum_construct("Option", "None", Vec::new()));
+         }
++        // D10(b): reject place-overlapping args under conflicting sigils before
++        // any callee dispatch (mirrors production `check_call_aliasing`, which
++        // runs on every `Expr::Call`).
++        self.check_arg_place_overlap(args)?;
+         let ast::Expr::Identifier(name) = &callee.node else {
+             return Err(ElabError::new("only named callees are supported in phase 0", callee.span));
+         };
+@@ -1615,6 +1707,11 @@ impl Elaborator {
+         args: &[Spanned<ast::CallArg>],
+         span: Span,
+     ) -> ElabResult<Expr> {
++        // D10(b): place-overlap check on the method args (mirrors production
++        // `check_call_aliasing`, which runs on every `Expr::MethodCall`). The
++        // receiver is not in scope of this check (it binds as `self`), matching
++        // production.
++        self.check_arg_place_overlap(args)?;
+         // Enum-variant construction is parsed as a method call on the type name
+         // (`Token.Ident("x")` → MethodCall{ recv: Token, method: Ident }).
+         if let ast::Expr::Identifier(type_name) = &receiver.node {
+@@ -2281,6 +2378,74 @@ fn is_clone_call(e: &ast::Expr) -> bool {
+     matches!(e, ast::Expr::MethodCall { method, args, .. } if method.node == "clone" && args.is_empty())
+ }
+ 
++/// D10(b) place primitive: the (root local name, projection path) of a place
++/// expression — mirrors production `find_root_def_id_with_path`
++/// (src/semantic/safety/helpers.rs). Field names are outer-to-inner; tuple
++/// segments are pre-dotted (`.0`). `Index`/`OptionalChain` COLLAPSE to the root
++/// (an index borrow is from the collection itself — conservative). Non-places
++/// return `None`.
++fn ast_place(e: &ast::Expr) -> Option<(String, Vec<String>)> {
++    match e {
++        ast::Expr::Identifier(n) => Some((n.clone(), Vec::new())),
++        ast::Expr::SelfExpr => Some(("self".to_string(), Vec::new())),
++        ast::Expr::FieldAccess { object, field } => {
++            let (root, mut path) = ast_place(&object.node)?;
++            path.push(field.node.clone());
++            Some((root, path))
++        }
++        ast::Expr::TupleFieldAccess { object, index } => {
++            let (root, mut path) = ast_place(&object.node)?;
++            path.push(format!(".{index}"));
++            Some((root, path))
++        }
++        ast::Expr::Index { object, .. } | ast::Expr::OptionalChain { object, .. } => {
++            ast_place(&object.node)
++        }
++        _ => None,
++    }
++}
++
++/// D10(b): two projection paths under the SAME root OVERLAP iff one is a prefix
++/// of the other (`zip` stops at the shorter). Disjoint siblings (`["a"]` vs
++/// `["b"]`) do NOT overlap; an empty path (the whole binding) overlaps all.
++fn paths_overlap(a: &[String], b: &[String]) -> bool {
++    a.iter().zip(b.iter()).all(|(x, y)| x == y)
++}
++
++/// Render a place for a diagnostic: `root` followed by its projection segments.
++fn render_place(root: &str, path: &[String]) -> String {
++    let mut s = root.to_string();
++    for seg in path {
++        s.push('.');
++        s.push_str(seg.strip_prefix('.').unwrap_or(seg));
++    }
++    s
++}
++
++/// Prefix a rendered place with its call-arg sigil (`&`/`!`/bare).
++fn sigil_place(own: ast::Ownership, place: &str) -> String {
++    match own {
++        ast::Ownership::Borrow => place.to_string(),
++        ast::Ownership::MutableBorrow => format!("&{place}"),
++        ast::Ownership::Move => format!("!{place}"),
++    }
++}
++
++/// The D10(b) place-overlap rejection (`decisions.md` D10 + the 2026-07-12
++/// D10(b) ADDENDUM + Rider 1 REVISED). The message carries `error[E_BorrowConflict]`,
++/// the code production surfaces from `SemanticErrorKind::BorrowConflict`.
++fn place_overlap_error(a: &str, b: &str, span: Span) -> ElabError {
++    ElabError::new(
++        format!(
++            "error[E_BorrowConflict]: cannot pass `{a}` and `{b}` in the same \
++             call — their places overlap under conflicting sigils (D10(b) \
++             place-overlap: a place has one exclusive writer; a Copy-typed bare \
++             read is a value snapshot and is exempt)"
++        ),
++        span,
++    )
++}
++
+ /// The D10(a) rejection (`docs/plans/define-gorget/decisions.md`, ratified
+ /// 2026-07-06; move-bind addendum 2026-07-11). A named `&`-binding creates a
+ /// SECOND live writable path to a place — the exclusivity violation D10 exists

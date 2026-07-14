@@ -1,0 +1,227 @@
+diff --git a/src/semantic/safety/helpers.rs b/src/semantic/safety/helpers.rs
+index b3e9bb1f..c5bb267d 100644
+--- a/src/semantic/safety/helpers.rs
++++ b/src/semantic/safety/helpers.rs
+@@ -44,6 +44,37 @@ pub(super) fn place_shape(e: &Expr) -> MoveShape {
+     }
+ }
+ 
++/// D10(b): two projection paths under the SAME root OVERLAP iff one is a prefix
++/// of the other. `zip` stops at the shorter path, so all-equal-so-far ⇒ the
++/// shorter is a prefix of the longer ⇒ overlap; a divergence at any position
++/// (`["a"]` vs `["b"]`) ⇒ disjoint siblings ⇒ no overlap. An empty path (the
++/// whole binding) overlaps every sub-place of the same root.
++fn paths_overlap(a: &[String], b: &[String]) -> bool {
++    a.iter().zip(b.iter()).all(|(x, y)| x == y)
++}
++
++/// Render a place for a diagnostic: `root` followed by its projection segments.
++/// Field segments are plain names (`field` → `.field`); tuple segments arrive
++/// pre-dotted from `find_root_def_id_with_path` (`.0` → `.0`).
++fn render_place(root: &str, path: &[String]) -> String {
++    let mut s = root.to_string();
++    for seg in path {
++        s.push('.');
++        s.push_str(seg.strip_prefix('.').unwrap_or(seg));
++    }
++    s
++}
++
++/// Prefix a rendered place with its call-arg sigil for the diagnostic
++/// (`&place` for a writer, `!place` for a mover, bare for a reader).
++fn sigil_place(own: Ownership, place: &str) -> String {
++    match own {
++        Ownership::Borrow => place.to_string(),
++        Ownership::MutableBorrow => format!("&{place}"),
++        Ownership::Move => format!("!{place}"),
++    }
++}
++
+ impl<'a> BorrowChecker<'a> {
+     /// D4/D12: if `e` is a PLACE whose type is drop-tainted, return a display
+     /// name for the error PLUS its place shape (Whole vs field/index sub-place),
+@@ -1117,70 +1148,133 @@ impl<'a> BorrowChecker<'a> {
+         }
+     }
+ 
+-    /// Detect aliasing conflicts within a single call's arguments.
+-    /// e.g., f(&x, &x) — double mutable borrow
+-    /// e.g., f(x, &x) — immutable read + mutable borrow
+-    /// e.g., f(&x, !x) — mutable borrow + move
++    /// Detect aliasing conflicts within a single call's arguments (D10(b)
++    /// place-overlap check — `decisions.md` D10 + the 2026-07-12 D10(b) ADDENDUM
++    /// + Rider 1 REVISED 2026-07-14). Two args whose PLACES overlap under
++    /// conflicting sigils are rejected. "Places overlap" = same root binding AND
++    /// one projection path is a prefix of the other (disjoint siblings like
++    /// `m.a` / `m.b` do NOT overlap). "Conflicting" = at least one arg is a
++    /// writer (`&`) or mover (`!`) and they are not both bare readers.
++    ///
++    /// The check ranges over LIVE ALIASES, not syntactic reads: a bare read of a
++    /// COPY-typed place is a value SNAPSHOT (evaluated into an independent value
++    /// before the callee runs) and participates in no overlap — so
++    /// `f(&s, s.copy_int)` is legal. A non-Copy bare read IS a live borrow under
++    /// CoW-default, so it conflicts with an overlapping writer.
++    ///
++    /// Examples: `f(&x, &x)` / `f(&x, &x.field)` (both writers, overlap) —
++    /// reject; `f(x, &x)` (non-Copy read + writer) — reject; `f(x, !x)` (read +
++    /// move) — reject; `f(&s, s.copy_int)` (writer + Copy snapshot) — OK;
++    /// `f(&m.a, &m.b)` (disjoint siblings) — OK.
++    ///
++    /// Two AXES are deliberately kept out of this check:
++    ///   * `(Move, Move)` overlap (`f(!x, !x)`, `f(!n, !n.field)`) is handled by
++    ///     E_DoubleMove — a projection move root-marks the whole DefId, so the
++    ///     second move already trips DoubleMove. Duplicating it here would
++    ///     double-diagnose.
++    ///   * `f(!x, x.copy_field)` (move THEN Copy read of the moved slot) is
++    ///     rejected UPSTREAM by the move-tracker (E_UseAfterMove) — a LIVENESS
++    ///     violation, not place-overlap. This check neither needs nor grants a
++    ///     mover Copy-exemption (Rider 1 REVISED).
+     pub(super) fn check_call_aliasing(&mut self, args: &[Spanned<CallArg>]) {
+-        // Collect (DefId, Ownership, span) for identifier arguments
+-        let mut arg_vars: Vec<(DefId, Ownership, Span)> = Vec::new();
++        // Collect the PLACE args: (root DefId, projection path, sigil, Copy-ness,
++        // span). Non-places (fresh temps, literals, `.clone()`, `.get()`) resolve
++        // to `None` and are skipped — they cannot alias.
++        struct ArgPlace {
++            root: DefId,
++            path: Vec<String>,
++            ownership: Ownership,
++            is_copy: bool,
++            span: Span,
++        }
++        let mut places: Vec<ArgPlace> = Vec::new();
+ 
+         for arg in args {
+-            let (inner_expr, ownership) = match arg.node.ownership {
+-                Ownership::Move => (&arg.node.value, Ownership::Move),
+-                Ownership::MutableBorrow => (&arg.node.value, Ownership::MutableBorrow),
+-                Ownership::Borrow => (&arg.node.value, Ownership::Borrow),
++            let Some((root, path)) = self.find_root_def_id_with_path(&arg.node.value) else {
++                continue;
+             };
+-
+-            if let Expr::Identifier(_) = &inner_expr.node {
+-                if let Some(&def_id) = self.resolution_map.get(&inner_expr.span.start) {
+-                    let kind = self.scopes.get_def(def_id).kind;
+-                    if kind == DefKind::Variable {
+-                        arg_vars.push((def_id, ownership, arg.span));
+-                    }
+-                }
+-            }
++            // Only VARIABLE roots participate. Params ARE `DefKind::Variable`
++            // (there is no `DefKind::Parameter`), so `f(&p, p)` on a param is
++            // still checked. `self`-rooted places have no `resolution_map` entry
++            // → already skipped above (see the `#[ignore]`d self-root fixture +
++            // TODO for wiring that later).
++            if self.scopes.get_def(root).kind != DefKind::Variable {
++                continue;
++            }
++            // Copy-ness of the arg VALUE via the TYPED axis (Rider 2 — NO
++            // name/shape heuristic). `lvalue_value_type` is the STRUCTURAL
++            // fallback: the typechecker does not record `expr_types` at
++            // field/tuple/index spans, so a `None` fallback would wrongly report
++            // a Copy field read (`s.copy_int`) as non-Copy and over-reject
++            // `f(&s, s.copy_int)`.
++            let is_copy = self.expr_value_is_copy(
++                &arg.node.value,
++                self.lvalue_value_type(&arg.node.value),
++            );
++            places.push(ArgPlace {
++                root,
++                path,
++                ownership: arg.node.ownership,
++                is_copy,
++                span: arg.span,
++            });
+         }
+ 
+-        // Check pairs for conflicts
+-        for i in 0..arg_vars.len() {
+-            for j in (i + 1)..arg_vars.len() {
+-                let (id_a, own_a, span_a) = &arg_vars[i];
+-                let (id_b, own_b, _span_b) = &arg_vars[j];
++        // Pairwise conflict: same root + overlapping projection prefix +
++        // conflicting sigils (after dropping Copy bare readers).
++        for i in 0..places.len() {
++            for j in (i + 1)..places.len() {
++                let a = &places[i];
++                let b = &places[j];
+ 
+-                if id_a != id_b {
++                if a.root != b.root {
++                    continue;
++                }
++                if !paths_overlap(&a.path, &b.path) {
++                    // Disjoint siblings (e.g. `m.a` vs `m.b`) — no live-alias edge.
+                     continue;
+                 }
+ 
+-                let name = self.scopes.get_def(*id_a).name.clone();
++                // Copy-read exemption: a bare read of a Copy-typed place is a
++                // value snapshot, not a live alias. Drop any such arg from the
++                // pair; a single remaining arg (or none) cannot conflict.
++                let a_copy_reader = a.ownership == Ownership::Borrow && a.is_copy;
++                let b_copy_reader = b.ownership == Ownership::Borrow && b.is_copy;
++                if a_copy_reader || b_copy_reader {
++                    continue;
++                }
+ 
+-                let conflict = match (own_a, own_b) {
+-                    // Double mutable borrow
+-                    (Ownership::MutableBorrow, Ownership::MutableBorrow) => {
+-                        Some("cannot borrow mutably more than once in the same call")
+-                    }
+-                    // Mutable borrow + move (either order)
+-                    (Ownership::MutableBorrow, Ownership::Move)
+-                    | (Ownership::Move, Ownership::MutableBorrow) => {
+-                        Some("cannot borrow and move the same variable in a call")
+-                    }
+-                    // Borrow (bare read) + mutable borrow
+-                    (Ownership::Borrow, Ownership::MutableBorrow)
+-                    | (Ownership::MutableBorrow, Ownership::Borrow) => {
+-                        Some("cannot use bare and mutable borrow of the same variable in a call")
+-                    }
+-                    _ => None,
+-                };
++                // `(Move, Move)` overlap is E_DoubleMove's job (a projection move
++                // root-marks) — keep it out to avoid double-diagnosing.
++                if a.ownership == Ownership::Move && b.ownership == Ownership::Move {
++                    continue;
++                }
+ 
+-                if let Some(detail) = conflict {
+-                    self.error(
+-                        SemanticErrorKind::BorrowConflict {
+-                            name,
+-                            detail: detail.to_string(),
+-                        },
+-                        *span_a,
+-                    );
++                // Conflict iff ≥1 remaining arg is a writer/mover AND they are
++                // not both bare readers.
++                let has_writer_or_mover =
++                    matches!(a.ownership, Ownership::MutableBorrow | Ownership::Move)
++                        || matches!(b.ownership, Ownership::MutableBorrow | Ownership::Move);
++                let both_bare =
++                    a.ownership == Ownership::Borrow && b.ownership == Ownership::Borrow;
++                if !has_writer_or_mover || both_bare {
++                    continue;
+                 }
++
++                let name = self.scopes.get_def(a.root).name.clone();
++                let place_a = render_place(&name, &a.path);
++                let place_b = render_place(&name, &b.path);
++                let detail = format!(
++                    "cannot pass `{}` and `{}` in the same call — their places overlap",
++                    sigil_place(a.ownership, &place_a),
++                    sigil_place(b.ownership, &place_b),
++                );
++                // Point the span at the SECOND (overlapping) arg — it reads as
++                // "this later arg conflicts with an earlier one".
++                self.error(
++                    SemanticErrorKind::BorrowConflict { name, detail },
++                    b.span,
++                );
+             }
+         }
+     }

@@ -1,0 +1,77 @@
+diff --git a/docs/language-reference.md b/docs/language-reference.md
+index 31383efe..4acf5975 100644
+--- a/docs/language-reference.md
++++ b/docs/language-reference.md
+@@ -2327,15 +2327,63 @@ Mismatches produce an **OwnershipMismatch** error.
+ 
+ ### 9.4 Same-Call Aliasing
+ 
+-Within a single function call's arguments, the following conflicts are detected:
+-
+-| Arguments          | Error                              |
+-|--------------------|------------------------------------|
+-| `f(&x, &x)`       | Double mutable borrow              |
+-| `f(x, &x)`        | Immutable + mutable borrow         |
+-| `f(&x, !x)`       | Mutable borrow + move              |
+-
+-Passing the same variable bare twice (`f(x, x)`) is allowed for Copy types.
++Within a single call, two arguments whose **places overlap** under **conflicting
++sigils** are rejected (`error[E_BorrowConflict]`). This is the call-argument face
++of the same exclusivity principle behind local `&`-binds (D10, 2026-07-06; the
++2026-07-12 D10(b) ADDENDUM): a place has one exclusive writer, and the check
++exists to close the lazy/eager copy-on-write divergence channel — a *live alias*
++that could observe or miss a mutation made through another argument.
++
++**Conflicting** = at least one argument is a **writer** (`&`) or **mover** (`!`)
++and the two are not **both bare readers**:
++
++| Arguments      | Result                                              |
++|----------------|-----------------------------------------------------|
++| `f(&x, &x)`    | rejected — two writers of the same place            |
++| `f(x, &x)`     | rejected — a (non-Copy) read overlapping a writer   |
++| `f(&x, !x)`    | rejected — a writer overlapping a mover             |
++| `f(x, !x)`     | rejected — a (non-Copy) read overlapping a mover    |
++| `f(x, x)`      | allowed — two bare reads never conflict             |
++
++**Places, not variables — projection overlap.** The check keys on the argument's
++**place**: its root binding plus the projection path (fields / tuple fields;
++`x[i]` collapses to `x`). Two places under the same root **overlap** when one
++projection path is a **prefix** of the other — the whole (`n`) overlaps any
++sub-place (`n.field`), and equal paths overlap. So `f(&n, &n.field)` is rejected
++(the whole and a sub-place, both writers). **Disjoint siblings do not overlap**:
++`f(&m.a, &m.b)` is legal — the paths diverge at the first segment, so the two
++borrows name non-overlapping storage.
++
++**Copy reads are value snapshots (exempt).** The check ranges over *live
++aliases*, not syntactic reads. A bare read of a **Copy-typed** place
++(`s.copy_int`, an `int`) is evaluated into an independent value *before* the
++callee runs — there is no memory edge left to diverge against — so it
++participates in no overlap. `f(&s, s.copy_int)` is therefore **legal**: the
++writer `&s` and the snapshot `s.copy_int` do not conflict. (This is the general
++form of "two bare reads are allowed"; it matches Rust's two-phase borrow, where
++`f(&mut s, s.int_field)` compiles but `f(&mut s, &s.vec)` does not.) A **non-Copy**
++bare read is a live borrow under copy-on-write, so it *does* conflict with an
++overlapping writer or mover.
++
++**Moves are a separate axis — order matters.** The Copy-snapshot exemption is for
++*writers*, not movers, because a move **consumes** the storage:
++
++- `f(s.copy_int, !s)` — reading the Copy place **before** the move — is **legal**
++  (left-to-right evaluation takes the snapshot, then the move kills the slot).
++- `f(!s, s.copy_int)` — the **move then the read** — is **rejected**, but by
++  **use-after-move** (`error[E_UseAfterMove]`), *not* by aliasing: after `!s` the
++  slot is dead, so reading `s.copy_int` is a dead-slot access. Rust rejects the
++  identical program.
++
++Do not read a blanket "no reads of `s` in a call that moves `s`" into this — the
++rule is evaluation-order-sensitive, and the move-consumes-storage rejection is a
++liveness check one layer *before* place-overlap. Likewise `f(!x, !x)` and
++`f(!n, !n.field)` are rejected as double-moves (`error[E_DoubleMove]`), again a
++liveness concern rather than place-overlap.
++
++See [§9.2 Borrowing Rules](#92-borrowing-rules) and the `&` operator's
++exclusivity note for the shared principle; the ruling is D10 in the design
++ledger (`docs/language-design.md` §3.5 The Borrow Rules).
+ 
+ ### 9.5 Branch Merging
+ 
