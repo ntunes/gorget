@@ -398,6 +398,37 @@ P1-infra reviewers' recommendation.
   if a refactor makes it fail with the overlap error, the move-tracker silently lost a case; the
   fixture catches that drift); the order-twin `f(x.copy_field, !x)` is a **POS** (pins the rule
   as evaluation-order-sensitive, not a blanket "no reads of `x` in a call that moves `x`").
+  **⚠ B2 SCOPE + LIVENESS-PASS + PASS-ORDER, RATIFIED 2026-07-14 (owner, firm — two calls, one layering principle):**
+  Raised by the B2 self-host-mirror scout (the self-host has NO move-tracker → accepts every use-after-move).
+  **(1) B2 mirrors the FULL D10 RULE, not production's exact code — the mover-mover arm is IN.** `f(!x, !x)`
+  is the MAXIMAL place-overlap ("at most one writer OR mover" — D10's ratified text). Production's
+  `check_call_aliasing` EXCLUDES `(Move,Move)` only because `E_DoubleMove` preempts it one pass earlier; the
+  self-host has no such upstream pass, so the faithful mirror lets the arm become REACHABLE and FIRE —
+  rejecting `f(!x,!x)` with the OVERLAP code. That is not a fudge: reject-with-a-different-code strictly beats
+  ACCEPT (silently admitting a broken program to preserve diagnostic cosmetics is backwards). Interim
+  divergence (self-host overlap-code vs production/ggdef `E_DoubleMove`) DOCUMENTED at the arm + cited to the
+  filed liveness entry; the mover-mover fixture stays OUT of the self-host conformance lane (or is a
+  self-host-targeted rejection test) until the liveness pass lands and preempts it. **BUT `f(!x, x.copy_field)`
+  stays EXEMPT — B2 must NOT catch it** (per Rider 1 REVISED: the Copy read is a SNAPSHOT, not an alias; bending
+  the overlap rule to mop it up is the phantom-alias mistake re-smuggled through the self-host). The self-host
+  ACCEPTS that program until the liveness track lands — an honest, filed, pre-existing divergence.
+  **(2) The self-host LIVENESS PASS is its OWN track, filed HIGH.** The self-host missing the entire liveness
+  axis is a first-order Core-#8 gap (`E_DoubleMove`/`E_UseAfterMove` are ratified registry diagnostics, the
+  definition models them, a conformance lane that can't emit them isn't conformant — same class as the (a2)
+  D23 gate). Sequence it AFTER A2-S (landed) — the port is then "add an axis to an existing walk." **STRUCTURAL
+  (the innovation): do NOT bolt on a third standalone pass — mirror production's `src/semantic/safety/` MODULE
+  LAYOUT: ONE self-host safety walk where drop-purity (A2-S) + place-overlap (B2) + liveness are ARMS reading
+  typed metadata** (three independently-grown `.gg` passes = sibling-drift; the self-host is the elegance
+  showcase). **Acceptance set = ggdef (the executable DEFINITION), fixture-for-fixture** (ggdef already models
+  read-of-moved→IllFormed `eval.rs:21/745`), NOT eyeballing the Rust tracker. **Scope minimal:** Gorget's move
+  rules are `!`-driven + last-use-based (not full NLL), so a per-function forward walk (moved-set, kill on move,
+  error on use-of-killed, union at merges) covers it; scout calibrates against production's move-tracker size
+  (~250-400 lines est., comparable to A2-S). Parallelize per-module if the blast radius reveals many real
+  self-host-source use-after-moves.
+  **(3) PASS-ORDER RIDER (ratified): LIVENESS diagnoses PRECEDE ALIASING diagnoses** (production's + the
+  definition's pass order). This makes the self-host's interim overlap-code rejection of `f(!x,!x)`
+  "known-nonconformant-but-safe, closes when liveness lands" rather than an ambiguous mismatch — and it protects
+  the D11 exact-code fixture expectations from ever being argued backwards from an implementation's pass order.
   **Rider 2 (implementation — owner):** the check MUST read the TYPED Copy axis
   (A2-R1 just built the Copy∧Drop machinery — read the same accessor, rule 2, NO
   shape heuristics); ggdef models the IDENTICAL rule in the same track, with fixtures
