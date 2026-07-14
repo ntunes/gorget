@@ -273,7 +273,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # no equip block exists in user-space.
             int reg_obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             if reg_obj_type >= 0 and reg_obj_type < types.types.len():
-                MethodResolution reg_res = resolve_method_full(types.trait_registry, reg_obj_type, method_name, scopes, &types)
+                MethodResolution reg_res = resolve_method_full(reg_obj_type, method_name, scopes, &types)
                 # Receiver-by-name fallback for cases where the receiver's
                 # TypeId came back as `defined_id` of an imported type that
                 # the registry indexed by its name in another module.
@@ -300,7 +300,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     # chained adapter calls like `t1.take(3)` where t1 is
                     # `TakeIter[X, Y]` and the impl is generic over [I, T].
                     if is_generic_recv and recv_name.len() > 0:
-                        reg_res = resolve_method_for_generic_receiver(types.trait_registry, recv_name, recv_targs, reg_obj_type, method_name, scopes, &types)
+                        reg_res = resolve_method_for_generic_receiver(recv_name, recv_targs, reg_obj_type, method_name, scopes, &types)
                     if not reg_res.found and recv_name.len() > 0:
                         reg_res = resolve_method_by_name(types.trait_registry, recv_name, method_name)
                     # Phase 4: intrinsic satisfaction for primitives. Looks
@@ -379,7 +379,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         match subst_recv_rt:
                             case RTGeneric(subst_rdef, subst_recv_args):
                                 String subst_recv_name = scopes.get_def(subst_rdef).name
-                                subst_ret = substitute_shape_return_generic_receiver(types.trait_registry, subst_recv_name, subst_recv_args, reg_obj_type, sh.shape, bound, scopes, &types)
+                                subst_ret = substitute_shape_return_generic_receiver(subst_recv_name, subst_recv_args, reg_obj_type, sh.shape, bound, scopes, &types)
                             else:
                                 pass
                         if subst_ret < 0 or subst_ret == types.error_id:

@@ -776,7 +776,7 @@ void reject_amp_self_mutator(SpannedExpr receiver, String method_name, ScopeTabl
         DefInfo d = scopes.get_def(def_id)
         if d.is_param and d.param_ownership == 0 and is_drop_tainted_type(d.type_id, scopes, types):
             int recv_type = infer_expr_type(receiver, scopes, &types, &ctx)
-            MethodResolution mr = resolve_method_full(types.trait_registry, recv_type, method_name, scopes, &types)
+            MethodResolution mr = resolve_method_full(recv_type, method_name, scopes, &types)
             # self_ownership == 1 is OWN_MUTABLE (`&self`) — the materialising
             # mutator. `self` (0) and `!self` (2) do not privatise a borrow.
             if mr.found and mr.sig.self_ownership == 1:
@@ -1651,7 +1651,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # expecting Callable[ReturnType(ParamType)].
             Vector[int] method_param_types = Vector[int]()
             if obj_type >= 0 and obj_type < types.types.len():
-                MethodResolution mres = resolve_method_full(types.trait_registry, obj_type, method_name, scopes, &types)
+                MethodResolution mres = resolve_method_full(obj_type, method_name, scopes, &types)
                 if not mres.found:
                     String recv_name = ""
                     ResolvedType obj_rt = get_rtype_at(types.types, obj_type)

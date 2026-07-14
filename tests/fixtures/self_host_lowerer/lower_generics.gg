@@ -102,7 +102,7 @@ int proto_inst_targ_count(ProtoMethInst pmi):
 int proto_inst_targ_tid(ProtoMethInst pmi, int i, GirModule &gmod):
     if pmi.method_targs.len() > 0:
         return proto_method_targ_tid(pmi.method_targs.get(i).unwrap(), &gmod)
-    return resolved_to_gir_type(pmi.method_targ_tids.get(i).unwrap(), gmod.tc_types, gmod.tc_scopes, &gmod)
+    return resolved_to_gir_type(pmi.method_targ_tids.get(i).unwrap(), &gmod)
 
 # walk an expression collecting method-generic call sites.
 void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):

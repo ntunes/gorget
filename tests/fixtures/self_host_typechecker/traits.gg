@@ -605,8 +605,8 @@ int substitute_default_return_generic(EquipInfo impl, TraitInfo trait_info, Meth
 # because the registered impl's self_type holds abstract placeholder
 # TypeIds that no concrete receiver matches.
 
-MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, String recv_name, Vector[int] recv_args, int recv_type_id, String method, ScopeTable scopes, TypeTable &types):
-    for impl in registry.impls:
+MethodResolution resolve_method_for_generic_receiver(String recv_name, Vector[int] recv_args, int recv_type_id, String method, ScopeTable scopes, TypeTable &types):
+    for impl in types.trait_registry.impls:
         if impl.self_type_name == recv_name:
             # Build impl-generic bindings from the receiver's args.
             Vector[String] impl_bind_names = Vector[String]()
@@ -641,7 +641,7 @@ MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, Str
             # Phase 3: trait default-method fallback with full
             # generic-receiver substitution.
             if impl.trait_def_id != NO_DEF:
-                for tinfo in registry.traits:
+                for tinfo in types.trait_registry.traits:
                     if tinfo.def_id == impl.trait_def_id:
                         if find_method_index(tinfo.method_names, method) is Some(midx):
                             bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
@@ -655,15 +655,15 @@ MethodResolution resolve_method_for_generic_receiver(TraitRegistry registry, Str
                                 return MethodResolution(true, sig, tinfo.def_id)
     return not_found_resolution()
 
-MethodResolution resolve_method_full(TraitRegistry registry, int type_id, String method, ScopeTable scopes, TypeTable &types):
+MethodResolution resolve_method_full(int type_id, String method, ScopeTable scopes, TypeTable &types):
     # Phase 1: inherent impls for this type via the typed index.
     # Rust's `inherent_impls.get(&type_id)` equivalent — visits only
     # the impls whose `self_type` matches, skipping the full linear
-    # scan over `registry.impls`.
-    if registry.inherent_impls.contains(type_id):
-        Vector[int] indices = registry.inherent_impls.get(type_id).unwrap()
+    # scan over `types.trait_registry.impls`.
+    if types.trait_registry.inherent_impls.contains(type_id):
+        Vector[int] indices = types.trait_registry.inherent_impls.get(type_id).unwrap()
         for idx_impl in indices:
-            EquipInfo impl = registry.impls.get(idx_impl).unwrap()
+            EquipInfo impl = types.trait_registry.impls.get(idx_impl).unwrap()
             if find_method_index(impl.method_names, method) is Some(idx):
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
     # Phase 2: trait-override impls for this type. Self-host extends
@@ -671,21 +671,21 @@ MethodResolution resolve_method_full(TraitRegistry registry, int type_id, String
     # index keyed only on self_type (Rust's trait_impls uses a richer
     # composite key for duplicate-impl validation, which the self-host
     # typechecker doesn't perform — so the simpler key suffices here).
-    if registry.trait_impls.contains(type_id):
-        Vector[int] indices = registry.trait_impls.get(type_id).unwrap()
+    if types.trait_registry.trait_impls.contains(type_id):
+        Vector[int] indices = types.trait_registry.trait_impls.get(type_id).unwrap()
         for idx_impl in indices:
-            EquipInfo impl = registry.impls.get(idx_impl).unwrap()
+            EquipInfo impl = types.trait_registry.impls.get(idx_impl).unwrap()
             if find_method_index(impl.method_names, method) is Some(idx):
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
     # Phase 3: trait default-method fallback. Same per-self_type
     # subset as phase 2, but consults the implemented trait's
     # TraitInfo for a default body when the impl itself doesn't
     # override the method.
-    if registry.trait_impls.contains(type_id):
-        Vector[int] indices = registry.trait_impls.get(type_id).unwrap()
+    if types.trait_registry.trait_impls.contains(type_id):
+        Vector[int] indices = types.trait_registry.trait_impls.get(type_id).unwrap()
         for idx_impl in indices:
-            EquipInfo impl = registry.impls.get(idx_impl).unwrap()
-            for tinfo in registry.traits:
+            EquipInfo impl = types.trait_registry.impls.get(idx_impl).unwrap()
+            for tinfo in types.trait_registry.traits:
                 if tinfo.def_id == impl.trait_def_id:
                     if find_method_index(tinfo.method_names, method) is Some(midx):
                         bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
@@ -949,8 +949,8 @@ int substitute_return_type(MethodSigShape shape, Vector[int] bind_tids, ScopeTab
 #
 # Returns -1 if no impl matches the receiver name (caller keeps its prior
 # `reg_ret`), so the base/non-adapter cases are untouched.
-int substitute_shape_return_generic_receiver(TraitRegistry registry, String recv_name, Vector[int] recv_args, int recv_type_id, MethodSigShape shape, Vector[int] bound, ScopeTable scopes, TypeTable &types):
-    for impl in registry.impls:
+int substitute_shape_return_generic_receiver(String recv_name, Vector[int] recv_args, int recv_type_id, MethodSigShape shape, Vector[int] bound, ScopeTable scopes, TypeTable &types):
+    for impl in types.trait_registry.impls:
         if impl.self_type_name == recv_name and impl.trait_def_id != NO_DEF:
             # Impl-generic bindings from the receiver's type args (positional).
             Vector[String] impl_bind_names = Vector[String]()
@@ -968,7 +968,7 @@ int substitute_shape_return_generic_receiver(TraitRegistry registry, String recv
             Vector[int] bind_tids = Vector[int]()
             bind_names.push("Self")
             bind_tids.push(recv_type_id)
-            for tinfo in registry.traits:
+            for tinfo in types.trait_registry.traits:
                 if tinfo.def_id == impl.trait_def_id:
                     int tn = tinfo.trait_generic_params.len()
                     if impl.trait_generic_args.len() < tn:

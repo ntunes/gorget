@@ -1773,8 +1773,20 @@ void p2p_stream_tick(Node &node):
 
 # ── Poll ─────────────────────────────────────────────────────
 
-P2PEvent p2p_poll_socket(Node &node, UdpSocket &sock):
-    Result[UdpPacket, String] recv_result = sock.recvfrom(65536)
+# Receive a datagram from the selected socket. `use_disc` picks the
+# discovery (multicast) socket, otherwise the main unicast socket. The
+# socket is always a field of `node`, so selecting it INTERNALLY (rather
+# than taking a separate `UdpSocket &sock` arg that always aliases a `node`
+# field) keeps the borrow single-rooted: recvfrom mutates `node.<socket>`
+# and the later `p2p_update_peer`/`p2p_send_raw` calls mutate other `node`
+# fields.
+Result[UdpPacket, String] p2p_recvfrom_selected(Node &node, bool use_disc):
+    if use_disc:
+        return node.disc_socket.recvfrom(65536)
+    return node.socket.recvfrom(65536)
+
+P2PEvent p2p_poll_socket(Node &node, bool use_disc):
+    Result[UdpPacket, String] recv_result = p2p_recvfrom_selected(&node, use_disc)
     if recv_result.is_error():
         return p2p_no_event()
 
@@ -2054,7 +2066,7 @@ P2PEvent p2p_poll(Node &node, int timeout_ms):
         # Drain all queued discovery messages (non-blocking)
         bool disc_ready = node.disc_socket.poll(0)
         while disc_ready:
-            P2PEvent ev = p2p_poll_socket(&node, &node.disc_socket)
+            P2PEvent ev = p2p_poll_socket(&node, true)
             if ev.event_type != 0:
                 return ev
             disc_ready = node.disc_socket.poll(0)
@@ -2064,4 +2076,4 @@ P2PEvent p2p_poll(Node &node, int timeout_ms):
     if not ready:
         return p2p_no_event()
 
-    return p2p_poll_socket(&node, &node.socket)
+    return p2p_poll_socket(&node, false)
