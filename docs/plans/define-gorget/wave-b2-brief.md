@@ -12,7 +12,16 @@
 > "D10(b) ADDENDUM", the "⚠ RIDER 1 REVISED 2026-07-14" note, AND the "⚠ B2 SCOPE + LIVENESS-PASS
 > + PASS-ORDER" ruling 2026-07-14 (the mover-mover-arm-IN / mover-Copy-EXEMPT decision — READ IT).
 >
-> **Status:** v0 — awaiting ≥3 sequential fresh brief-reviews.
+> **Status:** v1 — **pass-1 (Opus, fresh) folded.** Pass-1 SIGNED OFF on 7/7 items — verified
+> the walker hook (`:1076/1103/1117`; `:859/863` confirmed stale = `collect_idents_expr`), the
+> CallArg directive (reads typed `arg.ownership`, `ast.gg:33`), the mover-mover-arm encoding
+> (deleting `skip (Move,Move)` is the ONLY delta vs B1; `f(!x,!x)` rejects, `f(!x,x.copy_field)`
+> accepts via the Copy-reader exclusion — traced both; disjoint `f(!x,!y)`/`f(!m.a,!m.b)` accept),
+> the typed Copy axis (`is_scalar_primitive_name` `traits.gg:732` + `RTPrimitive`), name-keyed
+> root (self handled), and the over-rejection gate. Raised **1 MEDIUM reservation, FOLDED:** §3's
+> "optional ACCEPT fixture" for the mover-Copy divergence (`f(!s,s.tag)`) would BLESS the buggy
+> accept (lock-in anti-pattern) — struck; that case is the LIVENESS axis (not B2's), pinned only
+> in the liveness track as an `#[ignore]`d SHOULD-reject fixture, no B2 fixture. Awaiting pass-2.
 
 ---
 
@@ -110,11 +119,16 @@ probes (`/tmp/b2_work/probes/`) to `tests/fixtures/d10b_place_overlap/`:
   REJECTION test, NOT in the cross-compiler exact-code conformance lane — see §0)**.
 - **ACCEPT** (exit 0 + emits C): `f(&m.a,&m.b)` (disjoint siblings), `f(&s,s.tag)` Copy int
   (writer-Copy-exempt — the over-rejection guard).
-- **The mover-Copy divergence** (`f(!s, s.tag)` — accepts self-host-side while Rust rejects via
-  E_UseAfterMove): do NOT wire as a self-host reject fixture (it legitimately accepts until
-  liveness lands); note it in the liveness follow-up. Optionally a self-host ACCEPT fixture with a
-  comment citing the interim divergence + the filed liveness entry (so a future reader knows it's
-  a KNOWN pre-existing gap, not a blessed accept).
+- **The mover-Copy divergence** (`f(!s, s.tag)` — accepts self-host-side while Rust/ggdef reject
+  via E_UseAfterMove): this exercises the LIVENESS axis, NOT B2's place-overlap logic, so it does
+  NOT belong in B2's fixture set at all. **Do NOT add a B2 ACCEPT fixture for it** — an ACCEPT
+  fixture would assert exit-0 as the EXPECTED behavior, which blesses the buggy accept (the
+  "lock-in buggy behavior" anti-pattern — CLAUDE.md "Don't redesign around compiler gaps": the
+  wired-in expected output is the load-bearing artifact). It accepts today ONLY because of the
+  known, filed liveness gap — not "legitimately." The correct home for pinning this case is the
+  **liveness track**, as an `#[ignore]`d fixture whose EXPECTED output is the correct REJECTION
+  (E_UseAfterMove), flipped active when the liveness pass lands. B2 just notes it in the liveness
+  follow-up; it wires no fixture for it.
 
 ---
 
