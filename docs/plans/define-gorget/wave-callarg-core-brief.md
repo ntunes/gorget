@@ -181,7 +181,7 @@ they've actually completed). On an Edit-tool desync, re-Read + retry.
 - [ ] `CallArg{name, ownership, value}` in canonical `ast.gg`; `ECall`/`EMethodCall`
       carry `Vector[CallArg]`; the `Vector[String]` names field + `last_arg_names` +
       `peek_arg_name` RETIRED; `skip_ownership_markers` KEPT (type-param parsing).
-- [ ] `parse_arg_ownership` mirrors Rust (`&`/`!`/`move`/`mutable`); named-arg values
+- [ ] `parse_arg_ownership` (`&`/`!`→ownership per Rust; `move`/`mutable` inherited self-host); named-arg values
       preserved; the 7 `.value`-on-`Vector[CallArg]` defects fixed to `callarg_values(...)`.
 - [ ] `lower_call` byte-unchanged (boundary adapter `callarg_values`/`callarg_names`);
       every AST-transformer rebuild PRESERVES `name`+`ownership` (§3.3 verified).
@@ -192,8 +192,8 @@ they've actually completed). On an Edit-tool desync, re-Read + retry.
       live + green — no disable, no under-rejection divergence); the ownership-gating is
       the filed extension follow-up.
 - [ ] **`self_host_runtime`/`_diff` GREEN** + **`self_host_bootstrap_fixed_point` GREEN**
-      + **FULL C sweep GREEN** + **FULL LLVM sweep GREEN** + all 5 `*_comparison`
-      count-diffs unchanged + `box_deref` ASan + lints. NO slice-only sign-off.
+      + **FULL C sweep GREEN** + **FULL LLVM sweep GREEN** + the 5 `*_comparison` count-diffs (3 shared: no NEW divergence/may improve;
+      2 copies: strictly unchanged) + `box_deref` ASan + lints. NO slice-only sign-off.
 - [ ] Follow-ups filed: parser/resolver copies (sidecar consistency) + the
       EStructLiteral/EDotShorthand extension (true 6/6).
 
