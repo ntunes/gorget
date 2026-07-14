@@ -15,8 +15,19 @@
 > FieldAccess soundness hole (landed `f9a9da3d`); the proto's 7 `.value`-on-`Vector[CallArg]`
 > accesses are now clean typecheck errors to fix (§3).
 >
-> **Status:** v0 (draft, orchestrator). Awaiting ≥3 SEQUENTIAL fresh brief-review
-> passes (fold after each; never stop on a pass with reservations) before launch.
+> **Status:** v1 — pass-1 (Opus, fresh) folded. Pass-1 applied the proto + the
+> FieldAccess-fixed compiler, BUILT the driver twice, and CONFIRMED the two crux claims:
+> value-stays-bare SAFETY (lower_call byte-unchanged, no wrapper → the driver builds
+> 0-error + cc-clean after the 7 fixes; miscompile class cannot recur) + AST-transformer
+> PRESERVATION (every meta/generics/lowering rebuild preserves name+ownership). Raised 3
+> reservations, ALL FOLDED: **(1)** the 7 `.value` defects were MIS-LOCATED (all 7 in
+> `lower_expr.gg`/`lower_expr_inner`: 3×`margs.value` + 3×`spawn_args.value` + 1×`sb_args.value`;
+> `eval_meta_int_v2` has ZERO — the scout's stale C-function attribution) → §3.2 corrected.
+> **(2)** my "disable EStructLiteral/EDotShorthand pos-2" was the WRONG direction
+> (under-rejects `S{a:x}` → a self-host-accepts/Rust-rejects divergence) → §4 corrected to
+> LEAVE the current unconditional reject UNTOUCHED (strictly safer, zero regression); the
+> ownership-gating is purely the follow-up. **(3)** the 3 shared `*_comparison` gates:
+> "no NEW divergences (count may improve)", not "identical". Awaiting pass 2 (fresh).
 
 ---
 
@@ -73,12 +84,15 @@ the LOWERER's `EMutableBorrow` arm fire. CallArg keeps `value` a BARE expression
    cleanly (main drifted), re-derive from §1 (the AST+parser+consumer conversion). The
    compiler enumerates ALL sites in one build (atomic) — converge to 0 semantic errors.
 2. **FIX the 7 `.value`-on-`Vector[CallArg]` proto defects** (now surfaced as
-   `E_NoFieldFound` by the landed FieldAccess fix, in `lower_expr___lower_expr_inner` ×3
-   + `lower_generics___eval_meta_int_v2` ×4): these are places the mechanical `.value`
-   pass OVER-applied `.value` to a `Vector[CallArg]` (a Vector has no `.value`) where it
-   should build the values via `callarg_values(...)`. Fix each to `callarg_values(...)`.
-   (This is why the driver's `cc` failed before — the OLD typechecker accepted the bogus
-   `.value`; the fix now rejects it, guiding the correction.)
+   `E_NoFieldFound` by the landed FieldAccess fix). **CORRECTED LOCATIONS (pass-1
+   ground-truth build — the scout's "eval_meta_int_v2 ×4" was a stale C-function
+   attribution; `eval_meta_int_v2` has ZERO bogus accesses):** all 7 are in
+   `self_host_lowerer/lower_expr.gg` inside `lower_expr_inner` — 3× `margs.value`
+   (`:3963/:3979/:3998`, Vector/Dict/Set HOF dispatch) + 3× `spawn_args.value`
+   (`:5934/:5944/:5952`) + 1× `sb_args.value` (`:6005`, spawn arms). Each applies
+   `.value` to a `Vector[CallArg]` (no such field) where it should build the values via
+   `callarg_values(...)`. Fix each to `callarg_values(...)` (pass-1 VERIFIED this makes
+   the driver build 0-error + `cc`-clean, 32MB driver.c + exe).
 3. **⚠ VERIFY AST-TRANSFORMER PRESERVATION (the MEDIUM risk — reviewers hammer this):**
    every pass that REBUILDS an ECall/EMethodCall must PRESERVE `CallArg(name, ownership,
    value)` through the rewrite — a silent drop loses named-arg OR D12-ownership metadata.
@@ -108,13 +122,18 @@ BORROW → skip), WITHOUT the lowerer ever seeing a wrapper:
   wrapper bug through — NON-NEGOTIABLE).
 - **B2 unblock:** the D10(b) place-overlap mirror consumes `arg.ownership` DIRECTLY.
 
-**⚠ EStructLiteral/EDotShorthand pos-2 STAYS STAGED (owner-decided):** these nodes keep
-`Vector[SpannedExpr]` (no ownership), so their pos-2 arm CANNOT ownership-gate `S{a:!x}`/
-`.Red(!x)`. Leaving the pos-2 reject on them would OVER-REJECT the move; DISABLING it
-UNDER-rejects the bare copy. Choose UNDER-rejection (disable their pos-2 arm) + wire
-`#[ignore]`d driver tests asserting the CORRECT behavior (`S{a:x}` bare tainted → SHOULD
-reject; `S{a:!x}` → SHOULD accept) + a SHARP TODO for the extension follow-up. NEVER a
-silent gap (Core #8 labelled-incomplete).
+**⚠ EStructLiteral/EDotShorthand pos-2 — KEEP THE CURRENT UNCONDITIONAL REJECT UNCHANGED
+(pass-1 CORRECTION — do NOT disable it).** These nodes keep `Vector[SpannedExpr]` and
+their pos-2 arm (`typecheck.gg:1185/1191`) is CURRENTLY LIVE + green + unconditional. My
+draft's "disable it" was the WRONG direction: disabling UNDER-rejects `S{a:x}` bare-tainted
+→ a self-host-ACCEPTS / Rust-REJECTS D12 divergence (Rust enforces pos-2 on struct/enum-
+literal init, `check_expr.rs:15-63`) — against the differential goal. The status-quo
+unconditional reject is STRICTLY SAFER: it rejects bare-tainted (matches Rust) with ZERO
+regression, and only over-rejects `S{a:!x}` (a move-into-literal that the executor should
+confirm is even PARSEABLE in the self-host — the reviewer found no `EStructLiteral(`
+construction site; if unparseable, there's no over-rejection at all). So the CallArg-core
+landing LEAVES these two nodes UNTOUCHED; the ownership-gating (`S{a:!x}`/`.Red(!x)` →
+accept) is PURELY the extension follow-up. No disable, no `#[ignore]` staging needed.
 
 ## 5. Gates — MANDATORY, FULL, the box QUIET (THE saga lesson: slice ≠ the gate)
 
@@ -130,9 +149,10 @@ wrapper miscompile — NEVER skip it.
    the new arg model.
 5. **ALL `*_comparison` count-diffs** (`--test-threads=1 --nocapture`, always-pass
    diagnostics — only counts matter): `lowerer_comparison`/`type_comparison`/
-   `check_comparison` IDENTICAL to baseline; `parser_comparison`/`resolver_comparison`
-   UNCHANGED (the parser/resolver COPIES are NOT touched this landing — must stay
-   identical). Any regression = STOP.
+   `check_comparison` NO NEW divergences (count must NOT GROW — convergence on Rust's
+   typed `.name` model may IMPROVE it; an improvement is fine, only a REGRESSION stops);
+   `parser_comparison`/`resolver_comparison` STRICTLY UNCHANGED (the copies are NOT
+   touched this landing). Any new divergence = STOP.
 6. **FULL `cargo test --test integration -- --test-threads=4`** (`GG_BUILD_TIMEOUT_SECS=600
    GG_TEST_TIMEOUT_SECS=120`) — the whole suite, no over-rejection anywhere.
 7. **`GG_BACKEND=llvm` FULL integration sweep** — the arg model feeds both backends.
@@ -165,8 +185,9 @@ they've actually completed). On an Edit-tool desync, re-Read + retry.
 - [ ] A2-S pos-2 (ctor-call) + pos-3 re-enabled via `a.ownership == OWN_BORROW`; lint 9;
       3 reject fixtures restored + the `W(!x)`/`push(!x)` ACCEPT guard added; `W(!a)`/
       `v.push(!b)` ACCEPT, bare `W(a)`/`v.push(a)` REJECT on the self-host driver.
-- [ ] EStructLiteral/EDotShorthand pos-2 STAGED with `#[ignore]` correct-behavior tests +
-      a sharp TODO (the extension follow-up).
+- [ ] EStructLiteral/EDotShorthand pos-2 arm LEFT UNTOUCHED (unconditional reject stays
+      live + green — no disable, no under-rejection divergence); the ownership-gating is
+      the filed extension follow-up.
 - [ ] **`self_host_runtime`/`_diff` GREEN** + **`self_host_bootstrap_fixed_point` GREEN**
       + **FULL C sweep GREEN** + **FULL LLVM sweep GREEN** + all 5 `*_comparison`
       count-diffs unchanged + `box_deref` ASan + lints. NO slice-only sign-off.
