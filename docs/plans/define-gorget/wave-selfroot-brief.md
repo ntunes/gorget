@@ -10,7 +10,16 @@
 > `scouts/patches/selfroot-proto.patch`. **Ruling:** D10 (`decisions.md` ~`:654` root+projection
 > keying) + the 2026-07-12 ADDENDUM.
 >
-> **Status:** v0 — awaiting ≥3 sequential fresh brief-reviews.
+> **Status:** v1 — **pass-1 (Opus, fresh) folded.** Pass-1 SIGNED OFF, independently
+> re-verified all 7 load-bearing claims (root cause; `self` is a real DefId literally named
+> "self" via `make_self_param`, so `scopes.lookup("self")` resolves and — since `self` is a
+> keyword — cannot hit a wrong binding; layering-correctness; double-diagnose delegation;
+> for-loop nuance pre-existing+consistent; full-sweep the right net), and CHASED DOWN the
+> flagged big risk (item 4): all `find_root_def_id` callers are in the safety layer + every
+> non-safety `resolution_map` consumer is guarded/inert → the change is structurally confined.
+> **2 LOW non-blocking notes FOLDED:** (A) added that structural-confinement argument to §2;
+> (B) noted the closure-nested-self case is a pre-existing under-check, not a fix failure.
+> Awaiting pass-2 (fresh, confirming).
 
 ---
 
@@ -60,6 +69,10 @@ The other self-checks (`origins.rs`, `return_borrows.rs`) never route through `f
 **Measured gates on the prototype (scout):** lib **1107/0** · `self_host_bootstrap_fixed_point` **GREEN** (the self-host recompiles itself — its own source has NO newly-rejected self-rooted pattern) · place_overlap 8/0 · cow_ 91/0 · equip 9/0 · borrow_conflict/mutex/rwlock/dict_alias 0-fail. In-repo `for … in self.` blast radius = **0** (all 3 occurrences iterate method-CALL results, which `find_root_def_id` returns None for).
 
 **One nuance — NOT a regression (do NOT try to fix it here):** `for x in self.a: self.b.push(…)` (DISJOINT self fields) over-rejects — but this is a PRE-EXISTING root-granularity limitation of the FOR-LOOP check (`check_expr.rs:501` is root-only, unlike check_call_aliasing's projection-aware `paths_overlap`). The identifier-rooted analog `for x in t.a: t.b.push(…)` (a path this fix does NOT touch) over-rejects IDENTICALLY today. So the fix makes self CONSISTENT with existing (imperfect) local behavior — it neither introduces nor worsens the for-loop granularity issue. File it as a separate owner question (§4), do NOT fold it in.
+
+**Why the change is CONFINED (pass-1 structural argument, stronger than "measured"):** the new `resolution_map` entry is keyed at the `self` token offset, but it is CONSUMED only by the safety place-primitives — **every** caller of `find_root_def_id[_with_path]` is in `src/semantic/safety/` (grep: check_expr.rs / helpers.rs / check_stmt.rs; ZERO callers in lowering / typecheck / lint / rewrite). Each NON-safety `resolution_map` consumer is node-type/name/kind-guarded and provably inert to a SelfExpr entry: `ir/lowering/mod.rs` `root_static` reads it only in the `Expr::Identifier` arm (a self-place peels to SelfExpr → `_ => None`); `typecheck.rs` `resolve_name` is name-guarded on an identifier/callee/receiver text (never `"self"`, a keyword); `ir/lowering/stmts/patterns.rs` is Const/Static-kind-guarded (self is Variable); `lint_suggest_throws` reads a Constructor path-segment; `rewrite.rs` resolves a callee identifier. Lowering a `self` reference goes through its OWN name-based arms (`functions.rs` `Some("self")`, `generics/mod.rs` `env.lookup("self")`), never the map. So the change is "global" only in that the map GAINS an entry; its EFFECT is structurally confined to the safety layer. (The full C+LLVM sweep is the corpus-wide backstop for this, not the primary argument.)
+
+**Obs B (pre-existing under-check, NOT a fix failure):** `scopes.lookup("self")` may not resolve inside a CLOSURE nested in a method (if `lookup` is function-scope-bounded), leaving a `self.a` reference INSIDE a closure body unrooted. This is the STATUS QUO today (no entry either way) — an under-check (never over-rejection, never unsoundness), NOT a regression the fix introduces. The executor must NOT treat an uncaught closure-internal self-alias as a fix failure; if desired, add a `#[ignore]`d fixture + TODO for it, but it is out of scope.
 
 ---
 
