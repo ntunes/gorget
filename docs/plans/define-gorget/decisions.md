@@ -370,6 +370,34 @@ P1-infra reviewers' recommendation.
   non-Copy bare read overlapping a mover is a live alias into a moved-away value —
   REJECT. The addendum states writer AND mover cases together; do not leave the mover
   case to be re-derived at the next fork.
+  **⚠ RIDER 1 REVISED 2026-07-14 (owner, firm — the B1 pass-2 review + measurement corrected
+  the mover HALF):** `f(!x, x.copy_field)` is **NOT legal — it is correctly REJECTED**, but by
+  the LIVENESS rule (`E_UseAfterMove`), NOT by place-overlap. The original "snapshot pre-call"
+  premise was derived from runtime mechanics without probing the static model — the
+  un-measured-premise mistake the gauntlet exists to catch. Measured on gg @ HEAD: `f(!s, s.n)`
+  → **E_UseAfterMove** ("value moved here"); `f(&s, s.n)` (writer+Copy) → **accepted**;
+  `f(s.n, !s)` (read-BEFORE-move, left-to-right eval) → **accepted + runs correctly**. The
+  dissolution: the mover-Copy case was never the aliasing rule's to decide —
+  **`&` borrows** (a deferred-activation/two-phase story is coherent, and a Copy read genuinely
+  has nothing to alias) **while `!`/`^` CONSUMES** — after `!x` the slot is logically dead, so
+  reading `x.copy_field` is a LIVENESS violation the move-tracker rejects one layer BEFORE
+  place-overlap is consulted. Two one-sentence rules on different axes: **(1) D10(b)
+  place-overlap governs LIVE ALIASES** — Copy reads participate in no overlap, uniformly for
+  writers AND movers (this part of the rider STANDS); **(2) E_UseAfterMove governs LIVENESS** —
+  a Copy read of a moved source is dead-slot access regardless of overlap. So the mover clause
+  now reads: *the place-overlap rule neither needs nor grants a mover exemption for Copy reads;
+  `f(!x, x.copy_field)` is rejected upstream by the move-tracker (E_UseAfterMove), and that
+  rejection is correct — a move consumes the storage; there is no two-phase machinery for moves
+  in this language or in the reference (Rust rejects the identical program).* Option-2
+  (make it legal) loses on the MERITS, not just cost: it needs the backend to provably read
+  `x.copy_field` before the transfer/zeroing (else a silent miscompile — the worst class), it
+  makes "after `!x`, `x` is dead" order-and-Copy-conditional (fuzzy boundary: `f(!x,x.a,x.b)`?
+  `f(!x,g(x.copy_field))`?), and the idiomatic rewrite is one clearer line (`auto n = x.copy_field`
+  then `f(!x, n)`, or reorder to `f(x.copy_field, !x)`). **B1 fixtures pin this layering:** the
+  `f(!x,x.copy_field)` NEG asserts the diagnostic is **E_UseAfterMove** (NOT an aliasing error —
+  if a refactor makes it fail with the overlap error, the move-tracker silently lost a case; the
+  fixture catches that drift); the order-twin `f(x.copy_field, !x)` is a **POS** (pins the rule
+  as evaluation-order-sensitive, not a blanket "no reads of `x` in a call that moves `x`").
   **Rider 2 (implementation — owner):** the check MUST read the TYPED Copy axis
   (A2-R1 just built the Copy∧Drop machinery — read the same accessor, rule 2, NO
   shape heuristics); ggdef models the IDENTICAL rule in the same track, with fixtures
