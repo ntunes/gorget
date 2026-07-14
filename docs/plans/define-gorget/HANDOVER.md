@@ -319,28 +319,30 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    `wave-callarg-core-brief.md`, scout `scouts/scout-callarg-normalization.md`. Follow-ups filed:
    parser/resolver copies, EStructLiteral/EDotShorthand extension (true 6/6), the HOF-direct guard
    fixture (Core #4), the 2 compiler leniencies, Strategy-2B (deref-aware FieldAccess).
-6. **THEN Batch B** (D10(b) place-overlap; PAUSED by owner until the sigil path lands).
-   B2 (self-host mirror) consumes `arg.ownership` from the CallArg record (owner: B2
-   must HONOR the CallArg model). B0 (hand-hoists, gauntlet-clean brief) → B1 (Rust
-   check) → B2. **SCOUT DONE + OWNER RULED**
-   (scout `scouts/scout-batch-b.md`; ruling `decisions.md` LOG 2026-07-12 "D10(b)
-   ADDENDUM"). Key corrections the scout made: (a) D10(b) is NOT greenfield — it EXTENDS
-   the existing `check_call_aliasing` (`src/semantic/safety/helpers.rs:1124-1186`); the
-   real gaps are `f(x,!x)` (missing matrix arm) + field/index args (only collects
-   `Identifier`) — sharpest `f(&n,&n.field)` silently drops a write. (b) The typed
-   borrow-provenance bit is NOT needed — call args already carry typed `CallArg.ownership`;
-   OWNER CONFIRMED (B) = read the typed metadata, DEFER the bit to the value-position
-   family. **Owner ruling (Copy-read exemption → the LIVE-ALIAS rule):** the place-overlap
-   check ranges over live aliases (`&` writers, `!`/`^` movers, non-Copy bare reads);
-   Copy reads are value snapshots, no overlap — extend uniformly to movers; read the
-   TYPED Copy axis; ggdef parity + full-suite gate. **Slicing (scout, 3 briefs, each own
-   gauntlet):** B0 = hand-hoists first (2 p2p double-writers `p2p.gg:2057/2067` restructured
-   to a socket selector + 4 self-host fn refactors — REAL refactors not hoists, D10(a)
-   forbids `&`-field-binds; the `add_local` sites are Copy-int → EXEMPT per the ruling);
-   B1 = Rust `check_call_aliasing` extension + per-arm fixtures + §9.4 docs (gates on B0);
-   B2 = self-host mirror in `check_carrier_ops` ECall/EMethodCall — REBASES onto A2-S's
-   walker, bootstrap-gated. Projection-aware keying is load-bearing (~30 self-host
-   disjoint-field pairs; overlap = one projection path is a prefix of the other).
+6. **Batch B (D10(b) place-overlap) — B0 hand-hoists LANDED `40772fd4` (2026-07-14); B1 NEXT, then B2.**
+   ✅ **B0** restructured the in-repo sites the check would trip: the p2p double-writer
+   (`p2p_poll_socket` `&node,&node.<sock>` → a `bool use_disc` selector) + the
+   `resolved_to_gir_type`/`resolved_to_c_name`/`resolve_method_full`-family struct-own-field-param
+   refactors (drop the redundant sub-table params, read `gmod.tc_types`/`types.trait_registry`
+   internally). Within-function-borrow = DIRECT internal read works (no fallback). SOUND
+   (output-review airtight): the sub-tables are IMMUTABLE across the writer chains
+   (`trait_registry` assigned once `typecheck.gg:2594`; `tc_types`/`tc_scopes` zero lowerer writes),
+   so hoisting the projection into a local — legit under DEFERRED-provenance D10(b) (syntactic
+   place-check) — launders no hazard. FULL C 1619/0 + FULL LLVM 1619/0 + bootstrap 651s +
+   comparison count-diff IDENTICAL. Brief `wave-b0-handhoists-brief.md`, patches `scouts/patches/b0-*.patch`.
+   ⏭ **B1 = the D10(b) CHECK itself in Rust** — EXTEND the existing `check_call_aliasing`
+   (`src/semantic/safety/helpers.rs:1124-1186`, NOT greenfield); real gaps the scout found are
+   `f(x,!x)` (missing matrix arm) + field/index args (only collects `Identifier`; sharpest
+   `f(&n,&n.field)` silently drops a write). Rule = the LIVE-ALIAS cut (owner ADDENDUM
+   2026-07-12): ranges over live aliases (`&`/`!`/`^` writers-movers + non-Copy bare reads);
+   Copy reads are value snapshots (EXEMPT) — read the TYPED Copy axis, provenance bit DEFERRED (B),
+   so the check keys on SYNTACTIC root+projection-prefix (~30 self-host disjoint-field pairs must
+   still PASS — overlap = one projection path is a prefix of the other). Per-arm fixtures pin BOTH
+   directions per position; ggdef models the identical rule + gates on the FULL ggdef suite;
+   §9.4 docs. Then **B2** = the self-host mirror, consuming `arg.ownership` from the CallArg
+   record (owner: HONOR the CallArg model — read `arg.ownership`, NEVER shape-match), rebasing
+   onto A2-S's walker; bootstrap-gated. Scout `scouts/scout-batch-b.md`; ruling `decisions.md`
+   LOG 2026-07-12 "D10(b) ADDENDUM".
 5. **Batch C** per the wave plan: C1 operators (D26+D28; wire every new token into
    self-host `map_binop` + the anti-OP_ADD ratchet) → C2 fault-catch removal (D25;
    ~2,000-line both-compiler deletion; ships D24 spec prose + §10.5/§10.9 rewrite) →
