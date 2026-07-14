@@ -6609,7 +6609,7 @@ bool extract_hof_closure(SpannedExpr arg, int arity, Vector[String] &out_params,
     while i < arity:
         String pn = "__hofp" + int_to_str(i)
         out_params.push(pn)
-        call_args.push(SpannedExpr(EIdentifier(pn), arg.span))
+        call_args.push(pos_arg(SpannedExpr(EIdentifier(pn), arg.span)))
         i += 1
     Vector[String] no_names = []
     Vector[SpannedType] no_targs = []
