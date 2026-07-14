@@ -39,7 +39,8 @@ FILED FOLLOW-UPS (NOT this track): (a) the two INDEPENDENT parser/resolver copie
 drivers, for full sidecar-retirement consistency); (b) extend `CallArg` to
 `EStructLiteral`/`EDotShorthand` (struct/enum-literal ctor positions — so `S{a:!x}` /
 `.Red(!x)` moves are ownership-gated). Both toward TRUE 6/6 in a follow-up; here,
-struct/enum-literal pos-2 STAYS staged (§4).
+the struct/enum-literal pos-2 ownership-GATING stays staged (the unconditional reject
+stays LIVE — §4).
 
 ## 1. The CallArg model (canonical `ast.gg`, symlinked into typechecker/check/lowerer)
 
@@ -55,8 +56,10 @@ struct CallArg:
   Vector[SpannedType])` + `EMethodCall(Box[SpannedExpr], String, Vector[CallArg],
   Vector[SpannedType])` — the `Vector[String]` names field REMOVED (merged into CallArg).
 - **Parser:** `parse_call_args` returns `Vector[CallArg]`; new `parse_arg_ownership()`
-  (mirrors Rust `parse_ownership_modifier` `mod.rs:236` — `&`/`!` + `move`/`mutable`
-  keywords → ownership int); RETIRE `Parser.last_arg_names` + `peek_arg_name` + every
+  (mirrors Rust `parse_ownership_modifier` `mod.rs:236` for the SIGILS — `&`→OWN_MUTABLE,
+  `!`→OWN_MOVE, else OWN_BORROW; the `move`/`mutable` KEYWORD arms are inherited self-host
+  behavior [from the old `skip_ownership_markers`], not a Rust mirror — behavior-preserving);
+  RETIRE `Parser.last_arg_names` + `peek_arg_name` + every
   `call_names = self.last_arg_names` read. **KEEP `skip_ownership_markers`** (still used
   by function-type-param parsing / `parse_type` — do NOT delete it).
 - **Design ground:** CLAUDE.md Layering rule 2 (typed-not-shape) + rule 3 (one source of
