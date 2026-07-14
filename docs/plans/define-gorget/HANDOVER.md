@@ -337,14 +337,19 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    **1627/0** + ggdef **121/0** + bootstrap 643s. 4-pass gauntlet (pass-1 Copy field-span trap;
    pass-2 mover-Copy scope defect → owner-ruled; pass-3 citation; pass-4 SIGN OFF) + output-review
    SIGN OFF. Brief `wave-b1-place-overlap-brief.md`, patches `scouts/patches/b1-*.patch`.
-   ⏭ **NEXT — the self-root follow-up (OWNER-PRIORITIZED, HIGH, before B2):** `g(&self.a,&self.a.b)`
-   is place-overlap-checked in ggdef (rejects) but NOT in production (accepts — `SelfExpr` has no
-   `resolution_map` root) → a production↔ggdef divergence + a self-rooted t5-class silent-lost-write
-   hole. Quarantined (`place_overlap_self_root_error.gg` `#[ignore]`d SHOULD-reject + TODO). FIX =
-   give `SelfExpr` a resolvable root in `find_root_def_id_with_path`, GUARDING against
-   double-diagnosing the existing self-mutation checks (`reject_amp_self_mutator` — the real risk;
-   own scout→brief→gauntlet). See the TODO HIGH-Priority entry.
-   ⏭ **THEN B2** = the self-host mirror in `check_carrier_ops` (ECall/EMethodCall arms), consuming
+   ✅ **self-root follow-up LANDED `1eae75ca` (2026-07-14)** — the last production↔ggdef D10(b)
+   divergence CLOSED. Root cause was a resolver write-site omission: `self` already has a real
+   `DefKind::Variable` param DefId, but `Expr::SelfExpr` sat in `resolve_expr`'s no-op arm
+   (`resolve.rs:1487`) so it got no `resolution_map` entry → self-rooted places were invisible to
+   the whole safety layer. FIX (13 lines) = wire `SelfExpr` to the self param DefId
+   (`scopes.lookup("self")`); fixes the whole class, no sentinel. Double-diagnose MEASURED not-real
+   (`reject_amp_self_mutator` turned out to be a SELF-HOST check, not Rust — no interaction); change
+   structurally confined to the safety layer (all `find_root_def_id` callers there; non-safety
+   `resolution_map` readers kind-guarded, inert). `place_overlap_self_root_error` flipped ACTIVE +
+   `place_overlap_self_root_disjoint` POS added. FULL C **1629/0** + LLVM **1629/0**. Scout
+   `scout-selfroot.md`, brief `wave-selfroot-brief.md` (3-pass gauntlet), patch `scouts/patches/selfroot-fix.patch`.
+   2 owner Qs filed (Medium): for-loop root-granularity (self AND locals); partial-self-move.
+   ⏭ **NEXT — B2** = the self-host mirror in `check_carrier_ops` (ECall/EMethodCall arms), consuming
    `arg.ownership` from the CallArg record (owner: HONOR the CallArg model — read `arg.ownership`,
    NEVER shape-match); needs a ~15-line place-extractor + the pairwise check + a `DkBorrowConflict`
    diag kind; rebases onto A2-S's walker; bootstrap-gated; mirror B1's negatives into the self-host
