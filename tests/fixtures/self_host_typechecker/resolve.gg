@@ -695,7 +695,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EUnaryOp(_, operand):
             resolve_expr(*operand, &scopes, &ctx)
 
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             # field_value(obj, fname) / field_set(obj, fname, value) /
             # make_variant(T, "Variant") are compile-time rewrite builtins. The
             # callee is not a real function and the field-name / type-name arg is
@@ -710,12 +710,12 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
                 case EIdentifier(cname):
                     if cname == "field_value" and args.len() == 2:
                         # Resolve only arg0 (the object expression).
-                        resolve_expr(args.get(0).unwrap(), &scopes, &ctx)
+                        resolve_expr(args.get(0).unwrap().value, &scopes, &ctx)
                         reflection_handled = true
                     elif cname == "field_set" and args.len() == 3:
                         # Resolve arg0 (object) and arg2 (value); skip arg1 (field name).
-                        resolve_expr(args.get(0).unwrap(), &scopes, &ctx)
-                        resolve_expr(args.get(2).unwrap(), &scopes, &ctx)
+                        resolve_expr(args.get(0).unwrap().value, &scopes, &ctx)
+                        resolve_expr(args.get(2).unwrap().value, &scopes, &ctx)
                         reflection_handled = true
                     elif cname == "make_variant" and args.len() == 2:
                         # arg0 is a type name, arg1 a string literal — neither
@@ -726,12 +726,12 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             if not reflection_handled:
                 resolve_expr(*callee, &scopes, &ctx)
                 for arg in args:
-                    resolve_expr(arg, &scopes, &ctx)
+                    resolve_expr(arg.value, &scopes, &ctx)
 
-        case EMethodCall(receiver, _, args, _, _):
+        case EMethodCall(receiver, _, args, _):
             resolve_expr(*receiver, &scopes, &ctx)
             for arg in args:
-                resolve_expr(arg, &scopes, &ctx)
+                resolve_expr(arg.value, &scopes, &ctx)
 
         case EFieldAccess(object, _):
             resolve_expr(*object, &scopes, &ctx)

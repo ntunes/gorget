@@ -1265,7 +1265,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # yielding a `GtPtr(Named(kind))` local). Bind the with-name.
             String with_alloc_kind = ""
             match with_resource.expr:
-                case ECall(with_callee_box, _, _, _):
+                case ECall(with_callee_box, _, _):
                     SpannedExpr with_callee = *with_callee_box
                     match with_callee.expr:
                         case EIdentifier(with_ctor_name):

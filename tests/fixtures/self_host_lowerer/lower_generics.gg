@@ -107,10 +107,10 @@ int proto_inst_targ_tid(ProtoMethInst pmi, int i, GirModule &gmod):
 # walk an expression collecting method-generic call sites.
 void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
     match sexpr.expr:
-        case EMethodCall(recv_box, mname, margs, _, mtargs):
+        case EMethodCall(recv_box, mname, margs, mtargs):
             proto_walk_expr(*recv_box, &gmod, &out, &seen)
             for a in margs:
-                proto_walk_expr(a, &gmod, &out, &seen)
+                proto_walk_expr(a.value, &gmod, &out, &seen)
             if mtargs.len() > 0:
                 # TURBOFISH form: mangle from the syntactic AST types.
                 # Resolve the receiver instance via the typecheck side-table.
@@ -142,10 +142,10 @@ void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &
                             if not seen.contains(sym_b):
                                 seen.put(sym_b.clone(), true)
                                 out.push(ProtoMethInst(recv_name_b, mname, [], bm_tids, sym_b))
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, _):
             proto_walk_expr(*callee_box, &gmod, &out, &seen)
             for a in cargs:
-                proto_walk_expr(a, &gmod, &out, &seen)
+                proto_walk_expr(a.value, &gmod, &out, &seen)
         case EFieldAccess(obj, _):
             proto_walk_expr(*obj, &gmod, &out, &seen)
         case EBinaryOp(l, _, r):
@@ -268,18 +268,18 @@ bool fp_expr_has_uncaught_fault(SpannedExpr sexpr, int catch_depth):
             if fp_expr_has_uncaught_fault(*inner, inner_depth):
                 return true
             return fp_expr_has_uncaught_fault(*handler, catch_depth)
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, _):
             if fp_expr_has_uncaught_fault(*callee_box, catch_depth):
                 return true
             for a in cargs:
-                if fp_expr_has_uncaught_fault(a, catch_depth):
+                if fp_expr_has_uncaught_fault(a.value, catch_depth):
                     return true
             return false
-        case EMethodCall(recv_box, _, margs, _, _):
+        case EMethodCall(recv_box, _, margs, _):
             if fp_expr_has_uncaught_fault(*recv_box, catch_depth):
                 return true
             for a in margs:
-                if fp_expr_has_uncaught_fault(a, catch_depth):
+                if fp_expr_has_uncaught_fault(a.value, catch_depth):
                     return true
             return false
         case EFieldAccess(obj, _):
@@ -348,7 +348,7 @@ void fp_collect_deep_callees_expr(SpannedExpr sexpr, int catch_depth, Dict[Strin
             fp_collect_deep_callees_expr(*inner, inner_depth, &callees)
             # The handler runs OUTSIDE the caught scope.
             fp_collect_deep_callees_expr(*handler, catch_depth, &callees)
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, _):
             if catch_depth > 0:
                 match (*callee_box).expr:
                     case EIdentifier(cname):
@@ -360,13 +360,13 @@ void fp_collect_deep_callees_expr(SpannedExpr sexpr, int catch_depth, Dict[Strin
             # Recurse into callee + args (nested calls / fault-catches).
             fp_collect_deep_callees_expr(*callee_box, catch_depth, &callees)
             for a in cargs:
-                fp_collect_deep_callees_expr(a, catch_depth, &callees)
-        case EMethodCall(recv_box, _, margs, _, _):
+                fp_collect_deep_callees_expr(a.value, catch_depth, &callees)
+        case EMethodCall(recv_box, _, margs, _):
             # `EMethodCall` method shape — SKIP recording (free-fn scope), but
             # still recurse so a free call nested inside an arg is found.
             fp_collect_deep_callees_expr(*recv_box, catch_depth, &callees)
             for a in margs:
-                fp_collect_deep_callees_expr(a, catch_depth, &callees)
+                fp_collect_deep_callees_expr(a.value, catch_depth, &callees)
         case EFieldAccess(obj, _):
             fp_collect_deep_callees_expr(*obj, catch_depth, &callees)
         case EBinaryOp(l, _, r):
@@ -507,11 +507,11 @@ void compute_participating_fault_fns(Module &m, GirModule &gmod):
 # collections / Option / Result are left to their own paths.
 void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String, bool] equip_generic_names, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     match sexpr.expr:
-        case EMethodCall(recv_box, _, margs, _, _):
+        case EMethodCall(recv_box, _, margs, _):
             # Walk the receiver chain + args first (inner links / nested chains).
             discover_adapter_chain_expr(*recv_box, &gmod, equip_generic_names, &seen, &instances)
             for a in margs:
-                discover_adapter_chain_expr(a, &gmod, equip_generic_names, &seen, &instances)
+                discover_adapter_chain_expr(a.value, &gmod, equip_generic_names, &seen, &instances)
             # Register THIS link's result type if it is a generic-equip adapter.
             int link_end = sexpr.span.end
             if gmod.tc_types.expr_link_types.contains(link_end):
@@ -539,10 +539,10 @@ void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String
                                         pass
                         else:
                             pass
-        case ECall(callee_box, cargs, carg_names, ctargs):
+        case ECall(callee_box, cargs, ctargs):
             discover_adapter_chain_expr(*callee_box, &gmod, equip_generic_names, &seen, &instances)
             for a in cargs:
-                discover_adapter_chain_expr(a, &gmod, equip_generic_names, &seen, &instances)
+                discover_adapter_chain_expr(a.value, &gmod, equip_generic_names, &seen, &instances)
             # R43-C: register a turbofish-free generic FREE-FN call's instance.
             # `infer_free_fn_targs` binds the callee template's generic params
             # from the arg types (returns [] unless it's a known generic free-fn
@@ -554,7 +554,7 @@ void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String
             if ctargs.len() == 0:
                 match (*callee_box).expr:
                     case EIdentifier(cfname):
-                        Vector[SpannedType] inf = infer_free_fn_targs(cfname, cargs, carg_names, &gmod)
+                        Vector[SpannedType] inf = infer_free_fn_targs(cfname, callarg_values(cargs), callarg_names(cargs), &gmod)
                         if inf.len() > 0:
                             String cmangled = compute_mangled_name(inf, cfname)
                             if not seen.contains(cmangled):
@@ -658,7 +658,7 @@ void expand_meta_for_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[GenericIns
 
 void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Vector[SpannedType] std_types, Dict[String, bool] &mf_ctx):
     match sexpr.expr:
-        case ECall(callee_box, args, _, targs):
+        case ECall(callee_box, args, targs):
             if targs.len() > 0 and has_type_variable_ctx(targs, &mf_ctx):
                 SpannedExpr callee = *callee_box
                 match callee.expr:
@@ -695,18 +695,18 @@ void expand_meta_for_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[Ge
                     else:
                         pass
             for arg in args:
-                expand_meta_for_expr(arg, &seen, &instances, std_types, &mf_ctx)
-        case EMethodCall(obj, _, margs, _, _):
+                expand_meta_for_expr(arg.value, &seen, &instances, std_types, &mf_ctx)
+        case EMethodCall(obj, _, margs, _):
             expand_meta_for_expr(*obj, &seen, &instances, std_types, &mf_ctx)
             for ma in margs:
-                expand_meta_for_expr(ma, &seen, &instances, std_types, &mf_ctx)
+                expand_meta_for_expr(ma.value, &seen, &instances, std_types, &mf_ctx)
         else:
             pass
 
 # Discover generic call sites in an expression
 void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Vector[GenericInstance] &instances, Dict[String, bool] &tparams):
     match sexpr.expr:
-        case ECall(callee_box, args, _, targs):
+        case ECall(callee_box, args, targs):
             if targs.len() > 0 and not has_type_variable_ctx(targs, &tparams):
                 # R37-T2 (Core #4 sibling of the SVarDecl annotation path):
                 # recurse into the call's OWN type-args via the shared type
@@ -727,9 +727,9 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
                         pass
             # Recurse into call args
             for arg in args:
-                discover_generic_calls_expr(arg, &seen, &instances, &tparams)
+                discover_generic_calls_expr(arg.value, &seen, &instances, &tparams)
             discover_generic_calls_expr(*callee_box, &seen, &instances, &tparams)
-        case EMethodCall(obj, _, args, _, mtargs):
+        case EMethodCall(obj, _, args, mtargs):
             discover_generic_calls_expr(*obj, &seen, &instances, &tparams)
             # R37-T2 (Core #4 sibling-drift): the method-call type-args were
             # IGNORED (`_`). Rust `scan_expr` scans them (generics/mod.rs:711)
@@ -738,7 +738,7 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
             for ta in mtargs:
                 discover_generic_calls_type(ta, &seen, &instances, &tparams)
             for arg in args:
-                discover_generic_calls_expr(arg, &seen, &instances, &tparams)
+                discover_generic_calls_expr(arg.value, &seen, &instances, &tparams)
         case EBinaryOp(lhs, _, rhs):
             discover_generic_calls_expr(*lhs, &seen, &instances, &tparams)
             discover_generic_calls_expr(*rhs, &seen, &instances, &tparams)
@@ -1109,14 +1109,14 @@ String eval_meta_builtin_str(SpannedExpr se, Dict[String, String] &tn_env, bool 
         case EStringLiteral(s, _):
             is_str = true
             return s
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             match (*callee).expr:
                 case EIdentifier(fname):
                     # `typeof` is identical to `typename` in Rust (meta.rs:2836
                     # vs :2800 — both return type_to_canonical_name of the
                     # resolved type param). Accept both spellings here.
                     if (fname == "typename" or fname == "typeof") and args.len() == 1:
-                        match args.get(0).unwrap().expr:
+                        match args.get(0).unwrap().value.expr:
                             case EIdentifier(tparam):
                                 if tn_env.contains(tparam):
                                     is_str = true
@@ -1171,11 +1171,11 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                 ok = true
                 return int_env.get(name).unwrap()
             return 0
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             match (*callee).expr:
                 case EIdentifier(fname):
                     if (fname == "sizeof" or fname == "bitwidth") and args.len() == 1:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         if concrete != "":
                             int byts = meta_type_byte_size(concrete)
                             ok = true
@@ -1186,7 +1186,7 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                         # Integer-type lower bound. Mirrors Rust meta.rs:2867:
                         # signed -> type min, unsigned -> 0. Unknown/non-int
                         # type leaves ok=false (construct stays inert).
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         if concrete == "int8":
                             ok = true
                             return 0 - 128
@@ -1208,7 +1208,7 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                     elif fname == "max_val" and args.len() == 1:
                         # Integer-type upper bound. Mirrors Rust meta.rs:2886.
                         # uint/uint64 saturate at i64::MAX (same as Rust).
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         if concrete == "int8":
                             ok = true
                             return 127
@@ -1234,7 +1234,7 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                             ok = true
                             return 9223372036854775807
                     elif fname == "variant_count" and args.len() == 1:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         if concrete != "" and gmod.enum_registry.contains(concrete):
                             ok = true
                             return gmod.enum_registry.get(concrete).unwrap().len()
@@ -1243,18 +1243,18 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                         # field_count -> s.fields.len(). Reads the registered
                         # GirTypeInfo.fields (the same data eval_meta_fields and
                         # meta_type_category_is consult).
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         if concrete != "" and gmod.type_infos.contains(concrete):
                             GirTypeInfo ti = gmod.type_infos.get(concrete).unwrap()
                             if not ti.is_enum:
                                 ok = true
                                 return ti.fields.len()
                     elif fname == "enum_ordinal" and args.len() == 2:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         # 2nd arg: a string literal (post-subst the loop var
                         # `vname` becomes an EStringLiteral).
                         String want = ""
-                        match args.get(1).unwrap().expr:
+                        match args.get(1).unwrap().value.expr:
                             case EStringLiteral(s, _):
                                 want = s
                             else:
@@ -1283,7 +1283,7 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
         case EStringLiteral(s, _):
             ok = true
             return s
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             match (*callee).expr:
                 case EIdentifier(fname):
                     if (fname == "typename" or fname == "typeof") and args.len() == 1:
@@ -1297,7 +1297,7 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
                         # str-v2-only call sites (e.g. `meta const s =
                         # typename(int)`). Without it the concrete case is a
                         # Core #8 silent-drop vs the Rust oracle.
-                        String tn = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String tn = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         if tn != "":
                             ok = true
                             return tn
@@ -1315,9 +1315,9 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
                         ok = true
                         return plat
                     elif fname == "enum_from_ordinal" and args.len() == 2:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         bool iok = false
-                        int ord = eval_meta_int_v2(args.get(1).unwrap(), &tn_env, &int_env, &gmod, &iok)
+                        int ord = eval_meta_int_v2(args.get(1).unwrap().value, &tn_env, &int_env, &gmod, &iok)
                         if concrete != "" and iok and gmod.enum_registry.contains(concrete):
                             Vector[String] vnames = gmod.enum_registry.get(concrete).unwrap()
                             if ord >= 0 and ord < vnames.len():
@@ -1330,9 +1330,9 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
                         # registered C-level type name (int64_t/double/...) back
                         # to the Gorget spelling (int/float/...), matching Rust's
                         # canonical-name output.
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         String want = ""
-                        match args.get(1).unwrap().expr:
+                        match args.get(1).unwrap().value.expr:
                             case EStringLiteral(s, _):
                                 want = s
                             else:
@@ -1492,7 +1492,7 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                     if negated:
                         return not is_cat
                     return is_cat
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             # Bare bool-valued reflection predicate as the whole meta-if
             # condition (`meta if has_field(T, "z"):`). Without this arm the
             # cond is unrecognized -> inert -> the generic fn returns garbage.
@@ -1500,9 +1500,9 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
             match (*callee).expr:
                 case EIdentifier(fname):
                     if fname == "has_field" and args.len() == 2:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         String want = ""
-                        match args.get(1).unwrap().expr:
+                        match args.get(1).unwrap().value.expr:
                             case EStringLiteral(s, _):
                                 want = s
                             else:
@@ -1525,9 +1525,9 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                         # (1) explicit/derived equip (gmod.trait_impls_by_type),
                         # then (2) intrinsic-primitive satisfaction rules. Rust
                         # returns false (NOT inert) when neither matches.
-                        String it_concrete = resolve_meta_tparam(args.get(0).unwrap(), &tn_env)
+                        String it_concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
                         String it_trait = ""
-                        match args.get(1).unwrap().expr:
+                        match args.get(1).unwrap().value.expr:
                             case EStringLiteral(s, _):
                                 it_trait = s
                             else:
@@ -1683,7 +1683,7 @@ SpannedExpr subst_mf_expr(SpannedExpr se, Dict[String, String] &sv, Dict[String,
             return SpannedExpr(EBinaryOp(Box(subst_mf_expr(*l, &sv, &iv)), op, Box(subst_mf_expr(*r, &sv, &iv))), se.span)
         case EUnaryOp(op, operand):
             return SpannedExpr(EUnaryOp(op, Box(subst_mf_expr(*operand, &sv, &iv))), se.span)
-        case ECall(callee, args, arg_names, targs):
+        case ECall(callee, args, targs):
             # Ctor-call rename: a bare `vname(...)` callee bound to a
             # string becomes `Circle(...)` (identifier), NOT
             # `"Circle"(...)` (string literal).
@@ -1694,15 +1694,15 @@ SpannedExpr subst_mf_expr(SpannedExpr se, Dict[String, String] &sv, Dict[String,
                         new_callee = SpannedExpr(EIdentifier(sv.get(cname).unwrap()), (*callee).span)
                 else:
                     new_callee = subst_mf_expr(*callee, &sv, &iv)
-            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            Vector[CallArg] na = Vector[CallArg]()
             for a in args:
-                na.push(subst_mf_expr(a, &sv, &iv))
-            return SpannedExpr(ECall(Box(new_callee), na, arg_names, targs), se.span)
-        case EMethodCall(recv, mname, args, arg_names, targs):
-            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+                na.push(CallArg(a.name, a.ownership, subst_mf_expr(a.value, &sv, &iv)))
+            return SpannedExpr(ECall(Box(new_callee), na, targs), se.span)
+        case EMethodCall(recv, mname, args, targs):
+            Vector[CallArg] na = Vector[CallArg]()
             for a in args:
-                na.push(subst_mf_expr(a, &sv, &iv))
-            return SpannedExpr(EMethodCall(Box(subst_mf_expr(*recv, &sv, &iv)), mname, na, arg_names, targs), se.span)
+                na.push(CallArg(a.name, a.ownership, subst_mf_expr(a.value, &sv, &iv)))
+            return SpannedExpr(EMethodCall(Box(subst_mf_expr(*recv, &sv, &iv)), mname, na, targs), se.span)
         case EFieldAccess(base, fname):
             return SpannedExpr(EFieldAccess(Box(subst_mf_expr(*base, &sv, &iv)), fname), se.span)
         case EIndex(base, idx):
@@ -1795,11 +1795,11 @@ Vector[Stmt] subst_mf_stmts(Vector[Stmt] stmts, Dict[String, String] &sv, Dict[S
 # (e.g. "T") to its concrete typename (e.g. "Point").
 bool eval_meta_fields(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names, Vector[String] &out_types):
     match iter_e.expr:
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             match (*callee).expr:
                 case EIdentifier(fname):
                     if fname == "fields" and args.len() == 1:
-                        match args.get(0).unwrap().expr:
+                        match args.get(0).unwrap().value.expr:
                             case EIdentifier(tparam):
                                 String concrete = tparam
                                 if tn_env.contains(tparam):
@@ -1823,11 +1823,11 @@ bool eval_meta_fields(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModul
 # concrete enum T. Sets ok=false if unrecognized / not an enum.
 bool eval_meta_variant_names(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names):
     match iter_e.expr:
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             match (*callee).expr:
                 case EIdentifier(fname):
                     if fname == "variant_names" and args.len() == 1:
-                        match args.get(0).unwrap().expr:
+                        match args.get(0).unwrap().value.expr:
                             case EIdentifier(tparam):
                                 String concrete = tparam
                                 if tn_env.contains(tparam):
@@ -1851,11 +1851,11 @@ bool eval_meta_variant_names(SpannedExpr iter_e, Dict[String, String] &tn_env, G
 # meta-for inert) if unrecognized / not a registered struct.
 bool eval_meta_field_names(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names):
     match iter_e.expr:
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             match (*callee).expr:
                 case EIdentifier(fname):
                     if fname == "field_names" and args.len() == 1:
-                        match args.get(0).unwrap().expr:
+                        match args.get(0).unwrap().value.expr:
                             case EIdentifier(tparam):
                                 String concrete = tparam
                                 if tn_env.contains(tparam):
@@ -2401,7 +2401,7 @@ bool expr_has_await(SpannedExpr sexpr):
     match sexpr.expr:
         case EAwait(_):
             return true
-        case ECall(callee_box, args, _, _):
+        case ECall(callee_box, args, _):
             match (*callee_box).expr:
                 case EIdentifier(cname):
                     if is_blocking_call_name(cname):
@@ -2411,14 +2411,14 @@ bool expr_has_await(SpannedExpr sexpr):
             if expr_has_await(*callee_box):
                 return true
             for a in args:
-                if expr_has_await(a):
+                if expr_has_await(a.value):
                     return true
             return false
-        case EMethodCall(recv_box, _, margs, _, _):
+        case EMethodCall(recv_box, _, margs, _):
             if expr_has_await(*recv_box):
                 return true
             for ma in margs:
-                if expr_has_await(ma):
+                if expr_has_await(ma.value):
                     return true
             return false
         case EBinaryOp(lhs_box, _, rhs_box):
@@ -2544,7 +2544,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
     match sexpr.expr:
         case ESpawn(inner_box):
             match (*inner_box).expr:
-                case ECall(callee_box, args, _, _):
+                case ECall(callee_box, args, _):
                     match (*callee_box).expr:
                         case EIdentifier(callee_name):
                             # Check if any arg is:
@@ -2554,7 +2554,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                             #     &counter arrives as EIdentifier("counter"), not EMutableBorrow.
                             bool has_shared = false
                             for arg in args:
-                                match arg.expr:
+                                match arg.value.expr:
                                     case EIdentifier(aname):
                                         if shared_vars.contains(aname) or borrow_params.contains(aname):
                                             has_shared = true
@@ -2584,7 +2584,7 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                                 pass
                         else:
                             pass
-                case EMethodCall(obj_box, method_name, _, _, _):
+                case EMethodCall(obj_box, method_name, _, _):
                     # spawn obj.method() → emit __spawn_method_wrap_TypeName__method_name
                     match (*obj_box).expr:
                         case EIdentifier(var_name):
@@ -2606,14 +2606,14 @@ void scan_expr_for_spawn(SpannedExpr sexpr, Dict[String, bool] &shared_vars, Dic
                     pass
         case EAwait(inner):
             scan_expr_for_spawn(*inner, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-        case EMethodCall(obj, _, margs, _, _):
+        case EMethodCall(obj, _, margs, _):
             scan_expr_for_spawn(*obj, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             for ma in margs:
-                scan_expr_for_spawn(ma, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
-        case ECall(callee, cargs, _, _):
+                scan_expr_for_spawn(ma.value, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+        case ECall(callee, cargs, _):
             scan_expr_for_spawn(*callee, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
             for ca in cargs:
-                scan_expr_for_spawn(ca, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
+                scan_expr_for_spawn(ca.value, &shared_vars, &async_fns, &emitted, &gmod, &var_types, &borrow_params)
         else:
             pass
 
@@ -2628,7 +2628,7 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, String fn_name, Dict[Strin
     match sexpr.expr:
         case ESpawn(inner_box):
             match (*inner_box).expr:
-                case ECall(callee_box, _, _, _):
+                case ECall(callee_box, _, _):
                     match (*callee_box).expr:
                         case EIdentifier(callee_name):
                             String cvc_key = fn_name + "\0" + callee_name
@@ -2646,14 +2646,14 @@ void emit_named_closure_spawn_expr(SpannedExpr sexpr, String fn_name, Dict[Strin
                 else:
                     pass
             emit_named_closure_spawn_expr(*inner_box, fn_name, &emitted, &gmod)
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             emit_named_closure_spawn_expr(*callee, fn_name, &emitted, &gmod)
             for arg in args:
-                emit_named_closure_spawn_expr(arg, fn_name, &emitted, &gmod)
-        case EMethodCall(obj, _, margs, _, _):
+                emit_named_closure_spawn_expr(arg.value, fn_name, &emitted, &gmod)
+        case EMethodCall(obj, _, margs, _):
             emit_named_closure_spawn_expr(*obj, fn_name, &emitted, &gmod)
             for ma in margs:
-                emit_named_closure_spawn_expr(ma, fn_name, &emitted, &gmod)
+                emit_named_closure_spawn_expr(ma.value, fn_name, &emitted, &gmod)
         else:
             pass
 
@@ -2753,10 +2753,10 @@ void discover_mono_method_insts_stmt(Stmt stmt, Dict[String, SpannedType] params
 
 void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType] params_by_name, Dict[String, SpannedType] &type_sub_map, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
     match sexpr.expr:
-        case EMethodCall(recv_box, mname, margs, _, mtargs):
+        case EMethodCall(recv_box, mname, margs, mtargs):
             discover_mono_method_insts_expr(*recv_box, params_by_name, &type_sub_map, &gmod, &out, &seen)
             for a in margs:
-                discover_mono_method_insts_expr(a, params_by_name, &type_sub_map, &gmod, &out, &seen)
+                discover_mono_method_insts_expr(a.value, params_by_name, &type_sub_map, &gmod, &out, &seen)
             if mtargs.len() > 0:
                 # Receiver must be a bare parameter identifier whose declared
                 # type substitutes to a CONCRETE named type (the equip base).
@@ -2807,10 +2807,10 @@ void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType
                                         out.push(ProtoMethInst(recv_name, mname, sub_targs, [], sym))
                     else:
                         pass
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, _):
             discover_mono_method_insts_expr(*callee_box, params_by_name, &type_sub_map, &gmod, &out, &seen)
             for a in cargs:
-                discover_mono_method_insts_expr(a, params_by_name, &type_sub_map, &gmod, &out, &seen)
+                discover_mono_method_insts_expr(a.value, params_by_name, &type_sub_map, &gmod, &out, &seen)
         case EFieldAccess(obj, _):
             discover_mono_method_insts_expr(*obj, params_by_name, &type_sub_map, &gmod, &out, &seen)
         case EBinaryOp(l, _, r):
@@ -2861,7 +2861,7 @@ String extract_meta_op_suffix(Vector[SpannedExpr] args):
 int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     int added = 0
     match sexpr.expr:
-        case ECall(callee_box, args, _, targs):
+        case ECall(callee_box, args, targs):
             if targs.len() > 0:
                 # Type-variable ctx = the instantiation's substitution keys
                 # (the enclosing template's params). Calls whose targs are
@@ -2875,7 +2875,7 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
                     for ta in targs:
                         resolved.push(substitute_type(ta, &type_sub_map))
                     if not has_type_variable_ctx(resolved, &tt_ctx):
-                        String meta_suffix = extract_meta_op_suffix(args)
+                        String meta_suffix = extract_meta_op_suffix(callarg_values(args))
                         match (*callee_box).expr:
                             case EIdentifier(fname):
                                 String mangled = compute_mangled_name(resolved, fname) + meta_suffix
@@ -2886,12 +2886,12 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
                             else:
                                 pass
             for arg in args:
-                added += discover_transitive_expr(arg, &type_sub_map, &seen, &instances)
+                added += discover_transitive_expr(arg.value, &type_sub_map, &seen, &instances)
             added += discover_transitive_expr(*callee_box, &type_sub_map, &seen, &instances)
-        case EMethodCall(obj, _, margs, _, _):
+        case EMethodCall(obj, _, margs, _):
             added += discover_transitive_expr(*obj, &type_sub_map, &seen, &instances)
             for ma in margs:
-                added += discover_transitive_expr(ma, &type_sub_map, &seen, &instances)
+                added += discover_transitive_expr(ma.value, &type_sub_map, &seen, &instances)
         case EBinaryOp(lhs, _, rhs):
             added += discover_transitive_expr(*lhs, &type_sub_map, &seen, &instances)
             added += discover_transitive_expr(*rhs, &type_sub_map, &seen, &instances)

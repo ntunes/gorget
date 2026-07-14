@@ -1755,9 +1755,9 @@ int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # Only Call / MethodCall produce a throws-Result via the throws sugar.
     bool is_producer = false
     match sexpr.expr:
-        case ECall(_, _, _, _):
+        case ECall(_, _, _):
             is_producer = true
-        case EMethodCall(_, _, _, _, _):
+        case EMethodCall(_, _, _, _):
             is_producer = true
         else:
             pass
@@ -2465,7 +2465,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 else:
                     pass
             return inner
-        case ECall(callee_box, args, arg_names, targs):
+        case ECall(callee_box, args, targs):
             SpannedExpr callee = *callee_box
             match callee.expr:
                 case EIdentifier(fname):
@@ -2513,7 +2513,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             # the pointer bits. The general scalar-read deref
                             # (:696-706) is UNCHANGED (still derefs for `x + 10` etc.).
                             bool carg_passed_ptr = false
-                            match carg.expr:
+                            match carg.value.expr:
                                 case EIdentifier(carg_name):
                                     if nl_contains(&ctx, carg_name):
                                         int carg_lid = nl_get(&ctx, carg_name)
@@ -2534,7 +2534,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 else:
                                     pass
                             if not carg_passed_ptr:
-                                int cval = lower_expr(&ctx, carg, &gmod)
+                                int cval = lower_expr(&ctx, carg.value, &gmod)
                                 cl_args.push(op_consume(&ctx, &gmod, cval, CkCallArgBorrow()))
                         # Emit as __callable_N (codegen handles this as void*[2] dispatch)
                         int arity = args.len()
@@ -2614,12 +2614,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         int cl_dst = add_local(&ctx, cl_ret_type, None)
                         emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
                         return cl_dst
-                    return lower_call(&ctx, &fname, &args, &arg_names, &targs, &gmod)
+                    Vector[SpannedExpr] _lc_vals = callarg_values(args)
+                    Vector[String] _lc_names = callarg_names(args)
+                    return lower_call(&ctx, &fname, &_lc_vals, &_lc_names, &targs, &gmod)
                 case EFieldAccess(_, method_name):
                     # Method-style call: obj.method(args) parsed as ECall(EFieldAccess(...))
                     # Lower args but return unit (method calls are complex)
                     for marg in args:
-                        lower_expr(&ctx, marg, &gmod)
+                        lower_expr(&ctx, marg.value, &gmod)
                     int mdst = add_local(&ctx, UNIT_TYPE, None)
                     emit(&ctx, GIAssign(mdst, OpConstUnit()))
                     return mdst
@@ -2650,7 +2652,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # CLASS, not just the named-callable instance (CLAUDE.md
                         # "Sibling-site drift — fix the class, not the instance").
                         bool iife_passed_ptr = false
-                        match iife_arg.expr:
+                        match iife_arg.value.expr:
                             case EIdentifier(iife_name):
                                 if nl_contains(&ctx, iife_name):
                                     int iife_lid = nl_get(&ctx, iife_name)
@@ -2671,7 +2673,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             else:
                                 pass
                         if not iife_passed_ptr:
-                            int iife_aval = lower_expr(&ctx, iife_arg, &gmod)
+                            int iife_aval = lower_expr(&ctx, iife_arg.value, &gmod)
                             iife_call_args.push(op_consume(&ctx, &gmod, iife_aval, CkCallArgBorrow()))
                     int iife_arity = args.len()
                     String iife_call = "__callable_" + int_to_str(iife_arity)
@@ -2692,11 +2694,18 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # call fell to `else: pass` → add_local(UNIT_TYPE), ignoring
                     # expected_type and yielding a unit value at an Option boundary.
                     String none_name = "None"
-                    return lower_call(&ctx, &none_name, &args, &arg_names, &targs, &gmod)
+                    Vector[SpannedExpr] _nc_vals = callarg_values(args)
+                    Vector[String] _nc_names = callarg_names(args)
+                    return lower_call(&ctx, &none_name, &_nc_vals, &_nc_names, &targs, &gmod)
                 else:
                     pass
             return add_local(&ctx, UNIT_TYPE, None)
-        case EMethodCall(recv_box, mname, margs, _marg_names, mtargs_proto):
+        case EMethodCall(recv_box, mname, margs, mtargs_proto):
+            # CallArg adapter: this arm's named-arg reorder / default-fill logic
+            # keys off the parallel keyword-name list. Derive it once from the
+            # typed CallArg args (`.name`); the arg VALUES are read via `.value`
+            # element-wise below, so the lowering the arm performs is unchanged.
+            Vector[String] _marg_names = callarg_names(margs)
             # #37 Phase 2 hook 1 (mutating method receiver): `v.push(..)` /
             # `v.set(..)` / a `&self`/`!self` user method on a lazy-family
             # source collection is a mutation site — emit the flag-guarded
@@ -2882,7 +2891,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             String _box_ctor = "Box"
                             Vector[SpannedType] _box_no_targs = []
                             Vector[String] _box_no_names = []
-                            return lower_call(&ctx, &_box_ctor, &margs, &_box_no_names, &_box_no_targs, &gmod)
+                            Vector[SpannedExpr] _box_vals = callarg_values(margs)
+                            return lower_call(&ctx, &_box_ctor, &_box_vals, &_box_no_names, &_box_no_targs, &gmod)
                         # Static method / variant ctor: dispatch via
                         # classify_call_arg against the mangled callee
                         # name. Built early enough that the callee name
@@ -2920,7 +2930,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # static default-fill (`methods.rs`). Enum-variant ctors
                         # carry no fn_defaults entry → no-op.
                         String _s_defaults_key = ident_name + "__" + mname
-                        Vector[SpannedExpr] static_margs = margs.clone()
+                        Vector[SpannedExpr] static_margs = callarg_values(margs)
                         bool _s_has_named = false
                         int _sn_i = 0
                         while _sn_i < _marg_names.len():
@@ -2939,7 +2949,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             int _ssi = 0
                             while _ssi < _s_n:
                                 _s_filled.push(false)
-                                _s_expr.push(margs.get(0).unwrap())
+                                _s_expr.push(margs.get(0).unwrap().value)
                                 _ssi += 1
                             bool _s_ok = true
                             int _s_pos = 0
@@ -2959,13 +2969,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                         _s_ok = false
                                     else:
                                         _s_filled.set(_s_target, true)
-                                        _s_expr.set(_s_target, margs.get(_sr_i).unwrap())
+                                        _s_expr.set(_s_target, margs.get(_sr_i).unwrap().value)
                                 else:
                                     while _s_pos < _s_n and _s_filled.get(_s_pos).unwrap():
                                         _s_pos += 1
                                     if _s_pos < _s_n:
                                         _s_filled.set(_s_pos, true)
-                                        _s_expr.set(_s_pos, margs.get(_sr_i).unwrap())
+                                        _s_expr.set(_s_pos, margs.get(_sr_i).unwrap().value)
                                         _s_pos += 1
                                     else:
                                         _s_ok = false
@@ -2996,7 +3006,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                     _sc_i += 1
                                 _s_did_reorder = true
                         if not _s_did_reorder:
-                            static_margs = margs.clone()
+                            static_margs = callarg_values(margs)
                             if gmod.fn_defaults.contains(_s_defaults_key):
                                 Vector[Option[SpannedExpr]] _s_defaults = gmod.fn_defaults.get(_s_defaults_key).unwrap()
                                 int _s_skip2 = 0
@@ -3296,7 +3306,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int default_local = -1
                 int uoi = 0
                 while uoi < margs.len():
-                    int lo = lower_expr(&ctx, margs.get(uoi).unwrap(), &gmod)
+                    int lo = lower_expr(&ctx, margs.get(uoi).unwrap().value, &gmod)
                     if uoi == 0 and mname == "unwrap_or":
                         default_local = lo
                     uoi += 1
@@ -3813,7 +3823,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # trait's dispatch key), unconditional like the Rust reference.
             if mname == "mod" and margs.len() == 1:
                 int _mod_op_ty = ctx.locals.get(recv).unwrap().type_id
-                int _mod_div = lower_expr(&ctx, margs.get(0).unwrap(), &gmod)
+                int _mod_div = lower_expr(&ctx, margs.get(0).unwrap().value, &gmod)
                 int _mod_dst = add_local(&ctx, _mod_op_ty, None)
                 emit(&ctx, GIBinOp(_mod_dst, OP_MOD, _mod_op_ty, op_consume(&ctx, &gmod, recv, CkBinOpArg()), op_consume(&ctx, &gmod, _mod_div, CkBinOpArg())))
                 return _mod_dst
@@ -3912,7 +3922,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # the hasher state never accumulates. `lower_place_base`
                     # on the borrow's inner returns the pointer slot directly
                     # (same reason the receiver dispatch uses it at :1113).
-                    SpannedExpr _rh_arg_expr = margs.get(0).unwrap()
+                    SpannedExpr _rh_arg_expr = margs.get(0).unwrap().value
                     SpannedExpr _rh_place_expr = _rh_arg_expr
                     match _rh_arg_expr.expr:
                         case EMutableBorrow(_rh_inner):
@@ -3950,7 +3960,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # dispatch) when the receiver isn't a Vector, the method isn't a HOF,
             # or the closure arg isn't an inlinable explicit non-capturing form.
             if collection_kind_eq(collection_kind_of(&gmod, recv_type_name), CkVector()):
-                int hof_result = try_lower_vector_hof(&ctx, recv, recv_type_name, mname, margs, sexpr, &gmod)
+                int hof_result = try_lower_vector_hof(&ctx, recv, recv_type_name, mname, callarg_values(margs), sexpr, &gmod)
                 if hof_result >= 0:
                     return hof_result
             # ── Dict/HashMap higher-order-function inline-loop intercept ──
@@ -3966,7 +3976,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # dispatch) when the method isn't a Dict HOF or the closure arg isn't
             # an inlinable explicit non-capturing form.
             if collection_kind_eq(collection_kind_of(&gmod, recv_type_name), CkDict()):
-                int dhof_result = try_lower_dict_hof(&ctx, recv, recv_type_name, mname, margs, sexpr, &gmod)
+                int dhof_result = try_lower_dict_hof(&ctx, recv, recv_type_name, mname, callarg_values(margs), sexpr, &gmod)
                 if dhof_result >= 0:
                     return dhof_result
             # ── Set/HashSet higher-order-function inline-loop intercept ──
@@ -3985,7 +3995,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             CollectionKind _recv_set_ck = collection_kind_of(&gmod, recv_type_name)
             if collection_kind_eq(_recv_set_ck, CkOrderedSet()) or collection_kind_eq(_recv_set_ck, CkHashSet()):
                 bool _set_ordered = collection_kind_eq(_recv_set_ck, CkOrderedSet())
-                int shof_result = try_lower_set_hof(&ctx, recv, recv_type_name, _set_ordered, mname, margs, sexpr, &gmod)
+                int shof_result = try_lower_set_hof(&ctx, recv, recv_type_name, _set_ordered, mname, callarg_values(margs), sexpr, &gmod)
                 if shof_result >= 0:
                     return shof_result
             String full_name = recv_type_name + "__" + mname
@@ -4114,7 +4124,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Without the REORDER a `p.add3(b=5, a=1)` would push args
             # positionally (a=5, b=1) → silent cross-compiler miscompile vs Rust.
             String _m_defaults_key = recv_type_name + "__" + mname
-            Vector[SpannedExpr] filled_margs = margs.clone()
+            Vector[SpannedExpr] filled_margs = callarg_values(margs)
             bool _m_has_named = false
             int _mn_i = 0
             while _mn_i < _marg_names.len():
@@ -4135,7 +4145,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int _ms_i = 0
                 while _ms_i < _m_n:
                     _m_slot_filled.push(false)
-                    _m_slot_expr.push(margs.get(0).unwrap())   # placeholder; never lowered while filled[i] is false
+                    _m_slot_expr.push(margs.get(0).unwrap().value)   # placeholder; never lowered while filled[i] is false
                     _ms_i += 1
                 bool _m_ok = true
                 int _m_pos = 0
@@ -4155,13 +4165,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             _m_ok = false
                         else:
                             _m_slot_filled.set(_m_target, true)
-                            _m_slot_expr.set(_m_target, margs.get(_mr_i).unwrap())
+                            _m_slot_expr.set(_m_target, margs.get(_mr_i).unwrap().value)
                     else:
                         while _m_pos < _m_n and _m_slot_filled.get(_m_pos).unwrap():
                             _m_pos += 1
                         if _m_pos < _m_n:
                             _m_slot_filled.set(_m_pos, true)
-                            _m_slot_expr.set(_m_pos, margs.get(_mr_i).unwrap())
+                            _m_slot_expr.set(_m_pos, margs.get(_mr_i).unwrap().value)
                             _m_pos += 1
                         else:
                             _m_ok = false
@@ -4194,7 +4204,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     _m_did_reorder = true
             # No named args (or reorder fell back): APPEND-only trailing fill.
             if not _m_did_reorder:
-                filled_margs = margs.clone()
+                filled_margs = callarg_values(margs)
                 if gmod.fn_defaults.contains(_m_defaults_key):
                     Vector[Option[SpannedExpr]] _m_defaults = gmod.fn_defaults.get(_m_defaults_key).unwrap()
                     # surface index of the first missing trailing slot. With a
@@ -4383,7 +4393,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int _cm_recv_tid = ctx.locals.get(recv).unwrap().type_id
                 EnumCategory _cm_ec = enum_category_of(&gmod, _cm_recv_tid)
                 if (_cm_ec.category == ENUM_CAT_OPTION or _cm_ec.category == ENUM_CAT_RESULT) and margs.len() == 1:
-                    int _cm_u = combinator_closure_ret_type(margs.get(0).unwrap(), &gmod)
+                    int _cm_u = combinator_closure_ret_type(margs.get(0).unwrap().value, &gmod)
                     if mname == "map":
                         if _cm_ec.category == ENUM_CAT_OPTION:
                             # Option.map: ok payload becomes U; Option has no err.
@@ -5831,7 +5841,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # spawn/await wiring). Any other shape falls back to the bare
             # passthrough.
             match (*inner_box).expr:
-                case ECall(spawn_callee_box, spawn_args, _, _):
+                case ECall(spawn_callee_box, spawn_args, _):
                     match (*spawn_callee_box).expr:
                         case EClosure(sp_params, sp_body):
                             # Inline-spawn `spawn ((): body)(args)`. The self-host
@@ -5867,7 +5877,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 # borrow-unique PARAM identifier arg is passed
                                 # THROUGH by pointer, not auto-dereffed to a value.
                                 bool isp_passed_ptr = false
-                                match isp_arg.expr:
+                                match isp_arg.value.expr:
                                     case EIdentifier(isp_name):
                                         if nl_contains(&ctx, isp_name):
                                             int isp_lid = nl_get(&ctx, isp_name)
@@ -5888,7 +5898,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                     else:
                                         pass
                                 if not isp_passed_ptr:
-                                    int isp_aval = lower_expr(&ctx, isp_arg, &gmod)
+                                    int isp_aval = lower_expr(&ctx, isp_arg.value, &gmod)
                                     isp_call_args.push(op_consume(&ctx, &gmod, isp_aval, CkCallArgBorrow()))
                             int isp_arity = spawn_args.len()
                             String isp_call = "__callable_" + int_to_str(isp_arity)
@@ -5921,7 +5931,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 # &x; lock inside the worker). Returns -1 when no
                                 # shared arg → fall through to the normal named-fn
                                 # spawn.
-                                int spawn_shared_dst = lower_shared_spawn(&ctx, spawn_named_fn, spawn_args, &gmod)
+                                int spawn_shared_dst = lower_shared_spawn(&ctx, spawn_named_fn, callarg_values(spawn_args), &gmod)
                                 if spawn_shared_dst >= 0:
                                     return spawn_shared_dst
                                 # round-16 Phase-2 inner-shared-spawn: a
@@ -5931,7 +5941,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 # records the InnerSharedSpawn the post-pass rewrites
                                 # to forward the carrier. Returns -1 when no `&param`
                                 # arg → fall through to the named-fn spawn.
-                                int spawn_inner_dst = lower_inner_shared_spawn(&ctx, spawn_named_fn, spawn_args, &gmod)
+                                int spawn_inner_dst = lower_inner_shared_spawn(&ctx, spawn_named_fn, callarg_values(spawn_args), &gmod)
                                 if spawn_inner_dst >= 0:
                                     return spawn_inner_dst
                                 # Named-fn spawn (Inc-1). Returns -1 when OUT of
@@ -5939,7 +5949,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 # param) — fall back to the bare passthrough (keeps
                                 # the pre-Inc-1 WRONG-output, NOT a fresh cc-fail).
                                 # Rolls to Inc-2.
-                                int spawn_named_dst = lower_named_fn_spawn(&ctx, spawn_named_fn, spawn_args, &gmod)
+                                int spawn_named_dst = lower_named_fn_spawn(&ctx, spawn_named_fn, callarg_values(spawn_args), &gmod)
                                 if spawn_named_dst >= 0:
                                     return spawn_named_dst
                             # Bare-passthrough fallback. When an arg is a
@@ -5956,7 +5966,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             # the plain inner type.
                             bool sp_stub_raw = false
                             for sp_stub_arg in spawn_args:
-                                match sp_stub_arg.expr:
+                                match sp_stub_arg.value.expr:
                                     case EIdentifier(sp_stub_n):
                                         if ctx.shared_locals.contains(sp_stub_n):
                                             if ctx.shared_locals.get(sp_stub_n).unwrap().kind != SHK_MUTEX:
@@ -5988,11 +5998,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # emitted VALUE). Any non-named-fn shape falls back to the bare
             # passthrough (its prior behavior).
             match (*inner_box).expr:
-                case ECall(sb_callee_box, sb_args, _, _):
+                case ECall(sb_callee_box, sb_args, _):
                     match (*sb_callee_box).expr:
                         case EIdentifier(sb_named_fn):
                             if gmod.fn_sigs.contains(sb_named_fn) and not nl_contains(&ctx, sb_named_fn):
-                                int sb_named_dst = lower_named_fn_spawn(&ctx, sb_named_fn, sb_args, &gmod)
+                                int sb_named_dst = lower_named_fn_spawn(&ctx, sb_named_fn, callarg_values(sb_args), &gmod)
                                 if sb_named_dst >= 0:
                                     return sb_named_dst
                             return lower_expr(&ctx, *inner_box, &gmod)
@@ -6244,14 +6254,14 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         Vector[String] no_arg_names = []
         if mname == "map":
             # `acc.push(<closure body>)`
-            Vector[SpannedExpr] push_args = [cbody.clone()]
-            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_arg_names, no_targs), span)
+            Vector[CallArg] push_args = [pos_arg(cbody.clone())]
+            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
             body.push(SExpr(push_call))
         else:
             # `if <closure body>: acc.push(<element>)`
             SpannedExpr elem_ref = SpannedExpr(EIdentifier(var_name), span)
-            Vector[SpannedExpr] push_args = [elem_ref]
-            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_arg_names, no_targs), span)
+            Vector[CallArg] push_args = [pos_arg(elem_ref)]
+            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
             Vector[Stmt] then_body = [SExpr(push_call)]
             Vector[ElseBranch] no_elifs = []
             body.push(SIf(cbody.clone(), then_body, no_elifs))
@@ -6287,8 +6297,8 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         Vector[String] no_arg_names = []
         # `acc.extend(<closure body>)` — the closure body is a Vector
         # expression; extend appends all its elements into acc.
-        Vector[SpannedExpr] ext_args = [cbody.clone()]
-        SpannedExpr ext_call = SpannedExpr(EMethodCall(Box(acc_ref), "extend", ext_args, no_arg_names, no_targs), span)
+        Vector[CallArg] ext_args = [pos_arg(cbody.clone())]
+        SpannedExpr ext_call = SpannedExpr(EMethodCall(Box(acc_ref), "extend", ext_args, no_targs), span)
         Vector[Stmt] body = [SExpr(ext_call)]
         lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
         return acc
@@ -6439,8 +6449,8 @@ int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
         SpannedExpr elem_ref = SpannedExpr(EIdentifier(var_name), span)
         Vector[SpannedType] no_targs = []
         Vector[String] no_arg_names = []
-        Vector[SpannedExpr] add_args = [elem_ref]
-        SpannedExpr add_call = SpannedExpr(EMethodCall(Box(acc_ref), "add", add_args, no_arg_names, no_targs), span)
+        Vector[CallArg] add_args = [pos_arg(elem_ref)]
+        SpannedExpr add_call = SpannedExpr(EMethodCall(Box(acc_ref), "add", add_args, no_targs), span)
         Vector[Stmt] then_body = [SExpr(add_call)]
         Vector[ElseBranch] no_elifs = []
         Vector[Stmt] body = [SIf(cbody.clone(), then_body, no_elifs)]
@@ -6594,7 +6604,7 @@ bool closure_extract(SpannedExpr arg, Vector[String] &out_params, SpannedExpr &o
 bool extract_hof_closure(SpannedExpr arg, int arity, Vector[String] &out_params, SpannedExpr &out_body):
     if closure_extract(arg.clone(), &out_params, &out_body):
         return true
-    Vector[SpannedExpr] call_args = []
+    Vector[CallArg] call_args = []
     int i = 0
     while i < arity:
         String pn = "__hofp" + int_to_str(i)
@@ -6603,7 +6613,7 @@ bool extract_hof_closure(SpannedExpr arg, int arity, Vector[String] &out_params,
         i += 1
     Vector[String] no_names = []
     Vector[SpannedType] no_targs = []
-    out_body = SpannedExpr(ECall(Box(arg), call_args, no_names, no_targs), arg.span)
+    out_body = SpannedExpr(ECall(Box(arg), call_args, no_targs), arg.span)
     return true
 
 # `fold(init, (acc, x): body)` → `acc = init; for x in v: acc = body`.
@@ -6733,11 +6743,11 @@ int lower_vector_find(LowerCtx &ctx, int recv, String recv_type_name, String var
     SpannedExpr some_arg = SpannedExpr(EIdentifier(var_name), span)
     if by_index:
         some_arg = SpannedExpr(EIdentifier(idxc_name), span)
-    Vector[SpannedExpr] some_args = [some_arg]
+    Vector[CallArg] some_args = [pos_arg(some_arg)]
     Vector[String] no_names = []
     Vector[SpannedType] no_targs = []
     SpannedExpr some_callee = SpannedExpr(EIdentifier("Some"), span)
-    SpannedExpr some_call = SpannedExpr(ECall(Box(some_callee), some_args, no_names, no_targs), span)
+    SpannedExpr some_call = SpannedExpr(ECall(Box(some_callee), some_args, no_targs), span)
     Vector[Stmt] then_body = [SAssign(acc_lhs, some_call), SBreak()]
     Vector[ElseBranch] no_elifs = []
     Vector[Stmt] body = [SIf(cbody.clone(), then_body, no_elifs)]
@@ -6998,10 +7008,10 @@ int comp_make_acc(LowerCtx &ctx, int acc_tid, String elem_tyname, GirModule &gmo
 # a filtered-out element never skips the loop's increment.
 Vector[Stmt] comp_synth_body(String acc_name, SpannedExpr comp_expr, Option[Box[SpannedExpr]] filt_opt, Span span):
     SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
-    Vector[SpannedExpr] push_args = [comp_expr.clone()]
+    Vector[CallArg] push_args = [pos_arg(comp_expr.clone())]
     Vector[SpannedType] no_targs = []
     Vector[String] no_arg_names = []
-    SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_arg_names, no_targs), span)
+    SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
     Stmt push_stmt = SExpr(push_call)
     Vector[Stmt] body = []
     match filt_opt:
@@ -7103,10 +7113,10 @@ int comp_make_set_acc(LowerCtx &ctx, GirModule &gmod):
 # a filtered-out element never skips the loop's position-advance.
 Vector[Stmt] comp_synth_set_body(String acc_name, SpannedExpr comp_expr, Option[Box[SpannedExpr]] filt_opt, Span span):
     SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
-    Vector[SpannedExpr] add_args = [comp_expr.clone()]
+    Vector[CallArg] add_args = [pos_arg(comp_expr.clone())]
     Vector[SpannedType] no_targs = []
     Vector[String] no_arg_names = []
-    SpannedExpr add_call = SpannedExpr(EMethodCall(Box(acc_ref), "add", add_args, no_arg_names, no_targs), span)
+    SpannedExpr add_call = SpannedExpr(EMethodCall(Box(acc_ref), "add", add_args, no_targs), span)
     Stmt add_stmt = SExpr(add_call)
     Vector[Stmt] body = []
     match filt_opt:
@@ -7184,10 +7194,10 @@ int comp_make_dict_acc(LowerCtx &ctx, GirModule &gmod):
 # position-advance.
 Vector[Stmt] comp_synth_dict_body(String acc_name, SpannedExpr key_expr, SpannedExpr val_expr, Option[Box[SpannedExpr]] filt_opt, Span span):
     SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
-    Vector[SpannedExpr] put_args = [key_expr.clone(), val_expr.clone()]
+    Vector[CallArg] put_args = [pos_arg(key_expr.clone()), pos_arg(val_expr.clone())]
     Vector[SpannedType] no_targs = []
     Vector[String] no_arg_names = []
-    SpannedExpr put_call = SpannedExpr(EMethodCall(Box(acc_ref), "put", put_args, no_arg_names, no_targs), span)
+    SpannedExpr put_call = SpannedExpr(EMethodCall(Box(acc_ref), "put", put_args, no_targs), span)
     Stmt put_stmt = SExpr(put_call)
     Vector[Stmt] body = []
     match filt_opt:
@@ -7465,7 +7475,7 @@ SpannedType infer_arg_ast_type(SpannedExpr arg, GirModule &gmod):
             return SpannedType(TNamed("String", []), -1)
         case EFString(_, _, _):
             return SpannedType(TNamed("String", []), -1)
-        case ECall(callee_box, _, _, _):
+        case ECall(callee_box, _, _):
             match (*callee_box).expr:
                 case EIdentifier(cname):
                     if gmod.fn_ast_defs.contains(cname):

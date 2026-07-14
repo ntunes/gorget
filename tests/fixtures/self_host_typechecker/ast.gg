@@ -21,6 +21,45 @@ struct SpannedPattern:
     Pattern pat
     Span span
 
+# A single call/method argument. Mirrors Rust gg's `CallArg`
+# (src/parser/ast.rs:789): per-arg passing metadata (keyword name, ownership
+# sigil) are typed fields alongside the BARE value expression — NOT a parallel
+# names-vector and NOT an EMove/EMutableBorrow wrapper on the value. `ownership`
+# uses the OWN_BORROW(0)/OWN_MUTABLE(1)/OWN_MOVE(2) convention (parser.gg),
+# shared with `Param.ownership`. `name` is Some(kw) for a `k = v` named arg,
+# None for positional.
+struct CallArg:
+    Option[String] name
+    int ownership
+    SpannedExpr value
+
+# Build a positional (unnamed, borrow) call argument around a bare expression.
+# Used by lowerer desugarings that synthesize AST calls (map→push, etc.).
+# ownership 0 == OWN_BORROW (parser.gg convention).
+CallArg pos_arg(SpannedExpr e):
+    return CallArg(None, 0, e)
+
+# Extract the bare value expressions from a CallArg list. Adapter used at the
+# lowerer boundary so lower_call's internals (which key off the callee's
+# borrow_flags, NOT the arg sigil) stay byte-identical — the whole point of the
+# bare-value model: the lowerer sees exactly the expressions it saw before.
+Vector[SpannedExpr] callarg_values(Vector[CallArg] args):
+    Vector[SpannedExpr] out = Vector[SpannedExpr]()
+    for a in args:
+        out.push(a.value)
+    return out
+
+# Extract the parallel keyword-name list ("" for positional) from a CallArg
+# list, matching the sidecar shape lower_call still consumes internally.
+Vector[String] callarg_names(Vector[CallArg] args):
+    Vector[String] out = Vector[String]()
+    for a in args:
+        if a.name is Some(nm):
+            out.push(nm)
+        else:
+            out.push("")
+    return out
+
 # ── Types ────────────────────────────────────────────────────
 
 enum Type:
@@ -59,8 +98,8 @@ enum Expr:
     EIt
     EBinaryOp(Box[SpannedExpr], String, Box[SpannedExpr])
     EUnaryOp(String, Box[SpannedExpr])
-    ECall(Box[SpannedExpr], Vector[SpannedExpr], Vector[String], Vector[SpannedType])
-    EMethodCall(Box[SpannedExpr], String, Vector[SpannedExpr], Vector[String], Vector[SpannedType])
+    ECall(Box[SpannedExpr], Vector[CallArg], Vector[SpannedType])
+    EMethodCall(Box[SpannedExpr], String, Vector[CallArg], Vector[SpannedType])
     EFieldAccess(Box[SpannedExpr], String)
     EIndex(Box[SpannedExpr], Box[SpannedExpr])
     ERange(Option[Box[SpannedExpr]], Option[Box[SpannedExpr]], bool)

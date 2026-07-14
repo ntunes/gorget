@@ -18564,16 +18564,14 @@ fn self_host_driver_rejects_d12_drop_purity() {
         "pos1_option_payload_reject",
         "pos1_result_ok_payload_reject",
         "pos1_result_err_payload_reject",
-        // positions 2 (ctor / field-init) + 3 (collection put) TEMPORARILY OMITTED
-        // (2026-07-12): the self-host `parse_call_args` DISCARDS the `!`/`&` arg
-        // sigil (parser.gg `skip_ownership_markers`), so these two positions cannot
-        // tell a legal `W(!x)` / `coll.push(!x)` MOVE from a bare COPY and
-        // over-rejected the move — pos-2/pos-3 are DISABLED in
-        // self_host_typechecker/typecheck.gg pending the call-arg-sigil fix. The
-        // fixtures (pos2_ctor_init_reject, pos3_collection_put_reject,
-        // pos3_field_place_reject) still exist and Rust gg asserts they reject
-        // (`d12_pos2_ctor_init_reject` / `d12_pos3_*` above). Restore these three
-        // entries when the sigil fix re-enables pos-2/pos-3 on the self-host.
+        // position 2 (ctor / field-init) + position 3 (collection put): re-enabled
+        // once the CallArg{name, ownership, value} normalization landed — the
+        // self-host now carries the `!`/`&` arg sigil as a typed `CallArg.ownership`
+        // field, so pos-2/pos-3 gate on `a.ownership == OWN_BORROW` and reject a
+        // bare copy while accepting an explicit `W(!x)` / `coll.push(!x)` move.
+        "pos2_ctor_init_reject",
+        "pos3_collection_put_reject",
+        "pos3_field_place_reject",
         // position 4 (return / expr-body / closure-tail)
         "pos4_return_reject",
         "pos4_field_place_reject",
@@ -18638,6 +18636,12 @@ fn self_host_driver_accepts_d12_legal() {
         "legal_field_place_int_accept",
         "legal_amp_self_owned",
         "legal_plain_call_borrow_accept",
+        // pos-2 ctor move (`W(!a)`) + pos-3 collection move (`v.push(!b)`) — the
+        // explicit-move counterparts of the re-enabled ctor/collection-put
+        // positions. The over-rejection hole that let the reverted wrapper bug
+        // through: without this, a naive "reject every ctor/put arg" would ship
+        // uncaught. NON-NEGOTIABLE guard for the CallArg-sigil re-enable.
+        "legal_ctor_coll_move_accept",
     ];
     for name in legal_fixtures {
         let fixture = manifest_dir.join(format!("tests/fixtures/d12_drop_purity/{name}.gg"));

@@ -115,7 +115,7 @@ void cow_mark_if_ident(LowerCtx &ctx, SpannedExpr e, int pos, bool in_closure):
 # into the mark helpers is the mutating expression's own `span.start`.
 void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closure):
     match e.expr:
-        case EMethodCall(recv_box, mname, margs, _, _):
+        case EMethodCall(recv_box, mname, margs, _):
             # TYPED: builtin `is_mutating` table OR user `&self`/`!self`
             # self-convention (method_mutates_receiver). A read-only call
             # does NOT mark its receiver; a mutating one marks the root.
@@ -133,8 +133,8 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             int scan_mai = 0
             for ma in margs:
                 if method_arg_lets_callee_mutate(&ctx, *recv_box, mname, scan_mai, &gmod):
-                    cow_mark_if_ident(&ctx, ma, ma.span.start, in_closure)
-                cow_scan_expr(&ctx, &gmod, ma, in_closure)
+                    cow_mark_if_ident(&ctx, ma.value, ma.value.span.start, in_closure)
+                cow_scan_expr(&ctx, &gmod, ma.value, in_closure)
                 scan_mai = scan_mai + 1
         case EMutableBorrow(inner_box):
             cow_mark_if_ident(&ctx, *inner_box, e.span.start, in_closure)
@@ -151,7 +151,7 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             # position.
             cow_mark_moved_root(&ctx, *inner_box)
             cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, _):
             cow_scan_expr(&ctx, &gmod, *callee_box, in_closure)
             # F1 soundness (free-call half): the parser DISCARDS `&`/`!`
             # sigils on call args (parser.gg skip_ownership_markers), so
@@ -176,12 +176,12 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
                     int scan_ai = 0
                     for ca_sig in cargs:
                         if call_arg_lets_callee_mutate(&gmod, scan_resolved, scan_ai):
-                            cow_mark_if_ident(&ctx, ca_sig, ca_sig.span.start, in_closure)
+                            cow_mark_if_ident(&ctx, ca_sig.value, ca_sig.value.span.start, in_closure)
                         scan_ai = scan_ai + 1
                 else:
                     pass
             for ca in cargs:
-                cow_scan_expr(&ctx, &gmod, ca, in_closure)
+                cow_scan_expr(&ctx, &gmod, ca.value, in_closure)
         case EBinaryOp(lhs_box, _, rhs_box):
             cow_scan_expr(&ctx, &gmod, *lhs_box, in_closure)
             cow_scan_expr(&ctx, &gmod, *rhs_box, in_closure)
@@ -437,7 +437,7 @@ void cow_record_decl_type(LowerCtx &ctx, SpannedType stype, String name, Spanned
             pass
     if cdt_name == "auto" or cdt_name == "":
         match init_e.expr:
-            case ECall(cdt_callee_box, _, _, _):
+            case ECall(cdt_callee_box, _, _):
                 match (*cdt_callee_box).expr:
                     case EIdentifier(cdt_ctor):
                         cdt_name = cdt_ctor
@@ -474,7 +474,7 @@ String cow_source_root_name(SpannedExpr e):
     match e.expr:
         case EIdentifier(idn):
             return idn
-        case EMethodCall(recv_box, _, _, _, _):
+        case EMethodCall(recv_box, _, _, _):
             return cow_source_root_name(*recv_box)
         case EIndex(base_box, _):
             return cow_source_root_name(*base_box)

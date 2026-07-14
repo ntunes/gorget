@@ -163,7 +163,7 @@ String format_expr(SpannedExpr se):
         case EUnaryOp(op, operand):
             String os = format_expr(*operand)
             return f"({op} {os})"
-        case ECall(callee, args, _, targs):
+        case ECall(callee, args, targs):
             String cs = format_expr(*callee)
             String result = cs + "("
             for (i, a) in args.enumerate():
@@ -172,7 +172,7 @@ String format_expr(SpannedExpr se):
                 result = result + format_expr(a)
             result = result + ")"
             return result
-        case EMethodCall(obj, name, args, _, targs):
+        case EMethodCall(obj, name, args, targs):
             String os = format_expr(*obj)
             String result = f"{os}.{name}("
             for (i, a) in args.enumerate():

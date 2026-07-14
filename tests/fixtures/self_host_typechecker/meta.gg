@@ -207,13 +207,13 @@ int eval_int_ex(Expr e, Dict[String, int] &env, Module &m, int depth, bool &ok):
             if op == "-":
                 return 0 - v
             return v
-        case ECall(callee, args, _, targs):
+        case ECall(callee, args, targs):
             match (*callee).expr:
                 case EIdentifier(fn_name):
                     if fn_name == "sizeof" and args.len() == 1:
-                        return meta_type_byte_size(meta_typename(arg_as_type(args.get(0).unwrap())))
+                        return meta_type_byte_size(meta_typename(arg_as_type(args.get(0).unwrap().value)))
                     elif fn_name == "alignof" and args.len() == 1:
-                        return meta_type_align(meta_typename(arg_as_type(args.get(0).unwrap())))
+                        return meta_type_align(meta_typename(arg_as_type(args.get(0).unwrap().value)))
                     elif fn_name == "arch_word_bits" and args.len() == 0:
                         return 64
                     # User meta-fn call
@@ -223,7 +223,7 @@ int eval_int_ex(Expr e, Dict[String, int] &env, Module &m, int depth, bool &ok):
                         Dict[String, int] callenv = Dict[String, int]()
                         int pi = 0
                         while pi < fdef.params.len() and pi < args.len():
-                            int av = eval_int_ex(args.get(pi).unwrap().expr, &env, &m, depth + 1, &ok)
+                            int av = eval_int_ex(args.get(pi).unwrap().value.expr, &env, &m, depth + 1, &ok)
                             callenv[fdef.params.get(pi).unwrap().param_name] = av
                             pi = pi + 1
                         bool ret = false
@@ -440,7 +440,7 @@ bool eval_meta_bool(Expr e, Dict[String, int] &iv, Dict[String, bool] &bv, Modul
                 return bv[name]
             ok = false
             return false
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             match (*callee).expr:
                 case EIdentifier(fn_name):
                     if fn_name == "feature":
@@ -524,13 +524,13 @@ Type arg_as_type(SpannedExpr arg):
             if name == "int" or name == "bool" or name == "float" or name == "String" or name == "cstr" or name == "int8" or name == "int16" or name == "int32" or name == "int64" or name == "uint8" or name == "uint16" or name == "uint32" or name == "uint64" or name == "float32" or name == "float64" or name == "str":
                 return TPrimitive(name)
             return TNamed(name, Vector[SpannedType]())
-        case ECall(callee, args, _, targs):
+        case ECall(callee, args, targs):
             match (*callee).expr:
                 case EIdentifier(name):
                     Vector[SpannedType] tas = Vector[SpannedType]()
                     int i = 0
                     while i < args.len():
-                        tas.push(SpannedType(arg_as_type(args.get(i).unwrap()), arg.span))
+                        tas.push(SpannedType(arg_as_type(args.get(i).unwrap().value), arg.span))
                         i = i + 1
                     return TNamed(name, tas)
                 else:
@@ -565,20 +565,20 @@ SpannedExpr subst_expr(SpannedExpr se, Dict[String, int] &iv, Dict[String, bool]
             return SpannedExpr(EBinaryOp(Box(subst_expr(*l, &iv, &bv, &sv)), op, Box(subst_expr(*r, &iv, &bv, &sv))), se.span)
         case EUnaryOp(op, operand):
             return SpannedExpr(EUnaryOp(op, Box(subst_expr(*operand, &iv, &bv, &sv))), se.span)
-        case ECall(callee, args, arg_names, targs):
-            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+        case ECall(callee, args, targs):
+            Vector[CallArg] na = Vector[CallArg]()
             int i = 0
             while i < args.len():
-                na.push(subst_expr(args.get(i).unwrap(), &iv, &bv, &sv))
+                na.push(CallArg(args.get(i).unwrap().name, args.get(i).unwrap().ownership, subst_expr(args.get(i).unwrap().value, &iv, &bv, &sv)))
                 i = i + 1
-            return SpannedExpr(ECall(Box(subst_expr(*callee, &iv, &bv, &sv)), na, arg_names, targs), se.span)
-        case EMethodCall(recv, mname, args, arg_names, targs):
-            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            return SpannedExpr(ECall(Box(subst_expr(*callee, &iv, &bv, &sv)), na, targs), se.span)
+        case EMethodCall(recv, mname, args, targs):
+            Vector[CallArg] na = Vector[CallArg]()
             int i = 0
             while i < args.len():
-                na.push(subst_expr(args.get(i).unwrap(), &iv, &bv, &sv))
+                na.push(CallArg(args.get(i).unwrap().name, args.get(i).unwrap().ownership, subst_expr(args.get(i).unwrap().value, &iv, &bv, &sv)))
                 i = i + 1
-            return SpannedExpr(EMethodCall(Box(subst_expr(*recv, &iv, &bv, &sv)), mname, na, arg_names, targs), se.span)
+            return SpannedExpr(EMethodCall(Box(subst_expr(*recv, &iv, &bv, &sv)), mname, na, targs), se.span)
         case EFieldAccess(base, fname):
             return SpannedExpr(EFieldAccess(Box(subst_expr(*base, &iv, &bv, &sv)), fname), se.span)
         case EIndex(base, idx):
@@ -803,30 +803,30 @@ SpannedExpr rename_aliases_expr(SpannedExpr se, Dict[String, String] &amap):
             return SpannedExpr(EBinaryOp(Box(rename_aliases_expr(*l, &amap)), op, Box(rename_aliases_expr(*r, &amap))), se.span)
         case EUnaryOp(op, operand):
             return SpannedExpr(EUnaryOp(op, Box(rename_aliases_expr(*operand, &amap))), se.span)
-        case ECall(callee, args, arg_names, targs):
-            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+        case ECall(callee, args, targs):
+            Vector[CallArg] na = Vector[CallArg]()
             int i = 0
             while i < args.len():
-                na.push(rename_aliases_expr(args.get(i).unwrap(), &amap))
+                na.push(CallArg(args.get(i).unwrap().name, args.get(i).unwrap().ownership, rename_aliases_expr(args.get(i).unwrap().value, &amap)))
                 i = i + 1
             Vector[SpannedType] nt = Vector[SpannedType]()
             int ti = 0
             while ti < targs.len():
                 nt.push(rename_aliases_type(targs.get(ti).unwrap(), &amap))
                 ti = ti + 1
-            return SpannedExpr(ECall(Box(rename_aliases_expr(*callee, &amap)), na, arg_names, nt), se.span)
-        case EMethodCall(recv, mname, args, arg_names, targs):
-            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            return SpannedExpr(ECall(Box(rename_aliases_expr(*callee, &amap)), na, nt), se.span)
+        case EMethodCall(recv, mname, args, targs):
+            Vector[CallArg] na = Vector[CallArg]()
             int i = 0
             while i < args.len():
-                na.push(rename_aliases_expr(args.get(i).unwrap(), &amap))
+                na.push(CallArg(args.get(i).unwrap().name, args.get(i).unwrap().ownership, rename_aliases_expr(args.get(i).unwrap().value, &amap)))
                 i = i + 1
             Vector[SpannedType] nt = Vector[SpannedType]()
             int ti = 0
             while ti < targs.len():
                 nt.push(rename_aliases_type(targs.get(ti).unwrap(), &amap))
                 ti = ti + 1
-            return SpannedExpr(EMethodCall(Box(rename_aliases_expr(*recv, &amap)), mname, na, arg_names, nt), se.span)
+            return SpannedExpr(EMethodCall(Box(rename_aliases_expr(*recv, &amap)), mname, na, nt), se.span)
         case EStructLiteral(name, gargs, args):
             String nn = name
             if amap.contains(name):
@@ -1149,11 +1149,11 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
                     match mc_expr.expr:
                         case EStringLiteral(s, _):
                             str_consts[mc_name] = s
-                        case ECall(callee, cargs, _, _):
+                        case ECall(callee, cargs, _):
                             match (*callee).expr:
                                 case EIdentifier(fn_name):
                                     if fn_name == "typename" and cargs.len() == 1:
-                                        str_consts[mc_name] = meta_typename(arg_as_type(cargs.get(0).unwrap()))
+                                        str_consts[mc_name] = meta_typename(arg_as_type(cargs.get(0).unwrap().value))
                                     elif fn_name == "embed_file" and cargs.len() == 1:
                                         # Gorget's include_str!: read a file
                                         # relative to the entry source dir at
@@ -1163,7 +1163,7 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
                                         # contents land in str_consts, so the
                                         # subst pass inlines it as a string
                                         # literal exactly like a `meta String`.
-                                        match cargs.get(0).unwrap().expr:
+                                        match cargs.get(0).unwrap().value.expr:
                                             case EStringLiteral(rel_path, _):
                                                 str_consts[mc_name] = read_file(source_dir + "/" + rel_path)
                                             else:
@@ -1230,7 +1230,7 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
                             SpannedExpr arg = call_args.get(j).unwrap()
                             # If arg is a call to a builtin like arch_word_bits()
                             match arg.expr:
-                                case ECall(callee_expr, inner_args, _, _):
+                                case ECall(callee_expr, inner_args, _):
                                     match (*callee_expr).expr:
                                         case EIdentifier(fn_name):
                                             if fn_name == "arch_word_bits" and inner_args.len() == 0:
@@ -1405,7 +1405,7 @@ SpannedExpr subst_arm_expr(SpannedExpr se, String vn, String vval, Dict[String, 
             return SpannedExpr(EBinaryOp(Box(subst_arm_expr(*l, vn, vval, &tmap)), op, Box(subst_arm_expr(*r, vn, vval, &tmap))), se.span)
         case EUnaryOp(op, operand):
             return SpannedExpr(EUnaryOp(op, Box(subst_arm_expr(*operand, vn, vval, &tmap))), se.span)
-        case ECall(callee, args, arg_names, targs):
+        case ECall(callee, args, targs):
             # CALLEE special-case: a bare `vname(…)` callee renames to the
             # IDENTIFIER `Circle`, NOT the string `"Circle"` (else `"Circle"(…)`).
             SpannedExpr new_callee = *callee
@@ -1417,10 +1417,10 @@ SpannedExpr subst_arm_expr(SpannedExpr se, String vn, String vval, Dict[String, 
                         new_callee = subst_arm_expr(*callee, vn, vval, &tmap)
                 else:
                     new_callee = subst_arm_expr(*callee, vn, vval, &tmap)
-            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            Vector[CallArg] na = Vector[CallArg]()
             int i = 0
             while i < args.len():
-                na.push(subst_arm_expr(args.get(i).unwrap(), vn, vval, &tmap))
+                na.push(CallArg(args.get(i).unwrap().name, args.get(i).unwrap().ownership, subst_arm_expr(args.get(i).unwrap().value, vn, vval, &tmap)))
                 i = i + 1
             # Type-arg substitution: `rewrap[T]` → `rewrap[float]` (Rust substitute_type).
             Vector[SpannedType] nt = Vector[SpannedType]()
@@ -1428,19 +1428,19 @@ SpannedExpr subst_arm_expr(SpannedExpr se, String vn, String vval, Dict[String, 
             while ti < targs.len():
                 nt.push(subst_arm_type(targs.get(ti).unwrap(), &tmap))
                 ti = ti + 1
-            return SpannedExpr(ECall(Box(new_callee), na, arg_names, nt), se.span)
-        case EMethodCall(recv, mname, args, arg_names, targs):
-            Vector[SpannedExpr] na = Vector[SpannedExpr]()
+            return SpannedExpr(ECall(Box(new_callee), na, nt), se.span)
+        case EMethodCall(recv, mname, args, targs):
+            Vector[CallArg] na = Vector[CallArg]()
             int i = 0
             while i < args.len():
-                na.push(subst_arm_expr(args.get(i).unwrap(), vn, vval, &tmap))
+                na.push(CallArg(args.get(i).unwrap().name, args.get(i).unwrap().ownership, subst_arm_expr(args.get(i).unwrap().value, vn, vval, &tmap)))
                 i = i + 1
             Vector[SpannedType] nt = Vector[SpannedType]()
             int ti = 0
             while ti < targs.len():
                 nt.push(subst_arm_type(targs.get(ti).unwrap(), &tmap))
                 ti = ti + 1
-            return SpannedExpr(EMethodCall(Box(subst_arm_expr(*recv, vn, vval, &tmap)), mname, na, arg_names, nt), se.span)
+            return SpannedExpr(EMethodCall(Box(subst_arm_expr(*recv, vn, vval, &tmap)), mname, na, nt), se.span)
         case EStructLiteral(name, gargs, args):
             String nn = name
             if name == vn:
@@ -1598,11 +1598,11 @@ MatchArm substitute_arm(MatchArm template, String var_name, String concrete_name
 # expected shape.
 String extract_variant_payloads_target(SpannedExpr range):
     match range.expr:
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             match (*callee).expr:
                 case EIdentifier(callee_name):
                     if callee_name == "variant_payloads" and args.len() == 1:
-                        SpannedExpr arg0 = args.get(0).unwrap()
+                        SpannedExpr arg0 = args.get(0).unwrap().value
                         match arg0.expr:
                             case EIdentifier(en):
                                 return en

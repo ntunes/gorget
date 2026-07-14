@@ -67,10 +67,10 @@ int infer_closure_expr_type(SpannedExpr sexpr, Dict[String, int] param_types, Sc
                 return types.bool_id
             return infer_closure_expr_type(*operand, param_types, scopes, &types, &ctx)
 
-        case ECall(callee, args, _, targs):
+        case ECall(callee, args, targs):
             return infer_expr_type(sexpr, scopes, &types, &ctx)
 
-        case EMethodCall(obj, method_name, args, _, targs):
+        case EMethodCall(obj, method_name, args, targs):
             return infer_expr_type(sexpr, scopes, &types, &ctx)
 
         else:
@@ -167,7 +167,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             return alt_d.type_id
             return NO_TYPE
 
-        case ECall(callee, args, _, targs):
+        case ECall(callee, args, targs):
             # Infer callee type, extract return type from RTFunction
             int callee_type = infer_expr_type(SpannedExpr((*callee).expr, (*callee).span), scopes, &types, &ctx)
             if callee_type >= 0 and callee_type < types.types.len():
@@ -263,7 +263,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         pass
             return NO_TYPE
 
-        case EMethodCall(obj, method_name, args, _, targs):
+        case EMethodCall(obj, method_name, args, targs):
             # Trait registry lookup: user-defined equip methods win over the
             # hardcoded collection-method fallback chain below. Returns -1
             # (skip) if the receiver type isn't registered, the method
@@ -316,7 +316,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     int reg_ret = reg_res.sig.return_type
                     Vector[int] reg_arg_types = Vector[int]()
                     for a in args:
-                        reg_arg_types.push(infer_expr_type(a, scopes, &types, &ctx))
+                        reg_arg_types.push(infer_expr_type(a.value, scopes, &types, &ctx))
                     ShapeResolution sh = resolve_method_shape(types.trait_registry, reg_obj_type, method_name)
                     # Lazy-iterator phase 1b Blocker #2: the TypeId-keyed
                     # shape lookup above fails for a monomorphized generic
@@ -704,7 +704,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # .fold(init, fn) returns the init type
             if method_name == "fold" or method_name == "reduce":
                 if args.len() >= 1:
-                    SpannedExpr init_arg = args.get(0).unwrap()
+                    SpannedExpr init_arg = args.get(0).unwrap().value
                     return infer_expr_type(init_arg, scopes, &types, &ctx)
             # .parse(String) on primitive type → Option[T] or Result[T, String]
             # e.g. int.parse("99") → Option[int], float.parse("1.5") → Result[float, String]

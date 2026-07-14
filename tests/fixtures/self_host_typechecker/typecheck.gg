@@ -856,17 +856,17 @@ void collect_idents_expr(SpannedExpr e, Vector[SpannedExpr] &out):
             collect_idents_expr(*r, &out)
         case EUnaryOp(_op, o):
             collect_idents_expr(*o, &out)
-        case ECall(callee, args, _n, _t):
+        case ECall(callee, args, _t):
             collect_idents_expr(*callee, &out)
             for a in args:
-                collect_idents_expr(a, &out)
-        case EMethodCall(recv, mname, args, _n, _t):
+                collect_idents_expr(a.value, &out)
+        case EMethodCall(recv, mname, args, _t):
             # `x.clone()` is an explicit copy — the receiver is NOT an
             # implicit-copy capture. Other method receivers ARE captured.
             if mname != "clone":
                 collect_idents_expr(*recv, &out)
             for a in args:
-                collect_idents_expr(a, &out)
+                collect_idents_expr(a.value, &out)
         case EFieldAccess(o, _f):
             collect_idents_expr(*o, &out)
         case EIndex(o, i):
@@ -1100,27 +1100,36 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes, 
                 check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, &scopes, &types, &ctx)
         case EUnaryOp(_op, operand):
             check_carrier_ops_expr(*operand, scope_id, &scopes, &types, &ctx)
-        case ECall(callee, args, _names, _targs):
+        case ECall(callee, args, _targs):
             check_carrier_ops_expr(*callee, scope_id, &scopes, &types, &ctx)
-            # D12 position 2 (ctor / field-init) TEMPORARILY DISABLED (2026-07-12):
-            # parse_call_args DISCARDS the `!`/`&` arg sigil (parser.gg
-            # `skip_ownership_markers`), so a ctor arg cannot be told apart as
-            # `W(!x)` (a legal move) vs `W(x)` (a copy) — enabling this OVER-REJECTED
-            # the move. Re-enable once the call-arg-sigil-preservation fix lands
-            # (TODO: self-host call-arg sigil). Rust gg + ggdef still enforce pos-2.
+            # D12 position 2 (ctor / field-init): a BARE drop-tainted place used
+            # as a constructor argument copies at the init ownership boundary. The
+            # CallArg model now carries the per-arg ownership sigil as a TYPED
+            # field, so a bare copy (`W(x)`, OWN_BORROW) is rejected while an
+            # explicit `W(!x)` (OWN_MOVE) / `W(&x)` (OWN_MUTABLE) skips the gate —
+            # the lowerer never sees a wrapper. Plain (non-ctor) call args stay a
+            # legal borrow. Mirrors Rust gg (src/semantic/safety/helpers.rs:1129).
+            bool call_is_ctor = is_ctor_callee(*callee, scopes, ctx)
             for a in args:
-                check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
-        case EMethodCall(receiver, method_name, args, _names, _targs):
+                if call_is_ctor and a.ownership == OWN_BORROW:
+                    reject_tainted_place(a.value, scopes, &types, &ctx)
+                check_carrier_ops_expr(a.value, scope_id, &scopes, &types, &ctx)
+        case EMethodCall(receiver, method_name, args, _targs):
             check_carrier_ops_expr(*receiver, scope_id, &scopes, &types, &ctx)
             # D12 position 6 sibling: a `&self` mutator on a tainted borrow-
             # rooted receiver materialises an implicit copy.
             reject_amp_self_mutator(*receiver, method_name, scopes, &types, &ctx)
-            # D12 position 3 (collection put) TEMPORARILY DISABLED (2026-07-12):
-            # same call-arg-sigil gap as position 2 — parse_call_args discards the
-            # `!`/`&` sigil, so enabling this OVER-REJECTED `coll.push(!x)`. Re-enable
-            # after the call-arg-sigil fix. Rust gg + ggdef still enforce pos-3.
+            # D12 position 3 (collection put): pushing a BARE drop-tainted place
+            # into an element-owning collection copies at the ownership boundary.
+            # Gated on the TYPED per-arg ownership: a bare `coll.push(x)`
+            # (OWN_BORROW) is rejected, `coll.push(!x)` (OWN_MOVE) is a legal move.
+            # A plain (non-collection) method arg stays a legal borrow. Mirrors
+            # Rust gg (src/semantic/safety/helpers.rs:1129).
+            bool ingest = is_collection_ingest_method(method_name) and is_collection_receiver(*receiver, scopes, &types, &ctx)
             for a in args:
-                check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+                if ingest and a.ownership == OWN_BORROW:
+                    reject_tainted_place(a.value, scopes, &types, &ctx)
+                check_carrier_ops_expr(a.value, scope_id, &scopes, &types, &ctx)
         case EFieldAccess(object, _field):
             check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)
         case EIndex(object, index):
@@ -1590,7 +1599,7 @@ void walk_expr_closures(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, Typ
 
 void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
-        case ECall(callee, args, arg_names, targs):
+        case ECall(callee, args, targs):
             walk_expr_closures(*callee, scope_id, &scopes, &types, &ctx)
             # Infer callee type to extract expected param types for closure args
             Vector[int] call_param_types = Vector[int]()
@@ -1603,45 +1612,37 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                     else:
                         pass
             # PositionalAfterNamed — a positional arg may not follow a named
-            # one. The parser stores the keyword for value i at arg_names[i]
-            # ("" for a positional arg, parser.gg:2055), parallel to `args`.
-            # Once a named arg is seen, a later positional arg is rejected.
-            # Mirrors src/semantic/typecheck.rs:5314
+            # one. Each arg is a CallArg whose `.name` is Some(kw) for a named
+            # arg, None for positional. Once a named arg is seen, a later
+            # positional arg is rejected. Mirrors src/semantic/typecheck.rs:5314
             # (SemanticErrorKind::PositionalAfterNamed).
             bool seen_named = false
             for (ai, arg) in args.enumerate():
-                String aname = ""
-                if ai < arg_names.len():
-                    aname = arg_names.get(ai).unwrap()
-                if aname.len() > 0:
+                if arg.name is Some(_aname):
                     seen_named = true
                 elif seen_named:
-                    ctx.diagnostics.push(Diagnostic.error(arg.span, DkControlFlow(), "positional argument cannot follow named argument"))
+                    ctx.diagnostics.push(Diagnostic.error(arg.value.span, DkControlFlow(), "positional argument cannot follow named argument"))
                 if ai < call_param_types.len():
-                    walk_expr_closures_with_type(arg, get_int_at(call_param_types, ai), scope_id, &scopes, &types, &ctx)
+                    walk_expr_closures_with_type(arg.value, get_int_at(call_param_types, ai), scope_id, &scopes, &types, &ctx)
                 else:
-                    walk_expr_closures(arg, scope_id, &scopes, &types, &ctx)
+                    walk_expr_closures(arg.value, scope_id, &scopes, &types, &ctx)
 
-        case EMethodCall(obj, method_name, args, arg_names, targs):
+        case EMethodCall(obj, method_name, args, targs):
             walk_expr_closures(*obj, scope_id, &scopes, &types, &ctx)
             # PositionalAfterNamed — a positional arg may not follow a named
-            # one. Same contract as the ECall case above: the keyword for the
-            # explicit arg at index i lives at arg_names[i] ("" for positional,
-            # parser.gg:2012), parallel to `args`. The receiver is the separate
-            # `obj` field, NOT part of `args`, so there is no off-by-one against
-            # `self` — `args`/`arg_names` cover only the EXPLICIT args after the
-            # receiver. Invariant #8: this completes the class the free-fn ECall
-            # check started. Mirrors src/semantic/typecheck.rs's EMethodCall arm
-            # (SemanticErrorKind::PositionalAfterNamed).
+            # one. Same contract as the ECall case above: each CallArg's `.name`
+            # is Some(kw) for a named arg, None for positional. The receiver is
+            # the separate `obj` field, NOT part of `args`, so there is no
+            # off-by-one against `self` — `args` covers only the EXPLICIT args
+            # after the receiver. Invariant #8: this completes the class the
+            # free-fn ECall check started. Mirrors src/semantic/typecheck.rs's
+            # EMethodCall arm (SemanticErrorKind::PositionalAfterNamed).
             bool m_seen_named = false
             for (mai, marg) in args.enumerate():
-                String maname = ""
-                if mai < arg_names.len():
-                    maname = arg_names.get(mai).unwrap()
-                if maname.len() > 0:
+                if marg.name is Some(_maname):
                     m_seen_named = true
                 elif m_seen_named:
-                    ctx.diagnostics.push(Diagnostic.error(marg.span, DkControlFlow(), "positional argument cannot follow named argument"))
+                    ctx.diagnostics.push(Diagnostic.error(marg.value.span, DkControlFlow(), "positional argument cannot follow named argument"))
             # Infer receiver element type for collection higher-order methods
             int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             int elem_type = extract_element_type(obj_type, scopes, types).unwrap_or(-1)
@@ -1684,7 +1685,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                         expected = types.add_type(RTFunction(ptypes, owns, -1))
                     elif (method_name == "fold" or method_name == "reduce") and ai == 1:
                         # (U, T) -> U
-                        int init_type = infer_expr_type(args.get(0).unwrap(), scopes, &types, &ctx)
+                        int init_type = infer_expr_type(args.get(0).unwrap().value, scopes, &types, &ctx)
                         Vector[int] ptypes = Vector[int]()
                         ptypes.push(init_type)
                         ptypes.push(elem_type)
@@ -1698,9 +1699,9 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 if expected < 0 and ai < method_param_types.len():
                     expected = get_int_at(method_param_types, ai)
                 if expected >= 0:
-                    walk_expr_closures_with_type(arg, expected, scope_id, &scopes, &types, &ctx)
+                    walk_expr_closures_with_type(arg.value, expected, scope_id, &scopes, &types, &ctx)
                 else:
-                    walk_expr_closures(arg, scope_id, &scopes, &types, &ctx)
+                    walk_expr_closures(arg.value, scope_id, &scopes, &types, &ctx)
 
         case EBinaryOp(left, op, right):
             walk_expr_closures(*left, scope_id, &scopes, &types, &ctx)
@@ -1848,7 +1849,7 @@ void resolve_call_in_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &t
 
 void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
-        case ECall(callee, args, _, targs):
+        case ECall(callee, args, targs):
             # Check if callee is an identifier with a function type containing type vars
             match (*callee).expr:
                 case EIdentifier(name):
@@ -1875,7 +1876,7 @@ void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, T
                                             ResolvedType old_prt = get_rtype_at(types.types, old_ptid)
                                             match old_prt:
                                                 case RTVar(var_id):
-                                                    int arg_type = infer_expr_type(arg, scopes, &types, &ctx)
+                                                    int arg_type = infer_expr_type(arg.value, scopes, &types, &ctx)
                                                     if arg_type >= 0 and arg_type != types.error_id:
                                                         new_params.push(arg_type)
                                                         var_map[var_id] = arg_type
@@ -1968,15 +1969,15 @@ void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, Scop
 # disambiguator (`span.end` is), it just guards against a stale entry.
 void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
-        case EMethodCall(recv_box, _, margs, _, _):
+        case EMethodCall(recv_box, _, margs, _):
             # Infer the whole method call (side effect: records the method
             # targs into `expr_method_targs`). `infer_expr_type` already walks
             # the receiver + args, so we do NOT descend manually here.
             int _ignore = infer_expr_type(sexpr, scopes, &types, &ctx)
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, _):
             record_method_targs_in_expr(*callee_box, &scopes, &types, &ctx)
             for a in cargs:
-                record_method_targs_in_expr(a, &scopes, &types, &ctx)
+                record_method_targs_in_expr(a.value, &scopes, &types, &ctx)
         case EFieldAccess(obj, _):
             record_method_targs_in_expr(*obj, &scopes, &types, &ctx)
         case EBinaryOp(l, _, r):
@@ -2001,7 +2002,7 @@ void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTabl
 # span offsets).
 bool fstring_interp_is_tag_check(SpannedExpr fe):
     match fe.expr:
-        case EMethodCall(_, m, _, _, _):
+        case EMethodCall(_, m, _, _):
             return m == "is_none" or m == "is_some" or m == "is_ok" or m == "is_error"
         else:
             return false
@@ -2013,13 +2014,13 @@ bool fstring_interp_is_tag_check(SpannedExpr fe):
 # bindings — array literals, identifiers, … — touch nothing).
 bool expr_has_method_call(SpannedExpr sexpr):
     match sexpr.expr:
-        case EMethodCall(_, _, _, _, _):
+        case EMethodCall(_, _, _, _):
             return true
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, _):
             if expr_has_method_call(*callee_box):
                 return true
             for a in cargs:
-                if expr_has_method_call(a):
+                if expr_has_method_call(a.value):
                     return true
             return false
         case EFieldAccess(obj, _):
@@ -2233,7 +2234,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # Check for .enumerate() — assign (int, T) to tuple pattern
             bool is_enumerate = false
             match iter_expr.expr:
-                case EMethodCall(obj, method_name, args, _, targs):
+                case EMethodCall(obj, method_name, args, targs):
                     if method_name == "enumerate":
                         is_enumerate = true
                         int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)

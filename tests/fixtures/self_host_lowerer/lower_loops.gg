@@ -120,7 +120,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     SpannedExpr probe_coll = iter_expr
     bool probe_is_enumerate = false
     match iter_expr.expr:
-        case EMethodCall(recv_box, mname, margs, _, _):
+        case EMethodCall(recv_box, mname, margs, _):
             if mname == "enumerate" and margs.len() == 0:
                 probe_coll = SpannedExpr((*recv_box).expr, (*recv_box).span)
                 probe_is_enumerate = true

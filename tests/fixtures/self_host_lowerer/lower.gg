@@ -567,9 +567,9 @@ String expr_kind(Expr e):
             return "EBinaryOp"
         case EUnaryOp(_, _):
             return "EUnaryOp"
-        case ECall(_, _, _, _):
+        case ECall(_, _, _):
             return "ECall"
-        case EMethodCall(_, _, _, _, _):
+        case EMethodCall(_, _, _, _):
             return "EMethodCall"
         case EFieldAccess(_, _):
             return "EFieldAccess"
@@ -1077,7 +1077,7 @@ bool mutinf_expr_is_self_rooted(SpannedExpr e):
             return mutinf_expr_is_self_rooted(*base)
         case EDeref(inner):
             return mutinf_expr_is_self_rooted(*inner)
-        case EMethodCall(recv, _, _, _, _):
+        case EMethodCall(recv, _, _, _):
             return mutinf_expr_is_self_rooted(*recv)
         case ETry(inner):
             return mutinf_expr_is_self_rooted(*inner)
@@ -1091,7 +1091,7 @@ bool mutinf_expr_is_self_rooted(SpannedExpr e):
 bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[String] &callees):
     bool m = false
     match e.expr:
-        case EMethodCall(recv_box, mname, margs, _, _):
+        case EMethodCall(recv_box, mname, margs, _):
             if mutinf_expr_is_self_rooted(*recv_box):
                 # Receiver is self or a self-projection. Classify in the
                 # user→builtin→leaf order that MIRRORS method_mutates_receiver
@@ -1157,15 +1157,15 @@ bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[Stri
                         rtn2 = type_id_to_name(rtid2, &gmod)
             int mai = 0
             for ma in margs:
-                if mutinf_expr_is_self_rooted(ma):
+                if mutinf_expr_is_self_rooted(ma.value):
                     if rtn2.len() > 0 and mutinf_method_arg_mut(&gmod, rtn2 + "__" + mname, mai):
                         m = true
-                if mutinf_scan_expr(ma, target, &gmod, &callees):
+                if mutinf_scan_expr(ma.value, target, &gmod, &callees):
                     m = true
                 mai += 1
             if mutinf_scan_expr(*recv_box, target, &gmod, &callees):
                 m = true
-        case ECall(callee_box, cargs, _, _):
+        case ECall(callee_box, cargs, _):
             String fname = ""
             match (*callee_box).expr:
                 case EIdentifier(fid):
@@ -1176,10 +1176,10 @@ bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[Stri
                     pass
             int cai = 0
             for ca in cargs:
-                if fname.len() > 0 and mutinf_expr_is_self_rooted(ca):
+                if fname.len() > 0 and mutinf_expr_is_self_rooted(ca.value):
                     if call_arg_lets_callee_mutate(&gmod, fname, cai):
                         m = true
-                if mutinf_scan_expr(ca, target, &gmod, &callees):
+                if mutinf_scan_expr(ca.value, target, &gmod, &callees):
                     m = true
                 cai += 1
             if mutinf_scan_expr(*callee_box, target, &gmod, &callees):
@@ -2859,7 +2859,7 @@ void apply_collect_target_rewrites(Module &m):
 SpannedExpr collect_rewrite_expr_expected(SpannedExpr sexpr, SpannedType expected, Dict[String, Vector[SpannedType]] &fn_param_types):
     Span ispan = sexpr.span
     match sexpr.expr:
-        case EMethodCall(recv, mname, margs, marg_names, mtargs):
+        case EMethodCall(recv, mname, margs, mtargs):
             String new_name = mname
             Vector[SpannedType] new_targs = mtargs
             if mname == "collect":
@@ -2878,7 +2878,7 @@ SpannedExpr collect_rewrite_expr_expected(SpannedExpr sexpr, SpannedType expecte
             # reconstruction idiom (cf. meta.gg `subst_expr`:481). Moving the
             # Box binding directly (`!recv`) reads as an untracked source at the
             # EnumInit consume site.
-            return SpannedExpr(EMethodCall(Box(*recv), new_name, margs, marg_names, new_targs), ispan)
+            return SpannedExpr(EMethodCall(Box(*recv), new_name, margs, new_targs), ispan)
         else:
             return SpannedExpr(collect_rewrite_expr(sexpr.expr, &fn_param_types), ispan)
 
@@ -2959,7 +2959,7 @@ Vector[Stmt] collect_rewrite_stmts(Vector[Stmt] stmts, SpannedType ret_ty, Dict[
 # nested position re-establishes one (a call arg, or a statement-list arm).
 Expr collect_rewrite_expr(Expr e, Dict[String, Vector[SpannedType]] &fn_param_types):
     match e:
-        case ECall(callee_box, cargs, carg_names, ctargs):
+        case ECall(callee_box, cargs, ctargs):
             # Free-call args: rewrite each against the callee's declared param
             # type when the callee is a known free function.
             String callee_name = ""
@@ -2968,20 +2968,21 @@ Expr collect_rewrite_expr(Expr e, Dict[String, Vector[SpannedType]] &fn_param_ty
                     callee_name = cn
                 else:
                     pass
-            Vector[SpannedExpr] nargs = Vector[SpannedExpr]()
+            Vector[CallArg] nargs = Vector[CallArg]()
             int ci = 0
             while ci < cargs.len():
-                SpannedExpr arg = cargs.get(ci).unwrap()
+                CallArg carg = cargs.get(ci).unwrap()
+                SpannedExpr arg = carg.value
                 bool arg_done = false
                 if callee_name != "" and fn_param_types.contains(callee_name):
                     Vector[SpannedType] ptys = fn_param_types.get(callee_name).unwrap()
                     if ci < ptys.len():
-                        nargs.push(collect_rewrite_expr_expected(arg, ptys.get(ci).unwrap(), &fn_param_types))
+                        nargs.push(CallArg(carg.name, carg.ownership, collect_rewrite_expr_expected(arg, ptys.get(ci).unwrap(), &fn_param_types)))
                         arg_done = true
                 if not arg_done:
-                    nargs.push(SpannedExpr(collect_rewrite_expr(arg.expr, &fn_param_types), arg.span))
+                    nargs.push(CallArg(carg.name, carg.ownership, SpannedExpr(collect_rewrite_expr(arg.expr, &fn_param_types), arg.span)))
                 ci = ci + 1
-            return ECall(Box(*callee_box), nargs, carg_names, ctargs)
+            return ECall(Box(*callee_box), nargs, ctargs)
         case EClosure(params, body):
             return EClosure(params, collect_rewrite_stmts(body, no_type(), &fn_param_types))
         case EBlock(body):

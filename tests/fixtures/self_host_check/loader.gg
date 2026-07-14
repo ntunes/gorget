@@ -135,7 +135,7 @@ bool expr_mentions_iter(SpannedExpr sexpr):
     match sexpr.expr:
         case EIdentifier(name):
             return is_iter_trigger_name(name)
-        case EMethodCall(obj, method_name, args, _, _):
+        case EMethodCall(obj, method_name, args, _):
             # `.iter()` triggers loading std.iter (Iterable trait + adapters).
             # `.drain()` does the same (Drainable trait + drain iterators).
             # Mirrors src/loader.rs:315.
@@ -145,17 +145,17 @@ bool expr_mentions_iter(SpannedExpr sexpr):
                 return true
             int i = 0
             while i < args.len():
-                SpannedExpr a = args.get(i).unwrap()
+                SpannedExpr a = args.get(i).unwrap().value
                 if expr_mentions_iter(a):
                     return true
                 i += 1
             return false
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             if expr_mentions_iter(SpannedExpr((*callee).expr, (*callee).span)):
                 return true
             int i = 0
             while i < args.len():
-                SpannedExpr a = args.get(i).unwrap()
+                SpannedExpr a = args.get(i).unwrap().value
                 if expr_mentions_iter(a):
                     return true
                 i += 1

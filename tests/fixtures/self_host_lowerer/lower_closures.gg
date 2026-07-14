@@ -760,7 +760,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
                 if nl_ec.category == ENUM_CAT_OPTION:
                     return expected_type
             return UNIT_TYPE
-        case ECall(callee_box, args, _, targs):
+        case ECall(callee_box, args, targs):
             match (*callee_box).expr:
                 case ENoneLiteral():
                     # `None()` with parens parses as ECall(callee=ENoneLiteral)
@@ -782,7 +782,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
                         return UNIT_TYPE
                     # Enum variant constructors: Some(x) → Option__T, Ok(x)/Error(x) → Result
                     if fname == "Some" and args.len() == 1:
-                        SpannedExpr inner_arg = args.get(0).unwrap()
+                        SpannedExpr inner_arg = args.get(0).unwrap().value
                         # The Some PAYLOAD is an inner constructor arg, NOT a tail
                         # position — its own type is inferred standalone (`-1`),
                         # then wrapped here into Option__<payload>. (Only TAIL
@@ -833,7 +833,7 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
                         return gmod.fn_sigs.get(call_name).unwrap()
                 else:
                     pass
-        case EMethodCall(recv, mname, margs, _, _):
+        case EMethodCall(recv, mname, margs, _):
             # Known void methods
             if mname == "push" or mname == "set" or mname == "put" or mname == "clear" or mname == "pop" or mname == "sort" or mname == "append" or mname == "insert" or mname == "remove":
                 return UNIT_TYPE
@@ -941,18 +941,18 @@ bool expr_has_it(SpannedExpr sexpr):
             return expr_has_it(*lhs) or expr_has_it(*rhs)
         case EUnaryOp(_, inner):
             return expr_has_it(*inner)
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             if expr_has_it(*callee):
                 return true
             for a in args:
-                if expr_has_it(a):
+                if expr_has_it(a.value):
                     return true
             return false
-        case EMethodCall(obj, _, args, _, _):
+        case EMethodCall(obj, _, args, _):
             if expr_has_it(*obj):
                 return true
             for a in args:
-                if expr_has_it(a):
+                if expr_has_it(a.value):
                     return true
             return false
         case EIf(cond, _, _):
@@ -1054,18 +1054,18 @@ bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, Gi
             return closure_expr_has_capture(*rhs, in_scope, &gmod)
         case EUnaryOp(_, inner):
             return closure_expr_has_capture(*inner, in_scope, &gmod)
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             if closure_expr_has_capture(*callee, in_scope, &gmod):
                 return true
             for a in args:
-                if closure_expr_has_capture(a, in_scope, &gmod):
+                if closure_expr_has_capture(a.value, in_scope, &gmod):
                     return true
             return false
-        case EMethodCall(obj, _, args, _, _):
+        case EMethodCall(obj, _, args, _):
             if closure_expr_has_capture(*obj, in_scope, &gmod):
                 return true
             for a in args:
-                if closure_expr_has_capture(a, in_scope, &gmod):
+                if closure_expr_has_capture(a.value, in_scope, &gmod):
                     return true
             return false
         case EFieldAccess(obj, _):
@@ -1399,7 +1399,7 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
             cc_collect_expr(&ctx, *rhs, in_scope, &gmod, &cc)
         case EUnaryOp(_, inner):
             cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             # A bare-identifier CALLEE is a FUNCTION reference, not a value
             # capture — `print(s)` / `helper(x)` name a builtin/top-level fn
             # in the function namespace, NOT an outer local. Recursing into
@@ -1412,11 +1412,11 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
             if not cc_callee_is_free_fn(&ctx, *callee, in_scope, &gmod):
                 cc_collect_expr(&ctx, *callee, in_scope, &gmod, &cc)
             for a in args:
-                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
-        case EMethodCall(obj, _, args, _, _):
+                cc_collect_expr(&ctx, a.value, in_scope, &gmod, &cc)
+        case EMethodCall(obj, _, args, _):
             cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
             for a in args:
-                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
+                cc_collect_expr(&ctx, a.value, in_scope, &gmod, &cc)
         case EFieldAccess(obj, _):
             cc_collect_expr(&ctx, *obj, in_scope, &gmod, &cc)
         case EIndex(obj, idx):
@@ -1658,18 +1658,18 @@ bool expr_has_nested_closure(SpannedExpr sexpr):
             return expr_has_nested_closure(*lhs) or expr_has_nested_closure(*rhs)
         case EUnaryOp(_, inner):
             return expr_has_nested_closure(*inner)
-        case ECall(callee, args, _, _):
+        case ECall(callee, args, _):
             if expr_has_nested_closure(*callee):
                 return true
             for a in args:
-                if expr_has_nested_closure(a):
+                if expr_has_nested_closure(a.value):
                     return true
             return false
-        case EMethodCall(obj, _, args, _, _):
+        case EMethodCall(obj, _, args, _):
             if expr_has_nested_closure(*obj):
                 return true
             for a in args:
-                if expr_has_nested_closure(a):
+                if expr_has_nested_closure(a.value):
                     return true
             return false
         case EFieldAccess(obj, _):

@@ -1,0 +1,27 @@
+# D4/D12 OVER-rejection guard for the RE-ENABLED positions 2 (ctor init) and 3
+# (collection put): an EXPLICIT `!` move at a constructor argument (`W(!a)`) and
+# at a collection put (`v.push(!b)`) transfers ownership — the source is dead, so
+# it is NOT a live-place implicit copy and MUST be accepted. Before the CallArg
+# {name, ownership, value} normalization the self-host `parse_call_args` discarded
+# the arg sigil, so pos-2/pos-3 could not tell `W(!a)` from `W(a)` and had to stay
+# disabled; now the sigil rides on the typed `CallArg.ownership` field (OWN_MOVE),
+# the gate reads it and skips the reject. This is the executable guard the
+# re-enabled positions cannot over-reject. Rust gg accepts these identically.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+struct W:
+    R inner
+
+void main():
+    R a = R(1)
+    W w = W(!a)            # pos-2 ctor move: legal, `a` is dead after the move
+    R b = R(2)
+    Vector[R] v = Vector[R]()
+    v.push(!b)             # pos-3 collection move: legal, `b` is dead after
+    print(w.inner.id)
+    print(v.len())

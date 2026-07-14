@@ -163,7 +163,7 @@ bool expr_mentions_iter(SpannedExpr sexpr):
     match sexpr.expr:
         case EIdentifier(name):
             return name_is_iter_marker(name)
-        case EMethodCall(recv_box, mname, args, _, _):
+        case EMethodCall(recv_box, mname, args, _):
             if mname == "iter" or mname == "drain":
                 return true
             SpannedExpr recv_e = *recv_box
@@ -171,18 +171,18 @@ bool expr_mentions_iter(SpannedExpr sexpr):
                 return true
             int i = 0
             while i < args.len():
-                SpannedExpr a = args.get(i).unwrap()
+                SpannedExpr a = args.get(i).unwrap().value
                 if expr_mentions_iter(a):
                     return true
                 i += 1
             return false
-        case ECall(callee_box, args, _, _):
+        case ECall(callee_box, args, _):
             SpannedExpr callee_e = *callee_box
             if expr_mentions_iter(callee_e):
                 return true
             int i = 0
             while i < args.len():
-                SpannedExpr a = args.get(i).unwrap()
+                SpannedExpr a = args.get(i).unwrap().value
                 if expr_mentions_iter(a):
                     return true
                 i += 1
