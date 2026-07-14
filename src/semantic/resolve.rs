@@ -1484,8 +1484,20 @@ fn resolve_expr(
         | Expr::FloatLiteral(_)
         | Expr::BoolLiteral(_)
         | Expr::NoneLiteral
-        | Expr::SelfExpr
         | Expr::It => {}
+
+        // `self` is bound as an ordinary parameter (DefKind::Variable,
+        // is_param = true) in `resolve_function`. Wire each usage site to
+        // that DefId so the safety layer's place primitives
+        // (`find_root_def_id[_with_path]`) can root self-projected places
+        // (`self.a.b`) for aliasing / move / borrow checks — exactly as
+        // for an identifier-rooted place. `lookup` returns None outside a
+        // method (SelfExpr cannot appear there), leaving behavior unchanged.
+        Expr::SelfExpr => {
+            if let Some(def_id) = scopes.lookup("self") {
+                resolution_map.insert(expr.span.start, def_id);
+            }
+        }
 
         Expr::StringLiteral(_, interp_exprs) => {
             // Resolve each pre-parsed interpolation expression so closure

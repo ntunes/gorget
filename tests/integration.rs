@@ -26854,17 +26854,22 @@ fn place_overlap_read_before_move() {
     run_gg("place_overlap_read_before_move.gg", "7");
 }
 
-// IGNORED — pins the KNOWN self-root gap ("Don't redesign around compiler
-// gaps" rule 2): `g(&self.a, &self.a.b)` overlaps two `self`-rooted writers and
-// SHOULD reject exactly like `f(&n,&n.f)`, but `Expr::SelfExpr` has no
-// resolution_map entry so self-rooted places are skipped. Wiring a SelfExpr
-// resolution path is deferred (risks double-diagnosing self-mutation checks).
-// Expected output = REJECTION; FLIP TO ACTIVE when the gap is closed. See TODO.
+// D10(b) self-root: `g(&self.a, &self.a.b)` overlaps two `self`-rooted writers,
+// rejected exactly like `f(&n,&n.f)`. Now ACTIVE (the SelfExpr→self-DefId
+// resolver write-site fix closed the gap — `resolve.rs` wires SelfExpr to the
+// `self` param DefId so self-rooted places root through `find_root_def_id`).
 #[test]
-#[ignore = "D10(b) self-root gap: SelfExpr has no resolution_map entry, so \
-            f(&self.a, &self.a.b) is not place-overlap-checked (filed in TODO)"]
 fn place_overlap_self_root_error() {
     check_gg_fails("place_overlap_self_root_error.gg", "error[E_BorrowConflict]");
+}
+
+// D10(b) self-root POSITIVE: `&self.a` / `&self.b` are DISJOINT sibling
+// sub-places — no overlap, both writers legal. Regression guard that the
+// SelfExpr→self-DefId fix uses the projection-aware call-site check (not the
+// root-only for-loop check), so disjoint self fields are accepted at a call.
+#[test]
+fn place_overlap_self_root_disjoint() {
+    run_gg("place_overlap_self_root_disjoint.gg", "2\n2\n10\n20");
 }
 
 // IGNORED — pins the UNDECIDED partial-move-widening question: `f(!m.a, !m.b)`

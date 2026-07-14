@@ -1,0 +1,26 @@
+# D10(b) self-root POSITIVE (regression guard for the SelfExpr→self-DefId fix):
+# `&self.a` and `&self.b` are DISJOINT sibling sub-places of `self` (paths
+# diverge at the first segment) — no overlap, so BOTH writers are legal. Confirms
+# the self-root resolution fix roots self-projected places through the same
+# projection-aware `paths_overlap` as any identifier root (the call-site check),
+# NOT the root-only for-loop check — so disjoint self fields are correctly
+# accepted at a call. Mirror of place_overlap_disjoint_siblings.gg.
+struct Holder:
+    Vector[int] a
+    Vector[int] b
+
+void g(Vector[int] &x, Vector[int] &y):
+    x.push(10)
+    y.push(20)
+
+equip Holder:
+    void doit(self):
+        g(&self.a, &self.b)
+
+void main():
+    Holder h = Holder([1], [2])
+    h.doit()
+    print(h.a.len())
+    print(h.b.len())
+    print(h.a.get(1).unwrap())
+    print(h.b.get(1).unwrap())
