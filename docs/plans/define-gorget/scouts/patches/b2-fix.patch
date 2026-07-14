@@ -1,0 +1,549 @@
+diff --git a/tests/fixtures/.gitignore b/tests/fixtures/.gitignore
+index 83edd8f1..123691fb 100644
+--- a/tests/fixtures/.gitignore
++++ b/tests/fixtures/.gitignore
+@@ -47,6 +47,11 @@
+ # *_comparison, runtime_diff) don't feed the negative probes to those drivers.
+ !d12_drop_purity/
+ !d12_drop_purity/*.gg
++# D10(b) same-call place-overlap probe fixtures (B2 self-host mirror): reject
++# set (overlapping writers/movers/non-Copy reads) + accept set (disjoint
++# siblings + writer-Copy-read exemption). Same subdir rationale as d12.
++!d10b_place_overlap/
++!d10b_place_overlap/*.gg
+ # D23 throws-totality cross-module negative fixture (a `throws` equip method
+ # imported across a module boundary, called unhandled → E_UnhandledThrows).
+ !d23_unhandled_method_xmod/
+diff --git a/tests/fixtures/d10b_place_overlap/disjoint_siblings_accept.gg b/tests/fixtures/d10b_place_overlap/disjoint_siblings_accept.gg
+new file mode 100644
+index 00000000..210c087c
+--- /dev/null
++++ b/tests/fixtures/d10b_place_overlap/disjoint_siblings_accept.gg
+@@ -0,0 +1,20 @@
++# D10(b) over-rejection guard: two `&` writers of DISJOINT sibling sub-places
++# (`&m.a` and `&m.b`) do NOT overlap — their projection paths (["a"] vs ["b"])
++# share the root `m` but diverge at the first segment, so neither is a prefix
++# of the other. Legal: two independent exclusive-write paths to distinct
++# fields. Must ACCEPT and lower. Guards the `paths_overlap_vec` prefix test
++# against over-firing on same-root-but-disjoint places.
++struct M:
++    Vector[int] a
++    Vector[int] b
++
++void f(Vector[int] &x, Vector[int] &y):
++    x.push(1)
++    y.push(2)
++
++void run():
++    M m = M(Vector[int](), Vector[int]())
++    f(&m.a, &m.b)
++
++void main():
++    run()
+diff --git a/tests/fixtures/d10b_place_overlap/double_move_reject.gg b/tests/fixtures/d10b_place_overlap/double_move_reject.gg
+new file mode 100644
+index 00000000..4ab54557
+--- /dev/null
++++ b/tests/fixtures/d10b_place_overlap/double_move_reject.gg
+@@ -0,0 +1,25 @@
++# D10(b) place-overlap — the MOVER-MOVER arm (`f(!n, !n)`): moving the same
++# place twice in one call is the MAXIMAL place-overlap ("at most one writer OR
++# mover"). The self-host REJECTS it here with the overlap diagnostic.
++#
++# ⚠ SELF-HOST-TARGETED rejection test — NOT in the cross-compiler exact-code
++# conformance lane. Production Rust gg + ggdef reject the identical program one
++# pass EARLIER via `E_DoubleMove` (their move-tracker preempts place-overlap).
++# The self-host has NO upstream move-tracker yet (the liveness axis is a filed
++# HIGH track), so the faithful mirror of the FULL D10 rule lets this arm fire —
++# reject-with-a-different-code strictly beats ACCEPT. When the self-host
++# liveness pass lands it preempts this arm (ratified pass-order rider: liveness
++# precedes aliasing) and the diagnostic flips to the E_DoubleMove code. Owner
++# ruling "B2 SCOPE + LIVENESS-PASS" 2026-07-14.
++struct N:
++    Vector[int] data
++
++void f(N !a, N !b):
++    pass
++
++void run():
++    N n = N(Vector[int]())
++    f(!n, !n)
++
++void main():
++    run()
+diff --git a/tests/fixtures/d10b_place_overlap/move_noncopyread_reject.gg b/tests/fixtures/d10b_place_overlap/move_noncopyread_reject.gg
+new file mode 100644
+index 00000000..659cc185
+--- /dev/null
++++ b/tests/fixtures/d10b_place_overlap/move_noncopyread_reject.gg
+@@ -0,0 +1,18 @@
++# D10(b) place-overlap: a mover of the WHOLE place and a NON-Copy bare read of
++# a SUB-place under it (`f(!n, n.data)` where `n.data` is a `Vector[int]`, not
++# Copy). The bare read is a live alias into the moved-away value's region —
++# rejected with the overlap diagnostic. The Copy/non-Copy cut is on the read's
++# TYPE (`Vector[int]` owns a buffer → non-Copy), read via the typed axis, not
++# the syntactic shape.
++struct N:
++    Vector[int] data
++
++void f(N !a, Vector[int] b):
++    pass
++
++void run():
++    N n = N(Vector[int]())
++    f(!n, n.data)
++
++void main():
++    run()
+diff --git a/tests/fixtures/d10b_place_overlap/read_move_reject.gg b/tests/fixtures/d10b_place_overlap/read_move_reject.gg
+new file mode 100644
+index 00000000..0e35e96e
+--- /dev/null
++++ b/tests/fixtures/d10b_place_overlap/read_move_reject.gg
+@@ -0,0 +1,18 @@
++# D10(b) place-overlap: a NON-Copy bare read and a mover of the same place
++# (`g(n, !n)`). Under CoW-default, a bare non-Copy read is a live borrow into
++# the value for the whole call — a live alias overlapping a mover, which is the
++# divergence channel. Rejected with the overlap diagnostic. (Contrast a Copy
++# bare read, which is a value snapshot and participates in no overlap — see
++# `writer_copyread_accept.gg`.)
++struct N:
++    Vector[int] data
++
++void g(N x, N !y):
++    pass
++
++void run():
++    N n = N(Vector[int]())
++    g(n, !n)
++
++void main():
++    run()
+diff --git a/tests/fixtures/d10b_place_overlap/writer_copyread_accept.gg b/tests/fixtures/d10b_place_overlap/writer_copyread_accept.gg
+new file mode 100644
+index 00000000..555d2712
+--- /dev/null
++++ b/tests/fixtures/d10b_place_overlap/writer_copyread_accept.gg
+@@ -0,0 +1,22 @@
++# D10(b) over-rejection guard — the writer-Copy-read exemption: a `&` writer of
++# the whole place and a bare read of an overlapping COPY sub-place
++# (`f(&s, s.tag)` where `s.tag` is an `int`). The Copy read is evaluated at the
++# call site into an INDEPENDENT value before the callee runs — no live memory
++# edge remains between it and the writer's region, so there is nothing to
++# diverge against. The rule ranges over LIVE ALIASES, not syntactic reads:
++# a Copy-typed bare read participates in no overlap (D10(b) ADDENDUM +
++# Rider 1 REVISED). Must ACCEPT and lower. Copy-ness is read from the TYPED
++# axis (`int` → scalar primitive → Copy), never the value shape.
++struct S:
++    Vector[int] data
++    int tag
++
++void f(S &a, int t):
++    a.data.push(t)
++
++void run():
++    S s = S(Vector[int](), 7)
++    f(&s, s.tag)
++
++void main():
++    run()
+diff --git a/tests/fixtures/d10b_place_overlap/writer_subfield_reject.gg b/tests/fixtures/d10b_place_overlap/writer_subfield_reject.gg
+new file mode 100644
+index 00000000..dd7c7dcc
+--- /dev/null
++++ b/tests/fixtures/d10b_place_overlap/writer_subfield_reject.gg
+@@ -0,0 +1,18 @@
++# D10(b) place-overlap: a `&` writer of the WHOLE place and a `&` writer of a
++# SUB-place under it (`&n` and `&n.data`). The projection path of `n.data`
++# (["data"]) is prefixed by the empty path of `n`, so the places overlap — two
++# live writable paths, one nested in the other. Rejected with the overlap
++# diagnostic. Exercises the projection-path prefix test (`paths_overlap_vec`).
++struct N:
++    Vector[int] data
++
++void h(N &a, Vector[int] &b):
++    a.data.push(1)
++    b.push(2)
++
++void run():
++    N n = N(Vector[int]())
++    h(&n, &n.data)
++
++void main():
++    run()
+diff --git a/tests/fixtures/d10b_place_overlap/writer_writer_reject.gg b/tests/fixtures/d10b_place_overlap/writer_writer_reject.gg
+new file mode 100644
+index 00000000..c851d873
+--- /dev/null
++++ b/tests/fixtures/d10b_place_overlap/writer_writer_reject.gg
+@@ -0,0 +1,17 @@
++# D10(b) place-overlap: two `&` writers of the SAME whole place in one call.
++# `f(&n, &n)` gives the callee two exclusive-write paths to `n` — the
++# lazy/eager CoW-divergence channel D10 exists to close. Rejected with the
++# borrow-conflict (overlap) diagnostic. Mirrors Rust `check_call_aliasing`
++# + ggdef `check_arg_place_overlap`.
++struct N:
++    Vector[int] data
++
++void f(N &a, N &b):
++    a.data.push(1)
++
++void run():
++    N n = N(Vector[int]())
++    f(&n, &n)
++
++void main():
++    run()
+diff --git a/tests/fixtures/self_host_typechecker/diagnostic.gg b/tests/fixtures/self_host_typechecker/diagnostic.gg
+index c8715724..d9893faa 100644
+--- a/tests/fixtures/self_host_typechecker/diagnostic.gg
++++ b/tests/fixtures/self_host_typechecker/diagnostic.gg
+@@ -56,6 +56,7 @@ enum DiagKind:
+     DkPrimitiveTraitImpl   # `equip <scalar-primitive> with Trait` — no addressable self
+     DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
+     DkMoveWithoutOperator  # D4/D12: implicit copy of a live drop-tainted place at an ownership boundary
++    DkBorrowConflict       # D10(b): two call args whose places overlap under conflicting sigils
+ 
+     # Reserved for future migrators (kept so the type doesn't churn
+     # when lowerer sites migrate).
+@@ -119,6 +120,8 @@ String diag_kind_str(DiagKind kind):
+             return "local-borrow-bind"
+         case DkMoveWithoutOperator():
+             return "move-without-operator"
++        case DkBorrowConflict():
++            return "borrow-conflict"
+         case DkUnreachable():
+             return "unreachable"
+ 
+diff --git a/tests/fixtures/self_host_typechecker/typecheck.gg b/tests/fixtures/self_host_typechecker/typecheck.gg
+index 9d173659..cb7b7f95 100644
+--- a/tests/fixtures/self_host_typechecker/typecheck.gg
++++ b/tests/fixtures/self_host_typechecker/typecheck.gg
+@@ -34,8 +34,8 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get
+ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
+ from resolve import ResolveContext
+ from infer import infer_expr_type, infer_closure_return_type
+-from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution
+-from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator
++from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name
++from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
+ 
+ # ── Fallback def lookup by name ──────────────────────────────
+ # Scans all definitions for a matching name (and optionally DkFunction kind).
+@@ -726,6 +726,163 @@ Option[int] place_root_def_spanned(SpannedExpr e, ScopeTable scopes, ResolveCont
+         else:
+             return None()
+ 
++# ── D10(b) same-call PLACE-OVERLAP rejection ─────────────────
++# Mirror Rust `check_call_aliasing` (src/semantic/safety/helpers.rs:1179) and
++# ggdef `check_arg_place_overlap` (spec/ggdef/src/elaborate/mod.rs:1076). Two
++# call args whose PLACES overlap under CONFLICTING sigils are rejected — a
++# place has one exclusive writer. The rule ranges over LIVE ALIASES: a
++# Copy-typed BARE read is a value snapshot and participates in no overlap
++# (D10(b) ADDENDUM + Rider 1 REVISED 2026-07-14). This is the FULL D10 rule —
++# the mover-mover arm is IN (owner ruling "B2 SCOPE + LIVENESS-PASS" 2026-07-14):
++# `f(!x, !x)` (same-root overlapping movers) is the MAXIMAL place-overlap and is
++# REJECTED here with the overlap code. Production's Rust `check_call_aliasing`
++# EXCLUDES `(Move,Move)` only because `E_DoubleMove` preempts it one pass earlier;
++# the self-host has NO upstream move-tracker, so the faithful mirror lets the arm
++# FIRE (reject-with-a-different-code strictly beats ACCEPT). Interim divergence
++# (self-host overlap-code vs production/ggdef `E_DoubleMove`) is FILED in the
++# self-host-liveness HIGH track (TODO.md); when liveness lands it preempts this arm
++# per the ratified pass-order rider (liveness precedes aliasing). The
++# mover-then-Copy-read case (`f(!x, x.copy_field)`) stays EXEMPT — the Copy read is
++# a SNAPSHOT, not an alias, so it is dropped before the conflict test (only `!x`
++# remains → no pair → accept); production/ggdef reject it via E_UseAfterMove, which
++# is the LIVENESS axis's job (also filed). Reads the TYPED per-arg
++# `CallArg.ownership` — never shape-matches the value (owner directive; layering
++# rule 2 typed-not-shape).
++
++# One collected place arg (mirror Rust/ggdef `struct P`). `root` is the binding
++# NAME (the self-host does not rename bindings, so the identifier text IS the
++# root — matches ggdef's String-keyed root and handles `self` uniformly).
++struct ArgPlace:
++    String root
++    Vector[String] path
++    int ownership
++    bool is_copy
++    Span span
++
++# The projection PATH (outer-to-inner field/tuple segments) of a place expr, or
++# None for a non-place (fresh temp, literal, `.clone()`, `.get()`). Tuple fields
++# parse as EFieldAccess with numeric-string names ("0"), so no special case is
++# needed. EIndex COLLAPSES to the collection root (an index borrow is from the
++# collection itself — conservative); `x[a..b]` (a slice) is NOT a place. Mirrors
++# ggdef `ast_place` / Rust `find_root_def_id_with_path`.
++Option[Vector[String]] place_projection_path(Expr e):
++    match e:
++        case EIdentifier(_):
++            return Some(Vector[String]())
++        case ESelfExpr():
++            return Some(Vector[String]())
++        case EFieldAccess(obj, fname):
++            match place_projection_path((*obj).expr):
++                case Some(inner):
++                    Vector[String] path = Vector[String]()
++                    for s in inner:
++                        path.push(s)
++                    path.push(fname)
++                    return Some(path)
++                else:
++                    return None()
++        case EIndex(obj, index):
++            bool is_range = false
++            match (*index).expr:
++                case ERange(_, _, _):
++                    is_range = true
++                else:
++                    pass
++            if is_range:
++                return None()
++            return place_projection_path((*obj).expr)
++        else:
++            return None()
++
++# Two projection paths under the SAME root OVERLAP iff one is a prefix of the
++# other (zip stops at the shorter). Disjoint siblings (`a` vs `b`) do NOT
++# overlap; an empty path (the whole binding) overlaps every sub-place.
++bool paths_overlap_vec(Vector[String] a, Vector[String] b):
++    int m = a.len()
++    if b.len() < m:
++        m = b.len()
++    int i = 0
++    while i < m:
++        if a.get(i).unwrap() != b.get(i).unwrap():
++            return false
++        i = i + 1
++    return true
++
++# Render a place with its call-arg sigil for the diagnostic (`&p`/`!p`/bare).
++String render_place_sig(int own, String root, Vector[String] path):
++    String s = root
++    for seg in path:
++        s = s + "." + seg
++    if own == OWN_MUTABLE:
++        return "&" + s
++    if own == OWN_MOVE:
++        return "!" + s
++    return s
++
++# Copy-ness of the arg VALUE via the TYPED axis (Rider 2 — NO shape heuristic):
++# a scalar primitive (`RTPrimitive` with a scalar name) is Copy; Str / String /
++# collections / structs own a buffer and are NOT. Mirrors ggdef's
++# `matches!(infer_ast_ty(..), Ty::Prim)`. Unknown → non-Copy (conservative).
++bool arg_place_is_copy(SpannedExpr e, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
++    int t = infer_expr_type(e, scopes, &types, &ctx)
++    if t < 0 or t >= types.types.len():
++        return false
++    ResolvedType rt = get_rtype_at(types.types, t)
++    match rt:
++        case RTPrimitive(name):
++            return is_scalar_primitive_name(name)
++        else:
++            return false
++
++# Reject two call args whose places overlap under conflicting sigils.
++void check_call_aliasing(Vector[CallArg] args, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
++    Vector[ArgPlace] places = Vector[ArgPlace]()
++    for a in args:
++        match place_projection_path(a.value.expr):
++            case Some(path):
++                String rname = place_root_name(a.value.expr)
++                # Only LOCAL-variable roots (+`self`) participate — a call name /
++                # const / variant root is skipped. Mirrors production's
++                # `DkVariable` root filter and ggdef's `root == "self" ||
++                # local_names.contains`.
++                bool is_local = false
++                if rname == "self":
++                    is_local = true
++                elif place_root_def_spanned(a.value, scopes, ctx) is Some(rdid):
++                    match scopes.get_def(rdid).kind:
++                        case DkVariable():
++                            is_local = true
++                        else:
++                            pass
++                if is_local:
++                    bool cpy = arg_place_is_copy(a.value, scopes, &types, &ctx)
++                    places.push(ArgPlace(rname, path, a.ownership, cpy, a.value.span))
++            else:
++                pass
++    int n = places.len()
++    int i = 0
++    while i < n:
++        int j = i + 1
++        while j < n:
++            ArgPlace x = places.get(i).unwrap()
++            ArgPlace y = places.get(j).unwrap()
++            if x.root == y.root and paths_overlap_vec(x.path, y.path):
++                bool x_copy_reader = x.ownership == OWN_BORROW and x.is_copy
++                bool y_copy_reader = y.ownership == OWN_BORROW and y.is_copy
++                # NO `(Move,Move)` skip here (owner ruling — the mover-mover arm is
++                # IN): the general "(≥1 writer/mover) ∧ ¬both-bare" rule flags
++                # same-root overlapping movers (`f(!x,!x)`). Copy bare readers are
++                # already dropped above, so `f(!x, x.copy_field)` leaves only `!x`
++                # → no pair → accept (the mover-Copy exemption falls out for free).
++                bool has_wm = x.ownership == OWN_MUTABLE or x.ownership == OWN_MOVE or y.ownership == OWN_MUTABLE or y.ownership == OWN_MOVE
++                bool both_bare = x.ownership == OWN_BORROW and y.ownership == OWN_BORROW
++                if not x_copy_reader and not y_copy_reader and has_wm and not both_bare:
++                    String pa = render_place_sig(x.ownership, x.root, x.path)
++                    String pb = render_place_sig(y.ownership, y.root, y.path)
++                    ctx.diagnostics.push(Diagnostic.error(y.span, DkBorrowConflict(), "cannot pass `" + pa + "` and `" + pb + "` in the same call — their places overlap"))
++            j = j + 1
++        i = i + 1
++
+ # D12 position 6 (materialize-on-write): a write through a bare BORROW-view
+ # param of a drop-tainted type would privatise (materialize) an implicit
+ # copy — rejected. Fires on a FIELD/INDEX write target (`s.id = 9`,
+@@ -1114,6 +1271,8 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes,
+                 if call_is_ctor and a.ownership == OWN_BORROW:
+                     reject_tainted_place(a.value, scopes, &types, &ctx)
+                 check_carrier_ops_expr(a.value, scope_id, &scopes, &types, &ctx)
++            # D10(b): same-call place-overlap rejection (args only, not callee).
++            check_call_aliasing(args, scopes, &types, &ctx)
+         case EMethodCall(receiver, method_name, args, _targs):
+             check_carrier_ops_expr(*receiver, scope_id, &scopes, &types, &ctx)
+             # D12 position 6 sibling: a `&self` mutator on a tainted borrow-
+@@ -1130,6 +1289,9 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes,
+                 if ingest and a.ownership == OWN_BORROW:
+                     reject_tainted_place(a.value, scopes, &types, &ctx)
+                 check_carrier_ops_expr(a.value, scope_id, &scopes, &types, &ctx)
++            # D10(b): same-call place-overlap rejection (explicit args only —
++            # the receiver is not aliasing-checked against args, per Rust).
++            check_call_aliasing(args, scopes, &types, &ctx)
+         case EFieldAccess(object, _field):
+             check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)
+         case EIndex(object, index):
+diff --git a/tests/integration.rs b/tests/integration.rs
+index 36da100c..da43861a 100644
+--- a/tests/integration.rs
++++ b/tests/integration.rs
+@@ -18667,6 +18667,129 @@ fn self_host_driver_accepts_d12_legal() {
+     }
+ }
+ 
++// B2 — D10(b) same-call PLACE-OVERLAP rejection in the self-host typechecker
++// (`check_call_aliasing`, self_host_typechecker/typecheck.gg). Two call args
++// whose PLACES overlap under conflicting sigils have two live paths to one
++// exclusive-write place — the lazy/eager CoW-divergence channel D10 closes.
++// Mirrors Rust `check_call_aliasing` + ggdef `check_arg_place_overlap`.
++// Contract per reject fixture: non-zero exit, the overlap codespan diagnostic
++// on stderr ("their places overlap" + the box rule), and NO C on stdout (the
++// gate halts BEFORE lowering). The self-host renderer has no `error[E_…]`
++// codes (a pre-existing property of every self-host diagnostic), so the
++// assertion is on the message TEXT + box rule, not a code.
++//
++// NOTE on `double_move_reject` (`f(!n,!n)` — the mover-mover arm): this is a
++// SELF-HOST-TARGETED rejection test, deliberately OUT of the cross-compiler
++// exact-code conformance lane. Production Rust gg + ggdef reject the identical
++// program one pass earlier via `E_DoubleMove` (their move-tracker preempts
++// place-overlap); the self-host has no move-tracker yet (filed HIGH liveness
++// track), so the faithful mirror of the FULL D10 rule lets the arm fire with
++// the overlap code — reject-with-a-different-code strictly beats ACCEPT. When
++// the self-host liveness pass lands it preempts this arm (ratified pass-order
++// rider) and the diagnostic flips to E_DoubleMove. Owner ruling "B2 SCOPE +
++// LIVENESS-PASS" 2026-07-14.
++#[test]
++#[serial(self_host_lowerer_driver)]
++fn self_host_driver_rejects_d10b_place_overlap() {
++    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
++    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
++    let lib_dir = manifest_dir.join("lib");
++    let reject_fixtures = [
++        // two `&` writers of the same whole place
++        "writer_writer_reject",
++        // `&` writer of the whole place + `&` writer of a sub-place under it
++        "writer_subfield_reject",
++        // non-Copy bare read + mover of the same place
++        "read_move_reject",
++        // mover of the whole place + non-Copy bare read of a sub-place
++        "move_noncopyread_reject",
++        // the mover-mover arm — self-host-targeted rejection (see NOTE above)
++        "double_move_reject",
++    ];
++    for name in reject_fixtures {
++        let fixture = manifest_dir.join(format!("tests/fixtures/d10b_place_overlap/{name}.gg"));
++        assert!(fixture.exists(), "missing D10(b) reject fixture: {}", fixture.display());
++        let out = run_with_timeout(
++            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
++            "self_host_driver_rejects_d10b_place_overlap",
++        );
++        let stderr = String::from_utf8_lossy(&out.stderr);
++        let stdout = String::from_utf8_lossy(&out.stdout);
++        assert!(
++            !out.status.success(),
++            "self-host driver ACCEPTED an overlapping-place call `{name}` \
++             (D10(b) place-overlap enforcement in self_host_typechecker/typecheck.gg \
++             regressed). exit={:?}\nstderr:\n{stderr}",
++            out.status.code(),
++        );
++        assert!(
++            stderr.contains("their places overlap") && stderr.contains('\u{250c}'),
++            "self-host driver rejected `{name}` but emitted no D10(b) codespan \
++             diagnostic (expected `their places overlap` + the box rule).\n\
++             stderr:\n{stderr}",
++        );
++        assert!(
++            stdout.trim().is_empty(),
++            "self-host driver emitted C for rejected `{name}` — the gate must halt \
++             BEFORE lowering. stdout bytes={}",
++            stdout.len(),
++        );
++    }
++}
++
++// Over-rejection guard for B2: the self-host driver must ACCEPT the LEGAL
++// place-overlap counterparts — DISJOINT sibling writers (`&m.a`,`&m.b`) whose
++// projection paths do not prefix each other, and a `&` writer + a COPY bare
++// read of an overlapping sub-place (`&s`,`s.tag`), where the Copy read is a
++// value snapshot that participates in no overlap (D10(b) ADDENDUM + Rider 1
++// REVISED). The bootstrap proves no UNDER-rejection regression in the
++// self-host source, but is silent to an OVER-rejection (self-host source has
++// no overlapping-place calls); this fixture is the executable guard an
++// over-rejection cannot pass.
++//
++// NOTE: there is deliberately NO fixture for the mover-Copy case
++// (`f(!s, s.tag)`). That program ACCEPTS self-host-side today ONLY because of
++// the known, filed missing liveness axis (production/ggdef reject it via
++// E_UseAfterMove). An ACCEPT fixture would assert exit-0 as the EXPECTED
++// behavior — blessing the buggy accept (the "lock-in" anti-pattern). It is
++// pinned in the liveness track as an `#[ignore]`d SHOULD-reject fixture, not
++// here.
++#[test]
++#[serial(self_host_lowerer_driver)]
++fn self_host_driver_accepts_d10b_place_overlap() {
++    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
++    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
++    let lib_dir = manifest_dir.join("lib");
++    let legal_fixtures = [
++        // disjoint sibling writers — same root, non-prefix paths
++        "disjoint_siblings_accept",
++        // writer + Copy bare read of an overlapping sub-place (the exemption)
++        "writer_copyread_accept",
++    ];
++    for name in legal_fixtures {
++        let fixture = manifest_dir.join(format!("tests/fixtures/d10b_place_overlap/{name}.gg"));
++        assert!(fixture.exists(), "missing D10(b) legal fixture: {}", fixture.display());
++        let out = run_with_timeout(
++            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
++            "self_host_driver_accepts_d10b_place_overlap",
++        );
++        let stderr = String::from_utf8_lossy(&out.stderr);
++        let stdout = String::from_utf8_lossy(&out.stdout);
++        assert!(
++            out.status.success(),
++            "self-host driver REJECTED a LEGAL D10(b) program `{name}` — an \
++             over-rejection in self_host_typechecker/typecheck.gg. exit={:?}\n\
++             stderr:\n{stderr}",
++            out.status.code(),
++        );
++        assert!(
++            !stdout.trim().is_empty(),
++            "self-host driver accepted `{name}` but emitted no C — the legal path \
++             must lower. stderr:\n{stderr}",
++        );
++    }
++}
++
+ // Companion to `self_host_driver_rejects_invalid_program`, exercising the
+ // positional-after-named diagnostic (the self-host typecheck now REJECTS
+ // `f(a=1, 2)`, matching Rust gg — see `positional_after_named_error()` for

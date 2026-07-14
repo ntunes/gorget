@@ -349,12 +349,29 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    `place_overlap_self_root_disjoint` POS added. FULL C **1629/0** + LLVM **1629/0**. Scout
    `scout-selfroot.md`, brief `wave-selfroot-brief.md` (3-pass gauntlet), patch `scouts/patches/selfroot-fix.patch`.
    2 owner Qs filed (Medium): for-loop root-granularity (self AND locals); partial-self-move.
-   ⏭ **NEXT — B2** = the self-host mirror in `check_carrier_ops` (ECall/EMethodCall arms), consuming
-   `arg.ownership` from the CallArg record (owner: HONOR the CallArg model — read `arg.ownership`,
-   NEVER shape-match); needs a ~15-line place-extractor + the pairwise check + a `DkBorrowConflict`
-   diag kind; rebases onto A2-S's walker; bootstrap-gated; mirror B1's negatives into the self-host
-   lane expectations. Scout `scouts/scout-batch-b.md`; ruling `decisions.md` LOG 2026-07-12 "D10(b)
-   ADDENDUM" + the "⚠ RIDER 1 REVISED 2026-07-14" note.
+   ✅ **B2 self-host place-overlap MIRROR LANDED `629ca465` (2026-07-14)** — `check_call_aliasing`
+   mirrored into the self-host `check_carrier_ops_expr` (ECall/EMethodCall arms), reads typed
+   `arg.ownership` (no shape-match), name-keyed root (self free), typed Copy exemption
+   (`is_scalar_primitive_name`). Per the owner ruling the mover-mover arm is IN (`f(!x,!x)` rejects
+   with the overlap code; `f(!x,x.copy_field)` exempt). Two interim divergences (vs production
+   E_DoubleMove/E_UseAfterMove) FILED to the liveness track, converge when it lands (pass-order rider).
+   FULL C **1631/0**, bootstrap ok (645s), self-host lanes 41/0. 7 d10b fixtures. Brief `wave-b2-brief.md`
+   (3-pass gauntlet), scout `scout-b2.md`, patch `scouts/patches/b2-fix.patch`. **✅ Batch B's
+   PLACE-OVERLAP axis is COMPLETE in all three compilers (Rust B1 + ggdef + self-host B2).**
+   ⏭ **NEXT TRACK — the self-host LIVENESS / use-after-move pass (owner-ruled, HIGH, one big gauntlet).**
+   SCOUT DONE (`scout-liveness.md`, prototype `scouts/patches/liveness-proto.patch`): FEASIBLE, blast
+   radius 0 (the +403-line proto over the whole self-host source emits ZERO diagnostics; 12/12 probes
+   match Rust; nested/branch-merge/re-init work). The proto IS the core. **OWNER DECISIONS 2026-07-14
+   (all folded into the TODO liveness entry):** (1) UNIFY IN THE SAME GAUNTLET — one `check_safety_stmts`
+   walk with drop-purity (A2-S) + place-overlap (B2) + liveness as arms (mirror `src/semantic/safety/`;
+   pass-order: liveness before aliasing → `f(!x,!x)` becomes a double-move preempting B2's mover-mover
+   arm, converging the divergence); (2) INCLUDE `!self`-consuming receivers + ConsumeCallable; (3) ADD
+   loop-local precision (not clone-and-discard); (4) the Dict.remove `Option[int]` coalesce MISCOMPILE
+   the scout found = its OWN track (fix in Rust gg + keep the `live_reinit` helper). Acceptance = ggdef's
+   liveness fixtures (`tests.rs:173/1773/1799`) + production negatives. Executor: build to an ISOLATED
+   /tmp path (concurrent-agent scratch contamination bit the scout) + re-run bootstrap in isolation.
+   Own brief→≥3 reviews→executor→output-review from the proven proto. Ruling: `decisions.md` "B2 SCOPE
+   + LIVENESS-PASS + PASS-ORDER" 2026-07-14.
 5. **Batch C** per the wave plan: C1 operators (D26+D28; wire every new token into
    self-host `map_binop` + the anti-OP_ADD ratchet) → C2 fault-catch removal (D25;
    ~2,000-line both-compiler deletion; ships D24 spec prose + §10.5/§10.9 rewrite) →
