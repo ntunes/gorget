@@ -1,0 +1,188 @@
+diff --git a/tests/fixtures/self_host_lowerer/lower_generics.gg b/tests/fixtures/self_host_lowerer/lower_generics.gg
+index aee3097f..6502eba9 100644
+--- a/tests/fixtures/self_host_lowerer/lower_generics.gg
++++ b/tests/fixtures/self_host_lowerer/lower_generics.gg
+@@ -102,7 +102,7 @@ int proto_inst_targ_count(ProtoMethInst pmi):
+ int proto_inst_targ_tid(ProtoMethInst pmi, int i, GirModule &gmod):
+     if pmi.method_targs.len() > 0:
+         return proto_method_targ_tid(pmi.method_targs.get(i).unwrap(), &gmod)
+-    return resolved_to_gir_type(pmi.method_targ_tids.get(i).unwrap(), gmod.tc_types, gmod.tc_scopes, &gmod)
++    return resolved_to_gir_type(pmi.method_targ_tids.get(i).unwrap(), &gmod)
+ 
+ # walk an expression collecting method-generic call sites.
+ void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
+diff --git a/tests/fixtures/self_host_lowerer/lower_types.gg b/tests/fixtures/self_host_lowerer/lower_types.gg
+index 32a77e4b..cd4d13b7 100644
+--- a/tests/fixtures/self_host_lowerer/lower_types.gg
++++ b/tests/fixtures/self_host_lowerer/lower_types.gg
+@@ -273,17 +273,17 @@ String type_to_c_name(SpannedType stype, GirModule &gmod):
+ # at primitive leaves so generic-equip method bodies under active mono
+ # subs translate consistently.
+ 
+-String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModule &gmod):
+-    if rtid < 0 or rtid >= types.types.len():
++String resolved_to_c_name(int rtid, GirModule &gmod):
++    if rtid < 0 or rtid >= gmod.tc_types.types.len():
+         return "int64_t"
+-    ResolvedType rt = types.types.get(rtid).unwrap()
++    ResolvedType rt = gmod.tc_types.types.get(rtid).unwrap()
+     match rt:
+         case RTPrimitive(pname):
+             if gmod.type_subs.contains(pname):
+                 return type_id_to_name(gmod.type_subs.get(pname).unwrap(), &gmod)
+             return prim_to_c_name(pname)
+         case RTDefined(def_id):
+-            DefInfo di = scopes.get_def(def_id)
++            DefInfo di = gmod.tc_scopes.get_def(def_id)
+             String name = di.name
+             if gmod.type_subs.contains(name):
+                 return type_id_to_name(gmod.type_subs.get(name).unwrap(), &gmod)
+@@ -291,10 +291,10 @@ String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModul
+                 return "GorgetString"
+             return name
+         case RTGeneric(def_id, type_args):
+-            DefInfo di = scopes.get_def(def_id)
++            DefInfo di = gmod.tc_scopes.get_def(def_id)
+             String mangled = di.name
+             for arg_rtid in type_args:
+-                String arg_name = resolved_to_c_name(arg_rtid, types, scopes, &gmod)
++                String arg_name = resolved_to_c_name(arg_rtid, &gmod)
+                 mangled = mangled + "__" + arg_name
+             return mangled
+         case RTRef(inner_rtid):
+@@ -306,16 +306,16 @@ String resolved_to_c_name(int rtid, TypeTable types, ScopeTable scopes, GirModul
+             # NOT strip the Ref here anymore: stripping collapsed the borrowed
+             # and owned Option types onto one name and erased the payload's
+             # pointer representation (the shallow-copy unsoundness).
+-            return "Ref__" + resolved_to_c_name(inner_rtid, types, scopes, &gmod)
++            return "Ref__" + resolved_to_c_name(inner_rtid, &gmod)
+         case RTTuple(elem_rtids):
+             String tup_name = "Tuple"
+             for et in elem_rtids:
+-                tup_name = tup_name + "__" + resolved_to_c_name(et, types, scopes, &gmod)
++                tup_name = tup_name + "__" + resolved_to_c_name(et, &gmod)
+             return tup_name
+         case RTArray(elem_rtid, _):
+-            return resolved_to_c_name(elem_rtid, types, scopes, &gmod)
++            return resolved_to_c_name(elem_rtid, &gmod)
+         case RTSlice(elem_rtid):
+-            return resolved_to_c_name(elem_rtid, types, scopes, &gmod)
++            return resolved_to_c_name(elem_rtid, &gmod)
+         case RTFunction(_, _, _):
+             # Lazy-iterator chain-link parity: a function-typed adapter targ
+             # (the `F` of `filter[F]`/`map[U,F]`, inferred from a bare-form
+@@ -380,10 +380,10 @@ int register_tuple_type(Vector[int] elem_tids, GirModule &gmod):
+         gmod.resource_types.put(tup_name.clone(), true)
+     return tup_tid
+ 
+-int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule &gmod):
+-    if rtid < 0 or rtid >= types.types.len():
++int resolved_to_gir_type(int rtid, GirModule &gmod):
++    if rtid < 0 or rtid >= gmod.tc_types.types.len():
+         return I64_TYPE
+-    ResolvedType rt = types.types.get(rtid).unwrap()
++    ResolvedType rt = gmod.tc_types.types.get(rtid).unwrap()
+     match rt:
+         case RTVoid():
+             return UNIT_TYPE
+@@ -401,7 +401,7 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
+                 return lookup_or_register_named(&gmod, "GorgetString")
+             return lookup_or_register_named(&gmod, pname)
+         case RTDefined(def_id):
+-            DefInfo di = scopes.get_def(def_id)
++            DefInfo di = gmod.tc_scopes.get_def(def_id)
+             String name = di.name
+             if gmod.type_subs.contains(name):
+                 return gmod.type_subs.get(name).unwrap()
+@@ -409,10 +409,10 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
+                 return lookup_or_register_named(&gmod, "GorgetString")
+             return lookup_or_register_named(&gmod, name)
+         case RTGeneric(def_id, type_args):
+-            DefInfo di = scopes.get_def(def_id)
++            DefInfo di = gmod.tc_scopes.get_def(def_id)
+             String mangled = di.name
+             for arg_rtid in type_args:
+-                String arg_name = resolved_to_c_name(arg_rtid, types, scopes, &gmod)
++                String arg_name = resolved_to_c_name(arg_rtid, &gmod)
+                 mangled = mangled + "__" + arg_name
+             int opt_tid = lookup_or_register_named(&gmod, mangled)
+             # option_ref_borrow Phase 2b: when this is a borrowing-getter
+@@ -424,11 +424,11 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
+             # appears at every read site.
+             if (di.name == "Option" or di.name == "Result") and type_args.len() >= 1:
+                 int first_arg = get_int_at(type_args, 0)
+-                if first_arg >= 0 and first_arg < types.types.len():
+-                    ResolvedType arg_rt = types.types.get(first_arg).unwrap()
++                if first_arg >= 0 and first_arg < gmod.tc_types.types.len():
++                    ResolvedType arg_rt = gmod.tc_types.types.get(first_arg).unwrap()
+                     match arg_rt:
+                         case RTRef(pointee_rtid):
+-                            int ptr_tid = register_ptr(&gmod, resolved_to_gir_type(pointee_rtid, types, scopes, &gmod))
++                            int ptr_tid = register_ptr(&gmod, resolved_to_gir_type(pointee_rtid, &gmod))
+                             record_option_ref_payload(&gmod, opt_tid, ptr_tid)
+                         else:
+                             pass
+@@ -439,16 +439,16 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
+                 # The payload tids come straight from the typechecker's
+                 # `type_args` — the authoritative typed source (Layering rule
+                 # 4, resolve once / write through).
+-                int ec_ok = resolved_to_gir_type(get_int_at(type_args, 0), types, scopes, &gmod)
++                int ec_ok = resolved_to_gir_type(get_int_at(type_args, 0), &gmod)
+                 if di.name == "Option":
+                     record_enum_category(&gmod, opt_tid, ENUM_CAT_OPTION, ec_ok, -1)
+                 elif type_args.len() >= 2:
+-                    int ec_err = resolved_to_gir_type(get_int_at(type_args, 1), types, scopes, &gmod)
++                    int ec_err = resolved_to_gir_type(get_int_at(type_args, 1), &gmod)
+                     record_enum_category(&gmod, opt_tid, ENUM_CAT_RESULT, ec_ok, ec_err)
+             if di.name == "Thread" and type_args.len() == 1:
+                 # Typed thread-payload channel (typechecker-resolved mint
+                 # path — sibling of the `map_ast_type` TNamed arm write).
+-                int thr_payload = resolved_to_gir_type(get_int_at(type_args, 0), types, scopes, &gmod)
++                int thr_payload = resolved_to_gir_type(get_int_at(type_args, 0), &gmod)
+                 record_thread_payload(&gmod, opt_tid, thr_payload)
+             return opt_tid
+         case RTRef(inner_rtid):
+@@ -460,7 +460,7 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
+             # local's `ownership` (LoBorrowed); the type now carries it too
+             # (Decision D2), and a standalone-Ref bind matches `GtPtr(inner)`
+             # directly at the svardecl site.
+-            return register_ptr(&gmod, resolved_to_gir_type(inner_rtid, types, scopes, &gmod))
++            return register_ptr(&gmod, resolved_to_gir_type(inner_rtid, &gmod))
+         case RTTuple(elem_rtids):
+             # Register the `Tuple__T1__T2__…` struct here — at the
+             # type-MAPPING site, not only at the literal — so a tuple that
+@@ -474,7 +474,7 @@ int resolved_to_gir_type(int rtid, TypeTable types, ScopeTable scopes, GirModule
+             # by `type_id_to_name` (the same source the helper uses).
+             Vector[int] tup_elem_tids = []
+             for et in elem_rtids:
+-                tup_elem_tids.push(resolved_to_gir_type(et, types, scopes, &gmod))
++                tup_elem_tids.push(resolved_to_gir_type(et, &gmod))
+             return register_tuple_type(tup_elem_tids, &gmod)
+         case RTArray(elem_rtid, _):
+             # Arrays map to GorgetArray (the C-level Vector backing); the
+@@ -558,14 +558,14 @@ int lookup_expr_gir_type(SpannedExpr sexpr, GirModule &gmod):
+             int link_end = sexpr.span.end
+             if gmod.tc_types.expr_link_types.contains(link_end):
+                 int link_rtid = gmod.tc_types.expr_link_types.get(link_end).unwrap()
+-                return resolved_to_gir_type(link_rtid, gmod.tc_types, gmod.tc_scopes, &gmod)
++                return resolved_to_gir_type(link_rtid, &gmod)
+         else:
+             pass
+     int span_start = sexpr.span.start
+     if not gmod.tc_types.expr_types.contains(span_start):
+         return -1
+     int rtid = gmod.tc_types.expr_types.get(span_start).unwrap()
+-    return resolved_to_gir_type(rtid, gmod.tc_types, gmod.tc_scopes, &gmod)
++    return resolved_to_gir_type(rtid, &gmod)
+ 
+ # Lazy-iterator phase 1b: the inferred method-level type-args recorded by
+ # the typechecker for a bare-form (no-turbofish) Iterator method call, keyed
+@@ -592,7 +592,7 @@ Vector[int] bare_method_targ_rtids(int span_end, String mname, GirModule &gmod):
+ # suffix is byte-identical to the turbofish form (whose AST `TFunction`
+ # already maps to GorgetClosure through type_to_c_name).
+ String bare_method_targ_c_name(int rtid, GirModule &gmod):
+-    int gir_tid = resolved_to_gir_type(rtid, gmod.tc_types, gmod.tc_scopes, &gmod)
++    int gir_tid = resolved_to_gir_type(rtid, &gmod)
+     return type_id_to_name(gir_tid, &gmod)
+ 
+ int map_ast_type(SpannedType stype, GirModule &gmod):
