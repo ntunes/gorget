@@ -1,0 +1,26 @@
+# D10(b) self-root gap (IGNORED — pins a KNOWN gap, not current behavior):
+# `g(&self.a, &self.a.b)` inside a method passes two writers into OVERLAPPING
+# `self`-rooted places (root `self`, paths `["a"]` and `["a","b"]`) — this SHOULD
+# be REJECTED (E_BorrowConflict) exactly like the identifier-rooted `f(&n,&n.f)`.
+# It is NOT caught today because `Expr::SelfExpr` has no `resolution_map` entry,
+# so `find_root_def_id_with_path(SelfExpr)` returns None and self-rooted places
+# are skipped by check_call_aliasing. Wiring a SelfExpr resolution path is
+# deferred (it risks double-diagnosing the existing self-mutation checks) — see
+# the TODO.md entry. Expected output = REJECTION (what the language SHOULD do).
+struct Inner:
+    Vector[int] b
+
+struct Holder:
+    Inner a
+
+void g(Inner &x, Vector[int] &y):
+    y.push(9)
+
+equip Holder:
+    void oops(self):
+        g(&self.a, &self.a.b)
+
+void main():
+    Holder h = Holder(Inner([1, 2]))
+    h.oops()
+    print(h.a.b.len())

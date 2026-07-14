@@ -1,0 +1,17 @@
+# D10(b): `&m.a` and `&m.b` are DISJOINT sibling sub-places (paths diverge at the
+# first segment) — no overlap, so BOTH writers are legal. Regression guard.
+struct M:
+    Vector[int] a
+    Vector[int] b
+
+void f(Vector[int] &x, Vector[int] &y):
+    x.push(10)
+    y.push(20)
+
+void main():
+    M m = M([1], [2])
+    f(&m.a, &m.b)
+    print(m.a.len())
+    print(m.b.len())
+    print(m.a.get(1).unwrap())
+    print(m.b.get(1).unwrap())

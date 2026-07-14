@@ -1,0 +1,10 @@
+# D10(b) place-overlap (GAP 1): a bare read and a move of the SAME place in one
+# call is a live-alias conflict — the read borrows while the move consumes.
+# Must be REJECTED (E_BorrowConflict). See decisions.md D10 + the 2026-07-12
+# D10(b) ADDENDUM.
+void f(Vector[int] a, Vector[int] !b):
+    print(a.len())
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    f(v, !v)

@@ -1,0 +1,15 @@
+# D10(b) x E_DoubleMove interaction: `f(!n, !n.field)` — a whole-place move and
+# an overlapping projection move. Already REJECTED by E_DoubleMove (a projection
+# move root-marks the whole DefId, so the second move trips DoubleMove). D10(b)
+# keeps (Move, Move) OUT of the place-overlap check to avoid double-diagnosing;
+# this fixture guards that the interaction still rejects.
+struct N:
+    Vector[int] field
+    int m
+
+void f(N !whole, Vector[int] !part):
+    pass
+
+void main():
+    N n = N([1, 2], 0)
+    f(!n, !n.field)

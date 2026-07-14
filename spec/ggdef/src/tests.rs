@@ -1677,6 +1677,144 @@ void main():
     assert_eq!(out(src), "4");
 }
 
+// ── D10(b): call-arg place-overlap is rejected at elaboration ────────────────
+//
+// The ratified exclusivity package (decisions.md, D10 2026-07-06 + the
+// 2026-07-12 D10(b) ADDENDUM + Rider 1 REVISED 2026-07-14): within a single
+// call, two args whose PLACES overlap (same root, one projection path a prefix
+// of the other) under CONFLICTING sigils are rejected — mirroring production
+// `check_call_aliasing` (src/semantic/safety/helpers.rs). The diagnostic carries
+// `error[E_BorrowConflict]`, the code production surfaces. A Copy-typed bare
+// read is a value SNAPSHOT (no live alias) and is exempt. Two axes stay OUT of
+// place-overlap and are handled by the interpreter's `Moved`→IllFormed liveness
+// rule (matching production's E_DoubleMove / E_UseAfterMove): `(Move,Move)`
+// overlap and `f(!x, x.copy_field)` (move-then-Copy-read).
+
+#[test]
+fn d10b_bare_move_overlap_rejected() {
+    // GAP 1: a bare read + a move of the same place — a live-alias conflict.
+    let src = r#"
+void f(Vector[int] a, Vector[int] b):
+    print(a.len())
+void main():
+    Vector[int] v = [1, 2, 3]
+    f(v, !v)
+"#;
+    elab_rejects(src, "error[E_BorrowConflict]", "bare read + move `f(v, !v)`");
+}
+
+#[test]
+fn d10b_projection_writers_rejected() {
+    // GAP 2: `&n` and `&n.field` overlap (root `n`, one path a prefix of the
+    // other) — both writers. Pre-D10(b) this silently dropped a write.
+    let src = r#"
+struct N:
+    Vector[int] field
+void f(N whole, Vector[int] part):
+    print(part.len())
+void main():
+    N n = N([1, 2])
+    f(&n, &n.field)
+"#;
+    elab_rejects(src, "error[E_BorrowConflict]", "projection overlap `f(&n, &n.field)`");
+}
+
+#[test]
+fn d10b_read_writer_rejected() {
+    // GAP 2: a non-Copy sub-place read (`n.field`) overlapping a whole writer.
+    let src = r#"
+struct N:
+    Vector[int] field
+void f(Vector[int] d, N whole):
+    print(d.len())
+void main():
+    N n = N([1, 2])
+    f(n.field, &n)
+"#;
+    elab_rejects(src, "error[E_BorrowConflict]", "read + writer `f(n.field, &n)`");
+}
+
+#[test]
+fn d10b_disjoint_siblings_legal() {
+    // `&m.a` / `&m.b` diverge at the first segment — disjoint siblings, no
+    // overlap — both writers legal (the regression-guard positive).
+    let src = r#"
+struct M:
+    Vector[int] a
+    Vector[int] b
+void f(Vector[int] x, Vector[int] y):
+    print(x.len())
+    print(y.len())
+void main():
+    M m = M([1], [2, 3])
+    f(&m.a, &m.b)
+"#;
+    assert_eq!(out(src), "1\n2");
+}
+
+#[test]
+fn d10b_writer_copy_read_exempt() {
+    // Copy-snapshot exemption: `s.copy_int` (an int) is a value snapshot, so it
+    // does NOT conflict with the overlapping writer `&s`. Legal.
+    let src = r#"
+struct S:
+    int copy_int
+    Vector[int] vec
+void f(S whole, int val):
+    print(val)
+void main():
+    S s = S(7, [1, 2])
+    f(&s, s.copy_int)
+"#;
+    assert_eq!(out(src), "7");
+}
+
+#[test]
+fn d10b_mover_copy_read_is_illformed_not_overlap() {
+    // Two-axis layering (Rider 1 REVISED): `f(!s, s.copy_field)` is REJECTED, but
+    // by LIVENESS (the `Moved`→IllFormed rule), NOT place-overlap — `!s` consumes
+    // the slot, so the later `s.copy_field` reads a moved-out value. This mirrors
+    // production's E_UseAfterMove (a liveness reject one layer before overlap).
+    // ggdef must NOT accept a program production rejects (Core #8).
+    let src = r#"
+struct S:
+    int copy_field
+    Vector[int] vec
+void f(S owned, int val):
+    print(val)
+void main():
+    S s = S(7, [1, 2])
+    f(!s, s.copy_field)
+"#;
+    let run = go(src);
+    assert!(
+        matches!(run.outcome, Outcome::IllFormed(_)),
+        "mover-Copy `f(!s, s.copy_field)` = read-of-moved IllFormed (liveness, not \
+         overlap), got {:?}",
+        run.outcome
+    );
+}
+
+#[test]
+fn d10b_order_twin_read_before_move_legal() {
+    // Order-twin (Rider 1 REVISED): reading a Copy place BEFORE moving the source
+    // (`f(s.copy_field, !s)`) is LEGAL — the snapshot is taken (left-to-right
+    // eval) before the move kills the slot. Pins the Copy-read-is-an-eager-
+    // snapshot eval model (a bare Copy-scalar arg is a `Source::Value`, not a
+    // lazy `BorrowView`), so the rule is evaluation-order-sensitive.
+    let src = r#"
+struct S:
+    int copy_field
+    Vector[int] vec
+void f(int val, S owned):
+    print(val)
+void main():
+    S s = S(7, [1, 2])
+    f(s.copy_field, !s)
+"#;
+    assert_eq!(out(src), "7");
+}
+
 // ── the `render_expect_block_from` seam round-trips json_escape (D2 prep) ─────
 #[test]
 fn render_expect_block_from_round_trips_json_escape() {

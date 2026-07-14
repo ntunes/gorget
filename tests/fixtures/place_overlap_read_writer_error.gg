@@ -1,0 +1,13 @@
+# D10(b) place-overlap (GAP 2): a non-Copy sub-place read (`n.data`) overlapping
+# a whole-place writer (`&n`). The read is a live borrow under CoW-default — the
+# divergence channel — so it is REJECTED (E_BorrowConflict).
+struct N:
+    Vector[int] data
+    int m
+
+void f(Vector[int] d, N &whole):
+    print(d.len())
+
+void main():
+    N n = N([1, 2], 0)
+    f(n.data, &n)

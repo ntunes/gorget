@@ -26786,6 +26786,103 @@ fn borrow_conflict_error() {
     check_gg_fails("borrow_conflict_error.gg", "borrow conflict");
 }
 
+// ── D10(b) place-overlap check (decisions.md D10 + the 2026-07-12 D10(b)
+// ADDENDUM + Rider 1 REVISED 2026-07-14). Two call args whose PLACES overlap
+// (same root, one projection path a prefix of the other) under conflicting
+// sigils are rejected; a Copy-typed bare read is a value snapshot (exempt);
+// (Move,Move) and move-then-Copy-read are LIVENESS rejects one layer up. ──
+
+// NEG (GAP 1): a bare read + a move of the same place.
+#[test]
+fn place_overlap_bare_move_error() {
+    check_gg_fails("place_overlap_bare_move_error.gg", "error[E_BorrowConflict]");
+}
+
+// NEG (GAP 2): `&n` and `&n.field` overlap, both writers (the pre-D10(b)
+// silent-lost-write defect).
+#[test]
+fn place_overlap_projection_writers_error() {
+    check_gg_fails("place_overlap_projection_writers_error.gg", "error[E_BorrowConflict]");
+}
+
+// NEG (GAP 2): a non-Copy sub-place read overlapping a whole-place writer.
+#[test]
+fn place_overlap_read_writer_error() {
+    check_gg_fails("place_overlap_read_writer_error.gg", "error[E_BorrowConflict]");
+}
+
+// NEG (two-axis layering): the mover-Copy case is a LIVENESS reject — the
+// diagnostic MUST be E_UseAfterMove, NOT an aliasing error. If a refactor makes
+// this fail with the overlap error, the move-tracker silently lost a case.
+#[test]
+fn place_overlap_mover_copy_use_after_move_error() {
+    check_gg_fails(
+        "place_overlap_mover_copy_use_after_move_error.gg",
+        "error[E_UseAfterMove]",
+    );
+}
+
+// NEG (interaction guard): overlapping projection moves stay rejected via
+// E_DoubleMove — D10(b) keeps (Move,Move) out of place-overlap to avoid
+// double-diagnosing.
+#[test]
+fn place_overlap_double_projection_move_error() {
+    check_gg_fails(
+        "place_overlap_double_projection_move_error.gg",
+        "error[E_DoubleMove]",
+    );
+}
+
+// POS (regression guard): disjoint sibling writers `&m.a` / `&m.b` accepted;
+// both mutations land.
+#[test]
+fn place_overlap_disjoint_siblings() {
+    run_gg("place_overlap_disjoint_siblings.gg", "2\n2\n10\n20");
+}
+
+// POS (Copy-snapshot exemption): a bare read of a Copy-typed place does not
+// conflict with an overlapping writer.
+#[test]
+fn place_overlap_writer_copy_read() {
+    run_gg("place_overlap_writer_copy_read.gg", "107");
+}
+
+// POS (order-twin): reading a Copy place BEFORE moving the source is legal —
+// evaluation-order-sensitive, not a blanket ban.
+#[test]
+fn place_overlap_read_before_move() {
+    run_gg("place_overlap_read_before_move.gg", "7");
+}
+
+// IGNORED — pins the KNOWN self-root gap ("Don't redesign around compiler
+// gaps" rule 2): `g(&self.a, &self.a.b)` overlaps two `self`-rooted writers and
+// SHOULD reject exactly like `f(&n,&n.f)`, but `Expr::SelfExpr` has no
+// resolution_map entry so self-rooted places are skipped. Wiring a SelfExpr
+// resolution path is deferred (risks double-diagnosing self-mutation checks).
+// Expected output = REJECTION; FLIP TO ACTIVE when the gap is closed. See TODO.
+#[test]
+#[ignore = "D10(b) self-root gap: SelfExpr has no resolution_map entry, so \
+            f(&self.a, &self.a.b) is not place-overlap-checked (filed in TODO)"]
+fn place_overlap_self_root_error() {
+    check_gg_fails("place_overlap_self_root_error.gg", "error[E_BorrowConflict]");
+}
+
+// IGNORED — pins the UNDECIDED partial-move-widening question: `f(!m.a, !m.b)`
+// moves two disjoint siblings and today over-rejects via E_UseAfterMove (the
+// move-tracker root-marks whole `m`). Whether it SHOULD accept is the
+// Rust-style destructuring widening left undecided by the 2026-07-11 D10(a)
+// ADDENDUM. D10(b) keeps (Move,Move) out of place-overlap, so this is not B1's
+// to decide; the fixture documents the question. See TODO.
+#[test]
+#[ignore = "D10(b) disjoint-sibling MOVE: undecided partial-move-widening \
+            (decisions.md 2026-07-11 D10(a) ADDENDUM) — over-rejects today (filed in TODO)"]
+fn place_overlap_disjoint_sibling_move_error() {
+    check_gg_fails(
+        "place_overlap_disjoint_sibling_move_error.gg",
+        "error[E_UseAfterMove]",
+    );
+}
+
 #[test]
 fn read_while_mut_captured_error() {
     check_gg_fails("read_while_mut_captured_error.gg", "cannot read");

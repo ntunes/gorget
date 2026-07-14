@@ -1,0 +1,14 @@
+# D10(b) order-twin (Rider 1 REVISED): reading a Copy place BEFORE moving the
+# source (`f(s.copy_field, !s)`) is LEGAL — the snapshot is taken (left-to-right
+# eval) before the move kills the slot. Pins the rule as evaluation-order-
+# sensitive: NOT a blanket "no reads of `s` in a call that moves `s`."
+struct S:
+    int copy_field
+    Vector[int] vec
+
+void f(int val, S !owned):
+    print(val)
+
+void main():
+    S s = S(7, [1, 2])
+    f(s.copy_field, !s)

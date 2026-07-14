@@ -1,0 +1,16 @@
+# D10(b) two-axis layering (Rider 1 REVISED 2026-07-14): `f(!s, s.copy_field)` is
+# REJECTED, but by LIVENESS (E_UseAfterMove), NOT place-overlap — `!s` consumes
+# the slot, so the later `s.copy_field` reads a DEAD slot. The move-tracker
+# rejects it one layer BEFORE place-overlap is consulted. This fixture PINS that
+# the diagnostic is E_UseAfterMove (not an aliasing error): if a refactor makes
+# it fail with the overlap error, the move-tracker silently lost a case.
+struct S:
+    int copy_field
+    Vector[int] vec
+
+void f(S !owned, int val):
+    print(val)
+
+void main():
+    S s = S(7, [1, 2])
+    f(!s, s.copy_field)

@@ -1,0 +1,14 @@
+# D10(b) Copy-snapshot exemption: `s.copy_int` is a bare read of a COPY-typed
+# (int) place — a value snapshot, NOT a live alias — so it does NOT conflict with
+# the overlapping writer `&s`. Legal. (Matches Rust's two-phase borrow.)
+struct S:
+    int copy_int
+    Vector[int] vec
+
+void f(S &whole, int val):
+    whole.copy_int = val + 100
+
+void main():
+    S s = S(7, [1, 2])
+    f(&s, s.copy_int)
+    print(s.copy_int)
