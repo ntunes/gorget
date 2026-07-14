@@ -38,6 +38,16 @@
 > call-arg move site is `check_expr.rs:234-243` (not the `:154-161` expression arm). Awaiting
 > pass-3 (fresh, confirming this fold).
 >
+> **v3 — pass-3 (Opus, fresh, confirming) folded.** Pass-3 independently re-verified every
+> anchor and **SIGNED OFF on the headline mover-Copy owner-ruling fold** (faithful+consistent
+> across §0/§2.1/§3/§4/§7/§9; two-axis story sound; ggdef read-of-moved `eval.rs:21` verified
+> sufficient to avoid a Core-#8 divergence; P2-R2/R3 citations correct). It raised **2 LOW
+> reservations, BOTH FOLDED:** (R1) §5 cited `decisions.md:626` (a D18 line) for the D10 keying
+> — corrected to `decisions.md:654` ("PLACES overlap (root + projection prefix)"); (R2) the §2.2
+> conflict predicate's last clause was loosely worded — rewritten as the explicit "drop Copy
+> bare readers first, then test the remainder" PROCEDURE with three worked examples. Awaiting
+> pass-4 (quick confirming re-read of these 2 LOW folds).
+>
 > **Risk profile:** LOW (proven projection/sigil core) · MEDIUM (writer-Copy exemption path +
 > ggdef model, both new/unproven; the mover-Copy axis is now OUT of scope — liveness, not overlap).
 
@@ -190,9 +200,12 @@ For each pair `(i<j)` with the SAME root:
   it does not participate — skip the pair on that arg's behalf (a Copy bare read is a
   snapshot). Concretely: a pair conflicts only if, after dropping Copy bare readers, the
   remaining pair still has ≥1 writer/mover and is not both-bare-readers.
-- **conflict** = overlap ∧ (≥1 of the pair is `MutableBorrow` or `Move`) ∧ ¬(both `Borrow`)
-  ∧ ¬(the sole hazard arg is an exempt Copy bare reader). Add the **`(Borrow, Move)`** arm
-  (GAP 1). **Keep `(Move, Move)` ENTIRELY OUT of this check** — E_DoubleMove already covers
+- **conflict** (stated as the procedure, not a loose predicate): first DROP from the pair any
+  arg that is a Copy bare reader (`Borrow` ∧ `is_copy`); then the pair **conflicts iff both
+  args remain AND ≥1 of the remaining args is `MutableBorrow` or `Move` AND they are not both
+  `Borrow`**. (So `f(&s, s.copy_int)` → drop `s.copy_int` → only `&s` remains → no pair → no
+  conflict ✓; `f(&n, &n.f)` → nothing dropped, both `&` → conflict ✓; `f(x, !x)` → nothing
+  dropped (`x` non-Copy), one Move → conflict ✓.) Add the **`(Borrow, Move)`** arm (GAP 1). **Keep `(Move, Move)` ENTIRELY OUT of this check** — E_DoubleMove already covers
   it correctly INCLUDING the projection cases, because **a projection move root-marks**: a
   `!p.field` arg runs `find_root_def_id(inner)` → `check_move(root_def_id)` — the operative
   CALL-ARG site is `check_expr.rs:234-243` (the arg loop; the sibling `Expr::Move` expression
@@ -315,7 +328,8 @@ sweep newly-REJECTS a site B0 didn't hoist, **TRIAGE — do not weaken the check
   the point; if it's in-repo production code, FIX the code (it was a latent bug) + note it.
 - **Index-collapse over-rejection** (a NEW class B0 didn't scan for): because `x[i]` collapses
   to root `x` (`find_root_def_id_with_path` `:478-480`), `f(&v[i], &v[j])` and `f(&v[i], &v)`
-  now REJECT — conservative and per-spec (D10's root+prefix keying, `decisions.md:626`), NOT a
+  now REJECT — conservative and per-spec (D10's root+projection-prefix keying, `decisions.md:654`
+  — "any two access paths … whose PLACES overlap (root + projection prefix)"), NOT a
   defect. B0's hoists were field-disjoint-focused, so any in-repo index-disjoint site is caught
   ONLY by the full C+LLVM sweep. If one appears: it's correctly-rejected-per-spec — restructure
   the call site (behavior-preserving) or, if genuinely two disjoint indices that must both pass,
