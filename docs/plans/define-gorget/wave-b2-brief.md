@@ -105,7 +105,8 @@ The prototype (`scouts/patches/b2-place-overlap-proto.patch`) is the recommended
      `(Move,Move)`. **DELETE that skip** — per the owner ruling the mover-mover arm is IN, so the
      general "(≥1 writer/mover) ∧ ¬both-bare" rule flags same-root overlapping movers. VERIFY:
      `f(!x,!x)` → REJECT (overlap), `f(!x, x.copy_field)` → ACCEPT (Copy reader dropped → only `!x`
-     left → no pair). Both MEASURED (§4).
+     left → no pair). Both to be MEASURED by the executor per §4 (the scout measured them with the
+     skip STILL IN — the deletion's outcomes are the executor's to verify).
 
 ---
 
