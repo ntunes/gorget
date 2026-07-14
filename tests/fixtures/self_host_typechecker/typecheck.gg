@@ -34,8 +34,8 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
-from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution
-from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator
+from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name
+from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -726,6 +726,163 @@ Option[int] place_root_def_spanned(SpannedExpr e, ScopeTable scopes, ResolveCont
         else:
             return None()
 
+# ── D10(b) same-call PLACE-OVERLAP rejection ─────────────────
+# Mirror Rust `check_call_aliasing` (src/semantic/safety/helpers.rs:1179) and
+# ggdef `check_arg_place_overlap` (spec/ggdef/src/elaborate/mod.rs:1076). Two
+# call args whose PLACES overlap under CONFLICTING sigils are rejected — a
+# place has one exclusive writer. The rule ranges over LIVE ALIASES: a
+# Copy-typed BARE read is a value snapshot and participates in no overlap
+# (D10(b) ADDENDUM + Rider 1 REVISED 2026-07-14). This is the FULL D10 rule —
+# the mover-mover arm is IN (owner ruling "B2 SCOPE + LIVENESS-PASS" 2026-07-14):
+# `f(!x, !x)` (same-root overlapping movers) is the MAXIMAL place-overlap and is
+# REJECTED here with the overlap code. Production's Rust `check_call_aliasing`
+# EXCLUDES `(Move,Move)` only because `E_DoubleMove` preempts it one pass earlier;
+# the self-host has NO upstream move-tracker, so the faithful mirror lets the arm
+# FIRE (reject-with-a-different-code strictly beats ACCEPT). Interim divergence
+# (self-host overlap-code vs production/ggdef `E_DoubleMove`) is FILED in the
+# self-host-liveness HIGH track (TODO.md); when liveness lands it preempts this arm
+# per the ratified pass-order rider (liveness precedes aliasing). The
+# mover-then-Copy-read case (`f(!x, x.copy_field)`) stays EXEMPT — the Copy read is
+# a SNAPSHOT, not an alias, so it is dropped before the conflict test (only `!x`
+# remains → no pair → accept); production/ggdef reject it via E_UseAfterMove, which
+# is the LIVENESS axis's job (also filed). Reads the TYPED per-arg
+# `CallArg.ownership` — never shape-matches the value (owner directive; layering
+# rule 2 typed-not-shape).
+
+# One collected place arg (mirror Rust/ggdef `struct P`). `root` is the binding
+# NAME (the self-host does not rename bindings, so the identifier text IS the
+# root — matches ggdef's String-keyed root and handles `self` uniformly).
+struct ArgPlace:
+    String root
+    Vector[String] path
+    int ownership
+    bool is_copy
+    Span span
+
+# The projection PATH (outer-to-inner field/tuple segments) of a place expr, or
+# None for a non-place (fresh temp, literal, `.clone()`, `.get()`). Tuple fields
+# parse as EFieldAccess with numeric-string names ("0"), so no special case is
+# needed. EIndex COLLAPSES to the collection root (an index borrow is from the
+# collection itself — conservative); `x[a..b]` (a slice) is NOT a place. Mirrors
+# ggdef `ast_place` / Rust `find_root_def_id_with_path`.
+Option[Vector[String]] place_projection_path(Expr e):
+    match e:
+        case EIdentifier(_):
+            return Some(Vector[String]())
+        case ESelfExpr():
+            return Some(Vector[String]())
+        case EFieldAccess(obj, fname):
+            match place_projection_path((*obj).expr):
+                case Some(inner):
+                    Vector[String] path = Vector[String]()
+                    for s in inner:
+                        path.push(s)
+                    path.push(fname)
+                    return Some(path)
+                else:
+                    return None()
+        case EIndex(obj, index):
+            bool is_range = false
+            match (*index).expr:
+                case ERange(_, _, _):
+                    is_range = true
+                else:
+                    pass
+            if is_range:
+                return None()
+            return place_projection_path((*obj).expr)
+        else:
+            return None()
+
+# Two projection paths under the SAME root OVERLAP iff one is a prefix of the
+# other (zip stops at the shorter). Disjoint siblings (`a` vs `b`) do NOT
+# overlap; an empty path (the whole binding) overlaps every sub-place.
+bool paths_overlap_vec(Vector[String] a, Vector[String] b):
+    int m = a.len()
+    if b.len() < m:
+        m = b.len()
+    int i = 0
+    while i < m:
+        if a.get(i).unwrap() != b.get(i).unwrap():
+            return false
+        i = i + 1
+    return true
+
+# Render a place with its call-arg sigil for the diagnostic (`&p`/`!p`/bare).
+String render_place_sig(int own, String root, Vector[String] path):
+    String s = root
+    for seg in path:
+        s = s + "." + seg
+    if own == OWN_MUTABLE:
+        return "&" + s
+    if own == OWN_MOVE:
+        return "!" + s
+    return s
+
+# Copy-ness of the arg VALUE via the TYPED axis (Rider 2 — NO shape heuristic):
+# a scalar primitive (`RTPrimitive` with a scalar name) is Copy; Str / String /
+# collections / structs own a buffer and are NOT. Mirrors ggdef's
+# `matches!(infer_ast_ty(..), Ty::Prim)`. Unknown → non-Copy (conservative).
+bool arg_place_is_copy(SpannedExpr e, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    int t = infer_expr_type(e, scopes, &types, &ctx)
+    if t < 0 or t >= types.types.len():
+        return false
+    ResolvedType rt = get_rtype_at(types.types, t)
+    match rt:
+        case RTPrimitive(name):
+            return is_scalar_primitive_name(name)
+        else:
+            return false
+
+# Reject two call args whose places overlap under conflicting sigils.
+void check_call_aliasing(Vector[CallArg] args, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    Vector[ArgPlace] places = Vector[ArgPlace]()
+    for a in args:
+        match place_projection_path(a.value.expr):
+            case Some(path):
+                String rname = place_root_name(a.value.expr)
+                # Only LOCAL-variable roots (+`self`) participate — a call name /
+                # const / variant root is skipped. Mirrors production's
+                # `DkVariable` root filter and ggdef's `root == "self" ||
+                # local_names.contains`.
+                bool is_local = false
+                if rname == "self":
+                    is_local = true
+                elif place_root_def_spanned(a.value, scopes, ctx) is Some(rdid):
+                    match scopes.get_def(rdid).kind:
+                        case DkVariable():
+                            is_local = true
+                        else:
+                            pass
+                if is_local:
+                    bool cpy = arg_place_is_copy(a.value, scopes, &types, &ctx)
+                    places.push(ArgPlace(rname, path, a.ownership, cpy, a.value.span))
+            else:
+                pass
+    int n = places.len()
+    int i = 0
+    while i < n:
+        int j = i + 1
+        while j < n:
+            ArgPlace x = places.get(i).unwrap()
+            ArgPlace y = places.get(j).unwrap()
+            if x.root == y.root and paths_overlap_vec(x.path, y.path):
+                bool x_copy_reader = x.ownership == OWN_BORROW and x.is_copy
+                bool y_copy_reader = y.ownership == OWN_BORROW and y.is_copy
+                # NO `(Move,Move)` skip here (owner ruling — the mover-mover arm is
+                # IN): the general "(≥1 writer/mover) ∧ ¬both-bare" rule flags
+                # same-root overlapping movers (`f(!x,!x)`). Copy bare readers are
+                # already dropped above, so `f(!x, x.copy_field)` leaves only `!x`
+                # → no pair → accept (the mover-Copy exemption falls out for free).
+                bool has_wm = x.ownership == OWN_MUTABLE or x.ownership == OWN_MOVE or y.ownership == OWN_MUTABLE or y.ownership == OWN_MOVE
+                bool both_bare = x.ownership == OWN_BORROW and y.ownership == OWN_BORROW
+                if not x_copy_reader and not y_copy_reader and has_wm and not both_bare:
+                    String pa = render_place_sig(x.ownership, x.root, x.path)
+                    String pb = render_place_sig(y.ownership, y.root, y.path)
+                    ctx.diagnostics.push(Diagnostic.error(y.span, DkBorrowConflict(), "cannot pass `" + pa + "` and `" + pb + "` in the same call — their places overlap"))
+            j = j + 1
+        i = i + 1
+
 # D12 position 6 (materialize-on-write): a write through a bare BORROW-view
 # param of a drop-tainted type would privatise (materialize) an implicit
 # copy — rejected. Fires on a FIELD/INDEX write target (`s.id = 9`,
@@ -1114,6 +1271,8 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes, 
                 if call_is_ctor and a.ownership == OWN_BORROW:
                     reject_tainted_place(a.value, scopes, &types, &ctx)
                 check_carrier_ops_expr(a.value, scope_id, &scopes, &types, &ctx)
+            # D10(b): same-call place-overlap rejection (args only, not callee).
+            check_call_aliasing(args, scopes, &types, &ctx)
         case EMethodCall(receiver, method_name, args, _targs):
             check_carrier_ops_expr(*receiver, scope_id, &scopes, &types, &ctx)
             # D12 position 6 sibling: a `&self` mutator on a tainted borrow-
@@ -1130,6 +1289,9 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes, 
                 if ingest and a.ownership == OWN_BORROW:
                     reject_tainted_place(a.value, scopes, &types, &ctx)
                 check_carrier_ops_expr(a.value, scope_id, &scopes, &types, &ctx)
+            # D10(b): same-call place-overlap rejection (explicit args only —
+            # the receiver is not aliasing-checked against args, per Rust).
+            check_call_aliasing(args, scopes, &types, &ctx)
         case EFieldAccess(object, _field):
             check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)
         case EIndex(object, index):

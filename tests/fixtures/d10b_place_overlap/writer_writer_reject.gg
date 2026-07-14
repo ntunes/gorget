@@ -1,0 +1,17 @@
+# D10(b) place-overlap: two `&` writers of the SAME whole place in one call.
+# `f(&n, &n)` gives the callee two exclusive-write paths to `n` — the
+# lazy/eager CoW-divergence channel D10 exists to close. Rejected with the
+# borrow-conflict (overlap) diagnostic. Mirrors Rust `check_call_aliasing`
+# + ggdef `check_arg_place_overlap`.
+struct N:
+    Vector[int] data
+
+void f(N &a, N &b):
+    a.data.push(1)
+
+void run():
+    N n = N(Vector[int]())
+    f(&n, &n)
+
+void main():
+    run()

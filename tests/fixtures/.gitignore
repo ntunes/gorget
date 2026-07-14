@@ -47,6 +47,11 @@
 # *_comparison, runtime_diff) don't feed the negative probes to those drivers.
 !d12_drop_purity/
 !d12_drop_purity/*.gg
+# D10(b) same-call place-overlap probe fixtures (B2 self-host mirror): reject
+# set (overlapping writers/movers/non-Copy reads) + accept set (disjoint
+# siblings + writer-Copy-read exemption). Same subdir rationale as d12.
+!d10b_place_overlap/
+!d10b_place_overlap/*.gg
 # D23 throws-totality cross-module negative fixture (a `throws` equip method
 # imported across a module boundary, called unhandled → E_UnhandledThrows).
 !d23_unhandled_method_xmod/

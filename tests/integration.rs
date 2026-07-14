@@ -18667,6 +18667,129 @@ fn self_host_driver_accepts_d12_legal() {
     }
 }
 
+// B2 — D10(b) same-call PLACE-OVERLAP rejection in the self-host typechecker
+// (`check_call_aliasing`, self_host_typechecker/typecheck.gg). Two call args
+// whose PLACES overlap under conflicting sigils have two live paths to one
+// exclusive-write place — the lazy/eager CoW-divergence channel D10 closes.
+// Mirrors Rust `check_call_aliasing` + ggdef `check_arg_place_overlap`.
+// Contract per reject fixture: non-zero exit, the overlap codespan diagnostic
+// on stderr ("their places overlap" + the box rule), and NO C on stdout (the
+// gate halts BEFORE lowering). The self-host renderer has no `error[E_…]`
+// codes (a pre-existing property of every self-host diagnostic), so the
+// assertion is on the message TEXT + box rule, not a code.
+//
+// NOTE on `double_move_reject` (`f(!n,!n)` — the mover-mover arm): this is a
+// SELF-HOST-TARGETED rejection test, deliberately OUT of the cross-compiler
+// exact-code conformance lane. Production Rust gg + ggdef reject the identical
+// program one pass earlier via `E_DoubleMove` (their move-tracker preempts
+// place-overlap); the self-host has no move-tracker yet (filed HIGH liveness
+// track), so the faithful mirror of the FULL D10 rule lets the arm fire with
+// the overlap code — reject-with-a-different-code strictly beats ACCEPT. When
+// the self-host liveness pass lands it preempts this arm (ratified pass-order
+// rider) and the diagnostic flips to E_DoubleMove. Owner ruling "B2 SCOPE +
+// LIVENESS-PASS" 2026-07-14.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_d10b_place_overlap() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let reject_fixtures = [
+        // two `&` writers of the same whole place
+        "writer_writer_reject",
+        // `&` writer of the whole place + `&` writer of a sub-place under it
+        "writer_subfield_reject",
+        // non-Copy bare read + mover of the same place
+        "read_move_reject",
+        // mover of the whole place + non-Copy bare read of a sub-place
+        "move_noncopyread_reject",
+        // the mover-mover arm — self-host-targeted rejection (see NOTE above)
+        "double_move_reject",
+    ];
+    for name in reject_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/d10b_place_overlap/{name}.gg"));
+        assert!(fixture.exists(), "missing D10(b) reject fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_d10b_place_overlap",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED an overlapping-place call `{name}` \
+             (D10(b) place-overlap enforcement in self_host_typechecker/typecheck.gg \
+             regressed). exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains("their places overlap") && stderr.contains('\u{250c}'),
+            "self-host driver rejected `{name}` but emitted no D10(b) codespan \
+             diagnostic (expected `their places overlap` + the box rule).\n\
+             stderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host driver emitted C for rejected `{name}` — the gate must halt \
+             BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+}
+
+// Over-rejection guard for B2: the self-host driver must ACCEPT the LEGAL
+// place-overlap counterparts — DISJOINT sibling writers (`&m.a`,`&m.b`) whose
+// projection paths do not prefix each other, and a `&` writer + a COPY bare
+// read of an overlapping sub-place (`&s`,`s.tag`), where the Copy read is a
+// value snapshot that participates in no overlap (D10(b) ADDENDUM + Rider 1
+// REVISED). The bootstrap proves no UNDER-rejection regression in the
+// self-host source, but is silent to an OVER-rejection (self-host source has
+// no overlapping-place calls); this fixture is the executable guard an
+// over-rejection cannot pass.
+//
+// NOTE: there is deliberately NO fixture for the mover-Copy case
+// (`f(!s, s.tag)`). That program ACCEPTS self-host-side today ONLY because of
+// the known, filed missing liveness axis (production/ggdef reject it via
+// E_UseAfterMove). An ACCEPT fixture would assert exit-0 as the EXPECTED
+// behavior — blessing the buggy accept (the "lock-in" anti-pattern). It is
+// pinned in the liveness track as an `#[ignore]`d SHOULD-reject fixture, not
+// here.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_accepts_d10b_place_overlap() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let legal_fixtures = [
+        // disjoint sibling writers — same root, non-prefix paths
+        "disjoint_siblings_accept",
+        // writer + Copy bare read of an overlapping sub-place (the exemption)
+        "writer_copyread_accept",
+    ];
+    for name in legal_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/d10b_place_overlap/{name}.gg"));
+        assert!(fixture.exists(), "missing D10(b) legal fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_accepts_d10b_place_overlap",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "self-host driver REJECTED a LEGAL D10(b) program `{name}` — an \
+             over-rejection in self_host_typechecker/typecheck.gg. exit={:?}\n\
+             stderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            !stdout.trim().is_empty(),
+            "self-host driver accepted `{name}` but emitted no C — the legal path \
+             must lower. stderr:\n{stderr}",
+        );
+    }
+}
+
 // Companion to `self_host_driver_rejects_invalid_program`, exercising the
 // positional-after-named diagnostic (the self-host typecheck now REJECTS
 // `f(a=1, 2)`, matching Rust gg — see `positional_after_named_error()` for

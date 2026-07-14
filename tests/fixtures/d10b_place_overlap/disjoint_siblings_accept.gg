@@ -1,0 +1,20 @@
+# D10(b) over-rejection guard: two `&` writers of DISJOINT sibling sub-places
+# (`&m.a` and `&m.b`) do NOT overlap — their projection paths (["a"] vs ["b"])
+# share the root `m` but diverge at the first segment, so neither is a prefix
+# of the other. Legal: two independent exclusive-write paths to distinct
+# fields. Must ACCEPT and lower. Guards the `paths_overlap_vec` prefix test
+# against over-firing on same-root-but-disjoint places.
+struct M:
+    Vector[int] a
+    Vector[int] b
+
+void f(Vector[int] &x, Vector[int] &y):
+    x.push(1)
+    y.push(2)
+
+void run():
+    M m = M(Vector[int](), Vector[int]())
+    f(&m.a, &m.b)
+
+void main():
+    run()

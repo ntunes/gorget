@@ -56,6 +56,7 @@ enum DiagKind:
     DkPrimitiveTraitImpl   # `equip <scalar-primitive> with Trait` — no addressable self
     DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
     DkMoveWithoutOperator  # D4/D12: implicit copy of a live drop-tainted place at an ownership boundary
+    DkBorrowConflict       # D10(b): two call args whose places overlap under conflicting sigils
 
     # Reserved for future migrators (kept so the type doesn't churn
     # when lowerer sites migrate).
@@ -119,6 +120,8 @@ String diag_kind_str(DiagKind kind):
             return "local-borrow-bind"
         case DkMoveWithoutOperator():
             return "move-without-operator"
+        case DkBorrowConflict():
+            return "borrow-conflict"
         case DkUnreachable():
             return "unreachable"
 

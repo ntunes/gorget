@@ -1,0 +1,18 @@
+# D10(b) place-overlap: a mover of the WHOLE place and a NON-Copy bare read of
+# a SUB-place under it (`f(!n, n.data)` where `n.data` is a `Vector[int]`, not
+# Copy). The bare read is a live alias into the moved-away value's region —
+# rejected with the overlap diagnostic. The Copy/non-Copy cut is on the read's
+# TYPE (`Vector[int]` owns a buffer → non-Copy), read via the typed axis, not
+# the syntactic shape.
+struct N:
+    Vector[int] data
+
+void f(N !a, Vector[int] b):
+    pass
+
+void run():
+    N n = N(Vector[int]())
+    f(!n, n.data)
+
+void main():
+    run()

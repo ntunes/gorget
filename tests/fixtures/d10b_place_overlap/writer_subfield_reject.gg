@@ -1,0 +1,18 @@
+# D10(b) place-overlap: a `&` writer of the WHOLE place and a `&` writer of a
+# SUB-place under it (`&n` and `&n.data`). The projection path of `n.data`
+# (["data"]) is prefixed by the empty path of `n`, so the places overlap — two
+# live writable paths, one nested in the other. Rejected with the overlap
+# diagnostic. Exercises the projection-path prefix test (`paths_overlap_vec`).
+struct N:
+    Vector[int] data
+
+void h(N &a, Vector[int] &b):
+    a.data.push(1)
+    b.push(2)
+
+void run():
+    N n = N(Vector[int]())
+    h(&n, &n.data)
+
+void main():
+    run()

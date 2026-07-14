@@ -1,0 +1,22 @@
+# D10(b) over-rejection guard — the writer-Copy-read exemption: a `&` writer of
+# the whole place and a bare read of an overlapping COPY sub-place
+# (`f(&s, s.tag)` where `s.tag` is an `int`). The Copy read is evaluated at the
+# call site into an INDEPENDENT value before the callee runs — no live memory
+# edge remains between it and the writer's region, so there is nothing to
+# diverge against. The rule ranges over LIVE ALIASES, not syntactic reads:
+# a Copy-typed bare read participates in no overlap (D10(b) ADDENDUM +
+# Rider 1 REVISED). Must ACCEPT and lower. Copy-ness is read from the TYPED
+# axis (`int` → scalar primitive → Copy), never the value shape.
+struct S:
+    Vector[int] data
+    int tag
+
+void f(S &a, int t):
+    a.data.push(t)
+
+void run():
+    S s = S(Vector[int](), 7)
+    f(&s, s.tag)
+
+void main():
+    run()

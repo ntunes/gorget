@@ -1,0 +1,18 @@
+# D10(b) place-overlap: a NON-Copy bare read and a mover of the same place
+# (`g(n, !n)`). Under CoW-default, a bare non-Copy read is a live borrow into
+# the value for the whole call — a live alias overlapping a mover, which is the
+# divergence channel. Rejected with the overlap diagnostic. (Contrast a Copy
+# bare read, which is a value snapshot and participates in no overlap — see
+# `writer_copyread_accept.gg`.)
+struct N:
+    Vector[int] data
+
+void g(N x, N !y):
+    pass
+
+void run():
+    N n = N(Vector[int]())
+    g(n, !n)
+
+void main():
+    run()
