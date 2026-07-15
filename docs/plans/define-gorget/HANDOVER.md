@@ -358,20 +358,30 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    FULL C **1631/0**, bootstrap ok (645s), self-host lanes 41/0. 7 d10b fixtures. Brief `wave-b2-brief.md`
    (3-pass gauntlet), scout `scout-b2.md`, patch `scouts/patches/b2-fix.patch`. **✅ Batch B's
    PLACE-OVERLAP axis is COMPLETE in all three compilers (Rust B1 + ggdef + self-host B2).**
-   ⏭ **NEXT TRACK — the self-host LIVENESS / use-after-move pass (owner-ruled, HIGH, one big gauntlet).**
-   SCOUT DONE (`scout-liveness.md`, prototype `scouts/patches/liveness-proto.patch`): FEASIBLE, blast
-   radius 0 (the +403-line proto over the whole self-host source emits ZERO diagnostics; 12/12 probes
-   match Rust; nested/branch-merge/re-init work). The proto IS the core. **OWNER DECISIONS 2026-07-14
-   (all folded into the TODO liveness entry):** (1) UNIFY IN THE SAME GAUNTLET — one `check_safety_stmts`
-   walk with drop-purity (A2-S) + place-overlap (B2) + liveness as arms (mirror `src/semantic/safety/`;
-   pass-order: liveness before aliasing → `f(!x,!x)` becomes a double-move preempting B2's mover-mover
-   arm, converging the divergence); (2) INCLUDE `!self`-consuming receivers + ConsumeCallable; (3) ADD
-   loop-local precision (not clone-and-discard); (4) the Dict.remove `Option[int]` coalesce MISCOMPILE
-   the scout found = its OWN track (fix in Rust gg + keep the `live_reinit` helper). Acceptance = ggdef's
-   liveness fixtures (`tests.rs:173/1773/1799`) + production negatives. Executor: build to an ISOLATED
-   /tmp path (concurrent-agent scratch contamination bit the scout) + re-run bootstrap in isolation.
-   Own brief→≥3 reviews→executor→output-review from the proven proto. Ruling: `decisions.md` "B2 SCOPE
-   + LIVENESS-PASS + PASS-ORDER" 2026-07-14.
+   ✅ **SELF-HOST LIVENESS / UNIFIED SAFETY WALK — LANDED 2026-07-15** (`2928d9cb` unify+liveness +
+   `8165157c` folds + `567f053e` the DefId re-key FP fix; → DONE.md). One `check_safety_*` walk
+   (drop-purity + place-overlap + liveness as arms); pass-order rider converged B2's 2 interim
+   divergences; `!self`/ConsumeCallable + precise loops in. **The FP saga:** the full C sweep caught a
+   23-fixture false-positive piece-1's gates missed (blast=0 was source-only; the corpus tests
+   `c_emit_comparison`/`self_host_runtime` run the driver over the whole fixture corpus — bake a corpus
+   run into any future self-host-typecheck executor gate). Root: NAME-keyed move-state collided a
+   synthetic iterator-protocol `x`. Owner ruled the reference-grade WRITE-SITE fix (all move-state axes
+   DefId-keyed; parser emits `name_span`, resolve records `resolution_map[binding.span]=def_id`; self
+   `-2` sentinel). GATES REGENERATED 2026-07-15: **FULL C 1633/0 · FULL LLVM 1633/0** · bootstrap ok ·
+   corpus (`c_emit_comparison`/`self_host_runtime`/`_diff`) ok · 15/15 liveness fixtures.
+   ⏭ **NEXT TRACK — ggdef LIVENESS TRANSITION-TABLE (DEFINITION-INTEGRITY, HIGH, owner-ruled RUN NOW,
+   ahead of Batch C which leans on ggdef).** The liveness differential surfaced TWO cells where `ggdef
+   run` (the acceptance ORACLE) is WRONG vs BOTH production + the self-host: a missing dead→live REVIVE
+   (re-init `x=fresh()` after move — ggdef over-rejects, `eval.rs:768-773`) and a missing live→dead KILL
+   (ConsumeCallable double-call — ggdef under-rejects/accepts-unsound, `eval.rs:1028-1043`). Both derivable
+   from ratified design intent. Deliverable = the TRANSITION-COMPLETE audit (every cell: move-kill,
+   consume-call-kill, assign-revive, AND the untested branch-merge cell where bug #3 likely hides) — not 2
+   point patches; + write-through prose (reference/book) for re-init legality + ConsumeCallable single-use;
+   + migrate both shapes from the self-host-driver-only assertions into the ggdef conformance fixtures.
+   Consult-history clean (decisions.md never pinned write-to-moved). See TODO "ggdef liveness
+   state-transition table is INCOMPLETE" + `scouts/scout-liveness-ext.md`. **Then** the codegen HIGH
+   (`is Some(x)` over mutating-method Option → mis-binds 0; retires the DefId-fix cited workaround) + the
+   tuple-element DefId slice MED + the prod double-fire wart LOW.
 5. **Batch C** per the wave plan: C1 operators (D26+D28; wire every new token into
    self-host `map_binop` + the anti-OP_ADD ratchet) → C2 fault-catch removal (D25;
    ~2,000-line both-compiler deletion; ships D24 spec prose + §10.5/§10.9 rewrite) →
