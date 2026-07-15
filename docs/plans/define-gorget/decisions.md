@@ -476,11 +476,34 @@ P1-infra reviewers' recommendation.
   at span`; exit = the check-failure code.** Pins: (1) FORMAT mirrors the RATIFIED diagnostic shape (production
   `gg check` family + ggdef's location-suffixed trap render), NOT a ggdef-private terse form — ggdef is the
   definition, its stderr is what a human reads adjudicating a lane diff, so it is the BEST-rendered of the four
-  lanes. (2) EXIT distinguishes "never ran" (static rejection = the compile-error code, matching production's
-  check/build-failure exit) from "ran and died" (trap = 101) — they MUST be distinct so a runtime crash can't
-  masquerade as a correct reject. (3) CONFORMANCE compares the `E_` code + exit CLASS only; prose detail +
-  span quality stay impl-defined (D11 trap precedent) — `ggdef -- gen` records the CODE for rejection fixtures,
-  not the message; span comparison is not a conformance axis until deliberately ratified.
+  lanes. (2) EXIT distinguishes "never ran" (static rejection = **exit 1**, the compile-error code — matches
+  production's check/build-failure exit AND the rustc/clang/gcc/tsc consensus) from "ran and died" (trap = 101)
+  — they MUST be distinct so a runtime crash can't masquerade as a correct reject. (3) CONFORMANCE compares the
+  `E_` code + exit CLASS only; prose detail + span quality stay impl-defined (D11 trap precedent) — `ggdef -- gen`
+  records the CODE for rejection fixtures, not the message; span comparison is not a conformance axis until
+  deliberately ratified.
+  **⚠ TOOLCHAIN EXIT-CODE SCHEME (Option A), RATIFIED 2026-07-15 (owner, firm; research-backed):** the whole
+  `gg`/`ggdef` toolchain uses **`0` success · `1` static rejection (parse OR semantic OR may-move IllFormed —
+  ONE class) · `2` usage/CLI · `101` runtime trap + ICE · `103` fuel (ggdef-ONLY, outside the compared set).**
+  Rationale: the NUMBERS are pure consensus, deliberately un-novel (0 universal; compile=1 per
+  rustc/clang/gcc/tsc/swiftc/javac — Go's 2 is the lone outlier; usage=2 per GNU/argparse; 101 = Rust's
+  panic/ICE, and rustc's exact compile=1 / panic=ICE=101 split is the DIRECT precedent for the one distinction
+  Gorget structurally needs; `sysexits.h` 64/65/70 is followed by NO mainstream compiler — rejected). Where
+  Gorget is the REFERENCE is not a novel number but making the taxonomy a first-class EXECUTABLY-ENFORCED
+  contract (ggdef is the definition; conformance compares `E_` code + exit CLASS across four lanes) — every
+  other compiler has 1-vs-101 as de-facto behavior nobody wrote down. **RECONCILE: production `gg` ALREADY
+  conforms** (compile=1, trap=101 via `gorget_trap_at`, ICE=101 for free); the ONLY code change is `ggdef` (~6
+  edits, 2 files): `EXIT_ILLFORMED 102→1` (`eval.rs:48`); route `FrontendError::{Parse,Elaborate}` 2→1 (a source
+  error is a static rejection, NOT usage — `main.rs:97-100`); keep `USAGE=2` (`main.rs:21`); keep `EXIT_FUEL=103`
+  re-doc'd as ggdef-only (`eval.rs:50`); rewrite the header taxonomy comment (`main.rs:11-14`). THE CLINCHER: the
+  ggdef conformance harness raw-compares the exit integer (`spec_conformance_ggdef.rs:102`) and production emits
+  1, so ggdef MUST emit 1 (this OVERRULES the brief-review-1 tentative "keep 102"). **ICE folds into 101 —
+  Option C (distinct ICE code) DEFERRED** (owner 2026-07-15; rustc doesn't bother, marginal value vs custom
+  panic hooks). Two LOW production follow-ups filed (TODO): usage errors collapse into 1 (should be 2); internal
+  runtime panics (OOM/closed-channel, `panic_normal.c:5`) exit 1, colliding with the compile-error code — route
+  to a distinct code or make them traps. Write-through: this scheme + a consolidated exit-code table into
+  `docs/language-reference.md`, cross-ref static=1/fuel=103 in `spec/prose/trap-codes.md`, and note both
+  `static-error`/`parse-error` tiers → exit 1 in `rfc-ggc-ggdef.md`.
   **⚠ B2 SCOPE + LIVENESS-PASS + PASS-ORDER, RATIFIED 2026-07-14 (owner, firm — two calls, one layering principle):**
   Raised by the B2 self-host-mirror scout (the self-host has NO move-tracker → accepts every use-after-move).
   **(1) B2 mirrors the FULL D10 RULE, not production's exact code — the mover-mover arm is IN.** `f(!x, !x)`
