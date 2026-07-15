@@ -1,0 +1,19 @@
+# THE call-arm-order lock (pass-order rider): a `!self`-consuming method whose
+# ARGUMENT reads a projection of the receiver (`c.consume(c.width)`). The
+# receiver is consumed at STEP 1 (before the arg loop), so the `c.width` arg is a
+# use-after-move — matching production (self consumed at check_expr.rs:397 before
+# args) + ggdef (receiver = Move arg0 evaluated first). The proto's after-loop
+# order would WRONGLY accept this; only this fixture locks the oracle-correct
+# order in.
+struct Config:
+    int width
+    String title
+
+equip Config:
+    Config consume(!self, int w):
+        return Config(w, self.title)
+
+void main():
+    Config c = Config(800, "game")
+    Config c2 = c.consume(c.width)
+    print(c2.title)

@@ -57,6 +57,8 @@ enum DiagKind:
     DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
     DkMoveWithoutOperator  # D4/D12: implicit copy of a live drop-tainted place at an ownership boundary
     DkBorrowConflict       # D10(b): two call args whose places overlap under conflicting sigils
+    DkUseAfterMove         # liveness: read of / second move of a place already moved (E_UseAfterMove / E_DoubleMove)
+    DkMoveInLoop           # liveness: move of an enclosing-scope place inside a loop (E_MoveInLoop) — re-moved next iteration
 
     # Reserved for future migrators (kept so the type doesn't churn
     # when lowerer sites migrate).
@@ -118,6 +120,10 @@ String diag_kind_str(DiagKind kind):
             return "primitive-trait-impl"
         case DkLocalBorrowBind():
             return "local-borrow-bind"
+        case DkUseAfterMove():
+            return "use-after-move"
+        case DkMoveInLoop():
+            return "move-in-loop"
         case DkMoveWithoutOperator():
             return "move-without-operator"
         case DkBorrowConflict():

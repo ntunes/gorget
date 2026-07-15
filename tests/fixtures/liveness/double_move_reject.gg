@@ -1,0 +1,10 @@
+# Liveness double move: the same place moved twice. Mirrors production
+# double_move_error.gg (E_DoubleMove) / ggdef IllFormed. Self-host emits
+# ``s` moved more than once (double move)`.
+void consume(String !x):
+    pass
+
+void main():
+    String s = "hello"
+    consume(!s)
+    consume(!s)

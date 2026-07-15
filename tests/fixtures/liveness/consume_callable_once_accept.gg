@@ -1,0 +1,10 @@
+# ConsumeCallable called exactly ONCE (legal): a single-owner callable consumed
+# by one call. Mirrors production consume_callable_once.gg.
+int apply_once(ConsumeCallable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    ConsumeCallable[int(int)] doubler = !(n): n * 2
+    int r1 = doubler(5)
+    int r2 = apply_once((n): n + 100, 1)
+    print(f"{r1}{r2}")

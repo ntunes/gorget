@@ -52,6 +52,12 @@
 # siblings + writer-Copy-read exemption). Same subdir rationale as d12.
 !d10b_place_overlap/
 !d10b_place_overlap/*.gg
+# Liveness (use-after-move / double-move / move-in-loop) probe fixtures for the
+# unified check_safety_* walk: reject set (UAM/DM/MoveInLoop/ConsumeCallable) +
+# accept set (order-twin, branch save/restore, re-init, loop-local, once). Same
+# subdir rationale as d12/d10b — keep only the .gg sources.
+!liveness/
+!liveness/*.gg
 # D23 throws-totality cross-module negative fixture (a `throws` equip method
 # imported across a module boundary, called unhandled → E_UnhandledThrows).
 !d23_unhandled_method_xmod/

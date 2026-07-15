@@ -1,9 +1,11 @@
-# D10(b) place-overlap: a mover of the WHOLE place and a NON-Copy bare read of
-# a SUB-place under it (`f(!n, n.data)` where `n.data` is a `Vector[int]`, not
-# Copy). The bare read is a live alias into the moved-away value's region —
-# rejected with the overlap diagnostic. The Copy/non-Copy cut is on the read's
-# TYPE (`Vector[int]` owns a buffer → non-Copy), read via the typed axis, not
-# the syntactic shape.
+# Liveness use-after-move: a mover of the WHOLE place at arg 0 followed by a read
+# of a SUB-place under it (`f(!n, n.data)`). Under the ratified pass-order rider
+# (liveness precedes aliasing), the `!n` move at arg 0 dominates the later read
+# of `n.data` (left-to-right eval), so this is E_UseAfterMove — the self-host
+# emits `use of `n` after it was moved`, NOT the place-overlap diagnostic. This
+# matches production/ggdef (ggdef's single `Slot::Moved`→IllFormed); the
+# self-host emits a SINGLE UAM here, one cleaner than production's redundant
+# UAM+BorrowConflict double-fire (a filed LOW Rust-gg wart).
 struct N:
     Vector[int] data
 

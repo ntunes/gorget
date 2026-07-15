@@ -1,16 +1,12 @@
-# D10(b) place-overlap — the MOVER-MOVER arm (`f(!n, !n)`): moving the same
-# place twice in one call is the MAXIMAL place-overlap ("at most one writer OR
-# mover"). The self-host REJECTS it here with the overlap diagnostic.
-#
-# ⚠ SELF-HOST-TARGETED rejection test — NOT in the cross-compiler exact-code
-# conformance lane. Production Rust gg + ggdef reject the identical program one
-# pass EARLIER via `E_DoubleMove` (their move-tracker preempts place-overlap).
-# The self-host has NO upstream move-tracker yet (the liveness axis is a filed
-# HIGH track), so the faithful mirror of the FULL D10 rule lets this arm fire —
-# reject-with-a-different-code strictly beats ACCEPT. When the self-host
-# liveness pass lands it preempts this arm (ratified pass-order rider: liveness
-# precedes aliasing) and the diagnostic flips to the E_DoubleMove code. Owner
-# ruling "B2 SCOPE + LIVENESS-PASS" 2026-07-14.
+# Liveness DOUBLE MOVE (`f(!n, !n)`): moving the same place twice in one call.
+# Under the ratified pass-order rider (liveness precedes aliasing), the second
+# `!n` is caught as a double move — the self-host emits ``n` moved more than once
+# (double move)``, NOT the place-overlap diagnostic. This now matches production
+# Rust gg + ggdef exactly (E_DoubleMove; their move-tracker preempts
+# place-overlap the same way). Before the liveness pass landed, this fired the
+# overlap code as a faithful mirror of the FULL D10 rule (reject-with-a-different
+# -code beats ACCEPT); the unified check_safety_* walk preempts that arm now.
+# Owner ruling "B2 SCOPE + LIVENESS-PASS" 2026-07-14.
 struct N:
     Vector[int] data
 

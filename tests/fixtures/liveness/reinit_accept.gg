@@ -1,0 +1,13 @@
+# Re-init (legal): a moved binding is made live again by a whole rebind before
+# the next use (Rust mark_live). `x` is moved, re-assigned, then read.
+void sink(String !s):
+    pass
+
+String fresh():
+    return "new"
+
+void main():
+    String x = "hi"
+    sink(!x)
+    x = fresh()
+    print(x)

@@ -18678,35 +18678,44 @@ fn self_host_driver_accepts_d12_legal() {
 // codes (a pre-existing property of every self-host diagnostic), so the
 // assertion is on the message TEXT + box rule, not a code.
 //
-// NOTE on `double_move_reject` (`f(!n,!n)` — the mover-mover arm): this is a
-// SELF-HOST-TARGETED rejection test, deliberately OUT of the cross-compiler
-// exact-code conformance lane. Production Rust gg + ggdef reject the identical
-// program one pass earlier via `E_DoubleMove` (their move-tracker preempts
-// place-overlap); the self-host has no move-tracker yet (filed HIGH liveness
-// track), so the faithful mirror of the FULL D10 rule lets the arm fire with
-// the overlap code — reject-with-a-different-code strictly beats ACCEPT. When
-// the self-host liveness pass lands it preempts this arm (ratified pass-order
-// rider) and the diagnostic flips to E_DoubleMove. Owner ruling "B2 SCOPE +
-// LIVENESS-PASS" 2026-07-14.
+// PASS-ORDER RIDER (LANDED with the unified check_safety_* walk): liveness now
+// precedes aliasing, so two of these five fixtures flip from the place-overlap
+// code to a LIVENESS code — the self-host now matches production/ggdef exactly:
+//   • `move_noncopyread_reject` (`f(!n, n.data)`): the move at arg 0 dominates
+//     the later read of `n.data` → E_UseAfterMove (`use of `n` after it was
+//     moved`), NOT overlap. The self-host emits a SINGLE UAM here — production
+//     redundantly double-fires UAM + BorrowConflict (a filed LOW Rust-gg
+//     diagnostic wart); the self-host is reference-grade-cleaner, matching
+//     ggdef's single IllFormed.
+//   • `double_move_reject` (`f(!n, !n)`): the second `!n` is a double move →
+//     E_DoubleMove (``n` moved more than once (double move)`), preempting the
+//     mover-mover overlap arm.
+// The other three stay on the overlap axis. Each fixture asserts its correct
+// axis message AND the codespan box rule (the UAM/DM diagnostics render through
+// the same Diagnostic.error box constructor). Owner ruling "B2 SCOPE +
+// LIVENESS-PASS" 2026-07-14; pass-order rider ratified.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_rejects_d10b_place_overlap() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let reject_fixtures = [
-        // two `&` writers of the same whole place
-        "writer_writer_reject",
-        // `&` writer of the whole place + `&` writer of a sub-place under it
-        "writer_subfield_reject",
-        // non-Copy bare read + mover of the same place
-        "read_move_reject",
-        // mover of the whole place + non-Copy bare read of a sub-place
-        "move_noncopyread_reject",
-        // the mover-mover arm — self-host-targeted rejection (see NOTE above)
-        "double_move_reject",
+    // (fixture, expected axis message). The box-rule (`\u{250c}`) is asserted for
+    // all — the flipped liveness diagnostics render through the same box.
+    let reject_fixtures: [(&str, &str); 5] = [
+        // two `&` writers of the same whole place — overlap
+        ("writer_writer_reject", "their places overlap"),
+        // `&` writer of the whole place + `&` writer of a sub-place — overlap
+        ("writer_subfield_reject", "their places overlap"),
+        // non-Copy bare read + mover of the same place — overlap (read-before-move)
+        ("read_move_reject", "their places overlap"),
+        // mover of the whole place + non-Copy read of a sub-place — FLIPS to
+        // liveness use-after-move (`!n` dominates the later `n.data` read)
+        ("move_noncopyread_reject", "use of `n` after it was moved"),
+        // the mover-mover arm — FLIPS to liveness double move (`f(!n,!n)`)
+        ("double_move_reject", "moved more than once (double move)"),
     ];
-    for name in reject_fixtures {
+    for (name, expected_msg) in reject_fixtures {
         let fixture = manifest_dir.join(format!("tests/fixtures/d10b_place_overlap/{name}.gg"));
         assert!(fixture.exists(), "missing D10(b) reject fixture: {}", fixture.display());
         let out = run_with_timeout(
@@ -18718,15 +18727,14 @@ fn self_host_driver_rejects_d10b_place_overlap() {
         assert!(
             !out.status.success(),
             "self-host driver ACCEPTED an overlapping-place call `{name}` \
-             (D10(b) place-overlap enforcement in self_host_typechecker/typecheck.gg \
-             regressed). exit={:?}\nstderr:\n{stderr}",
+             (D10(b) place-overlap / liveness enforcement in \
+             self_host_typechecker/typecheck.gg regressed). exit={:?}\nstderr:\n{stderr}",
             out.status.code(),
         );
         assert!(
-            stderr.contains("their places overlap") && stderr.contains('\u{250c}'),
-            "self-host driver rejected `{name}` but emitted no D10(b) codespan \
-             diagnostic (expected `their places overlap` + the box rule).\n\
-             stderr:\n{stderr}",
+            stderr.contains(expected_msg) && stderr.contains('\u{250c}'),
+            "self-host driver rejected `{name}` but emitted no codespan diagnostic \
+             (expected `{expected_msg}` + the box rule).\nstderr:\n{stderr}",
         );
         assert!(
             stdout.trim().is_empty(),
@@ -18747,13 +18755,13 @@ fn self_host_driver_rejects_d10b_place_overlap() {
 // no overlapping-place calls); this fixture is the executable guard an
 // over-rejection cannot pass.
 //
-// NOTE: there is deliberately NO fixture for the mover-Copy case
-// (`f(!s, s.tag)`). That program ACCEPTS self-host-side today ONLY because of
-// the known, filed missing liveness axis (production/ggdef reject it via
-// E_UseAfterMove). An ACCEPT fixture would assert exit-0 as the EXPECTED
-// behavior — blessing the buggy accept (the "lock-in" anti-pattern). It is
-// pinned in the liveness track as an `#[ignore]`d SHOULD-reject fixture, not
-// here.
+// NOTE: the mover-Copy case (`f(!s, s.tag)` / `f(!n, n.data)`) is a LIVENESS
+// reject, not a place-overlap one — the `!s` move dominates the later read.
+// With the unified check_safety_* walk landed it now REJECTS via use-after-move
+// (see `move_noncopyread_reject` in `self_host_driver_rejects_d10b_place_overlap`
+// and the `self_host_driver_rejects_liveness` set), matching production + ggdef.
+// It is deliberately NOT an accept fixture here (asserting exit-0 would bless a
+// buggy accept — the "lock-in" anti-pattern).
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_accepts_d10b_place_overlap() {
@@ -18778,6 +18786,130 @@ fn self_host_driver_accepts_d10b_place_overlap() {
         assert!(
             out.status.success(),
             "self-host driver REJECTED a LEGAL D10(b) program `{name}` — an \
+             over-rejection in self_host_typechecker/typecheck.gg. exit={:?}\n\
+             stderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            !stdout.trim().is_empty(),
+            "self-host driver accepted `{name}` but emitted no C — the legal path \
+             must lower. stderr:\n{stderr}",
+        );
+    }
+}
+
+// LIVENESS / use-after-move axis in the self-host (unified check_safety_* walk,
+// self_host_typechecker/typecheck.gg). The self-host now tracks move-state and
+// rejects the use-after-move / double-move / move-in-loop class it previously
+// ACCEPTED — closing the divergence with Rust gg + ggdef (ggdef `Slot::Moved`
+// -> IllFormed). Each reject fixture asserts its SPECIFIC axis message (the
+// self-host renderer has no `error[E_…]` codes) + the codespan box rule.
+//
+// ggdef fixture-for-fixture: the straight-line UAM/DM shapes agree with ggdef's
+// move_then_read_is_illformed / d10b_order_twin_read_before_move_legal (verified
+// via `ggdef run` -> IllFormed / Value). Two axes go BEYOND ggdef's model and
+// are verified against production Rust gg instead (both a filed ggdef gap, NOT a
+// self-host defect): re-init-makes-live (`reinit_accept` — ggdef flags a write
+// to a moved slot ill-formed, but production + the self-host correctly accept
+// it, and the self-host itself relies on re-init so blast=0 requires it) and
+// ConsumeCallable single-owner consume (`consume_callable_double_reject` —
+// production E_DoubleMove; ggdef under-models the carve-out and runs it).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_liveness() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    // (fixture, expected axis message). Box-rule (`\u{250c}`) asserted for all.
+    let reject_fixtures: [(&str, &str); 9] = [
+        // straight-line read after a `!`-consume -> use-after-move
+        ("use_after_move_reject", "after it was moved"),
+        // same place moved twice -> double move
+        ("double_move_reject", "moved more than once (double move)"),
+        // move in one arm of an if-without-else -> moved-in-any -> read is UAM
+        ("use_after_move_branch_reject", "after it was moved"),
+        // read of a moved root inside an f-string interpolation -> UAM
+        ("fstring_use_after_move_reject", "after it was moved"),
+        // field/method read of a moved root (`v.len()` after `!v`) -> UAM
+        ("field_read_use_after_move_reject", "after it was moved"),
+        // `!self`-consuming method then a read of the receiver -> UAM
+        ("consuming_self_use_after_move_reject", "after it was moved"),
+        // THE call-arm-order lock: `!self` method whose ARG reads the receiver
+        // (`c.consume(c.width)`) -> receiver consumed at STEP 1 before the arg -> UAM
+        ("consuming_self_arg_reads_receiver_reject", "after it was moved"),
+        // ConsumeCallable called twice -> double move (production parity)
+        ("consume_callable_double_reject", "moved more than once (double move)"),
+        // Part C: move of an enclosing-scope place inside a multi-iteration loop
+        ("move_in_loop_reject", "inside a loop"),
+    ];
+    for (name, expected_msg) in reject_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/liveness/{name}.gg"));
+        assert!(fixture.exists(), "missing liveness reject fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_liveness",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED a use-after-move / double-move / move-in-loop \
+             `{name}` (liveness enforcement in self_host_typechecker/typecheck.gg \
+             regressed). exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains(expected_msg) && stderr.contains('\u{250c}'),
+            "self-host driver rejected `{name}` but emitted no liveness codespan \
+             diagnostic (expected `{expected_msg}` + the box rule).\nstderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host driver emitted C for rejected `{name}` — the gate must halt \
+             BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+}
+
+// Over-rejection guard for the liveness axis: the self-host must ACCEPT the LEGAL
+// counterparts — the read-before-move order-twin, branch save/restore, re-init,
+// a loop-local move, a ConsumeCallable called once, and a `!self`-consume with no
+// post-use. The bootstrap proves no UNDER-rejection regression, but is silent to
+// an OVER-rejection; these fixtures are the executable guard a liveness FP (the
+// exact risk Part C precise loops carried) cannot pass.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_accepts_liveness() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let legal_fixtures = [
+        // order-twin: Copy read BEFORE the move is legal
+        "read_before_move_accept",
+        // move in one arm, use in the other exclusive arm -> legal
+        "branch_save_restore_accept",
+        // moved then re-assigned (mark_live) before the next read -> legal
+        "reinit_accept",
+        // value declared INSIDE the loop is loop-local -> moving it is legal
+        "loop_local_move_accept",
+        // ConsumeCallable called exactly once -> legal
+        "consume_callable_once_accept",
+        // `!self`-consume with NO post-use of the receiver -> legal
+        "consuming_self_no_use_accept",
+    ];
+    for name in legal_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/liveness/{name}.gg"));
+        assert!(fixture.exists(), "missing liveness legal fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_accepts_liveness",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "self-host driver REJECTED a LEGAL liveness program `{name}` — an \
              over-rejection in self_host_typechecker/typecheck.gg. exit={:?}\n\
              stderr:\n{stderr}",
             out.status.code(),

@@ -1,0 +1,10 @@
+# Liveness use-after-move inside an f-string interpolation — the move-tracker
+# must visit f-string sub-expressions. Mirrors production
+# fstring_use_after_move_error.gg.
+void consume(Vector[int] !v):
+    print(v.len())
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    consume(!v)
+    print(f"{v.len()}")

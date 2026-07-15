@@ -1,0 +1,10 @@
+# Liveness use-after-move via a field/method read of a moved root (`v.len()`
+# after `!v`). The self-host tracks at ROOT-name granularity (matches production
+# + the proto), so reading any projection of a moved root is use-after-move.
+void consume(Vector[int] !v):
+    pass
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    consume(!v)
+    print(v.len())

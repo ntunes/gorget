@@ -1,0 +1,11 @@
+# Loop-local move (legal): a value declared INSIDE the loop body is re-created
+# each iteration, so moving it is not a cross-iteration re-move (Rust
+# mark_live -> loop_local_defs.last). Contrast move_in_loop_reject (outer var).
+void sink(String !s):
+    pass
+
+void main():
+    Vector[int] items = [1, 2]
+    for i in items:
+        String tmp = "y"
+        sink(!tmp)

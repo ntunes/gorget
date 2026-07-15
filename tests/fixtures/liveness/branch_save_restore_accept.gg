@@ -1,0 +1,13 @@
+# Branch save/restore (legal): a move in one arm and a use in the OTHER arm of an
+# if/else — the two paths are exclusive, and nothing reads the place after the
+# join, so no use-after-move.
+void sink(String !s):
+    pass
+
+void main():
+    String x = "hi"
+    bool c = true
+    if c:
+        sink(!x)
+    else:
+        print(x)

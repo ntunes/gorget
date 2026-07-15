@@ -12,7 +12,7 @@ from ast import SpannedExpr, SpannedType, SpannedPattern, Span, Type, Expr, Patt
 from ast import EMethodCall, EBinaryOp, EIs, EClosure, ECall, EBlock, EDo, EAs, EIdentifier, EFString, SelectArm, SORecv, EMatch
 from ast import EFieldAccess, EUnaryOp, EIndex, EIntLiteral
 from ast import SExpr, SVarDecl, SReturn
-# Full Expr/Stmt surface for the exhaustive carrier-op walker (check_carrier_ops_*).
+# Full Expr/Stmt surface for the exhaustive unified safety walker (check_safety_*).
 from ast import ERange, EIf, EImplicitClosure, EArrayLiteral, ETupleLiteral
 from ast import EDictLiteral, EStructLiteral, EDotShorthand, ETry, EMove, EMutableBorrow, EDeref
 from ast import EListComp, ESetComp, EDictComp, EDefaultOp, EAwait, ESpawn, ESpawnBlocking
@@ -342,7 +342,7 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
                         scopes.set_def_type(param_def, binding_type_id)
                         # D12 position 6: stamp is_param + ownership on the
                         # TYPECHECK-table param def (the one resolution_map +
-                        # `check_carrier_ops` actually read). `resolve_function`
+                        # `check_safety_*` actually read). `resolve_function`
                         # marks a param on the resolve-pass scope table, but the
                         # merged-module typecheck uses a different def id — so the
                         # ownership sigil must be recorded HERE, at the def this
@@ -866,14 +866,24 @@ void check_call_aliasing(Vector[CallArg] args, ScopeTable scopes, TypeTable &typ
         while j < n:
             ArgPlace x = places.get(i).unwrap()
             ArgPlace y = places.get(j).unwrap()
+            # PASS-ORDER RIDER (liveness precedes aliasing): `x` is the EARLIER arg
+            # (i < j, places collected in left-to-right order). If it is a MOVE, it
+            # DOMINATES every later use of its place — the second move (`f(!x,!x)`)
+            # is E_DoubleMove and a move-then-read (`f(!x, x.data)`) is E_UseAfterMove,
+            # both the LIVENESS axis's job (which runs first). Skip the pair so the
+            # overlap axis does not double-diagnose. This SUBSUMES the old explicit
+            # mover-mover arm AND drops production's redundant BorrowConflict on
+            # `f(!x, x.data)` (measured: Rust gg emits UAM + BorrowConflict there;
+            # the self-host emits a single UAM — reference-grade-cleaner). A move at
+            # arg `j` (LATER) still conflicts with an earlier reader/writer at `i`
+            # (`g(n,!n)`, `f(&n,!n)`) — that read-before-move is legal for liveness,
+            # so the overlap axis must still fire; hence the guard is on `x` only.
+            if x.ownership == OWN_MOVE:
+                j = j + 1
+                continue
             if x.root == y.root and paths_overlap_vec(x.path, y.path):
                 bool x_copy_reader = x.ownership == OWN_BORROW and x.is_copy
                 bool y_copy_reader = y.ownership == OWN_BORROW and y.is_copy
-                # NO `(Move,Move)` skip here (owner ruling — the mover-mover arm is
-                # IN): the general "(≥1 writer/mover) ∧ ¬both-bare" rule flags
-                # same-root overlapping movers (`f(!x,!x)`). Copy bare readers are
-                # already dropped above, so `f(!x, x.copy_field)` leaves only `!x`
-                # → no pair → accept (the mover-Copy exemption falls out for free).
                 bool has_wm = x.ownership == OWN_MUTABLE or x.ownership == OWN_MOVE or y.ownership == OWN_MUTABLE or y.ownership == OWN_MOVE
                 bool both_bare = x.ownership == OWN_BORROW and y.ownership == OWN_BORROW
                 if not x_copy_reader and not y_copy_reader and has_wm and not both_bare:
@@ -1106,42 +1116,312 @@ void reject_tainted_captures(Vector[Stmt] body, int outer_scope, ScopeTable scop
                     ctx.diagnostics.push(Diagnostic.error(id_expr.span, DkMoveWithoutOperator(), drop_taint_message(d.name, 2)))
 
 # Exhaustive statement walker — visits every expression position in a body.
-void check_carrier_ops_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
-    for s in stmts:
-        check_carrier_ops_stmt(s, scope_id, &scopes, &types, &ctx)
+# ═══════════════════════════════════════════════════════════════════════════
+# UNIFIED SAFETY WALK — drop-purity (D4/D12) + place-overlap (D10b) + liveness
+# (use-after-move / double-move) are ARMS of ONE traversal. Mirrors production's
+# src/semantic/safety/ module layout: a single per-function walk that threads the
+# move-state alongside the stateless carrier-op rejects. Replaces the former two
+# parallel walks (check_carrier_ops_* stateless + check_liveness_* stateful).
+#
+# Liveness mirrors Rust src/semantic/safety/origins.rs check_move(468)/check_use(25)
+# + merge_branch_states(568). The self-host had NO move-tracker, so it accepted
+# every use-after-move / double-move that Rust gg + ggdef reject (ggdef
+# `Slot::Moved`→IllFormed, eval.rs:745). Closes the divergence for the move shapes:
+#   • CallArg.ownership == OWN_MOVE  (`f(!x)`)                  — ast.gg CallArg
+#   • EMove wrapping a place         (`S y = !x`, `return !x`)  — parser.gg:2496
+#   • `!self`-consuming method receivers + ConsumeCallable-typed callees (Part B)
+# Move-state is NAME-keyed (B2: `self` is not resolved; place_root_name returns
+# "self"). state.moved[root] = the move site's span.start; presence = moved (Rust
+# VarState::Moved). Root-name granularity (matches production's DkVariable filter).
+struct SafetyState:
+    Dict[String, int] moved        # flow-state: root name -> move-site span.start; present = moved
+    int loop_depth                 # structural loop nesting (saved/restored, NOT branch-cloned)
+    Dict[String, int] loop_locals  # names bound INSIDE the current loop (moving these is legal)
+    String rebind                  # same-stmt rebind target (`x = f(!x)` self-rebind stays legal)
 
-void check_carrier_ops_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+# A per-branch snapshot: the flow-state `moved` and the loop-local set are
+# DEEP-cloned so a branch's moves/reinits never leak into a sibling or the parent
+# join; loop_depth (int) and rebind (String) copy by value. This is the branched
+# flow-state clone Rust does implicitly per BranchState.
+SafetyState safety_snapshot(SafetyState state):
+    return SafetyState(state.moved.clone(), state.loop_depth, state.loop_locals.clone(), state.rebind)
+
+# Rust check_use (origins.rs:25): a read of a moved place is use-after-move.
+void live_check_use(String name, Span span, SafetyState &state, ResolveContext &ctx):
+    if state.moved.contains(name):
+        ctx.diagnostics.push(Diagnostic.error(span, DkUseAfterMove(), f"use of `{name}` after it was moved"))
+
+# Re-init a binding to Live (Rust mark_live): a fresh `SVarDecl`/`SAssign` of the
+# whole binding makes it usable again. Isolated in a SMALL helper on purpose —
+# the discarded `Dict[_,int].remove` result is an `Option[int]`, and threading the
+# discard through the large `check_safety_stmt` frame trips a latent Rust-gg
+# C-backend coalesce miscompile (Option[int] slot stored an int32 0). Keeping the
+# discard in a tiny function sidesteps the coalesce path. (Bug filed — own track.)
+void live_reinit(SafetyState &state, String name):
+    if state.moved.contains(name):
+        state.moved.remove(name)
+
+# Rust check_move (origins.rs:468): mark a move site; a second move of an
+# already-moved place is a double move. Only whole-binding locals/params/self
+# are tracked (Rust's DkVariable filter); a non-place move (`!f()`) has no root.
+void live_mark_move(SpannedExpr place, SafetyState &state, ScopeTable &scopes, ResolveContext &ctx):
+    String root = place_root_name(place.expr)
+    if root == "<place>":
+        return
+    bool trackable = root == "self"
+    if not trackable:
+        if place_root_def_spanned(place, scopes, ctx) is Some(rdid):
+            match scopes.get_def(rdid).kind:
+                case DkVariable():
+                    trackable = true
+                else:
+                    pass
+    if not trackable:
+        return
+    if state.moved.contains(root):
+        ctx.diagnostics.push(Diagnostic.error(place.span, DkUseAfterMove(), f"`{root}` moved more than once (double move)"))
+        return
+    # PART C (Rust check_move, origins.rs:495-503): moving an ENCLOSING-scope place
+    # inside a loop re-moves it on the next iteration — a static MoveInLoop reject.
+    # Exempt: a loop-local (declared / re-init inside the innermost loop body, via
+    # live_reinit's loop_locals population) and the same-statement rebind target
+    # (`acc = bump(!acc)`, whose move feeds the immediate re-init). loop_depth is 0
+    # outside any loop, so this is dormant on straight-line code.
+    if state.loop_depth > 0 and not state.loop_locals.contains(root) and root != state.rebind:
+        ctx.diagnostics.push(Diagnostic.error(place.span, DkMoveInLoop(), f"cannot move `{root}` out of an enclosing scope inside a loop — it would be used-after-move on the next iteration"))
+        return
+    state.moved.set(root, place.span.start)
+
+# A branch whose last stmt is a control-flow exit never reaches the join, so its
+# move-state is excluded from the merge (Rust merge_branch_states filters
+# `s.diverges`, origins.rs:574). Divergence is RECURSIVE: an `if`/`match` whose
+# every arm diverges also diverges (Rust sets BranchState.diverges when all
+# merged branches diverge). Over-reporting divergence only under-detects (never
+# a false positive), so this is purely anti-over-rejection.
+bool live_stmts_diverge(Vector[Stmt] stmts):
+    if stmts.len() == 0:
+        return false
+    return live_stmt_diverges(stmts.get(stmts.len() - 1).unwrap())
+
+bool live_stmt_diverges(Stmt s):
     match s:
-        case SVarDecl(_stype, _name, init_expr, _line, _col, _flags):
+        case SReturn(_):
+            return true
+        case SThrow(_):
+            return true
+        case SBreak():
+            return true
+        case SContinue():
+            return true
+        case SIf(_cond, body, else_branches):
+            # Diverges iff the then-body AND every else-branch body diverge AND
+            # there is an unconditional else (else the no-branch path falls through).
+            if not live_stmts_diverge(body):
+                return false
+            bool has_unconditional_else = false
+            for eb in else_branches:
+                if not live_stmts_diverge(eb.body):
+                    return false
+                if eb.condition is None:
+                    has_unconditional_else = true
+            return has_unconditional_else
+        case SMatch(_scrut, arms):
+            # A match is exhaustive (typecheck enforces it), so it diverges iff
+            # every arm body diverges.
+            if arms.len() == 0:
+                return false
+            for arm in arms:
+                if not live_stmts_diverge(arm.body):
+                    return false
+            return true
+        else:
+            return false
+
+# Collect the binding NAMES a pattern introduces (Rust mark_pattern_bindings →
+# mark_live). Mirrors resolve.gg's define_pattern_bindings enumeration.
+void collect_pattern_names_into(SpannedPattern pattern, Vector[String] &out):
+    match pattern.pat:
+        case PBinding(name):
+            out.push(name)
+        case PConstructor(_, fields):
+            for field in fields:
+                collect_pattern_names_into(field, &out)
+        case PDotShorthand(_, fields):
+            for field in fields:
+                collect_pattern_names_into(field, &out)
+        case PTuple(elements):
+            for elem in elements:
+                collect_pattern_names_into(elem, &out)
+        case POr(alternatives):
+            if alternatives.len() > 0:
+                collect_pattern_names_into(alternatives.get(0).unwrap(), &out)
+        else:
+            pass
+
+# Collect the `is`-pattern bindings a boolean condition introduces into its
+# guarded branch (`if x is Some(e):` binds `e` in the then-body), recursing the
+# and/or/not tree. Over-collecting only ever UNDER-detects a MoveInLoop (adds a
+# spurious loop-local) — never a false positive — so a negated `is` is included.
+void collect_is_bindings_into(SpannedExpr cond, Vector[String] &out):
+    match cond.expr:
+        case EIs(_inner, _neg, pat):
+            collect_pattern_names_into(*pat, &out)
+        case EBinaryOp(l, _op, r):
+            collect_is_bindings_into(*l, &out)
+            collect_is_bindings_into(*r, &out)
+        case EUnaryOp(_op, o):
+            collect_is_bindings_into(*o, &out)
+        else:
+            pass
+
+# Walk one alternative branch on a snapshot of the pre-branch state; if it reaches
+# the join, fold its NEW moves into `acc`. The union across branches is "moved in
+# any branch → moved after" (Rust merge, origins.rs:609). `pat_names` are the
+# pattern bindings this branch introduces (match arm / `is`-condition) — inside a
+# loop they are loop-local (re-bound each iteration), so seed them.
+void safety_branch(Vector[Stmt] body, Vector[String] pat_names, int scope_id, SafetyState &state, Dict[String, int] &acc, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    SafetyState b = safety_snapshot(state)
+    if b.loop_depth > 0:
+        for pn in pat_names:
+            b.loop_locals.set(pn, 1)
+    check_safety_stmts(body, scope_id, &b, &scopes, &types, &ctx)
+    if live_stmts_diverge(body):
+        return
+    for k in b.moved.keys():
+        if not acc.contains(k):
+            acc.set(k, b.moved.get(k).unwrap())
+
+# Commit an accumulated branch-union into the live state (moved-in-any).
+void safety_commit(Dict[String, int] acc, SafetyState &state):
+    for k in acc.keys():
+        if not state.moved.contains(k):
+            state.moved.set(k, acc.get(k).unwrap())
+
+# PART C: precise loop-body handling (Rust origins.rs:495-503 + check_stmt.rs:988-1022).
+# Walk the body IN-PLACE at loop_depth+1 with a FRESH innermost loop_locals set
+# (mirrors loop_local_defs.push(empty) — only vars declared/re-init INSIDE this
+# loop body are loop-local, so an outer var moved here is a MoveInLoop, fired in
+# live_mark_move). After the body, union the pre-loop and post-body move-sets: the
+# loop may run 0 times, so a body-move only "maybe" happens, but a pre-loop move
+# stays moved (Rust merge_branch_states([before, after_body])). loop_depth,
+# loop_locals and rebind are saved/restored so the loop context never leaks past
+# the loop (mirrors the push/pop of loop_local_defs).
+void safety_loop_body(Vector[Stmt] body, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    int saved_depth = state.loop_depth
+    Dict[String, int] saved_locals = state.loop_locals.clone()
+    String saved_rebind = state.rebind
+    Dict[String, int] before = state.moved.clone()
+    state.loop_depth = saved_depth + 1
+    state.loop_locals = Dict[String, int]()
+    check_safety_stmts(body, scope_id, &state, &scopes, &types, &ctx)
+    state.loop_depth = saved_depth
+    state.loop_locals = saved_locals
+    state.rebind = saved_rebind
+    for k in before.keys():
+        if not state.moved.contains(k):
+            state.moved.set(k, before.get(k).unwrap())
+
+# A move consumes the whole place; do not also count it as a read. `!f()` (a
+# non-place move) has no root — walk its sub-exprs for nested uses instead.
+void live_move_operand(SpannedExpr place, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    if place_root_name(place.expr) == "<place>":
+        check_safety_expr(place, scope_id, &state, &scopes, &types, &ctx)
+    else:
+        live_mark_move(place, &state, &scopes, &ctx)
+
+# PART B: is `e` a ConsumeCallable-typed value? A call `f()` where `f` is
+# ConsumeCallable CONSUMES `f` (single-owner-by-design carve-out — no clone
+# path). Mirrors Rust `is_consume_callable_var` (helpers.rs:423). Typed axis
+# (layering rule 2): matches the RTConsumeCallableTrait / boxed-ConsumeCallable
+# ResolvedType — never a name/shape heuristic.
+bool live_is_consume_callable(SpannedExpr e, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    int t = infer_expr_type(e, scopes, &types, &ctx)
+    if t < 0 or t >= types.types.len():
+        return false
+    ResolvedType rt = get_rtype_at(types.types, t)
+    match rt:
+        case RTConsumeCallableTrait(_):
+            return true
+        case RTBoxedCallable(kind_name, _):
+            return kind_name == "ConsumeCallable"
+        else:
+            return false
+
+# ── The unified walk. Each Stmt/Expr arm runs BOTH the stateless carrier-op
+# rejects (D4/D12 drop-purity, `??`/`*x`) AND the stateful liveness update
+# (moves, reads, branch join) in ONE traversal. `scope_id` STAYS an ambient int
+# (constant per function body — it never branches). Adding a new safety axis =
+# add a SafetyState field + touch the relevant arms; the traversal is shared.
+# Loops use PRECISE MoveInLoop tracking (`safety_loop_body`: loop_depth+1, fresh
+# per-iteration loop_locals, and a final union so a body move DOES escape to after
+# the loop) — mirroring production `origins.rs`. A move of an outer (non-loop-local,
+# non-same-stmt-rebound) place inside a loop is a MoveInLoop reject.
+void check_safety_stmts(Vector[Stmt] stmts, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    for s in stmts:
+        check_safety_stmt(s, scope_id, &state, &scopes, &types, &ctx)
+
+void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match s:
+        case SVarDecl(_stype, name, init_expr, _line, _col, _flags):
             check_local_borrow_bind(init_expr, &ctx)
             # D12 position 1 (bind): a bare bind of a live drop-tainted place.
             reject_tainted_place(init_expr, scopes, &types, &ctx)
-            check_carrier_ops_expr(init_expr, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(init_expr, scope_id, &state, &scopes, &types, &ctx)
+            # Liveness: a fresh binding of `name` makes it live again (Rust mark_live);
+            # inside a loop it is a loop-local (re-created each iteration → moving it
+            # is legal, Rust mark_live adds it to loop_local_defs.last).
+            live_reinit(&state, name)
+            if state.loop_depth > 0:
+                state.loop_locals.set(name, 1)
         case SAssign(target, value):
-            check_carrier_ops_expr(target, scope_id, &scopes, &types, &ctx)
             check_local_borrow_bind(value, &ctx)
             # D12 position 1 (assign): a bare assign of a live drop-tainted place.
             reject_tainted_place(value, scopes, &types, &ctx)
             # D12 position 6 (materialize-on-write via field/index write):
             # `s.id = 9` through a bare BORROW param of a drop-tainted type.
             reject_materialize_on_write(target, scopes, &types, &ctx)
-            check_carrier_ops_expr(value, scope_id, &scopes, &types, &ctx)
+            # PART C: record the same-statement rebind target so a `acc = bump(!acc)`
+            # left-fold inside a loop is NOT flagged MoveInLoop — the move feeds the
+            # immediate re-init (Rust assignment_rebind_target). Set it only for the
+            # RHS walk (where the move happens), then restore.
+            String saved_rebind = state.rebind
+            match target.expr:
+                case EIdentifier(rnm):
+                    state.rebind = rnm
+                else:
+                    pass
+            # Liveness: read the RHS (source still live) BEFORE re-initialising the
+            # target, so `x = f(x)` reads the old `x` then rebinds it.
+            check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
+            state.rebind = saved_rebind
+            match target.expr:
+                case EIdentifier(nm):
+                    # Whole-binding rebind → live again (Rust mark_live); a rebind
+                    # inside a loop makes the target loop-local too.
+                    live_reinit(&state, nm)
+                    if state.loop_depth > 0:
+                        state.loop_locals.set(nm, 1)
+                else:
+                    # Field/index write (`p.f = ...`) reads the root.
+                    check_safety_expr(target, scope_id, &state, &scopes, &types, &ctx)
         case SCompoundAssign(target, _op, value):
-            check_carrier_ops_expr(target, scope_id, &scopes, &types, &ctx)
             # D12 position 6 (materialize-on-write via compound field/index write).
             reject_materialize_on_write(target, scopes, &types, &ctx)
-            check_carrier_ops_expr(value, scope_id, &scopes, &types, &ctx)
+            # A compound assign READS the target (uses the old value) — a moved
+            # target here is a use-after-move.
+            check_safety_expr(target, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
         case SExpr(sexpr):
-            check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(sexpr, scope_id, &state, &scopes, &types, &ctx)
         case SReturn(opt_expr):
             if opt_expr is Some(sexpr):
                 # D12 position 4 (return + expr-body-fn tail, both normalize to
                 # SReturn): a bare return of a live drop-tainted place copies at
                 # the return ownership boundary.
                 reject_tainted_place(sexpr, scopes, &types, &ctx)
-                check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(sexpr, scope_id, &state, &scopes, &types, &ctx)
         case SThrow(sexpr):
-            check_carrier_ops_expr(sexpr, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(sexpr, scope_id, &state, &scopes, &types, &ctx)
         case SBreak():
             pass
         case SContinue():
@@ -1151,86 +1431,106 @@ void check_carrier_ops_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable 
         case SMeta():
             pass
         case SMetaFor(_vars, iter_e, body):
-            check_carrier_ops_expr(iter_e, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(iter_e, scope_id, &state, &scopes, &types, &ctx)
+            SafetyState mfc = safety_snapshot(state)
+            check_safety_stmts(body, scope_id, &mfc, &scopes, &types, &ctx)
         case SMetaIf(cond, body, else_branches):
-            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(cond, scope_id, &state, &scopes, &types, &ctx)
+            Dict[String, int] mi_acc = Dict[String, int]()
+            safety_branch(body, Vector[String](), scope_id, &state, &mi_acc, &scopes, &types, &ctx)
             for eb in else_branches:
                 if eb.condition is Some(c):
-                    check_carrier_ops_expr(c, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_stmts(eb.body, scope_id, &scopes, &types, &ctx)
+                    check_safety_expr(c, scope_id, &state, &scopes, &types, &ctx)
+                safety_branch(eb.body, Vector[String](), scope_id, &state, &mi_acc, &scopes, &types, &ctx)
+            safety_commit(mi_acc, &state)
         case SMetaConst(_name, value):
-            check_carrier_ops_expr(value, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
         case SMetaForMatch(_vars, scrut, arms):
-            check_carrier_ops_expr(scrut, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(scrut, scope_id, &state, &scopes, &types, &ctx)
             for arm in arms:
                 if arm.guard is Some(g):
-                    check_carrier_ops_expr(g, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_stmts(arm.body, scope_id, &scopes, &types, &ctx)
+                    check_safety_expr(g, scope_id, &state, &scopes, &types, &ctx)
+                SafetyState mfm = safety_snapshot(state)
+                check_safety_stmts(arm.body, scope_id, &mfm, &scopes, &types, &ctx)
         case SMetaMatch(scrut, meta_arms, default_body):
-            check_carrier_ops_expr(scrut, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(scrut, scope_id, &state, &scopes, &types, &ctx)
             for ma in meta_arms:
-                check_carrier_ops_expr(ma.case_value, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_stmts(ma.body, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(default_body, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(ma.case_value, scope_id, &state, &scopes, &types, &ctx)
+                SafetyState mmc = safety_snapshot(state)
+                check_safety_stmts(ma.body, scope_id, &mmc, &scopes, &types, &ctx)
+            SafetyState mmd = safety_snapshot(state)
+            check_safety_stmts(default_body, scope_id, &mmd, &scopes, &types, &ctx)
         case SMetaWhile(cond, body):
-            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(cond, scope_id, &state, &scopes, &types, &ctx)
+            SafetyState mwc = safety_snapshot(state)
+            check_safety_stmts(body, scope_id, &mwc, &scopes, &types, &ctx)
         case SFor(_pat, iter_e, body, _flags, else_body):
-            check_carrier_ops_expr(iter_e, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(else_body, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(iter_e, scope_id, &state, &scopes, &types, &ctx)
+            # PART C precise loop body (the for-pattern binding is NOT loop-local —
+            # moving the loop variable IS a MoveInLoop, matching production).
+            safety_loop_body(body, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_stmts(else_body, scope_id, &state, &scopes, &types, &ctx)
         case SWhile(cond, body, else_body):
-            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(else_body, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(cond, scope_id, &state, &scopes, &types, &ctx)
+            safety_loop_body(body, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_stmts(else_body, scope_id, &state, &scopes, &types, &ctx)
         case SLoop(body):
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            safety_loop_body(body, scope_id, &state, &scopes, &types, &ctx)
         case SIf(cond, body, else_branches):
-            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(cond, scope_id, &state, &scopes, &types, &ctx)
+            Vector[String] then_binds = Vector[String]()
+            collect_is_bindings_into(cond, &then_binds)
+            Dict[String, int] if_acc = Dict[String, int]()
+            safety_branch(body, then_binds, scope_id, &state, &if_acc, &scopes, &types, &ctx)
             for eb in else_branches:
+                Vector[String] eb_binds = Vector[String]()
                 if eb.condition is Some(c):
-                    check_carrier_ops_expr(c, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_stmts(eb.body, scope_id, &scopes, &types, &ctx)
+                    check_safety_expr(c, scope_id, &state, &scopes, &types, &ctx)
+                    collect_is_bindings_into(c, &eb_binds)
+                safety_branch(eb.body, eb_binds, scope_id, &state, &if_acc, &scopes, &types, &ctx)
+            safety_commit(if_acc, &state)
         case SMatch(scrut, arms):
-            check_carrier_ops_expr(scrut, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(scrut, scope_id, &state, &scopes, &types, &ctx)
+            Dict[String, int] m_acc = Dict[String, int]()
             for arm in arms:
                 if arm.guard is Some(g):
-                    check_carrier_ops_expr(g, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_stmts(arm.body, scope_id, &scopes, &types, &ctx)
+                    check_safety_expr(g, scope_id, &state, &scopes, &types, &ctx)
+                Vector[String] arm_binds = Vector[String]()
+                collect_pattern_names_into(arm.pattern, &arm_binds)
+                safety_branch(arm.body, arm_binds, scope_id, &state, &m_acc, &scopes, &types, &ctx)
+            safety_commit(m_acc, &state)
         case SWith(e, _name, body):
-            check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_stmts(body, scope_id, &state, &scopes, &types, &ctx)
         case SAssert(cond, _msg):
-            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(cond, scope_id, &state, &scopes, &types, &ctx)
         case SAssertReturn(cond, _msg):
-            check_carrier_ops_expr(cond, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(cond, scope_id, &state, &scopes, &types, &ctx)
         case SNamedScope(_name, body):
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_safety_stmts(body, scope_id, &state, &scopes, &types, &ctx)
         case SSelect(arms):
             for sa in arms:
                 match sa.op:
                     case SORecv(_n, _i, e):
-                        check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+                        check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
                     case SOSend(chan, val):
-                        check_carrier_ops_expr(chan, scope_id, &scopes, &types, &ctx)
-                        check_carrier_ops_expr(val, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_stmts(sa.body, scope_id, &scopes, &types, &ctx)
+                        check_safety_expr(chan, scope_id, &state, &scopes, &types, &ctx)
+                        check_safety_expr(val, scope_id, &state, &scopes, &types, &ctx)
+                SafetyState sel = safety_snapshot(state)
+                check_safety_stmts(sa.body, scope_id, &sel, &scopes, &types, &ctx)
         case SOnError(body):
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            check_safety_stmts(body, scope_id, &state, &scopes, &types, &ctx)
         case SItem(_item):
             # Nested item decls (fn/struct/…) are walked via their own
             # type_check_function entry; no expression here to check.
             pass
         case SSnapshot(_name, _kind, e):
-            check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
 
 # Exhaustive expression walker — mirrors resolve.gg's `resolve_expr` enumeration.
-# Visits EVERY sub-expression so a `??`/`*x` cannot escape via an un-recursed
-# parent shape. Fires the carrier-op rejects at EBinaryOp("??") and EDeref.
-void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+# Visits EVERY sub-expression so no reject/liveness site escapes via an
+# un-recursed parent shape.
+void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match expr.expr:
         case EIntLiteral(_):
             pass
@@ -1244,88 +1544,133 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes, 
             pass
         case ENoneLiteral():
             pass
-        case EIdentifier(_):
-            pass
+        case EIdentifier(name):
+            # Liveness: a read of a moved place is use-after-move.
+            live_check_use(name, expr.span, &state, &ctx)
         case ESelfExpr():
-            pass
+            live_check_use("self", expr.span, &state, &ctx)
         case EIt():
             pass
         case EBinaryOp(left, op, right):
-            check_carrier_ops_expr(*left, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*right, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*left, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_expr(*right, scope_id, &state, &scopes, &types, &ctx)
             if op == "??":
                 check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, &scopes, &types, &ctx)
         case EUnaryOp(_op, operand):
-            check_carrier_ops_expr(*operand, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*operand, scope_id, &state, &scopes, &types, &ctx)
         case ECall(callee, args, _targs):
-            check_carrier_ops_expr(*callee, scope_id, &scopes, &types, &ctx)
-            # D12 position 2 (ctor / field-init): a BARE drop-tainted place used
-            # as a constructor argument copies at the init ownership boundary. The
-            # CallArg model now carries the per-arg ownership sigil as a TYPED
-            # field, so a bare copy (`W(x)`, OWN_BORROW) is rejected while an
-            # explicit `W(!x)` (OWN_MOVE) / `W(&x)` (OWN_MUTABLE) skips the gate —
-            # the lowerer never sees a wrapper. Plain (non-ctor) call args stay a
-            # legal borrow. Mirrors Rust gg (src/semantic/safety/helpers.rs:1129).
+            # STEP 1 (pass-order rider — liveness precedes aliasing): callee
+            # liveness + ConsumeCallable-consume (Part B). A call to a
+            # ConsumeCallable-typed var CONSUMES it; marking via live_mark_move
+            # both records the move AND catches a second call (`f(); f()`) as a
+            # double-move, so we skip the plain callee read when consumed.
+            bool live_consumed = false
+            match (*callee).expr:
+                case EIdentifier(_):
+                    if live_is_consume_callable(*callee, scopes, &types, &ctx):
+                        live_mark_move(*callee, &state, &scopes, &ctx)
+                        live_consumed = true
+                else:
+                    pass
+            if not live_consumed:
+                check_safety_expr(*callee, scope_id, &state, &scopes, &types, &ctx)
+            # STEP 2: per-arg loop, left-to-right — liveness move/use + the D12
+            # position-2 ctor/field-init reject (a BARE drop-tainted place used as
+            # a constructor arg copies at the init boundary; `W(!x)` / `W(&x)` skip
+            # the gate). Mirrors Rust gg (src/semantic/safety/helpers.rs:1129).
             bool call_is_ctor = is_ctor_callee(*callee, scopes, ctx)
             for a in args:
-                if call_is_ctor and a.ownership == OWN_BORROW:
-                    reject_tainted_place(a.value, scopes, &types, &ctx)
-                check_carrier_ops_expr(a.value, scope_id, &scopes, &types, &ctx)
-            # D10(b): same-call place-overlap rejection (args only, not callee).
+                if a.ownership == OWN_MOVE:
+                    live_move_operand(a.value, scope_id, &state, &scopes, &types, &ctx)
+                else:
+                    if call_is_ctor and a.ownership == OWN_BORROW:
+                        reject_tainted_place(a.value, scopes, &types, &ctx)
+                    check_safety_expr(a.value, scope_id, &state, &scopes, &types, &ctx)
+            # STEP 3: D10(b) same-call place-overlap (args only, not callee), with
+            # Part A's skip-move-first — runs AFTER liveness so `f(!x,!x)` is a
+            # double-move (liveness) preempting the overlap arm.
             check_call_aliasing(args, scopes, &types, &ctx)
         case EMethodCall(receiver, method_name, args, _targs):
-            check_carrier_ops_expr(*receiver, scope_id, &scopes, &types, &ctx)
-            # D12 position 6 sibling: a `&self` mutator on a tainted borrow-
-            # rooted receiver materialises an implicit copy.
+            # STEP 1: receiver liveness (read) + the D12 pos-6 `&self`-mutator
+            # reject + the `!self`-consume — ALL before the arg loop. Marking the
+            # receiver moved BEFORE the args is oracle-correct (production consumes
+            # self at check_expr.rs:397 before the args at :658; ggdef desugars the
+            # receiver as a Move arg0 evaluated first), so `x.consume(x.field)` is a
+            # use-after-move on the `x.field` arg.
+            check_safety_expr(*receiver, scope_id, &state, &scopes, &types, &ctx)
+            # D12 position 6 sibling: a `&self` mutator on a tainted borrow-rooted
+            # receiver materialises an implicit copy.
             reject_amp_self_mutator(*receiver, method_name, scopes, &types, &ctx)
-            # D12 position 3 (collection put): pushing a BARE drop-tainted place
-            # into an element-owning collection copies at the ownership boundary.
-            # Gated on the TYPED per-arg ownership: a bare `coll.push(x)`
-            # (OWN_BORROW) is rejected, `coll.push(!x)` (OWN_MOVE) is a legal move.
-            # A plain (non-collection) method arg stays a legal borrow. Mirrors
-            # Rust gg (src/semantic/safety/helpers.rs:1129).
+            # PART B: a `!self`-consuming method consumes the receiver root. Only a
+            # bare-place receiver participates (a temp method-chain receiver has no
+            # trackable root). Mirrors Rust check_expr.rs:387-403.
+            if place_root_name((*receiver).expr) != "<place>":
+                int live_recv_ty = infer_expr_type(*receiver, scopes, &types, &ctx)
+                MethodResolution live_mr = resolve_method_full(live_recv_ty, method_name, scopes, &types)
+                if live_mr.found and live_mr.sig.self_ownership == OWN_MOVE:
+                    live_mark_move(*receiver, &state, &scopes, &ctx)
+            # STEP 2: per-arg loop — liveness move/use + the D12 position-3
+            # collection-put reject (a bare drop-tainted place pushed into an
+            # element-owning collection copies at the boundary; `coll.push(!x)`
+            # skips). Mirrors Rust gg (src/semantic/safety/helpers.rs:1129).
             bool ingest = is_collection_ingest_method(method_name) and is_collection_receiver(*receiver, scopes, &types, &ctx)
             for a in args:
-                if ingest and a.ownership == OWN_BORROW:
-                    reject_tainted_place(a.value, scopes, &types, &ctx)
-                check_carrier_ops_expr(a.value, scope_id, &scopes, &types, &ctx)
-            # D10(b): same-call place-overlap rejection (explicit args only —
-            # the receiver is not aliasing-checked against args, per Rust).
+                if a.ownership == OWN_MOVE:
+                    live_move_operand(a.value, scope_id, &state, &scopes, &types, &ctx)
+                else:
+                    if ingest and a.ownership == OWN_BORROW:
+                        reject_tainted_place(a.value, scopes, &types, &ctx)
+                    check_safety_expr(a.value, scope_id, &state, &scopes, &types, &ctx)
+            # STEP 3: D10(b) place-overlap (explicit args only — the receiver is
+            # not aliasing-checked against args, per Rust).
             check_call_aliasing(args, scopes, &types, &ctx)
         case EFieldAccess(object, _field):
-            check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*object, scope_id, &state, &scopes, &types, &ctx)
         case EIndex(object, index):
-            check_carrier_ops_expr(*object, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*index, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*object, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_expr(*index, scope_id, &state, &scopes, &types, &ctx)
         case ERange(opt_start, opt_end, _incl):
             if opt_start is Some(b):
-                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(*b, scope_id, &state, &scopes, &types, &ctx)
             if opt_end is Some(b):
-                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(*b, scope_id, &state, &scopes, &types, &ctx)
         case EIf(cond, then_body, elif_branches):
-            check_carrier_ops_expr(*cond, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_stmts(then_body, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*cond, scope_id, &state, &scopes, &types, &ctx)
+            Vector[String] eif_binds = Vector[String]()
+            collect_is_bindings_into(*cond, &eif_binds)
+            Dict[String, int] eif_acc = Dict[String, int]()
+            safety_branch(then_body, eif_binds, scope_id, &state, &eif_acc, &scopes, &types, &ctx)
             for br in elif_branches:
+                Vector[String] br_binds = Vector[String]()
                 if br.condition is Some(c):
-                    check_carrier_ops_expr(c, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_stmts(br.body, scope_id, &scopes, &types, &ctx)
+                    check_safety_expr(c, scope_id, &state, &scopes, &types, &ctx)
+                    collect_is_bindings_into(c, &br_binds)
+                safety_branch(br.body, br_binds, scope_id, &state, &eif_acc, &scopes, &types, &ctx)
+            safety_commit(eif_acc, &state)
         case EMatch(scrutinee, arms):
-            check_carrier_ops_expr(*scrutinee, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*scrutinee, scope_id, &state, &scopes, &types, &ctx)
+            Dict[String, int] em_acc = Dict[String, int]()
             for arm in arms:
                 if arm.guard is Some(g):
-                    check_carrier_ops_expr(g, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_stmts(arm.body, scope_id, &scopes, &types, &ctx)
+                    check_safety_expr(g, scope_id, &state, &scopes, &types, &ctx)
+                Vector[String] em_binds = Vector[String]()
+                collect_pattern_names_into(arm.pattern, &em_binds)
+                safety_branch(arm.body, em_binds, scope_id, &state, &em_acc, &scopes, &types, &ctx)
+            safety_commit(em_acc, &state)
         case EClosure(_params, body):
-            check_carrier_ops_stmts(body, scope_id, &scopes, &types, &ctx)
+            # A closure body is a FRESH liveness scope — captured outer locals are
+            # live inside it, and a move inside the closure does not escape to the
+            # enclosing state. Carrier rejects (tainted capture + expression-tail)
+            # still apply.
+            SafetyState cl = SafetyState(Dict[String, int](), 0, Dict[String, int](), "")
+            check_safety_stmts(body, scope_id, &cl, &scopes, &types, &ctx)
             # D12 position 5 (closure capture): a captured tainted OUTER local.
             reject_tainted_captures(body, scope_id, scopes, &types, &ctx)
             # D12 position 4 (closure expression-tail): a closure whose body tail
             # IS a bare drop-tainted place (`(R x): x`) returns a copy at the
-            # closure return boundary. The tail normalizes to a trailing SExpr
-            # (parser.gg:2323), NOT SReturn, so the SReturn hook never fires here.
-            # PARAM-ROOTED tails only: a CAPTURE-rooted tail (`(): a`) is already
-            # rejected by position 5 above, so skip it here to avoid a
-            # double-report (mirror Rust check_expr.rs:997-1006).
+            # closure return boundary. PARAM-ROOTED tails only: a CAPTURE-rooted
+            # tail is already rejected by position 5 above (mirror Rust
+            # check_expr.rs:997-1006).
             if body.len() > 0:
                 Stmt tail_stmt = body.get(body.len() - 1).unwrap()
                 match tail_stmt:
@@ -1339,86 +1684,91 @@ void check_carrier_ops_expr(SpannedExpr expr, int scope_id, ScopeTable &scopes, 
                     else:
                         pass
         case EImplicitClosure(inner):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EArrayLiteral(elements):
             for e in elements:
-                check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
         case ETupleLiteral(elements):
             for e in elements:
-                check_carrier_ops_expr(e, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
         case EDictLiteral(keys, values):
             for (di, k) in keys.enumerate():
-                check_carrier_ops_expr(k, scope_id, &scopes, &types, &ctx)
-                check_carrier_ops_expr(values.get(di).unwrap(), scope_id, &scopes, &types, &ctx)
+                check_safety_expr(k, scope_id, &state, &scopes, &types, &ctx)
+                check_safety_expr(values.get(di).unwrap(), scope_id, &state, &scopes, &types, &ctx)
         case EStructLiteral(_name, _fields, args):
             # D12 position 2 (struct field-init): every struct-literal arg is a
-            # consuming init boundary.
+            # consuming init boundary. A bare `!x` arg is an EMove (marked below).
             for a in args:
                 reject_tainted_place(a, scopes, &types, &ctx)
-                check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(a, scope_id, &state, &scopes, &types, &ctx)
         case EDotShorthand(_variant, args):
             # D12 position 2 (enum variant init): `.Variant(x)` args are a
             # consuming init boundary.
             for a in args:
                 reject_tainted_place(a, scopes, &types, &ctx)
-                check_carrier_ops_expr(a, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(a, scope_id, &state, &scopes, &types, &ctx)
         case ETry(inner):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EMove(inner):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            # `S y = !x` / `return !x` — mark the move (or, for a non-place `!f()`,
+            # recurse for nested reads).
+            live_move_operand(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EMutableBorrow(inner):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EDeref(inner):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
             check_deref_operand(SpannedExpr((*inner).expr, (*inner).span), scope_id, &scopes, &types, &ctx)
         case EAs(inner, _target):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EIs(inner, _neg, _pat):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EBlock(stmts):
-            check_carrier_ops_stmts(stmts, scope_id, &scopes, &types, &ctx)
+            check_safety_stmts(stmts, scope_id, &state, &scopes, &types, &ctx)
         case EDo(stmts):
-            check_carrier_ops_stmts(stmts, scope_id, &scopes, &types, &ctx)
+            check_safety_stmts(stmts, scope_id, &state, &scopes, &types, &ctx)
         case EListComp(comp_e, _var, iterable, opt_cond):
-            check_carrier_ops_expr(*iterable, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*comp_e, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*iterable, scope_id, &state, &scopes, &types, &ctx)
+            SafetyState lc = safety_snapshot(state)
+            check_safety_expr(*comp_e, scope_id, &lc, &scopes, &types, &ctx)
             if opt_cond is Some(b):
-                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(*b, scope_id, &lc, &scopes, &types, &ctx)
         case ESetComp(comp_e, _var, iterable, opt_cond):
-            check_carrier_ops_expr(*iterable, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*comp_e, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*iterable, scope_id, &state, &scopes, &types, &ctx)
+            SafetyState sc = safety_snapshot(state)
+            check_safety_expr(*comp_e, scope_id, &sc, &scopes, &types, &ctx)
             if opt_cond is Some(b):
-                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(*b, scope_id, &sc, &scopes, &types, &ctx)
         case EDictComp(key, value, _var, iterable, opt_cond):
-            check_carrier_ops_expr(*iterable, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*key, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*value, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*iterable, scope_id, &state, &scopes, &types, &ctx)
+            SafetyState dc = safety_snapshot(state)
+            check_safety_expr(*key, scope_id, &dc, &scopes, &types, &ctx)
+            check_safety_expr(*value, scope_id, &dc, &scopes, &types, &ctx)
             if opt_cond is Some(b):
-                check_carrier_ops_expr(*b, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(*b, scope_id, &dc, &scopes, &types, &ctx)
         case EDefaultOp(left, right):
             # Parser-unreachable (it lowers `??` to EBinaryOp) but kept for
             # completeness — same reject as the EBinaryOp("??") arm.
-            check_carrier_ops_expr(*left, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*right, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*left, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_expr(*right, scope_id, &state, &scopes, &types, &ctx)
             check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, &scopes, &types, &ctx)
         case EAwait(inner):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case ESpawn(inner):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case ESpawnBlocking(inner):
-            check_carrier_ops_expr(*inner, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case ERethrow(e, _eopt, _etype, transform):
-            check_carrier_ops_expr(*e, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*transform, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*e, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_expr(*transform, scope_id, &state, &scopes, &types, &ctx)
         case ECatch(e, _name, recovery):
-            check_carrier_ops_expr(*e, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*recovery, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*e, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_expr(*recovery, scope_id, &state, &scopes, &types, &ctx)
         case EFaultCatch(fc_inner, _fc_pat, fc_handler):
-            check_carrier_ops_expr(*fc_inner, scope_id, &scopes, &types, &ctx)
-            check_carrier_ops_expr(*fc_handler, scope_id, &scopes, &types, &ctx)
+            check_safety_expr(*fc_inner, scope_id, &state, &scopes, &types, &ctx)
+            check_safety_expr(*fc_handler, scope_id, &state, &scopes, &types, &ctx)
         case EFString(_tmpl, exprs, _specs):
             for fe in exprs:
-                check_carrier_ops_expr(fe, scope_id, &scopes, &types, &ctx)
+                check_safety_expr(fe, scope_id, &state, &scopes, &types, &ctx)
 
 void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx,int def_scope):
     # Register the signature first (idempotent — running it twice for
@@ -1463,13 +1813,15 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         ctx.current_function_throws = func.throws_type.is_some()
         ctx.in_function_body = true
         type_check_stmts(func.body, body_scope, &scopes, &types, &ctx)
-        # Carrier-operator reject pass (AGENTS.md Core #8 + #4) — driven ONCE
-        # per function body AFTER type_check_stmts (so def types are assigned),
-        # via the EXHAUSTIVE check_carrier_ops_* walker. Rejects `??` on a
-        # non-Option/Result LHS and `*x` on a non-Box operand at EVERY
-        # expression position (the fragmented walk_expr_closures pass missed
-        # nested positions — that was the v1 one-sided-reject hole).
-        check_carrier_ops_stmts(func.body, body_scope, &scopes, &types, &ctx)
+        # UNIFIED safety walk (AGENTS.md Core #8 + #4) — driven ONCE per function
+        # body AFTER type_check_stmts (so def types are assigned), via the
+        # EXHAUSTIVE check_safety_* walker. Runs drop-purity (D4/D12), place-overlap
+        # (D10b) and liveness (use-after-move / double-move) as ARMS of ONE
+        # traversal. Pass-order rider: liveness precedes aliasing, so `f(!x,!x)` is
+        # a double move (not a place-overlap). Fresh SafetyState per function —
+        # params are live at entry and no enclosing loop carries across a fn body.
+        SafetyState safety = SafetyState(Dict[String, int](), 0, Dict[String, int](), "")
+        check_safety_stmts(func.body, body_scope, &safety, &scopes, &types, &ctx)
         ctx.loop_depth = saved_loop_depth
         ctx.current_function_throws = saved_throws
         ctx.in_function_body = saved_in_fn
@@ -1874,7 +2226,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # EBlock/EDo/EFString/EMatch) and hits `else: pass` for the rest, so a
             # `??` nested inside EUnaryOp/EIndex/EArrayLiteral/EAs/… ESCAPES it.
             # The reject is driven from the dedicated EXHAUSTIVE walker
-            # `check_carrier_ops_*` (below), modeled on resolve.gg's `resolve_expr`
+            # `check_safety_*` (below), modeled on resolve.gg's `resolve_expr`
             # enumeration, so EVERY `??` position is covered exactly once.
 
         case EAwait(inner):
@@ -2772,7 +3124,7 @@ void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, Reso
             else:
                 pass
     # D4/D12 drop-purity: seed + fixpoint the drop-taint flags BEFORE the
-    # item-walk, so the per-function `check_carrier_ops` reject pass reads a
+    # item-walk, so the per-function `check_safety_*` reject pass reads a
     # complete taint set. Mirrors Rust pass-3.55 `compute_drop_taint`.
     compute_drop_taint(module, &scopes, &types)
     for item in module.items:

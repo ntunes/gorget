@@ -1,0 +1,10 @@
+# Liveness use-after-move: a value read after it was moved into a `!`-consumer.
+# Mirrors production use_after_move_error.gg + ggdef move_then_read_is_illformed
+# (Slot::Moved -> IllFormed). Self-host emits `use of `s` after it was moved`.
+void consume(String !x):
+    pass
+
+void main():
+    String s = "hello"
+    consume(!s)
+    print(s)

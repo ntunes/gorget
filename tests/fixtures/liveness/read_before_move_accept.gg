@@ -1,0 +1,16 @@
+# Order-twin (legal liveness): reading a Copy projection BEFORE moving the source
+# (`f(s.copy_field, !s)`) — the Copy snapshot is taken (left-to-right eval)
+# before the `!s` move kills the slot. Mirrors ggdef
+# d10b_order_twin_read_before_move_legal. The 2nd param is a `!`-move param so the
+# `!s` is a legal consuming move (no ownership-axis noise) — this isolates the
+# LIVENESS order-twin: the read precedes the move, so it is NOT use-after-move.
+struct S:
+    int copy_field
+    Vector[int] vec
+
+void f(int val, S !other):
+    print(val)
+
+void main():
+    S s = S(7, [1, 2])
+    f(s.copy_field, !s)
