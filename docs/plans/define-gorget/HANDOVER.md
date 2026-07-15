@@ -369,7 +369,18 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    DefId-keyed; parser emits `name_span`, resolve records `resolution_map[binding.span]=def_id`; self
    `-2` sentinel). GATES REGENERATED 2026-07-15: **FULL C 1633/0 · FULL LLVM 1633/0** · bootstrap ok ·
    corpus (`c_emit_comparison`/`self_host_runtime`/`_diff`) ok · 15/15 liveness fixtures.
-   ⏭ **IN-FLIGHT TRACK — ggdef LIVENESS (DEFINITION-INTEGRITY, HIGH). RE-SCOPED to TWO PHASES 2026-07-15**
+   ⏭ **IN-FLIGHT TRACK — ggdef LIVENESS (DEFINITION-INTEGRITY, HIGH). ⚡ MERGED to ONE LANDING 2026-07-15**
+   (owner ok'd merge once BOTH prototypes proved out). **Authoritative brief: `wave-ggdef-elab-eval-brief.md`**
+   (supersedes the Phase-1-only `wave-ggdef-liveness-brief.md`). The COMBINED prototype
+   `scouts/patches/ggdef-elaborate-move-proto.patch` (eval fix + elaborate may-move gate; 5 files, +731/-9;
+   ggdef 127/0; conformance 195/195; 100% production agreement / 25 probes) applies CLEAN. REMAINING: the
+   brief needs its ≥3 fresh reviews → executor (apply the proven patch + boundary-note rewrite + stderr-
+   diagnostic requirement [owner: rejected programs emit the WHY on stderr, empty stdout, exit non-zero] +
+   ConsumeCallable prose + shared transition-table + closure-capture test + fixture migration with
+   REGENERATED floors + RIDER 2 verify; RIDER 1 is DEAD) → output-review → `cargo test -p ggdef` +
+   `--test spec_conformance*` + smith. Scouts `scout-ggdef-liveness.md` + `scout-ggdef-elaborate-move.md`.
+   [superseded two-phase framing below, kept for context:]
+   **RE-SCOPED to TWO PHASES 2026-07-15**
    (owner ruling `decisions.md` **"GGDEF VERDICT = ELABORATE ∘ EVAL"**: elaborate owns ALL ratified static
    rejections; eval owns per-path dynamic semantics). **PHASE 1 = the EVAL fix** (revive-on-reassign +
    consume-call-kill; PROVEN `scouts/patches/ggdef-liveness-fix-proto.patch`, ggdef 127/0). Brief

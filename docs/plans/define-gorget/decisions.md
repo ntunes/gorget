@@ -466,8 +466,21 @@ P1-infra reviewers' recommendation.
   NOT become a place where whatever precision production's analysis happens to have gets silently canonized.
   If production rejects something elaborate accepts (or vice versa) on a liveness shape, that is a finding to
   adjudicate against the PROSE rule, same as any divergence. **The definition LEADS; it does not trail.**
-  SEQUENCING: the eval transition-table fix (revive + consume-call-kill, proven, ggdef 127/0) lands first; the
-  elaborate may-move pass is its immediate successor, reusing the same transition-table fixtures.
+  SEQUENCING: the eval transition-table fix (revive + consume-call-kill, proven) + the elaborate may-move pass
+  land as ONE merged change (owner ok'd merge 2026-07-15 once both prototypes proved out; combined patch
+  `scouts/patches/ggdef-elaborate-move-proto.patch`, ggdef 127/0, conformance 195/195, 100% production
+  agreement / 25 probes). **THE VERDICT TRIPLE for a static rejection (owner, 2026-07-15): channels = layers.
+  stdout is EVAL's channel (what the program printed); stderr is ELABORATE's/the-judge's channel (why rejected;
+  and at runtime, the trap).** A statically-rejected program never ran → **stdout = "" is semantically correct
+  and stays EXACTLY empty (= "the program never executed", which IS the verdict); stderr = `error[E_Code]: …
+  at span`; exit = the check-failure code.** Pins: (1) FORMAT mirrors the RATIFIED diagnostic shape (production
+  `gg check` family + ggdef's location-suffixed trap render), NOT a ggdef-private terse form — ggdef is the
+  definition, its stderr is what a human reads adjudicating a lane diff, so it is the BEST-rendered of the four
+  lanes. (2) EXIT distinguishes "never ran" (static rejection = the compile-error code, matching production's
+  check/build-failure exit) from "ran and died" (trap = 101) — they MUST be distinct so a runtime crash can't
+  masquerade as a correct reject. (3) CONFORMANCE compares the `E_` code + exit CLASS only; prose detail +
+  span quality stay impl-defined (D11 trap precedent) — `ggdef -- gen` records the CODE for rejection fixtures,
+  not the message; span comparison is not a conformance axis until deliberately ratified.
   **⚠ B2 SCOPE + LIVENESS-PASS + PASS-ORDER, RATIFIED 2026-07-14 (owner, firm — two calls, one layering principle):**
   Raised by the B2 self-host-mirror scout (the self-host has NO move-tracker → accepts every use-after-move).
   **(1) B2 mirrors the FULL D10 RULE, not production's exact code — the mover-mover arm is IN.** `f(!x, !x)`
