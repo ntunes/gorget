@@ -55,7 +55,7 @@ The code shows what IS; the docs show what's INTENDED. Base every design choice 
 
 ## 2. THE PROVEN PROTOTYPE (your starting reference — DO NOT skip verifying it)
 `docs/plans/define-gorget/scouts/patches/liveness-ext-proto.patch` — a **buildable core+A+B prototype**
-(+462 over main; applies CLEAN via `git apply`). It is the TWO-WALK form: adds `check_liveness_*` as a
+(+457 net / 462 gross insertions over main; applies CLEAN via `git apply`). It is the TWO-WALK form: adds `check_liveness_*` as a
 standalone second walk in `type_check_function` AFTER `check_carrier_ops_stmts`, plus `DkUseAfterMove` in
 `diagnostic.gg`, plus Part A's skip-move-first line and Part B's `!self`/ConsumeCallable tracking.
 It is your PROVEN behavioral oracle: the scout MEASURED it (whole-source blast = 0; the d10b fixture
@@ -88,8 +88,13 @@ struct SafetyState:
     String rebind
 ```
 `scope_id` STAYS an ambient `int` param (constant per function body, never branches). Extensible: a new
-axis adds a field. Branch arms clone `moved` (via `live_branch`/`live_commit`, keep the proto's
-merge-moved-in-any that filters diverging arms via `live_stmts_diverge`). Delete the separate
+axis adds a field. Branch arms must clone ONLY `state.moved` per branch and leave
+`loop_depth/loop_locals/rebind` intact (those are structural context, not flow-state) — if bundling
+`moved` into `SafetyState` makes that per-branch clone awkward, you MAY keep `moved` threaded as its own
+`&Dict[String,int]` param alongside a smaller `SafetyState` for the loop context, PROVIDED the
+single-traversal-both-axes requirement still holds (this is a mechanism choice, not a semantic one).
+Keep the proto's merge-moved-in-any that filters diverging arms via `live_stmts_diverge` (`live_branch`
+/`live_commit`). Delete the separate
 `check_carrier_ops_stmts(func.body, ...)` invocation (:1472) and the separate `check_liveness_stmts`
 invocation the proto added — replace with ONE `check_safety_stmts(func.body, body_scope, &state, ...)`
 with a fresh empty `SafetyState` per function.
@@ -102,7 +107,19 @@ with a fresh empty `SafetyState` per function.
    `reject_tainted_place` gate;
 3. THEN `check_call_aliasing(args, ...)` — with Part A's **skip-move-first** line already in it.
 
-Re-run ALL Phase-0 measurements — they must match EXACTLY (blast 0, same d10b results) — PLUS the
+**⚠ INTENTIONAL DIVERGENCE FROM THE PROTO — read carefully.** The proto marks the `!self`-consume
+AFTER the per-arg loop (patch ~:375-391); the order above (`!self`-consume in step 1, BEFORE the arg
+loop) is the ORACLE-CORRECT one and you must use IT, not the proto's. Production consumes self at
+`check_expr.rs:~397` BEFORE the arg loop (~:658), and ggdef desugars the receiver as a Move arg0
+evaluated left-to-right before later args → `x.consume(x.field)` is IllFormed. The proto's after-loop
+order would ACCEPT `x.consume(x.field)` (oracle-wrong). Do NOT blind-copy the proto's method-call arm —
+lift its liveness LOGIC but place the `!self`-consume in step 1. This corner is NOT exercised by the
+blast or d10b set (the self-host source is production-clean), so a wrong order passes every named gate
+silently — it is locked in ONLY by the new `consuming_self_arg_reads_receiver` fixture (§4).
+
+Re-run ALL Phase-0 measurements — they must match on the **blast + d10b set** (blast 0, same d10b
+results). (Phase 1 legitimately IMPROVES on the proto for the `x.consume(x.field)` corner above, so
+"identical to Phase 0" holds on the measured set, not on that one unexercised shape.) PLUS the
 bootstrap fixed-point in isolation (see §6). Commit as the unified walk.
 
 ### PHASE 2 — Part C precise loops (RE-MEASURE — this is where FP risk lives)
@@ -118,6 +135,15 @@ production/ggdef distinguish; prefer a distinct kind if production has `E_MoveIn
 measurement for precision. If ANY residual false positive surfaces that you cannot eliminate,
 **fall back to clone-and-discard** (the owner-accepted floor) and FILE the precision follow-up in a
 report note — do NOT ship a false positive (Core #8 anti-FP: over-rejection is worse than under-detection).
+
+**MoveInLoop vs the ggdef oracle — a deliberate axis caveat.** `MoveInLoop` is a production-faithful
+STATIC-CONSERVATIVE reject (`origins.rs:495-503`); ggdef models loops DYNAMICALLY (`Slot::Moved`→IllFormed
+only when a second iteration actually re-moves). So a loop that provably runs 0–1 times but moves an outer
+var is a static REJECT yet a ggdef ACCEPT — the two axes are NOT 1:1 on run-once loops. This is intended
+(the self-host mirrors production's static analysis, not ggdef's dynamic evaluator, for the loop axis).
+Consequence for §4: any `MoveInLoop` REJECT fixture you write MUST be a genuine MULTI-iteration re-move
+(where ggdef ALSO IllFormeds), never a run-once loop — otherwise the fixture diverges from the stated
+ggdef oracle. The straight-line UAM/DM/`!self`/ConsumeCallable fixtures stay fixture-for-fixture with ggdef.
 
 ---
 
@@ -141,7 +167,11 @@ Mirror the existing `self_host_driver_rejects_d12_*` / `self_host_driver_rejects
 pattern (grep them in `integration.rs`). Add self-host reject fixtures covering the production negatives:
 `double_move_error`, `use_after_move_error`, `use_after_move_branch_error`, `fstring_use_after_move_error`,
 `consuming_self_use_after_move_error`, `borrow_field_use_after_move_error` — each asserting the self-host
-driver emits the UAM/DM message. Add ACCEPT fixtures for the legal twins (read-before-move
+driver emits the UAM/DM message. **Add `consuming_self_arg_reads_receiver` (`x.consume(x.field)` where
+`consume` takes `!self`) as a REJECT fixture pinned to ggdef** — this is the one shape that locks in the
+oracle-correct call-arm order (step-1 `!self`-consume BEFORE the arg loop, §2 Phase 1); nothing else in
+the gate set exercises it, so without this fixture a proto-order regression ships silently. Add ACCEPT
+fixtures for the legal twins (read-before-move
 `f(x.field, !x)`; branch save/restore `if c: sink(!x) else: use x`; re-init `y=!x; x=fresh(); use x`;
 loop-local move; ConsumeCallable-once accept; `!self`-consume-with-no-post-use accept).
 **Acceptance is ggdef fixture-for-fixture** — verify the self-host AGREES with ggdef's
