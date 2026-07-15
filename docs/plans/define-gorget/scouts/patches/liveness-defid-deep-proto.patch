@@ -1,0 +1,544 @@
+diff --git a/tests/fixtures/self_host_typechecker/parser.gg b/tests/fixtures/self_host_typechecker/parser.gg
+index 9c1311c8..cd0dbc09 100644
+--- a/tests/fixtures/self_host_typechecker/parser.gg
++++ b/tests/fixtures/self_host_typechecker/parser.gg
+@@ -3581,6 +3581,12 @@ equip Parser:
+             self.advance()
+         SpannedType ty = self.parse_type()
+         String name = ""
++        # DEEPDEF: capture the binding's name span so resolve records
++        # resolution_map[name_span]=def_id at the DECLARATION (the safety
++        # liveness walk reads a binding's DefId the same way it reads a use's).
++        # Only a SINGLE whole-binding decl gets a real span; a tuple/bare-tuple
++        # destructure keeps -1 (multi-binding, no single root to key).
++        int name_span = -1
+         if self.check_tok(TOK_LPAREN):
+             # Tuple pattern: Type (a, b, ...) = expr
+             self.advance()
+@@ -3598,16 +3604,18 @@ equip Parser:
+         else:
+             SpannedToken name_tok = self.advance()
+             name = token_ident(name_tok.lex_token)
++            name_span = name_tok.lex_start
+             # Bare tuple destructuring: `auto a, b = expr`
+             if self.check_tok(TOK_COMMA):
+                 name = "(" + name
++                name_span = -1
+                 while self.match_tok(TOK_COMMA):
+                     SpannedToken next_tok = self.advance()
+                     name = name + ", " + token_ident(next_tok.lex_token)
+                 name = name + ")"
+         self.expect_tok(TOK_EQ, "expected '=' in variable declaration")
+         SpannedExpr init = self.parse_expr()
+-        return SVarDecl(ty, name, init, own, 0, -1)
++        return SVarDecl(ty, name, init, own, 0, name_span)
+ 
+     # Like parse_var_decl but captures name_span for RES entry (used in select arms)
+     Stmt parse_select_var_decl(&self):
+diff --git a/tests/fixtures/self_host_typechecker/resolve.gg b/tests/fixtures/self_host_typechecker/resolve.gg
+index 80a46f97..cc6541a8 100644
+--- a/tests/fixtures/self_host_typechecker/resolve.gg
++++ b/tests/fixtures/self_host_typechecker/resolve.gg
+@@ -493,7 +493,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
+         case SFor(pattern, iterable, body, _, else_body):
+             resolve_expr(iterable, &scopes, &ctx)
+             scopes.push_scope(SkForLoop())
+-            define_pattern_bindings(pattern, &scopes)
++            define_pattern_bindings(pattern, &scopes, &ctx)
+             resolve_block(body, &scopes, &types, &ctx)
+             scopes.pop_scope()
+             if else_body.len() > 0:
+@@ -542,7 +542,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
+             resolve_expr(scrutinee, &scopes, &ctx)
+             for arm in arms:
+                 scopes.push_scope(SkBlock())
+-                define_pattern_bindings(arm.pattern, &scopes)
++                define_pattern_bindings(arm.pattern, &scopes, &ctx)
+                 if arm.guard is Some(g):
+                     resolve_expr(g, &scopes, &ctx)
+                 resolve_block(arm.body, &scopes, &types, &ctx)
+@@ -780,7 +780,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
+             resolve_expr(*scrutinee, &scopes, &ctx)
+             for arm in arms:
+                 scopes.push_scope(SkBlock())
+-                define_pattern_bindings(arm.pattern, &scopes)
++                define_pattern_bindings(arm.pattern, &scopes, &ctx)
+                 if arm.guard is Some(g):
+                     resolve_expr(g, &scopes, &ctx)
+                 resolve_block_expr(arm.body, &scopes, &ctx)
+@@ -966,7 +966,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
+         case SFor(pattern, iterable, body, _, else_body):
+             resolve_expr(iterable, &scopes, &ctx)
+             scopes.push_scope(SkForLoop())
+-            define_pattern_bindings(pattern, &scopes)
++            define_pattern_bindings(pattern, &scopes, &ctx)
+             resolve_block_expr(body, &scopes, &ctx)
+             scopes.pop_scope()
+             if else_body.len() > 0:
+@@ -1005,7 +1005,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
+             resolve_expr(scrutinee, &scopes, &ctx)
+             for arm in arms:
+                 scopes.push_scope(SkBlock())
+-                define_pattern_bindings(arm.pattern, &scopes)
++                define_pattern_bindings(arm.pattern, &scopes, &ctx)
+                 if arm.guard is Some(g):
+                     resolve_expr(g, &scopes, &ctx)
+                 resolve_block_expr(arm.body, &scopes, &ctx)
+@@ -1095,27 +1095,38 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
+ 
+ # ── Pattern bindings ────────────────────────────────────────
+ 
+-void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes):
++void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes, ResolveContext &ctx):
+     match pattern.pat:
+         case PBinding(name):
+-            scopes.define(name, DkVariable(), Span(0, 0))
++            # DEEPDEF: record the binding's DefId at the DECLARATION span so the
++            # liveness safety walk can key a pattern binding by DefId (not name).
++            # Mirrors the identifier-USE resolution_map entry (resolve_expr:674).
++            # NOTE: the define result is bound to a LOCAL before use — inlining it
++            # as `if scopes.define(...) is Some(def_id):` mis-binds def_id to 0 (a
++            # latent self-host codegen bug: an Option returned by a mutating &self
++            # method used directly as an `is` scrutinee; same family as the
++            # live_reinit Option[int] coalesce workaround in typecheck.gg).
++            Option[int] pat_def = scopes.define(name, DkVariable(), Span(0, 0))
++            if pat_def is Some(def_id):
++                if pattern.span.start >= 0:
++                    ctx.resolution_map.put(pattern.span.start, def_id)
+ 
+         case PConstructor(_, fields):
+             for field in fields:
+-                define_pattern_bindings(field, &scopes)
++                define_pattern_bindings(field, &scopes, &ctx)
+ 
+         case PDotShorthand(_, fields):
+             for field in fields:
+-                define_pattern_bindings(field, &scopes)
++                define_pattern_bindings(field, &scopes, &ctx)
+ 
+         case PTuple(elements):
+             for elem in elements:
+-                define_pattern_bindings(elem, &scopes)
++                define_pattern_bindings(elem, &scopes, &ctx)
+ 
+         case POr(alternatives):
+             if alternatives.len() > 0:
+                 SpannedPattern first = alternatives.get(0).unwrap()
+-                define_pattern_bindings(first, &scopes)
++                define_pattern_bindings(first, &scopes, &ctx)
+ 
+         case PWildcard():
+             pass
+@@ -1152,7 +1163,7 @@ void resolve_is_condition(SpannedExpr expr, ScopeTable &scopes, ResolveContext &
+         case EIs(inner, negated, pattern):
+             if not negated:
+                 resolve_expr(*inner, &scopes, &ctx)
+-                define_pattern_bindings(*pattern, &scopes)
++                define_pattern_bindings(*pattern, &scopes, &ctx)
+                 return
+             resolve_expr(expr, &scopes, &ctx)
+ 
+diff --git a/tests/fixtures/self_host_typechecker/typecheck.gg b/tests/fixtures/self_host_typechecker/typecheck.gg
+index 36d1f0ec..9c59f235 100644
+--- a/tests/fixtures/self_host_typechecker/typecheck.gg
++++ b/tests/fixtures/self_host_typechecker/typecheck.gg
+@@ -1130,14 +1130,20 @@ void reject_tainted_captures(Vector[Stmt] body, int outer_scope, ScopeTable scop
+ #   • CallArg.ownership == OWN_MOVE  (`f(!x)`)                  — ast.gg CallArg
+ #   • EMove wrapping a place         (`S y = !x`, `return !x`)  — parser.gg:2496
+ #   • `!self`-consuming method receivers + ConsumeCallable-typed callees (Part B)
+-# Move-state is NAME-keyed (B2: `self` is not resolved; place_root_name returns
+-# "self"). state.moved[root] = the move site's span.start; presence = moved (Rust
+-# VarState::Moved). Root-name granularity (matches production's DkVariable filter).
++# Move-state is DEFID-keyed (DEEPDEF): the binding identity is the DefId that
++# name-resolution produces at the source (layering rule 2 — a typed fact, not the
++# identifier string), so two distinct same-named synthetic bindings never collide.
++# state.moved[root_def] = the move site's span.start; presence = moved (Rust
++# VarState::Moved). `self` has no DefId (ESelfExpr is unresolved) so it keys on the
++# reserved -2 sentinel. Whole-binding granularity (matches production's DkVariable
++# filter). Move/read/reinit/rebind read the DefId from the USE's resolution_map
++# entry; loop-local seeding reads it from the DECLARATION's resolution_map entry
++# (SVarDecl name_span + define_pattern_bindings, both recorded by resolve).
+ struct SafetyState:
+-    Dict[String, int] moved        # flow-state: root name -> move-site span.start; present = moved
+-    int loop_depth                 # structural loop nesting (saved/restored, NOT branch-cloned)
+-    Dict[String, int] loop_locals  # names bound INSIDE the current loop (moving these is legal)
+-    String rebind                  # same-stmt rebind target (`x = f(!x)` self-rebind stays legal)
++    Dict[int, int] moved        # flow-state: root DefId -> move-site span.start; present = moved
++    int loop_depth              # structural loop nesting (saved/restored, NOT branch-cloned)
++    Dict[int, int] loop_locals  # DefIds bound INSIDE the current loop (moving these is legal)
++    int rebind                  # same-stmt rebind target DefId (`x = f(!x)` self-rebind stays legal); -1 = none
+ 
+ # A per-branch snapshot: the flow-state `moved` and the loop-local set are
+ # DEEP-cloned so a branch's moves/reinits never leak into a sibling or the parent
+@@ -1146,9 +1152,29 @@ struct SafetyState:
+ SafetyState safety_snapshot(SafetyState state):
+     return SafetyState(state.moved.clone(), state.loop_depth, state.loop_locals.clone(), state.rebind)
+ 
++# DEEPDEF: the liveness key of a place's ROOT binding. `self` -> the -2 sentinel
++# (distinct from real DefIds >=0 and NO_DEF=-1 — safe because SafetyState is
++# fresh per function so there is exactly one self per state). A non-place / global
++# / function root, or an unresolved use -> -1 (untrackable, never enters `moved`).
++# This is the write-site DefId (layering rule 2): identity comes from the typed
++# resolution_map, not the identifier string.
++int live_root_key(SpannedExpr place, ScopeTable scopes, ResolveContext ctx):
++    if place_root_name(place.expr) == "self":
++        return -2
++    if place_root_def_spanned(place, scopes, ctx) is Some(rdid):
++        match scopes.get_def(rdid).kind:
++            case DkVariable():
++                return rdid
++            else:
++                return -1
++    return -1
++
+ # Rust check_use (origins.rs:25): a read of a moved place is use-after-move.
+-void live_check_use(String name, Span span, SafetyState &state, ResolveContext &ctx):
+-    if state.moved.contains(name):
++# `key` is the DefId of the place's root (self -> -2); `name` is only for the message.
++void live_check_use(int key, String name, Span span, SafetyState &state, ResolveContext &ctx):
++    if key == -1:
++        return
++    if state.moved.contains(key):
+         ctx.diagnostics.push(Diagnostic.error(span, DkUseAfterMove(), f"use of `{name}` after it was moved"))
+ 
+ # Re-init a binding to Live (Rust mark_live): a fresh `SVarDecl`/`SAssign` of the
+@@ -1157,9 +1183,11 @@ void live_check_use(String name, Span span, SafetyState &state, ResolveContext &
+ # discard through the large `check_safety_stmt` frame trips a latent Rust-gg
+ # C-backend coalesce miscompile (Option[int] slot stored an int32 0). Keeping the
+ # discard in a tiny function sidesteps the coalesce path. (Bug filed — own track.)
+-void live_reinit(SafetyState &state, String name):
+-    if state.moved.contains(name):
+-        state.moved.remove(name)
++void live_reinit(SafetyState &state, int key):
++    if key == -1:
++        return
++    if state.moved.contains(key):
++        state.moved.remove(key)
+ 
+ # Rust check_move (origins.rs:468): mark a move site; a second move of an
+ # already-moved place is a double move. Only whole-binding locals/params/self
+@@ -1168,17 +1196,14 @@ void live_mark_move(SpannedExpr place, SafetyState &state, ScopeTable &scopes, R
+     String root = place_root_name(place.expr)
+     if root == "<place>":
+         return
+-    bool trackable = root == "self"
+-    if not trackable:
+-        if place_root_def_spanned(place, scopes, ctx) is Some(rdid):
+-            match scopes.get_def(rdid).kind:
+-                case DkVariable():
+-                    trackable = true
+-                else:
+-                    pass
+-    if not trackable:
++    # DEEPDEF: key the move-state by the root binding's DefId (typed identity),
++    # not its name — two distinct same-named synthetic bindings (e.g. `case
++    # Some(x)` in sibling match arms) must NOT collide. `root` name is kept only
++    # for the human-readable diagnostic.
++    int root_def = live_root_key(place, scopes, ctx)
++    if root_def == -1:
+         return
+-    if state.moved.contains(root):
++    if state.moved.contains(root_def):
+         ctx.diagnostics.push(Diagnostic.error(place.span, DkUseAfterMove(), f"`{root}` moved more than once (double move)"))
+         return
+     # PART C (Rust check_move, origins.rs:495-503): moving an ENCLOSING-scope place
+@@ -1187,10 +1212,10 @@ void live_mark_move(SpannedExpr place, SafetyState &state, ScopeTable &scopes, R
+     # live_reinit's loop_locals population) and the same-statement rebind target
+     # (`acc = bump(!acc)`, whose move feeds the immediate re-init). loop_depth is 0
+     # outside any loop, so this is dormant on straight-line code.
+-    if state.loop_depth > 0 and not state.loop_locals.contains(root) and root != state.rebind:
++    if state.loop_depth > 0 and not state.loop_locals.contains(root_def) and root_def != state.rebind:
+         ctx.diagnostics.push(Diagnostic.error(place.span, DkMoveInLoop(), f"cannot move `{root}` out of an enclosing scope inside a loop — it would be used-after-move on the next iteration"))
+         return
+-    state.moved.set(root, place.span.start)
++    state.moved.set(root_def, place.span.start)
+ 
+ # A branch whose last stmt is a control-flow exit never reaches the join, so its
+ # move-state is excluded from the merge (Rust merge_branch_states filters
+@@ -1237,40 +1262,44 @@ bool live_stmt_diverges(Stmt s):
+         else:
+             return false
+ 
+-# Collect the binding NAMES a pattern introduces (Rust mark_pattern_bindings →
+-# mark_live). Mirrors resolve.gg's define_pattern_bindings enumeration.
+-void collect_pattern_names_into(SpannedPattern pattern, Vector[String] &out):
++# Collect the DefIds a pattern introduces (Rust mark_pattern_bindings →
++# mark_live). Mirrors resolve.gg's define_pattern_bindings enumeration. DEEPDEF:
++# reads each binding's DefId from resolution_map[pattern.span.start] (recorded at
++# the DECLARATION by define_pattern_bindings) so loop-local seeding is DefId-keyed
++# and consistent with the DefId-keyed move check.
++void collect_pattern_defs_into(SpannedPattern pattern, ResolveContext ctx, Vector[int] &out):
+     match pattern.pat:
+-        case PBinding(name):
+-            out.push(name)
++        case PBinding(_name):
++            if ctx.resolution_map.contains(pattern.span.start):
++                out.push(ctx.resolution_map.get(pattern.span.start).unwrap())
+         case PConstructor(_, fields):
+             for field in fields:
+-                collect_pattern_names_into(field, &out)
++                collect_pattern_defs_into(field, ctx, &out)
+         case PDotShorthand(_, fields):
+             for field in fields:
+-                collect_pattern_names_into(field, &out)
++                collect_pattern_defs_into(field, ctx, &out)
+         case PTuple(elements):
+             for elem in elements:
+-                collect_pattern_names_into(elem, &out)
++                collect_pattern_defs_into(elem, ctx, &out)
+         case POr(alternatives):
+             if alternatives.len() > 0:
+-                collect_pattern_names_into(alternatives.get(0).unwrap(), &out)
++                collect_pattern_defs_into(alternatives.get(0).unwrap(), ctx, &out)
+         else:
+             pass
+ 
+-# Collect the `is`-pattern bindings a boolean condition introduces into its
++# Collect the `is`-pattern binding DefIds a boolean condition introduces into its
+ # guarded branch (`if x is Some(e):` binds `e` in the then-body), recursing the
+ # and/or/not tree. Over-collecting only ever UNDER-detects a MoveInLoop (adds a
+ # spurious loop-local) — never a false positive — so a negated `is` is included.
+-void collect_is_bindings_into(SpannedExpr cond, Vector[String] &out):
++void collect_is_defs_into(SpannedExpr cond, ResolveContext ctx, Vector[int] &out):
+     match cond.expr:
+         case EIs(_inner, _neg, pat):
+-            collect_pattern_names_into(*pat, &out)
++            collect_pattern_defs_into(*pat, ctx, &out)
+         case EBinaryOp(l, _op, r):
+-            collect_is_bindings_into(*l, &out)
+-            collect_is_bindings_into(*r, &out)
++            collect_is_defs_into(*l, ctx, &out)
++            collect_is_defs_into(*r, ctx, &out)
+         case EUnaryOp(_op, o):
+-            collect_is_bindings_into(*o, &out)
++            collect_is_defs_into(*o, ctx, &out)
+         else:
+             pass
+ 
+@@ -1279,11 +1308,11 @@ void collect_is_bindings_into(SpannedExpr cond, Vector[String] &out):
+ # any branch → moved after" (Rust merge, origins.rs:609). `pat_names` are the
+ # pattern bindings this branch introduces (match arm / `is`-condition) — inside a
+ # loop they are loop-local (re-bound each iteration), so seed them.
+-void safety_branch(Vector[Stmt] body, Vector[String] pat_names, int scope_id, SafetyState &state, Dict[String, int] &acc, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
++void safety_branch(Vector[Stmt] body, Vector[int] pat_defs, int scope_id, SafetyState &state, Dict[int, int] &acc, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+     SafetyState b = safety_snapshot(state)
+     if b.loop_depth > 0:
+-        for pn in pat_names:
+-            b.loop_locals.set(pn, 1)
++        for pd in pat_defs:
++            b.loop_locals.set(pd, 1)
+     check_safety_stmts(body, scope_id, &b, &scopes, &types, &ctx)
+     if live_stmts_diverge(body):
+         return
+@@ -1292,7 +1321,7 @@ void safety_branch(Vector[Stmt] body, Vector[String] pat_names, int scope_id, Sa
+             acc.set(k, b.moved.get(k).unwrap())
+ 
+ # Commit an accumulated branch-union into the live state (moved-in-any).
+-void safety_commit(Dict[String, int] acc, SafetyState &state):
++void safety_commit(Dict[int, int] acc, SafetyState &state):
+     for k in acc.keys():
+         if not state.moved.contains(k):
+             state.moved.set(k, acc.get(k).unwrap())
+@@ -1308,11 +1337,11 @@ void safety_commit(Dict[String, int] acc, SafetyState &state):
+ # the loop (mirrors the push/pop of loop_local_defs).
+ void safety_loop_body(Vector[Stmt] body, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+     int saved_depth = state.loop_depth
+-    Dict[String, int] saved_locals = state.loop_locals.clone()
+-    String saved_rebind = state.rebind
+-    Dict[String, int] before = state.moved.clone()
++    Dict[int, int] saved_locals = state.loop_locals.clone()
++    int saved_rebind = state.rebind
++    Dict[int, int] before = state.moved.clone()
+     state.loop_depth = saved_depth + 1
+-    state.loop_locals = Dict[String, int]()
++    state.loop_locals = Dict[int, int]()
+     check_safety_stmts(body, scope_id, &state, &scopes, &types, &ctx)
+     state.loop_depth = saved_depth
+     state.loop_locals = saved_locals
+@@ -1363,17 +1392,22 @@ void check_safety_stmts(Vector[Stmt] stmts, int scope_id, SafetyState &state, Sc
+ 
+ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+     match s:
+-        case SVarDecl(_stype, name, init_expr, _line, _col, _flags):
++        case SVarDecl(_stype, name, init_expr, _own, _sk, name_span):
+             check_local_borrow_bind(init_expr, &ctx)
+             # D12 position 1 (bind): a bare bind of a live drop-tainted place.
+             reject_tainted_place(init_expr, scopes, &types, &ctx)
+             check_safety_expr(init_expr, scope_id, &state, &scopes, &types, &ctx)
+-            # Liveness: a fresh binding of `name` makes it live again (Rust mark_live);
++            # Liveness: a fresh binding makes its DefId live again (Rust mark_live);
+             # inside a loop it is a loop-local (re-created each iteration → moving it
+-            # is legal, Rust mark_live adds it to loop_local_defs.last).
+-            live_reinit(&state, name)
+-            if state.loop_depth > 0:
+-                state.loop_locals.set(name, 1)
++            # is legal, Rust mark_live adds it to loop_local_defs.last). DEEPDEF: the
++            # binding's DefId is read from resolution_map[name_span], recorded at the
++            # DECLARATION (parser now emits a real name_span for a whole-binding decl).
++            int decl_def = -1
++            if name_span >= 0 and ctx.resolution_map.contains(name_span):
++                decl_def = ctx.resolution_map.get(name_span).unwrap()
++            live_reinit(&state, decl_def)
++            if decl_def >= 0 and state.loop_depth > 0:
++                state.loop_locals.set(decl_def, 1)
+         case SAssign(target, value):
+             check_local_borrow_bind(value, &ctx)
+             # D12 position 1 (assign): a bare assign of a live drop-tainted place.
+@@ -1385,23 +1419,30 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
+             # left-fold inside a loop is NOT flagged MoveInLoop — the move feeds the
+             # immediate re-init (Rust assignment_rebind_target). Set it only for the
+             # RHS walk (where the move happens), then restore.
+-            String saved_rebind = state.rebind
++            # DEEPDEF: the rebind target's DefId comes from the target IDENTIFIER's
++            # USE resolution (place_root_def_spanned) — a whole-binding assign target
++            # is a resolvable use. -1 = not a plain identifier (field/index write).
++            int saved_rebind = state.rebind
++            int target_def = -1
+             match target.expr:
+-                case EIdentifier(rnm):
+-                    state.rebind = rnm
++                case EIdentifier(_rnm):
++                    if place_root_def_spanned(target, scopes, ctx) is Some(td):
++                        target_def = td
+                 else:
+                     pass
++            if target_def >= 0:
++                state.rebind = target_def
+             # Liveness: read the RHS (source still live) BEFORE re-initialising the
+             # target, so `x = f(x)` reads the old `x` then rebinds it.
+             check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
+             state.rebind = saved_rebind
+             match target.expr:
+-                case EIdentifier(nm):
++                case EIdentifier(_nm):
+                     # Whole-binding rebind → live again (Rust mark_live); a rebind
+                     # inside a loop makes the target loop-local too.
+-                    live_reinit(&state, nm)
+-                    if state.loop_depth > 0:
+-                        state.loop_locals.set(nm, 1)
++                    live_reinit(&state, target_def)
++                    if target_def >= 0 and state.loop_depth > 0:
++                        state.loop_locals.set(target_def, 1)
+                 else:
+                     # Field/index write (`p.f = ...`) reads the root.
+                     check_safety_expr(target, scope_id, &state, &scopes, &types, &ctx)
+@@ -1437,12 +1478,12 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
+             check_safety_stmts(body, scope_id, &mfc, &scopes, &types, &ctx)
+         case SMetaIf(cond, body, else_branches):
+             check_safety_expr(cond, scope_id, &state, &scopes, &types, &ctx)
+-            Dict[String, int] mi_acc = Dict[String, int]()
+-            safety_branch(body, Vector[String](), scope_id, &state, &mi_acc, &scopes, &types, &ctx)
++            Dict[int, int] mi_acc = Dict[int, int]()
++            safety_branch(body, Vector[int](), scope_id, &state, &mi_acc, &scopes, &types, &ctx)
+             for eb in else_branches:
+                 if eb.condition is Some(c):
+                     check_safety_expr(c, scope_id, &state, &scopes, &types, &ctx)
+-                safety_branch(eb.body, Vector[String](), scope_id, &state, &mi_acc, &scopes, &types, &ctx)
++                safety_branch(eb.body, Vector[int](), scope_id, &state, &mi_acc, &scopes, &types, &ctx)
+             safety_commit(mi_acc, &state)
+         case SMetaConst(_name, value):
+             check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
+@@ -1479,25 +1520,25 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
+             safety_loop_body(body, scope_id, &state, &scopes, &types, &ctx)
+         case SIf(cond, body, else_branches):
+             check_safety_expr(cond, scope_id, &state, &scopes, &types, &ctx)
+-            Vector[String] then_binds = Vector[String]()
+-            collect_is_bindings_into(cond, &then_binds)
+-            Dict[String, int] if_acc = Dict[String, int]()
++            Vector[int] then_binds = Vector[int]()
++            collect_is_defs_into(cond, ctx, &then_binds)
++            Dict[int, int] if_acc = Dict[int, int]()
+             safety_branch(body, then_binds, scope_id, &state, &if_acc, &scopes, &types, &ctx)
+             for eb in else_branches:
+-                Vector[String] eb_binds = Vector[String]()
++                Vector[int] eb_binds = Vector[int]()
+                 if eb.condition is Some(c):
+                     check_safety_expr(c, scope_id, &state, &scopes, &types, &ctx)
+-                    collect_is_bindings_into(c, &eb_binds)
++                    collect_is_defs_into(c, ctx, &eb_binds)
+                 safety_branch(eb.body, eb_binds, scope_id, &state, &if_acc, &scopes, &types, &ctx)
+             safety_commit(if_acc, &state)
+         case SMatch(scrut, arms):
+             check_safety_expr(scrut, scope_id, &state, &scopes, &types, &ctx)
+-            Dict[String, int] m_acc = Dict[String, int]()
++            Dict[int, int] m_acc = Dict[int, int]()
+             for arm in arms:
+                 if arm.guard is Some(g):
+                     check_safety_expr(g, scope_id, &state, &scopes, &types, &ctx)
+-                Vector[String] arm_binds = Vector[String]()
+-                collect_pattern_names_into(arm.pattern, &arm_binds)
++                Vector[int] arm_binds = Vector[int]()
++                collect_pattern_defs_into(arm.pattern, ctx, &arm_binds)
+                 safety_branch(arm.body, arm_binds, scope_id, &state, &m_acc, &scopes, &types, &ctx)
+             safety_commit(m_acc, &state)
+         case SWith(e, _name, body):
+@@ -1546,10 +1587,14 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
+         case ENoneLiteral():
+             pass
+         case EIdentifier(name):
+-            # Liveness: a read of a moved place is use-after-move.
+-            live_check_use(name, expr.span, &state, &ctx)
++            # Liveness: a read of a moved place is use-after-move. DEEPDEF: key by
++            # the use's DefId (resolution_map) — an unresolved/global name -> -1 skip.
++            int use_key = -1
++            if ctx.resolution_map.contains(expr.span.start):
++                use_key = ctx.resolution_map.get(expr.span.start).unwrap()
++            live_check_use(use_key, name, expr.span, &state, &ctx)
+         case ESelfExpr():
+-            live_check_use("self", expr.span, &state, &ctx)
++            live_check_use(-2, "self", expr.span, &state, &ctx)
+         case EIt():
+             pass
+         case EBinaryOp(left, op, right):
+@@ -1637,25 +1682,25 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
+                 check_safety_expr(*b, scope_id, &state, &scopes, &types, &ctx)
+         case EIf(cond, then_body, elif_branches):
+             check_safety_expr(*cond, scope_id, &state, &scopes, &types, &ctx)
+-            Vector[String] eif_binds = Vector[String]()
+-            collect_is_bindings_into(*cond, &eif_binds)
+-            Dict[String, int] eif_acc = Dict[String, int]()
++            Vector[int] eif_binds = Vector[int]()
++            collect_is_defs_into(*cond, ctx, &eif_binds)
++            Dict[int, int] eif_acc = Dict[int, int]()
+             safety_branch(then_body, eif_binds, scope_id, &state, &eif_acc, &scopes, &types, &ctx)
+             for br in elif_branches:
+-                Vector[String] br_binds = Vector[String]()
++                Vector[int] br_binds = Vector[int]()
+                 if br.condition is Some(c):
+                     check_safety_expr(c, scope_id, &state, &scopes, &types, &ctx)
+-                    collect_is_bindings_into(c, &br_binds)
++                    collect_is_defs_into(c, ctx, &br_binds)
+                 safety_branch(br.body, br_binds, scope_id, &state, &eif_acc, &scopes, &types, &ctx)
+             safety_commit(eif_acc, &state)
+         case EMatch(scrutinee, arms):
+             check_safety_expr(*scrutinee, scope_id, &state, &scopes, &types, &ctx)
+-            Dict[String, int] em_acc = Dict[String, int]()
++            Dict[int, int] em_acc = Dict[int, int]()
+             for arm in arms:
+                 if arm.guard is Some(g):
+                     check_safety_expr(g, scope_id, &state, &scopes, &types, &ctx)
+-                Vector[String] em_binds = Vector[String]()
+-                collect_pattern_names_into(arm.pattern, &em_binds)
++                Vector[int] em_binds = Vector[int]()
++                collect_pattern_defs_into(arm.pattern, ctx, &em_binds)
+                 safety_branch(arm.body, em_binds, scope_id, &state, &em_acc, &scopes, &types, &ctx)
+             safety_commit(em_acc, &state)
+         case EClosure(_params, body):
+@@ -1663,7 +1708,7 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
+             # live inside it, and a move inside the closure does not escape to the
+             # enclosing state. Carrier rejects (tainted capture + expression-tail)
+             # still apply.
+-            SafetyState cl = SafetyState(Dict[String, int](), 0, Dict[String, int](), "")
++            SafetyState cl = SafetyState(Dict[int, int](), 0, Dict[int, int](), -1)
+             check_safety_stmts(body, scope_id, &cl, &scopes, &types, &ctx)
+             # D12 position 5 (closure capture): a captured tainted OUTER local.
+             reject_tainted_captures(body, scope_id, scopes, &types, &ctx)
+@@ -1821,7 +1866,7 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
+         # traversal. Pass-order rider: liveness precedes aliasing, so `f(!x,!x)` is
+         # a double move (not a place-overlap). Fresh SafetyState per function —
+         # params are live at entry and no enclosing loop carries across a fn body.
+-        SafetyState safety = SafetyState(Dict[String, int](), 0, Dict[String, int](), "")
++        SafetyState safety = SafetyState(Dict[int, int](), 0, Dict[int, int](), -1)
+         check_safety_stmts(func.body, body_scope, &safety, &scopes, &types, &ctx)
+         ctx.loop_depth = saved_loop_depth
+         ctx.current_function_throws = saved_throws
