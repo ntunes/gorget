@@ -1,5 +1,11 @@
 # Excellence plan: finish CoW write-through + materialize closed set
 
+> **Status:** v2 — folds reviewer reservations (alias-root derivation, ggdef-as-oracle,
+> drop-taint × materialize, gate/scoreboard bar, smaller anchors). Architecture unchanged
+> (waves 0–3; track order 1B → 1C → 1A). After this fold: **fresh-pass plan review loop**
+> (≥1 clean pass) before any track brief. Committed sibling path to sync on next land:
+> `docs/plans/cow-writethrough-materialize-closed-set.md`.
+
 ## Context
 
 Gorget’s core ownership rule (§3.1 / D1 / devbook/11):
@@ -8,20 +14,32 @@ Gorget’s core ownership rule (§3.1 / D1 / devbook/11):
 
 G1 (projected mutation materialize) and G2 (`&`-of-bare formation materialize) landed. The **uniform rule is still incomplete** at several closed-set positions. Incomplete positions are silent wrong-output bugs (often Core #8: both compilers agree on wrong), not design forks.
 
-**Excellence north star for this campaign:** every position in the closed set behaves per §3.1 on **Rust gg + self-host**, with fixtures locking correct stdout, ASan clean on materialize/untrack paths, and no clone-stats regression on self-host self-compile beyond noise.
+**Excellence north star for this campaign:** every position in the closed set behaves per §3.1 on **Rust gg + self-host**, with fixture expectations **sourced from ggdef (the definition) when the shape is in-subset**, ASan clean on materialize/untrack paths, **WRONG-OUTPUT parity count drops** at each wave close, and no clone-stats regression on self-host self-compile beyond noise.
 
-Related owner notes (this session): local `&`-binds may reopen later only if exclusivity-safe (out of v1 burn-down until D10 place-overlap is solid); free views / low cloning remain production goals (D15 refinement, not eager clone everywhere).
+Related owner notes: local `&`-binds may reopen later only if exclusivity-safe (out of v1 burn-down until D10 place-overlap is solid); free views / low cloning remain production goals (D15 refinement, not eager clone everywhere).
+
+---
+
+## Standing rules for this campaign
+
+1. **Expectations flow FROM the definition (ggdef), not from production measurement.**  
+   Measuring compilers tells you what they *do*; if they write through where the chain is broken, pinning that locks Core #8 wrong-output. Wave 0 and every new fixture: run the probe under **ggdef** (when elaborable); expected stdout = ggdef verdict. If the shape is **outside ggdef’s subset**, state that explicitly and derive from §3.1 / D1 / prose 02–03 (never “whatever production printed”).
+2. **Derive before measure for multi-hop alias chains** (see fixture `cow_for_amp_vector_alias_root` below).
+3. **Materialize is an implicit copy** — drop-taint (D4/D12) applies; see closed-set row + **queued decision before 2E**.
+4. Process: per **`CLAUDE.md` / `AGENTS.md`** (same symlink): scout → brief → ≥3 sequential fresh brief-reviews → worktree execute → output-review → integrate. Plan itself needs a **clean fresh review pass** after this v2 fold before the first track brief.
 
 ---
 
 ## Definition of done
 
-1. **Closed-set totality (runtime):** every position class below has ≥1 positive fixture (correct expected output) that **both** compilers match (C backend primary; LLVM parity where the fixture is not backend-specific).
+1. **Closed-set totality (runtime):** every position class below has ≥1 positive fixture whose expected output is **ggdef-adjudicated (or prose-derived with explicit out-of-subset note)** and that **both** compilers match (C **and** LLVM full sweeps at wave close).
 2. **No known silent drop of write-through** on Vector / Dict / Set value-element field stores, `for x in &coll`, nested `&` field places (snag #53), or owned-index field places (self-host mirror).
-3. **No known silent write-through where materialize is required** for tracked roots (G1/G2 already) **plus** D2 plain-`self` and untracked alias chains (or those two explicitly deferred with open fixtures + TODO, if scoped out of wave 1 — see waves).
-4. **Promote** `rust_value_index_element_field_writethrough` from inline Rust-only to corpus once self-host matches.
-5. **devbook/11** “converging” marker removed or reduced to only explicitly deferred residual classes.
-6. **Gates:** `cargo test --lib`, targeted integration + `self_host_bootstrap_fixed_point` after each track; full `cargo test --test integration` at wave close; ASan on new materialize fixtures; re-measure clone baseline optional but preferred after D2/`for &` (low-clone goal).
+3. **No known silent write-through where materialize is required** for tracked roots (G1/G2) **plus** D2 plain-`self` and untracked alias chains (or those deferred only with fixtures that encode **definition-correct** expected output — never lock wrong).
+4. **Drop-taint × materialize** disposition is **owner-ruled** and implemented (reject vs clone-with-explicit — see queued decision); closed-set row is not latent.
+5. **Promote** `rust_value_index_element_field_writethrough` from inline Rust-only to corpus once self-host matches.
+6. **devbook/11** “converging” marker removed or reduced to only explicitly deferred residual classes.
+7. **Gates (round-close bar):** lib + lints + targeted integration + bootstrap + **full C integration** + **full LLVM integration** + **`spec_conformance` + full ggdef suite** at wave close (and on any track that **flips fixture expectations**, e.g. 2E — Batch-A lesson). ASan on new materialize/untrack fixtures.
+8. **Scoreboard:** regen `self_host_runtime_diff` / parity at **wave-1 and wave-2 close**; WRONG-OUTPUT (and related non-MATCH) **must drop** relative to pre-wave baseline (command in gates; **no dated numbers in this plan**).
 
 ---
 
@@ -32,34 +50,87 @@ Related owner notes (this session): local `&`-binds may reopen later only if exc
 | Class | Spec | Status |
 |-------|------|--------|
 | Bare param `T x` mutates | design §3.2; spectest `cow_bare_param_materialize` | **Done** (corpus + spectest) |
-| Bare local / bare alias | design §3.3–3.4; `cow_bare_assign_sever`, sever fixtures | **Done** |
-| Projected mutation through bare root (`v[i].f=`, `o.f.push`, …) | G1 | **Done** |
-| `&`-of-bare formation (`f(&t)`, `&s.field`) | G2 | **Done** |
+| Bare local / bare alias | design §3.3–3.4; `cow_bare_assign_sever`, severorder | **Done** |
+| Projected mutation through bare root | G1 | **Done** |
+| `&`-of-bare formation | G2 | **Done** |
 | Named bare-recv `&self` mutator (non-generic) | R38 T-B | **Done** (generic residual H) |
-| Bare `for x in coll` element mutate | design §3.1 | **Partial** (reads OK; value-elem materialize may lag) |
-| **Plain `self` (not `&self`)** | **D2** | **Both wrong** (write-through today) |
-| Untracked alias chains (`&x.slice()[i]` mut) | devbook/11:443–450 | **Open** (last G1/G2 convergence class) |
-| Loop-carried bare-param lazy mat | matcluster #2 | **Open** (lazy substrate) |
-| Match pattern bindings | prose 02 | Treat as Borrow; verify if any hole (scout wave 0) |
+| Bare `for x in coll` element mutate | design §3.1 | **Partial** |
+| **Plain `self` (not `&self`)** | **D2** (`decisions.md` D2) | **Both wrong** (write-through today) |
+| Untracked alias chains | devbook/11 | **Open** |
+| Loop-carried bare-param lazy mat | matcluster #2 | **Open** |
+| Match pattern bindings | prose 02 | Borrow; wave-0 probe |
+| **Drop-tainted value at any materialize-on-write site** | D4 / D12 + **this campaign’s seventh position** | **Open — owner ruling required before 2E** (see below) |
 
 ### Write-through (`&` / owned place)
 
 | Class | Spec | Status |
 |-------|------|--------|
-| `&` param / `f(&x)` unique | C3; `cow_amp_owned_writethrough` | **Done** |
-| `&self` method | design §4.5 | **Done** (generic residual H) |
-| Owned place `v.field=`, `v[i]=` | collections | **Done** for common paths |
+| `&` param / unique owned `&` | C3; `cow_amp_owned_writethrough` | **Done** |
+| `&self` | design §4.5 | **Done** (generic residual H) |
+| Owned place `v.field=`, `v[i]=` | collections | **Done** (common paths) |
 | Value-type `v[i].field=` (Vector) | R39-T1 | **Rust done; self-host open (B)** |
-| **`for x in &coll` element** | design/book | **Both open (A)** — no corpus fixture |
-| **Dict/Set `d[k].field=`** | same class as R39 | **Both likely open (C)** — verify first |
-| Nested place under `&` (`&outer.inner…`) | snag #53 | **Both open (F)** |
-| Compound through write-through place | `cow_amp_compound_writethrough` | **Done** for covered shapes |
+| **`for x in &coll` element** | design/book | **Both open (A)** |
+| **Dict/Set `d[k].field=`** | same class as R39 | **Both likely open (C)** |
+| Nested place under `&` (snag #53) | known_gaps | **Both open (F)** |
+| Compound through write-through place | `cow_amp_compound_writethrough` | **Done** (covered shapes) |
 
-**Not in this campaign (defer):**
+### Drop-taint × materialize (queued decision — blocks Track 2E)
 
-- Local `auto r = &b` reopening (owner: OK later if exclusivity-safe; keep D10 reject until place-overlap solid).
-- D12 drop-purity enforcement wave (adjacent, separate).
-- Comprehension `for x in &a` empty (I) — sibling of A; fold into A track as desugar parity.
+**Fact:** materialize-on-write is an **implicit copy**. D12/D4: drop-tainted types must not be implicitly duplicated at the six positions (`E_MoveWithoutOperator`). Materialize is a **seventh** implicit-copy position not yet enumerated as such in the closed-set tables.
+
+**Reviewer derivation (recommended default for the owner brief):** **reject** bare mutation of a drop-tainted binding (same family as the six positions): user writes `&self` / `&param` (write-through, no clone of the resource identity in the CoW sense for taint) or explicit `.clone()` / `!` as appropriate — never silent double-drop of custom `Drop`.
+
+**This plan does not rule.** Before Track 2E executes:
+
+1. Wave-0 probe: bare param **and** bare `self` of a **custom-Drop** type; mutate; record **ggdef + both compilers** (stdout / diagnostic / crash).
+2. Owner decision item (ledger or TODO): **reject at materialize sites for drop-tainted** vs other disposition.
+3. Implement disposition + negative fixtures **with** 2E (or as 2E.0 prerequisite track).
+
+Until then, 2E must not land bare-self materialize for drop-tainted receivers as silent clones.
+
+**Defer (not this campaign’s identity):**
+
+- Local `auto r = &b` reopening (exclusivity-safe later).
+- D12 full six-position enforcement wave (coordinate; drop-taint materialize decision **aligns** with D12).
+- Async/shared edges unless they fall out of A–F.
+
+---
+
+## Derived fixture expectations (do not “measure” these)
+
+### `for c in &a` on owned root → write-through
+
+```
+Vector[Cell] a = [Cell(1), …]
+for c in &a:
+    c.n = c.n + 100
+print(a[0].n)   # EXPECT 101
+```
+
+Chain: `c` —`&`→ element of owned `a`. Unbroken `&` to owner → write-through. Confirm with **ggdef** in wave 0.
+
+### `cow_for_amp_vector_alias_root` — **derived, not measured**
+
+```
+Vector[Cell] a = [Cell(1), …]
+Vector[Cell] b = a          # bare bind → Borrow alias of a
+for c in &b:
+    c.n = c.n + 100
+print(a[0].n)               # EXPECT 1  — chain breaks at bare b
+print(b[0].n)               # EXPECT 101 — materialize at b, then write-through into b’s private copy
+```
+
+**Derivation:** `b = a` is a bare binding (borrow). Write chain: `c` —`&`→ `b` —**bare**→ `a`. The unbroken-`&` chain ends at `b`; per §3.1 the write **materializes at `b`**. `a` is untouched. This is the same sever semantics as `cow_bare_assign_sever` / severorder with a loop in the middle — **not** “both aliases see write.”
+
+**Do not** set expected output from production if production still write-throughs to `a` (that would lock Core #8). Wave 0 **records** production/ggdef deltas; expected stdout for the fixture is the **derivation + ggdef** above.
+
+### Bare `for c in a` control → materialize
+
+```
+for c in a:          # bare element = Borrow
+    c.n = c.n + 100
+print(a[0].n)        # EXPECT 1 (private copy in c)
+```
 
 ---
 
@@ -67,210 +138,224 @@ Related owner notes (this session): local `&`-binds may reopen later only if exc
 
 | ID | Gap | Compilers | Primary files |
 |----|-----|-----------|---------------|
-| **A** | `for x in &coll` element write-through lost | Both | Rust `src/ir/lowering/stmts/for_loops.rs`; SH `lower_loops.gg` (+ field/index mut on loop var) |
-| **B** | Self-host value `v[i].field=` write-through | Self-host | `lower_stmt.gg` `lower_place_base` / `lower_field_write` (~1514–1638); promote corpus after |
-| **C** | Dict/Set `d[k].field=` write-through | Both | Rust `try_resolve_field_place` Index arm `src/ir/lowering/exprs/mod.rs:2540+` (Array-only today); SH place twin; fix double-eval type-only pre-check |
-| **D** | Untracked alias chains materialize | Both | `resolve_projection_root_local` `exprs/mod.rs:2374+`; SH `cow_source_root_name` / `cow_materialize_projected_root` |
-| **E** | D2 plain-`self` materialize | Both | Receiver ABI + `cow_before_mutation` for bare self; SH equip path; migration sweep + DeadBareParamWrite extends to `self` |
-| **F** | Snag #53 nested `&` field write-through | Both | Nested field place under MutPtr base; fixture `known_gaps/snag53_*` |
-| **G** | Loop-carried bare-param materialize | Both | Lazy loop-carried substrate (`emit_lazy_loopcarried_borrow` / bare-param branch) |
-| **H** | Generic-equip bare named-recv materialize | Self-host residual (Core #8 class) | `compute_method_mutates_self` generic equip |
-| **I** | Comprehension over `&` iterable empty | Both | Desugar must match statement `for` |
+| **A** | `for x in &coll` element write-through | Both | Rust `for_loops.rs`; SH `lower_loops.gg` |
+| **B** | Self-host value `v[i].field=` | Self-host | `lower_stmt.gg` `lower_place_base` / `lower_field_write` ~1514–1638 |
+| **C** | Dict/Set `d[k].field=` | Both | Rust `try_resolve_field_place` Index arm `exprs/mod.rs:2540+`; SH place twin; type-only pre-check before `lower_expr(coll)` |
+| **D** | Untracked alias chains materialize | Both | `resolve_projection_root_local` `exprs/mod.rs:2374+`; SH CoW root helpers |
+| **E** | D2 plain-`self` materialize | Both | Receiver + `cow_before_mutation` `context.rs:3325`; SH equip; **blocked on drop-taint ruling** |
+| **F** | Snag #53 nested `&` field WT | Both | Nested MutPtr place; `known_gaps/snag53_*` |
+| **G** | Loop-carried bare-param mat | Both | Lazy loop-carried substrate |
+| **H** | Generic-equip bare named-recv mat | SH residual | `compute_method_mutates_self` generics |
+| **I** | Comprehension over `&` iterable empty | Both | **Same iterable-mode helper as A** (not a second fix) |
+| **T** | Drop-taint × materialize | Both + ggdef | Owner decision + reject/negative fixtures; prerequisite to 2E |
 
 ---
 
-## Recommended approach (waves)
+## Waves
 
-### Wave 0 — Verify live symptoms (1 short scout, read-only + measure)
+### Wave 0 — Verify + adjudicate (ggdef-first)
 
-**Do not trust dated TODO numbers.** For each of A, B, C, E, F run compile+run on both compilers (and self-host lowerer for B):
+For each probe (A, B, C, E, F, **T drop-taint**, alias-root derivation, bare-for control, match-bind spot-check):
 
-| Probe | Expected if still broken |
-|-------|--------------------------|
-| A: `for c in &a: c.n += 100; print(a[0].n)` | `1` not `101` |
-| B: self-host `v[0].x = 88` | stale `10` |
-| C: `Dict[int, Point]; d[0].x = 99; print(d[0].x)` | stale / wrong |
-| E: bare-`self` push; print caller | write-through (caller changed) |
-| F: snag53 fixture | empty / no-op |
+| Lane | What to record |
+|------|----------------|
+| **ggdef** | elaborate+run (or ElabError / out-of-subset note) → **authoritative expected** when Value |
+| Rust C / LLVM | stdout, exit, trap line |
+| Self-host lowerer | where applicable (B) |
 
-Deliverable: `/tmp/cow_wave0_measure.log` with stdout + exit codes. Re-order wave 1 if any already fixed.
+Deliverable: `/tmp/cow_wave0_measure.log` with **three-way** comparison and explicit **expected = ggdef | prose-derived (out of subset)**.
 
-Also inventory match-pattern bare binds for materialize holes (quick grep + 1 probe).
+Re-order wave 1 only if a gap is already fixed **and** matches ggdef/derivation.
 
-### Wave 1 — Place write-through class (lvalue completeness)
+Also: capture **parity baseline** command output (WRONG count) for wave-1 scoreboard (record command + session regen only — no stale numbers in plan).
 
-**Principle:** one **place-resolution** model: field/index stores go through addresses (`get_ptr` / MutPtr), never value copies. Fix the class, not one collection kind.
+### Wave 1 — Place write-through class
 
-#### Track 1B — Self-host value index-element field write-through (first)
+**Principle:** one place-resolution model (addresses / `get_ptr` / MutPtr), not per-collection special cases. Expectations from ggdef/derivation from day one; spectest **lane** wiring may wait for elaborator (wave 3) but **stdout expectations do not**.
 
-- **Why first:** Rust already correct; unlocks corpus fixture; pure SH place path; unblocks parity.
-- **Fix shape:** mirror R39-T1 — when field-store base is `EIndex` on Array, force element **Ptr** (`gorget_array_get_ptr` / existing SH equivalent), write field through it, **untrack** transient element CoW handle (same class as Rust `untrack_transient_element_refs_in_range`).
-- **Root cause (scout):** `lower_place_base` only special-cases Identifier/static/Deref; Index falls to `lower_expr` → **value copy** → field write dies (`lower_stmt.gg:1514–1638`).
-- **Files:** `tests/fixtures/self_host_lowerer/lower_stmt.gg` (primary); possibly `lower_expr.gg` if index helpers live there. Serialize vs other SH tracks.
-- **Fixtures:** promote `rust_value_index_element_field_writethrough` body to `tests/fixtures/cow_value_index_field_writethrough.gg` + expected; keep Rust inline or delete once corpus covers; both C + LLVM + self-host runtime.
-- **Gates:** rebuild SH driver; `self_host_runtime` / targeted run; ASan on multilevel index+field fixtures already in corpus.
+#### Track 1B — Self-host value index-element field write-through (**first**)
+
+- Mirror R39-T1: Index base of field-store → force element Ptr + untrack transient CoW handle.
+- Root: `lower_place_base` falls through Index to value `lower_expr` (`lower_stmt.gg:1514–1638`).
+- Promote inline test body (`integration.rs` ~21089) → `tests/fixtures/cow_value_index_field_writethrough.gg` with ggdef/derived expected.
+- Gates: SH driver rebuild; targeted integration; ASan multilevel cow_index_*; **ggdef suite** if expectations added to spectests later — corpus expected still ggdef-checked in wave 0.
 
 #### Track 1C — Dict/Set element field lvalue (both)
 
-- **Verify** wave 0 first (Core #8 candidate).
-- **Rust:** extend `try_resolve_field_place` `Expr::Index` beyond `CollectionKind::Array` — Map/Set via `gorget_map_get_ptr`-style + key typing; **type-only pre-check before `lower_expr(coll)`** to kill double-eval of side-effecting coll producers.
-- **Self-host:** same place-base class as 1B (index/dict key path).
-- **Fixtures:** `cow_dict_value_field_writethrough.gg` (+ Set if distinct); compound/nested optional.
-- **Siblings:** grep all place-resolution sites (assigns, methods, compound) — Core #4.
+- Wave-0 verify first.
+- Extend `try_resolve_field_place` past `CollectionKind::Array`; type-only pre-check before lowering collection (no double-eval).
+- Fixtures with ggdef/derived expected; sibling-site grep (assigns/methods/compound).
 
-#### Track 1A — `for x in &coll` write-through (both)
+#### Track 1A — `for x in &coll` write-through (both) **+ I (comprehension)**
 
-- **Root cause:** for-lowering binds elements without a **mode bit** (bare = Borrow / materialize-on-write; `&` = MutPtr write-through into collection element).
-- **Rust:** `for_loops.rs` — detect `Expr::Unary`/`MutableBorrow` (or AST equivalent) on iterable; for Vector, bind loop var as **element place** (Ptr into slot), not value copy; field/index assigns on loop var must use that place. Dict/Set for-`&` if language allows (confirm grammar).
-- **Self-host:** `lower_loops.gg` `lower_for_vector` (~224–285) currently always `borrow_only=true` payload read — branch on `&`.
-- **Fixtures (must land with fix):**
-  - `cow_for_amp_vector_field_writethrough.gg` → `101` (owned root)
-  - `cow_for_amp_vector_alias_root.gg` → both aliases see write (or per CoW: if `b=a` bare alias then `for c in &b` — exclusivity/CoW interaction; wave 0 measure)
-  - bare control: `for c in a: c.n += 100` → materialize, `a[0].n` unchanged
-- **Follow-on in same track or immediate follow-up:** **I** comprehension desugar for `&` iterable (must not yield empty).
-- **Smith:** remove exclusion in `tests/smith/generator.rs:32–33` after green.
-- **Spectest seed** when ggdef can express (optional in wave 1; at least corpus).
+- Mode bit on iterable: bare = Borrow element; `&` = MutPtr element place.
+- **Core #4:** one **shared iterable-mode helper** (or shared desugar) feeding **both** statement-`for` and **comprehension** lowering — not two parallel fixes. Absorb TODO-High “comprehension over `&` yields empty” (A3 gauntlet residual) into this track; reconcile TODO on land (move completed note to DONE, leave only residuals).
+- Fixtures (expected = derivation + ggdef):
+  - `cow_for_amp_vector_field_writethrough.gg` → `101`
+  - `cow_for_amp_vector_alias_root.gg` → `1` then `101` (see derivation above)
+  - bare-for control → `1`
+  - comprehension twin once helper exists
+- Un-exclude smith (`generator.rs:32–33`) after green.
 
-**Wave 1 exit:** B + C + A green on both compilers; corpus fixtures committed; no ASan UAF on untrack.
+**Wave 1 close gates + scoreboard:** full C integration, full LLVM integration, lib, lints, bootstrap, **spec_conformance + full ggdef suite**, ASan sample, **parity regen — expect WRONG drop**.
 
-### Wave 2 — Materialize completeness (immutable-context totality)
+### Wave 2 — Materialize completeness
+
+#### Track 2T / decision — drop-taint × materialize (**before 2E**)
+
+- Owner ruling + implement reject (recommended) or alternate; negative fixtures; align messaging with D12 family.
 
 #### Track 2E — D2 plain-`self` materialize (both)
 
-- **Spec:** bare `self` ≡ bare param: write materializes private copy; caller untouched; `&self` write-through.
-- **Today:** both write through (TODO ~1109; decisions D2).
-- **Fix:** route bare-self mutation through same materialize chokepoint as bare param (`cow_before_mutation` / SH equivalent); do **not** change `&self`.
-- **Migration:** DeadBareParamWrite (or self-arm) + sweep self-host / fixtures that relied on bare-self write-through → `&self`. Scout blast radius first (owner rule for D12-like tracks).
-- **Fixtures:** positive materialize (caller unchanged); `&self` still write-through; method that only reads bare self (no clone).
+- Only after 2T disposition is clear for drop-tainted receivers.
+- Bare `self` ≡ bare param materialize; `&self` write-through.
+- Migration: DeadBareParamWrite/`self` arm + sweep bare-self write-through → `&self`.
+- **Any fixture expectation flip ⇒ full ggdef suite in track gates** (Batch-A).
 
 #### Track 2D — Untracked alias chains
 
-- Extend `resolve_projection_root_local` (and SH twin) to name roots from view-returning methods / temps where sound, **or** materialize at the immutable link when root unnameable (prefer uniform chokepoint).
-- Fixture: mutate through `&x.slice()[i]` or equivalent; owner buffer unchanged; no UAF.
-- Remove devbook/11 “one remaining unconverged shape” when done.
+- Extend root oracle or materialize at immutable link; fixture; remove devbook converging marker when done.
 
-#### Track 2F — Snag #53 nested write-through
+#### Track 2F — Snag #53
 
-- Nested field under `&` outer must remain MutPtr place chain.
-- Un-`#[ignore]` `snag53_nested_struct_field_mut`; promote out of known_gaps when green.
+- Nested MutPtr place chain; un-ignore when green.
 
 #### Track 2G / 2H (rolling)
 
-- **G** loop-carried bare-param: separate brief; wire expected `1,2,3,1` only after fix (do not lock wrong output).
-- **H** generic-equip mutator: extend `compute_method_mutates_self` to generic equips; un-ignore `generic_equip_mutator_named_recv`.
+- Loop-carried bare-param; generic-equip mutator classification.
+
+**Wave 2 close:** same gate battery as wave 1 + **parity regen — expect further WRONG drop**.
 
 ### Wave 3 — Spec lock + docs + guards
 
-1. Spectests for A, C, E (ggdef expectations via `ggdef -- gen` when elaborator covers).
-2. Docs write-through: language-design §3.1 examples; book/11 for-`&`; devbook/11 implementation status (remove converging marker).
-3. Structural guards (Core #6):
-   - arm-count / place-resolver: Index place path must handle Array **and** Map (lint on `CollectionKind` exhaustiveness or sibling-site count).
-   - optional: smith tier for `for x in &coll` field mut.
-4. Clone baseline: `scripts/self_host_mem_baseline.sh` + `--clones=stats` after wave 1–2 (ensure free-view / low-clone goal not regressed by over-eager materialize).
+1. Spectest **lane** wiring for A/C/E/T when elaborator covers (expectations already from ggdef day one).
+2. Docs: language-design §3.1, book/11 for-`&` + alias-root, devbook/11 status, D4/D12 seventh position if ruled.
+3. Lints: place-resolver CollectionKind exhaustiveness / sibling counts; optional smith for-`&`.
+4. Clone baseline: `scripts/self_host_mem_baseline.sh` + `--clones=stats` (no regression).
 
 ---
 
-## Process (non-negotiable)
-
-Per `Agents.md`:
+## Process
 
 ```
-scout (measure e2e) → brief → ≥3 sequential fresh brief-reviews → execute (worktree) → fresh output-review → integrate
+fresh plan review (clean pass on this v2) →
+per track: scout (e2e + ggdef) → brief → ≥3 sequential reviews → worktree execute → output-review → integrate
 ```
 
-- **Always** `isolation: "worktree"`; stage by explicit file names; no stash.
-- Parent runs full integration at wave close; agents run lib + targeted + bootstrap.
-- Core #8: both-wrong is **not** a pass; fixtures encode **intended** stdout.
-- Do **not** resurrect the abandoned reject-gate model for bare mutation (TODO.md:22).
-- Fix **classes** (place-resolution, for-mode bit), not one call site.
+- Always `isolation: "worktree"`; explicit `git add` paths; no stash.
+- Parent: full C + LLVM integration at wave close; agents: lib + targeted + bootstrap + **ggdef/spec_conformance when expectations flip**.
+- Core #8: both-wrong is not a pass.
+- Do not resurrect reject-gate for **ordinary** bare mutation (TODO / CLAUDE.md); **do** reject drop-tainted materialize if owner rules that way (orthogonal: taint purity, not “bare always reject”).
+
+### Coordination with enforcement wave (main)
+
+| Overlap | Note |
+|---------|------|
+| `src/ir/lowering/*`, `lower_*.gg` | Shared with exclusivity / drop-purity / trap tracks — **serialize** or rebase often |
+| **Batch C3** composed `gg fmt` / D27 sigil sweep (~1,114 move sites) | **Catastrophic conflict** with long-lived CoW branches. **Strategy:** land CoW waves **before** C3, **or** rebase CoW branch onto post-C3 main immediately after C3 lands (no multi-week dual branch). State choice at campaign kickoff. |
 
 ### File-zone serialization (self-host)
 
 | Zone | Tracks |
 |------|--------|
 | `lower_stmt.gg` place/field/index | 1B, 1C-SH, 2F |
-| `lower_loops.gg` | 1A, 2G |
-| `lower_expr.gg` / `lower.gg` CoW helpers | 1A-SH, 2D, 2E, 2H |
-| Rust `for_loops.rs` | 1A-Rust |
-| Rust `exprs/mod.rs` + `assigns.rs` + `methods.rs` | 1C-Rust, 2D-Rust, 2E-Rust |
+| `lower_loops.gg` + comprehension desugar | 1A, **I**, 2G |
+| `lower_expr.gg` / `lower.gg` CoW | 1A-SH helpers, 2D, 2E, 2H, 2T |
+| Rust `for_loops.rs` + comprehension | 1A-Rust, I-Rust |
+| Rust `exprs/mod.rs`, `assigns.rs`, `methods.rs`, `context.rs` | 1C-Rust, 2D, 2E, 2T |
 
-Prefer: **1B → 1C → 1A** on SH (shared place helpers), with Rust 1C parallelizable after wave 0.
+Prefer **1B → 1C → 1A(+I)** on SH; Rust 1C parallelizable after wave 0 if zones held.
 
 ---
 
-## Critical code map (reuse)
+## Critical code map (verified anchors)
 
 | Role | Path |
 |------|------|
-| Field place + Index Ptr force (Rust R39) | `src/ir/lowering/exprs/mod.rs` `try_resolve_field_place` ~2472–2582 |
-| Assign untrack + field store | `src/ir/lowering/stmts/assigns.rs` |
-| Method value-field recv | `src/ir/lowering/exprs/methods.rs` ~2010+ |
-| `cow_before_mutation` | `src/ir/lowering/context.rs` ~2658+ |
-| Projection root | `src/ir/lowering/exprs/mod.rs` `resolve_projection_root_local` ~2374+ |
+| Field place + Index Ptr (R39) | `src/ir/lowering/exprs/mod.rs` `try_resolve_field_place` **:2472** |
+| Projection root | `…/exprs/mod.rs` `resolve_projection_root_local` **:2374** |
+| `cow_before_mutation` | `src/ir/lowering/context.rs` **:3325** (not ~2658 — stale) |
+| Assign untrack / field store | `src/ir/lowering/stmts/assigns.rs` |
 | For-loops | `src/ir/lowering/stmts/for_loops.rs` |
-| SH place base / field write | `tests/fixtures/self_host_lowerer/lower_stmt.gg` ~1514–1638 |
-| SH for vector | `tests/fixtures/self_host_lowerer/lower_loops.gg` ~224–285 |
-| SH projected materialize | `lower.gg` `cow_materialize_projected_root` ~758+ |
-| Rust inline regression (B) | `tests/integration.rs` ~21080–21179 |
-| Smith exclusion for for-`&` | `tests/smith/generator.rs` ~32–33 |
-| Spec | `docs/language-design.md` §3.1; `docs/devbook/11-copy-on-write.md` §mutation; decisions D1/D2 |
-| Prose stubs | `spec/prose/02-borrow-and-materialize-on-write.md`, `03-writethrough-and-move.md` |
+| SH place / field write | `self_host_lowerer/lower_stmt.gg` **:1514–1638** |
+| SH for vector | `self_host_lowerer/lower_loops.gg` **:224+** |
+| Rust inline (B) | `tests/integration.rs` **~21089** |
+| Smith for-`&` exclusion | `tests/smith/generator.rs` **:32** |
+| D2 | `docs/plans/define-gorget/decisions.md` D2 (~:79) |
+| Spec / prose | language-design §3.1; devbook/11; `spec/prose/02`, `03` |
+| ggdef | `spec/ggdef/` — oracle for in-subset CoW |
 
 ---
 
-## Verification checklist (per track)
+## Verification / gates
+
+### Per-track (minimum)
 
 ```bash
-# Wave 0 probes (example)
-cargo build --release
-# hand-run minimal .gg via target/release/gg run /tmp/probe.gg  (C + LLVM)
-# self-host: rebuild lowerer driver then run probe
-
-# Per-track
 cargo test --lib
-cargo test --test integration -- <fixture_filter> --test-threads=4 2>&1 | tee /tmp/cow-$RANDOM.log
+cargo test --test lints   # when touching structural/lint sites
+cargo test --test integration -- <filter> --test-threads=4 2>&1 | tee /tmp/cow-$RANDOM.log
 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_bootstrap_fixed_point -- --nocapture
-
-# After materialize/untrack changes
-# ASan on new + multilevel cow_index_* fixtures
-
-# Wave close
-GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration -- --test-threads=4 2>&1 | tee /tmp/integration-$RANDOM.log
-# optional: GG_BACKEND=llvm for parity sample of new fixtures
+# If track adds/flips expected stdout or spectests:
+cargo test -p ggdef -- --test-threads=4 2>&1 | tee /tmp/ggdef-$RANDOM.log
+cargo test --test spec_conformance -- --test-threads=4 2>&1 | tee /tmp/spec-$RANDOM.log
 ```
 
-Clone/RSS (wave 3): `scripts/self_host_mem_baseline.sh` + compare to pre-wave capture in `/tmp`.
+### Wave close (mandatory — not optional LLVM sample)
+
+```bash
+GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration -- --test-threads=4 2>&1 | tee /tmp/integration-c-$RANDOM.log
+GG_BACKEND=llvm GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release -- --test-threads=4 2>&1 | tee /tmp/integration-llvm-$RANDOM.log
+cargo test -p ggdef -- --test-threads=4 2>&1 | tee /tmp/ggdef-wave-$RANDOM.log
+cargo test --test spec_conformance -- --test-threads=4 2>&1 | tee /tmp/spec-wave-$RANDOM.log
+# Scoreboard (regen; quote only this session’s numbers):
+GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff -- --nocapture 2>&1 | tee /tmp/parity-$RANDOM.log
+# Read PARITY = MATCH/(…) and WRONG-OUTPUT count — expect drop vs wave-0 baseline
+```
+
+ASan on new mat/untrack fixtures. Clone baseline after wave 1–2 preferred.
 
 ---
 
-## Out of scope (this excellence slice)
+## Out of scope
 
-- D10 place-overlap / local `&`-bind reopening (exclusivity package).
-- D12 drop-purity straight-to-error (can follow; different diagnostic axis).
-- Perf clone burn-down as primary goal (only **no regression** here; free views preserved).
-- Async/shared CoW edges unless they fall out of A–F.
-- ggdef elaboration of full closed set if elaborator subset blocks — corpus first, spectest when ready.
+- D10 local `&`-bind reopening (until place-overlap solid).
+- Full D12 six-position burn-down (coordinate; 2T aligns).
+- Perf clone burn-down as primary (no-regression only; free views preserved).
+- Long dual-branch against Batch C3 without stated rebase plan.
 
 ---
 
-## Suggested execution order (summary)
+## Success metrics
+
+| Metric | Target |
+|--------|--------|
+| Wave-1 gaps A,B,C | Zero known wrong stdout vs ggdef/derived |
+| Wave-2 E,D,F,T | Closed or deferred only with **definition-correct** expected fixtures |
+| Drop-taint row | Owner-ruled + enforced |
+| Parity WRONG | Drops at wave-1 and wave-2 close (session-regenerated) |
+| devbook/11 | No stale “one remaining shape” without naming deferred only |
+| Excellence table | “Ownership model as fully implemented” → Excellent for closed set |
+
+---
+
+## Execution order (summary)
 
 ```
-Wave 0  measure A,B,C,E,F (+ match bind spot-check)
+v2 plan → fresh review clean pass
    ↓
-Wave 1  1B self-host index field WT
-        1C Dict/Set field WT (both) + double-eval fix
-        1A for-in-& WT (both) + bare-for materialize control + comprehension I
+Wave 0  ggdef+C+LLVM+SH probes; T drop-taint evidence; parity baseline; alias-root EXPECT locked by derivation
    ↓
-Wave 2  2E D2 plain-self
-        2D untracked alias chains
-        2F snag53
-        2G / 2H rolling
+Wave 1  1B → 1C → 1A(+I shared iterable-mode helper)
+        close: full C + LLVM + ggdef + spec_conformance + parity (WRONG↓)
    ↓
-Wave 3  spectests, docs, lints, clone baseline, remove converging markers
+Wave 2  2T owner ruling → 2E D2 → 2D → 2F → 2G/2H
+        close: same battery + parity (WRONG↓)
+   ↓
+Wave 3  spectest lanes, docs, lints, clone baseline
 ```
 
-**First concrete PR after wave 0:** Track **1B** (self-host value index-element field write-through + corpus promote).
+**First PR after wave 0 + clean plan review:** Track **1B**.
 
 ---
 
@@ -278,18 +363,22 @@ Wave 3  spectests, docs, lints, clone baseline, remove converging markers
 
 | Risk | Mitigation |
 |------|------------|
-| Untrack miss → UAF after materialize | ASan on all new mat fixtures; reuse G1 untrack pattern |
-| Over-materialize (clone bombs) | Owned `&` path must remain write-through; measure clones after 1A/2E |
-| SH/Rust drift | Corpus fixtures both compilers; promote only when MATCH |
-| File-zone collisions | Serialize SH lower_*.gg tracks; worktrees |
-| D2 migration blast | Scout blast radius; lint; fix-it to `&self` |
-| Dict double-eval | Type-only pre-check before lower_expr |
+| Pinning production wrong-output | ggdef/derivation first; never measure-as-expected for alias-root |
+| Drop-taint silent double-drop via 2E | 2T blocks 2E; reject recommended |
+| Untrack UAF | ASan; reuse G1 untrack |
+| Over-materialize / clone bomb | Owned `&` stays WT; clone baseline |
+| C3 / enforcement conflict | Land before C3 or rebase strategy at kickoff |
+| SH/Rust drift | Corpus both compilers; ggdef oracle |
+| Expectation flips break ggdef floors | Full ggdef suite in gates (Batch-A) |
 
 ---
 
-## Success metrics
+## Review fold log (v1 → v2)
 
-- Zero open rows in wave-1 table (A,B,C) for known wrong stdout.
-- Wave-2 E/D/F closed or explicitly deferred with `#[ignore]` fixtures that encode **correct** expected output (never lock wrong).
-- `devbook/11` no longer claims “one remaining unconverged shape” without naming only deferred items.
-- Excellence table row **“Ownership model as fully implemented”** moves from Incomplete → Excellent for the closed set.
+| # | Severity | Fold |
+|---|----------|------|
+| 1 | HIGH | Alias-root expected: `a=1`, `b=101` by §3.1 derivation (not “both see write” / not wave-0 measure) |
+| 2 | HIGH | ggdef oracle from wave 0; expectations day-one; spectest lanes may wait wave 3 |
+| 3 | HIGH | Drop-taint × materialize row + wave-0 probe + owner decision before 2E |
+| 4 | MED | Gates: ggdef + spec_conformance; full C+LLVM at close; parity scoreboard WRONG↓ |
+| — | small | `cow_before_mutation` → `context.rs:3325`; cite CLAUDE.md; 1A+I shared helper + TODO recon; C3 coordination |
