@@ -56,34 +56,52 @@ Before re-keying, INSTRUMENT to confirm DefId-keying will actually separate the 
   method? unwrap desugar? — for the report.)
 Remove the debug print before finalizing.
 
-## 3. THE FIX — re-key the liveness move-state by DefId
-Change the move-state axis from name-keyed to DefId-keyed (`SafetyState`):
-- `moved`: `Dict[String, int]` (name→span) → `Dict[int, int]` (**DefId→span**).
-- `loop_locals`: `Dict[String, int]` → `Dict[int, int]` (DefId set).
-- `rebind`: `String` (name; "" = none) → `int` (**DefId**; use a sentinel like `-1` for none).
-Update every keying site to compute the DefId instead of the name:
-- **Place uses/moves** (`live_check_use`, `live_mark_move`, `live_move_operand`, the ECall/EMethodCall
-  arg loop, EIdentifier/ESelfExpr): use `place_root_def_spanned` (typecheck.gg:712, already returns
-  `Option[int]` DefId) for the key. A place with no trackable root DefId is simply untracked (as today).
-- **Binding sites that seed re-init / loop-local** (`SVarDecl` name, `SAssign` ident target, for-loop
-  `_pat`, match-arm patterns via `collect_pattern_names_into`): these currently work with NAMES; resolve
-  each binding to its **DefId** in the current scope (`scopes` + `scope_id` — mirror how
-  `place_root_def_spanned` / the resolver map yields a DefId for a bound name). Seed `loop_locals` /
-  call `live_reinit` by DefId. (If a binding name can't be resolved to a DefId here, prefer leaving it
-  untracked over guessing — untracked = no false positive.)
-- **`self` sentinel:** the self-host does NOT resolve `self` to a DefId (it is name-keyed `"self"`:
-  typecheck.gg:1171 `root == "self"`, :1552 `live_check_use("self", ...)`). Pick a **reserved sentinel key**
-  (e.g. a named constant `SELF_KEY = -2`, distinct from the rebind `-1` none-sentinel and from any real
-  DefId) and key all `self` uses/`!self`-consumes/receiver-moves by it. Document the sentinel. (Do NOT
-  attempt to wire self→DefId in the self-host resolver in THIS fix — that's a separate change; the sentinel
-  is the minimal, correct move here and keeps `self` distinguishable from every named binding.)
-- Keep the move/double-move/UAM/re-init/branch-merge/loop logic IDENTICAL — only the KEY TYPE changes.
+## 3. THE FIX — re-key ONLY the `moved` double-move set by DefId (mixed keying)
+**SCOPE (tightened after brief review — read the WHY, it is load-bearing):** re-key ONLY `moved` by
+DefId. **Keep `loop_locals` AND `rebind` NAME-keyed, unchanged.** The FP lives entirely in the `moved`
+double-move set (`typecheck.gg:1181`); `loop_locals`/`rebind` only feed the MoveInLoop check, never the
+double-move, so leaving them name-keyed cannot reintroduce the FP. Re-keying `loop_locals` by DefId is
+NOT executable and would introduce a NEW bug: binding-INTRODUCTION sites are not DefId-resolvable at the
+safety walk — a regular `SVarDecl` is emitted with `name_span = -1` (`parser.gg:3610`) so resolve stores
+NO resolution_map entry for it (gated `name_span >= 0`, `resolve.gg:463`); pattern bindings use `Span(0,0)`
+with no entry (`resolve.gg:1100-1101`); and `check_safety_stmts` threads the function `body_scope`
+(`typecheck.gg:1825`) and never descends into child scopes, so `lookup_from_scope` walks UPWARD
+(`scope.gg:311-318`) — it finds outer bindings (which must NOT be loop-local) and misses inner ones
+(which MUST be seeded). "Leave untracked" is UNSAFE for `loop_locals`: untracked ⇒ not exempt ⇒ a legal
+in-loop move (`loop_local_move_accept.gg`) becomes a MoveInLoop false positive. So do NOT touch that axis.
 
-**Place-overlap (B2) axis:** `check_call_aliasing` / `ArgPlace.root: String` is a SEPARATE per-call axis
-(args within ONE call are same-scope, so same-name ⇒ same binding — no cross-scope collision). Leave it
-NAME-keyed UNLESS your verification finds a real collision there; if you leave it, add a one-line comment
-noting the move-state is DefId-keyed while place-overlap stays name-keyed and WHY (within-call, no
-cross-scope collision). Do not silently diverge.
+Concretely:
+- `SafetyState.moved`: `Dict[String, int]` (name→span) → **`Dict[int, int]` (DefId→span)**.
+- `SafetyState.loop_locals`: **stays `Dict[String, int]`, name-keyed, untouched.**
+- `SafetyState.rebind`: **stays `String` (name; "" = none), untouched.**
+- **`moved` keying sites — all reliably DefId-resolvable** (an identifier USE stores
+  `resolution_map[expr.span.start]=def_id` at `resolve.gg:672-674`, read by `place_root_def_spanned`
+  :712): `live_check_use` (called with `expr.span` from the `EIdentifier` arm :1548-1550),
+  `live_mark_move`, `live_move_operand`, the ECall/EMethodCall arg loop, and the `SAssign`-ident re-init
+  target (`target.expr` is an EIdentifier with a span). Compute the DefId via `place_root_def_spanned`;
+  a place with no trackable DefId is untracked (as today — safe for `moved`, it only under-detects a
+  double-move, never over-rejects).
+- **`self` on `moved`:** the self-host does NOT resolve `self` to a DefId (name-keyed `"self"`:
+  :1171/:1552). Use a reserved sentinel key **`SELF_KEY = -2`** on `moved` (CONFIRMED SAFE by review: real
+  DefIds are monotonic `>= 0` (`scope.gg:215/254/265`); `NO_DEF/NO_SCOPE = -1`; so `-2` collides with no
+  real DefId). Key all `self` uses / `!self`-consumes / receiver-moves on `moved` by `-2`. Do NOT wire
+  self→DefId in the resolver (separate change).
+- **`live_mark_move` uses MIXED keying** (it has BOTH the `root` name AND the DefId in hand): the
+  double-move check is `moved.contains(def_id)`; the MoveInLoop check stays
+  `state.loop_depth > 0 and not state.loop_locals.contains(root) and root != state.rebind` (name-keyed).
+- **Re-init:** keep `live_reinit` on the `SAssign`-ident target keyed by the target's **DefId** (needed —
+  `reinit_accept.gg` `x = fresh()` after `sink(!x)` reuses the SAME binding/DefId → must clear
+  `moved[def_id]`). The `SVarDecl` re-init becomes a correct NO-OP under DefId keying (a fresh binding gets
+  a fresh DefId never in `moved`, and a shadow's later uses resolve to the new DefId) — leave the call in
+  (harmless) or drop it; either is fine, note which.
+- Keep the move/double-move/UAM/branch-merge (`safety_branch`/`safety_commit`/`safety_loop_body` iterate
+  `moved.keys()`, key-type-agnostic) logic IDENTICAL — only `moved`'s KEY TYPE changes.
+
+**Do NOT re-key `loop_locals`, `rebind`, the `SVarDecl`/for-`_pat`/pattern SEED sites, or the for-loop
+`_pat`** (the `SFor` arm intentionally ignores `_pat` — moving the loop var IS a correct MoveInLoop; there
+is nothing to re-key there). **Place-overlap (B2)** / `ArgPlace.root: String` stays NAME-keyed (per-call,
+same-scope args ⇒ no cross-scope collision). Add a one-line comment at `SafetyState` noting `moved` is
+DefId-keyed while `loop_locals`/`rebind`/place-overlap stay name-keyed, and WHY.
 
 ## 4. VERIFY (your own gate — the corpus run the original gates missed)
 Build the driver to a PRIVATE path, then FOREGROUND:
