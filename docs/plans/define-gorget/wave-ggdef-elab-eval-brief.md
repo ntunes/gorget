@@ -118,9 +118,14 @@ internal-panic exit-1 collision — are already filed in `TODO.md`; do NOT fix t
   capture / a `ConsumeCallable` param consumed inside a closure body — no corpus fixture exercises it.
 
 ## 7. FIXTURE MIGRATION — SCOPED (accept-migration NOW; reject-migration DEFERRED to the self-host track)
-- **reinit_accept:** strip the `KNOWN-ORACLE-BUG` header from `tests/fixtures/liveness/reinit_accept.gg` and
-  migrate it as a clean 4-lane accept run-spectest (`Value "new"`, exit 0) — all lanes agree, no self-host
-  issue (it's an ACCEPT). Regenerate the affected floors to observed.
+- **reinit_accept (TWO DISTINCT files — do NOT conflate; "migrate" ≠ "move the driver fixture out"):**
+  (a) **CREATE a NEW** `spectests/run/reinit_accept.gg` (with `#!spectest` frontmatter + `expect:` exit 0 /
+  stdout `"new\n"`) as a clean 4-lane accept run-spectest — all lanes agree, no self-host issue (it's an
+  ACCEPT). (b) **SEPARATELY** strip the now-stale `KNOWN-ORACLE-BUG` header from the DRIVER fixture
+  `tests/fixtures/liveness/reinit_accept.gg`, **KEEPING the file AND its entry** in the
+  `self_host_driver_accepts_liveness` `legal_fixtures` list (`tests/integration.rs:~18954`, guarded by
+  `assert!(fixture.exists())` — the over-rejection guard) — the SAME KEEP as the `consume_callable` bullet
+  below. Regenerate the affected floors to observed (see §9).
 - **Header strips + comment:** strip the `KNOWN-ORACLE-BUG` header from `consume_callable_double_reject.gg`;
   rewrite the `tests/integration.rs` (~:18855-18877) comment from "beyond ggdef… filed" to "now AGREE with
   ggdef." KEEP the `self_host_driver_{accepts,rejects}_liveness` assertions.
@@ -143,15 +148,29 @@ elaborate accepts must run clean under eval). The code fix REMOVES a pre-existin
 check-accepted reinit-after-move → ggdef IllFormed → spurious SpecDiverge). Add a regression seed if coverage
 is thin. Do NOT add a new tier/verdict.
 
-## 9. GATES (FOREGROUND) + REPORT
-`cargo test -p ggdef` (130+/0 incl. the reject-biconditional + transition-table + closure-capture tests +
-conformance 196/196) · `cargo test --test spec_conformance` (C/LLVM 196/196, self-host held at its floor with
-the documented reject MISMATCH) · `cargo test --lib` green · the full C+LLVM integration sweep
-(`--test-threads=4`, `tee` to a random log; LLVM run `--release` per CLAUDE.md) · the smith run (RIDER 2). NOT
-bootstrap-gated (no self-host source change). Report: commit hash; the ggdef-suite + all-lane conformance
-counts (regenerated, quoted from the run); the use-after-move stderr WHY (paste `error[E_UseAfterMove]: … at
-…`) + empty stdout + exit 1; the E_-code proof (corrupt→FAIL→restore); the stdout-flip is the only ggdef
-assertion changed; the closure-capture test result; confirm the retracted boundary wording appears NOWHERE +
-the self-host held-floor + its MISMATCH are documented (NOT silent); confirm the self-host reject-diagnostic
-follow-up is filed HIGH; `git -C /workspace/gorget status` CLEAN. Any elaborate-vs-production liveness
-disagreement → flag for prose adjudication (guard-rail), do NOT silently match.
+## 9. GATES + REPORT
+**Executor FOREGROUND gates:** `cargo test -p ggdef` (130+/0 incl. the reject-biconditional + transition-table
++ closure-capture tests + conformance green at the REGENERATED ggdef floor) · `cargo test --test
+spec_conformance` (all lanes green at the REGENERATED floors) · `cargo test --lib` green · the TARGETED
+`self_host_driver_accepts_liveness` + `self_host_driver_rejects_liveness` integration tests (they read the
+fixtures you edit; run a `GG_BACKEND=llvm … --release` variant too per CLAUDE.md) · the smith run (RIDER 2).
+**Do NOT run the full `cargo test --test integration` sweep — that is the PARENT's gate** (CLAUDE.md
+multi-agent rule 4: the 15-20 min run stalls agents). NOT bootstrap-gated (no self-host SOURCE change — the
+migrated fixture is a spectest).
+**FLOORS — regenerate, quote, do NOT hardcode:** the patch CHECKPOINTS the corpus at 196
+(`GGDEF/C/LLVM/MIN_FIXTURES`, self-host held 195). The §7 `reinit_accept` accept-migration adds +1 → the corpus
+is **~197**; regenerate `GGDEF/C/LLVM/MIN_FIXTURES` to the observed count (~197) and `SELFHOST` to observed
+(~196 — still one below, the documented gap), quoting the printed `MATCH=` from each lane. NEVER a literal.
+**Report:** commit hash; the ggdef-suite + all-lane conformance counts (regenerated, quoted from the run — NOT
+the 196 post-apply checkpoint); the use-after-move stderr WHY (paste `error[E_UseAfterMove]: … at …`) + empty
+stdout + exit 1; the E_-code proof (corrupt→FAIL→restore); the stdout-flip is the only ggdef assertion changed;
+the closure-capture test result; confirm the retracted boundary wording appears NOWHERE + the self-host
+held-floor + its MISMATCH are documented (NOT silent); confirm the self-host reject-diagnostic follow-up is
+filed HIGH; **do NOT add any `LANDED`/`DONE` breadcrumb to `TODO.md`** (breadcrumb-check); `git -C
+/workspace/gorget status` CLEAN. Any elaborate-vs-production liveness disagreement → flag for prose
+adjudication (guard-rail), do NOT silently match.
+**PARENT at integrate (NOT the executor):** run the full C+LLVM integration sweep (`--test-threads=4`, `tee`;
+LLVM `--release`); move the now-resolved `TODO.md` transition-table entry (the "🆕🐛 [HIGH —
+DEFINITION-INTEGRITY … ggdef liveness state-transition table is INCOMPLETE]" entry, ~:261-266 — both phases +
+Case 1 + Case 2 + the branch-merge cell + the write-through) to `DONE.md`; the deferred bulk reject-fixture
+conformance migration already lives in the self-host follow-up (TODO).
