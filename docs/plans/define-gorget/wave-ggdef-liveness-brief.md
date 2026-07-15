@@ -3,9 +3,14 @@
 **Track:** ggdef definition-integrity (owner-ruled HIGH, run now, ahead of Batch C). **Base:** main.
 **Deliverable:** land the proven ggdef transition-table fix (revive + consume-call kill) AND document the
 three-layer oracle boundary the audit surfaced AND wire the two operational riders that fall out of it —
-so the fix closes the definition-integrity hole *and* makes the boundary self-enforcing. Contained to
-`spec/ggdef/` + `spec/spectests` + `docs/` + fixtures. **NOT bootstrap-gated** (ggdef is a Rust crate; no
-`gg`/self-host rebuild).
+so the fix closes the definition-integrity hole *and* makes the boundary self-enforcing. **Footprint
+(pass-1 corrected): `spec/ggdef/` (the fix) + repo-root `spectests/run/` (the migrated seed) + `docs/` +
+`tests/fixtures/liveness/` + the MAIN-crate test files `tests/integration.rs` (comment), `tests/spec_conformance.rs`
+(RIDER-1 adjudication + floor bumps), `tests/smith/main.rs` (RIDER-2 verify).** Not "contained to
+`spec/ggdef/`". **No `.gg` SOURCE change and no `bootstrap_fixed_point` re-run** (so not bootstrap-gated in
+that narrow sense) — BUT the self-host DRIVER binary IS built and exercised on the new run-seed by
+`spec_conformance_selfhost`, so the parent MUST run `cargo test --test spec_conformance` (+ the smith run),
+not just `cargo test -p ggdef`.
 
 ## 0. WORKTREE PREAMBLE (non-negotiable)
 Run `pwd` and `git rev-parse --show-toplevel` FIRST; confirm both inside your worktree. NEVER touch
@@ -45,14 +50,15 @@ Verify: `cargo build -p ggdef`; `ggdef run tests/fixtures/liveness/reinit_accept
 **(a) ADD the ConsumeCallable single-use sentence** — §4.2 Callable Trait Types (after the coercion-hierarchy
 bullets, ~`:461`; the terse `# consuming: … (single use)` comment at ~`:455` is not a rule):
 > A `ConsumeCallable` is **single-owner**: calling it consumes the callable (its captured environment is
-> moved out), so it can be called **at most once**. A second call — or any use after the call — is a
-> compile-time **use-after-move** (`error[E_DoubleMove]`), exactly as for any other moved value. `Callable`
-> and `MutCallable` are reusable and carry no such restriction.
+> moved out), so it can be called **at most once**. A second call is a compile-time **double-move**
+> (`error[E_DoubleMove]`); any other use of it after the call is a **use-after-move** (`error[E_UseAfterMove]`)
+> — exactly as for any other moved value. `Callable` and `MutCallable` are reusable and carry no such restriction.
 
 **(b) ADD the THREE-LAYER ORACLE BOUNDARY note** — this is the reference-grade closure of the audit and is
 owner-SIGNED-OFF *with the ownership wording below*. Place it where the project's normative model lives:
-a ratified entry in `docs/plans/define-gorget/decisions.md` (the ledger) AND a one-paragraph note in the
-ggdef spec docs (find the ggdef README / spec doc under `spec/ggdef/` or `docs/`). The model has THREE
+a ratified entry in `docs/plans/define-gorget/decisions.md` (the ledger) AND a one-paragraph note in
+`docs/plans/define-gorget/rfc-ggc-ggdef.md` (the ggc/ggdef RFC — there is NO `spec/ggdef/README.md`, only
+`spec/ggdef/reports/*`; pass-1 pinned this as the natural home). The model has THREE
 layers — **do not collapse to two, and do NOT write that implementations own any axis** (implementations
 NEVER own normative semantics — ending implementation-defined semantics is the project's whole purpose):
 > 1. **ggdef-eval is the sole oracle for DYNAMIC semantics.** A Value/trap/output verdict on a concrete
@@ -80,35 +86,61 @@ spectests) must agree; a disagreement is a defect in the DEFINITION regardless o
    `consume_callable_double_reject.gg` (:4-6). Rewrite the comment block at `tests/integration.rs:~18855-18877`
    from "two axes go BEYOND ggdef… filed HIGH/MED" to "now AGREE with ggdef (fix landed)". KEEP the
    `self_host_driver_{accepts,rejects}_liveness` assertions (they pin the self-host lane).
-2. Add TWO hand-authored `spectests/run/` seeds — `liveness_reinit_accept.gg` and
-   `liveness_consume_callable_double.gg` — with `#!spectest` / `# mode: run` / `# adjudicator: ggdef`
-   frontmatter; run `cargo run -p ggdef -- gen spectests/run/<f>.gg` to fill `expect:` (reinit → exit 0
-   stdout "new\n"; consume-double → exit 102 / no trap). **The IllFormed reject seed MUST be hand-authored**
-   — the automated `ggdef migrate` only takes the Value/Agree bucket (`classify.rs`), never an IllFormed seed.
-3. Bump `GGDEF_MATCH_FLOOR` 195→197 in `spec_conformance_ggdef.rs` in the SAME commit.
+2. **Only `reinit_accept` becomes a run-spectest** (it is a CLEAN 4-lane MATCH — C/LLVM/self-host all
+   compile+run → `Value` "new"; ggdef → "new"). Add `spectests/run/liveness_reinit_accept.gg` with
+   `#!spectest`/`# mode: run`/`# adjudicator: ggdef` frontmatter; `cargo run -p ggdef -- gen …` fills
+   `expect:` (exit 0, stdout "new\n"). **`consume_callable_double` is NOT a run-spectest** — production
+   COMPILE-REJECTS it (`E_DoubleMove` → `BuildFail`, not a runnable program), so it can't be a clean run
+   seed (pass-1 review). It is ALREADY pinned cross-lane by: (a) the new ggdef unit test consume-double→
+   IllFormed [in §2's 6 tests], (b) the existing production negative fixture `consume_callable_once_error.gg`,
+   (c) the `self_host_driver_rejects_liveness` assertion. That IS "all lanes pin it permanently" — a
+   compile-rejected program is pinned by negatives + unit tests, NOT run-spectests. Do NOT force it into the
+   run-corpus (it would need RIDER-1-style machinery AND it isn't even RIDER-1's shape — ggdef IllFormeds it,
+   doesn't `Value` it). State this reasoning in your report.
+3. Floor bumps IN THE SAME COMMIT (bump-on-improvement rule): `GGDEF_MATCH_FLOOR` 195→**196** (only
+   reinit_accept added, +1) in `spec_conformance_ggdef.rs:45`; AND the production-lane floors
+   `C/LLVM/SELFHOST_MATCH_FLOOR` + `MIN_FIXTURES` 195→196 in `tests/spec_conformance.rs:~79-89` (reinit_accept
+   is a clean +1 on each production lane too — pass-1 caught that the brief bumped only the ggdef floor).
 
-## 5. RIDER 1 — the `static-only` frontmatter discriminator (decided NOW, per owner)
-No current fixture is affected (rejects pin the condition so the move is on the sampled path — STATE this as
-a **fixture-authoring rule**: when writing a liveness reject fixture, make the violating path the EXECUTED
-path wherever possible, so the ggdef lane and the static lanes agree). BUT the first genuinely-conservative
-fixture (maybe-moved, statically REJECTED, `Value` under ggdef by the `:2390` gap) will MISMATCH the ggdef
-lane BY DESIGN. Add a frontmatter tag (`static-only:` or similar — match the existing frontmatter grammar) to
-the spectest harness so a tagged case's **ggdef lane expects `Value`/clean while the production/self-host
-static lanes expect the error**. Find the frontmatter parser + the ggdef-lane expectation logic (grep the
-spectest harness / `spec_conformance` / the `#!spectest` parser). Implement the mechanism + ONE example/test
-exercising it (a synthetic maybe-moved case). If the harness structure makes this materially different from
-described, REPORT it — don't force a wrong shape.
+## 5. RIDER 1 — the `static-only` discriminator (decided NOW; MAIN-crate work — pass-1 corrected the scope)
+First, the **fixture-authoring rule** (state it in the docs boundary note + the spectest authoring guide):
+when writing a liveness reject fixture, make the violating path the EXECUTED path wherever possible, so the
+ggdef lane and the static lanes AGREE (this is why no current fixture is affected — verified). BUT the first
+genuinely-conservative case — **maybe-moved, statically REJECTED, `Value` under ggdef by the `:2390` gap** —
+mismatches BY DESIGN, and there is no mechanism to express it today.
+**The real scope (pass-1 review — bigger than a frontmatter tag):**
+- The run-tier `expect:` block (`spectests` `frontmatter.rs`, `Expect{exit,stdout,trap}`) has NO field for a
+  static-rejection expectation. And **`tests/spec_conformance.rs`** (MAIN crate — the brief originally failed
+  to name it) adjudicates the production/self-host lanes and treats a compile-reject as
+  `Verdict::BuildFail` (a non-MATCH "defect surface", ~:504-508) — there is NO notion of an EXPECTED
+  rejection. The ggdef lane needs NO change (it already reads `expect:`=Value).
+- So the mechanism = (a) a new frontmatter discriminator (`static-only:` or an `expect: static-reject` on the
+  production lanes — match the existing grammar) + (b) adjudication in `tests/spec_conformance.rs` so a tagged
+  case's production/self-host lanes EXPECT a compile-reject (MATCH) while the ggdef lane expects `Value`.
+- Implement the mechanism + ONE **synthetic** example that is RIDER 1's actual target: a conditional-move
+  where the moving branch is NOT taken, e.g. `if <statically-false-ish cond>: sink(!x)` then `print(x)` —
+  production/self-host may-move-REJECT it (per `:2390`), ggdef-eval returns `Value` (x never moved on the
+  run path). Tag it; the ggdef lane expects `Value`, the static lanes expect the reject. (This is DISTINCT
+  from `consume_callable_double`, which ggdef IllFormeds — see §4; do NOT use that as the RIDER-1 example.)
+If the harness structure makes this materially different from described, REPORT it — don't force a wrong
+shape. This is the mechanism that keeps §6's "conservative static checkers" clause from drifting into
+"unconstrained," so it lands NOW even though only the synthetic case needs it today.
 
-## 6. RIDER 2 — convert the boundary's soundness direction into a guard (Core #6, per owner)
+## 6. RIDER 2 — the soundness guard ALREADY EXISTS; verify + add a regression seed (Core #6)
 The gap is ONE-DIRECTIONAL: static may over-reject relative to a single path, but **a statically-ACCEPTED
 program MUST run dynamically clean under ggdef on every input** — an accepted program that hits a liveness
-`IllFormed` in ggdef is a static-checker SOUNDNESS bug, and that is mechanically checkable. The smith infra
-already has a ggdef verdict lane (grep for **P1-E** / the smith ggdef adjudicator). Add a tier that runs
-`gg check`-ACCEPTED move-shaped programs under ggdef-eval and screams **SPEC-DIVERGE** on any dynamic
-liveness violation. This turns the prose boundary into an executable guard (Core #6) — it is what keeps the
-"conservative static checkers" clause from ever drifting into "unconstrained static checkers." Find the smith
-tier structure; add the tier + wire it into the smith run. If the smith infra can't express this cleanly,
-REPORT the gap with what's there.
+`IllFormed` in ggdef is a static-checker SOUNDNESS bug. **This guard is ALREADY IMPLEMENTED** (pass-1
+review): `tests/smith/main.rs:~597-608` — right after `gg check` accepts, `ggdef::run_source(source,
+GGDEF_FUEL)` runs in-process and `Outcome::IllFormed → Verdict::SpecDiverge{"gg check ACCEPTED but ggdef
+IllFormed: …"}`. It runs at **tier 0 (default)**, whose grammar already generates move-shaped programs
+(module doc ~:76-77). ("P1-E" is NOT a lane — it's a provenance label on the `GGDEF_FUEL` comment ~:522.)
+So DO NOT add a new tier/verdict. Instead: (a) VERIFY the existing lane covers liveness-`IllFormed`-on-
+accepted (read `main.rs:597-608` + confirm tier-0 grammar emits reinit-after-move / move-then-reassign
+shapes); (b) if move-shape coverage is thin, add a targeted regression SEED and/or a small grammar emphasis
+so the guard actually exercises the class; (c) **note in your report: the code fix REMOVES a pre-existing
+FALSE-POSITIVE in this lane** — before the fix, any generated check-accepted program doing reinit-after-move
+would trip a spurious SPEC-DIVERGE (ggdef said IllFormed on legal code). If the lane is NOT as described,
+REPORT it — but the expectation is verify-and-augment, not build.
 
 ## 7. FILE (do NOT scope in) — a LOW idea
 Append to `TODO.md` (Low): *a cheap audit pass that diffs the reference's normative move/ownership sentences
@@ -119,10 +151,12 @@ for a future prose↔ggdef conformance auditor.* One entry; do not build it here
 - `cargo build -p ggdef` + `cargo test -p ggdef` (expect 127+/0 lib incl. your new tests + all 8 integration
   binaries green, esp. `spec_conformance_ggdef` at the bumped floor 197).
 - The 2 migrated spectests pass; `ggdef run` on both fixtures gives the correct verdicts.
-- Rider 1's example case + Rider 2's tier run green.
+- Rider 1's synthetic example adjudicates correctly; Rider 2's existing lane verified (+ any regression seed).
 - `cargo test --lib` (Rust unit) stays green.
-The PARENT runs the broader `cargo test` sweep if the change touches shared crates; ggdef is self-contained,
-so the ggdef suite + spectests + smith tier are the load-bearing gates (NO self-host bootstrap needed).
+**`cargo test --test spec_conformance`** is a LOAD-BEARING gate here (NOT just `cargo test -p ggdef`): it
+builds `gg` AND the self-host driver and runs all four lanes over the new `reinit_accept` run-seed + the
+RIDER-1 tagged example — this is where a floor-bump miss or a RIDER-1 adjudication bug surfaces. Plus the
+smith run for RIDER 2. No `bootstrap_fixed_point` (no `.gg` source change), but this is NOT "ggdef only".
 
 ## 9. FINAL REPORT
 Commit hash(es) + summary; the ggdef suite result (counts) + conformance floor; the 2 fixtures' verdicts
