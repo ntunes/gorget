@@ -18861,20 +18861,21 @@ fn self_host_driver_accepts_d10b_place_overlap() {
 //
 // ggdef fixture-for-fixture: the straight-line UAM/DM shapes agree with ggdef's
 // move_then_read_is_illformed / d10b_order_twin_read_before_move_legal (verified
-// via `ggdef run` -> IllFormed / Value). Two axes go BEYOND ggdef's model and
-// are verified against production Rust gg instead (both a filed ggdef gap, NOT a
-// self-host defect): re-init-makes-live (`reinit_accept` — ggdef flags a write
-// to a moved slot ill-formed, but production + the self-host correctly accept
-// it, and the self-host itself relies on re-init so blast=0 requires it) and
-// ConsumeCallable single-owner consume (`consume_callable_double_reject` —
-// production E_DoubleMove; ggdef under-models the carve-out and runs it).
-// KNOWN-ORACLE-BUG PIN: these two are ggdef DEFINITION bugs (a missing dead->live
-// revive and a missing live->dead kill — two cells of one liveness state-transition
-// table), filed HIGH/MED in TODO.md as the "ggdef liveness transition-table" track.
-// The self-host + production are CORRECT; do NOT "reconcile" this disagreement by
-// conforming the self-host to ggdef. It closes the RIGHT way — by fixing ggdef, after
-// which both shapes migrate from these self-host-driver-only assertions into the
-// ggdef conformance fixtures so every lane is pinned permanently.
+// via `ggdef run` -> IllFormed / Value). The two axes that once went BEYOND
+// ggdef's model NOW AGREE with ggdef: the elaborate `check_liveness` pass +
+// eval's revive/consume-call fix closed both cells of the liveness transition
+// table. re-init-makes-live (`reinit_accept`) — ggdef eval now revives the slot
+// on the whole-local reassignment and ACCEPTS, matching production + self-host
+// (cross-lane twin: spectests/run/reinit_accept.gg). ConsumeCallable
+// single-owner consume (`consume_callable_double_reject`) — ggdef's consume-call
+// kill now fires on the first call, so the second is E_DoubleMove, matching
+// production. All lanes therefore AGREE on both shapes. NOTE the self-host
+// renderer still emits a bare `error:` headline (not `error[E_<code>]`), so the
+// reject axis is compared here by MESSAGE, not the registry code — the
+// self-host reject-diagnostic-rendering alignment is the filed HIGH follow-up
+// (TODO.md) that migrates these driver-only reject assertions into four-lane
+// ggdef conformance fixtures. The ONE proof migration already lives at
+// spectests/run/reject_use_after_move.gg.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_rejects_liveness() {

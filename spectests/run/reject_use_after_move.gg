@@ -1,0 +1,25 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness]
+# doc: |
+#   May-move static rejection (verdict = elaborate ∘ eval). `x` is moved into
+#   `sink(!x)`, then read by `print(x)`. The flow-sensitive liveness gate rejects
+#   it BEFORE eval with E_UseAfterMove — stdout stays EXACTLY empty (the program
+#   never ran, which IS the verdict), exit 1. This fixture proves the reject
+#   verdict-triple AND the E_-code conformance axis: flipping the expected
+#   `reject:` code must make this lane MISMATCH (Core #6/#8).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UseAfterMove
+#!end
+
+void sink(String !s):
+    pass
+
+void main():
+    String x = "hi"
+    sink(!x)
+    print(x)

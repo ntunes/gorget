@@ -262,7 +262,12 @@ pub enum Expr {
     // ── Value producers ──
     Call { func: String, args: Vec<Source> },
     /// A call of a first-class closure value (`f()` where `f` is a local).
-    CallValue { callee: Box<Expr>, args: Vec<Source> },
+    /// `consumes_callee` is set at elaboration when the callee's declared type
+    /// is a single-owner `ConsumeCallable` (D5 kind axis): calling it CONSUMES
+    /// the callee value, so a second call reads a moved-out slot → `IllFormed`
+    /// (mirrors production `check_move` on a ConsumeCallable call). A plain
+    /// `Callable` / `MutCallable` is reusable, so the flag is `false`.
+    CallValue { callee: Box<Expr>, args: Vec<Source>, consumes_callee: bool },
     Construct { kind: ConstructKind, args: Vec<Source> },
     /// An enum variant value (`Some(x)`, `None`, `Ok(v)`, `Token.Ident(s)`).
     EnumConstruct { type_name: String, variant: String, args: Vec<Source> },

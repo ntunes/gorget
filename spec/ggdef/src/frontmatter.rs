@@ -49,6 +49,12 @@ pub struct Expect {
     /// The expected trap `T_` code (`TrapKind::code()`), present IFF the outcome
     /// is a Trap (`exit == 101`). The reader enforces that biconditional.
     pub trap: Option<String>,
+    /// The expected may-move rejection `E_` code (`MoveErrorKind::code()`),
+    /// present IFF the outcome is a static rejection (`exit == 1`). The reader
+    /// enforces that biconditional — symmetric with `trap`. This is the
+    /// conformance-compared axis of a rejection (pin 3); prose + span stay
+    /// impl-defined.
+    pub reject: Option<String>,
 }
 
 /// A parsed `#!spectest` frontmatter block. A successful parse ALWAYS carries an
@@ -105,6 +111,12 @@ pub enum FrontmatterError {
     /// `exit: 101` (a trap) but no `trap:` code — an uncaught trap MUST carry its
     /// `T_` code so conformance can compare it.
     TrapExitWithoutCode,
+    /// A `reject:` code was present but `exit` was not 1 — a static rejection is
+    /// EXACTLY the exit-1 outcome (symmetric with the trap contract).
+    RejectCodeNonRejectExit { code: String, exit: i32 },
+    /// `exit: 1` (a static rejection) but no `reject:` code — a rejection MUST
+    /// carry its `E_` code so conformance can compare it (pin 3).
+    RejectExitWithoutCode,
 }
 
 impl std::fmt::Display for FrontmatterError {
@@ -139,6 +151,15 @@ impl std::fmt::Display for FrontmatterError {
                 f,
                 "`expect.exit: 101` is a trap but no `expect.trap:` `T_` code is declared"
             ),
+            FrontmatterError::RejectCodeNonRejectExit { code, exit } => write!(
+                f,
+                "`expect.reject: {code}` requires `exit: 1` (a static rejection is exactly the \
+                 exit-1 outcome), but `exit` is {exit}"
+            ),
+            FrontmatterError::RejectExitWithoutCode => write!(
+                f,
+                "`expect.exit: 1` is a static rejection but no `expect.reject:` `E_` code is declared"
+            ),
         }
     }
 }
@@ -158,6 +179,7 @@ pub fn parse_frontmatter(source: &str) -> Result<Frontmatter, FrontmatterError> 
     let mut expect_exit = None;
     let mut expect_stdout = None;
     let mut expect_trap = None;
+    let mut expect_reject = None;
     let mut saw_expect = false;
     let mut unknown = Vec::new();
 
@@ -202,6 +224,7 @@ pub fn parse_frontmatter(source: &str) -> Result<Frontmatter, FrontmatterError> 
                         }
                         "stdout" => expect_stdout = Some(parse_json_string(cv)?),
                         "trap" => expect_trap = Some(cv.to_string()),
+                        "reject" => expect_reject = Some(cv.to_string()),
                         // Tolerate unknown nested keys (forward-compat).
                         _ => {}
                     }
@@ -225,13 +248,27 @@ pub fn parse_frontmatter(source: &str) -> Result<Frontmatter, FrontmatterError> 
     let stdout = expect_stdout.ok_or(FrontmatterError::MissingExpectField("stdout"))?;
 
     // Enforce `trap: present ⟺ exit == 101` — a trap is exactly the exit-101
-    // outcome. The two non-trap nonzero exits (102 IllFormed / 103 FuelExhausted)
-    // legitimately carry no code, so the rule keys on `== 101`, not `!= 0`.
+    // outcome. The one remaining non-trap nonzero exit (103 FuelExhausted)
+    // legitimately carries no code, so the rule keys on `== 101`, not `!= 0`.
     match (&expect_trap, exit) {
         (Some(_), 101) => {}
         (None, 101) => return Err(FrontmatterError::TrapExitWithoutCode),
         (Some(code), _) => {
             return Err(FrontmatterError::TrapCodeNonTrapExit { code: code.clone(), exit });
+        }
+        (None, _) => {}
+    }
+
+    // Enforce `reject: present ⟺ exit == 1` — symmetric with the trap rule. A
+    // static rejection is exactly the exit-1 outcome (a may-move `IllFormed`;
+    // ggdef's `Value` is always exit 0, so exit 1 uniquely identifies a reject).
+    // The `E_` code is the conformance-compared axis (pin 3), so a reject fixture
+    // MUST declare it and a non-reject exit MUST NOT.
+    match (&expect_reject, exit) {
+        (Some(_), 1) => {}
+        (None, 1) => return Err(FrontmatterError::RejectExitWithoutCode),
+        (Some(code), _) => {
+            return Err(FrontmatterError::RejectCodeNonRejectExit { code: code.clone(), exit });
         }
         (None, _) => {}
     }
@@ -242,7 +279,7 @@ pub fn parse_frontmatter(source: &str) -> Result<Frontmatter, FrontmatterError> 
         since,
         features,
         doc,
-        expect: Expect { exit, stdout, trap: expect_trap },
+        expect: Expect { exit, stdout, trap: expect_trap, reject: expect_reject },
         unknown,
     })
 }
@@ -483,7 +520,10 @@ mod tests {
         assert_eq!(fm.since.as_deref(), Some("spec-v0.1"));
         assert_eq!(fm.features, vec!["cow", "alias", "sever"]);
         assert_eq!(fm.doc.as_deref(), Some("line one\nline two"));
-        assert_eq!(fm.expect, Expect { exit: 0, stdout: "1\n99\n".to_string(), trap: None });
+        assert_eq!(
+            fm.expect,
+            Expect { exit: 0, stdout: "1\n99\n".to_string(), trap: None, reject: None }
+        );
         assert!(fm.unknown.is_empty());
     }
 
@@ -509,7 +549,10 @@ mod tests {
                    #   duration_ms: 12\n\
                    #!end\n";
         let fm = parse_frontmatter(src).expect("unknown keys must be tolerated, not error");
-        assert_eq!(fm.expect, Expect { exit: 0, stdout: "ok\n".to_string(), trap: None });
+        assert_eq!(
+            fm.expect,
+            Expect { exit: 0, stdout: "ok\n".to_string(), trap: None, reject: None }
+        );
         // Unknown top-level keys are preserved, not dropped.
         let keys: Vec<&str> = fm.unknown.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&"args"), "unknown keys: {keys:?}");
@@ -587,7 +630,12 @@ mod tests {
         let fm = parse_frontmatter(src).expect("a trap fixture must parse");
         assert_eq!(
             fm.expect,
-            Expect { exit: 101, stdout: "pre\n".to_string(), trap: Some("T_Overflow".to_string()) }
+            Expect {
+                exit: 101,
+                stdout: "pre\n".to_string(),
+                trap: Some("T_Overflow".to_string()),
+                reject: None,
+            }
         );
     }
 
@@ -617,13 +665,50 @@ mod tests {
 
     #[test]
     fn nonzero_non_trap_exit_needs_no_code() {
-        // 102 (IllFormed) / 103 (FuelExhausted) are nonzero NON-trap outcomes:
-        // they legitimately carry no `trap:` code (rule keys on == 101).
-        for exit in [102, 103] {
-            let src = format!("#!spectest\n# expect:\n#   exit: {exit}\n#   stdout: \"\"\n#!end\n");
-            let fm = parse_frontmatter(&src).unwrap_or_else(|e| panic!("exit {exit} must parse: {e}"));
-            assert_eq!(fm.expect.trap, None);
-        }
+        // 103 (FuelExhausted) is the one remaining nonzero NON-trap NON-reject
+        // outcome: it legitimately carries no `trap:` code (rule keys on == 101)
+        // and no `reject:` code (rule keys on == 1). (102 is retired — a static
+        // rejection now exits 1 per the ratified exit-code scheme.)
+        let src = "#!spectest\n# expect:\n#   exit: 103\n#   stdout: \"\"\n#!end\n";
+        let fm = parse_frontmatter(src).unwrap_or_else(|e| panic!("exit 103 must parse: {e}"));
+        assert_eq!(fm.expect.trap, None);
+        assert_eq!(fm.expect.reject, None);
+    }
+
+    // ── the `reject:` field: present IFF exit == 1 (symmetric with `trap`) ──
+    #[test]
+    fn reject_bearing_expect_parses() {
+        let src = "#!spectest\n# expect:\n#   exit: 1\n#   stdout: \"\"\n#   reject: E_UseAfterMove\n#!end\n";
+        let fm = parse_frontmatter(src).expect("a reject fixture must parse");
+        assert_eq!(
+            fm.expect,
+            Expect {
+                exit: 1,
+                stdout: String::new(),
+                trap: None,
+                reject: Some("E_UseAfterMove".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn reject_code_with_non_reject_exit_is_an_error() {
+        // A `reject:` code but exit != 1 (here exit 0) — rejected.
+        let src = "#!spectest\n# expect:\n#   exit: 0\n#   stdout: \"\"\n#   reject: E_UseAfterMove\n#!end\n";
+        assert_eq!(
+            parse_frontmatter(src),
+            Err(FrontmatterError::RejectCodeNonRejectExit {
+                code: "E_UseAfterMove".to_string(),
+                exit: 0
+            })
+        );
+    }
+
+    #[test]
+    fn reject_exit_without_code_is_an_error() {
+        // exit 1 but no `reject:` code — rejected (a rejection MUST name its code).
+        let src = "#!spectest\n# expect:\n#   exit: 1\n#   stdout: \"\"\n#!end\n";
+        assert_eq!(parse_frontmatter(src), Err(FrontmatterError::RejectExitWithoutCode));
     }
 
     // ── the JSON decode is a tight inverse of the writer ───────────────────

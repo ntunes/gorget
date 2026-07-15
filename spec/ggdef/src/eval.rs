@@ -44,9 +44,15 @@ pub const EXIT_VALUE: i32 = 0;
 /// An uncaught trap (§10.9 catchable subset OR an uncatchable panic / unwrap /
 /// assert). All trap classes exit 101; the `T_` code discriminates them.
 pub const EXIT_TRAP: i32 = 101;
-/// A statically-ill-formed program was detected dynamically.
-pub const EXIT_ILLFORMED: i32 = 102;
-/// The fuel bound was reached (non-termination guard).
+/// A statically-rejected program (a static rejection — parse, elaboration, OR
+/// may-move `IllFormed`; ONE class per the ratified TOOLCHAIN EXIT-CODE SCHEME
+/// (Option A), decisions.md). It NEVER ran, so stdout is exactly empty and the
+/// `E_` reject code goes to stderr — mirroring production `gg check`. Distinct
+/// from a runtime trap (101), so a crash can't masquerade as a correct reject.
+pub const EXIT_ILLFORMED: i32 = 1;
+/// The fuel bound was reached (non-termination guard). ggdef-ONLY / out of
+/// conformance: fuel is the definitional interpreter's totality device, not a
+/// language outcome an implementation reproduces (production does not bound).
 pub const EXIT_FUEL: i32 = 103;
 
 /// The closed registry of trap classes (RFC §2.3 `Trap(TrapKind)`; D11 trap
@@ -299,10 +305,57 @@ pub struct Run {
     /// different lines are the SAME outcome. Statement-granular (the enclosing
     /// statement, not the faulting sub-expression) — an impl-defined detail.
     pub trap_span: Option<Span>,
+    /// The ratified `E_` reject code when `outcome` is a static-rejection
+    /// `IllFormed` from the may-move gate (`MoveErrorKind::code()`), `None`
+    /// otherwise. TYPED METADATA resolved ONCE at the liveness gate and carried
+    /// here — the conformance-compared axis of a rejection (pin 3). Deliberately
+    /// on `Run`, NOT on `Outcome` (exactly like `trap_span`): conformance keys on
+    /// the outcome KIND + this code, and two rejects differing only in prose/span
+    /// are the SAME outcome. The eval-internal `IllFormed` cases (no `main`,
+    /// unresolved local) carry no ratified code → `None`.
+    pub reject_code: Option<&'static str>,
+    /// The statement span of a static-rejection `IllFormed`, for the rendered
+    /// ` at file:line:col` suffix (mirrors `trap_span`; impl-defined, never
+    /// conformance-compared). `None` when the outcome is not a gate rejection or
+    /// the violation had no enclosing statement.
+    pub illformed_span: Option<Span>,
 }
 
 /// Evaluate a program from `main`, bounded by `fuel`.
 pub fn run(program: &Program, fuel: u64) -> Run {
+    // The STATIC gate (verdict = check_liveness ∘ eval): a flow-sensitive
+    // may-move analysis rejects the conditional-move-then-use / double-move /
+    // move-in-loop class BEFORE eval runs, so those programs never reach the
+    // dynamic per-path interpreter. A statically ill-formed program is rejected
+    // with NO observable output (it never executes) — matching production
+    // `gg check`, which never runs a rejected program.
+    if let Err(err) = crate::elaborate::check_liveness(program) {
+        // Verdict-triple render channels (decisions.md THE VERDICT TRIPLE):
+        // stdout stays EXACTLY empty (the program never executed — that IS the
+        // verdict); the ratified `E_` code + statement span ride on `Run` for the
+        // stderr `error[E_Code]: … at span` render and the conformance compare.
+        return Run {
+            outcome: Outcome::IllFormed(err.message),
+            stdout: String::new(),
+            trace: Vec::new(),
+            trap_span: None,
+            reject_code: Some(err.kind.code()),
+            illformed_span: err.span,
+        };
+    }
+    // Gate passed → the pure dynamic per-path interpreter (the `eval` half of
+    // `verdict = check_liveness ∘ eval`).
+    eval_program(program, fuel)
+}
+
+/// The `eval` half of `verdict = check_liveness ∘ eval`: the pure dynamic
+/// per-path interpreter WITHOUT the static may-move gate. `run` composes it
+/// AFTER `check_liveness`. Exposed at crate scope so the transition-table tests
+/// can pin eval's PER-PATH verdict (e.g. a conditional-move-then-use where the
+/// untaken arm's read is dynamically a Value) — the verdict `run`'s gate shadows
+/// by rejecting the whole program up front. eval's own `IllFormed` (a read of a
+/// moved slot on the TAKEN path) remains defense-in-depth (RFC §2.3).
+pub(crate) fn eval_program(program: &Program, fuel: u64) -> Run {
     let ctx = Ctx::new(program);
     let Some(&main_idx) = ctx.funcs.get("main") else {
         return Run {
@@ -310,6 +363,8 @@ pub fn run(program: &Program, fuel: u64) -> Run {
             stdout: String::new(),
             trace: Vec::new(),
             trap_span: None,
+            reject_code: None,
+            illformed_span: None,
         };
     };
     let mut state = State::new(fuel);
@@ -331,7 +386,16 @@ pub fn run(program: &Program, fuel: u64) -> Run {
         Outcome::Trap(_) if state.cur_span != Span::dummy() => Some(state.cur_span),
         _ => None,
     };
-    Run { outcome, stdout: state.stdout, trace: state.trace, trap_span }
+    Run {
+        outcome,
+        stdout: state.stdout,
+        trace: state.trace,
+        trap_span,
+        // Dynamic eval never produces a gate rejection (the gate ran first);
+        // any eval-internal `IllFormed` here carries no ratified code.
+        reject_code: None,
+        illformed_span: None,
+    }
 }
 
 // ── Function calls ─────────────────────────────────────────────────────────
@@ -758,6 +822,7 @@ fn resolve_write(ctx: &Ctx, state: &mut State, place: &Place, newval: Value, spa
         WriteOwned,
         Follow(Place),
         Materialize(Place, String),
+        Revive,
     }
     let action = match &state.frames[place.frame].locals[place.local].slot {
         Slot::Owned(_) => Action::WriteOwned,
@@ -766,13 +831,29 @@ fn resolve_write(ctx: &Ctx, state: &mut State, place: &Place, newval: Value, spa
             Action::Materialize(t.clone(), state.frames[place.frame].locals[place.local].name.clone())
         }
         Slot::Moved => {
-            return Err(Halt::IllFormed(format!(
-                "write to moved-out value `{}`",
-                state.frames[place.frame].locals[place.local].name
-            )));
+            // Re-init makes live: a WHOLE-LOCAL reassignment REVIVES a moved-out
+            // slot (it rebinds a fresh owned value), mirroring production's
+            // `mark_live` on a whole rebind (`check_stmt.rs` `mark_live`; ratified
+            // "move-bind kills, one live name after" — decisions.md D10(a)). A
+            // PROJECTED write (`x.f = …`) to a moved root is a genuine
+            // use-after-move — the root value is gone, so there is no place to
+            // write into; that stays `IllFormed`.
+            if place.proj.is_empty() {
+                Action::Revive
+            } else {
+                return Err(Halt::IllFormed(format!(
+                    "write to moved-out value `{}`",
+                    state.frames[place.frame].locals[place.local].name
+                )));
+            }
         }
     };
     match action {
+        Action::Revive => {
+            // Whole-local re-init: the slot becomes freshly owned again.
+            state.frames[place.frame].locals[place.local].slot = Slot::Owned(newval);
+            Ok(())
+        }
         Action::WriteOwned => {
             if let Slot::Owned(v) = &mut state.frames[place.frame].locals[place.local].slot {
                 navigate_write(v, &place.proj, newval)
@@ -1025,8 +1106,18 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
             Ok(Value::Closure { def: *idx, captured })
         }
 
-        Expr::CallValue { callee, args } => {
+        Expr::CallValue { callee, args, consumes_callee } => {
             let callee_val = eval_expr(ctx, state, callee)?;
+            // A `ConsumeCallable` is single-owner (D5 kind axis): the call
+            // CONSUMES the callee. Kill its slot (BEFORE the args, matching the
+            // ratified step-order where the receiver/callee is consumed first)
+            // so a second call reads a moved-out slot → `IllFormed`, mirroring
+            // production `check_move` on a ConsumeCallable call. A plain
+            // `Callable` leaves `consumes_callee` false and stays reusable.
+            if *consumes_callee {
+                let p = eval_place(ctx, state, callee)?;
+                kill_place(state, &p);
+            }
             let (def_idx, captured) = match callee_val {
                 Value::Closure { def, captured } => (def, captured),
                 other => {

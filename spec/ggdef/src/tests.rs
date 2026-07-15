@@ -21,6 +21,19 @@ fn go(src: &str) -> Run {
     run_source(src, FUEL).unwrap_or_else(|e| panic!("frontend error: {e}"))
 }
 
+/// Run a program through the `eval` half ALONE — bypassing the static may-move
+/// gate — so a test can pin eval's PER-PATH verdict (the `Value` a concrete
+/// branch produces), the verdict `go`/`run` shadows by rejecting the whole
+/// program statically. This is the executable dynamic-vs-static contrast: the
+/// SAME source yields a static `IllFormed` under `go` and a per-path `Value`
+/// under `eval_no_gate` (decisions.md "the transition table is the SHARED spec
+/// for BOTH layers … that contrast, pinned in tests, IS the dynamic/static
+/// distinction documented executably").
+fn eval_no_gate(src: &str) -> Run {
+    let program = crate::frontend(src).unwrap_or_else(|e| panic!("frontend error: {e}"));
+    crate::eval::eval_program(&program, FUEL)
+}
+
 fn kinds(run: &Run) -> Vec<&'static str> {
     run.trace.iter().map(TraceEvent::kind).collect()
 }
@@ -183,7 +196,335 @@ void main():
 "#;
     let run = go(src);
     assert!(matches!(run.outcome, Outcome::IllFormed(_)), "read of moved = IllFormed, got {:?}", run.outcome);
-    assert_eq!(run.stdout, "hi\n", "output up to the ill-formed read is preserved");
+    // The STATIC may-move gate (check_liveness ∘ eval) rejects a use-after-move
+    // BEFORE eval runs, so a statically ill-formed program produces NO output —
+    // matching production `gg check`, which never executes a rejected program.
+    assert_eq!(run.stdout, "", "statically rejected before eval runs → no output");
+}
+
+// ── Liveness transition table: the dead→live REVIVE + the consume-call KILL ──
+// (the two cells the differential gauntlet found ggdef modelled wrong).
+
+#[test]
+fn reinit_after_move_revives_the_slot() {
+    // A WHOLE-LOCAL reassignment after a move RE-INITS the slot (dead→live):
+    // production + self-host ACCEPT (`mark_live` on a whole rebind), so the
+    // later read sees the fresh value. Was over-rejected ("write to moved").
+    let src = r#"
+void sink(String !s):
+    pass
+String fresh():
+    return "new"
+void main():
+    String x = "hi"
+    sink(!x)
+    x = fresh()
+    print(x)
+"#;
+    assert_eq!(out(src), "new");
+}
+
+#[test]
+fn reinit_then_move_again_is_legal() {
+    // Revive must yield a genuinely-live OWNED slot: a second `!x` after the
+    // re-init moves the FRESH value, not a corpse.
+    let src = r#"
+void sink(String !s):
+    pass
+String fresh():
+    return "new"
+void main():
+    String x = "hi"
+    sink(!x)
+    x = fresh()
+    sink(!x)
+    print("done")
+"#;
+    assert_eq!(out(src), "done");
+}
+
+#[test]
+fn projected_write_to_moved_root_stays_illformed() {
+    // Re-init makes a WHOLE local live; a PROJECTED write to a moved ROOT is a
+    // genuine use-after-move (no root value to write a field into) → IllFormed.
+    let src = r#"
+struct S:
+    String text
+void consume(S !s):
+    pass
+void main():
+    S a = S("hi")
+    consume(!a)
+    a.text = "x"
+    print("done")
+"#;
+    assert!(
+        matches!(go(src).outcome, Outcome::IllFormed(_)),
+        "projected write to a moved root must stay IllFormed"
+    );
+}
+
+#[test]
+fn consume_callable_double_call_is_illformed() {
+    // A `ConsumeCallable` is single-owner: the FIRST call consumes it, so the
+    // SECOND call reads a moved-out slot → IllFormed (production E_DoubleMove).
+    let src = r#"
+void main():
+    ConsumeCallable[int(int)] f = !(n): n * 2
+    int r1 = f(5)
+    int r2 = f(10)
+    print(f"{r1}{r2}")
+"#;
+    assert!(
+        matches!(go(src).outcome, Outcome::IllFormed(_)),
+        "second call of a ConsumeCallable must be IllFormed, got {:?}",
+        go(src).outcome
+    );
+}
+
+#[test]
+fn consume_callable_single_call_is_legal() {
+    // The over-rejection guard: a ConsumeCallable called EXACTLY once (and a
+    // fresh closure consumed inside a callee) stays legal — the kill must fire
+    // only on the SECOND call, never poison the first.
+    let src = r#"
+int apply_once(ConsumeCallable[int(int)] f, int x):
+    return f(x)
+void main():
+    ConsumeCallable[int(int)] doubler = !(n): n * 2
+    int r1 = doubler(5)
+    int r2 = apply_once((n): n + 100, 1)
+    print(f"{r1}{r2}")
+"#;
+    assert_eq!(out(src), "10101");
+}
+
+#[test]
+fn plain_callable_is_reusable_across_calls() {
+    // The carve-out is ConsumeCallable-ONLY: a plain `Callable` is reusable, so
+    // calling it twice must NOT kill it (no false DoubleMove).
+    let src = r#"
+void main():
+    Callable[int(int)] f = (n): n * 2
+    int r1 = f(5)
+    int r2 = f(10)
+    print(f"{r1}{r2}")
+"#;
+    assert_eq!(out(src), "1020");
+}
+
+// ── The SHARED may-move transition table: BOTH columns pinned ───────────────
+//
+// decisions.md ("GGDEF VERDICT = ELABORATE ∘ EVAL") makes the transition table
+// the SHARED spec for BOTH layers. Each row pins the branch-merge cell: the
+// STATIC column (`go` = `check_liveness ∘ eval`, elaborate's UNION verdict) AND,
+// where the two diverge, the DYNAMIC column (`eval_no_gate`, eval's PER-PATH
+// verdict). That contrast IS the dynamic/static distinction, documented
+// executably (Core #6: prose rots, guards don't).
+
+#[test]
+fn transition_conditional_move_then_use_static_vs_dynamic() {
+    // THE cell. `x` is moved in ONE arm (the never-taken `if c` with `c=false`),
+    // then read. Union: "moved in ANY arm ⇒ moved after" → elaborate REJECTS with
+    // E_UseAfterMove BEFORE eval. But the DYNAMIC path (c=false) never moves `x`,
+    // so eval alone yields Value "hi". Same source, two verdicts — the gate
+    // shadows the per-path Value by rejecting the whole program up front.
+    let src = r#"
+void sink(String !s):
+    pass
+void main():
+    String x = "hi"
+    bool c = false
+    if c:
+        sink(!x)
+    print(x)
+"#;
+    // STATIC column: elaborate's union rejects.
+    let statik = go(src);
+    assert!(
+        matches!(statik.outcome, Outcome::IllFormed(_)),
+        "elaborate union verdict must REJECT conditional-move-then-use, got {:?}",
+        statik.outcome
+    );
+    assert_eq!(statik.reject_code, Some("E_UseAfterMove"), "the ratified reject code");
+    assert_eq!(statik.stdout, "", "a statically-rejected program never runs → empty stdout");
+    // DYNAMIC column: eval's per-path (c=false) verdict is a Value.
+    let dynamic = eval_no_gate(src);
+    assert!(
+        matches!(dynamic.outcome, Outcome::Value(_)),
+        "eval's per-path (c=false) verdict is a Value — the gate shadows it, got {:?}",
+        dynamic.outcome
+    );
+    assert_eq!(dynamic.stdout.trim_end(), "hi", "the untaken-move path prints the live value");
+}
+
+#[test]
+fn transition_moved_in_both_arms_then_use_rejects_on_both_layers() {
+    // Moved in BOTH arms, then read: the union is moved (like the one-arm case),
+    // AND every dynamic path moves `x` before the read. So BOTH layers reject —
+    // elaborate with the ratified E_UseAfterMove code, eval as defense-in-depth
+    // IllFormed (no code; the gate owns the code). This pins that the union is
+    // not merely the one-arm artifact.
+    let src = r#"
+void sink(String !s):
+    pass
+void main():
+    String x = "hi"
+    bool c = true
+    if c:
+        sink(!x)
+    else:
+        sink(!x)
+    print(x)
+"#;
+    let statik = go(src);
+    assert_eq!(statik.reject_code, Some("E_UseAfterMove"), "elaborate rejects with the code");
+    let dynamic = eval_no_gate(src);
+    assert!(
+        matches!(dynamic.outcome, Outcome::IllFormed(_)),
+        "every dynamic path moves `x` before the read → eval IllFormed, got {:?}",
+        dynamic.outcome
+    );
+    assert_eq!(dynamic.reject_code, None, "eval-internal IllFormed carries no ratified code");
+}
+
+#[test]
+fn transition_diverging_arm_move_is_filtered_from_the_union() {
+    // Guard-clause shape: the `then` arm moves `x` AND diverges (`return`), so it
+    // never reaches the join — the union FILTERS it out, leaving the fall-through
+    // where `x` is live. Elaborate ACCEPTS; eval runs to Value on both paths.
+    let src = r#"
+void sink(String !s):
+    pass
+void main():
+    String x = "hi"
+    bool c = false
+    if c:
+        sink(!x)
+        return
+    print(x)
+"#;
+    assert_eq!(out(src), "hi");
+}
+
+#[test]
+fn transition_rebind_guard_left_fold_in_loop_is_legal() {
+    // `acc = bump(!acc)` inside a loop: the `!acc` move feeds an IMMEDIATE re-init
+    // (the RHS is evaluated, then the whole-local assign revives the slot), so it
+    // is NOT a cross-iteration re-move — the rebind guard suppresses MoveInLoop.
+    let src = r#"
+String bump(String !s):
+    return s + "!"
+void main():
+    String acc = "x"
+    int i = 0
+    while i < 3:
+        acc = bump(!acc)
+        i = i + 1
+    print(acc)
+"#;
+    assert_eq!(out(src), "x!!!");
+}
+
+#[test]
+fn transition_sibling_arm_locals_do_not_collide() {
+    // Each arm declares its OWN `x` (a fresh BindingId), so moving arm-1's `x`
+    // must NOT poison arm-2's `x` — the name-keyed-set collision the BindingId
+    // resolver exists to prevent. Both arms are legal; the join reads neither.
+    let src = r#"
+void sink(String !s):
+    pass
+void main():
+    bool c = true
+    if c:
+        String x = "a"
+        sink(!x)
+    else:
+        String x = "b"
+        sink(!x)
+    print("done")
+"#;
+    assert_eq!(out(src), "done");
+}
+
+#[test]
+fn transition_inner_shadow_binding_is_live_though_outer_is_moved() {
+    // An inner block re-declares `x`, shadowing a moved OUTER `x`. The read hits
+    // the INNER (live) binding, not the moved outer — resolution is innermost
+    // -first by BindingId, so the outer move never reaches the inner use.
+    let src = r#"
+void sink(String !s):
+    pass
+void main():
+    String x = "outer"
+    sink(!x)
+    bool c = true
+    if c:
+        String x = "inner"
+        print(x)
+"#;
+    assert_eq!(out(src), "inner");
+}
+
+// ── Closure-capture liveness (the scout's faithful-but-unproven gap) ────────
+// No corpus fixture exercises a move THROUGH a closure boundary; these pin it.
+
+#[test]
+fn closure_capturing_a_moved_var_is_use_after_move() {
+    // A closure captures its free vars BY VALUE at creation (D5), which READS
+    // them. Capturing `x` after it was moved is a use-after-move — the closure
+    // creation is the offending read.
+    let src = r#"
+void sink(String !s):
+    pass
+void main():
+    String x = "hi"
+    sink(!x)
+    Callable[String()] f = (): x
+    print(f())
+"#;
+    let run = go(src);
+    assert!(
+        matches!(run.outcome, Outcome::IllFormed(_)),
+        "capturing a moved var must be use-after-move, got {:?}",
+        run.outcome
+    );
+    assert_eq!(run.reject_code, Some("E_UseAfterMove"), "the ratified reject code");
+}
+
+#[test]
+fn closure_body_double_move_of_a_consume_param_is_rejected() {
+    // A `ConsumeCallable` param consumed TWICE inside a closure body: the closure
+    // is checked as its own activation (params are fresh live bindings), so the
+    // second call inside the body is a double-move — proving the gate descends
+    // into closure bodies, not just top-level functions.
+    let src = r#"
+Callable[int()] make(ConsumeCallable[int(int)] g):
+    return (): g(1) + g(2)
+void main():
+    Callable[int()] f = make(!(n): n * 10)
+    print(f())
+"#;
+    let run = go(src);
+    assert!(
+        matches!(run.outcome, Outcome::IllFormed(_)),
+        "double-consume of a ConsumeCallable inside a closure body must reject, got {:?}",
+        run.outcome
+    );
+    assert_eq!(run.reject_code, Some("E_DoubleMove"), "the ratified reject code");
+}
+
+#[test]
+fn closure_capturing_a_live_var_stays_legal() {
+    // The over-capture guard: capturing a still-LIVE var is legal (the common
+    // case). The kill must fire only on a genuinely-moved capture.
+    let src = r#"
+void main():
+    String x = "hi"
+    Callable[String()] f = (): x
+    print(f())
+"#;
+    assert_eq!(out(src), "hi");
 }
 
 // ── §2.2 bullet 4 (drop) + §2.1 scope-exit reverse order ───────────────────
@@ -1825,8 +2166,8 @@ fn render_expect_block_from_round_trips_json_escape() {
     // (parse_json_string), must equal the original — so a value serialized by
     // render_expect_block_from always parses back byte-exact.
     for s in ["", "9\n", "plain", "a\"b\\c\nd\te\r", "line1\nline2\n", "tab\tend"] {
-        // No-trap outcome: a 3-line block (no `trap:` line).
-        let block = render_expect_block_from(0, s, None);
+        // No-trap, no-reject outcome: a 3-line block.
+        let block = render_expect_block_from(0, s, None, None);
         assert_eq!(block.len(), 3);
         assert_eq!(block[0], "# expect:");
         assert_eq!(block[1], "#   exit: 0");
@@ -1834,10 +2175,15 @@ fn render_expect_block_from_round_trips_json_escape() {
         assert_eq!(parse_json_string(quoted).unwrap(), s, "round-trip failed for {s:?}");
     }
     // The exit code is threaded verbatim (not hardcoded to 0).
-    assert_eq!(render_expect_block_from(101, "", None)[1], "#   exit: 101");
+    assert_eq!(render_expect_block_from(101, "", None, None)[1], "#   exit: 101");
     // A Trap outcome appends the `trap:` line at index 3, keeping exit@1/stdout@2.
-    let trap_block = render_expect_block_from(101, "pre\n", Some("T_Overflow"));
+    let trap_block = render_expect_block_from(101, "pre\n", Some("T_Overflow"), None);
     assert_eq!(trap_block.len(), 4);
     assert_eq!(trap_block[1], "#   exit: 101");
     assert_eq!(trap_block[3], "#   trap: T_Overflow");
+    // A static-rejection outcome appends the `reject:` line at index 3 instead.
+    let reject_block = render_expect_block_from(1, "", None, Some("E_UseAfterMove"));
+    assert_eq!(reject_block.len(), 4);
+    assert_eq!(reject_block[1], "#   exit: 1");
+    assert_eq!(reject_block[3], "#   reject: E_UseAfterMove");
 }

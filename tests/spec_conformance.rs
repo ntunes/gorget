@@ -43,21 +43,21 @@
 //!
 //!   cargo test --test spec_conformance -- --test-threads=1 --nocapture
 //!
-//! The three PRODUCTION floors (C/LLVM/self-host) are the count of exit-0
-//! baseline fixtures every production impl reproduces today. `MIN_FIXTURES` is
-//! the TOTAL committed corpus count (the glob-emptiness guard) — since the D11
-//! trap-normalization fixtures landed, it EXCEEDS the three production floors:
-//! a trap fixture MATCHes the ggdef lane (expectation generated from ggdef) but
-//! MISMATCHes the production lanes until T2 makes production emit the normative
-//! `trap[T_X]` + exit-101 shape. When T2 lands, it ratchets the three
-//! production floors up to `MIN_FIXTURES` in the same commit.
+//! The three PRODUCTION floors (C/LLVM/self-host) are the count of committed
+//! fixtures each production impl reproduces today. `MIN_FIXTURES` is the TOTAL
+//! committed corpus count (the glob-emptiness guard). The D11 trap fixtures
+//! (post-T2) now MATCH all three lanes; the C and LLVM floors reach the whole
+//! corpus. The one lane sitting below `MIN_FIXTURES` is SELF-HOST, on the
+//! may-move REJECT fixture: it rejects correctly (exit 1, empty stdout) but its
+//! diagnostic headline lacks the `error[E_<code>]` bracket the ggdef/C/LLVM lanes
+//! emit — a tracked reject-diagnostic-rendering gap (see the floor consts below).
 //!
 //! (History: the C and LLVM lanes once floored one below self-host because
 //! `smith_move_param_concat.gg` was a both-backend BUILD-FAIL — the C backend
 //! emitted an invalid pointer-add, the LLVM backend an invalid `add ptr`, while
 //! the self-host lowerer was already correct. That defect is FIXED
-//! (`src/ir/lowering/exprs/operators.rs` `cow_deref_if_ptr`), which is why all
-//! three production floors are equal today.)
+//! (`src/ir/lowering/exprs/operators.rs` `cow_deref_if_ptr`); today the roles are
+//! reversed — self-host is the lane one below, on the reject-diagnostic gap.)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,18 +75,41 @@ use ggdef::{parse_frontmatter, Expect};
 // ALL THREE lanes (C, LLVM, self-host). T2b normalized the shared runtime bounds
 // path (`gorget_array_get` → `gorget_trap` + the whole index/bounds class), so
 // `trap_bounds` flipped on every lane — the self-host FOR FREE (it links the same
-// runtime), no `.gg` edit — reaching 187 + 8 = 195 = the full corpus (MIN_FIXTURES).
-const C_MATCH_FLOOR: usize = 195;
-const LLVM_MATCH_FLOOR: usize = 195;
-const SELFHOST_MATCH_FLOOR: usize = 195;
+// runtime), no `.gg` edit — reaching 187 + 8 = 195 exit-0/trap fixtures.
+//
+// REJECT fixtures (`expect.reject`, exit 1, empty stdout, an `error[E_X]` marker
+// — the ratified verdict-triple for a may-move static rejection): a reject
+// fixture MATCHes a lane iff that lane REFUSES it at check/build time with the
+// declared `E_` code (`adjudicate_lane`). The first reject seed,
+// `reject_use_after_move.gg`, MATCHes the C and LLVM lanes (both emit
+// `error[E_UseAfterMove]` from the shared semantic checker — backend-independent,
+// so the +1 is on BOTH). Its ACCEPT complement `reinit_accept.gg` (a moved slot
+// revived by a whole-local reassign → `Value "new"`, exit 0) MATCHes ALL THREE
+// lanes, so the corpus + every lane's MATCH rise by that fixture together.
+//
+// The reject seed MISMATCHes the SELF-HOST lane — a KNOWN, TRACKED gap (mirrors
+// the pre-T2 trap interim above): the self-host driver correctly REJECTS the
+// program (exit 1, empty stdout) but its diagnostic headline renders a BARE
+// `error: use of `x` after it was moved` with NO `error[E_<code>]` bracket
+// (`tests/fixtures/self_host_lowerer/diagnostic.gg:293` — the headline omits the
+// `DiagKind` code; `diag_kind_str` maps `DkUseAfterMove → "use-after-move"`, not
+// the registry `E_UseAfterMove`). So the self-host reject-diagnostic format needs
+// alignment to the ratified `error[E_<code>]` family before its floor can reach
+// the corpus — filed HIGH as a self-host diagnostic-rendering track (TODO.md).
+// Until then SELF-HOST holds ONE below (MATCH=196 < MIN_FIXTURES=197), exactly as
+// the trap floors once held below the corpus with a documented interim MISMATCH.
+const C_MATCH_FLOOR: usize = 197;
+const LLVM_MATCH_FLOOR: usize = 197;
+const SELFHOST_MATCH_FLOOR: usize = 196;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the TOTAL seed COUNT. It EQUALS the three production MATCH floors: after
-/// T2a-rust, T2a-selfhost, AND T2b, all three lanes (C/LLVM/self-host) MATCH the
-/// whole corpus — `trap_bounds` was the last MISMATCH and T2b flipped it on every
-/// lane.
-const MIN_FIXTURES: usize = 195;
+/// the TOTAL seed COUNT (195 exit-0/trap fixtures + the may-move PAIR:
+/// `reject_use_after_move.gg` + its accept complement `reinit_accept.gg` = 197).
+/// It EQUALS the C and LLVM MATCH floors (both lanes reproduce the whole corpus).
+/// The self-host floor sits ONE below, on the tracked reject-diagnostic gap
+/// documented above.
+const MIN_FIXTURES: usize = 197;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs
@@ -284,6 +307,55 @@ fn adjudicate(expect: &Expect, out: &Output) -> Verdict {
     }
 }
 
+/// Adjudicate one lane's raw step result against the committed expectation,
+/// dispatching on whether the fixture is a static REJECTION.
+///
+/// A reject fixture (`expect.reject` is `Some`) inverts the build contract: a
+/// correct production impl REFUSES it at check/build time (exit nonzero, no
+/// runnable binary) AND its build stderr carries the `error[E_<code>]` marker
+/// whose code equals `expect.reject`. This mirrors the `trap:` arm exactly — the
+/// CODE is the conformance axis; the prose message and the codespan rendering
+/// stay impl-defined (pin 3). Verdicts:
+///   * build failed + code == `expect.reject`  → Match (the reject is AFFIRMED)
+///   * build failed + wrong/absent code        → Mismatch (on the code axis)
+///   * build SUCCEEDED (a binary ran)          → Mismatch (should have rejected)
+///
+/// A NON-reject fixture keeps the prior contract byte-for-byte: `Ok(out)` →
+/// `adjudicate`; a step `Err(v)` (BuildFail / run-timeout Mismatch) passes
+/// through unchanged, so a plain build failure still counts as BuildFail.
+fn adjudicate_lane(expect: &Expect, raw: Result<Output, Verdict>) -> Verdict {
+    let Some(want) = expect.reject.as_deref() else {
+        return match raw {
+            Ok(out) => adjudicate(expect, &out),
+            Err(v) => v,
+        };
+    };
+    match raw {
+        // The EXPECTED path: a check/build-stage rejection. Its marker line is in
+        // the BuildFail detail (`first_error_line` keeps the first `error`-bearing
+        // line, and `error[E_..]:` sits at its head, inside the 200-char window).
+        Err(Verdict::BuildFail(stderr)) => match extract_reject_code(&stderr) {
+            Some(got) if got == want => Verdict::Match,
+            Some(got) => Verdict::Mismatch(format!(
+                "reject: want error[{want}] · got error[{got}] · build stderr {stderr:?}"
+            )),
+            None => Verdict::Mismatch(format!(
+                "reject: want error[{want}] · build failed with NO error[E_..] marker · \
+                 stderr {stderr:?}"
+            )),
+        },
+        // Built + ran when it should have been rejected at check time.
+        Ok(out) => Verdict::Mismatch(format!(
+            "reject: want build rejection error[{want}] · but the build SUCCEEDED and the \
+             binary ran (exit {}, stdout {:?})",
+            exit_str(&out),
+            String::from_utf8_lossy(&out.stdout),
+        )),
+        // A non-BuildFail step error (e.g. an emit/run timeout) — surface as-is.
+        Err(v) => v,
+    }
+}
+
 /// Human-readable exit for a diagnostic line (`signal` when killed by a signal,
 /// which surfaces as `code() == None` on Unix).
 fn exit_str(out: &Output) -> String {
@@ -304,6 +376,22 @@ fn first_error_line(out: &Output) -> String {
         .chars()
         .take(200)
         .collect()
+}
+
+/// Extract the `E_<code>` from the FIRST `error[E_..]` marker in a build/check
+/// stderr — the production diagnostic family (`error[E_UseAfterMove]: …`), the
+/// static-rejection analogue of the `trap[T_..]` marker `adjudicate` already
+/// extracts. Returns the bare registry code (`E_UseAfterMove`), or `None` when no
+/// such marker is present. Only the CODE is read; the message + the codespan
+/// rendering (`┌─ file:line:col`) are impl-defined and NEVER compared (pin 3 —
+/// the exact analogue of ignoring the trap's ` at file:line:col` detail). The
+/// `E_` guard ensures a stray `error[...]` bracket is not mistaken for a code.
+fn extract_reject_code(stderr: &str) -> Option<String> {
+    let after = stderr.find("error[").map(|i| i + "error[".len())?;
+    let rest = &stderr[after..];
+    let end = rest.find(']')?;
+    let code = &rest[..end];
+    code.starts_with("E_").then(|| code.to_string())
 }
 
 // ─────────────────────────── per-lane build+run steps ───────────────────
@@ -487,10 +575,7 @@ fn run_lane(
             }
         };
 
-        let verdict = match step(&scratch, path) {
-            Ok(out) => adjudicate(&fm.expect, &out),
-            Err(v) => v,
-        };
+        let verdict = adjudicate_lane(&fm.expect, step(&scratch, path));
         match verdict {
             Verdict::Match => {
                 matched += 1;

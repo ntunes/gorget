@@ -7,6 +7,14 @@
 > compares the `T_` code + exit only — never the human detail (the trailing
 > ` at file:line:col` is normalized out).
 
+> **Exit-code context.** Trap + ICE = exit **101** is one tier of the toolchain's
+> fixed exit-code taxonomy (ratified 2026-07-15): `0` success · `1` **static
+> rejection** (parse OR semantic OR flow-sensitive may-move liveness — ONE
+> compile-error class, `error[E_Code]:`) · `2` usage · `101` **trap + ICE** (this
+> registry) · `103` **fuel** (`ggdef`-only, outside the cross-lane compared set).
+> Static rejection (never ran, stdout empty) and a runtime trap (ran and died)
+> are DELIBERATELY distinct codes. Full table: `docs/language-reference.md` §10.10.
+
 ## Source of truth & the ratchet
 
 The codes are defined — one per variant, no catch-all — on the trap registry:

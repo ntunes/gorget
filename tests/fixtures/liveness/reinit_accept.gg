@@ -1,8 +1,8 @@
 # Re-init (legal): a moved binding is made live again by a whole rebind before
 # the next use (Rust mark_live). `x` is moved, re-assigned, then read.
-# KNOWN-ORACLE-BUG: `ggdef run` currently over-rejects this (missing dead->live
-# revive on assignment — filed ggdef track). Self-host + production are CORRECT to
-# ACCEPT; do NOT change the self-host to match ggdef. Asserted vs the self-host driver.
+# All lanes ACCEPT: production, self-host, AND ggdef (whose eval revives the slot
+# on the whole-local reassignment). Asserted vs the self-host driver; the
+# cross-lane conformance twin is spectests/run/reinit_accept.gg.
 void sink(String !s):
     pass
 

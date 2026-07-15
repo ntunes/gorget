@@ -119,6 +119,42 @@ prose-derived code, and count every implementation as MISMATCH until the rejecti
 production rejections — that's the point.) Tests of the IllFormed detector itself are `ggdef`
 unit tests, not language conformance fixtures.
 
+### 2.3.1 The verdict boundary — `verdict = check_liveness ∘ eval` (ratified 2026-07-15)
+
+A ggdef program's verdict is **`elaborate ∘ eval`**, and the elaborate half now includes a
+flow-sensitive **may-move liveness** gate: `verdict = check_liveness ∘ eval`.
+
+- **ggdef-elaborate owns EVERY ratified static rejection within ggdef's subset — including the
+  flow-sensitive ones.** Use-after-move, double-move, move-in-loop, and conditional-move-then-use
+  are rejected at elaboration with an `IllFormed` outcome carrying an `E_` code
+  (`E_UseAfterMove` / `E_DoubleMove` / `E_MoveInLoop`) BEFORE eval runs. This mirrors production
+  `src/semantic/` (`origins.rs`) and the self-host `check_safety_*` walk. The may-move merge is
+  textbook flow-sensitive dataflow — one syntax-directed walk over a moved-set: kill on move,
+  revive on whole-local reassignment, union at joins ("moved in ANY arm ⇒ moved after"), filter
+  diverging arms, moved-in-loop-body ⇒ `E_MoveInLoop` — deterministic, terminating, no fuel, no
+  path enumeration. It is NOT all-paths execution; it abstracts branches by union.
+- **ggdef-eval owns pure per-path dynamic semantics.** A valid re-init (`x` moved, then
+  whole-rebound, then read) REVIVES the slot and RUNS to a Value — the dynamic revive-on-reassign
+  rule. Eval's `IllFormed` outcome remains defense-in-depth (§2.3), but for the ratified static
+  rejections the elaborate gate fires first, so those programs never reach eval.
+- **The escape-hatch list is EMPTY of ownership carve-outs.** ggdef-elaborate owns the ENTIRE
+  flow-sensitive static ownership axis with an executable arbiter (the `check_liveness` gate +
+  the conformance lane) — no ownership rule is left to prose alone without a guard that can
+  MISMATCH (Core #6). The only honest gaps that remain are ggdef *subset* limits (generics,
+  `it`-lambdas, other B2 constructs outside the modeled core) — subset limits, NOT ownership
+  carve-outs.
+- **GUARD-RAIL (owner, so the pendulum does not overswing):** elaborate models the RATIFIED
+  CONSERVATIVE may-move rule (the merge rule specified in `docs/language-reference.md` §4.2). It
+  must NOT become a place where whatever precision production's analysis happens to have gets
+  silently canonized. If production rejects something elaborate accepts (or vice versa) on a
+  liveness shape, that is a finding to adjudicate against the PROSE rule, exactly like any other
+  cross-lane divergence. **The definition LEADS; it does not trail.**
+
+Both the `static-error` tier (semantic / may-move rejection) and the `parse-error` tier map to
+**exit 1** — the compile-error class. See the consolidated toolchain exit-code table in
+`docs/language-reference.md` (`0` success · `1` static rejection · `2` usage · `101` trap+ICE ·
+`103` ggdef-only fuel).
+
 ### 2.4 Elaboration (surface AST → GGC) — the honest cost statement
 
 A NEW spec-owned pass sharing the production **lexer + parser only** (verified import-clean;

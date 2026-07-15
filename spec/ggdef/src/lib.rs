@@ -134,13 +134,22 @@ pub fn gen_frontmatter(source: &str, fuel: u64) -> Result<String, GenError> {
 /// The canonical `expect:` block for a run outcome — `exit:` (the outcome code)
 /// plus `stdout:` as a JSON-escaped string (a canonical, unambiguous, and thus
 /// idempotent serialisation of arbitrary bytes, incl. newlines), plus a `trap:`
-/// `T_` code line when (and only when) the outcome is a Trap.
+/// `T_` code line when (and only when) the outcome is a Trap, OR a `reject:`
+/// `E_` code line when (and only when) the outcome is a may-move static
+/// rejection. `gen` records the CODE, not the human message (pin 3).
 fn render_expect_block(run: &Run) -> Vec<String> {
     let trap = match &run.outcome {
         Outcome::Trap(kind) => Some(kind.code()),
         _ => None,
     };
-    render_expect_block_from(run.outcome.exit_code(), &run.stdout, trap)
+    // The reject code is the typed metadata already resolved on `Run` (only
+    // present for a may-move gate `IllFormed`); keyed on the outcome KIND so an
+    // eval-internal codeless `IllFormed` records no `reject:` line.
+    let reject = match &run.outcome {
+        Outcome::IllFormed(_) => run.reject_code,
+        _ => None,
+    };
+    render_expect_block_from(run.outcome.exit_code(), &run.stdout, trap, reject)
 }
 
 /// The `expect:` block from a bare `(exit, stdout, trap)` triple — the same
@@ -150,8 +159,16 @@ fn render_expect_block(run: &Run) -> Vec<String> {
 /// (`json_escape` ⇄ `parse_json_string`) is unit-tested (`src/tests.rs`).
 /// `trap` is the `TrapKind::code()` on a Trap outcome, `None` otherwise; the
 /// `#   trap:` line is emitted (at index 3) ONLY when it is `Some`, so a no-trap
-/// block stays exactly `exit` (index 1) + `stdout` (index 2).
-pub fn render_expect_block_from(exit: i32, stdout: &str, trap: Option<&str>) -> Vec<String> {
+/// block stays exactly `exit` (index 1) + `stdout` (index 2). `reject` is the
+/// `MoveErrorKind::code()` on a may-move static-rejection `IllFormed`, `None`
+/// otherwise; its `#   reject:` line is emitted ONLY when `Some`. `trap` and
+/// `reject` are mutually exclusive (a Trap is exit 101, a rejection is exit 1).
+pub fn render_expect_block_from(
+    exit: i32,
+    stdout: &str,
+    trap: Option<&str>,
+    reject: Option<&str>,
+) -> Vec<String> {
     let mut block = vec![
         "# expect:".to_string(),
         format!("#   exit: {exit}"),
@@ -159,6 +176,9 @@ pub fn render_expect_block_from(exit: i32, stdout: &str, trap: Option<&str>) -> 
     ];
     if let Some(code) = trap {
         block.push(format!("#   trap: {code}"));
+    }
+    if let Some(code) = reject {
+        block.push(format!("#   reject: {code}"));
     }
     block
 }

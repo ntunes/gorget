@@ -460,6 +460,8 @@ ConsumeCallable[int(int)]  # consuming: takes ownership of captures (single use)
 - A `Callable` closure can be passed where `MutCallable` or `ConsumeCallable` is expected.
 - A `MutCallable` closure can be passed where `ConsumeCallable` is expected.
 
+A `ConsumeCallable` is **single-owner**: calling it consumes the callable, so it can be called **at most once**. A second call is a compile-time **double-move** (`error[E_DoubleMove]`); any other use after the call is a **use-after-move** (`error[E_UseAfterMove]`). `Callable`/`MutCallable` are reusable.
+
 **Usage as parameters:**
 
 ```gorget
@@ -2670,6 +2672,20 @@ Faults panic by default; a fault `catch` (§10.5) is the only way to recover one
 - **`Fault.Bounds`** — an out-of-bounds index read of an indexed array-backed collection (`Vector`, `Deque`). A negative index is a catchable `Bounds` inside a fault `catch` (and a panic outside one). Dict lookups, string indexing, and range slices are not covered.
 
 Faults are **out of the function signature** — a plain `int sum(...)` does not become a `Result`-returning function because it does arithmetic — so they never appear in a `throws` type or on the API surface.
+
+### 10.10 Toolchain Exit Codes
+
+The `gg` / `ggdef` toolchain uses one fixed, executably-enforced process exit-code taxonomy (ratified 2026-07-15; the conformance harness compares the exit *class* across the C, LLVM, self-host, and `ggdef` lanes). The numbers are deliberately un-novel — they follow the rustc / clang / gcc / tsc consensus (compile error = 1, panic/ICE = 101):
+
+| Exit | Class | Meaning |
+|---|---|---|
+| `0` | success | The program (or command) completed normally. A statically-accepted `run` program that returns from `main` exits 0. |
+| `1` | static rejection | The program was rejected before it ran — parse error, semantic error, OR a flow-sensitive may-move liveness rejection (`error[E_UseAfterMove]` / `error[E_DoubleMove]` / `error[E_MoveInLoop]`). These are ONE class: the compile-error code. `main throws int` also exits with the thrown code, which is program-controlled. |
+| `2` | usage | CLI / usage error (no input file, unreadable path, bad flags). |
+| `101` | trap + ICE | An uncaught runtime trap renders `trap[T_X]: detail at file:line:col` and exits 101 (§10.9). An internal compiler error (ICE / panic) folds into the same code — matching rustc. |
+| `103` | fuel | `ggdef`-ONLY: the fuel-bounded evaluator exhausted its budget. Outside the cross-lane compared set (production `gg` has no fuel bound). |
+
+The **exit distinguishes "never ran" from "ran and died"**: a static rejection is exit 1 (the program never executed — stdout stays exactly empty, stderr carries the `error[E_Code]: … at span` diagnostic), while a runtime trap is exit 101. They MUST be distinct so a runtime crash can never masquerade as a correct static rejection. Conformance compares the `E_` code plus the exit class only; prose detail and span quality stay implementation-defined (the D11 trap precedent).
 
 ---
 

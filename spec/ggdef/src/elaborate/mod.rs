@@ -23,6 +23,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+mod liveness;
+pub(crate) use liveness::check_liveness;
+
 use gorget::lexer::token::{StringKind, StringSegment};
 use gorget::parser::ast;
 use gorget::span::{Span, Spanned};
@@ -177,6 +180,12 @@ enum Ty {
     Result(Box<Ty>, Box<Ty>),
     /// A user struct/enum (carry no user methods that dispatch differently).
     Named(String),
+    /// A first-class callable (`Callable[..]` / `MutCallable[..]` /
+    /// `ConsumeCallable[..]`). `consuming` is true ONLY for `ConsumeCallable`:
+    /// a single-owner callable whose call consumes it (D5 kind axis). Resolved
+    /// once here so the `CallValue` elaboration reads a typed field rather than
+    /// name-matching the surface spelling (layering rule 2).
+    Callable { consuming: bool },
     /// Not inferable at this position — dispatch falls through to the builtins.
     Unknown,
 }
@@ -510,6 +519,9 @@ impl Elaborator {
             // implicit copy duplicates R's drop just as a bare `R` would.
             Ty::Option(el) => self.ty_tainted(el),
             Ty::Result(ok, err) => self.ty_tainted(ok) || self.ty_tainted(err),
+            // A callable is single-owner-by-design with a PURE drop (D4/D5): it
+            // is never drop-TAINTED (that axis is side-effectful custom drops).
+            Ty::Callable { .. } => false,
             Ty::Prim | Ty::Str | Ty::Unknown => false,
         }
     }
@@ -1409,7 +1421,16 @@ impl Elaborator {
             for a in args {
                 out.push(self.call_arg_source(&a.node)?);
             }
-            return Ok(Expr::CallValue { callee: Box::new(Expr::Local(name.clone())), args: out });
+            // Single-owner `ConsumeCallable`: the call consumes the callee (D5
+            // kind axis). Read the typed callable classification resolved at
+            // `ty_of_type` — never the surface name.
+            let consumes_callee =
+                matches!(self.local_ty.get(name), Some(Ty::Callable { consuming: true }));
+            return Ok(Expr::CallValue {
+                callee: Box::new(Expr::Local(name.clone())),
+                args: out,
+                consumes_callee,
+            });
         }
         // Ordinary function call — (B2, from B1 output-review R2) named args
         // are REORDERED to the callee's param order via the pass-1 signature
@@ -2218,7 +2239,7 @@ fn collect_expr_locals(e: &Expr, closures: &[ClosureDef], out: &mut HashSet<Stri
                 collect_source_locals(a, closures, out);
             }
         }
-        Expr::CallValue { callee, args } => {
+        Expr::CallValue { callee, args, .. } => {
             collect_expr_locals(callee, closures, out);
             for a in args {
                 collect_source_locals(a, closures, out);
@@ -2307,6 +2328,12 @@ fn ty_of_type(t: &ast::Type) -> Ty {
                 // methods — dispatch falls through to the builtin table.
                 "Option" => Ty::Option(Box::new(arg(0))),
                 "Result" => Ty::Result(Box::new(arg(0)), Box::new(arg(1))),
+                // The callable family (D5 kind axis). ONLY `ConsumeCallable` is
+                // single-owner (consumed by its call); `Callable`/`MutCallable`
+                // are reusable. Classified once here so `CallValue` reads a
+                // typed field, never the surface name.
+                "ConsumeCallable" => Ty::Callable { consuming: true },
+                "Callable" | "MutCallable" => Ty::Callable { consuming: false },
                 other => Ty::Named(other.to_string()),
             }
         }

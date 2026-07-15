@@ -32,17 +32,19 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 ///
 /// Seeded from a run regenerated IN THIS WORKTREE (never a dated number):
 ///   cargo test -p ggdef --test spec_conformance_ggdef -- --nocapture
-///   → total=195 · MATCH=195 · MISMATCH=0 · GGDEF-SKIP=0
+///   → total=197 · MATCH=197 · MISMATCH=0 · GGDEF-SKIP=0
 ///
 /// (5 original seeds + the 182-fixture P1-D "AGREE" migration + the 8 D11
-/// trap-normalization fixtures. Every fixture's `expect:` is ggdef-generated, so
-/// on the ggdef lane total == MATCH by construction — including the trap
-/// fixtures, whose `T_` code + exit 101 the interpreter reproduces exactly.)
+/// trap-normalization fixtures + the may-move pair — `reject_use_after_move.gg`
+/// (the `E_` reject code + exit 1 + empty stdout) and its accept complement
+/// `reinit_accept.gg` (whole-local revive → Value "new") — which the interpreter
+/// reproduces exactly. Every fixture's `expect:` is ggdef-generated, so on the
+/// ggdef lane total == MATCH by construction.)
 ///
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 195;
+const GGDEF_MATCH_FLOOR: usize = 197;
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
@@ -99,9 +101,21 @@ fn spec_conformance_ggdef() {
                     Outcome::Trap(kind) => Some(kind.code()),
                     _ => None,
                 };
+                // On a static rejection, compare the ratified `E_` reject code —
+                // keyed on the outcome KIND (`IllFormed`) + the typed `reject_code`
+                // on `Run`, NEVER re-parsed from the message and NEVER inferred
+                // from exit alone (pin 3; the Value-exit-1-vs-reject-exit-1
+                // disambiguation). Without this, a WRONG-code regression would
+                // MATCH silently (empty stdout, exit 1) — the Core-#6/#8 hole this
+                // axis closes.
+                let got_reject: Option<&str> = match &run.outcome {
+                    Outcome::IllFormed(_) => run.reject_code,
+                    _ => None,
+                };
                 if got_exit == fm.expect.exit
                     && run.stdout == fm.expect.stdout
                     && got_trap == fm.expect.trap.as_deref()
+                    && got_reject == fm.expect.reject.as_deref()
                 {
                     matched += 1;
                     table.push_str(&format!(
@@ -112,8 +126,8 @@ fn spec_conformance_ggdef() {
                     mismatched += 1;
                     table.push_str(&format!("  MISMATCH     {name}\n"));
                     mismatches.push(format!(
-                        "  {name}: exit {got_exit} vs expect {} · trap {:?} vs expect {:?} · stdout {:?} vs expect {:?}",
-                        fm.expect.exit, got_trap, fm.expect.trap, run.stdout, fm.expect.stdout
+                        "  {name}: exit {got_exit} vs expect {} · trap {:?} vs expect {:?} · reject {:?} vs expect {:?} · stdout {:?} vs expect {:?}",
+                        fm.expect.exit, got_trap, fm.expect.trap, got_reject, fm.expect.reject, run.stdout, fm.expect.stdout
                     ));
                 }
             }

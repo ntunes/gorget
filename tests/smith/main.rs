@@ -984,6 +984,77 @@ fn generator_determinism_throws() {
     }
 }
 
+/// Always-on RIDER 2: the ggdef verdict lane (`classify` step 1b, line ~597)
+/// guards ggdef's OWN two-layer soundness relation — a program `elaborate`
+/// (`check_liveness`) accepts must run CLEAN under `eval`, and a program it
+/// rejects must surface as `IllFormed` so a real divergence still fires.
+///
+/// The batch fuzzer cannot exercise this cell: the generator drops a local from
+/// its env the moment it is moved, so it never emits a reinit-after-move. Before
+/// the elaborate∘eval fix, that shape was a LATENT false positive — `gg check`
+/// accepts it, but ggdef `eval` over-rejected the whole-local revive as
+/// `IllFormed`, which this lane would have reported as a spurious SPEC-DIVERGE.
+/// These fixed seeds pin the fix (and the guard's teeth) directly through the
+/// same `ggdef::run_source` call the lane uses.
+#[test]
+fn ggdef_verdict_lane_two_layer_soundness() {
+    // (a) reinit-after-move: gg check ACCEPTS; the two-layer relation requires
+    // ggdef to accept too (revive on whole-local reassign) → Value, no spurious
+    // SPEC-DIVERGE.
+    let reinit = r#"
+void sink(String !s):
+    pass
+String fresh():
+    return "new"
+void main():
+    String x = "hi"
+    sink(!x)
+    x = fresh()
+    print(x)
+"#;
+    let run = ggdef::run_source(reinit, GGDEF_FUEL).expect("reinit frontend clean");
+    assert!(
+        matches!(run.outcome, ggdef::Outcome::Value(_)),
+        "reinit-after-move must run clean under check_liveness ∘ eval (no spurious \
+         SPEC-DIVERGE), got {:?}",
+        run.outcome
+    );
+
+    // (b) ConsumeCallable called EXACTLY once: legal — the consume-call kill must
+    // not poison the single legal call.
+    let once = r#"
+void main():
+    ConsumeCallable[int(int)] f = !(n): n * 2
+    int r = f(5)
+    print(r)
+"#;
+    let run = ggdef::run_source(once, GGDEF_FUEL).expect("once frontend clean");
+    assert!(
+        matches!(run.outcome, ggdef::Outcome::Value(_)),
+        "a ConsumeCallable called once must run clean, got {:?}",
+        run.outcome
+    );
+
+    // (c) the guard KEEPS its teeth: a genuine use-after-move that gg check would
+    // reject must still surface as IllFormed here, so a real gg-accepts /
+    // ggdef-rejects divergence is never masked.
+    let uam = r#"
+void sink(String !s):
+    pass
+void main():
+    String x = "hi"
+    sink(!x)
+    print(x)
+"#;
+    let run = ggdef::run_source(uam, GGDEF_FUEL).expect("uam frontend clean");
+    assert!(
+        matches!(run.outcome, ggdef::Outcome::IllFormed(_)),
+        "a genuine use-after-move must stay IllFormed so the SPEC-DIVERGE guard \
+         retains its teeth, got {:?}",
+        run.outcome
+    );
+}
+
 /// Always-on: `classify_throws` routing (T3b's inverted oracle). The benign
 /// PASS requires the EXACT diagnostic code — `error[E_UnhandledThrows]` — not
 /// any mention of "throws": a parse error whose snippet quotes the

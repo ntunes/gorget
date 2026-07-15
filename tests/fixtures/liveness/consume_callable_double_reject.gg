@@ -1,9 +1,9 @@
 # Liveness double move of a ConsumeCallable: a `ConsumeCallable[..]` value is
 # single-owner — calling it consumes it, so a second call is a double move.
 # Mirrors production consume_callable_once_error.gg (E_DoubleMove).
-# KNOWN-ORACLE-BUG: `ggdef run` currently under-rejects this (missing live->dead
-# kill on a consume-call — filed ggdef track). Self-host + production are CORRECT to
-# REJECT; do NOT change the self-host to match ggdef. Asserted vs the self-host driver.
+# All lanes REJECT: production, self-host, AND ggdef (whose consume-call kill
+# fires on the first call, so the second reads a moved-out slot). Asserted vs the
+# self-host driver.
 void main():
     ConsumeCallable[int(int)] f = !(n): n * 2
     int r1 = f(5)

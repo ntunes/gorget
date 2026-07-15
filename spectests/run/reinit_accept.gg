@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness]
+# doc: |
+#   Re-init (legal): a moved binding is made live again by a WHOLE rebind before
+#   the next use (production/self-host `mark_live`). `x` is moved into `sink(!x)`,
+#   re-assigned from `fresh()`, then read — the dynamic revive-on-reassign rule,
+#   so `verdict = check_liveness ∘ eval` ACCEPTS on all four lanes and prints the
+#   fresh value. The static complement of reject_use_after_move.gg (same shape, a
+#   re-init instead of a read of the corpse).
+# expect:
+#   exit: 0
+#   stdout: "new\n"
+#!end
+
+void sink(String !s):
+    pass
+
+String fresh():
+    return "new"
+
+void main():
+    String x = "hi"
+    sink(!x)
+    x = fresh()
+    print(x)
