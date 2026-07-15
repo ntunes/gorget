@@ -3581,6 +3581,12 @@ equip Parser:
             self.advance()
         SpannedType ty = self.parse_type()
         String name = ""
+        # DEEPDEF: capture the binding's name span so resolve records
+        # resolution_map[name_span]=def_id at the DECLARATION (the safety
+        # liveness walk reads a binding's DefId the same way it reads a use's).
+        # Only a SINGLE whole-binding decl gets a real span; a tuple/bare-tuple
+        # destructure keeps -1 (multi-binding, no single root to key).
+        int name_span = -1
         if self.check_tok(TOK_LPAREN):
             # Tuple pattern: Type (a, b, ...) = expr
             self.advance()
@@ -3598,16 +3604,18 @@ equip Parser:
         else:
             SpannedToken name_tok = self.advance()
             name = token_ident(name_tok.lex_token)
+            name_span = name_tok.lex_start
             # Bare tuple destructuring: `auto a, b = expr`
             if self.check_tok(TOK_COMMA):
                 name = "(" + name
+                name_span = -1
                 while self.match_tok(TOK_COMMA):
                     SpannedToken next_tok = self.advance()
                     name = name + ", " + token_ident(next_tok.lex_token)
                 name = name + ")"
         self.expect_tok(TOK_EQ, "expected '=' in variable declaration")
         SpannedExpr init = self.parse_expr()
-        return SVarDecl(ty, name, init, own, 0, -1)
+        return SVarDecl(ty, name, init, own, 0, name_span)
 
     # Like parse_var_decl but captures name_span for RES entry (used in select arms)
     Stmt parse_select_var_decl(&self):

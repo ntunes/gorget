@@ -493,7 +493,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
         case SFor(pattern, iterable, body, _, else_body):
             resolve_expr(iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
-            define_pattern_bindings(pattern, &scopes)
+            define_pattern_bindings(pattern, &scopes, &ctx)
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
             if else_body.len() > 0:
@@ -542,7 +542,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             resolve_expr(scrutinee, &scopes, &ctx)
             for arm in arms:
                 scopes.push_scope(SkBlock())
-                define_pattern_bindings(arm.pattern, &scopes)
+                define_pattern_bindings(arm.pattern, &scopes, &ctx)
                 if arm.guard is Some(g):
                     resolve_expr(g, &scopes, &ctx)
                 resolve_block(arm.body, &scopes, &types, &ctx)
@@ -780,7 +780,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*scrutinee, &scopes, &ctx)
             for arm in arms:
                 scopes.push_scope(SkBlock())
-                define_pattern_bindings(arm.pattern, &scopes)
+                define_pattern_bindings(arm.pattern, &scopes, &ctx)
                 if arm.guard is Some(g):
                     resolve_expr(g, &scopes, &ctx)
                 resolve_block_expr(arm.body, &scopes, &ctx)
@@ -966,7 +966,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
         case SFor(pattern, iterable, body, _, else_body):
             resolve_expr(iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
-            define_pattern_bindings(pattern, &scopes)
+            define_pattern_bindings(pattern, &scopes, &ctx)
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
             if else_body.len() > 0:
@@ -1005,7 +1005,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(scrutinee, &scopes, &ctx)
             for arm in arms:
                 scopes.push_scope(SkBlock())
-                define_pattern_bindings(arm.pattern, &scopes)
+                define_pattern_bindings(arm.pattern, &scopes, &ctx)
                 if arm.guard is Some(g):
                     resolve_expr(g, &scopes, &ctx)
                 resolve_block_expr(arm.body, &scopes, &ctx)
@@ -1095,27 +1095,38 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
 
 # ── Pattern bindings ────────────────────────────────────────
 
-void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes):
+void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes, ResolveContext &ctx):
     match pattern.pat:
         case PBinding(name):
-            scopes.define(name, DkVariable(), Span(0, 0))
+            # DEEPDEF: record the binding's DefId at the DECLARATION span so the
+            # liveness safety walk can key a pattern binding by DefId (not name).
+            # Mirrors the identifier-USE resolution_map entry (resolve_expr:674).
+            # NOTE: the define result is bound to a LOCAL before use — inlining it
+            # as `if scopes.define(...) is Some(def_id):` mis-binds def_id to 0 (a
+            # latent self-host codegen bug: an Option returned by a mutating &self
+            # method used directly as an `is` scrutinee; same family as the
+            # live_reinit Option[int] coalesce workaround in typecheck.gg).
+            Option[int] pat_def = scopes.define(name, DkVariable(), Span(0, 0))
+            if pat_def is Some(def_id):
+                if pattern.span.start >= 0:
+                    ctx.resolution_map.put(pattern.span.start, def_id)
 
         case PConstructor(_, fields):
             for field in fields:
-                define_pattern_bindings(field, &scopes)
+                define_pattern_bindings(field, &scopes, &ctx)
 
         case PDotShorthand(_, fields):
             for field in fields:
-                define_pattern_bindings(field, &scopes)
+                define_pattern_bindings(field, &scopes, &ctx)
 
         case PTuple(elements):
             for elem in elements:
-                define_pattern_bindings(elem, &scopes)
+                define_pattern_bindings(elem, &scopes, &ctx)
 
         case POr(alternatives):
             if alternatives.len() > 0:
                 SpannedPattern first = alternatives.get(0).unwrap()
-                define_pattern_bindings(first, &scopes)
+                define_pattern_bindings(first, &scopes, &ctx)
 
         case PWildcard():
             pass
@@ -1152,7 +1163,7 @@ void resolve_is_condition(SpannedExpr expr, ScopeTable &scopes, ResolveContext &
         case EIs(inner, negated, pattern):
             if not negated:
                 resolve_expr(*inner, &scopes, &ctx)
-                define_pattern_bindings(*pattern, &scopes)
+                define_pattern_bindings(*pattern, &scopes, &ctx)
                 return
             resolve_expr(expr, &scopes, &ctx)
 
