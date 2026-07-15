@@ -93,9 +93,11 @@ prose (float formatting is decision §8.2).
   dynamic drop-flags. ⚠ Prerequisite: the
   collection-element custom-Drop loss on named-local push (TODO HIGH, 2026-07-05) must be
   fixed before drop-count spectests gate implementations.
-- **Resource exhaustion (stack depth, OOM) is implementation-defined** and outside
-  output-comparison conformance (places ledger C11: unbounded recursion → OS-guard SIGSEGV
-  accepted by design). `ggdef` is total via fuel and never exhausts a real stack.
+- **ResourceExhausted (stack depth, OOM, other host limits)** — named *event class*, not a
+  language outcome and not "defined as SIGSEGV" (ledger C11 as amended/refined 2026-07-15).
+  Production may die on the OS guard / allocator. Conformance does **not adjudicate** these
+  runs (non-comparable). Not a D11 TrapKind. `ggdef` is total via its own fuel bound
+  (`FuelExhausted`, tool-level) and never claims to model real-stack or OOM behavior.
 
 ### 2.3 Evaluator outcomes — and why GGC has no UB
 

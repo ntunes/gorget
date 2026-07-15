@@ -252,8 +252,12 @@ mutation · C3 `&` of an owned root writes through with no materialize · C4 mut
 `param.field` via bare param materializes the root · C5 sever-order/staletag rules ·
 C6 Set ordered / HashSet unordered · C7 bare bind of a resource static deep-clones ·
 C8 mutated-after-bind deferred clones fire eagerly at the bind · C9 operator-overload dispatch =
-bare `Type__method`, no vtable · C10 `String.display()` = identity · C11 unbounded recursion →
-OS-guard SIGSEGV accepted by design · C12 rejection-phasing meta-rule.
+bare `Type__method`, no vtable · C10 `String.display()` = identity · **C11 ResourceExhausted
+(stack depth, OOM, other host/tool resource limits)** — named *event class*, not a language
+outcome and not a D11 TrapKind: production may die on the OS guard / allocator; ggdef models
+only its own fuel bound (`FuelExhausted`, tool-level). Conformance **does not adjudicate**
+ResourceExhausted runs (non-comparable; neither MATCH nor MISMATCH). Not "defined as SIGSEGV"
+· C12 rejection-phasing meta-rule.
 
 ## CONFORMANCE-ONLY backlog (intended semantics clear; no decision needed)
 Scout-B List B (B1–B19): each becomes a spectest with the already-known-correct expectation.
@@ -293,6 +297,37 @@ integral-float fix (Rust `{}` prints "3" — use `{:?}`-style or ryu-with-".0").
 P1-infra reviewers' recommendation.
 
 ## LOG
+
+- 2026-07-15 — **C11 AMENDED (owner-agreed honesty fix) + NAMING REFINED same day.**
+  Prior C11 ("unbounded recursion → OS-guard SIGSEGV accepted by design") half-implied
+  stack death was a *defined language outcome*. **"Out of conformance" is the wrong primary
+  name** — that is a *suite process* relation, not what happened to the program. Prefer the
+  three-layer framing:
+  1. **Language outcomes (closed):** `Value` | `Trap(kind)` | `IllFormed`.
+  2. **Tool outcome (ggdef only):** `FuelExhausted` — the definitional interpreter's fuel
+     bound; not host stack/OOM; not a D11 TrapKind production must emit.
+  3. **Event class `ResourceExhausted`:** host/tool resource limits hit (stack guard, OOM,
+     …). **Not** a language outcome and **not** "defined as SIGSEGV." Production may die on
+     the OS/allocator; ggdef must not pretend to model that. Conformance **does not
+     adjudicate** these runs (non-comparable — neither MATCH nor MISMATCH). Elevating
+     ResourceExhausted to a peer of Trap (normalized `trap[T_ResourceExhausted]`, portable
+     stack/OOM detection) is a **future decision**, not smuggled by renaming.
+  Docs write-through: C11 line + D11 residual + RFC §2.2. No change to production's practical
+  deep-recursion behavior — only to naming and what we claim the language defines.
+
+- 2026-07-15 — **D10 local `&`-binds: owner open to reopening** provided they introduce no
+  CoW soundness holes. Stance recorded (not a formal D-number yet): exclusive local binds
+  are compatible with "one exclusive writer" when the bind *is* that writer for its live
+  range (overlapping root uses rejected, liveness-based duration). Reopen only after D10
+  place-overlap enforcement is solid; ban remains the safe default until then.
+
+- 2026-07-15 — **D15 CLARIFICATION (owner question: "I want free views — why are we
+  losing that?"): we are not.** D15 removes the *user-visible borrowed-slice surface type*
+  (`T[]` / fat-pointer-as-type — the lifetime-annotation trap). It does **not** require
+  eager deep-clone of every `v[a:b]`. Per D1 and the batch-4 proposal: an owned-value
+  sub-sequence and a lazy CoW sub-range share are observationally identical; production
+  SHOULD keep free views (String already does via `cap==0`; Vector slices may grow the same
+  invisible opt). Spec meaning = value-as-of-slice-point; free view = refinement.
 
 - 2026-07-13 — **`str.data` FOSSIL RETIRED (owner-decided; dogfood finding via the
   FieldAccess soundness fix).** `str.data` (reading a `String`/`GorgetString`'s internal
@@ -628,7 +663,10 @@ P1-infra reviewers' recommendation.
   Panic), T_ codes derived from variant identity (E_ convention), rendered
   `trap[T_X]: detail at file:line:col` + exit 101; §10.9 `Fault` re-founded as the
   catchable SUBSET (the three; fault-catch untouched; parity lint); no-drops-on-trap
-  normative v1; per-code catchability deferred to deep-fault; SIGSEGV/OOM outside v1.
+  normative v1; per-code catchability deferred to deep-fault; **ResourceExhausted
+  (stack / OOM / host limits) is outside the defined language outcome set** — see C11
+  (amended 2026-07-15; naming refined same day): not a TrapKind, not "accepted SIGSEGV,"
+  non-adjudicable by conformance.
   **WITH THIS, DECISION BATCH 4 CLOSES — D10 through D21 all ratified 2026-07-06.**
 
 - 2026-07-06 — **D21 RATIFIED (owner GO, judgment delegated + rendered): `gg sim` is
@@ -664,12 +702,15 @@ P1-infra reviewers' recommendation.
   (reference/design/book still show the closed single-owner set). Compound-assign rides
   along: `v[i] += x` moves the dead element (D4 move-at-last-use — no residual question;
   clone would be the violation); the resource-element ICE dies with it.
-- 2026-07-06 — **D15 RATIFIED by owner: slices are owned values + `int[]`/`T[]` REMOVED
-  from the surface entirely** (supersedes the filed reject-escape; owner: simplify and
+- 2026-07-06 — **D15 RATIFIED by owner: slices are *semantically* owned values + `int[]`/`T[]`
+  REMOVED from the surface entirely** (supersedes the filed reject-escape; owner: simplify and
   uniformize now, re-add later as a widening if C-interop demands — then as a dedicated
-  FFI type, not the general slice). One sequence type; the fat pointer survives only as
-  a possible future INVISIBLE CoW optimization. Removal track gated on a live-use scan.
-  A6 CLOSED.
+  FFI type, not the general slice). One sequence type on the surface. **Free views are NOT
+  retired:** under D1, a zero-alloc sub-range share (String `cap==0`, future Vector offset+len
+  CoW) is observationally identical to an eager owned sub-sequence and remains the production
+  *refinement* — the fat pointer / view is an INVISIBLE optimization, never a user-visible
+  borrowed-slice type that needs lifetime annotations. Removal track gated on a live-use scan.
+  A6 CLOSED. (Clarified 2026-07-15 — see LOG.)
 
 - 2026-07-06 — **D17 RATIFIED by owner: `read_file` is FALLIBLE (`throws`).** Owner:
   avoid panics, keep the server running, recover where possible — recorded as the
