@@ -369,19 +369,24 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    DefId-keyed; parser emits `name_span`, resolve records `resolution_map[binding.span]=def_id`; self
    `-2` sentinel). GATES REGENERATED 2026-07-15: **FULL C 1633/0 · FULL LLVM 1633/0** · bootstrap ok ·
    corpus (`c_emit_comparison`/`self_host_runtime`/`_diff`) ok · 15/15 liveness fixtures.
-   ⏭ **NEXT TRACK — ggdef LIVENESS TRANSITION-TABLE (DEFINITION-INTEGRITY, HIGH, owner-ruled RUN NOW,
-   ahead of Batch C which leans on ggdef).** The liveness differential surfaced TWO cells where `ggdef
-   run` (the acceptance ORACLE) is WRONG vs BOTH production + the self-host: a missing dead→live REVIVE
-   (re-init `x=fresh()` after move — ggdef over-rejects, `eval.rs:768-773`) and a missing live→dead KILL
-   (ConsumeCallable double-call — ggdef under-rejects/accepts-unsound, `eval.rs:1028-1043`). Both derivable
-   from ratified design intent. Deliverable = the TRANSITION-COMPLETE audit (every cell: move-kill,
-   consume-call-kill, assign-revive, AND the untested branch-merge cell where bug #3 likely hides) — not 2
-   point patches; + write-through prose (reference/book) for re-init legality + ConsumeCallable single-use;
-   + migrate both shapes from the self-host-driver-only assertions into the ggdef conformance fixtures.
-   Consult-history clean (decisions.md never pinned write-to-moved). See TODO "ggdef liveness
-   state-transition table is INCOMPLETE" + `scouts/scout-liveness-ext.md`. **Then** the codegen HIGH
-   (`is Some(x)` over mutating-method Option → mis-binds 0; retires the DefId-fix cited workaround) + the
-   tuple-element DefId slice MED + the prod double-fire wart LOW.
+   ⏭ **IN-FLIGHT TRACK — ggdef LIVENESS (DEFINITION-INTEGRITY, HIGH). RE-SCOPED to TWO PHASES 2026-07-15**
+   (owner ruling `decisions.md` **"GGDEF VERDICT = ELABORATE ∘ EVAL"**: elaborate owns ALL ratified static
+   rejections; eval owns per-path dynamic semantics). **PHASE 1 = the EVAL fix** (revive-on-reassign +
+   consume-call-kill; PROVEN `scouts/patches/ggdef-liveness-fix-proto.patch`, ggdef 127/0). Brief
+   `wave-ggdef-liveness-brief.md` through pass-1 + pass-2 (both folded). REMAINING for Phase 1: **RIDER 1 is
+   DELETED** (the `static-only:` per-lane-split tag — dead, elaborate Phase 2 makes it unnecessary); the
+   boundary note is DEFERRED to Phase 2; regenerate-don't-hardcode the conformance floors (pass-2 fix); then
+   pass-3 → executor → output-review → `cargo test -p ggdef` + `--test spec_conformance` + smith. **PHASE 2 =
+   teach ggdef-ELABORATE the static may-move dataflow** (moved-set/kill/revive/union-at-joins/MoveInLoop/
+   `E_UseAfterMove`/`E_DoubleMove` before eval — mirrors `origins.rs` + the landed self-host `check_safety_*`)
+   so ggdef rejects conditional-move-then-use like production → the divergence VANISHES + carries the REWRITTEN
+   boundary note (`verdict = elaborate ∘ eval`) + the SHARED transition-table spec (eval per-path cells vs
+   elaborate union cells) + the guard-rail (elaborate models the ratified `:2390` rule, never canonizes
+   production's precision — divergences adjudicate against the PROSE). **SCOUT `ae8fb6af` IN FLIGHT** (measuring
+   elaborate feasibility/cost). See TODO "ggdef liveness state-transition table" (re-scoped entry) +
+   `scouts/scout-ggdef-liveness.md`. **Then** the codegen HIGH (`is Some(x)` over mutating-method Option →
+   mis-binds 0; retires the DefId-fix cited workaround) + the tuple-element DefId slice MED + the prod
+   double-fire wart LOW. **All ahead of Batch C** (which leans on ggdef).
 5. **Batch C** per the wave plan: C1 operators (D26+D28; wire every new token into
    self-host `map_binop` + the anti-OP_ADD ratchet) → C2 fault-catch removal (D25;
    ~2,000-line both-compiler deletion; ships D24 spec prose + §10.5/§10.9 rewrite) →

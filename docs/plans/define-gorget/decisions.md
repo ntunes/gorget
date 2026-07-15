@@ -433,6 +433,41 @@ P1-infra reviewers' recommendation.
   if a refactor makes it fail with the overlap error, the move-tracker silently lost a case; the
   fixture catches that drift); the order-twin `f(x.copy_field, !x)` is a **POS** (pins the rule
   as evaluation-order-sensitive, not a blanket "no reads of `x` in a call that moves `x`").
+  **⚠ GGDEF VERDICT = ELABORATE ∘ EVAL — ELABORATE OWNS ALL RATIFIED STATIC REJECTIONS, RATIFIED 2026-07-15 (owner, firm; corrects a boundary-note flaw):**
+  A ggdef program's verdict is `elaborate ∘ eval`: **ggdef-elaborate models EVERY ratified static rejection
+  within its subset — INCLUDING flow-sensitive may-move liveness — and ggdef-eval owns pure per-path dynamic
+  semantics.** THE CORRECTION: an earlier boundary note (this session) assigned the flow-sensitive static axis
+  to "prose + spectests (enumerated escape-hatch list)". That preserved "implementations don't own semantics"
+  but left the axis with **NO EXECUTABLE ARBITER** — Core #6 INVERTED (prose rots, guards don't). Proof: the
+  self-host shipped for months with NO liveness pass and nothing caught it, precisely because the definition
+  didn't model the static liveness judgment, so the conformance lane had no negative that could MISMATCH. The
+  "fuel-bounded / can't explore all paths" argument proves only that EVAL can't own the rule — it does NOT
+  follow that ggdef can't, because ggdef has never been just eval: **elaborate already makes static judgments
+  (D10(a) binds, D12 six positions, D10 place-overlap, throws totality).** The may-move merge rule is NOT
+  all-paths execution — it is textbook flow-sensitive static dataflow (one syntax-directed walk: moved-set,
+  kill on move, revive on whole-local reassign, union at joins = "moved in ANY arm ⇒ moved after", filter
+  diverging arms, moved-in-loop-body ⇒ MoveInLoop, emit `E_UseAfterMove`/`E_DoubleMove` as IllFormed BEFORE
+  eval) — deterministic, terminating, NO fuel, NO path enumeration (abstracts branches by union, never executes
+  them). It mirrors production `origins.rs` + the self-host's `check_safety_*` walk (~few hundred lines, in
+  `spec/ggdef/src/elaborate/`, Rust-side, NOT bootstrap-gated). The conditional-move-then-use program then gets
+  `E_UseAfterMove` from elaborate (matching production + self-host) and never reaches eval — exactly as it never
+  reaches a binary in production; eval's "Value on the c=false path" verdict is unreachable-but-still-true.
+  **CONSEQUENCES:** (1) the proposed `static-only:` per-lane-split frontmatter tag DIES — with elaborate
+  rejecting the same programs, no lane needs a by-design MISMATCH (it was a wart). (2) The transition-table
+  test suite is the SHARED spec for BOTH layers — same cells; the branch-merge column differs BY DESIGN (eval
+  asserts the per-path verdict, elaborate asserts the union verdict) — that contrast, pinned in tests, IS the
+  dynamic/static distinction documented executably. (3) The smith soundness guard survives (check-accepted
+  programs must run dynamically clean under eval) and now ALSO guards the soundness relation between ggdef's
+  OWN two layers. (4) The boundary doc note is REWRITTEN (not softened): `verdict = elaborate ∘ eval`; the
+  old enumerated escape-hatch list → EMPTY except honest ggdef *subset* gaps (generics, it-lambdas — subset
+  limits, NOT ownership carve-outs). (5) The conditional-move + consume-double fixtures become ORDINARY
+  cross-lane conformance fixtures (elaborate rejects them → all lanes agree). **GUARD-RAIL (owner, so the
+  pendulum doesn't overswing):** elaborate models the RATIFIED CONSERVATIVE rule (reference `:2390`) — it must
+  NOT become a place where whatever precision production's analysis happens to have gets silently canonized.
+  If production rejects something elaborate accepts (or vice versa) on a liveness shape, that is a finding to
+  adjudicate against the PROSE rule, same as any divergence. **The definition LEADS; it does not trail.**
+  SEQUENCING: the eval transition-table fix (revive + consume-call-kill, proven, ggdef 127/0) lands first; the
+  elaborate may-move pass is its immediate successor, reusing the same transition-table fixtures.
   **⚠ B2 SCOPE + LIVENESS-PASS + PASS-ORDER, RATIFIED 2026-07-14 (owner, firm — two calls, one layering principle):**
   Raised by the B2 self-host-mirror scout (the self-host has NO move-tracker → accepts every use-after-move).
   **(1) B2 mirrors the FULL D10 RULE, not production's exact code — the mover-mover arm is IN.** `f(!x, !x)`

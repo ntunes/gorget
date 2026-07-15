@@ -1,5 +1,17 @@
 # Executor Brief — ggdef liveness transition-table + the three-layer oracle boundary
 
+> **⚡ RE-SCOPED 2026-07-15 (owner ruling `decisions.md` "GGDEF VERDICT = ELABORATE ∘ EVAL"). This brief is now
+> PHASE 1 (the EVAL fix) ONLY. Two changes before execution: (1) **RIDER 1 (§5, the `static-only:` per-lane-
+> split tag) IS DELETED** — Phase 2 teaches ggdef-elaborate the may-move dataflow, so it rejects the
+> conditional-move programs statically like production/self-host, and NO lane needs a by-design MISMATCH.
+> (2) The **three-layer boundary note (§3b) is DEFERRED to Phase 2**, where it is REWRITTEN to `verdict =
+> elaborate ∘ eval` (elaborate owns ALL ratified static rejections; enumerated escape-hatch list → empty).
+> Do NOT ship the old "prose+spectests own the flow-sensitive axis" wording. Phase 1 = eval fix (revive +
+> consume-call-kill, PROVEN) + the ConsumeCallable prose sentence (§3a, still valid) + `reinit_accept`
+> migration (§4) + RIDER 2 verify (§6) + regenerate-don't-hardcode floors (pass-2 fix). Phase 2 (the elaborate
+> may-move pass, scout `ae8fb6af` in flight) carries the boundary note + the shared transition-table spec +
+> the conditional-move/consume-double conformance fixtures + the guard-rail.**
+
 **Track:** ggdef definition-integrity (owner-ruled HIGH, run now, ahead of Batch C). **Base:** main.
 **Deliverable:** land the proven ggdef transition-table fix (revive + consume-call kill) AND document the
 three-layer oracle boundary the audit surfaced AND wire the two operational riders that fall out of it —
