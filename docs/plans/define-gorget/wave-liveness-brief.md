@@ -157,6 +157,10 @@ them emit liveness messages instead:
   assertion to the DM message; the `.gg` header already anticipates the flip — confirm/refine it.
 The other 3 (`writer_writer_reject`, `writer_subfield_reject`, `read_move_reject`) stay
 "their places overlap". Restructure the test so each fixture asserts its correct axis message.
+**Preserve the codespan-box assertion:** the current test checks BOTH the message text AND the codespan
+box glyph (`┌` / `\u{250c}`, `integration.rs:~18726`); the UAM/DM diagnostics render through the same
+`Diagnostic.error` constructor, so they DO produce a box — the flipped fixtures must keep asserting the
+box-rule, not just the swapped message text (don't drop the structural check when you swap the string).
 This convergence is the intended effect of the ratified pass-order rider (self-host now MATCHES
 production/ggdef on `f(!x,!x)` — via UAM/DM, not the interim overlap code).
 
@@ -174,6 +178,12 @@ the gate set exercises it, so without this fixture a proto-order regression ship
 fixtures for the legal twins (read-before-move
 `f(x.field, !x)`; branch save/restore `if c: sink(!x) else: use x`; re-init `y=!x; x=fresh(); use x`;
 loop-local move; ConsumeCallable-once accept; `!self`-consume-with-no-post-use accept).
+**CONDITIONAL (Part C):** IF precise loops land (you did NOT fall back to clone-and-discard), add ONE
+`move_in_loop_reject` fixture — a genuine MULTI-iteration re-move (per the §2 Phase 2 caveat: NOT a
+run-once loop, so it stays consistent with the ggdef oracle) asserting the `MoveInLoop` message. This is
+the ONLY thing that locks the precision in: without it, a silent precise→clone-and-discard regression
+(which under-detects) passes every named gate. If you DID fall back to clone-and-discard, do NOT add it
+(it would fail on the floor) — say so in your report instead.
 **Acceptance is ggdef fixture-for-fixture** — verify the self-host AGREES with ggdef's
 `move_then_read_is_illformed` / `d10b_mover_copy_read_is_illformed_not_overlap` /
 `d10b_order_twin_read_before_move_legal` (the DEFINITION oracle). Do NOT eyeball the Rust tracker; where
