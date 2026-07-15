@@ -1,0 +1,850 @@
+diff --git a/spec/ggdef/src/elaborate/liveness.rs b/spec/ggdef/src/elaborate/liveness.rs
+new file mode 100644
+index 00000000..a05edee6
+--- /dev/null
++++ b/spec/ggdef/src/elaborate/liveness.rs
+@@ -0,0 +1,535 @@
++//! The static may-move liveness pass (RFC §9.5 branch-merge; mirrors production
++//! `src/semantic/safety/origins.rs` + the self-host `check_safety_*` walk).
++//!
++//! `ggdef`'s `eval` models liveness DYNAMICALLY — one path per run, per the
++//! concrete branch conditions. That is the correct *dynamic* semantics, but it
++//! cannot reject a program that is memory-safe on its sampled path yet
++//! statically ill-formed (`if false: sink(!x); print(x)` — `x` is never moved
++//! at runtime, so `eval` says `Value`, but the STATIC gate rejects it). This
++//! pass is that static gate: a syntax-directed, flow-sensitive move-tracker that
++//! runs BEFORE `eval` and rejects the conditional-move-then-use class with an
++//! `IllFormed` verdict (exit 102), so `verdict = check_liveness ∘ eval`.
++//!
++//! It needs NO fuel and NO path exploration — branches are abstracted by
++//! unioning the per-arm moved-sets ("moved in ANY arm ⇒ moved after the join",
++//! reference `:2390` §9.5), never executed.
++//!
++//! ## Why a private scope-stack + binding ids (not names)
++//!
++//! GGC identifies locals by surface NAME (`Expr::Local(String)`). A name-keyed
++//! moved-set COLLIDES across sibling scopes and shadows (two `if`-arm-local `x`
++//! bindings, a re-`let` of the same name). Production and the self-host key on
++//! `DefId` for exactly this reason. So this pass builds its own lexical resolver
++//! — a fresh `BindingId` per binding, resolved innermost-first — which gives
++//! scope-exit correctness (an out-of-scope id is simply never resolved again)
++//! for free.
++
++use std::collections::{HashMap, HashSet};
++
++use crate::ggc::{Expr, Pattern, Program, Source, Stmt};
++
++type Id = u32;
++
++/// The flow-sensitive move-tracker state.
++struct Live<'a> {
++    /// Per-closure-index capture name lists (`program.closures[i].captures`), so
++    /// a closure-creation expression can read (check_use) its captured free vars.
++    closure_captures: &'a [Vec<String>],
++    /// Lexical scope stack: each frame is `(name, id)` in declaration order.
++    /// Resolution scans innermost frame first, latest-declared first (shadowing).
++    scopes: Vec<Vec<(String, Id)>>,
++    next_id: Id,
++    /// The set of binding ids currently moved-out.
++    moved: HashSet<Id>,
++    /// id → name, for the diagnostic message only (never conformance-compared).
++    names: HashMap<Id, String>,
++    /// Structural loop nesting. A move of an ENCLOSING-scope local inside a loop
++    /// would be a use-after-move on the next iteration → `MoveInLoop`.
++    loop_depth: u32,
++    /// Loop-local ids: one set per active loop (innermost last). A local
++    /// DECLARED inside the loop is re-created each iteration, so moving it is
++    /// legal (mirrors production `loop_local_defs.last()`).
++    loop_locals: Vec<HashSet<Id>>,
++    /// The left-fold rebind target (`acc = bump(!acc)`): the `!acc` move feeds an
++    /// immediate re-init, so it is not a cross-iteration re-move.
++    rebind: Option<Id>,
++    /// The FIRST violation (we stop at the first, mirroring `eval`'s first Halt).
++    error: Option<String>,
++}
++
++/// Run the static may-move gate over a whole program. `Ok(())` if well-formed;
++/// `Err(message)` on the first use-after-move / double-move / move-in-loop —
++/// the caller maps it to `Outcome::IllFormed` BEFORE `eval` runs.
++pub(crate) fn check_liveness(program: &Program) -> Result<(), String> {
++    let captures: Vec<Vec<String>> = program.closures.iter().map(|c| c.captures.clone()).collect();
++    // Each function is an independent activation: params are fresh live
++    // bindings, the body walks in the params' scope.
++    for f in &program.functions {
++        let mut live = Live::new(&captures);
++        live.push_scope();
++        for p in &f.params {
++            live.declare(&p.name);
++        }
++        live.check_block_in_current_scope(&f.body);
++        if let Some(e) = live.error.take() {
++            return Err(e);
++        }
++    }
++    // Closure bodies are independent activations too: captures are by-value
++    // copies (D5), so a closure's move-state is disjoint from its enclosing
++    // function. Params + captures are fresh live bindings.
++    for c in &program.closures {
++        let mut live = Live::new(&captures);
++        live.push_scope();
++        for name in &c.captures {
++            live.declare(name);
++        }
++        for p in &c.params {
++            live.declare(&p.name);
++        }
++        live.check_expr(&c.body);
++        if let Some(e) = live.error.take() {
++            return Err(e);
++        }
++    }
++    Ok(())
++}
++
++impl<'a> Live<'a> {
++    fn new(closure_captures: &'a [Vec<String>]) -> Self {
++        Live {
++            closure_captures,
++            scopes: Vec::new(),
++            next_id: 0,
++            moved: HashSet::new(),
++            names: HashMap::new(),
++            loop_depth: 0,
++            loop_locals: Vec::new(),
++            rebind: None,
++            error: None,
++        }
++    }
++
++    // ── Scope + binding-id machinery ────────────────────────────────────────
++
++    fn push_scope(&mut self) {
++        self.scopes.push(Vec::new());
++    }
++
++    fn pop_scope(&mut self) {
++        self.scopes.pop();
++    }
++
++    /// Allocate a fresh live binding for `name` in the current scope. If in a
++    /// loop, record it as loop-local (safe to move — re-created each iteration).
++    fn declare(&mut self, name: &str) -> Id {
++        let id = self.next_id;
++        self.next_id += 1;
++        self.names.insert(id, name.to_string());
++        self.scopes.last_mut().expect("a scope is open").push((name.to_string(), id));
++        if let Some(set) = self.loop_locals.last_mut() {
++            set.insert(id);
++        }
++        id
++    }
++
++    /// Resolve `name` to the currently-in-scope binding id (innermost scope,
++    /// latest declaration first — matching `eval`'s `rposition` shadowing).
++    fn resolve(&self, name: &str) -> Option<Id> {
++        for frame in self.scopes.iter().rev() {
++            if let Some((_, id)) = frame.iter().rev().find(|(n, _)| n == name) {
++                return Some(*id);
++            }
++        }
++        None
++    }
++
++    fn is_loop_local(&self, id: Id) -> bool {
++        self.loop_locals.last().map_or(false, |s| s.contains(&id))
++    }
++
++    fn set_err(&mut self, msg: String) {
++        if self.error.is_none() {
++            self.error = Some(msg);
++        }
++    }
++
++    // ── The two primitive checks (mirror origins.rs check_use / check_move) ──
++
++    /// A read of `name`. If its binding is moved-out → use-after-move.
++    fn check_use(&mut self, name: &str) {
++        if self.error.is_some() {
++            return;
++        }
++        if let Some(id) = self.resolve(name) {
++            if self.moved.contains(&id) {
++                self.set_err(format!("E_UseAfterMove: use of `{name}` after it was moved"));
++            }
++        }
++    }
++
++    /// A move of `name` (kills its binding). Double-move / move-in-loop reject.
++    fn check_move(&mut self, name: &str) {
++        if self.error.is_some() {
++            return;
++        }
++        let Some(id) = self.resolve(name) else {
++            return; // untrackable (e.g. an unresolved place) — never enters `moved`
++        };
++        if self.moved.contains(&id) {
++            self.set_err(format!("E_DoubleMove: `{name}` moved more than once (double move)"));
++            return;
++        }
++        if self.loop_depth > 0 && !self.is_loop_local(id) && self.rebind != Some(id) {
++            self.set_err(format!(
++                "E_MoveInLoop: cannot move `{name}` out of an enclosing scope inside a loop"
++            ));
++            return;
++        }
++        self.moved.insert(id);
++    }
++
++    /// The root local name of a place expression (`v`, `v.f`, `v[i]`, `v.0`), or
++    /// `None` for a non-place shape.
++    fn place_root<'e>(expr: &'e Expr) -> Option<&'e str> {
++        match expr {
++            Expr::Local(n) => Some(n),
++            Expr::Field(o, _) | Expr::TupleField(o, _) | Expr::Index(o, _) => Live::place_root(o),
++            _ => None,
++        }
++    }
++
++    // ── Sources (the copy/move/borrow decision, as `eval` sees it) ───────────
++
++    fn check_source(&mut self, source: &Source) {
++        if self.error.is_some() {
++            return;
++        }
++        match source {
++            // A move reads the place then KILLS its root.
++            Source::Move(place) => {
++                self.check_place_indices(place);
++                if let Some(root) = Live::place_root(place) {
++                    self.check_move(root);
++                }
++            }
++            // Copy / borrow / write-through all READ the place (root must be live).
++            Source::Copy(place) | Source::BorrowView(place) | Source::WriteThrough(place) => {
++                self.check_expr(place);
++            }
++            Source::Value(expr) => self.check_expr(expr),
++        }
++    }
++
++    /// The index sub-expressions of a place are ordinary reads (`v[side()]`).
++    fn check_place_indices(&mut self, place: &Expr) {
++        match place {
++            Expr::Index(o, i) => {
++                self.check_place_indices(o);
++                self.check_expr(i);
++            }
++            Expr::Field(o, _) | Expr::TupleField(o, _) => self.check_place_indices(o),
++            _ => {}
++        }
++    }
++
++    // ── Expressions ──────────────────────────────────────────────────────────
++
++    fn check_expr(&mut self, expr: &Expr) {
++        if self.error.is_some() {
++            return;
++        }
++        match expr {
++            Expr::Local(name) => self.check_use(name),
++            Expr::Field(o, _) | Expr::TupleField(o, _) => self.check_expr(o),
++            Expr::Index(o, i) => {
++                self.check_expr(o);
++                self.check_expr(i);
++            }
++            Expr::Slice { object, start, end, .. } => {
++                self.check_expr(object);
++                if let Some(e) = start {
++                    self.check_expr(e);
++                }
++                if let Some(e) = end {
++                    self.check_expr(e);
++                }
++            }
++            Expr::Binary(_, a, b) => {
++                self.check_expr(a);
++                self.check_expr(b);
++            }
++            Expr::Unary(_, a) | Expr::Cast { expr: a, .. } => self.check_expr(a),
++            Expr::Call { args, .. } => {
++                for a in args {
++                    self.check_source(a);
++                }
++            }
++            Expr::CallValue { callee, args, consumes_callee } => {
++                // eval reads the callee then, when consuming, KILLS it BEFORE the
++                // args (a `ConsumeCallable` call is single-use). A second call
++                // reads a moved-out slot → DoubleMove.
++                if *consumes_callee {
++                    if let Some(root) = Live::place_root(callee) {
++                        self.check_move(root);
++                    } else {
++                        self.check_expr(callee);
++                    }
++                } else {
++                    self.check_expr(callee);
++                }
++                for a in args {
++                    self.check_source(a);
++                }
++            }
++            Expr::Construct { args, .. } | Expr::EnumConstruct { args, .. } => {
++                for a in args {
++                    self.check_source(a);
++                }
++            }
++            Expr::Method { recv, args, .. } => {
++                self.check_expr(recv);
++                for a in args {
++                    self.check_source(a);
++                }
++            }
++            Expr::Closure(idx) => {
++                // Capture-by-value at creation READS each free var from the
++                // current scope; capturing a moved-out var is a use-after-move.
++                if let Some(caps) = self.closure_captures.get(*idx) {
++                    for name in caps.clone() {
++                        self.check_use(&name);
++                    }
++                }
++            }
++            Expr::Match { scrutinee, arms, else_arm, .. } => {
++                self.check_expr(scrutinee);
++                // Each arm body is an EXPR; branch over them like a stmt match.
++                let saved = self.moved.clone();
++                let mut ends: Vec<HashSet<Id>> = Vec::new();
++                for arm in arms {
++                    self.moved = saved.clone();
++                    self.push_scope();
++                    self.declare_pattern(&arm.pattern);
++                    self.check_expr(&arm.body);
++                    self.pop_scope();
++                    ends.push(self.moved.clone());
++                }
++                if let Some(e) = else_arm {
++                    self.moved = saved.clone();
++                    self.check_expr(e);
++                    ends.push(self.moved.clone());
++                }
++                self.moved = union_all(&saved, &ends);
++            }
++            Expr::Panic(e) | Expr::IntToStr(e) | Expr::Clone(e) | Expr::Propagate(e) => {
++                self.check_expr(e)
++            }
++            Expr::FString(parts) => {
++                for p in parts {
++                    if let crate::ggc::FPart::Interp(e) = p {
++                        self.check_expr(e);
++                    }
++                }
++            }
++            // Literals — no reads.
++            Expr::Int(_) | Expr::Bool(_) | Expr::Float(_) | Expr::Str(_) | Expr::Unit => {}
++        }
++    }
++
++    // ── Statements ───────────────────────────────────────────────────────────
++
++    /// Walk a block, introducing a FRESH scope for its locals.
++    fn check_block(&mut self, block: &[Stmt]) {
++        self.push_scope();
++        self.check_block_in_current_scope(block);
++        self.pop_scope();
++    }
++
++    /// Walk a block's statements WITHOUT opening a new scope (the function root
++    /// runs its body directly in the params' scope).
++    fn check_block_in_current_scope(&mut self, block: &[Stmt]) {
++        for s in block {
++            if self.error.is_some() {
++                return;
++            }
++            self.check_stmt(s);
++        }
++    }
++
++    fn check_stmt(&mut self, stmt: &Stmt) {
++        match stmt {
++            Stmt::Bind { name, source, .. } => {
++                self.check_source(source);
++                self.declare(name);
++            }
++            Stmt::With { name, source, body, .. } => {
++                self.check_source(source);
++                self.push_scope();
++                self.declare(name);
++                self.check_block_in_current_scope(body);
++                self.pop_scope();
++            }
++            Stmt::Assign { target, value, .. } => {
++                if let Expr::Local(x) = target {
++                    // Whole-local reassignment: eval evaluates the RHS first, so
++                    // a `!x` inside it is a legal left-fold move (rebind guard);
++                    // then the write REVIVES the slot (mark_live).
++                    let saved_rebind = self.rebind;
++                    self.rebind = self.resolve(x);
++                    self.check_source(value);
++                    self.rebind = saved_rebind;
++                    if let Some(id) = self.resolve(x) {
++                        self.moved.remove(&id);
++                    }
++                } else {
++                    // A projected write (`x.f = …`, `v[i] = …`): the RHS, then the
++                    // place — whose ROOT must be live (a moved root has no storage
++                    // to write into → use-after-move).
++                    self.check_source(value);
++                    self.check_expr(target);
++                }
++            }
++            Stmt::Expr { expr, .. } | Stmt::Print { expr, .. } => self.check_expr(expr),
++            Stmt::If { cond, then_, else_, .. } => {
++                self.check_expr(cond);
++                let saved = self.moved.clone();
++                self.check_block(then_);
++                let then_end = self.moved.clone();
++                let then_div = stmts_diverge(then_);
++                self.moved = saved.clone();
++                self.check_block(else_);
++                let else_end = self.moved.clone();
++                let else_div = stmts_diverge(else_);
++                let mut ends: Vec<HashSet<Id>> = Vec::new();
++                if !then_div {
++                    ends.push(then_end);
++                }
++                if !else_div {
++                    ends.push(else_end);
++                }
++                self.moved = union_all(&saved, &ends);
++            }
++            Stmt::Match { scrutinee, arms, else_arm, .. } => {
++                self.check_expr(scrutinee);
++                let saved = self.moved.clone();
++                let mut ends: Vec<HashSet<Id>> = Vec::new();
++                for arm in arms {
++                    self.moved = saved.clone();
++                    self.push_scope();
++                    self.declare_pattern(&arm.pattern);
++                    self.check_block_in_current_scope(&arm.body);
++                    self.pop_scope();
++                    if !stmts_diverge(&arm.body) {
++                        ends.push(self.moved.clone());
++                    }
++                }
++                if let Some(body) = else_arm {
++                    self.moved = saved.clone();
++                    self.check_block(body);
++                    if !stmts_diverge(body) {
++                        ends.push(self.moved.clone());
++                    }
++                }
++                self.moved = union_all(&saved, &ends);
++            }
++            Stmt::While { cond, body, .. } => {
++                self.check_expr(cond);
++                self.check_loop_body(body);
++            }
++            Stmt::Loop { body, .. } => self.check_loop_body(body),
++            Stmt::Return { value, .. } => {
++                if let Some(e) = value {
++                    self.check_expr(e);
++                }
++            }
++            Stmt::Assert { cond, message, .. } => {
++                self.check_expr(cond);
++                if let Some(m) = message {
++                    self.check_expr(m);
++                }
++            }
++            Stmt::Break { .. } | Stmt::Continue { .. } => {}
++        }
++    }
++
++    /// Walk a loop body ONCE at `loop_depth+1` with a FRESH innermost loop-local
++    /// set. A move of an enclosing (non-loop-local, non-rebind) local is a
++    /// `MoveInLoop`. After the body, the loop-merge is `union(before, after)` —
++    /// a local moved before OR by the body is moved after (mirrors production
++    /// `merge_branch_states([before, after_body])`).
++    fn check_loop_body(&mut self, body: &[Stmt]) {
++        let before = self.moved.clone();
++        self.loop_depth += 1;
++        self.loop_locals.push(HashSet::new());
++        self.check_block(body);
++        self.loop_locals.pop();
++        self.loop_depth -= 1;
++        // union(before, after): re-add any pre-loop move revived inside the body.
++        for id in before {
++            self.moved.insert(id);
++        }
++    }
++
++    /// Declare a match-arm pattern's bindings as fresh live locals (they are
++    /// Borrow views into the scrutinee).
++    fn declare_pattern(&mut self, pattern: &Pattern) {
++        match pattern {
++            Pattern::Wildcard => {}
++            Pattern::Literal(e) => self.check_expr(e),
++            Pattern::Binding(name) => {
++                self.declare(name);
++            }
++            Pattern::Variant { fields, .. } => {
++                for f in fields {
++                    self.declare_pattern(f);
++                }
++            }
++        }
++    }
++}
++
++/// Union the moved-sets of the live (non-diverging) branch arms: "moved in ANY
++/// arm ⇒ moved after the join" (`:2390` §9.5). If every arm diverged, the join
++/// is unreachable — keep the pre-branch state.
++fn union_all(saved: &HashSet<Id>, ends: &[HashSet<Id>]) -> HashSet<Id> {
++    if ends.is_empty() {
++        return saved.clone();
++    }
++    let mut out = HashSet::new();
++    for e in ends {
++        for id in e {
++            out.insert(*id);
++        }
++    }
++    out
++}
++
++/// Whether a statement block DEFINITELY diverges (its tail transfers control
++/// away, so its move-state never reaches the join). Mirrors the self-host
++/// `live_stmts_diverge`. Over-reporting divergence only ever UNDER-detects a
++/// move (never a false reject).
++fn stmts_diverge(block: &[Stmt]) -> bool {
++    match block.last() {
++        None => false,
++        Some(s) => stmt_diverges(s),
++    }
++}
++
++fn stmt_diverges(stmt: &Stmt) -> bool {
++    match stmt {
++        Stmt::Return { .. } | Stmt::Break { .. } | Stmt::Continue { .. } => true,
++        Stmt::Expr { expr: Expr::Panic(_), .. } => true,
++        Stmt::If { then_, else_, .. } => {
++            // An `if` diverges iff BOTH arms diverge (an empty else never does).
++            !else_.is_empty() && stmts_diverge(then_) && stmts_diverge(else_)
++        }
++        Stmt::Match { arms, else_arm, .. } => {
++            // A match (exhaustive by typecheck) diverges iff every arm diverges,
++            // and the else (if present) diverges too.
++            arms.iter().all(|a| stmts_diverge(&a.body))
++                && else_arm.as_ref().map_or(true, |b| stmts_diverge(b))
++        }
++        _ => false,
++    }
++}
+diff --git a/spec/ggdef/src/elaborate/mod.rs b/spec/ggdef/src/elaborate/mod.rs
+index 68f495f1..5228678c 100644
+--- a/spec/ggdef/src/elaborate/mod.rs
++++ b/spec/ggdef/src/elaborate/mod.rs
+@@ -23,6 +23,9 @@
+ 
+ use std::collections::{HashMap, HashSet};
+ 
++mod liveness;
++pub(crate) use liveness::check_liveness;
++
+ use gorget::lexer::token::{StringKind, StringSegment};
+ use gorget::parser::ast;
+ use gorget::span::{Span, Spanned};
+@@ -177,6 +180,12 @@ enum Ty {
+     Result(Box<Ty>, Box<Ty>),
+     /// A user struct/enum (carry no user methods that dispatch differently).
+     Named(String),
++    /// A first-class callable (`Callable[..]` / `MutCallable[..]` /
++    /// `ConsumeCallable[..]`). `consuming` is true ONLY for `ConsumeCallable`:
++    /// a single-owner callable whose call consumes it (D5 kind axis). Resolved
++    /// once here so the `CallValue` elaboration reads a typed field rather than
++    /// name-matching the surface spelling (layering rule 2).
++    Callable { consuming: bool },
+     /// Not inferable at this position — dispatch falls through to the builtins.
+     Unknown,
+ }
+@@ -510,6 +519,9 @@ impl Elaborator {
+             // implicit copy duplicates R's drop just as a bare `R` would.
+             Ty::Option(el) => self.ty_tainted(el),
+             Ty::Result(ok, err) => self.ty_tainted(ok) || self.ty_tainted(err),
++            // A callable is single-owner-by-design with a PURE drop (D4/D5): it
++            // is never drop-TAINTED (that axis is side-effectful custom drops).
++            Ty::Callable { .. } => false,
+             Ty::Prim | Ty::Str | Ty::Unknown => false,
+         }
+     }
+@@ -1409,7 +1421,16 @@ impl Elaborator {
+             for a in args {
+                 out.push(self.call_arg_source(&a.node)?);
+             }
+-            return Ok(Expr::CallValue { callee: Box::new(Expr::Local(name.clone())), args: out });
++            // Single-owner `ConsumeCallable`: the call consumes the callee (D5
++            // kind axis). Read the typed callable classification resolved at
++            // `ty_of_type` — never the surface name.
++            let consumes_callee =
++                matches!(self.local_ty.get(name), Some(Ty::Callable { consuming: true }));
++            return Ok(Expr::CallValue {
++                callee: Box::new(Expr::Local(name.clone())),
++                args: out,
++                consumes_callee,
++            });
+         }
+         // Ordinary function call — (B2, from B1 output-review R2) named args
+         // are REORDERED to the callee's param order via the pass-1 signature
+@@ -2218,7 +2239,7 @@ fn collect_expr_locals(e: &Expr, closures: &[ClosureDef], out: &mut HashSet<Stri
+                 collect_source_locals(a, closures, out);
+             }
+         }
+-        Expr::CallValue { callee, args } => {
++        Expr::CallValue { callee, args, .. } => {
+             collect_expr_locals(callee, closures, out);
+             for a in args {
+                 collect_source_locals(a, closures, out);
+@@ -2307,6 +2328,12 @@ fn ty_of_type(t: &ast::Type) -> Ty {
+                 // methods — dispatch falls through to the builtin table.
+                 "Option" => Ty::Option(Box::new(arg(0))),
+                 "Result" => Ty::Result(Box::new(arg(0)), Box::new(arg(1))),
++                // The callable family (D5 kind axis). ONLY `ConsumeCallable` is
++                // single-owner (consumed by its call); `Callable`/`MutCallable`
++                // are reusable. Classified once here so `CallValue` reads a
++                // typed field, never the surface name.
++                "ConsumeCallable" => Ty::Callable { consuming: true },
++                "Callable" | "MutCallable" => Ty::Callable { consuming: false },
+                 other => Ty::Named(other.to_string()),
+             }
+         }
+diff --git a/spec/ggdef/src/eval.rs b/spec/ggdef/src/eval.rs
+index 3f3aa68c..4d08bd68 100644
+--- a/spec/ggdef/src/eval.rs
++++ b/spec/ggdef/src/eval.rs
+@@ -303,6 +303,20 @@ pub struct Run {
+ 
+ /// Evaluate a program from `main`, bounded by `fuel`.
+ pub fn run(program: &Program, fuel: u64) -> Run {
++    // The STATIC gate (verdict = check_liveness ∘ eval): a flow-sensitive
++    // may-move analysis rejects the conditional-move-then-use / double-move /
++    // move-in-loop class BEFORE eval runs, so those programs never reach the
++    // dynamic per-path interpreter. A statically ill-formed program is rejected
++    // with NO observable output (it never executes) — matching production
++    // `gg check`, which never runs a rejected program.
++    if let Err(message) = crate::elaborate::check_liveness(program) {
++        return Run {
++            outcome: Outcome::IllFormed(message),
++            stdout: String::new(),
++            trace: Vec::new(),
++            trap_span: None,
++        };
++    }
+     let ctx = Ctx::new(program);
+     let Some(&main_idx) = ctx.funcs.get("main") else {
+         return Run {
+@@ -758,6 +772,7 @@ fn resolve_write(ctx: &Ctx, state: &mut State, place: &Place, newval: Value, spa
+         WriteOwned,
+         Follow(Place),
+         Materialize(Place, String),
++        Revive,
+     }
+     let action = match &state.frames[place.frame].locals[place.local].slot {
+         Slot::Owned(_) => Action::WriteOwned,
+@@ -766,13 +781,29 @@ fn resolve_write(ctx: &Ctx, state: &mut State, place: &Place, newval: Value, spa
+             Action::Materialize(t.clone(), state.frames[place.frame].locals[place.local].name.clone())
+         }
+         Slot::Moved => {
+-            return Err(Halt::IllFormed(format!(
+-                "write to moved-out value `{}`",
+-                state.frames[place.frame].locals[place.local].name
+-            )));
++            // Re-init makes live: a WHOLE-LOCAL reassignment REVIVES a moved-out
++            // slot (it rebinds a fresh owned value), mirroring production's
++            // `mark_live` on a whole rebind (`check_stmt.rs` `mark_live`; ratified
++            // "move-bind kills, one live name after" — decisions.md D10(a)). A
++            // PROJECTED write (`x.f = …`) to a moved root is a genuine
++            // use-after-move — the root value is gone, so there is no place to
++            // write into; that stays `IllFormed`.
++            if place.proj.is_empty() {
++                Action::Revive
++            } else {
++                return Err(Halt::IllFormed(format!(
++                    "write to moved-out value `{}`",
++                    state.frames[place.frame].locals[place.local].name
++                )));
++            }
+         }
+     };
+     match action {
++        Action::Revive => {
++            // Whole-local re-init: the slot becomes freshly owned again.
++            state.frames[place.frame].locals[place.local].slot = Slot::Owned(newval);
++            Ok(())
++        }
+         Action::WriteOwned => {
+             if let Slot::Owned(v) = &mut state.frames[place.frame].locals[place.local].slot {
+                 navigate_write(v, &place.proj, newval)
+@@ -1025,8 +1056,18 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
+             Ok(Value::Closure { def: *idx, captured })
+         }
+ 
+-        Expr::CallValue { callee, args } => {
++        Expr::CallValue { callee, args, consumes_callee } => {
+             let callee_val = eval_expr(ctx, state, callee)?;
++            // A `ConsumeCallable` is single-owner (D5 kind axis): the call
++            // CONSUMES the callee. Kill its slot (BEFORE the args, matching the
++            // ratified step-order where the receiver/callee is consumed first)
++            // so a second call reads a moved-out slot → `IllFormed`, mirroring
++            // production `check_move` on a ConsumeCallable call. A plain
++            // `Callable` leaves `consumes_callee` false and stays reusable.
++            if *consumes_callee {
++                let p = eval_place(ctx, state, callee)?;
++                kill_place(state, &p);
++            }
+             let (def_idx, captured) = match callee_val {
+                 Value::Closure { def, captured } => (def, captured),
+                 other => {
+diff --git a/spec/ggdef/src/ggc.rs b/spec/ggdef/src/ggc.rs
+index f68db5e8..3db037ed 100644
+--- a/spec/ggdef/src/ggc.rs
++++ b/spec/ggdef/src/ggc.rs
+@@ -262,7 +262,12 @@ pub enum Expr {
+     // ── Value producers ──
+     Call { func: String, args: Vec<Source> },
+     /// A call of a first-class closure value (`f()` where `f` is a local).
+-    CallValue { callee: Box<Expr>, args: Vec<Source> },
++    /// `consumes_callee` is set at elaboration when the callee's declared type
++    /// is a single-owner `ConsumeCallable` (D5 kind axis): calling it CONSUMES
++    /// the callee value, so a second call reads a moved-out slot → `IllFormed`
++    /// (mirrors production `check_move` on a ConsumeCallable call). A plain
++    /// `Callable` / `MutCallable` is reusable, so the flag is `false`.
++    CallValue { callee: Box<Expr>, args: Vec<Source>, consumes_callee: bool },
+     Construct { kind: ConstructKind, args: Vec<Source> },
+     /// An enum variant value (`Some(x)`, `None`, `Ok(v)`, `Token.Ident(s)`).
+     EnumConstruct { type_name: String, variant: String, args: Vec<Source> },
+diff --git a/spec/ggdef/src/tests.rs b/spec/ggdef/src/tests.rs
+index ae2e2d64..be3ccebd 100644
+--- a/spec/ggdef/src/tests.rs
++++ b/spec/ggdef/src/tests.rs
+@@ -183,7 +183,121 @@ void main():
+ "#;
+     let run = go(src);
+     assert!(matches!(run.outcome, Outcome::IllFormed(_)), "read of moved = IllFormed, got {:?}", run.outcome);
+-    assert_eq!(run.stdout, "hi\n", "output up to the ill-formed read is preserved");
++    // The STATIC may-move gate (check_liveness ∘ eval) rejects a use-after-move
++    // BEFORE eval runs, so a statically ill-formed program produces NO output —
++    // matching production `gg check`, which never executes a rejected program.
++    assert_eq!(run.stdout, "", "statically rejected before eval runs → no output");
++}
++
++// ── Liveness transition table: the dead→live REVIVE + the consume-call KILL ──
++// (the two cells the differential gauntlet found ggdef modelled wrong).
++
++#[test]
++fn reinit_after_move_revives_the_slot() {
++    // A WHOLE-LOCAL reassignment after a move RE-INITS the slot (dead→live):
++    // production + self-host ACCEPT (`mark_live` on a whole rebind), so the
++    // later read sees the fresh value. Was over-rejected ("write to moved").
++    let src = r#"
++void sink(String !s):
++    pass
++String fresh():
++    return "new"
++void main():
++    String x = "hi"
++    sink(!x)
++    x = fresh()
++    print(x)
++"#;
++    assert_eq!(out(src), "new");
++}
++
++#[test]
++fn reinit_then_move_again_is_legal() {
++    // Revive must yield a genuinely-live OWNED slot: a second `!x` after the
++    // re-init moves the FRESH value, not a corpse.
++    let src = r#"
++void sink(String !s):
++    pass
++String fresh():
++    return "new"
++void main():
++    String x = "hi"
++    sink(!x)
++    x = fresh()
++    sink(!x)
++    print("done")
++"#;
++    assert_eq!(out(src), "done");
++}
++
++#[test]
++fn projected_write_to_moved_root_stays_illformed() {
++    // Re-init makes a WHOLE local live; a PROJECTED write to a moved ROOT is a
++    // genuine use-after-move (no root value to write a field into) → IllFormed.
++    let src = r#"
++struct S:
++    String text
++void consume(S !s):
++    pass
++void main():
++    S a = S("hi")
++    consume(!a)
++    a.text = "x"
++    print("done")
++"#;
++    assert!(
++        matches!(go(src).outcome, Outcome::IllFormed(_)),
++        "projected write to a moved root must stay IllFormed"
++    );
++}
++
++#[test]
++fn consume_callable_double_call_is_illformed() {
++    // A `ConsumeCallable` is single-owner: the FIRST call consumes it, so the
++    // SECOND call reads a moved-out slot → IllFormed (production E_DoubleMove).
++    let src = r#"
++void main():
++    ConsumeCallable[int(int)] f = !(n): n * 2
++    int r1 = f(5)
++    int r2 = f(10)
++    print(f"{r1}{r2}")
++"#;
++    assert!(
++        matches!(go(src).outcome, Outcome::IllFormed(_)),
++        "second call of a ConsumeCallable must be IllFormed, got {:?}",
++        go(src).outcome
++    );
++}
++
++#[test]
++fn consume_callable_single_call_is_legal() {
++    // The over-rejection guard: a ConsumeCallable called EXACTLY once (and a
++    // fresh closure consumed inside a callee) stays legal — the kill must fire
++    // only on the SECOND call, never poison the first.
++    let src = r#"
++int apply_once(ConsumeCallable[int(int)] f, int x):
++    return f(x)
++void main():
++    ConsumeCallable[int(int)] doubler = !(n): n * 2
++    int r1 = doubler(5)
++    int r2 = apply_once((n): n + 100, 1)
++    print(f"{r1}{r2}")
++"#;
++    assert_eq!(out(src), "10101");
++}
++
++#[test]
++fn plain_callable_is_reusable_across_calls() {
++    // The carve-out is ConsumeCallable-ONLY: a plain `Callable` is reusable, so
++    // calling it twice must NOT kill it (no false DoubleMove).
++    let src = r#"
++void main():
++    Callable[int(int)] f = (n): n * 2
++    int r1 = f(5)
++    int r2 = f(10)
++    print(f"{r1}{r2}")
++"#;
++    assert_eq!(out(src), "1020");
+ }
+ 
+ // ── §2.2 bullet 4 (drop) + §2.1 scope-exit reverse order ───────────────────
