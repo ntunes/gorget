@@ -1,5 +1,8 @@
 # Re-init (legal): a moved binding is made live again by a whole rebind before
 # the next use (Rust mark_live). `x` is moved, re-assigned, then read.
+# KNOWN-ORACLE-BUG: `ggdef run` currently over-rejects this (missing dead->live
+# revive on assignment — filed ggdef track). Self-host + production are CORRECT to
+# ACCEPT; do NOT change the self-host to match ggdef. Asserted vs the self-host driver.
 void sink(String !s):
     pass
 

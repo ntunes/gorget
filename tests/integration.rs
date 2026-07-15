@@ -18814,6 +18814,13 @@ fn self_host_driver_accepts_d10b_place_overlap() {
 // it, and the self-host itself relies on re-init so blast=0 requires it) and
 // ConsumeCallable single-owner consume (`consume_callable_double_reject` —
 // production E_DoubleMove; ggdef under-models the carve-out and runs it).
+// KNOWN-ORACLE-BUG PIN: these two are ggdef DEFINITION bugs (a missing dead->live
+// revive and a missing live->dead kill — two cells of one liveness state-transition
+// table), filed HIGH/MED in TODO.md as the "ggdef liveness transition-table" track.
+// The self-host + production are CORRECT; do NOT "reconcile" this disagreement by
+// conforming the self-host to ggdef. It closes the RIGHT way — by fixing ggdef, after
+// which both shapes migrate from these self-host-driver-only assertions into the
+// ggdef conformance fixtures so every lane is pinned permanently.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_rejects_liveness() {

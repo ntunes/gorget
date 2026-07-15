@@ -1352,10 +1352,11 @@ bool live_is_consume_callable(SpannedExpr e, ScopeTable scopes, TypeTable &types
 # (moves, reads, branch join) in ONE traversal. `scope_id` STAYS an ambient int
 # (constant per function body — it never branches). Adding a new safety axis =
 # add a SafetyState field + touch the relevant arms; the traversal is shared.
-# Loops use PRECISE MoveInLoop tracking (`safety_loop_body`: loop_depth+1, fresh
-# per-iteration loop_locals, and a final union so a body move DOES escape to after
+# Loops use PRECISE MoveInLoop tracking (`safety_loop_body`, PART C below): the body
+# walks at loop_depth+1 with a fresh innermost loop_locals set, then the pre-loop and
+# post-body move-sets are UNIONED (0-iteration safety; a body move stays moved after
 # the loop) — mirroring production `origins.rs`. A move of an outer (non-loop-local,
-# non-same-stmt-rebound) place inside a loop is a MoveInLoop reject.
+# non-same-stmt-rebound) place inside a loop is a MoveInLoop reject (live_mark_move).
 void check_safety_stmts(Vector[Stmt] stmts, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     for s in stmts:
         check_safety_stmt(s, scope_id, &state, &scopes, &types, &ctx)
