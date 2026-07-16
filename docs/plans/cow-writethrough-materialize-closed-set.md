@@ -24,6 +24,10 @@
 > mechanically at three code sites; pivot complete, both producers, no third sibling). New closed-set discovery filed HIGH:
 > bare `v[i].method()` mutating-receiver write-through is broken on BOTH compilers (the
 > method-receiver analog of gap B — needs a row + wave assignment when its track is scoped).
+> ✅ **1C LANDED `99a52094`** (2026-07-16; Fable-reviewed with negative controls; Dict
+> write-through both compilers + double-eval closed; HashMap deferred to its filed track —
+> the M2b probe measured the self-host MORE complete than Rust there). **NEXT: Track 1A
+> (`for x in &coll` write-through + the comprehension desugar) — the wave-1 closer.**
 
 ## Context
 
