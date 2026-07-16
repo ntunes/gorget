@@ -369,35 +369,29 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    DefId-keyed; parser emits `name_span`, resolve records `resolution_map[binding.span]=def_id`; self
    `-2` sentinel). GATES REGENERATED 2026-07-15: **FULL C 1633/0 · FULL LLVM 1633/0** · bootstrap ok ·
    corpus (`c_emit_comparison`/`self_host_runtime`/`_diff`) ok · 15/15 liveness fixtures.
-   ⏭ **IN-FLIGHT TRACK — ggdef LIVENESS (DEFINITION-INTEGRITY, HIGH). ⚡ MERGED to ONE LANDING 2026-07-15**
-   (owner ok'd merge once BOTH prototypes proved out). **Authoritative brief: `wave-ggdef-elab-eval-brief.md`**
-   (supersedes the Phase-1-only `wave-ggdef-liveness-brief.md`). The COMBINED prototype
-   `scouts/patches/ggdef-elaborate-move-proto.patch` (eval fix + elaborate may-move gate; 5 files, +731/-9;
-   ggdef 127/0; conformance 195/195; 100% production agreement / 25 probes) applies CLEAN. REMAINING: the
-   brief needs its ≥3 fresh reviews → executor (apply the proven patch + boundary-note rewrite + stderr-
-   diagnostic requirement [owner: rejected programs emit the WHY on stderr, empty stdout, exit non-zero] +
-   ConsumeCallable prose + shared transition-table + closure-capture test + fixture migration with
-   REGENERATED floors + RIDER 2 verify; RIDER 1 is DEAD) → output-review → `cargo test -p ggdef` +
-   `--test spec_conformance*` + smith. Scouts `scout-ggdef-liveness.md` + `scout-ggdef-elaborate-move.md`.
-   [superseded two-phase framing below, kept for context:]
-   **RE-SCOPED to TWO PHASES 2026-07-15**
-   (owner ruling `decisions.md` **"GGDEF VERDICT = ELABORATE ∘ EVAL"**: elaborate owns ALL ratified static
-   rejections; eval owns per-path dynamic semantics). **PHASE 1 = the EVAL fix** (revive-on-reassign +
-   consume-call-kill; PROVEN `scouts/patches/ggdef-liveness-fix-proto.patch`, ggdef 127/0). Brief
-   `wave-ggdef-liveness-brief.md` through pass-1 + pass-2 (both folded). REMAINING for Phase 1: **RIDER 1 is
-   DELETED** (the `static-only:` per-lane-split tag — dead, elaborate Phase 2 makes it unnecessary); the
-   boundary note is DEFERRED to Phase 2; regenerate-don't-hardcode the conformance floors (pass-2 fix); then
-   pass-3 → executor → output-review → `cargo test -p ggdef` + `--test spec_conformance` + smith. **PHASE 2 =
-   teach ggdef-ELABORATE the static may-move dataflow** (moved-set/kill/revive/union-at-joins/MoveInLoop/
-   `E_UseAfterMove`/`E_DoubleMove` before eval — mirrors `origins.rs` + the landed self-host `check_safety_*`)
-   so ggdef rejects conditional-move-then-use like production → the divergence VANISHES + carries the REWRITTEN
-   boundary note (`verdict = elaborate ∘ eval`) + the SHARED transition-table spec (eval per-path cells vs
-   elaborate union cells) + the guard-rail (elaborate models the ratified `:2390` rule, never canonizes
-   production's precision — divergences adjudicate against the PROSE). **SCOUT `ae8fb6af` IN FLIGHT** (measuring
-   elaborate feasibility/cost). See TODO "ggdef liveness state-transition table" (re-scoped entry) +
-   `scouts/scout-ggdef-liveness.md`. **Then** the codegen HIGH (`is Some(x)` over mutating-method Option →
-   mis-binds 0; retires the DefId-fix cited workaround) + the tuple-element DefId slice MED + the prod
-   double-fire wart LOW. **All ahead of Batch C** (which leans on ggdef).
+   ✅ **LANDED 2026-07-16 — ggdef VERDICT = ELABORATE ∘ EVAL + the ratified VERDICT TRIPLE + the toolchain
+   EXIT-CODE SCHEME** (`67ce92f8`; exit-scheme ratified `b180b9d2`; see DONE.md 2026-07-16). ggdef-elaborate now
+   models the flow-sensitive may-move dataflow (rejects use-after-move / double-move / move-in-loop /
+   conditional-move-then-use BEFORE eval — `verdict = check_liveness ∘ eval`); a static rejection emits
+   `stdout=""` · `stderr=error[E_Code]: … at file:line:col` · `exit=1`; the E_ code is a CONFORMANCE-COMPARED
+   axis (a WRONG code FAILS conformance across ggdef+C+LLVM); exit scheme `0/1/2/101/103` ratified (only ggdef
+   changed — `EXIT_ILLFORMED 102→1`, `FrontendError 2→1`; production already conformed). RIDER 1 DEAD, RIDER 2
+   verified + a two-layer-soundness regression pinned. GATES: **C 1633/0 · LLVM 1633/0** · ggdef 139/0 +
+   conformance 197/197 · C/LLVM spec_conformance 197/197 · self-host 197/196 (held) · smith 50/50. Gauntlet:
+   exit-code research → 3 scouts (4-lane verdict-triple PROVEN, `scouts/scout-ggdef-verdict-triple.md` + patch
+   `scouts/patches/ggdef-vt-4lane-proto.patch`) → 4 fresh brief-reviews (7→4→1→SIGN OFF) → executor →
+   output-review (reference-grade gate PASSED) → integrate + both full sweeps.
+   ⏭ **NEXT (committed follow-ups, in order):**
+   1. **Self-host reject-diagnostic-rendering — HIGH, bootstrap-gated (TODO).** The self-host REJECTS
+      use-after-move correctly but renders a bare `error:` headline, not `error[E_<code>]:` (rendering-only —
+      the typed `DiagKind` is present; `diagnostic.gg:293`/`:123` drops the registry bracket) → self-host
+      conformance floor HELD one below MIN_FIXTURES, documented. Add the `DiagKind→E_code` render + MIGRATE the
+      deferred bulk reject fixtures (`consume_callable_double_reject`/`move_in_loop`/`conditional_move`/
+      `consuming_self` → `spectests/run/`) + raise `SELFHOST_MATCH_FLOOR` → **FOUR-LANE-GREEN**. The one thing
+      between three-lane-affirm and four-lane.
+   2. The codegen HIGH (`is Some(x)` over a mutating-method Option → mis-binds 0; retires the DefId-fix cited
+      workaround) + the coalesce `Dict.remove`-discard C-miscompile (same family) + the tuple-element DefId
+      slice MED + the prod double-fire wart LOW. **All ahead of Batch C** (which leans on ggdef).
 5. **Batch C** per the wave plan: C1 operators (D26+D28; wire every new token into
    self-host `map_binop` + the anti-OP_ADD ratchet) → C2 fault-catch removal (D25;
    ~2,000-line both-compiler deletion; ships D24 spec prose + §10.5/§10.9 rewrite) →
