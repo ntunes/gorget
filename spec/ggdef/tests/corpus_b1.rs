@@ -32,9 +32,16 @@ use std::path::{Path, PathBuf};
 /// `cow_value_index_field_writethrough` mixes module statics (phase-1 —
 /// `Item::StaticDecl` not elaborated) with locals; its LOCAL half was
 /// ggdef-adjudicated at authoring (88/30/45, see the fixture comment).
+/// `cow_dict_index_field_writethrough` is a Dict index write-place outside the
+/// phase-0 subset (`navigate_write` eval.rs:923 has no Map arm → `IllFormed`);
+/// its expected output is §3.1-prose-derived (99/41/99).
+/// `cow_dict_index_field_single_eval` is the same Dict index write-place
+/// (`make()[0].x`) — likewise out of subset; it pins eval-order, not ggdef.
 const EXCLUDE: &[&str] = &[
     "deadwrite_ok_atomic_add.gg",
     "cow_value_index_field_writethrough.gg",
+    "cow_dict_index_field_writethrough.gg",
+    "cow_dict_index_field_single_eval.gg",
 ];
 
 fn ws_root() -> PathBuf {

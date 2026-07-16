@@ -1,0 +1,28 @@
+from std.collections import Dict
+
+# CoW Track 1C double-eval / eval-order regression: a field store through a
+# side-effecting Dict PRODUCER (`make()[0].x = 99`) must evaluate `make()`
+# EXACTLY ONCE. Pre-fix, the Index field-place arm lowered `coll = make()`
+# (effect #1), found the base was not an Array, returned `None`, and the
+# caller's fallback re-lowered the whole `make()[0]` (effect #2) — `make` ran
+# TWICE. The fix's TYPE-ONLY pre-check (`index_base_kind_type_only`) resolves
+# the collection kind from the base's static type WITHOUT lowering and returns
+# `None` for a side-effecting/unresolvable producer BEFORE `lower_expr(coll)`,
+# so the fallback lowers `make()` a single time. If `make` ran twice this
+# fixture would print "make called" twice. (The store lands on the discarded
+# temporary — this fixture pins EVAL-ORDER, not write-through; the write-through
+# shapes are in cow_dict_index_field_writethrough.gg.)
+
+struct Point:
+    int x
+    int y
+
+Dict[int, Point] make():
+    print("make called")
+    Dict[int, Point] d = {}
+    d[0] = Point(1, 2)
+    return d
+
+void main():
+    make()[0].x = 99
+    print("done")

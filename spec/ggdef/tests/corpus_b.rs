@@ -44,6 +44,15 @@ const EXCLUDE: &[&str] = &[
     // local shapes; its LOCAL half was ggdef-adjudicated at authoring (88/30/45,
     // see the fixture comment), the static half is prose-derived.
     "cow_value_index_field_writethrough.gg",
+    // Dict index write-place outside the phase-0 subset — `navigate_write`
+    // (eval.rs:923) has arms for Struct/Vector/Tuple/Enum only, so a Map value
+    // + Index write-projection `IllFormed`s. The CoW-1C fixture's expected
+    // output is §3.1-prose-derived (owned Dict place writes through: 99/41/99).
+    "cow_dict_index_field_writethrough.gg",
+    // Same Dict index write-place (a `make()[0].x = 99` through a side-effecting
+    // producer) — the CoW-1C double-eval regression fixture is likewise outside
+    // the phase-0 subset; it pins EVAL-ORDER on the real compilers, not ggdef.
+    "cow_dict_index_field_single_eval.gg",
 ];
 
 fn ws_root() -> PathBuf {

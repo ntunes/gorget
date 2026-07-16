@@ -2479,6 +2479,52 @@ pub(super) fn materialize_global_field_base(
     Some(Operand::Copy(Place::local(ptr_local)))
 }
 
+/// Type-only resolution of a PURE place expression (identifier / `self` /
+/// field / index chain) to its `TypeId`, WITHOUT lowering it (no side effects,
+/// no IR emitted). Returns `None` for anything that is side-effecting or not a
+/// resolvable place (a call, literal, etc.). Used by the `Expr::Index`
+/// write-through pre-check so a side-effecting collection producer
+/// (`make()[k].field = x`) is not evaluated twice.
+fn place_expr_type_only(ctx: &mut LoweringContext, expr: &Spanned<Expr>) -> Option<TypeId> {
+    match &expr.node {
+        Expr::Identifier(name) => {
+            if let Some((_, tid)) = ctx.lookup_local(name) {
+                Some(tid)
+            } else {
+                let tn = ctx.global_type_names.get(name).cloned()?;
+                lookup_global_type(ctx, &tn)
+            }
+        }
+        Expr::SelfExpr => ctx.lookup_local("self").map(|(_, t)| t),
+        Expr::FieldAccess { object, field } => {
+            let obj_t = place_expr_type_only(ctx, object)?;
+            let resolved = ctx.pointee_type(obj_t).unwrap_or(obj_t);
+            let name = ctx.type_name_for_id(resolved)?.to_string();
+            ctx.lookup_field(&name, &field.node).map(|(_, ft)| ft)
+        }
+        Expr::Index { object, .. } => {
+            let coll_t = place_expr_type_only(ctx, object)?;
+            Some(infer_collection_element_type(ctx, coll_t))
+        }
+        _ => None,
+    }
+}
+
+/// The `CollectionKind` of the base of an `Expr::Index`, resolved TYPE-ONLY
+/// (no lowering). `None` when the base type can't be resolved without lowering
+/// (a side-effecting producer) or isn't a builtin collection.
+fn index_base_kind_type_only(
+    ctx: &mut LoweringContext,
+    coll: &Spanned<Expr>,
+) -> Option<CollectionKind> {
+    let tid = place_expr_type_only(ctx, coll)?;
+    let resolved = ctx.pointee_type(tid).unwrap_or(tid);
+    let name = ctx.type_name_for_id(resolved)?.to_string();
+    ctx.type_registry
+        .get_type_def(&name)
+        .and_then(|td| td.metadata.collection_kind)
+}
+
 /// Resolve a field access expression to a Place (with projections) and the field's type,
 /// WITHOUT copying the field to a temp. This allows borrowing the field in-place.
 /// Returns `Some((place, field_type_id))` if the expression is a resolvable field access.
@@ -2534,23 +2580,50 @@ pub(super) fn try_resolve_field_place(
                 return None;
             }
         }
-        // `v[i].field = x` / `PTS[i].field = x`: resolve the Index ELEMENT to a
-        // WRITE-THROUGH pointer so the field-store lands in the collection's
-        // heap buffer, not on a stack copy. `lower_index_access` returns a value
-        // COPY for VALUE-type elements (only resource-type elements get a
-        // `Ptr(T)` handle), so a plain `lower_expr(v[i])` on a struct-of-scalars
-        // element silently drops the write. Force the element `Ptr(T)` here for
-        // BOTH element kinds — `index_load` with a `Ptr(elem)` result type
-        // lowers to `gorget_array_get_ptr`, a pointer INTO the buffer, and the
-        // pointer-deref path below (`pointee_type` → `Projection::Deref` + field)
-        // projects the field through it. Handles local and module-level `static`
-        // array bases (GlobalRef → Borrow-local, mirroring `lower_index_access`
-        // and `lower_index_assign`'s T5 arm); the caller's root
-        // `cow_before_mutation` already materialized a private copy for a shared
-        // local, so the pointer aliases the owned buffer. Non-array collections
-        // (Dict/Set) fall through to `None` (their element-field lvalue is a
-        // separate case — see the filed `d[k].field=x` follow-up).
+        // `v[i].field = x` / `PTS[i].field = x` / `d[k].field = x`: resolve the
+        // Index ELEMENT to a WRITE-THROUGH pointer so the field-store lands in
+        // the collection's heap buffer, not on a stack copy. `lower_index_access`
+        // returns a value COPY for VALUE-type elements (only resource-type
+        // elements get a `Ptr(T)` handle), so a plain `lower_expr(v[i])` on a
+        // struct-of-scalars element silently drops the write. Force the element
+        // `Ptr(T)` here for BOTH element kinds — an `index_load` with a
+        // `Ptr(elem)` result type lowers to `gorget_array_get` (Array/Deque) or
+        // `gorget_map_get` (Dict) returning a pointer INTO the backing buffer's
+        // element / value slot, and the pointer-deref path below (`pointee_type`
+        // → `Projection::Deref` + field) projects the field through it. Handles
+        // local and module-level `static` array bases (GlobalRef → Borrow-local,
+        // mirroring `lower_index_access` and `lower_index_assign`'s T5 arm); the
+        // caller's root `cow_before_mutation` already materialized a private copy
+        // for a shared local, so the pointer aliases the owned buffer.
+        //
+        // DOUBLE-EVAL: a TYPE-ONLY pre-check (`index_base_kind_type_only`, no
+        // lowering) gates this arm BEFORE `lower_expr(coll)` so a side-effecting
+        // collection producer (`make()[k].field = x`) is evaluated exactly once.
+        // Unsupported bases (Set; HashMap; user `Index` overloads; an
+        // unresolvable/side-effecting producer) return `None` WITHOUT lowering,
+        // so the caller's fallback lowers `coll` a single time.
+        // Set is excluded because a set's element IS its key: `gorget_map_get`
+        // returns a sentinel (not a real value pointer) in set-mode, and a
+        // Set of a struct isn't even constructible (elements must be Hashable).
+        // HashMap (`CollectionKind::Map`) is excluded by the filed bug
+        // "HashMap-of-struct element typing, methods.rs:3859":
+        // `infer_collection_element_type` strips `Dict__`/`Map__` but not
+        // `HashMap__`, so a HashMap value type resolves to I64 — admitting
+        // `Map` here would silently route HashMap field-writes into a
+        // wrong-typed slot. Only `Array` (Vector/Deque) and `OrderedMap` (Dict)
+        // have a correctly-typed, addressable element/value slot today; the
+        // HashMap track owns flipping this arm to include `Map` once the
+        // element-typing bug is fixed.
         Expr::Index { object: coll, index } => {
+            let kind = index_base_kind_type_only(ctx, coll);
+            let is_addressable = matches!(
+                kind,
+                Some(crate::ir::types::CollectionKind::Array)
+                    | Some(crate::ir::types::CollectionKind::OrderedMap)
+            );
+            if !is_addressable {
+                return None;
+            }
             let mut coll_obj = lower_expr(ctx, builder, coll);
             // Materialize a `static` base (GlobalRef) into an addressable local:
             // a resource-typed collection Borrows (zero-cost header aliasing the
@@ -2572,21 +2645,6 @@ pub(super) fn try_resolve_field_place(
                 _ => return None,
             };
             let base_ty = infer_operand_type_full(ctx, &coll_obj, builder);
-            let resolved_base = ctx.pointee_type(base_ty).unwrap_or(base_ty);
-            // Only array-like collections have directly addressable elements
-            // here (typed via `collection_kind`, never a name check).
-            let base_name = ctx
-                .type_name_for_id(resolved_base)
-                .unwrap_or_default()
-                .to_string();
-            let is_array = ctx
-                .type_registry
-                .get_type_def(&base_name)
-                .and_then(|td| td.metadata.collection_kind)
-                == Some(crate::ir::types::CollectionKind::Array);
-            if !is_array {
-                return None;
-            }
             let elem_type = infer_collection_element_type(ctx, base_ty);
             let idx = lower_expr(ctx, builder, index);
             let elem_ptr_type = ctx.register_ptr_type(elem_type);

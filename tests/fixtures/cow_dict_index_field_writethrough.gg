@@ -1,0 +1,64 @@
+from std.collections import Dict
+
+# CoW write-through: a value-struct element of a Dict, addressed as
+# `d[k].field`, is an unbroken owned place → the field store WRITES THROUGH
+# to the map's heap value slot (language-design §3.1). Fixed by CoW Track 1C:
+# the Rust `try_resolve_field_place` Index arm and the self-host
+# `lower_field_place_base` gate resolved only `CollectionKind::Array`, so a
+# Dict element field-store fell through to a value COPY and silently lost the
+# write (pre-fix both compilers printed the stale 1). The gate is now
+# `Array | OrderedMap` (Dict); `gorget_map_get` returns a pointer INTO the
+# map's value slot, exactly the write-through target the array arm gets from
+# `gorget_array_get`. Covers the single-level shapes only: plain, compound,
+# and String-key field stores on a LOCAL Dict.
+#
+# Expected-output adjudication (campaign principle 1): ALL lines are OUT of
+# ggdef's phase-0 subset — `navigate_write` (spec/ggdef/src/eval.rs:923) has
+# arms for Struct/Vector/Tuple/Enum projections only, so a Map value + Index
+# write-projection hits `IllFormed`. Unlike the 1B fixture's LOCAL Vector half,
+# NO line here is ggdef-adjudicated. The values are prose-derived from §3.1:
+# `d[k]` on an owned Dict is an owned place, so the field store writes through
+# to the backing value slot. This fixture is therefore listed in the EXCLUDE
+# arrays of both spec/ggdef/tests/corpus_b.rs and corpus_b1.rs (mirroring the
+# 1B fixture — corpus_b/b1 run every non-excluded fixture through ggdef, which
+# would `IllFormed` on the Dict write-projection and brick the suite).
+#
+# HashMap divergence (Track 1C M2b probe, filed HIGH — "HashMap-of-struct
+# element typing, methods.rs:3859"): the identical shape on `HashMap[int,
+# Point]` is NOT included here. On Rust gg it prints 0 — but that 0 is NOT a
+# gate-dropped write: the HashMap-of-struct READ/STORE is itself broken by the
+# element-typing bug (`infer_collection_element_type` strips `Dict__`/`Map__`
+# but not `HashMap__`, so the value type resolves to I64), so even a
+# store-then-read with NO field write prints 0. The 1C gate excludes
+# `CollectionKind::Map` for exactly this reason; the HashMap track converges
+# the two compilers by fixing Rust's element typing, then flipping the gate.
+#
+# The NESTED shape (`d[0].inner.v = x`) is a bonus write-through on Rust gg
+# (its `try_resolve_field_place` recurses through the chained EFieldAccess
+# base) but stays broken on the self-host (`lower_field_place_base` handles a
+# single-level EIndex only) — that Rust/self-host asymmetry is gap 2F (snag
+# #53 family); a nested Dict line is deliberately NOT pinned here because it
+# would fail the self-host lane until 2F lands.
+
+struct Point:
+    int x
+    int y
+
+void main():
+    # plain: int-key Dict value-struct field store → write-through
+    Dict[int, Point] d = {}
+    d[0] = Point(1, 2)
+    d[0].x = 99
+    print(d[0].x)          # 99
+
+    # compound: `+=` through the write-through place
+    Dict[int, Point] c = {}
+    c[0] = Point(1, 2)
+    c[0].x += 40
+    print(c[0].x)          # 41  (1 + 40)
+
+    # String-key Dict value-struct field store → write-through
+    Dict[String, Point] s = {}
+    s["a"] = Point(1, 2)
+    s["a"].x = 99
+    print(s["a"].x)        # 99

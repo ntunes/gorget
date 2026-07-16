@@ -1596,23 +1596,30 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
                         fpb_base_name = type_id_to_name(fpb_inner2, &gmod)
                     else:
                         pass
-            # Array-kind gate — CkVector/CkDeque only. Dict/Set/user-Index fall
-            # through to the shared resolver unchanged (Track 1C extends here for
-            # Dict/Set). Dispatch via the typed `collection_kind`, never a name
-            # match — an `gorget_array_get` on a Map base would be UB.
-            bool fpb_is_array = false
+            # Collection-kind gate → the element/value pointer-getter. CkVector/
+            # CkDeque resolve the element via `gorget_array_get`; CkDict resolves
+            # the VALUE slot via `gorget_map_get` (Track 1C — a pointer INTO the
+            # map's value buffer, exactly the write-through target the array arm
+            # gets from `gorget_array_get`). Set / user-Index fall through to the
+            # shared resolver unchanged (a set's element IS its key — no
+            # addressable value slot; `gorget_map_get` returns a sentinel in
+            # set-mode). Dispatch via the typed `collection_kind`, never a name
+            # match — a `gorget_array_get` on a Map base would be UB.
+            String fpb_getter = ""
             match resource_meta_for(&gmod, fpb_base_name):
                 case Some(fpb_rmeta):
                     match fpb_rmeta.collection_kind:
                         case CkVector():
-                            fpb_is_array = true
+                            fpb_getter = "gorget_array_get"
                         case CkDeque():
-                            fpb_is_array = true
+                            fpb_getter = "gorget_array_get"
+                        case CkDict():
+                            fpb_getter = "gorget_map_get"
                         else:
                             pass
                 case None:
                     pass
-            if fpb_is_array:
+            if fpb_getter != "":
                 # Element type NAME → id via the SAME `index_value_type_name`
                 # helper the read/compound arms use (one source of truth).
                 String fpb_elem_name = index_value_type_name(fpb_base_name)
@@ -1653,7 +1660,7 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
                         int fpb_ptr_tid = register_ptr(&gmod, fpb_elem_tid)
                         int fpb_dst = add_local_with(&ctx, fpb_ptr_tid, None, LoBorrowed(), BoNone())
                         Vector[Operand] fpb_args = [fpb_base_op, OpBorrow(fpb_idx)]
-                        emit(&ctx, GICallExtern(fpb_dst, "gorget_array_get", fpb_args))
+                        emit(&ctx, GICallExtern(fpb_dst, fpb_getter, fpb_args))
                         return fpb_dst
         else:
             pass

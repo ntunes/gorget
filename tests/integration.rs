@@ -21606,6 +21606,51 @@ fn cow_value_index_field_writethrough() {
     );
 }
 
+/// CoW Track 1C corpus fixture (C + LLVM lanes; the self-host lane auto-enrolls
+/// via the `runtime_snapshots/cow_dict_index_field_writethrough.out` snapshot
+/// net). A value-struct element of a Dict, addressed as `d[k].field`, is an
+/// unbroken owned place → the field store WRITES THROUGH to the map's heap
+/// value slot (language-design §3.1). Pre-fix, the `try_resolve_field_place`
+/// Index arm (and the self-host `lower_field_place_base` gate) resolved only
+/// `CollectionKind::Array`, so the Dict element field-store fell through to a
+/// value COPY and silently lost the write (Core #8: both backends printed the
+/// stale 1). The gate is now `Array | OrderedMap` (Dict); `gorget_map_get`
+/// returns a pointer INTO the map's value slot. Covers the single-level plain
+/// (99), compound (41), and String-key (99) shapes on a LOCAL Dict — all OUT
+/// of ggdef's subset (`navigate_write` has no Map arm), so expected output is
+/// §3.1-prose-derived and the fixture is EXCLUDEd in corpus_b/b1. HashMap of
+/// the same shape is deliberately not pinned (filed HIGH: HashMap-of-struct
+/// element typing broken at methods.rs:3859 — the HashMap track owns it).
+#[test]
+fn cow_dict_index_field_writethrough() {
+    run_gg(
+        "cow_dict_index_field_writethrough.gg",
+        "\
+99
+41
+99",
+    );
+}
+
+/// CoW Track 1C double-eval / eval-order regression: a field store through a
+/// side-effecting Dict producer (`make()[0].x = 99`) must evaluate `make()`
+/// EXACTLY ONCE. Pre-fix the Index field-place arm lowered `coll = make()`,
+/// returned `None` (not an Array), and the caller's fallback re-lowered the
+/// whole `make()[0]` — `make` ran twice. The fix's TYPE-ONLY pre-check
+/// (`index_base_kind_type_only`) resolves the collection kind without lowering
+/// and returns `None` before `lower_expr(coll)` for a side-effecting producer,
+/// so the fallback lowers `make()` once. A second `make called` line here means
+/// the double-eval class reopened.
+#[test]
+fn cow_dict_index_field_single_eval() {
+    run_gg(
+        "cow_dict_index_field_single_eval.gg",
+        "\
+make called
+done",
+    );
+}
+
 /// (A) FLOORED DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1).
 ///
 /// Full corpus, live `gg run` oracle. Discovers the MATCH set and the
