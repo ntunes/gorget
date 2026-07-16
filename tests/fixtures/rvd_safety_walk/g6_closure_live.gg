@@ -1,0 +1,6 @@
+void run():
+    String s = "hello"
+    int() f = (): s.len()
+
+void main():
+    run()

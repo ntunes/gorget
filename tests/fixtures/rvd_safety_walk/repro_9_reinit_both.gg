@@ -1,0 +1,15 @@
+# HOLE #9: move-then-reinit-in-BOTH-arms must be ACCEPTED (r live at the join).
+void sink(String !s):
+    pass
+
+void run(bool cond):
+    String s = "hello"
+    sink(!s)
+    if cond:
+        s = "a"
+    else:
+        s = "b"
+    sink(!s)
+
+void main():
+    run(true)

@@ -1,0 +1,11 @@
+# HOLE #6: a closure body reading a MOVED capture must be UseAfterMove.
+void sink(String !s):
+    pass
+
+void run():
+    String s = "hello"
+    sink(!s)
+    int() f = (): s.len()
+
+void main():
+    run()

@@ -1,0 +1,13 @@
+# HOLE #8: f(&v, v[0..2]) — the range slice is a live VIEW rooted at v; it
+# overlaps the mutable borrow &v (non-Copy element String). Must reject.
+void f(Vector[String] &v, Vector[String] slice):
+    v.push("z")
+
+void run():
+    Vector[String] v = Vector[String]()
+    v.push("a")
+    v.push("b")
+    f(&v, v[0..2])
+
+void main():
+    run()

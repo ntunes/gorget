@@ -1,0 +1,16 @@
+# HOLE #8 over-rejection guard: a range slice with NO overlapping mutable
+# borrow is legal. After #8 makes a slice root at its collection, EVERY slice
+# arg participates in the place-overlap axis; this guard proves a lone slice
+# read (no conflicting `&v` writer) still ACCEPTS — the view is the only
+# reference to v's buffer at the call, so nothing conflicts.
+int count(Vector[String] slice):
+    return slice.len()
+
+void run():
+    Vector[String] v = Vector[String]()
+    v.push("a")
+    v.push("b")
+    int n = count(v[0..2])
+
+void main():
+    run()

@@ -1,0 +1,9 @@
+int add_len(String a, String b):
+    return a.len() + b.len()
+
+void run(Vector[String] xs):
+    String prefix = "p"
+    Vector[int] ys = [add_len(prefix, x) for x in xs]
+
+void main():
+    run(Vector[String]())

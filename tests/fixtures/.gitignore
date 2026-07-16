@@ -58,6 +58,13 @@
 # subdir rationale as d12/d10b — keep only the .gg sources.
 !liveness/
 !liveness/*.gg
+# RV-D unified safety-walk soundness cluster (holes #6/#7/#8/#9) probe fixtures:
+# reject set (closure moved-capture UAM, comprehension move-in-loop, slice-alias
+# borrow-conflict, branch-join double-move edges) + accept set (live capture,
+# plain/enclosing-read comprehensions, a lone slice read, reinit-in-all-arms).
+# Same subdir rationale as d12/d10b/liveness — keep only the .gg sources.
+!rvd_safety_walk/
+!rvd_safety_walk/*.gg
 # D23 throws-totality cross-module negative fixture (a `throws` equip method
 # imported across a module boundary, called unhandled → E_UnhandledThrows).
 !d23_unhandled_method_xmod/

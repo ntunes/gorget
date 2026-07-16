@@ -1,0 +1,14 @@
+void sink(String !s):
+    pass
+
+void run(int k):
+    String s = "hi"
+    match k:
+        case 0:
+            sink(!s)
+        else:
+            sink(!s)
+    sink(!s)
+
+void main():
+    run(0)

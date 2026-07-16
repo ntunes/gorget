@@ -1,0 +1,8 @@
+int use_it(String s):
+    return s.len()
+
+void run(Vector[String] xs):
+    Vector[int] ys = [use_it(x) for x in xs]
+
+void main():
+    run(Vector[String]())

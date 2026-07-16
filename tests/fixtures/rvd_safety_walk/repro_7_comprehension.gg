@@ -1,0 +1,11 @@
+# HOLE #7: moving an ENCLOSING local inside a comprehension is a per-iteration
+# double-move (MoveInLoop) — the comprehension is a loop context.
+int consume(String !s):
+    return s.len()
+
+void run(Vector[int] xs):
+    String enclosing = "hi"
+    Vector[int] ys = [consume(!enclosing) for x in xs]
+
+void main():
+    run(Vector[int]())

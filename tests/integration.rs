@@ -19025,6 +19025,150 @@ fn self_host_driver_accepts_liveness() {
     }
 }
 
+// RV-D: the self-host unified safety-walk soundness cluster (holes #6/#7/#8/#9).
+// Four fixes to the `check_safety_*` walk in self_host_typechecker/typecheck.gg
+// close three UNDER-rejections that accepted use-after-move / dangling-view
+// programs, plus one OVER-rejection that refused a legal move-then-reinit shape:
+//   #6 closure   — the body is now checked against a SNAPSHOT of the enclosing
+//                  move-state (captures visible), so reading a MOVED capture is
+//                  E_UseAfterMove (was: fresh empty state → accepted the UAF).
+//   #7 comprehension — the body walks at loop_depth+1 with fresh loop_locals, so
+//                  moving an ENCLOSING local inside the comprehension is a
+//                  per-iteration E_MoveInLoop (was: discarded snapshot → accepted).
+//   #8 slice     — `place_projection_path` drops its range carve-out, so a slice
+//                  `v[0..2]` roots at its collection and overlaps a `&v` writer
+//                  (non-Copy element) → E_BorrowConflict (was: slice = fresh
+//                  value → dangling view accepted). The Copy-element case stays
+//                  ACCEPTED at production parity (RV-E's job in both compilers).
+//   #9 branch-join — `safety_commit` REPLACES `state.moved` with the union of
+//                  the REACHING branches' end-states (fall-through folded in only
+//                  when no unconditional else / catch-all), so move-then-reinit
+//                  in ALL arms clears the move and the post-join use ACCEPTS (was:
+//                  ADD-only union could never drop a key → over-rejected).
+// This reject test pins the SOUNDNESS true-positives + the divergence/nesting
+// edges: each asserts the ratified `error[E_<code>]` headline, its message text,
+// the codespan box rule, and NO C on stdout (the gate halts BEFORE lowering).
+// Verified verdict-for-verdict against production `gg check` in the scout
+// (docs/plans/define-gorget/scouts/scout-rvd-safety-walk.md). Parity-neutral —
+// every reject fixture is Rust-rejected, excluded from the parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_rvd_safety_walk() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    // (fixture, exact registry code, axis message substring). Box-rule asserted
+    // for all. The four E_DoubleMove shapes exercise #9's REACHING-branch union:
+    // a move in one/both if-arms or all match-arms, or a nested-if move, all
+    // still leave the join move-live → the post-join `!s` is a double move.
+    let reject_fixtures: [(&str, &str, &str); 8] = [
+        // #6: a closure body reading a MOVED capture -> use-after-move
+        ("repro_6_closure", "error[E_UseAfterMove]", "after it was moved"),
+        // #7: moving an ENCLOSING local inside a comprehension -> per-iter MoveInLoop
+        (
+            "repro_7_comprehension",
+            "error[E_MoveInLoop]",
+            "out of an enclosing scope inside a loop",
+        ),
+        // #8: f(&v, v[0..2]) on Vector[String] -> slice view overlaps the &v writer
+        ("repro_8_slice_alias", "error[E_BorrowConflict]", "their places overlap"),
+        // #9 edges: the move-live join true-positives (must STILL reject)
+        ("g9_move_one_arm", "error[E_DoubleMove]", "moved more than once (double move)"),
+        ("g9_move_both_arms", "error[E_DoubleMove]", "moved more than once (double move)"),
+        ("g9_reinit_one_arm", "error[E_DoubleMove]", "moved more than once (double move)"),
+        ("g9_match_move_all", "error[E_DoubleMove]", "moved more than once (double move)"),
+        ("e9_nested_move", "error[E_DoubleMove]", "moved more than once (double move)"),
+    ];
+    for (name, expected_code, expected_msg) in reject_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/rvd_safety_walk/{name}.gg"));
+        assert!(fixture.exists(), "missing RV-D reject fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_rvd_safety_walk",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED an unsafe program `{name}` (RV-D safety-walk \
+             soundness hole in self_host_typechecker/typecheck.gg regressed). \
+             exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains(expected_code)
+                && stderr.contains(expected_msg)
+                && stderr.contains('\u{250c}'),
+            "self-host driver rejected `{name}` but did not emit the ratified \
+             `{expected_code}` codespan headline (expected message `{expected_msg}` \
+             + the box rule).\nstderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host driver emitted C for rejected `{name}` — the gate must halt \
+             BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+}
+
+// Over-rejection guard for RV-D: the self-host must ACCEPT the LEGAL
+// counterparts of the four holes — a live (unmoved) capture read inside a
+// closure (#6), plain and enclosing-read comprehensions with no move (#7), a
+// lone slice read with no conflicting writer (#8, NEWLY AUTHORED — the archive
+// has no legal-#8 probe), and the move-then-reinit-in-all-reaching-branches
+// shapes across if/else, match/else, and diverge-one-arm (#9). The bootstrap
+// proves no UNDER-rejection regression in the self-host source, but is silent
+// to an OVER-rejection (self-host source has no such shapes); these fixtures
+// are the executable guard an over-tightening cannot pass — each must exit 0
+// and emit C (the legal path must lower).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_accepts_rvd_safety_walk() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let legal_fixtures = [
+        // #6: a closure capturing a LIVE (unmoved) local is legal
+        "g6_closure_live",
+        // #7: a comprehension that only READS enclosing locals is legal
+        "g7_comp_plain",
+        "g7_comp_read_enclosing",
+        // #8: a slice read with NO overlapping mutable borrow is legal (authored)
+        "accept_8_slice_legal",
+        // #9: move-then-reinit in ALL reaching branches clears the move
+        "repro_9_reinit_both",
+        "g9_reinit_both_arms",
+        "g9_match_reinit_else",
+        // #9 edges: a diverging arm carries no state to the join; reinit on the
+        // other reaching arm clears the move; all-diverge leaves no fall-through
+        "e9_diverge_reinit",
+        "e9_all_diverge",
+    ];
+    for name in legal_fixtures {
+        let fixture = manifest_dir.join(format!("tests/fixtures/rvd_safety_walk/{name}.gg"));
+        assert!(fixture.exists(), "missing RV-D legal fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_accepts_rvd_safety_walk",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "self-host driver REJECTED a LEGAL RV-D program `{name}` — an \
+             over-rejection in self_host_typechecker/typecheck.gg's safety walk. \
+             exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            !stdout.trim().is_empty(),
+            "self-host driver accepted `{name}` but emitted no C — the legal path \
+             must lower. stderr:\n{stderr}",
+        );
+    }
+}
+
 // Companion to `self_host_driver_rejects_invalid_program`, exercising the
 // positional-after-named diagnostic (the self-host typecheck now REJECTS
 // `f(a=1, 2)`, matching Rust gg — see `positional_after_named_error()` for

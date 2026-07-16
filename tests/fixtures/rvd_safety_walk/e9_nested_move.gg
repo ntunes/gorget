@@ -1,0 +1,12 @@
+void sink(String !s):
+    pass
+
+void run(bool a, bool b):
+    String s = "hi"
+    if a:
+        if b:
+            sink(!s)
+    sink(!s)
+
+void main():
+    run(true, true)
