@@ -1,0 +1,499 @@
+################ PROBE probe_A ################
+--- source ---
+struct Cell:
+    int n
+
+void main():
+    Vector[Cell] a = [Cell(1), Cell(2)]
+    for c in &a:
+        c.n = c.n + 100
+    print(a[0].n)
+--- C backend (gg build + run) ---
+[C] build OK; run exit=0 stdout:
+1
+--- LLVM backend ---
+[LLVM] build OK; run exit=0 stdout:
+1
+--- ggdef run ---
+[ggdef] exit=1 output:
+ggdef: elaboration error @ 81..122: `for &`/`for !` iteration is Increment B2
+
+################ PROBE probe_A_alias ################
+--- source ---
+struct Cell:
+    int n
+
+void main():
+    Vector[Cell] a = [Cell(1), Cell(2)]
+    Vector[Cell] b = a
+    for c in &b:
+        c.n = c.n + 100
+    print(a[0].n)
+    print(b[0].n)
+--- C backend (gg build + run) ---
+[C] build OK; run exit=0 stdout:
+1
+1
+--- LLVM backend ---
+[LLVM] build OK; run exit=0 stdout:
+1
+1
+--- ggdef run ---
+[ggdef] exit=1 output:
+ggdef: elaboration error @ 104..145: `for &`/`for !` iteration is Increment B2
+
+################ PROBE probe_A_bare ################
+--- source ---
+struct Cell:
+    int n
+
+void main():
+    Vector[Cell] a = [Cell(1), Cell(2)]
+    for c in a:
+        c.n = c.n + 100
+    print(a[0].n)
+--- C backend (gg build + run) ---
+[C] build OK; run exit=0 stdout:
+1
+--- LLVM backend ---
+[LLVM] build OK; run exit=0 stdout:
+1
+--- ggdef run ---
+[ggdef] exit=0 output:
+1
+
+################ PROBE probe_C ################
+--- source ---
+struct Point:
+    int x
+    int y
+
+void main():
+    Dict[int, Point] d = Dict[int, Point]()
+    d[0] = Point(1, 2)
+    d[0].x = 99
+    print(d[0].x)
+--- C backend (gg build + run) ---
+[C] build OK; run exit=0 stdout:
+1
+--- LLVM backend ---
+[LLVM] build OK; run exit=0 stdout:
+1
+--- ggdef run ---
+[ggdef] exit=1 output:
+error: write projection Index(0) on Dict
+
+################ PROBE probe_E ################
+--- source ---
+struct Counter:
+    int n
+
+equip Counter:
+    void bump(self):
+        self.n = self.n + 100
+
+void main():
+    Counter c = Counter(1)
+    c.bump()
+    print(c.n)
+--- C backend (gg build + run) ---
+[C] build OK; run exit=0 stdout:
+101
+--- LLVM backend ---
+[LLVM] build OK; run exit=0 stdout:
+101
+--- ggdef run ---
+[ggdef] exit=0 output:
+1
+
+################ PROBE probe_match ################
+--- source ---
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(1, 2)
+    match p:
+        case Point(x, y):
+            x = x + 100
+            print(x)
+    print(p.x)
+--- C backend (gg build + run) ---
+[C] build OK; run exit=0 stdout:
+102
+1
+--- LLVM backend ---
+[LLVM] build OK; run exit=0 stdout:
+102
+1
+--- ggdef run ---
+[ggdef] exit=1 output:
+error: no `match` arm matched the scrutinee (non-exhaustive match)
+
+################ PROBE probe_T_param ################
+--- source ---
+struct Res:
+    int id
+
+equip Res with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+void mutate(Res r):
+    r.id = 99
+
+void main():
+    Res a = Res(1)
+    mutate(a)
+    print(f"after {a.id}")
+--- C backend (gg build + run) ---
+[C] BUILD FAIL exit=1:
+[0m[1m[38;5;9merror[E_MoveWithoutOperator][0m[1m: cannot copy `r`: `r` is a resource (a type with a custom `Drop` is single-owner) — write `!r` to move or `r.clone()` to copy[0m
+  [0m[34m┌─[0m /tmp/cow_wave0/probe_T_param.gg:9:5
+  [0m[34m│[0m
+[0m[34m9[0m [0m[34m│[0m     [0m[31mr.id[0m = 99
+  [0m[34m│[0m     [0m[31m^^^^[0m
+
+1 semantic error(s) found
+--- LLVM backend ---
+[LLVM] BUILD FAIL exit=1:
+[0m[1m[38;5;9merror[E_MoveWithoutOperator][0m[1m: cannot copy `r`: `r` is a resource (a type with a custom `Drop` is single-owner) — write `!r` to move or `r.clone()` to copy[0m
+  [0m[34m┌─[0m /tmp/cow_wave0/probe_T_param.gg:9:5
+  [0m[34m│[0m
+[0m[34m9[0m [0m[34m│[0m     [0m[31mr.id[0m = 99
+  [0m[34m│[0m     [0m[31m^^^^[0m
+
+1 semantic error(s) found
+--- ggdef run ---
+[ggdef] exit=1 output:
+ggdef: elaboration error @ 125..134: E_MoveWithoutOperator: implicit copy of a drop-tainted value at materialize-on-write; a type with a custom `Drop` is single-owner — write `!<src>` to move or `<src>.clone()` to copy
+
+################ PROBE probe_T_self ################
+--- source ---
+struct Res:
+    int id
+
+equip Res with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+    void bump(self):
+        self.id = 99
+
+void main():
+    Res a = Res(1)
+    a.bump()
+    print(f"after {a.id}")
+--- C backend (gg build + run) ---
+[C] build OK; run exit=0 stdout:
+after 99
+drop 99
+--- LLVM backend ---
+[LLVM] build OK; run exit=0 stdout:
+after 99
+drop 99
+--- ggdef run ---
+[ggdef] exit=1 output:
+ggdef: elaboration error @ 129..141: E_MoveWithoutOperator: implicit copy of a drop-tainted value at materialize-on-write; a type with a custom `Drop` is single-owner — write `!<src>` to move or `<src>.clone()` to copy
+
+################ PROBE probe_match2 ################
+--- source ---
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(1, 2)
+    match p:
+        case Point(x, y):
+            print(x)
+            print(y)
+    print(p.x)
+    print(p.y)
+--- C backend ---
+[C] run exit=0:
+2
+1
+1
+2
+--- LLVM backend ---
+[LLVM] run exit=0:
+2
+1
+1
+2
+--- ggdef ---
+[ggdef] exit=1:
+error: no `match` arm matched the scrutinee (non-exhaustive match)
+
+################ PROBE probe_T_self_amp ################
+--- source ---
+struct Res:
+    int id
+
+equip Res with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+    void bump(Res &self):
+        self.id = 99
+
+void main():
+    Res a = Res(1)
+    a.bump()
+    print(f"after {a.id}")
+--- C backend ---
+[C] BUILD FAIL:
+[0m[1m[38;5;9merror[0m[1m: expected identifier, found 'self'[0m
+  [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:7:20
+  [0m[34m│[0m
+[0m[34m7[0m [0m[34m│[0m     void bump(Res &[0m[31mself[0m):
+  [0m[34m│[0m                    [0m[31m^^^^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found INDENT[0m
+  [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:8:1
+  [0m[34m│[0m
+[0m[34m8[0m [0m[34m│[0m [0m[31m        [0mself.id = 99
+  [0m[34m│[0m [0m[31m^^^^^^^^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+10 parse error(s) found
+--- LLVM backend ---
+[LLVM] BUILD FAIL:
+[0m[1m[38;5;9merror[0m[1m: expected identifier, found 'self'[0m
+  [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:7:20
+  [0m[34m│[0m
+[0m[34m7[0m [0m[34m│[0m     void bump(Res &[0m[31mself[0m):
+  [0m[34m│[0m                    [0m[31m^^^^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found INDENT[0m
+  [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:8:1
+  [0m[34m│[0m
+[0m[34m8[0m [0m[34m│[0m [0m[31m        [0mself.id = 99
+  [0m[34m│[0m [0m[31m^^^^^^^^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+[0m[1m[38;5;9merror[0m[1m: expected type, found DEDENT[0m
+   [0m[34m┌─[0m /tmp/cow_wave0/probe_T_self_amp.gg:10:1
+   [0m[34m│[0m
+[0m[34m10[0m [0m[34m│[0m [0m[31mv[0moid main():
+   [0m[34m│[0m [0m[31m^[0m
+
+10 parse error(s) found
+--- ggdef ---
+[ggdef] exit=1:
+ggdef: 10 parse error(s):
+  expected identifier, found 'self'
+  expected type, found INDENT
+  expected type, found DEDENT
+  expected type, found DEDENT
+  expected type, found DEDENT
+  expected type, found DEDENT
+  expected type, found DEDENT
+  expected type, found DEDENT
+  expected type, found DEDENT
+  expected type, found DEDENT
+
+################ PROBE probe_F ################
+--- source ---
+# Snag #53: mutating a nested struct field through `&outer.inner` is a silent no-op.
+# gorget-sheets: `sheet_set(&st.view.sheet, addr, text)` and `st.view.sheet.raw[k]=v`
+# did not persist; `st.sheet.raw[k]=v` on a flattened AppState did.
+# Reference-grade: nested field `&` should alias the live sub-object.
+
+struct Inner:
+    Dict[String, String] raw
+
+struct Outer:
+    Inner inner
+
+void set_nested(Outer &o, String k, String v):
+    o.inner.raw[k] = v
+
+String get_nested(Outer &o, String k):
+    return o.inner.raw.get_or(k, "")
+
+void main():
+    Outer o = Outer(Inner(Dict[String, String]()))
+    set_nested(&o, "A1", "=1+2")
+    print(get_nested(&o, "A1"))--- C backend ---
+[C] run exit=0:
+
+--- LLVM backend ---
+[LLVM] run exit=0:
+
+--- ggdef ---
+[ggdef] exit=1:
+ggdef: elaboration error @ 506..531: method `.get_or()` is outside the phase-0 subset (may need Increment B2)
+
+################ PROBE probe_T_self_amp ################
+--- source ---
+struct Res:
+    int id
+
+equip Res with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+    void bump(&self):
+        self.id = 99
+
+void main():
+    Res a = Res(1)
+    a.bump()
+    print(f"after {a.id}")
+
+--- C ---
+[C] run:
+after 99
+drop 99
+--- LLVM ---
+[LLVM] run:
+after 99
+drop 99
+--- ggdef ---
+[ggdef]:
+after 99
+drop 99
+
+################ PROBE probe_match3 ################
+--- source ---
+struct Trip:
+    int a
+    int b
+    int c
+
+void main():
+    Trip t = Trip(10, 20, 30)
+    match t:
+        case Trip(a, b, c):
+            print(a)
+            print(b)
+            print(c)
+
+--- C ---
+[C] run:
+20
+30
+10
+--- LLVM ---
+[LLVM] run:
+20
+30
+10
+--- ggdef ---
+[ggdef]:
+error: no `match` arm matched the scrutinee (non-exhaustive match)
+
+################ PROBE B (self-host value v[i].field= via lowerer driver) ################
+--- source (probe_B.gg) ---
+from std.collections import Vector
+
+struct Point:
+    int x
+    int y
+
+void main():
+    Vector[Point] v = [Point(10, 20), Point(30, 40)]
+    v[0].x = 88
+    print(v[0].x)
+    print(v[1].x)
+
+--- RUST --emit-gir store region (WRITE-THROUGH, correct) ---
+    _13 = index_load _1, const 0i64      ; _13: *Point
+    _13.*.0 = const 88i64                ; deref-store through element ptr
+    _14 = index_load _1, const 0i64      ; reads back -> 88
+
+--- SELF-HOST lowerer driver store region (WRITE INTO COPY, LOST) ---
+    _10 = call_extern @gorget_array_get(borrow _8, borrow _9)   ; _10: Point  (VALUE COPY, not *Point)
+    call_extern @__field_write_Point_x(borrow _10, copy _11)    ; writes into throwaway copy _10
+    _14 = call_extern @gorget_array_get(borrow _8, borrow _13)  ; re-reads element -> STALE 10
+    _15 = field_load _14, 0  -> prints 10, NOT 88
+
+VERDICT B: BROKEN-AS-FILED (self-host only; Rust correct). Re-verified this session (R39-T1 premise still holds).

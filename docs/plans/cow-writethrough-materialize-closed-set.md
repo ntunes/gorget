@@ -1,10 +1,18 @@
 # Excellence plan: finish CoW write-through + materialize closed set
 
-> **Status:** v2 — folds reviewer reservations (alias-root derivation, ggdef-as-oracle,
-> drop-taint × materialize, gate/scoreboard bar, smaller anchors). Architecture unchanged
-> (waves 0–3; track order 1B → 1C → 1A). After this fold: **fresh-pass plan review loop**
-> (≥1 clean pass) before any track brief. Committed sibling path to sync on next land:
-> `docs/plans/cow-writethrough-materialize-closed-set.md`.
+> **Status:** v3 — **WAVE 0 COMPLETE (2026-07-16)**: report `docs/plans/cow-wave0-measure.md`,
+> raw log `docs/plans/artifacts/cow_wave0_measure.log`. All gaps CONFIRMED live (A/A-alias/B/C/E/F
+> broken; C≡LLVM on every probe — all gaps are shared-GIR); **wave-1 order 1B → 1C → 1A(+I)
+> UNCHANGED**. A-alias expectation LOCKED by derivation + measurement: `a=1, b=101` (materialize
+> AT the bare alias; today the write is lost entirely, b=1). **Drop-taint × materialize:
+> MEASURED — the bare-param taint gate is ALREADY LIVE on all three judges (reject
+> E_MoveWithoutOperator); ggdef already rejects drop-tainted plain-`self`; production
+> writes through AND skips the gate (worse-than-filed). Disposition "reject" recorded
+> (owner ratification pending — see conversation 2026-07-16); 2E MUST route drop-tainted
+> receivers through the existing reject or it converts write-through into silent
+> clone→double-drop.** Discovery filed to TODO High: struct-value match patterns mis-bind
+> (rotated-by-one + arity unchecked, Core-#8). v2 folded reviewer reservations
+> (alias-root derivation, ggdef-as-oracle, drop-taint, gate/scoreboard bar). NEXT: Track 1B brief.
 
 ## Context
 
