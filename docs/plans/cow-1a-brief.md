@@ -1,12 +1,14 @@
 # EXECUTOR BRIEF — CoW-1A: for-loop `&`-iterable element write-through (BOTH-LANE) + gap A2
 
-**Status:** DRAFT v4 — in the ≥3-fresh-pass review gauntlet. Pass 1 (enumerate twin —
+**Status:** DRAFT v5 — in the ≥3-fresh-pass review gauntlet. Pass 1 (enumerate twin —
 reproduced; comprehension plan-mandate drop; gate gaps) → v2. Pass 2 (premises re-verified,
 gaps reproduced both backends; self-host enumerate cell unmeasured; Rust comprehension site
-named `collections.rs:~628`; wrong self-host site corrected) → v3. Pass 3 (fold fidelity
-confirmed; 2 residuals: fixture #6's ggdef disposition — enumerate 2-tuple PANICS
-`binding_name` at `elaborate/mod.rs:~969`, needs its own EXCLUDE row or gate 7 reds; TODO/DONE
-in the git-add list) → this v4. Do not execute until the gauntlet records a clean pass.
+named; wrong self-host site corrected) → v3. Pass 3 (fixture-6 ggdef enumerate-pattern panic;
+TODO/DONE staging) → v4. Pass 4 (fold fidelity confirmed across all folds; 2 LOW residuals:
+fixture 7's EXCLUDE reason is the comprehension catch-all, NOT the :967 B2 gate; the TODO
+retire instruction scoped to the completed sub-bullet so pending residuals survive; +O1
+fixture-4 verify-at-execution note) → this v5. Do not execute until the gauntlet records a
+clean pass.
 **Scout evidence (read FIRST):** `docs/plans/cow-1a-scout.md` (premise table, measured matrix,
 prototype design, cross-lane analysis). Prototype patch: `/tmp/cow1a_proto.patch` (backup
 `/tmp/recover_cow1a_proto.patch`; 182 lines, self-host only, verified end-to-end, clone-neutral).
@@ -126,11 +128,17 @@ behavior, all RED on at least one lane today)
 
 Wire all of them as `run_gg` integration tests (both backends inherit via the harness). ggdef lane
 dispositions (all `cow_*` fixtures are corpus-harvested by prefix — every row needs one):
-- Fixtures 1/2/5/7/8 (`&` iterable): OUT of the phase-0 subset (Increment B2) — EXCLUDE rows
-  with the documented reason (the `corpus_b1.rs` pattern); they hit the clean
+- Fixtures 1/2/5/8 (`&` iterable, statement-for): OUT of the phase-0 subset (Increment B2) —
+  EXCLUDE rows with the documented reason (the `corpus_b1.rs` pattern); they hit the clean
   `elaborate/mod.rs:~967` "Increment B2" error if not excluded.
-- Fixtures 3/4 (plain single-binding bare-for): IN subset — ggdef adjudicates them (expect `1`;
-  report what it prints).
+- Fixture 7 (the comprehension): ALSO out of subset but via a DIFFERENT site — ggdef's
+  `elaborate_expr` has NO comprehension arm at all, so it hits the catch-all
+  "expression … outside the phase-0 subset" error, never reaching `desugar_for`. Its EXCLUDE
+  row documents THAT reason (comprehension-outside-subset), not the for-`&` B2 gate.
+- Fixtures 3/4 (plain single-binding bare-for): expected IN subset — ggdef adjudicates them
+  (expect `1`; report what it prints). VERIFY at execution: if ggdef errors on fixture 4's
+  resource-struct field-write shape, it gets an EXCLUDE row with that documented reason (like
+  fixture 6), not a silent skip.
 - **Fixture 6 (bare `.enumerate()`): OUT of subset for a DIFFERENT reason** — `desugar_for`
   (`elaborate/mod.rs:~969` `binding_name(pattern)?`) accepts only a single binding; the
   enumerate 2-tuple pattern fails it as a PANICKING `ElabError` in `corpus_b1.rs:~231`. It
@@ -175,9 +183,12 @@ src/ir/lowering/exprs/collections.rs tests/fixtures/cow_for_*.gg
 tests/fixtures/cow_comprehension_amp_source.gg tests/integration.rs
 tests/fixtures/self_host_lowerer/lower_loops.gg tests/fixtures/self_host_lowerer/lower_expr.gg
 spec/ggdef/tests/corpus_b1.rs docs/plans/cow-writethrough-materialize-closed-set.md TODO.md
-DONE.md` — TODO/DONE edits are explicitly instructed (the deferral notes; retiring the gap-A
-`:29` and comprehension-empty `:278` entries to DONE with datestamps — TODO stays pending-only,
-NO landed-status breadcrumbs); adjust the list to what you actually touched;
+DONE.md` — TODO/DONE edits are explicitly instructed (the deferral notes; retiring the
+COMPLETED items to DONE with datestamps: ONLY the `for x in &coll` write-through SUB-bullet
+under the FULL-LAZY-CoW parent (~:29-39) + its scout annotation, and the comprehension-empty
+`:278` entry — the parent bullet and its OTHER nested residuals (the `b=a` eager-clone
+pessimization, untracked-alias-chains) are STILL PENDING and must survive; TODO stays
+pending-only, NO landed-status breadcrumbs); adjust the list to what you actually touched;
 NEVER `git add .`/`-a`/`commit -a`). One commit; message with the measured cell matrix; trailers:
 
     Co-Authored-By: Claude Opus <noreply@anthropic.com>
