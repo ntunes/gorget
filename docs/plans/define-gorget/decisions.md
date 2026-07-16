@@ -177,12 +177,10 @@ language-design/book examples showing float output.
   to a named type — lint). Evidence pro: kills the conversion tax+soundness surface AND
   the error-type zoo; single-currency dogfood proof says optimize the common case, the
   sets serve stdlib-composition boundaries (which the D17 class sweep will create).
-- **A32 (HOF effect-polymorphism — design BEFORE the surface calcifies): a HOF throws
-  iff its function argument throws** (rethrows-style, but designed as real effect
-  polymorphism since async composes: throws × async × faults as one effect algebra is
-  the phase-3 research bet — async semantics land there anyway). Compiler evidence the
-  retrofit is already hurting: the ad-hoc fault-slot closure adapters + the wild-write
-  adapter fix.
+- **A32 → RATIFIED 2026-07-16 as basic design (forks A1–G1; see LOG): a HOF is fallible
+  iff a function argument it invokes is fallible** (throws or declared-Result callback).
+  Evidence: [`scouts/scout-a32-hof.md`](scouts/scout-a32-hof.md). Impl track separate
+  (not opened here; after D29 call-sites when scheduled). Full throws×async algebra later.
 - **A33 (deep-fault prep, small): spec the supervised-boundary HOOK now** — a
   T_-code-carrying fault value convertible to a catchable Error at a defined isolation
   point (Task join is the natural site) — so the phase-3 supervised boundary composes
@@ -298,6 +296,103 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-16 (session) — **🎯 A32 BASIC DESIGN RATIFIED (owner): forks A1–G1.** HOF effect
+  polymorphism for the **error channel only** (v1). Normative pins (evidence:
+  `scouts/scout-a32-hof.md`):
+  - **Rule:** a HOF call is fallible iff it **invokes** a function-argument that is
+    fallible (`throws E` or declared `Result[_,E]` return — same one-mark rule as D29).
+  - **A1 inferred rethrows:** HOF source decls stay without `throws`; effect is computed
+    from the callback(s) at each call (no surface `effect E` / no `rethrows` keyword v1).
+  - **B1 same-E:** all invoked fallible callbacks must share one `E`; else type error
+    (A31 unions = later widening, not v1).
+  - **C1 throws callables:** closures may be `(params) throws E: body`; function types
+    carry effect (`R(args) throws E` / safe `Callable[…]` form); lifts Snag #44 when the
+    closure is a throws frame. Prerequisite substrate for A32.
+  - **D1 split:** collection/iterator HOFs + user HOFs that call `f` **rethrow**;
+    Result/Option combinators stay primarily data-plane; fallible callback there requires
+    `E_callback == E_receiver` (Result) rather than inventing a second error lattice in v1.
+  - **E1 no coerce:** throwing/fallible callable does not silently coerce to an
+    infallible function type.
+  - **F1 traits:** same rethrows rule for trait/equip methods (including defaults).
+  - **G1 async deferred:** forward-compat only — same polymorphism should later cover
+    `async` callables; v1 specifies **error effect only**.
+  - **Doctrine:** no permanent `try_map`/`try_filter` duals; interim = loops or
+    Result-as-data. **D29 impl does not include A32 impl.** D17 env APIs unblocked;
+    **fallible stdlib combinators blocked on A32 impl.** Function/closure types must gain
+    an error-effect slot at impl time. D29 call-site marks: fallible HOF use → `hof(f)!`.
+  Implementation = separate track (after D29 call-sites when scheduled). Async×throws
+  full algebra remains phase research.
+
+- 2026-07-16 (session) — **A32 DESIGN PASS OPENED (owner): basic HOF effect polymorphism
+  now; D29 implementation NOT resumed.** Scope: syntax + semantics for “HOF fallible iff
+  a function argument it invokes is fallible” (throws + declared-Result callbacks per D29
+  one-mark rule). Async×throws algebra deferred to a forward-compat sentence only (v1 =
+  error effect). Process: scout+design draft → owner forks → LOG ratify → impl later
+  (after D29 call-sites when that track runs). **No permanent try_map.** D17 env APIs not
+  blocked; fallible stdlib *combinators* blocked on A32 impl. Draft:
+  `scouts/scout-a32-hof.md` (forks A–G open). Queue item A32 remains open until owner
+  pins forks; this entry records the design-pass start only. **Superseded same session:
+  forks A1–G1 ratified (entry above).**
+
+- 2026-07-16 (session) — **D29 ↔ D17 SEQUENCING + DOGFOOD HARDENING (owner confirmed).**
+  (1) **D29 call-sites land first** (already before C1/C3) — grammar, checks, fmt `!`
+  insert, `E_MissingFallibleMark` / `E_UnhandledThrows`, dispositions; small blast radius
+  while lib/self-host have zero throws. (2) **D17 class sweep is the dogfood gate** —
+  stdlib env failures become `throws`; callers gain `!` via fmt; do **not** block D29 on
+  D17, but do **not** call the error surface "closed" until D17 dogfoods real APIs.
+  (3) **Final readability re-check post-D17** — pre-D17 pages are illustrative; re-render
+  at least one page with real `std.fs` (or peer) after the sweep. (4) **Hardening (in D29
+  track):** ship an **integration fixture** that uses a fallible stdlib-shaped API —
+  prefer real `read_file` / peer once D17 has landed for that symbol; until then a thin
+  local `throws` wrapper with the same call shape is acceptable so always-mark +
+  disposition (`!` / `catch` / Result capture) is exercised end-to-end before the stdlib
+  flood. Fixture expected output = principled fallible behavior (Core #8 / no redesign
+  around gaps).
+
+- 2026-07-16 (session) — **D29 DIAGNOSTIC CODES SPLIT (owner confirmed).** Two codes, not one
+  template: (1) **`E_MissingFallibleMark`** — bare fallible call (throws callee or
+  declared-`Result` return); message teaches mark `f()!` and lists dispositions
+  (`f()! catch …` / `f()! rethrow …` / `Result[T,E] r = f()!`). (2) **`E_UnhandledThrows`**
+  — marked call that cannot propagate here (non-`throws` fn, no disposition); message
+  teaches handle with catch/rethrow/Result bind **or declare `throws E` to propagate**.
+  Never primary-fix-it to signature `!` / `! E`. Never surface desugar as type-mismatch
+  `found Result[…]` for these cases. Fix-it: insert `!` (or `! ` before `=`). Registry +
+  smith/D23 ratchets gain the new code; both compilers + ggdef. Terminology of the codes
+  themselves may be revisited if a channel-vocabulary rename lands (owner brainstorm same
+  session — not yet decided).
+
+- 2026-07-16 (session) — **D29 FALLIBLE-CALL RULE: ONE MARK FOR BOTH CALL KINDS (owner confirmed).**
+  Mandatory postfix `!` applies to **every fallible call**, not only `throws`-declared
+  callees: (1) calls/methods whose callee is `throws E`; (2) calls/methods whose
+  **declared return type** is `Result[T,E]`. Same dispositions (prop / `catch` /
+  `rethrow` / Result-bind). Bare fallible call remains always illegal. Scope of the
+  mark = Call/MethodCall whose resolved callee is throws **or** returns Result — not
+  every expression of type Result (locals/combinators are separate). **`Result[T,E]`
+  stays a first-class value type** (deferred handling, collections, combinators,
+  non-throws boundaries); D29 does not abolish it. Doctrine: functions declare
+  fallibility with `throws` (or return Result when the API is data-first); every
+  fallible *call* is marked `!`; Result is how you hold an outcome as a value.
+  Declaration-style preference (stdlib prefer-throws vs Result-returning APIs) left
+  open as style/guidance, not a deletion. Census/fmt instruments must cover both paths.
+
+- 2026-07-16 (session) — **D29 PACKET/READABILITY WRITE-THROUGH DONE (owner confirmed).**
+  `scouts/scout-d29-packet.md` + `scouts/scout-d29-readability.md` brought to currency:
+  LOG is normative; `!` joins `throws` (no signature `! E`); call-sites-only migration;
+  always-mark + disposition table; diagnostics prefer `throws E`; readability AFTER pages
+  use `throws E` + call-site `!`. Full book/reference sweep still rides the D29 landing.
+
+- 2026-07-16 (session) — **D29 CATCH-ATTACHMENT / DISPOSITION GRAMMAR PINNED (owner confirmed).**
+  Bare fallible call is **always illegal**. Disposition attaches to the **marked** expression
+  (Swift always-mark; supersedes the scout packet's Rust-`?` "handlers eat bare calls" wording):
+  (1) propagate — `f()!` inside `throws E`; (2) recover — `f()! catch (e): fallback` (postfix
+  on the marked call); (3) transform+rethrow — `f()! rethrow (e): wrap(e)`; (4) capture as
+  data — `Result[T,E] r = f()!` (Result destination is a disposition; still requires `!`).
+  Precedence: `!` binds to the call first; then `catch`/`rethrow` attach to that marked expr
+  (`(f()!) catch …`). Nested: each fallible call carries its own mark (`g(f()!)! catch …`).
+  No second mark and no "handle without `!`" form. Remaining D29 open items: A32 HOF
+  path; handled-sites census; `!=` maximal-munch tests. (Result-returning-call `!`,
+  diagnostic split, D17 sequencing+fixture hardening: PINNED same session.)
+
 - 2026-07-16 (latest) — **🎯 D29 RATIFIED (owner, formal — packet-backed: census + accept-both
   prototype + collision corners + readability pages, `scouts/scout-d29-packet.md`): VISIBLE
   ERROR PROPAGATION.** Final scope with both same-day amendments consolidated:
@@ -312,8 +407,10 @@ P1-infra reviewers' recommendation.
   use-sites; keywords = contracts at declarations). (c) Implementation = CALL-SITES ONLY
   (~61 propagation + the handled-sites count to be measured; the signature migration is
   cancelled); `gg fmt` inserts mechanically; sequenced BEFORE C1/C3; the readability census
-  renders post-D29 pages. Open items for the implementation brief: the catch-attachment
-  grammar; the handled-sites census; `!=` maximal-munch parse tests (disposition proven).
+  renders post-D29 pages. **Catch-attachment grammar: PINNED 2026-07-16.
+  Packet/readability write-through: DONE 2026-07-16.** Remaining open items for the
+  implementation brief: the handled-sites census; `!=` maximal-munch parse tests
+  (disposition proven); Result-returning-call `!` and diagnostic wording (owner queue).
 - 2026-07-16 (late) — **D29 DIRECTION AGREED (superseded by the ratification above; kept for
   the derivation record): visible error propagation — `!` mandatory
   at THROWS CALL SITES + `!` replaces `throws` in signatures.** The critique (no way to see a

@@ -1,32 +1,50 @@
-# D29 RATIFICATION PACKET — visible error propagation (`f()!` + `!` replaces `throws`)
+# D29 RATIFICATION PACKET — visible error propagation (`f()!`; `!` JOINS `throws`)
 
-Scout deliverable. Direction pre-agreed (decisions.md LOG, 2026-07-16 "D29 DIRECTION
-AGREED"). This packet = census + proven accept-both grammar prototype + collision-corner
-dispositions + semantic pinning + readability pages + migration sketch.
+Scout deliverable + **currency write-through 2026-07-16** (post owner amendments).
+
+**Normative authority:** `docs/plans/define-gorget/decisions.md` LOG — D29 formal
+ratification + catch-attachment pin (2026-07-16 session). Where this packet's historical
+prototype text diverges, the LOG wins. This file remains census + grammar evidence.
+
+**Ratified surface (do not re-litigate in the implementation brief):**
+- Call-site postfix `!` is MANDATORY on every fallible use (Swift always-mark).
+- `throws E` REMAINS the explicit contract spelling on declarations.
+- Bare signature `!:` is grammar-locked for A31 inferred sets only (parses; teaching reject until A31).
+- `!` NEVER takes a type on a signature (`! E` was a prototype spelling — **cancelled**).
+- Implementation scope = **CALL-SITES ONLY** (signature migration cancelled).
+- Disposition attaches to the **marked** expression (bare fallible call always illegal).
+
+Original scout direction was "D29 DIRECTION AGREED" (including a later-amended
+signature-replace path). Amendments consolidated in the LOG: `!` joins `throws`, does not
+replace it.
 
 Prototype patch: `/tmp/recover_d29_proto.patch` (566 lines; builds clean, `cargo test --lib`
 1107/0, parser suite 103/0, end-to-end build+run verified). Instruments/tooling:
 `examples/d29_census.rs`, `examples/d29_corners.rs`, `examples/d29_listfail.rs`.
+Accept-both prototype also parsed `! E` signatures — **historical only**; not v1 surface.
 
 ---
 
-## 0. TL;DR recommendations
+## 0. TL;DR recommendations (currency)
 
-1. **Call sites** — postfix `!` on the call: `f()!`, `a.m()!`, `g(f()!)!`. Additive to the
+1. **Call sites** — postfix `!` on every fallible call: `f()!`, `a.m()!`, `g(f()!)!`,
+   including handled forms (`f()! catch (e): …`, `Result[T,E] r = f()!`). Additive to the
    grammar (postfix `!` was a parse error before; adding it cannot change any currently-valid
    parse). `!=` keeps lexing as one token (`BangEq`) under Logos maximal munch, so `a()!=b`
    stays a not-equal comparison — the only real corner, resolved by "insert `! ` (bang-space)".
-2. **Signatures** — `!` replaces `throws`, in the same slot after `)`:
-   `int f(args) ! E:` (explicit) and `int f(args)!:` (bare = A31 inferred set). The
-   explicit/inferred switch is a clean one-token lookahead (token after `!` is `:`/`=`/NEWLINE
-   ⇒ inferred; else ⇒ parse the error type). `throws E` kept during the accept-both window.
-3. **Function types** — recommend the bracketed `Callable[int(int)!]` /
-   `Callable[int(int)! E]` as the canonical throwing-callable spelling; reserve bare
-   `int(int)!` (inferred) only at delimiters. Bare-param explicit-error is genuinely
-   ambiguous — see §4.
+2. **Signatures** — **unchanged explicit form:** `int f(args) throws E:`. Bare
+   `int f(args)!:` is reserved for A31 (inferred error set); until A31, parse + teaching
+   reject ("declare `throws E`"). Do **not** migrate `throws E` → `! E`.
+3. **Function types** — fallible callables keep effect visibility at the type; prefer
+   bracketed forms that do not collide with param-position sigils. A31 may pin
+   `Callable[int(int)!]` for inferred-throws callables; explicit-error callables stay
+   keyword/typed-contract shaped until A31 designs the type spelling. Bare-param
+   `int(int)! name` stays rejected (ambiguous). See §3 historical prototype notes.
 4. **D26 operators** are the same rule at a different operation-glyph (`+!` = mark on `+`);
    no double-marking (`a +! b`, never `(a +! b)!`). Not implemented in this prototype
    (its `+!` lexing collides with pre-D27 prefix-move `!b`; lands with C1+D27).
+5. **Disposition** — bare fallible call always illegal; `catch` / `rethrow` / Result capture
+   attach to the marked expression (see §4).
 
 ---
 
@@ -101,43 +119,51 @@ small and only affects files that would not compile post-migration anyway.
 
 Secondary surface not in the 61: calls to *explicitly* `Result[T,E]`-returning functions
 (non-`throws`) also auto-propagate per §10.1. Those take a different type path (no
-`throws_type_id`) and are NOT in the count. The corpus has very few; whether D29's `!` extends
-to them is an owner sub-call (recommend: yes, same rule — a fallible call is a fallible call).
+`throws_type_id`) and were NOT in the prop census. **RATIFIED 2026-07-16 (owner): same
+rule — mandatory `!` on both throws callees and declared-`Result[T,E]`-returning
+calls/methods.** Instruments/fmt must cover both paths; `Result` remains a value type.
 
-**Migration size, in-repo: ~61 `!` insertions at call sites + 179 signature rewrites
-(`throws E` → `! E`).** Trivial blast radius. The real work is the later gorget-js round
-(113 decls + its propagation sites).
+**Migration size, in-repo (ratified scope): call-site `!` insertions only** — ~61
+propagation sites (floor) + handled-sites count still to measure. **No signature rewrites**
+(`throws E` stays). Trivial blast radius. The real work is the later gorget-js round
+(113 decls + its propagation/handled sites) and, after D17, stdlib call sites.
+
+The 179 throws **declarations** remain a census fact (how many fallible APIs exist), not
+a migration worklist.
 
 ---
 
-## 2. RECOMMENDED SIGNATURE GRAMMAR (with the A31 reservation)
+## 2. SIGNATURE GRAMMAR — ratified vs historical prototype
 
-EBNF (replaces `throws_clause = "throws" [ type ]`):
+### 2a. Ratified v1 surface (implementation target)
 
 ```ebnf
-function_def  = ... "(" [ param_list ] ")" [ error_clause ] body ;
-error_clause  = "!" [ type ] ;          (* accept-both also keeps: "throws" [type] *)
+function_def  = ... "(" [ param_list ] ")" [ throws_clause ] body ;
+throws_clause = "throws" type ;     (* explicit contract — unchanged *)
+(* future A31: bare "!" before body = inferred error set; teaching-reject until then *)
 ```
 
-Semantics of `error_clause`:
-- `! E`  — explicit error set `E` (paves nothing new; direct `throws E` replacement).
-- `!`    — **A31 inferred error set** (bare `!:` / `!` before body). RESERVED; inference is
-           NOT implemented — the checker treats the set as opaque for now. This *is* A31's
-           surface, designed together per the owner sub-answer.
+- `throws E` — explicit error contract (public APIs, all current code).
+- `!:` / bare signature `!` before body — **A31 reservation only**; grammar may lock now;
+  checker rejects with "inferred error sets are not yet implemented — declare `throws E`".
 - absent — non-throwing.
+- **`! E` (sigil + type) is NOT v1** — cancelled by the 2026-07-16 amendment.
 
-Disambiguation is a clean one-token lookahead after `!`: if the next token opens the body
-(`:`, `=` for extern, or NEWLINE for a bare decl) it's inferred; otherwise parse the error
-type. Verified for every body form: block, expr-body (`int f()!: expr`), extern
-(`= "sym"`), and trait-method declaration (no body). All parse (see §3 harness).
+`main() throws int:` stays the exit-code form.
 
-Placement rationale: `!` sits in the exact slot `throws` occupied (after `)`, before body),
-so it composes unchanged with multi-return tuples (`String, int f() ! E:`), qualifiers
-(`async int f() ! E:`), generics, and `main() ! int:` (exit-code form). It visually rhymes
-with the call-site postfix `!` — both read "the error channel is here".
+### 2b. Historical accept-both prototype (evidence only — not v1)
 
-Zero bare `throws` (no error type) exists in-repo, so the signature migration is uniformly
-`throws E → ! E`; no legacy inferred form to map.
+The scout prototype also parsed signature `! E` / `!:` as an alternate throws clause to
+prove lookahead and collision corners. That experiment is **superseded**:
+
+| Prototype spelling | Ratified disposition |
+|---|---|
+| `int f() ! E:` | **cancelled** — write `throws E` |
+| `int f()!:` | A31 only (teaching reject until inference) |
+| `int f() throws E:` | **v1 explicit contract** |
+| `void main() ! int:` | write `throws int` |
+
+Do not cite §2b tables as the shipping surface.
 
 ---
 
@@ -172,108 +198,111 @@ directly abutting `=`/`==` requires a space (`f()! == b`); the fmt migration ins
 (bang-space) so the mark never fuses. No lexer change is needed — this falls out of Logos
 maximal munch automatically.
 
-### Signature corners
+### Signature corners (prototype harness — historical)
 
-| Corner | Input | Result |
-|---|---|---|
-| explicit `! E` | `int f() ! E:` | throws=Explicit(E) ✓ |
-| inferred `!:` | `int f()!:` | throws=INFERRED ✓ (A31 reservation) |
-| inferred + expr-body | `int f()!: 1 + 1` | throws=INFERRED ✓ |
-| legacy (accept-both) | `int f() throws E:` | throws=Explicit(E) ✓ |
-| main exit-code | `void main() ! int:` | throws=Explicit(int) ✓ |
-| explicit + expr-body | `int f() ! E: 1 + 1` | throws=Explicit(E) ✓ |
-| non-throwing | `int f():` | throws=None ✓ |
-| generic error | `int f() ! AppError[int]:` | throws=Explicit(AppError[int]) ✓ |
+The accept-both prototype accepted the rows below. **Shipping rows are marked.**
+
+| Corner | Input | Prototype | v1 disposition |
+|---|---|---|---|
+| explicit keyword | `int f() throws E:` | throws=Explicit(E) ✓ | **SHIP** |
+| main exit-code | `void main() throws int:` | throws=Explicit(int) ✓ | **SHIP** |
+| non-throwing | `int f():` | throws=None ✓ | **SHIP** |
+| inferred `!:` | `int f()!:` | throws=INFERRED ✓ | A31 reservation (teaching reject until then) |
+| prototype `! E` | `int f() ! E:` | throws=Explicit(E) ✓ | **CANCELLED** — use `throws E` |
+| prototype main `! int` | `void main() ! int:` | throws=Explicit(int) ✓ | **CANCELLED** — use `throws int` |
 
 ### Function-type corners
 
 | Corner | Input | Result | Disposition |
 |---|---|---|---|
-| bracketed inferred | `Callable[int(int)!] cb` | parses ✓ | **RECOMMENDED spelling** |
-| bracketed explicit | `Callable[int(int)! E] cb` | parses ✓ | RECOMMENDED for explicit error |
-| bare param inferred | `int(int)! cb` (param) | **PARSE-ERR** | collides with the `!` move-sigil in param position (pre-D27). See below. |
 | non-throwing | `int(int) cb` | parses ✓ | unchanged |
+| bare param `!` | `int(int)! cb` (param) | **PARSE-ERR** | stays rejected (ambiguous with sigils) |
+| bracketed `!` forms | `Callable[int(int)!]` etc. | prototype parses | A31 / type-spelling follow-up — not a D29 call-site deliverable |
 
-**Function-type disposition:** in bare *param* position, `T(args)! name` collides three ways:
-(1) pre-D27, `!` is the move ownership sigil (`Token !tok`); (2) even post-D27, the inferred
-form `int(int)! name` cannot distinguish "inferred-throws param `name`" from "explicit-throws
-`name`, param-name-missing". **Recommendation:** explicit throwing function types are spelled
-ONLY in the bracketed `Callable[ret(args)! E]` form (the `]` delimits the error type
-unambiguously); bare `ret(args)!` is inferred-only and legal only at a hard delimiter
-(binding/return-type). This is also the idiomatic form the book already uses. The
-bare-param collision then never arises. (The prototype greedily eats a bare-param `!`; the
-corpus has ZERO function-type move-params, so this is zero-regression, but the production
-rule should be the bracket recommendation above, not the prototype's greedy eat.)
+**Function-type note:** D29 call-sites do not require shipping a new callable-type spelling.
+A31 should design effect-on-callable-types together with inferred sets. Until then, existing
+`throws` on function values / book forms stand; bare-param `T(args)! name` remains illegal.
 
 ---
 
-## 4. SEMANTIC PINNING (design only)
+## 4. SEMANTIC PINNING (ratified — owner 2026-07-16)
 
-### Handling forms post-D25 — the bare-call rule
+### Fallible-use mark + disposition (always-mark; bare call always illegal)
 
 D25 removes lexical fault-catch; faults reach values only at the D24 supervised boundary.
-So the post-D25 forms that consume a *thrown error* without a `!` are:
+D29: every fallible call carries `!`. Disposition attaches to the **marked** expression
+(Swift model — **not** Rust's `?`-vs-`match` split). The scout's earlier "handlers eat bare
+calls" wording is **superseded** by the catch-attachment pin in `decisions.md`.
 
-| Form | §ref | Consumes bare call? | `!` needed? |
-|---|---|---|---|
-| propagate (throws ctx) | §10.1 | — | **YES** `f()!` |
-| bare statement in throws ctx (result discarded) | §10.1 | — | **YES** `f()!` (still propagates) |
-| `catch (e):` / `catch (_):` / block | §10.5 | **yes** | no |
-| `rethrow E` / `rethrow (e): …` | §10.4 | **yes** | no |
-| Result-typed binding capture (`Result[T,E] r = f()`) | §10.3 | **yes** | no |
-| `on error:` cleanup | §10.7 | n/a (statement, not a call handler) | body calls still need `!` |
-| D24 Task-join → `TaskFault` (phase 3) | §10.9 | — | future `task.join()!` |
+| Disposition | Spelling | Notes |
+|---|---|---|
+| Propagate | `f()!` inside `throws E` | auto-prop under the mark |
+| Bare statement (discard Ok, prop Error) | `f()!` | still marked |
+| Recover | `f()! catch (e): fallback` | postfix `catch` on the marked expr |
+| Transform + rethrow | `f()! rethrow (e): wrap(e)` | postfix `rethrow` on the marked expr |
+| Capture as data | `Result[T,E] r = f()!` | Result destination is a disposition; **still requires `!`** |
+| `on error:` cleanup | body calls still use `!` | cleanup is not a call handler |
+| D24 Task-join (phase 3) | future `task.join()!` | supervised boundary |
 
-Rule: **`!` marks *propagation*; the handling forms `catch`/`rethrow`/Result-capture consume
-the bare call.** This is exactly Rust's `?`-vs-`match` split. The mark attaches to the CALL,
-uniformly, in every D23 position (binding / operand / arg / return-tail / match scrutinee /
-match arm / bare statement) — nested calls each carry their own (`g(f()!)!`).
+**Precedence:** `!` binds to the call first; then `catch` / `rethrow` attach to that marked
+expression (`(f()!) catch …`). Nested calls each carry their own mark:
+`g(f()!)! catch (e): …`.
 
-### Diagnostics (message drafts)
+**No exceptions:** no second mark; no "handle without `!`" form. Bare fallible call = always
+an error ("mark the fallible call: `f()!`").
 
-- **Missing mark** (bare throws call in a throws context — today's invisible auto-prop):
-  `error[E_UnhandledThrows]: this call can fail (throws E) — mark the propagation with '!'`
-  `(f()!), or handle it with catch / rethrow / a Result[T,E] binding`.
-  (Reuses D23's existing E_UnhandledThrows; the message flips from "declare throws or handle"
-  to "propagate with `!` or handle it", per the owner sub-answer.)
-- **Mark in non-throws context** (`!` where the fn can't propagate):
-  `error[E_PropagateOutsideThrows]: '!' propagates an error, but <fn> is not declared`
-  `throwing — declare it '! E' (or 'throws E'), or handle the error with 'catch'`.
-- D23 diagnostic contract preserved: never surface `Result[` in a user-facing message.
+The mark attaches to the CALL uniformly in every D23 position (binding / operand / arg /
+return-tail / match scrutinee / match arm / bare statement).
+
+### Diagnostics (message drafts — currency)
+
+Prefer **`throws E`** as the contract teaching spelling; do not push bare `!:` until A31.
+
+- **Missing mark** (bare fallible call anywhere):
+  `error[E_UnhandledThrows]: this call can fail (throws E) — mark the fallible call with '!'`
+  `(f()!), or handle it: f()! catch … / f()! rethrow … / Result[T,E] r = f()!`.
+- **Marked call in non-throws context without a local disposition:**
+  `error[E_UnhandledThrows]: this call can fail (throws E) — handle it with catch /`
+  `rethrow / a Result[T,E] binding, or declare the function 'throws E' to propagate`.
+- D23 diagnostic contract preserved: never surface `Result[` in a user-facing message for
+  unhandled-throws (Result capture is an intentional disposition spelling).
 
 ### D23 totality interaction
 
 D29 realises D23 syntactically: D23 says a throws call is type `T` in every position with
-`Result`-ness unobservable; D29 requires exactly one `!` at each such call, in every position.
-The mark is on the CALL regardless of surrounding context, so totality and visibility compose
-without special cases. D26 fallible operators are the same rule at the operator glyph (`+!`),
-so a fallible op is not double-marked.
+`Result`-ness unobservable; D29 requires exactly one `!` at each such call, in every position
+(including handled dispositions). The mark is on the CALL regardless of surrounding context,
+so totality and visibility compose without special cases. D26 fallible operators are the same
+rule at the operator glyph (`+!`), so a fallible op is not double-marked.
 
 ---
 
 ## 5. READABILITY PAGES (full post-wave surface: D27 `^` + D22 `[a:b]` + D28 `**` + D29 `!`)
 
-See the separate rendered file `/tmp/recover_d29_readability.md` (3 pages: book error example,
-real self-host excerpt, dense synthetic sample), each with before/after side-by-sides.
+See `scouts/scout-d29-readability.md` (currency write-through 2026-07-16: signatures stay
+`throws E`; call sites carry `!`). Three pages: book error example, real self-host excerpt,
+dense synthetic sample — each with before/after side-by-sides.
 
 ---
 
-## 6. MIGRATION PLAN sketch
+## 6. MIGRATION PLAN sketch (call-sites only)
 
 - **Mechanical enumeration is PROVEN:** the census instrument IS the migration oracle — every
   Route-A site the checker flags is one `!` insertion; `resolve_throws_call_type` already
-  centralises the class (one site, per the "fix the class" discipline).
+  centralises the class (one site, per the "fix the class" discipline). Extend the instrument
+  to **handled** sites (catch / rethrow / Result capture) so always-mark insertion is complete.
 - **`gg fmt` insertion:**
-  1. Signatures: `throws E` → `! E` (regex-free AST rewrite; 179 in-repo).
-  2. Call sites: at each flagged propagation span, insert `!` immediately after the call's
-     closing `)` (or the postfix-chain segment that is the throws call). ~61 in-repo.
+  1. **Signatures: NO rewrite** — leave `throws E` as-is.
+  2. Call sites: at each fallible call (propagation **and** handled dispositions), insert `!`
+     immediately after the call's closing `)` (or the postfix-chain segment that is the
+     throws call). ~61 prop sites measured; handled-sites census pending.
   3. **The one ambiguous insertion class:** a throws call whose result is immediately
      compared with `!=`/`==` with no space (`f() != b`). Inserting a bare `!` would fuse into
      `!=`. Fmt MUST insert `! ` (bang-space): `f()! != b`. Detectable mechanically (next
      non-space char is `=`). No other ambiguous class.
 - Rides the C3 fmt vehicle (composes with D27/D22/D28 — the wave-census "composition test
-  PASSED"), or a D29 sibling pass. In-repo only; gorget-js/arena/gglox/gconf in the later
-  coordination round (owner ruling).
+  PASSED"), or a D29 sibling pass sequenced **before** C1/C3. In-repo only first;
+  gorget-js/arena/gglox/gconf in the later coordination round (owner ruling).
 
 ---
 
