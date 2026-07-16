@@ -298,6 +298,19 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-16 (later still) — **D2 RIDER RATIFIED (owner): the DEAD-BARE-PARAM-WRITE diagnostic.**
+  No grammar special case for `self` — bare `self` stays legal (it is the CORRECT zero-cost
+  spelling for read-only methods; banning it would force write-through `&self` borrows on
+  getters, lying about intent and tripping D10 exclusivity needlessly). The footgun is exactly
+  the DEAD-WRITE subclass: **a write to ANY bare parameter whose materialized private copy is
+  never subsequently read is flagged, uniformly — `self` just falls out as the first
+  parameter.** The scratch-copy idiom (mutate-then-READ, e.g. sort-a-private-copy) stays legal.
+  Ratified message (verbatim, does the teaching): *"this writes to a private copy that is
+  never read — the caller's value is unchanged; did you mean `&self`?"* (param-flavored
+  variant: "…did you mean `&<param>`?"). Severity: on-by-default `W_` shipping IN THE SAME
+  LANDING as 2E's behavior flip (the warning must not lag the flip), promoted to `E_` after
+  corpus burn-down (Core-#6 ratchet). Enforcement: the CoW campaign Track 2E carries it as a
+  mandate; registry row + prose land with it (all lanes per invariant #9; ggdef within subset).
 - 2026-07-16 (later) — **STAGING RULING (owner): wrapper deref access REJECTS until implemented.**
   `Box[T].field` / wrapper method auto-deref (§9.4 deref coercion) is UNIMPLEMENTED end-to-end
   (field read returns 0; method deref cc-fails — RV-A scout measured). The earlier staged

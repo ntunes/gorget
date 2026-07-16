@@ -226,6 +226,16 @@ Also: capture **parity baseline** command output (WRONG count) for wave-1 scoreb
 
 #### Track 2E — D2 plain-`self` materialize (both)
 
+**OWNER-RATIFIED RIDER (2026-07-16, ledger LOG "D2 RIDER"): the dead-bare-param-write
+diagnostic ships IN THE SAME LANDING as 2E's behavior flip.** Uniform over ALL bare params
+(`self` falls out as the first parameter — no grammar special case; bare self stays legal for
+read-only methods; the scratch-copy mutate-then-READ idiom stays legal). Flag exactly the
+dead-write subclass: a write to a bare param whose materialized copy is never subsequently
+read. Ratified message verbatim: "this writes to a private copy that is never read — the
+caller's value is unchanged; did you mean `&self`?" On-by-default `W_`, promoted to `E_`
+after corpus burn-down (Core-#6 ratchet). Registry row + prose + all-lane coverage per
+invariant #9.
+
 - Only after 2T disposition is clear for drop-tainted receivers.
 - Bare `self` ≡ bare param materialize; `&self` write-through.
 - Migration: DeadBareParamWrite/`self` arm + sweep bare-self write-through → `&self`.
