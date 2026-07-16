@@ -306,9 +306,19 @@ P1-infra reviewers' recommendation.
   propagates from here: `+!`, `**!`, `f()!` — one grammar). Owner-pinned sub-answers:
   (1) the bare signature form `int f(args)!:` = the INFERRED-error-set spelling — designed
   TOGETHER with A31 (this paves A31's syntax); explicit form carries the type (shape for the
-  scout: `int f(args) ! E:`). (2) `!` = PROPAGATE, legal only in throws contexts; handling
-  forms consume the bare call (the Rust ?-vs-match split); E_UnhandledThrows' message becomes
-  "propagate with `!` or handle it". (3) Migration is compiler-driven and mechanical (the
+  scout: `int f(args) ! E:`). (2) **AMENDED (owner, 2026-07-16 same-day): `!` = the uniform FALLIBLE-USE MARKER, not
+  "propagate"** — every fallible call carries `!` INCLUDING handled ones
+  (`a = f()! catch (e): …`); the Swift model (mark always; disposition is the handler's job),
+  NOT Rust's ?-operator model. Derivation: D26's operators keep their `!` in handled contexts
+  (`a +! b catch …` — the operator IS the fallible variant), so calls must too or the
+  one-general-rule elegance collapses. Unhandled marked call in a non-`!` function =
+  E_UnhandledThrows, message: "handle it with `catch`, or declare the function `!` to
+  propagate"; bare fallible call = always an error ("mark the fallible call: `f()!`").
+  CONSEQUENCES for the packet: (a) the CATCH-ATTACHMENT grammar is a new ratification
+  sub-question (postfix expression-catch binding to the marked expression vs today's
+  statement forms — the implementation brief pins it against the existing catch syntax);
+  (b) the census needs a SECOND count — fallible calls inside HANDLED contexts (the scout's
+  61 counted the propagation chokepoint only); (c) the E_UnhandledThrows message rewords. (3) Migration is compiler-driven and mechanical (the
   checker knows every throws call site; `gg fmt` inserts) — rides the C3 fmt vehicle or a
   sibling; census required; the READABILITY CENSUS must render post-D29 pages (not just
   post-D27). Honest cost recorded: amends auto-propagation's invisibility (semantics stay
