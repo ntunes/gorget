@@ -85,8 +85,9 @@
    BOOLEAN `definitely_absent` and emits outside the match (typecheck.rs:2822); carrying the
    second code requires restructuring to a 3-valued result or inline emits (pass-3) —, RE-MEASURES the blast radius of the
    5-container reject across the full targeted battery (the "1 fixture" figure was
-   Box-only), and reports the measured count before proceeding. Registry: new row +
-   bump the "93 E_ codes" header count to 94 (`spec/prose/diagnostic-codes.md:12`). This REVERSES the prior `check_gg_ok` staging: flip `fieldaccess_box_field_ok` to a
+   Box-only), and reports the measured count before proceeding. Registry: new row + bump the header count BY ONE from whatever it currently reads
+   (`spec/prose/diagnostic-codes.md:12` — the curation track moved it 93→95 in the same
+   round; never hardcode the target number, read-then-increment). This REVERSES the prior `check_gg_ok` staging: flip `fieldaccess_box_field_ok` to a
    reject fixture (keep the `#[ignore]`d run-twin asserting the CORRECT future `7` — cite the
    deref-backend TODO entry), and `Box[P].nonexistent` rejects via the same deref-aware path.
    Blast radius measured: 1 fixture + zero real corpus sites; re-verify with the full battery.
