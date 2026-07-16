@@ -1,12 +1,12 @@
 # EXECUTOR BRIEF — CoW-1A: for-loop `&`-iterable element write-through (BOTH-LANE) + gap A2
 
-**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 1 (3 reservations: the
-enumerate twin gate — reproduced; the comprehension plan-mandate drop; gate gaps) FOLDED into
-v2. Pass 2 (all premises re-verified + every gap reproduced on both backends; 3 reservations:
-the self-host bare-enumerate cell unmeasured — cross-lane pin risk; the Rust comprehension fix
-site unnamed — `collections.rs:~628` missing Ptr-deref; v2 pointed the executor at the WRONG
-self-host comprehension site) FOLDED into this v3. Do not execute until the gauntlet records a
-clean pass.
+**Status:** DRAFT v4 — in the ≥3-fresh-pass review gauntlet. Pass 1 (enumerate twin —
+reproduced; comprehension plan-mandate drop; gate gaps) → v2. Pass 2 (premises re-verified,
+gaps reproduced both backends; self-host enumerate cell unmeasured; Rust comprehension site
+named `collections.rs:~628`; wrong self-host site corrected) → v3. Pass 3 (fold fidelity
+confirmed; 2 residuals: fixture #6's ggdef disposition — enumerate 2-tuple PANICS
+`binding_name` at `elaborate/mod.rs:~969`, needs its own EXCLUDE row or gate 7 reds; TODO/DONE
+in the git-add list) → this v4. Do not execute until the gauntlet records a clean pass.
 **Scout evidence (read FIRST):** `docs/plans/cow-1a-scout.md` (premise table, measured matrix,
 prototype design, cross-lane analysis). Prototype patch: `/tmp/cow1a_proto.patch` (backup
 `/tmp/recover_cow1a_proto.patch`; 182 lines, self-host only, verified end-to-end, clone-neutral).
@@ -124,11 +124,19 @@ behavior, all RED on at least one lane today)
 | `cow_comprehension_amp_source.gg` | `[x * 2 for x in &a]` over a populated vector; print len + elems | the CORRECT doubled values (pins the yields-empty HIGH; derive the exact stdout from §3.1 — read path, no mutation) |
 | `cow_for_amp_deque_field_writethrough.gg` | value struct, `&`, Deque root | `101` (the Deque probe constraint 3 mandates) |
 
-Wire all of them as `run_gg` integration tests (both backends inherit via the harness). ggdef lane:
-`for x in &coll` is OUT of the phase-0 subset (Increment B2) — add the EXCLUDE rows with the
-documented out-of-subset reason (the `corpus_b1.rs` pattern), and note the subset gap in the
-campaign plan's status header. The bare-mode fixtures (3, 4) use no `&` iterable — check whether
-they fall IN subset; if yes they are ggdef-gated too (report what ggdef prints).
+Wire all of them as `run_gg` integration tests (both backends inherit via the harness). ggdef lane
+dispositions (all `cow_*` fixtures are corpus-harvested by prefix — every row needs one):
+- Fixtures 1/2/5/7/8 (`&` iterable): OUT of the phase-0 subset (Increment B2) — EXCLUDE rows
+  with the documented reason (the `corpus_b1.rs` pattern); they hit the clean
+  `elaborate/mod.rs:~967` "Increment B2" error if not excluded.
+- Fixtures 3/4 (plain single-binding bare-for): IN subset — ggdef adjudicates them (expect `1`;
+  report what it prints).
+- **Fixture 6 (bare `.enumerate()`): OUT of subset for a DIFFERENT reason** — `desugar_for`
+  (`elaborate/mod.rs:~969` `binding_name(pattern)?`) accepts only a single binding; the
+  enumerate 2-tuple pattern fails it as a PANICKING `ElabError` in `corpus_b1.rs:~231`. It
+  needs its own EXCLUDE row (documented reason: enumerate patterns out of phase-0 subset) or
+  gate 7 goes RED.
+Note the subset gaps in the campaign plan's status header.
 
 ## Gates (executor scope — the parent runs the full sweeps + parity at integration)
 
@@ -166,8 +174,10 @@ Your worktree only. Stage EXPLICITLY by file name (`git add src/ir/lowering/stmt
 src/ir/lowering/exprs/collections.rs tests/fixtures/cow_for_*.gg
 tests/fixtures/cow_comprehension_amp_source.gg tests/integration.rs
 tests/fixtures/self_host_lowerer/lower_loops.gg tests/fixtures/self_host_lowerer/lower_expr.gg
-spec/ggdef/tests/corpus_b1.rs docs/plans/cow-writethrough-materialize-closed-set.md` — adjust
-to what you actually touched;
+spec/ggdef/tests/corpus_b1.rs docs/plans/cow-writethrough-materialize-closed-set.md TODO.md
+DONE.md` — TODO/DONE edits are explicitly instructed (the deferral notes; retiring the gap-A
+`:29` and comprehension-empty `:278` entries to DONE with datestamps — TODO stays pending-only,
+NO landed-status breadcrumbs); adjust the list to what you actually touched;
 NEVER `git add .`/`-a`/`commit -a`). One commit; message with the measured cell matrix; trailers:
 
     Co-Authored-By: Claude Opus <noreply@anthropic.com>
