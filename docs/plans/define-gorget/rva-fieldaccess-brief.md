@@ -1,6 +1,6 @@
 # Executor brief: RV-A — field-access soundness (typed wrapper flag + deref-reject staging + self-host mirror)
 
-> **Status:** v5 — pass-5 folded (R1 BLOCKING: the GuardAccept row's ABSENT-field behavior was
+> **Status:** v5 — ✅ PASS 6 SIGNED OFF (2026-07-16; the table proven TOTAL over all 9 kind×field-state cells; the guard-absent hole probed REAL on tip; registry maps exact) — **EXECUTING**. Pass-6 advisories folded inline: the flipped fixture's HEADER COMMENT updates with the flip; NonDerefContainer short-circuits to E_NoFieldFound WITHOUT the prober's accept path (the table row is authoritative); any earlier single-mechanism ggdef phrasing in this changelog is superseded by the two-mechanism entry. Pass-5 folded (R1 BLOCKING: the GuardAccept row's ABSENT-field behavior was
 > unspecified — the permissive reading ships `guard.nonexistent` → garbage-0, reopening the
 > exact Core-#8 class for guards; the table now has the GuardAccept row: present → ACCEPT,
 > absent → E_NoFieldFound (the inner-resolution prober already yields it), + the
@@ -99,8 +99,9 @@
    Box-only), and reports the measured count before proceeding. Registry: new row + bump the header count BY ONE from whatever it currently reads
    (`spec/prose/diagnostic-codes.md:12` — the curation track moved it 93→95 in the same
    round; never hardcode the target number, read-then-increment). This REVERSES the prior `check_gg_ok` staging: flip `fieldaccess_box_field_ok` to a
-   reject fixture (keep the `#[ignore]`d run-twin asserting the CORRECT future `7` — cite the
-   deref-backend TODO entry), and `Box[P].nonexistent` rejects via the same deref-aware path.
+   reject fixture — INCLUDING its header comment (currently 'gg check must SUCCEED'; a stale
+   comment on a reject fixture is the false-historical-record smell) — (keep the `#[ignore]`d
+   run-twin asserting the CORRECT future `7` — cite the deref-backend TODO entry), and `Box[P].nonexistent` rejects via the same deref-aware path.
    Blast radius measured: 1 fixture + zero real corpus sites; re-verify with the full battery.
 3. **Self-host mirror (scoped):** the `DkNoFieldFound`→`E_NoFieldFound` reject in
    **infer.gg's EFieldAccess arm** (NOT typecheck.gg — RV-D's zone) for **RTPrimitive
