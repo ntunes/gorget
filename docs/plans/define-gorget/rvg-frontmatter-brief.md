@@ -1,10 +1,14 @@
 # Executor brief: RV-G — gen⇄parse frontmatter biconditional (gen refuses codeless exit-1)
 
-> **Status:** v0 — awaiting ≥3 sequential fresh brief-reviews (fold after each; stop only on a
-> clean pass). **Scout basis (read both FIRST):**
+> **Status:** v1 — pass-1 SIGNED OFF (zero reservations; brick + design grounding + patch +
+> gates + blast-zero all independently re-verified, incl. a live refusal probe leaving the file
+> byte-identical). Two non-blocking notes folded below. Passes 2-3 still required (≥3 rule).
+> **Scout basis (read both FIRST):**
 > `docs/plans/define-gorget/scouts/scout-rvg-frontmatter.md` (brick repro + design trade-off
-> table) and the proven patch `docs/plans/define-gorget/scouts/patches/rvg_frontmatter_proto.patch`
-> (2 files, +124; measured 140/0). **Model policy:** executor + brief-reviews Opus;
+> table; ⚠ its §6 cites a stale `/tmp/recover_rvg_proto.patch` path — the DURABLE copy is the
+> one below) and the proven patch
+> `docs/plans/define-gorget/scouts/patches/rvg_frontmatter_proto.patch`
+> (2 files, +124; measured 139/0 → 140/0). **Model policy:** executor + brief-reviews Opus;
 > output-review on Fable.
 
 ## Objective
@@ -59,6 +63,9 @@ worktree. NEVER touch `/workspace/gorget` (main) or `/workspace/gorget-1`; workt
 paths only (your worktree nests UNDER the main checkout). NEVER `git stash`; checkpoint to
 /tmp after each milestone. Stage by EXPLICIT file name (`spec/ggdef/src/lib.rs`,
 `spec/ggdef/src/tests.rs` only). On an Edit-tool desync, re-Read and retry the Edit tool.
+Under multi-agent cargo contention a TRANSIENT dependency-compile error (e.g. regex
+E0463/E0282) can appear once and vanish on retry — retry before diagnosing (the documented
+worktree-launch-reset pattern).
 Commit when green (`fix(ggdef): gen refuses codeless eval-internal IllFormed — gen⇄parse
 round-trip guaranteed (RV-G)`), trailers: Co-Authored-By Claude Opus + the Claude-Session
 line. Report any NEW pre-existing bug (file-don't-fix).
