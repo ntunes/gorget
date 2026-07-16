@@ -381,17 +381,24 @@ worktree executor→fresh output-review→integrate; ALL subagents `model:"opus"
    exit-code research → 3 scouts (4-lane verdict-triple PROVEN, `scouts/scout-ggdef-verdict-triple.md` + patch
    `scouts/patches/ggdef-vt-4lane-proto.patch`) → 4 fresh brief-reviews (7→4→1→SIGN OFF) → executor →
    output-review (reference-grade gate PASSED) → integrate + both full sweeps.
+   ✅ **LANDED 2026-07-16 (BOTH, validated TOGETHER on the combined state — bootstrap fixed-point green,
+   conformance 202/202 four-lane, full C 1634/0 + LLVM 1634/0; see DONE.md):**
+   - **Self-host reject-diagnostic** (`cbb21f28`) — the self-host now emits `error[E_<code>]:` (split off a new
+     `DkDoubleMove`; typed `diag_kind_code` map; coarse `DkTypeMismatch`/`DkControlFlow` stay codeless); the
+     move/liveness reject family migrated to four-lane-green `spectests/run/` spectests; floors → 202. **The ggdef
+     verdict-triple landing is now genuinely FOUR-LANE-GREEN.**
+   - **is-scrutinee single-eval** (`146c4830`) — the "codegen HIGH" was a GIR DOUBLE-EVAL (a side-effecting `is`
+     scrutinee lowered/called twice), fixed at the write site; retired the resolve.gg workaround. "Bug 2"
+     (`Dict.remove` coalesce) turned out DORMANT + re-filed.
+   - Also: restored a DEAD lints guard (`2361596d`, red on main since 2026-07-15).
    ⏭ **NEXT (committed follow-ups, in order):**
-   1. **Self-host reject-diagnostic-rendering — HIGH, bootstrap-gated (TODO).** The self-host REJECTS
-      use-after-move correctly but renders a bare `error:` headline, not `error[E_<code>]:` (rendering-only —
-      the typed `DiagKind` is present; `diagnostic.gg:293`/`:123` drops the registry bracket) → self-host
-      conformance floor HELD one below MIN_FIXTURES, documented. Add the `DiagKind→E_code` render + MIGRATE the
-      deferred bulk reject fixtures (`consume_callable_double_reject`/`move_in_loop`/`conditional_move`/
-      `consuming_self` → `spectests/run/`) + raise `SELFHOST_MATCH_FLOOR` → **FOUR-LANE-GREEN**. The one thing
-      between three-lane-affirm and four-lane.
-   2. The codegen HIGH (`is Some(x)` over a mutating-method Option → mis-binds 0; retires the DefId-fix cited
-      workaround) + the coalesce `Dict.remove`-discard C-miscompile (same family) + the tuple-element DefId
-      slice MED + the prod double-fire wart LOW. **All ahead of Batch C** (which leans on ggdef).
+   1. **Coarse-kind split — HIGH, bootstrap-gated (TODO).** Split the self-host's `DkTypeMismatch` (6 codes) +
+      `DkControlFlow` (7 codes) 1:1 with the registry so their rejects become E_-code-conformance-comparable
+      (mirror the `DkDoubleMove` split); then those reject families migrate to four-lane spectests too.
+   2. The DORMANT `Dict.remove`-discard coalesce miscompile (re-litigate the root FIRST — red-herring precedent:
+      could be typechecker-accepts-bad-program) + the tuple-element DefId slice MED + the small LOWs
+      (expr-position `if is`-binding, `E_LocalBorrowBind` registry row, prod double-fire wart). **All ahead of
+      Batch C** (which leans on ggdef).
 5. **Batch C** per the wave plan: C1 operators (D26+D28; wire every new token into
    self-host `map_binop` + the anti-OP_ADD ratchet) → C2 fault-catch removal (D25;
    ~2,000-line both-compiler deletion; ships D24 spec prose + §10.5/§10.9 rewrite) →
