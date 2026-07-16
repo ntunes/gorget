@@ -6,6 +6,12 @@
 >    AND the sole preserved repro for the filed ggdef compound-index double-eval bug. Keep until
 >    RV-C lands. The body's claim that RV-* tracks "have no brief/scout files yet" is FALSE for
 >    RV-C (and now also 1C: `cow-track-1c-scout.md`/`-brief.md` + `cow1c_proto.patch` are LIVE).
+> 1b. EXPLICIT LIVE enumeration (pass-2: the fold prose alone did not amend the body's
+>    bulk-delete instructions, and the link gate does NOT catch patch files cited only from
+>    other plan files): `cow-track-1c-brief.md`, `cow-track-1c-scout.md`,
+>    `scouts/patches/cow1c_proto.patch` — all three sit in the same enumerated keep-set as
+>    the tuple-DefId carve-out until 1C lands. The body's line-81 and Slice-1 instructions
+>    are amended in place to name BOTH patch exceptions.
 > 2. `define-gorget/scouts/scout-wave-census.md` (the REPORT) → **LIVE** until Batch C closes —
 >    cited BY PATH from TODO's ratified wave plan, HANDOVER, and the out-of-repo MEMORY.md; the
 >    C3 sigil counts trace to it. The spent MANDATE file `wave-census-scout-mandate.md` stays
@@ -108,7 +114,7 @@ Ranked gaps:
 
 ## (c) PROPOSED EXECUTION SLICES (each = its own reviewed track)
 
-**Slice 1 — Bulk delete (zero content loss).** `git rm` the ≈156 DELETE files (all top-level completed clusters + all define-gorget briefs/scouts for landed tracks + the entire `patches/` tree except `tupledefid_proto.patch`). Reviewer verification: for each file, confirm (i) it is NOT in the LIVE or ABSORB lists, and (ii) its landing commit resolves in DONE.md/git OR it is a "preserve … deliverable"/REFUTED round artifact. Deletion is git-recoverable, so the bar is "no unabsorbed durable content" — which slices 2–3 handle first. Gate: `git grep` finds no LIVE doc still linking a deleted path.
+**Slice 1 — Bulk delete (zero content loss).** `git rm` the ≈156 DELETE files (all top-level completed clusters + all define-gorget briefs/scouts for landed tracks + the entire `patches/` tree except `tupledefid_proto.patch` AND `cow1c_proto.patch` (both LIVE — queued/in-gauntlet tracks)). Reviewer verification: for each file, confirm (i) it is NOT in the LIVE or ABSORB lists, and (ii) its landing commit resolves in DONE.md/git OR it is a "preserve … deliverable"/REFUTED round artifact. Deletion is git-recoverable, so the bar is "no unabsorbed durable content" — which slices 2–3 handle first. Gate: `git grep` finds no LIVE doc still linking a deleted path.
 
 **Slice 2 — Absorb before delete (content preservation).** (a) `scout-c-prior-art.md` → append a "Prior art & rationale" appendix to `rfc-ggc-ggdef.md` (do-now); then DELETE the scout. (b) `error-model-phase2-design.md`'s by-value-error-channel paragraph → `devbook/13` or `15` if not already stated; then DELETE. (c) `scout-a33-fault-model.md` — do NOT delete yet; it is the source prose for the unstarted C2 §10.9/§10.5 rewrite. Reviewer verification: diff the absorbed text against the target section; confirm the source file is then either deleted (a,b) or explicitly retained-until-C2 (c).
 

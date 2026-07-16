@@ -298,6 +298,29 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-16 — **D10(b) ADDENDUM 2 RATIFIED (owner, in-discussion): compound-assign aliasing.**
+  **Rule:** the compound-assign LHS (`v[i] += rhs`, all `op=` forms, index and field-path
+  places) is an implicit exclusive WRITER for the statement; the D10(b) live-alias
+  place-overlap rule extends to the RHS — a `&`-borrow, `!`-move, mutating method-receiver,
+  or non-Copy bare read of `root(LHS)` inside the RHS is REJECTED (`E_BorrowConflict`).
+  Copy bare reads stay exempt (`v[0] += v[1]` on ints — the ratified Copy-read snapshot cut).
+  **Rider:** with aliasing rejected, evaluation order is unobservable for every accepted
+  program → lowering unifies on READ-FIRST (drop the resource-only `rhs_pre` reorder from
+  R1/A2-R2-M1, keep its borrow-in-place ICE fix). **Why:** measured (RV-C scout 2026-07-16):
+  the order was ELEMENT-TYPE-DEPENDENT (`v[0] += mutate(&v)` = 11 for `Vector[int]`,
+  110 for a custom-Drop element — an implementation leak, not semantics), and
+  pin-an-order-keep-accepting forces choosing between the R1 use-after-free (read-first +
+  RHS reallocs) and permanently type-dependent behavior. Rejecting dissolves the dilemma;
+  READ-FIRST matches the 3 already-uniform lanes (self-host, ggdef, production-nonresource).
+  **Census:** blast radius ZERO across 2,179 in-repo .gg files (the only aliasing sites are
+  R1's own UAF counterfactual probes → they become the negative fixtures). **Honest cost:**
+  non-Copy `v[i] += v[j]` (same root, statically indistinguishable indices) rejects with a
+  one-token `.clone()` remediation — mirrors Rust; zero current sites. **Rejected
+  alternatives:** pin-order-keep-accepting (the UAF-vs-confusion dilemma); reject-only-realloc
+  (not statically decidable); reject+keep-reorder (diverges from 3 lanes, churns ~20
+  snapshots). Full matrix + fix-shape per lane: `scouts/scout-rvc-compound-assign.md`.
+  Enforcement = the RV-C track (all three lanes + the ggdef compound-index double-eval fix
+  riding its ggdef leg; queues behind RV-D/RV-F).
 - 2026-07-15 — **C11 AMENDED (owner-agreed honesty fix) + NAMING REFINED same day.**
   Prior C11 ("unbounded recursion → OS-guard SIGSEGV accepted by design") half-implied
   stack death was a *defined language outcome*. **"Out of conformance" is the wrong primary
