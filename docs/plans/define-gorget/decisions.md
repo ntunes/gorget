@@ -298,6 +298,23 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-16 (late) — **D29 DIRECTION AGREED (owner, in-discussion; formal ratification rides
+  the scout/census packet per the batch-5 pattern): visible error propagation — `!` mandatory
+  at THROWS CALL SITES + `!` replaces `throws` in signatures.** The critique (no way to see a
+  throws call at the site) is valid by the language's own sigils-mark-effects principle; the
+  fix makes D26 an INSTANCE of a general rule (suffix-`!` on any operation = fallible, failure
+  propagates from here: `+!`, `**!`, `f()!` — one grammar). Owner-pinned sub-answers:
+  (1) the bare signature form `int f(args)!:` = the INFERRED-error-set spelling — designed
+  TOGETHER with A31 (this paves A31's syntax); explicit form carries the type (shape for the
+  scout: `int f(args) ! E:`). (2) `!` = PROPAGATE, legal only in throws contexts; handling
+  forms consume the bare call (the Rust ?-vs-match split); E_UnhandledThrows' message becomes
+  "propagate with `!` or handle it". (3) Migration is compiler-driven and mechanical (the
+  checker knows every throws call site; `gg fmt` inserts) — rides the C3 fmt vehicle or a
+  sibling; census required; the READABILITY CENSUS must render post-D29 pages (not just
+  post-D27). Honest cost recorded: amends auto-propagation's invisibility (semantics stay
+  automatic; syntax becomes visible — the Swift/Rust/Zig convergence point). Scout launched
+  2026-07-16: census + grammar prototype + collision corners (`a()!=b` maximal-munch, chains
+  `f()!.m()!`, function-type spelling `int(int)!`, optional interactions) + the packet.
 - 2026-07-16 (later still) — **D2 RIDER RATIFIED (owner): the DEAD-BARE-PARAM-WRITE diagnostic.**
   No grammar special case for `self` — bare `self` stays legal (it is the CORRECT zero-cost
   spelling for read-only methods; banning it would force write-through `&self` borrows on
