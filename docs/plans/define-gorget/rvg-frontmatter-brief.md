@@ -1,7 +1,7 @@
 # Executor brief: RV-G — gen⇄parse frontmatter biconditional (gen refuses codeless exit-1)
 
-> **Status:** v3 — pass-4 folded (2: the self-validation mechanism CORRECTED to parse the SPLICED would-be file per migrate's idiom — the bare rendered block would NoFence-fail every call; the phantom '+N' count hedge dropped — exactly 140/0). Pass-3 folded (2 LOW: the stale status clause removed; the CLASS upgrade
-> below — gen SELF-VALIDATES its rendered block through `parse_frontmatter` before writing, so
+> **Status:** v4 — pass-5 folded (2 LOW, exact-fix: the stale 'rendered block' wording in the pass-3 summary; UnparseableRender payload pinned to FrontmatterError). Pass-5 PROTOTYPE-PROVED the class upgrade: compiles clean, 140/0, backstop unreachable on all four generatable arms, exhaustive witness compiles. Pass-4 folded (2: the self-validation mechanism CORRECTED to parse the SPLICED would-be file per migrate's idiom — the bare rendered block would NoFence-fail every call; the phantom '+N' count hedge dropped — exactly 140/0). Pass-3 folded (2 LOW: the stale status clause removed; the CLASS upgrade
+> below — gen SELF-VALIDATES its SPLICED would-be output through `parse_frontmatter` before writing, so
 > the biconditional holds by construction for any future Outcome variant, plus an exhaustive
 > `match Outcome` witness in the test). Pass-1 and pass-2 signed off zero-reservations (pass-2
 > closed the writer-class question: gen_frontmatter is the SOLE machine writer). Awaiting the
@@ -37,7 +37,7 @@ makes writer⇄reader agree by construction, and keeps gate holes VISIBLE via a 
 
 1. **M1 — apply the proven patch, THEN add the pass-3 class upgrade** (`git apply --check`
    first; repo-root-relative path above):
-   `spec/ggdef/src/lib.rs` — new `GenError::CodelessIllFormed(String)` + Display + the guard in
+   `spec/ggdef/src/lib.rs` — new `GenError::CodelessIllFormed(String)` + Display + new `GenError::UnparseableRender(FrontmatterError)` + its Display arm (the class backstop's error type) + the guard in
    `gen_frontmatter` (refuse BEFORE rendering; the target file must remain unchanged on
    refusal); `spec/ggdef/src/tests.rs` — the `gen_output_always_parses_round_trip` guard
    (Core #6): every generatable outcome (Value / Trap+T_ / elaborate-reject+E_ /
