@@ -2187,3 +2187,110 @@ fn render_expect_block_from_round_trips_json_escape() {
     assert_eq!(reject_block[1], "#   exit: 1");
     assert_eq!(reject_block[3], "#   reject: E_UseAfterMove");
 }
+
+// ── gen ⇄ parse ROUND-TRIP: every block `gen` can emit MUST parse (Core #6) ───
+//
+// The RV-G landmine: `gen`'s WRITER and the frontmatter READER must agree. The
+// reader enforces a biconditional (`exit: 1` ⟺ a `reject:` code — the ratified
+// verdict triple, decisions.md); if `gen` can emit a block the reader refuses,
+// ONE bad committed seed bricks EVERY conformance lane (`run_lane` collects a
+// frontmatter error and fails the whole lane, independent of the floor hatch).
+//
+// This is the executable guard for that agreement: for each GENERATABLE outcome
+// kind (Value / Trap / elaborate-rejected IllFormed-with-code / FuelExhausted)
+// a representative program is framed with a `#!spectest` block, run through
+// `gen_frontmatter`, and the result MUST `parse_frontmatter` cleanly. The CODELESS
+// eval-internal `IllFormed` (no `main`; defense-in-depth read-of-moved) is the one
+// non-generatable outcome — `gen` must REFUSE it (`GenError::CodelessIllFormed`),
+// never emit an unparseable `exit: 1`/no-`reject:` block.
+#[test]
+fn gen_output_always_parses_round_trip() {
+    use crate::{gen_frontmatter, parse_frontmatter, GenError, Outcome, DEFAULT_FUEL};
+
+    // Frame a bare body with a minimal run-tier fence; `expect:` is spliced by gen.
+    fn framed(body: &str) -> String {
+        format!("#!spectest\n# mode: run\n# adjudicator: ggdef\n#!end\n{body}")
+    }
+
+    // Every GENERATABLE outcome kind → gen → the block MUST parse cleanly.
+    let generatable: &[(&str, &str)] = &[
+        // Value (exit 0).
+        ("value", "void main():\n    print(1)\n"),
+        // Trap (exit 101 + T_ code).
+        ("trap", "void main():\n    int d = 0\n    int x = 10 / d\n    print(x)\n"),
+        // Elaborate-owned static rejection (exit 1 + E_ code).
+        (
+            "reject",
+            "String take(String !s):\n    return s\nvoid main():\n    String a = \"hi\"\n    \
+             String b = take(!a)\n    print(a)\n",
+        ),
+    ];
+    for (label, body) in generatable {
+        let src = framed(body);
+        let generated = gen_frontmatter(&src, DEFAULT_FUEL)
+            .unwrap_or_else(|e| panic!("[{label}] gen must succeed on a generatable outcome: {e}"));
+        parse_frontmatter(&generated).unwrap_or_else(|e| {
+            panic!("[{label}] gen emitted a block the reader REFUSES (writer⇄reader break): {e}\n{generated}")
+        });
+    }
+
+    // FuelExhausted (exit 103) — the one nonzero NON-trap NON-reject generatable
+    // outcome. Bound the fuel low so a non-terminating loop halts as FuelExhausted.
+    {
+        let src = framed("void main():\n    int n = 0\n    while true:\n        n = n + 1\n");
+        let generated =
+            gen_frontmatter(&src, 10_000).expect("fuel-exhausted is generatable (exit 103)");
+        let fm = parse_frontmatter(&generated).expect("a 103 block must parse (no code required)");
+        assert_eq!(fm.expect.exit, crate::eval::EXIT_FUEL);
+        assert_eq!(fm.expect.reject, None);
+    }
+
+    // The CODELESS eval-internal IllFormed cases: gen must REFUSE, not emit an
+    // unparseable block. (1) no `main`.
+    let no_main = framed("int helper(int x):\n    return x\n");
+    match gen_frontmatter(&no_main, DEFAULT_FUEL) {
+        Err(GenError::CodelessIllFormed(_)) => {}
+        other => panic!("no-`main` must be refused as CodelessIllFormed, got {other:?}"),
+    }
+    // (2) defense-in-depth: a while-condition move the static gate misses but eval
+    // catches (RV-H's hole — this test does NOT depend on that hole being fixed;
+    // if RV-H closes so elaborate rejects it WITH a code, gen would then SUCCEED
+    // and produce a parseable reject block, which is ALSO fine — either way the
+    // writer⇄reader agreement holds. The invariant under test is that gen never
+    // emits an unparseable block, which the assertion below proves for whatever
+    // the current outcome is).
+    let while_move = framed(
+        "bool consume(String !s):\n    return s == \"hi\"\nvoid main():\n    String x = \"hi\"\n    \
+         int n = 0\n    while consume(!x):\n        n = n + 1\n    print(n)\n",
+    );
+    match gen_frontmatter(&while_move, DEFAULT_FUEL) {
+        // Today: codeless eval-internal IllFormed → refused.
+        Err(GenError::CodelessIllFormed(_)) => {}
+        // If a future gate closes the hole with a code, the block must still parse.
+        Ok(generated) => {
+            parse_frontmatter(&generated).expect("if gen succeeds, its block must parse");
+        }
+        other => panic!("unexpected gen result for the while-move program: {other:?}"),
+    }
+
+    // ── Exhaustiveness witness (compile-time): force a decision for any FUTURE
+    // `Outcome` variant. This `match` has NO wildcard, so adding a 5th variant to
+    // `eval::Outcome` fails to compile HERE until an author classifies it: either
+    // it is a GENERATABLE outcome (its rendered block must round-trip through the
+    // arms proven above) or it is a codeless/non-generatable outcome `gen` must
+    // REFUSE (like the eval-internal `IllFormed`). The scrutinee is fabricated —
+    // only the arm STRUCTURE is load-bearing; the runtime coverage lives above.
+    // This is the structural half of the class guarantee: `gen`'s
+    // self-validation catches an unparseable block at run time, and this witness
+    // ensures the set of outcomes we reason about stays complete at compile time.
+    let witness = Outcome::FuelExhausted;
+    match witness {
+        // Generatable → the block round-trips (asserted above).
+        Outcome::Value(_) => {}
+        Outcome::Trap(_) => {}
+        Outcome::FuelExhausted => {}
+        // Codeless eval-internal → gen REFUSES; elaborate-coded → round-trips.
+        // Either way the writer⇄reader agreement is asserted above.
+        Outcome::IllFormed(_) => {}
+    }
+}

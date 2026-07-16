@@ -102,12 +102,36 @@ pub const FENCE_OPEN: &str = "#!spectest";
 pub const FENCE_CLOSE: &str = "#!end";
 
 /// A `gen` failure: either the program did not run cleanly (a `mode: run`
-/// fixture whose body traps at the frontend is itself invalid), or the file has
-/// no frontmatter fence to write into.
+/// fixture whose body traps at the frontend is itself invalid), the file has
+/// no frontmatter fence to write into, or the program evaluated to a CODELESS
+/// eval-internal `IllFormed` (see `CodelessIllFormed`).
 #[derive(Debug)]
 pub enum GenError {
     Frontend(FrontendError),
     NoFrontmatter,
+    /// The program evaluated to an eval-internal `IllFormed` carrying NO ratified
+    /// `E_` reject code (no `main`; or eval's defense-in-depth read-of-moved that
+    /// the static may-move gate did not catch). Such an outcome renders as
+    /// `exit: 1` with no `reject:` line, which the frontmatter READER rejects
+    /// (`RejectExitWithoutCode`, `frontmatter.rs`) — so writing it would brick
+    /// EVERY conformance lane. The writer⇄reader biconditional is the contract:
+    /// ELABORATE owns every ratified static rejection (`verdict = elaborate ∘
+    /// eval`, decisions.md), so a codeless `IllFormed` is not a generatable
+    /// conformance outcome. `gen` REFUSES instead of emitting an unparseable
+    /// block — keeping the missing-gate / no-`main` hole VISIBLE. The `String` is
+    /// the eval-internal `IllFormed` message, for the report.
+    CodelessIllFormed(String),
+    /// The block `gen` was about to write does NOT parse back cleanly — the
+    /// writer⇄reader biconditional (`frontmatter.rs`) would be violated by the
+    /// file we were about to commit. This is the CLASS backstop: `gen`
+    /// self-validates its SPLICED would-be output through `parse_frontmatter`
+    /// before returning (the same idiom `migrate` uses, `lib.rs`), so ANY future
+    /// `Outcome` whose rendered block the reader refuses is caught by
+    /// construction — not just today's codeless `IllFormed` (which the specific
+    /// `CodelessIllFormed` guard names first). For the current taxonomy this is
+    /// UNREACHABLE (the round-trip test transitively pins it); it fires only if a
+    /// new outcome/render path ever emits a block the reader rejects.
+    UnparseableRender(FrontmatterError),
 }
 
 impl std::fmt::Display for GenError {
@@ -118,6 +142,26 @@ impl std::fmt::Display for GenError {
                 f,
                 "no `{FENCE_OPEN}` … `{FENCE_CLOSE}` frontmatter fence — cannot write `expect:`"
             ),
+            GenError::CodelessIllFormed(msg) => write!(
+                f,
+                "program is an eval-internal `IllFormed` with no ratified `E_` reject code \
+                 ({msg}) — not a generatable conformance outcome. Every ratified static \
+                 rejection is owned by elaborate and carries an `E_` code (`verdict = elaborate \
+                 ∘ eval`); a codeless `IllFormed` means the program has no `main`, or the static \
+                 may-move gate missed a move eval caught defensively. Fix the program (add \
+                 `main`) or the gate (file/fix the liveness hole) — do NOT commit an `exit: 1` \
+                 block with no `reject:` code (the frontmatter reader refuses it, bricking every \
+                 conformance lane)."
+            ),
+            GenError::UnparseableRender(e) => write!(
+                f,
+                "the `expect:` block `gen` was about to write does NOT parse back \
+                 ({e}) — writing it would violate the writer⇄reader biconditional and \
+                 brick every conformance lane. This is the class backstop: `gen` \
+                 self-validates its spliced output before committing. A render path \
+                 produced a block the frontmatter reader refuses — fix the renderer or \
+                 the reader so they agree."
+            ),
         }
     }
 }
@@ -127,8 +171,32 @@ impl std::fmt::Display for GenError {
 /// wraps it with a read + write-back. Idempotent: `gen(gen(x)) == gen(x)`.
 pub fn gen_frontmatter(source: &str, fuel: u64) -> Result<String, GenError> {
     let run = run_source(source, fuel).map_err(GenError::Frontend)?;
+    // Writer⇄reader biconditional (frontmatter.rs `RejectExitWithoutCode`): an
+    // exit-1 static rejection MUST carry an `E_` reject code. ELABORATE owns every
+    // ratified static rejection, so a CODELESS `IllFormed` here is eval-internal
+    // (no `main`, or a defense-in-depth read-of-moved the static gate missed) — NOT
+    // a generatable conformance outcome. Refuse rather than emit an unparseable
+    // `exit: 1`/no-`reject:` block that would brick every lane. (Belt-and-suspenders
+    // with `render_expect_block`'s keying: this is the LOUD, early stop.)
+    if let Outcome::IllFormed(msg) = &run.outcome {
+        if run.reject_code.is_none() {
+            return Err(GenError::CodelessIllFormed(msg.clone()));
+        }
+    }
     let block = render_expect_block(&run);
-    splice_expect(source, &block)
+    let spliced = splice_expect(source, &block)?;
+    // Class backstop for the writer⇄reader biconditional: self-validate the
+    // SPLICED would-be file through `parse_frontmatter` before returning it —
+    // NOT the bare rendered block (`parse_frontmatter` requires the full
+    // `#!spectest`…`#!end` fenced source; its first act is `fence_body`, so a
+    // bare block would `NoFence`-fail on every call). This is the exact idiom
+    // `migrate` uses (re-reads the just-generated file). The specific
+    // `CodelessIllFormed` guard above owns the cause-naming for today's only
+    // known offender; this check makes the biconditional hold BY CONSTRUCTION for
+    // ANY future `Outcome`/render path — it stays UNREACHABLE for the current
+    // taxonomy (the round-trip test transitively pins it).
+    parse_frontmatter(&spliced).map_err(GenError::UnparseableRender)?;
+    Ok(spliced)
 }
 
 /// The canonical `expect:` block for a run outcome — `exit:` (the outcome code)
