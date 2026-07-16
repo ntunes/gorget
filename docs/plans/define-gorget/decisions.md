@@ -319,6 +319,18 @@ P1-infra reviewers' recommendation.
   deref-coercion backend track lands, wrapper deref access is an E_-reject with a
   "not yet implemented" message; that track flips acceptance + run-tests together.
   Enforcement: the RV-A track.
+  **SCOPE CLARIFICATION (2026-07-16, recorded after RV-A passes 1-2 measured ALL EIGHT
+  wrappers; supersedes any broader reading):** the reject partition is
+  **GUARDS-vs-CONTAINERS**. Guard/ReadGuard/WriteGuard field access WORKS today (green
+  run fixtures, correct output) — the ruling's rationale (no blessed silent-wrong-output)
+  does not reach them; they stay ACCEPTED. Box/Shared/Weak/Mutex/RWLock DIRECT field access
+  all print silent garbage-0 (measured) — they REJECT, with a 3-way diagnostic split:
+  field-present-on-inner AND the wrapper is a documented deref-coercion target
+  (design-doc §9.4) → E_DerefCoercionUnimplemented; field-absent-on-inner OR
+  primitive-inner OR the wrapper is NOT a §9.4 target (Mutex/RWLock — access is via
+  .lock()/.read(), auto-deref is not promised) → E_NoFieldFound. Wrapper METHOD auto-deref
+  stays with the deref-backend track (fails loudly today). Owner notified in-conversation;
+  the principle is unchanged — reject where broken, accept where working.
 - 2026-07-16 — **D10(b) ADDENDUM 2 RATIFIED (owner, in-discussion): compound-assign aliasing.**
   **Rule:** the compound-assign LHS (`v[i] += rhs`, all `op=` forms, index and field-path
   places) is an implicit exclusive WRITER for the statement; the D10(b) live-alias
