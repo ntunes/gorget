@@ -1,18 +1,18 @@
 # Executor brief: RV-D — self-host safety-walk soundness cluster (holes #6/#7/#8/#9 + Copy-axis subset)
 
-> **Status:** v2 — pass-2 folded (1 MED: the two probes that demonstrate FILED defects are
+> **Status:** v2 — ✅ PASS 3 SIGNED OFF (2026-07-16; two cosmetic counts inline-fixed below) — **EXECUTING**. Pass-2 folded (1 MED: the two probes that demonstrate FILED defects are
 > PROBE-ONLY, never committed fixtures — see M2; 2 nits: the live_reinit anchor is
 > `typecheck.gg:1186-1190` [NOT check_stmt.rs]; only the 21 `*.gg` files in the archive are
-> fixture sources, the 12 non-.gg entries are scout scratch). Pass-2 independently re-ran 18
+> fixture sources, the 12 non-.gg entries are scout scratch; the 3 `probe_*.gg` diagnostics are scratch alongside the 2 probe-only repros — 16 shapes get committed). Pass-2 independently re-ran 18
 > probes — all verdicts reproduce. Pass-1 folded (R1 the 21 probe sources are now COMMITTED at
 > `scouts/patches/rvd_probes.tgz` — M2 unpacks them, no re-derivation; R2 the #9 catch-all
 > honesty note below; R3 line/count fixups). Pass-1 independently reproduced ALL decisive
-> gates (patch clean on tip, 23/23 lanes, 21/21 probes exact, type_comparison ==85).
+> gates (patch clean on tip, 22/22 lanes [pass-3-corrected count], 21/21 probes exact, type_comparison ==85).
 > Awaiting the next fresh pass. **Scout basis (read both FIRST):**
 > `docs/plans/define-gorget/scouts/scout-rvd-safety-walk.md` (premise table, per-hole measured
 > before/after, gates) + the PROVEN patch
 > `docs/plans/define-gorget/scouts/patches/rvd_proto.patch` (ONE file,
-> `tests/fixtures/self_host_typechecker/typecheck.gg`, +160/−45; 23/23 driver lanes green;
+> `tests/fixtures/self_host_typechecker/typecheck.gg`, +160/−45; 22/22 driver lanes green;
 > the full ~18K-line frontend compiles with ZERO new diagnostics).
 > **Model policy:** executor + brief-reviews Opus; output-review on Fable.
 
@@ -72,7 +72,7 @@ over the walk, matching production's model per-hole:
    `.err`/`.log`/`.sh` entries are scratch). Fixtures must not be gitignore-hidden;
    `gg fmt`-idempotent.
 3. **M3 — gates (FOREGROUND; chunk >600s by test name):** driver rebuild
-   (`GG_BUILD_TIMEOUT_SECS=600`) · ALL `self_host_driver_*` lanes (expect 23/23 + the new
+   (`GG_BUILD_TIMEOUT_SECS=600`) · ALL `self_host_driver_*` lanes (expect 22/22 + the new
    fixtures) · **`self_host_bootstrap_fixed_point` YOURSELF** (single monolithic test,
    `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600`, no chunking — this track's explicit
    exception: over-tightening the walk = self-host source rejected, and the bootstrap is the
