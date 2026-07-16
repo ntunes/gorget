@@ -445,6 +445,14 @@ sibling sites, breadcrumbs) catches what model strength alone does not.
    language-design findings, filed against `decisions.md`.
 5. **The import ratchet is the fence**: the ggdef crate may import lexer/parser/AST/span ONLY —
    never `src/ir/` or `src/semantic/`. The lint lands in Increment A, before any evaluator code.
+6. **LANE PARITY (owner 2026-07-16 — CLAUDE.md Core invariant #9)**: a SEMANTIC change lands on
+   every lane in the same round (ggdef-within-subset · Rust C+LLVM · self-host), pinned by a
+   cross-lane fixture encoding the intended FINAL state; lagging lane = red lane or explicit
+   `#[ignore]`+citation, never a silent gap; out-of-subset = explicit note + filed gap;
+   implementation-internal (one backend's codegen) exempt. Output-reviews MUST check it: "does
+   this diff alter accept/reject or runtime semantics? If yes, where are the other lanes'
+   landings or their pinned divergence notes?" The round does not close with an undocumented
+   lane divergence.
 
 ## What comes after phase 0 (do not start early)
 
