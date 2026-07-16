@@ -1,6 +1,6 @@
 # Executor brief: CoW Track 1C — Dict `d[k].field = x` write-through (both compilers)
 
-> **Status:** v4 — pass-4 folded (M2b's Rust prediction was FALSIFIED by measurement: HashMap
+> **Status:** v5 — ✅ PASS 6 SIGNED OFF CLEAN (2026-07-16; gauntlet: 1:1res 2✓ 3:1res 4:1res 5:2res 6✓) — **EXECUTING**. Pass-4/5 folded (M2b's Rust prediction was FALSIFIED by measurement: HashMap
 > Rust-side prints 0 — the READ/STORE is broken by the filed element-typing bug, NOT a
 > gate-dropped write printing 1; ASYMMETRY is the source-supported prediction — the self-host's index_value_type_name DOES
 > handle HashMap__ (it does not share the Rust bug); both-0 stays acceptable IF measured; the STOP trigger is re-scoped to SAFETY only; a HashMap
