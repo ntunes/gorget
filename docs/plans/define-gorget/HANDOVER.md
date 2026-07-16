@@ -424,7 +424,13 @@ Reviewers verify against CURRENT source with file:line; brief them to SIGN OFF o
 specific reservations, never rubber-stamp. If the owner's tokens are constrained, pass
 `model: "opus"` on Agent calls — the briefs in this project are written to be executable by
 Opus-class agents; if an Opus agent stalls on a brief, that is a BRIEF DEFECT to fix, not an
-agent failure to push through.
+agent failure to push through. **Model policy amendment (owner 2026-07-16): the OUTPUT-REVIEW
+— the last reviewer before integration — runs on FABLE** (leverage asymmetry: one agent per
+track at the point of maximum consequence; plus model diversity over the Opus executor).
+Optionally also the FINAL brief-review pass on Fable for expectation-flipping /
+semantics-changing tracks (e.g. CoW 2E). Scouts, executors, and the earlier brief-review
+passes stay on Opus. Mandate quality still dominates — the reviewer checklist (ggdef lane,
+sibling sites, breadcrumbs) catches what model strength alone does not.
 
 ## Standing rules specific to this project
 
