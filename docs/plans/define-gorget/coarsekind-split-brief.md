@@ -1,15 +1,25 @@
 # Executor brief: coarse-kind diagnostic split (DkTypeMismatch + DkControlFlow → per-code kinds)
 
-> **Status:** v1 — pass-1 review folded (3 reservations: M2's count corrected 7→10 and enumerated;
-> M3 rewritten to REUSE the 4 existing fixtures + author 2 NEW ones for the uncovered codes →
-> 6 new driver tests; scout's "all 12 PROVEN" corrected to 10-driver-verified). Awaiting the next
-> fresh pass.
-> **Scout basis (read both FIRST):** `scouts/scout-coarsekind-split.md` (verified emit-site table,
-> measured before/after, blast radius; ⚠ its headline "PROVEN end-to-end (all 12 codes)" is an
-> overclaim — the driver-run table covers 10 codes; E_ReturnOutsideFunction + E_DoubleAwait were
-> never driven) + `scouts/patches/coarsekind_split_proto.patch` (the proven split — 14/0 driver
-> rejects emitting contiguous `error[E_<code>]:`, floor-neutral; pass-1 verified it still applies
-> clean, blob-hash exact).
+> **Status:** v2 — pass-2 folded (R1 patch path spelled repo-root-relative; R2 the
+> return-outside question is SETTLED — unreachable, reserved slot, gates 19/0, M3 is FIVE tests;
+> R3 glob-harness note; R4 per-test codes spelled). Pass-1 had folded: M2 count 7→10 enumerated;
+> M3 reuse-4; scout overclaim corrected. Awaiting the next fresh pass.
+> **Scout basis (read both FIRST):**
+> `docs/plans/define-gorget/scouts/scout-coarsekind-split.md` (verified emit-site table, measured
+> before/after, blast radius; ⚠ its headline "PROVEN end-to-end (all 12 codes)" is an overclaim —
+> the driver-run table covers 10 codes) and the proven patch at
+> `docs/plans/define-gorget/scouts/patches/coarsekind_split_proto.patch` (repo-root-relative
+> path — use it verbatim from your worktree root; pass-1 verified blob-hash-exact clean apply,
+> pass-2 re-verified: 3 files, diagnostic.gg +74/−16 · infer.gg +1/−1 · typecheck.gg +14/−14,
+> zero spectests/).
+> **Settled by pass-2 (empirical, production compiler built + probed):**
+> **E_DoubleAwait IS reachable** (`async int f(): auto v = await await g()` → production
+> `error[E_DoubleAwait]`; self-host emit at typecheck.gg:2286) — write its driver test.
+> **E_ReturnOutsideFunction is UNREACHABLE** via any parseable program (top-level `return` is a
+> PARSE error — parse_item has no Return arm; the typecheck gate `not ctx.in_function_body`
+> [typecheck.gg:2888] is only false at module scope, which the parser cannot produce; the
+> existing fixture's own comment agrees) — it is a RESERVED-CODED SLOT like E_TypeMismatch: the
+> split still wires the code + emit site; do NOT author a fixture for it.
 > **Model policy:** executor + brief-reviews on Opus; the output-review before integration on Fable
 > (owner 2026-07-16).
 
@@ -36,39 +46,51 @@ names and a phantom 6th site):
 
 ## Milestones
 
-1. **M1 — apply the proven split** from `scouts/patches/coarsekind_split_proto.patch` onto the
-   current tip (re-read each hunk if it has drifted; the patch was proven on `b57cf993`-era
-   source). 3 files. Includes the `infer.gg:24` dead-import fix (DkControlFlow/DkTypeMismatch
-   imports that nothing uses).
-2. **M2 — tighten the TEN existing coarse-family driver reject tests** (pass-1 enumerated; the
-   scout's "7" was an undercount — and because every coarse code still renders `"error"`, a
-   missed upgrade passes the gates silently, so upgrade ALL of these from `contains("error")`
-   to the exact `error[E_<code>]`): `invalid_program` (:~18563, E_ThrowInNonThrowingFunction) ·
-   `positional_after_named` (:~19039) · `positional_after_named_method` (:~19106) ·
-   `default_op_non_optional` (:~19173) · `default_op_non_optional_nested` (:~19237) ·
-   `required_after_default` (:~19303) · `trait_required_after_default` (:~19444) ·
-   `value_out_of_range` (:~19522) · `string_index_assign` (:~19601) ·
-   `string_index_compound_assign` (:~19671). (The other 4 `self_host_driver_rejects_*` are
-   non-coarse — d12/d10b/liveness/duplicate-field — leave them.)
-3. **M3 — add SIX new driver reject tests** covering the codes no driver test exercises:
+1. **M1 — apply the proven split** from
+   `docs/plans/define-gorget/scouts/patches/coarsekind_split_proto.patch` (repo-root-relative —
+   run `git apply --check <that path>` from your worktree root first) onto the current tip
+   (re-read each hunk if it has drifted). 3 files. Includes the `infer.gg:24` dead-import fix
+   (DkControlFlow/DkTypeMismatch imports that nothing uses).
+2. **M2 — tighten the TEN existing coarse-family driver reject tests** (because every coarse
+   code still renders `"error"`, a missed upgrade passes the gates silently — upgrade ALL of
+   these from `contains("error")` to the exact `error[E_<code>]`; codes spelled per pass-2):
+   `invalid_program` (:~18563 → E_ThrowInNonThrowingFunction) ·
+   `positional_after_named` (:~19039 → E_PositionalAfterNamed) ·
+   `positional_after_named_method` (:~19106 → E_PositionalAfterNamed) ·
+   `default_op_non_optional` (:~19173 → E_DefaultOpNonOptional) ·
+   `default_op_non_optional_nested` (:~19237 → E_DefaultOpNonOptional) ·
+   `required_after_default` (:~19303 → E_RequiredAfterDefault) ·
+   `trait_required_after_default` (:~19444 → E_RequiredAfterDefault) ·
+   `value_out_of_range` (:~19522 → E_ValueOutOfRange) ·
+   `string_index_assign` (:~19601 → E_StringIndexAssign) ·
+   `string_index_compound_assign` (:~19671 → E_StringIndexAssign).
+   (The other 4 `self_host_driver_rejects_*` are non-coarse — d12/d10b/liveness/duplicate-field —
+   leave them.)
+3. **M3 — add FIVE new driver reject tests** covering the reachable codes no driver test
+   exercises:
    - Four REUSE existing committed fixtures (do NOT author duplicates):
-     `tests/fixtures/deref_non_box_rejected.gg`, `main_throws_non_int_error.gg`,
-     `break_outside_loop_error.gg`, `continue_outside_loop_error.gg` (each already consumed by a
-     production `check_gg_fails` test — integration.rs ~:7954/:27300/:27332/:27356).
-   - Two need NEW fixtures (none exist anywhere): **return-outside-function** and
-     **double-await** (production's double-await coverage is a Rust unit test only). Author
-     minimal .gg reject fixtures; verify they're not gitignore-hidden (`git status` shows them);
-     confirm the shape actually reaches the typecheck emit site on BOTH compilers (production
-     rejects with the same code). ⚠ If a shape cannot reach the emit site (e.g. the parser
-     rejects `return` at top level before typecheck), STOP on that code, document it as a
-     reserved-coded slot (like E_TypeMismatch), and report — do not force an artificial shape.
+     `tests/fixtures/deref_non_box_rejected.gg` (→ E_DerefNonBox),
+     `main_throws_non_int_error.gg` (→ E_MainThrowsNonInt),
+     `break_outside_loop_error.gg` (→ E_BreakOutsideLoop),
+     `continue_outside_loop_error.gg` (→ E_ContinueOutsideLoop) — each already consumed by a
+     production `check_gg_fails` test (integration.rs ~:7954/:27300/:27332/:27356); no
+     `.expected` companions needed.
+   - One NEW fixture: **double-await** (`await await g()` inside an async fn — the proven
+     reachable shape; production rejects `error[E_DoubleAwait]`). Name it with the sibling
+     `*_error.gg` convention; run it through `gg fmt` BEFORE committing (top-level fixtures are
+     auto-swept by glob harnesses — `fmt_idempotent` asserts formatter fixpoint on every
+     fixture and runs in the PARENT's sweep, so a non-converging fixture bounces late);
+     verify it's not gitignore-hidden (`git status` shows it).
+   - **E_ReturnOutsideFunction: reserved-coded slot** (settled unreachable — see header). No
+     fixture, no test; the split wires the code + emit site and that is the whole deliverable
+     for it.
 4. **M4 — gates (all FOREGROUND, generous timeouts; chunk any >600s gate by test name)**:
    self-host driver rebuild (`GG_BUILD_TIMEOUT_SECS=600`) · `self_host_driver_rejects_*`
-   (expect 14/0 pre-M3, **20/0** after — or 18-19/0 with documented reserved slots per M3) ·
-   `self_host_driver_accepts_*` 3/0 · `type_comparison` diagnostic run (print the counts) ·
-   `cargo test --lib` · `cargo test --test lints` · `cargo test -p ggdef` (cheap insurance; no
-   expectations flip — the split is floor-neutral, `spec_conformance` floors stay at their
-   current value; do NOT touch spectests/).
+   (expect 14/0 pre-M3, **19/0** after M3) · `self_host_driver_accepts_*` 3/0 ·
+   `type_comparison` diagnostic run (print the counts) · `gg fmt` idempotence on the new
+   fixture · `cargo test --lib` · `cargo test --test lints` · `cargo test -p ggdef` (cheap
+   insurance; no expectations flip — the split is floor-neutral, `spec_conformance` floors stay
+   at their current value; do NOT touch spectests/).
 
 ## Out of scope (do NOT do these)
 
@@ -95,7 +117,7 @@ find (file:line + repro) — do not fix it in this track.
 ## Acceptance
 
 Every coarse-kind reject prints `error[E_<code>]:` with the correct code (scout table), exit 1,
-empty stdout; **all 12 codes exercised by a driver test** (or explicitly documented as
-reserved-coded slots with the reachability evidence); 20/0 rejects (or per M3's documented
-slots) · 3/0 accepts · lib/lints/ggdef green; zero spectests/floor movement; zero changes
-outside the 3 self-host files + tests/integration.rs (+ the 2 new fixture files).
+empty stdout; **11 of 12 codes exercised by a driver test** (E_ReturnOutsideFunction is the one
+documented reserved-coded slot, settled unreachable); **19/0 rejects** · 3/0 accepts ·
+lib/lints/ggdef green; zero spectests/floor movement; zero changes outside the 3 self-host
+files + tests/integration.rs (+ the 1 new double-await fixture).
