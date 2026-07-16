@@ -1,6 +1,6 @@
 # Executor brief: RV-G — gen⇄parse frontmatter biconditional (gen refuses codeless exit-1)
 
-> **Status:** v2 — pass-3 folded (2 LOW: the stale status clause removed; the CLASS upgrade
+> **Status:** v3 — pass-4 folded (2: the self-validation mechanism CORRECTED to parse the SPLICED would-be file per migrate's idiom — the bare rendered block would NoFence-fail every call; the phantom '+N' count hedge dropped — exactly 140/0). Pass-3 folded (2 LOW: the stale status clause removed; the CLASS upgrade
 > below — gen SELF-VALIDATES its rendered block through `parse_frontmatter` before writing, so
 > the biconditional holds by construction for any future Outcome variant, plus an exhaustive
 > `match Outcome` witness in the test). Pass-1 and pass-2 signed off zero-reservations (pass-2
@@ -44,15 +44,21 @@ makes writer⇄reader agree by construction, and keeps gate holes VISIBLE via a 
    FuelExhausted@103) round-trips gen→parse; both codeless shapes assert refusal. The
    while-move arm must stay RV-H-INDEPENDENT (it accepts a future coded reject once RV-H
    lands — assert "refuses OR parses", never pin the current hole).
-   **Class upgrade (pass-3, ~10 lines beyond the patch):** (i) in `gen_frontmatter`, AFTER
-   rendering, run `parse_frontmatter` over the rendered block and return a new
-   `GenError::UnparseableRender(..)` if it fails — gen self-validates; the biconditional holds
-   BY CONSTRUCTION for any future Outcome variant (keep the specific `CodelessIllFormed` guard
-   first — it owns the good, cause-naming error message; the parse-check is the class
-   backstop and must stay UNREACHABLE for the current taxonomy). (ii) in the round-trip test,
-   add an exhaustive `match` witness over `Outcome` (no wildcard) so adding a variant
-   compile-forces a new round-trip arm. The prototype's wildcard arms in
-   `render_expect_block` stay as-is (the self-validation now covers them).
+   **Class upgrade (pass-3, mechanism CORRECTED by pass-4 — ~10 lines beyond the patch):**
+   (i) in `gen_frontmatter`, SPLICE first, then self-validate the SPLICED would-be file —
+   NOT the bare rendered block (`parse_frontmatter` requires the full `#!spectest`…`#!end`
+   fenced source; its first act is `fence_body`, so a bare block would `NoFence`-fail on
+   EVERY call). Shape: `let spliced = splice_expect(source, &block)?;
+   parse_frontmatter(&spliced).map_err(|e| GenError::UnparseableRender(..))?; Ok(spliced)` —
+   the exact idiom `migrate` already uses (`lib.rs:325-329`, the proven model). Keep the
+   specific `CodelessIllFormed` guard FIRST (it owns the cause-naming error message); the
+   spliced-parse check is the class backstop and must stay UNREACHABLE for the current
+   taxonomy (no extra assert needed — pass-4 verified the round-trip test transitively pins
+   both: a spurious backstop fires the generatable arms' unwraps; a mis-ordered guard trips
+   the codeless arms' panic). (ii) in the round-trip test, add an exhaustive `match` witness
+   over `Outcome` (no wildcard; structural exhaustiveness compile-forces a 5th variant even
+   over a fabricated scrutinee). The prototype's wildcard arms in `render_expect_block` stay
+   as-is (the spliced-parse now covers them).
 2. **M2 — gates (foreground, ggdef-scoped; NOT bootstrap-gated):** `cargo test -p ggdef --lib`
    (expect 140/0) · `cargo test -p ggdef` full (all sub-suites incl. `gen_idempotent` +
    `converter_agreement`) · `cargo test --test spec_conformance --no-run` (compile-check) ·
@@ -85,8 +91,10 @@ line. Report any NEW pre-existing bug (file-don't-fix).
 
 ## Acceptance
 
-The brick is impossible by construction: gen SELF-VALIDATES every rendered block through
-`parse_frontmatter` before writing (the class guard) and refuses codeless IllFormed with the
-cause-naming message (the instance guard); the round-trip test's exhaustive `match Outcome`
-witness compile-forces coverage of future variants; ggdef 140/0 (or +N for the new arms);
-conformance compile-clean; zero corpus churn; two files changed.
+The brick is impossible by construction: gen SELF-VALIDATES the SPLICED would-be file through
+`parse_frontmatter` before writing (the class guard, migrate's proven idiom) and refuses
+codeless IllFormed with the cause-naming message (the instance guard); the round-trip test's
+exhaustive `match Outcome` witness compile-forces coverage of future variants; ggdef
+**exactly 140/0** (the class upgrade adds match arms and assertions inside the existing test,
+not a new test fn — the count does not move); conformance compile-clean; zero corpus churn;
+two files changed.
