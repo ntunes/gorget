@@ -1,7 +1,10 @@
 # Executor brief: CoW Track 1C — Dict `d[k].field = x` write-through (both compilers)
 
-> **Status:** v0 — awaiting ≥3 sequential fresh brief-reviews (fold after each; stop only on a
-> clean pass). **Scout basis (read both FIRST):** `docs/plans/cow-track-1c-scout.md` (measured
+> **Status:** v1 — pass-1 folded (1 blocking: the patch's `Map` gate arm ADMITTED HashMap while
+> HashMap-of-struct element typing is broken upstream (pre-existing, now filed HIGH) → the gate
+> is SCOPED to `Array|OrderedMap` (Dict only, matching what is proven); the HashMap track owns
+> flipping the arm + the fixture shape. Also: ggdef sub-suite count corrected to 7 test files;
+> ASan is executor-mandatory — pass-1 could not run it). Awaiting the next fresh pass. **Scout basis (read both FIRST):** `docs/plans/cow-track-1c-scout.md` (measured
 > matrix, runtime-layout notes, sibling grep) + the PROVEN patch
 > `docs/plans/define-gorget/scouts/patches/cow1c_proto.patch` (both compilers × both backends,
 > targeted 183/0, ASan+UBSan clean). **Campaign:** `cow-writethrough-materialize-closed-set.md`
@@ -19,7 +22,10 @@ separately — do not fix it here).
 ## Mechanism (scout-proven — the patch is the spec; highlights)
 
 - **Rust:** extend the Index-arm gate in `try_resolve_field_place` at
-  `src/ir/lowering/exprs/mod.rs:2582` from `Array` to `Array|OrderedMap|Map`. No new runtime
+  `src/ir/lowering/exprs/mod.rs:2582` from `Array` to **`Array|OrderedMap` ONLY** (pass-1: do
+  NOT admit `Map` — HashMap-of-struct element typing is broken upstream, filed HIGH; a `Map`
+  arm would silently route HashMap field-writes into wrong output. Leave a one-line comment at
+  the gate citing the filed entry so the HashMap track flips it). No new runtime
   symbol: `gorget_map_get` (`runtime_map.c:322`) already returns a pointer into the value slot;
   LIR `IndexLoad` already routes Dict→`gorget_map_get`; `materialize_collection_element`
   returns the raw pointer for a `Ptr(T)` dst. Pure GIR place resolution — C and LLVM inherit.
@@ -55,7 +61,7 @@ separately — do not fix it here).
    (scout baseline: 183/0) · self-host driver rebuild (GG_BUILD_TIMEOUT_SECS=600) + the three
    Dict probes + the 1B array fixture (no regression) · `self_host_runtime` targeted ·
    **ASan+UBSan** on the new fixture + dict-of-vector/nested-array regressions ·
-   **FULL `cargo test -p ggdef`** (all 10 sub-suites — corpus_b/b1 brick without the EXCLUDE
+   **FULL `cargo test -p ggdef`** (all 7 test files — corpus_b/b1 brick without the EXCLUDE
    entries) · `lower_comparison`/`type_comparison` counts. The bootstrap + full sweeps +
    parity are the PARENT's (this fix's blast is the write-place producers only — no receiver
    rerouting, unlike 1B).
