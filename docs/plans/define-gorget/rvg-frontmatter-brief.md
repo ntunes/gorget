@@ -1,8 +1,11 @@
 # Executor brief: RV-G — gen⇄parse frontmatter biconditional (gen refuses codeless exit-1)
 
-> **Status:** v1 — pass-1 AND pass-2 both SIGNED OFF, zero reservations (pass-2 additionally closed the writer-CLASS question: gen_frontmatter is the SOLE machine writer — migrate routes through it, smith is in-process, hand-authored blocks are the reader's guard; and probed the refusal is not over-broad). Pass 3 = the final ≥3-rule pass. (pass-1: brick + design grounding + patch +
-> gates + blast-zero all independently re-verified, incl. a live refusal probe leaving the file
-> byte-identical). Two non-blocking notes folded below. Passes 2-3 still required (≥3 rule).
+> **Status:** v2 — pass-3 folded (2 LOW: the stale status clause removed; the CLASS upgrade
+> below — gen SELF-VALIDATES its rendered block through `parse_frontmatter` before writing, so
+> the biconditional holds by construction for any future Outcome variant, plus an exhaustive
+> `match Outcome` witness in the test). Pass-1 and pass-2 signed off zero-reservations (pass-2
+> closed the writer-class question: gen_frontmatter is the SOLE machine writer). Awaiting the
+> confirming pass.
 > **Scout basis (read both FIRST):**
 > `docs/plans/define-gorget/scouts/scout-rvg-frontmatter.md` (brick repro + design trade-off
 > table; ⚠ its §6 cites a stale `/tmp/recover_rvg_proto.patch` path — the DURABLE copy is the
@@ -32,7 +35,8 @@ makes writer⇄reader agree by construction, and keeps gate holes VISIBLE via a 
 
 ## Milestones
 
-1. **M1 — apply the proven patch** (`git apply --check` first; repo-root-relative path above):
+1. **M1 — apply the proven patch, THEN add the pass-3 class upgrade** (`git apply --check`
+   first; repo-root-relative path above):
    `spec/ggdef/src/lib.rs` — new `GenError::CodelessIllFormed(String)` + Display + the guard in
    `gen_frontmatter` (refuse BEFORE rendering; the target file must remain unchanged on
    refusal); `spec/ggdef/src/tests.rs` — the `gen_output_always_parses_round_trip` guard
@@ -40,6 +44,15 @@ makes writer⇄reader agree by construction, and keeps gate holes VISIBLE via a 
    FuelExhausted@103) round-trips gen→parse; both codeless shapes assert refusal. The
    while-move arm must stay RV-H-INDEPENDENT (it accepts a future coded reject once RV-H
    lands — assert "refuses OR parses", never pin the current hole).
+   **Class upgrade (pass-3, ~10 lines beyond the patch):** (i) in `gen_frontmatter`, AFTER
+   rendering, run `parse_frontmatter` over the rendered block and return a new
+   `GenError::UnparseableRender(..)` if it fails — gen self-validates; the biconditional holds
+   BY CONSTRUCTION for any future Outcome variant (keep the specific `CodelessIllFormed` guard
+   first — it owns the good, cause-naming error message; the parse-check is the class
+   backstop and must stay UNREACHABLE for the current taxonomy). (ii) in the round-trip test,
+   add an exhaustive `match` witness over `Outcome` (no wildcard) so adding a variant
+   compile-forces a new round-trip arm. The prototype's wildcard arms in
+   `render_expect_block` stay as-is (the self-validation now covers them).
 2. **M2 — gates (foreground, ggdef-scoped; NOT bootstrap-gated):** `cargo test -p ggdef --lib`
    (expect 140/0) · `cargo test -p ggdef` full (all sub-suites incl. `gen_idempotent` +
    `converter_agreement`) · `cargo test --test spec_conformance --no-run` (compile-check) ·
@@ -72,6 +85,8 @@ line. Report any NEW pre-existing bug (file-don't-fix).
 
 ## Acceptance
 
-The brick is impossible by construction: everything gen writes, parse accepts (round-trip
-guard green); codeless IllFormed programs refuse loudly at gen time with the file untouched;
-ggdef 140/0; conformance compile-clean; zero corpus churn; two files changed.
+The brick is impossible by construction: gen SELF-VALIDATES every rendered block through
+`parse_frontmatter` before writing (the class guard) and refuses codeless IllFormed with the
+cause-naming message (the instance guard); the round-trip test's exhaustive `match Outcome`
+witness compile-forces coverage of future variants; ggdef 140/0 (or +N for the new arms);
+conformance compile-clean; zero corpus churn; two files changed.
