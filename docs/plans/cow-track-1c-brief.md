@@ -1,6 +1,6 @@
 # Executor brief: CoW Track 1C — Dict `d[k].field = x` write-through (both compilers)
 
-> **Status:** v1 — pass-1 folded (1 blocking: the patch's `Map` gate arm ADMITTED HashMap while
+> **Status:** v2 — pass-2 SIGNED OFF (fold verified coherent+necessary: HashMap falls back to the identical old path, provably not-worse; the two-EXCLUDE mandate confirmed complete across all 7 ggdef test files; N1 comment-wording nit folded). Pass-1 folded (1 blocking: the patch's `Map` gate arm ADMITTED HashMap while
 > HashMap-of-struct element typing is broken upstream (pre-existing, now filed HIGH) → the gate
 > is SCOPED to `Array|OrderedMap` (Dict only, matching what is proven); the HashMap track owns
 > flipping the arm + the fixture shape. Also: ggdef sub-suite count corrected to 7 test files;
@@ -24,8 +24,10 @@ separately — do not fix it here).
 - **Rust:** extend the Index-arm gate in `try_resolve_field_place` at
   `src/ir/lowering/exprs/mod.rs:2582` from `Array` to **`Array|OrderedMap` ONLY** (pass-1: do
   NOT admit `Map` — HashMap-of-struct element typing is broken upstream, filed HIGH; a `Map`
-  arm would silently route HashMap field-writes into wrong output. Leave a one-line comment at
-  the gate citing the filed entry so the HashMap track flips it). No new runtime
+  arm would silently route HashMap field-writes into wrong output. Extend the gate's existing
+  unsupported-bases comment (which lists Set) to include HashMap/`Map`, citing the filed
+  entry by DURABLE PHRASE — "HashMap-of-struct element typing, methods.rs:3859" — never a
+  TODO line number). No new runtime
   symbol: `gorget_map_get` (`runtime_map.c:322`) already returns a pointer into the value slot;
   LIR `IndexLoad` already routes Dict→`gorget_map_get`; `materialize_collection_element`
   returns the raw pointer for a `Ptr(T)` dst. Pure GIR place resolution — C and LLVM inherit.

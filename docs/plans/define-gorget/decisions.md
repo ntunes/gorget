@@ -298,6 +298,14 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-16 (later) — **STAGING RULING (owner): wrapper deref access REJECTS until implemented.**
+  `Box[T].field` / wrapper method auto-deref (§9.4 deref coercion) is UNIMPLEMENTED end-to-end
+  (field read returns 0; method deref cc-fails — RV-A scout measured). The earlier staged
+  acceptance (`check_gg_ok` + `#[ignore]`d run-test) is REVERSED: a fixture blessing silent
+  wrong output is the Core-#8 red-flag pattern regardless of who wrote it. Until the
+  deref-coercion backend track lands, wrapper deref access is an E_-reject with a
+  "not yet implemented" message; that track flips acceptance + run-tests together.
+  Enforcement: the RV-A track.
 - 2026-07-16 — **D10(b) ADDENDUM 2 RATIFIED (owner, in-discussion): compound-assign aliasing.**
   **Rule:** the compound-assign LHS (`v[i] += rhs`, all `op=` forms, index and field-path
   places) is an implicit exclusive WRITER for the statement; the D10(b) live-alias
