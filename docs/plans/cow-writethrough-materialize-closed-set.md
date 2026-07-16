@@ -57,7 +57,7 @@ Related owner notes: local `&`-binds may reopen later only if exclusivity-safe (
 4. **Drop-taint × materialize** disposition is **owner-ruled** and implemented (reject vs clone-with-explicit — see queued decision); closed-set row is not latent.
 5. **Promote** `rust_value_index_element_field_writethrough` from inline Rust-only to corpus once self-host matches.
 6. **devbook/11** “converging” marker removed or reduced to only explicitly deferred residual classes.
-7. **Gates (round-close bar):** lib + lints + targeted integration + bootstrap + **full C integration** + **full LLVM integration** + **`spec_conformance` + full ggdef suite** at wave close (and on any track that **flips fixture expectations**, e.g. 2E — Batch-A lesson). ASan on new materialize/untrack fixtures.
+7. **Gates (round-close bar):** lib + lints + targeted integration + bootstrap + **full C integration** + **full LLVM integration** + **`spec_conformance` + full ggdef suite** at wave close (and on any track that **flips OR ADDS fixture expectations** — Batch-A lesson EXTENDED 2026-07-16: 1B's statics-mixing fixture bricked corpus_b/b1, caught only at the parent battery; the corpus tests harvest inline expectations, so a NEW fixture is a ggdef-lane event). ASan on new materialize/untrack fixtures.
 8. **Scoreboard:** regen `self_host_runtime_diff` / parity at **wave-1 and wave-2 close**; WRONG-OUTPUT (and related non-MATCH) **must drop** relative to pre-wave baseline (command in gates; **no dated numbers in this plan**).
 
 ---
