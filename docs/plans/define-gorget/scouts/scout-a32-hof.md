@@ -2,6 +2,14 @@
 
 **Status:** ✅ DESIGN RATIFIED 2026-07-16 — owner accepted forks **A1 B1 C1 D1 E1 F1 G1**.  
 **Normative:** `docs/plans/define-gorget/decisions.md` LOG (“A32 BASIC DESIGN RATIFIED”).  
+**⚠ A1 REFINED same day — the A1×E1 COMPOSITION PIN (ratified; LOG + evidence
+`scout-a32-a1xe1-composition.md`):** inferred rethrows fires only through opt-in latent
+callable params spelled `U(T)!` (A31's bare-`!` at the type position); unannotated function
+types are concretely infallible EVERYWHERE (E1 uniform); HOF bodies mark latent invocations
+`f(x)!`; pre-D27 param-position spelling is `Callable[U(T)!]` only; Result/Option combinator
+callbacks stay unmarked per D1. Read this file's §3.2/§3.3 declaration-model text through
+that pin — "HOF decls stay success-typed" means success-typed WITH the `!` latency marker on
+the callback param, not bare `U(T)`.  
 This file remains evidence + worked examples; do not re-litigate ratified forks.  
 **Date:** 2026-07-16  
 **Scope:** Basic syntax + semantics for “HOF fallible iff callback fallible.”  

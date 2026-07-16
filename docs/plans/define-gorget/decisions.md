@@ -179,8 +179,12 @@ language-design/book examples showing float output.
   sets serve stdlib-composition boundaries (which the D17 class sweep will create).
 - **A32 → RATIFIED 2026-07-16 as basic design (forks A1–G1; see LOG): a HOF is fallible
   iff a function argument it invokes is fallible** (throws or declared-Result callback).
-  Evidence: [`scouts/scout-a32-hof.md`](scouts/scout-a32-hof.md). Impl track separate
-  (not opened here; after D29 call-sites when scheduled). Full throws×async algebra later.
+  Evidence: [`scouts/scout-a32-hof.md`](scouts/scout-a32-hof.md). **+ A1×E1 COMPOSITION PIN
+  ratified same day (see LOG): rethrows only through opt-in latent params `U(T)!`;
+  unannotated function types concretely infallible everywhere (E1 uniform); packet
+  [`scouts/scout-a32-a1xe1-composition.md`](scouts/scout-a32-a1xe1-composition.md).** Impl
+  track separate (not opened here; after D29 call-sites when scheduled). Full throws×async
+  algebra later.
 - **A33 (deep-fault prep, small): spec the supervised-boundary HOOK now** — a
   T_-code-carrying fault value convertible to a catchable Error at a defined isolation
   point (Task join is the natural site) — so the phase-3 supervised boundary composes
@@ -295,6 +299,30 @@ integral-float fix (Rust `{}` prints "3" — use `{:?}`-style or ryu-with-".0").
 P1-infra reviewers' recommendation.
 
 ## LOG
+
+- 2026-07-16 (session, post-A32) — **🎯 A32/A1×E1 COMPOSITION PIN RATIFIED (owner).**
+  Resolves the seam between A1 (inferred rethrows) and E1 (no silent coerce), which read
+  literally together deadlock (E1 rejects the very callback-pass A32's inference needs).
+  Normative pin: **Unannotated function types are concretely infallible (E1, uniform, every
+  position). Latent/inferred effect on a callable is spelled `U(T)!` — A31's bare-`!`
+  meaning at the type position. A32 inferred rethrows applies only through `!`-marked
+  function-type parameters; inside a HOF body a latent-effect invocation carries the D29
+  mark (`f(x)!`), vacuous under an infallible instantiation. Fallible callables never coerce
+  to effect-less types; storage of a known-throws callable spells the effect
+  (`U(T) throws E` / `Callable[…]`, per Fork C1). Param-position spelling pre-D27 is
+  bracketed-only: `Callable[U(T)!] f`. Result/Option combinator callbacks stay unmarked per
+  D1 (a throwing callback there rejects — a feature, not an omission). Doctrine wording
+  extended: `!` marks the error channel at the site where the channel appears — use,
+  declaration, or type; keywords still name concrete contracts (`throws E`). Recorded as a
+  REFINEMENT completing A1 (not a re-litigation): inferred rethrows through opt-in latent
+  params; implementers must NOT keep the pre-pin "any `U(T)` param is effect-generic"
+  reading.** The three callable-type spellings: `U(T)` = concretely infallible ·
+  `U(T)!` = latent set (may resolve empty) · `U(T) throws E` = concrete error type.
+  Process: the seam was found at the `e44b6120` review; full packet with deadlock examples,
+  alternatives (positional rule = "Option 1 in a trench coat" rejected; template-style /
+  registry-only / all-latent / wrap-coerce rejected), and the external fresh-pass SIGN OFF
+  (fold-ins R1–R5, all folded): `scouts/scout-a32-a1xe1-composition.md`. Binds the future
+  A32 impl brief; changes nothing in D29 call-sites v1.
 
 - 2026-07-16 (session) — **🎯 A32 BASIC DESIGN RATIFIED (owner): forks A1–G1.** HOF effect
   polymorphism for the **error channel only** (v1). Normative pins (evidence:

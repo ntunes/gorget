@@ -1,11 +1,11 @@
 # A32 pre-impl design question — the A1×E1 composition (unannotated function types: latent or infallible?)
 
-**Status:** REVIEWED — external fresh-agent pass 1 (2026-07-16, owner-run): **SIGN OFF on
-Option 2** with fold-ins R1–R5 (all folded below; none contradict a ratified fork — R3's
-third spelling is already Fork C1 surface). AWAITING THE OWNER PIN (proposed LOG text in §7).
-Originally filed 2026-07-16 at the review of commit `e44b6120`. Nothing here re-litigates a
-ratified fork; the question lives in the *seam between* two ratified pins — the reviewer's
-framing, adopted throughout: **Option 2 is A1 *completed by* E1, not A1 vs E1.**
+**Status:** ✅ **RATIFIED by the owner 2026-07-16** — the §7 pin is now in
+`decisions.md` LOG ("A32/A1×E1 COMPOSITION PIN RATIFIED"), which is normative; this file
+remains the evidence + derivation record. Do not re-litigate. History: filed at the
+`e44b6120` review; external fresh-agent pass 1 (owner-run): SIGN OFF on Option 2 with
+fold-ins R1–R5 (all folded below; R3's third spelling is already Fork C1 surface). The
+reviewer's framing, adopted throughout: **Option 2 is A1 *completed by* E1, not A1 vs E1.**
 
 **Purpose of this document:** a self-contained statement of the problem + a recommended
 resolution ("Option 2"), written to be handed to a fresh reviewer with no session context.
