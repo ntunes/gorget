@@ -1,0 +1,38 @@
+#!spectest
+# mode: run
+# adjudicator: production-v1
+# since: spec-v0.1
+# features: [cow, borrow, copy]
+# doc: |
+#   RV-F #11 (Copy axis, REJECT direction). Same shape as copy_field_borrow_ok.gg
+#   but the second argument reads a NON-Copy field: `h.label` is a `String` (owns a
+#   heap buffer), so its bare read stays a LIVE borrow-view that overlaps the
+#   exclusive `&h` write in the same call — E_BorrowConflict. Only a Copy-typed
+#   bare read is snapshot-exempt (D10(b)); a String / collection / callable read is
+#   not. This is the REJECT complement that pins the Copy extent's upper edge: the
+#   #11 fix must ACCEPT the Copy-field read WITHOUT also accepting this one.
+#
+#   adjudicator: production-v1 — the definition rejects this at the ELABORATE stage
+#   (a `FrontendError`, not an eval-time `IllFormed`), so the ggdef run-surface
+#   lane records it as out-of-surface (GGDEF-SKIP) rather than a run verdict, and
+#   `ggdef gen` cannot own its expect (it errors out of surface). The three
+#   PRODUCTION lanes affirm the reject at build time with error[E_BorrowConflict].
+#   stdout stays EXACTLY empty; flipping the `reject:` code must make every
+#   production lane MISMATCH (Core #6/#8).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_BorrowConflict
+#!end
+
+struct Record:
+    int n
+    String label
+
+void bump(Record &r, String tag):
+    r.n = r.n + tag.len()
+
+void main():
+    Record r = Record(1, "hi")
+    bump(&r, r.label)
+    print(r.n)

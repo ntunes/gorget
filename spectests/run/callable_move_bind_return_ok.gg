@@ -1,0 +1,33 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, callable]
+# doc: |
+#   RV-F #15 (single-owner Callable, ACCEPT direction — the carve-out's non-reject
+#   positions). A `Callable` is single-owner, so a BARE identifier copy at an init
+#   boundary is rejected (see reject_callable_bind_bare.gg). But two positions
+#   ACCEPT a bare callable because they are NOT implicit copies:
+#     * an EXPLICIT move `!a` at a bind — the sigil discharges the single-owner
+#       requirement (the source `a` is dead afterwards);
+#     * `return f` — the drop-taint axis differs at return: a callable moves at
+#       last use there, so the bare form is accepted (production accepts bare
+#       `return f` for callables, NOT via the init carve-out).
+#   `b(5) = 5 + 1 = 6` and `make()`'s returned doubler gives `c(3) = 3 * 2 = 6`.
+#   Both source callables are LOCAL owned values (a param `!f`-bind would instead
+#   be an E_UseAfterSourceMoved — a separate axis, not exercised here).
+# expect:
+#   exit: 0
+#   stdout: "6\n6\n"
+#!end
+
+Callable[int(int)] make():
+    Callable[int(int)] f = (n): n * 2
+    return f
+
+void main():
+    Callable[int(int)] a = (n): n + 1
+    Callable[int(int)] b = !a
+    print(b(5))
+    Callable[int(int)] c = make()
+    print(c(3))

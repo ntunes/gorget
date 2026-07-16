@@ -475,7 +475,19 @@ mod tests {
             let fm = parse_frontmatter(&src)
                 .unwrap_or_else(|e| panic!("{}: {e}", seed.file_name().unwrap().to_string_lossy()));
             assert_eq!(fm.mode.as_deref(), Some("run"), "{seed:?}");
-            assert_eq!(fm.adjudicator.as_deref(), Some("ggdef"), "{seed:?}");
+            // Adjudicator must be a schema-valid value (RFC §4): `ggdef` for a
+            // definition-generated expect, or `production-v1` for an ELABORATE-stage
+            // rejection the ggdef run-surface lane records as GGDEF-SKIP (its reject
+            // is affirmed by the production lanes at build time, not by an eval
+            // verdict, and `ggdef gen` cannot own it — mirrors gen_idempotent).
+            assert!(
+                matches!(
+                    fm.adjudicator.as_deref(),
+                    Some("ggdef") | Some("production-v1") | Some("prose")
+                ),
+                "{seed:?}: unexpected adjudicator {:?}",
+                fm.adjudicator,
+            );
         }
     }
 
@@ -485,6 +497,15 @@ mod tests {
         for seed in &run_seeds() {
             let src = fs::read_to_string(seed).unwrap();
             let fm = parse_frontmatter(&src).unwrap();
+            // Only `adjudicator: ggdef` seeds carry a definition-generated expect
+            // that a fresh run reproduces. A `production-v1` seed is an
+            // ELABORATE-stage rejection (a `FrontendError`) whose expect the
+            // production lanes affirm at build time; `run_source` returns
+            // out-of-surface for it, so the writer⇄reader run-equality does not
+            // apply (mirrors gen_idempotent's adjudicator gate).
+            if fm.adjudicator.as_deref() != Some("ggdef") {
+                continue;
+            }
             let run = run_source(&src, DEFAULT_FUEL).unwrap();
             let name = seed.file_name().unwrap().to_string_lossy();
             assert_eq!(

@@ -1,0 +1,28 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, callable]
+# doc: |
+#   RV-F #15 param-gate (single-owner Callable, ACCEPT direction — the param
+#   carve-out). Binding `Callable g = f` bare is rejected for a LOCAL callable
+#   (reject_callable_bind_bare.gg) but ACCEPTED when the source `f` is a PARAM: a
+#   param is a borrowed view, so re-binding it copies a pointer, not the owner
+#   (production `!def.is_param`, check_stmt.rs:1464). This is the ACCEPT half of
+#   the param-specific gate — its REJECT half is reject_callable_for_var_bind.gg,
+#   where a `for`-element callable (Borrow-mode but NOT a param) IS rejected. The
+#   two pin that the gate keys on param-ness specifically, not on Borrow-mode
+#   (which also marks for-vars / match-bindings / self). `g` and `f` both alias
+#   the passed doubler, so `g(5) + f(5) = 10 + 10 = 20`.
+# expect:
+#   exit: 0
+#   stdout: "20\n"
+#!end
+
+int use_twice(Callable[int(int)] f, int x):
+    Callable[int(int)] g = f
+    return g(x) + f(x)
+
+void main():
+    Callable[int(int)] fn = (n): n * 2
+    print(use_twice(fn, 5))

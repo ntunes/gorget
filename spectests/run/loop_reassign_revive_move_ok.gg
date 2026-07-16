@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness, loop]
+# doc: |
+#   RV-F #13 (loop revive-seeding, ACCEPT direction). `n` is declared in an
+#   ENCLOSING scope, then inside a 2-element loop it is FIRST whole-local
+#   reassigned (`n = "fresh"`) and only THEN moved (`consume(!n)`). The reassign
+#   re-creates the value for THIS iteration, so the move is legal every iteration
+#   — no use-after-move on the next one. This works because a whole-local rebind
+#   inside a loop seeds the innermost loop-local set (production `origins.rs:18`);
+#   the oracle previously revived the moved slot but did NOT re-seed it loop-local,
+#   so it wrongly rejected this program with E_MoveInLoop. Contrast
+#   reject_move_in_loop.gg: there the enclosing `n` is moved with NO intervening
+#   reassign, so the second iteration genuinely re-moves a dead slot.
+# expect:
+#   exit: 0
+#   stdout: "done\n"
+#!end
+
+void consume(String !s):
+    pass
+
+void main():
+    String n = "outer"
+    Vector[int] items = [1, 2]
+    for i in items:
+        n = "fresh"
+        consume(!n)
+    print("done")

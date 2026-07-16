@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: production-v1
+# since: spec-v0.1
+# features: [move, callable]
+# doc: |
+#   RV-F #15 (single-owner Callable, REJECT direction — the enum-variant position).
+#   A bare `Callable` identifier passed to an enum-variant constructor (here the
+#   prelude `Some(f)`) is an implicit copy of a single-owner value —
+#   E_MoveWithoutOperator (write `!f` / `f.clone()`). This pins the enum-variant
+#   arm of production's single-owner-init carve-out.
+#
+#   adjudicator: production-v1 — ELABORATE-stage reject (GGDEF-SKIP on the ggdef
+#   run-surface lane; C/LLVM affirm error[E_MoveWithoutOperator] at build).
+#
+#   KNOWN SELF-HOST GAP (filed, TODO.md): the self-host does not treat `Callable`
+#   as single-owner, so it ACCEPTS this enum-variant init — the self-host lane
+#   MISMATCHes. The expected verdict is what the language SHOULD do (reject); the
+#   fixture EXPOSES the gap.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MoveWithoutOperator
+#!end
+
+void main():
+    Callable[int(int)] f = (n): n * 2
+    Option[Callable[int(int)]] o = Some(f)
+    print("x")

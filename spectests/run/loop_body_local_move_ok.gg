@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness, loop]
+# doc: |
+#   RV-F #14 (for-var vs body-local, ACCEPT direction). `s` is a FRESH local
+#   declared INSIDE the loop body, so it is re-created each iteration and IS
+#   loop-local — moving it out with `consume(!s)` is legal on every iteration.
+#   This is the deliberate contrast to reject_for_var_move_in_loop.gg, where the
+#   `for`-element variable aliases persistent collection storage and is NOT
+#   loop-local (moving it is E_MoveInLoop). The two fixtures pin the distinction
+#   the oracle now keys on the TYPED bind source (`Source::BorrowView` = the
+#   for-desugar's element view → not loop-local; a user `Source::Copy` body-local
+#   → loop-local) rather than any shape heuristic.
+# expect:
+#   exit: 0
+#   stdout: "done\n"
+#!end
+
+void consume(String !s):
+    pass
+
+void main():
+    Vector[int] items = [1, 2]
+    for i in items:
+        String s = "fresh"
+        consume(!s)
+    print("done")

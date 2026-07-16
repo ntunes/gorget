@@ -180,12 +180,27 @@ impl<'a> Live<'a> {
     /// Allocate a fresh live binding for `name` in the current scope. If in a
     /// loop, record it as loop-local (safe to move — re-created each iteration).
     fn declare(&mut self, name: &str) -> Id {
+        self.declare_impl(name, true)
+    }
+
+    /// Like `declare`, but NEVER records the binding as loop-local even inside a
+    /// loop. Used for the `for`-element view, which aliases persistent
+    /// collection storage rather than being re-created each iteration — moving
+    /// it out is a `MoveInLoop` (production binds the for-var OUTSIDE the
+    /// loop-local scope: `check_stmt.rs:968` precedes `:992`).
+    fn declare_non_loop_local(&mut self, name: &str) -> Id {
+        self.declare_impl(name, false)
+    }
+
+    fn declare_impl(&mut self, name: &str, loop_local: bool) -> Id {
         let id = self.next_id;
         self.next_id += 1;
         self.names.insert(id, name.to_string());
         self.scopes.last_mut().expect("a scope is open").push((name.to_string(), id));
-        if let Some(set) = self.loop_locals.last_mut() {
-            set.insert(id);
+        if loop_local {
+            if let Some(set) = self.loop_locals.last_mut() {
+                set.insert(id);
+            }
         }
         id
     }
@@ -433,7 +448,16 @@ impl<'a> Live<'a> {
         match stmt {
             Stmt::Bind { name, source, .. } => {
                 self.check_source(source);
-                self.declare(name);
+                // A `BorrowView`-sourced bind is a per-iteration VIEW of a
+                // persistent value — uniquely the `for x in coll` element bind
+                // (bind_source never yields BorrowView; only the for-desugar
+                // does, `mod.rs:947`). It is NOT re-created each iteration, so a
+                // move of it out is a MoveInLoop — do NOT seed it loop-local.
+                if matches!(source, Source::BorrowView(_)) {
+                    self.declare_non_loop_local(name);
+                } else {
+                    self.declare(name);
+                }
             }
             Stmt::With { name, source, body, .. } => {
                 self.check_source(source);
@@ -453,6 +477,13 @@ impl<'a> Live<'a> {
                     self.rebind = saved_rebind;
                     if let Some(id) = self.resolve(x) {
                         self.moved.remove(&id);
+                        // `mark_live` also seeds the innermost loop-local set
+                        // (production `origins.rs:18`): a whole-local rebind
+                        // inside a loop re-creates the value each iteration, so a
+                        // subsequent move is legal (not MoveInLoop).
+                        if let Some(set) = self.loop_locals.last_mut() {
+                            set.insert(id);
+                        }
                     }
                 } else {
                     // A projected write (`x.f = …`, `v[i] = …`): the RHS, then the

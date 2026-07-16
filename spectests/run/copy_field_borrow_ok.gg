@@ -1,0 +1,33 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [cow, borrow, copy]
+# doc: |
+#   RV-F #11 (Copy axis, ACCEPT direction). `bump(&p, p.b)` passes a mutable
+#   borrow `&p` AND a bare read of the field `p.b` in the SAME call. Their places
+#   overlap (`p` vs `p.p`), but `p.b` is `int` — a Copy type — so the bare read is
+#   a VALUE SNAPSHOT taken before the borrow's exclusive write, not a live view
+#   that conflicts (D10(b) place-overlap: a Copy-typed bare read is exempt). Both
+#   compilers ACCEPT and run; the loop-free body computes `p.a = 3 + 4 = 7`. This
+#   is the POS complement of reject_borrow_conflict_noncopy_field.gg — flipping the
+#   field to a non-Copy type turns the same shape into an E_BorrowConflict. The
+#   Copy extent mirrors production `is_copy_type` exactly (scalar / tuple-of-Copy /
+#   all-Copy-field struct); the oracle previously mis-modelled it as `Ty::Prim`
+#   only and over-rejected this program.
+# expect:
+#   exit: 0
+#   stdout: "7\n"
+#!end
+
+struct Pair:
+    int a
+    int b
+
+void bump(Pair &p, int extra):
+    p.a = p.a + extra
+
+void main():
+    Pair p = Pair(3, 4)
+    bump(&p, p.b)
+    print(p.a)

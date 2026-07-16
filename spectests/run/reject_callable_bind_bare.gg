@@ -1,0 +1,35 @@
+#!spectest
+# mode: run
+# adjudicator: production-v1
+# since: spec-v0.1
+# features: [move, callable]
+# doc: |
+#   RV-F #15 (single-owner Callable, REJECT direction — the bind position). A
+#   `Callable` is single-owner (no implicit copy path in the lowering), so a BARE
+#   identifier copy at a bind boundary must be rejected: write `!f` to move or
+#   `f.clone()` to copy — E_MoveWithoutOperator. The oracle previously had no
+#   bind-side reject for `Ty::Callable` and wrongly accepted this. This is the
+#   canonical bare-assign site of production's single-owner-init carve-out; its
+#   ACCEPT complement (`!f`-bind / `return f`) is callable_move_bind_return_ok.gg.
+#
+#   adjudicator: production-v1 — the definition rejects at the ELABORATE stage (a
+#   `FrontendError`), so the ggdef run-surface lane records GGDEF-SKIP and
+#   `ggdef gen` cannot own the expect. The C and LLVM production lanes affirm the
+#   reject at build time with error[E_MoveWithoutOperator].
+#
+#   KNOWN SELF-HOST GAP (filed, TODO.md): the self-host driver does NOT yet treat
+#   `Callable` as single-owner at init boundaries — it ACCEPTS this bare bind and
+#   runs it. The self-host lane therefore MISMATCHes this fixture until that gap is
+#   fixed. The expected verdict here is what the language SHOULD do (reject), not
+#   what the self-host currently does — the fixture EXPOSES the gap rather than
+#   ratifying the wrong behavior.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MoveWithoutOperator
+#!end
+
+void main():
+    Callable[int(int)] f = (n): n * 2
+    Callable[int(int)] g = f
+    print(g(5))

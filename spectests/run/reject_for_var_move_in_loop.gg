@@ -1,0 +1,30 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness, loop]
+# doc: |
+#   RV-F #14 (for-var MoveInLoop, REJECT direction). The `for`-element variable
+#   `x` aliases persistent collection storage — it is NOT re-created each
+#   iteration — so moving it out with `consume(!x)` would move OUT of the
+#   collection: E_MoveInLoop. The oracle previously treated the for-element bind
+#   as a body-local (loop-local) and wrongly ACCEPTED this; the fix keys on the
+#   TYPED for-desugar view (`Source::BorrowView`), which is never loop-local.
+#   stdout stays EXACTLY empty (the program never ran, which IS the verdict),
+#   exit 1. This is the REJECT complement of loop_body_local_move_ok.gg (a genuine
+#   body-local IS movable); flipping the expected `reject:` code must make every
+#   lane MISMATCH (Core #6/#8). The 2-element iterable makes the re-move a genuine
+#   multi-iteration reject, never a run-once loop.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MoveInLoop
+#!end
+
+void consume(String !s):
+    pass
+
+void main():
+    Vector[String] items = ["a", "b"]
+    for x in items:
+        consume(!x)

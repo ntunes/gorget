@@ -45,11 +45,13 @@
 //!
 //! The three PRODUCTION floors (C/LLVM/self-host) are the count of committed
 //! fixtures each production impl reproduces today. `MIN_FIXTURES` is the TOTAL
-//! committed corpus count (the glob-emptiness guard). The D11 trap fixtures
-//! (post-T2) now MATCH all three lanes, and the may-move REJECT fixture MATCHes
-//! all three too (the self-host renderer now emits the ratified `error[E_<code>]`
-//! headline off its typed `DiagKind` — see the floor consts below): all three
-//! lanes reach the whole corpus, so every floor EQUALS `MIN_FIXTURES`.
+//! committed corpus count (the glob-emptiness guard). The C and LLVM lanes reach
+//! the whole corpus (floor == `MIN_FIXTURES`). The self-host floor is FOUR below
+//! it: RV-F added four single-owner-Callable init rejects (E_MoveWithoutOperator)
+//! that the self-host typechecker does not yet enforce — it ACCEPTS them, so those
+//! four MISMATCH the self-host lane by design (the KNOWN gap detailed at the floor
+//! consts below). Every other fixture (the D11 trap fixtures, the may-move rejects,
+//! and the other seven RV-F fixtures) MATCHes all three lanes.
 //!
 //! (History: the C and LLVM lanes once floored one below self-host because
 //! `smith_move_param_concat.gg` was a both-backend BUILD-FAIL — the C backend
@@ -108,21 +110,41 @@ use ggdef::{parse_frontmatter, Expect};
 // (E_DoubleMove via a single-owner ConsumeCallable). Together with the patch's
 // `reject_double_move.gg` that is FIVE new coded rejects — all four-lane MATCH — so
 // every floor rose 197 → 202 in lockstep with the corpus.
-const C_MATCH_FLOOR: usize = 202;
-const LLVM_MATCH_FLOOR: usize = 202;
-const SELFHOST_MATCH_FLOOR: usize = 202;
+//
+// RV-F added 11 fixtures (Copy axis, loop revive-seeding, for-var MoveInLoop, the
+// single-owner Callable init class). SEVEN MATCH on ALL THREE production lanes:
+// five ACCEPT seeds (`copy_field_borrow_ok`, `loop_reassign_revive_move_ok`,
+// `loop_body_local_move_ok`, `callable_move_bind_return_ok`,
+// `callable_param_rebind_ok`) + the reject `reject_borrow_conflict_noncopy_field.gg`
+// (E_BorrowConflict) + `reject_for_var_move_in_loop.gg` (E_MoveInLoop). The C and
+// LLVM lanes reject via the shared backend-independent semantic checker, so those
+// two rejects MATCH on C and LLVM too — and the self-host renders both codes off
+// its typed `DiagKind`. So C and LLVM rise by all ELEVEN (202 → 213).
+//
+// The remaining FOUR are the single-owner-Callable init rejects
+// (`reject_callable_bind_bare` / `_ctor_bare` / `_enum_variant_bare` /
+// `_for_var_bind`, all E_MoveWithoutOperator). C and LLVM reject them (the +11
+// above). The SELF-HOST lane does NOT: its typechecker does not yet treat
+// `Callable` as single-owner at init boundaries, so it ACCEPTS (builds + runs)
+// those four bare-init programs — a KNOWN, FILED self-host gap (TODO.md). Those
+// four fixtures therefore MISMATCH the self-host lane BY DESIGN (they EXPOSE the
+// gap with the expected verdict = what the language SHOULD do — a reject — never
+// ratifying the wrong behavior, per "Don't redesign around compiler gaps"). So the
+// self-host floor rises by only SEVEN (202 → 209), holding FOUR below the corpus
+// until the self-host single-owner-Callable check lands (mirrors the historical
+// trap-fixture staging, where a fixture MISMATCHed a lane by design and the floor
+// held below the total until the lane caught up).
+const C_MATCH_FLOOR: usize = 213;
+const LLVM_MATCH_FLOOR: usize = 213;
+const SELFHOST_MATCH_FLOOR: usize = 209;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the TOTAL seed COUNT (195 exit-0/trap fixtures + the may-move UAM PAIR
-/// `reject_use_after_move.gg` + `reinit_accept.gg` + the FIVE migrated coded
-/// liveness/move rejects `reject_double_move.gg` (E_DoubleMove),
-/// `reject_move_in_loop.gg` (E_MoveInLoop), `reject_use_after_move_branch.gg`
-/// (E_UseAfterMove), `reject_consuming_self_use_after_move.gg` (E_UseAfterMove),
-/// `reject_consume_callable_double.gg` (E_DoubleMove) = 202). It EQUALS all three
-/// MATCH floors (C, LLVM, and — since the reject-diagnostic render alignment
-/// documented above — self-host all reproduce the whole corpus).
-const MIN_FIXTURES: usize = 202;
+/// the TOTAL seed COUNT (202 pre-RV-F + the 11 RV-F seeds = 213). It EQUALS the C
+/// and LLVM MATCH floors (both reject/run the whole corpus); the self-host floor
+/// is FOUR below it — the four single-owner-Callable init rejects the self-host
+/// does not yet enforce (the KNOWN gap documented above).
+const MIN_FIXTURES: usize = 213;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs

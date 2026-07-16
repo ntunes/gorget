@@ -1,0 +1,34 @@
+#!spectest
+# mode: run
+# adjudicator: production-v1
+# since: spec-v0.1
+# features: [move, callable, loop]
+# doc: |
+#   RV-F #15 param-gate (single-owner Callable, REJECT direction — the for-var
+#   half). Binding `Callable g = f` bare is ACCEPTED when `f` is a param
+#   (callable_param_rebind_ok.gg) but REJECTED when `f` is a `for`-element callable:
+#   a for-var is Borrow-mode but is NOT a param, and the single-owner-init gate
+#   skips ONLY params (production `!def.is_param`, check_stmt.rs:1464) — so the bare
+#   copy is E_MoveWithoutOperator. This is the REJECT half of the param-specific
+#   gate: together with the param ACCEPT it proves the gate keys on param-ness, not
+#   on Borrow-mode (which also marks for-vars). The reject fires at the bind before
+#   any iteration runs.
+#
+#   adjudicator: production-v1 — ELABORATE-stage reject (GGDEF-SKIP on the ggdef
+#   run-surface lane; C/LLVM affirm error[E_MoveWithoutOperator] at build).
+#
+#   KNOWN SELF-HOST GAP (filed, TODO.md): the self-host does not treat `Callable`
+#   as single-owner, so it ACCEPTS this for-var bind — the self-host lane
+#   MISMATCHes. The expected verdict is what the language SHOULD do (reject); the
+#   fixture EXPOSES the gap.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MoveWithoutOperator
+#!end
+
+void main():
+    Vector[Callable[int()]] fns = [(): 1, (): 2]
+    for f in fns:
+        Callable[int()] g = f
+        print(g())
