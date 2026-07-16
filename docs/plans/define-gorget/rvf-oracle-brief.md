@@ -1,6 +1,14 @@
 # Executor brief: RV-F — four ggdef oracle divergences (liveness / Copy / Callable)
 
-> **Status:** v2 — pass-2 folded (1 BLOCKING: the R1 `local_mode != Borrow` discriminator was
+> **Status:** v3 — pass-3 folded (1 BLOCKING: the match-binding REJECT cell was UNSATISFIABLE —
+> ggdef never TYPES match-arm bindings (mod.rs:2036-2051), so the type-gated reject can never
+> fire there; proven orthogonal to the param gate (s7 survives param_names emptied). The cell
+> is DROPPED from M2 and the substrate gap FILED (MED, pairs with the axis-extension track).
+> Pass-2's "(proven by probe s6/s7)" was HALF-right: the param-gate fixes s6 (for-var, typed,
+> Borrow-exempt), NOT s7 (untyped binding — different cause). Minor: fixtures MUST use the
+> `Callable[...]` spelling — bare `int(int)` under-rejects in ggdef (pre-existing, filed LOW,
+> out-of-scope line added). The pass-3 reviewer's param-gate prototype is captured at
+> `scouts/patches/rvf_paramgate_r3.patch` — the executor starts from it.) Pass-2 folded (1 BLOCKING: the R1 `local_mode != Borrow` discriminator was
 > TOO BROAD — `Borrow` marks {param, for-var, match-binding, self} while production skips ONLY
 > params; the gate as-folded wrongly ACCEPTS for-var/match-binding callable binds that
 > production REJECTS (proven by probe: s6/s7) — a wrong-ACCEPT the whole suite misses. The
@@ -49,9 +57,10 @@ differs at return; do not blur them).
    equivalent typed param bit) populated in the param-binding loop at `mod.rs:341-362`; do
    NOT use `local_mode` (Borrow also marks for-vars/match-bindings/self — production skips
    ONLY params, `check_stmt.rs:1464 !def.is_param`). Bind/assign sites skip param sources;
-   ctor sites unchanged. Fixtures pinning ALL THREE cells: callable-PARAM bare-bind →
-   ACCEPTED; callable **for-var** bare-bind → REJECTED (E_MoveWithoutOperator); callable
-   **match-binding** bare-bind → REJECTED (production probes s6/s7). Then: #11
+   ctor sites unchanged. Fixtures pinning TWO cells: callable-PARAM bare-bind → ACCEPTED; callable **for-var**
+   bare-bind → REJECTED (E_MoveWithoutOperator). The match-binding cell is OUT (filed —
+   untyped-binding substrate gap; do NOT attempt match-arm type inference here). ALL fixtures
+   use the `Callable[...]` spelling, never bare `int(int)` (filed under-reject). Then: #11
    `f(&x, x.p)` all-scalar POS + non-Copy field NEG(E_BorrowConflict); #13
    reassign-then-move-in-loop POS; #14 `for x in v: sink(!x)` NEG(E_MoveInLoop) + fresh-local
    move-in-body POS; #15 NEGs at bind/ctor/enum-variant + POS at `!f`-bind / `return f` **with LOCAL owned sources only** (a param `!f`-bind
@@ -65,7 +74,8 @@ differs at return; do not blur them).
 
 ## Out of scope / zone carve
 
-- Auto-inferred closure-literal sources for #15 (ggdef typing gap — noted in acceptance; the
+- Auto-inferred closure-literal sources for #15 AND match-arm pattern bindings AND the bare
+  `int(int)` function-type spelling (all ggdef typing-substrate gaps — filed; the
   axis-extension track's neighborhood). Channel/Shared/Weak/Mutex Copy-treatment (latent
   pre-existing subset divergence; not corpus-exercised).
 - The filed `v.push(f)` production ICE (its own track).
