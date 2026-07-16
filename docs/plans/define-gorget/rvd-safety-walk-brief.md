@@ -1,6 +1,10 @@
 # Executor brief: RV-D — self-host safety-walk soundness cluster (holes #6/#7/#8/#9 + Copy-axis subset)
 
-> **Status:** v1 — pass-1 folded (R1 the 21 probe sources are now COMMITTED at
+> **Status:** v2 — pass-2 folded (1 MED: the two probes that demonstrate FILED defects are
+> PROBE-ONLY, never committed fixtures — see M2; 2 nits: the live_reinit anchor is
+> `typecheck.gg:1186-1190` [NOT check_stmt.rs]; only the 21 `*.gg` files in the archive are
+> fixture sources, the 12 non-.gg entries are scout scratch). Pass-2 independently re-ran 18
+> probes — all verdicts reproduce. Pass-1 folded (R1 the 21 probe sources are now COMMITTED at
 > `scouts/patches/rvd_probes.tgz` — M2 unpacks them, no re-derivation; R2 the #9 catch-all
 > honesty note below; R3 line/count fixups). Pass-1 independently reproduced ALL decisive
 > gates (patch clean on tip, 23/23 lanes, 21/21 probes exact, type_comparison ==85).
@@ -57,8 +61,16 @@ over the walk, matching production's model per-hole:
    over-rejection guard), including the divergence/nesting edges (move-one-arm /
    reinit-one-arm / match-move-all REJECT; reinit-both / match-reinit-else / diverge-reinit
    ACCEPT). Wire into the `self_host_driver_rejects_*`/`accepts_*` suites with exact
-   `error[E_<code>]` assertions (the coarse-kind precedent). Fixtures must not be
-   gitignore-hidden; `gg fmt`-idempotent.
+   `error[E_<code>]` assertions (the coarse-kind precedent). **PROBE-ONLY carve-outs
+   (pass-2, Core-#8/don't-pin-gaps): `repro_8b_slice_int` (accepts a dangling-view program —
+   the FILED RV-E under-rejection; committing it green would pin the bug and block RV-E) and
+   `repro_5_copy_struct` (rejects a legal Copy-struct read — the FILED compute_is_copy
+   over-rejection) are NOT committed as fixtures; their flips belong to those tracks. #8's
+   accept-guard must be a NEWLY-AUTHORED legal slice program instead (e.g. `f(v[0..2])` with
+   no conflicting `&v`, or two disjoint slice reads) — the archive contains no legal-#8
+   accept probe.** Only the 21 `*.gg` files in the archive are sources (glob `*.gg`; the
+   `.err`/`.log`/`.sh` entries are scratch). Fixtures must not be gitignore-hidden;
+   `gg fmt`-idempotent.
 3. **M3 — gates (FOREGROUND; chunk >600s by test name):** driver rebuild
    (`GG_BUILD_TIMEOUT_SECS=600`) · ALL `self_host_driver_*` lanes (expect 23/23 + the new
    fixtures) · **`self_host_bootstrap_fixed_point` YOURSELF** (single monolithic test,

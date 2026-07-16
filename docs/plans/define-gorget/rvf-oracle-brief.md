@@ -1,6 +1,12 @@
 # Executor brief: RV-F — four ggdef oracle divergences (liveness / Copy / Callable)
 
-> **Status:** v1 — pass-1 folded (R1 BLOCKING: the patch's #15 bind/assign reject must gate on
+> **Status:** v2 — pass-2 folded (1 BLOCKING: the R1 `local_mode != Borrow` discriminator was
+> TOO BROAD — `Borrow` marks {param, for-var, match-binding, self} while production skips ONLY
+> params; the gate as-folded wrongly ACCEPTS for-var/match-binding callable binds that
+> production REJECTS (proven by probe: s6/s7) — a wrong-ACCEPT the whole suite misses. The
+> discriminator is now PARAM-SPECIFIC. Minor: the `!f`-bind/`return f` POS fixtures must use
+> LOCAL owned sources — a param `!f`-bind diverges, production rejects E_UseAfterSourceMoved.)
+> Pass-1 folded (R1 BLOCKING: the patch's #15 bind/assign reject must gate on
 > `local_mode != Borrow` — a callable PARAM bare-bind is production-ACCEPTED and the patch
 > as-proven over-rejects it (a divergence the patch CREATED; the green suite missed it — the
 > corpus doesn't exercise it); ctor/enum/struct-literal sites correctly do NOT exclude params
@@ -38,14 +44,19 @@ differs at return; do not blur them).
 1. **M1** — apply the proven patch (`git apply --check`; re-read hunks on drift). The #15
    full-class shape is the RATIFIED scope (orchestrator endorses the reference-grade
    completion over the literal one-position filing). Checkpoint /tmp/recover_rvf_exec_1.patch.
-2. **M2 — fixtures pinning BOTH directions per position** (pass-1-corrected): the executor
-   FIRST adds the R1 param-gate to the patch (bind/assign sites gate on the RHS source's
-   `local_mode != BindMode::Borrow`, ggdef tracks it at mod.rs:283/362; ctor sites unchanged)
-   + a NEG-accepts fixture (callable-PARAM bare-bind → ACCEPTED, matching production). Then: #11
+2. **M2 — fixtures pinning BOTH directions per position** (pass-2-corrected): the executor
+   FIRST adds the R1 gate as a **PARAM-SPECIFIC** discriminator — a `param_names` set (or
+   equivalent typed param bit) populated in the param-binding loop at `mod.rs:341-362`; do
+   NOT use `local_mode` (Borrow also marks for-vars/match-bindings/self — production skips
+   ONLY params, `check_stmt.rs:1464 !def.is_param`). Bind/assign sites skip param sources;
+   ctor sites unchanged. Fixtures pinning ALL THREE cells: callable-PARAM bare-bind →
+   ACCEPTED; callable **for-var** bare-bind → REJECTED (E_MoveWithoutOperator); callable
+   **match-binding** bare-bind → REJECTED (production probes s6/s7). Then: #11
    `f(&x, x.p)` all-scalar POS + non-Copy field NEG(E_BorrowConflict); #13
    reassign-then-move-in-loop POS; #14 `for x in v: sink(!x)` NEG(E_MoveInLoop) + fresh-local
-   move-in-body POS; #15 NEGs at bind/ctor/enum-variant + POS at `!f`-bind / `return f` (NOT `v.push(f)` —
-   filed ICE; the closure-LITERAL push form is acceptable if a push POS is wanted). Populate `expect:` via `ggdef gen`; every new fixture must ALSO pass the
+   move-in-body POS; #15 NEGs at bind/ctor/enum-variant + POS at `!f`-bind / `return f` **with LOCAL owned sources only** (a param `!f`-bind
+   diverges — production rejects E_UseAfterSourceMoved; NOT `v.push(f)` — filed ICE; the
+   closure-LITERAL push form is acceptable if a push POS is wanted). Populate `expect:` via `ggdef gen`; every new fixture must ALSO pass the
    production `spec_conformance` lanes (they are four-lane spectests — invariant #9).
 3. **M3 — gates (FOREGROUND):** full `cargo test -p ggdef` (all 7 test files) · main-repo
    `GG_BUILD_TIMEOUT_SECS=600 cargo test --test spec_conformance -- --test-threads=1
