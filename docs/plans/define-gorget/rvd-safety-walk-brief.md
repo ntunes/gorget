@@ -1,7 +1,10 @@
 # Executor brief: RV-D — self-host safety-walk soundness cluster (holes #6/#7/#8/#9 + Copy-axis subset)
 
-> **Status:** v0 — awaiting ≥3 sequential fresh brief-reviews (fold after each; stop only on a
-> clean pass). **Scout basis (read both FIRST):**
+> **Status:** v1 — pass-1 folded (R1 the 21 probe sources are now COMMITTED at
+> `scouts/patches/rvd_probes.tgz` — M2 unpacks them, no re-derivation; R2 the #9 catch-all
+> honesty note below; R3 line/count fixups). Pass-1 independently reproduced ALL decisive
+> gates (patch clean on tip, 23/23 lanes, 21/21 probes exact, type_comparison ==85).
+> Awaiting the next fresh pass. **Scout basis (read both FIRST):**
 > `docs/plans/define-gorget/scouts/scout-rvd-safety-walk.md` (premise table, per-hole measured
 > before/after, gates) + the PROVEN patch
 > `docs/plans/define-gorget/scouts/patches/rvd_proto.patch` (ONE file,
@@ -29,7 +32,14 @@ over the walk, matching production's model per-hole:
 4. **#9 branch-join**: `safety_commit` REPLACES `state.moved` with the union of
    REACHING-branch end-states (fall-through only when no unconditional else/catch-all —
    the new `elsebranches_have_uncond`/`match_has_catch_all` helpers) — move-then-reinit-in-
-   both-arms now accepts. The OWNER-RULED-KEEP `live_reinit` workaround (`:~1184-1185`)
+   both-arms now accepts. **HONESTY NOTE (pass-1): on the exotic shape "reinit in ALL arms
+   incl. a bare `case _:`/`case x:` wildcard arm", the self-host is STRICTLY MORE PRECISE
+   than production** (production still pushes the pre-branch fall-through unless there is a
+   separate `else_arm` — `check_stmt.rs:1217-1222` — and so over-rejects; the self-host
+   correctly treats an unguarded wildcard/binding arm as exhaustive). SOUND (never accepts an
+   unsafe program), dormant, and per rust-not-sacrosanct the precision stays; the PRODUCTION
+   over-rejection is FILED as its own small entry. Do not "fix" the self-host down to
+   production's imprecision, and do not write a production-parity fixture on this shape. The OWNER-RULED-KEEP `live_reinit` workaround (`:1186-1190`)
    stays untouched.
 5. **Copy axis (subset)**: `arg_place_is_copy` → recursive `resolved_type_is_copy`
    (scalar/tuple/ref/handle-generics). The struct-of-scalars completion is FILED (needs a
@@ -40,8 +50,9 @@ over the walk, matching production's model per-hole:
 1. **M1** — apply the proven patch (`git apply --check`; ⚠ coarse-kind landed in this file's
    EMIT sites `c082ae96` and the scout verified no collision — re-verify on the current tip;
    re-read hunks on drift). Checkpoint `/tmp/recover_rvd_exec_1.patch`.
-2. **M2 — fixtures**: promote the scout's 21 probes (`/tmp/rvd/` shapes are documented in the
-   scout report — reconstruct from the report's table if /tmp is gone) into committed driver
+2. **M2 — fixtures**: promote the scout's 21 probes — **unpack the COMMITTED archive
+   `docs/plans/define-gorget/scouts/patches/rvd_probes.tgz`** (18 named + 3 diagnostic
+   probes; verbatim sources, no re-derivation) — into committed driver
    reject/accept fixtures: per hole ≥1 reject (the soundness shape) + ≥1 accept (the
    over-rejection guard), including the divergence/nesting edges (move-one-arm /
    reinit-one-arm / match-move-all REJECT; reinit-both / match-reinit-else / diverge-reinit
