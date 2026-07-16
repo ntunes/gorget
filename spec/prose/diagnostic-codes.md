@@ -9,7 +9,7 @@
 
 The codes are defined — one per variant, no catch-all — on the diagnostic enums:
 
-- `SemanticErrorKind::code()` (`src/semantic/errors.rs`) → the 93 `E_` codes below.
+- `SemanticErrorKind::code()` (`src/semantic/errors.rs`) → the 95 `E_` codes below.
 - `SemanticWarningKind::code()` (`src/semantic/errors.rs`) → the 17 `W_` codes below.
 
 Each `code()` is an **exhaustive `match` mirroring the `Display` impl** with **no**
@@ -69,6 +69,7 @@ and is cited concretely.
 | `E_UnwrapOnNonOptional` | `UnwrapOnNonOptional` | — |
 | `E_DerefNonBox` | `DerefNonBox` | — |
 | `E_DefaultOpNonOptional` | `DefaultOpNonOptional` | — |
+| `E_LocalBorrowBind` | `LocalBorrowBind` | [`03`](03-writethrough-and-move.md) |
 | `E_MethodGenericInferenceFailed` | `MethodGenericInferenceFailed` | — |
 | `E_CannotInferType` | `CannotInferType` | — |
 | `E_NoFieldFound` | `NoFieldFound` | — |
@@ -87,6 +88,7 @@ and is cited concretely.
 | `E_OnErrorInNonThrowingFunction` | `OnErrorInNonThrowingFunction` | — |
 | `E_MainThrowsNonInt` | `MainThrowsNonInt` | — |
 | `E_UnconvertibleErrorPropagation` | `UnconvertibleErrorPropagation` | — |
+| `E_UnhandledThrows` | `UnhandledThrows` | — |
 | `E_AwaitOutsideAsync` | `AwaitOutsideAsync` | — |
 | `E_SelectOutsideAsync` | `SelectOutsideAsync` | — |
 | `E_AwaitNonFuture` | `AwaitNonFuture` | — |

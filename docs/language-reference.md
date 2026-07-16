@@ -2401,6 +2401,8 @@ else:
 print(s)  # ERROR: use after move
 ```
 
+The merge is a flow-sensitive union taken only over the branches that actually reach the join: an arm that diverges — via `return`, `break`, `continue`, or `throw` — contributes nothing to the merged state, and because a variable reinitialized within an arm is revived there, a value that is moved and then reassigned in every reaching arm is live after the branch, while a value left moved in any reaching arm is moved.
+
 ### 9.6 Copy-on-Write Semantics
 
 Resource types use **copy-on-write** (CoW): bare-identifier assignment

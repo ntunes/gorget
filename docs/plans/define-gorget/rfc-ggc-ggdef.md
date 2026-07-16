@@ -334,3 +334,134 @@ Coverage illusion → smith across all lanes + seed sweeps.
    `print` and `float_to_str`; the formatting appendix specifies the algorithm; Phase-1
    converter unblocked (float-fixture expectations regenerate under the new rule).
 3. `E_`-code numbering scheme (bikeshed; Phase 1) — still open.
+
+## Appendix: Prior art & rationale
+
+The design above is a set of choices; this appendix records the prior art those choices
+answer to, and why the executable definition takes the shape it does rather than the
+alternatives. Two facts about Gorget's own tree frame it. First, `gg sim` (`src/sim/`, a
+tree-walking interpreter over GIR, self-described as "analogous to Rust's miri") already
+exists — but it consumes GIR, so it executes the clone/move/drop decisions the production
+lowering *already made*; it can validate backends against the lowering, but it is
+structurally incapable of *defining* what the lowering must mean. It is the Miri trap made
+concrete, and it is why `ggdef` must be a separate pass that shares only the frontend
+(§2.4's import ratchet is the fence). Second, the enforcement culture `ggdef` plugs into —
+ratchet lints, a bootstrap fixed-point test, diagnostic-always-pass `*_comparison` tests
+with MATCH counts, an ASan gate, a deterministic-stdout fixture corpus — already supplies
+the machinery every guard below needs.
+
+### Prior-art systems
+
+**WebAssembly — the gold-standard triad.** One repository holds three artifacts: the formal
+spec (typing + reduction rules over abstract syntax), an OCaml **reference interpreter**
+written "for clarity and simplicity, not speed … a device for nailing down exact semantics,"
+and a `.wast` **test suite** (`assert_return` / `assert_trap` / `assert_invalid` /
+`assert_malformed`). What kept spec and implementations in sync was *process, not tooling*:
+the proposal phases require the tests updated at phase 2, a complete reference interpreter at
+phase 3, and two independent VMs passing before phase 5 merges spec text + interpreter +
+tests together. SpecTec (PLDI 2024) is the earned second generation — a single-source-of-truth
+DSL generating the formal spec, prose, and a meta-interpreter that ran all 49,833 spec tests
+and found 10 errors in in-flight proposals. **Lesson:** sync is a merge-gate, not a wish; no
+feature exists until prose, reference interpreter, and tests land together, and
+implementations are measured against the tests, not the prose. (This is §5.1's same-PR gate
+and the charter line copied verbatim into the crate root.)
+
+**Standard ML + CakeML.** SML is the canonical "designed with a formal definition" language:
+typing rules and operational semantics on paper, bought unambiguous portability and multiple
+agreeing implementations. What rotted is instructive: the rules were *paper, never executed*,
+and dozens of defects accumulated for a decade until Rossberg built HaMLet, a faithful
+rule-by-rule transcription that finally *ran* them; the "final revision" framing also froze
+the language into a tombstone. CakeML then showed the modern shape — semantics as a
+**functional big-step evaluation function with a fuel clock**, a recursive function rather
+than a relation, which is the structure compiler-verification proofs want (divergence
+preservation and simulation diagrams as equational reasoning). **Lesson:** a spec nobody
+executes silently rots; and if proofs are ever wanted, writing the definition as a
+fuel-indexed evaluation function from day one is what ports to a prover mechanically (§2.7).
+
+**Rust's landscape — what starting late costs.** Rust needed four partial artifacts because
+its executable definition came a decade late, and each is compromised in a different way: the
+**Ferrocene FLS** is descriptive-only and explicitly non-normative (borrow-checker and
+const-eval semantics out of scope) — it documents what rustc does, it cannot arbitrate what
+rustc *should* do; **Miri** interprets rustc's own MIR, the best UB oracle Rust has but
+entangled with the implementation it should judge (exactly `gg sim`'s position); **RustBelt**
+is a heroic Coq/Iris soundness proof of an idealized core that permanently trails the real
+language. **MiniRust** is the most relevant artifact: an idealized MIR-like core whose
+semantics *is an interpreter* written in specr-lang ("the spec itself is code"). Its design
+case — precision and accessibility are at odds, math is precise-but-unreadable and prose
+readable-but-imprecise, and an interpreter in the community's own language is both — is the
+argument for a hand-written definitional interpreter over either a DSL or a proof assistant
+first. MiniRust's discipline is also the scoping model: UB is *defined as what the interpreter
+detects*, non-determinism is explicit, and scope is deliberately cut (no typeck, no borrow
+check, no surface syntax) with incompleteness preferred over premature closure. **Lesson:** a
+new language can make the MiniRust-shaped artifact the *first-class* definition while the
+language is still small — and must not mistake its GIR-level interpreter for it.
+
+**K Framework (KEVM).** A rewriting-logic framework: write the semantics once, derive
+parser/interpreter/symbolic-executor/verifier. KEVM passes the official 40,683-test EVM
+conformance suite, the credibility event that proves semantics-first *works*. The catches for
+Gorget: KEVM targets a small *frozen* bytecode VM, not a moving surface language; the toolchain
+is heavyweight and centered on one vendor; and — telling — WebAssembly, with K available,
+chose to build its own DSL rather than adopt it. **Lesson:** semantics-first works, but betting
+a living language's definition on an external framework is a tooling/bus-factor risk; the
+pragmatic v1 is a hand-written definitional interpreter in the contributors' own language,
+with a SpecTec-style DSL as an *earned* v2.
+
+**Others.** *test262* makes tests the currency of proposal advancement (a proposal cannot
+advance without coverage), with a low-bar `staging/` tier and machine-readable per-test
+frontmatter — the model for §4's frontmatter and `staging/`. *Go* shows that even without
+formal semantics a versioned behavior corpus plus a compatibility promise does most of the
+conformance work — but Go has no novel semantics axis to pin down; Gorget's lazy CoW does.
+*CompCert* states correctness as a **refinement** — compiled behavior refines source
+semantics, proved as composed forward simulations — which is the exact shape of Gorget's novel
+claim: the definitional interpreter implements **eager value semantics**, and each production
+implementation's lazy-CoW output must be observationally equivalent (differentially now,
+provably later). *Aeneas/Charon* already translates real Rust (via MIR/LLBC) into Lean4/Coq/F*
+and is used in production verification — so a disciplined safe-Rust interpreter keeps a
+mechanization path off the shelf.
+
+### Failure modes and the structural guard for each
+
+The precedents above each failed in a characteristic way. The definition is built so that
+Gorget's existing enforcement toolkit guards against every one:
+
+| # | Failure mode (precedent) | Structural guard in Gorget |
+|---|---|---|
+| 1 | Nobody-runs-it rot — SML's paper rules rotted for a decade until HaMLet executed them | `ggdef` runs the full fixture corpus in CI from day 0, gated like `self_host_bootstrap_fixed_point`; a required executor, not a side project |
+| 2 | Spec lags implementation — Rust's decade gap; the FLS reduced to describing rustc | Same-PR gate + coverage lint (new fixture / AST node ⇒ spec manifest touched), `tests/lints.rs` style |
+| 3 | Divergence-by-convenience — spec quietly edited to match an implementation | Expected outputs generated by `ggdef` + human-reviewed diffs; spec changes justified by design-intent docs only; sequential fresh-agent review passes |
+| 4 | Performance creep makes the spec unreadable | Written charter ("clarity, not speed"); `gg sim` absorbs all speed pressure; lint bans `unsafe` and parallelism deps in the spec crate |
+| 5 | Scope creep into full formalization — RustBelt-style idealization that never ships | MiniRust scoping: dynamic semantics of GGC first; typeck stays prose + negative fixtures; incompleteness explicit and tracked |
+| 6 | The Miri trap — promoting the existing interpreter to "spec" | Hard rule: `gg sim` consumes GIR and is permanently disqualified; the import ratchet keeps `ggdef` off `src/ir/` |
+| 7 | Spec freeze — SML's "final revision" killed evolution | Versioned spec releases + changelog + the same-PR process; the spec is a living artifact on the compiler's cadence |
+| 8 | Coverage illusion — suite passes, spec still wrong (SpecTec found 10 such errors) | Later: seeded program-generator fuzzing across all executors; seed sweeps for the admitted nondeterminism |
+| 9 | UB-agreement trap — "both backends agree / benign UB" verdicts (Core invariant #8's red flag) | The spec interpreter is the arbiter; anything it rejects becomes a negative fixture every implementation must reject; comparison MATCH floors ratchet monotonically |
+
+### Mechanization roadmap (later, non-blocking)
+
+The disciplined subset and the fuel-indexed evaluator keep three doors open, none of which
+block v1: (a) **Aeneas/Charon** auto-translation of the Rust interpreter to Lean4; (b) a hand
+port to Lean4 (functional big-step ports mechanically — CakeML's clock lesson); (c) a
+specr-style transpiler if the subset stays tight. Lean4 is preferred over Coq (Aeneas's
+recommended backend, and the community gravity). The first theorem worth mechanizing is the
+novel one — **lazy CoW refines eager value semantics on GGC**, a per-construct forward
+simulation in the CompCert shape; type soundness comes after. Neither blocks v1; the
+differential harness carries the confidence until then.
+
+### Naming and precedent nuggets
+
+*Reference interpreter* and the "clarity, not speed" charter (Wasm); "the spec itself is
+code," UB = what the interpreter detects, and pluggable models behind one interface (MiniRust
+— Gorget's analog is a pluggable *ownership* model, eager-copy definitional vs. instrumented);
+"single source of truth" (SpecTec, the earned v2); the `staging/` tier and YAML frontmatter
+(test262); functional big-step with a clock (CakeML); refinement by composed forward
+simulations (CompCert — the vocabulary for "lazy CoW refines eager value semantics"); the
+faithful-transcription ideal where spec code and reference sections cross-cite (HaMLet);
+"semantics-first, credibility = passing the official suite" (KEVM). The names this RFC adopts —
+core language **GGC**, binary **`ggdef`**, suite directory **`spectests/`**, and the model
+slogan **"CoW is an optimization; value semantics is the meaning"** — come from this survey.
+
+**Key sources:** WebAssembly spec + reference-interpreter README + phase process; SpecTec
+(PLDI 2024, `10.1145/3656440`); MiniRust (`github.com/minirust/minirust`) + Ralf Jung's design
+post; Ferrocene FLS; Rossberg's SML defects list + HaMLet; CakeML functional big-step semantics
+(ESOP '16); KEVM (CSF 2018); test262 contributing guide + TC39 process; Aeneas
+(`github.com/AeneasVerif/aeneas`).

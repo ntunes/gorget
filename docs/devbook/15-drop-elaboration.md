@@ -14,6 +14,10 @@ The runtime check is not free. The C backend lowers `NonZero { size }` to an inl
 
 Drop elaboration replaces that `memcmp` with compile-time knowledge wherever a forward dataflow can supply it, and with a cheap `bool` load (`DropGuardKind::Bool`, lowered to `if (flag)` at `mod.rs:2880`) where it cannot.
 
+### Every exit is an ordinary exit — the by-value error channel
+
+The scope-exit drops this pass optimizes are the *whole* drop story: Gorget has no unwind substrate, so there is no second, unwind-time drop path for the elaborator to reason about. Errors propagate by value, not by unwinding. A `throws E` function lowers to a `Result[T, E]`-valued return; a `throw` builds `Error(val)` and returns it by value, and every call site that receives a `Result` from a callee auto-propagates by re-wrapping the error in the current frame's `Result` and returning by value again (`maybe_auto_propagate` → `emit_result_auto_propagate`, `src/ir/lowering/exprs/`), so an error threads up N frames as N ordinary returns. At each of those early returns — and at every `return`/`break`/`continue` — the GIR drop accountant runs `emit_early_exit_drops` (`src/ir/lowering/drops.rs`), emitting exactly the `DropIfAlive` markers a fall-off-the-end scope exit would; drop-correctness across a propagating error is therefore just ordinary CFG drop insertion, and this pass elaborates those guards identically. Nothing in either backend carries an unwinder — there are no `landingpad`/`invoke`/`personality`/`resume` instructions in the LLVM backend, and an uncaught panic is a plain `exit(1)` (`gorget_panic_at`, `panic_normal.c`). The `gorget_throw`/`GORGET_TRY` `setjmp`/`longjmp` pair in `runtime_error.c` is vestigial — emitted only as the fallback arm for a `throw` in a non-`throws` (ill-typed) context — and never sits on the drop path this chapter governs.
+
 ## The initialization lattice
 
 The analysis is a standard forward init/uninit dataflow. The per-slot lattice has three reachable states (`src/lir/drop_elab.rs:27`):
