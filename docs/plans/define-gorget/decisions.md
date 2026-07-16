@@ -325,10 +325,12 @@ P1-infra reviewers' recommendation.
   run fixtures, correct output) — the ruling's rationale (no blessed silent-wrong-output)
   does not reach them; they stay ACCEPTED. Box/Shared/Weak/Mutex/RWLock DIRECT field access
   all print silent garbage-0 (measured) — they REJECT, with a 3-way diagnostic split:
-  field-present-on-inner AND the wrapper is a documented deref-coercion target
-  (design-doc §9.4) → E_DerefCoercionUnimplemented; field-absent-on-inner OR
-  primitive-inner OR the wrapper is NOT a §9.4 target (Mutex/RWLock — access is via
-  .lock()/.read(), auto-deref is not promised) → E_NoFieldFound. Wrapper METHOD auto-deref
+  field-present-on-inner AND the wrapper is a documented deref-coercion target — **§9.4
+  names ONLY Box** (design-doc :1707-1712, sole example) → E_DerefCoercionUnimplemented;
+  field-absent-on-inner OR primitive-inner OR the wrapper is NOT a §9.4 target
+  (**Shared/Weak/Mutex/RWLock** — Weak's design access is `.upgrade()`, never deref, §9.2;
+  Mutex/RWLock via .lock()/.read(); promoting Shared to a deref target would be a §9.4 doc
+  change + a one-line enum reseed, an owner call) → E_NoFieldFound. Wrapper METHOD auto-deref
   stays with the deref-backend track (fails loudly today). Owner notified in-conversation;
   the principle is unchanged — reject where broken, accept where working.
 - 2026-07-16 — **D10(b) ADDENDUM 2 RATIFIED (owner, in-discussion): compound-assign aliasing.**

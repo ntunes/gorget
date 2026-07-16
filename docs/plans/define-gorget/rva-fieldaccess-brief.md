@@ -1,6 +1,16 @@
 # Executor brief: RV-A — field-access soundness (typed wrapper flag + deref-reject staging + self-host mirror)
 
-> **Status:** v2 — pass-2 folded (SIX: R1 the partition is GUARDS-vs-CONTAINERS — pass-2's
+> **Status:** v3 — pass-3 folded (2 BLOCKING, both pre-resolutions: R1 the first table row is
+> **{Box} ONLY** — §9.4 (language-design.md:1707-1712) names Box as its sole deref example;
+> Weak's design access is `.upgrade()` (§9.2), so E_DerefCoercionUnimplemented would LIE for
+> it; Shared/Weak/Mutex/RWLock all → E_NoFieldFound (consistent with M3 as written; promoting
+> Shared later = a §9.4 doc change + enum reseed, owner call). R2 the second distinction is a
+> **3-WAY typed enum** `DerefWrapperKind { GuardAccept, DerefTarget, NonDerefContainer }` on
+> DefInfo, seeded once at the two registration sites (the allowed compute_drop_taint-precedent
+> name-match), read via accessor at the reject site — one boolean collapses Box-vs-Mutex and
+> forces a consumer name-match. Plus the mechanical note: the `definitely_absent` boolean arm
+> (typecheck.rs:2822 emits outside the match) must restructure to a 3-valued result or inline
+> emits to carry the second code.) Pass-2 folded (SIX: R1 the partition is GUARDS-vs-CONTAINERS — pass-2's
 > 8-wrapper probe matrix shows Mutex/RWLock DIRECT field access is ALSO garbage-0 (the green
 > fixture only touches the guards) → reject = {Box, Shared, Weak, Mutex, RWLock}, accept =
 > {Guard, ReadGuard, WriteGuard}; blast radius of the wider set must be RE-MEASURED by the
@@ -47,20 +57,25 @@
    **REJECT (direct field access = silent garbage-0, all measured): Box, Shared, Weak,
    Mutex, RWLock.** Wrapper METHOD auto-deref is OUT OF SCOPE (cc-fails loudly; the
    deref-backend track owns it). The reject needs a SECOND typed distinction beyond
-   `is_deref_wrapper` (which marks all 8) — a typed guards-vs-containers bit set at the same
-   registration sites, never name-matched at the consumer.
+   `is_deref_wrapper` (which marks all 8) — the 3-WAY typed enum `DerefWrapperKind { GuardAccept, DerefTarget,
+   NonDerefContainer }` on DefInfo, seeded ONCE at the two registration sites (Box →
+   DerefTarget; Guard/ReadGuard/WriteGuard → GuardAccept; Shared/Weak/Mutex/RWLock →
+   NonDerefContainer), read via a typed accessor at the reject site — never name-matched at
+   the consumer.
    **THE 3-WAY DIAGNOSTIC TABLE (R3 — the reject site keys on
    (field-present-on-inner × wrapper-is-§9.4-deref-target)):**
    | case | code | example |
    |---|---|---|
-   | present on inner AND wrapper is a §9.4 target (Box; Shared/Weak per the design doc — VERIFY which the doc promises) | `E_DerefCoercionUnimplemented` — "field `x` exists on `Point` but deref coercion (design-doc §9.4) is not yet implemented for `Box`" | `Box[P].x` |
+   | present on inner AND `DerefWrapperKind::DerefTarget` (**{Box} only** — §9.4's sole named target; pre-resolved pass-3) | `E_DerefCoercionUnimplemented` — "field `x` exists on `Point` but deref coercion (design-doc §9.4) is not yet implemented for `Box`" | `Box[P].x` |
    | absent on inner | `E_NoFieldFound` (the §9.4 message would lie) | `Box[P].nonexistent` |
    | primitive inner | `E_NoFieldFound` | `Box[int].x` |
-   | wrapper NOT a §9.4 target (Mutex/RWLock — access via .lock()/.read(); auto-deref not promised) | `E_NoFieldFound` | `Mutex[P].x`, `RWLock[C].port` |
+   | `DerefWrapperKind::NonDerefContainer` ({Shared, Weak, Mutex, RWLock} — Weak accesses via `.upgrade()` §9.2, never deref; the others via .lock()/.read()/.get()) | `E_NoFieldFound` even when the field exists on the inner | `Shared[P].x`, `Weak[P].x`, `Mutex[P].x`, `RWLock[C].port` |
    **The M2 leg is PROTOTYPE-FIRST:** before wiring fixtures, the executor implements the
    table at the reject site (`typecheck.rs:2801-2831` definitely_absent arm), keeps the
    patch's inner-resolution block (patch lines ~103-125) as the field-present prober but
-   flips its outcome from accept to the table's codes, RE-MEASURES the blast radius of the
+   flips its outcome from accept to the table's codes — NOTE the current arm computes a
+   BOOLEAN `definitely_absent` and emits outside the match (typecheck.rs:2822); carrying the
+   second code requires restructuring to a 3-valued result or inline emits (pass-3) —, RE-MEASURES the blast radius of the
    5-container reject across the full targeted battery (the "1 fixture" figure was
    Box-only), and reports the measured count before proceeding. Registry: new row +
    bump the "93 E_ codes" header count to 94 (`spec/prose/diagnostic-codes.md:12`). This REVERSES the prior `check_gg_ok` staging: flip `fieldaccess_box_field_ok` to a
