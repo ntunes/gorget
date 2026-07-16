@@ -1,0 +1,46 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [cow, borrow, copy]
+# doc: |
+#   RV-F #11 (Copy axis, ACCEPT direction — the STRUCT extension pin). `h.p` is
+#   an all-int STRUCT field (`Point {int a; int b}`), passed bare alongside the
+#   exclusive `&h` in the same call. An all-Copy-field struct is itself Copy, so
+#   the bare read is a value snapshot exempt from D10(b) place-overlap — accepted,
+#   printing `h.n = 1 + 1 + 2 = 4`. THIS fixture is the pin on the #11 divergence:
+#   the pre-fix oracle's Prim-only Copy axis rejected exactly this shape with
+#   E_BorrowConflict (counterfactual-verified — reverting ty_is_copy to Prim-only
+#   turns this fixture red) while production accepts it via is_copy_type's
+#   struct recursion. Its scalar sibling copy_field_borrow_ok.gg (an int field)
+#   was accepted by BOTH the old and new axes and guards only the scalar base
+#   case.
+#
+#   KNOWN SELF-HOST GAP (filed — the RV-D cluster's "self-host twin of RV-F's
+#   Copy-axis narrowing", TODO.md): the self-host safety walk's Copy axis is
+#   scalar-only, so its D10(b) mirror REJECTS this program (E_BorrowConflict at
+#   the driver) — the self-host lane BUILD-FAILs this fixture BY DESIGN until the
+#   RV-D Copy-axis twin lands and flips it to four-lane MATCH. The expected
+#   verdict here is what the language SHOULD do (accept), never a ratification of
+#   the narrow axis — same staging pattern as the four single-owner-Callable
+#   rejects.
+# expect:
+#   exit: 0
+#   stdout: "4\n"
+#!end
+
+struct Point:
+    int a
+    int b
+
+struct Holder:
+    Point p
+    int n
+
+void bump(Holder &h, Point pt):
+    h.n = h.n + pt.a + pt.b
+
+void main():
+    Holder h = Holder(Point(1, 2), 1)
+    bump(&h, h.p)
+    print(h.n)

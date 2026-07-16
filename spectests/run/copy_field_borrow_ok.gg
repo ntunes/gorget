@@ -13,8 +13,12 @@
 #   is the POS complement of reject_borrow_conflict_noncopy_field.gg — flipping the
 #   field to a non-Copy type turns the same shape into an E_BorrowConflict. The
 #   Copy extent mirrors production `is_copy_type` exactly (scalar / tuple-of-Copy /
-#   all-Copy-field struct); the oracle previously mis-modelled it as `Ty::Prim`
-#   only and over-rejected this program.
+#   all-Copy-field struct). NOTE: an int field is `Ty::Prim`, the Copy axis's
+#   scalar BASE case — the pre-fix Prim-only oracle already accepted this exact
+#   program, so this fixture guards only that base case. The pin on the #11
+#   divergence (the STRUCT extension the old axis mis-modelled) is
+#   copy_struct_field_borrow_ok.gg, whose all-int struct-field read the Prim-only
+#   axis rejects (counterfactual-verified).
 # expect:
 #   exit: 0
 #   stdout: "7\n"

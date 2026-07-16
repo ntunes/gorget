@@ -32,7 +32,7 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 ///
 /// Seeded from a run regenerated IN THIS WORKTREE (never a dated number):
 ///   cargo test -p ggdef --test spec_conformance_ggdef -- --nocapture
-///   → total=213 · MATCH=208 · MISMATCH=0 · GGDEF-SKIP=5
+///   → total=214 · MATCH=209 · MISMATCH=0 · GGDEF-SKIP=5
 ///
 /// (5 original seeds + the 182-fixture P1-D "AGREE" migration + the 8 D11
 /// trap-normalization fixtures + the may-move pair — `reject_use_after_move.gg`
@@ -47,8 +47,10 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 /// `expect:` is ggdef-generated, so on the ggdef lane total == MATCH by
 /// construction.)
 ///
-/// RV-F added 11 fixtures. SIX are `adjudicator: ggdef` and MATCH here (the count
-/// rose 202 → 208): five ACCEPT seeds (`copy_field_borrow_ok`,
+/// RV-F added 12 fixtures. SEVEN are `adjudicator: ggdef` and MATCH here (the
+/// count rose 202 → 209): six ACCEPT seeds (`copy_field_borrow_ok`,
+/// `copy_struct_field_borrow_ok` — the counterfactual-verified PIN on the #11
+/// Copy-axis struct extension (Prim-only rejects its all-int struct-field read),
 /// `loop_reassign_revive_move_ok`, `loop_body_local_move_ok`,
 /// `callable_move_bind_return_ok`, `callable_param_rebind_ok`) plus the LIVENESS
 /// reject `reject_for_var_move_in_loop.gg` (E_MoveInLoop, an eval-time
@@ -62,7 +64,7 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 208;
+const GGDEF_MATCH_FLOOR: usize = 209;
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
