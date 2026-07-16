@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF — CoW-1A: for-loop `&`-iterable element write-through (BOTH-LANE) + gap A2
 
-**Status:** DRAFT v5 — in the ≥3-fresh-pass review gauntlet. Pass 1 (enumerate twin —
+**Status:** ✅ v5 GAUNTLET-CLEAN (pass 5 SIGN OFF 2026-07-16, full coherence + citation re-verify) — EXECUTABLE; executor launched. Gauntlet history: pass 1 (enumerate twin —
 reproduced; comprehension plan-mandate drop; gate gaps) → v2. Pass 2 (premises re-verified,
 gaps reproduced both backends; self-host enumerate cell unmeasured; Rust comprehension site
 named; wrong self-host site corrected) → v3. Pass 3 (fixture-6 ggdef enumerate-pattern panic;
