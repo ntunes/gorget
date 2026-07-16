@@ -1,6 +1,6 @@
 # Executor brief: RV-G — gen⇄parse frontmatter biconditional (gen refuses codeless exit-1)
 
-> **Status:** v1 — pass-1 SIGNED OFF (zero reservations; brick + design grounding + patch +
+> **Status:** v1 — pass-1 AND pass-2 both SIGNED OFF, zero reservations (pass-2 additionally closed the writer-CLASS question: gen_frontmatter is the SOLE machine writer — migrate routes through it, smith is in-process, hand-authored blocks are the reader's guard; and probed the refusal is not over-broad). Pass 3 = the final ≥3-rule pass. (pass-1: brick + design grounding + patch +
 > gates + blast-zero all independently re-verified, incl. a live refusal probe leaving the file
 > byte-identical). Two non-blocking notes folded below. Passes 2-3 still required (≥3 rule).
 > **Scout basis (read both FIRST):**
