@@ -12,7 +12,16 @@
 > receivers through the existing reject or it converts write-through into silent
 > clone→double-drop.** Discovery filed to TODO High: struct-value match patterns mis-bind
 > (rotated-by-one + arity unchecked, Core-#8). v2 folded reviewer reservations
-> (alias-root derivation, ggdef-as-oracle, drop-taint, gate/scoreboard bar). NEXT: Track 1B brief.
+> (alias-root derivation, ggdef-as-oracle, drop-taint, gate/scoreboard bar).
+> **1B EXECUTED 2026-07-16 (output-review in flight):** ⚠ ARCHITECTURE CORRECTION from
+> execution — the wave-1 "one place-resolution model in the SHARED `lower_place_base`" premise
+> is FALSE for the self-host: growing the shared resolver a pointer arm breaks value-struct
+> `.clone()` method receivers (3 regex fixtures regressed, self-caught + reverted). The proven
+> shape mirrors Rust's actual scoping: a WRITE-ONLY `lower_field_place_base` producer (called
+> by both field-write sites), shared resolver untouched. **Tracks 1C and 2F extend
+> `lower_field_place_base`, NOT `lower_place_base`.** New closed-set discovery filed HIGH:
+> bare `v[i].method()` mutating-receiver write-through is broken on BOTH compilers (the
+> method-receiver analog of gap B — needs a row + wave assignment when its track is scoped).
 
 ## Context
 
