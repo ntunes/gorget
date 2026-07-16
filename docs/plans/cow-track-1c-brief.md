@@ -1,6 +1,10 @@
 # Executor brief: CoW Track 1C — Dict `d[k].field = x` write-through (both compilers)
 
-> **Status:** v3 — pass-3 folded (1 substantive: the self-host producer CANNOT be Dict-scoped —
+> **Status:** v4 — pass-4 folded (M2b's Rust prediction was FALSIFIED by measurement: HashMap
+> Rust-side prints 0 — the READ/STORE is broken by the filed element-typing bug, NOT a
+> gate-dropped write printing 1; the self-host read shares the mechanism so BOTH-0 symmetric
+> is a plausible+acceptable outcome; the STOP trigger is re-scoped to SAFETY only; a HashMap
+> probe joins the ASan gate). Pass-3 folded (1 substantive: the self-host producer CANNOT be Dict-scoped —
 > no CkHashMap exists; `resource_meta_for` maps `HashMap__`→CkDict (lir_lower.gg:318) and the
 > self-host resolves HashMap value types (lower_types.gg:2648), so the `case CkDict()` arm
 > writes through HashMap-of-struct while scoped Rust drops the write — a LATENT divergence,
@@ -63,13 +67,19 @@ separately — do not fix it here).
    `corpus_b1.rs:~35`** with the documented out-of-subset reason (Dict write-place not
    elaborable), mirroring the 1B fixture's entries. Verify not gitignore-hidden; run `gg fmt`
    idempotence on it.
-2b. **M2b — the HashMap asymmetry probe + documentation (pass-3):** run
-   `HashMap[int, Point] h; h[0].x = 99; print(h[0].x)` through BOTH compilers post-fix and
-   record the outputs (expected: Rust drops the write via the scoped gate; self-host writes
-   through via CkDict). Document the measured asymmetry in the FIXTURE COMMENT (not as a
-   fixture assertion — no fixture pins either behavior) citing the HashMap TODO entry that
-   owns closing it by fixing Rust. If the probe shows anything OTHER than the predicted
-   asymmetry, STOP and report.
+2b. **M2b — the HashMap divergence probe + documentation (pass-4-corrected):** run
+   `HashMap[int, Point] h; h[0] = Point(1,2); h[0].x = 99; print(h[0].x)` through BOTH
+   compilers post-fix and record the outputs. **Measured reality (pass-4): Rust prints 0 —
+   the HashMap-of-struct READ/STORE is itself broken by the filed element-typing bug
+   (methods.rs:3859), independent of the scoped gate** (a store-then-read with NO field
+   write also prints 0 while the Dict control prints the field). The self-host read shares
+   the `index_value_type_name` mechanism, so **"both print 0" is a plausible and ACCEPTABLE
+   outcome** — as is a genuine asymmetry (self-host writes through via CkDict). Record
+   WHATEVER prints, in the FIXTURE COMMENT (never a fixture assertion — no behavior is
+   pinned), attributed accurately (broken read/store, NOT "gate-dropped write"), citing the
+   HashMap TODO entry that owns convergence by fixing Rust. **STOP only if the probe CRASHES
+   or trips ASan on either compiler** — a surprising print value is data to record, not a
+   stop condition.
 3. **M3 — double-eval regression test**: a side-effecting-base probe wired as a test (the
    scout's `make()[0].x` shape — assert the producer runs once). If the natural home is an
    inline Rust test, that's fine; name it so the eval-order class is greppable.
@@ -77,7 +87,8 @@ separately — do not fix it here).
    `cargo test --lib` · targeted `cow_/dict_/hashmap_/index_` filters on **C AND LLVM**
    (scout baseline: 183/0) · self-host driver rebuild (GG_BUILD_TIMEOUT_SECS=600) + the three
    Dict probes + the 1B array fixture (no regression) · `self_host_runtime` targeted ·
-   **ASan+UBSan** on the new fixture + dict-of-vector/nested-array regressions ·
+   **ASan+UBSan** on the new fixture + dict-of-vector/nested-array regressions + the M2b
+   HashMap-of-struct probe (the CkDict arm now fires for HashMap on the self-host) ·
    **FULL `cargo test -p ggdef`** (all 7 test files — corpus_b/b1 brick without the EXCLUDE
    entries) · `lower_comparison`/`type_comparison` counts. The bootstrap + full sweeps +
    parity are the PARENT's (this fix's blast is the write-place producers only — no receiver
