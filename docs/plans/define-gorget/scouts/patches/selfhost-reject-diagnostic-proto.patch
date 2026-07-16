@@ -1,0 +1,213 @@
+diff --git a/spectests/run/reject_double_move.gg b/spectests/run/reject_double_move.gg
+new file mode 100644
+index 00000000..72494bb0
+--- /dev/null
++++ b/spectests/run/reject_double_move.gg
+@@ -0,0 +1,26 @@
++#!spectest
++# mode: run
++# adjudicator: ggdef
++# since: spec-v0.1
++# features: [move, liveness]
++# doc: |
++#   Static double-move rejection (verdict = elaborate ∘ eval). `s` is moved into
++#   the first `consume(!s)`, then moved AGAIN by the second `consume(!s)`. The
++#   flow-sensitive liveness gate rejects the second move BEFORE eval with
++#   E_DoubleMove — stdout stays EXACTLY empty (the program never ran, which IS the
++#   verdict), exit 1. This is the E_DoubleMove sibling of reject_use_after_move.gg:
++#   it proves the DoubleMove code axis on all four lanes; flipping the expected
++#   `reject:` code must make every lane MISMATCH (Core #6/#8).
++# expect:
++#   exit: 1
++#   stdout: ""
++#   reject: E_DoubleMove
++#!end
++
++void consume(String !s):
++    pass
++
++void main():
++    String s = "hi"
++    consume(!s)
++    consume(!s)
+diff --git a/tests/fixtures/self_host_typechecker/diagnostic.gg b/tests/fixtures/self_host_typechecker/diagnostic.gg
+index c64f6fad..e1e6818f 100644
+--- a/tests/fixtures/self_host_typechecker/diagnostic.gg
++++ b/tests/fixtures/self_host_typechecker/diagnostic.gg
+@@ -57,7 +57,8 @@ enum DiagKind:
+     DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
+     DkMoveWithoutOperator  # D4/D12: implicit copy of a live drop-tainted place at an ownership boundary
+     DkBorrowConflict       # D10(b): two call args whose places overlap under conflicting sigils
+-    DkUseAfterMove         # liveness: read of / second move of a place already moved (E_UseAfterMove / E_DoubleMove)
++    DkUseAfterMove         # liveness: read of a place already moved (E_UseAfterMove)
++    DkDoubleMove           # liveness: second move of a place already moved (E_DoubleMove)
+     DkMoveInLoop           # liveness: move of an enclosing-scope place inside a loop (E_MoveInLoop) — re-moved next iteration
+ 
+     # Reserved for future migrators (kept so the type doesn't churn
+@@ -122,6 +123,8 @@ String diag_kind_str(DiagKind kind):
+             return "local-borrow-bind"
+         case DkUseAfterMove():
+             return "use-after-move"
++        case DkDoubleMove():
++            return "double-move"
+         case DkMoveInLoop():
+             return "move-in-loop"
+         case DkMoveWithoutOperator():
+@@ -131,6 +134,51 @@ String diag_kind_str(DiagKind kind):
+         case DkUnreachable():
+             return "unreachable"
+ 
++# Ratified registry error code (`E_<code>`, spec/prose/diagnostic-codes.md) for a
++# diagnostic kind — the machine-readable axis a conformance harness compares (the
++# static-rejection analogue of a runtime `trap[T_<code>]`). Returns "" for kinds
++# that carry NO code: the lex/parse families (not yet coded); the COARSE kinds
++# (`DkControlFlow` multiplexes E_Break/Continue/ReturnOutsideLoop /
++# E_ThrowInNonThrowingFunction / E_PositionalAfterNamed / …; `DkTypeMismatch`
++# multiplexes E_TypeMismatch / E_ValueOutOfRange / E_StringIndexAssign / … — until
++# each is split 1:1 with the registry, no single code can be named from the kind
++# alone); and the reserved `DkUnreachable`. The code is read from the TYPED kind
++# (layering rule 2 — never name-matched off the message text) and only ever rides
++# an error-severity headline (warning codes are not rendered — diagnostic-codes.md).
++String diag_kind_code(DiagKind kind):
++    match kind:
++        case DkUseAfterMove():
++            return "E_UseAfterMove"
++        case DkDoubleMove():
++            return "E_DoubleMove"
++        case DkMoveInLoop():
++            return "E_MoveInLoop"
++        case DkMoveWithoutOperator():
++            return "E_MoveWithoutOperator"
++        case DkBorrowConflict():
++            return "E_BorrowConflict"
++        case DkLocalBorrowBind():
++            return "E_LocalBorrowBind"
++        case DkPrimitiveTraitImpl():
++            return "E_PrimitiveTraitImpl"
++        case DkUndefinedName():
++            return "E_UndefinedName"
++        case DkDuplicateDefinition():
++            return "E_DuplicateDefinition"
++        case DkNotAType():
++            return "E_NotAType"
++        # Coarse / not-yet-coded / reserved kinds render codeless (bare `error:`):
++        case DkTypeMismatch():
++            return ""
++        case DkControlFlow():
++            return ""
++        case DkParseError():
++            return ""
++        case DkLexError():
++            return ""
++        case DkUnreachable():
++            return ""
++
+ # Canonical one-line rendering used by the typechecker comparison test
+ # driver. Format: `DIAG <severity> <kind> <span_start>:<span_end> <message>`.
+ # Stderr-routed so the stdout comparison contract (canonical TYPE lines)
+@@ -289,8 +337,22 @@ String render_diagnostic(Diagnostic d, String source, String path):
+     String line_no = int_to_str(lc.line)
+     String gutter = repeat_str(" ", digit_count(lc.line) + 1)  # blank left margin
+ 
+-    # 1) headline: `error: <message>`
+-    String headline = ANSI_RESET + ANSI_BOLD + severity_color(d.sev) + severity_str(d.sev) + ANSI_RESET + ANSI_BOLD + ": " + d.message + ANSI_RESET
++    # 1) headline: `error[E_<code>]: <message>` — the ratified registry code sits
++    #    INSIDE the colored severity run (codespan renders `error[E0382]` as one
++    #    styled token), so the machine-readable `error[E_<code>]` substring stays
++    #    CONTIGUOUS (no ANSI reset splits `error` from `[`) for a conformance
++    #    harness to read. Only error-severity diagnostics whose kind maps to a
++    #    registry code carry the `[E_<code>]` segment; warnings, notes, and the
++    #    coarse / not-yet-coded kinds render the bare `severity:` headline.
++    String code_seg = ""
++    match d.sev:
++        case SevError():
++            String code = diag_kind_code(d.kind)
++            if code != "":
++                code_seg = "[" + code + "]"
++        else:
++            pass
++    String headline = ANSI_RESET + ANSI_BOLD + severity_color(d.sev) + severity_str(d.sev) + code_seg + ANSI_RESET + ANSI_BOLD + ": " + d.message + ANSI_RESET
+     # 2) location: `  ┌─ path:line:col`
+     String location = gutter + ANSI_RESET + ANSI_BLUE + "\u{250c}\u{2500}" + ANSI_RESET + " " + path + ":" + line_no + ":" + int_to_str(lc.col)
+     # 3) empty gutter rule: `  │`
+diff --git a/tests/fixtures/self_host_typechecker/typecheck.gg b/tests/fixtures/self_host_typechecker/typecheck.gg
+index 9c59f235..5cab305e 100644
+--- a/tests/fixtures/self_host_typechecker/typecheck.gg
++++ b/tests/fixtures/self_host_typechecker/typecheck.gg
+@@ -1204,7 +1204,7 @@ void live_mark_move(SpannedExpr place, SafetyState &state, ScopeTable &scopes, R
+     if root_def == -1:
+         return
+     if state.moved.contains(root_def):
+-        ctx.diagnostics.push(Diagnostic.error(place.span, DkUseAfterMove(), f"`{root}` moved more than once (double move)"))
++        ctx.diagnostics.push(Diagnostic.error(place.span, DkDoubleMove(), f"`{root}` moved more than once (double move)"))
+         return
+     # PART C (Rust check_move, origins.rs:495-503): moving an ENCLOSING-scope place
+     # inside a loop re-moves it on the next iteration — a static MoveInLoop reject.
+diff --git a/tests/spec_conformance.rs b/tests/spec_conformance.rs
+index 9e5cd3ac..e6c52eef 100644
+--- a/tests/spec_conformance.rs
++++ b/tests/spec_conformance.rs
+@@ -46,11 +46,10 @@
+ //! The three PRODUCTION floors (C/LLVM/self-host) are the count of committed
+ //! fixtures each production impl reproduces today. `MIN_FIXTURES` is the TOTAL
+ //! committed corpus count (the glob-emptiness guard). The D11 trap fixtures
+-//! (post-T2) now MATCH all three lanes; the C and LLVM floors reach the whole
+-//! corpus. The one lane sitting below `MIN_FIXTURES` is SELF-HOST, on the
+-//! may-move REJECT fixture: it rejects correctly (exit 1, empty stdout) but its
+-//! diagnostic headline lacks the `error[E_<code>]` bracket the ggdef/C/LLVM lanes
+-//! emit — a tracked reject-diagnostic-rendering gap (see the floor consts below).
++//! (post-T2) now MATCH all three lanes, and the may-move REJECT fixture MATCHes
++//! all three too (the self-host renderer now emits the ratified `error[E_<code>]`
++//! headline off its typed `DiagKind` — see the floor consts below): all three
++//! lanes reach the whole corpus, so every floor EQUALS `MIN_FIXTURES`.
+ //!
+ //! (History: the C and LLVM lanes once floored one below self-host because
+ //! `smith_move_param_concat.gg` was a both-backend BUILD-FAIL — the C backend
+@@ -87,29 +86,27 @@ use ggdef::{parse_frontmatter, Expect};
+ // revived by a whole-local reassign → `Value "new"`, exit 0) MATCHes ALL THREE
+ // lanes, so the corpus + every lane's MATCH rise by that fixture together.
+ //
+-// The reject seed MISMATCHes the SELF-HOST lane — a KNOWN, TRACKED gap (mirrors
+-// the pre-T2 trap interim above): the self-host driver correctly REJECTS the
+-// program (exit 1, empty stdout) but its diagnostic headline renders a BARE
+-// `error: use of `x` after it was moved` with NO `error[E_<code>]` bracket
+-// (`tests/fixtures/self_host_lowerer/diagnostic.gg:293` — the headline omits the
+-// `DiagKind` code; `diag_kind_str` maps `DkUseAfterMove → "use-after-move"`, not
+-// the registry `E_UseAfterMove`). So the self-host reject-diagnostic format needs
+-// alignment to the ratified `error[E_<code>]` family before its floor can reach
+-// the corpus — filed HIGH as a self-host diagnostic-rendering track (TODO.md).
+-// Until then SELF-HOST holds ONE below (MATCH=196 < MIN_FIXTURES=197), exactly as
+-// the trap floors once held below the corpus with a documented interim MISMATCH.
+-const C_MATCH_FLOOR: usize = 197;
+-const LLVM_MATCH_FLOOR: usize = 197;
+-const SELFHOST_MATCH_FLOOR: usize = 196;
++// The reject seed now MATCHes the SELF-HOST lane too (the tracked gap is CLOSED):
++// `render_diagnostic` renders the ratified `error[E_<code>]:` headline off the
++// TYPED `DiagKind` via `diag_kind_code` (the `[E_<code>]` segment rides inside the
++// colored severity run so `error[E_UseAfterMove]` stays a contiguous substring for
++// `extract_reject_code`). `DkUseAfterMove` was split into `DkUseAfterMove`
++// (E_UseAfterMove) + a new `DkDoubleMove` (E_DoubleMove) so each reject carries its
++// own registry code — `tests/fixtures/self_host_typechecker/diagnostic.gg`
++// (`diag_kind_code` + the headline) and typecheck.gg's double-move push site. With
++// the render aligned, ALL THREE lanes reproduce the whole corpus.
++const C_MATCH_FLOOR: usize = 198;
++const LLVM_MATCH_FLOOR: usize = 198;
++const SELFHOST_MATCH_FLOOR: usize = 198;
+ 
+ /// The glob-emptiness guard: `spectests/run` must contain at least this many
+ /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
+-/// the TOTAL seed COUNT (195 exit-0/trap fixtures + the may-move PAIR:
+-/// `reject_use_after_move.gg` + its accept complement `reinit_accept.gg` = 197).
+-/// It EQUALS the C and LLVM MATCH floors (both lanes reproduce the whole corpus).
+-/// The self-host floor sits ONE below, on the tracked reject-diagnostic gap
+-/// documented above.
+-const MIN_FIXTURES: usize = 197;
++/// the TOTAL seed COUNT (195 exit-0/trap fixtures + the may-move UAM PAIR
++/// `reject_use_after_move.gg` + `reinit_accept.gg` + the migrated E_DoubleMove
++/// reject `reject_double_move.gg` = 198). It EQUALS all three MATCH floors (C,
++/// LLVM, and — since the reject-diagnostic render alignment documented above —
++/// self-host all reproduce the whole corpus).
++const MIN_FIXTURES: usize = 198;
+ 
+ // ─────────────────────────── infrastructure ────────────────────────────
+ // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs
