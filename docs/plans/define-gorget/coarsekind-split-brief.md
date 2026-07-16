@@ -1,9 +1,12 @@
 # Executor brief: coarse-kind diagnostic split (DkTypeMismatch + DkControlFlow → per-code kinds)
 
-> **Status:** v2 — pass-2 folded (R1 patch path spelled repo-root-relative; R2 the
-> return-outside question is SETTLED — unreachable, reserved slot, gates 19/0, M3 is FIVE tests;
-> R3 glob-harness note; R4 per-test codes spelled). Pass-1 had folded: M2 count 7→10 enumerated;
-> M3 reuse-4; scout overclaim corrected. Awaiting the next fresh pass.
+> **Status:** v2 — ✅ PASS 3 SIGNED OFF CLEAN (2026-07-16; gauntlet 3→4→0 reservations) —
+> **EXECUTING**. Pass-3 extras: the double-await self-host path is structurally proven but was
+> never driver-run — the 19/0 gate is its empirical confirmation; if an async-handling crash
+> pre-empts the walk, that is a pre-existing bug to REPORT. Pass-2 folded: patch path
+> repo-root-relative; return-outside SETTLED unreachable (reserved slot; the typecheck gate is
+> structurally dead — in_function_body is never false at a reachable SReturn); gates 19/0; M3
+> five tests. Pass-1 folded: M2 count 7→10 enumerated; M3 reuse-4; scout overclaim corrected.
 > **Scout basis (read both FIRST):**
 > `docs/plans/define-gorget/scouts/scout-coarsekind-split.md` (verified emit-site table, measured
 > before/after, blast radius; ⚠ its headline "PROVEN end-to-end (all 12 codes)" is an overclaim —
