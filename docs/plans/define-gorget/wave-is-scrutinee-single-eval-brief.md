@@ -29,11 +29,14 @@ FOREGROUND. On an Edit desync, re-Read + retry — never a shell heredoc with an
 applies CLEAN). It:
 - `src/ir/lowering/context.rs`: adds a per-function `is_scrut_memo: FxHashMap<usize,(LocalId,TypeId)>` on
   `FunctionState` (auto-cleared via `Default` at each function). **⚠ CORRECT THE FIELD DOC COMMENT
-  (brief-review-1): the patch's `is_scrut_memo` field doc ends with a FALSE sentence — "each entry is REMOVED
-  on consumption so a stale entry can never be reused" — asserting the EXACT OPPOSITE of the fix's load-bearing
-  invariant (the impl READS, does NOT remove; read-not-remove is deliberate — an `and`-chain binds its left
-  operand in TWO dominated blocks and both must reuse the single eval). After applying, EDIT this comment to
-  state READ-not-remove + why + "cleared en masse per-function via `Default`." Leaving it is a
+  (brief-review-1 + 2): the patch's `is_scrut_memo` field doc asserts the EXACT OPPOSITE of the fix's
+  load-bearing invariant in TWO places — (a) the flatly-false last sentence "each entry is REMOVED on
+  consumption so a stale entry can never be reused", and (b) the "`emit_is_bindings` … consumes this entry and
+  reuses `scrut_local`" phrasing — both reinforce a "remove" model, but the impl READS and does NOT remove
+  (`stmts/mod.rs` reads via `.get(&…span.start).copied()`). Read-not-remove is DELIBERATE: an `and`-chain binds
+  its left operand in TWO dominated blocks (`operators.rs:428` rhs block + the outer then-block via the `And`
+  recursion) and BOTH must reuse the single eval. After applying, EDIT the WHOLE field doc to consistently say
+  READ (not consume/remove) + why + "cleared en masse per-function via `Default`." Leaving either phrasing is a
   false-historical-record landmine — a future contributor who "corrects" the code to `.remove()` silently
   re-breaks and-chains and NO gate catches it (CLAUDE.md layering / self-host false-historical-record rules).**
 - `src/ir/lowering/exprs/mod.rs:791` (`Expr::Is` value lowering): records `(scrut_local, scrut_type)` under
