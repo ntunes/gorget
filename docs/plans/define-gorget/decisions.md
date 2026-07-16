@@ -298,8 +298,24 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
-- 2026-07-16 (late) — **D29 DIRECTION AGREED (owner, in-discussion; formal ratification rides
-  the scout/census packet per the batch-5 pattern): visible error propagation — `!` mandatory
+- 2026-07-16 (latest) — **🎯 D29 RATIFIED (owner, formal — packet-backed: census + accept-both
+  prototype + collision corners + readability pages, `scouts/scout-d29-packet.md`): VISIBLE
+  ERROR PROPAGATION.** Final scope with both same-day amendments consolidated:
+  (a) **call-site `!` is MANDATORY on every fallible call — the uniform FALLIBLE-USE MARKER**
+  (Swift model): handled calls carry it too (`f()! catch (e): …`); unhandled marked call in a
+  non-throws fn = E_UnhandledThrows ("handle it with `catch`, or declare the function to
+  propagate"); bare fallible call = always an error ("mark the fallible call: `f()!`"). D26's
+  `+!`/`**!` are instances of the one rule: suffix-`!` on any operation = fallible.
+  (b) **`!` NEVER takes a type**: bare signature `int f(args)!:` is grammar-locked as A31's
+  inferred-error-set spelling (parses, rejects with the teaching diagnostic until A31);
+  `throws E` REMAINS the explicit contract spelling — `!` JOINS `throws` (sigils = flow at
+  use-sites; keywords = contracts at declarations). (c) Implementation = CALL-SITES ONLY
+  (~61 propagation + the handled-sites count to be measured; the signature migration is
+  cancelled); `gg fmt` inserts mechanically; sequenced BEFORE C1/C3; the readability census
+  renders post-D29 pages. Open items for the implementation brief: the catch-attachment
+  grammar; the handled-sites census; `!=` maximal-munch parse tests (disposition proven).
+- 2026-07-16 (late) — **D29 DIRECTION AGREED (superseded by the ratification above; kept for
+  the derivation record): visible error propagation — `!` mandatory
   at THROWS CALL SITES + `!` replaces `throws` in signatures.** The critique (no way to see a
   throws call at the site) is valid by the language's own sigils-mark-effects principle; the
   fix makes D26 an INSTANCE of a general rule (suffix-`!` on any operation = fallible, failure
