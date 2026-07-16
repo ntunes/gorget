@@ -1948,6 +1948,32 @@ fallthrough_else",
     );
 }
 
+// Regression: an `is Some(x)` scrutinee (if/elif/while/and-chain) must be
+// evaluated EXACTLY ONCE. GIR used to lower the scrutinee twice (tag test +
+// payload bind), calling a side-effecting mutating-`&self` method twice and
+// binding the payload from the second call. The `.calls` counters assert
+// single-evaluation. Both backends.
+#[test]
+fn is_scrutinee_single_eval() {
+    run_gg(
+        "is_scrutinee_single_eval.gg",
+        "\
+1
+1
+11
+1
+1
+2
+3
+4
+1
+1
+2
+1
+1",
+    );
+}
+
 #[test]
 fn block_expr() {
     run_gg(

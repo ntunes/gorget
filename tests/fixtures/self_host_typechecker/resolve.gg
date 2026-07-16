@@ -1101,13 +1101,7 @@ void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes, Resolve
             # DEEPDEF: record the binding's DefId at the DECLARATION span so the
             # liveness safety walk can key a pattern binding by DefId (not name).
             # Mirrors the identifier-USE resolution_map entry (resolve_expr:674).
-            # NOTE: the define result is bound to a LOCAL before use — inlining it
-            # as `if scopes.define(...) is Some(def_id):` mis-binds def_id to 0 (a
-            # latent self-host codegen bug: an Option returned by a mutating &self
-            # method used directly as an `is` scrutinee; same family as the
-            # live_reinit Option[int] coalesce workaround in typecheck.gg).
-            Option[int] pat_def = scopes.define(name, DkVariable(), Span(0, 0))
-            if pat_def is Some(def_id):
+            if scopes.define(name, DkVariable(), Span(0, 0)) is Some(def_id):
                 if pattern.span.start >= 0:
                     ctx.resolution_map.put(pattern.span.start, def_id)
 

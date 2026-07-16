@@ -813,6 +813,19 @@ fn lower_expr_inner(
             };
             builder.assign_mode(mode, Place::local(scrut_local), val);
 
+            // Bug-1 fix (double-eval of `is`-scrutinee): record the single
+            // scrutinee local so the LATER `emit_is_bindings` pass (which runs
+            // in the then/body block to bind the pattern payload) reuses it
+            // instead of RE-LOWERING `inner` — a re-lower re-invokes a
+            // side-effecting scrutinee (e.g. a mutating `&self` method returning
+            // Option), calling it twice. Only non-negated forms bind payloads,
+            // so only they need the memo. Keyed by this Is-node's span start.
+            if !*negated {
+                ctx.func_state
+                    .is_scrut_memo
+                    .insert(expr.span.start, (scrut_local, scrut_type));
+            }
+
             let cond = super::stmts::lower_pattern_condition(
                 ctx, builder, pattern, scrut_local, scrut_type,
             );

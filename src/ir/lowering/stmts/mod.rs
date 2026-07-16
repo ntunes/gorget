@@ -3059,7 +3059,32 @@ pub fn emit_is_bindings(
         if *negated {
             return; // `is not` — no bindings in the then branch
         }
-        // Re-lower the inner expression to get the scrutinee local
+        // Bug-1 fix: reuse the scrutinee local created when this same `Expr::Is`
+        // node was lowered as a boolean value (the tag test in the enclosing
+        // condition), keyed by the node's span start. RE-lowering `inner` here
+        // would re-evaluate the scrutinee — a second call for a side-effecting
+        // scrutinee (a mutating `&self` method returning Option), binding the
+        // payload from the wrong evaluation. The value-lowering runs first and
+        // always memoizes non-negated Is nodes, so the entry is present; the
+        // re-lower path below is a defensive fallback only.
+        //
+        // The entry is READ (not removed): an `and`-chain binds its LEFT operand
+        // in two dominated blocks — `lower_short_circuit`'s rhs block (so the
+        // binding is in scope while evaluating the right operand) AND the outer
+        // then/body block (for the branch body). Both must reuse the SINGLE
+        // scrutinee evaluation; removing on first read would force the second
+        // site to re-lower (re-invoking the scrutinee). The value-lowering block
+        // dominates every binding site, so the local is always valid to read;
+        // stale entries are harmless (unique spans, cleared per-function).
+        if let Some((scrut_local, scrut_type)) =
+            ctx.func_state.is_scrut_memo.get(&condition.span.start).copied()
+        {
+            emit_pattern_bindings(ctx, builder, pattern, scrut_local, scrut_type);
+            return;
+        }
+        // Fallback: no memo (scrutinee was never value-lowered on this path) —
+        // re-lower to get the scrutinee local. Safe for side-effect-free
+        // scrutinees; the memo above covers every if/while/expr-if condition.
         let val = lower_expr(ctx, builder, inner);
         let scrut_type = super::exprs::infer_operand_type_full(ctx, &val, builder);
         let scrut_local = if let Operand::Copy(ref place) | Operand::Move(ref place) = val {

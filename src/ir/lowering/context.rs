@@ -303,6 +303,37 @@ pub struct FunctionState {
     /// for a non-participating function. Set in `lower_function` before body
     /// lowering, read by the fault-return block emit.
     pub fault_slot_param: Option<LocalId>,
+    /// Memoized `is`-scrutinee locals, keyed by the `Expr::Is` node's span
+    /// start. When an `Expr::Is` is lowered as a boolean VALUE (the tag test in
+    /// an `if`/`elif`/`while` condition, an expr-`if`, or an `and`-chain), the
+    /// scrutinee is evaluated exactly once into `scrut_local`; that local +
+    /// type are recorded here. `emit_is_bindings` (which runs LATER, in the
+    /// then/body block, to bind the pattern payload) READS this entry and
+    /// reuses `scrut_local` INSTEAD of re-lowering the scrutinee expression.
+    ///
+    /// Re-lowering re-evaluates the scrutinee — for a side-effecting scrutinee
+    /// (a mutating `&self` method returning `Option`, e.g. `if scopes.define(…)
+    /// is Some(id):`) that means the method is CALLED TWICE, binding the payload
+    /// from the second call and mis-observing state (`resolve.gg`
+    /// `define_pattern_bindings` bind-to-local workaround). Sharing the single
+    /// scrutinee local mirrors how `match` lowers its scrutinee once. Keyed by
+    /// span-start because the value-lowering and the binding-lowering are
+    /// dispatched from different call sites over the SAME `Spanned<Expr>` node
+    /// (unique per source location).
+    ///
+    /// The entry is READ, never removed (`emit_is_bindings` uses
+    /// `.get(..).copied()`). Read-not-remove is LOAD-BEARING: an `and`-chain
+    /// binds its LEFT operand in TWO dominated blocks — `lower_short_circuit`'s
+    /// rhs block (so the binding is in scope while evaluating the right operand)
+    /// AND the outer then/body block (for the branch body) — and BOTH must reuse
+    /// the single scrutinee evaluation. Removing on the first read would force
+    /// the second binding site to re-lower, re-invoking the scrutinee and
+    /// re-introducing the double-eval on the left operand. Leaving stale entries
+    /// is harmless: spans are unique per source location, the value-lowering
+    /// block dominates every binding site (so the local is always valid to
+    /// read), and the whole map is cleared en masse per-function via `Default`
+    /// (`clear_locals`) — so a stale entry can never be reused across functions.
+    pub is_scrut_memo: FxHashMap<usize, (LocalId, TypeId)>,
 }
 
 /// The handler-block targets an active fault-`catch` routes faults to.

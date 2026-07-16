@@ -1,0 +1,61 @@
+# Regression: an `is Some(x)` scrutinee must be evaluated EXACTLY ONCE.
+#
+# GIR used to lower the `is`-scrutinee twice — once to test the discriminant
+# (the enclosing if/elif/while condition) and again to extract the payload
+# binding. For a side-effecting scrutinee (a mutating `&self` method returning
+# `Option`, e.g. `if scopes.define(...) is Some(id):`) that meant the method
+# was CALLED TWICE: the bound payload reflected the SECOND call, silently
+# corrupting the value (self-host `resolve.gg` needed a bind-to-local
+# workaround). The `.calls` counters below assert single-evaluation.
+
+struct Counter:
+    int n
+    int calls
+
+equip Counter:
+    # Mutating &self returning Option[int]: bumps n, records the call, and
+    # stops (None) once n reaches 3.
+    Option[int] step(&self):
+        self.calls = self.calls + 1
+        if self.n >= 3:
+            return None
+        self.n = self.n + 1
+        return Some(self.n)
+
+void main():
+    # if-is: one evaluation, payload from that single call.
+    Counter a = Counter(0, 0)
+    if a.step() is Some(x):
+        print(x)            # 1
+    print(a.calls)          # 1
+
+    # if/else: still one evaluation on the Some path.
+    Counter b = Counter(0, 0)
+    if b.step() is Some(y):
+        print(y + 10)       # 11
+    else:
+        print(-1)
+    print(b.calls)          # 1
+
+    # while-is, None-terminated: exactly one evaluation per header visit.
+    Counter c = Counter(0, 0)
+    while c.step() is Some(v):
+        print(v)            # 1, 2, 3
+    print(c.calls)          # 4  (3 Somes + the terminating None)
+
+    # match over the same mutating method (control: always single-eval).
+    Counter m = Counter(0, 0)
+    match m.step():
+        case Some(w):
+            print(w)        # 1
+        else:
+            print(-2)
+    print(m.calls)          # 1
+
+    # and-chain: each side-effecting scrutinee evaluated exactly once.
+    Counter d = Counter(0, 0)
+    Counter e = Counter(0, 0)
+    if d.step() is Some(p) and e.step() is Some(q):
+        print(p + q)        # 2
+    print(d.calls)          # 1
+    print(e.calls)          # 1
