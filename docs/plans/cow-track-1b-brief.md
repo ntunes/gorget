@@ -1,13 +1,15 @@
 # Executor brief: CoW Track 1B — self-host value index-element field write-through
 
-> **Status:** v2 — pass-2 folded (4 reservations: the EIndex arm MUST gate on `collection_kind`
-> with fall-through for non-array kinds — `lower_place_base` is SHARED with reads/receivers and
-> an unconditional array getter would hijack Dict/Set and crash; the read/receiver blast radius
-> made explicit + executor runs the bootstrap deliberately; static guidance reframed to the
-> self-host's own `lower_index_assign` idiom, not Rust GlobalRef; ggdef adjudication split
-> local-vs-static). Pass-1 had folded: fixture scoped to M1-covered shapes; the
-> `gorget_array_get_ptr`/untrack framing corrected; statics in scope; lint deferral explicit.
-> Awaiting the next fresh pass. **Campaign:** `cow-writethrough-materialize-closed-set.md` (v3) — this is the
+> **Status:** v3 — pass-3 folded (2 reservations: the ELEMENT-KIND mandate — dst is
+> `GtPtr(elem)`+`LoBorrowed` for BOTH value-struct and resource elements, do NOT replicate the
+> read path's 3-way split whose struct→by-value `else` arm IS the bug; the Out-of-scope
+> bootstrap contradiction reconciled + chunk-verbiage dropped for the monolithic test).
+> Pass-2 folded: `collection_kind` gate mandate on the shared resolver; read/receiver blast +
+> executor-run bootstrap; statics via the `lower_index_assign` idiom; ggdef local/static split.
+> Pass-1 folded: fixture scoped; `gorget_array_get_ptr`/untrack framing corrected; statics in
+> scope; lint deferral explicit. Awaiting the next fresh pass (pass-3 verified all other axes
+> clean, incl. CkVector/CkDeque completeness, the OpCopy-if-ptr idiom for both base kinds, and
+> the fixture's expected values against the inline test). **Campaign:** `cow-writethrough-materialize-closed-set.md` (v3) — this is the
 > campaign's designated first PR. **Wave-0 basis:** `cow-wave0-measure.md` — gap B re-verified
 > broken this session (self-host only; Rust GIR is correct).
 > **Model policy:** executor + brief-reviews Opus; output-review before integration on Fable.
@@ -38,11 +40,22 @@ where Rust GIR emits the `get_ptr` + deref-store shape.
 **Mechanism (pass-1-corrected — the campaign plan's `gorget_array_get_ptr` is an ASPIRATIONAL
 name from a comment at `src/ir/lowering/exprs/mod.rs:2543`; no such symbol exists anywhere):**
 Rust's Index arm (`exprs/mod.rs:2553-2595`) emits `Inst::ElemPtr` (inline `base + idx*elem_size`).
-The self-host's real equivalent is what its resource-element READ path already does at
-`lower_expr.gg:4971-4973`: call `gorget_array_get` (which returns a pointer INTO the buffer —
-`runtime_array.c:31-36`) with the dst typed **`GtPtr(elem)`** and tagged **`LoBorrowed`**.
-Mirror that in `lower_place_base`'s new **EIndex arm**: element place = `gorget_array_get` →
-`GtPtr(elem)` dst, `LoBorrowed` tag, field store THROUGH the pointer. There is NO self-host
+The self-host building block is `gorget_array_get` (returns a pointer INTO the buffer for ALL
+element types — `runtime_array.c:31-36`) with the dst typed **`GtPtr(elem)`** and tagged
+**`LoBorrowed`** — the shape the resource-element READ arm uses at `lower_expr.gg:4971-4973`.
+
+**⚠ ELEMENT-KIND MANDATE (pass-3, the subtle one): the new EIndex arm types the dst
+`GtPtr(elem)` + `LoBorrowed` for BOTH value-struct AND resource elements — do NOT replicate the
+read path's scalar/resource/struct 3-way split.** The read path at `lower_expr.gg:4969-4975`
+gives `GtPtr` ONLY to the `eix_is_resource` arm; a plain value struct like `Point` takes the
+`:4975` `else` arm — a BARE-typed dst, which `lir_lower.gg:~4616-4634` turns into the
+`*(StructT*)` aggregate COPY-OUT. That value-copy arm IS this bug (`Vector[Point]` is exactly
+the fixture's element). The dst slot TYPE is what decides pointer-vs-copy at the C level
+(`GtPtr` dst → plain `ISlotStore` of the raw pointer; bare aggregate dst → copy-out). Rust's
+own comment says it outright (`exprs/mod.rs:2540-2543`): "lower_index_access returns a value
+COPY for VALUE-type elements … **Force the element Ptr(T) here for BOTH element kinds**."
+Scalar elements are not this arm's business (a field store needs a struct-ish element; scalar
+receivers keep the existing fall-through — Copy semantics are correct for them). There is NO self-host
 untrack pass to call (Rust's `untrack_transient_element_refs_in_range`, `context.rs:2543`, has
 no twin) — the `LoBorrowed` tag IS the untrack-equivalent: it keeps the element Ptr out of
 drop-tracking. **The real risk is mis-tagging the dst `LoOwned` → the buffer element gets
@@ -67,9 +80,10 @@ campaign wants, and the pointer-base read path (`lower_expr.gg:4587-4725`) alrea
 `GtPtr` bases (it's the `&self`/`&param` path). Executor duties: (a) verify index-element reads
 and method-receiver shapes still pass (targeted probes); (b) an emitted-GIR-shape change on
 reads is EXPECTED, not a bug — note it, don't fight it; (c) because the fixture alone has no
-read/receiver-only coverage, run `self_host_bootstrap_fixed_point` YOURSELF as a FOREGROUND
-chunked gate (`GG_BUILD_TIMEOUT_SECS=600`; it self-exercises every read shape) — this track is
-an exception to the bootstrap-is-parent's-job default; the parent still runs the full sweeps.
+read/receiver-only coverage, run `self_host_bootstrap_fixed_point` YOURSELF, FOREGROUND, with
+`GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600` (a single monolithic test — no chunking;
+it self-exercises every read shape) — this track is an exception to the
+bootstrap-is-parent's-job default; the parent still runs the full sweeps.
 (d) If nested-Vector `get→push→set` shapes start passing, REPORT it — it may retire a filed
 workaround (memory: nested-vector get-push-set) — do not silently absorb it.
 
@@ -144,8 +158,12 @@ coarse-kind split in `typecheck.gg`, tuple-DefId in `parser.gg`/`resolve.gg`; st
 - Dict/Set element field stores (Track 1C), `for x in &coll` (Track 1A), nested-`&` (2F),
   plain-`self` (2E). If your fix naturally generalizes, leave the seam clean and NOTE it.
 - Any Rust-side lowering change (Rust is correct here).
-- The bootstrap fixed-point + full C/LLVM sweeps + parity regen: the PARENT runs these
-  (combined with the other in-flight tracks). You run build + targeted + lib only.
+- The full C/LLVM sweeps + parity regen: the PARENT runs these (combined with the other
+  in-flight tracks). **EXCEPTION carved out for THIS track (pass-2/3): you DO run
+  `self_host_bootstrap_fixed_point` yourself** — it is the only coverage for the read/receiver
+  reroute (see blast-radius section). It is a SINGLE monolithic test (stage-2==3==4): run it
+  FOREGROUND with `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600` — no chunking applies.
+  Everything else beyond build + targeted + lib + that one bootstrap test stays the parent's.
 
 ## Process contract (non-negotiable)
 
