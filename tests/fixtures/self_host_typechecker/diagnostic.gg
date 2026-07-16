@@ -32,8 +32,9 @@ enum Severity:
 # ── Diagnostic category ─────────────────────────────────────
 #
 # One variant per category currently emitted by a stage on the
-# accumulator. The typechecker populates `DkTypeMismatch` /
-# `DkUndefinedName` today; the other variants are reserved for
+# accumulator. The typechecker populates its per-code reject kinds
+# (`DkDerefNonBox`, `DkBreakOutsideLoop`, … — one per registry code)
+# plus `DkUndefinedName` today; the other variants are reserved for
 # upstream / downstream stages (parser → DkParseError; resolver →
 # DkUndefinedName / DkDuplicateDefinition; lexer → DkLexError;
 # lowerer → DkUnreachable).
@@ -51,8 +52,21 @@ enum DiagKind:
 
     # Typechecker kinds (active in this stage)
     DkNotAType             # used a non-type identifier in a type position
-    DkTypeMismatch         # expected vs actual type disagreement
-    DkControlFlow          # break/continue/return/throw in invalid context
+    DkTypeMismatch         # expected vs actual type disagreement (E_TypeMismatch)
+    # Split out of the former coarse DkTypeMismatch — each 1:1 with its registry code:
+    DkDerefNonBox          # `*` on a non-`Box[T]` value (E_DerefNonBox)
+    DkDefaultOpNonOptional # `??` on a non-Option/Result LHS (E_DefaultOpNonOptional)
+    DkMainThrowsNonInt     # `main()` throws a non-`int` (E_MainThrowsNonInt)
+    DkValueOutOfRange      # integer literal out of the target type's range (E_ValueOutOfRange)
+    DkStringIndexAssign    # `s[i] = x` on a read-only string view (E_StringIndexAssign)
+    # Split out of the former coarse DkControlFlow — each 1:1 with its registry code:
+    DkBreakOutsideLoop           # `break` outside a loop (E_BreakOutsideLoop)
+    DkContinueOutsideLoop        # `continue` outside a loop (E_ContinueOutsideLoop)
+    DkReturnOutsideFunction      # `return` outside a function (E_ReturnOutsideFunction)
+    DkThrowInNonThrowingFunction # `throw` in a fn without `throws` (E_ThrowInNonThrowingFunction)
+    DkPositionalAfterNamed       # positional arg after a named arg (E_PositionalAfterNamed)
+    DkRequiredAfterDefault       # required param after a defaulted param (E_RequiredAfterDefault)
+    DkDoubleAwait                # expression awaited twice (E_DoubleAwait)
     DkPrimitiveTraitImpl   # `equip <scalar-primitive> with Trait` — no addressable self
     DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
     DkMoveWithoutOperator  # D4/D12: implicit copy of a live drop-tainted place at an ownership boundary
@@ -115,8 +129,30 @@ String diag_kind_str(DiagKind kind):
             return "not-a-type"
         case DkTypeMismatch():
             return "type-mismatch"
-        case DkControlFlow():
-            return "control-flow"
+        case DkDerefNonBox():
+            return "deref-non-box"
+        case DkDefaultOpNonOptional():
+            return "default-op-non-optional"
+        case DkMainThrowsNonInt():
+            return "main-throws-non-int"
+        case DkValueOutOfRange():
+            return "value-out-of-range"
+        case DkStringIndexAssign():
+            return "string-index-assign"
+        case DkBreakOutsideLoop():
+            return "break-outside-loop"
+        case DkContinueOutsideLoop():
+            return "continue-outside-loop"
+        case DkReturnOutsideFunction():
+            return "return-outside-function"
+        case DkThrowInNonThrowingFunction():
+            return "throw-in-non-throwing-function"
+        case DkPositionalAfterNamed():
+            return "positional-after-named"
+        case DkRequiredAfterDefault():
+            return "required-after-default"
+        case DkDoubleAwait():
+            return "double-await"
         case DkPrimitiveTraitImpl():
             return "primitive-trait-impl"
         case DkLocalBorrowBind():
@@ -137,12 +173,12 @@ String diag_kind_str(DiagKind kind):
 # Ratified registry error code (`E_<code>`, spec/prose/diagnostic-codes.md) for a
 # diagnostic kind — the machine-readable axis a conformance harness compares (the
 # static-rejection analogue of a runtime `trap[T_<code>]`). Returns "" for kinds
-# that carry NO code: the lex/parse families (not yet coded); the COARSE kinds
-# (`DkControlFlow` multiplexes E_Break/Continue/ReturnOutsideLoop /
-# E_ThrowInNonThrowingFunction / E_PositionalAfterNamed / …; `DkTypeMismatch`
-# multiplexes E_TypeMismatch / E_ValueOutOfRange / E_StringIndexAssign / … — until
-# each is split 1:1 with the registry, no single code can be named from the kind
-# alone); and the reserved `DkUnreachable`. The code is read from the TYPED kind
+# that carry NO code: the lex/parse families (not yet coded) and the reserved
+# `DkUnreachable`. Every typechecker reject kind is now split 1:1 with the registry
+# (the former coarse `DkTypeMismatch`/`DkControlFlow` multiplexers were broken out
+# into per-code kinds — `DkDerefNonBox`, `DkBreakOutsideLoop`, … — so each names
+# exactly one code; `DkTypeMismatch` itself now maps to its namesake `E_TypeMismatch`
+# for a plain expected-vs-actual disagreement). The code is read from the TYPED kind
 # (layering rule 2 — never name-matched off the message text) and only ever rides
 # an error-severity headline (warning codes are not rendered — diagnostic-codes.md).
 String diag_kind_code(DiagKind kind):
@@ -167,11 +203,33 @@ String diag_kind_code(DiagKind kind):
             return "E_DuplicateDefinition"
         case DkNotAType():
             return "E_NotAType"
-        # Coarse / not-yet-coded / reserved kinds render codeless (bare `error:`):
         case DkTypeMismatch():
-            return ""
-        case DkControlFlow():
-            return ""
+            return "E_TypeMismatch"
+        case DkDerefNonBox():
+            return "E_DerefNonBox"
+        case DkDefaultOpNonOptional():
+            return "E_DefaultOpNonOptional"
+        case DkMainThrowsNonInt():
+            return "E_MainThrowsNonInt"
+        case DkValueOutOfRange():
+            return "E_ValueOutOfRange"
+        case DkStringIndexAssign():
+            return "E_StringIndexAssign"
+        case DkBreakOutsideLoop():
+            return "E_BreakOutsideLoop"
+        case DkContinueOutsideLoop():
+            return "E_ContinueOutsideLoop"
+        case DkReturnOutsideFunction():
+            return "E_ReturnOutsideFunction"
+        case DkThrowInNonThrowingFunction():
+            return "E_ThrowInNonThrowingFunction"
+        case DkPositionalAfterNamed():
+            return "E_PositionalAfterNamed"
+        case DkRequiredAfterDefault():
+            return "E_RequiredAfterDefault"
+        case DkDoubleAwait():
+            return "E_DoubleAwait"
+        # Not-yet-coded / reserved kinds render codeless (bare `error:`):
         case DkParseError():
             return ""
         case DkLexError():
@@ -342,8 +400,8 @@ String render_diagnostic(Diagnostic d, String source, String path):
     #    styled token), so the machine-readable `error[E_<code>]` substring stays
     #    CONTIGUOUS (no ANSI reset splits `error` from `[`) for a conformance
     #    harness to read. Only error-severity diagnostics whose kind maps to a
-    #    registry code carry the `[E_<code>]` segment; warnings, notes, and the
-    #    coarse / not-yet-coded kinds render the bare `severity:` headline.
+    #    registry code carry the `[E_<code>]` segment; warnings and notes render
+    #    the bare `severity:` headline.
     String code_seg = ""
     match d.sev:
         case SevError():

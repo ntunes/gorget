@@ -1,0 +1,13 @@
+# Negative fixture: `await await g()` awaits one expression twice. The inner
+# `await g()` already unwraps `Task[int]` to `int`, so the outer `await`
+# operates on the plain `int` — virtually always a bug. The language MUST
+# reject this (E_DoubleAwait), matching Rust gg (src/semantic/typecheck.rs,
+# SemanticErrorKind::DoubleAwait). Use either `await expr` or `expr.await()`,
+# not both. Before the coarse-kind split the self-host rendered this as a bare
+# `error:`; it now emits the ratified `error[E_DoubleAwait]` headline.
+async int g():
+    return 1
+
+async void main():
+    int v = g().await().await()
+    print(v)

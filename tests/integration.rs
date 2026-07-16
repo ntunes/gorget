@@ -18597,7 +18597,7 @@ fn self_host_driver_rejects_invalid_program() {
     //    headline word, the message text, and the box rule — together they
     //    prove the diagnostic rendered with content rather than crashing.
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_ThrowInNonThrowingFunction]")
             && stderr.contains("throw in function that doesn't declare `throws`")
             && stderr.contains('\u{250c}'),
         "self-host driver exited non-zero but emitted no codespan diagnostic \
@@ -18910,10 +18910,11 @@ fn self_host_driver_accepts_d10b_place_overlap() {
 // message): spectests/run/reject_move_in_loop.gg, reject_use_after_move_branch.gg,
 // reject_consuming_self_use_after_move.gg, reject_consume_callable_double.gg —
 // alongside the original proof migration spectests/run/reject_use_after_move.gg and
-// its E_DoubleMove sibling reject_double_move.gg. Only the COARSE codeless kinds
-// `DkTypeMismatch` / `DkControlFlow` (each multiplexing several registry codes)
-// still render bare `error:` and cannot yet be E_-code-compared — the filed HIGH
-// follow-up that splits those kinds 1:1 with the registry (TODO.md).
+// its E_DoubleMove sibling reject_double_move.gg. The formerly-coarse kinds
+// (`DkTypeMismatch` / `DkControlFlow`) are SPLIT 1:1 with the registry — every
+// self-host reject now carries its `error[E_<code>]` headline (see the coarse-family
+// driver tests below); their four-lane conformance migration remains blocked on the
+// ggdef-elaborate axis extension (TODO.md).
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_rejects_liveness() {
@@ -19072,7 +19073,7 @@ fn self_host_driver_rejects_positional_after_named() {
     //    render_diagnostic). The `error` headline and message text together
     //    with the box rule prove the diagnostic rendered with content.
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_PositionalAfterNamed]")
             && stderr.contains("positional argument cannot follow named argument")
             && stderr.contains('\u{250c}'),
         "self-host driver exited non-zero but emitted no codespan diagnostic \
@@ -19137,7 +19138,7 @@ fn self_host_driver_rejects_positional_after_named_method() {
     // 2. It MUST render a codespan diagnostic to stderr (same render path as the
     //    free-fn sibling — see self_host_typechecker/diagnostic.gg).
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_PositionalAfterNamed]")
             && stderr.contains("positional argument cannot follow named argument")
             && stderr.contains('\u{250c}'),
         "self-host driver exited non-zero but emitted no codespan diagnostic \
@@ -19204,7 +19205,7 @@ fn self_host_driver_rejects_default_op_non_optional() {
     // 2. It MUST render a codespan diagnostic to stderr (same render path as the
     //    sibling guards — see self_host_typechecker/diagnostic.gg).
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_DefaultOpNonOptional]")
             && stderr.contains("default operator `??` requires an `Option` or `Result` left-hand side")
             && stderr.contains('\u{250c}'),
         "self-host driver exited non-zero but emitted no codespan diagnostic \
@@ -19268,7 +19269,7 @@ fn self_host_driver_rejects_default_op_non_optional_nested() {
 
     // 2. It MUST render the codespan diagnostic to stderr.
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_DefaultOpNonOptional]")
             && stderr.contains("default operator `??` requires an `Option` or `Result` left-hand side")
             && stderr.contains('\u{250c}'),
         "self-host driver exited non-zero but emitted no codespan diagnostic \
@@ -19336,7 +19337,7 @@ fn self_host_driver_rejects_required_after_default() {
     //    render_diagnostic). The `error` headline and message text together
     //    with the box rule prove the diagnostic rendered with content.
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_RequiredAfterDefault]")
             && stderr.contains("follows a parameter with a default value")
             && stderr.contains('\u{250c}'),
         "self-host driver exited non-zero but emitted no codespan diagnostic \
@@ -19479,7 +19480,7 @@ fn self_host_driver_rejects_trait_required_after_default() {
     //    render_diagnostic). The `error` headline and message text together
     //    with the box rule prove the diagnostic rendered with content.
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_RequiredAfterDefault]")
             && stderr.contains("follows a parameter with a default value")
             && stderr.contains('\u{250c}'),
         "self-host driver exited non-zero but emitted no codespan diagnostic \
@@ -19557,7 +19558,7 @@ fn self_host_driver_rejects_value_out_of_range() {
     //    is byte-identical to Rust's so type_comparison stays exact), and the
     //    box rule together prove the diagnostic rendered with content.
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_ValueOutOfRange]")
             && stderr
                 .contains("value 200 is out of range for type int8 (valid range: -128..=127)")
             && stderr.contains('\u{250c}'),
@@ -19635,7 +19636,7 @@ fn self_host_driver_rejects_string_index_assign() {
     //    type_comparison stays exact), and the box rule together prove the
     //    diagnostic rendered with content.
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_StringIndexAssign]")
             && stderr.contains(
                 "strings are not index-assignable: `s[i]` is a read-only \
                  codepoint view",
@@ -19697,7 +19698,7 @@ fn self_host_driver_rejects_string_index_compound_assign() {
     );
 
     assert!(
-        stderr.contains("error")
+        stderr.contains("error[E_StringIndexAssign]")
             && stderr.contains(
                 "strings are not index-assignable: `s[i]` is a read-only \
                  codepoint view",
@@ -19714,6 +19715,219 @@ fn self_host_driver_rejects_string_index_compound_assign() {
          halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
         stdout.len(),
         &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+// ── Coarse-kind diagnostic split: driver-level code assertions ────────
+// The five tests below lock the `error[E_<code>]` headline for the five
+// reachable former-coarse reject codes that no self-host driver reject test
+// exercised before the split (`DkTypeMismatch`/`DkControlFlow` → per-code
+// kinds in self_host_typechecker/diagnostic.gg). Four reuse committed
+// production fixtures (already gated by `check_gg_fails`); one drives a new
+// double-await fixture. Together with the ten upgraded coarse tests above,
+// every reachable code in the split is now driver-asserted (11 of 12 — the
+// twelfth, E_ReturnOutsideFunction, is a reserved-coded slot: `return` at
+// module scope is a PARSE error, so the typecheck gate is structurally
+// unreachable, hence no fixture). Same contract as the sibling guards:
+// non-zero exit, a source-grounded codespan diagnostic on stderr (the exact
+// `error[E_<code>]` headline + message text + box rule), and NO C on stdout
+// (the diagnostic gate halts BEFORE lowering). Parity-neutral — every
+// fixture is Rust-rejected, excluded from the parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_deref_non_box() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/deref_non_box_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_deref_non_box",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (`*x` on a non-`Box[T]` \
+         value). The DkDerefNonBox reject in self_host_typechecker/typecheck.gg's \
+         check_deref_operand was removed or stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("error[E_DerefNonBox]")
+            && stderr.contains("cannot dereference `*` a non-`Box[T]` value")
+            && stderr.contains('\u{250c}'),
+        "self-host driver rejected the deref but did not emit the ratified \
+         `error[E_DerefNonBox]` codespan headline.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must halt \
+         BEFORE lowering. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_main_throws_non_int() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/main_throws_non_int_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_main_throws_non_int",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (`main()` declaring a \
+         non-`int` throws type). The DkMainThrowsNonInt reject in \
+         self_host_typechecker/typecheck.gg's type_check_function was removed or \
+         stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("error[E_MainThrowsNonInt]")
+            && stderr.contains("`main()` can only throw `int` (the process exit code)")
+            && stderr.contains('\u{250c}'),
+        "self-host driver rejected the non-int main throws but did not emit the \
+         ratified `error[E_MainThrowsNonInt]` codespan headline.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must halt \
+         BEFORE lowering. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_break_outside_loop() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/break_outside_loop_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_break_outside_loop",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (`break` outside a loop). \
+         The DkBreakOutsideLoop reject in self_host_typechecker/typecheck.gg's \
+         type_check_stmt was removed or stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("error[E_BreakOutsideLoop]")
+            && stderr.contains("break outside of loop")
+            && stderr.contains('\u{250c}'),
+        "self-host driver rejected the stray break but did not emit the ratified \
+         `error[E_BreakOutsideLoop]` codespan headline.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must halt \
+         BEFORE lowering. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_continue_outside_loop() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/continue_outside_loop_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_continue_outside_loop",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (`continue` outside a \
+         loop). The DkContinueOutsideLoop reject in \
+         self_host_typechecker/typecheck.gg's type_check_stmt was removed or \
+         stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("error[E_ContinueOutsideLoop]")
+            && stderr.contains("continue outside of loop")
+            && stderr.contains('\u{250c}'),
+        "self-host driver rejected the stray continue but did not emit the ratified \
+         `error[E_ContinueOutsideLoop]` codespan headline.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must halt \
+         BEFORE lowering. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+// Double-await (`await await g()`, canonicalized by the formatter to
+// `g().await().await()`) — the outer `await` operates on the already-unwrapped
+// value, virtually always a bug. This is the ONE reachable former-coarse code
+// with no committed fixture, so this test drives a new one
+// (`double_await_error.gg`, at the formatter fixpoint). Mirrors Rust gg's
+// `double_await_rejected` (src/semantic/typecheck.rs, SemanticErrorKind::DoubleAwait).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_double_await() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/double_await_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_double_await",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (an expression awaited \
+         twice). The DkDoubleAwait reject in self_host_typechecker/typecheck.gg's \
+         EAwait walk-pass arm was removed or stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("error[E_DoubleAwait]")
+            && stderr.contains("expression is awaited twice")
+            && stderr.contains('\u{250c}'),
+        "self-host driver rejected the double-await but did not emit the ratified \
+         `error[E_DoubleAwait]` codespan headline.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must halt \
+         BEFORE lowering. stdout bytes={}",
+        stdout.len(),
     );
 }
 

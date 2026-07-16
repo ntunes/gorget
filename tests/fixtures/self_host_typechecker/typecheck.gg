@@ -35,7 +35,7 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name
-from diagnostic import Diagnostic, DkTypeMismatch, DkControlFlow, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -382,7 +382,7 @@ void check_default_param_ordering(Vector[Param] params, ResolveContext &ctx):
         if p.default_value is Some(_):
             seen_default = true
         elif seen_default:
-            ctx.diagnostics.push(Diagnostic.error(p.param_type.span, DkControlFlow(), f"required parameter `{p.param_name}` follows a parameter with a default value"))
+            ctx.diagnostics.push(Diagnostic.error(p.param_type.span, DkRequiredAfterDefault(), f"required parameter `{p.param_name}` follows a parameter with a default value"))
 
 # ── Carrier-operator reject pass (EXHAUSTIVE; AGENTS.md Core #8 + #4) ──────
 #
@@ -449,7 +449,7 @@ void check_default_op_lhs(SpannedExpr lhs, int scope_id, ScopeTable &scopes, Typ
     if carrier_op_suppress(lhs_type, &types):
         return
     if not carrier_op_is_option_or_result(lhs_type, &scopes, &types):
-        ctx.diagnostics.push(Diagnostic.error(lhs.span, DkTypeMismatch(), "default operator `??` requires an `Option` or `Result` left-hand side"))
+        ctx.diagnostics.push(Diagnostic.error(lhs.span, DkDefaultOpNonOptional(), "default operator `??` requires an `Option` or `Result` left-hand side"))
 
 # Reject `*x` when `x` is not a `Box[T]` (with the same suppression). Peels a
 # single RTRef wrapper (`*(&box)`), mirroring infer.gg's EDeref arm.
@@ -476,7 +476,7 @@ void check_deref_operand(SpannedExpr operand, int scope_id, ScopeTable &scopes, 
             else:
                 pass
     if not is_box:
-        ctx.diagnostics.push(Diagnostic.error(operand.span, DkTypeMismatch(), "cannot dereference `*` a non-`Box[T]` value"))
+        ctx.diagnostics.push(Diagnostic.error(operand.span, DkDerefNonBox(), "cannot dereference `*` a non-`Box[T]` value"))
 
 # D10(a) (decisions.md, ratified 2026-07-06): a mutable borrow (`&expr`)
 # bound to a name — `auto r = &b`, `r = &b`. A named `&`-binding would alias
@@ -1840,7 +1840,7 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
             else:
                 pass
         if not is_int:
-            ctx.diagnostics.push(Diagnostic.error(throws_st.span, DkTypeMismatch(), "`main()` can only throw `int` (the process exit code)"))
+            ctx.diagnostics.push(Diagnostic.error(throws_st.span, DkMainThrowsNonInt(), "`main()` can only throw `int` (the process exit code)"))
 
     # Walk body for VarDecl types
     Option[int] body_scope_opt = find_body_scope(func.name, parent_scope, scopes, &ctx)
@@ -2181,7 +2181,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 if arg.name is Some(_aname):
                     seen_named = true
                 elif seen_named:
-                    ctx.diagnostics.push(Diagnostic.error(arg.value.span, DkControlFlow(), "positional argument cannot follow named argument"))
+                    ctx.diagnostics.push(Diagnostic.error(arg.value.span, DkPositionalAfterNamed(), "positional argument cannot follow named argument"))
                 if ai < call_param_types.len():
                     walk_expr_closures_with_type(arg.value, get_int_at(call_param_types, ai), scope_id, &scopes, &types, &ctx)
                 else:
@@ -2202,7 +2202,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                 if marg.name is Some(_maname):
                     m_seen_named = true
                 elif m_seen_named:
-                    ctx.diagnostics.push(Diagnostic.error(marg.value.span, DkControlFlow(), "positional argument cannot follow named argument"))
+                    ctx.diagnostics.push(Diagnostic.error(marg.value.span, DkPositionalAfterNamed(), "positional argument cannot follow named argument"))
             # Infer receiver element type for collection higher-order methods
             int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             int elem_type = extract_element_type(obj_type, scopes, types).unwrap_or(-1)
@@ -2285,7 +2285,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # driven on the former; the latter currently only walks).
             match (*inner).expr:
                 case EAwait(_):
-                    ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkControlFlow(), "expression is awaited twice — use either `await expr` or `expr.await()`, not both"))
+                    ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkDoubleAwait(), "expression is awaited twice — use either `await expr` or `expr.await()`, not both"))
                 else:
                     pass
             walk_expr_closures(*inner, scope_id, &scopes, &types, &ctx)
@@ -2683,7 +2683,7 @@ void check_sized_int_literal_range(SpannedExpr init_expr, int var_type_id, TypeT
     if not is_literal:
         return
     if value < range_min or value > range_max:
-        ctx.diagnostics.push(Diagnostic.error(init_expr.span, DkTypeMismatch(), f"value {value} is out of range for type {prim_name} (valid range: {range_min}..={range_max})"))
+        ctx.diagnostics.push(Diagnostic.error(init_expr.span, DkValueOutOfRange(), f"value {value} is out of range for type {prim_name} (valid range: {range_min}..={range_max})"))
 
 # ── String index-assign reject (StringIndexAssign) ──────────
 # Mirrors Rust's check_string_index_assign in src/semantic/typecheck.rs:4174
@@ -2711,7 +2711,7 @@ void check_string_index_assign(SpannedExpr target, int scope_id, ScopeTable &sco
                 match ort:
                     case RTPrimitive(name):
                         if name == "str" or name == "String":
-                            ctx.diagnostics.push(Diagnostic.error(target.span, DkTypeMismatch(), "strings are not index-assignable: `s[i]` is a read-only codepoint view — build a new string instead (e.g. `s.replace(...)`, slicing + concatenation)"))
+                            ctx.diagnostics.push(Diagnostic.error(target.span, DkStringIndexAssign(), "strings are not index-assignable: `s[i]` is a read-only codepoint view — build a new string instead (e.g. `s.replace(...)`, slicing + concatenation)"))
                     else:
                         pass
         else:
@@ -2889,7 +2889,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 Span ret_span = Span(0, 0)
                 if opt_expr is Some(rsp):
                     ret_span = rsp.span
-                ctx.diagnostics.push(Diagnostic.error(ret_span, DkControlFlow(), "return outside of function"))
+                ctx.diagnostics.push(Diagnostic.error(ret_span, DkReturnOutsideFunction(), "return outside of function"))
             if opt_expr is Some(sexpr):
                 walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
 
@@ -2899,7 +2899,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # at SFor/SWhile/SLoop entry, reset at function entry, and
             # save/restored across closures.
             if ctx.loop_depth == 0:
-                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkControlFlow(), "break outside of loop"))
+                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkBreakOutsideLoop(), "break outside of loop"))
 
         case SContinue():
             # ContinueOutsideLoop — mirrors src/semantic/typecheck.rs:2898
@@ -2908,14 +2908,14 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # statement spans onto containers (the enclosing fn/block), so
             # this matches the resolution offered for other span-less stmts.
             if ctx.loop_depth == 0:
-                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkControlFlow(), "continue outside of loop"))
+                ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkContinueOutsideLoop(), "continue outside of loop"))
 
         case SThrow(expr):
             # ThrowInNonThrowingFunction — mirrors src/semantic/typecheck.rs:2866
             # (SemanticErrorKind::ThrowInNonThrowingFunction). The enclosing
             # function must declare `throws T` for `throw` to be valid.
             if not ctx.current_function_throws:
-                ctx.diagnostics.push(Diagnostic.error(expr.span, DkControlFlow(), "throw in function that doesn't declare `throws`"))
+                ctx.diagnostics.push(Diagnostic.error(expr.span, DkThrowInNonThrowingFunction(), "throw in function that doesn't declare `throws`"))
             walk_expr_closures(expr, scope_id, &scopes, &types, &ctx)
 
         case SSelect(arms):

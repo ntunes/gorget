@@ -21,7 +21,7 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTNever, RTRef, RTVar
 from types import ast_type_to_resolved
 from types import FunctionSig, MethodSigShape, MethodResolution, ShapeResolution, EquipInfo
 from resolve import ResolveContext
-from diagnostic import Diagnostic, DkControlFlow, DkTypeMismatch, DkUndefinedName
+from diagnostic import Diagnostic, DkUndefinedName
 from traits import resolve_method_by_name, resolve_method_shape
 from traits import resolve_method_full, resolve_method_for_generic_receiver
 from traits import infer_method_targs, substitute_return_type, type_name_of
