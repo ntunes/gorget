@@ -1,6 +1,12 @@
 # Executor brief: CoW Track 1C — Dict `d[k].field = x` write-through (both compilers)
 
-> **Status:** v2 — pass-2 SIGNED OFF (fold verified coherent+necessary: HashMap falls back to the identical old path, provably not-worse; the two-EXCLUDE mandate confirmed complete across all 7 ggdef test files; N1 comment-wording nit folded). Pass-1 folded (1 blocking: the patch's `Map` gate arm ADMITTED HashMap while
+> **Status:** v3 — pass-3 folded (1 substantive: the self-host producer CANNOT be Dict-scoped —
+> no CkHashMap exists; `resource_meta_for` maps `HashMap__`→CkDict (lir_lower.gg:318) and the
+> self-host resolves HashMap value types (lower_types.gg:2648), so the `case CkDict()` arm
+> writes through HashMap-of-struct while scoped Rust drops the write — a LATENT divergence,
+> zero corpus sites. Disposition: DOCUMENT + PROBE + hand to the HashMap track, which closes
+> it by fixing Rust — see M2b below. Do NOT add a CkHashMap variant or a name-check here.)
+> Pass-2 SIGNED OFF (fold verified coherent+necessary: HashMap falls back to the identical old path, provably not-worse; the two-EXCLUDE mandate confirmed complete across all 7 ggdef test files; N1 comment-wording nit folded). Pass-1 folded (1 blocking: the patch's `Map` gate arm ADMITTED HashMap while
 > HashMap-of-struct element typing is broken upstream (pre-existing, now filed HIGH) → the gate
 > is SCOPED to `Array|OrderedMap` (Dict only, matching what is proven); the HashMap track owns
 > flipping the arm + the fixture shape. Also: ggdef sub-suite count corrected to 7 test files;
@@ -57,6 +63,13 @@ separately — do not fix it here).
    `corpus_b1.rs:~35`** with the documented out-of-subset reason (Dict write-place not
    elaborable), mirroring the 1B fixture's entries. Verify not gitignore-hidden; run `gg fmt`
    idempotence on it.
+2b. **M2b — the HashMap asymmetry probe + documentation (pass-3):** run
+   `HashMap[int, Point] h; h[0].x = 99; print(h[0].x)` through BOTH compilers post-fix and
+   record the outputs (expected: Rust drops the write via the scoped gate; self-host writes
+   through via CkDict). Document the measured asymmetry in the FIXTURE COMMENT (not as a
+   fixture assertion — no fixture pins either behavior) citing the HashMap TODO entry that
+   owns closing it by fixing Rust. If the probe shows anything OTHER than the predicted
+   asymmetry, STOP and report.
 3. **M3 — double-eval regression test**: a side-effecting-base probe wired as a test (the
    scout's `make()[0].x` shape — assert the producer runs once). If the natural home is an
    inline Rust test, that's fine; name it so the eval-order class is greppable.
