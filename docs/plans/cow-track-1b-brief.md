@@ -1,6 +1,9 @@
 # Executor brief: CoW Track 1B — self-host value index-element field write-through
 
-> **Status:** v3 — pass-3 folded (2 reservations: the ELEMENT-KIND mandate — dst is
+> **Status:** v3 — ✅ PASS 4 SIGNED OFF CLEAN (2026-07-16; gauntlet 5→4→2→0) — **EXECUTING**.
+> Pass-4 confirmed the correctness crux at the LIR level (GtPtr dst skips the aggregate
+> copy-out; plain ISlotStore of the raw pointer) and that BOTH compound legs (read + write-back)
+> route through the new arm. Pass-3 folded (2 reservations: the ELEMENT-KIND mandate — dst is
 > `GtPtr(elem)`+`LoBorrowed` for BOTH value-struct and resource elements, do NOT replicate the
 > read path's 3-way split whose struct→by-value `else` arm IS the bug; the Out-of-scope
 > bootstrap contradiction reconciled + chunk-verbiage dropped for the monolithic test).
