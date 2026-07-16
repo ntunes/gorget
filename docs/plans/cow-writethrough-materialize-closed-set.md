@@ -19,7 +19,9 @@
 > `.clone()` method receivers (3 regex fixtures regressed, self-caught + reverted). The proven
 > shape mirrors Rust's actual scoping: a WRITE-ONLY `lower_field_place_base` producer (called
 > by both field-write sites), shared resolver untouched. **Tracks 1C and 2F extend
-> `lower_field_place_base`, NOT `lower_place_base`.** New closed-set discovery filed HIGH:
+> `lower_field_place_base` (`lower_stmt.gg:1578`), NOT `lower_place_base`.** ✅ 1B LANDED
+> `565392d8` (Fable output-review SIGN OFF, deviation APPROVED — regression story proven
+> mechanically at three code sites; pivot complete, both producers, no third sibling). New closed-set discovery filed HIGH:
 > bare `v[i].method()` mutating-receiver write-through is broken on BOTH compilers (the
 > method-receiver analog of gap B — needs a row + wave assignment when its track is scoped).
 

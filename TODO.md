@@ -862,6 +862,7 @@ Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (
 
 ## Low
 
+- **🧹 [1B Fable output-review 2026-07-16, LOW-MED — pre-existing, self-host only] Self-host compound `v[i].f += n` evaluates base+idx TWICE** (read leg `lower_stmt.gg:~1184` + the write-back re-resolution) vs Rust's resolve-once-read-through-place (`assigns.rs:1433-1437`). Observable only with a side-effecting index expr (`v[pick()].f += 1` calls `pick()` twice). Predates 1B, not worsened by it. Fix direction: resolve the place once and thread it to both legs (the new `lower_field_place_base` producer is the natural home). Pairs with the RV-C evaluation-order track (same construct, Rust side).
 - **🧹 [coarse-kind Fable output-review 2026-07-16, LOW — diagnostic-cascade polish] Production emits a cascading second `E_AwaitNonFuture` on the double-await shape** (`await await g()`) where the self-host emits only the primary `E_DoubleAwait`. Both lanes reject; both diagnostics are true; purely a cascade-suppression nicety. Fixture `double_await_error.gg` is the probe.
 - **🧹 [unwrap output-review 2026-07-06, LOW] Self-host panic spans emit `<unknown>:0:0:`** — the self-host's emitted `gorget_panic_at` calls carry no source spans (Rust gg threads file:line:col correctly). Related to the Rust runtime-helper span-threading item; self-host-specific half. Rides naturally with the D11 trap-normalization track's location-threading work.
 
