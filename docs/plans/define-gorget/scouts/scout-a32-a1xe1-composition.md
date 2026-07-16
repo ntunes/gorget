@@ -1,8 +1,11 @@
 # A32 pre-impl design question — the A1×E1 composition (unannotated function types: latent or infallible?)
 
-**Status:** OPEN design question, filed 2026-07-16 at the review of commit `e44b6120`. Needs an
-owner pin before the A32 implementation brief is written. Nothing here re-litigates a ratified
-fork; the question lives in the *seam between* two ratified pins.
+**Status:** REVIEWED — external fresh-agent pass 1 (2026-07-16, owner-run): **SIGN OFF on
+Option 2** with fold-ins R1–R5 (all folded below; none contradict a ratified fork — R3's
+third spelling is already Fork C1 surface). AWAITING THE OWNER PIN (proposed LOG text in §7).
+Originally filed 2026-07-16 at the review of commit `e44b6120`. Nothing here re-litigates a
+ratified fork; the question lives in the *seam between* two ratified pins — the reviewer's
+framing, adopted throughout: **Option 2 is A1 *completed by* E1, not A1 vs E1.**
 
 **Purpose of this document:** a self-contained statement of the problem + a recommended
 resolution ("Option 2"), written to be handed to a fresh reviewer with no session context.
@@ -148,6 +151,22 @@ mean *inferred error set*. Extend the same meaning to function **types**:
 > coerces to an effect-less function type — anywhere. A32's rethrow inference fires only
 > through `!`-marked callable params.
 
+**Framing (review fold-in R1): this is A1 *completed*, not amended away.** A1 as ratified
+("no `rethrows` keyword, no effect parameters, effect computed from the callback per call")
+underspecified the param type it computes *through*. Option 2 supplies the missing half:
+inferred rethrows, but only through opt-in latent callable params (`U(T)!`); unannotated
+`U(T)` is concretely infallible (E1, uniform). Implementers must not keep the old
+"any `U(T)` param is effect-generic" reading.
+
+**The three callable-type spellings (review fold-in R3 — keep them from blurring; the third
+is already ratified Fork C1 surface, `R(args) throws E`):**
+
+| Spelling | Meaning |
+|---|---|
+| `U(T)` | concretely infallible (E1 applies, everywhere) |
+| `U(T)!` | latent/inferred error set (may resolve empty); A32 rethrows through it |
+| `U(T) throws E` | concrete error type `E` (storage of a known-throws callable goes HERE, or `Callable[…]` — never stuffed into bare `U(T)`) |
+
 ```gorget
 Vector[U] map[T, U](self, U(T)! f):     # `!` — f may carry an error set; map rethrows it
     Vector[U] out = []
@@ -199,29 +218,34 @@ boundary with a teachable message.
   fold / each / sort-by / iterator adapters). Users writing HOFs must know the marker; the
   E1 diagnostic must carry the fix-it ("mark the param `int(String)!` to accept fallible
   callbacks").
-- **Parse corner in bare param position.** The D29 packet measured `int(int)! name` as
-  ambiguous while prefix-`!` is still the move sigil (pre-D27). Until D27 lands (`^` takes
-  over move), the marker may need the bracketed form in param position:
-  `Callable[int(int)!] f`. A32 impl is sequenced after D29 and near the D27 wave, so the
-  corner likely dissolves before it binds; if not, bracket-only in param position is an
-  acceptable v1 spelling (it is already the packet's recommended callable form).
-- **It bends A1's "no new surface" by one glyph.** A1 said: no `rethrows` keyword, no effect
-  parameters, effect computed per call. Option 2 keeps all of that (the `!` introduces no
-  named effect variable and no keyword) but does put a marker in the signature, so it needs a
-  one-line owner amendment to A1/E1 — an amendment, not a re-litigation.
-- **Doctrine tension to adjudicate:** "sigils = flow at use-sites; keywords = contracts at
-  declarations" — this is a sigil in a declaration. Counterpoint: D29 already grammar-locked
-  bare `!:` on signatures as A31's contract spelling ("error set inferred"), so `U(T)!` is
-  arguably the same contract spelling in its third position, not a new doctrine exception.
-  The reviewer should weigh whether this reads as extension or violation.
+- **Parse corner in bare param position — HARD v1 pin (review fold-in R4).** The D29 packet
+  measured `int(int)! name` as ambiguous while prefix-`!` is still the move sigil (pre-D27).
+  Pin the fallback so the impl brief cannot invent a third spelling mid-implementation:
+  prefer bare `U(T)!` once D27 lands (`^` takes over move); until then — or wherever
+  ambiguity remains — param position uses the bracketed form ONLY: `Callable[U(T)!] f`
+  (already the D29 packet's recommended callable form).
+- **It refines A1's "no new surface" by one glyph.** A1 said: no `rethrows` keyword, no
+  effect parameters, effect computed per call. Option 2 keeps all of that (the `!` introduces
+  no named effect variable and no keyword) but does put a marker in the signature — so the
+  pin should be recorded as an A1 *refinement/completion* (see the R1 framing above), not a
+  silent footnote.
+- **Doctrine — extend the slogan rather than fight it (review fold-in R2).** "Sigils = flow
+  at use-sites" is too narrow once A31's `!:` and `U(T)!` exist. Proposed doctrine wording:
+  **"`!` marks the error channel at the site where the channel appears — use, declaration, or
+  type. Keywords still name concrete contracts (`throws E`). Bare `!` means latent/inferred
+  set."** Under that wording Option 2 is a doctrine extension, not a violation. (D26's `+!`
+  fits the same sentence: the channel appears at the operation glyph.)
 
 ### Interaction checklist (how Option 2 composes with the other ratified forks)
 
 - **B1 (same-E):** two `!`-marked params (e.g. a fold with two callbacks) join their latent
   sets; v1 requires them equal, else type error. Unchanged.
-- **D1 (collections rethrow / Result combinators data-plane):** unchanged; `Result.map`'s
-  callback param simply stays unmarked (`U(T)`) in v1, or marked with the same-E constraint
-  per the ratified D1 text.
+- **D1 (collections rethrow / Result combinators data-plane) — do NOT over-mark (review
+  fold-in R5):** `Result.map`/`Option.map` callback params stay unmarked `U(T)` in v1 —
+  E1 then rejects a throwing callback there, which is a FEATURE (the receiver already
+  encodes failure; per ratified D1, a fallible callback in that plane is same-E-or-reject).
+  Option 2 must not "helpfully" mark every HOF-shaped method; only the rethrow plane
+  (collections / iterators / user HOFs) opts in.
 - **D29 one-mark-for-both-kinds:** the latent set covers both fallibility kinds (throws
   callee or declared-`Result` return) exactly as D29 defines a fallible call.
 - **F1 (traits/equip):** the marker appears in trait method signatures the same way; default
@@ -249,7 +273,7 @@ boundary with a teachable message.
 - **Wrap-coerce at the boundary** (convert the error to a fault): this is Fork E's rejected
   option E2. Dead.
 
-## 6. What we ask the reviewer
+## 6. What we asked the reviewer (standing mandate for any subsequent pass)
 
 1. Verify the load-bearing claims: the A1/E1/C1 fork texts and the D29/A31 pins in
    `docs/plans/define-gorget/decisions.md` (LOG, 2026-07-16 entries) and
@@ -266,3 +290,31 @@ boundary with a teachable message.
 4. Compare honestly against Option 1 (positional). If you conclude Option 1 (or another
    option) is stronger, say so with reasons — the recommendation is not the assignment.
 5. Return SIGN OFF or specific reservations with `file:line`/section citations.
+
+## 6a. Review record
+
+**Pass 1 (external fresh agent, owner-run, 2026-07-16): SIGN OFF on Option 2** — "the
+deadlock is real; Option 2 is the right resolution; ready for owner pin" — with fold-ins:
+R1 record as an A1 refinement/completion (folded: §4 framing); R2 extend the sigil doctrine
+wording (folded: §4 doctrine bullet); R3 spell the three callable-type forms (folded: §4
+table); R4 hard-pin the pre-D27 `Callable[U(T)!]` param-position fallback (folded: §4
+bullet); R5 Result combinators stay unmarked per D1 (folded: §4 checklist). R6 corners
+confirmed as impl-brief checklist items, no new option needed; R7 confirmed sequencing (pin
+before the A32 impl brief; no delay to A32 design). The reviewer also confirmed the
+rejections of Options 3–5 and warned against "E1 only at storage" without writing it down
+("Option 1 in a trench coat").
+
+## 7. Proposed LOG pin (ready for owner ratification)
+
+> **A32/A1×E1 COMPOSITION PIN:** Unannotated function types are concretely infallible (E1,
+> uniform, every position). Latent/inferred effect on a callable is spelled `U(T)!` — A31's
+> bare-`!` meaning at the type position. A32 inferred rethrows applies only through
+> `!`-marked function-type parameters; inside a HOF body a latent-effect invocation carries
+> the D29 mark (`f(x)!`), vacuous under an infallible instantiation. Fallible callables never
+> coerce to effect-less types; storage of a known-throws callable spells the effect
+> (`U(T) throws E` / `Callable[…]`, per Fork C1). Param-position spelling pre-D27 is
+> bracketed-only: `Callable[U(T)!] f`. Result/Option combinator callbacks stay unmarked per
+> D1. Doctrine wording extended: `!` marks the error channel at the site where the channel
+> appears — use, declaration, or type; keywords still name concrete contracts. Recorded as a
+> REFINEMENT completing A1 (not a re-litigation): inferred rethrows through opt-in latent
+> params.
