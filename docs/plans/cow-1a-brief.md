@@ -1,10 +1,12 @@
 # EXECUTOR BRIEF — CoW-1A: for-loop `&`-iterable element write-through (BOTH-LANE) + gap A2
 
-**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet; pass 1 raised 3 reservations
-(comprehension yields-empty plan-mandate dropped; the `lower_for_enumerate` twin gate —
-reviewer REPRODUCED its A2-twin; ggdef + snapshot-drift gate gaps), ALL FOLDED into this v2
-plus both observations (bare-element lint note; value-copy latitude). Do not execute until the
-gauntlet records a clean pass.
+**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 1 (3 reservations: the
+enumerate twin gate — reproduced; the comprehension plan-mandate drop; gate gaps) FOLDED into
+v2. Pass 2 (all premises re-verified + every gap reproduced on both backends; 3 reservations:
+the self-host bare-enumerate cell unmeasured — cross-lane pin risk; the Rust comprehension fix
+site unnamed — `collections.rs:~628` missing Ptr-deref; v2 pointed the executor at the WRONG
+self-host comprehension site) FOLDED into this v3. Do not execute until the gauntlet records a
+clean pass.
 **Scout evidence (read FIRST):** `docs/plans/cow-1a-scout.md` (premise table, measured matrix,
 prototype design, cross-lane analysis). Prototype patch: `/tmp/cow1a_proto.patch` (backup
 `/tmp/recover_cow1a_proto.patch`; 182 lines, self-host only, verified end-to-end, clone-neutral).
@@ -31,10 +33,21 @@ today), **the enumerate twins of both** (review pass 1 REPRODUCED the A2-twin:
 `for i, c in a.enumerate():` over a bare resource wrongly prints `101` on Rust —
 `lower_for_enumerate` carries a twin of the same gate, `for_loops.rs:682-690` + its own `&`
 auto-deref `:601-621`), and **the comprehension-over-`&` READ bug** (plan-mandated: TODO's
-"`[x*2 for x in &a]` yields an EMPTY vector" HIGH — silent wrong output; measure which lane(s)
-reproduce it and fix there; the `&` is lost UPSTREAM of `lower_for_vector`, at the comprehension
-desugar's recv resolution, NOT in the strip helper). Scout measured the core matrix; your
-acceptance target is the "derived expected" column extended by the fixtures table below.
+"`[x*2 for x in &a]` yields an EMPTY vector" HIGH — silent wrong output; review pass 2
+REPRODUCED it on BOTH Rust backends, len 0 where §3.1 wants len 3). The measured sites
+(pass-2-verified — do not mis-hunt):
+- **Rust:** `src/ir/lowering/exprs/collections.rs` `lower_list_comprehension`, the non-range
+  branch (~`:628-657`) lowers the `&a` MutableBorrow to a Ptr `iter_type` but — unlike
+  `for_loops.rs:171-193` — NEVER auto-derefs it, so element-type inference fails and the loop
+  runs 0 iterations. The fix mirrors the for-loop deref; reconcile with the campaign plan's
+  "one shared iterable-mode helper, not two parallel fixes" mandate (the statement-for deref
+  and the comprehension index-walk are currently separate code).
+- **Self-host:** the `lower_expr.gg:~6949` list-comprehension site HAS the iterable EXPRESSION
+  available — the strip helper DOES apply there; that is where the self-host READ bug lives (if
+  it reproduces on that lane — measure). The comprehension paths that arrive as an
+  already-resolved `recv` (the HOF intercepts) are the DEFERRED write facet, not this bug.
+Scout + pass-2 measured the core matrix; your acceptance target is the "derived expected"
+column extended by the fixtures table below.
 
 **Explicitly DEFERRED (update the campaign plan + TODO to say so):** comprehension element
 WRITE-THROUGH (`[… for x in &v]` mutating the element — the write facet of Gap I) and
@@ -66,17 +79,21 @@ add a diagnostic.
    constrains observable semantics, not the binding implementation per element class.
 3. **Self-host: productionize the prototype, don't just apply it.** Extract ONE shared
    iterable-mode helper (`for_iterable_mode`-shaped: strip `EMutableBorrow`, return
-   (inner, write_through)) feeding the stmt-for path and the comprehension call sites of
-   `lower_for_vector` (`lower_expr.gg`) **where the iterable EXPRESSION is available** —
-   comprehension sources that arrive as an already-resolved `recv` cannot be fixed by the strip
-   helper; the comprehension-over-`&` READ bug lives at THAT desugar/recv-resolution site (fix
-   it there, in whichever lane(s) it reproduces — measure first). Comprehensions pass
-   write_through=false (the write facet stays deferred per the Mission section). Extend the
-   proto beyond the owned-local root: non-owned roots (`for c in &self.field`, `&v[i]`,
-   statics) via the 1B ptr-or-borrow base idiom. Add a Deque probe. Typed gates only — no
-   name-matching. ESCAPE HATCH: if the comprehension recv-resolution fix turns out to be a
-   multi-file re-architecture rather than a bounded desugar fix, STOP-AND-REPORT with the
-   measured shape — do not silently descope and do not balloon.
+   (inner, write_through)) feeding the stmt-for path AND the `lower_expr.gg:~6949`
+   list-comprehension site (the iterable EXPRESSION is available there — that is where the
+   self-host comprehension READ fix lands if the lane reproduces the bug; measure first). The
+   already-resolved-`recv` comprehension paths (HOF intercepts) stay write_through=false — the
+   deferred write facet per the Mission section. Extend the proto beyond the owned-local root:
+   non-owned roots (`for c in &self.field`, `&v[i]`, statics) via the 1B ptr-or-borrow base
+   idiom. Add a Deque probe. Typed gates only — no name-matching.
+   **MEASURE the self-host bare-enumerate-over-resource cell** (`for i, c in v.enumerate():`
+   mutating a resource element — expected `1`): the proto's else-branch suggests it already
+   materializes, but it is UNMEASURED, and fixture #6 enters the parity corpus — a Rust-only
+   enumerate fix with a self-host write-through there would DIVERGE the lanes (constraint 1).
+   If the self-host writes through, apply the same materialize treatment.
+   ESCAPE HATCH (BOTH lanes): if either comprehension READ fix turns out to be a multi-file
+   re-architecture rather than a bounded deref/strip fix, STOP-AND-REPORT with the measured
+   shape — do not silently descope and do not balloon.
 4. **The alias-root is the hard Rust case — prove the sever.** Self-host currently passes it via
    a pre-existing eager copy (masking the sever path); Rust `b = a` is a 0-clone lazy alias, so
    an unsevered `&b` element write would mutate the SHARED buffer (`101`/`101` — a Core-#8
@@ -132,6 +149,9 @@ split it by test name into sequential foreground chunks — never background a f
    clones; report the `&`-path counts (write-through should REMOVE the per-element copy).
 6. `self_host_bootstrap_fixed_point` (self-host lowerer touched; scout says the compiler source
    itself uses no `for x in &coll`, so expect INERT — verify).
+6b. The self-host-owned cross-lane cells: run fixtures #3/#4/#6 (bare controls + the enumerate
+   twin) AND the `&` cells through the SELF-HOST driver (emit-C → cc → run) and diff against
+   expected — the parent's parity regen will compare these lanes; do not hand it a divergence.
 7. `cargo test -p ggdef` — you edit `corpus_b1.rs` EXCLUDE rows and ADD fixtures whose names the
    corpus filters pick up (`cow_*` prefix!); the definition lane must be run, not assumed
    (the Batch-A lesson: expectation-affecting fixture adds gate on the FULL ggdef suite). Note
@@ -143,9 +163,11 @@ split it by test name into sequential foreground chunks — never background a f
 ## Commit discipline
 
 Your worktree only. Stage EXPLICITLY by file name (`git add src/ir/lowering/stmts/for_loops.rs
-tests/fixtures/cow_for_*.gg tests/integration.rs tests/fixtures/self_host_lowerer/lower_loops.gg
-tests/fixtures/self_host_lowerer/lower_expr.gg spec/ggdef/tests/corpus_b1.rs
-docs/plans/cow-writethrough-materialize-closed-set.md` — adjust to what you actually touched;
+src/ir/lowering/exprs/collections.rs tests/fixtures/cow_for_*.gg
+tests/fixtures/cow_comprehension_amp_source.gg tests/integration.rs
+tests/fixtures/self_host_lowerer/lower_loops.gg tests/fixtures/self_host_lowerer/lower_expr.gg
+spec/ggdef/tests/corpus_b1.rs docs/plans/cow-writethrough-materialize-closed-set.md` — adjust
+to what you actually touched;
 NEVER `git add .`/`-a`/`commit -a`). One commit; message with the measured cell matrix; trailers:
 
     Co-Authored-By: Claude Opus <noreply@anthropic.com>
