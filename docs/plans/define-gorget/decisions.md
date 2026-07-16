@@ -304,9 +304,16 @@ P1-infra reviewers' recommendation.
   throws call at the site) is valid by the language's own sigils-mark-effects principle; the
   fix makes D26 an INSTANCE of a general rule (suffix-`!` on any operation = fallible, failure
   propagates from here: `+!`, `**!`, `f()!` — one grammar). Owner-pinned sub-answers:
-  (1) the bare signature form `int f(args)!:` = the INFERRED-error-set spelling — designed
-  TOGETHER with A31 (this paves A31's syntax); explicit form carries the type (shape for the
-  scout: `int f(args) ! E:`). (2) **AMENDED (owner, 2026-07-16 same-day): `!` = the uniform FALLIBLE-USE MARKER, not
+  (1) **AMENDED (owner 2026-07-16, post-readability-read): `!` NEVER takes a type** — the bare
+  signature `int f(args)!:` is the ONLY `!`-signature form and means A31 inferred error sets;
+  the explicit-contract spelling REMAINS `throws E` (pending A31's design — likely permanently,
+  per the Zig public-API guidance: inferred sets are unstable contracts on API boundaries).
+  D29's framing is therefore "`!` JOINS `throws`", not replaces: sigils mark FLOW at use-sites,
+  keywords state CONTRACTS at declarations. Consequences: D29's implementation shrinks to
+  CALL-SITES ONLY (~61 + the handled-sites count; the 179-signature migration is CANCELLED —
+  no double churn when A31 lands); interim rule: bare signature-`!` PARSES but rejects with the
+  teaching diagnostic "inferred error sets are not yet implemented — declare `throws E`" (the
+  grammar locks now, A31 flips one switch). (2) **AMENDED (owner, 2026-07-16 same-day): `!` = the uniform FALLIBLE-USE MARKER, not
   "propagate"** — every fallible call carries `!` INCLUDING handled ones
   (`a = f()! catch (e): …`); the Swift model (mark always; disposition is the handler's job),
   NOT Rust's ?-operator model. Derivation: D26's operators keep their `!` in handled contexts
