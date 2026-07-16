@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🛑 SESSION WIND-DOWN 2026-07-16 (owner: token limit + 30-min agent freeze). STATE FOR THE SUCCESSOR:**
+**🛑 WIND-DOWN UPDATE (2026-07-16, post-token-restore): ALL EIGHT WAVE-1 LANDINGS INTEGRATED on gorget-1** — coarse-kind `c082ae96` · 1B `565392d8` · RV-G `95b54cfb` · curation `5d4ec5df` · RV-D `c599db0f` · 1C `99a52094` · RV-F `f8d9d80b`+`ee323ac1` · RV-A `afd5c327` (registry merged to 96 == errors.rs). Zero agent worktrees; stash empty. **THE ROUND-CLOSE BATTERY IS RUNNING (background task `bntk1hzqh`; log `/tmp/battery-round2-*.log`)**: C sweep → bootstrap → LLVM sweep → ggdef → conformance (expect C/LLVM 214/214 · ggdef 209 MATCH+5 GGDEF-SKIP · selfhost 209 MATCH/4 MISMATCH/1 BUILD-FAIL all by-design) → parity (prior 1153/1228=93.9% WRONG 12 — expect WRONG to DROP via 1C-Dict; the RV-A flip moves fieldaccess_box_field_ok WRONG→CC-FAIL). ON COMPLETION: read the log tails, verify vs expectations, write the round-close DONE/memory entries, refresh this block. If ANY lane misses expectations: the by-design self-host misses are documented in tests/spec_conformance.rs floor comments — anything ELSE is a regression to triage before closing.**
 
 **WAVE-1 LANDINGS ON gorget-1 (all Fable-output-reviewed, integrated):** coarse-kind `c082ae96` · CoW-1B `565392d8` · RV-G `95b54cfb` · doc-curation `5d4ec5df` (128 files deleted, 2 absorbed) · RV-D `c599db0f` (safety-walk cluster, counterfactually proven) · CoW-1C `99a52094` (Dict write-through + double-eval, negative-control proven). DONE.md has full gauntlet records.
 
