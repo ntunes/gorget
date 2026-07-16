@@ -257,11 +257,13 @@ return-tail / match scrutinee / match arm / bare statement).
 ### Diagnostics (message drafts — currency)
 
 Prefer **`throws E`** as the contract teaching spelling; do not push bare `!:` until A31.
+Two codes per the LOG's "D29 DIAGNOSTIC CODES SPLIT" pin (2026-07-16), not one template:
 
-- **Missing mark** (bare fallible call anywhere):
-  `error[E_UnhandledThrows]: this call can fail (throws E) — mark the fallible call with '!'`
+- **Missing mark** (bare fallible call anywhere) — **`E_MissingFallibleMark`** (new code):
+  `error[E_MissingFallibleMark]: this call can fail (throws E) — mark the fallible call with '!'`
   `(f()!), or handle it: f()! catch … / f()! rethrow … / Result[T,E] r = f()!`.
-- **Marked call in non-throws context without a local disposition:**
+- **Marked call that cannot propagate here** (non-`throws` fn, no disposition) —
+  **`E_UnhandledThrows`** (existing code, message flips):
   `error[E_UnhandledThrows]: this call can fail (throws E) — handle it with catch /`
   `rethrow / a Result[T,E] binding, or declare the function 'throws E' to propagate`.
 - D23 diagnostic contract preserved: never surface `Result[` in a user-facing message for

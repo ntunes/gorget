@@ -393,7 +393,7 @@ P1-infra reviewers' recommendation.
   path; handled-sites census; `!=` maximal-munch tests. (Result-returning-call `!`,
   diagnostic split, D17 sequencing+fixture hardening: PINNED same session.)
 
-- 2026-07-16 (latest) — **🎯 D29 RATIFIED (owner, formal — packet-backed: census + accept-both
+- 2026-07-16 (formal ratification; the six follow-through pins above postdate it) — **🎯 D29 RATIFIED (owner, formal — packet-backed: census + accept-both
   prototype + collision corners + readability pages, `scouts/scout-d29-packet.md`): VISIBLE
   ERROR PROPAGATION.** Final scope with both same-day amendments consolidated:
   (a) **call-site `!` is MANDATORY on every fallible call — the uniform FALLIBLE-USE MARKER**
