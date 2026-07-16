@@ -1,0 +1,580 @@
+diff --git a/examples/d29_census.rs b/examples/d29_census.rs
+new file mode 100644
+index 00000000..b8ad355d
+--- /dev/null
++++ b/examples/d29_census.rs
+@@ -0,0 +1,114 @@
++// D29 CENSUS (throwaway): count throws-function DECLARATIONS per corpus by
++// parsing every .gg file with the real parser and walking the AST. Exact (no
++// double-counting), tolerant of parse failures (counts what parses; reports the
++// rest). Propagation-site counts come from the separate env-gated `gg check`
++// instrument (GG_D29_CENSUS) — declarations are purely syntactic and live here.
++//
++// Usage: cargo run --example d29_census -- <label>=<dir> [<label>=<dir> ...]
++
++use gorget::parser::ast::{Expr, FunctionBody, FunctionDef, Item, TraitItem, Type};
++use gorget::parser::Parser;
++use std::path::{Path, PathBuf};
++
++#[derive(Default)]
++struct Counts {
++    files: usize,
++    parse_fail: usize,
++    throws_decls: usize,     // functions with any throws clause (`throws`/`!`/`!:`)
++    throws_inferred: usize,  // subset: bare `!:` inferred-set spelling
++    fn_defs: usize,          // total function definitions (denominator)
++}
++
++fn is_inferred(t: &Type) -> bool {
++    matches!(t, Type::Named { name, .. } if name.node == "!inferred")
++}
++
++fn count_fn(f: &FunctionDef, c: &mut Counts) {
++    c.fn_defs += 1;
++    if let Some(t) = &f.throws {
++        c.throws_decls += 1;
++        if is_inferred(&t.node) {
++            c.throws_inferred += 1;
++        }
++    }
++    // Recurse into bodies is unnecessary for declaration counting (Gorget has no
++    // nested named fn items), but closures never carry throws so nothing to add.
++    let _ = &f.body;
++}
++
++fn walk_items(items: &[gorget::span::Spanned<Item>], c: &mut Counts) {
++    for it in items {
++        match &it.node {
++            Item::Function(f) => count_fn(f, c),
++            Item::Equip(eq) => {
++                for m in &eq.items {
++                    count_fn(&m.node, c);
++                }
++            }
++            Item::Trait(tr) => {
++                for ti in &tr.items {
++                    if let TraitItem::Method(f) = &ti.node {
++                        count_fn(f, c);
++                    }
++                }
++            }
++            Item::ExternBlock(eb) => {
++                for m in &eb.items {
++                    count_fn(&m.node, c);
++                }
++            }
++            Item::Module { items, .. } => walk_items(items, c),
++            _ => {}
++        }
++    }
++}
++
++fn gg_files(dir: &Path, out: &mut Vec<PathBuf>) {
++    if let Ok(rd) = std::fs::read_dir(dir) {
++        for e in rd.flatten() {
++            let p = e.path();
++            if p.is_dir() {
++                gg_files(&p, out);
++            } else if p.extension().map_or(false, |x| x == "gg") {
++                out.push(p);
++            }
++        }
++    }
++}
++
++fn main() {
++    // Silence the FunctionBody import so the module compiles cleanly.
++    let _ = FunctionBody::Declaration;
++    let _ = Expr::It;
++    for arg in std::env::args().skip(1) {
++        let (label, dir) = match arg.split_once('=') {
++            Some(x) => x,
++            None => continue,
++        };
++        let mut files = Vec::new();
++        gg_files(Path::new(dir), &mut files);
++        files.sort();
++        let mut c = Counts::default();
++        for f in &files {
++            c.files += 1;
++            let src = match std::fs::read_to_string(f) {
++                Ok(s) => s,
++                Err(_) => {
++                    c.parse_fail += 1;
++                    continue;
++                }
++            };
++            let mut parser = Parser::new(&src);
++            let module = parser.parse_module();
++            if !parser.errors.is_empty() {
++                c.parse_fail += 1;
++                // still walk what parsed
++            }
++            walk_items(&module.items, &mut c);
++        }
++        println!(
++            "[census] {:<22} files={:<5} parse_fail={:<4} fn_defs={:<6} throws_decls={:<5} (inferred={})",
++            label, c.files, c.parse_fail, c.fn_defs, c.throws_decls, c.throws_inferred
++        );
++    }
++}
+diff --git a/examples/d29_corners.rs b/examples/d29_corners.rs
+new file mode 100644
+index 00000000..6252905c
+--- /dev/null
++++ b/examples/d29_corners.rs
+@@ -0,0 +1,151 @@
++// D29 collision-corner harness (throwaway). Parses each corner snippet with the
++// real parser and prints a compact AST sketch so each maximal-munch / lookahead
++// disposition is settled EMPIRICALLY. Expr snippets are wrapped in a function
++// body; def/type snippets are parsed as whole items.
++
++use gorget::parser::ast::{Expr, FunctionBody, Item, Module, Stmt, Type};
++use gorget::parser::Parser;
++use gorget::span::Spanned;
++
++fn sketch_expr(e: &Expr) -> String {
++    match e {
++        Expr::IntLiteral(n) => format!("{n}"),
++        Expr::Identifier(s) => s.clone(),
++        Expr::SelfExpr => "self".into(),
++        Expr::NoneLiteral => "None".into(),
++        Expr::Propagate { expr } => format!("Prop({})", sketch_expr(&expr.node)),
++        Expr::Move { expr } => format!("Move({})", sketch_expr(&expr.node)),
++        Expr::MutableBorrow { expr } => format!("Borrow({})", sketch_expr(&expr.node)),
++        Expr::Deref { expr } => format!("Deref({})", sketch_expr(&expr.node)),
++        Expr::Call { callee, args, .. } => format!(
++            "Call({},[{}])",
++            sketch_expr(&callee.node),
++            args.iter().map(|a| sketch_expr(&a.node.value.node)).collect::<Vec<_>>().join(",")
++        ),
++        Expr::MethodCall { receiver, method, args, .. } => format!(
++            "MCall({}.{}[{}])",
++            sketch_expr(&receiver.node),
++            method.node,
++            args.iter().map(|a| sketch_expr(&a.node.value.node)).collect::<Vec<_>>().join(",")
++        ),
++        Expr::FieldAccess { object, field } => {
++            format!("Field({}.{})", sketch_expr(&object.node), field.node)
++        }
++        Expr::OptionalChain { object, field } => {
++            format!("OptChain({}?.{})", sketch_expr(&object.node), field.node)
++        }
++        Expr::Index { object, index } => {
++            format!("Index({}[{}])", sketch_expr(&object.node), sketch_expr(&index.node))
++        }
++        Expr::BinaryOp { op, left, right } => {
++            format!("{:?}({},{})", op, sketch_expr(&left.node), sketch_expr(&right.node))
++        }
++        Expr::UnaryOp { op, operand } => format!("{:?}({})", op, sketch_expr(&operand.node)),
++        Expr::DefaultOp { lhs, rhs } => {
++            format!("Default({},{})", sketch_expr(&lhs.node), sketch_expr(&rhs.node))
++        }
++        Expr::Catch { .. } => "Catch(..)".into(),
++        Expr::Rethrow { .. } => "Rethrow(..)".into(),
++        other => format!("{:?}", std::mem::discriminant(other)),
++    }
++}
++
++fn first_tail_expr(m: &Module) -> Option<String> {
++    // Find `g` and return the sketch of its body's last return/expr.
++    for it in &m.items {
++        if let Item::Function(f) = &it.node {
++            match &f.body {
++                FunctionBody::Expression(e) => return Some(sketch_expr(&e.node)),
++                FunctionBody::Block(b) => {
++                    if let Some(Spanned { node: Stmt::Return(Some(e)), .. }) = b.stmts.last() {
++                        return Some(sketch_expr(&e.node));
++                    }
++                    if let Some(last) = b.stmts.last() {
++                        return Some(format!("stmt:{:?}", std::mem::discriminant(&last.node)));
++                    }
++                }
++                _ => {}
++            }
++        }
++    }
++    None
++}
++
++fn parse_expr_corner(label: &str, expr_src: &str) {
++    let src = format!("int g() ! E:\n    return {expr_src}\n");
++    let mut p = Parser::new(&src);
++    let m = p.parse_module();
++    let errs = p.errors.len();
++    let sketch = first_tail_expr(&m).unwrap_or_else(|| "<none>".into());
++    println!(
++        "  {:<16} `{}`  =>  {}{}",
++        label, expr_src, sketch,
++        if errs > 0 { format!("   [PARSE-ERR x{errs}]") } else { String::new() }
++    );
++}
++
++fn throws_desc(t: &Option<Spanned<Type>>) -> String {
++    match t {
++        None => "throws=None".into(),
++        Some(Spanned { node: Type::Named { name, .. }, .. }) if name.node == "!inferred" => {
++            "throws=INFERRED(!:)".into()
++        }
++        Some(Spanned { node: Type::Named { name, .. }, .. }) => {
++            format!("throws=Explicit({})", name.node)
++        }
++        Some(_) => "throws=Explicit(<complex>)".into(),
++    }
++}
++
++fn parse_def_corner(label: &str, src: &str) {
++    let mut p = Parser::new(src);
++    let m = p.parse_module();
++    let errs = p.errors.len();
++    let mut desc = String::from("<no-fn>");
++    for it in &m.items {
++        if let Item::Function(f) = &it.node {
++            desc = format!("{} ({})", throws_desc(&f.throws), f.name.node);
++            break;
++        }
++    }
++    println!(
++        "  {:<20} `{}`  =>  {}{}",
++        label, src.replace('\n', "\\n"), desc,
++        if errs > 0 { format!("   [PARSE-ERR x{errs}]") } else { String::new() }
++    );
++}
++
++fn main() {
++    println!("== EXPRESSION collision corners ==");
++    parse_expr_corner("neq-munch", "a()!=b");
++    parse_expr_corner("neq-eqeq", "a()!==b");
++    parse_expr_corner("prop-then-neq", "a()! != b");
++    parse_expr_corner("prop-then-eq", "a()! == b");
++    parse_expr_corner("chain", "f()!.m()!");
++    parse_expr_corner("chain-field", "a.b()!.c");
++    parse_expr_corner("index-call", "v[i]()!");
++    parse_expr_corner("prop-default", "f()! ?? d");
++    parse_expr_corner("prop-optchain", "f()!?.field");
++    parse_expr_corner("nested-arg", "g(f()!)!");
++    parse_expr_corner("neg", "-f()!");
++    parse_expr_corner("prefix-move-post", "!x!");
++    parse_expr_corner("prop-call", "foo!(x)");
++    parse_expr_corner("plain-prop", "f()!");
++    parse_expr_corner("add-then-prop", "a + f()!");
++
++    println!("\n== SIGNATURE collision corners ==");
++    parse_def_corner("explicit-!E", "int f() ! E:\n    return 1\n");
++    parse_def_corner("inferred-!:", "int f()!:\n    return 1\n");
++    parse_def_corner("inferred-expr-body", "int f()!: 1 + 1\n");
++    parse_def_corner("legacy-throws", "int f() throws E:\n    return 1\n");
++    parse_def_corner("main-!int", "void main() ! int:\n    return 0\n");
++    parse_def_corner("explicit-expr-body", "int f() ! E: 1 + 1\n");
++    parse_def_corner("nonthrows", "int f():\n    return 1\n");
++    parse_def_corner("explicit-generic-err", "int f() ! AppError[int]:\n    return 1\n");
++
++    println!("\n== FUNCTION-TYPE collision corners ==");
++    parse_def_corner("throwing-callable", "void h(Callable[int(int)!] cb):\n    return\n");
++    parse_def_corner("throwing-fntype-param", "void h(int(int)! cb):\n    return\n");
++    parse_def_corner("throwing-fntype-expl", "void h(Callable[int(int)! E] cb):\n    return\n");
++    parse_def_corner("nonthrow-fntype", "void h(int(int) cb):\n    return\n");
++}
+diff --git a/examples/d29_listfail.rs b/examples/d29_listfail.rs
+new file mode 100644
+index 00000000..46a2b050
+--- /dev/null
++++ b/examples/d29_listfail.rs
+@@ -0,0 +1,5 @@
++use gorget::parser::Parser;
++use std::path::{Path, PathBuf};
++fn gg(dir:&Path,out:&mut Vec<PathBuf>){ if let Ok(rd)=std::fs::read_dir(dir){for e in rd.flatten(){let p=e.path(); if p.is_dir(){gg(&p,out)} else if p.extension().map_or(false,|x|x=="gg"){out.push(p)}}}}
++fn main(){ let mut files=Vec::new(); for a in std::env::args().skip(1){ gg(Path::new(&a),&mut files);} files.sort();
++ for f in &files { let src=std::fs::read_to_string(f).unwrap_or_default(); let mut p=Parser::new(&src); let _=p.parse_module(); if !p.errors.is_empty(){ println!("FAIL {}", f.display()); } } }
+diff --git a/src/formatter/mod.rs b/src/formatter/mod.rs
+index db2a0b5f..14dc7dac 100644
+--- a/src/formatter/mod.rs
++++ b/src/formatter/mod.rs
+@@ -1762,6 +1762,11 @@ impl Formatter {
+                 self.emitter.write("!");
+                 self.format_expr(expr);
+             }
++            // D29 PROTOTYPE: postfix `!` propagation renders the sigil AFTER inner.
++            Expr::Propagate { expr } => {
++                self.format_expr(expr);
++                self.emitter.write("!");
++            }
+             Expr::MutableBorrow { expr } => {
+                 self.emitter.write("&");
+                 self.format_expr(expr);
+diff --git a/src/ir/lowering/exprs/mod.rs b/src/ir/lowering/exprs/mod.rs
+index ee3f63fb..24449c67 100644
+--- a/src/ir/lowering/exprs/mod.rs
++++ b/src/ir/lowering/exprs/mod.rs
+@@ -241,6 +241,11 @@ fn lower_expr_inner(
+             lower_index_access(ctx, builder, object, index)
+         }
+ 
++        // D29 PROTOTYPE: `expr!` propagation lowers transparently to inner.
++        // (Auto-propagation is already inserted by the existing throws lowering;
++        // the mark carries no extra lowering in this prototype.)
++        Expr::Propagate { expr: inner } => lower_expr(ctx, builder, inner),
++
+         // -- P2.6: Move/Borrow --
+         Expr::Move { expr: inner } => {
+             // CoW: if moving a borrowed local, materialize first.
+diff --git a/src/loader.rs b/src/loader.rs
+index 3f40b176..e01ca6e2 100644
+--- a/src/loader.rs
++++ b/src/loader.rs
+@@ -1204,6 +1204,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
+         Expr::Block(block) => qualify_block(block, vm),
+         Expr::Do { body } => qualify_block(body, vm),
+         Expr::Move { expr: inner }
++        | Expr::Propagate { expr: inner }
+         | Expr::MutableBorrow { expr: inner }
+         | Expr::Deref { expr: inner }
+         | Expr::Await { expr: inner }
+diff --git a/src/parser/ast.rs b/src/parser/ast.rs
+index ac736478..81a352d7 100644
+--- a/src/parser/ast.rs
++++ b/src/parser/ast.rs
+@@ -608,6 +608,14 @@ pub enum Expr {
+         expr: Box<Spanned<Expr>>,
+     },
+ 
++    // ── D29 PROTOTYPE: postfix error-propagation (`call()!`) ──
++    // Marks a throws-call site as propagating. Semantically the identity on the
++    // success value (the checker already auto-propagates today); the node exists
++    // so the propagation is VISIBLE at the site. Parse-only in this prototype.
++    Propagate {
++        expr: Box<Spanned<Expr>>,
++    },
++
+     // ── Mutable borrow (&) ──
+     MutableBorrow {
+         expr: Box<Spanned<Expr>>,
+diff --git a/src/parser/expr.rs b/src/parser/expr.rs
+index 7c7865a2..ea76c9b6 100644
+--- a/src/parser/expr.rs
++++ b/src/parser/expr.rs
+@@ -93,7 +93,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
+ 
+         // Unary
+         Expr::UnaryOp { operand, .. } => contains_it(operand),
+-        Expr::Move { expr } | Expr::MutableBorrow { expr }
++        Expr::Move { expr } | Expr::Propagate { expr } | Expr::MutableBorrow { expr }
+         | Expr::Deref { expr } | Expr::Await { expr }
+         | Expr::Spawn { expr, .. } | Expr::SpawnBlocking { expr, .. } => contains_it(expr),
+ 
+@@ -1148,6 +1148,11 @@ impl Parser {
+             Token::LBracket => Some(35),
+             // Function call
+             Token::LParen => Some(35),
++            // D29 PROTOTYPE: postfix error-propagation `expr!`. Same tight bp as
++            // `.`/call/index so `f()!.m()!` chains left-to-right. Note `!=` lexes
++            // as BangEq (never Bang) under maximal munch, so `a()!=b` is NOT seen
++            // here — it stays a not-equal comparison. See collision-corner report.
++            Token::Bang => Some(35),
+             // Range operators
+             Token::DotDot | Token::DotDotEq => Some(23),
+             _ => None,
+@@ -1303,6 +1308,18 @@ impl Parser {
+                 ))
+             }
+ 
++            // D29 PROTOTYPE: postfix error-propagation `expr!`.
++            Token::Bang => {
++                self.advance();
++                let end = self.previous_span();
++                Ok(Spanned::new(
++                    Expr::Propagate {
++                        expr: Box::new(lhs),
++                    },
++                    start.merge(end),
++                ))
++            }
++
+             Token::DotDot => {
+                 self.advance();
+                 let end_expr = if self.is_expr_start() {
+diff --git a/src/parser/mod.rs b/src/parser/mod.rs
+index 765b4821..ee6bd0d9 100644
+--- a/src/parser/mod.rs
++++ b/src/parser/mod.rs
+@@ -1760,9 +1760,34 @@ impl Parser {
+         let params = self.parse_param_list()?;
+         self.expect(&Token::RParen)?;
+ 
+-        // Parse throws clause
++        // Parse throws clause. Accept-both (D29 prototype):
++        //   `throws E` — legacy keyword form (still parses)
++        //   `! E`      — D29 explicit error-set form
++        //   `!`        — D29 inferred error-set form (bare `!:` / `!` before body),
++        //                reserved as A31's inferred-set spelling. Encoded via a
++        //                sentinel `Named("!inferred")` so the prototype needs no new
++        //                Type variant; production would carry
++        //                `ThrowsSpec::{No, Inferred, Explicit(Type)}`.
+         let throws = if self.match_keyword(Keyword::Throws) {
+             Some(self.parse_type()?)
++        } else if self.match_token(&Token::Bang) {
++            // Inferred iff the next token opens the body (`:` block/expr, `=` extern,
++            // or NEWLINE decl); otherwise an explicit error type follows.
++            if self.check(&Token::Colon)
++                || self.check(&Token::Eq)
++                || self.check(&Token::Newline)
++            {
++                let sp = self.previous_span();
++                Some(Spanned::new(
++                    crate::parser::ast::Type::Named {
++                        name: Spanned::new("!inferred".to_string(), sp),
++                        generic_args: vec![],
++                    },
++                    sp,
++                ))
++            } else {
++                Some(self.parse_type()?)
++            }
+         } else {
+             None
+         };
+diff --git a/src/parser/types.rs b/src/parser/types.rs
+index 73577162..85d608de 100644
+--- a/src/parser/types.rs
++++ b/src/parser/types.rs
+@@ -213,6 +213,24 @@ impl Parser {
+                 }
+             }
+             self.expect(&Token::RParen)?;
++            // D29 PROTOTYPE: a throwing function type is `ret(params)!` (inferred)
++            // or `ret(params)! E` (explicit). `!` here is unambiguous (the param
++            // `!` ownership sigils live INSIDE the parens). Consumed-and-recorded
++            // only for parse-feasibility; production adds a `throws` field to
++            // `Type::Function`. We drop the marker here to avoid touching 59
++            // construction sites in a throwaway build.
++            if self.match_token(&Token::Bang) {
++                // Optional explicit error type after `!` (skip if a delimiter follows).
++                if !self.check(&Token::RBracket)
++                    && !self.check(&Token::Comma)
++                    && !self.check(&Token::RParen)
++                    && !self.check(&Token::Colon)
++                    && !self.check(&Token::Newline)
++                    && !self.check(&Token::Eq)
++                {
++                    let _throws_ty = self.parse_type()?;
++                }
++            }
+             let end = self.previous_span();
+             return Ok(Spanned::new(
+                 Type::Function {
+diff --git a/src/parser/visitor.rs b/src/parser/visitor.rs
+index c8782e3d..f4e3d205 100644
+--- a/src/parser/visitor.rs
++++ b/src/parser/visitor.rs
+@@ -129,6 +129,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
+ 
+         // ── Wrapper expressions ──
+         Expr::Move { expr }
++        | Expr::Propagate { expr }
+         | Expr::MutableBorrow { expr }
+         | Expr::Deref { expr }
+         | Expr::Await { expr }
+diff --git a/src/semantic/meta.rs b/src/semantic/meta.rs
+index 837c1f1d..2bb0e27b 100644
+--- a/src/semantic/meta.rs
++++ b/src/semantic/meta.rs
+@@ -2361,6 +2361,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
+             substitute_expr(rhs, env, type_env);
+         }
+         Expr::Move { expr: inner }
++        | Expr::Propagate { expr: inner }
+         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
+         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. }
+         | Expr::SpawnBlocking { expr: inner, .. } => {
+diff --git a/src/semantic/resolve.rs b/src/semantic/resolve.rs
+index bbc9191c..c1a26f40 100644
+--- a/src/semantic/resolve.rs
++++ b/src/semantic/resolve.rs
+@@ -1658,6 +1658,7 @@ fn resolve_expr(
+         }
+ 
+         Expr::Move { expr: inner }
++        | Expr::Propagate { expr: inner }
+         | Expr::MutableBorrow { expr: inner }
+         | Expr::Deref { expr: inner }
+         | Expr::Await { expr: inner }
+diff --git a/src/semantic/rewrite.rs b/src/semantic/rewrite.rs
+index ee961659..44334d46 100644
+--- a/src/semantic/rewrite.rs
++++ b/src/semantic/rewrite.rs
+@@ -338,7 +338,7 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
+             rename_expr(lhs, aliases);
+             rename_expr(rhs, aliases);
+         }
+-        Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
++        Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::MutableBorrow { expr: inner }
+         | Expr::Deref { expr: inner } | Expr::Await { expr: inner }
+         | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
+             rename_expr(inner, aliases);
+@@ -709,6 +709,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
+             rewrite_expr(rhs, res, scopes, errors);
+         }
+         Expr::Move { expr: inner }
++        | Expr::Propagate { expr: inner }
+         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
+         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. }
+         | Expr::SpawnBlocking { expr: inner, .. } => {
+diff --git a/src/semantic/safety/check_expr.rs b/src/semantic/safety/check_expr.rs
+index 832c9c42..baf67251 100644
+--- a/src/semantic/safety/check_expr.rs
++++ b/src/semantic/safety/check_expr.rs
+@@ -163,6 +163,11 @@ impl<'a> BorrowChecker<'a> {
+                 }
+             }
+ 
++            // D29 PROTOTYPE: `expr!` propagation is a transparent read of inner.
++            Expr::Propagate { expr: inner } => {
++                self.check_expr(inner);
++            }
++
+             Expr::MutableBorrow { expr: inner } => {
+                 // The `&` operator: mutable borrow
+                 // Check that the inner expression is still usable
+diff --git a/src/semantic/typecheck.rs b/src/semantic/typecheck.rs
+index d40aa582..34de15a6 100644
+--- a/src/semantic/typecheck.rs
++++ b/src/semantic/typecheck.rs
+@@ -2991,6 +2991,12 @@ impl<'a> TypeChecker<'a> {
+                 self.infer_expr(inner) // ownership modifiers don't change the type
+             }
+ 
++            // D29 PROTOTYPE: `expr!` propagation types as its inner expression.
++            // (The throws-call peel already happens at the call site; the mark is
++            // the VISIBLE propagation point. Full D29 would additionally verify the
++            // enclosing context can propagate and reject bare throws calls.)
++            Expr::Propagate { expr: inner } => self.infer_expr(inner),
++
+             Expr::Deref { expr: inner } => {
+                 let inner_type = self.infer_expr(inner);
+                 // Peel any ownership wrappers (`&box`, `!box`) before checking
+@@ -5431,6 +5437,11 @@ impl<'a> TypeChecker<'a> {
+                 } else if self.current_fn_can_propagate() {
+                     // Route A: the producer-peel fires. Gate the callee-E
+                     // against the caller-E before discarding it.
++                    // D29 CENSUS (env-gated): this IS the mandatory-`!` insertion
++                    // site — a throws call auto-propagating in a throws context.
++                    if std::env::var_os("GG_D29_CENSUS").is_some() {
++                        eprintln!("[d29-prop] {} {}", span.start, span.end);
++                    }
+                     self.auto_prop_error_gate(err_ty, span);
+                     return_type
+                 } else {
+diff --git a/tests/integration.rs b/tests/integration.rs
+index ed66430d..10560f94 100644
+--- a/tests/integration.rs
++++ b/tests/integration.rs
+@@ -13104,6 +13104,9 @@ fn format_expr_canonical(expr: &Expr) -> String {
+         Expr::Move { expr } => {
+             format!("!{}", format_expr_canonical(&expr.node))
+         }
++        Expr::Propagate { expr } => {
++            format!("{}!", format_expr_canonical(&expr.node))
++        }
+         Expr::MutableBorrow { expr } => {
+             format!("&{}", format_expr_canonical(&expr.node))
+         }
