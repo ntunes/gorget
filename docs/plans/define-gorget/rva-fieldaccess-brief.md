@@ -1,6 +1,12 @@
 # Executor brief: RV-A — field-access soundness (typed wrapper flag + deref-reject staging + self-host mirror)
 
-> **Status:** v3 — pass-3 folded (2 BLOCKING, both pre-resolutions: R1 the first table row is
+> **Status:** v4 — pass-4 folded (R1 should-fix: ONE field, not two — `deref_wrapper_kind:
+> Option<DerefWrapperKind>`, default `None` in BOTH DefInfo ctors (scope.rs:216/:293); `None`
+> = not-a-wrapper (subsumes the leg-1 bool via `.is_some()`); no bare-enum default landmine,
+> one source of truth per axis (rule 3), M2 now zero-judgment. R2: the stale "verify which
+> applies" ggdef-exclusion remnant reconciled to R6's answer (non-spectest placement, no
+> EXCLUDE). R3: the `Box[int].x` primitive-inner NEG added to M3.)
+> Pass-3 folded (2 BLOCKING, both pre-resolutions: R1 the first table row is
 > **{Box} ONLY** — §9.4 (language-design.md:1707-1712) names Box as its sole deref example;
 > Weak's design access is `.upgrade()` (§9.2), so E_DerefCoercionUnimplemented would LIE for
 > it; Shared/Weak/Mutex/RWLock all → E_NoFieldFound (consistent with M3 as written; promoting
@@ -43,8 +49,11 @@
 
 ## Objective (three legs)
 
-1. **Typed wrapper flag (rule 2):** retire the `is_field_deref_wrapper` NAME-match
-   (`typecheck.rs:189`, `:~2803`) with a typed `is_deref_wrapper` flag seeded at BOTH
+1. **Typed wrapper metadata (rule 2 + rule 3):** retire the `is_field_deref_wrapper`
+   NAME-match (`typecheck.rs:189`, `:~2803`) with **ONE typed field**
+   `deref_wrapper_kind: Option<DerefWrapperKind>` (default `None` in both DefInfo ctors,
+   scope.rs:216/:293 — `None` = not a wrapper; `.is_some()` gives the leg-1 predicate;
+   the `Some(kind)` carries the 3-way split) seeded at BOTH
    registries — `BUILTIN_GENERIC_TYPES` (resolve.rs:19) AND the builtin-module `.gg` structs
    (Box in collections.gg; RWLock/ReadGuard/WriteGuard in sync.gg), the struct site gated on
    `is_builtin_module(path)` — so a USER `struct Guard` gets flag=false and stops escaping
@@ -57,11 +66,10 @@
    **REJECT (direct field access = silent garbage-0, all measured): Box, Shared, Weak,
    Mutex, RWLock.** Wrapper METHOD auto-deref is OUT OF SCOPE (cc-fails loudly; the
    deref-backend track owns it). The reject needs a SECOND typed distinction beyond
-   `is_deref_wrapper` (which marks all 8) — the 3-WAY typed enum `DerefWrapperKind { GuardAccept, DerefTarget,
-   NonDerefContainer }` on DefInfo, seeded ONCE at the two registration sites (Box →
-   DerefTarget; Guard/ReadGuard/WriteGuard → GuardAccept; Shared/Weak/Mutex/RWLock →
-   NonDerefContainer), read via a typed accessor at the reject site — never name-matched at
-   the consumer.
+   `is_deref_wrapper` (which marks all 8) — the SAME `deref_wrapper_kind` field's `Some(kind)` values (Box → DerefTarget;
+   Guard/ReadGuard/WriteGuard → GuardAccept; Shared/Weak/Mutex/RWLock → NonDerefContainer —
+   NOT a second field; one axis, one source of truth), read via a typed accessor at the
+   reject site — never name-matched at the consumer.
    **THE 3-WAY DIAGNOSTIC TABLE (R3 — the reject site keys on
    (field-present-on-inner × wrapper-is-§9.4-deref-target)):**
    | case | code | example |
@@ -95,16 +103,17 @@ M1 — apply the proven patch; verify the two-registry seeding empirically (`fro
 import Box` was the mid-scout miss — probe it). M2 — the Option-C extension: the deref-access
 reject + the fixture flip + the "not yet implemented" message naming §9.4 and the filed backend
 track. M3 — fixtures (ALL in tests/fixtures/, NEVER spectests/run/ — R6): NEGs: user-`Guard.y` +
-`Box[P].nonexistent` + `Box[P].x` (staged, E_DerefCoercionUnimplemented) + `Shared[P].x` +
+`Box[P].nonexistent` + `Box[P].x` (staged, E_DerefCoercionUnimplemented) + `Box[int].x` (primitive-inner →
+E_NoFieldFound — the DerefTarget+primitive arm, pass-4) + `Shared[P].x` + `Weak[P].x` +
 `Mutex[P].x` + `RWLock[C].port` (E_NoFieldFound per the table) + `reject_field_on_string`
 both-lane. POS controls (REQUIRED — they pin the guards-accept invariant): the existing
 `guard_struct_field.gg` + `guard_rwlock_field.gg` stay green (name them in the gate list),
 plus a real-field-on-user-struct-named-Guard POS. ggdef: absent-field is NOT in ggdef's check-time repertoire (scout-verified —
-`field_ty` returns Unknown; eval IllFormed only) — the new negatives are EXPLICITLY EXCLUDED from the ggdef conformance lane (the corpus_b/b1
-EXCLUDE mechanism or non-spectest placement — verify which applies); the alignment rides the
-axis-extension track. New fixtures not gitignore-hidden; fmt-idempotent;
-if any lands in tests/fixtures top-level, check the corpus_b/b1 EXCLUDE question (reject
-fixtures with CheckFails provenance are handled — verify, don't assume). M4 — gates
+`field_ty` returns Unknown; eval IllFormed only) — the new negatives stay out of the ggdef conformance lane by PLACEMENT (pass-2 R6, RESOLVED:
+tests/fixtures/ only — every ggdef lane filters by prefix/dir, NO corpus EXCLUDE needed;
+the executor's only step is confirming the prefix filters hold on the current tip); the
+alignment rides the axis-extension track. New fixtures not gitignore-hidden; fmt-idempotent;
+ M4 — gates
 (FOREGROUND): `cargo test --lib` · wrapper/box/field/deref + field-access filters C AND LLVM ·
 self-host driver rebuild + reject/accept lanes + `type_comparison` (≤85 baseline, print
 counts) · `cargo test -p ggdef` (insurance) · `cargo test --test lints`. Bootstrap: the
