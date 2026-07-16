@@ -158,10 +158,141 @@ fn run_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
     run_with_deadline(cmd, fixture, test_binary_timeout())
 }
 
+/// Per-stream cap on how much of a child's stdout/stderr the harness buffers in
+/// RAM. A MISCOMPILED fixture whose binary infinite-loops printing would
+/// otherwise fill an unbounded `read_to_end` Vec to many GB over the (up to
+/// 600s) timeout window and OOM the whole harness process. Measured 2026-07-16:
+/// the self-host-emitted `stdlib_iter_set` binary infinite-looped, writing
+/// 8.85GB to stdout at ~37MB/s, ballooning ONE drain-thread Vec past 6GB and
+/// SIGKILLing the runtime parity sweep. Capping the capture bounds harness
+/// memory to `n_workers × 2 × MAX_CAPTURE_BYTES` regardless of timeout length,
+/// and turns a runaway fixture into a prompt CRASH outcome (killed within one
+/// poll tick of crossing the cap) instead of a suite-wide OOM.
+///
+/// Sized 256 MiB, NOT 64 MiB, because legitimate captures get large: the two
+/// biggest streams this drain sees are the Rust-emitted `driver.c` (measured
+/// 2026-07-16 = 32,380,724 B ≈ 30.9 MiB) and the stage-0 driver `--lir-c` body
+/// that the bootstrap tests capture UNCAUGHT through `run_with_deadline`
+/// (measured 37,460,732 B ≈ 35.7 MiB — that stage body has DOUBLED in a single
+/// change before, when SMatch lowering landed). At 64 MiB that stream sits at
+/// 56% of the cap — one doubling from a hard failure mislabelled "runaway
+/// output". 256 MiB gives ~7.2× headroom over the measured 35.7 MiB while still
+/// bounding a single runaway to 256 MiB (worst theoretical 8 workers × 2
+/// streams × 256 MiB = 4 GiB on a 15 GB box; realistic single-runaway ≈ 256 MiB)
+/// — the anti-OOM property is preserved.
+const MAX_CAPTURE_BYTES: usize = 256 * 1024 * 1024;
+
+/// Drain a child stream in a background thread, capturing at most `cap` bytes
+/// (`MAX_CAPTURE_BYTES` in production; the unit guards pass a tiny cap). Past the
+/// cap it keeps reading (so the pipe never blocks and deadlocks the poll loop)
+/// but DISCARDS the overflow and raises `overflow` so the caller can kill the
+/// runaway child. For any well-behaved fixture this is behaviourally identical
+/// to `read_to_end` (the flag never trips).
+fn capped_drain<R: std::io::Read + Send + 'static>(
+    mut reader: R,
+    overflow: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cap: usize,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 64 * 1024];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if buf.len() < cap {
+                        let room = cap - buf.len();
+                        buf.extend_from_slice(&chunk[..n.min(room)]);
+                        if buf.len() >= cap {
+                            overflow.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    // Over cap: keep draining to avoid a pipe-buffer deadlock,
+                    // but discard — the flag is already set and the poll loop
+                    // will kill the child.
+                }
+                // A signal (SIGCHLD etc.) can interrupt a blocking read; the old
+                // `read_to_end` retried EINTR internally, so treat it as a
+                // transient retry rather than a fatal end-of-stream (a bare
+                // `break` here would silently truncate the capture).
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        buf
+    })
+}
+
+/// SIGKILL a child AND its whole process group, then reap it.
+///
+/// `run_with_deadline` spawns every child as a process-group *leader*
+/// (`process_group(0)`, so the group id == the child's pid), so signalling the
+/// NEGATIVE pid reaps the entire tree — not just the direct child. This matters
+/// because the fixtures fork grandchildren: `gg run` spawns the compiled fixture
+/// binary, and some fixtures fork their own spinner. A plain `child.kill()` only
+/// reaps the direct child; the grandchild survives, reparents to PID 1, and
+/// spins at ~100% CPU forever (measured: orphaned `deadwrite_ok_while_drain`
+/// binaries at PPID 1 after deadline kills, cleaned up by hand). Killing the
+/// group closes that leak on every kill path (deadline, overflow).
+///
+/// Unix only (this box is Linux); elsewhere it degrades to a direct kill.
+#[cfg(unix)]
+fn kill_process_tree(child: &mut std::process::Child) {
+    // `kill(2)` is always linked (std depends on libc), so declaring the symbol
+    // here avoids adding a direct `libc` dev-dependency for one call.
+    unsafe extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
+    const SIGKILL: i32 = 9;
+    let pid = child.id() as i32;
+    // Negative pid ⇒ signal the process GROUP led by `pid` (set at spawn via
+    // process_group(0)). Reaps the direct child + any grandchildren it forked.
+    unsafe {
+        kill(-pid, SIGKILL);
+    }
+    // Belt-and-suspenders: also target the direct child, then reap it so it does
+    // not linger as a zombie.
+    child.kill().ok();
+    child.wait().ok();
+}
+
+#[cfg(not(unix))]
+fn kill_process_tree(child: &mut std::process::Child) {
+    child.kill().ok();
+    child.wait().ok();
+}
+
 /// Run a command with a specific timeout duration. Returns the output or panics
-/// if the process hangs beyond the deadline.
+/// if the process hangs beyond the deadline OR produces runaway output past
+/// `MAX_CAPTURE_BYTES` (a miscompiled infinite-print fixture).
 fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std::process::Output {
+    run_with_deadline_capped(cmd, fixture, timeout, MAX_CAPTURE_BYTES)
+}
+
+/// Body of `run_with_deadline` with an explicit per-stream capture cap. Split
+/// out so the unit guards (`capped_drain_kills_infinite_printer` /
+/// `capped_drain_exit_at_cap_is_loud`) can pin the cap-trip + exit-at-cap
+/// behaviour deterministically with a tiny cap instead of moving 256 MiB.
+fn run_with_deadline_capped(
+    cmd: &mut Command,
+    fixture: &str,
+    timeout: Duration,
+    cap: usize,
+) -> std::process::Output {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     let start = std::time::Instant::now();
+    // Put the child in its OWN process group (leader pid == group id) so a
+    // deadline/overflow kill can reap the whole tree via the negative pgid —
+    // see kill_process_tree. Without this, `gg run`'s grandchild fixture binary
+    // orphans to PID 1 and spins forever.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     let mut child = cmd
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -171,23 +302,14 @@ fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std
     // Drain stdout/stderr in background threads to prevent pipe-buffer deadlock.
     // Without this, a child writing >64KB to stderr blocks until the parent reads,
     // but the parent is polling try_wait() waiting for exit — classic deadlock.
+    // The drain is CAPPED (see MAX_CAPTURE_BYTES / capped_drain): a runaway
+    // infinite-print fixture must not be allowed to fill RAM unboundedly.
     let stdout_handle = child.stdout.take().unwrap();
     let stderr_handle = child.stderr.take().unwrap();
 
-    let stdout_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stdout_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stderr_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
+    let overflow = Arc::new(AtomicBool::new(false));
+    let stdout_thread = capped_drain(stdout_handle, overflow.clone(), cap);
+    let stderr_thread = capped_drain(stderr_handle, overflow.clone(), cap);
 
     let deadline = std::time::Instant::now() + timeout;
 
@@ -196,9 +318,20 @@ fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                // Runaway output: a LIVE fixture crossed the capture cap while
+                // still running. Kill its whole process tree and surface as a
+                // panic (caught by run_with_timeout_catching → a per-fixture
+                // CRASH), same as the deadline path — memory is already bounded
+                // at the cap by capped_drain.
+                if overflow.load(Ordering::Relaxed) {
+                    kill_process_tree(&mut child);
+                    panic!(
+                        "Test binary for {fixture} produced runaway output (>{} bytes) — killed",
+                        cap,
+                    );
+                }
                 if std::time::Instant::now() >= deadline {
-                    child.kill().ok();
-                    child.wait().ok();
+                    kill_process_tree(&mut child);
                     panic!(
                         "Test binary for {fixture} timed out after {}s",
                         timeout.as_secs()
@@ -215,7 +348,101 @@ fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std
 
     record_timing(fixture, start.elapsed());
 
+    // Exit-at-cap race guard. A child that emitted >cap and then exited FAST can
+    // win the try_wait() race before the poll-loop overflow branch ever observes
+    // the flag — leaving us about to return a buffer SILENTLY TRUNCATED at the
+    // cap as if it were the child's complete output. Now that both drain threads
+    // have joined, `overflow` is authoritative: if set, the capture hit the cap
+    // ⇒ raise the SAME loud runaway panic as the in-loop path (caught upstream →
+    // a per-fixture CRASH). Contract: >cap ⇒ loud CRASH, never silent truncation
+    // presented as complete output.
+    if overflow.load(Ordering::Relaxed) {
+        panic!(
+            "Test binary for {fixture} produced runaway output (>{} bytes) — killed",
+            cap,
+        );
+    }
+
     std::process::Output { status, stdout, stderr }
+}
+
+/// Extract a caught panic payload as a `&str` for message assertions.
+#[cfg(unix)]
+fn panic_msg(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// Core-#6 executable guard (a): a LIVE infinite-printer must trip the per-stream
+/// capture cap and be killed PROMPTLY — the in-loop overflow branch of
+/// `run_with_deadline_capped`. Tiny cap so `yes` crosses it in microseconds; the
+/// 20s deadline is only a backstop, so a FAILURE to trip surfaces as a slow
+/// timeout, not a hang. This is the unit-level analogue of the `stdlib_iter_set`
+/// runaway that OOM'd the parity sweep.
+#[cfg(unix)]
+#[test]
+fn capped_drain_kills_infinite_printer() {
+    let cap = 8 * 1024;
+    let start = std::time::Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut cmd = Command::new("yes");
+        run_with_deadline_capped(
+            &mut cmd,
+            "capped_drain_kills_infinite_printer",
+            Duration::from_secs(20),
+            cap,
+        )
+    }));
+    let elapsed = start.elapsed();
+    let payload = result.expect_err(
+        "an infinite printer must trip the cap and panic, not run to the deadline or return",
+    );
+    let msg = panic_msg(&*payload);
+    assert!(
+        msg.contains("runaway output"),
+        "cap-trip panic must name runaway output; got: {msg:?}",
+    );
+    // Killed AT THE CAP (~one poll tick), NOT at the 20s deadline.
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "runaway kill was not prompt ({elapsed:?}) — the in-loop overflow branch did not fire",
+    );
+}
+
+/// Core-#6 executable guard (b): pins reservation R2 (the exit-at-cap race). A
+/// child that emits >cap then EXITS — here 16 KiB, which fits the OS pipe buffer
+/// so the child never blocks and exits immediately, and the drain reads its
+/// output AFTER exit — must NOT be returned as silently-truncated `Ok` output.
+/// It must panic loudly ("runaway output") via the post-poll-loop overflow
+/// re-check. Before that re-check, `run_with_deadline` returned `Ok` with
+/// exactly-cap bytes and no error (empirically confirmed in review). If R2's
+/// post-loop check is ever removed, this test fails.
+#[cfg(unix)]
+#[test]
+fn capped_drain_exit_at_cap_is_loud() {
+    let cap = 8 * 1024;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // 16 KiB (> the 8 KiB cap, < the 64 KiB pipe buffer) of NULs, then exit.
+        let mut cmd = Command::new("head");
+        cmd.arg("-c").arg("16384").arg("/dev/zero");
+        run_with_deadline_capped(
+            &mut cmd,
+            "capped_drain_exit_at_cap_is_loud",
+            Duration::from_secs(20),
+            cap,
+        )
+    }));
+    let payload = result.expect_err(
+        "a child emitting >cap then exiting must panic loudly, never return silently-truncated output",
+    );
+    let msg = panic_msg(&*payload);
+    assert!(
+        msg.contains("runaway output"),
+        "exit-at-cap must be a loud runaway panic (R2), not silent truncation; got: {msg:?}",
+    );
 }
 
 /// Append a `<elapsed_ms>\t<fixture>\n` line to `$GG_TIMING_LOG` when set.
@@ -21340,18 +21567,34 @@ fn first_diff_line(oracle: &str, mine: &str) -> String {
 /// `parallel_map_fixtures` worker that panic aborts the whole chunk — over the
 /// full corpus, ONE infinite-loop / stdin-blocking fixture would take out every
 /// result the worker accumulated. This wrapper catches the timeout panic and
-/// returns `None` so the caller can record a per-fixture outcome instead.
+/// returns `Err` so the caller can record a per-fixture outcome instead.
 ///
 /// The default panic hook would still spew the "timed out" line to stderr; the
 /// corpus-level entry points install a silent hook for the duration (see
 /// `with_silent_panic_hook`). `AssertUnwindSafe` is sound here: the closure
 /// only spawns a subprocess and reads its output — no shared mutable state
 /// crosses the unwind boundary.
-fn run_with_timeout_catching(cmd: &mut Command, fixture: &str) -> Option<std::process::Output> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+///
+/// Returns `Err(panic_message)` on a caught panic so the caller can tell a
+/// prompt runaway-output kill (~one poll tick past the cap) apart from a
+/// full-deadline timeout — otherwise a 2-second output-kill reads as an Ns
+/// "timed out" in the CRASH backlog. The message is the `panic!` string from
+/// `run_with_deadline` ("… runaway output (>N bytes) — killed" vs "… timed out
+/// after Ns"); callers that don't care about the reason ignore it.
+fn run_with_timeout_catching(cmd: &mut Command, fixture: &str) -> Result<std::process::Output, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_with_timeout(cmd, fixture)
-    }))
-    .ok()
+    })) {
+        Ok(out) => Ok(out),
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "panicked (no message)".to_string());
+            Err(msg)
+        }
+    }
 }
 
 /// Run `f` with the default panic hook suppressed, restoring it after. Used by
@@ -21460,12 +21703,16 @@ fn self_host_emit_cc_run(
     let mut run_cmd = Command::new(&bin_path);
     run_cmd.stdin(Stdio::null());
     let run = match run_with_timeout_catching(&mut run_cmd, &fname) {
-        Some(out) => out,
-        None => {
-            return Err(RuntimeParityOutcome::Crashed {
-                exit_code: None,
-                stderr_first: format!("timed out after {}s", test_binary_timeout().as_secs()),
-            });
+        Ok(out) => out,
+        Err(msg) => {
+            // Honest label: a runaway-output kill fires ~one poll tick past the
+            // cap, NOT at the deadline — don't file it as an Ns timeout.
+            let stderr_first = if msg.contains("runaway output") {
+                format!("runaway output — killed (>{}MiB)", MAX_CAPTURE_BYTES / (1024 * 1024))
+            } else {
+                format!("timed out after {}s", test_binary_timeout().as_secs())
+            };
+            return Err(RuntimeParityOutcome::Crashed { exit_code: None, stderr_first });
         }
     };
     if !run.status.success() {
@@ -21835,6 +22082,22 @@ fn self_host_runtime_diff() {
     ));
     std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
 
+    // Scratch cleanup as a Drop guard, not a happy-path call: the floor assert
+    // at the end of this fn panics on a regression, and a per-fixture
+    // runaway/timeout panic can escape a worker — either would skip a bare
+    // `remove_dir_all` and orphan hundreds of MB of `.c` + binaries under
+    // /tmp/gg_runtime_diff_*. The guard runs on the normal path AND on unwind.
+    // CAVEAT: Drop does NOT run on SIGKILL (an uncatchable OOM) — the capped
+    // drain above is what prevents that OOM in the first place; this guard
+    // covers panic + normal exit only.
+    struct TmpRootGuard(PathBuf);
+    impl Drop for TmpRootGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _tmp_root_guard = TmpRootGuard(tmp_root.clone());
+
     let driver_exe = &driver_exe;
     let lib_dir = &lib_dir;
     let runtime_dir = &runtime_dir;
@@ -21863,8 +22126,8 @@ fn self_host_runtime_diff() {
                 Command::new(gg_exe).arg("run").arg(fixture).stdin(Stdio::null()),
                 &stem,
             ) {
-                Some(o) => o,
-                None => return (stem, RuntimeParityOutcome::RustCrash),
+                Ok(o) => o,
+                Err(_) => return (stem, RuntimeParityOutcome::RustCrash),
             };
             if !oracle.status.success() {
                 // Clean non-zero ⇒ Rust correctly rejecting an error fixture;
@@ -21895,7 +22158,9 @@ fn self_host_runtime_diff() {
         })
     });
 
-    let _ = std::fs::remove_dir_all(tmp_root);
+    // tmp_root cleanup is handled by `_tmp_root_guard`'s Drop (covers the
+    // floor-assert panic below and any worker-escaping panic, not just this
+    // happy path).
 
     // Tally + per-category lists.
     let mut matched: Vec<String> = Vec::new();
@@ -21990,24 +22255,29 @@ fn self_host_runtime_diff() {
     // assert's behaviour is *deliberately* profile-gated rather than
     // pretending the count is profile-independent (it is not).
     //
-    // Seeded 2026-07-02 from a regenerated run in THIS worktree (never from a
-    // dated TODO/memory number):
+    // Re-seed by regenerating in THIS worktree (never from a dated TODO/memory
+    // number), with the canonical default test timeout (NO GG_TEST_TIMEOUT_SECS
+    // override — the count is timeout-flip sensitive, so the floor must be
+    // seeded from the same invocation it gates):
     //   rm tests/fixtures/self_host_lowerer/driver{,.c}
     //   GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration \
     //       --release self_host_runtime_diff -- --nocapture
-    //   → MATCH 986 (WRONG 19, CC-FAIL 85, CRASH 14 — of which 5 were
-    //     'timed out after 30s' MATCH→CRASH flips; the round-32 audit log
-    //     independently measured 5 such flips on this box).
     //
-    // Floor = 997 − 5 (regenerated MATCH minus measured timeout jitter,
-    // nothing more) = 992. Re-seeded at round-32 close (MATCH 997/1108 on
-    // the full six-track tip; jitter = the 5 timeout-class CRASHes measured
-    // twice that round).
+    // Last re-seeded 2026-07-16 (capped-drain landing): the canonical run above
+    // reported MATCH 1156 / 1230 = 94.0% (WRONG 11, CC-FAIL 52, CRASH 11,
+    // DRIVER-FAIL 0; EXCLUDED 89, RUST-REJECTED 239, RUST-CRASH 1), completing
+    // in ~198s with no OOM. The CRASH set still carries the timeout-flip class
+    // (async_select / dict_keys_lazy / dict_values_lazy 'timed out after 30s',
+    // and stdlib_iter_set as a runaway-output kill) — the jitter the floor
+    // discounts.
+    //
+    // Floor = 1156 − 5 (regenerated MATCH minus measured timeout jitter,
+    // nothing more) = 1151.
     //
     // Bump-on-improvement: when MATCH rises, raise the floor in the same
     // commit that lands the improvement so the gain is locked in. Do NOT
-    // pad the floor beyond measured jitter.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1138;
+    // pad the floor beyond measured jitter. Floors ratchet — never lower.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1151;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -22862,16 +23132,16 @@ fn regenerate_runtime_snapshots(
         // stdin so a stdin-reading fixture (io_input.gg) snapshots its EOF-path
         // output instead of blocking on the inherited (non-EOF) sweep stdin.
         let oracle1 = match run_with_timeout_catching(Command::new(gg_exe).arg("run").arg(fixture).stdin(Stdio::null()), &stem) {
-            Some(o) => o,
-            None => return Regen::Skipped(stem, "rust gg run timed out".into()),
+            Ok(o) => o,
+            Err(_) => return Regen::Skipped(stem, "rust gg run timed out".into()),
         };
         if !oracle1.status.success() {
             return Regen::Skipped(stem, "rust gg run failed (reject/crash)".into());
         }
         let o1 = String::from_utf8_lossy(&oracle1.stdout).trim_end().to_string();
         let oracle2 = match run_with_timeout_catching(Command::new(gg_exe).arg("run").arg(fixture).stdin(Stdio::null()), &stem) {
-            Some(o) => o,
-            None => return Regen::Flaky(stem, "rust gg run non-deterministic (2nd run timed out)".into()),
+            Ok(o) => o,
+            Err(_) => return Regen::Flaky(stem, "rust gg run non-deterministic (2nd run timed out)".into()),
         };
         if !oracle2.status.success() {
             return Regen::Flaky(stem, "rust gg run non-deterministic (2nd run failed)".into());
