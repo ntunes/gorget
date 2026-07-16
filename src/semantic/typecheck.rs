@@ -6,7 +6,7 @@ use crate::span::{Span, Spanned};
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, ScopeId, TypeId};
 use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
-use super::scope::{DefKind, ScopeKind, ScopeTable};
+use super::scope::{DefKind, DerefWrapperKind, ScopeKind, ScopeTable};
 use super::traits::TraitRegistry;
 use super::types::{self, ResolvedType, TypeTable};
 
@@ -179,24 +179,20 @@ fn type_mentions_name(ty: &Type, target: &str) -> bool {
     }
 }
 
-/// Smart-pointer / lock-guard / shared wrapper types whose `.field` access
-/// auto-dereferences to an inner type resolved late (in lowering /
-/// monomorphization). A missing field on these must NOT be rejected at
-/// typecheck (`Box[Point].x` legitimately reads the boxed `Point`'s `x`);
-/// deref-aware missing-field checking for them is the Strategy 2B follow-up.
-/// Mirrors the existing name-based wrapper recognition in `unify`
-/// (`Mutex`/`Shared`/`RWLock`) and `Deref`/`Box` handling.
-fn is_field_deref_wrapper(name: &str) -> bool {
-    matches!(
-        name,
-        "Box" | "Shared"
-            | "Mutex"
-            | "RWLock"
-            | "Weak"
-            | "ReadGuard"
-            | "WriteGuard"
-            | "Guard"
-    )
+/// RV-A: whether a builtin wrapper's inner type (`Box[T]` → `T`) carries the
+/// accessed field. Drives the 3-way field-access diagnostic — see
+/// `TypeChecker::wrapper_inner_field_status`.
+enum InnerFieldStatus {
+    /// The inner is a known struct that HAS the field. `inner_name` is the
+    /// inner struct's name (for the `E_DerefCoercionUnimplemented` message).
+    Present { inner_name: String },
+    /// The inner is a known struct WITHOUT the field, or a primitive (which
+    /// has no named fields) — the field is definitely absent.
+    Absent,
+    /// The inner could not be resolved to a concrete field list (a bare
+    /// wrapper with no type arg, a generic-param / opaque inner). Cannot prove
+    /// present or absent — callers must not over-reject on this.
+    Unknown,
 }
 
 fn int_range(prim: &PrimitiveType) -> Option<(i128, i128)> {
@@ -846,6 +842,49 @@ impl<'a> TypeChecker<'a> {
                 format!("trait {}", self.scopes.get_def(*def_id).name)
             }
             _ => self.types.display(type_id),
+        }
+    }
+
+    /// RV-A: resolve a builtin wrapper's inner type (`Box[T]` → `T`) and
+    /// classify whether `field` exists on it. Keys the 3-way field-access
+    /// diagnostic (guard accept vs. Box deref-coercion-unimplemented vs.
+    /// absent). Only ever called for a def already flagged
+    /// `deref_wrapper_kind = Some(_)`, so this is pure inner-type resolution —
+    /// no name-matching.
+    fn wrapper_inner_field_status(
+        &self,
+        wrapper_rt: &ResolvedType,
+        field: &str,
+    ) -> InnerFieldStatus {
+        let targs = match wrapper_rt {
+            ResolvedType::Generic(_, targs) => targs,
+            // A bare wrapper with no type arg — inner is unknown.
+            _ => return InnerFieldStatus::Unknown,
+        };
+        let Some(&inner) = targs.first() else {
+            return InnerFieldStatus::Unknown;
+        };
+        let inner_r = self.resolve_type(inner);
+        match self.types.get(inner_r).clone() {
+            ResolvedType::Defined(idid) | ResolvedType::Generic(idid, _) => {
+                match self.struct_fields.get(&idid) {
+                    Some(sfi) => {
+                        if sfi.fields.iter().any(|(n, _)| n.as_str() == field) {
+                            InnerFieldStatus::Present {
+                                inner_name: self.scopes.get_def(idid).name.clone(),
+                            }
+                        } else {
+                            InnerFieldStatus::Absent
+                        }
+                    }
+                    // Inner is a type with no user field list (generic param,
+                    // enum, opaque builtin) — can't prove present or absent.
+                    None => InnerFieldStatus::Unknown,
+                }
+            }
+            // A primitive inner (`Box[int]`) has no named fields → absent.
+            ResolvedType::Primitive(_) => InnerFieldStatus::Absent,
+            _ => InnerFieldStatus::Unknown,
         }
     }
 
@@ -2785,49 +2824,97 @@ impl<'a> TypeChecker<'a> {
                 // parameter type, so the C backend emits uncompilable /
                 // miscompiled code (e.g. `margs.value` on a `Vector[CallArg]`
                 // stored an `int 0` into a `GorgetArray` slot →
-                // "incompatible types … GorgetArray from int32_t"). Mirror the
-                // `Deref`-on-non-Box guard: report NoFieldFound for types that
-                // definitely have no such field, suppressing the report for
-                // still-inferring (`Var`) / already-errored types (no cascade)
-                // and for smart-pointer / guard wrappers whose field resolves
-                // through the deref target late (Box/Shared/Mutex/RWLock/Weak/
-                // ReadGuard/WriteGuard/Guard — deref-aware missing-field
-                // checking for those is the Strategy 2B follow-up).
+                // "incompatible types … GorgetArray from int32_t"). Report
+                // NoFieldFound for types that definitely have no such field,
+                // suppressing the report for still-inferring (`Var`) /
+                // already-errored types (no cascade).
+                //
+                // RV-A 3-way disposition (decisions.md 2026-07-16 STAGING
+                // RULING + SCOPE CLARIFICATION; the brief's diagnostic table).
+                // The wrapper split is keyed on the TYPED `deref_wrapper_kind`
+                // seeded at registration — never a name-match here:
+                //   • NonDerefContainer (Shared/Weak/Mutex/RWLock): accessed
+                //     via an explicit method, never deref → always NoFieldFound.
+                //   • GuardAccept (Guard/ReadGuard/WriteGuard): auto-deref that
+                //     WORKS today → present-on-inner ACCEPTS, absent rejects.
+                //   • DerefTarget (Box, §9.4's sole target): present-on-inner is
+                //     E_DerefCoercionUnimplemented (backend not built); absent /
+                //     primitive inner is NoFieldFound (the §9.4 message would lie).
                 let resolved_rt = self.types.get(resolved).clone();
-                let definitely_absent = match &resolved_rt {
+                enum FieldDisp {
+                    Accept,
+                    NoField,
+                    DerefUnimpl { field: String, inner: String, wrapper: String },
+                }
+                let disp = match &resolved_rt {
                     // Primitives (int, String, bool, float, …) have no named
                     // fields; `.foo` on them is always invalid.
-                    ResolvedType::Primitive(_) => true,
+                    ResolvedType::Primitive(_) => FieldDisp::NoField,
                     ResolvedType::Defined(did) | ResolvedType::Generic(did, _) => {
-                        let name = self.scopes.get_def(*did).name.clone();
-                        if is_field_deref_wrapper(&name) {
-                            // Auto-deref wrapper: field resolved through the
-                            // deref target downstream — do not reject here.
-                            false
-                        } else if let Some(sfi) = self.struct_fields.get(did) {
-                            // Known field list: absent iff not present. A
-                            // present-but-untyped field (generic-param typed
-                            // late by monomorphization) reaches here and must
-                            // NOT be rejected.
-                            !sfi.fields.iter().any(|(n, _)| n == &field.node)
-                        } else {
-                            // A builtin generic/opaque type with no user field
-                            // list (`Vector`, `Dict`, `Set`, `HashMap`, an
-                            // enum, …) — the field is genuinely absent.
-                            true
+                        match self.scopes.get_def(*did).deref_wrapper_kind {
+                            Some(DerefWrapperKind::NonDerefContainer) => FieldDisp::NoField,
+                            Some(DerefWrapperKind::GuardAccept) => {
+                                match self.wrapper_inner_field_status(&resolved_rt, &field.node) {
+                                    InnerFieldStatus::Present { .. }
+                                    | InnerFieldStatus::Unknown => FieldDisp::Accept,
+                                    InnerFieldStatus::Absent => FieldDisp::NoField,
+                                }
+                            }
+                            Some(DerefWrapperKind::DerefTarget) => {
+                                match self.wrapper_inner_field_status(&resolved_rt, &field.node) {
+                                    InnerFieldStatus::Present { inner_name } => {
+                                        FieldDisp::DerefUnimpl {
+                                            field: field.node.clone(),
+                                            inner: inner_name,
+                                            wrapper: self.scopes.get_def(*did).name.clone(),
+                                        }
+                                    }
+                                    InnerFieldStatus::Absent => FieldDisp::NoField,
+                                    // Cannot prove the inner's fields (generic
+                                    // param / opaque inner): don't over-reject.
+                                    InnerFieldStatus::Unknown => FieldDisp::Accept,
+                                }
+                            }
+                            None => {
+                                if let Some(sfi) = self.struct_fields.get(did) {
+                                    // Known field list: absent iff not present. A
+                                    // present-but-untyped field (generic-param
+                                    // typed late by monomorphization) reaches
+                                    // here and must NOT be rejected.
+                                    if sfi.fields.iter().any(|(n, _)| n == &field.node) {
+                                        FieldDisp::Accept
+                                    } else {
+                                        FieldDisp::NoField
+                                    }
+                                } else {
+                                    // A builtin generic/opaque type with no user
+                                    // field list (`Vector`, `Dict`, `Set`,
+                                    // `HashMap`, an enum, …) — genuinely absent.
+                                    FieldDisp::NoField
+                                }
+                            }
                         }
                     }
-                    _ => false,
+                    _ => FieldDisp::Accept,
                 };
-                if definitely_absent {
-                    let type_name = self.describe_resolved_type(resolved);
-                    self.error(
-                        SemanticErrorKind::NoFieldFound {
-                            field: field.node.clone(),
-                            type_: type_name,
-                        },
-                        expr.span,
-                    );
+                match disp {
+                    FieldDisp::Accept => {}
+                    FieldDisp::NoField => {
+                        let type_name = self.describe_resolved_type(resolved);
+                        self.error(
+                            SemanticErrorKind::NoFieldFound {
+                                field: field.node.clone(),
+                                type_: type_name,
+                            },
+                            expr.span,
+                        );
+                    }
+                    FieldDisp::DerefUnimpl { field, inner, wrapper } => {
+                        self.error(
+                            SemanticErrorKind::DerefCoercionUnimplemented { field, inner, wrapper },
+                            expr.span,
+                        );
+                    }
                 }
                 self.types.error_id
             }

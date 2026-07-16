@@ -22,6 +22,46 @@ pub enum DefKind {
     Import,
 }
 
+/// RV-A field-access disposition for a BUILTIN smart-pointer / guard wrapper
+/// type. Seeded ONCE at registration onto `DefInfo.deref_wrapper_kind`
+/// (`None` = not a wrapper) and read via the typed flag at the field-access
+/// reject site — never re-derived from a name downstream (layering rule 2).
+/// The three variants key the 3-way diagnostic table in the RV-A brief
+/// (`docs/plans/define-gorget/rva-fieldaccess-brief.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerefWrapperKind {
+    /// Guard / ReadGuard / WriteGuard — a lock/borrow guard whose `.field`
+    /// auto-derefs to the inner value and WORKS today (green fixtures):
+    /// present field → ACCEPT, absent field → `E_NoFieldFound`.
+    GuardAccept,
+    /// Box — the SOLE §9.4 deref-coercion target (design-doc :1707-1712).
+    /// A field present on the inner is `E_DerefCoercionUnimplemented` (the
+    /// deref-field-read backend is not yet built); an absent or primitive
+    /// inner is `E_NoFieldFound` (the §9.4 message would lie).
+    DerefTarget,
+    /// Shared / Weak / Mutex / RWLock — accessed through an explicit method
+    /// (`.get()` / `.upgrade()` §9.2 / `.lock()` / `.read()`), never deref:
+    /// direct `.field` is always `E_NoFieldFound`, even when the inner has it.
+    NonDerefContainer,
+}
+
+impl DerefWrapperKind {
+    /// The ONE allowed registration-time name-match (mirrors the
+    /// `compute_drop_taint` seeding precedent): map a builtin wrapper type
+    /// name to its field-access disposition, `None` for every non-wrapper
+    /// name. Callers seed `DefInfo.deref_wrapper_kind` from this ONLY for
+    /// definitions in the builtin registry / builtin modules, so a user
+    /// struct sharing the name never gets a kind.
+    pub fn for_builtin_name(name: &str) -> Option<DerefWrapperKind> {
+        match name {
+            "Box" => Some(DerefWrapperKind::DerefTarget),
+            "Guard" | "ReadGuard" | "WriteGuard" => Some(DerefWrapperKind::GuardAccept),
+            "Shared" | "Weak" | "Mutex" | "RWLock" => Some(DerefWrapperKind::NonDerefContainer),
+            _ => None,
+        }
+    }
+}
+
 /// Metadata for a definition.
 #[derive(Debug, Clone)]
 pub struct DefInfo {
@@ -52,6 +92,16 @@ pub struct DefInfo {
     /// (layering rule 2). Mirrors ggdef's `tainted` set
     /// (spec/ggdef/src/elaborate/mod.rs:253-255, :458-487).
     pub is_drop_tainted: bool,
+    /// RV-A field-access soundness: `Some(kind)` iff this DefId is a BUILTIN
+    /// smart-pointer / guard wrapper whose `.field` disposition is `kind`
+    /// (see `DerefWrapperKind`); `None` = not a wrapper. Seeded ONCE at
+    /// registration (`BUILTIN_GENERIC_TYPES` imports + builtin-module structs)
+    /// via `DerefWrapperKind::for_builtin_name`; a USER struct that shadows the
+    /// name gets a distinct DefId with `None`, so it no longer escapes
+    /// `E_NoFieldFound` (the garbage-0 miscompile). `.is_some()` is the
+    /// is-a-wrapper predicate; the `Some(kind)` carries the 3-way split.
+    /// Retires the `is_field_deref_wrapper` name-match (layering rule 2).
+    pub deref_wrapper_kind: Option<DerefWrapperKind>,
 }
 
 /// A lexical scope.
@@ -214,6 +264,7 @@ impl ScopeTable {
             field_types: None,
             variant_field_types: None,
             is_drop_tainted: false,
+            deref_wrapper_kind: None,
         });
         def_id
     }
@@ -291,6 +342,7 @@ impl ScopeTable {
             field_types: None,
             variant_field_types: None,
             is_drop_tainted: false,
+            deref_wrapper_kind: None,
         });
         let scope = &mut self.scopes[self.current.0 as usize];
         match ns {

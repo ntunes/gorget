@@ -1415,27 +1415,109 @@ fn fieldaccess_shared_field_ok() {
     run_gg("fieldaccess_shared_field_ok.gg", "9");
 }
 
-// POSITIVE (over-rejection guard) — the smart-pointer WRAPPER carve-out. A
-// field access on a `Box[P]` (`b.x`) auto-derefs to the boxed `P`'s field and
-// resolves LATE; the receiver is `Generic(Box, [P])` at check time with `x`
-// absent from Box's own field list. `is_field_deref_wrapper("Box")` carves it
-// out of the reject, so `gg check` must SUCCEED. (Check-only: the auto-deref
-// field READ is the filed Strategy-2B follow-up — see the `#[ignore]`d runtime
-// twin below.)
+// STAGED REJECT (owner ruling, decisions.md 2026-07-16 STAGING RULING —
+// RV-A): `Box[P].x` needs §9.4 deref coercion, which is UNIMPLEMENTED
+// end-to-end (field read yields garbage 0; method deref fails to compile).
+// The former `check_gg_ok` staging blessed that silent wrong output (Core #8),
+// so acceptance is REVERSED until the deref-coercion backend track lands
+// (TODO.md "RV-A scout discoveries" items 1+2). The field EXISTS on the inner
+// `P`, so the reject carries the dedicated `E_DerefCoercionUnimplemented` —
+// `E_NoFieldFound` would lie. That backend track flips this back to acceptance
+// together with un-ignoring the runtime twin below.
 #[test]
 fn fieldaccess_box_field_ok() {
-    check_gg_ok("fieldaccess_box_field_ok.gg");
+    check_gg_fails(
+        "fieldaccess_box_field_ok.gg",
+        "error[E_DerefCoercionUnimplemented]",
+    );
 }
 
-// Strategy-2B follow-up (filed): the Box auto-deref field READ must eventually
-// yield the CORRECT value (7). It currently yields 0 (late-resolve gap), so
-// this is `#[ignore]`d with the RIGHT expected output per "Don't redesign
-// around compiler gaps" — a ready regression test for when 2B lands. Do NOT
-// change the expected value to the buggy one to un-ignore it.
+// Deref-coercion backend follow-up (filed: TODO.md "RV-A scout discoveries"
+// items 1+2 — the §9.4 / Strategy-2B deref-field-read work): when it lands,
+// the Box auto-deref field READ must yield the CORRECT value (7). Kept
+// `#[ignore]`d with the RIGHT expected output per "Don't redesign around
+// compiler gaps" — a ready regression test for that track. Do NOT change the
+// expected value to a buggy one to un-ignore it; the track un-ignores this
+// twin and flips `fieldaccess_box_field_ok` back to acceptance together.
 #[test]
-#[ignore = "Strategy-2B: Box auto-deref field read resolves late; yields 0 not 7 (filed HIGH)"]
+#[ignore = "§9.4 deref-coercion backend unimplemented (staged reject; TODO 'RV-A scout discoveries' 1+2): Box auto-deref field read must yield 7"]
 fn fieldaccess_box_field_read_value() {
     run_gg("fieldaccess_box_field_ok.gg", "7");
+}
+
+// ── RV-A: the 3-way wrapper field-access diagnostic table (typed
+// `deref_wrapper_kind` on DefInfo — decisions.md 2026-07-16 STAGING RULING +
+// SCOPE CLARIFICATION). One fixture per cell; the DerefTarget+present cell is
+// `fieldaccess_box_field_ok` above. ──────────────────────────────────────────
+
+// NEGATIVE (typed-flag fix): a USER struct named `Guard` has
+// `deref_wrapper_kind = None` — an absent field rejects like any struct.
+// Pre-flag, the name-match carve-out let `g.y` check OK and print garbage 0.
+#[test]
+fn fieldaccess_user_guard_missing_field_reject() {
+    check_gg_fails("fieldaccess_user_guard_missing_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// POSITIVE (over-rejection guard): a USER struct named `Guard` with a REAL
+// field still typechecks and runs — the flag is on builtin DefIds only.
+#[test]
+fn fieldaccess_user_guard_field_ok() {
+    run_gg("fieldaccess_user_guard_field_ok.gg", "3");
+}
+
+// NEGATIVE (GuardAccept + ABSENT field): builtin `Guard[P].nonexistent` must
+// reject — the inner-resolution prober checks the field on P. Present guard
+// fields keep working (guard_struct_field / guard_rwlock_field POS controls).
+#[test]
+fn fieldaccess_guard_missing_field_reject() {
+    check_gg_fails("fieldaccess_guard_missing_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// NEGATIVE (DerefTarget + ABSENT field): `Box[P].nonexistent` — absent on the
+// inner too, so E_NoFieldFound (the §9.4 message would lie).
+#[test]
+fn fieldaccess_wrapper_missing_field_reject() {
+    check_gg_fails("fieldaccess_wrapper_missing_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// NEGATIVE (DerefTarget + PRIMITIVE inner): `Box[int].x` — a primitive has no
+// named fields; E_NoFieldFound.
+#[test]
+fn fieldaccess_box_primitive_inner_reject() {
+    check_gg_fails("fieldaccess_box_primitive_inner_reject.gg", FIELDACCESS_CODE);
+}
+
+// NEGATIVE (NonDerefContainer): Shared/Weak/Mutex/RWLock direct field access
+// is E_NoFieldFound even when the field exists on the inner — their design
+// access is .get()/.upgrade()/.lock()/.read(), never deref (§9.2/§9.4), and
+// the direct access printed silent garbage-0 (measured) before the reject.
+#[test]
+fn fieldaccess_shared_container_reject() {
+    check_gg_fails("fieldaccess_shared_container_reject.gg", FIELDACCESS_CODE);
+}
+
+#[test]
+fn fieldaccess_weak_container_reject() {
+    check_gg_fails("fieldaccess_weak_container_reject.gg", FIELDACCESS_CODE);
+}
+
+#[test]
+fn fieldaccess_mutex_container_reject() {
+    check_gg_fails("fieldaccess_mutex_container_reject.gg", FIELDACCESS_CODE);
+}
+
+#[test]
+fn fieldaccess_rwlock_container_reject() {
+    check_gg_fails("fieldaccess_rwlock_container_reject.gg", FIELDACCESS_CODE);
+}
+
+// NEGATIVE, BOTH-LANE (RV-A self-host mirror), Rust half: `.field` on a
+// String primitive. The self-host half is
+// `self_host_driver_rejects_field_on_string` (infer.gg RTPrimitive arm →
+// DkNoFieldFound → E_NoFieldFound).
+#[test]
+fn reject_field_on_string() {
+    check_gg_fails("reject_field_on_string.gg", FIELDACCESS_CODE);
 }
 
 // A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
@@ -18607,6 +18689,63 @@ fn self_host_driver_rejects_invalid_program() {
 
     // 3. It MUST NOT emit C (the gate halts BEFORE lower_module). The `--lir-c`
     //    body goes to stdout; on a rejected program stdout must be empty.
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+// ── RV-A both-lane mirror, self-host half: `.field` on a String primitive
+// (`s.data`) must REJECT in the self-host lane too — infer.gg's EFieldAccess
+// RTPrimitive arm pushes DkNoFieldFound (→ `error[E_NoFieldFound]`), closing
+// the divergence where the self-host silently ACCEPTED it and lowered an
+// int64-0 placeholder (`lower_expr.gg` `[bug]` marker). The RTPrimitive-only
+// scope is SOUND (0 false positives measured across 1547 fixtures); the
+// struct-receiver reject is deferred on the per-struct field-registry
+// prerequisite (filed). Rust half: `reject_field_on_string`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_field_on_string() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/reject_field_on_string.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_field_on_string",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. Non-zero exit (the diagnostic gate's exit(1)).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted `.field` on a String (the infer.gg \
+         RTPrimitive DkNoFieldFound reject stopped firing). exit={:?}\n\
+         stderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. The rendered diagnostic: the ratified code headline, the message
+    //    text, and the codespan box rule.
+    assert!(
+        stderr.contains("error[E_NoFieldFound]")
+            && stderr.contains("no field `data` found on type `String`")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but did not render the \
+         E_NoFieldFound diagnostic.\nstderr:\n{stderr}",
+    );
+
+    // 3. No C emitted (the gate halts BEFORE lowering).
     assert!(
         stdout.trim().is_empty(),
         "self-host driver emitted C for a rejected program — the gate must \

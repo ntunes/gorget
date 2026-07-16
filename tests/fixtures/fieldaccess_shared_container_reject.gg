@@ -1,0 +1,12 @@
+# NEGATIVE (RV-A, NonDerefContainer): `Shared[P].x` — Shared is NOT a §9.4
+# deref-coercion target (design access is `.get()`); direct field access
+# printed silent garbage-0 (measured) before the reject. E_NoFieldFound even
+# though the field exists on the inner: no deref path is ever intended here.
+struct P:
+    int x
+
+void f(Shared[P] s):
+    print(s.x)
+
+int main():
+    return 0

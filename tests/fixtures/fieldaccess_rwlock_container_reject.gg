@@ -1,0 +1,15 @@
+# NEGATIVE (RV-A, NonDerefContainer): `RWLock[Config].port` — the design
+# access is `.read()`/`.write()` (yielding Read/WriteGuard, whose field access
+# WORKS — guard_rwlock_field.gg); DIRECT field access on the RWLock itself
+# printed silent garbage-0 (measured). E_NoFieldFound even though the field
+# exists on the inner.
+from std.sync import RWLock
+
+struct Config:
+    int port
+
+void f(RWLock[Config] lock):
+    print(lock.port)
+
+int main():
+    return 0

@@ -1,15 +1,19 @@
-# FieldAccess over-rejection guard — the smart-pointer WRAPPER carve-out. A
-# field access on a `Box[P]` (`b.x`) auto-dereferences to the boxed `P`'s field
-# and resolves LATE (in lowering / monomorphization), so at typecheck the
-# receiver is `Generic(Box, [P])` with `x` absent from Box's own (empty) field
-# list. `is_field_deref_wrapper("Box")` carves it OUT of the definitely-absent
-# reject — `gg check` must SUCCEED (this is `check_gg_ok`, not `run_gg`).
+# STAGED REJECT (owner ruling, decisions.md 2026-07-16 STAGING RULING): a field
+# access on a `Box[P]` (`b.x`) requires §9.4 deref coercion, which is
+# UNIMPLEMENTED end-to-end (the auto-deref field READ yields garbage 0 at
+# runtime; method auto-deref fails to compile). The earlier `check_gg_ok`
+# staging blessed that silent wrong output — the Core-#8 red-flag pattern — so
+# acceptance is REVERSED: `gg check` must FAIL with
+# `error[E_DerefCoercionUnimplemented]` ("field `x` exists on `P` but deref
+# coercion (design-doc §9.4) is not yet implemented for `Box`"). The field
+# EXISTS on the inner type, so `E_NoFieldFound` would lie — the dedicated code
+# names the real gap.
 #
-# NOTE: the auto-deref field READ itself is the filed Strategy-2B follow-up —
-# it currently yields a wrong value (0 instead of 7) at runtime, which is why
-# the runtime assertion is `#[ignore]`d with the CORRECT expected output (per
-# "Don't redesign around compiler gaps"). This fixture's point is ACCEPTANCE at
-# check time; do NOT lock in the buggy runtime value.
+# When the deref-coercion BACKEND track lands (TODO.md "RV-A scout discoveries"
+# items 1+2, the Strategy-2B deref-field-read work), it flips this back to
+# acceptance AND un-ignores the runtime twin (`fieldaccess_box_field_read_value`)
+# asserting the CORRECT value `7` — per "Don't redesign around compiler gaps",
+# the expected runtime output stays the right one, never the buggy one.
 from std.collections import Box
 
 struct P:

@@ -1,0 +1,13 @@
+# NEGATIVE (RV-A, the typed-flag fix): a USER struct named `Guard` is NOT the
+# builtin wrapper — its DefId carries `deref_wrapper_kind = None` — so an
+# absent field on it must reject with E_NoFieldFound like any other struct.
+# Before the typed flag, the `is_field_deref_wrapper` NAME-match carved the
+# name "Guard" out of the reject and `g.y` checked OK, built, and printed
+# garbage `0` (measured) — the silent-miscompile class this fixture pins shut.
+struct Guard:
+    int x
+
+int main():
+    Guard g = Guard(3)
+    print(g.y)
+    return 0

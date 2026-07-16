@@ -1,0 +1,13 @@
+# NEGATIVE (RV-A, DerefTarget + ABSENT field): `Box[P].nonexistent` — the
+# field is absent on the INNER type too, so this is E_NoFieldFound (the
+# E_DerefCoercionUnimplemented message would lie: no deref could ever resolve
+# it). Closes the former silent-accept-garbage hole (printed 0, measured).
+from std.collections import Box
+
+struct P:
+    int x
+
+int main():
+    Box[P] b = Box.new(P(7))
+    print(b.nonexistent)
+    return 0

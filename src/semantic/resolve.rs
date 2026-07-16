@@ -5,7 +5,7 @@ use crate::span::{Span, Spanned};
 
 use super::errors::{SemanticError, SemanticErrorKind};
 use super::ids::{DefId, TypeId};
-use super::scope::{DefKind, ScopeKind, ScopeTable};
+use super::scope::{DefKind, DerefWrapperKind, ScopeKind, ScopeTable};
 use super::types::{self, TypeTable};
 
 pub use crate::parser::ast::Ownership;
@@ -157,7 +157,14 @@ pub fn collect_top_level(
     // available for type resolution (e.g. Result[Vector[uint8], str] in synthetic modules).
     // The real struct definitions from std.collections replace these when imported.
     for type_name in BUILTIN_GENERIC_TYPES {
-        let _ = scopes.define(type_name.to_string(), DefKind::Import, Span::dummy());
+        if let Ok(did) = scopes.define(type_name.to_string(), DefKind::Import, Span::dummy()) {
+            // RV-A: seed the typed deref-wrapper kind on the BUILTIN def (the
+            // ONE allowed registration name-match; every downstream read is the
+            // typed flag). Non-wrapper builtins (Vector/Dict/…) map to `None`.
+            if let Some(kind) = DerefWrapperKind::for_builtin_name(type_name) {
+                scopes.get_def_mut(did).deref_wrapper_kind = Some(kind);
+            }
+        }
     }
     // Register built-in Option[T] and Result[T,E] enum types with their variants.
     for (enum_name, variant_names) in &[
@@ -594,6 +601,23 @@ fn collect_item(
                     if !bounds.is_empty() {
                         let param_names = extract_generic_param_names(&s.generic_params);
                         ctx.struct_generic_bounds.insert(def_id, (param_names, bounds));
+                    }
+                    // RV-A: seed the typed deref-wrapper kind on builtin-module
+                    // wrapper STRUCTS (Box in std.collections; RWLock/ReadGuard/
+                    // WriteGuard in std.sync), gated on the defining scope being
+                    // a BUILTIN module — a USER `struct ReadGuard` gets `None`
+                    // and so stops escaping E_NoFieldFound. `Box` needs seeding
+                    // here as well as in BUILTIN_GENERIC_TYPES because
+                    // `from std.collections import Box` resolves to THIS struct
+                    // def, not the Import placeholder (the mid-scout miss).
+                    if let Some(kind) = DerefWrapperKind::for_builtin_name(s.name.node.as_str()) {
+                        let in_builtin = matches!(
+                            scopes.scope_kind(scopes.current_scope()),
+                            ScopeKind::FileModule { path } if crate::stdlib::is_builtin_module(path)
+                        );
+                        if in_builtin {
+                            scopes.get_def_mut(def_id).deref_wrapper_kind = Some(kind);
+                        }
                     }
                 }
                 Err(e) => errors.push(e),

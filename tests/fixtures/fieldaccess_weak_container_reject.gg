@@ -1,0 +1,11 @@
+# NEGATIVE (RV-A, NonDerefContainer): `Weak[P].x` — Weak's design access is
+# `.upgrade()` (§9.2), never deref; a §9.4-naming diagnostic would lie for it.
+# E_NoFieldFound even though the field exists on the inner.
+struct P:
+    int x
+
+void f(Weak[P] w):
+    print(w.x)
+
+int main():
+    return 0

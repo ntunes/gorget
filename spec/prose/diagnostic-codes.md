@@ -9,7 +9,7 @@
 
 The codes are defined — one per variant, no catch-all — on the diagnostic enums:
 
-- `SemanticErrorKind::code()` (`src/semantic/errors.rs`) → the 95 `E_` codes below.
+- `SemanticErrorKind::code()` (`src/semantic/errors.rs`) → the 96 `E_` codes below.
 - `SemanticWarningKind::code()` (`src/semantic/errors.rs`) → the 17 `W_` codes below.
 
 Each `code()` is an **exhaustive `match` mirroring the `Display` impl** with **no**
@@ -73,6 +73,7 @@ and is cited concretely.
 | `E_MethodGenericInferenceFailed` | `MethodGenericInferenceFailed` | — |
 | `E_CannotInferType` | `CannotInferType` | — |
 | `E_NoFieldFound` | `NoFieldFound` | — |
+| `E_DerefCoercionUnimplemented` | `DerefCoercionUnimplemented` | — |
 | `E_TupleIndexOutOfBounds` | `TupleIndexOutOfBounds` | — |
 | `E_OrPatternBindingMismatch` | `OrPatternBindingMismatch` | — |
 | `E_DuplicateImpl` | `DuplicateImpl` | — |

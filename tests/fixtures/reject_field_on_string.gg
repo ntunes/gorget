@@ -1,0 +1,9 @@
+# NEGATIVE, BOTH-LANE (RV-A self-host mirror): `.field` on a String — a
+# primitive receiver has no named fields. Rust gg rejects with E_NoFieldFound;
+# the self-host typechecker mirrors it via infer.gg's RTPrimitive arm
+# (DkNoFieldFound → E_NoFieldFound), closing the lane divergence where the
+# self-host silently ACCEPTED `s.data` and lowered an int64-0 placeholder.
+int main():
+    String s = "hello"
+    print(s.data)
+    return 0

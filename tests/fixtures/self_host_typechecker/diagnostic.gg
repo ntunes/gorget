@@ -52,6 +52,7 @@ enum DiagKind:
 
     # Typechecker kinds (active in this stage)
     DkNotAType             # used a non-type identifier in a type position
+    DkNoFieldFound         # `.field` absent on the receiver (E_NoFieldFound)
     DkTypeMismatch         # expected vs actual type disagreement (E_TypeMismatch)
     # Split out of the former coarse DkTypeMismatch — each 1:1 with its registry code:
     DkDerefNonBox          # `*` on a non-`Box[T]` value (E_DerefNonBox)
@@ -127,6 +128,8 @@ String diag_kind_str(DiagKind kind):
             return "lex-error"
         case DkNotAType():
             return "not-a-type"
+        case DkNoFieldFound():
+            return "no-field-found"
         case DkTypeMismatch():
             return "type-mismatch"
         case DkDerefNonBox():
@@ -203,6 +206,8 @@ String diag_kind_code(DiagKind kind):
             return "E_DuplicateDefinition"
         case DkNotAType():
             return "E_NotAType"
+        case DkNoFieldFound():
+            return "E_NoFieldFound"
         case DkTypeMismatch():
             return "E_TypeMismatch"
         case DkDerefNonBox():

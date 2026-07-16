@@ -1,0 +1,13 @@
+# NEGATIVE (RV-A pass-5, GuardAccept + ABSENT field): the builtin `Guard[P]`
+# auto-derefs `.field` to the inner P (GuardAccept — present fields work, see
+# guard_struct_field.gg), but a field ABSENT on the inner must reject with
+# E_NoFieldFound — never silently accept into error_id/garbage (the Core-#8
+# class, reopened for guards by a permissive wrapper carve-out).
+struct P:
+    int x
+
+int main():
+    Mutex[P] m = Mutex[P](P(10))
+    Guard[P] g = m.lock()
+    print(g.nonexistent)
+    return 0

@@ -21,7 +21,7 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTNever, RTRef, RTVar
 from types import ast_type_to_resolved
 from types import FunctionSig, MethodSigShape, MethodResolution, ShapeResolution, EquipInfo
 from resolve import ResolveContext
-from diagnostic import Diagnostic, DkUndefinedName
+from diagnostic import Diagnostic, DkUndefinedName, DkNoFieldFound
 from traits import resolve_method_by_name, resolve_method_shape
 from traits import resolve_method_full, resolve_method_for_generic_receiver
 from traits import infer_method_targs, substitute_return_type, type_name_of
@@ -259,6 +259,17 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         String key = f"{d.name}.{field_name}"
                         if types.variant_field_types.contains(key):
                             return types.variant_field_types.get(key).unwrap()
+                        # NOTE: a concrete-struct absent-field reject would go
+                        # HERE, but the self-host `variant_field_types` table is
+                        # INCOMPLETE (misses generic-struct / imported / equip
+                        # fields → 45 false positives measured), so it is NOT a
+                        # sound "definitely absent" signal. A sound struct reject
+                        # needs a complete per-struct field registry — filed as
+                        # a follow-up (see RV-A scout report).
+                    case RTPrimitive(pname):
+                        # `.field` on a primitive (String/int/…) is always
+                        # invalid — no named fields exist. REJECT.
+                        ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNoFieldFound(), "no field `" + field_name + "` found on type `" + pname + "`"))
                     else:
                         pass
             return NO_TYPE

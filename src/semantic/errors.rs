@@ -355,6 +355,14 @@ pub enum SemanticErrorKind {
     /// Field doesn't exist on struct.
     NoFieldFound { field: String, type_: String },
 
+    /// RV-A: a field PRESENT on a `Box[T]` wrapper's inner type was accessed
+    /// directly (`box_val.field`), which requires §9.4 deref coercion — a
+    /// feature whose backend (deref-field read) is not yet implemented. Staged
+    /// reject (decisions.md 2026-07-16 STAGING RULING) until that track lands;
+    /// distinct from `NoFieldFound` because the field DOES exist on the inner,
+    /// so an "no field found" message would lie.
+    DerefCoercionUnimplemented { field: String, inner: String, wrapper: String },
+
     /// Tuple field index out of bounds.
     TupleIndexOutOfBounds { index: usize, len: usize },
 
@@ -716,6 +724,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::MethodGenericInferenceFailed { .. } => "E_MethodGenericInferenceFailed",
             SemanticErrorKind::CannotInferType => "E_CannotInferType",
             SemanticErrorKind::NoFieldFound { .. } => "E_NoFieldFound",
+            SemanticErrorKind::DerefCoercionUnimplemented { .. } => "E_DerefCoercionUnimplemented",
             SemanticErrorKind::TupleIndexOutOfBounds { .. } => "E_TupleIndexOutOfBounds",
             SemanticErrorKind::OrPatternBindingMismatch { .. } => "E_OrPatternBindingMismatch",
             SemanticErrorKind::DuplicateImpl { .. } => "E_DuplicateImpl",
@@ -886,6 +895,13 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::NoFieldFound { field, type_ } => {
                 write!(f, "no field `{field}` found on type `{type_}`")
+            }
+            SemanticErrorKind::DerefCoercionUnimplemented { field, inner, wrapper } => {
+                write!(
+                    f,
+                    "field `{field}` exists on `{inner}` but deref coercion (design-doc §9.4) \
+                     is not yet implemented for `{wrapper}`"
+                )
             }
             SemanticErrorKind::TupleIndexOutOfBounds { index, len } => {
                 write!(f, "tuple index `{index}` out of bounds for tuple with {len} elements")

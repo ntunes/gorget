@@ -1,0 +1,11 @@
+# POSITIVE (RV-A over-rejection guard): a USER struct named `Guard` with a
+# REAL field must typecheck and run normally — the typed wrapper flag lives on
+# the builtin DefIds only, so sharing a builtin wrapper's name costs the user
+# nothing on valid accesses.
+struct Guard:
+    int x
+
+int main():
+    Guard g = Guard(3)
+    print(g.x)
+    return 0

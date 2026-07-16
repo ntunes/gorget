@@ -1,0 +1,10 @@
+# NEGATIVE (RV-A pass-4, DerefTarget + PRIMITIVE inner): `Box[int].x` — a
+# primitive has no named fields, so no deref coercion could ever resolve `.x`;
+# E_NoFieldFound (not E_DerefCoercionUnimplemented, which is reserved for a
+# field that EXISTS on the inner).
+from std.collections import Box
+
+int main():
+    Box[int] b = Box.new(5)
+    print(b.x)
+    return 0
