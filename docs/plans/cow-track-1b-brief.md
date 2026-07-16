@@ -1,11 +1,13 @@
 # Executor brief: CoW Track 1B — self-host value index-element field write-through
 
-> **Status:** v1 — pass-1 review folded (5 reservations: fixture SCOPED to M1-covered shapes —
-> the full inline-test body would MISMATCH the auto-enrolled self-host lane on the nested +
-> value-field-method shapes and RAISE parity WRONG; the untrack/`gorget_array_get_ptr` framing
-> corrected — no such symbol exists, no self-host untrack pass exists; static base added to the
-> arm's scope; wave-3 lint deferral made explicit; lower_expr.gg edits flagged). Awaiting the
-> next fresh pass. **Campaign:** `cow-writethrough-materialize-closed-set.md` (v3) — this is the
+> **Status:** v2 — pass-2 folded (4 reservations: the EIndex arm MUST gate on `collection_kind`
+> with fall-through for non-array kinds — `lower_place_base` is SHARED with reads/receivers and
+> an unconditional array getter would hijack Dict/Set and crash; the read/receiver blast radius
+> made explicit + executor runs the bootstrap deliberately; static guidance reframed to the
+> self-host's own `lower_index_assign` idiom, not Rust GlobalRef; ggdef adjudication split
+> local-vs-static). Pass-1 had folded: fixture scoped to M1-covered shapes; the
+> `gorget_array_get_ptr`/untrack framing corrected; statics in scope; lint deferral explicit.
+> Awaiting the next fresh pass. **Campaign:** `cow-writethrough-materialize-closed-set.md` (v3) — this is the
 > campaign's designated first PR. **Wave-0 basis:** `cow-wave0-measure.md` — gap B re-verified
 > broken this session (self-host only; Rust GIR is correct).
 > **Model policy:** executor + brief-reviews Opus; output-review before integration on Fable.
@@ -46,12 +48,43 @@ no twin) — the `LoBorrowed` tag IS the untrack-equivalent: it keeps the elemen
 drop-tracking. **The real risk is mis-tagging the dst `LoOwned` → the buffer element gets
 drop-registered → double-free — this is what the ASan gate is for.**
 
-**Static bases are in scope (pass-1):** the Rust arm explicitly materializes a `GlobalRef` base
-(`exprs/mod.rs:2559-2569`); the fixture body includes `static Vector[Point] PTS` shapes. Handle
-a static collection base in the new EIndex arm (mirror the Rust shape) and verify
-`PTS[0].x = 99` / `PTS[1].x += 100` end-to-end on the driver. If the static path turns out to
-be structurally larger than a mirror (report the evidence), scope the fixture to locals and
-file the static case — do not silently drop it.
+**⚠ MANDATE (pass-2, HIGH): the EIndex arm MUST gate on the collection kind and PRESERVE the
+`lower_expr` fall-through for every non-array base.** `lower_place_base` is SHARED — it is
+called by the field-READ arm (`lower_expr.gg:4582`), the method-RECEIVER arm (`:3289`), and the
+hasher arm (`:3932`) for `x[i].field`/`x[i].method()` on ALL collection kinds. A Dict `d[k].f`
+read works today precisely BECAUSE it falls through to `lower_expr` → `gorget_map_get`. An
+unconditional `gorget_array_get` in the new arm would call an ARRAY getter on a MAP →
+UB/crash, regressing working Dict/Set reads and colliding with Track 1C. Dispatch exactly as
+the existing read/index-assign paths do — via `resource_meta_for(...).collection_kind`
+(see the getter dispatch at `lower_expr.gg:~4840-4920` and `lower_index_assign`,
+`lower_stmt.gg:1818-1846`): take the pointer path for **CkVector/CkDeque array-kind** bases
+ONLY; everything else (Dict/Set/user-Index) falls through unchanged.
+
+**Blast radius is WIDER than stores — this is intended, verify it (pass-2):** the new arm
+reroutes index-element field-READS and method-RECEIVERS (incl. `m[0].push()`, the nested-Vector
+mutation shape) from value-copy to element-pointer. That is the one-resolver design the
+campaign wants, and the pointer-base read path (`lower_expr.gg:4587-4725`) already handles
+`GtPtr` bases (it's the `&self`/`&param` path). Executor duties: (a) verify index-element reads
+and method-receiver shapes still pass (targeted probes); (b) an emitted-GIR-shape change on
+reads is EXPECTED, not a bug — note it, don't fight it; (c) because the fixture alone has no
+read/receiver-only coverage, run `self_host_bootstrap_fixed_point` YOURSELF as a FOREGROUND
+chunked gate (`GG_BUILD_TIMEOUT_SECS=600`; it self-exercises every read shape) — this track is
+an exception to the bootstrap-is-parent's-job default; the parent still runs the full sweeps.
+(d) If nested-Vector `get→push→set` shapes start passing, REPORT it — it may retire a filed
+workaround (memory: nested-vector get-push-set) — do not silently absorb it.
+
+**Static bases are in scope — use the SELF-HOST's own proven idiom (pass-2 corrects the pass-1
+Rust framing):** do NOT mirror Rust's GlobalRef materialization. The self-host already writes
+static array elements correctly via `lower_index_assign` (`lower_stmt.gg:1769-1868`): it lowers
+the collection base via **`lower_place_base` itself** (`:1770`), which returns a `GtMutPtr` for
+statics through `__global_ref__` (`:1519-1529`), then consumes it with the `is_ptr_type(base) →
+OpCopy` idiom (`:1857-1859`). The new EIndex arm must lower ITS collection base the same way —
+recursively via `lower_place_base`, NEVER via `lower_expr` (a static through `lower_expr`
+yields a value slot whose address-of is a pointer-to-pointer). Proof this works:
+`static_vector_index_store.gg` / `static_vector_index_compound.gg` pass today. Verify
+`PTS[0].x = 99` / `PTS[1].x += 100` end-to-end on the driver; if statics still turn out
+structurally larger (report the evidence), scope the fixture to locals and file the static
+case — do not silently drop it.
 
 Do it in the shared place-base path (`lower_place_base`), NOT per-statement-kind — Track 1C
 (Dict/Set) and 2F (nested `&`) will extend the same resolver; leave the EIndex arm shaped so a
@@ -81,8 +114,14 @@ coarse-kind split in `typecheck.gg`, tuple-DefId in `parser.gg`/`resolve.gg`; st
    `lower_place_base(EFieldAccess-base)` — NOT fixed by the EIndex arm — so they STAY in the
    inline Rust test: **KEEP the inline twin** (its comment already documents why it's not
    corpus), and file the two residual shapes as the follow-up they are (they belong to the
-   nested-place class, Track 2F's neighborhood). Adjudicate the fixture's expected output with
-   ggdef per above; wire the standard three-lane integration tests (C + LLVM; the self-host lane
+   nested-place class, Track 2F's neighborhood). **ggdef adjudication is SPLIT (pass-2): the
+   LOCAL shapes (`v[0].x = 88`, `v[1].y += 5`) are IN-subset** (`navigate_write` handles
+   Vector-Index + Struct-Field, `spec/ggdef/src/eval.rs:931-949`) — **adjudicate them with a
+   statics-stripped ggdef probe** (expected write-through: `88`, `45`); **the STATIC lines are
+   OUT-of-subset** (`Item::StaticDecl` is not elaborated, `elaborate/mod.rs:62-119`) — derive
+   them from §3.1 prose with an explicit out-of-subset note in the fixture comment. Do NOT run
+   the mixed fixture through ggdef and conclude the shape is out-of-subset — only the statics
+   are. Wire the standard three-lane integration tests (C + LLVM; the self-host lane
    auto-enrolls via the runtime-parity corpus). Verify new files are not gitignore-hidden
    (`git status` must show them).
 3. **M3 — negative-space probes** (cheap, in-worktree, not committed unless they find something):
@@ -91,12 +130,14 @@ coarse-kind split in `typecheck.gg`, tuple-DefId in `parser.gg`/`resolve.gg`; st
    write-through lands or report the residual shape (report, don't scope-creep the fix).
 4. **M4 — gates (FOREGROUND, generous timeouts; chunk >600s gates by test name)**:
    rebuild the self-host lowerer driver (`GG_BUILD_TIMEOUT_SECS=600`) · the new fixture green on
-   all three lanes · `self_host_runtime` targeted run · **ASan** on the new fixture + the
-   existing multilevel `cow_index_*` fixtures (the #1 risk is mis-tagging the element-Ptr dst
-   `LoOwned` → drop-registered buffer element → DOUBLE-FREE; a leak-check needs a positive
-   control before trusting "clean") · `cargo test --lib` ·
-   `lower_comparison`/`type_comparison` diagnostic runs (print the counts) · targeted
-   `cow_*` integration filter.
+   all three lanes · `self_host_runtime` targeted run · read/receiver probes per the blast-radius
+   duties (Dict `d[k].f` read still works; `v[i].m()` receivers; `m[0].push()`) ·
+   **`self_host_bootstrap_fixed_point` FOREGROUND** (this track's explicit exception — see
+   blast-radius section) · **ASan** on the new fixture + the existing multilevel `cow_index_*`
+   fixtures (the #1 risk is mis-tagging the element-Ptr dst `LoOwned` → drop-registered buffer
+   element → DOUBLE-FREE; a leak-check needs a positive control before trusting "clean") ·
+   `cargo test --lib` · `lower_comparison`/`type_comparison` diagnostic runs (print the counts) ·
+   targeted `cow_*` + `static_vector_index_*` integration filters.
 
 ## Out of scope
 
