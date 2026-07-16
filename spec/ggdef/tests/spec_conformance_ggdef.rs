@@ -32,19 +32,25 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 ///
 /// Seeded from a run regenerated IN THIS WORKTREE (never a dated number):
 ///   cargo test -p ggdef --test spec_conformance_ggdef -- --nocapture
-///   → total=197 · MATCH=197 · MISMATCH=0 · GGDEF-SKIP=0
+///   → total=202 · MATCH=202 · MISMATCH=0 · GGDEF-SKIP=0
 ///
 /// (5 original seeds + the 182-fixture P1-D "AGREE" migration + the 8 D11
 /// trap-normalization fixtures + the may-move pair — `reject_use_after_move.gg`
 /// (the `E_` reject code + exit 1 + empty stdout) and its accept complement
-/// `reinit_accept.gg` (whole-local revive → Value "new") — which the interpreter
-/// reproduces exactly. Every fixture's `expect:` is ggdef-generated, so on the
-/// ggdef lane total == MATCH by construction.)
+/// `reinit_accept.gg` (whole-local revive → Value "new") — plus the FIVE
+/// migrated liveness/move rejects that the self-host now renders with the
+/// ratified `error[E_<code>]` headline: `reject_double_move.gg` (E_DoubleMove),
+/// `reject_move_in_loop.gg` (E_MoveInLoop), `reject_use_after_move_branch.gg`
+/// (E_UseAfterMove), `reject_consuming_self_use_after_move.gg` (E_UseAfterMove),
+/// and `reject_consume_callable_double.gg` (E_DoubleMove) — each rejected by the
+/// interpreter's `liveness.rs` may-move / consume-call kill. Every fixture's
+/// `expect:` is ggdef-generated, so on the ggdef lane total == MATCH by
+/// construction.)
 ///
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 197;
+const GGDEF_MATCH_FLOOR: usize = 202;
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")

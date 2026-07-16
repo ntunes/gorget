@@ -1204,7 +1204,7 @@ void live_mark_move(SpannedExpr place, SafetyState &state, ScopeTable &scopes, R
     if root_def == -1:
         return
     if state.moved.contains(root_def):
-        ctx.diagnostics.push(Diagnostic.error(place.span, DkUseAfterMove(), f"`{root}` moved more than once (double move)"))
+        ctx.diagnostics.push(Diagnostic.error(place.span, DkDoubleMove(), f"`{root}` moved more than once (double move)"))
         return
     # PART C (Rust check_move, origins.rs:495-503): moving an ENCLOSING-scope place
     # inside a loop re-moves it on the next iteration — a static MoveInLoop reject.

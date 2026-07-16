@@ -18625,9 +18625,12 @@ fn self_host_driver_rejects_invalid_program() {
 // binds (the `RTGeneric` args-recursion no `.gg` fixture otherwise covers).
 // Contract per reject fixture: non-zero exit, a codespan diagnostic on stderr
 // (`cannot copy`/`cannot capture` + the box rule), and NO C on stdout (the
-// diagnostic gate halts BEFORE lowering). The self-host renderer has no
-// `error[E_…]` codes (a pre-existing property shared by every self-host
-// diagnostic), so the assertion is on the message TEXT + box rule, not a code.
+// diagnostic gate halts BEFORE lowering). These reject via `DkMoveWithoutOperator`,
+// which the self-host now renders with the ratified `error[E_MoveWithoutOperator]`
+// headline (diagnostic.gg `diag_kind_code`); this driver-level assertion stays on
+// the message TEXT + box rule (these D12 shapes are not yet migrated to four-lane
+// spectests/run conformance fixtures — a candidate for the same reject-migration
+// track as the liveness set).
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_rejects_d12_drop_purity() {
@@ -18754,9 +18757,12 @@ fn self_host_driver_accepts_d12_legal() {
 // Mirrors Rust `check_call_aliasing` + ggdef `check_arg_place_overlap`.
 // Contract per reject fixture: non-zero exit, the overlap codespan diagnostic
 // on stderr ("their places overlap" + the box rule), and NO C on stdout (the
-// gate halts BEFORE lowering). The self-host renderer has no `error[E_…]`
-// codes (a pre-existing property of every self-host diagnostic), so the
-// assertion is on the message TEXT + box rule, not a code.
+// gate halts BEFORE lowering). The self-host now renders the ratified
+// `error[E_<code>]` headline for coded kinds (the overlap arms via
+// `DkBorrowConflict` -> E_BorrowConflict, the flipped liveness arms via
+// E_UseAfterMove / E_DoubleMove), but this driver-level assertion stays on the
+// message TEXT + box rule (these shapes are not yet migrated to four-lane
+// spectests/run conformance fixtures).
 //
 // PASS-ORDER RIDER (LANDED with the unified check_safety_* walk): liveness now
 // precedes aliasing, so two of these five fixtures flip from the place-overlap
@@ -18882,8 +18888,11 @@ fn self_host_driver_accepts_d10b_place_overlap() {
 // self_host_typechecker/typecheck.gg). The self-host now tracks move-state and
 // rejects the use-after-move / double-move / move-in-loop class it previously
 // ACCEPTED — closing the divergence with Rust gg + ggdef (ggdef `Slot::Moved`
-// -> IllFormed). Each reject fixture asserts its SPECIFIC axis message (the
-// self-host renderer has no `error[E_…]` codes) + the codespan box rule.
+// -> IllFormed). Each reject fixture asserts its SPECIFIC axis message + the
+// codespan box rule. The self-host now ALSO renders the ratified `error[E_<code>]`
+// headline off its typed `DiagKind` (E_UseAfterMove / E_DoubleMove / E_MoveInLoop
+// via diagnostic.gg `diag_kind_code`), so the migrated fixtures below are compared
+// on the registry code four-lane; these driver-only survivors assert the message.
 //
 // ggdef fixture-for-fixture: the straight-line UAM/DM shapes agree with ggdef's
 // move_then_read_is_illformed / d10b_order_twin_read_before_move_legal (verified
@@ -18893,15 +18902,18 @@ fn self_host_driver_accepts_d10b_place_overlap() {
 // table. re-init-makes-live (`reinit_accept`) — ggdef eval now revives the slot
 // on the whole-local reassignment and ACCEPTS, matching production + self-host
 // (cross-lane twin: spectests/run/reinit_accept.gg). ConsumeCallable
-// single-owner consume (`consume_callable_double_reject`) — ggdef's consume-call
-// kill now fires on the first call, so the second is E_DoubleMove, matching
-// production. All lanes therefore AGREE on both shapes. NOTE the self-host
-// renderer still emits a bare `error:` headline (not `error[E_<code>]`), so the
-// reject axis is compared here by MESSAGE, not the registry code — the
-// self-host reject-diagnostic-rendering alignment is the filed HIGH follow-up
-// (TODO.md) that migrates these driver-only reject assertions into four-lane
-// ggdef conformance fixtures. The ONE proof migration already lives at
-// spectests/run/reject_use_after_move.gg.
+// single-owner consume — ggdef's consume-call kill now fires on the first call,
+// so the second is E_DoubleMove, matching production. All lanes therefore AGREE.
+// The reject-diagnostic-rendering alignment (the self-host emitting `error[E_<code>]`)
+// is LANDED, and it let four of the original driver-only rejects migrate into
+// four-lane ggdef+C+LLVM+self-host conformance fixtures (E_-code-compared, not just
+// message): spectests/run/reject_move_in_loop.gg, reject_use_after_move_branch.gg,
+// reject_consuming_self_use_after_move.gg, reject_consume_callable_double.gg —
+// alongside the original proof migration spectests/run/reject_use_after_move.gg and
+// its E_DoubleMove sibling reject_double_move.gg. Only the COARSE codeless kinds
+// `DkTypeMismatch` / `DkControlFlow` (each multiplexing several registry codes)
+// still render bare `error:` and cannot yet be E_-code-compared — the filed HIGH
+// follow-up that splits those kinds 1:1 with the registry (TODO.md).
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_rejects_liveness() {
@@ -18909,26 +18921,28 @@ fn self_host_driver_rejects_liveness() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
     // (fixture, expected axis message). Box-rule (`\u{250c}`) asserted for all.
-    let reject_fixtures: [(&str, &str); 9] = [
+    // NOTE: four of the original nine liveness rejects — `move_in_loop_reject`,
+    // `use_after_move_branch_reject`, `consuming_self_use_after_move_reject`, and
+    // `consume_callable_double_reject` — have MIGRATED to four-lane conformance
+    // fixtures now that the self-host renders the ratified `error[E_<code>]`
+    // headline (spectests/run/reject_move_in_loop.gg / reject_use_after_move_branch.gg
+    // / reject_consuming_self_use_after_move.gg / reject_consume_callable_double.gg,
+    // adjudicated by ggdef + C + LLVM + self-host in tests/spec_conformance.rs). Those
+    // are covered STRONGER there (the registry `E_`-code axis, not just the message),
+    // so they are dropped from this driver-only list. The five below stay here as
+    // driver-level message + box-rule + halt-before-lowering assertions.
+    let reject_fixtures: [(&str, &str); 5] = [
         // straight-line read after a `!`-consume -> use-after-move
         ("use_after_move_reject", "after it was moved"),
         // same place moved twice -> double move
         ("double_move_reject", "moved more than once (double move)"),
-        // move in one arm of an if-without-else -> moved-in-any -> read is UAM
-        ("use_after_move_branch_reject", "after it was moved"),
         // read of a moved root inside an f-string interpolation -> UAM
         ("fstring_use_after_move_reject", "after it was moved"),
         // field/method read of a moved root (`v.len()` after `!v`) -> UAM
         ("field_read_use_after_move_reject", "after it was moved"),
-        // `!self`-consuming method then a read of the receiver -> UAM
-        ("consuming_self_use_after_move_reject", "after it was moved"),
         // THE call-arm-order lock: `!self` method whose ARG reads the receiver
         // (`c.consume(c.width)`) -> receiver consumed at STEP 1 before the arg -> UAM
         ("consuming_self_arg_reads_receiver_reject", "after it was moved"),
-        // ConsumeCallable called twice -> double move (production parity)
-        ("consume_callable_double_reject", "moved more than once (double move)"),
-        // Part C: move of an enclosing-scope place inside a multi-iteration loop
-        ("move_in_loop_reject", "inside a loop"),
     ];
     for (name, expected_msg) in reject_fixtures {
         let fixture = manifest_dir.join(format!("tests/fixtures/liveness/{name}.gg"));

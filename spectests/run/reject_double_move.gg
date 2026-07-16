@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness]
+# doc: |
+#   Static double-move rejection (verdict = elaborate ∘ eval). `s` is moved into
+#   the first `consume(!s)`, then moved AGAIN by the second `consume(!s)`. The
+#   flow-sensitive liveness gate rejects the second move BEFORE eval with
+#   E_DoubleMove — stdout stays EXACTLY empty (the program never ran, which IS the
+#   verdict), exit 1. This is the E_DoubleMove sibling of reject_use_after_move.gg:
+#   it proves the DoubleMove code axis on all four lanes; flipping the expected
+#   `reject:` code must make every lane MISMATCH (Core #6/#8).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_DoubleMove
+#!end
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hi"
+    consume(!s)
+    consume(!s)

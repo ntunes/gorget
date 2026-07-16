@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness]
+# doc: |
+#   Static use-after-move across a branch join (verdict = elaborate ∘ eval). `s` is
+#   moved into `consume(!s)` in ONE arm of an if-without-else, so after the join the
+#   place is moved-in-any; the later `print(s)` is a use-after-move. The
+#   flow-sensitive liveness gate takes the UNION of the arms (the elab∘eval win) and
+#   rejects BEFORE eval with E_UseAfterMove — stdout stays EXACTLY empty (the program
+#   never ran, which IS the verdict), exit 1. Sibling of reject_use_after_move.gg on
+#   the branch-join axis; flipping the expected `reject:` code must make every lane
+#   MISMATCH (Core #6/#8).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UseAfterMove
+#!end
+
+void consume(String !s):
+    pass
+
+void main():
+    String s = "hello"
+    bool flag = true
+    if flag:
+        consume(!s)
+    print(s)

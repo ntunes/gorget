@@ -46,18 +46,20 @@
 //! The three PRODUCTION floors (C/LLVM/self-host) are the count of committed
 //! fixtures each production impl reproduces today. `MIN_FIXTURES` is the TOTAL
 //! committed corpus count (the glob-emptiness guard). The D11 trap fixtures
-//! (post-T2) now MATCH all three lanes; the C and LLVM floors reach the whole
-//! corpus. The one lane sitting below `MIN_FIXTURES` is SELF-HOST, on the
-//! may-move REJECT fixture: it rejects correctly (exit 1, empty stdout) but its
-//! diagnostic headline lacks the `error[E_<code>]` bracket the ggdef/C/LLVM lanes
-//! emit — a tracked reject-diagnostic-rendering gap (see the floor consts below).
+//! (post-T2) now MATCH all three lanes, and the may-move REJECT fixture MATCHes
+//! all three too (the self-host renderer now emits the ratified `error[E_<code>]`
+//! headline off its typed `DiagKind` — see the floor consts below): all three
+//! lanes reach the whole corpus, so every floor EQUALS `MIN_FIXTURES`.
 //!
 //! (History: the C and LLVM lanes once floored one below self-host because
 //! `smith_move_param_concat.gg` was a both-backend BUILD-FAIL — the C backend
 //! emitted an invalid pointer-add, the LLVM backend an invalid `add ptr`, while
 //! the self-host lowerer was already correct. That defect is FIXED
-//! (`src/ir/lowering/exprs/operators.rs` `cow_deref_if_ptr`); today the roles are
-//! reversed — self-host is the lane one below, on the reject-diagnostic gap.)
+//! (`src/ir/lowering/exprs/operators.rs` `cow_deref_if_ptr`). Later the self-host
+//! held one below on a reject-diagnostic-rendering gap — its reject headline
+//! lacked the `error[E_<code>]` bracket — which is ALSO now closed: the self-host
+//! renders the ratified `error[E_<code>]` family off its typed `DiagKind`, so all
+//! three lanes are level at the whole corpus.)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -87,29 +89,40 @@ use ggdef::{parse_frontmatter, Expect};
 // revived by a whole-local reassign → `Value "new"`, exit 0) MATCHes ALL THREE
 // lanes, so the corpus + every lane's MATCH rise by that fixture together.
 //
-// The reject seed MISMATCHes the SELF-HOST lane — a KNOWN, TRACKED gap (mirrors
-// the pre-T2 trap interim above): the self-host driver correctly REJECTS the
-// program (exit 1, empty stdout) but its diagnostic headline renders a BARE
-// `error: use of `x` after it was moved` with NO `error[E_<code>]` bracket
-// (`tests/fixtures/self_host_lowerer/diagnostic.gg:293` — the headline omits the
-// `DiagKind` code; `diag_kind_str` maps `DkUseAfterMove → "use-after-move"`, not
-// the registry `E_UseAfterMove`). So the self-host reject-diagnostic format needs
-// alignment to the ratified `error[E_<code>]` family before its floor can reach
-// the corpus — filed HIGH as a self-host diagnostic-rendering track (TODO.md).
-// Until then SELF-HOST holds ONE below (MATCH=196 < MIN_FIXTURES=197), exactly as
-// the trap floors once held below the corpus with a documented interim MISMATCH.
-const C_MATCH_FLOOR: usize = 197;
-const LLVM_MATCH_FLOOR: usize = 197;
-const SELFHOST_MATCH_FLOOR: usize = 196;
+// The reject seed now MATCHes the SELF-HOST lane too (the tracked gap is CLOSED):
+// `render_diagnostic` renders the ratified `error[E_<code>]:` headline off the
+// TYPED `DiagKind` via `diag_kind_code` (the `[E_<code>]` segment rides inside the
+// colored severity run so `error[E_UseAfterMove]` stays a contiguous substring for
+// `extract_reject_code`). `DkUseAfterMove` was split into `DkUseAfterMove`
+// (E_UseAfterMove) + a new `DkDoubleMove` (E_DoubleMove) so each reject carries its
+// own registry code — `tests/fixtures/self_host_typechecker/diagnostic.gg`
+// (`diag_kind_code` + the headline) and typecheck.gg's double-move push site. With
+// the render aligned, ALL THREE lanes reproduce the whole corpus.
+//
+// The render alignment then let the four remaining driver-only liveness/move
+// rejects migrate into four-lane conformance fixtures (each was previously only a
+// `self_host_driver_rejects_liveness` message assertion in tests/integration.rs):
+// `reject_move_in_loop.gg` (E_MoveInLoop), `reject_use_after_move_branch.gg`
+// (E_UseAfterMove, the branch-join union), `reject_consuming_self_use_after_move.gg`
+// (E_UseAfterMove via a `!self`-consuming method), and `reject_consume_callable_double.gg`
+// (E_DoubleMove via a single-owner ConsumeCallable). Together with the patch's
+// `reject_double_move.gg` that is FIVE new coded rejects — all four-lane MATCH — so
+// every floor rose 197 → 202 in lockstep with the corpus.
+const C_MATCH_FLOOR: usize = 202;
+const LLVM_MATCH_FLOOR: usize = 202;
+const SELFHOST_MATCH_FLOOR: usize = 202;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the TOTAL seed COUNT (195 exit-0/trap fixtures + the may-move PAIR:
-/// `reject_use_after_move.gg` + its accept complement `reinit_accept.gg` = 197).
-/// It EQUALS the C and LLVM MATCH floors (both lanes reproduce the whole corpus).
-/// The self-host floor sits ONE below, on the tracked reject-diagnostic gap
-/// documented above.
-const MIN_FIXTURES: usize = 197;
+/// the TOTAL seed COUNT (195 exit-0/trap fixtures + the may-move UAM PAIR
+/// `reject_use_after_move.gg` + `reinit_accept.gg` + the FIVE migrated coded
+/// liveness/move rejects `reject_double_move.gg` (E_DoubleMove),
+/// `reject_move_in_loop.gg` (E_MoveInLoop), `reject_use_after_move_branch.gg`
+/// (E_UseAfterMove), `reject_consuming_self_use_after_move.gg` (E_UseAfterMove),
+/// `reject_consume_callable_double.gg` (E_DoubleMove) = 202). It EQUALS all three
+/// MATCH floors (C, LLVM, and — since the reject-diagnostic render alignment
+/// documented above — self-host all reproduce the whole corpus).
+const MIN_FIXTURES: usize = 202;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs

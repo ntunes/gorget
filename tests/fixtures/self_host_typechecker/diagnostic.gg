@@ -57,7 +57,8 @@ enum DiagKind:
     DkLocalBorrowBind      # D10(a): `auto r = &b` / `r = &b` — local `&`-bind rejected
     DkMoveWithoutOperator  # D4/D12: implicit copy of a live drop-tainted place at an ownership boundary
     DkBorrowConflict       # D10(b): two call args whose places overlap under conflicting sigils
-    DkUseAfterMove         # liveness: read of / second move of a place already moved (E_UseAfterMove / E_DoubleMove)
+    DkUseAfterMove         # liveness: read of a place already moved (E_UseAfterMove)
+    DkDoubleMove           # liveness: second move of a place already moved (E_DoubleMove)
     DkMoveInLoop           # liveness: move of an enclosing-scope place inside a loop (E_MoveInLoop) — re-moved next iteration
 
     # Reserved for future migrators (kept so the type doesn't churn
@@ -122,6 +123,8 @@ String diag_kind_str(DiagKind kind):
             return "local-borrow-bind"
         case DkUseAfterMove():
             return "use-after-move"
+        case DkDoubleMove():
+            return "double-move"
         case DkMoveInLoop():
             return "move-in-loop"
         case DkMoveWithoutOperator():
@@ -130,6 +133,51 @@ String diag_kind_str(DiagKind kind):
             return "borrow-conflict"
         case DkUnreachable():
             return "unreachable"
+
+# Ratified registry error code (`E_<code>`, spec/prose/diagnostic-codes.md) for a
+# diagnostic kind — the machine-readable axis a conformance harness compares (the
+# static-rejection analogue of a runtime `trap[T_<code>]`). Returns "" for kinds
+# that carry NO code: the lex/parse families (not yet coded); the COARSE kinds
+# (`DkControlFlow` multiplexes E_Break/Continue/ReturnOutsideLoop /
+# E_ThrowInNonThrowingFunction / E_PositionalAfterNamed / …; `DkTypeMismatch`
+# multiplexes E_TypeMismatch / E_ValueOutOfRange / E_StringIndexAssign / … — until
+# each is split 1:1 with the registry, no single code can be named from the kind
+# alone); and the reserved `DkUnreachable`. The code is read from the TYPED kind
+# (layering rule 2 — never name-matched off the message text) and only ever rides
+# an error-severity headline (warning codes are not rendered — diagnostic-codes.md).
+String diag_kind_code(DiagKind kind):
+    match kind:
+        case DkUseAfterMove():
+            return "E_UseAfterMove"
+        case DkDoubleMove():
+            return "E_DoubleMove"
+        case DkMoveInLoop():
+            return "E_MoveInLoop"
+        case DkMoveWithoutOperator():
+            return "E_MoveWithoutOperator"
+        case DkBorrowConflict():
+            return "E_BorrowConflict"
+        case DkLocalBorrowBind():
+            return "E_LocalBorrowBind"
+        case DkPrimitiveTraitImpl():
+            return "E_PrimitiveTraitImpl"
+        case DkUndefinedName():
+            return "E_UndefinedName"
+        case DkDuplicateDefinition():
+            return "E_DuplicateDefinition"
+        case DkNotAType():
+            return "E_NotAType"
+        # Coarse / not-yet-coded / reserved kinds render codeless (bare `error:`):
+        case DkTypeMismatch():
+            return ""
+        case DkControlFlow():
+            return ""
+        case DkParseError():
+            return ""
+        case DkLexError():
+            return ""
+        case DkUnreachable():
+            return ""
 
 # Canonical one-line rendering used by the typechecker comparison test
 # driver. Format: `DIAG <severity> <kind> <span_start>:<span_end> <message>`.
@@ -289,8 +337,22 @@ String render_diagnostic(Diagnostic d, String source, String path):
     String line_no = int_to_str(lc.line)
     String gutter = repeat_str(" ", digit_count(lc.line) + 1)  # blank left margin
 
-    # 1) headline: `error: <message>`
-    String headline = ANSI_RESET + ANSI_BOLD + severity_color(d.sev) + severity_str(d.sev) + ANSI_RESET + ANSI_BOLD + ": " + d.message + ANSI_RESET
+    # 1) headline: `error[E_<code>]: <message>` — the ratified registry code sits
+    #    INSIDE the colored severity run (codespan renders `error[E0382]` as one
+    #    styled token), so the machine-readable `error[E_<code>]` substring stays
+    #    CONTIGUOUS (no ANSI reset splits `error` from `[`) for a conformance
+    #    harness to read. Only error-severity diagnostics whose kind maps to a
+    #    registry code carry the `[E_<code>]` segment; warnings, notes, and the
+    #    coarse / not-yet-coded kinds render the bare `severity:` headline.
+    String code_seg = ""
+    match d.sev:
+        case SevError():
+            String code = diag_kind_code(d.kind)
+            if code != "":
+                code_seg = "[" + code + "]"
+        else:
+            pass
+    String headline = ANSI_RESET + ANSI_BOLD + severity_color(d.sev) + severity_str(d.sev) + code_seg + ANSI_RESET + ANSI_BOLD + ": " + d.message + ANSI_RESET
     # 2) location: `  ┌─ path:line:col`
     String location = gutter + ANSI_RESET + ANSI_BLUE + "\u{250c}\u{2500}" + ANSI_RESET + " " + path + ":" + line_no + ":" + int_to_str(lc.col)
     # 3) empty gutter rule: `  │`

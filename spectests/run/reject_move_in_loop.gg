@@ -1,0 +1,29 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness]
+# doc: |
+#   Static move-in-loop rejection (verdict = elaborate ∘ eval). `n` is declared in
+#   an ENCLOSING scope, then moved by `consume(!n)` inside a 2-element `for` loop —
+#   so the second iteration re-moves an already-moved place. The flow-sensitive
+#   liveness gate rejects the move BEFORE eval with E_MoveInLoop — stdout stays
+#   EXACTLY empty (the program never ran, which IS the verdict), exit 1. This is
+#   the E_MoveInLoop sibling of reject_use_after_move.gg: it proves the MoveInLoop
+#   code axis on all four lanes; flipping the expected `reject:` code must make
+#   every lane MISMATCH (Core #6/#8). The 2-element iterable makes the re-move a
+#   GENUINE multi-iteration reject (never a run-once loop).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MoveInLoop
+#!end
+
+void consume(String !s):
+    pass
+
+void main():
+    String n = "outer"
+    Vector[int] items = [1, 2]
+    for i in items:
+        consume(!n)

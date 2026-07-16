@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [move, liveness]
+# doc: |
+#   Static double-move of a ConsumeCallable (verdict = elaborate ∘ eval). A
+#   `ConsumeCallable[..]` value is single-owner: calling it CONSUMES it, so the
+#   second call `f(10)` is a double move of an already-consumed slot. The
+#   flow-sensitive liveness gate rejects the second call BEFORE eval with
+#   E_DoubleMove — stdout stays EXACTLY empty (the program never ran, which IS the
+#   verdict), exit 1. All four lanes REJECT: ggdef's consume-call kill fires on the
+#   first call, so the second reads a moved-out slot. Sibling of reject_double_move.gg
+#   on the ConsumeCallable axis; flipping the expected `reject:` code must make every
+#   lane MISMATCH (Core #6/#8).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_DoubleMove
+#!end
+
+void main():
+    ConsumeCallable[int(int)] f = !(n): n * 2
+    int r1 = f(5)
+    int r2 = f(10)
+    print(f"{r1}{r2}")
