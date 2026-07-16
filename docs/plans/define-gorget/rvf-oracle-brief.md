@@ -1,7 +1,16 @@
 # Executor brief: RV-F — four ggdef oracle divergences (liveness / Copy / Callable)
 
-> **Status:** v0 — awaiting ≥3 sequential fresh brief-reviews (fold after each; stop only on a
-> clean pass). **Scout basis (read both FIRST):**
+> **Status:** v1 — pass-1 folded (R1 BLOCKING: the patch's #15 bind/assign reject must gate on
+> `local_mode != Borrow` — a callable PARAM bare-bind is production-ACCEPTED and the patch
+> as-proven over-rejects it (a divergence the patch CREATED; the green suite missed it — the
+> corpus doesn't exercise it); ctor/enum/struct-literal sites correctly do NOT exclude params
+> (production rejects `Holder(f)` for params too). R2 BLOCKING: `v.push(f)` dropped from the
+> POS set — it check-accepts then ICEs production's shared lowering (filed HIGH, ≥2 bugs);
+> use `!f`-bind + `return f` (both verified build+run) and/or the closure-LITERAL push form.
+> R3: acceptance language carved — #15 closes for EXPLICITLY-TYPED callable sources;
+> auto-inferred closure literals are out-of-subset in ggdef's typing (noted, not chased).
+> Minor: Channel/Shared/Weak/Mutex Copy-treatment is a latent pre-existing subset divergence —
+> out-of-scope line added.) Awaiting the next fresh pass. **Scout basis (read both FIRST):**
 > `docs/plans/define-gorget/scouts/scout-rvf-oracle.md` (premise table, the calibration
 > findings, position matrix) + the PROVEN patch
 > `docs/plans/define-gorget/scouts/patches/rvf_proto.patch` (132 lines,
@@ -29,11 +38,14 @@ differs at return; do not blur them).
 1. **M1** — apply the proven patch (`git apply --check`; re-read hunks on drift). The #15
    full-class shape is the RATIFIED scope (orchestrator endorses the reference-grade
    completion over the literal one-position filing). Checkpoint /tmp/recover_rvf_exec_1.patch.
-2. **M2 — fixtures pinning BOTH directions per position** (from the scout's plan): #11
+2. **M2 — fixtures pinning BOTH directions per position** (pass-1-corrected): the executor
+   FIRST adds the R1 param-gate to the patch (bind/assign sites gate on the RHS source's
+   `local_mode != BindMode::Borrow`, ggdef tracks it at mod.rs:283/362; ctor sites unchanged)
+   + a NEG-accepts fixture (callable-PARAM bare-bind → ACCEPTED, matching production). Then: #11
    `f(&x, x.p)` all-scalar POS + non-Copy field NEG(E_BorrowConflict); #13
    reassign-then-move-in-loop POS; #14 `for x in v: sink(!x)` NEG(E_MoveInLoop) + fresh-local
-   move-in-body POS; #15 NEGs at bind/ctor/enum-variant + POS at `!f`-bind / `return f` /
-   `v.push(f)`. Populate `expect:` via `ggdef gen`; every new fixture must ALSO pass the
+   move-in-body POS; #15 NEGs at bind/ctor/enum-variant + POS at `!f`-bind / `return f` (NOT `v.push(f)` —
+   filed ICE; the closure-LITERAL push form is acceptable if a push POS is wanted). Populate `expect:` via `ggdef gen`; every new fixture must ALSO pass the
    production `spec_conformance` lanes (they are four-lane spectests — invariant #9).
 3. **M3 — gates (FOREGROUND):** full `cargo test -p ggdef` (all 7 test files) · main-repo
    `GG_BUILD_TIMEOUT_SECS=600 cargo test --test spec_conformance -- --test-threads=1
@@ -41,6 +53,11 @@ differs at return; do not blur them).
    `cargo test --lib` (Rust-side untouched, cheap insurance). NOT bootstrap-gated.
 
 ## Out of scope / zone carve
+
+- Auto-inferred closure-literal sources for #15 (ggdef typing gap — noted in acceptance; the
+  axis-extension track's neighborhood). Channel/Shared/Weak/Mutex Copy-treatment (latent
+  pre-existing subset divergence; not corpus-exercised).
+- The filed `v.push(f)` production ICE (its own track).
 
 The `Stmt::While` arm (`liveness.rs:~539`) is RV-H's seam — the patch touches nothing ≥ line
 ~490 in liveness.rs; keep it that way. The `.cb()` callable-field subset gap (filed — the
@@ -57,6 +74,6 @@ Report any NEW pre-existing bug (file-don't-fix).
 
 ## Acceptance
 
-All four divergences closed with both-direction four-lane fixtures; full ggdef suite green;
+Divergences #11/#13/#14 closed universally; #15 closed for explicitly-typed callable sources (auto-closure carve noted in fixture comments) with the param-gate NEG-accepts pinned; both-direction four-lane fixtures; full ggdef suite green;
 spec_conformance green all lanes; converter AGREE unchanged; liveness.rs While-seam untouched;
 2 files in src-space + fixtures.
