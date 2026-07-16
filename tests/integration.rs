@@ -21330,16 +21330,19 @@ fn rust_named_recv_user_mutator_caller_untouched() {
 /// Fixed by the new `Expr::Index` arm in `try_resolve_field_place` (forces the
 /// element `Ptr(T)` for value elements too) + the hoisted round-33 CoW untrack.
 ///
-/// Why this is NOT a `tests/fixtures/*.gg` fixture (mirrors
-/// `rust_named_recv_user_mutator_caller_untouched` above): `runtime_parity_corpus`
-/// / `lowerer_comparison` / `c_emit_comparison` auto-scan every
-/// `tests/fixtures/*.gg`, and the SELF-HOST lowerer STILL miscompiles this shape
-/// (verified R39-T1: the self-host `run` of `v[0].x = 88` also prints the stale
-/// `10` — it never got the round-33/34 CoW value-element write-through). A corpus
-/// fixture would force self-host agreement and count as a permanent WRONG in
-/// `self_host_runtime_diff`. The self-host mirror is filed in TODO.md; this
-/// Rust-only inline test carries the correct-expected-output regression until
-/// then, asserting BOTH backends since the pre-fix miscompile reproduced on both.
+/// Corpus split (CoW Track 1B): the SINGLE-LEVEL shapes — plain + compound
+/// value-element field stores on a LOCAL and a STATIC Vector (`v[0].x = 88`,
+/// `v[1].y += 5`, `PTS[0].x = 99`, `PTS[1].x += 100`) — are now fixed in the
+/// self-host too (the write-only `lower_field_place_base` producer forces the
+/// element `Ptr(T)` for the field-store base) and promoted to the corpus fixture
+/// `cow_value_index_field_writethrough.gg`. This inline test is KEPT because it
+/// uniquely guards the RESIDUAL shapes that route through a chained EFieldAccess
+/// place base — NOT the EIndex arm — and are therefore still self-host-broken
+/// (nested-place / Track 2F's class): the NESTED store `ns[0].inner.val = 99`
+/// and the value-field-METHOD-receiver `hs[0].c.bump()`. Promoting the full body
+/// would count a permanent WRONG in `self_host_runtime_diff` for those two, so
+/// they stay Rust-only here (asserting BOTH backends — the pre-fix miscompile
+/// reproduced on both) until Track 2F lands the nested-place mirror.
 #[test]
 fn rust_value_index_element_field_writethrough() {
     let gg_exe: PathBuf = gg_binary().to_path_buf();
@@ -21436,6 +21439,27 @@ fn rust_value_index_element_field_writethrough() {
         );
     }
     let _ = std::fs::remove_dir_all(&tmp_root);
+}
+
+/// CoW Track 1B corpus fixture (C + LLVM lanes; the self-host lane auto-enrolls
+/// via the `runtime_snapshots/cow_value_index_field_writethrough.out` snapshot
+/// net). The SINGLE-LEVEL value-element field stores promoted from the inline
+/// twin above — plain + compound on both a LOCAL and a module-level STATIC
+/// Vector[Point] — must WRITE THROUGH per language-design §3.1. Expected values:
+/// the LOCAL lines (88, 45) are ggdef-adjudicated (in-subset); the STATIC lines
+/// (99, 103) are prose-derived (StaticDecl is out of ggdef's phase-0 subset).
+#[test]
+fn cow_value_index_field_writethrough() {
+    run_gg(
+        "cow_value_index_field_writethrough.gg",
+        "\
+99
+3
+88
+30
+103
+45",
+    );
 }
 
 /// (A) FLOORED DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1).

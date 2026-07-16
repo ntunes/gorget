@@ -1,0 +1,42 @@
+from std.collections import Vector
+
+# CoW write-through: a value-struct element of a Vector, addressed as
+# `v[i].field`, is an unbroken owned place → the field store WRITES THROUGH
+# to the collection's heap buffer (language-design §3.1). Rust gg has done
+# this since R39-T1; this fixture pins the self-host after CoW Track 1B fixed
+# `lower_place_base`'s EIndex arm (it fell through to a value COPY, silently
+# losing the write). Covers the M1-fixed single-level shapes only: plain +
+# compound field stores on both a LOCAL and a module-level STATIC Vector.
+#
+# Expected-output adjudication (campaign principle 1):
+#  - LOCAL lines (`v[0].x = 88` → 88, `v[1].y += 5` → 45) are IN ggdef's
+#    subset (navigate_write handles Vector-Index + Struct-Field) and are
+#    ggdef-adjudicated to the write-through values 88 / 45.
+#  - STATIC lines (`PTS[0].x = 99`, `PTS[1].x += 100`) are OUT of ggdef's
+#    subset (Item::StaticDecl is not elaborated) — derived from §3.1 prose:
+#    a static addressed by its own name is an owned place, so the store
+#    writes through (99, then 3+100=103); the untouched sibling stays.
+#
+# The NESTED (`ns[0].inner.val = x`) and value-field-METHOD-receiver
+# (`hs[0].c.bump()`) shapes route through a chained EFieldAccess place base,
+# NOT the EIndex arm, so they stay in the inline Rust test
+# `rust_value_index_element_field_writethrough` (nested-place / Track 2F).
+
+struct Point:
+    int x
+    int y
+
+static Vector[Point] PTS = [Point(1, 2), Point(3, 4)]
+
+void main():
+    PTS[0].x = 99          # static value-element field store → write-through
+    print(PTS[0].x)        # 99
+    print(PTS[1].x)        # 3   (sibling untouched)
+    Vector[Point] v = [Point(10, 20), Point(30, 40)]
+    v[0].x = 88            # local value-element field store → write-through
+    print(v[0].x)          # 88
+    print(v[1].x)          # 30  (sibling untouched)
+    PTS[1].x += 100        # compound store on a static value element
+    print(PTS[1].x)        # 103 (3 + 100)
+    v[1].y += 5            # compound store on a local value element
+    print(v[1].y)          # 45  (40 + 5)
