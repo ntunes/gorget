@@ -1,6 +1,6 @@
 # Executor brief: RV-F — four ggdef oracle divergences (liveness / Copy / Callable)
 
-> **Status:** v4 — pass-4 folded (1: the two patches DO NOT COMPOSE — `rvf_paramgate_r3.patch`
+> **Status:** v4 — ✅ PASS 5 SIGNED OFF CLEAN (2026-07-16; 13-cell matrix all-agree on both compilers; gauntlet 1:2res 2:1res 3:1res 4:1res 5✓) — **EXECUTING**. NEG-fixture convention (pass-5 FYI): `ggdef gen` auto-populates POS expects only; NEG fixtures are hand-authored per the reject_move_in_loop.gg convention (`reject: E_X` + `exit: 1` + `stdout: ""`) — the brief enumerates every NEG's exact code. Pass-4 folded (1: the two patches DO NOT COMPOSE — `rvf_paramgate_r3.patch`
 > is a SUPERSET re-derivation of `rvf_proto.patch` (same base blobs; overlapping hunks) — the
 > executor applies **r3 ALONE**; pass-4 re-proved the FULL probe matrix on r3-alone, suite
 > 140/0 green. Notes: fixture shapes use vector LITERALS (`Vector()` ctor is out of ggdef's
