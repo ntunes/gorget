@@ -1,4 +1,27 @@
 # Documentation-Curation Scout — Deliverable (2026-07-16)
+> **REVIEW PASS 1 FOLDS (2026-07-16 — AUTHORITATIVE overrides of the classification below; a
+> confirming pass follows):**
+> 1. `define-gorget/scouts/scout-rvc-compound-assign.md` → **LIVE** (was UNCLASSIFIED — created
+>    the same day, after this scout's sweep). It is the IN-FLIGHT RV-C track's scout deliverable
+>    AND the sole preserved repro for the filed ggdef compound-index double-eval bug. Keep until
+>    RV-C lands. The body's claim that RV-* tracks "have no brief/scout files yet" is FALSE for
+>    RV-C (and now also 1C: `cow-track-1c-scout.md`/`-brief.md` + `cow1c_proto.patch` are LIVE).
+> 2. `define-gorget/scouts/scout-wave-census.md` (the REPORT) → **LIVE** until Batch C closes —
+>    cited BY PATH from TODO's ratified wave plan, HANDOVER, and the out-of-repo MEMORY.md; the
+>    C3 sigil counts trace to it. The spent MANDATE file `wave-census-scout-mandate.md` stays
+>    DELETE (different file).
+> 3. `define-gorget/decision-batch-4-proposal.md` → **LIVE** until the D14 book write-through —
+>    the body's "rulings live in decisions.md" rationale is WRONG for §D14: the owner-flagged
+>    MUST-REACH-THE-BOOK copy/move/view derivation + what-chains table exists ONLY there
+>    (decisions.md:711-717 points AT it). Alternative: absorb §D14 into the book via slice 2,
+>    then delete.
+> 4. Slice-1 link gate SPELLED OUT: before any `git rm`, grep every candidate path against
+>    TODO.md + DONE.md + docs/plans/define-gorget/HANDOVER.md + decisions.md + docs/book +
+>    docs/devbook + docs/language-reference.md + docs/language-design.md + spec/prose; AND
+>    check the out-of-repo memory dir (`~/.claude/projects/.../memory/`) which an in-repo
+>    git-grep cannot reach. Any hit = STOP on that file.
+
+
 
 Scope: every file under `docs/plans/` (176 files) + a currency audit of the official docs
 (book / devbook / language-reference / language-design / spec/prose) against landed reality.
