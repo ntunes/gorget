@@ -28,7 +28,14 @@ FOREGROUND. On an Edit desync, re-Read + retry — never a shell heredoc with an
 `git apply docs/plans/define-gorget/scouts/patches/is-scrutinee-single-eval-proto.patch` (6 files, +146/-8;
 applies CLEAN). It:
 - `src/ir/lowering/context.rs`: adds a per-function `is_scrut_memo: FxHashMap<usize,(LocalId,TypeId)>` on
-  `FunctionState` (auto-cleared via `Default` at each function).
+  `FunctionState` (auto-cleared via `Default` at each function). **⚠ CORRECT THE FIELD DOC COMMENT
+  (brief-review-1): the patch's `is_scrut_memo` field doc ends with a FALSE sentence — "each entry is REMOVED
+  on consumption so a stale entry can never be reused" — asserting the EXACT OPPOSITE of the fix's load-bearing
+  invariant (the impl READS, does NOT remove; read-not-remove is deliberate — an `and`-chain binds its left
+  operand in TWO dominated blocks and both must reuse the single eval). After applying, EDIT this comment to
+  state READ-not-remove + why + "cleared en masse per-function via `Default`." Leaving it is a
+  false-historical-record landmine — a future contributor who "corrects" the code to `.remove()` silently
+  re-breaks and-chains and NO gate catches it (CLAUDE.md layering / self-host false-historical-record rules).**
 - `src/ir/lowering/exprs/mod.rs:791` (`Expr::Is` value lowering): records `(scrut_local, scrut_type)` under
   `expr.span.start` for NON-negated nodes.
 - `src/ir/lowering/stmts/mod.rs` (`emit_is_bindings`): READS (does NOT remove) the memo and reuses the local;
@@ -51,10 +58,14 @@ VERIFY (measured, don't assume) — BOTH backends (C default + `GG_BACKEND=llvm`
   read-not-remove). Confirm the patch READS.
 - **Per-function clear** (`FunctionState`/`Default`): the memo must NOT leak a scrutinee local across function
   boundaries. Confirm it's on `FunctionState` and reset per function.
-- **Loop re-evaluation:** in `while … is Some(x)`, the SAME `Expr::Is` node (same span) is re-evaluated each
-  iteration; the value-lowering must OVERWRITE the memo each iteration so `emit_is_bindings` reuses THAT
-  iteration's scrutinee (NOT a stale first-iteration local). Scout measured each pop firing once — confirm the
-  mechanism (value-lowering records fresh per iteration), not accidental.
+- **Loop re-evaluation (correct by CFG CONSTRUCTION — NOT by per-iteration memo rewriting):** lowering runs
+  ONCE per `while` loop, not per iteration. In `lower_while` the `Expr::Is` value-lowering runs in the HEADER
+  block (creating ONE `scrut_local` + inserting the memo once); `emit_is_bindings` reads it once in the BODY
+  block. Per-iteration correctness is STRUCTURAL: the header block re-executes each iteration via the back-edge
+  and re-assigns that same slot, and the header DOMINATES the body which reads it — so the body always observes
+  the current iteration's value. Confirm this CFG shape (one header-emitted `scrut_local` dominating the body);
+  the empirical gate is the fixture's per-iteration single-eval (`c.calls == 4`, both backends). There is NO
+  per-iteration memo rewriting to look for — do not hunt for one.
 - **Negated `is` / `is not`:** the patch records only NON-negated nodes — confirm a negated `is` (no binding)
   is unaffected and still correct.
 
@@ -67,7 +78,7 @@ value-lowering binds via `lower_pattern_match` at the SINGLE value-lowering site
 reviewer thinks one is needed, that's a signal to re-check (the self-host already lowers correctly).
 
 ## 5. GATES + REPORT
-**Executor FOREGROUND gates:** `cargo test --lib` (1107/0) · `cargo test --test lints` · a TARGETED
+**Executor FOREGROUND gates:** `cargo test --lib` (run + report the count; ~1107 baseline, regenerate — no un-regenerated numbers) · `cargo test --test lints` · a TARGETED
 integration subset on BOTH backends covering the `is`/pattern/Option/Dict/match surface (`is_bindings`,
 `is_pattern_binding`, `pattern_is`, `match_option_result`, `paren_as_and_if_oneliner`, `option_box_enum`,
 `test_match_advanced`, the new `is_scrutinee_single_eval`, plus while/if/result/iter fixtures) — run the
