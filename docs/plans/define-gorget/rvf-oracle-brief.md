@@ -1,6 +1,13 @@
 # Executor brief: RV-F — four ggdef oracle divergences (liveness / Copy / Callable)
 
-> **Status:** v3 — pass-3 folded (1 BLOCKING: the match-binding REJECT cell was UNSATISFIABLE —
+> **Status:** v4 — pass-4 folded (1: the two patches DO NOT COMPOSE — `rvf_paramgate_r3.patch`
+> is a SUPERSET re-derivation of `rvf_proto.patch` (same base blobs; overlapping hunks) — the
+> executor applies **r3 ALONE**; pass-4 re-proved the FULL probe matrix on r3-alone, suite
+> 140/0 green. Notes: fixture shapes use vector LITERALS (`Vector()` ctor is out of ggdef's
+> subset — follow closure_compose.gg's idiom); the #11 Copy-field POS fixture should pick a
+> shape the SELFHOST lane already accepts (existing copy_struct_*.gg shapes — the self-host
+> Copy-axis twin is RV-D's zone; never weaken ggdef to dodge a lane); the mod.rs:2036-2051
+> cite is the POST-patch range (pre-patch: 1925-1951).) Pass-3 folded (1 BLOCKING: the match-binding REJECT cell was UNSATISFIABLE —
 > ggdef never TYPES match-arm bindings (mod.rs:2036-2051), so the type-gated reject can never
 > fire there; proven orthogonal to the param gate (s7 survives param_names emptied). The cell
 > is DROPPED from M2 and the substrate gap FILED (MED, pairs with the axis-extension track).
@@ -49,13 +56,14 @@ differs at return; do not blur them).
 
 ## Milestones
 
-1. **M1** — apply the proven patch (`git apply --check`; re-read hunks on drift). The #15
-   full-class shape is the RATIFIED scope (orchestrator endorses the reference-grade
-   completion over the literal one-position filing). Checkpoint /tmp/recover_rvf_exec_1.patch.
-2. **M2 — fixtures pinning BOTH directions per position** (pass-2-corrected): the executor
-   FIRST adds the R1 gate as a **PARAM-SPECIFIC** discriminator — a `param_names` set (or
-   equivalent typed param bit) populated in the param-binding loop at `mod.rs:341-362`; do
-   NOT use `local_mode` (Borrow also marks for-vars/match-bindings/self — production skips
+1. **M1** — apply **`docs/plans/define-gorget/scouts/patches/rvf_paramgate_r3.patch` ALONE**
+   (`git apply --check` first). It SUBSUMES rvf_proto.patch's #11/#13/#14/#15 changes PLUS
+   the R1 param-gate — do NOT also apply rvf_proto (same base, they don't compose; pass-4
+   proved the failure and re-proved the full matrix on r3-alone). The #15 full-class shape is
+   the RATIFIED scope. Checkpoint /tmp/recover_rvf_exec_1.patch.
+2. **M2 — fixtures pinning BOTH directions per position** (pass-2-corrected): r3 ALREADY CONTAINS the R1 param-specific gate (the `param_names`
+   set populated in the param-binding loop) — VERIFY it is present after M1; your M2
+   deliverable is the FIXTURES. Do NOT re-derive the gate and do NOT use `local_mode` (Borrow also marks for-vars/match-bindings/self — production skips
    ONLY params, `check_stmt.rs:1464 !def.is_param`). Bind/assign sites skip param sources;
    ctor sites unchanged. Fixtures pinning TWO cells: callable-PARAM bare-bind → ACCEPTED; callable **for-var**
    bare-bind → REJECTED (E_MoveWithoutOperator). The match-binding cell is OUT (filed —
