@@ -2,13 +2,14 @@
 
 > **Status:** v4 — pass-4 folded (M2b's Rust prediction was FALSIFIED by measurement: HashMap
 > Rust-side prints 0 — the READ/STORE is broken by the filed element-typing bug, NOT a
-> gate-dropped write printing 1; the self-host read shares the mechanism so BOTH-0 symmetric
-> is a plausible+acceptable outcome; the STOP trigger is re-scoped to SAFETY only; a HashMap
+> gate-dropped write printing 1; ASYMMETRY is the source-supported prediction — the self-host's index_value_type_name DOES
+> handle HashMap__ (it does not share the Rust bug); both-0 stays acceptable IF measured; the STOP trigger is re-scoped to SAFETY only; a HashMap
 > probe joins the ASan gate). Pass-3 folded (1 substantive: the self-host producer CANNOT be Dict-scoped —
 > no CkHashMap exists; `resource_meta_for` maps `HashMap__`→CkDict (lir_lower.gg:318) and the
 > self-host resolves HashMap value types (lower_types.gg:2648), so the `case CkDict()` arm
-> writes through HashMap-of-struct while scoped Rust drops the write — a LATENT divergence,
-> zero corpus sites. Disposition: DOCUMENT + PROBE + hand to the HashMap track, which closes
+> writes through HashMap-of-struct while scoped Rust prints 0 — the HashMap read/store is
+> itself broken by the element-typing bug (methods.rs:3859), independent of the write-through
+> gate (pass-4 measurement); a latent divergence, zero corpus sites. Disposition: DOCUMENT + PROBE + hand to the HashMap track, which closes
 > it by fixing Rust — see M2b below. Do NOT add a CkHashMap variant or a name-check here.)
 > Pass-2 SIGNED OFF (fold verified coherent+necessary: HashMap falls back to the identical old path, provably not-worse; the two-EXCLUDE mandate confirmed complete across all 7 ggdef test files; N1 comment-wording nit folded). Pass-1 folded (1 blocking: the patch's `Map` gate arm ADMITTED HashMap while
 > HashMap-of-struct element typing is broken upstream (pre-existing, now filed HIGH) → the gate
@@ -72,9 +73,9 @@ separately — do not fix it here).
    compilers post-fix and record the outputs. **Measured reality (pass-4): Rust prints 0 —
    the HashMap-of-struct READ/STORE is itself broken by the filed element-typing bug
    (methods.rs:3859), independent of the scoped gate** (a store-then-read with NO field
-   write also prints 0 while the Dict control prints the field). The self-host read shares
-   the `index_value_type_name` mechanism, so **"both print 0" is a plausible and ACCEPTABLE
-   outcome** — as is a genuine asymmetry (self-host writes through via CkDict). Record
+   write also prints 0 while the Dict control prints the field). The self-host's `index_value_type_name` DOES resolve HashMap values (lower_types.gg:2648),
+   so **ASYMMETRY is the likely outcome** (self-host ≈99 write-through via CkDict, Rust 0);
+   "both print 0" is ACCEPTABLE if that is what measures — record reality either way. Record
    WHATEVER prints, in the FIXTURE COMMENT (never a fixture assertion — no behavior is
    pinned), attributed accurately (broken read/store, NOT "gate-dropped write"), citing the
    HashMap TODO entry that owns convergence by fixing Rust. **STOP only if the probe CRASHES
