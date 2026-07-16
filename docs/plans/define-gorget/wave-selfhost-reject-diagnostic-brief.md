@@ -52,11 +52,15 @@ The 4 remaining reject fixtures are currently DRIVER-ONLY in `self_host_driver_r
 | `reject_use_after_move_branch.gg` | `use_after_move_branch_reject` (conditional-move-then-use) | E_UseAfterMove | elaborate union (the elab∘eval win) |
 | `reject_consuming_self_use_after_move.gg` | `consuming_self_use_after_move_reject` | E_UseAfterMove | may-move |
 | `reject_consume_callable_double.gg` | `consume_callable_double_reject` | E_DoubleMove | consume-call kill |
-For EACH: copy the `.gg` source into `spectests/run/`; `cargo run -p ggdef -- gen spectests/run/<f>.gg` to fill
-the `expect:` block (confirm it records `exit: 1` / `stdout: ""` / `reject: E_<code>`, NOT the message); run all
-four lanes and confirm **four-lane MATCH** (ggdef + C + LLVM + self-host all reject with the right code); then
-REMOVE that entry from the `self_host_driver_rejects_liveness` `reject_fixtures` list (it's now covered stronger
-cross-lane) — KEEP the `accepts_liveness` list untouched. **FLOORS: regenerate, do NOT hardcode** — each
+For EACH: copy the `.gg` source into `spectests/run/` **AND wrap it in the `#!spectest … #!end` frontmatter
+scaffold** (mode/adjudicator/features/doc + an EMPTY `expect:`) using the patch's `reject_double_move.gg` as the
+TEMPLATE — `ggdef gen` FILLS `expect:` but does NOT scaffold the fence (a bare fixture errors "no #!spectest …
+#!end frontmatter fence"). THEN `cargo run -p ggdef -- gen spectests/run/<f>.gg` to fill the `expect:` block
+(confirm it records `exit: 1` / `stdout: ""` / `reject: E_<code>`, NOT the message); run all four lanes and
+confirm **four-lane MATCH** (ggdef + C + LLVM + self-host all reject with the right code — the reviewer measured
+all 4 do); then REMOVE that entry from the `self_host_driver_rejects_liveness` `reject_fixtures` list (it's now
+covered stronger cross-lane) — **update the array-size annotation `[(&str, &str); 9]` → `; 5]`** when you remove
+the 4 migrated entries (a hard compile error if missed) — and KEEP the `accepts_liveness` list untouched. **FLOORS: regenerate, do NOT hardcode** — each
 four-lane-MATCH fixture bumps `MIN_FIXTURES` + all four lane floors (both files) by 1; run each lane with the
 floor-off env (`GG_PARITY_FLOOR_OFF=1` / `GG_GGDEF_CONFORMANCE_FLOOR_OFF=1`), read the printed `total=`, set the
 floors to it in the SAME commit.
