@@ -1,6 +1,11 @@
 # EXECUTOR BRIEF — self-host FLIP TRACKS: callable-init class (+4) + Copy-axis struct (+1) → SELFHOST floor 214
 
-**Status:** DRAFT — in the ≥3-fresh-pass review gauntlet. Do not execute until a clean pass.
+**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet. Pass 1 (mechanics verified sound
+end-to-end incl. patch-applies-clean, all 5 wiring sites == production's set, symlink topology
+confirmed disjoint from the concurrent lowerer executor; 1 actionable reservation: the
+module-doc rewrite range would have deleted the valid History paragraph — narrowed to :49-58
+with an explicit preserve; +1 informational: MEMORY's parity line lagged the landing — fixed
+by the parent) FOLDED into this v2. Do not execute until a clean pass.
 **Scout evidence (THE spec's measurements):** `docs/plans/flip-tracks-scout.md` — GO, fully
 prototyped + measured. Prototype: `/tmp/flip_proto.patch` (293 lines, backup
 `/tmp/recover_flip_proto.patch`; touches ONLY `tests/fixtures/self_host_typechecker/scope.gg`
@@ -39,8 +44,11 @@ and are exactly the 5 flipping).
    result, not the patch (if anything in it contradicts this brief, STOP-AND-REPORT).
 2. Same commit riders:
    - `tests/spec_conformance.rs`: `SELFHOST_MATCH_FLOOR` 209→214; REWRITE the by-design-miss
-     comments (module doc ~:49-67 + inline ~:117-163) — the five-miss list is GONE; do not
-     leave stale prose.
+     comments — ONLY the stale staging prose at module doc ~:49-58 (the "self-host floor is
+     FIVE below" paragraph) + the inline comments ~:117-163. **PRESERVE the "(History: …)"
+     paragraph at ~:59-67** (the smith_move_param_concat + render-gap record — timeless, and
+     MORE accurate post-flip). The five-miss list is GONE; do not leave stale prose, and do
+     not delete valid history.
    - The documented asymmetry note (scout's "KNOWN MINOR ASYMMETRY"): the self-host
      struct-literal arm lacks production's ref-typed-field skip (`check_expr.rs:1183`
      `!target_is_ref`) — over-reject-only, unreachable in today's corpus. Put the one-line
