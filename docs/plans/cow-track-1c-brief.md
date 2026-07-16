@@ -42,7 +42,9 @@ separately — do not fix it here).
 
 ## Milestones
 
-1. **M1** — adopt the proven patch (`git apply --check` first; re-read hunks on drift).
+1. **M1** — adopt the proven patch (`git apply --check` first; re-read hunks on drift), THEN
+   **remove the `Map` arm from the gate** (the patch predates the pass-1 scoping — the landed
+   gate is `Array|OrderedMap` only, with the one-line comment citing the filed HashMap entry).
    Checkpoint `/tmp/recover_cow1c_exec_1.patch`.
 2. **M2 — fixture**: `tests/fixtures/cow_dict_index_field_writethrough.gg` (+ runtime snapshot)
    covering plain / compound / String-key shapes (scout's probes: 99 / 41 / 99). Expected
@@ -78,8 +80,8 @@ Run `pwd` + `git rev-parse --show-toplevel` FIRST; confirm inside your worktree.
 UNDER main). NEVER `git stash`; checkpoint to /tmp per milestone. Stage by EXPLICIT file name.
 Edit-tool desync → re-Read + retry, never a heredoc with an absolute path. Transient cargo
 errors under contention: retry. Commit when green
-(`fix(cow): 1C — Dict value-element field write-through (Index place arm Array|Map + type-only
-pre-check kills double-eval)`), trailers: Co-Authored-By Claude Opus + the Claude-Session line.
+(`fix(cow): 1C — Dict value-element field write-through (Index place arm Array|OrderedMap +
+type-only pre-check kills double-eval)`), trailers: Co-Authored-By Claude Opus + the Claude-Session line.
 Report any NEW pre-existing bug (file-don't-fix).
 
 ## Acceptance
