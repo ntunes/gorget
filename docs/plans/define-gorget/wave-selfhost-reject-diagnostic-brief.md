@@ -57,13 +57,22 @@ scaffold** (mode/adjudicator/features/doc + an EMPTY `expect:`) using the patch'
 TEMPLATE — `ggdef gen` FILLS `expect:` but does NOT scaffold the fence (a bare fixture errors "no #!spectest …
 #!end frontmatter fence"). THEN `cargo run -p ggdef -- gen spectests/run/<f>.gg` to fill the `expect:` block
 (confirm it records `exit: 1` / `stdout: ""` / `reject: E_<code>`, NOT the message); run all four lanes and
-confirm **four-lane MATCH** (ggdef + C + LLVM + self-host all reject with the right code — the reviewer measured
-all 4 do); then REMOVE that entry from the `self_host_driver_rejects_liveness` `reject_fixtures` list (it's now
-covered stronger cross-lane) — **update the array-size annotation `[(&str, &str); 9]` → `; 5]`** when you remove
-the 4 migrated entries (a hard compile error if missed) — and KEEP the `accepts_liveness` list untouched. **FLOORS: regenerate, do NOT hardcode** — each
+confirm **four-lane MATCH** (ggdef + C + LLVM + self-host all reject with the right code — mechanism-confirmed
+via ggdef's `liveness.rs` may-move pass, but VERIFY per-fixture; if any fixture does NOT reject four-lane on
+ggdef, **FILE it** ("Don't redesign around compiler gaps") rather than force-remove it); then REMOVE the
+four-lane-verified entries from the `self_host_driver_rejects_liveness` `reject_fixtures` list (now covered
+stronger cross-lane) — **update the array-size annotation `[(&str, &str); 9]` → the ACTUAL remaining count**
+(`; 5]` if all 4 migrate; a hard compile error if the number is wrong) — and KEEP the `accepts_liveness` list
+untouched. **FLOORS: regenerate, do NOT hardcode** — each
 four-lane-MATCH fixture bumps `MIN_FIXTURES` + all four lane floors (both files) by 1; run each lane with the
 floor-off env (`GG_PARITY_FLOOR_OFF=1` / `GG_GGDEF_CONFORMANCE_FLOOR_OFF=1`), read the printed `total=`, set the
-floors to it in the SAME commit.
+floors to it in the SAME commit. **AND update the floor-block DOC-COMMENT NARRATIVES in BOTH files to the
+regenerated total + the full migrated-reject set** — `tests/spec_conformance.rs:~105-112` (the `MIN_FIXTURES`
+"= N (…enumerated reject fixtures…)" narrative + the C/LLVM/SELFHOST floor comment — the patch already rewrote
+this for the 198 step; EXTEND it to the final total and name the newly-migrated rejects) AND
+`spec/ggdef/tests/spec_conformance_ggdef.rs:~33-42` (the sample-run "→ total=N · MATCH=N" + the fixture
+enumeration above `GGDEF_MATCH_FLOOR`). Leaving these prose narratives stale MANUFACTURES exactly the
+false-historical-record the §5 sweep exists to remove — treat them as part of §5.
 
 ## 5. THE STALE-COMMENT SWEEP (false historical record — fix it, per CLAUDE.md)
 `tests/integration.rs:~18602-18603, 18731, 18860, 18873` still assert in PROSE "the self-host renderer has no
