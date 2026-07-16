@@ -39,6 +39,11 @@ const EXCLUDE: &[&str] = &[
     "cow_element_borrow_alias_mutate.gg",
     "cow_p3_alias_chain_mutate.gg",
     "cow_p3_index_mutate.gg",
+    // Module statics are outside the phase-0 subset (`Item::StaticDecl` not
+    // elaborated — "item kind static"): the CoW-1B fixture mixes static and
+    // local shapes; its LOCAL half was ggdef-adjudicated at authoring (88/30/45,
+    // see the fixture comment), the static half is prose-derived.
+    "cow_value_index_field_writethrough.gg",
 ];
 
 fn ws_root() -> PathBuf {

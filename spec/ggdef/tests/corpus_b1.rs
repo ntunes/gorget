@@ -29,7 +29,13 @@ use std::path::{Path, PathBuf};
 /// The standing exclusions (RFC §6): the three generic-equip cow fixtures are
 /// already excluded by the `equip`-block filter; `deadwrite_ok_atomic_add` uses
 /// std.sync atomics (phase 3) and is excluded by name.
-const EXCLUDE: &[&str] = &["deadwrite_ok_atomic_add.gg"];
+/// `cow_value_index_field_writethrough` mixes module statics (phase-1 —
+/// `Item::StaticDecl` not elaborated) with locals; its LOCAL half was
+/// ggdef-adjudicated at authoring (88/30/45, see the fixture comment).
+const EXCLUDE: &[&str] = &[
+    "deadwrite_ok_atomic_add.gg",
+    "cow_value_index_field_writethrough.gg",
+];
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
