@@ -4111,11 +4111,11 @@ fn self_host_embedded_libstd_table_count() {
 /// typecheck.gg, recursing into every sub-expression / body the variant carries
 /// (model it on the same variant's arm in `resolve.gg::resolve_expr`).
 #[test]
-fn self_host_carrier_ops_walker_is_exhaustive() {
+fn self_host_safety_walker_is_exhaustive() {
     let ast = fs::read_to_string("tests/fixtures/self_host_typechecker/ast.gg")
-        .expect("self_host_carrier_ops_walker_is_exhaustive: ast.gg not found");
+        .expect("self_host_safety_walker_is_exhaustive: ast.gg not found");
     let tc = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
-        .expect("self_host_carrier_ops_walker_is_exhaustive: typecheck.gg not found");
+        .expect("self_host_safety_walker_is_exhaustive: typecheck.gg not found");
 
     // Parse the variant names from `enum Expr:` / `enum Stmt:` in ast.gg. Each
     // variant is an indented `EName(...)` / `EName` (or `SName...`) line; the
@@ -4172,14 +4172,17 @@ fn self_host_carrier_ops_walker_is_exhaustive() {
     let stmt_variants = variants(&ast, "enum Stmt:", 'S');
     assert!(
         expr_variants.len() >= 40 && stmt_variants.len() >= 25,
-        "carrier-ops lint failed to parse ast.gg variants (got {} Expr, {} Stmt) — \
+        "safety-walk exhaustiveness lint failed to parse ast.gg variants (got {} Expr, {} Stmt) — \
          the ast.gg enum shape changed; fix the parser.",
         expr_variants.len(),
         stmt_variants.len(),
     );
 
-    let expr_body = body_of(&tc, "void check_carrier_ops_expr(");
-    let stmt_body = body_of(&tc, "void check_carrier_ops_stmt(");
+    // The former `check_carrier_ops_{expr,stmt}` walkers were merged into the
+    // ONE unified `check_safety_{expr,stmt}` walk (2026-07-15 self-host safety
+    // unification). The exhaustiveness guard follows the rename.
+    let expr_body = body_of(&tc, "void check_safety_expr(");
+    let stmt_body = body_of(&tc, "void check_safety_stmt(");
 
     let mut missing_expr = Vec::new();
     for v in &expr_variants {
