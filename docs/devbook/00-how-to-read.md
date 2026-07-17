@@ -15,7 +15,7 @@ them: [The Gorget Book](../book/README.md) (how to *use* the language),
 [`language-reference.md`](../language-reference.md) (the normative spec — *what*
 the language is), and [`language-design.md`](../language-design.md) (the *why*).
 The devbook's axis is the fourth: *how it is implemented*
-([`devbook_plan.md:9`](../plans/devbook_plan.md)).
+(`devbook_plan.md:9` (devbook plan — git history)).
 
 ## The one-authoritative-source contract
 
@@ -24,7 +24,7 @@ the invariants, and the *why*. It does **not** own *live behavioral facts*:
 which function does what, exact ABI offsets, comparison scores, numeric budgets,
 branch tables, `file:line`. For those, the **code and tests stay authoritative
 and the book cites them — it never copies them**
-([`README.md:11`](README.md), [`devbook_plan.md:13`](../plans/devbook_plan.md)).
+([`README.md:11`](README.md), `devbook_plan.md:13` (devbook plan — git history)).
 
 This is the same rule the compiler itself lives by, applied to documentation:
 "one source of truth per axis" (CLAUDE.md layering-discipline rule 3). A fact
@@ -86,14 +86,14 @@ into chapters, repointing their source citations at each chapter's stable
 anchors, and then deleting the absorbed doc — the former `internals/` tree died
 of attrition once every doc had been folded
 ([`README.md:19`](README.md),
-[`devbook_plan.md:15`](../plans/devbook_plan.md)). Folding was **lazy**: no
+`devbook_plan.md:15` (devbook plan — git history)). Folding was **lazy**: no
 internals file was moved or deleted, and no source comment repointed, until the
 chapter that absorbed it was actually written
-([`devbook_plan.md:17`](../plans/devbook_plan.md)).
+(`devbook_plan.md:17` (devbook plan — git history)).
 
 When a chapter folds in an internals doc, each piece of that doc's content is
 classified into one of **four dispositions**
-([`devbook_plan.md:23-27`](../plans/devbook_plan.md)):
+(`devbook_plan.md:23-27` (devbook plan — git history)):
 
 | Disposition | Content | Action |
 |-------------|---------|--------|
@@ -104,11 +104,11 @@ classified into one of **four dispositions**
 
 The decisive rule is that **disposition (d) applies to every folded doc by
 default** — it is *not* gated on a hand-maintained "which docs are stale" list
-([`devbook_plan.md:29`](../plans/devbook_plan.md)). The trigger is per-sentence
+(`devbook_plan.md:29` (devbook plan — git history)). The trigger is per-sentence
 and mechanical: **every** status / present-tense / future-tense claim in a
 folded doc is *presumed stale* and re-verified against current source at fold
 time. A list of "known offenders" exists in the plan
-([`devbook_plan.md:30`](../plans/devbook_plan.md)) but is explicitly
+(`devbook_plan.md:30` (devbook plan — git history)) but is explicitly
 *illustrative and non-exhaustive* — a stale doc that is not on it is still
 caught, because the check runs on every sentence, not against a list.
 
@@ -117,7 +117,7 @@ hand-maintained state whose completeness is load-bearing and drift-prone — the
 exact anti-pattern this book exists to fight. The universal check is *"re-verify;
 most will pass"*, not *"rewrite everything"*: of the planning audit, for
 example, `safety-checker.md` verified clean while several others were flagged
-IMPL-AHEAD ([`devbook_plan.md:30`](../plans/devbook_plan.md)).
+IMPL-AHEAD (`devbook_plan.md:30` (devbook plan — git history)).
 
 ### The honesty gate
 
@@ -125,11 +125,11 @@ Folding is also where the four corpora are kept consistent. Each chapter's
 accuracy pass triangulates three of them — `source+tests` /
 `language-reference.md`+`language-design.md` / `docs/book/` — and classifies
 every disagreement as **CONSISTENT / DOC-AHEAD-OF-IMPL / IMPL-AHEAD-OF-DOC /
-CONTRADICTION** ([`devbook_plan.md:41`](../plans/devbook_plan.md)). Findings go
+CONTRADICTION** (`devbook_plan.md:41` (devbook plan — git history)). Findings go
 to `TODO.md`; the book itself cites `language-reference.md` for normative facts
 and never restates the spec. The planning audit already logged real drift — its
 seed catalog records a CoW materialization-point count mismatch ("6 vs 7")
-between the corpora ([`devbook_plan.md:111-112`](../plans/devbook_plan.md)); the
+between the corpora (`devbook_plan.md:111-112` (devbook plan — git history)); the
 fold then re-derives the live count from current source (the materialization
 table in [`11-copy-on-write.md`](11-copy-on-write.md))
 rather than repeating either figure. The devbook gate is the forcing function
@@ -139,7 +139,7 @@ that keeps all four corpora honest.
 
 The table of contents walks the compiler **by subsystem**, not in strict
 pipeline-pass order ([`README.md:13`](README.md),
-[`devbook_plan.md:39`](../plans/devbook_plan.md)). The linear pass order is
+`devbook_plan.md:39` (devbook plan — git history)). The linear pass order is
 given once, in [Chapter 1](01-pipeline-and-driver.md); the chapters then group
 related machinery so a reader learning a subsystem reads it as a unit rather
 than scattered across the points where each pass happens to touch it.
@@ -161,7 +161,7 @@ from stale docs. The actual semantic pass order, read from
 ([`mod.rs:317`](../../src/semantic/mod.rs)) → 5 borrow checking
 ([`mod.rs:336`](../../src/semantic/mod.rs)). There is **no** provenance pass and
 **no** `src/semantic/provenance.rs` — a "Pass 4.5 provenance.rs" that appeared in
-the former `internals/README.md` was stale ([`devbook_plan.md:39`](../plans/devbook_plan.md));
+the former `internals/README.md` was stale (`devbook_plan.md:39` (devbook plan — git history));
 the file does not exist in the tree. This is exactly the kind of fact the book
 cites to source rather than transcribes: [Chapter 1](01-pipeline-and-driver.md)
 folds a corrected diagram from `src/semantic/mod.rs`, not from the old README.
@@ -172,7 +172,7 @@ Most phase / area chapters carry an **"In the self-host"** section describing ho
 the Gorget self-host compiler (`tests/fixtures/self_host_*`) implements the same
 area, where it diverges from the Rust `gg`, and the current parity
 ([`README.md:15`](README.md),
-[`devbook_plan.md:32`](../plans/devbook_plan.md)). The self-host is the same
+`devbook_plan.md:32` (devbook plan — git history)). The self-host is the same
 book, not a separate one: Chapters [26](26-self-host-frontend.md) and
 [27](27-comparison-bootstrap.md) give the *system-level* treatment, while the
 per-chapter sections are the *area-level* mirror.
@@ -205,7 +205,7 @@ procedure is the authority.
 Where the self-host has no or partial coverage of an area — most backend
 chapters, since the self-host frontend stops before code generation — the
 section **says so plainly and points at the gap**
-([`devbook_plan.md:32`](../plans/devbook_plan.md)) rather than omitting the
+(`devbook_plan.md:32` (devbook plan — git history)) rather than omitting the
 section or implying parity that does not exist.
 
 ## What you can rely on, in one paragraph
