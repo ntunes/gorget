@@ -25,23 +25,25 @@ int helper_str(int x) throws String:
     return x
 
 int caller_rethrow(int x) throws Err:
-    int v = helper_str(x) rethrow (String e): Err(f"transformed: {e}")
+    int v = helper_str(x)! rethrow (String e): Err(f"transformed: {e}")
     return v + 100
 
 int caller_catch_uses(int x):
-    return helper_str(x) catch (e): e.len()
+    return helper_str(x)! catch (e): e.len()
 
 int caller_catch_default(int x):
-    return helper_str(x) catch (_e): 999
+    return helper_str(x)! catch (_e): 999
 
 void main():
     # Case (1) — happy + error paths through rethrow
-    match caller_rethrow(5):
+    Result[int, Err] __d29_r2 = caller_rethrow(5)
+    match __d29_r2:
         case Ok(v):
             print(f"rt/+: ok {v}")
         case Error(e):
             print(f"rt/+: err {e.msg}")
-    match caller_rethrow(-1):
+    Result[int, Err] __d29_r1 = caller_rethrow(-1)
+    match __d29_r1:
         case Ok(v):
             print(f"rt/-: ok {v}")
         case Error(e):

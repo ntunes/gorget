@@ -248,7 +248,7 @@ fn fixup_calls_in_expr(
                 fixup_calls_in_expr(e, fixups);
             }
         }
-        Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+        Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::MutableBorrow { expr: inner }
         | Expr::Deref { expr: inner } | Expr::Await { expr: inner, .. } | Expr::Spawn { expr: inner, .. }
         | Expr::SpawnBlocking { expr: inner, .. } => {
             fixup_calls_in_expr(inner, fixups);

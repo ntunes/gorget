@@ -4,9 +4,9 @@ int risky(int x) throws String:
     return x * 2
 
 void main():
-    int a = risky(-1) catch (e): 0
-    int b = risky(5) catch (e): 0
-    int c = risky(-10) catch (e): 99
+    int a = risky(-1)! catch (e): 0
+    int b = risky(5)! catch (e): 0
+    int c = risky(-10)! catch (e): 99
     print(a)
     print(b)
     print(c)

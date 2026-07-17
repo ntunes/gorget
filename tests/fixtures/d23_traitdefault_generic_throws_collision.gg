@@ -19,9 +19,9 @@ equip S with Risky[String]:
         return self.v
 
 int use(S s) throws String:
-    return s.risky(5)
+    return s.risky(5)!
 
 void main():
     S s = S(1)
-    int y = use(s) catch (e): -1
+    int y = use(s)! catch (e): -1
     print(y)

@@ -20,7 +20,7 @@ void main():
 
     # File struct usage
     File f = File.create("_test_output2.txt")
-    write_str[File](&f, "from File struct")
+    write_str[File](&f, "from File struct")! catch (e): 0
     f.close()
 
     String data = read_file("_test_output2.txt")

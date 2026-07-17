@@ -4,8 +4,8 @@ String safe_divide(int a, int b) throws String:
     return f"{a / b}"
 
 void main():
-    auto r1 = safe_divide(10, 2)
-    auto r2 = safe_divide(10, 0)
+    Result[String, String] r1 = safe_divide(10, 2)
+    Result[String, String] r2 = safe_divide(10, 0)
     match r1:
         case Ok(v): print(v)
         case Error(e): print(e)

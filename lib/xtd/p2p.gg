@@ -341,7 +341,7 @@ void p2p_send_announce(Node &node):
     int nonce = node.next_nonce
     node.next_nonce = node.next_nonce + 1
     Vector[uint8] packet = p2p_encode_message(10, nonce, node.identity.peer_id, payload)
-    node.disc_socket.sendto(packet, node.disc_group, node.disc_port)
+    node.disc_socket.sendto(packet, node.disc_group, node.disc_port)! catch (e): 0
     node.last_announce = time_ms()
 
 Result[bool, String] p2p_enable_discovery(Node &node, DiscoveryConfig config):
@@ -384,7 +384,7 @@ Result[bool, String] p2p_bootstrap(Node &node, Vector[String] addrs):
                 int d = port_str.byte_at(k) as int - 48
                 port = port * 10 + d
                 k = k + 1
-            p2p_send_raw(&node, host, port, 1, Vector[uint8]())
+            p2p_send_raw(&node, host, port, 1, Vector[uint8]())!
         i = i + 1
     return Ok(true)
 
@@ -475,7 +475,7 @@ void p2p_dht_store(Node &node, Vector[uint8] key, Vector[uint8] value):
     int i = 0
     while i < node.peers.len():
         auto pi = node.peers.get(i).unwrap()
-        p2p_send_raw(&node, pi.host, pi.port, 22, payload)
+        p2p_send_raw(&node, pi.host, pi.port, 22, payload)! catch (e): false
         i = i + 1
 
 Result[Vector[uint8], String] p2p_dht_get(Node &node, Vector[uint8] key, int timeout_ms):
@@ -489,7 +489,7 @@ Result[Vector[uint8], String] p2p_dht_get(Node &node, Vector[uint8] key, int tim
     int i = 0
     while i < node.peers.len():
         auto pi = node.peers.get(i).unwrap()
-        p2p_send_raw(&node, pi.host, pi.port, 23, key)
+        p2p_send_raw(&node, pi.host, pi.port, 23, key)!
         i = i + 1
     # Poll until we get a FIND_VALUE_REPLY or timeout
     int start = time_ms()
@@ -522,7 +522,7 @@ struct ExternalAddr:
 
 Result[ExternalAddr, String] p2p_discover_external_addr(Node &node, String probe_host, int probe_port, int timeout_ms):
     # Send ADDR_PROBE to the specified peer
-    p2p_send_raw(&node, probe_host, probe_port, 40, Vector[uint8]())
+    p2p_send_raw(&node, probe_host, probe_port, 40, Vector[uint8]())!
     # Poll until we get an ADDR_REPLY
     int start = time_ms()
     while time_ms() - start < timeout_ms:
@@ -558,7 +558,7 @@ Result[bool, String] p2p_hole_punch(Node &node, PeerId target, PeerId rendezvous
     Vector[uint8] payload = target.bytes
     Vector[uint8] addr_payload = p2p_encode_announce_payload(our_ext.host, our_ext.port)
     payload = bytes_concat(payload, addr_payload)
-    p2p_send_to_peer(&node, rendezvous, 42, payload)
+    p2p_send_to_peer(&node, rendezvous, 42, payload)!
     # Also start sending probes directly to target's known address
     # (if we know it from the peer table)
     return Ok(true)
@@ -628,7 +628,7 @@ void p2p_publish(Node &node, String topic, Vector[uint8] data):
     int i = 0
     while i < node.peers.len():
         auto pi = node.peers.get(i).unwrap()
-        p2p_send_raw(&node, pi.host, pi.port, 30, payload)
+        p2p_send_raw(&node, pi.host, pi.port, 30, payload)! catch (e): false
         i = i + 1
 
 # ── Reliable Streams ────────────────────────────────────────
@@ -848,7 +848,7 @@ void p2p_stream_send_raw(Node &node, String peer_hex, int msg_type, Vector[uint8
     int idx = p2p_find_peer(node, peer_hex)
     if idx >= 0:
         auto pi = node.peers.get(idx).unwrap()
-        p2p_send_raw(&node, pi.host, pi.port, msg_type, payload)
+        p2p_send_raw(&node, pi.host, pi.port, msg_type, payload)! catch (e): false
 
 # ── Handshake ──────────────────────────────────────────────
 
@@ -866,7 +866,7 @@ Result[int, String] p2p_stream_open(Node &node, String peer_hex):
     # Send SYN
     Vector[uint8] payload = p2p_encode_syn_payload(sid, 0)
     auto pi = node.peers.get(idx).unwrap()
-    p2p_send_raw(&node, pi.host, pi.port, 52, payload)
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)!
     return Ok(sid)
 
 Result[int, String] p2p_stream_open_encrypted(Node &node, String peer_hex):
@@ -893,7 +893,7 @@ Result[int, String] p2p_stream_open_encrypted(Node &node, String peer_hex):
     # Send authenticated SYN (flags=0x03): ephemeral + Ed25519 pubkey + signature
     Vector[uint8] payload = p2p_encode_syn_auth_payload(sid, 0, epub, node.identity.public_key, sig)
     auto pi = node.peers.get(idx).unwrap()
-    p2p_send_raw(&node, pi.host, pi.port, 52, payload)
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)!
     return Ok(sid)
 
 # ── Protocol-tagged stream open ──────────────────────────
@@ -913,7 +913,7 @@ Result[int, String] p2p_stream_open_protocol(Node &node, String peer_hex, String
     # Send SYN with protocol tag
     Vector[uint8] payload = p2p_encode_syn_protocol_payload(sid, 0, protocol)
     auto pi = node.peers.get(idx).unwrap()
-    p2p_send_raw(&node, pi.host, pi.port, 52, payload)
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)!
     return Ok(sid)
 
 Result[int, String] p2p_stream_open_encrypted_protocol(Node &node, String peer_hex, String protocol):
@@ -938,7 +938,7 @@ Result[int, String] p2p_stream_open_encrypted_protocol(Node &node, String peer_h
     Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, epub).unwrap()
     Vector[uint8] payload = p2p_encode_syn_auth_protocol_payload(sid, 0, epub, node.identity.public_key, sig, protocol)
     auto pi = node.peers.get(idx).unwrap()
-    p2p_send_raw(&node, pi.host, pi.port, 52, payload)
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)!
     return Ok(sid)
 
 String p2p_stream_protocol(Node node, int stream_id):
@@ -1812,7 +1812,7 @@ P2PEvent p2p_poll_socket(Node &node, bool use_disc):
             auto info = ann.unwrap()
             p2p_update_peer(&node, sender_hex, info.host, info.port)
             # Send PING to their unicast address for mutual introduction
-            p2p_send_raw(&node, info.host, info.port, 1, Vector[uint8]())
+            p2p_send_raw(&node, info.host, info.port, 1, Vector[uint8]())! catch (e): false
             return P2PEvent(2, msg.sender, Vector[uint8](), "")
         return p2p_no_event()
 
@@ -1820,7 +1820,7 @@ P2PEvent p2p_poll_socket(Node &node, bool use_disc):
 
     # PING (1) -> auto-reply with PONG (2)
     if msg.msg_type == 1:
-        p2p_send_raw(&node, pkt.sender.host, pkt.sender.port, 2, Vector[uint8]())
+        p2p_send_raw(&node, pkt.sender.host, pkt.sender.port, 2, Vector[uint8]())! catch (e): false
         return P2PEvent(2, msg.sender, Vector[uint8](), "")
 
     # PONG (2) -> peer discovered
@@ -1854,11 +1854,11 @@ P2PEvent p2p_poll_socket(Node &node, bool use_disc):
                 Vector[uint8] reply = p2p_make_byte(1)
                 Vector[uint8] fv_val_copy = bytes_slice(fv_entry.value, 0, fv_entry.value.len())
                 reply = bytes_concat(reply, fv_val_copy)
-                p2p_send_raw(&node, pkt.sender.host, pkt.sender.port, 24, reply)
+                p2p_send_raw(&node, pkt.sender.host, pkt.sender.port, 24, reply)! catch (e): false
             elif fv_idx < 0:
                 # Reply: [1B found=0]
                 Vector[uint8] reply = p2p_make_byte(0)
-                p2p_send_raw(&node, pkt.sender.host, pkt.sender.port, 24, reply)
+                p2p_send_raw(&node, pkt.sender.host, pkt.sender.port, 24, reply)! catch (e): false
         return p2p_no_event()
 
     # FIND_VALUE_REPLY (24) -> return as DHT_RESULT event
@@ -1875,7 +1875,7 @@ P2PEvent p2p_poll_socket(Node &node, bool use_disc):
     # ADDR_PROBE (40) -> reply with sender's external address
     if msg.msg_type == 40:
         Vector[uint8] addr_reply = p2p_encode_announce_payload(pkt.sender.host, pkt.sender.port)
-        p2p_send_raw(&node, pkt.sender.host, pkt.sender.port, 41, addr_reply)
+        p2p_send_raw(&node, pkt.sender.host, pkt.sender.port, 41, addr_reply)! catch (e): false
         return p2p_no_event()
 
     # ADDR_REPLY (41) -> return as ADDR_DISCOVERED event
@@ -1915,7 +1915,7 @@ P2PEvent p2p_poll_socket(Node &node, bool use_disc):
                 if msg.payload.len() > 32:
                     Vector[uint8] addr_part = bytes_slice(msg.payload, 32, msg.payload.len())
                     notify_payload = bytes_concat(notify_payload, addr_part)
-                p2p_send_raw(&node, target_pi.host, target_pi.port, 43, notify_payload)
+                p2p_send_raw(&node, target_pi.host, target_pi.port, 43, notify_payload)! catch (e): false
         return p2p_no_event()
 
     # HOLE_PUNCH_NOTIFY (43) -> target learns initiator's address, sends probe
@@ -1930,7 +1930,7 @@ P2PEvent p2p_poll_socket(Node &node, bool use_disc):
                     String init_hex = bytes_to_hex(init_id_bytes)
                     p2p_update_peer(&node, init_hex, hp_addr.host, hp_addr.port)
                     # Send PING to initiator to complete hole punch
-                    p2p_send_raw(&node, hp_addr.host, hp_addr.port, 1, Vector[uint8]())
+                    p2p_send_raw(&node, hp_addr.host, hp_addr.port, 1, Vector[uint8]())! catch (e): false
                     return P2PEvent(2, PeerId(init_id_bytes), Vector[uint8](), "")
         return p2p_no_event()
 
@@ -1947,7 +1947,7 @@ P2PEvent p2p_poll_socket(Node &node, bool use_disc):
                 if msg.payload.len() > 32:
                     Vector[uint8] relay_data_part = bytes_slice(msg.payload, 32, msg.payload.len())
                     relay_fwd = bytes_concat(relay_fwd, relay_data_part)
-                p2p_send_raw(&node, relay_pi.host, relay_pi.port, 45, relay_fwd)
+                p2p_send_raw(&node, relay_pi.host, relay_pi.port, 45, relay_fwd)! catch (e): false
         return p2p_no_event()
 
     # RELAY_DATA (45) -> relayed data arriving
@@ -1989,7 +1989,7 @@ P2PEvent p2p_poll_socket(Node &node, bool use_disc):
                     while fi < node.peers.len():
                         auto fpi = node.peers.get(fi).unwrap()
                         if fpi.peer_hex != sender_hex:
-                            p2p_send_raw(&node, fpi.host, fpi.port, 30, fwd_payload)
+                            p2p_send_raw(&node, fpi.host, fpi.port, 30, fwd_payload)! catch (e): false
                         fi = fi + 1
                 # Deliver to application if subscribed
                 if p2p_is_subscribed(node, topic):

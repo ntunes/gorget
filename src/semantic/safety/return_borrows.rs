@@ -571,7 +571,7 @@ fn collect_param_indices(
             result.extend(collect_param_indices(&lhs.node, param_names, aliases, function_info, resolution_map, scopes));
             result.extend(collect_param_indices(&rhs.node, param_names, aliases, function_info, resolution_map, scopes));
         }
-        Expr::Move { expr: inner } | Expr::Deref { expr: inner } => {
+        Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::Deref { expr: inner } => {
             result.extend(collect_param_indices(&inner.node, param_names, aliases, function_info, resolution_map, scopes));
         }
         _ => {}
@@ -661,7 +661,7 @@ fn trace_expr_to_params(
             trace_expr_to_params(rhs, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
 
-        Expr::Move { expr: inner } | Expr::Deref { expr: inner } => {
+        Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::Deref { expr: inner } => {
             trace_expr_to_params(inner, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
 

@@ -289,7 +289,9 @@ fn substitute_expr_types(expr: &mut Spanned<Expr>, subs: &[(String, Type)]) {
                 substitute_expr_types(eb, subs);
             }
         }
-        Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner } => {
+        Expr::Move { expr: inner }
+        | Expr::Propagate { expr: inner }
+        | Expr::MutableBorrow { expr: inner } => {
             substitute_expr_types(inner, subs);
         }
         Expr::Range { start, end, .. } => {

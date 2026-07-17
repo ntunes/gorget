@@ -11,7 +11,7 @@ void main():
 
     # Introduce nodes to each other
     UdpAddr addrB = nodeB.socket.local_addr()
-    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)! catch (e): false
 
     # B discovers A via PING/PONG
     P2PEvent ev1 = p2p_poll(&nodeB, 1000)
@@ -39,7 +39,7 @@ void main():
         print("stream connected")
 
     # A sends data to B
-    p2p_stream_send(&nodeA, stream_id, bytes_from_str("hello reliable"))
+    p2p_stream_send(&nodeA, stream_id, bytes_from_str("hello reliable"))! catch (e): 0
 
     # Poll A to flush data
     p2p_poll(&nodeA, 100)

@@ -61,7 +61,7 @@ void ident_bool(String label, bool b):
 
 void run_all() throws MyException:
     # ── Case A: enum constructor, inline throws-fn (BUG) ──
-    Tagged a = Tagged.BoolV(fn_bool_throws())
+    Tagged a = Tagged.BoolV(fn_bool_throws()!)
     match a:
         case Tagged.BoolV(b):
             print(f"case A enum BoolV(inline throws-fn): expected true, got {b}")
@@ -69,7 +69,7 @@ void run_all() throws MyException:
             print("case A: wrong variant")
 
     # ── Case B: enum constructor, local-bound (workaround) ──
-    bool tmp = fn_bool_throws()
+    bool tmp = fn_bool_throws()!
     Tagged b_t = Tagged.BoolV(tmp)
     match b_t:
         case Tagged.BoolV(b):
@@ -86,18 +86,19 @@ void run_all() throws MyException:
             print("case C: wrong variant")
 
     # ── Case D: struct constructor, two inline throws-fn args (BUG) ──
-    Pair d = Pair(fn_bool_throws(), fn_int_throws())
+    Pair d = Pair(fn_bool_throws()!, fn_int_throws()!)
     print(f"case D struct Pair(inline x2):       expected (true, 42), got ({d.b}, {d.n})")
 
     # ── Case E: struct constructor, literal + inline throws-fn (BUG) ──
-    Pair e = Pair(true, fn_int_throws())
+    Pair e = Pair(true, fn_int_throws()!)
     print(f"case E struct Pair(literal, inline): expected (true, 42), got ({e.b}, {e.n})")
 
     # ── Case F: plain fn arg with inline throws-fn (works) ──
-    ident_bool("case F fn-arg ident(inline)        ", fn_bool_throws())
+    ident_bool("case F fn-arg ident(inline)        ", fn_bool_throws()!)
 
 void main():
-    match run_all():
+    Result[void, MyException] __d29_r1 = run_all()
+    match __d29_r1:
         case Ok(_):
             pass
         case Error(_):

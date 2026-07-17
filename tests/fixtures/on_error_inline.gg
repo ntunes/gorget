@@ -6,15 +6,15 @@ int risky(int x) throws String:
 int with_cleanup(int x) throws String:
     print("enter")
     on error print("cleanup")
-    int val = risky(x)
+    int val = risky(x)!
     print("success")
     return val
 
 void main():
-    int a = with_cleanup(5) catch (e): -1
+    int a = with_cleanup(5)! catch (e): -1
     print(f"{a}")
 
-    int b = with_cleanup(-1) catch (e): -1
+    int b = with_cleanup(-1)! catch (e): -1
     print(f"{b}")
 
     print("done")

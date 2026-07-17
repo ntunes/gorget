@@ -4,12 +4,12 @@ int try_parse(String s) throws String:
     return 42
 
 void main():
-    int a = try_parse("hello") catch (e): 0
+    int a = try_parse("hello")! catch (e): 0
     print(a)
-    int b = try_parse("") catch (e): -1
+    int b = try_parse("")! catch (e): -1
     print(b)
     # Also verify error message via Result match
-    auto r = try_parse("")
+    Result[int, String] r = try_parse("")
     match r:
         case Ok(v): print(v)
         case Error(e): print(f"error: {e}")

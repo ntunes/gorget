@@ -182,7 +182,9 @@ fn uses_expr<'a>(
             uses_expr(&right.node, right.span.start, live, lu);
             uses_expr(&left.node, left.span.start, live, lu);
         }
-        Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand } => {
+        Expr::UnaryOp { operand, .. }
+        | Expr::Move { expr: operand }
+        | Expr::Propagate { expr: operand } => {
             uses_expr(&operand.node, operand.span.start, live, lu);
         }
         Expr::Block(block) => {

@@ -14,7 +14,7 @@ void main():
 
     # Introduce peers
     UdpAddr addrB = nodeB.socket.local_addr()
-    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)! catch (e): false
     P2PEvent ev1 = p2p_poll(&nodeB, 1000)
     P2PEvent ev2 = p2p_poll(&nodeA, 1000)
 
@@ -56,7 +56,7 @@ void main():
             String req_body = bytes_to_str(req.payload).unwrap()
             print("request: " + req_body)
             # B responds with "pong"
-            p2p_rpc_send_response(&nodeB, b_sid1, req.correlation_id, bytes_from_str("pong"))
+            p2p_rpc_send_response(&nodeB, b_sid1, req.correlation_id, bytes_from_str("pong"))! catch (e): 0
             got_req = true
         rr = rr + 1
 
@@ -87,7 +87,7 @@ void main():
         RpcMessage req2 = p2p_rpc_recv_request(&nodeB, b_sid1)
         if req2.msg_type == 1:
             # Respond with error
-            p2p_rpc_send_response(&nodeB, b_sid1, req2.correlation_id, bytes_from_str("not found"))
+            p2p_rpc_send_response(&nodeB, b_sid1, req2.correlation_id, bytes_from_str("not found"))! catch (e): 0
             got_req2 = true
         rr3 = rr3 + 1
 

@@ -50,7 +50,7 @@ Result[int, String] wrap_int(int x) throws String: mk_int(x)
 void main():
     # expr-body resource Result: wrap_result(5) -> Ok(Ok("val-ok")); catch peels
     # the outer throws-Result -> Ok("val-ok") -> prints `val-ok`.
-    Result[String, String] r1 = wrap_result(5) catch (e): Error("c")
+    Result[String, String] r1 = wrap_result(5)! catch (e): Error("c")
     match r1:
         case Ok(s):
             print(s)
@@ -58,7 +58,7 @@ void main():
             print(m)
 
     # block-body resource Result twin: same value, explicit return.
-    Result[String, String] r2 = wrap_result_block(5) catch (e): Error("c")
+    Result[String, String] r2 = wrap_result_block(5)! catch (e): Error("c")
     match r2:
         case Ok(s):
             print(s)
@@ -67,7 +67,7 @@ void main():
 
     # expr-body resource Option: wrap_option(5) -> Ok(Some("opt-yes")) ->
     # Some("opt-yes") -> prints `opt-yes`.
-    Option[String] o1 = wrap_option(5) catch (e): None
+    Option[String] o1 = wrap_option(5)! catch (e): None
     match o1:
         case Some(s):
             print(s)
@@ -75,7 +75,7 @@ void main():
             print("none")
 
     # non-resource int inner: wrap_int(4) -> Ok(Ok(12)) -> Ok(12) -> prints `12`.
-    Result[int, String] i1 = wrap_int(4) catch (e): Error("c")
+    Result[int, String] i1 = wrap_int(4)! catch (e): Error("c")
     match i1:
         case Ok(v):
             print(v)

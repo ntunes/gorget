@@ -5,7 +5,7 @@ int failing() throws String:
     throw "boom"
 
 void main():
-    int a = risky() catch (_): -1
-    int b = failing() catch (_): -1
+    int a = risky()! catch (_): -1
+    int b = failing()! catch (_): -1
     print(f"a={a}")
     print(f"b={b}")

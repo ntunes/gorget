@@ -4,33 +4,33 @@ int parse_int(String s) throws String:
     throw "not 42"
 
 int double_parsed(String s) throws String:
-    int val = parse_int(s)
+    int val = parse_int(s)!
     return val * 2
 
 int add_ten(String s) throws String:
-    int val = parse_int(s)
+    int val = parse_int(s)!
     return val + 10
 
 int chain(String s) throws String:
-    int a = parse_int(s)
-    int b = double_parsed(s)
+    int a = parse_int(s)!
+    int b = double_parsed(s)!
     return a + b
 
 void main():
     # Success: auto-propagation through double_parsed
-    int r1 = double_parsed("42") catch (e): -1
+    int r1 = double_parsed("42")! catch (e): -1
     print(f"{r1}")
 
     # Error: propagated through double_parsed
-    int r2 = double_parsed("abc") catch (e): -1
+    int r2 = double_parsed("abc")! catch (e): -1
     print(f"{r2}")
 
     # Success: auto-propagation through add_ten
-    int r3 = add_ten("42") catch (e): -1
+    int r3 = add_ten("42")! catch (e): -1
     print(f"{r3}")
 
     # Multi-step: chain calls two throws functions
-    int r4 = chain("42") catch (e): -1
+    int r4 = chain("42")! catch (e): -1
     print(f"{r4}")
 
     print("done")

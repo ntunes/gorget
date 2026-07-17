@@ -12,15 +12,15 @@ int to_n(int x) throws PErr:
 int dispatch(int sel) throws PErr:
     int cv = match sel:
         case 0:
-            to_n(100)
+            to_n(100)!
         else:
-            to_n(sel)
+            to_n(sel)!
     return cv
 
 void main():
-    int a = dispatch(0) catch (e): -1
+    int a = dispatch(0)! catch (e): -1
     print(a)
-    int b = dispatch(7) catch (e): -1
+    int b = dispatch(7)! catch (e): -1
     print(b)
-    int c = dispatch(-1) catch (e): -99
+    int c = dispatch(-1)! catch (e): -99
     print(c)

@@ -22,16 +22,16 @@ equip Label:
         return self.text
 
 void main():
-    String a = f(5) catch (e): e             # free fn, success
+    String a = f(5)! catch (e): e             # free fn, success
     print(a)
-    String b = f(-1) catch (e): e            # free fn, error -> bare resource binding recovery
+    String b = f(-1)! catch (e): e            # free fn, error -> bare resource binding recovery
     print(b)
-    String c = f(-1) catch (e): "f-fallback" # free fn, error -> fresh literal recovery
+    String c = f(-1)! catch (e): "f-fallback" # free fn, error -> fresh literal recovery
     print(c)
     Label lbl = Label("m-ok")
-    String d = lbl.describe(7) catch (e): e  # equip method, success
+    String d = lbl.describe(7)! catch (e): e  # equip method, success
     print(d)
-    String g = lbl.describe(-1) catch (e): e # equip method, error -> bare resource binding recovery
+    String g = lbl.describe(-1)! catch (e): e # equip method, error -> bare resource binding recovery
     print(g)
-    String h = lbl.describe(-1) catch (e): "m-fallback" # equip method, error -> fresh literal recovery
+    String h = lbl.describe(-1)! catch (e): "m-fallback" # equip method, error -> fresh literal recovery
     print(h)

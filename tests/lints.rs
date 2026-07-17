@@ -1571,7 +1571,9 @@ fn self_host_generic_discovery_expr_arms_count() {
     /// `Expr` set. Counts the function's TOP-LEVEL match arms only (8-space
     /// indent); the nested `case EIdentifier` (inside the ECall arm) and the
     /// `case Some|None` sub-matches are deeper-indented and excluded.
-    const EXPECTED: usize = 35;
+    // 2026-07-17 (D29): 35 → 36 — the `EPropagate` transparent wrapper arm
+    // (recurses into its inner; the mark carries no semantics of its own).
+    const EXPECTED: usize = 36;
 
     // lower_generics.gg lives ONLY in self_host_lowerer (real file, not
     // symlinked), so no double-count guard is needed.
@@ -1651,7 +1653,9 @@ fn self_host_mutinf_scan_expr_arms_count() {
     /// TOP-LEVEL match arms only (8-space indent); the nested `case ESelfExpr`
     /// (inside the EMethodCall receiver sub-matches, 20-space indent) and the
     /// `case Some|None` sub-matches (12-space indent) are excluded.
-    const EXPECTED: usize = 35;
+    // 2026-07-17 (D29): 35 → 36 — the `EPropagate` transparent wrapper arm
+    // (recurses into its inner; the mark carries no semantics of its own).
+    const EXPECTED: usize = 36;
 
     // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
     // no double-count guard is needed.

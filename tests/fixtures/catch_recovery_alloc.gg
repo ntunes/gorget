@@ -15,11 +15,11 @@ String mk(String s) throws String:
 String wrap(String e): "wrap(" + e + ")"
 
 void main():
-    String a = mk("") catch (e): "[" + e + "]"   # allocating recovery using e
+    String a = mk("")! catch (e): "[" + e + "]"   # allocating recovery using e
     print(a)
-    String b = mk("x") catch (e): "[" + e + "]"  # success path (recovery not run)
+    String b = mk("x")! catch (e): "[" + e + "]"  # success path (recovery not run)
     print(b)
-    String c = mk("") catch (e): wrap(e)         # fn-call recovery (owned String)
+    String c = mk("")! catch (e): wrap(e)         # fn-call recovery (owned String)
     print(c)
-    String d = mk("") catch (e): "<" + ">"       # allocating recovery NOT using e
+    String d = mk("")! catch (e): "<" + ">"       # allocating recovery NOT using e
     print(d)

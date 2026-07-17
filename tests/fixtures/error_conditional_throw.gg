@@ -8,7 +8,7 @@ String classify(int n) throws String:
     return "odd"
 
 void main():
-    print(classify(0) catch (e): "err")
-    print(classify(4) catch (e): "err")
-    print(classify(7) catch (e): "err")
-    print(classify(-3) catch (e): "err")
+    print(classify(0)! catch (e): "err")
+    print(classify(4)! catch (e): "err")
+    print(classify(7)! catch (e): "err")
+    print(classify(-3)! catch (e): "err")

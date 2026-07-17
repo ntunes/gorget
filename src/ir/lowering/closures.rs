@@ -689,7 +689,9 @@ impl FreeVarCollector<'_> {
                     self.visit_expr(&elem.node);
                 }
             }
-            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner } => {
+            Expr::Move { expr: inner }
+            | Expr::Propagate { expr: inner }
+            | Expr::MutableBorrow { expr: inner } => {
                 self.visit_expr(&inner.node);
             }
             Expr::Range { start, end, .. } => {

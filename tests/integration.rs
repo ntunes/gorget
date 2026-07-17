@@ -5239,13 +5239,13 @@ fn throws_call_into_bare_t_error() {
     // — that fixture locked in the leak as canonical. The bind of an unhandled
     // `throws` call to a bare `T` now REJECTS with `E_UnhandledThrows` and never
     // surfaces the `Result[T, E]` desugar as the found type.
-    check_gg_fails_no_desugar("throws_call_into_bare_t_error.gg");
+    check_gg_fails_missing_mark("throws_call_into_bare_t_error.gg");
 }
 
 #[test]
 fn throws_call_arg_into_bare_t_error() {
     // D23: same correction as `throws_call_into_bare_t_error`, arg position.
-    check_gg_fails_no_desugar("throws_call_arg_into_bare_t_error.gg");
+    check_gg_fails_missing_mark("throws_call_arg_into_bare_t_error.gg");
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -5263,55 +5263,55 @@ fn throws_call_arg_into_bare_t_error() {
 
 #[test]
 fn d23_unhandled_binop() {
-    check_gg_fails_no_desugar("d23_unhandled_binop.gg");
+    check_gg_fails_missing_mark("d23_unhandled_binop.gg");
 }
 
 #[test]
 fn d23_unhandled_arg() {
-    check_gg_fails_no_desugar("d23_unhandled_arg.gg");
+    check_gg_fails_missing_mark("d23_unhandled_arg.gg");
 }
 
 #[test]
 fn d23_unhandled_bind() {
-    check_gg_fails_no_desugar("d23_unhandled_bind.gg");
+    check_gg_fails_missing_mark("d23_unhandled_bind.gg");
 }
 
 #[test]
 fn d23_unhandled_scrutinee() {
     // Was a SILENT SWALLOW (no diagnostic; `throw` discarded at runtime).
-    check_gg_fails_no_desugar("d23_unhandled_scrutinee.gg");
+    check_gg_fails_missing_mark("d23_unhandled_scrutinee.gg");
 }
 
 #[test]
 fn d23_unhandled_statement() {
     // Was a SILENT SWALLOW (bare-statement discard).
-    check_gg_fails_no_desugar("d23_unhandled_statement.gg");
+    check_gg_fails_missing_mark("d23_unhandled_statement.gg");
 }
 
 #[test]
 fn d23_unhandled_matcharm() {
-    check_gg_fails_no_desugar("d23_unhandled_matcharm.gg");
+    check_gg_fails_missing_mark("d23_unhandled_matcharm.gg");
 }
 
 #[test]
 fn d23_unhandled_method() {
     // Was the WORST mode: SILENT MISCOMPILE to garbage (`int x = 1 + s.risky()`
     // passed `gg check`, printed garbage). Concrete equip-method dispatch path.
-    check_gg_fails_no_desugar("d23_unhandled_method.gg");
+    check_gg_fails_missing_mark("d23_unhandled_method.gg");
 }
 
 #[test]
 fn d23_unhandled_method_traitdefault() {
     // Fallback path #1: a `throws` TRAIT-DEFAULT method (throws read from the
     // trait's `DefaultMethodSig`, not `function_info`). Was silent garbage.
-    check_gg_fails_no_desugar("d23_unhandled_method_traitdefault.gg");
+    check_gg_fails_missing_mark("d23_unhandled_method_traitdefault.gg");
 }
 
 #[test]
 fn d23_unhandled_method_xmod() {
     // Fallback path #2: a `throws` equip method imported ACROSS a module
     // boundary, called in an unhandled position.
-    check_gg_fails_dir_no_desugar("d23_unhandled_method_xmod", "main.gg");
+    check_gg_fails_dir_missing_mark("d23_unhandled_method_xmod", "main.gg");
 }
 
 #[test]
@@ -5319,12 +5319,12 @@ fn d23_unhandled_method_traitdefault_xmod() {
     // Cross-module TRAIT-DEFAULT (registry-keying Fix 1): pre-fix the trait
     // registry was keyed under the import placeholder, the default was
     // invisible to typecheck, and this program silently ran garbage.
-    check_gg_fails_dir_no_desugar("d23_unhandled_method_traitdefault_xmod", "main.gg");
+    check_gg_fails_dir_missing_mark("d23_unhandled_method_traitdefault_xmod", "main.gg");
     // Concrete-name pin (the no-desugar harness asserts only the exact code):
     // the diagnostic must name `CalcError` — a regression to `<error>` fails.
     check_gg_fails(
         "d23_unhandled_method_traitdefault_xmod/main.gg",
-        "throws `CalcError`",
+        "fail with `CalcError`",
     );
 }
 
@@ -5368,12 +5368,12 @@ fn d23_traitdefault_generic_throws_collision() {
 
 #[test]
 fn d23_traitdefault_generic_collision_unhandled() {
-    check_gg_fails_no_desugar("d23_traitdefault_generic_collision_unhandled.gg");
+    check_gg_fails_missing_mark("d23_traitdefault_generic_collision_unhandled.gg");
     // Concrete-name pin: must name the binding `String`, not struct `E`,
     // not `<error>`.
     check_gg_fails(
         "d23_traitdefault_generic_collision_unhandled.gg",
-        "throws `String`",
+        "fail with `String`",
     );
 }
 
@@ -5383,6 +5383,39 @@ fn d23_traitdefault_generic_collision_unhandled() {
 // Each NEG fixture asserts the EXACT code `error[E_MissingFallibleMark]` and
 // no `found `Result[` desugar leak (`check_gg_fails_missing_mark`).
 // ══════════════════════════════════════════════════════════════
+
+#[test]
+fn d29_hardening_stdlib_shape() {
+    // The pinned hardening fixture (decisions.md D29↔D17 ruling): a
+    // stdlib-shaped thin local `throws` wrapper exercising always-mark + all
+    // dispositions (prop / catch / rethrow / unmarked-capture) end-to-end.
+    run_gg(
+        "d29_hardening_stdlib_shape.gg",
+        "config@app.cfg\ncaught not found: missing.cfg\n8080\n-2\nheld not found: missing.cfg\nreload failed: not found: missing.cfg",
+    );
+}
+
+#[test]
+fn d29_hardening_mark_capture() {
+    // NEG twin: mark + Result-annotated capture = the redundant-mark error.
+    check_gg_fails_missing_mark("d29_hardening_mark_capture_error.gg");
+}
+
+#[test]
+fn d29_marked_unhandled() {
+    // Matrix NEG: marked call, non-throws fn, no disposition → the flipped
+    // E_UnhandledThrows (exact code + no desugar leak — the D23 harness).
+    check_gg_fails_no_desugar("d29_marked_unhandled_error.gg");
+}
+
+#[test]
+fn d29_sig_inferred_reject() {
+    // A31 reservation: `int f()!:` parses, teaching-rejects until A31.
+    check_gg_fails(
+        "d29_sig_inferred_error.gg",
+        "inferred error sets",
+    );
+}
 
 #[test]
 fn d29_kind2_unmarked_catch() {
@@ -8172,48 +8205,6 @@ fn check_gg_fails_no_desugar(fixture: &str) {
     );
 }
 
-/// Directory variant of `check_gg_fails_no_desugar` — for the cross-module D23
-/// gate (a `throws` equip method imported across a module boundary): `gg check
-/// <dir>/<main>` must FAIL, NOT leak `found `Result[` (checked FIRST), and
-/// carry the EXACT code `error[E_UnhandledThrows]` (see `D23_CODE`).
-fn check_gg_fails_dir_no_desugar(dir_name: &str, main_file: &str) {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let main_path = manifest_dir
-        .join("tests/fixtures")
-        .join(dir_name)
-        .join(main_file);
-
-    assert!(
-        main_path.exists(),
-        "Fixture not found: {}",
-        main_path.display()
-    );
-
-    let output = build_with_timeout(
-        gg_command("check").arg(&main_path),
-        &format!("{dir_name}/{main_file}"),
-    );
-
-    assert!(
-        !output.status.success(),
-        "Expected `gg check` to fail for {dir_name}/{main_file}, but it succeeded.\nstdout: {}",
-        String::from_utf8_lossy(&output.stdout),
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        !stderr.contains("found `Result["),
-        "D23 desugar leak: stderr for {dir_name}/{main_file} surfaced the \
-         `Result[T, E]` desugar as the found type, got:\n{stderr}",
-    );
-    assert!(
-        stderr.contains(D23_CODE),
-        "Expected the exact D23 diagnostic code `{D23_CODE}` in stderr for \
-         {dir_name}/{main_file} (a rejection with any OTHER diagnostic is a \
-         D23 regression), got:\n{stderr}",
-    );
-}
-
 /// The exact D29 diagnostic-code pin (see `D23_CODE` for the rendering
 /// contiguity argument): the mandatory-fallible-mark code, covering the bare /
 /// redundant-on-capture / Result-arms-on-peeled / mark-on-infallible reasons.
@@ -8253,6 +8244,47 @@ fn check_gg_fails_missing_mark(fixture: &str) {
         "Expected the exact D29 diagnostic code `{D29_CODE}` in stderr for \
          {fixture} (a rejection with any OTHER diagnostic is a D29 regression), \
          got:\n{stderr}",
+    );
+}
+
+/// Directory variant of `check_gg_fails_missing_mark` — the cross-module D29
+/// gate (a fallible equip method imported across a module boundary, called
+/// bare): must FAIL, not leak `found `Result[`, carry `error[E_MissingFallibleMark]`.
+fn check_gg_fails_dir_missing_mark(dir_name: &str, main_file: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let main_path = manifest_dir
+        .join("tests/fixtures")
+        .join(dir_name)
+        .join(main_file);
+
+    assert!(
+        main_path.exists(),
+        "Fixture not found: {}",
+        main_path.display()
+    );
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&main_path),
+        &format!("{dir_name}/{main_file}"),
+    );
+
+    assert!(
+        !output.status.success(),
+        "Expected `gg check` to fail for {dir_name}/{main_file}, but it succeeded.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("found `Result["),
+        "D23/D29 desugar leak: stderr for {dir_name}/{main_file} surfaced the \
+         `Result[T, E]` desugar as the found type, got:\n{stderr}",
+    );
+    assert!(
+        stderr.contains(D29_CODE),
+        "Expected the exact D29 diagnostic code `{D29_CODE}` in stderr for \
+         {dir_name}/{main_file} (a rejection with any OTHER diagnostic is a \
+         D29 regression), got:\n{stderr}",
     );
 }
 

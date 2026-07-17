@@ -1,0 +1,11 @@
+# D29 matrix NEG: a MARKED call that cannot propagate here — non-throws fn, no
+# disposition attached. The mark activates the channel but there is nowhere for
+# the error to go: E_UnhandledThrows (the D23 code, message flipped for D29).
+int boom(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return x + 1
+
+void main():
+    int a = boom(3)!
+    print(a)

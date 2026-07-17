@@ -17,17 +17,17 @@ void main():
     UdpAddr addr_c = node_c.socket.local_addr()
 
     # Connect A <-> B and B <-> C
-    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)
+    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)! catch (e): false
     p2p_poll(&node_b, 1000)
     p2p_poll(&node_a, 1000)
 
-    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)
+    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)! catch (e): false
     p2p_poll(&node_c, 1000)
     p2p_poll(&node_b, 1000)
 
     # Step 1: External address discovery
     # A sends ADDR_PROBE (40) to B
-    p2p_send_raw(&node_a, "127.0.0.1", addr_b.port, 40, Vector[uint8]())
+    p2p_send_raw(&node_a, "127.0.0.1", addr_b.port, 40, Vector[uint8]())! catch (e): false
     # B processes it and sends ADDR_REPLY (41)
     p2p_poll(&node_b, 1000)
     # A receives ADDR_REPLY (event_type 5)
@@ -38,7 +38,7 @@ void main():
     # Step 2: Hole punch via rendezvous
     # A sends HOLE_PUNCH_REQ (42) to B with target=C's peer_id + A's address
     ExternalAddr a_ext = ExternalAddr(addr_a.host, addr_a.port)
-    p2p_hole_punch(&node_a, node_c.identity.peer_id, node_b.identity.peer_id, a_ext)
+    p2p_hole_punch(&node_a, node_c.identity.peer_id, node_b.identity.peer_id, a_ext)! catch (e): false
     # B processes HOLE_PUNCH_REQ, forwards NOTIFY (43) to C
     p2p_poll(&node_b, 1000)
     # C processes NOTIFY, learns A's address, sends PING to A
@@ -51,7 +51,7 @@ void main():
         print("A discovered C via hole punch")
 
     # Step 3: Relay — A sends data to C via relay B
-    p2p_request_relay(&node_a, node_b.identity.peer_id, node_c.identity.peer_id, bytes_from_str("relayed msg"))
+    p2p_request_relay(&node_a, node_b.identity.peer_id, node_c.identity.peer_id, bytes_from_str("relayed msg"))! catch (e): false
     # B processes RELAY_REQUEST and forwards to C
     p2p_poll(&node_b, 1000)
     # C receives RELAY_DATA (event_type 6) — may need extra polls to drain PONG

@@ -29,5 +29,5 @@ void main():
             print(f"caught: {e.msg}")
 
 Result[int, BigErr] try_outer(int x):
-    int r = outer(x)
+    int r = outer(x)!
     return Ok(r)

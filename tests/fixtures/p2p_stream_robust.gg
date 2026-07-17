@@ -13,7 +13,7 @@ void main():
 
     # Introduce peers
     UdpAddr addrB = nodeB.socket.local_addr()
-    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)! catch (e): false
     P2PEvent ev1 = p2p_poll(&nodeB, 1000)
     P2PEvent ev2 = p2p_poll(&nodeA, 1000)
 
@@ -35,9 +35,9 @@ void main():
     P2PEvent conn1 = p2p_poll(&nodeA, 1000)
 
     # Send 3 framed messages
-    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("hello"))
-    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("world"))
-    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("!"))
+    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("hello"))! catch (e): 0
+    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("world"))! catch (e): 0
+    p2p_stream_send_frame(&nodeA, s1, bytes_from_str("!"))! catch (e): 0
 
     # Poll loop to deliver data
     int frame_count = 0
@@ -98,7 +98,7 @@ void main():
         ar = ar + 1
 
     # Send data then immediately close
-    p2p_stream_send(&nodeA, s2, bytes_from_str("graceful data"))
+    p2p_stream_send(&nodeA, s2, bytes_from_str("graceful data"))! catch (e): 0
     p2p_stream_close(&nodeA, s2)
 
     # Poll until B receives data and close event

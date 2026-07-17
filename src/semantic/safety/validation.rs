@@ -677,6 +677,7 @@ fn visit_expr_children(expr: &Spanned<Expr>, mut visit: impl FnMut(&Spanned<Expr
         Expr::BinaryOp { left, right, .. } => { visit(left); visit(right); }
         Expr::UnaryOp { operand, .. } => visit(operand),
         Expr::MutableBorrow { expr: inner } | Expr::Move { expr: inner }
+        | Expr::Propagate { expr: inner }
         | Expr::Deref { expr: inner } => visit(inner),
         Expr::Rethrow { expr: inner, transform, .. } => { visit(inner); visit(transform); }
         Expr::If { condition, then_branch, elif_branches, else_branch } => {

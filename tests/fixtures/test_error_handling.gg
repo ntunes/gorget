@@ -6,24 +6,24 @@ int safe_divide(int a, int b) throws String:
     return a / b
 
 int chain_ops(int x) throws String:
-    int r1 = safe_divide(x, 2)
-    int r2 = safe_divide(r1, 3)
+    int r1 = safe_divide(x, 2)!
+    int r2 = safe_divide(r1, 3)!
     return r2
 
 int rethrow_with_context(int a, int b) throws String:
-    int val = safe_divide(a, b) rethrow (String e): f"calc failed: {e}"
+    int val = safe_divide(a, b)! rethrow (String e): f"calc failed: {e}"
     return val
 
 void main():
     # Basic Result via auto-wrapping (calling throws fn from non-throws)
-    auto r1 = safe_divide(10, 2)
+    Result[int, String] r1 = safe_divide(10, 2)
     match r1:
         case Ok(v):
             print(f"{v}")
         case Error(e):
             print(e)
 
-    auto r2 = safe_divide(10, 0)
+    Result[int, String] r2 = safe_divide(10, 0)
     match r2:
         case Ok(v):
             print(f"{v}")
@@ -31,7 +31,7 @@ void main():
             print(e)
 
     # Auto-propagation through chain_ops
-    auto r3 = chain_ops(60)
+    Result[int, String] r3 = chain_ops(60)
     match r3:
         case Ok(v):
             print(f"{v}")
@@ -39,7 +39,7 @@ void main():
             print(e)
 
     # chain_ops(1): 1/2=0, 0/3=0
-    auto r4 = chain_ops(1)
+    Result[int, String] r4 = chain_ops(1)
     match r4:
         case Ok(v):
             print(f"{v}")
@@ -47,7 +47,7 @@ void main():
             print(e)
 
     # chain_ops with zero divisor propagates error
-    auto r5 = chain_ops(0)
+    Result[int, String] r5 = chain_ops(0)
     match r5:
         case Ok(v):
             print(f"{v}")
@@ -55,15 +55,15 @@ void main():
             print(e)
 
     # catch — success path
-    int v1 = safe_divide(10, 3) catch (e): -1
+    int v1 = safe_divide(10, 3)! catch (e): -1
     print(f"{v1}")
 
     # catch — error path
-    int v2 = safe_divide(10, 0) catch (e): -1
+    int v2 = safe_divide(10, 0)! catch (e): -1
     print(f"{v2}")
 
     # rethrow — success path
-    auto r6 = rethrow_with_context(10, 2)
+    Result[int, String] r6 = rethrow_with_context(10, 2)
     match r6:
         case Ok(v):
             print(f"{v}")
@@ -71,7 +71,7 @@ void main():
             print(e)
 
     # rethrow — error path (transformed message)
-    auto r7 = rethrow_with_context(10, 0)
+    Result[int, String] r7 = rethrow_with_context(10, 0)
     match r7:
         case Ok(v):
             print(f"{v}")

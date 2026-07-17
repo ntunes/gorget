@@ -4,18 +4,18 @@ int parse_number(String s) throws String:
     return 42
 
 int load_value(String input) throws String:
-    int n = parse_number(input) rethrow (String e): f"load failed: {e}"
+    int n = parse_number(input)! rethrow (String e): f"load failed: {e}"
     return n
 
 void main():
-    auto r1 = load_value("ok")
+    Result[int, String] r1 = load_value("ok")
     match r1:
         case Ok(v):
             print(f"ok:{v}")
         case Error(e):
             print(f"err:{e}")
 
-    auto r2 = load_value("bad")
+    Result[int, String] r2 = load_value("bad")
     match r2:
         case Ok(v):
             print(f"ok:{v}")

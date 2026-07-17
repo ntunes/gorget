@@ -4,29 +4,29 @@ int parse_number(String s) throws String:
     return 42
 
 int load_value(String input) throws int:
-    int n = parse_number(input) rethrow 1
+    int n = parse_number(input)! rethrow 1
     return n
 
 int load_with_context(String input) throws String:
-    int n = parse_number(input) rethrow (String e): f"wrapped: {e}"
+    int n = parse_number(input)! rethrow (String e): f"wrapped: {e}"
     return n
 
 void main():
-    auto r1 = load_value("ok")
+    Result[int, int] r1 = load_value("ok")
     match r1:
         case Ok(v):
             print(f"ok:{v}")
         case Error(code):
             print(f"exit:{code}")
 
-    auto r2 = load_value("bad")
+    Result[int, int] r2 = load_value("bad")
     match r2:
         case Ok(v):
             print(f"ok:{v}")
         case Error(code):
             print(f"exit:{code}")
 
-    auto r3 = load_with_context("bad")
+    Result[int, String] r3 = load_with_context("bad")
     match r3:
         case Ok(v):
             print(f"ok:{v}")

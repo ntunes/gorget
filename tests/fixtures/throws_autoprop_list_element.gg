@@ -12,12 +12,12 @@ int to_n(int x) throws PErr:
     return x
 
 Vector[int] dispatch(int sel) throws PErr:
-    Vector[int] xs = [to_n(sel), 5]
+    Vector[int] xs = [to_n(sel)!, 5]
     return xs
 
 void main():
-    Vector[int] ok = dispatch(3) catch (e): Vector[int]()
+    Vector[int] ok = dispatch(3)! catch (e): Vector[int]()
     print(ok.get(0).unwrap())
     print(ok.get(1).unwrap())
-    Vector[int] err = dispatch(-1) catch (e): Vector[int]()
+    Vector[int] err = dispatch(-1)! catch (e): Vector[int]()
     print(err.len())

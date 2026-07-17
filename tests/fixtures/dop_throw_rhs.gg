@@ -12,7 +12,8 @@ int int_inner(Option[int] o) throws String:
     return v
 
 void main():
-    match inner(Some(JsValue.StringV("hello"))):
+    Result[JsValue, String] __d29_r4 = inner(Some(JsValue.StringV("hello")))
+    match __d29_r4:
         case Ok(v):
             match v:
                 case JsValue.StringV(s):
@@ -21,17 +22,20 @@ void main():
                     print("other")
         case Error(e):
             print(f"err: {e}")
-    match inner(None):
+    Result[JsValue, String] __d29_r3 = inner(None)
+    match __d29_r3:
         case Ok(_):
             print("ok")
         case Error(e):
             print(f"err: {e}")
-    match int_inner(Some(42)):
+    Result[int, String] __d29_r2 = int_inner(Some(42))
+    match __d29_r2:
         case Ok(v):
             print(f"i: {v}")
         case Error(e):
             print(f"err: {e}")
-    match int_inner(None):
+    Result[int, String] __d29_r1 = int_inner(None)
+    match __d29_r1:
         case Ok(v):
             print(f"i: {v}")
         case Error(e):

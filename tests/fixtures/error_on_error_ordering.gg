@@ -5,6 +5,6 @@ int process() throws String:
     throw "fail"
 
 void main():
-    int r = process() catch (e): -1
+    int r = process()! catch (e): -1
     print(r)
     print("done")

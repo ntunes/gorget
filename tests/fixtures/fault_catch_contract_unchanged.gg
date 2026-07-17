@@ -7,9 +7,9 @@ int parse_it(String s) throws String:
     return 42
 
 void main():
-    int v = parse_it("bad") catch (msg): -1
+    int v = parse_it("bad")! catch (msg): -1
     print(f"{v}")
-    int w = parse_it("ok") catch (msg): -1
+    int w = parse_it("ok")! catch (msg): -1
     print(f"{w}")
     int big = 9223372036854775807
     int r = (big * 2) catch Fault.Overflow: -2

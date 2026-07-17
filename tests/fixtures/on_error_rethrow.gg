@@ -6,18 +6,18 @@ int risky(int x) throws String:
 int process(int x) throws String:
     on error:
         print("cleanup")
-    int val = risky(x) rethrow (String e): f"process: {e}"
+    int val = risky(x)! rethrow (String e): f"process: {e}"
     return val + 1
 
 void main():
-    auto r1 = process(5)
+    Result[int, String] r1 = process(5)
     match r1:
         case Ok(v):
             print(f"ok:{v}")
         case Error(e):
             print(f"err:{e}")
 
-    auto r2 = process(-1)
+    Result[int, String] r2 = process(-1)
     match r2:
         case Ok(v):
             print(f"ok:{v}")

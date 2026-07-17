@@ -11,7 +11,7 @@ void main():
     UdpAddr addr2 = node2.socket.local_addr()
 
     # node1 introduces itself to node2 (sends PING)
-    p2p_add_peer(&node1, "127.0.0.1", addr2.port)
+    p2p_add_peer(&node1, "127.0.0.1", addr2.port)! catch (e): false
 
     # node2 polls: should receive PING and auto-reply PONG
     # event_type 2 = PEER_DISCOVERED
@@ -25,7 +25,7 @@ void main():
         print("node1 discovered peer")
 
     # Now node1 can send DATA to node2 via peer_id
-    p2p_send(&node1, ev2.peer_id, bytes_from_str("hello p2p"))
+    p2p_send(&node1, ev2.peer_id, bytes_from_str("hello p2p"))! catch (e): false
 
     # node2 polls: should receive DATA
     # event_type 1 = MESSAGE

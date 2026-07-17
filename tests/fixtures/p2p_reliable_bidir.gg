@@ -12,7 +12,7 @@ void main():
 
     # Introduce and connect
     UdpAddr addrB = nodeB.socket.local_addr()
-    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)! catch (e): false
     P2PEvent ev1 = p2p_poll(&nodeB, 1000)
     P2PEvent ev2 = p2p_poll(&nodeA, 1000)
 
@@ -47,8 +47,8 @@ void main():
         print("B->A connected")
 
     # Send data in both directions simultaneously
-    p2p_stream_send(&nodeA, sid_ab, bytes_from_str("hello from A"))
-    p2p_stream_send(&nodeB, sid_ba, bytes_from_str("hello from B"))
+    p2p_stream_send(&nodeA, sid_ab, bytes_from_str("hello from A"))! catch (e): 0
+    p2p_stream_send(&nodeB, sid_ba, bytes_from_str("hello from B"))! catch (e): 0
 
     # Poll loop: flush + receive (polls both flush and process incoming data)
     String a_received = ""

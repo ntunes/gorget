@@ -37,17 +37,17 @@ void main():
     Calc c = Calc(10)
 
     # Success path: c.add(5) -> Ok(15), catch peels nothing -> 15.
-    int r1 = c.add(5) catch (e): -1
+    int r1 = c.add(5)! catch (e): -1
     print(r1)
 
     # Error path: c.add(-3) throws, propagates, caught -> -99.
-    int r2 = c.add(-3) catch (e): -99
+    int r2 = c.add(-3)! catch (e): -99
     print(r2)
 
     # Second method, success path: c.scale(4) -> Ok(40) -> 40.
-    int r3 = c.scale(4) catch (e): -1
+    int r3 = c.scale(4)! catch (e): -1
     print(r3)
 
     # Second method, error path: c.scale(0) throws -> -77.
-    int r4 = c.scale(0) catch (e): -77
+    int r4 = c.scale(0)! catch (e): -77
     print(r4)

@@ -4,8 +4,8 @@ int half(int x) throws String:
     return x / 2
 
 void main():
-    auto r1 = half(10)
-    auto r2 = half(7)
+    Result[int, String] r1 = half(10)
+    Result[int, String] r2 = half(7)
     print(r1.unwrap_or(-1))
     print(r2.unwrap_or(-1))
     print(r1.is_ok())

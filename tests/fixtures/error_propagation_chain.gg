@@ -2,13 +2,13 @@ int step1() throws String:
     throw "oops"
 
 int step2() throws String:
-    int x = step1()
+    int x = step1()!
     return x + 1
 
 int step3() throws String:
-    int x = step2()
+    int x = step2()!
     return x + 1
 
 void main():
-    int result = step3() catch (e): -1
+    int result = step3()! catch (e): -1
     print(result)

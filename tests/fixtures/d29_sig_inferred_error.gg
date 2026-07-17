@@ -1,0 +1,7 @@
+# D29/A31 NEG: the bare `!` signature (inferred error sets) parses — the
+# grammar is locked for A31 — but teaching-rejects until A31 lands.
+int f()!:
+    return 1
+
+void main():
+    print("x")

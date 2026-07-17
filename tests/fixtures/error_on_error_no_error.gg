@@ -4,5 +4,5 @@ int process() throws String:
     return 1
 
 void main():
-    int r = process() catch (e): -1
+    int r = process()! catch (e): -1
     print("done")

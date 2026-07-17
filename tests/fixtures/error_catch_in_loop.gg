@@ -9,7 +9,7 @@ void main():
     int errors = 0
 
     for x in inputs:
-        int result = parse(x) catch (e):
+        int result = parse(x)! catch (e):
             errors += 1
             0
         total += result

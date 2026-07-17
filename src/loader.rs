@@ -375,6 +375,7 @@ fn expr_mentions_iter(expr: &Spanned<crate::parser::ast::Expr>) -> bool {
                 || end.as_ref().map_or(false, |e| expr_mentions_iter(e))
         }
         Expr::Move { expr: inner }
+        | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner }
         | Expr::OptionalChain { object: inner, .. } => expr_mentions_iter(inner),
         Expr::DefaultOp { lhs, rhs } => {

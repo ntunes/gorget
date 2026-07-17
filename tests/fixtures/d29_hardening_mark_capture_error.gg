@@ -1,0 +1,10 @@
+# D29 hardening NEG twin: mark + explicitly-Result-annotated capture together
+# is the redundant-mark error (remove the `!` — one way to write everything).
+String load_config(String path) throws String:
+    if path == "":
+        throw "empty path"
+    return f"config@{path}"
+
+void main():
+    Result[String, String] r = load_config("app.cfg")!
+    print("x")

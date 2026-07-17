@@ -13,11 +13,11 @@ int to_n(int x) throws PErr:
     return x
 
 Wrap dispatch(int sel) throws PErr:
-    Wrap w = Wrap(to_n(sel))
+    Wrap w = Wrap(to_n(sel)!)
     return w
 
 void main():
-    Wrap a = dispatch(42) catch (e): Wrap(-1)
+    Wrap a = dispatch(42)! catch (e): Wrap(-1)
     print(a.v)
-    Wrap b = dispatch(-1) catch (e): Wrap(-99)
+    Wrap b = dispatch(-1)! catch (e): Wrap(-99)
     print(b.v)

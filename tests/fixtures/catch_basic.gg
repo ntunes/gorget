@@ -5,19 +5,19 @@ int parse_number(String s) throws String:
 
 void main():
     # Inline form — success path
-    int x = parse_number("ok") catch (e): -1
+    int x = parse_number("ok")! catch (e): -1
     print(f"x:{x}")
 
     # Inline form — error path
-    int y = parse_number("bad") catch (e): -1
+    int y = parse_number("bad")! catch (e): -1
     print(f"y:{y}")
 
     # Using the error binding
-    int z = parse_number("bad") catch (e): -99
+    int z = parse_number("bad")! catch (e): -99
     print(f"z:{z}")
 
     # Catch does not throw — can be used in non-throws function
-    int w = parse_number("bad") catch (e): 0
+    int w = parse_number("bad")! catch (e): 0
     print(f"w:{w}")
 
     print("done")

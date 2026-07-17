@@ -15,7 +15,7 @@ int risky(int x) throws String:
 # Expr-body throws fn that FORWARDS another throws call. The inner call
 # auto-propagates (unwrapping to the inner `T`); this arm must re-wrap the
 # unwrapped value exactly ONCE — never double-`Ok`.
-int forward(int x) throws String: risky(x)
+int forward(int x) throws String: risky(x)!
 
 # Expr-body throws fn returning a resource type (String) — exercises the
 # Move-mode return-slot assign on the wrapped Ok value.
@@ -81,21 +81,21 @@ Option[int] wrap_opt_some(int x) throws String:
     return Some(x + 50)
 
 void main():
-    int a = inc(10) catch (e): -1
+    int a = inc(10)! catch (e): -1
     print(a)
 
-    int b = forward(5) catch (e): -1
+    int b = forward(5)! catch (e): -1
     print(b)
 
-    int c = forward(-3) catch (e): -1
+    int c = forward(-3)! catch (e): -1
     print(c)
 
-    String g = greet("Bee") catch (e): "err"
+    String g = greet("Bee")! catch (e): "err"
     print(g)
 
     # T = Result, expr-body tail: catch peels the outer throws-Result, leaving
     # the inner `Result[int, String]` = Ok(12).
-    Result[int, String] r1 = wrap_result_expr(4) catch (e): Error("boom")
+    Result[int, String] r1 = wrap_result_expr(4)! catch (e): Error("boom")
     match r1:
         case Ok(v):
             print("ok")
@@ -105,7 +105,7 @@ void main():
             print(m)
 
     # T = Result, block-body tail (return mk(x)).
-    Result[int, String] r2 = wrap_result_block(5) catch (e): Error("boom")
+    Result[int, String] r2 = wrap_result_block(5)! catch (e): Error("boom")
     match r2:
         case Ok(v):
             print(v)
@@ -113,7 +113,7 @@ void main():
             print(m)
 
     # T = Result, `return Ok(inner)` success path (Ok(24)).
-    Result[int, String] r3 = wrap_result_ok(6) catch (e): Error("boom")
+    Result[int, String] r3 = wrap_result_ok(6)! catch (e): Error("boom")
     match r3:
         case Ok(v):
             print(v)
@@ -122,7 +122,7 @@ void main():
 
     # T = Result, throw path: the outer Error propagates, caught at the call
     # site, leaving the inner Error("from-throw").
-    Result[int, String] r4 = wrap_result_ok(-1) catch (e): Error("from-throw")
+    Result[int, String] r4 = wrap_result_ok(-1)! catch (e): Error("from-throw")
     match r4:
         case Ok(v):
             print(v)
@@ -131,7 +131,7 @@ void main():
 
     # T = Option, expr-body tail: catch peels the outer throws-Result, leaving
     # the inner `Option[int]` = Some(21).
-    Option[int] o1 = wrap_opt_expr(3) catch (e): None
+    Option[int] o1 = wrap_opt_expr(3)! catch (e): None
     match o1:
         case Some(v):
             print(v)
@@ -139,7 +139,7 @@ void main():
             print(-1)
 
     # T = Option, block-body tail (return maybe(x)): maybe(-1) returns None.
-    Option[int] o2 = wrap_opt_block(-1) catch (e): None
+    Option[int] o2 = wrap_opt_block(-1)! catch (e): None
     match o2:
         case Some(v):
             print(v)
@@ -147,7 +147,7 @@ void main():
             print(-2)
 
     # T = Option, `return Some(inner)` success path (Some(56)).
-    Option[int] o3 = wrap_opt_some(6) catch (e): None
+    Option[int] o3 = wrap_opt_some(6)! catch (e): None
     match o3:
         case Some(v):
             print(v)
@@ -156,7 +156,7 @@ void main():
 
     # T = Option, throw path: the outer Error propagates, caught at the call
     # site, leaving the catch default None.
-    Option[int] o4 = wrap_opt_some(-1) catch (e): None
+    Option[int] o4 = wrap_opt_some(-1)! catch (e): None
     match o4:
         case Some(v):
             print(v)

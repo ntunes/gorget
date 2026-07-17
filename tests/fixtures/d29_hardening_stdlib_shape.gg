@@ -1,0 +1,45 @@
+# D29 hardening pin (decisions.md 2026-07-16 sequencing+dogfood ruling): a
+# stdlib-shaped fallible API — a thin local `throws` wrapper with the same call
+# shape as a future D17 `read_file` — exercising ALWAYS-MARK + every
+# disposition end-to-end before the stdlib flood. The NEG twins live in
+# d29_hardening_stdlib_shape_error.gg (mark+capture) and the bare-discard /
+# bare-call fixtures. Expected output is principled fallible behavior (Core #8).
+String load_config(String path) throws String:
+    if path == "":
+        throw "empty path"
+    if path == "missing.cfg":
+        throw f"not found: {path}"
+    return f"config@{path}"
+
+int parse_port(String cfg) throws String:
+    if cfg == "config@bad.cfg":
+        throw "bad port"
+    return 8080
+
+# Propagate: both marks visible, each call carries its own.
+int boot(String path) throws String:
+    return parse_port(load_config(path)!)!
+
+void main():
+    # catch (recover)
+    String a = load_config("app.cfg")! catch (e): "fallback"
+    print(a)
+    String b = load_config("missing.cfg")! catch (e): f"caught {e}"
+    print(b)
+    # rethrow (transform) then catch at the outer layer
+    int p = boot("app.cfg")! catch (e): -1
+    print(p)
+    int q = boot("")! catch (e): -2
+    print(q)
+    # unmarked capture: the explicitly-annotated destination holds the outcome
+    Result[String, String] r = load_config("missing.cfg")
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(f"held {e}")
+    # rethrow: wrap the error type's message, recover outside
+    String w = reload("missing.cfg")! catch (e): e
+    print(w)
+
+String reload(String path) throws String:
+    String cfg = load_config(path)! rethrow (String e): f"reload failed: {e}"
+    return cfg

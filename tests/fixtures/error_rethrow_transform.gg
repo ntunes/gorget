@@ -4,17 +4,17 @@ int try_parse(String s) throws String:
     return 42
 
 int validated_port(String s) throws String:
-    int port = try_parse(s) rethrow (String e): f"port error: {e}"
+    int port = try_parse(s)! rethrow (String e): f"port error: {e}"
     if port < 0:
         throw "port must be positive"
     return port
 
 void main():
-    int p = validated_port("ok") catch (e): -1
+    int p = validated_port("ok")! catch (e): -1
     print(p)
-    int p2 = validated_port("bad") catch (e): -1
+    int p2 = validated_port("bad")! catch (e): -1
     print(p2)
-    auto result = validated_port("bad")
+    Result[int, String] result = validated_port("bad")
     match result:
         case Ok(v):
             print(v)

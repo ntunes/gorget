@@ -38,7 +38,7 @@ void main():
     # Happy path — catch arm is divergent but doesn't fire. The
     # post-catch code MUST be reachable (no spurious "unreachable"
     # warning).
-    V r = helper(false) catch (msg):
+    V r = helper(false)! catch (msg):
         print(f"caught: {msg}")
         exit(1)
         return

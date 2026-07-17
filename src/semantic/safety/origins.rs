@@ -224,6 +224,7 @@ impl<'a> BorrowChecker<'a> {
 
             // Transparent wrappers: propagate inner origin
             Expr::Move { expr: inner }
+            | Expr::Propagate { expr: inner }
             | Expr::Deref { expr: inner }
             | Expr::As { expr: inner, .. } => {
                 self.compute_expr_origin(inner)

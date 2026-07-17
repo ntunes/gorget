@@ -15,12 +15,12 @@ void main():
     UdpAddr addr_c = node_c.socket.local_addr()
 
     # A <-> B
-    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)
+    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)! catch (e): false
     p2p_poll(&node_b, 1000)
     p2p_poll(&node_a, 1000)
 
     # B <-> C
-    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)
+    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)! catch (e): false
     p2p_poll(&node_c, 1000)
     p2p_poll(&node_b, 1000)
 

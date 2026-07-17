@@ -18,10 +18,10 @@ equip Adder:
 
 int dispatch(int sel) throws PErr:
     Adder a = Adder(100)
-    return a.add(to_n(sel))
+    return a.add(to_n(sel)!)
 
 void main():
-    int a = dispatch(5) catch (e): -1
+    int a = dispatch(5)! catch (e): -1
     print(a)
-    int b = dispatch(-1) catch (e): -99
+    int b = dispatch(-1)! catch (e): -99
     print(b)

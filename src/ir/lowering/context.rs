@@ -4170,7 +4170,9 @@ fn count_name_in_expr(expr: &Expr, name: &str, count: &mut u32) {
             count_name_in_expr(&left.node, name, count);
             count_name_in_expr(&right.node, name, count);
         }
-        Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand } => {
+        Expr::UnaryOp { operand, .. }
+        | Expr::Move { expr: operand }
+        | Expr::Propagate { expr: operand } => {
             count_name_in_expr(&operand.node, name, count);
         }
         Expr::If { condition, then_branch, elif_branches, else_branch, .. } => {

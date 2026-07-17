@@ -775,7 +775,9 @@ fn count_uses_in_expr(expr: &Expr, counts: &mut rustc_hash::FxHashMap<String, u3
             count_uses_in_expr(&left.node, counts);
             count_uses_in_expr(&right.node, counts);
         }
-        Expr::UnaryOp { operand, .. } | Expr::Move { expr: operand } => {
+        Expr::UnaryOp { operand, .. }
+        | Expr::Move { expr: operand }
+        | Expr::Propagate { expr: operand } => {
             count_uses_in_expr(&operand.node, counts);
         }
         // Struct / container literals also USE their argument identifiers — the

@@ -5,7 +5,8 @@ int unwrap(Option[int] x) throws E:
     return x ?? throw E("missing")
 
 void main():
-    match unwrap(Some(42)):
+    Result[int, E] __d29_r1 = unwrap(Some(42))
+    match __d29_r1:
         case Ok(v):
             print(f"ok {v}")
         case Error(_):

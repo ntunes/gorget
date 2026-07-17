@@ -9,7 +9,7 @@ int risky(int x) throws String:
 
 # Auto-propagation: `risky(x)` in a throws fn peels to `int` (no handling needed).
 int doubler(int x) throws String:
-    int v = risky(x)
+    int v = risky(x)!
     return v + 1
 
 void main():
@@ -29,5 +29,5 @@ void main():
             print(e)
 
     # Auto-propagated call captured at the boundary.
-    int d = doubler(4) catch (e): -1
+    int d = doubler(4)! catch (e): -1
     print(d)

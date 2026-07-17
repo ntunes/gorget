@@ -16,7 +16,7 @@ void main():
     items.push("hello")
     items.push("world")
     String first = items[0]
-    auto r1 = identity(first)
+    Result[String, String] r1 = identity(first)
     match r1:
         case Ok(v):
             print(v)
@@ -24,7 +24,7 @@ void main():
             print(e)
 
     # Vector index → clone in Result.Ok
-    auto r2 = find_first(items)
+    Result[String, String] r2 = find_first(items)
     match r2:
         case Ok(v):
             print(v)
@@ -32,7 +32,7 @@ void main():
             print(e)
 
     # Error path
-    auto r3 = find_first(Vector[String]())
+    Result[String, String] r3 = find_first(Vector[String]())
     match r3:
         case Ok(v):
             print(v)

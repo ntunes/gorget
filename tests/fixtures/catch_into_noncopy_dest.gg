@@ -26,7 +26,7 @@ V helper(int x) throws String:
 
 void main():
     # Happy path — Ok branch flows through catch into V slot.
-    V r1 = helper(7) catch (msg): V.B(msg)
+    V r1 = helper(7)! catch (msg): V.B(msg)
     match r1:
         case V.A(n):
             print(f"+: A({n})")
@@ -34,7 +34,7 @@ void main():
             print(f"+: B({s})")
 
     # Error path — recovery expression flows through catch into V slot.
-    V r2 = helper(-1) catch (msg): V.B(msg)
+    V r2 = helper(-1)! catch (msg): V.B(msg)
     match r2:
         case V.A(n):
             print(f"-: A({n})")

@@ -16,11 +16,11 @@ void main():
     UdpAddr addr_b = node_b.socket.local_addr()
     UdpAddr addr_c = node_c.socket.local_addr()
 
-    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)
+    p2p_add_peer(&node_a, "127.0.0.1", addr_b.port)! catch (e): false
     p2p_poll(&node_b, 1000)
     p2p_poll(&node_a, 1000)
 
-    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)
+    p2p_add_peer(&node_b, "127.0.0.1", addr_c.port)! catch (e): false
     p2p_poll(&node_c, 1000)
     p2p_poll(&node_b, 1000)
 
@@ -43,7 +43,7 @@ void main():
     int ci = 0
     while ci < node_c.peers.len():
         PeerInfo cpi = node_c.peers.get(ci).unwrap()
-        p2p_send_raw(&node_c, cpi.host, cpi.port, 23, key)
+        p2p_send_raw(&node_c, cpi.host, cpi.port, 23, key)! catch (e): false
         ci = ci + 1
 
     # Poll B to process FIND_VALUE and send FIND_VALUE_REPLY

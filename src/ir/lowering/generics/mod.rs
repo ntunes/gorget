@@ -758,8 +758,27 @@ impl GenericCollector {
                     self.scan_expr(eb);
                 }
             }
-            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner } => {
+            Expr::Move { expr: inner }
+            | Expr::Propagate { expr: inner }
+            | Expr::MutableBorrow { expr: inner } => {
                 self.scan_expr(inner);
+            }
+            // Error-handling wrappers: the inner call (and the recovery /
+            // transform arm) can instantiate generics. PRE-EXISTING gap made
+            // load-bearing by D29: `write_str[File](&f, s)! catch (e): 0`
+            // (a marked lib-generic call under `catch`) lost its instance —
+            // undefined symbol at link. Same class for `rethrow`/fault-catch.
+            Expr::Catch { expr: inner, recovery, .. } => {
+                self.scan_expr(inner);
+                self.scan_expr(recovery);
+            }
+            Expr::Rethrow { expr: inner, transform, .. } => {
+                self.scan_expr(inner);
+                self.scan_expr(transform);
+            }
+            Expr::FaultCatch { expr: inner, handler, .. } => {
+                self.scan_expr(inner);
+                self.scan_expr(handler);
             }
             Expr::Range { start, end, .. } => {
                 if let Some(s) = start { self.scan_expr(s); }
@@ -1124,9 +1143,24 @@ impl GenericCollector {
                 if let Some(s) = start { self.walk_expr_for_method_calls(s, env); }
                 if let Some(e) = end { self.walk_expr_for_method_calls(e, env); }
             }
-            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+            Expr::Move { expr: inner }
+            | Expr::Propagate { expr: inner }
+            | Expr::MutableBorrow { expr: inner }
             | Expr::OptionalChain { object: inner, .. } => {
                 self.walk_expr_for_method_calls(inner, env);
+            }
+            // Error-handling wrappers (see scan_expr — the same discovery class).
+            Expr::Catch { expr: inner, recovery, .. } => {
+                self.walk_expr_for_method_calls(inner, env);
+                self.walk_expr_for_method_calls(recovery, env);
+            }
+            Expr::Rethrow { expr: inner, transform, .. } => {
+                self.walk_expr_for_method_calls(inner, env);
+                self.walk_expr_for_method_calls(transform, env);
+            }
+            Expr::FaultCatch { expr: inner, handler, .. } => {
+                self.walk_expr_for_method_calls(inner, env);
+                self.walk_expr_for_method_calls(handler, env);
             }
             Expr::DefaultOp { lhs, rhs } => {
                 self.walk_expr_for_method_calls(lhs, env);

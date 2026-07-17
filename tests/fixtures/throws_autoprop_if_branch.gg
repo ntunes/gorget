@@ -13,11 +13,11 @@ int dispatch(int sel) throws PErr:
     # then-branch is a throwing call; when sel is in (0, threshold) it
     # succeeds, when sel < 0 the SAME branch throws (sel > -100 routes the
     # negative into the then-branch so the throw propagates).
-    int cv = if sel > -100: to_n(sel) else: 0
+    int cv = if sel > -100: to_n(sel)! else: 0
     return cv
 
 void main():
-    int a = dispatch(7) catch (e): -1
+    int a = dispatch(7)! catch (e): -1
     print(a)
-    int b = dispatch(-1) catch (e): -99
+    int b = dispatch(-1)! catch (e): -99
     print(b)

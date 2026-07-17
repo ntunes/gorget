@@ -9,7 +9,8 @@ V make_v() throws String:
     return V.StringV("x")
 
 C make() throws String:
-    V v = match make_v():
+    Result[V, String] __d29_r3 = make_v()
+    V v = match __d29_r3:
         case Ok(x):
             x
         case Error(e):
@@ -22,7 +23,8 @@ bool to_b(V v):
             return s.len() > 0
 
 C e_if() throws String:
-    C cc = match make():
+    Result[C, String] __d29_r2 = make()
+    C cc = match __d29_r2:
         case Ok(x):
             !x
         case Error(e):
@@ -37,7 +39,8 @@ C e_if() throws String:
     return C.Normal(V.StringV("end"))
 
 void main():
-    match e_if():
+    Result[C, String] __d29_r1 = e_if()
+    match __d29_r1:
         case Ok(_):
             print("ok")
         case Error(_):

@@ -33,7 +33,7 @@ bool helper(int x) throws String:
     return x > 0
 
 bool caller(int x) throws String:
-    return helper(x)
+    return helper(x)!
 
 public enum V:
     BoolV(bool)
@@ -44,38 +44,44 @@ bool match_recurse(V v) throws String:
         case V.BoolV(b):
             b
         case V.NumberV(n):
-            return match_recurse(V.BoolV(n > 0.0))
+            return match_recurse(V.BoolV(n > 0.0))!
 
 void main():
     # (1) simple tail return
-    match caller(5):
+    Result[bool, String] __d29_r6 = caller(5)
+    match __d29_r6:
         case Ok(v):
             print(f"+: ok {v}")
         case Error(_):
             print("+: err")
-    match caller(-1):
+    Result[bool, String] __d29_r5 = caller(-1)
+    match __d29_r5:
         case Ok(v):
             print(f"-: ok {v}")
         case Error(_):
             print("-: err")
-    match caller(0):
+    Result[bool, String] __d29_r4 = caller(0)
+    match __d29_r4:
         case Ok(_):
             print("0: ok BUG")
         case Error(e):
             print(f"0: err {e}")
 
     # (2) recursive match-arm with mixed bare-T / return-recurse arms
-    match match_recurse(V.BoolV(true)):
+    Result[bool, String] __d29_r3 = match_recurse(V.BoolV(true))
+    match __d29_r3:
         case Ok(v):
             print(f"r/bool: ok {v}")
         case Error(_):
             print("r/bool: err")
-    match match_recurse(V.NumberV(2.0)):
+    Result[bool, String] __d29_r2 = match_recurse(V.NumberV(2.0))
+    match __d29_r2:
         case Ok(v):
             print(f"r/+: ok {v}")
         case Error(_):
             print("r/+: err")
-    match match_recurse(V.NumberV(-3.0)):
+    Result[bool, String] __d29_r1 = match_recurse(V.NumberV(-3.0))
+    match __d29_r1:
         case Ok(v):
             print(f"r/-: ok {v}")
         case Error(_):

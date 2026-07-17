@@ -12,7 +12,7 @@ void main():
 
     # Introduce and connect
     UdpAddr addrB = nodeB.socket.local_addr()
-    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)
+    p2p_add_peer(&nodeA, "127.0.0.1", addrB.port)! catch (e): false
     P2PEvent ev1 = p2p_poll(&nodeB, 1000)
     P2PEvent ev2 = p2p_poll(&nodeA, 1000)
 
@@ -38,7 +38,7 @@ void main():
         i = i + 1
 
     # Send all at once — will be segmented, encrypted, and sent internally
-    p2p_stream_send(&nodeA, stream_id, big_data)
+    p2p_stream_send(&nodeA, stream_id, big_data)! catch (e): 0
 
     # Poll loop: A flushes, B receives, A gets ACKs
     Vector[uint8] all_received = Vector[uint8]()

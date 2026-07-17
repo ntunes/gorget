@@ -18,11 +18,11 @@ int to_n(int x) throws PErr:
     return x * 10
 
 (int, int) build(int sel) throws PErr:
-    return (to_n(sel), 5)
+    return (to_n(sel)!, 5)
 
 void main():
-    (int, int) ok = build(3) catch (e): (0, 0)
+    (int, int) ok = build(3)! catch (e): (0, 0)
     print(ok._0)
     print(ok._1)
-    (int, int) err = build(-1) catch (e): (-99, -99)
+    (int, int) err = build(-1)! catch (e): (-99, -99)
     print(err._0)

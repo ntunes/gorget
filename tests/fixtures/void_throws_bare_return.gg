@@ -7,12 +7,14 @@ void define_own_property(int obj_id, String key) throws RuntimeException:
     print(f"set {key} on obj {obj_id}")
 
 void main():
-    match define_own_property(1, "foo"):
+    Result[void, RuntimeException] __d29_r2 = define_own_property(1, "foo")
+    match __d29_r2:
         case Ok(_):
             print("ok path")
         case Error(_):
             print("err path")
-    match define_own_property(-1, "bar"):
+    Result[void, RuntimeException] __d29_r1 = define_own_property(-1, "bar")
+    match __d29_r1:
         case Ok(_):
             print("bare-return ok")
         case Error(_):

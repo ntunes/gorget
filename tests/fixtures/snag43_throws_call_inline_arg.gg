@@ -11,11 +11,12 @@ T sub() throws E:
 
 Vector[T] outer() throws E:
     Vector[T] v = Vector[T]()
-    v.push(sub())
+    v.push(sub()!)
     return v
 
 void main():
-    match outer():
+    Result[Vector[T], E] __d29_r1 = outer()
+    match __d29_r1:
         case Ok(ts):
             print(f"text: '{ts.get(0).unwrap().text}'")
         case Error(_):

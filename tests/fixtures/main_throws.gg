@@ -4,6 +4,6 @@ int parse_number(String s) throws String:
     return 42
 
 void main() throws int:
-    int n = parse_number("ok") rethrow 1
+    int n = parse_number("ok")! rethrow 1
     print(n)
     print("success")

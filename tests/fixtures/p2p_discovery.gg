@@ -13,11 +13,11 @@ void main():
 
     # Enable discovery on node2 FIRST so it joins the multicast group
     DiscoveryConfig config2 = p2p_default_discovery_config()
-    p2p_enable_discovery(&node2, config2)
+    p2p_enable_discovery(&node2, config2)! catch (e): false
 
     # Now enable node1 — its announce will be heard by node2
     DiscoveryConfig config1 = p2p_default_discovery_config()
-    p2p_enable_discovery(&node1, config1)
+    p2p_enable_discovery(&node1, config1)! catch (e): false
 
     # Poll both nodes in a loop until both discover each other
     bool node2_found = false
@@ -41,7 +41,7 @@ void main():
 
     # Send DATA from node1 directly to node2's address
     UdpAddr addr2 = node2.socket.local_addr()
-    p2p_send_raw(&node1, addr2.host, addr2.port, 3, bytes_from_str("discovery works"))
+    p2p_send_raw(&node1, addr2.host, addr2.port, 3, bytes_from_str("discovery works"))! catch (e): false
 
     # Poll node2 until we get the DATA message
     int attempts = 0

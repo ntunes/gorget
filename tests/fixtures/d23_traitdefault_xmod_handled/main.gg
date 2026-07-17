@@ -4,11 +4,11 @@
 from calc import Risky, S, CalcError
 
 int use(S s) throws CalcError:
-    return s.risky(5)
+    return s.risky(5)!
 
 void main():
     S s = S(1)
-    int x = s.risky(5) catch (e): -1
+    int x = s.risky(5)! catch (e): -1
     print(x + 1)
-    int y = use(s) catch (e): -1
+    int y = use(s)! catch (e): -1
     print(y)

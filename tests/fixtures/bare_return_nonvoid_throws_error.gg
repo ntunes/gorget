@@ -11,6 +11,7 @@ int parse_one(String s) throws ParseError:
     return 1
 
 void main():
-    match parse_one("x"):
+    Result[int, ParseError] __d29_r1 = parse_one("x")
+    match __d29_r1:
         case Ok(n): print(n)
         case Error(e): print(e.msg)

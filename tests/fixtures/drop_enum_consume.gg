@@ -7,18 +7,18 @@ String parse_int(String s) throws String:
     return s
 
 String transform(String input) throws String:
-    String result = parse_int(input) rethrow (String e): f"parse failed: {e}"
+    String result = parse_int(input)! rethrow (String e): f"parse failed: {e}"
     return f"ok:{result}"
 
 void main():
-    auto r1 = transform("hello")
+    Result[String, String] r1 = transform("hello")
     match r1:
         case Ok(v):
             print(v)
         case Error(e):
             print(e)
 
-    auto r2 = transform("bad")
+    Result[String, String] r2 = transform("bad")
     match r2:
         case Ok(v):
             print(v)

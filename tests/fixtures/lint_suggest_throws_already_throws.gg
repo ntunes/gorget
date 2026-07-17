@@ -8,11 +8,11 @@ int parse_int(String s) throws String:
     throw f"bad: {s}"
 
 int add_one(String s) throws String:
-    int n = parse_int(s)
+    int n = parse_int(s)!
     return n + 1
 
 void main():
-    auto r = add_one("42")
+    Result[int, String] r = add_one("42")
     match r:
         case Ok(v):
             print(f"got {v}")

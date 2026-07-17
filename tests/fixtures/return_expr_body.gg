@@ -29,5 +29,5 @@ void main():
     print(c.echo(99))
     print(pick(7, 9))
     print(greet("bob"))
-    int v = risky(41) catch (e): 0
+    int v = risky(41)! catch (e): 0
     print(v)

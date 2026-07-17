@@ -4,5 +4,5 @@ int parse(String s) throws String:
     return 10
 
 void main():
-    int total = (parse("a") catch (e): 0) + (parse("") catch (e): 5) + (parse("b") catch (e): 0)
+    int total = (parse("a")! catch (e): 0) + (parse("")! catch (e): 5) + (parse("b")! catch (e): 0)
     print(total)

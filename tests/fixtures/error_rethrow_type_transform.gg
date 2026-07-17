@@ -6,25 +6,25 @@ int parse_number(String s) throws String:
     return 42
 
 int double_parsed(String s) throws String:
-    int n = parse_number(s) rethrow (String e): f"parse failed: {e}"
+    int n = parse_number(s)! rethrow (String e): f"parse failed: {e}"
     return n * 2
 
 void main():
-    auto a = double_parsed("ok")
+    Result[int, String] a = double_parsed("ok")
     match a:
         case Ok(v):
             print(f"ok: {v}")
         case Error(e):
             print(f"err: {e}")
 
-    auto b = double_parsed("bad")
+    Result[int, String] b = double_parsed("bad")
     match b:
         case Ok(v):
             print(f"ok: {v}")
         case Error(e):
             print(f"err: {e}")
 
-    auto c = double_parsed("")
+    Result[int, String] c = double_parsed("")
     match c:
         case Ok(v):
             print(f"ok: {v}")

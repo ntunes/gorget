@@ -13,10 +13,10 @@ int to_n(int x) throws PErr:
 
 int doubled_plus(int x) throws PErr:
     # binop operand position
-    return to_n(x) + 5
+    return to_n(x)! + 5
 
 void main():
-    int a = doubled_plus(10) catch (e): -1
+    int a = doubled_plus(10)! catch (e): -1
     print(a)
-    int b = doubled_plus(-1) catch (e): -99
+    int b = doubled_plus(-1)! catch (e): -99
     print(b)

@@ -55,7 +55,7 @@ Tagged boolv_throws() throws MyException:
 #    extracting a String from a throws-fn's Tagged.StringV payload.
 #    Comment this out to see cases B + C run (with their runtime bugs).
 String case_string_inline() throws MyException:
-    String x = match stringv_throws():
+    String x = match stringv_throws()!:
         case Tagged.StringV(s):
             s
         else:
@@ -64,7 +64,7 @@ String case_string_inline() throws MyException:
 
 # ── Case B (runtime wrong value): same shape, extracting int.
 int case_int_inline() throws MyException:
-    int x = match numberv_throws():
+    int x = match numberv_throws()!:
         case Tagged.NumberV(n):
             n
         else:
@@ -73,7 +73,7 @@ int case_int_inline() throws MyException:
 
 # ── Case C (runtime wrong value): same shape, extracting bool.
 bool case_bool_inline() throws MyException:
-    bool x = match boolv_throws():
+    bool x = match boolv_throws()!:
         case Tagged.BoolV(b):
             b
         else:
@@ -83,7 +83,7 @@ bool case_bool_inline() throws MyException:
 # ── Workaround: bind to a local first. All three of these
 #    compile + print the correct value.
 String case_string_local() throws MyException:
-    Tagged t = stringv_throws()
+    Tagged t = stringv_throws()!
     String x = match t:
         case Tagged.StringV(s):
             s
@@ -92,7 +92,7 @@ String case_string_local() throws MyException:
     return x
 
 int case_int_local() throws MyException:
-    Tagged t = numberv_throws()
+    Tagged t = numberv_throws()!
     int x = match t:
         case Tagged.NumberV(n):
             n
@@ -101,7 +101,7 @@ int case_int_local() throws MyException:
     return x
 
 bool case_bool_local() throws MyException:
-    Tagged t = boolv_throws()
+    Tagged t = boolv_throws()!
     bool x = match t:
         case Tagged.BoolV(b):
             b

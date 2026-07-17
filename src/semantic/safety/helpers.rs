@@ -203,6 +203,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::As { expr: inner, .. }
             | Expr::MutableBorrow { expr: inner }
             | Expr::Move { expr: inner }
+            | Expr::Propagate { expr: inner }
             | Expr::Deref { expr: inner }
             | Expr::Await { expr: inner }
             | Expr::Spawn { expr: inner, .. }
@@ -263,6 +264,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::As { expr: inner, .. }
             | Expr::MutableBorrow { expr: inner }
             | Expr::Move { expr: inner }
+            | Expr::Propagate { expr: inner }
             | Expr::Deref { expr: inner }
             | Expr::Is { expr: inner, .. } => self.find_with_tracked_in_condition(inner),
             Expr::TupleLiteral(elems)
@@ -350,6 +352,7 @@ impl<'a> BorrowChecker<'a> {
             | Expr::As { expr: operand, .. }
             | Expr::MutableBorrow { expr: operand }
             | Expr::Move { expr: operand }
+            | Expr::Propagate { expr: operand }
             | Expr::Deref { expr: operand }
             | Expr::Is { expr: operand, .. } => self.expr_contains_yield_point(operand),
             Expr::FieldAccess { object, .. }
@@ -409,6 +412,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::As { expr: inner, .. }
             | Expr::MutableBorrow { expr: inner }
             | Expr::Move { expr: inner }
+            | Expr::Propagate { expr: inner }
             | Expr::Deref { expr: inner }
             | Expr::Is { expr: inner, .. } => self.find_stale_in_condition(inner),
             Expr::TupleLiteral(elems)
@@ -709,7 +713,9 @@ impl<'a> BorrowChecker<'a> {
         ctx: EscapeCtx,
     ) -> Option<(String, Span)> {
         match &expr.node {
-            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner } => {
+            Expr::Move { expr: inner }
+            | Expr::Propagate { expr: inner }
+            | Expr::MutableBorrow { expr: inner } => {
                 self.arena_backed_source(inner, fallback_tid, ctx)
             }
             Expr::Identifier(name) => {

@@ -10,12 +10,13 @@ bool keep_going(int i) throws E:
 
 int counter() throws E:
     int i = 0
-    while keep_going(i):
+    while keep_going(i)!:
         i = i + 1
     return i
 
 void main():
-    match counter():
+    Result[int, E] __d29_r1 = counter()
+    match __d29_r1:
         case Ok(n):
             print(f"count: {n}")
         case Error(_):

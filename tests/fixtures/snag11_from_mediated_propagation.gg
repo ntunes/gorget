@@ -19,13 +19,13 @@ bool inner(int x) throws String:
     return x > 0
 
 int outer(int x) throws BigErr:
-    bool b = inner(x)        # cross-error propagation via From[String]
+    bool b = inner(x)!        # cross-error propagation via From[String]
     if b:
         return 1
     return 0
 
 Result[int, BigErr] try_outer(int x):
-    int r = outer(x)
+    int r = outer(x)!
     return Ok(r)
 
 void main():

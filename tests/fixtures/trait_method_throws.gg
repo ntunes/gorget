@@ -25,25 +25,25 @@ equip StrictParser with Parser:
 void main():
     IntParser ip = IntParser(100)
 
-    int a = ip.parse("ok") catch (e): -1
+    int a = ip.parse("ok")! catch (e): -1
     print(f"{a}")
 
-    int b = ip.parse("bad") catch (e):
+    int b = ip.parse("bad")! catch (e):
         print(f"error: {e}")
         -1
     print(f"{b}")
 
     StrictParser sp = StrictParser(3)
 
-    int c = sp.parse("hi") catch (e): -1
+    int c = sp.parse("hi")! catch (e): -1
     print(f"{c}")
 
-    int d = sp.parse("") catch (e):
+    int d = sp.parse("")! catch (e):
         print(f"error: {e}")
         -1
     print(f"{d}")
 
-    int f = sp.parse("toolong") catch (e):
+    int f = sp.parse("toolong")! catch (e):
         print(f"error: {e}")
         -1
     print(f"{f}")

@@ -30,5 +30,5 @@ void main():
             print(e)
 
     # Handled via catch — still fine.
-    int c = ok.risky() catch (e): -1
+    int c = ok.risky()! catch (e): -1
     print(c)

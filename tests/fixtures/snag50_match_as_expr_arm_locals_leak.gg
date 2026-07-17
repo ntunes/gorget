@@ -94,7 +94,8 @@ String typeof_v(JsValue v):
 void demo(JsValue v):
     match v:
         case JsValue.ObjectV(_):
-            JsValue ts = match lookup_throws(v):
+            Result[JsValue, MyException] __d29_r1 = lookup_throws(v)
+            JsValue ts = match __d29_r1:
                 case Ok(x):
                     x
                 case Error(_):

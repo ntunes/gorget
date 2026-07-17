@@ -24,16 +24,18 @@ int to_n(int x) throws PErr:
     return x * 10
 
 Dict[String, int] build(int sel) throws PErr:
-    return {"a": to_n(sel), "b": 5}
+    return {"a": to_n(sel)!, "b": 5}
 
 void main():
-    match build(3):
+    Result[Dict[String, int], PErr] __d29_r2 = build(3)
+    match __d29_r2:
         case Ok(d):
             print(d.get("a").unwrap())
             print(d.get("b").unwrap())
         case Error(e):
             print(-1)
-    match build(-1):
+    Result[Dict[String, int], PErr] __d29_r1 = build(-1)
+    match __d29_r1:
         case Ok(d2):
             print(d2.get("a").unwrap())
         case Error(e2):
