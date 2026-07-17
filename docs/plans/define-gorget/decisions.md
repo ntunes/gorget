@@ -300,6 +300,36 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-17 — **🎯 D29 CAPTURE AMENDMENT RATIFIED (owner; supersedes the catch-attachment
+  pin's "Result destination is a disposition; still requires `!`" clause — that clause ONLY).**
+  Normative pin: **`!` marks error-channel ACTIVATION — the three control-flow dispositions
+  (propagate / `catch` / `rethrow`) — on BOTH call kinds. A fallible call with NO mark is
+  legal exactly where its full `Result[T,E]` is captured by an EXPLICITLY Result-annotated
+  destination (binding / param / return): `Result[int, Error] r = f()`. Mark + Result
+  destination together is an ERROR (fix-it: remove the `!` — one way to write everything).
+  Inferred/`auto` destinations do NOT capture — they type as `T` and require the mark (no
+  silent capture through inference). Bare-discard of a fallible call's outcome is ILLEGAL
+  for both kinds (mark it to propagate, or attach a handler — silent Error-discard is what
+  D29 exists to kill; for kind-2 this is the one new breakage class, census it). Match
+  scrutinee stays `T`-typed per D23 (mark required: `match f()!:`; bind to a Result first to
+  match Ok/Error). D23 ADDENDUM: a throws call types as `T` in every position EXCEPT an
+  explicitly Result-annotated capture position, where it types as `Result[T,E]` (the capture
+  form). Kind-2 calls stay Result-typed everywhere as today; their `!` peels and activates
+  the channel. `E_MissingFallibleMark` teaches all three exits: mark it, handle it, or
+  capture it. The never-surface-`Result[`-in-unhandled-diagnostics contract is unchanged.**
+  Derivation: proposed by the OWNER when the D29 impl scout invalidated the blast-radius
+  premise (kind-2 = 206 decls / 146 in lib; a literal always-mark forced `r.and_then(f)!`
+  absurdities and the `match parse_int(s)!:` peel contradiction). The principled line: catch
+  and rethrow are channel-ACTIVE (control flow on Error) and KEEP their marks — the owner's
+  "handled calls carry it too" amendment survives; value-plane capture was never handling,
+  it is holding, and the Result annotation carries the visibility on the same line.
+  CONSEQUENCES: the combinator question dissolves (combinators operate on Result VALUES,
+  not fallible calls — no receiver-type predicate needed); the D29↔D17 "Decision 2"
+  sequencing dilemma dissolves (kind-2 bind/match/pass/chain sites — lib's 146 APIs — need
+  ZERO changes; the migration = 267 throws-kind marks + the kind-2 bare-discard census =
+  ONE round, no staging, no softening). Honest trade-off recorded: fallible-call sites are
+  no longer 100% greppable by `!` alone — capture sites signal via the annotation.
+
 - 2026-07-16 (session, post-A32) — **🎯 A32/A1×E1 COMPOSITION PIN RATIFIED (owner).**
   Resolves the seam between A1 (inferred rethrows) and E1 (no silent coerce), which read
   literally together deadlock (E1 rejects the very callback-pass A32's inference needs).

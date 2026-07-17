@@ -240,7 +240,7 @@ calls" wording is **superseded** by the catch-attachment pin in `decisions.md`.
 | Bare statement (discard Ok, prop Error) | `f()!` | still marked |
 | Recover | `f()! catch (e): fallback` | postfix `catch` on the marked expr |
 | Transform + rethrow | `f()! rethrow (e): wrap(e)` | postfix `rethrow` on the marked expr |
-| Capture as data | `Result[T,E] r = f()!` | Result destination is a disposition; **still requires `!`** |
+| Capture as data | `Result[int, Error] r = f()` — **UNMARKED (2026-07-17 CAPTURE AMENDMENT)** | an EXPLICITLY Result-annotated destination captures without the mark; mark + Result destination together is an ERROR (fix-it: remove the `!`) |
 | `on error:` cleanup | body calls still use `!` | cleanup is not a call handler |
 | D24 Task-join (phase 3) | future `task.join()!` | supervised boundary |
 
@@ -248,8 +248,20 @@ calls" wording is **superseded** by the catch-attachment pin in `decisions.md`.
 expression (`(f()!) catch …`). Nested calls each carry their own mark:
 `g(f()!)! catch (e): …`.
 
-**No exceptions:** no second mark; no "handle without `!`" form. Bare fallible call = always
-an error ("mark the fallible call: `f()!`").
+**⚠ 2026-07-17 CAPTURE AMENDMENT (owner-ratified — the LOG entry is normative; supersedes
+this section's original "still requires `!`" capture row and the "no handle without `!`"
+absolutism for the capture form ONLY):** `!` marks error-channel ACTIVATION (propagate /
+catch / rethrow — control flow on the Error case), both call kinds. Value-plane capture by
+an explicitly Result-annotated destination (binding / param / return) is legal UNMARKED —
+the annotation carries the visibility. Inferred/`auto` destinations don't capture (type as
+`T`, mark required); bare-discard is illegal both kinds; match scrutinees stay `T`-typed
+per D23 (bind first to match the Result); kind-2 calls stay Result-typed everywhere, their
+`!` peels + activates. Consequence: the kind-2 lib migration collapses (bind/match/pass/
+combinator sites unchanged); migration = the 267 throws-kind marks + the kind-2
+bare-discard census.
+
+**Bare fallible call otherwise = always an error** ("mark the fallible call `f()!`, handle
+it, or capture it: `Result[T,E] r = f()`" — `E_MissingFallibleMark` teaches all three).
 
 The mark attaches to the CALL uniformly in every D23 position (binding / operand / arg /
 return-tail / match scrutinee / match arm / bare statement).
