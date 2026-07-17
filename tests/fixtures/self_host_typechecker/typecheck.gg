@@ -2700,10 +2700,17 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, String variant_name,
                 elif lookup_name == "Error" and type_args.len() >= 2:
                     result.push(get_int_at(type_args, 1))
             else:
-                # User-defined generic enum — try to look up variant
-                # For now, just return the first type arg as a rough approximation
-                if type_args.len() >= 1:
-                    result.push(get_int_at(type_args, 0))
+                # User-defined generic enum. A variant WITH fields is registered
+                # in variant_field_types (IEnum registration skips 0-field
+                # variants); approximate its payload as the first concrete type
+                # arg for binding types. A variant that is NOT registered has
+                # ZERO fields (e.g. `Empty()`) — leave result empty so the arity
+                # gate sees 0, not a bogus 1. (The old unconditional push
+                # false-rejected `case Empty()` on a generic enum once the arity
+                # gate started reading this count.)
+                if types.variant_field_types.contains(lookup_name):
+                    if type_args.len() >= 1:
+                        result.push(get_int_at(type_args, 0))
 
         case RTDefined(def_id):
             # Struct constructor pattern: `match p: case Point(x, y):` when

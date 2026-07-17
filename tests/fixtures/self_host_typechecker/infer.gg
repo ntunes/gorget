@@ -291,8 +291,19 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                     tuple_idx = i
                                 else:
                                     pass
-                        if tuple_idx >= 0 and tuple_idx < elems.len():
-                            return elems.get(tuple_idx).unwrap()
+                        if tuple_idx >= 0:
+                            # Numeric tuple index. Return the element type when in
+                            # range; when the index is beyond the CURRENTLY-resolved
+                            # element list, return NO_TYPE rather than error — the
+                            # self-host's tuple types can be under-resolved (e.g. a
+                            # synthetic N-tuple param desugared from closure tuple
+                            # destructuring mis-sizes to fewer elements), and the
+                            # lowering indexes the real runtime tuple correctly.
+                            # Erroring here false-rejects valid programs Rust accepts.
+                            if tuple_idx < elems.len():
+                                return elems.get(tuple_idx).unwrap()
+                            return NO_TYPE
+                        # Non-numeric name on a tuple → genuinely absent.
                         ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNoFieldFound(), "no field `" + field_name + "` found on tuple type"))
                     else:
                         pass
