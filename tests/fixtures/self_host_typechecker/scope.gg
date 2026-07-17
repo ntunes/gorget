@@ -48,6 +48,13 @@ struct DefInfo:
     # drop-tainted type would privatise an implicit copy. Mirrors Rust
     # `DefInfo.param_ownership`.
     int param_ownership
+    # D10(b) Copy axis (mirrors Rust `is_copy_type`'s struct/enum recursion):
+    # a type-def is Copy iff it is NOT drop-tainted AND every field / variant
+    # payload is (transitively) Copy. Seeded + closed under the field-graph
+    # fixpoint by `compute_is_copy` (typecheck.gg), the DUAL of
+    # `compute_drop_taint` (non-Copy is the absorbing direction). Only
+    # meaningful for RTDefined struct/enum defs; read via `resolved_type_is_copy`.
+    bool is_copy
 
 # ── Scope kinds ─────────────────────────────────────────────
 
@@ -213,7 +220,7 @@ equip ScopeTable:
         if self.find_name_entry(self.current, name.clone()) is Some(ni):
             return self.define_replace_or_fail(ni, name, kind, span, is_mutable)
         int def_id = self.definitions.len()
-        DefInfo info = DefInfo(name.clone(), kind, span, self.current, NO_DEF, is_mutable, false, false, -1)
+        DefInfo info = DefInfo(name.clone(), kind, span, self.current, NO_DEF, is_mutable, false, false, -1, false)
         self.definitions.push(info)
         # PERF index (A): the new entry lands at index `i` in the parallel
         # name table. Capture `i` and the key BEFORE the `name_keys.push`
@@ -252,7 +259,7 @@ equip ScopeTable:
 
         if allow_replace:
             int def_id = self.definitions.len()
-            DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, is_mutable, false, false, -1)
+            DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, is_mutable, false, false, -1, false)
             self.definitions.push(info)
             self.name_def_ids.set(ni, def_id)
             return Some(def_id)
@@ -268,7 +275,7 @@ equip ScopeTable:
         # by the DefInfo ctor below.
         String vkey = name.clone()
         bool is_variant = def_kind_is_variant(kind)
-        DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, false, false, false, -1)
+        DefInfo info = DefInfo(name, kind, span, self.current, NO_DEF, false, false, false, -1, false)
         self.definitions.push(info)
         if is_variant:
             if self.variant_name_index.contains(vkey):
@@ -427,6 +434,12 @@ equip ScopeTable:
     void set_def_drop_tainted(&self, int id, bool tainted):
         DefInfo d = self.definitions.get(id).unwrap()
         d.is_drop_tainted = tainted
+        self.definitions.set(id, d)
+
+    # D10(b) Copy axis: mark a type def Copy/non-Copy (set by `compute_is_copy`).
+    void set_def_is_copy(&self, int id, bool copy):
+        DefInfo d = self.definitions.get(id).unwrap()
+        d.is_copy = copy
         self.definitions.set(id, d)
 
     # D12 position 6: record a parameter def's ownership sigil (OWN_*).

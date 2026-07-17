@@ -45,16 +45,17 @@
 //!
 //! The three PRODUCTION floors (C/LLVM/self-host) are the count of committed
 //! fixtures each production impl reproduces today. `MIN_FIXTURES` is the TOTAL
-//! committed corpus count (the glob-emptiness guard). The C and LLVM lanes reach
-//! the whole corpus (floor == `MIN_FIXTURES`). The self-host floor is FIVE below
-//! it, on two KNOWN, FILED self-host gaps (detailed at the floor consts below):
-//! RV-F added four single-owner-Callable init rejects (E_MoveWithoutOperator)
-//! that the self-host typechecker does not yet enforce — it ACCEPTS them, so those
-//! four MISMATCH the self-host lane by design — plus one Copy-axis struct-field
-//! ACCEPT (`copy_struct_field_borrow_ok.gg`) that the self-host's scalar-only
-//! Copy axis wrongly REJECTS (a by-design BUILD-FAIL until the RV-D Copy-axis
-//! twin lands). Every other fixture (the D11 trap fixtures, the may-move rejects,
-//! and the other seven RV-F fixtures) MATCHes all three lanes.
+//! committed corpus count (the glob-emptiness guard). ALL THREE production lanes
+//! (C, LLVM, and self-host) now reach the whole corpus (floor == `MIN_FIXTURES`).
+//! The former self-host staging — the floor once held FIVE below the corpus on
+//! two KNOWN, FILED gaps: the four single-owner-Callable init rejects
+//! (E_MoveWithoutOperator) the self-host typechecker did not yet enforce (it
+//! ACCEPTED them) plus one Copy-axis struct-field ACCEPT
+//! (`copy_struct_field_borrow_ok.gg`) its scalar-only Copy axis wrongly REJECTED
+//! — is CLOSED: the self-host now enforces the single-owner INIT class at the
+//! init boundaries and computes the struct/enum Copy axis (`compute_is_copy`), so
+//! those five fixtures MATCH the self-host lane too. Every fixture MATCHes all
+//! three lanes.
 //!
 //! (History: the C and LLVM lanes once floored one below self-host because
 //! `smith_move_param_concat.gg` was a both-backend BUILD-FAIL — the C backend
@@ -115,51 +116,39 @@ use ggdef::{parse_frontmatter, Expect};
 // every floor rose 197 → 202 in lockstep with the corpus.
 //
 // RV-F added 12 fixtures (Copy axis, loop revive-seeding, for-var MoveInLoop, the
-// single-owner Callable init class). SEVEN MATCH on ALL THREE production lanes:
-// five ACCEPT seeds (`copy_field_borrow_ok`, `loop_reassign_revive_move_ok`,
-// `loop_body_local_move_ok`, `callable_move_bind_return_ok`,
-// `callable_param_rebind_ok`) + the reject `reject_borrow_conflict_noncopy_field.gg`
-// (E_BorrowConflict) + `reject_for_var_move_in_loop.gg` (E_MoveInLoop). The C and
-// LLVM lanes reject via the shared backend-independent semantic checker, so those
-// two rejects MATCH on C and LLVM too — and the self-host renders both codes off
-// its typed `DiagKind`. C and LLVM also MATCH the remaining FIVE below, so they
-// rise by all TWELVE (202 → 214).
+// single-owner Callable init class). All TWELVE MATCH on ALL THREE production
+// lanes. Five are ACCEPT seeds (`copy_field_borrow_ok`,
+// `loop_reassign_revive_move_ok`, `loop_body_local_move_ok`,
+// `callable_move_bind_return_ok`, `callable_param_rebind_ok`); the other seven are
+// rejects — `reject_borrow_conflict_noncopy_field.gg` (E_BorrowConflict),
+// `reject_for_var_move_in_loop.gg` (E_MoveInLoop), the four single-owner-Callable
+// init rejects (`reject_callable_bind_bare` / `_ctor_bare` / `_enum_variant_bare`
+// / `_for_var_bind`, all E_MoveWithoutOperator), and the Copy-axis struct PIN
+// `copy_struct_field_borrow_ok.gg` (an all-int struct-field bare read under `&h`
+// that ACCEPTs + runs). C and LLVM reject/run via the shared backend-independent
+// semantic checker; the self-host renders each reject code off its typed
+// `DiagKind`. Every floor rose by all TWELVE (202 → 214).
 //
-// FOUR of the remaining five are the single-owner-Callable init rejects
-// (`reject_callable_bind_bare` / `_ctor_bare` / `_enum_variant_bare` /
-// `_for_var_bind`, all E_MoveWithoutOperator). C and LLVM reject them (the +12
-// above). The SELF-HOST lane does NOT: its typechecker does not yet treat
-// `Callable` as single-owner at init boundaries, so it ACCEPTS (builds + runs)
-// those four bare-init programs — a KNOWN, FILED self-host gap (TODO.md). Those
-// four fixtures therefore MISMATCH the self-host lane BY DESIGN (they EXPOSE the
-// gap with the expected verdict = what the language SHOULD do — a reject — never
-// ratifying the wrong behavior, per "Don't redesign around compiler gaps").
-//
-// The FIFTH is `copy_struct_field_borrow_ok.gg` — the counterfactual-verified PIN
-// on the #11 Copy-axis STRUCT extension (an all-int struct-field bare read under
-// `&h`; reverting the oracle's ty_is_copy to Prim-only turns it red, which the
-// scalar `copy_field_borrow_ok.gg` does not). C and LLVM ACCEPT and run it (the
-// shared checker's is_copy_type recurses structs). The SELF-HOST lane's Copy axis
-// is SCALAR-ONLY (the RV-D-filed "self-host twin of RV-F's Copy-axis narrowing",
-// TODO.md), so its D10(b) mirror wrongly REJECTS the program (E_BorrowConflict at
-// the driver) — a by-design BUILD-FAIL on that lane until the RV-D twin lands.
-//
-// So the self-host floor rises by only SEVEN (202 → 209), holding FIVE below the
-// corpus across those two documented gaps (mirrors the historical trap-fixture
-// staging, where a fixture missed a lane by design and the floor held below the
-// total until the lane caught up). When either gap is fixed, flip the affected
-// fixtures to lane-MATCH and raise SELFHOST_MATCH_FLOOR in the same commit.
+// The self-host lane now reaches all twelve. The two former gaps are CLOSED:
+// (a) it enforces the single-owner INIT class at the bind / reassign / ctor /
+// struct-literal / enum-variant boundaries (`reject_single_owner_init`, params
+// exempt only at bind/reassign — mirroring production's
+// `require_explicit_move_for_single_owner_init` + `check_value_needs_move`), so
+// the four bare-init programs REJECT E_MoveWithoutOperator instead of building +
+// running; and (b) it computes the struct/enum Copy axis (`compute_is_copy`, the
+// DUAL of `compute_drop_taint`), so `copy_struct_field_borrow_ok.gg`'s all-int
+// struct is Copy — the D10(b) place-overlap check ACCEPTs the bare field read
+// under `&h` (was a scalar-only BUILD-FAIL). The self-host floor now equals the
+// corpus (202 → 214), level with C and LLVM.
 const C_MATCH_FLOOR: usize = 214;
 const LLVM_MATCH_FLOOR: usize = 214;
-const SELFHOST_MATCH_FLOOR: usize = 209;
+const SELFHOST_MATCH_FLOOR: usize = 214;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the TOTAL seed COUNT (202 pre-RV-F + the 12 RV-F seeds = 214). It EQUALS the C
-/// and LLVM MATCH floors (both reject/run the whole corpus); the self-host floor
-/// is FIVE below it — the four single-owner-Callable init rejects the self-host
-/// does not yet enforce + the one Copy-axis struct-field ACCEPT it wrongly
-/// rejects (the KNOWN gaps documented above).
+/// the TOTAL seed COUNT (202 pre-RV-F + the 12 RV-F seeds = 214). It EQUALS all
+/// three production MATCH floors (C, LLVM, and self-host all reject/run the whole
+/// corpus).
 const MIN_FIXTURES: usize = 214;
 
 // ─────────────────────────── infrastructure ────────────────────────────

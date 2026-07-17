@@ -597,6 +597,63 @@ void compute_drop_taint(Module module, ScopeTable &scopes, TypeTable &types):
                 else:
                     pass
 
+# D10(b) Copy-axis computation — the DUAL of `compute_drop_taint`. Closes
+# `DefInfo.is_copy` over the struct-field / enum-payload graph so a struct/enum
+# is Copy iff it is NOT drop-tainted AND every field / variant payload is
+# (transitively) Copy — mirroring Rust `is_copy_type`'s struct/enum recursion
+# (src/semantic/safety/type_utils.rs:49-80). NON-Copy is the absorbing direction
+# (taint's Copy dual): seed every non-tainted type-def optimistically Copy, then
+# flip to non-Copy the moment any field is non-Copy, iterating to a fixed point.
+# MUST run AFTER `compute_drop_taint` (it reads is_drop_tainted). Without it the
+# self-host Copy axis is scalar-only and OVER-REJECTS a struct-of-scalars bare
+# read paired with an overlapping `&` writer (the RV-D Copy-axis twin).
+void compute_is_copy(Module module, ScopeTable &scopes, TypeTable &types):
+    # Seed: a struct/enum def is optimistically Copy unless already drop-tainted.
+    for item in module.items:
+        match item:
+            case IStruct(struct_def):
+                if scopes.lookup(struct_def.name) is Some(sdef_id):
+                    scopes.set_def_is_copy(sdef_id, not scopes.get_def(sdef_id).is_drop_tainted)
+            case IEnum(enum_def):
+                if scopes.lookup(enum_def.name) is Some(edef_id):
+                    scopes.set_def_is_copy(edef_id, not scopes.get_def(edef_id).is_drop_tainted)
+            else:
+                pass
+    # Fixpoint: flip a still-Copy def to non-Copy if ANY field/payload is non-Copy.
+    # `resolved_type_is_copy` reads the CURRENT flags, so a not-yet-flipped
+    # referenced struct reads Copy this round and is corrected the next — the
+    # monotone flip-to-non-Copy converges.
+    bool changed = true
+    while changed:
+        changed = false
+        for item in module.items:
+            match item:
+                case IStruct(struct_def):
+                    if scopes.lookup(struct_def.name) is Some(sdef_id):
+                        if scopes.get_def(sdef_id).is_copy:
+                            bool all_copy = true
+                            for field in struct_def.fields:
+                                int ft = ast_type_to_resolved(field.param_type.ty, field.param_type.span, scopes, &types)
+                                if not resolved_type_is_copy(ft, scopes, types):
+                                    all_copy = false
+                            if not all_copy:
+                                scopes.set_def_is_copy(sdef_id, false)
+                                changed = true
+                case IEnum(enum_def):
+                    if scopes.lookup(enum_def.name) is Some(edef_id):
+                        if scopes.get_def(edef_id).is_copy:
+                            bool all_copy = true
+                            for variant in enum_def.variants:
+                                for fty in variant.fields:
+                                    int ft = ast_type_to_resolved(fty.ty, fty.span, scopes, &types)
+                                    if not resolved_type_is_copy(ft, scopes, types):
+                                        all_copy = false
+                            if not all_copy:
+                                scopes.set_def_is_copy(edef_id, false)
+                                changed = true
+                else:
+                    pass
+
 # A PLACE expr (mirror Rust `expr_is_place`, helpers.rs:19-31): an
 # identifier / self, a field sub-place, or a non-range index chain. `!x`
 # (EMove) and `.clone()` (EMethodCall) are NOT places → naturally legal.
@@ -681,6 +738,78 @@ void reject_tainted_place(SpannedExpr e, ScopeTable scopes, TypeTable &types, Re
         shape = 0
     String rname = place_root_name(e.expr)
     ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), drop_taint_message(rname, shape)))
+
+# ── Single-owner INIT-class rejection (the callable/Box/Task carve-out) ──
+# Mirrors Rust `needs_explicit_move` (src/semantic/safety/type_utils.rs:102) +
+# `require_explicit_move_for_single_owner_init` (check_expr.rs:24) +
+# `check_value_needs_move`'s single-owner arm (check_stmt.rs:1485). These types
+# have NO implicit-copy path in the lowering (unlike CoW-eligible user structs),
+# so a BARE identifier copy at an ownership-init boundary is E_MoveWithoutOperator
+# — write `!f` (move) or `f.clone()` (copy). This axis is DISJOINT from the
+# drop-taint axis (`reject_tainted_place`): production's `needs_explicit_move` ORs
+# drop-taint in, but `tainted_place_name` preempts it at every shared call site,
+# so excluding drop-taint here reproduces production exactly with no
+# double-diagnosis.
+
+# Is a resolved type single-owner-by-design (carve-out)? Callables (closures) +
+# Box/Task/TaskGroup/Guard. NOT drop-tainted types — that axis is
+# `reject_tainted_place`'s. Mirrors `needs_explicit_move` within the self-host
+# `ResolvedType` vocabulary (no RTOwned variant exists — types.gg).
+bool is_single_owner_type(int type_id, ScopeTable scopes, TypeTable types):
+    if type_id < 0 or type_id >= types.types.len():
+        return false
+    if is_drop_tainted_type(type_id, scopes, types):
+        return false
+    ResolvedType rt = get_rtype_at(types.types, type_id)
+    match rt:
+        case RTFunction(_p, _o, _r):
+            return true
+        case RTCallableTrait(_):
+            return true
+        case RTMutCallableTrait(_):
+            return true
+        case RTConsumeCallableTrait(_):
+            return true
+        case RTBoxedCallable(_kind, _fid):
+            return true
+        case RTGeneric(def_id, _args):
+            String n = scopes.get_def(def_id).name
+            return n == "Box" or n == "Task" or n == "TaskGroup" or n == "Guard"
+        else:
+            return false
+
+# The single-owner INIT-class reject message (mirrors Rust MoveWithoutOperator +
+# MoveReason::SingleOwner + MoveShape::Whole, errors.rs:1045/1049). An init-class
+# copy is always a WHOLE bare identifier (`f`), so only the whole-shape remedy.
+String single_owner_message(String name):
+    String why = "a single-owner type (no implicit copy)"
+    return f"cannot copy `{name}`: `{name}` is {why} — write `!{name}` to move or `{name}.clone()` to copy"
+
+# Reject a BARE single-owner identifier at an ownership-init boundary. `e` is the
+# bind RHS / ctor / struct-literal / enum-variant arg. `!x` (EMove) and
+# `x.clone()` (EMethodCall) are not bare identifiers → naturally accepted, as is a
+# fresh temp (a ctor/call result). `param_exempt` is TRUE only at bind/reassign:
+# a param is borrowed from the caller, so re-binding it copies a pointer not the
+# value (Rust `!def.is_param`, check_stmt.rs:1464). At a ctor / field-init
+# boundary NO exemption applies (check_expr.rs:45 gates on DkVariable only — a
+# param IS rejected there).
+void reject_single_owner_init(SpannedExpr e, bool param_exempt, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    match e.expr:
+        case EIdentifier(_name):
+            if ctx.resolution_map.contains(e.span.start):
+                int def_id = ctx.resolution_map.get(e.span.start).unwrap()
+                DefInfo d = scopes.get_def(def_id)
+                bool is_var = false
+                match d.kind:
+                    case DkVariable():
+                        is_var = true
+                    else:
+                        pass
+                if is_var and (not param_exempt or not d.is_param):
+                    if is_single_owner_type(d.type_id, scopes, types):
+                        ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), single_owner_message(d.name)))
+        else:
+            pass
 
 # Is this ECall callee a constructor (struct / enum / variant name)? Gates
 # D12 position 2 so a PLAIN function-call arg stays a legal BORROW
@@ -830,10 +959,10 @@ String render_place_sig(int own, String root, Vector[String] path):
 #   * Channel/Shared/Weak/Mutex  → Copy (opaque handle pointers)
 # Str/String, collections and buffer-owning structs are NOT. A struct/enum
 # (`RTDefined`) is Copy in production iff it is NOT drop-tainted AND all fields
-# are Copy — that needs a per-def all-fields-Copy flag the self-host does not yet
-# compute (see TODO: a `compute_is_copy` pass mirroring `compute_drop_taint`), so
-# it is kept CONSERVATIVE (non-Copy) here — safe (only ever over-rejects a
-# writer+Copy-struct-read pair, never under-rejects). Unknown → non-Copy.
+# are (transitively) Copy — resolved off the per-def `DefInfo.is_copy` flag that
+# `compute_is_copy` (below) closes over the field-graph fixpoint, the DUAL of
+# `compute_drop_taint`. This mirrors production `is_copy_type`'s struct/enum
+# recursion (type_utils.rs:49-80). Unknown → non-Copy.
 bool resolved_type_is_copy(int type_id, ScopeTable scopes, TypeTable types):
     if type_id < 0 or type_id >= types.types.len():
         return false
@@ -848,6 +977,14 @@ bool resolved_type_is_copy(int type_id, ScopeTable scopes, TypeTable types):
             return true
         case RTRef(_inner):
             return true
+        case RTDefined(def_id):
+            # A struct/enum is Copy iff NOT drop-tainted AND all fields/payloads
+            # are Copy (the precomputed flag). Production `is_copy_type` ANDs the
+            # same two axes (type_utils.rs:55-70). A drop-tainted type is NEVER
+            # Copy (D4/D12 mutual exclusion) — belt-and-suspenders since
+            # compute_is_copy already leaves tainted defs non-Copy.
+            DefInfo dd = scopes.get_def(def_id)
+            return not dd.is_drop_tainted and dd.is_copy
         case RTGeneric(def_id, _args):
             DefInfo gd = scopes.get_def(def_id)
             return gd.name == "Channel" or gd.name == "Shared" or gd.name == "Weak" or gd.name == "Mutex"
@@ -1478,6 +1615,9 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             check_local_borrow_bind(init_expr, &ctx)
             # D12 position 1 (bind): a bare bind of a live drop-tainted place.
             reject_tainted_place(init_expr, scopes, &types, &ctx)
+            # Single-owner init class (bind): a bare callable/Box/Task copy at a
+            # bind boundary. PARAM-EXEMPT (rebinding a param copies a pointer).
+            reject_single_owner_init(init_expr, true, scopes, &types, &ctx)
             check_safety_expr(init_expr, scope_id, &state, &scopes, &types, &ctx)
             # Liveness: a fresh binding makes its DefId live again (Rust mark_live);
             # inside a loop it is a loop-local (re-created each iteration → moving it
@@ -1494,6 +1634,9 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             check_local_borrow_bind(value, &ctx)
             # D12 position 1 (assign): a bare assign of a live drop-tainted place.
             reject_tainted_place(value, scopes, &types, &ctx)
+            # Single-owner init class (reassign): a bare callable/Box/Task copy at
+            # a whole-reassign boundary. PARAM-EXEMPT (same as bind).
+            reject_single_owner_init(value, true, scopes, &types, &ctx)
             # D12 position 6 (materialize-on-write via field/index write):
             # `s.id = 9` through a bare BORROW param of a drop-tainted type.
             reject_materialize_on_write(target, scopes, &types, &ctx)
@@ -1717,6 +1860,10 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                 else:
                     if call_is_ctor and a.ownership == OWN_BORROW:
                         reject_tainted_place(a.value, scopes, &types, &ctx)
+                        # Single-owner init class (ctor / enum-variant): a bare
+                        # callable/Box/Task ctor arg. NO param exemption at an
+                        # init boundary (a param IS rejected here).
+                        reject_single_owner_init(a.value, false, scopes, &types, &ctx)
                     check_safety_expr(a.value, scope_id, &state, &scopes, &types, &ctx)
             # STEP 3: D10(b) same-call place-overlap (args only, not callee), with
             # Part A's skip-move-first — runs AFTER liveness so `f(!x,!x)` is a
@@ -1842,15 +1989,46 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                 check_safety_expr(values.get(di).unwrap(), scope_id, &state, &scopes, &types, &ctx)
         case EStructLiteral(_name, _fields, args):
             # D12 position 2 (struct field-init): every struct-literal arg is a
-            # consuming init boundary. A bare `!x` arg is an EMove (marked below).
+            # consuming init boundary. A bare `!x` arg is an EMove (marked below)
+            # — the parser PRESERVES the prefix `!` on THIS path (an EMove node),
+            # so `reject_single_owner_init` (which only matches a bare
+            # EIdentifier) never fires on a legal `S{f: !callable}`; no RV-B
+            # sigil-discard misfire applies here (contrast the EDotShorthand arm
+            # below). This arm is also UNREACHABLE in today's parser: `S(...)`
+            # lowers to ECall and `{...}` to a dict/set literal, so parser.gg
+            # never constructs EStructLiteral — only meta.gg's
+            # substitution-rebuild arms name it, and they rebuild a pre-existing
+            # node. Kept for completeness / the meta path.
+            # ⚠ KNOWN MINOR ASYMMETRY (filed LOW, TODO): production's struct-brace
+            # single-owner check (check_expr.rs:1183) sits in the `!target_is_ref`
+            # branch and SKIPS ref-typed fields (a `Ref[Callable]` field init is a
+            # borrow, not a copy). This arm applies the reject to ALL args with no
+            # ref-field gate, so it would OVER-REJECT the exotic `S{cbref: f}`
+            # where `cbref` is a borrow-typed field. Over-reject-only (never UAF)
+            # and unreachable in today's corpus; the heavier per-field ref-flag
+            # mirror is deliberately deferred.
             for a in args:
                 reject_tainted_place(a, scopes, &types, &ctx)
+                # Single-owner init class (struct-literal field): NO param exempt.
+                reject_single_owner_init(a, false, scopes, &types, &ctx)
                 check_safety_expr(a, scope_id, &state, &scopes, &types, &ctx)
         case EDotShorthand(_variant, args):
             # D12 position 2 (enum variant init): `.Variant(x)` args are a
             # consuming init boundary.
+            # ⚠ RV-B latent asymmetry (filed LOW, TODO — cross-refs the RV-B
+            # DotShorthand entry): the EDotShorthand parser adapter
+            # (parser.gg:~2553) pushes only `dsa.value` and DISCARDS the parsed
+            # `!` move sigil, so a LEGAL `MyEnum e = .Wrap(!callable)` reaches
+            # here as a bare EIdentifier — `reject_single_owner_init` would then
+            # fire a SELF-CONTRADICTING "write `!callable` to move" on code that
+            # ALREADY wrote `!`. Dormant (SELFHOST 214/214 + bootstrap green ⇒ no
+            # corpus hit) and over-reject-only; RV-B's sigil-preserving adapter
+            # (which threads CallArg.ownership through, mirroring EStructLiteral's
+            # preserved EMove) clears this misfire.
             for a in args:
                 reject_tainted_place(a, scopes, &types, &ctx)
+                # Single-owner init class (enum-variant shorthand): NO param exempt.
+                reject_single_owner_init(a, false, scopes, &types, &ctx)
                 check_safety_expr(a, scope_id, &state, &scopes, &types, &ctx)
         case ETry(inner):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
@@ -3288,5 +3466,9 @@ void type_check_module(Module module, ScopeTable &scopes, TypeTable &types, Reso
     # item-walk, so the per-function `check_safety_*` reject pass reads a
     # complete taint set. Mirrors Rust pass-3.55 `compute_drop_taint`.
     compute_drop_taint(module, &scopes, &types)
+    # D10(b) Copy axis: close the `DefInfo.is_copy` flag over the field graph
+    # AFTER drop-taint (it reads is_drop_tainted), so the place-overlap check's
+    # `resolved_type_is_copy` sees the struct/enum Copy extent, not scalar-only.
+    compute_is_copy(module, &scopes, &types)
     for item in module.items:
         type_check_item(item, module_scope, &scopes, &types, &ctx)
