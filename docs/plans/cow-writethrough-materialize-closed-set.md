@@ -53,6 +53,21 @@
 > private copy, not the collection). **ggdef subset gaps** (both gates): `for &` iteration
 > (elaborate/mod.rs:967 "Increment B2"), enumerate 2-tuple pattern (:969 `binding_name`),
 > comprehension expression (no `elaborate_expr` arm).
+>
+> **1A REMEDIATION-2 (2026-07-17, from the fresh delta-review of remediation-1):** the
+> remediation itself introduced a NEW cross-lane divergence on the receiver-wrap shape —
+> `for i, x in (&a).enumerate():` printed `101` on Rust but `1` on the self-host (Rust's
+> dispatch stripped the wrapped receiver; the self-host strip was top-level-only). Fixed by
+> routing the self-host receiver box through the SAME shared `for_iterable_mode` (one strip
+> path per lane, all three `&` spellings identical), pinned by
+> `cow_for_enumerate_amp_recv_wrap.gg` (`101`). The delta-review also proved the new
+> enumerate alias-root sever was load-bearing-but-unpinned (disabling it silently corrupted
+> the alias source `101/101` with every test green) — now pinned by
+> `cow_for_enumerate_amp_alias_root.gg` (`1`/`101`, counterfactual-verified RED). Gate
+> citations corrected per ggdef-RUN measurement: statement-`&` enumerate shapes hit :967
+> (B2); the receiver-wrap and bare shapes hit :969 (`binding_name` — the `&` inside the
+> expression never sets statement ownership). Chain: base → rem-1 → rem-2, each step through
+> a fresh Fable pass; final SIGN OFF on the third pass.
 > **FINDING:** `Deque` is not constructible in surface Gorget (absent from `resolve.rs`
 > `BUILTIN_GENERIC_TYPES`; `language-design.md:3381` = VecDeque "Not yet implemented"), so the
 > brief's Deque probe was infeasible and dropped — the fix is `CollectionKind::Array`-generic, so
