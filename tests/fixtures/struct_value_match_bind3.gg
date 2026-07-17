@@ -1,0 +1,15 @@
+# 3-field struct constructor pattern — bind order must be declaration order.
+struct Triple:
+    int a
+    int b
+    int c
+
+void main():
+    Triple t = Triple(10, 20, 30)
+    match t:
+        case Triple(x, y, z):
+            print(x)
+            print(y)
+            print(z)
+        else:
+            print("no match")

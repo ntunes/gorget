@@ -639,6 +639,77 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
             effective_enum = "Result"
         elif effective_variant == "Some" or effective_variant == "None":
             effective_enum = "Option"
+    # Struct constructor patterns (`case Point(x, y):` on a struct value).
+    # Language reference §8.4 — constructors match enum *or* struct. Struct
+    # fields are 0-based on the value layout (no tag); mirror Rust
+    # `patterns.rs` `is_struct_ctor` → `field_load`. Detect before the
+    # enum hard-fail so a non-enum scrutinee no longer lowers as a bug.
+    String struct_ctor_name = ""
+    if gmod.type_infos.contains(effective_variant):
+        GirTypeInfo sti = gmod.type_infos.get(effective_variant).unwrap()
+        if not sti.is_enum:
+            struct_ctor_name = effective_variant
+    if struct_ctor_name == "" and effective_enum != "" and gmod.type_infos.contains(effective_enum):
+        GirTypeInfo sti2 = gmod.type_infos.get(effective_enum).unwrap()
+        if not sti2.is_enum:
+            struct_ctor_name = effective_enum
+    if struct_ctor_name == "" and effective_enum == "":
+        # Scrutinee-type fallback for bare `case Point(x, y):` when the
+        # pattern name wasn't enough (e.g. monomorph mangled type).
+        int scr_tid_s = ctx.locals.get(scrutinee).unwrap().type_id
+        if scr_tid_s >= 0 and scr_tid_s < gmod.type_table.len():
+            int peeled_s = scr_tid_s
+            GirType bt_s = gmod.type_table.get(scr_tid_s).unwrap()
+            match bt_s:
+                case GtPtr(inner):
+                    peeled_s = inner
+                case GtMutPtr(inner):
+                    peeled_s = inner
+                else:
+                    pass
+            String scr_tn_s = type_id_to_name(peeled_s, &gmod)
+            if gmod.type_infos.contains(scr_tn_s):
+                GirTypeInfo sti3 = gmod.type_infos.get(scr_tn_s).unwrap()
+                if not sti3.is_enum and (effective_variant == scr_tn_s or effective_variant == sti3.name):
+                    struct_ctor_name = scr_tn_s
+    if struct_ctor_name != "":
+        # Always matches (single-type structural destructure; wrong-name
+        # residual is typecheck-side / filed separately). Bind sub-pats via
+        # 0-based GIFieldLoad — not enum tag/payload helpers.
+        int sfi = 0
+        while sfi < sub_pats.len():
+            SpannedPattern ssp = sub_pats.get(sfi).unwrap()
+            match ssp.pat:
+                case PWildcard:
+                    pass
+                case PBinding(sbname):
+                    int sfty = I64_TYPE
+                    String sftype_name = ""
+                    if gmod.type_infos.contains(struct_ctor_name):
+                        GirTypeInfo sti_f = gmod.type_infos.get(struct_ctor_name).unwrap()
+                        if sfi < sti_f.fields.len():
+                            GirFieldInfo sff = sti_f.fields.get(sfi).unwrap()
+                            sftype_name = sff.type_name.clone()
+                            sfty = resolve_field_gir_type(sftype_name, &gmod)
+                    bool sfield_res = sftype_name != "" and is_resource_type_name(sftype_name, &gmod)
+                    Option[String] sb_opt = Some(sbname)
+                    int sdst = -1
+                    if sfield_res:
+                        # Resource field: Ptr-typed LoBorrowed alias (mirrors
+                        # EFieldAccess A.2) so consume sites clone on demand.
+                        int sdst_ty = register_ptr(&gmod, sfty)
+                        sdst = add_local_with(&ctx, sdst_ty, sb_opt, LoBorrowed(), BoNone())
+                        set_field_borrow(&ctx, sdst, scrutinee, sfi)
+                    else:
+                        # Scalar / non-resource: value-typed field load.
+                        sdst = add_local(&ctx, sfty, sb_opt)
+                    emit(&ctx, GIFieldLoad(sdst, scrutinee, sfi))
+                    nl_put(&ctx, sbname, sdst)
+                else:
+                    lower_fail("nested non-binding pattern in struct PConstructor — wildcard fallback (got: " + pat_kind(ssp.pat) + ")")
+            sfi = sfi + 1
+        set_terminator(&ctx, GTJump(match_bb))
+        return
     if effective_enum == "":
         # Truly nothing we can do. Hits on monomorphized Option / Result
         # which use `__` separators the __field_read_ parser can't split

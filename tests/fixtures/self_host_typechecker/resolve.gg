@@ -291,7 +291,7 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
             pass
         case IMetaAssert():
             pass
-        case IMetaIf():
+        case IMetaIf(_, _, _):
             pass
         case IMetaLog():
             pass
@@ -374,7 +374,7 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
             pass
         case IMetaAssert():
             pass
-        case IMetaIf():
+        case IMetaIf(_, _, _):
             pass
         case IMetaLog():
             pass

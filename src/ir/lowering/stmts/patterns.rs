@@ -1002,14 +1002,26 @@ pub fn emit_pattern_bindings(
             // Move semantics: zero the scrutinee after extracting all variant fields.
             // Prevents double-free when both extracted values and the scrutinee are dropped.
             // Match arms are exclusive — only one arm executes, so zeroing is safe.
+            // Enum *and* struct resource fields: last-use clone-elision must
+            // zero the scrutinee after extract so bindings own without double-free.
+            // Pre-Track-A this was enum-only, so `match s: case S(r):` on a
+            // last-use resource-struct could double-free / skip zero (Core #8).
             let has_resource_field = fields.iter().enumerate().any(|(i, _)| {
                 if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
-                    if let TypeDefKind::Enum(ref e) = type_def.kind {
-                        if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
-                            if let Some(f) = v.fields.get(i) {
+                    match &type_def.kind {
+                        TypeDefKind::Enum(e) => {
+                            if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
+                                if let Some(f) = v.fields.get(i) {
+                                    return ctx.type_registry.is_resource_type(f.type_id);
+                                }
+                            }
+                        }
+                        TypeDefKind::Struct(s) => {
+                            if let Some(f) = s.fields.get(i) {
                                 return ctx.type_registry.is_resource_type(f.type_id);
                             }
                         }
+                        _ => {}
                     }
                 }
                 false

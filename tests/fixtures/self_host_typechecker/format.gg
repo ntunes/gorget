@@ -496,7 +496,7 @@ String format_item(Item item):
             return f"meta type {name}(...)"
         case IMetaAssert():
             return "meta assert ..."
-        case IMetaIf():
+        case IMetaIf(_, _, _):
             return "meta if ..."
         case IMetaLog():
             return "meta log ..."

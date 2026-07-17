@@ -1,0 +1,12 @@
+# Wrong arity on a struct constructor pattern is a type error.
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(1, 2)
+    match p:
+        case Point(a):
+            print(a)
+        else:
+            print("no match")

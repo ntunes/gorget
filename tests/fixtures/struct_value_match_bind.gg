@@ -1,0 +1,14 @@
+# Struct constructor patterns bind fields in declaration order (0-based).
+# Language reference §8.4 — constructor patterns match enum *or* struct.
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(1, 2)
+    match p:
+        case Point(x, y):
+            print(x)
+            print(y)
+        else:
+            print("no match")

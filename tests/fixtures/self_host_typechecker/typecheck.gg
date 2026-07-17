@@ -35,7 +35,8 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
+from std.conv import int_to_str
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -2519,7 +2520,7 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
 # ── Pattern type assignment ────────────────────────────────
 # Recursively assigns types to pattern bindings based on a scrutinee type.
 
-void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_id, ScopeTable &scopes, TypeTable &types):
+void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match pattern.pat:
         case PBinding(name):
             if scopes.lookup_in_subtree_untyped(scope_id, name) is Some(def_id):
@@ -2535,14 +2536,32 @@ void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_
                     scopes.set_def_type(def_id, scrutinee_type)
 
         case PConstructor(variant_name, fields):
-            # Resolve variant payload types from the scrutinee type
+            # Resolve variant/struct field types from the scrutinee type
             Vector[int] field_types = resolve_variant_field_types(scrutinee_type, variant_name, scopes, types)
+            # Arity gate (mirrors Rust typecheck.rs assign_pattern_types): when
+            # we know the payload/field list, wrong arity is a type error
+            # (was silent — struct patterns then mis-bound via enum tag offset).
+            if field_types.len() > 0 and field_types.len() != fields.len():
+                String bare = variant_name
+                int dpi = -1
+                int ci2 = 0
+                while ci2 < variant_name.len():
+                    if variant_name.char_at(ci2) == ".":
+                        dpi = ci2
+                    ci2 = ci2 + 1
+                if dpi >= 0:
+                    bare = ""
+                    int di = dpi + 1
+                    while di < variant_name.len():
+                        bare = bare + variant_name.char_at(di)
+                        di = di + 1
+                ctx.diagnostics.push(Diagnostic.error(pattern.span, DkTypeMismatch(), "type mismatch: expected `pattern with " + int_to_str(field_types.len()) + " field(s) for `" + bare + "``, found `" + int_to_str(fields.len()) + " field(s)`"))
             for (i, field) in fields.enumerate():
                 int ft = -1
                 if i < field_types.len():
                     ft = get_int_at(field_types, i)
                 if ft >= 0:
-                    assign_pattern_types(field, ft, scope_id, &scopes, &types)
+                    assign_pattern_types(field, ft, scope_id, &scopes, &types, &ctx)
 
         case PDotShorthand(variant_name, fields):
             Vector[int] field_types = resolve_variant_field_types(scrutinee_type, variant_name, scopes, types)
@@ -2551,7 +2570,7 @@ void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_
                 if i < field_types.len():
                     ft = get_int_at(field_types, i)
                 if ft >= 0:
-                    assign_pattern_types(field, ft, scope_id, &scopes, &types)
+                    assign_pattern_types(field, ft, scope_id, &scopes, &types, &ctx)
 
         case PTuple(elements):
             # Destructure tuple type
@@ -2564,7 +2583,7 @@ void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_
                             if i < elem_ids.len():
                                 et = get_int_at(elem_ids, i)
                             if et >= 0:
-                                assign_pattern_types(elem, et, scope_id, &scopes, &types)
+                                assign_pattern_types(elem, et, scope_id, &scopes, &types, &ctx)
                     else:
                         pass
 
@@ -2616,6 +2635,32 @@ Vector[int] resolve_variant_field_types(int scrutinee_type, String variant_name,
                     result.push(get_int_at(type_args, 0))
 
         case RTDefined(def_id):
+            # Struct constructor pattern: `match p: case Point(x, y):` when
+            # scrutinee is a struct named Point. Ordered field TypeIds are
+            # registered under the bare struct name in IStruct (as a single
+            # type or RTTuple for multi-field). Mirrors Rust resolve_variant_field_types.
+            DefInfo sdef_info = scopes.get_def(def_id)
+            bool is_struct_def = false
+            match sdef_info.kind:
+                case DkStruct():
+                    is_struct_def = true
+                else:
+                    pass
+            if is_struct_def and sdef_info.name == lookup_name:
+                if types.variant_field_types.contains(lookup_name):
+                    int sft = types.variant_field_types.get(lookup_name).unwrap()
+                    if sft >= 0 and sft < types.types.len():
+                        ResolvedType srt = get_rtype_at(types.types, sft)
+                        match srt:
+                            case RTTuple(selems):
+                                for e in selems:
+                                    result.push(e)
+                                return result
+                            else:
+                                pass
+                    result.push(sft)
+                    return result
+                return result
             # User-defined enum — look up variant field types from type table
             if types.variant_field_types.contains(lookup_name):
                 int vft = types.variant_field_types.get(lookup_name).unwrap()
@@ -2701,7 +2746,7 @@ void assign_is_condition_types(SpannedExpr expr, int scope_id, ScopeTable &scope
             if not negated:
                 int scrut_type = infer_expr_type(*inner, scopes, &types, &ctx)
                 if scrut_type >= 0:
-                    assign_pattern_types(*pattern, scrut_type, scope_id, &scopes, &types)
+                    assign_pattern_types(*pattern, scrut_type, scope_id, &scopes, &types, &ctx)
                 return
 
         else:
@@ -2978,7 +3023,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             int scrut_type = infer_expr_type(SpannedExpr((*scrutinee).expr, (*scrutinee).span), scopes, &types, &ctx)
             for arm in arms:
                 if scrut_type >= 0:
-                    assign_pattern_types(arm.pattern, scrut_type, scope_id, &scopes, &types)
+                    assign_pattern_types(arm.pattern, scrut_type, scope_id, &scopes, &types, &ctx)
                 type_check_stmts(arm.body, scope_id, &scopes, &types, &ctx)
 
         else:
@@ -3448,12 +3493,12 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                             tuple_elems.push(types.int_id)
                             tuple_elems.push(elem_type)
                             int tuple_type = types.add_type(RTTuple(tuple_elems))
-                            assign_pattern_types(pat, tuple_type, scope_id, &scopes, &types)
+                            assign_pattern_types(pat, tuple_type, scope_id, &scopes, &types, &ctx)
                 else:
                     pass
             if not is_enumerate:
                 if extract_element_type(iter_type, scopes, types) is Some(elem_type):
-                    assign_pattern_types(pat, elem_type, scope_id, &scopes, &types)
+                    assign_pattern_types(pat, elem_type, scope_id, &scopes, &types, &ctx)
             ctx.loop_depth = ctx.loop_depth + 1
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
             ctx.loop_depth = ctx.loop_depth - 1
@@ -3476,7 +3521,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             int scrutinee_type = infer_expr_type(expr, scopes, &types, &ctx)
             for arm in arms:
                 if scrutinee_type >= 0:
-                    assign_pattern_types(arm.pattern, scrutinee_type, scope_id, &scopes, &types)
+                    assign_pattern_types(arm.pattern, scrutinee_type, scope_id, &scopes, &types, &ctx)
                 type_check_stmts(arm.body, scope_id, &scopes, &types, &ctx)
 
         case SWith(expr, name, body):
@@ -3641,11 +3686,21 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                     seen_fields.push(field.param_name)
             # Build a field type lookup table for EFieldAccess inference.
             # Store struct_name.field_name → type_id in variant_field_types dict.
+            # Also store ordered positional field types under the bare struct
+            # name (single type or RTTuple) so constructor patterns
+            # `case Point(x, y):` resolve field types + arity (Core #9).
+            Vector[int] ordered_field_ids = Vector[int]()
             for field in sdef.fields:
                 int field_type_id = ast_type_to_resolved(field.param_type.ty, field.param_type.span, scopes, &types)
                 if field_type_id >= 0:
                     String key = f"{sdef.name}.{field.param_name}"
                     types.variant_field_types.put(key, field_type_id)
+                    ordered_field_ids.push(field_type_id)
+            if ordered_field_ids.len() == 1:
+                types.variant_field_types.put(sdef.name, get_int_at(ordered_field_ids, 0))
+            elif ordered_field_ids.len() > 1:
+                int struct_tuple_tid = types.add_type(RTTuple(ordered_field_ids))
+                types.variant_field_types.put(sdef.name, struct_tuple_tid)
 
         case IEnum(edef):
             # Register variant payload types in the type table's variant map
