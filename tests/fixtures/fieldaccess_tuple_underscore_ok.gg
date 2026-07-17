@@ -1,0 +1,8 @@
+# FieldAccess over-rejection guard for tuples: the underscore alias
+# `._0`/`._1` is the legal FieldAccess spelling for tuple elements
+# (language-reference §4.2 / §7.8). Must typecheck AND run — a blanket
+# `Tuple => NoField` would false-reject this path.
+void main():
+    auto t = (10, 20)
+    print(t._0)
+    print(t._1)

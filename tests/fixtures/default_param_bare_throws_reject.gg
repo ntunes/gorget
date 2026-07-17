@@ -1,0 +1,13 @@
+# R5: default-param expressions are definition-site values evaluated in a
+# non-propagating context — a bare fallible call must REJECT with
+# E_MissingFallibleMark (same discipline as a statement discard). Free-
+# function form of the class pin (Track C / T2c).
+int boom() throws String:
+    throw "x"
+    return 0
+
+int f(int x = boom()):
+    return x
+
+void main():
+    print(f())

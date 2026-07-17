@@ -1,0 +1,18 @@
+# R5 class pin (Track C / T2c): bare fallible default on an EQUIP METHOD must
+# also reject with E_MissingFallibleMark. Equip methods go through the same
+# check_function default-param walk as free functions; this sibling pins that
+# the walk is not free-function-only.
+int boom() throws String:
+    throw "x"
+    return 0
+
+struct S:
+    int v
+
+equip S:
+    int m(self, int x = boom()):
+        return self.v + x
+
+void main():
+    S s = S(1)
+    print(s.m())

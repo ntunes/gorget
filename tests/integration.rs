@@ -1738,6 +1738,22 @@ fn fieldaccess_rwlock_container_reject() {
     check_gg_fails("fieldaccess_rwlock_container_reject.gg", FIELDACCESS_CODE);
 }
 
+// NEGATIVE (T2b / Track C): a named field other than `._N` on a tuple must
+// REJECT — only the underscore alias is legal FieldAccess; bare `.0` is
+// TupleFieldAccess. Pins E_NoFieldFound on `t.foo`.
+#[test]
+fn fieldaccess_tuple_named_field_reject() {
+    check_gg_fails("fieldaccess_tuple_named_field_reject.gg", FIELDACCESS_CODE);
+}
+
+// POSITIVE (T2b / Track C over-rejection guard): `t._0` / `t._1` FieldAccess
+// aliases on a tuple must still typecheck AND run (a blanket `Tuple => NoField`
+// would false-reject this path).
+#[test]
+fn fieldaccess_tuple_underscore_ok() {
+    run_gg("fieldaccess_tuple_underscore_ok.gg", "10\n20");
+}
+
 // NEGATIVE, BOTH-LANE (RV-A self-host mirror), Rust half: `.field` on a
 // String primitive. The self-host half is
 // `self_host_driver_rejects_field_on_string` (infer.gg RTPrimitive arm →
@@ -28210,6 +28226,20 @@ fn default_params_basic() {
         "default_params_basic.gg",
         "8\n15\nhello Alice\nhello world",
     );
+}
+
+// R5 / T2c (Track C): default-param exprs are non-propagating — a bare fallible
+// free-function default must REJECT with E_MissingFallibleMark.
+#[test]
+fn default_param_bare_throws_reject() {
+    check_gg_fails_missing_mark("default_param_bare_throws_reject.gg");
+}
+
+// R5 / T2c class pin: bare fallible default on an EQUIP METHOD must also reject
+// (equip methods share check_function's default-param walk).
+#[test]
+fn default_param_method_bare_throws_reject() {
+    check_gg_fails_missing_mark("default_param_method_bare_throws_reject.gg");
 }
 
 // P0 self-host default-arg fill proof. `f(5)` synthesizes the `b = 10`
