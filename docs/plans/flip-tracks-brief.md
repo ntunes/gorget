@@ -1,13 +1,17 @@
 # EXECUTOR BRIEF — self-host FLIP TRACKS: callable-init class (+4) + Copy-axis struct (+1) → SELFHOST floor 214
 
-**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 1 (mechanics verified sound
+**Status:** DRAFT v4 — in the ≥3-fresh-pass review gauntlet. Pass 1 (mechanics verified sound
 end-to-end; module-doc range narrowed preserving History; MEMORY parity lag fixed by the
 parent) → v2. Pass 2 (independent re-derivation: exactly-5-sites confirmed by exhaustive grep;
 collection-put/closure-capture confirmed separate classes, not holes; no RTOwned variant —
 correct omission; 2 reservations: the rewrite lower bound extended to :48 — the lanes sentence
 must say ALL THREE post-flip; the EDotShorthand `!`-discard makes the new reject
 SELF-CONTRADICTING on legal `.Wrap(!callable)` — dormant, documented as the second latent
-asymmetry with RV-B cross-refs) FOLDED into this v3. Do not execute until a clean pass.
+asymmetry with RV-B cross-refs) → v3. Pass 3 (both range-folds verified EXACT against source;
+1 fold-residue reservation: the RV-B note over-reached to the structurally-UNREACHABLE
+EStructLiteral arm where it would contradict the existing correct EMove comment — note now
+confined to EDotShorthand, EStructLiteral gets the ref-field note + a reconciled
+unreachability sentence) FOLDED into this v4. Do not execute until a clean pass.
 **Scout evidence (THE spec's measurements):** `docs/plans/flip-tracks-scout.md` — GO, fully
 prototyped + measured. Prototype: `/tmp/flip_proto.patch` (293 lines, backup
 `/tmp/recover_flip_proto.patch`; touches ONLY `tests/fixtures/self_host_typechecker/scope.gg`
@@ -58,10 +62,17 @@ and are exactly the 5 flipping).
      `MyEnum e = .Wrap(!callable)` presents as a bare `EIdentifier` and the new
      `reject_single_owner_init` would fire a SELF-CONTRADICTING "write `!callable` to move" on
      code that already wrote `!`. Dormant (214/214 + bootstrap green prove no corpus hit) and
-     over-reject-only, but it must be findable: add a comment at BOTH literal arms
-     (EDotShorthand + EStructLiteral) citing RV-B, and a LOW TODO cross-referencing the RV-B
-     entry — RV-B's sigil-preserving adapter clears both misfires at once. (The ECall-ctor arm
-     is immune: it gates on `a.ownership == OWN_BORROW`.)
+     over-reject-only, but it must be findable. **Scope precisely (pass-3 correction):** the
+     RV-B sigil-discard note goes on the EDotShorthand arm ONLY, + a LOW TODO
+     cross-referencing the RV-B entry (TODO ~:253; its sigil-preserving adapter clears this
+     misfire). The **EStructLiteral arm is structurally UNREACHABLE today** (the parser never
+     constructs that node — `S(...)` is an ECall, `{...}` is dict/set; only meta.gg's
+     substitution-rebuild arms mention it and they need a pre-existing node): do NOT put an
+     RV-B note there — it would contradict the existing correct comment at
+     `typecheck.gg:~1843-1848` (prefix-`!x` → EMove IS preserved on that path). Instead keep
+     only the ref-field-skip note there, plus (optionally) one plain sentence that the arm is
+     currently unreachable, RECONCILED with the existing comment so the arm carries one
+     coherent story. (The ECall-ctor arm is immune: it gates on `a.ownership == OWN_BORROW`.)
    - The documented asymmetry note (scout's "KNOWN MINOR ASYMMETRY"): the self-host
      struct-literal arm lacks production's ref-typed-field skip (`check_expr.rs:1183`
      `!target_is_ref`) — over-reject-only, unreachable in today's corpus. Put the one-line
