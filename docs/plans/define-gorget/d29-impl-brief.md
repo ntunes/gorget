@@ -1,6 +1,18 @@
 # EXECUTOR BRIEF — D29 implementation: call-site `!` (visible error propagation), all lanes
 
-**Status:** DRAFT — in the ≥3-fresh-pass review gauntlet. Do not execute until a clean pass.
+**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet. Pass 1 (semantics section
+verified faithful to the LOG incl. the kind-2 peel pin; scout claims + all cited source
+locations verified; the capture machinery located — `decl_type_hint`/`dest_is_result`,
+kind-1 capture EXISTS today; TWO HIGH reservations: the checker-design + gates sections
+predated the capture amendment — kind-2 enforcement rewritten to bare-DISCARD-only at
+statement position with the three existing keep-the-Result sites' re-scoping enumerated
+[dest_is_result keeps-unmarked / auto-capture REMOVED / match-arm suppress removed for
+kind-1, kept for kind-2], and the marked-match acceptance gate flipped to the
+amendment-correct NEG+POS pair; +R3 the stale 267 census now re-measure-mandated; +R4
+four-lane conformance + floors + anchored-test grep gates added; +R5 machinery named;
+"bare" disambiguated) ALL FOLDED into this v2. Do not execute until a clean pass. NOTE for
+reviewers: `src/semantic/safety/check_expr.rs` gains an additive `Propagate` arm — RV-B's
+zone; the sequencing STOP covers it.
 **Normative semantics:** `decisions.md` LOG — the D29 formal ratification + its six
 follow-through pins + the **2026-07-17 CAPTURE AMENDMENT** (read all of them FIRST; where
 any other document disagrees, the LOG wins).
@@ -47,19 +59,50 @@ holds the grammar evidence and disposition table.
 - **Typed metadata, not the proto's shortcut:** the signature-side `throws` field uses a
   typed `ThrowsSpec::{No, Inferred, Explicit(TypeId)}`-shaped representation — the
   prototype's `"!inferred"` STRING SENTINEL violates layering rule 2 and must NOT ship.
-- **Checker:** kind-1 chokepoint = `resolve_throws_call_type` (`typecheck.rs:~5499`; all 4
-  throws-call sites funnel — verified). Kind-2 has NO chokepoint (`typecheck.rs:~2061-2065`
-  never peels) — BUILD one: a single shared decision point for "this call is fallible"
-  covering the free-fn `else` (~:2079) + the method fallbacks, with an ARM-COUNT LINT
-  (`tests/lints.rs`) so the next call-shape is forced through it (mirror the throws lint).
-  Enforcement: bare fallible call → `E_MissingFallibleMark` UNLESS the expected-type at an
-  explicitly-annotated binding/param/return position is `Result[T,E]` with matching E
-  (capture — no peel, no mark); marked call → peel to `T` + require a disposition;
-  mark+capture → the dedicated error with fix-it.
-- **THE TWO-LAYER TRANSPARENCY FIX (mandatory-gate finding):** the `Propagate` node eats
-  the `suppress_auto_prop` one-shot in BOTH the typechecker AND the IR lowerer — the scout
-  APPLIED both fixes; without them `f()! catch` mis-types and `match f()!:` passes `gg
-  check` then SIGSEGVs. **A marked-match-scrutinee RUN test is an acceptance gate.**
+- **Checker — TWO ARCHITECTURALLY DIFFERENT rules (pass-1 R1: do NOT apply kind-1's rule
+  to kind-2):**
+  **KIND-1 (throws callee).** Chokepoint = `resolve_throws_call_type` (`typecheck.rs:~5499`;
+  all 4 throws-call sites funnel — verified). Enforcement: unmarked throws call →
+  `E_MissingFallibleMark` UNLESS captured; marked → peel to `T` + require a disposition;
+  mark+capture → the dedicated error with fix-it. **The capture rule already has its
+  machinery (pass-1 R5 — do not build from scratch):** `decl_type_hint` (`typecheck.rs:~563`;
+  set at bindings ~:1499, call-arg params ~:1923/:2099, returns ~:3343) already drives
+  `dest_is_result` at the throws chokepoint (~:5511-5513) — kind-1 capture EXISTS today;
+  the work is re-scoping it per the amendment:
+  (a) explicit-Result `dest_is_result` — KEEP, now legal UNMARKED (and mark+capture = the
+  new error); (b) the `auto`/inferred capture (~:4047) — **REMOVE**: `auto r = f()` now
+  types as `T` and requires the mark; (c) the match-Ok/Error-arm suppress
+  (`arms_match_result_or_option`, ~:3243) — **REMOVE for kind-1**: `match f():` scrutinee
+  stays `T`-typed, `match f()!:` peels (so Ok/Error arms are a CHECK ERROR — bind to a
+  Result first); the same helper KEEPS working for kind-2 (matching a Result VALUE as
+  today).
+  **KIND-2 (declared-Result callee).** No expected-type rule at all — Result VALUE flows
+  (bind, match, pass, chain, receiver) are ALL legal unmarked (the amendment). Enforcement
+  is **bare-DISCARD-only, a STATEMENT-position property, not a call-node one**: an
+  expression-statement whose value is a kind-2 call's un-consumed `Result` →
+  `E_MissingFallibleMark` (mark to propagate, or attach a handler). Plus the `!`-path:
+  a MARKED kind-2 call peels to `T` and activates the channel (prop/catch/rethrow) — this
+  needs the classification point ("is this callee kind-2") built at the call-typing layer
+  (the free-fn `else` ~:2079 + method fallbacks, `typecheck.rs:~2061-2065` never peel
+  today) with an ARM-COUNT LINT (`tests/lints.rs`) so the next call-shape is forced through
+  it (mirror the throws lint). Verify combinator calls fall out correctly with NO carve-out
+  (a combinator is a kind-2 call whose Result is consumed by the chain — legal unmarked);
+  a needed carve-out = STOP-AND-REPORT.
+  **Terminology (disambiguation):** "unmarked call" = no `!` (the E_MissingFallibleMark
+  domain); "marked bare statement" = `f()!` as a statement with no attachment (LEGAL in a
+  throws fn: discard Ok, propagate Error — the original pin). Do not conflate.
+- **THE TWO-LAYER TRANSPARENCY FIX (mandatory-gate finding, AMENDMENT-CORRECTED per pass-1
+  R2):** the `Propagate` node eats the `suppress_auto_prop` one-shot in BOTH the typechecker
+  AND the IR lowerer — the scout APPLIED both fixes for the `catch`/`rethrow` attachments,
+  and those remain correct and required (`f()! catch` must type and RUN). BUT the scout's
+  marked-match-scrutinee case encoded PRE-amendment behavior (keep-the-Result so
+  `match f()!:` with Ok/Error arms runs) — under the amendment that exact program is a
+  CHECK ERROR (the scrutinee peels; bind to a Result first). **Acceptance gates therefore:
+  (a) `f()! catch (e): …` types and RUNS (the transparency pin); (b) `match f()!:` with
+  Ok/Error arms → CHECK ERROR (NEG test — the amendment pin); (c)
+  `Result[T,E] r = f()` then `match r:` → RUNS (the capture-then-match POS pin); (d) the
+  kind-2 marked variants of (a). The scout's SIGSEGV class is covered by (a)+(c) reaching
+  the lowerer; nothing marked-match reaches it anymore by construction.**
 - **Diagnostics:** `E_MissingFallibleMark` registered (`errors.rs`; registry count 96→97;
   `spec/prose/diagnostic-codes.md` row); `E_UnhandledThrows` message flip per the pinned
   drafts; smith/D23 ratchets gain the new code.
@@ -67,10 +110,15 @@ holds the grammar evidence and disposition table.
   IS the oracle) + bang-space at `=`-adjacency; capture sites get NO mark.
 
 ### The migration (same round, second commit for bisectability)
-- Regenerate the census with the final checker: throws-kind = 61 prop + 206 handled = 267
-  marks expected (fixtures + spectests; lib has ZERO throws decls); kind-2 = ONLY the
-  bare-discard sites (the amendment leaves bind/match/pass/chain sites untouched) — COUNT
-  them first and report before migrating (an unexpectedly large count is a STOP-AND-REPORT).
+- Regenerate the census with the final checker **under the AMENDMENT's rules (pass-1 R3 —
+  the scout's 267 is STALE):** the scout's handled=206 INCLUDED throws-call Result-capture
+  sites measured via `dest_is_result`, which are now UNMARKED captures — the true
+  throws-kind mark count is 61 + (206 − the capture subset) **< 267**; a correct smaller
+  number is NOT a regression. Report the fresh split (prop / catch / rethrow / captures-now-
+  unmarked). Kind-2 = ONLY the bare-discard sites — COUNT them first and report before
+  migrating (an unexpectedly large count is a STOP-AND-REPORT). Beware the numeric
+  coincidence: 206 is ALSO the kind-2 declaration count — two different quantities; do not
+  conflate in the regen.
 - Run the fmt insertion across the corpus; every migrated fixture must build+run
   STDOUT-IDENTICAL (the scout proved the mechanics on 41 marks; now the full set).
 - The pinned HARDENING FIXTURE: a stdlib-shaped thin local `throws` wrapper exercising
@@ -107,8 +155,19 @@ chunk >10min by test name; NEVER background a final gate)
 5. Self-host: driver suite incl. the new lane tests; `self_host_bootstrap_fixed_point`
    (parser/typecheck.gg on the bootstrap path; budget 900s).
 6. `type_comparison`/`check_comparison` — the migration touches fixtures those nets compile;
-   report the fresh counts vs the 85/86 baselines; deltas explained-or-STOP.
+   report the fresh counts vs the DOCUMENTED baselines (regenerate, don't trust dated
+   figures); deltas explained-or-STOP.
 7. Registry lint: `grep -cE '=> "E_' src/semantic/errors.rs` == the new documented count.
+8. **Four-lane conformance (pass-1 R4 — D29 changes accept/reject on every lane):** new
+   `spec_conformance` fixtures for the disposition matrix's accept/reject flips (at minimum:
+   unmarked-throws-call reject; unmarked-capture accept; mark+capture reject;
+   kind-1-marked-match reject; bare-discard reject both kinds), adjudicated by all four
+   lanes; bump the C/LLVM/SELFHOST/GGDEF/MIN floors by the adds in the same commit with the
+   regenerated counts.
+9. **Emitted-shape / anchored-test grep (pass-1 R4):** before the gates, grep `tests/` for
+   anchored landmarks a new parser node + error code can trip (snapshot tests, message
+   asserts on the old E_UnhandledThrows wording, smith ratchet expectations); list what you
+   regenerated.
 
 ## Sizing note (honest)
 This is the largest track since the enforcement wave: parser+checker+fmt+three lanes+a
