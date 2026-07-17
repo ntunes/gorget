@@ -7,8 +7,7 @@
 > AT the bare alias; today the write is lost entirely, b=1). **Drop-taint × materialize:
 > MEASURED — the bare-param taint gate is ALREADY LIVE on all three judges (reject
 > E_MoveWithoutOperator); ggdef already rejects drop-tainted plain-`self`; production
-> writes through AND skips the gate (worse-than-filed). Disposition "reject" recorded
-> (owner ratification pending — see conversation 2026-07-16); 2E MUST route drop-tainted
+> writes through AND skips the gate (worse-than-filed). Disposition "reject" **RATIFIED (owner 2026-07-17 — ledger LOG "2T RATIFIED")**; 2E MUST route drop-tainted
 > receivers through the existing reject or it converts write-through into silent
 > clone→double-drop.** Discovery filed to TODO High: struct-value match patterns mis-bind
 > (rotated-by-one + arity unchecked, Core-#8). v2 folded reviewer reservations
@@ -126,7 +125,7 @@ Related owner notes: local `&`-binds may reopen later only if exclusivity-safe (
 | Untracked alias chains | devbook/11 | **Open** |
 | Loop-carried bare-param lazy mat | matcluster #2 | **Open** |
 | Match pattern bindings | prose 02 | Borrow; wave-0 probe |
-| **Drop-tainted value at any materialize-on-write site** | D4 / D12 + **this campaign’s seventh position** | **Open — owner ruling required before 2E** (see below) |
+| **Drop-tainted value at any materialize-on-write site** | D4 / D12 + **this campaign’s seventh position** | **REJECT — RATIFIED (owner 2026-07-17, ledger LOG)** |
 
 ### Write-through (`&` / owned place)
 
@@ -141,7 +140,7 @@ Related owner notes: local `&`-binds may reopen later only if exclusivity-safe (
 | Nested place under `&` (snag #53) | known_gaps | **Both open (F)** |
 | Compound through write-through place | `cow_amp_compound_writethrough` | **Done** (covered shapes) |
 
-### Drop-taint × materialize (queued decision — blocks Track 2E)
+### Drop-taint × materialize (✅ RATIFIED 2026-07-17: REJECT — the ledger LOG entry is normative; 2E unblocked)
 
 **Fact:** materialize-on-write is an **implicit copy**. D12/D4: drop-tainted types must not be implicitly duplicated at the six positions (`E_MoveWithoutOperator`). Materialize is a **seventh** implicit-copy position not yet enumerated as such in the closed-set tables.
 
@@ -268,9 +267,9 @@ Also: capture **parity baseline** command output (WRONG count) for wave-1 scoreb
 
 ### Wave 2 — Materialize completeness
 
-#### Track 2T / decision — drop-taint × materialize (**before 2E**)
+#### Track 2T — drop-taint × materialize (✅ ruling RATIFIED 2026-07-17: REJECT)
 
-- Owner ruling + implement reject (recommended) or alternate; negative fixtures; align messaging with D12 family.
+- Implement the reject at every materialize-on-write position; negative fixtures per position; D12-family messaging; all lanes (Core #9). Ships with or immediately before 2E.
 
 #### Track 2E — D2 plain-`self` materialize (both)
 

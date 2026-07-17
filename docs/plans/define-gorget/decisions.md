@@ -300,6 +300,23 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-07-17 — **🎯 2T RATIFIED (owner): drop-taint × materialize = REJECT — materialize-on-write
+  is the SEVENTH implicit-copy position.** At every materialize-on-write site (a write to a
+  bare/borrowed binding that would CoW-materialize a private copy), a DROP-TAINTED source
+  REJECTS with the D12 family (`E_MoveWithoutOperator`: write `!x` to move or `x.clone()` to
+  copy) instead of silently materializing — a silent materialize of a drop-tainted value is a
+  hidden clone, so the drop side-effect runs twice (the double-fd-close class). Plain VALUE
+  types keep silent materialize (the intended CoW semantics; the ratified D2-rider dead-write
+  diagnostic covers the dead-copy footgun); `&` write-through and explicit `!`/`.clone()`
+  unaffected. Grounding (wave-0 measured): the same taint gate is ALREADY LIVE on all three
+  judges at the assign position; ggdef already rejects drop-tainted plain-`self`; production
+  currently writes through AND skips the gate (worse-than-filed; ≥2 bugs per Core #8).
+  Obligations: negative fixtures per materialize position; all lanes per Core #9; messaging
+  aligned with the D12 family; **HARD PREREQUISITE to 2E** (without it, 2E's plain-`self`
+  flip converts today's write-through into silent clone→double-drop for tainted receivers).
+  Unblocks CoW WAVE 2 (2T→2E leads; wave 2 opens as its own focused round after the D29
+  chain integrates + the repo-hygiene slice).
+
 - 2026-07-17 — **🎯 D29 CAPTURE AMENDMENT RATIFIED (owner; supersedes the catch-attachment
   pin's "Result destination is a disposition; still requires `!`" clause — that clause ONLY).**
   Normative pin: **`!` marks error-channel ACTIVATION — the three control-flow dispositions
