@@ -237,7 +237,7 @@ bool stmt_mentions_iter(Stmt s):
                     return true
                 i += 1
             return false
-        case SWhile(cond, body):
+        case SWhile(cond, body, _):
             if expr_mentions_iter(cond):
                 return true
             return stmts_mention_iter(body)
