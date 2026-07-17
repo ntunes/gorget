@@ -5437,10 +5437,8 @@ fn d29_selfhost_driver_rejects_bare_fallible() {
 // `error[E_MissingFallibleMark]` headline (the code the Rust lane emits, off the
 // self-host's typed `DkMissingFallibleMark`) and NO C on stdout (halt before
 // lowering). Mirrors the Rust-lane `check_gg_fails_missing_mark` fixtures, run
-// through the self-host driver instead. The lying-mark (`f()!!`/`5!`/`pure()!`/
-// Result-local `r!`), marked-unhandled (E_UnhandledThrows), and A31 sig-`!:`
-// rejects are DOCUMENTED self-host lane gaps (the conservative-classification
-// arms — filed TODO.md); this suite pins only the shapes the self-host enforces.
+// through the self-host driver instead. A31 sig-`!:` and method-call fallibility
+// (residual (c)/(d)) remain documented SH gaps in TODO.md.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_driver_rejects_d29_missing_mark() {
@@ -5457,6 +5455,13 @@ fn self_host_driver_rejects_d29_missing_mark() {
         "d29_kind2_unmarked_rethrow_error.gg",
         // mark + Result-annotated capture together = the redundant-mark error.
         "d29_hardening_mark_capture_error.gg",
+        // residual (a) lying-mark — prove-lie only (not kind==0 methods).
+        "d29_double_mark_error.gg",
+        "d29_mark_on_pure_call_error.gg",
+        "d29_mark_on_literal_error.gg",
+        "d29_mark_on_result_local_error.gg",
+        // residual (e) expr-body void → SReturn bare kind-1.
+        "d29_expr_body_void_bare_error.gg",
     ];
     for name in reject_fixtures {
         let fixture = manifest_dir.join("tests/fixtures").join(name);
@@ -5563,6 +5568,48 @@ fn d29_marked_unhandled() {
     // Matrix NEG: marked call, non-throws fn, no disposition → the flipped
     // E_UnhandledThrows (exact code + no desugar leak — the D23 harness).
     check_gg_fails_no_desugar("d29_marked_unhandled_error.gg");
+}
+
+/// Core #9 lane pin: SH rejects marked-unhandled with `E_UnhandledThrows`
+/// (residual (b) — must not ride the MissingFallibleMark matrix).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_d29_unhandled_throws() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures")
+        .join("d29_marked_unhandled_error.gg");
+    assert!(fixture.exists(), "missing {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_d29_unhandled_throws",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "self-host ACCEPTED marked-unhandled (E_UnhandledThrows gap). stderr:\n{stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_UnhandledThrows]"),
+        "self-host rejected marked-unhandled but not with E_UnhandledThrows.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host emitted C for marked-unhandled reject. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+#[test]
+fn d29_expr_body_void_bare() {
+    // residual (e): expr-body void → SReturn bare kind-1.
+    check_gg_fails_missing_mark("d29_expr_body_void_bare_error.gg");
 }
 
 #[test]

@@ -74,6 +74,15 @@ struct ResolveContext:
     # a bare fallible call there is a legal value flow. Mirrors the Rust lane's
     # `tail_value_dropped`. Saved/restored around each context change.
     bool d29_tail_dropped
+    # D29 residual (a)/(b)/(e): walk context for mark discipline.
+    # `d29_in_disposition` — subject of catch/rethrow (marked call activates into handler).
+    # `d29_in_result_capture` — init of Result-annotated bind (redundant mark, not unhandled).
+    # `d29_can_propagate` — enclosing fn `throws` OR returns Result (Rust current_fn_can_propagate).
+    # `d29_return_is_result` — declared return type is Result (bare kind-1 capture on SReturn).
+    bool d29_in_disposition
+    bool d29_in_result_capture
+    bool d29_can_propagate
+    bool d29_return_is_result
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -149,7 +158,7 @@ bool is_compiler_intrinsic_name(String name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false)
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false, false, false, false, false)
 
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()

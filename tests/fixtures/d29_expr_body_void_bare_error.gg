@@ -1,0 +1,12 @@
+# D29 residual (e): expr-body void function normalizes to SReturn of a bare
+# kind-1 fallible call — must reject E_MissingFallibleMark (the statement
+# discard hook only sees SExpr, not SReturn).
+int boom(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return x
+
+void f(): boom(1)
+
+void main():
+    print("x")

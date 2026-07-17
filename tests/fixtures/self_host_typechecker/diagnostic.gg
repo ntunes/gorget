@@ -66,6 +66,7 @@ enum DiagKind:
     DkReturnOutsideFunction      # `return` outside a function (E_ReturnOutsideFunction)
     DkThrowInNonThrowingFunction # `throw` in a fn without `throws` (E_ThrowInNonThrowingFunction)
     DkMissingFallibleMark        # D29: a fallible call used without the mandatory `!` (E_MissingFallibleMark)
+    DkUnhandledThrows            # D29/D23: marked fallible call cannot propagate here (E_UnhandledThrows)
     DkPositionalAfterNamed       # positional arg after a named arg (E_PositionalAfterNamed)
     DkRequiredAfterDefault       # required param after a defaulted param (E_RequiredAfterDefault)
     DkDoubleAwait                # expression awaited twice (E_DoubleAwait)
@@ -153,6 +154,8 @@ String diag_kind_str(DiagKind kind):
             return "throw-in-non-throwing-function"
         case DkMissingFallibleMark():
             return "missing-fallible-mark"
+        case DkUnhandledThrows():
+            return "unhandled-throws"
         case DkPositionalAfterNamed():
             return "positional-after-named"
         case DkRequiredAfterDefault():
@@ -233,6 +236,8 @@ String diag_kind_code(DiagKind kind):
             return "E_ThrowInNonThrowingFunction"
         case DkMissingFallibleMark():
             return "E_MissingFallibleMark"
+        case DkUnhandledThrows():
+            return "E_UnhandledThrows"
         case DkPositionalAfterNamed():
             return "E_PositionalAfterNamed"
         case DkRequiredAfterDefault():

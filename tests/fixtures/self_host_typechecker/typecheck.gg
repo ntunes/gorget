@@ -35,7 +35,7 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -498,11 +498,95 @@ bool d29_stype_is_result(SpannedType stype):
             return false
 
 # D29 enforcement: emit E_MissingFallibleMark at `span`. ONE code for every
-# reason (bare / redundant-on-capture / result-arms-on-peeled), mirroring the
-# Rust `E_MissingFallibleMark` family; the reason rides the (impl-defined)
-# message, only the CODE is conformance-compared.
+# reason (bare / redundant-on-capture / result-arms-on-peeled / mark-on-infallible),
+# mirroring the Rust family; the reason rides the message, only the CODE is
+# conformance-compared.
 void d29_emit(Span span, String message, ResolveContext &ctx):
     ctx.diagnostics.push(Diagnostic.error(span, DkMissingFallibleMark(), message))
+
+void d29_emit_unhandled(Span span, ResolveContext &ctx):
+    ctx.diagnostics.push(Diagnostic.error(span, DkUnhandledThrows(), "this call can fail but the error is not handled here; handle it with `catch` or `rethrow`, capture its outcome in an explicitly-typed binding, or declare the enclosing function `throws` to propagate"))
+
+# D29 residual (a): is this mark PROVABLY a lie? Never use kind==0 alone —
+# methods/unresolved are unclassifiable and must NOT be MarkOnInfallible while
+# residual (d) is OUT (preserves d29_marked_combinator method marks).
+bool d29_is_provable_lie(SpannedExpr inner, ResolveContext &ctx):
+    match inner.expr:
+        case EPropagate(_):
+            # nested `!!` — outer mark is never on a call
+            return true
+        case ECall(callee, _args, _targs):
+            match (*callee).expr:
+                case EIdentifier(_name):
+                    int cspan = (*callee).span.start
+                    if not ctx.resolution_map.contains(cspan):
+                        # unresolved free-fn — unclassifiable, not a proven lie
+                        return false
+                    int def_id = ctx.resolution_map.get(cspan).unwrap()
+                    # resolved free-fn absent from fallibility map = known pure
+                    return not ctx.d29_callee_kind.contains(def_id)
+                else:
+                    # non-identifier callee (method chain, call expression, …)
+                    return false
+        case EMethodCall(_recv, _m, _a, _t):
+            # residual (d) OUT — method marks stay accepted
+            return false
+        case EIntLiteral(_):
+            return true
+        case EFloatLiteral(_):
+            return true
+        case EBoolLiteral(_):
+            return true
+        case EStringLiteral(_, _):
+            return true
+        case ECharLiteral(_):
+            return true
+        case ENoneLiteral():
+            return true
+        case EIdentifier(_):
+            # Result-local `r!` and other value marks
+            return true
+        case ESelfExpr():
+            return true
+        case EFieldAccess(_, _):
+            return true
+        case EIndex(_, _):
+            return true
+        else:
+            # unclassifiable shapes — not a proven lie
+            return false
+
+# D29 residual (a)+(b) on `expr!` (EPropagate).
+void d29_check_propagate(SpannedExpr marked, SpannedExpr inner, ResolveContext &ctx):
+    if d29_is_provable_lie(inner, &ctx):
+        d29_emit(marked.span, "this `!` does not mark a fallible call — `!` attaches to a call whose callee is declared `throws` or returns `Result[T, E]`, exactly one mark per call; remove it", &ctx)
+        return
+    int kind = d29_call_kind(inner, &ctx)
+    if kind < 1:
+        # method / unclassifiable — leave accepted (conservative)
+        return
+    if ctx.d29_in_disposition or ctx.d29_in_result_capture or ctx.d29_can_propagate:
+        return
+    d29_emit_unhandled(marked.span, &ctx)
+
+# D29 residual (e): bare fallible on SReturn / expr-body — dest-aware table.
+# Never call blanket d29_reject_if_bare_fallible here (kind-2 always rejected).
+void d29_reject_bare_on_return(SpannedExpr e, ResolveContext &ctx):
+    if d29_is_marked(e):
+        return
+    int kind = d29_call_kind(e, &ctx)
+    if kind == 1:
+        if ctx.d29_return_is_result:
+            return
+        d29_emit(e.span, "this fallible call must be marked with `!` — mark it to propagate, handle it with `catch`/`rethrow`, or capture it into a `Result` binding", &ctx)
+        return
+    if kind == 2:
+        if ctx.d29_return_is_result:
+            return
+        if ctx.d29_can_propagate:
+            # Route-B auto-prop of Result into T in a throws/Result fn
+            return
+        d29_emit(e.span, "this fallible call must be marked with `!` — mark it to propagate, handle it with `catch`/`rethrow`, or capture it into a `Result` binding", &ctx)
 
 # D29 (bare-call in a value-DISCARD or disposition/scrutinee position): a
 # fallible CALL used WITHOUT the mark silently drops the outcome. Reject unless
@@ -1786,7 +1870,11 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             # Single-owner init class (bind): a bare callable/Box/Task copy at a
             # bind boundary. PARAM-EXEMPT (rebinding a param copies a pointer).
             reject_single_owner_init(init_expr, true, scopes, &types, &ctx)
+            bool saved_rcap = ctx.d29_in_result_capture
+            if d29_stype_is_result(stype):
+                ctx.d29_in_result_capture = true
             check_safety_expr(init_expr, scope_id, &state, &scopes, &types, &ctx)
+            ctx.d29_in_result_capture = saved_rcap
             # Liveness: a fresh binding makes its DefId live again (Rust mark_live);
             # inside a loop it is a loop-local (re-created each iteration → moving it
             # is legal, Rust mark_live adds it to loop_local_defs.last). DEEPDEF: the
@@ -1856,6 +1944,8 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
                 # SReturn): a bare return of a live drop-tainted place copies at
                 # the return ownership boundary.
                 reject_tainted_place(sexpr, scopes, &types, &ctx)
+                # D29 residual (e): dest-aware bare-fallible on return/expr-body.
+                d29_reject_bare_on_return(sexpr, &ctx)
                 check_safety_expr(sexpr, scope_id, &state, &scopes, &types, &ctx)
         case SThrow(sexpr):
             check_safety_expr(sexpr, scope_id, &state, &scopes, &types, &ctx)
@@ -2142,10 +2232,17 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # D29: a closure's tail statement IS its return value (a value block),
             # not a discard — a bare fallible tail there is a legal value flow
             # (e.g. `.and_then((n): parse(n))` where the callback returns Result).
+            # Closures do not inherit outer throws/Result-return propagate context.
             bool cl_saved_tail = ctx.d29_tail_dropped
+            bool cl_saved_prop = ctx.d29_can_propagate
+            bool cl_saved_ret = ctx.d29_return_is_result
             ctx.d29_tail_dropped = false
+            ctx.d29_can_propagate = false
+            ctx.d29_return_is_result = false
             check_safety_stmts(body, scope_id, &cl, &scopes, &types, &ctx)
             ctx.d29_tail_dropped = cl_saved_tail
+            ctx.d29_can_propagate = cl_saved_prop
+            ctx.d29_return_is_result = cl_saved_ret
             # D12 position 5 (closure capture): a captured tainted OUTER local.
             reject_tainted_captures(body, scope_id, scopes, &types, &ctx)
             # D12 position 4 (closure expression-tail): a closure whose body tail
@@ -2228,7 +2325,8 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
         case ETry(inner):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EPropagate(inner):
-            # D29: the mark is a transparent read of the inner fallible call.
+            # D29 residual (a)+(b): prove-lie + marked-unhandled.
+            d29_check_propagate(expr, *inner, &ctx)
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EMove(inner):
             # `S y = !x` / `return !x` — mark the move (or, for a non-place `!f()`,
@@ -2307,14 +2405,20 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # call it attaches to must carry the mark (`f()! rethrow …`) on BOTH
             # kinds. An unmarked disposition inner is the bare-call error.
             d29_reject_if_bare_fallible(*e, &ctx)
+            bool saved_disp_r = ctx.d29_in_disposition
+            ctx.d29_in_disposition = true
             check_safety_expr(*e, scope_id, &state, &scopes, &types, &ctx)
+            ctx.d29_in_disposition = saved_disp_r
             check_safety_expr(*transform, scope_id, &state, &scopes, &types, &ctx)
         case ECatch(e, _name, recovery):
             # D29: same as ERethrow — `catch` on a fallible CALL requires the mark
             # (`f()! catch …`). A `catch` on a Result LOCAL is not a call and is
             # never classified fallible here, so it stays legal unmarked.
             d29_reject_if_bare_fallible(*e, &ctx)
+            bool saved_disp_c = ctx.d29_in_disposition
+            ctx.d29_in_disposition = true
             check_safety_expr(*e, scope_id, &state, &scopes, &types, &ctx)
+            ctx.d29_in_disposition = saved_disp_c
             check_safety_expr(*recovery, scope_id, &state, &scopes, &types, &ctx)
         case EFaultCatch(fc_inner, _fc_pat, fc_handler):
             check_safety_expr(*fc_inner, scope_id, &state, &scopes, &types, &ctx)
@@ -2361,9 +2465,13 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         # Rust typechecker's per-function context save in `check_function`.
         int saved_loop_depth = ctx.loop_depth
         bool saved_throws = ctx.current_function_throws
+        bool saved_prop = ctx.d29_can_propagate
+        bool saved_ret_res = ctx.d29_return_is_result
         bool saved_in_fn = ctx.in_function_body
         ctx.loop_depth = 0
         ctx.current_function_throws = func.throws_type.is_some()
+        ctx.d29_return_is_result = d29_stype_is_result(func.return_type)
+        ctx.d29_can_propagate = func.throws_type.is_some() or ctx.d29_return_is_result
         ctx.in_function_body = true
         type_check_stmts(func.body, body_scope, &scopes, &types, &ctx)
         # UNIFIED safety walk (AGENTS.md Core #8 + #4) — driven ONCE per function
@@ -2375,14 +2483,16 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         # params are live at entry and no enclosing loop carries across a fn body.
         SafetyState safety = SafetyState(Dict[int, int](), 0, Dict[int, int](), -1)
         # D29: a function BLOCK body drops its tail statement's value (block
-        # bodies return via explicit `return`; expr-body tails are SReturn, which
-        # the discard check skips) — so a bare fallible tail here is a discard.
+        # bodies return via explicit `return`; expr-body tails are SReturn —
+        # residual (e) checks bare-fallible there).
         bool saved_tail_dropped = ctx.d29_tail_dropped
         ctx.d29_tail_dropped = true
         check_safety_stmts(func.body, body_scope, &safety, &scopes, &types, &ctx)
         ctx.d29_tail_dropped = saved_tail_dropped
         ctx.loop_depth = saved_loop_depth
         ctx.current_function_throws = saved_throws
+        ctx.d29_can_propagate = saved_prop
+        ctx.d29_return_is_result = saved_ret_res
         ctx.in_function_body = saved_in_fn
 
 # ── Pattern type assignment ────────────────────────────────
