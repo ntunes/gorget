@@ -1,6 +1,10 @@
 # EXECUTOR BRIEF — RV-B: DotShorthand enum-init consume position (both lanes)
 
-**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 1 (all premises confirmed
+**Status:** ✅ v3 GAUNTLET-CLEAN (pass 3 SIGN OFF 2026-07-17 — every premise re-derived
+independently, both lower.gg sites verified in source AND proto, symlink topology fully
+verified; its one non-blocking hardening note folded in place per explicit reviewer
+clearance) — **EXECUTOR PENDING the Root-A landing (the sequencing gate below).**
+Gauntlet history: DRAFT v3 — Pass 1 (all premises confirmed
 by reproduction incl. the compile-error safety property; extraction byte-faithful;
 is_constructor sound; 12-site set complete; 85/86 baselines fresh; 4 reservations folded:
 +2 matrix fixtures, TODO:264 narrowing, `#[ignore]` intended-output, sequencing wording) →
@@ -65,7 +69,7 @@ check, on both lanes (Core #4 — fix the class at one shared site):
 | `dotshorthand_tainted_bare_reject.gg` | `check_gg_fails(…, E_MoveWithoutOperator)` + add to `self_host_driver_rejects_d12_drop_purity` | reject, both compilers, same code |
 | `dotshorthand_move_ok.gg` | `run_gg(…, "built\ndrop 1")` + add to `self_host_driver_accepts_d12_legal` | single drop; ASan clean (pins the double-drop) |
 | `dotshorthand_move_then_use_reject.gg` (EXECUTOR-AUTHORED, pass-1 R1) | Rust: `check_gg_fails(…, "error[E_UseAfterMove]")` — verify the exact code the longhand emits FIRST and use that. Self-host: a DEDICATED reject test — do NOT add to `rejects_d12_drop_purity` (its assertion greps `"cannot copy"`; a self-host use-after-move emits `"use of \`r\` after it was moved"`, `typecheck.gg:~1342` DkUseAfterMove). **VERIFY-FIRST:** the self-host behavior on `.Wrap(!r); use r` post-fix is UNMEASURED (the scout's 5 self-host cases didn't include it) — measure it; if the self-host does not yet reject this shape, scope the fixture's self-host half to a REPORT + filed gap, never a silently-weakened assertion | `.Wrap(!r); use r` rejects — pins the SECOND Rust bug (the ignored `!` → missed move); nothing else guards it |
-| `dotshorthand_bare_value_ok.gg` (EXECUTOR-AUTHORED, pass-1 R1) | `run_gg` POS: enum `E: Wrap(String)`, `String s = "hi"`, `E e = .Wrap(s)`, then `print(s)` (source still live — CoW clones) and a match printing the payload; expected stdout `hi` then `hi` (derive precisely from the CLAUDE.md ownership table when authoring; both backends) | legal bare non-resource `.Wrap(s)` ACCEPTS and runs — pins the "dot-shorthand == longhand" property against future over-tightening |
+| `dotshorthand_bare_value_ok.gg` (EXECUTOR-AUTHORED, pass-1 R1) | `run_gg` POS: enum `E: Wrap(String)`, `String s = "hi"`, `E e = .Wrap(s)`, then `print(s)` (source still live — CoW clones) and a match printing the payload; expected stdout `hi` then `hi` (derive precisely from the CLAUDE.md ownership table when authoring; both backends). **Also wire into `self_host_driver_accepts_d12_legal`** (pass-3 hardening note: the scout measured the self-host accepts this; committing it guards the no-over-reject else-branch) | legal bare non-resource `.Wrap(s)` ACCEPTS and runs — pins the "dot-shorthand == longhand" property against future over-tightening |
 | `dotshorthand_callable_move_ok.gg` | `check_gg_ok` (both lanes accept) **+ a `run_gg(…, "built")` runtime test wired `#[ignore]` citing the filed callable-enum-payload lowering-panic TODO** — the ignored test asserts the INTENDED runtime behavior per don't-redesign-around-gaps; un-ignore when that gap lands | check-accept all lanes; intended runtime pinned |
 
 ggdef lane: value-position dot-shorthand is OUT of the ggdef subset (`expr_kind` catch-all;

@@ -1,6 +1,13 @@
 # EXECUTOR BRIEF — Root A: self-host iterator-receiver field-place borrow (3 spin fixtures flip)
 
-**Status:** DRAFT — in the ≥3-fresh-pass review gauntlet. Do not execute until a clean pass.
+**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet. Pass 1 (core patch verified
+clean end-to-end: bug reproduced at HEAD, all 3 write-site claims + the Rust mirror citation
+confirmed, patch applies, Core-#4 single-site verified, oracle spot-checks ran, parity
+arithmetic + guard-label reliability confirmed; 4 reservations FOLDED: guard gets the
+floor's debug-skip/parity_floor_active gating + jitter-triage comment + a MANDATORY positive
+control; comparison-net facts stated; the TODO retire anchored to :1021 with the two
+same-named older entries protected + the new Ref__ residual appended to :214's census)
+→ this v2. Do not execute until a clean pass.
 **Scout evidence (THE measured spec):** `docs/plans/roota-scout.md` — GO, fully validated.
 Prototype: `/tmp/roota_proto.patch` (197 lines, 4 files: `lower_expr.gg` + `tests/integration.rs`
 + 2 new fixtures; applies cleanly, round-trip verified; backup `/tmp/recover_roota_proto.patch`).
@@ -36,8 +43,18 @@ behavior; the census fixtures + 2 new regression fixtures are the pins).
    **listing ONLY `async_select`** (this landing removes the other three, so the list is
    born correct). A new hang FAILS loudly; a fixed one FAILS asking to shrink. Shrink-only
    allowlist, the MATCH-floor idiom; place it beside `RUNTIME_DIFF_MATCH_FLOOR` with the
-   same comment discipline. Update the harness follow-ups TODO entry: item (iii) lands here;
-   items (i)/(ii)/(iv) remain.
+   same comment discipline — **and inside the SAME gating structure** (pass-1 R1): skipped
+   under `cfg!(debug_assertions)` and gated on `parity_floor_active(...)` exactly like the
+   floor (`integration.rs:~22287-22292`), because the floor's 5-jitter discount exists
+   precisely for transient MATCH→CRASH timeout flips and a SET guard cannot discount jitter
+   — its comment must state that a transient red = re-run (same triage as a floor red).
+   **POSITIVE CONTROL required (pass-1 R4, per the leak-detection-needs-positive-control
+   rule): before shipping, prove the guard CAN FIRE** — invert/empty the allowlist (or
+   point the substring filter at a label you know is present) and confirm the test FAILS
+   with the intended message, then restore; record the failing output in your report. A
+   guard whose only validation is "the assert passed" may be a substring typo matching
+   nothing. Update the harness follow-ups TODO entry: item (iii) lands here; items
+   (i)/(ii)/(iv) remain.
 4. **Parity regen + floor:** run the full regen FOREGROUND
    (`GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 <test binary> self_host_runtime_diff
    --nocapture`, ~200s — do NOT set GG_TEST_TIMEOUT_SECS; the harness is FIXED, the
@@ -59,14 +76,31 @@ chunk >10min; NEVER background a final gate)
 4. ASan on the touched fixtures + a Vector-adapter control.
 5. `self_host_bootstrap_fixed_point` (lower_expr.gg is on the bootstrap path; budget 900s,
    chunked foreground; scout measured 583s).
-6. The parity regen (scope item 4) — this doubles as the guard's first live run.
+6. The parity regen (scope item 4) — this doubles as the guard's first live PASSING run
+   (the positive control in scope item 3 is what proves it can FAIL).
+7. Comparison-net facts (pass-1 R2 — state, don't re-run beyond the listed): `type_comparison`
+   / `check_comparison` build the TYPECHECKER driver, which has no `lower_expr.gg` — provably
+   untouched by this diff; `lowerer_comparison` + `c_emit_comparison` DO build from the
+   patched tree but are structurally insensitive to a borrow-vs-copy change (`c_emit`'s
+   metric is user_fn_count; the fix adds no functions) — they are the parent's-sweep
+   backstop; the 2 new fixtures raise c_emit's matched count by +2 (floor-safe; optionally
+   reseed `C_EMIT_MATCH_FLOOR` +2 with the same-commit ratchet discipline, reporting the
+   fresh count).
 
 ## Bookkeeping (same commit)
-- TODO: the Root-A HIGH entry retires to DONE (datestamped, with the mechanism + the
-  measured flips); the harness follow-ups entry updated per scope item 3; the two
-  scout-filed limitations (deeper-chain LOW; the DictIter chained-adapter MED) STAY filed —
-  do not touch. MEMORY's parity line is the PARENT's to update — report your fresh number,
-  don't edit memory.
+- TODO: **the retire target is EXACTLY the "ROOT A of the hang census 2026-07-16 …
+  SCOUTED 2026-07-17 — GO" HIGH entry (~:1021)** — datestamped to DONE with the mechanism +
+  measured flips. ⚠ DISAMBIGUATION (pass-1 R3): TWO OTHER entries also say "Root A" and are
+  DIFFERENT, OLDER tracks that this patch does NOT resolve — the "#4 Ref[T] / lazy-iterator
+  read-side deref CRASH" deep track (~:195) and the "Ref/MutRef write-site port" entry
+  (~:214). BOTH STAY FILED untouched. Additionally: `lower_recv_place` ADDS a
+  `starts_with("Ref__")/("MutRef__")` name-match (`rp_is_ref`) — an ACCEPTED residual
+  mirroring the established `lir_lower.gg:~5143` idiom, but it joins line ~:214's debt
+  census: append it to that entry so the census stays complete and the output-reviewer
+  doesn't mis-flag it as a fresh layering violation. The harness follow-ups entry updates
+  per scope item 3; the two scout-filed limitations (deeper-chain LOW; DictIter
+  chained-adapter MED) STAY filed. MEMORY's parity line is the PARENT's to update — report
+  your fresh number, don't edit memory.
 - Stage EXPLICITLY: `tests/fixtures/self_host_lowerer/lower_expr.gg tests/integration.rs
   tests/fixtures/set_filter_count.gg tests/fixtures/set_take_values.gg TODO.md DONE.md`
   (adjust to actual). Trailers:
