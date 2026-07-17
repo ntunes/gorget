@@ -1,11 +1,13 @@
 # EXECUTOR BRIEF — self-host FLIP TRACKS: callable-init class (+4) + Copy-axis struct (+1) → SELFHOST floor 214
 
-**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet. Pass 1 (mechanics verified sound
-end-to-end incl. patch-applies-clean, all 5 wiring sites == production's set, symlink topology
-confirmed disjoint from the concurrent lowerer executor; 1 actionable reservation: the
-module-doc rewrite range would have deleted the valid History paragraph — narrowed to :49-58
-with an explicit preserve; +1 informational: MEMORY's parity line lagged the landing — fixed
-by the parent) FOLDED into this v2. Do not execute until a clean pass.
+**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 1 (mechanics verified sound
+end-to-end; module-doc range narrowed preserving History; MEMORY parity lag fixed by the
+parent) → v2. Pass 2 (independent re-derivation: exactly-5-sites confirmed by exhaustive grep;
+collection-put/closure-capture confirmed separate classes, not holes; no RTOwned variant —
+correct omission; 2 reservations: the rewrite lower bound extended to :48 — the lanes sentence
+must say ALL THREE post-flip; the EDotShorthand `!`-discard makes the new reject
+SELF-CONTRADICTING on legal `.Wrap(!callable)` — dormant, documented as the second latent
+asymmetry with RV-B cross-refs) FOLDED into this v3. Do not execute until a clean pass.
 **Scout evidence (THE spec's measurements):** `docs/plans/flip-tracks-scout.md` — GO, fully
 prototyped + measured. Prototype: `/tmp/flip_proto.patch` (293 lines, backup
 `/tmp/recover_flip_proto.patch`; touches ONLY `tests/fixtures/self_host_typechecker/scope.gg`
@@ -44,11 +46,22 @@ and are exactly the 5 flipping).
    result, not the patch (if anything in it contradicts this brief, STOP-AND-REPORT).
 2. Same commit riders:
    - `tests/spec_conformance.rs`: `SELFHOST_MATCH_FLOOR` 209→214; REWRITE the by-design-miss
-     comments — ONLY the stale staging prose at module doc ~:49-58 (the "self-host floor is
-     FIVE below" paragraph) + the inline comments ~:117-163. **PRESERVE the "(History: …)"
-     paragraph at ~:59-67** (the smith_move_param_concat + render-gap record — timeless, and
-     MORE accurate post-flip). The five-miss list is GONE; do not leave stale prose, and do
-     not delete valid history.
+     comments — ONLY the stale prose at module doc **:48-58** (starts at the L48 sentence "The
+     C and LLVM lanes reach the whole corpus…", which post-flip must say ALL THREE lanes reach
+     it, through the "self-host floor is FIVE below" staging paragraph) + the inline comments
+     ~:117-163. **PRESERVE the "(History: …)" paragraph at ~:59-67** (the
+     smith_move_param_concat + render-gap record — timeless, and MORE accurate post-flip).
+     The five-miss list is GONE; do not leave stale prose, and do not delete valid history.
+   - **SECOND latent-asymmetry note (pass-2 finding — document, do NOT fix here):** the
+     self-host parser DISCARDS the `!` move sigil at the EDotShorthand adapter
+     (`parser.gg:~2552` pushes only `dsa.value` — the filed RV-B bug, TODO ~:253), so a legal
+     `MyEnum e = .Wrap(!callable)` presents as a bare `EIdentifier` and the new
+     `reject_single_owner_init` would fire a SELF-CONTRADICTING "write `!callable` to move" on
+     code that already wrote `!`. Dormant (214/214 + bootstrap green prove no corpus hit) and
+     over-reject-only, but it must be findable: add a comment at BOTH literal arms
+     (EDotShorthand + EStructLiteral) citing RV-B, and a LOW TODO cross-referencing the RV-B
+     entry — RV-B's sigil-preserving adapter clears both misfires at once. (The ECall-ctor arm
+     is immune: it gates on `a.ownership == OWN_BORROW`.)
    - The documented asymmetry note (scout's "KNOWN MINOR ASYMMETRY"): the self-host
      struct-literal arm lacks production's ref-typed-field skip (`check_expr.rs:1183`
      `!target_is_ref`) — over-reject-only, unreachable in today's corpus. Put the one-line
