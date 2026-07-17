@@ -762,6 +762,46 @@ fn d23_method_throws_return_sites() {
     );
 }
 
+/// D29 (visible error propagation) kind-2 sibling-guard ratchet (CLAUDE.md rule
+/// 4 "one fix, all siblings"). A KIND-2 fallible call — a non-`throws` callee
+/// whose DECLARED return is `Result[T,E]` — must route its return type through
+/// `resolve_kind2_call_type` so a `!`-mark peels + activates the error channel
+/// and an unmarked value flow stays a legal `Result`. There are exactly TWO
+/// classification points: the free-fn `Expr::Call` non-throws branch and the
+/// centralized method `None` branch inside `resolve_throws_method_ret`. A new
+/// call-shape that returns a callee `Result` without routing here silently
+/// makes `parse(s)!` a no-op (the mark ignored) — the D29 hole. Bump the count
+/// when you add a genuine kind-2 classification point.
+///
+/// Baseline 2026-07-17: 2 `resolve_kind2_call_type` call sites.
+#[test]
+fn d29_kind2_call_sites() {
+    const EXPECTED_KIND2_SITES: usize = 2;
+
+    let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
+    let mut kind2_sites = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        // `.`-receiver calls only — excludes the `fn ...(` definition.
+        kind2_sites += line.matches(".resolve_kind2_call_type(").count();
+    }
+    assert_eq!(
+        kind2_sites, EXPECTED_KIND2_SITES,
+        "D29 kind-2 call-site count changed: {kind2_sites} vs \
+         {EXPECTED_KIND2_SITES}.\n\n\
+         Every non-`throws` callee whose declared return is `Result[T,E]` must \
+         route through `self.resolve_kind2_call_type(return_type, \
+         suppress_auto_prop, fallible_call_marked, span)` so a `!`-mark peels + \
+         activates and an unmarked flow stays a legal `Result`. If you added a \
+         new kind-2 classification point (a call-typing branch that returns a \
+         callee `Result`), route it here and bump the count; if you removed one, \
+         lower it.",
+    );
+}
+
 /// D23 trait-registry keying ratchet (Fix 1; CLAUDE.md rule 4 "one fix, all
 /// siblings"). Trait-name → DefId resolution in the traits.rs REGISTRATION
 /// paths must use the TYPE namespace (`scopes.lookup_type`), never the

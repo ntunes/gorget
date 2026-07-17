@@ -107,7 +107,7 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
                     fd.params.iter().map(|p| ty_of_type(&p.node.type_.node)).collect(),
                 );
                 el.fn_ret.insert(name.clone(), ty_of_type(&fd.return_type.node));
-                if fd.throws.is_some() {
+                if fd.throws.declares_throws() {
                     el.fn_throws.insert(name);
                 }
             }
@@ -341,7 +341,7 @@ impl Elaborator {
         // A `throws E` function's return type is widened to `Result[T, E]`:
         // `return`/`throw`/fall-off wrap `Ok`/`Error`, and nested throws-calls
         // auto-propagate (RFC §2.6 row 1). `capture_ctx` starts clear.
-        self.current_fn_throws = fd.throws.is_some();
+        self.current_fn_throws = fd.throws.declares_throws();
         self.current_fn_ret_is_result = ty_is_result(&ty_of_type(&fd.return_type.node));
         self.capture_ctx = CaptureCtx::None;
         for p in &fd.params {
@@ -459,7 +459,7 @@ impl Elaborator {
             self.fn_param_names.insert(mangled.clone(), param_names);
             self.fn_param_tys.insert(mangled.clone(), param_tys);
             self.fn_ret.insert(mangled.clone(), ty_of_type(&m.node.return_type.node));
-            if m.node.throws.is_some() {
+            if m.node.throws.declares_throws() {
                 self.fn_throws.insert(mangled.clone());
             }
             self.equip_methods.insert(

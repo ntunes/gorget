@@ -178,7 +178,7 @@ fn test_function_with_throws() {
     let module = parse("int parse_int(String s) throws ValueError:\n    pass\n");
     assert_eq!(module.items.len(), 1);
     if let Item::Function(ref f) = module.items[0].node {
-        assert!(f.throws.is_some());
+        assert!(f.throws.declares_throws());
     } else {
         panic!("Expected function");
     }
@@ -1549,4 +1549,165 @@ fn test_paren_expr_before_colon_not_closure() {
     // Regression: looks_like_closure() used to fire here, causing a confusing error.
     let source = "void f(bool cond, int a, int b, int c, int d):\n    if cond and (a == b or c == d):\n        print(1)\n";
     parse(source); // must not panic
+}
+
+// ══════════════════════════════════════════════════════════════
+// D29: postfix `!` (visible error propagation) + `!=` corners
+// ══════════════════════════════════════════════════════════════
+
+/// Parse `int g() throws E:\n    return <expr>\n` and return the return expr.
+fn d29_tail(expr_src: &str) -> Expr {
+    let src = format!("int g() throws E:\n    return {expr_src}\n");
+    let m = parse(&src);
+    for it in &m.items {
+        if let Item::Function(f) = &it.node {
+            if let FunctionBody::Block(b) = &f.body {
+                if let Some(Spanned { node: Stmt::Return(Some(e)), .. }) = b.stmts.last() {
+                    return e.node.clone();
+                }
+            }
+        }
+    }
+    panic!("no tail expr for `{expr_src}`");
+}
+
+#[test]
+fn d29_plain_propagate() {
+    // f()! => Propagate(Call)
+    assert!(matches!(d29_tail("f()!"),
+        Expr::Propagate { expr } if matches!(expr.node, Expr::Call { .. })));
+}
+
+#[test]
+fn d29_method_propagate() {
+    // a.m()! => Propagate(MethodCall)
+    assert!(matches!(d29_tail("a.m()!"),
+        Expr::Propagate { expr } if matches!(expr.node, Expr::MethodCall { .. })));
+}
+
+#[test]
+fn d29_nested_calls_each_marked() {
+    // g(f()!)! => Propagate(Call(g, [Propagate(Call(f))]))
+    let e = d29_tail("g(f()!)!");
+    let inner = match e {
+        Expr::Propagate { expr } => *expr,
+        _ => panic!("outer not Propagate"),
+    };
+    let arg0 = match &inner.node {
+        Expr::Call { args, .. } => args[0].node.value.node.clone(),
+        _ => panic!("inner not Call"),
+    };
+    assert!(matches!(arg0, Expr::Propagate { .. }), "arg not marked: {arg0:?}");
+}
+
+#[test]
+fn d29_chain_left_to_right() {
+    // f()!.m()! => Propagate(MethodCall(Propagate(Call(f)).m))
+    let e = d29_tail("f()!.m()!");
+    let mcall = match e {
+        Expr::Propagate { expr } => *expr,
+        _ => panic!("outer not Propagate"),
+    };
+    let recv = match &mcall.node {
+        Expr::MethodCall { receiver, .. } => receiver.node.clone(),
+        _ => panic!("not MethodCall"),
+    };
+    assert!(matches!(recv, Expr::Propagate { .. }), "receiver not Propagate: {recv:?}");
+}
+
+#[test]
+fn d29_maximal_munch_neq_is_not_propagate() {
+    // a()!=b  => Neq(Call(a), b)  — `!=` lexes as one token; NO Propagate.
+    let e = d29_tail("a()!=b");
+    match e {
+        Expr::BinaryOp { op, left, .. } => {
+            assert_eq!(op, BinaryOp::Neq);
+            assert!(matches!(left.node, Expr::Call { .. }), "lhs should be bare Call, not Propagate");
+        }
+        other => panic!("expected Neq comparison, got {other:?}"),
+    }
+}
+
+#[test]
+fn d29_neq_with_space_before_bang_is_still_neq() {
+    // f()!= b  => Neq(Call(f), b) — the `!=` still fuses (space is AFTER `!=`).
+    let e = d29_tail("f()!= b");
+    match e {
+        Expr::BinaryOp { op, left, .. } => {
+            assert_eq!(op, BinaryOp::Neq);
+            assert!(matches!(left.node, Expr::Call { .. }));
+        }
+        other => panic!("expected Neq, got {other:?}"),
+    }
+}
+
+#[test]
+fn d29_propagate_then_eqeq_with_space() {
+    // f()! == b => Eq(Propagate(Call(f)), b) — a space frees `!` as postfix.
+    let e = d29_tail("f()! == b");
+    match e {
+        Expr::BinaryOp { op, left, .. } => {
+            assert_eq!(op, BinaryOp::Eq);
+            assert!(matches!(left.node, Expr::Propagate { .. }), "lhs should be Propagate");
+        }
+        other => panic!("expected Eq(Propagate,..), got {other:?}"),
+    }
+}
+
+#[test]
+fn d29_catch_attaches_to_marked_expr() {
+    // f()! catch (e): 0  => Catch { expr: Propagate(Call(f)), .. }
+    let e = d29_tail("f()! catch (e): 0");
+    match e {
+        Expr::Catch { expr, .. } => {
+            assert!(matches!(expr.node, Expr::Propagate { .. }),
+                "catch inner should be Propagate, got {:?}", expr.node);
+        }
+        other => panic!("expected Catch(Propagate,..), got {other:?}"),
+    }
+}
+
+#[test]
+fn d29_rethrow_attaches_to_marked_expr() {
+    // f()! rethrow 1 => Rethrow { expr: Propagate(Call(f)), .. } (bare form)
+    let e = d29_tail("f()! rethrow 1");
+    match e {
+        Expr::Rethrow { expr, .. } => {
+            assert!(matches!(expr.node, Expr::Propagate { .. }),
+                "rethrow inner should be Propagate, got {:?}", expr.node);
+        }
+        other => panic!("expected Rethrow(Propagate,..), got {other:?}"),
+    }
+}
+
+#[test]
+fn d29_signature_bare_bang_parses_as_inferred() {
+    // int f()!:  parses to ThrowsSpec::Inferred (A31 reservation; NOT a
+    // `Named("!inferred")` string sentinel — a typed axis).
+    let m = parse("int f()!:\n    return 1\n");
+    let f = m.items.iter().find_map(|it| match &it.node {
+        Item::Function(f) => Some(f), _ => None,
+    }).expect("no fn");
+    assert!(matches!(&f.throws, ThrowsSpec::Inferred(_)),
+        "bare `!:` should populate ThrowsSpec::Inferred, got {:?}", f.throws);
+    assert!(f.throws.declares_throws());
+    assert!(f.throws.explicit_type().is_none());
+}
+
+#[test]
+fn d29_signature_bang_type_is_rejected() {
+    // int f() ! E:  is NOT a valid signature form (cancelled) — parse error.
+    let (_m, errs) = parse_with_errors("int f() ! E:\n    return 1\n");
+    assert!(!errs.is_empty(), "`! E` signature should be a parse error");
+}
+
+#[test]
+fn d29_legacy_throws_signature_unchanged() {
+    // int f() throws E:  still parses to an explicit throws.
+    let m = parse("int f() throws E:\n    return 1\n");
+    let f = m.items.iter().find_map(|it| match &it.node {
+        Item::Function(f) => Some(f), _ => None,
+    }).expect("no fn");
+    let t = f.throws.explicit_type().expect("throws clause");
+    assert!(matches!(&t.node, Type::Named { name, .. } if name.node == "E"));
 }

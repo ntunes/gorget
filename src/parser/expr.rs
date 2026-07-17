@@ -93,7 +93,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
 
         // Unary
         Expr::UnaryOp { operand, .. } => contains_it(operand),
-        Expr::Move { expr } | Expr::MutableBorrow { expr }
+        Expr::Move { expr } | Expr::Propagate { expr } | Expr::MutableBorrow { expr }
         | Expr::Deref { expr } | Expr::Await { expr }
         | Expr::Spawn { expr, .. } | Expr::SpawnBlocking { expr, .. } => contains_it(expr),
 
@@ -1148,6 +1148,12 @@ impl Parser {
             Token::LBracket => Some(35),
             // Function call
             Token::LParen => Some(35),
+            // D29: postfix error-propagation `expr!`. Same tight bp as
+            // `.`/call/index so `f()!.m()!` chains left-to-right and
+            // `f()! catch …` nests as Catch(Propagate(..)). Note `!=` lexes as
+            // BangEq (never Bang) under maximal munch, so `a()!=b` is NOT seen
+            // here — it stays a not-equal comparison.
+            Token::Bang => Some(35),
             // Range operators
             Token::DotDot | Token::DotDotEq => Some(23),
             _ => None,
@@ -1298,6 +1304,18 @@ impl Parser {
                         callee: Box::new(lhs),
                         generic_args: None,
                         args,
+                    },
+                    start.merge(end),
+                ))
+            }
+
+            // D29: postfix error-propagation `expr!`.
+            Token::Bang => {
+                self.advance();
+                let end = self.previous_span();
+                Ok(Spanned::new(
+                    Expr::Propagate {
+                        expr: Box::new(lhs),
                     },
                     start.merge(end),
                 ))

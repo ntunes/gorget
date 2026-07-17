@@ -216,7 +216,7 @@ fn visit_function(
 ) {
     // Only fire for functions whose declared return type is `Result[T, E]`
     // AND that are NOT already declared `throws` (the suggestion would be a no-op).
-    if func.throws.is_some() {
+    if func.throws.declares_throws() {
         return;
     }
     // Reject extern / declaration bodies up-front.

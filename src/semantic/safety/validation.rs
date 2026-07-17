@@ -263,7 +263,7 @@ pub(super) fn collect_used_type_def_ids(
     fn walk_func(walker: &mut TypeWalker, func: &FunctionDef) {
         for p in &func.params { walker.walk_type(&p.node.type_.node); }
         walker.walk_type(&func.return_type.node);
-        if let Some(throws) = &func.throws { walker.walk_type(&throws.node); }
+        if let Some(throws) = func.throws.explicit_type() { walker.walk_type(&throws.node); }
         match &func.body {
             FunctionBody::Block(b) => walker.visit_block(b),
             FunctionBody::Expression(e) => walker.visit_expr(e),

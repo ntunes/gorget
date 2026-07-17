@@ -223,6 +223,12 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
+            // D29: postfix error-propagation `expr!` is a transparent read of
+            // its inner fallible call — no ownership effect of its own.
+            Expr::Propagate { expr: inner } => {
+                self.check_expr(inner);
+            }
+
             Expr::Move { expr: inner } => {
                 // The `!` operator: move the value. `check_move` itself
                 // marks the variable as used (a move IS a use), so no extra

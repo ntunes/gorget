@@ -100,7 +100,7 @@ pub fn register_trait_types(
                     }
 
                     let method_name = &method_def.name.node;
-                    let return_type = if let Some(throws) = &method_def.throws {
+                    let return_type = if let Some(throws) = method_def.throws.explicit_type() {
                         // `int parse(self, String input) throws String` →
                         // Result[int, String]. One source of truth
                         // (devbook-24 rule 3): synthesize via the shared helper
@@ -936,7 +936,7 @@ fn lower_trait_method_body(
     }
 
     // Track throws context for Result wrapping in return/throw statements
-    ctx.func_state.current_throws_result_type = if method_def.throws.is_some() {
+    ctx.func_state.current_throws_result_type = if method_def.throws.declares_throws() {
         Some(return_type)
     } else {
         None

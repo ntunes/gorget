@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
-use super::errors::{SemanticError, SemanticErrorKind};
+use super::errors::{FallibleMarkReason, SemanticError, SemanticErrorKind};
 use super::ids::{DefId, ScopeId, TypeId};
 use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use super::scope::{DefKind, DerefWrapperKind, ScopeKind, ScopeTable};
@@ -574,6 +574,13 @@ struct TypeChecker<'a> {
     /// the only `==` operand whose raw-vs-peeled compare differs — is never
     /// peeled at the producer, so `make(1) == make(1)` is unchanged.)
     suppress_auto_prop: bool,
+    /// D29 one-shot, mirror of `suppress_auto_prop`: set by the `Expr::Propagate`
+    /// (`expr!`) arm while inferring its inner call, so the fallible-call
+    /// produce site (throws chokepoint / kind-2 detection) can verify the
+    /// mandatory `!` is present. Consumed (reset) at the next `infer_expr`
+    /// entry, so it is seen only at the immediately-enclosed producer, not at a
+    /// nested sub-expression.
+    fallible_call_marked: bool,
     /// Maps (function_name, span_start) → body scope id (for scope-aware lookups).
     function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
     /// Current function's body scope (for scope-aware variable lookup).
@@ -649,6 +656,7 @@ impl<'a> TypeChecker<'a> {
             current_equip_generics: Vec::new(),
             decl_type_hint: None,
             suppress_auto_prop: false,
+            fallible_call_marked: false,
             function_body_scopes,
             current_fn_scope: None,
             current_trait_bounds: Vec::new(),
@@ -1211,6 +1219,9 @@ impl<'a> TypeChecker<'a> {
         // throws-fn-call produce site (the Result-peel); reset so nested
         // sub-expressions auto-prop normally.
         let suppress_auto_prop = std::mem::replace(&mut self.suppress_auto_prop, false);
+        // D29 one-shot: same discipline for the `!` mark — captured here, read
+        // at the fallible-call produce site, reset so nested args don't inherit.
+        let fallible_call_marked = std::mem::replace(&mut self.fallible_call_marked, false);
         match &expr.node {
             Expr::IntLiteral(n) => {
                 if let Some(hint_id) = self.decl_type_hint {
@@ -2074,6 +2085,19 @@ impl<'a> TypeChecker<'a> {
                                 return_type,
                                 err_ty,
                                 suppress_auto_prop,
+                                fallible_call_marked,
+                                expr.span,
+                            )
+                        } else if self.type_is_result(return_type) {
+                            // D29 kind-2: a non-throws free fn whose declared
+                            // return is `Result[T,E]` is a fallible call under
+                            // the one-mark rule. Unmarked = a legal Result value
+                            // flow (bare-discard caught at statement position);
+                            // marked = peel + activate.
+                            self.resolve_kind2_call_type(
+                                return_type,
+                                suppress_auto_prop,
+                                fallible_call_marked,
                                 expr.span,
                             )
                         } else {
@@ -2465,6 +2489,7 @@ impl<'a> TypeChecker<'a> {
                         resolved_receiver,
                         sig.return_type,
                         suppress_auto_prop,
+                        fallible_call_marked,
                         expr.span,
                     );
                     self.expr_types.insert(expr.span, ret);
@@ -2521,6 +2546,7 @@ impl<'a> TypeChecker<'a> {
                             resolved_receiver,
                             sig.return_type,
                             suppress_auto_prop,
+                            fallible_call_marked,
                             expr.span,
                         );
                         self.expr_types.insert(expr.span, ret);
@@ -2594,6 +2620,7 @@ impl<'a> TypeChecker<'a> {
                                         resolved_receiver,
                                         ret_ty,
                                         suppress_auto_prop,
+                                        fallible_call_marked,
                                         expr.span,
                                     );
                                     self.expr_types.insert(expr.span, ret);
@@ -3078,6 +3105,20 @@ impl<'a> TypeChecker<'a> {
                 self.infer_expr(inner) // ownership modifiers don't change the type
             }
 
+            // D29: `expr!` propagation. The mark is recorded via the one-shot
+            // `fallible_call_marked` (mirror of `suppress_auto_prop`) so the
+            // immediately-enclosed fallible call verifies the mark is present.
+            // TRANSPARENCY (two-layer, scout Finding 5): forward the captured
+            // `suppress_auto_prop` one-shot into the inner call — a `!` between a
+            // disposition (`catch`/`rethrow`) and its call must NOT eat the
+            // suppress signal, or the call auto-props to `T` and the disposition
+            // can no longer read the raw Result. Mirror on the lowering side.
+            Expr::Propagate { expr: inner } => {
+                self.fallible_call_marked = true;
+                self.suppress_auto_prop = suppress_auto_prop;
+                self.infer_expr(inner)
+            }
+
             Expr::Deref { expr: inner } => {
                 let inner_type = self.infer_expr(inner);
                 // Peel any ownership wrappers (`&box`, `!box`) before checking
@@ -3232,21 +3273,30 @@ impl<'a> TypeChecker<'a> {
                 arms,
                 else_arm,
             } => {
-                // Suppress the throws-fn-call auto-prop peel for the
-                // scrutinee when the arms discriminate Result/Option, so the
-                // raw `Result[T, E]` reaches `assign_pattern_types`. Clear the
-                // inherited `decl_type_hint` so the peel decision depends only
-                // on the arms + propagating context (mirror of lowering's
-                // `expected_type.take()` at `patterns.rs:389`).
+                // Clear the inherited `decl_type_hint` so a throws/Result call
+                // scrutinee is not read as an explicit-`Result` capture position
+                // (mirror of lowering's `expected_type.take()` at
+                // `patterns.rs:389`). D29 (2026-07-17 amendment): a kind-1 throws
+                // call scrutinee is NO LONGER auto-suppressed to a raw Result —
+                // `match f()!:` peels to `T` (mark required; Ok/Error arms then
+                // fail to match `T` — bind to a Result first). A kind-2 call and
+                // a plain Result LOCAL already carry `Result` as a value, so they
+                // match Ok/Error without any suppression.
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = None;
-                self.suppress_auto_prop = Self::arms_match_result_or_option(arms);
                 let scrutinee_type = self.infer_expr(scrutinee);
                 self.decl_type_hint = prev_hint;
                 // Record the scrutinee's typed shape so downstream passes
                 // (e.g. `lint:suggest_throws`) can recognize Result[T, E]
                 // scrutinees without re-running inference.
                 self.expr_types.insert(scrutinee.span, scrutinee_type);
+                // D29: `match f()!:` peels to `T` — reject `Ok`/`Error` arms
+                // (they can no longer inspect the whole Result; capture first).
+                self.check_result_arms_against_scrutinee(
+                    scrutinee_type,
+                    arms.iter().map(|a| &a.pattern.node),
+                    scrutinee.span,
+                );
                 let mut result_type = self.fresh_type_var();
 
                 for arm in arms {
@@ -4032,20 +4082,15 @@ impl<'a> TypeChecker<'a> {
 
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = declared_type;
-                // D23: `auto r = throws_call()` in a NON-propagating context
-                // captures the whole `Result[T, E]` (the inferred binding takes
-                // whatever the RHS produces; the user then handles it with a
-                // `match Ok/Error`). Signal the throws-call producer to keep the
-                // raw Result — the same one-shot `suppress_auto_prop` a
-                // match-scrutinee-with-Result-arms uses. In a PROPAGATING context
-                // we leave it unset so the call still auto-propagates (peels to
-                // `T`), preserving pre-D23 behavior. The flag is consumed at
-                // `infer_expr`'s top, so a throws call NESTED in a larger `auto`
-                // RHS (`auto x = 1 + risky()`) still sees no suppression and is
-                // correctly rejected as unhandled.
-                if matches!(&type_.node, Type::Inferred) && !self.current_fn_can_propagate() {
-                    self.suppress_auto_prop = true;
-                }
+                // D29 (2026-07-17 amendment): an `auto`/inferred destination does
+                // NOT capture a fallible call — `auto r = f()` types as `T` and
+                // requires the mark (`auto r = f()!`). Only an EXPLICITLY
+                // `Result[T,E]`-annotated destination captures unmarked (that is
+                // `dest_is_result` at the chokepoint, driven by `declared_type`).
+                // So there is no longer an auto-capture suppress here; the
+                // pre-amendment `auto r = throws_call()` idiom now diagnoses
+                // E_MissingFallibleMark (the migration rewrites it to an explicit
+                // `Result[T,E] r = f()` capture where a whole Result is wanted).
                 let value_type = self.infer_expr(value);
                 self.decl_type_hint = prev_hint;
 
@@ -4363,19 +4408,24 @@ impl<'a> TypeChecker<'a> {
                 arms,
                 else_arm,
             } => {
-                // Suppress the throws-fn-call auto-prop peel for the
-                // scrutinee when the arms discriminate Result/Option (mirror
-                // of lowering's `patterns.rs:389`; see the `Expr::Match` arm).
-                let arm_arms: Vec<_> = arms.iter().filter_map(|i| i.arm().cloned()).collect();
+                // D29 (2026-07-17 amendment): no auto-suppress for a throws/
+                // Result call scrutinee — `match f()!:` peels to `T` (see the
+                // `Expr::Match` arm). Clear the hint so the scrutinee is not read
+                // as an explicit-`Result` capture position.
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = None;
-                self.suppress_auto_prop = Self::arms_match_result_or_option(&arm_arms);
                 let scrutinee_type = self.infer_expr(scrutinee);
                 self.decl_type_hint = prev_hint;
                 // Record the scrutinee's typed shape so downstream passes
                 // (e.g. `lint:suggest_throws`) can recognize Result[T, E]
                 // scrutinees without re-running inference.
                 self.expr_types.insert(scrutinee.span, scrutinee_type);
+                // D29: `match f()!:` peels to `T` — reject `Ok`/`Error` arms.
+                self.check_result_arms_against_scrutinee(
+                    scrutinee_type,
+                    arms.iter().filter_map(|i| i.arm()).map(|a| &a.pattern.node),
+                    scrutinee.span,
+                );
                 let mut first_arm_type = None;
                 for arm in arms.iter().filter_map(|i| i.arm()) {
                     self.assign_pattern_types(&arm.pattern, scrutinee_type);
@@ -5096,11 +5146,41 @@ impl<'a> TypeChecker<'a> {
             // or a tail if/match with branches that end in expressions.
             if let Some(ty) = stmt_type {
                 last_type = ty;
+                // D29 kind-2 bare-discard: a NON-tail expression statement whose
+                // value is an un-consumed fallible `Result` silently drops the
+                // Error case — exactly what D29 kills. The TAIL (i == last_idx)
+                // is the block's value (consumed by the enclosing return / expr
+                // context — the normal return unification handles it), so it is
+                // not a discard. (Kind-1 unmarked calls already errored at the
+                // call site and type as `error`, not `Result`, so they never
+                // reach here.)
+                if i != last_idx {
+                    if let Stmt::Expr(expr) = &stmt.node {
+                        self.check_bare_fallible_discard(expr, ty);
+                    }
+                }
             } else if i == last_idx {
                 last_type = self.infer_stmt_tail_type(&stmt.node);
             }
         }
         last_type
+    }
+
+    /// D29: flag a bare (unmarked) fallible CALL used as a discarded expression
+    /// statement — `parse(s)` on its own line drops the `Result` outcome. Mark
+    /// it (`parse(s)!`) to propagate, or handle it. A `Propagate`-wrapped call
+    /// has already activated its channel (types as `T` or errored), and a plain
+    /// value / local is not a fallible call, so neither reaches this branch.
+    fn check_bare_fallible_discard(&mut self, expr: &Spanned<Expr>, ty: TypeId) {
+        if !matches!(&expr.node, Expr::Call { .. } | Expr::MethodCall { .. }) {
+            return;
+        }
+        let resolved = self.resolve_type(ty);
+        if let ResolvedType::Generic(def_id, args) = self.types.get(resolved).clone() {
+            if args.len() == 2 && self.scopes.get_def(def_id).name == "Result" {
+                self.emit_missing_fallible_mark(args[1], FallibleMarkReason::Bare, expr.span);
+            }
+        }
     }
 
     /// Infer the type produced by a statement in tail position of a block.
@@ -5496,11 +5576,22 @@ impl<'a> TypeChecker<'a> {
     ///
     /// PRESERVES the `match self.scopes.lookup("Result") { … None => return_type }`
     /// fallback so a build where `Result` is out of scope does not regress.
+    /// D29 kind-1 chokepoint (`throws E` callee). `marked` = the call carried a
+    /// postfix `!` (an `Expr::Propagate` wrapper). Enforces the ratified /
+    /// amended (`decisions.md` 2026-07-17) fallible-mark discipline:
+    ///
+    /// | position                            | unmarked          | marked                |
+    /// |-------------------------------------|-------------------|-----------------------|
+    /// | `catch`/`rethrow` inner (suppress)  | E_MissingFallibleMark | activate, keep Result |
+    /// | explicit `Result[T,E]` dest (capture)| capture (legal)  | E_MissingFallibleMark (redundant) |
+    /// | propagating context                 | E_MissingFallibleMark | peel to `T` (Route A) |
+    /// | non-propagating, no disposition     | E_MissingFallibleMark | E_UnhandledThrows     |
     fn resolve_throws_call_type(
         &mut self,
         return_type: TypeId,
         err_ty: TypeId,
         suppress_auto_prop: bool,
+        marked: bool,
         span: Span,
     ) -> TypeId {
         match self.scopes.lookup("Result") {
@@ -5511,19 +5602,46 @@ impl<'a> TypeChecker<'a> {
                 let dest_is_result = self
                     .decl_type_hint
                     .map_or(false, |h| self.type_is_result(h));
-                if suppress_auto_prop || dest_is_result {
-                    // Legit whole-Result position — capture / scrutinee /
-                    // catch / rethrow. Unchanged from pre-D23.
-                    raw_result
-                } else if self.current_fn_can_propagate() {
+                // (1) Disposition inner — `catch`/`rethrow` set `suppress_auto_prop`
+                //     and read the whole raw Result. The mark is MANDATORY there
+                //     (`f()! catch …`); an unmarked `f() catch …` is the bare-call
+                //     error. Checked FIRST so a disposition wins over an ambient
+                //     `Result` hint.
+                if suppress_auto_prop {
+                    if !marked {
+                        self.emit_missing_fallible_mark(err_ty, FallibleMarkReason::Bare, span);
+                    }
+                    return raw_result;
+                }
+                // (2) Explicit `Result[T,E]` capture position. LEGAL UNMARKED (the
+                //     annotation carries the visibility — 2026-07-17 amendment);
+                //     marking it too is the redundant-mark error (remove the `!`).
+                if dest_is_result {
+                    if marked {
+                        self.emit_missing_fallible_mark(
+                            err_ty,
+                            FallibleMarkReason::RedundantOnCapture,
+                            span,
+                        );
+                    }
+                    return raw_result;
+                }
+                // (3) No capture, no disposition: the mark is mandatory. A bare
+                //     fallible call is always illegal (both a propagating and a
+                //     non-propagating context — bare is bare).
+                if !marked {
+                    self.emit_missing_fallible_mark(err_ty, FallibleMarkReason::Bare, span);
+                    return self.types.error_id;
+                }
+                // (4) Marked: activate the error channel.
+                if self.current_fn_can_propagate() {
                     // Route A: the producer-peel fires. Gate the callee-E
                     // against the caller-E before discarding it.
                     self.auto_prop_error_gate(err_ty, span);
                     return_type
                 } else {
-                    // Unhandled throws: neither propagated nor handled. Emit the
-                    // one clean D23 diagnostic; return error_id so the downstream
-                    // unify short-circuits (no desugar leak, no swallow).
+                    // Marked but cannot propagate here and no disposition
+                    // attached → E_UnhandledThrows (message flipped for D29).
                     self.error(
                         SemanticErrorKind::UnhandledThrows {
                             throws_type: self.describe_resolved_type(err_ty),
@@ -5535,6 +5653,23 @@ impl<'a> TypeChecker<'a> {
             }
             None => return_type,
         }
+    }
+
+    /// D29: emit `E_MissingFallibleMark` with the callee error type rendered for
+    /// the teaching message (never the `Result[…]` desugar — D23 contract).
+    fn emit_missing_fallible_mark(
+        &mut self,
+        err_ty: TypeId,
+        reason: FallibleMarkReason,
+        span: Span,
+    ) {
+        self.error(
+            SemanticErrorKind::MissingFallibleMark {
+                throws_type: self.describe_resolved_type(err_ty),
+                reason,
+            },
+            span,
+        );
     }
 
     /// Method-path adapter for `resolve_throws_call_type` (D23). Resolves the
@@ -5569,6 +5704,7 @@ impl<'a> TypeChecker<'a> {
         receiver_type_id: TypeId,
         return_type: TypeId,
         suppress_auto_prop: bool,
+        marked: bool,
         span: Span,
     ) -> TypeId {
         // (1) Concrete equip/extern method.
@@ -5623,8 +5759,77 @@ impl<'a> TypeChecker<'a> {
             }
         }
         match err_ty {
-            Some(e) => self.resolve_throws_call_type(return_type, e, suppress_auto_prop, span),
+            Some(e) => {
+                self.resolve_throws_call_type(return_type, e, suppress_auto_prop, marked, span)
+            }
+            // Kind-2: a non-throws method whose DECLARED return is `Result[T,E]`
+            // is fallible too (D29 one-mark-for-both-kinds). NO combinator
+            // carve-out (the 2026-07-17 amendment dissolves it): a combinator
+            // like `r.and_then(f)` is just a kind-2 call — unmarked it is a legal
+            // Result VALUE flow (consumed by the chain), marked it activates the
+            // channel, discarded bare it is the same E_MissingFallibleMark. No
+            // receiver-type predicate is needed.
+            None if self.type_is_result(return_type) => {
+                self.resolve_kind2_call_type(return_type, suppress_auto_prop, marked, span)
+            }
             None => return_type,
+        }
+    }
+
+    /// D29 kind-2 site (non-throws callee whose declared return is `Result[T,E]`).
+    /// Unmarked = a legal Result VALUE flow (its bare-discard is caught at
+    /// statement position, not here). Marked = peel to `T` + activate the error
+    /// channel, exactly like a kind-1 throws call.
+    fn resolve_kind2_call_type(
+        &mut self,
+        result_return_type: TypeId,
+        suppress_auto_prop: bool,
+        marked: bool,
+        span: Span,
+    ) -> TypeId {
+        // Extract T and E from the declared `Result[T, E]` return.
+        let resolved = self.resolve_type(result_return_type);
+        let (t, e) = match self.types.get(resolved).clone() {
+            ResolvedType::Generic(def_id, args)
+                if args.len() == 2 && self.scopes.get_def(def_id).name == "Result" =>
+            {
+                (args[0], args[1])
+            }
+            // Not actually a `Result[T,E]` (shouldn't happen — guarded by the
+            // caller's `type_is_result`); return as-is.
+            _ => return result_return_type,
+        };
+        if !marked {
+            // Legal value flow: bind / match / pass / chain / receiver. The
+            // bare-DISCARD case (a statement whose value is this un-consumed
+            // Result) is enforced separately at statement position.
+            return result_return_type;
+        }
+        // Marked: activate the channel — same discipline as a throws call.
+        let dest_is_result = self
+            .decl_type_hint
+            .map_or(false, |h| self.type_is_result(h));
+        if suppress_auto_prop {
+            // `parse()! catch …` — the disposition reads the whole Result.
+            return result_return_type;
+        }
+        if dest_is_result {
+            // `Result[T,E] r = parse()!` — the mark is redundant (capture is the
+            // unmarked spelling). Remove the `!`.
+            self.emit_missing_fallible_mark(e, FallibleMarkReason::RedundantOnCapture, span);
+            return result_return_type;
+        }
+        if self.current_fn_can_propagate() {
+            self.auto_prop_error_gate(e, span);
+            t
+        } else {
+            self.error(
+                SemanticErrorKind::UnhandledThrows {
+                    throws_type: self.describe_resolved_type(e),
+                },
+                span,
+            );
+            self.types.error_id
         }
     }
 
@@ -5678,26 +5883,6 @@ impl<'a> TypeChecker<'a> {
         false
     }
 
-    /// Whether any match arm pattern discriminates a `Result`/`Option`
-    /// (`Ok` / `Error` / `Some` / `None`, optionally `Result.`/`Option.`
-    /// qualified). When true, a throws-fn-call scrutinee must keep its raw
-    /// `Result[T, E]` so the arm patterns bind correctly — the auto-prop
-    /// peel is suppressed. Mirror of IR-lowering's
-    /// `pattern_is_result_or_option` (`src/ir/lowering/stmts/patterns.rs`).
-    fn arms_match_result_or_option(arms: &[crate::parser::ast::MatchArm]) -> bool {
-        arms.iter().any(|arm| {
-            if let Pattern::Constructor { path, .. } = &arm.pattern.node {
-                let head = path.first().map(|s| s.node.as_str());
-                let second = path.get(1).map(|s| s.node.as_str());
-                matches!(head, Some("Ok" | "Error" | "Some" | "None"))
-                    || (matches!(head, Some("Result" | "Option"))
-                        && matches!(second, Some("Ok" | "Error" | "Some" | "None")))
-            } else {
-                false
-            }
-        })
-    }
-
     /// True when `type_id` resolves to a `Result[T, E]` enum.
     fn type_is_result(&self, type_id: TypeId) -> bool {
         let resolved = self.resolve_type(type_id);
@@ -5705,6 +5890,53 @@ impl<'a> TypeChecker<'a> {
             return args.len() == 2 && self.scopes.get_def(*def_id).name == "Result";
         }
         false
+    }
+
+    /// True when a match arm pattern discriminates a `Result` variant
+    /// (`Ok` / `Error`, optionally `Result.`-qualified). Used by the D29
+    /// marked-match check (`match f()!:` peels to `T`; `Ok`/`Error` arms then
+    /// cannot match — capture the Result first).
+    fn pattern_discriminates_result(pat: &Pattern) -> bool {
+        if let Pattern::Constructor { path, .. } = pat {
+            let head = path.first().map(|s| s.node.as_str());
+            let second = path.get(1).map(|s| s.node.as_str());
+            matches!(head, Some("Ok" | "Error"))
+                || (matches!(head, Some("Result")) && matches!(second, Some("Ok" | "Error")))
+        } else {
+            false
+        }
+    }
+
+    /// D29: reject `Ok`/`Error` arms over a scrutinee that is NOT a `Result` —
+    /// the `match f()!:` peel case (the mark peeled the Result to `T`, so the
+    /// arms can no longer inspect it). Only fires on a concrete, resolved,
+    /// non-error scrutinee to avoid cascading on an already-failed inference.
+    fn check_result_arms_against_scrutinee<'p>(
+        &mut self,
+        scrutinee_type: TypeId,
+        patterns: impl Iterator<Item = &'p Pattern>,
+        span: Span,
+    ) {
+        let resolved = self.resolve_type(scrutinee_type);
+        // Skip unresolved / error scrutinees (a prior error already reported).
+        if resolved == self.types.error_id
+            || matches!(self.types.get(resolved), ResolvedType::Var(_))
+        {
+            return;
+        }
+        if self.type_is_result(scrutinee_type) {
+            return; // matching a real Result — fine.
+        }
+        let mut ps = patterns;
+        if ps.any(Self::pattern_discriminates_result) {
+            self.error(
+                SemanticErrorKind::MissingFallibleMark {
+                    throws_type: String::new(),
+                    reason: FallibleMarkReason::ResultArmsOnPeeled,
+                },
+                span,
+            );
+        }
     }
 
     /// Check if auto-propagation allows assigning a `Result[T, E]` value to a `T`-typed
@@ -7360,12 +7592,18 @@ impl<'a> TypeChecker<'a> {
         .unwrap_or(self.types.void_id);
 
         self.current_return_type = Some(return_type);
-        self.current_function_throws = func.throws.is_some();
+        // D29/A31: a bare `!` signature (`int f()!:`) is the reserved inferred-
+        // error-set spelling. It parses (the grammar locks now) but is teaching-
+        // rejected until A31 lands — steer the user to `throws E`.
+        if let crate::parser::ast::ThrowsSpec::Inferred(bang_span) = &func.throws {
+            self.error(SemanticErrorKind::InferredThrowsUnsupported, *bang_span);
+        }
+        self.current_function_throws = func.throws.declares_throws();
         // Snag #11: resolve the CALLER's error type (`throws E`) so the
         // auto-propagation chokepoints can gate cross-error propagation. The
         // boolean `current_function_throws` is not enough — we need the
         // resolved TypeId of E to compare against the callee's error type.
-        self.current_fn_throws_type_id = func.throws.as_ref().and_then(|t| {
+        self.current_fn_throws_type_id = func.throws.explicit_type().and_then(|t| {
             super::types::ast_type_to_resolved(&t.node, t.span, self.scopes, self.types).ok()
         });
         self.current_function_is_async = func.qualifiers.is_async;
@@ -7373,7 +7611,7 @@ impl<'a> TypeChecker<'a> {
 
         // main() can only throw int (the process exit code)
         if func.name.node == "main" {
-            if let Some(ref throws_type) = func.throws {
+            if let Some(throws_type) = func.throws.explicit_type() {
                 let is_int = matches!(&throws_type.node, crate::parser::ast::Type::Primitive(crate::parser::ast::PrimitiveType::Int));
                 if !is_int {
                     self.error(SemanticErrorKind::MainThrowsNonInt, throws_type.span);
@@ -7421,7 +7659,7 @@ impl<'a> TypeChecker<'a> {
         // `unreachable` right after it. (Extern bodies included — the
         // combination is a lie regardless of where the body lives.)
         if func.qualifiers.is_noreturn {
-            if let Some(throws) = &func.throws {
+            if let Some(throws) = func.throws.explicit_type() {
                 self.error(
                     SemanticErrorKind::NoreturnWithThrows {
                         function: func.name.node.clone(),
@@ -7919,7 +8157,7 @@ pub fn apply_inferred_method_targs(
                 if let Some(s) = start { walk_expr(s, inferred); }
                 if let Some(en) = end { walk_expr(en, inferred); }
             }
-            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+            Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::MutableBorrow { expr: inner }
             | Expr::OptionalChain { object: inner, .. } => walk_expr(inner, inferred),
             Expr::DefaultOp { lhs, rhs } => {
                 walk_expr(lhs, inferred);
@@ -8081,7 +8319,7 @@ pub fn apply_inferred_call_targs(
                 if let Some(s) = start { walk_expr(s, inferred); }
                 if let Some(en) = end { walk_expr(en, inferred); }
             }
-            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+            Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::MutableBorrow { expr: inner }
             | Expr::OptionalChain { object: inner, .. } => walk_expr(inner, inferred),
             Expr::DefaultOp { lhs, rhs } => {
                 walk_expr(lhs, inferred);
@@ -8332,7 +8570,7 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
                 if let Some(s) = start { walk_expr(s, sigs); }
                 if let Some(e) = end { walk_expr(e, sigs); }
             }
-            Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+            Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::MutableBorrow { expr: inner }
             | Expr::OptionalChain { object: inner, .. } => walk_expr(inner, sigs),
             Expr::DefaultOp { lhs, rhs } => {
                 walk_expr(lhs, sigs);

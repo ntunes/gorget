@@ -529,7 +529,7 @@ fn collect_item(
 
                     validate_default_param_ordering(&f.params, errors);
 
-                    let throws_type_id = f.throws.as_ref().and_then(|t| {
+                    let throws_type_id = f.throws.explicit_type().and_then(|t| {
                         types::ast_type_to_resolved(&t.node, t.span, scopes, types).ok()
                     });
                     let generic_param_names = extract_generic_param_names(&f.generic_params);
@@ -543,7 +543,7 @@ fn collect_item(
                             param_ownerships,
                             param_names,
                             param_defaults,
-                            throws: f.throws.is_some(),
+                            throws: f.throws.declares_throws(),
                             throws_type_id,
                             is_async: f.qualifiers.is_async,
                             is_blocking: f.qualifiers.is_blocking,
@@ -766,7 +766,7 @@ fn collect_item(
                             })
                             .collect();
                         validate_default_param_ordering(&f.params, errors);
-                        let throws_type_id = f.throws.as_ref().and_then(|t| {
+                        let throws_type_id = f.throws.explicit_type().and_then(|t| {
                             types::ast_type_to_resolved(&t.node, t.span, scopes, types).ok()
                         });
                         let generic_param_names = extract_generic_param_names(&f.generic_params);
@@ -780,7 +780,7 @@ fn collect_item(
                                 param_ownerships,
                                 param_names,
                                 param_defaults,
-                                throws: f.throws.is_some(),
+                                throws: f.throws.declares_throws(),
                                 throws_type_id,
                                 is_async: f.qualifiers.is_async,
                                 is_blocking: f.qualifiers.is_blocking,
@@ -833,7 +833,7 @@ fn collect_item(
                             ).ok())
                             .collect();
                         let param_count = func.node.params.len();
-                        let throws_type_id = func.node.throws.as_ref().and_then(|t| {
+                        let throws_type_id = func.node.throws.explicit_type().and_then(|t| {
                             types::ast_type_to_resolved(&t.node, t.span, scopes, types).ok()
                         });
                         let generic_param_names = extract_generic_param_names(&func.node.generic_params);
@@ -844,7 +844,7 @@ fn collect_item(
                             param_ownerships,
                             param_names,
                             param_defaults: vec![None; param_count],
-                            throws: func.node.throws.is_some(),
+                            throws: func.node.throws.declares_throws(),
                             throws_type_id,
                             is_async: func.node.qualifiers.is_async,
                             is_blocking: func.node.qualifiers.is_blocking,
@@ -1682,6 +1682,7 @@ fn resolve_expr(
         }
 
         Expr::Move { expr: inner }
+        | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner }
         | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner }

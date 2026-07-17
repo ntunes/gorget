@@ -75,6 +75,14 @@ pub fn lower_expr(
     builder: &mut FunctionBuilder,
     expr: &Spanned<Expr>,
 ) -> Operand {
+    // D29: `expr!` (Propagate) is TRANSPARENT — unwrap it BEFORE the suppress
+    // one-shot is consumed, so the inner call inherits the match-scrutinee /
+    // catch / rethrow suppress signal (otherwise the mark eats it, the call
+    // auto-props to `T`, and a match on the raw Result reads garbage → SIGSEGV;
+    // scout Finding 5). Mirror of the typecheck-side transparency fix.
+    if let Expr::Propagate { expr: inner } = &expr.node {
+        return lower_expr(ctx, builder, inner);
+    }
     let suppress = std::mem::replace(&mut ctx.func_state.suppress_auto_prop, false);
     let is_producer = matches!(&expr.node, Expr::Call { .. } | Expr::MethodCall { .. });
     let op = lower_expr_inner(ctx, builder, expr, None);
@@ -240,6 +248,12 @@ fn lower_expr_inner(
         Expr::Index { object, index } => {
             lower_index_access(ctx, builder, object, index)
         }
+
+        // D29: `expr!` propagation lowers transparently to inner. (Auto-prop is
+        // inserted by the existing throws lowering; the mark carries no extra
+        // lowering. The `lower_expr` entry normally intercepts Propagate before
+        // reaching here — this arm covers any direct `lower_expr_inner` call.)
+        Expr::Propagate { expr: inner } => lower_expr(ctx, builder, inner),
 
         // -- P2.6: Move/Borrow --
         Expr::Move { expr: inner } => {

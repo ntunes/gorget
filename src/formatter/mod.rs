@@ -504,9 +504,14 @@ impl Formatter {
             self.format_generic_params_wrapped(gp);
         }
         self.format_params_wrapped(&f.params);
-        if let Some(ref throws) = f.throws {
-            self.emitter.write(" throws ");
-            self.format_type(throws);
+        match &f.throws {
+            ThrowsSpec::Explicit(throws) => {
+                self.emitter.write(" throws ");
+                self.format_type(throws);
+            }
+            // D29/A31 bare `!` inferred-error-set signature (`int f()!:`).
+            ThrowsSpec::Inferred(_) => self.emitter.write("!"),
+            ThrowsSpec::No => {}
         }
         match &f.body {
             FunctionBody::Block(block) => {
@@ -1761,6 +1766,15 @@ impl Formatter {
             Expr::Move { expr } => {
                 self.emitter.write("!");
                 self.format_expr(expr);
+            }
+            // D29: postfix error-propagation renders the `!` AFTER the inner
+            // expression. No bang-space corner here: a `!=`/`==` comparison is
+            // a `BinaryOp` whose arm already emits ` != `/ ` == ` with spaces,
+            // so a re-rendered `f()! != b` never fuses. (The raw-text migrator
+            // handles bang-space when INSERTING into un-spaced source.)
+            Expr::Propagate { expr } => {
+                self.format_expr(expr);
+                self.emitter.write("!");
             }
             Expr::MutableBorrow { expr } => {
                 self.emitter.write("&");

@@ -1760,11 +1760,28 @@ impl Parser {
         let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
 
-        // Parse throws clause
+        // Parse throws clause (D29).
+        //   `throws E` — explicit error contract (the v1 spelling; unchanged).
+        //   `!`        — bare `!` before the body (`int f()!:`) is A31's
+        //                inferred-error-set signature spelling. It PARSES so the
+        //                grammar locks now; the checker teaching-rejects it until
+        //                A31 lands. Carried as `ThrowsSpec::Inferred` — a typed
+        //                axis, NOT a `Type::Named("!inferred")` sentinel.
+        //   `! E`      — sigil+type does NOT exist (cancelled 2026-07-16); reject.
         let throws = if self.match_keyword(Keyword::Throws) {
-            Some(self.parse_type()?)
+            ThrowsSpec::Explicit(self.parse_type()?)
+        } else if self.match_token(&Token::Bang) {
+            let bang_span = self.previous_span();
+            if self.check(&Token::Colon) || self.check(&Token::Eq) || self.check(&Token::Newline) {
+                ThrowsSpec::Inferred(bang_span)
+            } else {
+                return Err(self.error_at(
+                    self.peek_span(),
+                    "`! Type` is not a signature form — write `throws E` for an explicit error contract (bare `!` is reserved for A31 inferred error sets)",
+                ));
+            }
         } else {
-            None
+            ThrowsSpec::No
         };
 
 

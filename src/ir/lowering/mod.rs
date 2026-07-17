@@ -634,16 +634,16 @@ pub fn lower_module(
             let name = &func.name.node;
             let is_main = name == "main";
 
-            let ret_type = if is_main && func.throws.is_none() {
+            let ret_type = if is_main && !func.throws.declares_throws() {
                 I32_TYPE
-            } else if func.throws.is_some() {
+            } else if func.throws.declares_throws() {
                 // `int foo() throws str` → Result[int, str]. One source of
                 // truth (devbook-24 rule 3): synthesize via the shared helper.
                 crate::ir::lowering::types::synthesize_throws_result_type(
                     &mut ctx.type_mapper,
                     &mut ctx.type_registry,
                     &func.return_type.node,
-                    &func.throws.as_ref().unwrap().node,
+                    &func.throws.explicit_type().unwrap().node,
                 )
             } else {
                 // Use map_ast_type_mut so tuple return types get registered on the fly
@@ -1034,7 +1034,7 @@ pub fn lower_module(
                     // the emitted C method returned `Result` → ill-typed C.
                     // Route through the shared helper — same synthesis as the
                     // free-fn pre-scan and the method body (`functions.rs`).
-                    let ret_type = if let Some(throws) = &method_def.throws {
+                    let ret_type = if let Some(throws) = method_def.throws.explicit_type() {
                         types::synthesize_throws_result_type(
                             &mut ctx.type_mapper,
                             &mut ctx.type_registry,
@@ -2653,7 +2653,7 @@ fn synthesize_static_init_fn(
 ) {
     use crate::parser::ast::{
         Block, Expr, FunctionBody, FunctionDef, FunctionQualifiers, Pattern, SharedKind, Stmt,
-        Visibility,
+        ThrowsSpec, Visibility,
     };
     use crate::span::Spanned;
 
@@ -2677,7 +2677,7 @@ fn synthesize_static_init_fn(
         name: Spanned::new(synth_name.to_string(), span),
         generic_params: None,
         params: vec![],
-        throws: None,
+        throws: ThrowsSpec::No,
         body: FunctionBody::Block(Block {
             stmts: vec![Spanned::new(var_decl_stmt, span), Spanned::new(return_stmt, span)],
             span,

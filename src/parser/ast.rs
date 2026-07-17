@@ -117,6 +117,54 @@ pub struct BenchDef {
 // Functions
 // ══════════════════════════════════════════════════════════════
 
+/// A function's declared fallibility (D29). One typed axis with three states —
+/// NOT a `Option<Type>` + sentinel: the `!:` inferred spelling must never be a
+/// magic `Type::Named("!inferred")` (layering rule 2: no name-matched sentinels).
+#[derive(Debug, Clone, Default)]
+pub enum ThrowsSpec {
+    /// No `throws` clause and no bare `!` — the function is infallible.
+    #[default]
+    No,
+    /// Bare `!` before the body (`int f()!:`) — A31's inferred-error-set
+    /// spelling. Parses so the grammar locks now; the checker teaching-rejects
+    /// it until A31 lands. Carries the `!` span for the diagnostic.
+    Inferred(Span),
+    /// Explicit `throws E` error contract.
+    Explicit(Spanned<Type>),
+}
+
+impl ThrowsSpec {
+    /// True when the function declares fallibility (either `throws E` or the
+    /// inferred `!`). Replaces the old `throws.is_some()`.
+    pub fn declares_throws(&self) -> bool {
+        !matches!(self, ThrowsSpec::No)
+    }
+
+    /// The explicit `throws E` type, if the fallibility is spelled with a
+    /// concrete contract. `None` for both `No` and `Inferred`. Replaces the old
+    /// `throws.as_ref()` where the caller wants the error type.
+    pub fn explicit_type(&self) -> Option<&Spanned<Type>> {
+        match self {
+            ThrowsSpec::Explicit(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the explicit `throws E` type (for the resolve/meta
+    /// substitution passes that rewrite type names in place).
+    pub fn explicit_type_mut(&mut self) -> Option<&mut Spanned<Type>> {
+        match self {
+            ThrowsSpec::Explicit(t) => Some(t),
+            _ => None,
+        }
+    }
+
+    /// True for the bare `!` inferred spelling (A31 reservation).
+    pub fn is_inferred(&self) -> bool {
+        matches!(self, ThrowsSpec::Inferred(_))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FunctionDef {
     pub attributes: Vec<Spanned<Attribute>>,
@@ -126,7 +174,7 @@ pub struct FunctionDef {
     pub name: Spanned<String>,
     pub generic_params: Option<Spanned<GenericParams>>,
     pub params: Vec<Spanned<Param>>,
-    pub throws: Option<Spanned<Type>>,
+    pub throws: ThrowsSpec,
     pub body: FunctionBody,
     pub doc_comment: Option<String>,
     pub span: Span,
@@ -605,6 +653,15 @@ pub enum Expr {
 
     // ── Move (!) ──
     Move {
+        expr: Box<Spanned<Expr>>,
+    },
+
+    // ── D29: postfix error-propagation mark (`call()!`) ──
+    // Marks a fallible-call site as activating its error channel (propagate /
+    // `catch` / `rethrow`). Semantically the identity on the success value; the
+    // node exists so the fallibility is VISIBLE at the site and the checker can
+    // enforce the mandatory mark (D29 / `decisions.md` 2026-07-17 amendment).
+    Propagate {
         expr: Box<Spanned<Expr>>,
     },
 

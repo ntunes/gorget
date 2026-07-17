@@ -1656,7 +1656,7 @@ impl<'a> BorrowChecker<'a> {
         self.reset_per_function_state();
         self.current_param_def_ids.clear();
         self.current_function_is_async = func.qualifiers.is_async;
-        self.current_function_throws = func.throws.is_some();
+        self.current_function_throws = func.throws.declares_throws();
         self.shared_derived.clear();
         self.stale_shared_derived.clear();
         self.mut_captured_vars.clear();

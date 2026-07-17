@@ -13492,6 +13492,9 @@ fn format_expr_canonical(expr: &Expr) -> String {
         Expr::Move { expr } => {
             format!("!{}", format_expr_canonical(&expr.node))
         }
+        Expr::Propagate { expr } => {
+            format!("{}!", format_expr_canonical(&expr.node))
+        }
         Expr::MutableBorrow { expr } => {
             format!("&{}", format_expr_canonical(&expr.node))
         }

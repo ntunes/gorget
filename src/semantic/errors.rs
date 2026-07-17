@@ -259,6 +259,24 @@ pub enum MoveShape {
     Capture,
 }
 
+/// D29: which fallible-mark violation an `E_MissingFallibleMark` reports. One
+/// code, two messages — the reason discriminates the teaching text (the code
+/// registry stays one-per-variant; this is a payload, not a second code).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallibleMarkReason {
+    /// A bare fallible call with no `!` and no capturing `Result` destination.
+    /// Teaches all three exits: mark it, handle it, or capture it.
+    Bare,
+    /// A `!`-marked call whose outcome is already captured by an explicitly
+    /// `Result`-annotated destination — the mark is redundant (the annotation
+    /// carries the visibility). Fix-it: remove the `!`.
+    RedundantOnCapture,
+    /// `Ok`/`Error` match arms over a marked (`f()!`) scrutinee, which peels to
+    /// the success value `T` — the arms cannot inspect the whole `Result`. Bind
+    /// the outcome first (`Result[T,E] r = f(); match r:`).
+    ResultArmsOnPeeled,
+}
+
 #[derive(Debug, Clone)]
 pub enum SemanticErrorKind {
     /// Name not found in any enclosing scope.
@@ -445,6 +463,24 @@ pub enum SemanticErrorKind {
     /// (`throws` method calls, whose throws-ness was dropped entirely).
     /// `throws_type` is the callee's error type `E`.
     UnhandledThrows { throws_type: String },
+
+    /// D29 (visible error propagation): a fallible call — one whose callee is
+    /// `throws E` (kind-1) OR whose declared return is `Result[T, E]` (kind-2) —
+    /// is used without the mandatory postfix `!`, and its outcome is neither
+    /// captured by an explicitly `Result`-annotated destination nor attached to
+    /// a `catch`/`rethrow` disposition. OR (the `RedundantOnCapture` reason) the
+    /// `!` is present but the destination already captures the whole `Result` —
+    /// the mark is redundant. `throws_type` is the callee's error type `E`; the
+    /// message never surfaces the `Result[…]` desugar as a found-type (D23
+    /// contract). Fix-it: insert `!` (or ` !` before `=`), or remove it for the
+    /// redundant-capture reason.
+    MissingFallibleMark { throws_type: String, reason: FallibleMarkReason },
+
+    /// D29/A31: a bare `!` signature (`int f()!:`) — the reserved spelling for
+    /// A31 inferred error sets — used before A31 is implemented. The grammar
+    /// locks now (parses); the checker teaching-rejects until A31 lands, steering
+    /// the user to the explicit `throws E` contract spelling.
+    InferredThrowsUnsupported,
 
     /// `await` used outside an `async` function.
     AwaitOutsideAsync,
@@ -741,6 +777,8 @@ impl SemanticErrorKind {
             SemanticErrorKind::MainThrowsNonInt => "E_MainThrowsNonInt",
             SemanticErrorKind::UnconvertibleErrorPropagation { .. } => "E_UnconvertibleErrorPropagation",
             SemanticErrorKind::UnhandledThrows { .. } => "E_UnhandledThrows",
+            SemanticErrorKind::MissingFallibleMark { .. } => "E_MissingFallibleMark",
+            SemanticErrorKind::InferredThrowsUnsupported => "E_InferredThrowsUnsupported",
             SemanticErrorKind::AwaitOutsideAsync => "E_AwaitOutsideAsync",
             SemanticErrorKind::SelectOutsideAsync => "E_SelectOutsideAsync",
             SemanticErrorKind::AwaitNonFuture => "E_AwaitNonFuture",
@@ -990,14 +1028,44 @@ impl std::fmt::Display for SemanticError {
                 )
             }
             SemanticErrorKind::UnhandledThrows { throws_type } => {
+                // D29 flip: a MARKED call that cannot propagate here (non-throws
+                // fn, no disposition). Teach handle / capture / propagate — never
+                // surface the `Result[…]` desugar as a found-type (D23 contract).
                 write!(
                     f,
-                    "this call throws `{throws_type}` but the error is not handled \
-                     here; declare the enclosing function `throws {throws_type}`, or \
-                     handle it with `catch`, `rethrow`, or by binding the result to a \
-                     `Result[T, {throws_type}]`"
+                    "this call can fail (throws `{throws_type}`) but the error is not \
+                     handled here; handle it with `catch` or `rethrow`, capture its \
+                     outcome in an explicitly-typed binding, or declare the enclosing \
+                     function `throws {throws_type}` to propagate"
                 )
             }
+            SemanticErrorKind::MissingFallibleMark { throws_type, reason } => match reason {
+                FallibleMarkReason::Bare => write!(
+                    f,
+                    "this call can fail (throws `{throws_type}`) — mark it with `!` to \
+                     propagate the error (`f()!`), handle it (`f()! catch (e): …` or \
+                     `f()! rethrow (e): …`), or capture its outcome in an explicitly \
+                     `Result`-typed binding"
+                ),
+                FallibleMarkReason::RedundantOnCapture => write!(
+                    f,
+                    "this call's outcome is captured by the explicitly-typed \
+                     destination — remove the `!` (the annotation makes the \
+                     fallibility visible; the mark would instead propagate the error)"
+                ),
+                FallibleMarkReason::ResultArmsOnPeeled => write!(
+                    f,
+                    "the marked call `f()!` peels to its success value, so these \
+                     `Ok`/`Error` arms cannot match its whole outcome — capture the \
+                     outcome in an explicitly `Result`-typed binding first, then \
+                     `match` that binding"
+                ),
+            },
+            SemanticErrorKind::InferredThrowsUnsupported => write!(
+                f,
+                "inferred error sets (a bare `!` on the signature) are not yet \
+                 implemented — declare the error contract explicitly with `throws E`"
+            ),
             SemanticErrorKind::AwaitOutsideAsync => {
                 write!(f, "`await` can only be used inside an `async` function")
             }

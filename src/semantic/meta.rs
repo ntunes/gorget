@@ -321,7 +321,7 @@ fn expand_generic_aliases_in_function(
     for param in &mut f.params {
         expand_generic_alias_in_type(&mut param.node.type_, generic);
     }
-    if let Some(throws_type) = &mut f.throws {
+    if let Some(throws_type) = f.throws.explicit_type_mut() {
         expand_generic_alias_in_type(throws_type, generic);
     }
     // Walk the body for VarDecl type annotations
@@ -2014,7 +2014,7 @@ fn substitute_function(f: &mut FunctionDef, env: &FxHashMap<String, MetaValue>, 
             substitute_expr(default, env, type_env);
         }
     }
-    if let Some(throws) = &mut f.throws {
+    if let Some(throws) = f.throws.explicit_type_mut() {
         substitute_type(throws, type_env);
     }
     match &mut f.body {
@@ -2361,6 +2361,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             substitute_expr(rhs, env, type_env);
         }
         Expr::Move { expr: inner }
+        | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. }
         | Expr::SpawnBlocking { expr: inner, .. } => {
@@ -3961,7 +3962,7 @@ mod tests {
                         name: Spanned::new("main".to_string(), dummy_span()),
                         generic_params: None,
                         params: vec![],
-                        throws: None,
+                        throws: ThrowsSpec::No,
                         body: FunctionBody::Block(Block {
                             stmts: vec![Spanned::new(
                                 Stmt::Expr(Spanned::new(
@@ -4056,7 +4057,7 @@ mod tests {
                         name: Spanned::new("main".to_string(), dummy_span()),
                         generic_params: None,
                         params: vec![],
-                        throws: None,
+                        throws: ThrowsSpec::No,
                         body: FunctionBody::Block(Block {
                             stmts: vec![Spanned::new(
                                 Stmt::Expr(Spanned::new(
@@ -4217,7 +4218,7 @@ mod tests {
                         name: Spanned::new("main".to_string(), dummy_span()),
                         generic_params: None,
                         params: vec![],
-                        throws: None,
+                        throws: ThrowsSpec::No,
                         body: FunctionBody::Block(Block {
                             stmts: vec![Spanned::new(
                                 Stmt::VarDecl {
@@ -4308,7 +4309,7 @@ mod tests {
                                 name: Spanned::new("kept".to_string(), dummy_span()),
                                 generic_params: None,
                                 params: vec![],
-                                throws: None,
+                                throws: ThrowsSpec::No,
                                         body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
                                 doc_comment: None,
                                 span: dummy_span(),
@@ -4328,7 +4329,7 @@ mod tests {
                                 name: Spanned::new("dropped".to_string(), dummy_span()),
                                 generic_params: None,
                                 params: vec![],
-                                throws: None,
+                                throws: ThrowsSpec::No,
                                         body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
                                 doc_comment: None,
                                 span: dummy_span(),
@@ -4391,7 +4392,7 @@ mod tests {
                                 name: Spanned::new("dropped".to_string(), dummy_span()),
                                 generic_params: None,
                                 params: vec![],
-                                throws: None,
+                                throws: ThrowsSpec::No,
                                         body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
                                 doc_comment: None,
                                 span: dummy_span(),
@@ -4411,7 +4412,7 @@ mod tests {
                                 name: Spanned::new("kept".to_string(), dummy_span()),
                                 generic_params: None,
                                 params: vec![],
-                                throws: None,
+                                throws: ThrowsSpec::No,
                                         body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
                                 doc_comment: None,
                                 span: dummy_span(),
@@ -4472,7 +4473,7 @@ mod tests {
                                 name: Spanned::new("dropped".to_string(), dummy_span()),
                                 generic_params: None,
                                 params: vec![],
-                                throws: None,
+                                throws: ThrowsSpec::No,
                                         body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
                                 doc_comment: None,
                                 span: dummy_span(),
@@ -4547,7 +4548,7 @@ mod tests {
                         name: Spanned::new("main".to_string(), dummy_span()),
                         generic_params: None,
                         params: vec![],
-                        throws: None,
+                        throws: ThrowsSpec::No,
                         body: FunctionBody::Block(Block {
                             stmts: vec![Spanned::new(
                                 Stmt::Expr(Spanned::new(
@@ -4677,7 +4678,7 @@ mod tests {
                         name: Spanned::new("main".to_string(), dummy_span()),
                         generic_params: None,
                         params: vec![],
-                        throws: None,
+                        throws: ThrowsSpec::No,
                         body: FunctionBody::Block(Block {
                             stmts: vec![Spanned::new(
                                 Stmt::VarDecl {
@@ -4860,7 +4861,7 @@ mod tests {
                         name: Spanned::new("main".to_string(), dummy_span()),
                         generic_params: None,
                         params: vec![],
-                        throws: None,
+                        throws: ThrowsSpec::No,
                         body: FunctionBody::Block(Block {
                             stmts: vec![Spanned::new(
                                 Stmt::VarDecl {

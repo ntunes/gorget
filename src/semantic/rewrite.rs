@@ -131,7 +131,7 @@ fn rename_function(f: &mut FunctionDef, aliases: &rustc_hash::FxHashMap<String, 
             rename_expr(default, aliases);
         }
     }
-    if let Some(throws) = &mut f.throws {
+    if let Some(throws) = f.throws.explicit_type_mut() {
         rename_type(&mut throws.node, aliases);
     }
     match &mut f.body {
@@ -338,7 +338,7 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
             rename_expr(lhs, aliases);
             rename_expr(rhs, aliases);
         }
-        Expr::Move { expr: inner } | Expr::MutableBorrow { expr: inner }
+        Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::MutableBorrow { expr: inner }
         | Expr::Deref { expr: inner } | Expr::Await { expr: inner }
         | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
             rename_expr(inner, aliases);
@@ -709,6 +709,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
             rewrite_expr(rhs, res, scopes, errors);
         }
         Expr::Move { expr: inner }
+        | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
         | Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. }
         | Expr::SpawnBlocking { expr: inner, .. } => {
@@ -977,7 +978,7 @@ mod tests {
                     name: Spanned::new("test_fn".to_string(), dummy_span()),
                     generic_params: None,
                     params: vec![],
-                    throws: None,
+                    throws: ThrowsSpec::No,
                     body: FunctionBody::Block(Block {
                         stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
                         span: dummy_span(),
@@ -1053,7 +1054,7 @@ mod tests {
                     name: Spanned::new("test_fn".to_string(), dummy_span()),
                     generic_params: None,
                     params: vec![],
-                    throws: None,
+                    throws: ThrowsSpec::No,
                     body: FunctionBody::Block(Block {
                         stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
                         span: dummy_span(),
@@ -1137,7 +1138,7 @@ mod tests {
                     name: Spanned::new("test_fn".to_string(), dummy_span()),
                     generic_params: None,
                     params: vec![],
-                    throws: None,
+                    throws: ThrowsSpec::No,
                     body: FunctionBody::Block(Block {
                         stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
                         span: dummy_span(),

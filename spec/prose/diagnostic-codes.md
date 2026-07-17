@@ -9,7 +9,7 @@
 
 The codes are defined — one per variant, no catch-all — on the diagnostic enums:
 
-- `SemanticErrorKind::code()` (`src/semantic/errors.rs`) → the 96 `E_` codes below.
+- `SemanticErrorKind::code()` (`src/semantic/errors.rs`) → the 98 `E_` codes below.
 - `SemanticWarningKind::code()` (`src/semantic/errors.rs`) → the 17 `W_` codes below.
 
 Each `code()` is an **exhaustive `match` mirroring the `Display` impl** with **no**
@@ -90,6 +90,8 @@ and is cited concretely.
 | `E_MainThrowsNonInt` | `MainThrowsNonInt` | — |
 | `E_UnconvertibleErrorPropagation` | `UnconvertibleErrorPropagation` | — |
 | `E_UnhandledThrows` | `UnhandledThrows` | — |
+| `E_MissingFallibleMark` | `MissingFallibleMark` | — |
+| `E_InferredThrowsUnsupported` | `InferredThrowsUnsupported` | — |
 | `E_AwaitOutsideAsync` | `AwaitOutsideAsync` | — |
 | `E_SelectOutsideAsync` | `SelectOutsideAsync` | — |
 | `E_AwaitNonFuture` | `AwaitNonFuture` | — |

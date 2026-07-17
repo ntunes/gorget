@@ -848,7 +848,7 @@ pub fn lower_function(
     let is_main = name == "main";
 
     // Map return type — use fn_sigs if available (handles `throws` → Result)
-    let return_type = if is_main && func.throws.is_none() {
+    let return_type = if is_main && !func.throws.declares_throws() {
         I32_TYPE
     } else if let Some((_, ret_ty)) = ctx.fn_sigs.get(name) {
         *ret_ty
@@ -959,7 +959,7 @@ pub fn lower_function(
     }
 
     // Track throws context for Result wrapping in return/throw
-    ctx.func_state.current_throws_result_type = if func.throws.is_some() {
+    ctx.func_state.current_throws_result_type = if func.throws.declares_throws() {
         Some(return_type)
     } else {
         None
@@ -1091,13 +1091,13 @@ pub fn lower_function(
             if builder.blocks[last_block_idx].terminator.is_none() {
                 // P2.6: Emit scope drops before implicit return
                 ctx.drops.pop_scope(&mut builder, &ctx.type_registry);
-                if is_main && func.throws.is_none() {
+                if is_main && !func.throws.declares_throws() {
                     builder.assign(
                         Place::local(LocalId(0)),
                         FunctionBuilder::const_i32(0),
                     );
                     builder.ret(FunctionBuilder::copy(LocalId(0)));
-                } else if is_main && func.throws.is_some() {
+                } else if is_main && func.throws.declares_throws() {
                     // throws main: implicit success → Ok(unit) wrapped in Result
                     let type_name = ctx.type_registry.type_name(return_type)
                         .unwrap_or_else(|| "Result".to_string());
@@ -1136,7 +1136,7 @@ pub fn lower_function(
             // at the wrong layer). For a non-throws fn `expected_type` stays the
             // slot type (unchanged behavior).
             let slot_type = builder.locals[0].type_id;
-            let declared_success_type = if func.throws.is_some() {
+            let declared_success_type = if func.throws.declares_throws() {
                 super::exprs::result_ok_payload_type(ctx, slot_type)
             } else {
                 slot_type
@@ -1161,7 +1161,7 @@ pub fn lower_function(
                     operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                     operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
                 }
-                operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, func.throws.is_some());
+                operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, func.throws.declares_throws());
                 let returned_local = match &operand {
                     Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
                         Some(place.local)
@@ -1236,7 +1236,7 @@ pub fn lower_equip_method(
     let method_name = &method.name.node;
     let mangled_name = format!("{type_name}__{method_name}");
 
-    let return_type = if let Some(throws) = &method.throws {
+    let return_type = if let Some(throws) = method.throws.explicit_type() {
         // `int parse(self, String input) throws String` → Result[int, String].
         // One source of truth (devbook-24 rule 3): synthesize via the shared
         // helper — same path as the free-fn and equip-method pre-scans in
@@ -1373,7 +1373,7 @@ pub fn lower_equip_method(
     }
 
     // Track throws context for Result wrapping in return/throw statements
-    ctx.func_state.current_throws_result_type = if method.throws.is_some() {
+    ctx.func_state.current_throws_result_type = if method.throws.declares_throws() {
         Some(return_type)
     } else {
         None
@@ -1451,7 +1451,7 @@ pub fn lower_equip_method(
             // user-level type, not the slot. Fixes the `T = Result` silent
             // miscompile on the method path too.
             let slot_type = builder.locals[0].type_id;
-            let declared_success_type = if method.throws.is_some() {
+            let declared_success_type = if method.throws.declares_throws() {
                 super::exprs::result_ok_payload_type(ctx, slot_type)
             } else {
                 slot_type
@@ -1471,7 +1471,7 @@ pub fn lower_equip_method(
                     operand = ctx.ensure_owned_at_boundary(&mut builder, operand, expr_span, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
                     operand = ctx.auto_deref_at_return(&mut builder, operand, ret_type);
                 }
-                operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, method.throws.is_some());
+                operand = wrap_expr_tail_in_ok(ctx, &mut builder, operand, ret_type, method.throws.declares_throws());
                 let returned_local = match &operand {
                     Operand::Copy(place) | Operand::Move(place) if place.projections.is_empty() => {
                         Some(place.local)

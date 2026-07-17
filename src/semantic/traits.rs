@@ -976,7 +976,7 @@ pub fn build_default_method_sig(func: &FunctionDef) -> DefaultMethodSig {
         method_generic_params,
         param_types,
         return_type: func.return_type.node.clone(),
-        throws_ast: func.throws.as_ref().map(|t| t.node.clone()),
+        throws_ast: func.throws.explicit_type().map(|t| t.node.clone()),
         param_ownerships,
         has_self,
         self_ownership,

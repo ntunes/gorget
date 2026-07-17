@@ -129,6 +129,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
 
         // ── Wrapper expressions ──
         Expr::Move { expr }
+        | Expr::Propagate { expr }
         | Expr::MutableBorrow { expr }
         | Expr::Deref { expr }
         | Expr::Await { expr }
