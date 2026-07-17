@@ -1,0 +1,13 @@
+# 2T (defect B): the taint reject is NAME-INDEPENDENT — a `_`-prefixed bare param
+# (which the dead-write LINT deliberately ignores) still REJECTS a tainted
+# materialize-on-write. The reject must not ride the lint's name filter.
+struct FH:
+    int fd
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+void poke(FH _fh):
+    _fh.fd = 9
+void main():
+    FH f = FH(9)
+    poke(f)

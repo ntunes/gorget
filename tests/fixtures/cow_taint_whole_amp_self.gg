@@ -1,0 +1,16 @@
+# 2T FORMATION position (whole `&self`): passing `&self` to a `&`-callee from a
+# plain-`self` method materialises the tainted self → REJECTED. `&self` on the
+# method (write-through) is the fix.
+struct FH:
+    int fd
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+void bumpfh(FH &x):
+    x.fd = x.fd + 1
+equip FH:
+    void poke(self):
+        bumpfh(&self)
+void main():
+    FH f = FH(9)
+    f.poke()

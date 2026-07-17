@@ -1,0 +1,14 @@
+# 2T: a write through plain `self` on a drop-tainted type materialises a private
+# copy (a hidden clone of a resource → double-close). REJECTED — the user writes
+# `&self` (write-through), `!self` (move), or `self.clone()`.
+struct FH:
+    int fd
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+equip FH:
+    void setfd(self):
+        self.fd = 5
+void main():
+    FH f = FH(9)
+    f.setfd()

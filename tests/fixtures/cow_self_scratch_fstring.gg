@@ -1,0 +1,13 @@
+# D2-rider silent twin (f-string read): `{self.n}` inside an f-string is a genuine
+# read of the private copy, so a mutate-then-interpolate plain-`self` method stays
+# lint-SILENT (pins the interpolation read hook). Runs: now 6, caller 5.
+struct Counter:
+    int n
+equip Counter:
+    void show(self):
+        self.n = self.n + 1
+        print(f"now {self.n}")
+void main():
+    Counter c = Counter(5)
+    c.show()
+    print(f"caller {c.n}")

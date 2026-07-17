@@ -1,0 +1,13 @@
+# 2E (D2): a mutating builtin (`push`) through plain `self` on a VALUE collection
+# field materialises a private copy — callee grows to 2, the caller's stays 1.
+from std.collections import Vector
+struct Bag:
+    Vector[int] items
+equip Bag:
+    void add(self):
+        self.items.push(9)
+        print(f"callee {self.items.len()}")
+void main():
+    Bag b = Bag([1])
+    b.add()
+    print(f"caller {b.items.len()}")

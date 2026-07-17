@@ -1,0 +1,16 @@
+# 2T FORMATION position: `bump(&self.fd)` forms a `&` of a self projection, which
+# materialises the (tainted) self root at the `&`-formation → hidden clone →
+# REJECTED. The remedy is `&self` (the method borrows self, write-through).
+struct FH:
+    int fd
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+void bumpint(int &x):
+    x = x + 1
+equip FH:
+    void poke(self):
+        bumpint(&self.fd)
+void main():
+    FH f = FH(9)
+    f.poke()

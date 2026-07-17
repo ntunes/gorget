@@ -14,7 +14,7 @@ void g(Inner &x, Vector[int] &y):
     y.push(9)
 
 equip Holder:
-    void oops(self):
+    void oops(&self):
         g(&self.a, &self.a.b)
 
 void main():

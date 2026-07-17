@@ -1,0 +1,16 @@
+# 2T FORMATION position (whole `&p` — wave-2 Core-#8 fix): passing `&p` (the
+# WHOLE bare param) to a `&`-callee materialises p at the formation — MEASURED
+# double-close of the same fd even on a read-only callee. Both production AND
+# ggdef accepted+double-closed this pre-fix; now REJECTED on both lanes.
+struct FH:
+    int fd
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+void reader(FH &x):
+    print(f"read {x.fd}")
+void poke(FH p):
+    reader(&p)
+void main():
+    FH f = FH(9)
+    poke(f)

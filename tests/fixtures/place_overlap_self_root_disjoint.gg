@@ -5,6 +5,10 @@
 # projection-aware `paths_overlap` as any identifier root (the call-site check),
 # NOT the root-only for-loop check — so disjoint self fields are correctly
 # accepted at a call. Mirror of place_overlap_disjoint_siblings.gg.
+# The receiver is `&self` (write-through): under 2E (D2) a plain-`self` method
+# materialises a private copy of self on the `&self.a`/`&self.b` formation, so
+# the caller's pushes would land on the copy (caller untouched) — `&self` is the
+# write-through opt-in that reaches the caller's `h`, restoring 2/2/10/20.
 struct Holder:
     Vector[int] a
     Vector[int] b
@@ -14,7 +18,7 @@ void g(Vector[int] &x, Vector[int] &y):
     y.push(20)
 
 equip Holder:
-    void doit(self):
+    void doit(&self):
         g(&self.a, &self.b)
 
 void main():

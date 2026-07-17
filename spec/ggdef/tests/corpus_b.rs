@@ -274,10 +274,10 @@ fn corpus_b_all_match() {
         failures.join("\n")
     );
 
-    // Guard the gate's shape: the full corpus is 120 fixtures
-    // (122 cow_*/deadwrite_* minus the 4 standing exclusions; +2 matcluster
-    // fixtures 2026-07-06: cow_amp_compound_writethrough, cow_dead_branch_alias_bind;
-    // +2 Track 1A in-subset bare for-element fixtures — the five `&`/enumerate/
-    // comprehension rows are EXCLUDEd above).
-    assert_eq!(fixtures.len(), 120, "B2 gate set drifted from 120 fixtures");
+    // Guard the gate's shape: the full corpus is 135 fixtures (150 cow_*/
+    // deadwrite_* minus the 15 standing exclusions). +15 from CoW wave-2 landing 1
+    // (2026-07-17): the 9 `cow_taint_*` 2T-reject NEG fixtures, the 5 `cow_self_*`
+    // 2E-materialize POS fixtures, and `deadwrite_warn_self` (the D2-rider `&self`
+    // flavor). Was 120.
+    assert_eq!(fixtures.len(), 135, "B2 gate set drifted from 135 fixtures");
 }

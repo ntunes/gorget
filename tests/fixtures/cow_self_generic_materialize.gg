@@ -1,0 +1,13 @@
+# 2E (D2, generic-equip sibling): a plain-`self` write inside a GENERIC equip
+# method materialises a private copy too (the generic lowering path must mark self
+# BareParam like the non-generic one) — callee sets, caller UNCHANGED.
+struct Box2[T]:
+    T val
+equip Box2[T]:
+    void set(self, T v):
+        self.val = v
+        print(f"callee {self.val}")
+void main():
+    Box2[int] b = Box2[int](1)
+    b.set(9)
+    print(f"caller {b.val}")

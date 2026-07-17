@@ -1,0 +1,17 @@
+# 2T (defect B'): the taint reject is POSITION-INDEPENDENT — a mutating builtin
+# in VALUE position (`int n = r.vals.pop().unwrap()`) materialises the receiver
+# root just as a statement-position one does → REJECTED on a tainted param.
+from std.collections import Vector
+struct FH:
+    int fd
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+struct Bag:
+    Vector[FH] vals
+void take(Bag r):
+    FH n = r.vals.pop().unwrap()
+    print(f"took {n.fd}")
+void main():
+    Bag b = Bag([FH(8)])
+    take(b)

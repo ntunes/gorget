@@ -1,0 +1,16 @@
+# 2T (defect A + C): a mutating builtin (`push`) on a plain-`self` collection
+# field materialises self on a drop-tainted type → REJECTED.
+from std.collections import Vector
+struct Log:
+    int id
+equip Log with Drop:
+    void drop(!self):
+        print(f"drop Log {self.id}")
+struct Holder:
+    Vector[Log] logs
+equip Holder:
+    void add(self, Log l):
+        self.logs.push(!l)
+void main():
+    Holder h = Holder([])
+    h.add(Log(1))

@@ -4,7 +4,10 @@ struct Stack[T]:
     Vector[T] items
 
 equip Stack[T]:
-    void push(self, T item):
+    # `&self` (write-through): under 2E (D2) a plain-`self` mutator materialises
+    # a private copy, so the pushes would not reach the caller's `s` (and the
+    # D2-rider would flag the dead write). A read-only method keeps plain `self`.
+    void push(&self, T item):
         self.items.push(item)
 
     int size(self):

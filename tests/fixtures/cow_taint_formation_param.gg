@@ -1,0 +1,15 @@
+# 2T FORMATION position (bare param): `bumpint(&p.fd)` materialises the tainted
+# param root `p` at the `&`-formation → double-close → REJECTED. Fix: declare the
+# callee to take a borrow of the field, or `p` as `&p`.
+struct FH:
+    int fd
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+void bumpint(int &x):
+    x = x + 1
+void pokep(FH p):
+    bumpint(&p.fd)
+void main():
+    FH f = FH(9)
+    pokep(f)

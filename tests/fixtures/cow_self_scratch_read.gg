@@ -1,0 +1,13 @@
+# D2-rider silent twin (direct read): a plain-`self` scratch copy that is mutated
+# then READ (the `return`) is a legal idiom — NO dead-write warning. Runs:
+# doubled prints 10, caller unchanged (5).
+struct Counter:
+    int n
+equip Counter:
+    int doubled(self):
+        self.n = self.n * 2
+        return self.n
+void main():
+    Counter c = Counter(5)
+    print(c.doubled())
+    print(f"caller {c.n}")

@@ -1,0 +1,12 @@
+# D2-rider: a write to plain `self` whose materialised private copy is NEVER read
+# is a dead write — the caller is unchanged. Fires the ratified W_ with the
+# `&self` flavor. Runs (caller unchanged: 5).
+struct Counter:
+    int n
+equip Counter:
+    void reset(self):
+        self.n = 0
+void main():
+    Counter c = Counter(5)
+    c.reset()
+    print(f"caller {c.n}")

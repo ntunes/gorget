@@ -8908,14 +8908,17 @@ fn lint_suggest_throws_already_throws() {
 // Positives assert the warning on `gg check` stderr; negatives assert
 // silence (each pins one of the lint's FP kill-rules).
 
-/// Stable fragment of the DeadBareParamWrite message (src/semantic/errors.rs).
-const DEADWRITE_MSG: &str = "lands on a private copy that is discarded";
+/// Stable fragment of the D2-rider DeadBareParamWrite message
+/// (src/semantic/errors.rs) — the ratified verbatim text. Param-independent, so
+/// it is used by the SILENCE assertions; the positive assertions pin the
+/// `did you mean `&<param>`?` flavor per name.
+const DEADWRITE_MSG: &str = "private copy that is never read";
 
 #[test]
 fn deadwrite_warn_index_assign() {
     check_gg_warns(
         "deadwrite_warn_index_assign.gg",
-        "write to bare parameter `xs` lands on a private copy that is discarded",
+        "did you mean `&xs`?",
     );
 }
 
@@ -8923,7 +8926,7 @@ fn deadwrite_warn_index_assign() {
 fn deadwrite_warn_field_assign() {
     check_gg_warns(
         "deadwrite_warn_field_assign.gg",
-        "write to bare parameter `w` lands on a private copy that is discarded",
+        "did you mean `&w`?",
     );
 }
 
@@ -8931,7 +8934,7 @@ fn deadwrite_warn_field_assign() {
 fn deadwrite_warn_nested_field() {
     check_gg_warns(
         "deadwrite_warn_nested_field.gg",
-        "write to bare parameter `o` lands on a private copy that is discarded",
+        "did you mean `&o`?",
     );
 }
 
@@ -8939,7 +8942,7 @@ fn deadwrite_warn_nested_field() {
 fn deadwrite_warn_push() {
     check_gg_warns(
         "deadwrite_warn_push.gg",
-        "write to bare parameter `xs` lands on a private copy that is discarded",
+        "did you mean `&xs`?",
     );
 }
 
@@ -8948,7 +8951,7 @@ fn deadwrite_warn_user_method() {
     // User `&self` method on the bare param receiver, statement position.
     check_gg_warns(
         "deadwrite_warn_user_method.gg",
-        "write to bare parameter `c` lands on a private copy that is discarded",
+        "did you mean `&c`?",
     );
 }
 
@@ -8956,7 +8959,7 @@ fn deadwrite_warn_user_method() {
 fn deadwrite_warn_string_push() {
     check_gg_warns(
         "deadwrite_warn_string_push.gg",
-        "write to bare parameter `s` lands on a private copy that is discarded",
+        "did you mean `&s`?",
     );
 }
 
@@ -8968,7 +8971,7 @@ fn deadwrite_warn_compound() {
     // 11 = write-through, on BOTH backends). The warning text is now TRUE.
     check_gg_warns(
         "deadwrite_warn_compound.gg",
-        "write to bare parameter `xs` lands on a private copy that is discarded",
+        "did you mean `&xs`?",
     );
     run_gg("deadwrite_warn_compound.gg", "10");
 }
@@ -8979,7 +8982,7 @@ fn deadwrite_warn_loop_write() {
     // needs a read in the loop; a bare write stays hot.
     check_gg_warns(
         "deadwrite_warn_loop_write.gg",
-        "write to bare parameter `xs` lands on a private copy that is discarded",
+        "did you mean `&xs`?",
     );
 }
 
@@ -8987,7 +8990,7 @@ fn deadwrite_warn_loop_write() {
 fn deadwrite_warn_early_return() {
     check_gg_warns(
         "deadwrite_warn_early_return.gg",
-        "write to bare parameter `xs` lands on a private copy that is discarded",
+        "did you mean `&xs`?",
     );
 }
 
@@ -8999,7 +9002,7 @@ fn deadwrite_warn_chained_stmt() {
     // tightening it to exact-node identity would silently flip this class.
     check_gg_warns(
         "deadwrite_warn_chained_stmt.gg",
-        "write to bare parameter `xs` lands on a private copy that is discarded",
+        "did you mean `&xs`?",
     );
 }
 
@@ -9009,7 +9012,7 @@ fn deadwrite_warn_branch_read_then_write() {
     // the last write (or sharing its loop) does.
     check_gg_warns(
         "deadwrite_warn_branch_read_then_write.gg",
-        "write to bare parameter `xs` lands on a private copy that is discarded",
+        "did you mean `&xs`?",
     );
 }
 
@@ -9020,7 +9023,7 @@ fn deadwrite_build_lock_nonfatal() {
     // unchanged value — is exactly the footgun the warning describes).
     build_gg_expect_warning(
         "deadwrite_build_lock.gg",
-        "write to bare parameter `xs` lands on a private copy that is discarded",
+        "did you mean `&xs`?",
     );
 }
 
@@ -29734,6 +29737,139 @@ fn cow_amp_field_arg() {
 4
 done",
     );
+}
+
+// ── CoW wave-2: 2T (drop-taint × materialize REJECT) + 2E (plain-self
+// materialize) + D2-rider (dead-bare-param-write). Each NEG fixture was
+// counterfactual-checked (revert the reject arm → the fixture accepts).
+
+/// 2T (defect A, self root): a plain-`self` field write on a drop-tainted type
+/// materialises a private copy → REJECT with the `&self` write-through hint.
+#[test]
+fn cow_taint_self_field_write() {
+    check_gg_fails(
+        "cow_taint_self_field_write.gg",
+        "error[E_MoveWithoutOperator]",
+    );
+}
+
+/// 2T (defect A + C, self mutating-builtin): `self.logs.push(!l)` on a tainted
+/// plain-self materialises the self root → REJECT.
+#[test]
+fn cow_taint_self_builtin() {
+    check_gg_fails("cow_taint_self_builtin.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T (defect B, name-independence): a `_`-prefixed bare param (which the
+/// dead-write LINT ignores) still REJECTS a tainted materialize-on-write — the
+/// semantic reject must not ride the lint's name filter.
+#[test]
+fn cow_taint_underscore_param() {
+    check_gg_fails("cow_taint_underscore_param.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T (defect B', position-independence): a mutating builtin in VALUE position
+/// (`FH n = r.vals.pop().unwrap()`) materialises the tainted receiver root →
+/// REJECT (statement vs value position is irrelevant).
+#[test]
+fn cow_taint_pop_value_pos() {
+    check_gg_fails("cow_taint_pop_value_pos.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T: a projected compound-assign (`r.vals[0] += Acc(5)`) on a tainted bare
+/// param materialises the root → REJECT.
+#[test]
+fn cow_taint_compound_projected() {
+    check_gg_fails("cow_taint_compound_projected.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T FORMATION position (self projection): `bumpint(&self.fd)` forms a `&` of a
+/// self projection, materialising the tainted self root → REJECT with `&self`.
+#[test]
+fn cow_taint_formation_self() {
+    check_gg_fails(
+        "cow_taint_formation_self.gg",
+        "error[E_MoveWithoutOperator]",
+    );
+}
+
+/// 2T FORMATION position (bare param projection): `bumpint(&p.fd)` materialises
+/// the tainted param root at the `&`-formation → REJECT with `&p`.
+#[test]
+fn cow_taint_formation_param() {
+    check_gg_fails(
+        "cow_taint_formation_param.gg",
+        "error[E_MoveWithoutOperator]",
+    );
+}
+
+/// 2T FORMATION position (whole `&p` — wave-2 Core-#8 fix): passing the WHOLE
+/// bare param `&p` to a `&`-callee materialises p (MEASURED double-close even on
+/// a read-only callee; both lanes accepted+double-closed pre-fix) → now REJECT.
+#[test]
+fn cow_taint_whole_amp_param() {
+    check_gg_fails(
+        "cow_taint_whole_amp_param.gg",
+        "error[E_MoveWithoutOperator]",
+    );
+}
+
+/// 2T FORMATION position (whole `&self`): `bumpfh(&self)` from a plain-`self`
+/// method materialises the tainted self → REJECT.
+#[test]
+fn cow_taint_whole_amp_self() {
+    check_gg_fails(
+        "cow_taint_whole_amp_self.gg",
+        "error[E_MoveWithoutOperator]",
+    );
+}
+
+/// 2E (D2): a plain-`self` field write on a VALUE struct materialises a private
+/// copy — callee sees 2, the caller's stays 1 (the callee-side read keeps it
+/// lint-silent).
+#[test]
+fn cow_self_value_field_materialize() {
+    run_gg("cow_self_value_field_materialize.gg", "callee 2\ncaller 1");
+}
+
+/// 2E (D2): a mutating builtin through plain `self` on a VALUE collection field
+/// materialises a private copy — callee 2, caller 1.
+#[test]
+fn cow_self_value_push_materialize() {
+    run_gg("cow_self_value_push_materialize.gg", "callee 2\ncaller 1");
+}
+
+/// 2E (D2, generic-equip sibling): a plain-`self` write in a GENERIC equip method
+/// materialises too — callee 9, caller UNCHANGED (1).
+#[test]
+fn cow_self_generic_materialize() {
+    run_gg("cow_self_generic_materialize.gg", "callee 9\ncaller 1");
+}
+
+/// D2-rider: a dead plain-`self` write fires the ratified W_ with the `&self`
+/// flavor, and still runs (caller unchanged: 5).
+#[test]
+fn deadwrite_warn_self() {
+    check_gg_warns(
+        "deadwrite_warn_self.gg",
+        "this writes to a private copy that is never read — the caller's value is unchanged; did you mean `&self`?",
+    );
+}
+
+/// D2-rider silent twin (direct read): a plain-`self` scratch copy mutated then
+/// READ is legal — NO dead-write warning.
+#[test]
+fn cow_self_scratch_read() {
+    check_gg_silent_for("cow_self_scratch_read.gg", "private copy that is never read");
+    run_gg("cow_self_scratch_read.gg", "10\ncaller 5");
+}
+
+/// D2-rider silent twin (f-string read): `{self.n}` in an f-string is a genuine
+/// read of the private copy → lint-SILENT (pins the interpolation read hook).
+#[test]
+fn cow_self_scratch_fstring() {
+    check_gg_silent_for("cow_self_scratch_fstring.gg", "private copy that is never read");
+    run_gg("cow_self_scratch_fstring.gg", "now 6\ncaller 5");
 }
 
 /// CoW G2 site 3 with a SIDE-EFFECTING index (`&arr[side()]`): the root

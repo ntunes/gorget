@@ -1,0 +1,18 @@
+# 2T: a projected compound-assign (`r.vals[0] += 1`) on a tainted bare param
+# materialises the root → REJECTED (materialize-on-write, compound position).
+from std.collections import Vector
+struct Acc:
+    int total
+equip Acc with Drop:
+    void drop(!self):
+        print(f"drop Acc {self.total}")
+equip Acc with Add[Acc]:
+    Acc add(self, Acc other):
+        return Acc(self.total + other.total)
+struct Bag:
+    Vector[Acc] vals
+void bump(Bag r):
+    r.vals[0] += Acc(5)
+void main():
+    Bag b = Bag([Acc(1)])
+    bump(b)

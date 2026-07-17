@@ -1,0 +1,14 @@
+# 2E (D2): a write through plain `self` on a VALUE struct materialises a private
+# copy — the callee sees the mutation, the caller's value is UNCHANGED. The
+# callee-side read (the f-string) makes this a scratch-copy (mutate-then-read),
+# so it is lint-SILENT (no dead-write warning).
+struct Counter:
+    int n
+equip Counter:
+    void bump(self):
+        self.n = self.n + 1
+        print(f"callee {self.n}")
+void main():
+    Counter c = Counter(1)
+    c.bump()
+    print(f"caller {c.n}")
