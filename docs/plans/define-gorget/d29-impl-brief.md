@@ -23,7 +23,12 @@ arm-type split verified identical; every load-bearing anchor re-resolved; one ph
 fold-edits-must-assert hazard] and fixed in place with the citation expanded per the
 reviewer's explicit non-blocking clearance; NOTE: pass 5's 'RV-B already in base' remark
 was WRONG — cross-checked, 8d5f6294 is NOT on gorget-1; the Zones STOP holds).
-✅ GAUNTLET-CLEAN — EXECUTOR PENDING the RV-B integration (the Zones sequencing STOP). NOTE for reviewers: `src/semantic/safety/check_expr.rs`
+✅ GAUNTLET-CLEAN → EXECUTING as a commit chain. Machinery commit `2a82c76a` LANDED on the
+executor branch + Fable-reviewed (core sound; reservations R1-R4+R6 are IN-CHAIN fixes
+before commit 5 pins behavior — including the R2 brief-vs-LOG conflict CORRECTED IN THIS
+BRIEF: kind-2 dispositions require the mark; +R4 tail-position discard holes; +R3 lying
+marks must error; +R1 the snag11 ratchet bump; +R6 the smith oracle; R7: re-run the census
+instrument — lib has ZERO throws decls anywhere, lib/xtd's exposure is ~35 KIND-2 decls). NOTE for reviewers: `src/semantic/safety/check_expr.rs`
 gains an additive `Propagate` arm — RV-B's zone; the sequencing STOP covers it.
 **Normative semantics:** `decisions.md` LOG — the D29 formal ratification + its six
 follow-through pins + the **2026-07-17 CAPTURE AMENDMENT** (read all of them FIRST; where
@@ -92,8 +97,15 @@ holds the grammar evidence and disposition table.
   Result first); the same helper KEEPS working for kind-2 (matching a Result VALUE as
   today).
   **KIND-2 (declared-Result callee).** No expected-type rule at all — Result VALUE flows
-  (bind, match, pass, chain, receiver) are ALL legal unmarked (the amendment). Enforcement
-  is **bare-DISCARD-only, a STATEMENT-position property, not a call-node one**: an
+  (bind, match, pass, chain, receiver) are ALL legal unmarked (the amendment). **BUT
+  dispositions require the mark on BOTH kinds (machinery-review R2 — the LOG's
+  catch-attachment applies to both; this brief's earlier bare-discard-ONLY scoping was a
+  brief-vs-LOG conflict, LOG wins): an unmarked kind-2 call with an ATTACHED disposition
+  (`parse2(x) catch …` / `rethrow`) → E_MissingFallibleMark; `parse2(x)! catch …` is the
+  legal form. A catch on a Result LOCAL stays legal (not a call).** Statement-position
+  enforcement is **bare-DISCARD (a STATEMENT property, not a call-node one) — INCLUDING
+  tail positions (review R4): void-fn tails and LOOP-BODY tails are the classic
+  silent-drop-per-iteration shape; the pin has no tail carve-out**: an
   expression-statement whose value is a kind-2 call's un-consumed `Result` →
   `E_MissingFallibleMark` (mark to propagate, or attach a handler). Plus the `!`-path:
   a MARKED kind-2 call peels to `T` and activates the channel (prop/catch/rethrow) — this
@@ -180,7 +192,8 @@ ARCHITECTURAL SPLIT as the Rust section (pass-3 R3 — "mirror the decision poin
 mean one rule): kind-1 = the throws-chokepoint re-scope (unmarked→error unless
 explicit-Result-captured; marked→peel+disposition; mark+capture→error; auto doesn't
 capture; match-arm suppress removed for kind-1), kind-2 = the bare-DISCARD statement-position
-check ONLY (value flows stay legal unmarked)** — a kind-1-only mirror yields the kind-2
+check (incl. tails) + unmarked-disposition rejection (value flows stay legal unmarked;
+dispositions marked on both kinds — review R2)** — a kind-1-only mirror yields the kind-2
 bare-discard conformance fixture rejected by C/LLVM but accepted by the self-host = a
 Core-#9 lane divergence; **the SAME two-layer transparency in its lowerer**. The driver
 tests pin BOTH kinds' rejects + the unmarked-capture accept + the T-variant marked-match
