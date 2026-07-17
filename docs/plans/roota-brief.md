@@ -1,13 +1,14 @@
 # EXECUTOR BRIEF — Root A: self-host iterator-receiver field-place borrow (3 spin fixtures flip)
 
-**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet. Pass 1 (core patch verified
-clean end-to-end: bug reproduced at HEAD, all 3 write-site claims + the Rust mirror citation
-confirmed, patch applies, Core-#4 single-site verified, oracle spot-checks ran, parity
-arithmetic + guard-label reliability confirmed; 4 reservations FOLDED: guard gets the
-floor's debug-skip/parity_floor_active gating + jitter-triage comment + a MANDATORY positive
-control; comparison-net facts stated; the TODO retire anchored to :1021 with the two
-same-named older entries protected + the new Ref__ residual appended to :214's census)
-→ this v2. Do not execute until a clean pass.
+**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 1 (core patch verified
+clean end-to-end; 4 reservations folded: guard gating + positive control, comparison-net
+facts, TODO retire disambiguation + Ref__ residual) → v2. Pass 2 (all folds re-verified
+independently incl. the load-bearing rp_is_ref exclusion at the LIR alias crux; ONE
+SUBSTANTIVE catch: the run_gg wiring pins only the RUST lane — for this self-host-only bug
+NO default-CI test would fail on revert; scope 2b now seeds the 5 runtime snapshots into
+the default `self_host_runtime` net with a revert-verify, per the CoW-1B/1C practice; +m1
+ggdef standing-exclusion citation, m2 sub-bullet promotion, m3 the second-regen cost)
+→ this v3. Do not execute until a clean pass.
 **Scout evidence (THE measured spec):** `docs/plans/roota-scout.md` — GO, fully validated.
 Prototype: `/tmp/roota_proto.patch` (197 lines, 4 files: `lower_expr.gg` + `tests/integration.rs`
 + 2 new fixtures; applies cleanly, round-trip verified; backup `/tmp/recover_roota_proto.patch`).
@@ -37,6 +38,16 @@ behavior; the census fixtures + 2 new regression fixtures are the pins).
 1. The patch (or re-derive on drift — STOP-AND-REPORT if it stops being mechanical).
 2. The 2 new regression fixtures (`set_filter_count` → `3`; `set_take_values` → `10,20`) —
    scout-verified 3-lane MATCHes; wire `run_gg`.
+2b. **DEFAULT-CI LOCK-IN for the SELF-HOST lane (pass-2 R1 — without this, reverting
+   `lower_recv_place` fails NO default test):** `run_gg` builds with RUST gg, and Root A is
+   a self-host-only bug — so the run_gg wiring alone does not exercise what it guards, and
+   the floor + EXPECTED_HANGS guard live inside the env-gated `runtime_diff`. Seed the
+   default-running `self_host_runtime` lock-in net: `GG_REGEN_RUNTIME_SNAPSHOT=1 …
+   self_host_runtime`, then stage ONLY the relevant new `.out` snapshot files (the 3 census
+   fixtures + the 2 new ones — 5 snapshots; enumerate them in your staged list; do NOT
+   sweep in unrelated regenerated snapshots). This is the established practice for parity
+   flips (CoW-1B `565392d8`, CoW-1C `99a52094` both seeded snapshots). Verify the lock-in:
+   with the fix reverted locally, at least one seeded snapshot test must FAIL; restore.
 3. **The EXPECTED_HANGS no-new-hangs guard** (the census recommendation, harness follow-ups
    TODO entry item (iii)): in `self_host_runtime_diff`, after the CRASH print, assert the
    set of fixtures whose label contains `timed out`/`runaway output` ⊆ `EXPECTED_HANGS` —
@@ -53,8 +64,10 @@ behavior; the census fixtures + 2 new regression fixtures are the pins).
    point the substring filter at a label you know is present) and confirm the test FAILS
    with the intended message, then restore; record the failing output in your report. A
    guard whose only validation is "the assert passed" may be a substring typo matching
-   nothing. Update the harness follow-ups TODO entry: item (iii) lands here; items
-   (i)/(ii)/(iv) remain.
+   nothing. COST NOTE (pass-2 m3): the positive control is a SEPARATE ~200s release regen
+   on top of gate 6's passing regen — two full runs total; budget for it, foreground both.
+   Update the harness follow-ups TODO entry: item (iii) lands here; items (i)/(ii)/(iv)
+   remain.
 4. **Parity regen + floor:** run the full regen FOREGROUND
    (`GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 <test binary> self_host_runtime_diff
    --nocapture`, ~200s — do NOT set GG_TEST_TIMEOUT_SECS; the harness is FIXED, the
@@ -97,10 +110,14 @@ chunk >10min; NEVER background a final gate)
   `starts_with("Ref__")/("MutRef__")` name-match (`rp_is_ref`) — an ACCEPTED residual
   mirroring the established `lir_lower.gg:~5143` idiom, but it joins line ~:214's debt
   census: append it to that entry so the census stays complete and the output-reviewer
-  doesn't mis-flag it as a fresh layering violation. The harness follow-ups entry updates
-  per scope item 3; the two scout-filed limitations (deeper-chain LOW; DictIter
-  chained-adapter MED) STAY filed. MEMORY's parity line is the PARENT's to update — report
-  your fresh number, don't edit memory.
+  doesn't mis-flag it as a fresh layering violation. **Retiring the :1021 parent must NOT
+  orphan its nested sub-bullets (pass-2 m2): PROMOTE the two scout-filed limitations
+  (deeper-chain LOW; DictIter chained-adapter MED) to STANDALONE entries** — they stay
+  pending. The harness follow-ups entry updates per scope item 3. ggdef subset note (pass-2
+  m1): generic stdlib iterators are a PRE-EXISTING structural ggdef exclusion, not a new
+  gap — cite the standing exclusion in the commit note; file a new gap ONLY if you find the
+  standing one is not actually recorded. MEMORY's parity line is the PARENT's to update —
+  report your fresh number, don't edit memory.
 - Stage EXPLICITLY: `tests/fixtures/self_host_lowerer/lower_expr.gg tests/integration.rs
   tests/fixtures/set_filter_count.gg tests/fixtures/set_take_values.gg TODO.md DONE.md`
   (adjust to actual). Trailers:
