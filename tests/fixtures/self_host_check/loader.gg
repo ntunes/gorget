@@ -176,6 +176,10 @@ bool expr_mentions_iter(SpannedExpr sexpr):
             if expr_mentions_iter(SpannedExpr((*operand).expr, (*operand).span)):
                 return true
             return type_mentions_iter((*target).ty)
+        case EPropagate(inner):
+            # D29: transparent — inserting a `!` mark must not change the
+            # iter-trigger scan (std.iter auto-loading) for the inner call.
+            return expr_mentions_iter(SpannedExpr((*inner).expr, (*inner).span))
         case EIs(operand, _, _):
             return expr_mentions_iter(SpannedExpr((*operand).expr, (*operand).span))
         case EClosure(params, body):

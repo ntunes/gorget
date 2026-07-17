@@ -168,7 +168,7 @@ FunctionDef find_meta_fn(Module &m, String name, bool &found):
                 pass
         i = i + 1
     found = false
-    return FunctionDef("", Vector[Param](), SpannedType(TInferred(), Span(0, 0)), Vector[String](), Vector[Stmt](), false, None, false)
+    return FunctionDef("", Vector[Param](), SpannedType(TInferred(), Span(0, 0)), Vector[String](), Vector[Stmt](), false, None, false, false)
 
 # Evaluate an int expr, recursing into user-fn calls and sizeof/alignof.
 int eval_int_ex(Expr e, Dict[String, int] &env, Module &m, int depth, bool &ok):
@@ -660,13 +660,13 @@ void substitute_meta_consts(Module &m, Dict[String, int] &iv, Dict[String, bool]
         match m.items.get(i).unwrap():
             case IFunction(fdef):
                 Vector[Stmt] nb = subst_stmts(fdef.body, &iv, &bv, &sv)
-                m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)))
+                m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub, fdef.throws_inferred)))
             case IEquip(eqblk):
                 Vector[FunctionDef] nm = Vector[FunctionDef]()
                 int mi = 0
                 while mi < eqblk.methods.len():
                     FunctionDef meth = eqblk.methods.get(mi).unwrap()
-                    nm.push(FunctionDef(meth.name, meth.params, meth.return_type, meth.type_params, subst_stmts(meth.body, &iv, &bv, &sv), meth.is_expr_body, meth.throws_type, meth.is_extern_stub))
+                    nm.push(FunctionDef(meth.name, meth.params, meth.return_type, meth.type_params, subst_stmts(meth.body, &iv, &bv, &sv), meth.is_expr_body, meth.throws_type, meth.is_extern_stub, meth.throws_inferred))
                     mi = mi + 1
                 m.items.set(i, IEquip(EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, nm, eqblk.via_field, eqblk.trait_generic_args)))
             else:
@@ -791,7 +791,7 @@ FunctionDef rename_aliases_fn(FunctionDef f, Dict[String, String] &amap):
         case None:
             nt = None
     Vector[Stmt] nb = rename_aliases_stmts(f.body, &amap)
-    return FunctionDef(f.name, np, nr, f.type_params, nb, f.is_expr_body, nt, f.is_extern_stub)
+    return FunctionDef(f.name, np, nr, f.type_params, nb, f.is_expr_body, nt, f.is_extern_stub, f.throws_inferred)
 
 SpannedExpr rename_aliases_expr(SpannedExpr se, Dict[String, String] &amap):
     match se.expr:
@@ -1703,7 +1703,7 @@ void expand_meta_for_match(Module &m):
         match item:
             case IFunction(fdef):
                 Vector[Stmt] new_body = expand_meta_for_in_stmts(fdef.body, m)
-                FunctionDef new_fn = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, new_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)
+                FunctionDef new_fn = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, new_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub, fdef.throws_inferred)
                 m.items.set(i, IFunction(new_fn))
             case IEquip(eqblk):
                 Vector[FunctionDef] new_methods = Vector[FunctionDef]()
@@ -1711,7 +1711,7 @@ void expand_meta_for_match(Module &m):
                 while mi < eqblk.methods.len():
                     FunctionDef method = eqblk.methods.get(mi).unwrap()
                     Vector[Stmt] new_body = expand_meta_for_in_stmts(method.body, m)
-                    FunctionDef new_method = FunctionDef(method.name, method.params, method.return_type, method.type_params, new_body, method.is_expr_body, method.throws_type, method.is_extern_stub)
+                    FunctionDef new_method = FunctionDef(method.name, method.params, method.return_type, method.type_params, new_body, method.is_expr_body, method.throws_type, method.is_extern_stub, method.throws_inferred)
                     new_methods.push(new_method)
                     mi = mi + 1
                 EquipBlock new_eq = EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, new_methods, eqblk.via_field, eqblk.trait_generic_args)

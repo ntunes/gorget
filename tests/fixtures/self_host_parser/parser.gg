@@ -1700,6 +1700,14 @@ equip Parser:
                 lhs = SpannedExpr(ETry(Box(lhs)), Span(bp_start, self.peek().lex_start))
                 continue
 
+            # D29: postfix error-propagation `expr!` (TkBangEq never splits, so
+            # TOK_BANG here is always the postfix mark).
+            if ptag == TOK_BANG:
+                int bp_start = lhs.span.start
+                self.advance()
+                lhs = SpannedExpr(EPropagate(Box(lhs)), Span(bp_start, self.peek().lex_start))
+                continue
+
             # As cast: expr as Type
             if self.check_kw(KW_AS):
                 int bp_start = lhs.span.start
@@ -3253,10 +3261,15 @@ equip Parser:
         Vector[Param] params = self.parse_params()
         self.expect_tok(TOK_RPAREN, "expected ')' in function def")
 
-        # Skip optional 'throws Type'
+        # Skip optional 'throws Type' — or the D29/A31 bare `!` (inferred
+        # error set; this reduced AST drops the throws clause entirely).
         if self.check_kw(KW_THROWS):
             self.advance()
             self.parse_type()
+        elif self.check_tok(TOK_BANG):
+            self.advance()
+            if not (self.check_tok(TOK_COLON) or self.check_tok(TOK_EQ) or self.check_tok(TOK_NEWLINE)):
+                self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "`! Type` is not a signature form — write `throws E` for an explicit error contract (bare `!` is reserved for A31 inferred error sets)"))
 
         # Expression-body function: Type name(params) = expr (deprecated)
         if self.check_tok(TOK_EQ):

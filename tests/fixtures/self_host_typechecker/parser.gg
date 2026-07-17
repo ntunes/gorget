@@ -1793,6 +1793,17 @@ equip Parser:
                 lhs = SpannedExpr(ETry(Box(lhs)), Span(bp_start, self.peek().lex_start))
                 continue
 
+            # D29: postfix error-propagation `expr!`. The lexer never splits
+            # `!=` (TkBangEq under maximal munch), so `a()!=b` stays a
+            # comparison — TOK_BANG here is always the postfix mark. Same tight
+            # binding as `.`/call/index so `f()!.m()!` chains left-to-right and
+            # `f()! catch …` nests as ECatch(EPropagate(..)).
+            if ptag == TOK_BANG:
+                int bp_start = lhs.span.start
+                self.advance()
+                lhs = SpannedExpr(EPropagate(Box(lhs)), Span(bp_start, self.peek().lex_start))
+                continue
+
             # As cast: expr as Type
             if self.check_kw(KW_AS):
                 int bp_start = lhs.span.start
@@ -3722,12 +3733,20 @@ equip Parser:
         Vector[Param] params = self.parse_params()
         self.expect_tok(TOK_RPAREN, "expected ')' in function def")
 
-        # Optional 'throws Type'
+        # Optional 'throws Type' — or the D29/A31 bare `!` (inferred error set;
+        # `! Type` does NOT exist: cancelled 2026-07-16).
         Option[SpannedType] throws_type = None
+        bool throws_inferred = false
         if self.check_kw(KW_THROWS):
             self.advance()
             SpannedType tt = self.parse_type()
             throws_type = Some(tt)
+        elif self.check_tok(TOK_BANG):
+            self.advance()
+            if self.check_tok(TOK_COLON) or self.check_tok(TOK_EQ) or self.check_tok(TOK_NEWLINE):
+                throws_inferred = true
+            else:
+                self.errors.push("`! Type` is not a signature form — write `throws E` for an explicit error contract (bare `!` is reserved for A31 inferred error sets)")
 
         # Expression-body function: Type name(params) = expr (deprecated)
         if self.check_tok(TOK_EQ):
@@ -3735,12 +3754,12 @@ equip Parser:
             SpannedExpr body_expr = self.parse_expr()
             Vector[Stmt] body = Vector[Stmt]()
             body.push(SReturn(Some(body_expr)))
-            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type, false)
+            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type, false, throws_inferred)
 
         # Declaration-only function (no body — e.g. trait method signatures)
         if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
             Vector[Stmt] body = Vector[Stmt]()
-            return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type, false)
+            return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type, false, throws_inferred)
 
         self.expect_tok(TOK_COLON, "expected ':' after function signature")
         # Skip any comment tokens between : and the newline/indent
@@ -3750,9 +3769,9 @@ equip Parser:
             SpannedExpr body_expr = self.parse_expr()
             Vector[Stmt] body = Vector[Stmt]()
             body.push(SReturn(Some(body_expr)))
-            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type, false)
+            return FunctionDef(name, params, ret_ty, type_params, body, true, throws_type, false, throws_inferred)
         Vector[Stmt] body = self.parse_block()
-        return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type, false)
+        return FunctionDef(name, params, ret_ty, type_params, body, false, throws_type, false, throws_inferred)
 
     Vector[Param] parse_params(&self):
         Vector[Param] params = Vector[Param]()
@@ -4270,7 +4289,7 @@ equip Parser:
                                 pass
                     else:
                         pass
-            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, body_out, false, fd.throws_type, true)
+            FunctionDef decl = FunctionDef(fd.name, fd.params, fd.return_type, fd.type_params, body_out, false, fd.throws_type, true, fd.throws_inferred)
             return IFunction(decl)
         self.expect_tok(TOK_COLON, "expected ':' after extern")
         Vector[FunctionDef] fns = Vector[FunctionDef]()
@@ -4329,7 +4348,7 @@ equip Parser:
                                     pass
                         else:
                             pass
-                FunctionDef fn_decl = FunctionDef(fn_fd.name, fn_fd.params, fn_fd.return_type, fn_fd.type_params, fn_body, false, fn_fd.throws_type, true)
+                FunctionDef fn_decl = FunctionDef(fn_fd.name, fn_fd.params, fn_fd.return_type, fn_fd.type_params, fn_body, false, fn_fd.throws_type, true, fn_fd.throws_inferred)
                 fns.push(fn_decl)
                 self.skip_trivia()
             if self.check_tok(TOK_DEDENT):

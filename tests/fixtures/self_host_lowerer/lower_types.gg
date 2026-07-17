@@ -1646,7 +1646,7 @@ FunctionDef build_static_init_fn(SpannedType sd_ty, String sd_name, SpannedExpr 
     Vector[Stmt] body = [vd, rs]
     Vector[Param] no_params = []
     Vector[String] no_tparams = []
-    return FunctionDef(static_init_fn_name(sd_name), no_params, sd_ty, no_tparams, body, false, None, false)
+    return FunctionDef(static_init_fn_name(sd_name), no_params, sd_ty, no_tparams, body, false, None, false, false)
 
 Option[float] eval_const_float_expr(SpannedExpr spe, GirModule &gmod):
     match spe.expr:

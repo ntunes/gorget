@@ -862,6 +862,8 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
             discover_generic_calls_expr(*spb, &seen, &instances, &tparams)
         case ETry(tr):
             discover_generic_calls_expr(*tr, &seen, &instances, &tparams)
+        case EPropagate(pr):
+            discover_generic_calls_expr(*pr, &seen, &instances, &tparams)
         case EDeref(dr):
             discover_generic_calls_expr(*dr, &seen, &instances, &tparams)
         case EDefaultOp(do_l, do_r):
@@ -2246,7 +2248,7 @@ void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String
     Dict[String, String] tn_env = build_meta_typename_env(type_params, type_args)
     Dict[String, int] int_env = {}
     Vector[Stmt] expanded_body = evaluate_delayed_meta_stmts(fdef.body, &tn_env, &int_env, &gmod)
-    FunctionDef mfdef = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, expanded_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)
+    FunctionDef mfdef = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, expanded_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub, fdef.throws_inferred)
     GirFunction gfn = lower_function(mfdef, &gmod)
 
     # Detect bare Move-type params that are directly returned.

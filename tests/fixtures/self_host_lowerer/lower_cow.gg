@@ -198,6 +198,8 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case ETry(inner_box):
             cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
+        case EPropagate(inner_box):
+            cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case EAwait(inner_box):
             cow_scan_expr(&ctx, &gmod, *inner_box, in_closure)
         case ESpawn(inner_box):
@@ -483,6 +485,8 @@ String cow_source_root_name(SpannedExpr e):
         case EDeref(inner_box):
             return cow_source_root_name(*inner_box)
         case ETry(inner_box):
+            return cow_source_root_name(*inner_box)
+        case EPropagate(inner_box):
             return cow_source_root_name(*inner_box)
         else:
             return ""

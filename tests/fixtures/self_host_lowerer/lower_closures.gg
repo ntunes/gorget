@@ -1148,6 +1148,8 @@ bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, Gi
             return false
         case ETry(inner):
             return closure_expr_has_capture(*inner, in_scope, &gmod)
+        case EPropagate(inner):
+            return closure_expr_has_capture(*inner, in_scope, &gmod)
         case EMove(inner):
             return closure_expr_has_capture(*inner, in_scope, &gmod)
         case EMutableBorrow(inner):
@@ -1473,6 +1475,8 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
                 cc_collect_expr(&ctx, a.value, in_scope, &gmod, &cc)
         case ETry(inner):
             cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
+        case EPropagate(inner):
+            cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
         case EMove(inner):
             cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
         case EMutableBorrow(inner):
@@ -1733,6 +1737,8 @@ bool expr_has_nested_closure(SpannedExpr sexpr):
                     return true
             return false
         case ETry(inner):
+            return expr_has_nested_closure(*inner)
+        case EPropagate(inner):
             return expr_has_nested_closure(*inner)
         case EMove(inner):
             return expr_has_nested_closure(*inner)

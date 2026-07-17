@@ -75,6 +75,8 @@ enum Expr:
     EDotShorthand(String, Vector[SpannedExpr])
     ETry(Box[SpannedExpr])
     EMove(Box[SpannedExpr])
+    # D29: postfix error-propagation mark (`call()!`).
+    EPropagate(Box[SpannedExpr])
     EMutableBorrow(Box[SpannedExpr])
     EDeref(Box[SpannedExpr])
     EAs(Box[SpannedExpr], Box[SpannedType])

@@ -731,6 +731,9 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case ETry(inner):
             resolve_expr(*inner, &scopes, &ctx)
 
+        case EPropagate(inner):
+            resolve_expr(*inner, &scopes, &ctx)
+
         case EMove(inner):
             resolve_expr(*inner, &scopes, &ctx)
 

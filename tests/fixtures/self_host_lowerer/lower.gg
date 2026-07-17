@@ -597,6 +597,8 @@ String expr_kind(Expr e):
             return "EDotShorthand"
         case ETry(_):
             return "ETry"
+        case EPropagate(_):
+            return "EPropagate"
         case EMove(_):
             return "EMove"
         case EMutableBorrow(_):
@@ -1081,6 +1083,8 @@ bool mutinf_expr_is_self_rooted(SpannedExpr e):
             return mutinf_expr_is_self_rooted(*recv)
         case ETry(inner):
             return mutinf_expr_is_self_rooted(*inner)
+        case EPropagate(inner):
+            return mutinf_expr_is_self_rooted(*inner)
         case EIdentifier(idn):
             return idn == "self"
         else:
@@ -1210,6 +1214,8 @@ bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[Stri
         case EAs(inner_box, _):
             if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
         case ETry(inner_box):
+            if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
+        case EPropagate(inner_box):
             if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
         case EAwait(inner_box):
             if mutinf_scan_expr(*inner_box, target, &gmod, &callees): m = true
@@ -2824,14 +2830,14 @@ void apply_collect_target_rewrites(Module &m):
         match m.items.get(i).unwrap():
             case IFunction(fdef):
                 Vector[Stmt] nb = collect_rewrite_stmts(fdef.body, fdef.return_type, &fn_param_types)
-                m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)))
+                m.items.set(i, IFunction(FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, nb, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub, fdef.throws_inferred)))
             case IEquip(eqblk):
                 Vector[FunctionDef] nm = Vector[FunctionDef]()
                 int mi = 0
                 while mi < eqblk.methods.len():
                     FunctionDef method = eqblk.methods.get(mi).unwrap()
                     Vector[Stmt] mnb = collect_rewrite_stmts(method.body, method.return_type, &fn_param_types)
-                    nm.push(FunctionDef(method.name, method.params, method.return_type, method.type_params, mnb, method.is_expr_body, method.throws_type, method.is_extern_stub))
+                    nm.push(FunctionDef(method.name, method.params, method.return_type, method.type_params, mnb, method.is_expr_body, method.throws_type, method.is_extern_stub, method.throws_inferred))
                     mi = mi + 1
                 m.items.set(i, IEquip(EquipBlock(eqblk.target, eqblk.type_params, eqblk.trait_name, nm, eqblk.via_field, eqblk.trait_generic_args)))
             case ITrait(tdef):
@@ -2840,7 +2846,7 @@ void apply_collect_target_rewrites(Module &m):
                 while ti < tdef.methods.len():
                     FunctionDef tmethod = tdef.methods.get(ti).unwrap()
                     Vector[Stmt] tnb = collect_rewrite_stmts(tmethod.body, tmethod.return_type, &fn_param_types)
-                    tnm.push(FunctionDef(tmethod.name, tmethod.params, tmethod.return_type, tmethod.type_params, tnb, tmethod.is_expr_body, tmethod.throws_type, tmethod.is_extern_stub))
+                    tnm.push(FunctionDef(tmethod.name, tmethod.params, tmethod.return_type, tmethod.type_params, tnb, tmethod.is_expr_body, tmethod.throws_type, tmethod.is_extern_stub, tmethod.throws_inferred))
                     ti = ti + 1
                 m.items.set(i, ITrait(TraitDef(tdef.name, tdef.type_params, tnm, tdef.parent_traits)))
             else:
@@ -4951,7 +4957,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                             Dict[String, String] ng_tn_env = {}
                             Dict[String, int] ng_int_env = {}
                             Vector[Stmt] ng_body = evaluate_delayed_meta_stmts(fdef.body, &ng_tn_env, &ng_int_env, &gmod)
-                            ng_fdef = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, ng_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)
+                            ng_fdef = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, ng_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub, fdef.throws_inferred)
                         gmod.functions.push(lower_function(ng_fdef, &gmod))
             case IStaticDecl(si_ty, si_name, si_val):
                 # Array/dict LITERAL static (`static Vector[T] X = [..]` /

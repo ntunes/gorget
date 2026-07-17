@@ -5750,6 +5750,15 @@ impl<'a> TypeChecker<'a> {
         reason: FallibleMarkReason,
         span: Span,
     ) {
+        // Migration instrument (env-gated, no user-facing behavior): the checker
+        // IS the mark-insertion oracle — every Bare site's span END is exactly
+        // the byte after the call's `)`, where the mechanical `!` goes. The
+        // corpus migrator (`gg fmt`-adjacent tooling) reads these lines.
+        if reason == FallibleMarkReason::Bare
+            && std::env::var_os("GG_D29_MIGRATE").is_some()
+        {
+            eprintln!("[d29-mark] {} {}", span.start, span.end);
+        }
         self.error(
             SemanticErrorKind::MissingFallibleMark {
                 throws_type: self.describe_resolved_type(err_ty),

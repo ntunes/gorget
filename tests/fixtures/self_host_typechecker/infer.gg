@@ -7,7 +7,7 @@ from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
 from ast import ECharLiteral, ENoneLiteral, EIdentifier, ESelfExpr
 from ast import EBinaryOp, EUnaryOp, ECall, EMethodCall, EFieldAccess
 from ast import EIndex, EClosure, EArrayLiteral, ETupleLiteral
-from ast import EStructLiteral, EDotShorthand, ETry, EAs, EMove
+from ast import EStructLiteral, EDotShorthand, ETry, EAs, EMove, EPropagate
 from ast import EMutableBorrow, EDeref, EIs, EAwait, ESpawn
 from ast import EDictLiteral, EDefaultOp, EBlock, EDo, EFString
 from ast import EFaultCatch, FaultCatchPattern, FcpVariant, FcpBinding
@@ -849,6 +849,11 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 if inferred_ret >= 0:
                     ret_id = inferred_ret
             return types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
+
+        case EPropagate(inner):
+            # D29: `expr!` types as its inner expression (the mark is identity
+            # on the success value; enforcement lives in typecheck).
+            return infer_expr_type(SpannedExpr((*inner).expr, (*inner).span), scopes, &types, &ctx)
 
         case ETry(inner):
             # try expr — unwraps Result[T,E] → T, Option[T] → T

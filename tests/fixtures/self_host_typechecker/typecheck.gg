@@ -14,7 +14,7 @@ from ast import EFieldAccess, EUnaryOp, EIndex, EIntLiteral
 from ast import SExpr, SVarDecl, SReturn
 # Full Expr/Stmt surface for the exhaustive unified safety walker (check_safety_*).
 from ast import ERange, EIf, EImplicitClosure, EArrayLiteral, ETupleLiteral
-from ast import EDictLiteral, EStructLiteral, EDotShorthand, ETry, EMove, EMutableBorrow, EDeref
+from ast import EDictLiteral, EStructLiteral, EDotShorthand, ETry, EMove, EPropagate, EMutableBorrow, EDeref
 from ast import EListComp, ESetComp, EDictComp, EDefaultOp, EAwait, ESpawn, ESpawnBlocking
 from ast import ERethrow, ECatch, EFaultCatch, FaultCatchPattern, FcpBinding, FcpVariant
 from ast import SAssign, SCompoundAssign, SThrow, SBreak, SContinue, SPass, SFor, SWhile
@@ -1236,6 +1236,8 @@ void collect_idents_expr(SpannedExpr e, Vector[SpannedExpr] &out):
             collect_idents_stmts(b, &out)
         case ETry(i):
             collect_idents_expr(*i, &out)
+        case EPropagate(i):
+            collect_idents_expr(*i, &out)
         case EMutableBorrow(i):
             collect_idents_expr(*i, &out)
         case EDeref(i):
@@ -2036,6 +2038,9 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # D10(b) same-call place-overlap (args only), mirroring the ECall arm.
             check_call_aliasing(args, scopes, &types, &ctx)
         case ETry(inner):
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
+        case EPropagate(inner):
+            # D29: the mark is a transparent read of the inner fallible call.
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EMove(inner):
             # `S y = !x` / `return !x` — mark the move (or, for a non-place `!f()`,

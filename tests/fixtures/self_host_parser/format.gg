@@ -374,6 +374,8 @@ String format_expr(SpannedExpr se):
             return format_expr(*inner) + "?"
         case EMove(inner):
             return "!" + format_expr(*inner)
+        case EPropagate(inner):
+            return format_expr(*inner) + "!"
         case EMutableBorrow(inner):
             return "&" + format_expr(*inner)
         case EDeref(inner):

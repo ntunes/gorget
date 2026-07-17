@@ -265,6 +265,9 @@ bool expr_mentions_iter(SpannedExpr sexpr):
         case ETry(inner_box):
             SpannedExpr try_e = *inner_box
             return expr_mentions_iter(try_e)
+        case EPropagate(inner_box):
+            SpannedExpr prop_e = *inner_box
+            return expr_mentions_iter(prop_e)
         case EAwait(inner_box):
             SpannedExpr aw_e = *inner_box
             return expr_mentions_iter(aw_e)
@@ -831,7 +834,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             call_redirects.put(bare_name, mangled.clone())
                             imported_fns.put(mangled.clone(), true)
                             # Create a renamed copy
-                            FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub)
+                            FunctionDef renamed = FunctionDef(mangled, fdef.params, fdef.return_type, fdef.type_params, fdef.body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub, fdef.throws_inferred)
                             m.items.push(IFunction(renamed))
                         else:
                             # Imported extern stub / forward declaration
@@ -876,7 +879,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                             # from emitting a degenerate body; is_extern_stub=true.
                             if fdef.is_extern_stub and extern_ret_shape_safe_to_register(fdef.return_type):
                                 Vector[Stmt] empty_body = Vector[Stmt]()
-                                FunctionDef stub_decl = FunctionDef(fdef.name.clone(), fdef.params, fdef.return_type, fdef.type_params, empty_body, false, fdef.throws_type, true)
+                                FunctionDef stub_decl = FunctionDef(fdef.name.clone(), fdef.params, fdef.return_type, fdef.type_params, empty_body, false, fdef.throws_type, true, fdef.throws_inferred)
                                 m.items.push(IFunction(stub_decl))
                     case IEnum(edef):
                         # Merge imported enums so type_infos has variant info —
@@ -1046,7 +1049,7 @@ Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, 
                                             pass
                                     if stub_register_ret:
                                         Vector[Stmt] empty_m_body = Vector[Stmt]()
-                                        FunctionDef void_stub = FunctionDef(stub_key.clone(), emdef.params, emdef.return_type, emdef.type_params, empty_m_body, false, emdef.throws_type, true)
+                                        FunctionDef void_stub = FunctionDef(stub_key.clone(), emdef.params, emdef.return_type, emdef.type_params, empty_m_body, false, emdef.throws_type, true, emdef.throws_inferred)
                                         m.items.push(IFunction(void_stub))
                                     emi += 1
                                     continue

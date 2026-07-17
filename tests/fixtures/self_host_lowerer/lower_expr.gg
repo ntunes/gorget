@@ -1836,6 +1836,16 @@ int lower_recv_place(LowerCtx &ctx, SpannedExpr recv_expr, GirModule &gmod):
     return lower_place_base(&ctx, recv_expr, &gmod)
 
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
+    # D29: `expr!` (EPropagate) is TRANSPARENT — unwrap it BEFORE the suppress
+    # one-shot is consumed, so the inner call inherits the match-scrutinee /
+    # catch / rethrow suppress signal (otherwise the mark eats it, the call
+    # auto-props to `T`, and a match on the raw Result reads garbage → SIGSEGV;
+    # the two-layer transparency, mirror of Rust `exprs/mod.rs` lower_expr).
+    match sexpr.expr:
+        case EPropagate(prop_inner):
+            return lower_expr(&ctx, *prop_inner, &gmod)
+        else:
+            pass
     # Consume the one-shot suppress flag for THIS expression.
     bool suppress = ctx.suppress_auto_prop
     ctx.suppress_auto_prop = false
@@ -5772,6 +5782,10 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 return ddst
             return dsrc
         case ETry(inner_box):
+            return lower_expr(&ctx, *inner_box, &gmod)
+        case EPropagate(inner_box):
+            # D29: transparent to inner (normally intercepted at lower_expr's
+            # entry; this arm covers any direct lower_expr_inner call).
             return lower_expr(&ctx, *inner_box, &gmod)
         case EDotShorthand(variant, sargs):
             # `.Variant` / `.Variant(args)` in value position. The variant name

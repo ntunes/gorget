@@ -114,6 +114,10 @@ enum Expr:
     EDotShorthand(String, Vector[CallArg])
     ETry(Box[SpannedExpr])
     EMove(Box[SpannedExpr])
+    # D29: postfix error-propagation mark (`call()!`) — identity on the success
+    # value; the mark makes the fallibility visible at the site (typecheck
+    # enforces the mandatory-mark rules; the lowerer is transparent).
+    EPropagate(Box[SpannedExpr])
     EMutableBorrow(Box[SpannedExpr])
     EDeref(Box[SpannedExpr])
     EAs(Box[SpannedExpr], Box[SpannedType])
@@ -265,6 +269,10 @@ struct FunctionDef:
     # tell a stub from a real fn. Set by the parser at the 2 extern ctors; read
     # by loader.gg's has_real_body gate + lower.gg's body-lowering skip.
     bool is_extern_stub
+    # D29/A31: bare `!` signature (`int f()!:`) — the reserved inferred-error-
+    # set spelling. Parses (the grammar locks now); typecheck teaching-rejects
+    # until A31. A TYPED axis — never a sentinel in `throws_type`.
+    bool throws_inferred
 
 struct StructDef:
     String name
