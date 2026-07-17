@@ -1,0 +1,22 @@
+# NEG: supertrait default `f` returns int — assigning to String must
+# fail check with E_TypeMismatch. Acceptance signal for resolve walking
+# `extends` (a missing resolve would either fail "no method" or, worse,
+# skip typecheck of the call).
+trait Base:
+    int f(self):
+        return 42
+
+trait Child extends Base:
+    int g(self)
+
+struct S:
+    int x
+
+equip S with Child:
+    int g(self):
+        return self.x
+
+void main():
+    S s = S(1)
+    String y = s.f()
+    print(y)

@@ -1,0 +1,21 @@
+# NEG: supertrait default with `throws` called unhandled must reject with
+# E_UnhandledThrows. Pins that resolve returns the OWNING (Base) trait
+# def_id so the throws gate reads the default method's throws_ast.
+trait Base:
+    int f(self) throws String:
+        throw "boom"
+
+trait Child extends Base:
+    int g(self)
+
+struct S:
+    int x
+
+equip S with Child:
+    int g(self):
+        return self.x
+
+void main():
+    S s = S(1)
+    int x = s.f()
+    print(x)

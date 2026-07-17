@@ -528,6 +528,37 @@ TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable 
     register_builtin_traits(scopes, types, &registry)
     return registry
 
+# ── Supertrait default-method walk ───────────────────────────
+# Mirrors Rust `TraitRegistry::find_default_method` (traits.rs): DFS over
+# a trait + its `extends` parents for a default method body. Cycle-guarded
+# via a visited Vector of def_ids. Returns the OWNING TraitInfo (where the
+# default body lives) so callers hand back that trait's def_id for throws
+# gates / default-sig substitution — not the equip's child trait def_id.
+
+Option[TraitInfo] find_default_method(TraitRegistry registry, int start_trait_def_id, String method):
+    Vector[int] stack = Vector[int]()
+    stack.push(start_trait_def_id)
+    Vector[int] visited = Vector[int]()
+    while stack.len() > 0:
+        Option[int] top = stack.pop()
+        if top is Some(id):
+            bool seen = false
+            for v in visited:
+                if v == id:
+                    seen = true
+            if seen:
+                continue
+            visited.push(id)
+            for tinfo in registry.traits:
+                if tinfo.def_id == id:
+                    if find_method_index(tinfo.method_names, method) is Some(midx):
+                        bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
+                        if has_default:
+                            return Some(tinfo)
+                    for parent_id in tinfo.parent_trait_ids:
+                        stack.push(parent_id)
+    return None()
+
 # ── Default-method Self/T substitution ───────────────────────
 # Mirrors `substitute_default_method_sig` in src/semantic/typecheck.rs.
 # When phase 3 of resolve_method matches a trait-default method, the
@@ -639,20 +670,19 @@ MethodResolution resolve_method_for_generic_receiver(String recv_name, Vector[in
                         sig = FunctionSig(sig.params, subst_ret, sig.has_self, sig.self_ownership)
                 return MethodResolution(true, sig, impl.method_def_ids.get(idx).unwrap())
             # Phase 3: trait default-method fallback with full
-            # generic-receiver substitution.
+            # generic-receiver substitution. Walks supertraits via
+            # `find_default_method` so a parent default is visible
+            # through `equip … with Child` (Child extends Base).
             if impl.trait_def_id != NO_DEF:
-                for tinfo in types.trait_registry.traits:
-                    if tinfo.def_id == impl.trait_def_id:
-                        if find_method_index(tinfo.method_names, method) is Some(midx):
-                            bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
-                            if has_default:
-                                FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
-                                if find_method_index(tinfo.default_shape_names, method) is Some(sidx):
-                                    MethodSigShape shape = tinfo.default_shape_shapes.get(sidx).unwrap()
-                                    int subst_ret = substitute_default_return_generic(impl, tinfo, shape, recv_type_id, impl_bind_names, impl_bind_tids, scopes, &types)
-                                    if subst_ret >= 0 and subst_ret != types.error_id:
-                                        sig = FunctionSig(sig.params, subst_ret, sig.has_self, sig.self_ownership)
-                                return MethodResolution(true, sig, tinfo.def_id)
+                if find_default_method(types.trait_registry, impl.trait_def_id, method) is Some(tinfo):
+                    if find_method_index(tinfo.method_names, method) is Some(midx):
+                        FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
+                        if find_method_index(tinfo.default_shape_names, method) is Some(sidx):
+                            MethodSigShape shape = tinfo.default_shape_shapes.get(sidx).unwrap()
+                            int subst_ret = substitute_default_return_generic(impl, tinfo, shape, recv_type_id, impl_bind_names, impl_bind_tids, scopes, &types)
+                            if subst_ret >= 0 and subst_ret != types.error_id:
+                                sig = FunctionSig(sig.params, subst_ret, sig.has_self, sig.self_ownership)
+                        return MethodResolution(true, sig, tinfo.def_id)
     return not_found_resolution()
 
 MethodResolution resolve_method_full(int type_id, String method, ScopeTable scopes, TypeTable &types):
@@ -678,25 +708,24 @@ MethodResolution resolve_method_full(int type_id, String method, ScopeTable scop
             if find_method_index(impl.method_names, method) is Some(idx):
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
     # Phase 3: trait default-method fallback. Same per-self_type
-    # subset as phase 2, but consults the implemented trait's
-    # TraitInfo for a default body when the impl itself doesn't
-    # override the method.
+    # subset as phase 2, but consults the implemented trait (and its
+    # supertraits via `find_default_method`) for a default body when
+    # the impl itself doesn't override the method. Returns the
+    # OWNING trait's def_id (where the default lives).
     if types.trait_registry.trait_impls.contains(type_id):
         Vector[int] indices = types.trait_registry.trait_impls.get(type_id).unwrap()
         for idx_impl in indices:
             EquipInfo impl = types.trait_registry.impls.get(idx_impl).unwrap()
-            for tinfo in types.trait_registry.traits:
-                if tinfo.def_id == impl.trait_def_id:
+            if impl.trait_def_id != NO_DEF:
+                if find_default_method(types.trait_registry, impl.trait_def_id, method) is Some(tinfo):
                     if find_method_index(tinfo.method_names, method) is Some(midx):
-                        bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
-                        if has_default:
-                            FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
-                            if find_method_index(tinfo.default_shape_names, method) is Some(sidx):
-                                MethodSigShape shape = tinfo.default_shape_shapes.get(sidx).unwrap()
-                                int subst_ret = substitute_default_return(impl, tinfo, shape, scopes, &types)
-                                if subst_ret >= 0 and subst_ret != types.error_id:
-                                    sig = FunctionSig(sig.params, subst_ret, sig.has_self, sig.self_ownership)
-                            return MethodResolution(true, sig, tinfo.def_id)
+                        FunctionSig sig = tinfo.method_sigs.get(midx).unwrap()
+                        if find_method_index(tinfo.default_shape_names, method) is Some(sidx):
+                            MethodSigShape shape = tinfo.default_shape_shapes.get(sidx).unwrap()
+                            int subst_ret = substitute_default_return(impl, tinfo, shape, scopes, &types)
+                            if subst_ret >= 0 and subst_ret != types.error_id:
+                                sig = FunctionSig(sig.params, subst_ret, sig.has_self, sig.self_ownership)
+                        return MethodResolution(true, sig, tinfo.def_id)
     return not_found_resolution()
 
 # ── Intrinsic-satisfaction helpers ──────────────────────────
@@ -822,15 +851,14 @@ MethodResolution resolve_method_by_name(TraitRegistry registry, String type_name
                 return MethodResolution(true, impl.method_sigs.get(idx).unwrap(), impl.method_def_ids.get(idx).unwrap())
     for impl in registry.impls:
         if impl.self_type_name == type_name and impl.trait_def_id != NO_DEF:
-            for tinfo in registry.traits:
-                if tinfo.def_id == impl.trait_def_id:
-                    if find_method_index(tinfo.method_names, method) is Some(midx):
-                        bool has_default = tinfo.method_has_default_body.get(midx).unwrap()
-                        if has_default:
-                            return MethodResolution(true, tinfo.method_sigs.get(midx).unwrap(), tinfo.def_id)
+            if find_default_method(registry, impl.trait_def_id, method) is Some(tinfo):
+                if find_method_index(tinfo.method_names, method) is Some(midx):
+                    return MethodResolution(true, tinfo.method_sigs.get(midx).unwrap(), tinfo.def_id)
     return not_found_resolution()
 
 # Lookup MethodSigShape by (TypeId, method).
+# Default-method shapes walk supertraits via `find_default_method`
+# (mirrors Rust `resolve_method_shape`).
 
 ShapeResolution resolve_method_shape(TraitRegistry registry, int type_id, String method):
     for impl in registry.impls:
@@ -839,10 +867,9 @@ ShapeResolution resolve_method_shape(TraitRegistry registry, int type_id, String
                 return ShapeResolution(true, impl.shape_method_shapes.get(idx).unwrap())
     for impl in registry.impls:
         if impl.self_type == type_id and impl.trait_def_id != NO_DEF:
-            for tinfo in registry.traits:
-                if tinfo.def_id == impl.trait_def_id:
-                    if find_method_index(tinfo.shape_method_names, method) is Some(midx):
-                        return ShapeResolution(true, tinfo.shape_method_shapes.get(midx).unwrap())
+            if find_default_method(registry, impl.trait_def_id, method) is Some(tinfo):
+                if find_method_index(tinfo.shape_method_names, method) is Some(midx):
+                    return ShapeResolution(true, tinfo.shape_method_shapes.get(midx).unwrap())
     return not_found_shape()
 
 # Lazy-iterator phase 1b Blocker #2: the TypeId-keyed `resolve_method_shape`
@@ -854,8 +881,8 @@ ShapeResolution resolve_method_shape(TraitRegistry registry, int type_id, String
 # that path so `infer_method_targs` can compute the method-level targs for
 # the bare (no-turbofish) terminal calls (`v.iter().fold(0, f)`). The shape
 # is read from the same stores as the TypeId-keyed path:
-# `impl.shape_method_shapes` (impl-override) and the implemented trait's
-# `tinfo.shape_method_shapes` (trait method-generic default).
+# `impl.shape_method_shapes` (impl-override) and the owning trait's
+# `tinfo.shape_method_shapes` (trait method-generic default, incl. supertrait).
 ShapeResolution resolve_method_shape_for_generic_receiver(TraitRegistry registry, String recv_name, String method):
     for impl in registry.impls:
         if impl.self_type_name == recv_name:
@@ -863,10 +890,9 @@ ShapeResolution resolve_method_shape_for_generic_receiver(TraitRegistry registry
                 return ShapeResolution(true, impl.shape_method_shapes.get(idx).unwrap())
     for impl in registry.impls:
         if impl.self_type_name == recv_name and impl.trait_def_id != NO_DEF:
-            for tinfo in registry.traits:
-                if tinfo.def_id == impl.trait_def_id:
-                    if find_method_index(tinfo.shape_method_names, method) is Some(midx):
-                        return ShapeResolution(true, tinfo.shape_method_shapes.get(midx).unwrap())
+            if find_default_method(registry, impl.trait_def_id, method) is Some(tinfo):
+                if find_method_index(tinfo.shape_method_names, method) is Some(midx):
+                    return ShapeResolution(true, tinfo.shape_method_shapes.get(midx).unwrap())
     return not_found_shape()
 
 # ── Method-generic inference ──────────────────────────────────

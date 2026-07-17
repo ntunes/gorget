@@ -1,0 +1,20 @@
+# Supertrait default methods via `extends`: equip Child only, call Base's
+# default body. Pins resolve_method / lowering inheritance (Track B / D23 hole).
+trait Base:
+    int f(self):
+        return 42
+
+trait Child extends Base:
+    int g(self)
+
+struct S:
+    int x
+
+equip S with Child:
+    int g(self):
+        return self.x
+
+void main():
+    S s = S(7)
+    print(s.f())
+    print(s.g())

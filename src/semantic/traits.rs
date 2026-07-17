@@ -940,8 +940,8 @@ fn collect_trait(
     // and inherited-REQUIRED-method VALIDATION would silently flip to accept
     // (`validate_trait_impls`' extends walk keys dead → a missing parent
     // method passes check; mutation-tested). Supertrait DEFAULT-method
-    // resolution misses regardless of this site — the default fallback has no
-    // extends walk (pre-existing hole, filed in TODO as its own track).
+    // resolution walks these `extends` edges at resolve time via
+    // `find_default_method` (resolve_method / by_name / shape / shape_by_name).
     let mut extends = Vec::new();
     for bound in &trait_def.extends {
         if let Some(parent_id) = scopes.lookup_type(&bound.node.name.node) {

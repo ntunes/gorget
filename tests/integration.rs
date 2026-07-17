@@ -7002,6 +7002,34 @@ fn trait_inherit_defaults() {
     );
 }
 
+// Supertrait default via `extends`: equip Child only, call Base default.
+// Complements trait_inherit_defaults with a minimal f/g shape used by the
+// TypeMismatch / throws NEG fixtures below.
+#[test]
+fn supertrait_default_method() {
+    run_gg(
+        "supertrait_default_method.gg",
+        "\
+42
+7",
+    );
+}
+
+// Acceptance signal for supertrait default resolve: `f` returns int, so
+// `String y = s.f()` must fail check (not "no method", not silent accept).
+#[test]
+fn supertrait_default_type_mismatch() {
+    check_gg_fails("supertrait_default_type_mismatch.gg", "E_TypeMismatch");
+}
+
+// Owning-trait def_id for supertrait throws defaults: unhandled call of
+// Base's `throws` default through equip Child must raise E_MissingFallibleMark
+// (same D23/D29 mark gate as d23_unhandled_method_traitdefault).
+#[test]
+fn supertrait_default_throws_unhandled() {
+    check_gg_fails_missing_mark("supertrait_default_throws_unhandled.gg");
+}
+
 #[test]
 fn generic_trait_equip() {
     run_gg(
@@ -26945,6 +26973,25 @@ positive
 first is one
 7",
     );
+}
+
+/// Struct-value constructor patterns (§8.4): bind fields in declaration order
+/// (0-based field_load — not the enum tag+payload offset path).
+#[test]
+fn struct_value_match_bind() {
+    run_gg("struct_value_match_bind.gg", "1\n2");
+}
+
+#[test]
+fn struct_value_match_bind3() {
+    run_gg("struct_value_match_bind3.gg", "10\n20\n30");
+}
+
+/// Wrong arity on a struct constructor pattern must typecheck-fail with the
+/// field-count message (not a silent mis-bind or bare "type mismatch").
+#[test]
+fn struct_value_match_arity_error() {
+    check_gg_fails("struct_value_match_arity_error.gg", "field(s)");
 }
 
 #[test]
