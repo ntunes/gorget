@@ -2,6 +2,7 @@
 # Given an expression and scope context, returns a type_id or NO_TYPE.
 
 from std.collections import Vector, Dict
+from std.conv import parse_int
 from ast import SpannedExpr, SpannedType, Span, Type, Expr, Param, Stmt
 from ast import EIntLiteral, EFloatLiteral, EBoolLiteral, EStringLiteral
 from ast import ECharLiteral, ENoneLiteral, EIdentifier, ESelfExpr
@@ -270,6 +271,18 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         # `.field` on a primitive (String/int/…) is always
                         # invalid — no named fields exist. REJECT.
                         ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNoFieldFound(), "no field `" + field_name + "` found on type `" + pname + "`"))
+                    case RTTuple(elems):
+                        # Legal alias: `._0`/`._1`/… (language-reference §4.2).
+                        # Bare `.N` is ETupleFieldAccess (separate arm). Any
+                        # other identifier is absent → E_NoFieldFound.
+                        if field_name.starts_with("_") and field_name.len() >= 2:
+                            match parse_int(field_name.byte_slice(1, field_name.len())):
+                                case Ok(idx):
+                                    if idx >= 0 and idx < elems.len():
+                                        return elems.get(idx).unwrap()
+                                else:
+                                    pass
+                        ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNoFieldFound(), "no field `" + field_name + "` found on tuple type"))
                     else:
                         pass
             return NO_TYPE

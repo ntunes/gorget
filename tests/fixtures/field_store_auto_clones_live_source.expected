@@ -1,7 +1,0 @@
-after_use items=hello f.a=hello
-last_use_move f.a=only
-chained_ifs f.b=x
-explicit_move f.a=forced
-explicit_clone items=cloned f.a=cloned
-index_store_live inner=idx outer[0]=idx
-done

@@ -35,7 +35,7 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -2436,6 +2436,27 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
     register_function_signature(func, parent_scope, &scopes, &types, &ctx, def_scope)
 
     check_default_param_ordering(func.params, &ctx)
+
+    # D29/A31 residual (c): bare `!:` signature is reserved for inferred error
+    # sets — teaching-reject until A31 (mirror Rust typecheck.rs:7704-7708).
+    if func.throws_inferred:
+        ctx.diagnostics.push(Diagnostic.error(func.return_type.span, DkInferredThrowsUnsupported(), "inferred error sets (a bare `!` on the signature) are not yet implemented — declare the error contract explicitly with `throws E`"))
+
+    # R5: walk default-param expressions under non-propagating D29 context so a
+    # bare fallible default (`b = boom(1)`) is rejected at the definition site.
+    for p in func.params:
+        if p.default_value is Some(dflt):
+            bool saved_prop = ctx.d29_can_propagate
+            ctx.d29_can_propagate = false
+            d29_reject_if_bare_fallible(dflt, &ctx)
+            # Also reject marked unhandled defaults (mark without a disposition).
+            if d29_is_marked(dflt):
+                match dflt.expr:
+                    case EPropagate(inner):
+                        d29_check_propagate(dflt, *inner, &ctx)
+                    else:
+                        pass
+            ctx.d29_can_propagate = saved_prop
 
     # `main` can only throw `int` (the process exit code). Mirrors the
     # Rust check at src/semantic/typecheck.rs:5197 (SemanticErrorKind::

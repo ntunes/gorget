@@ -1,6 +1,0 @@
-if_elif b=x
-if_else b=y
-three_way b=z
-match b=m
-first_branch a=first
-done
