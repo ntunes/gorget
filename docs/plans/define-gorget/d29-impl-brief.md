@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF — D29 implementation: call-site `!` (visible error propagation), all lanes
 
-**Status:** DRAFT v4 — in the ≥3-fresh-pass review gauntlet. Gauntlet history:
+**Status:** DRAFT v5 — in the ≥3-fresh-pass review gauntlet. Gauntlet history:
 pass 1 (semantics faithful; capture machinery located — kind-1 capture EXISTS via
 `decl_type_hint`/`dest_is_result`; 2 HIGH: checker/gates predated the amendment → kind-2
 rewritten to bare-DISCARD-only + the three keep-the-Result sites' re-scoping + gates
@@ -12,8 +12,12 @@ Pass 3 (caught the v3 fold's OWN defect: marked-match SPLITS BY ARM TYPE — T-v
 are LEGAL and keep their RUN net [snag48's class, the actual SIGSEGV site; its scout proof
 STANDS], only Ok/Error arms are the check error; snag48's wrong NEG flip reverted to
 mechanical-mark POS; +R2 `MIN_FIXTURES=214` EXISTS as the total-seed guard and bumps in
-lockstep; +R3 the self-host lane given the explicit kind-1/kind-2 split) → this v4.
-Do not execute until a clean pass. NOTE for reviewers: `src/semantic/safety/check_expr.rs`
+lockstep; +R3 the self-host lane given the explicit kind-1/kind-2 split) → v4.
+Pass 4 (all body sections verified consistent; ONE HIGH: gate 2 was the FIFTH enumeration
+site of the arm-type split and still carried all three overturned claims — now synced:
+T-variant RUN added [the SIGSEGV pin], capture-then-match relabeled to the capture POS pin,
+the "no marked-match RUN by construction" clause deleted; +the T-variant ACCEPT added to
+gate 8's conformance set; +path minor) → this v5. Do not execute until a clean pass. NOTE for reviewers: `src/semantic/safety/check_expr.rs`
 gains an additive `Propagate` arm — RV-B's zone; the sequencing STOP covers it.
 **Normative semantics:** `decisions.md` LOG — the D29 formal ratification + its six
 follow-through pins + the **2026-07-17 CAPTURE AMENDMENT** (read all of them FIRST; where
@@ -183,11 +187,12 @@ DRIVER tests pin the lane (reject-bare + accept-marked + capture cases through t
 chunk >10min by test name; NEVER background a final gate)
 1. `cargo build` + `cargo test --lib` + the full parser suite.
 2. The disposition matrix (both backends): RUN tests — prop / catch / rethrow /
-   unmarked-capture / **capture-then-match (`Result r = f(); match r:` — the real SIGSEGV
-   coverage)** / nested `g(f()!)!` / `a()!=b` / the kind-2 variants; NEG tests —
-   mark+capture-error / bare-discard-error / **kind-1 `match f()!:` with Ok/Error arms
-   (CHECK ERROR per the amendment — the pass-2-corrected gate; no marked-match RUN test
-   exists anymore by construction)**.
+   unmarked-capture / **`match f()!:` with T-VARIANT arms (snag48's class — THE Finding-5
+   SIGSEGV site's RUN pin)** / capture-then-match (`Result r = f(); match r:` — the capture
+   POS pin; it has NO Propagate node, so it does NOT cover the SIGSEGV site) / nested
+   `g(f()!)!` / `a()!=b` / the kind-2 variants; NEG tests — mark+capture-error /
+   bare-discard-error / **kind-1 `match f()!:` with Ok/Error arms (CHECK ERROR per the
+   amendment)**.
 3. The migrated corpus: full C sweep is the PARENT's; you run the migrated-fixture filter
    (every touched fixture builds + runs stdout-identical) on C AND LLVM.
 4. `cargo test -p ggdef` full suite.
@@ -200,7 +205,8 @@ chunk >10min by test name; NEVER background a final gate)
 8. **Four-lane conformance (pass-1 R4, pass-2-R3-corrected — D29 changes accept/reject on
    every lane):** new `spec_conformance` fixtures for the flips (at minimum:
    unmarked-throws-call reject; unmarked-capture accept; mark+capture reject;
-   kind-1-marked-match reject; bare-discard reject both kinds). **Floor handling SPLITS by
+   kind-1-marked-match-Ok/Error reject; **T-variant marked-match ACCEPT (the legal case —
+   pins the split on every lane)**; bare-discard reject both kinds). **Floor handling SPLITS by
    fixture kind:** ACCEPT fixtures bump C/LLVM/SELFHOST (run-MATCH, all three); REJECT
    fixtures bump C/LLVM/SELFHOST via the `error[E_]` marker mechanism
    (`tests/spec_conformance.rs:~88-92,~367-389`), but on the GGDEF lane a reject counts
