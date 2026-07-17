@@ -1,18 +1,22 @@
 # EXECUTOR BRIEF — RV-B: DotShorthand enum-init consume position (both lanes)
 
-**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet. Pass 1 (all premises confirmed
-by reproduction incl. the compile-error safety property [CallArg vs SpannedExpr nominal];
-extraction verified byte-faithful; is_constructor=true verified for all resolutions; 12-site
-set verified complete; 85/86 baselines verified FRESH; 4 reservations: +2 matrix fixtures
-[the `!`-then-use NEG — the second Rust bug was unpinned — and the bare-String POS pinning
-dot-shorthand==longhand]; TODO:264 narrowed to EStructLiteral-only; the `#[ignore]` runtime
-test asserts intended output; queue-order vs landing-order reconciled + the 6-hunks/7-arms
-no-op wording) ALL FOLDED into this v2. Do not execute until a clean pass.
+**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 1 (all premises confirmed
+by reproduction incl. the compile-error safety property; extraction byte-faithful;
+is_constructor sound; 12-site set complete; 85/86 baselines fresh; 4 reservations folded:
++2 matrix fixtures, TODO:264 narrowing, `#[ignore]` intended-output, sequencing wording) →
+v2. Pass 2 (independent re-derivation clean on all premises; 2 fold-defects: the two
+pass-1-added fixture rows were never AUTHORED and the header claimed false provenance —
+now marked EXECUTOR-AUTHORED with expected-output specs and a VERIFY-FIRST self-host UAM
+instruction [the rejects_d12 grep would never match a UAM message]; the arm enumeration
+omitted the REAL `lower.gg:1310` hunk while implying the no-op was lower.gg's only arm —
+corrected) FOLDED into this v3. Do not execute until a clean pass.
 **⚠ SEQUENCING GATE:** the self-host half changes the `EDotShorthand` AST shape
 (`Vector[SpannedExpr]` → `Vector[CallArg]`), which requires **6 mechanical hunks across 7
-lowerer case-arms** (`lower_expr.gg`, `lower_closures.gg` ×3, `lower_generics.gg`, plus one —
-the `lower.gg:~596` arm binds `_,_` and is a DELIBERATE no-op: it will correctly NOT produce
-a compile error; do not be thrown by it during the error-chase). The Root-A iterator-receiver
+lowerer case-arms**. The SIX hunked arms (pass-2-corrected enumeration): `lower_expr.gg`,
+`lower.gg:~1310` (`mutinf_scan_expr` — a REAL hunk, `.value` access), `lower_closures.gg`
+×3, `lower_generics.gg`. The SEVENTH arm, `lower.gg:~596` (the node-name debug helper),
+binds `_,_` and is a DELIBERATE no-op — it alone will correctly NOT produce a compile
+error during the error-chase; every other lowerer arm WILL. The Root-A iterator-receiver
 track is landing in those files first. **This executor launches only after Root-A has landed
 on gorget-1 (or its track is killed), and REBASES the prototype on that state.** (NOTE the
 handover queue lists RV-B before Root-A — that is PRIORITY order, not landing order; this
@@ -52,15 +56,16 @@ check, on both lanes (Core #4 — fix the class at one shared site):
   `resolve.gg`, `format.gg` + the 7 lowerer arms. The mini-drivers
   (`self_host_parser`/`self_host_resolver`) keep their own `ast.gg` UNTOUCHED.
 
-## Fixtures (from `/tmp/rvb_fixtures/`, into `tests/fixtures/d12_drop_purity/`; all
-scout-verified both lanes)
+## Fixtures (into `tests/fixtures/d12_drop_purity/`. PROVENANCE: rows 1/2/5 exist at
+`/tmp/rvb_fixtures/` and are scout-verified both lanes; **rows 3/4 are EXECUTOR-AUTHORED**
+— added by review pass 1, they exist nowhere yet)
 
 | Fixture | Wiring | Expected |
 |---|---|---|
 | `dotshorthand_tainted_bare_reject.gg` | `check_gg_fails(…, E_MoveWithoutOperator)` + add to `self_host_driver_rejects_d12_drop_purity` | reject, both compilers, same code |
 | `dotshorthand_move_ok.gg` | `run_gg(…, "built\ndrop 1")` + add to `self_host_driver_accepts_d12_legal` | single drop; ASan clean (pins the double-drop) |
-| `dotshorthand_move_then_use_reject.gg` (pass-1 R1) | `check_gg_fails(…, "error[E_UseAfterMove]")` + self-host driver reject test | `.Wrap(!r); use r` rejects — pins the SECOND Rust bug (the ignored `!` → missed move); nothing else guards it |
-| `dotshorthand_bare_value_ok.gg` (pass-1 R1) | `run_gg` POS, String payload | legal bare non-resource `.Wrap(s)` ACCEPTS and runs — pins the whole "dot-shorthand == longhand" property against future over-tightening |
+| `dotshorthand_move_then_use_reject.gg` (EXECUTOR-AUTHORED, pass-1 R1) | Rust: `check_gg_fails(…, "error[E_UseAfterMove]")` — verify the exact code the longhand emits FIRST and use that. Self-host: a DEDICATED reject test — do NOT add to `rejects_d12_drop_purity` (its assertion greps `"cannot copy"`; a self-host use-after-move emits `"use of \`r\` after it was moved"`, `typecheck.gg:~1342` DkUseAfterMove). **VERIFY-FIRST:** the self-host behavior on `.Wrap(!r); use r` post-fix is UNMEASURED (the scout's 5 self-host cases didn't include it) — measure it; if the self-host does not yet reject this shape, scope the fixture's self-host half to a REPORT + filed gap, never a silently-weakened assertion | `.Wrap(!r); use r` rejects — pins the SECOND Rust bug (the ignored `!` → missed move); nothing else guards it |
+| `dotshorthand_bare_value_ok.gg` (EXECUTOR-AUTHORED, pass-1 R1) | `run_gg` POS: enum `E: Wrap(String)`, `String s = "hi"`, `E e = .Wrap(s)`, then `print(s)` (source still live — CoW clones) and a match printing the payload; expected stdout `hi` then `hi` (derive precisely from the CLAUDE.md ownership table when authoring; both backends) | legal bare non-resource `.Wrap(s)` ACCEPTS and runs — pins the "dot-shorthand == longhand" property against future over-tightening |
 | `dotshorthand_callable_move_ok.gg` | `check_gg_ok` (both lanes accept) **+ a `run_gg(…, "built")` runtime test wired `#[ignore]` citing the filed callable-enum-payload lowering-panic TODO** — the ignored test asserts the INTENDED runtime behavior per don't-redesign-around-gaps; un-ignore when that gap lands | check-accept all lanes; intended runtime pinned |
 
 ggdef lane: value-position dot-shorthand is OUT of the ggdef subset (`expr_kind` catch-all;
