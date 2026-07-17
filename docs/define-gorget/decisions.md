@@ -316,6 +316,19 @@ P1-infra reviewers' recommendation.
   flip converts today's write-through into silent clone→double-drop for tainted receivers).
   Unblocks CoW WAVE 2 (2T→2E leads; wave 2 opens as its own focused round after the D29
   chain integrates + the repo-hygiene slice).
+  **LANDED 2026-07-17 (wave-2 landing 1), all four lanes.** Rust safety (decoupled
+  `reject_tainted_materialize_on_write` at assign/compound/receiver + the shared
+  `reject_tainted_formation_arg` for the `&`-of-value FORMATION position), ggdef
+  (`call_arg_source` formation reject), self-host (`reject_if_tainted_materialize_root`
+  self-root-aware core + `is_mutating_builtin_method` receiver gate). A `write_through_available`
+  discriminator on `E_MoveWithoutOperator` leads with the `&self`/`&<param>` write-through
+  remedy at materialize sites only. Fixtures `cow_taint_self_field_write` / `_self_builtin` /
+  `_underscore_param` / `_pop_value_pos` / `_compound_projected` / `_formation_self` /
+  `_formation_param` / `_whole_amp_param` / `_whole_amp_self`. **Scope-widening Core-#8 catch:
+  whole `&p` on a tainted bare param (`void poke(FH p): reader(&p)`) MEASURED a double-close of
+  the same fd on BOTH production and ggdef pre-fix — the formation gate now covers whole `&p`/`&self`,
+  not just projections.** Guards: `tests/lints.rs::tainted_reject_never_reads_lint_state` +
+  `::tainted_formation_arg_gate_sites`.
 
 - 2026-07-17 — **🎯 D29 CAPTURE AMENDMENT RATIFIED (owner; supersedes the catch-attachment
   pin's "Result destination is a disposition; still requires `!`" clause — that clause ONLY).**
@@ -533,6 +546,13 @@ P1-infra reviewers' recommendation.
   LANDING as 2E's behavior flip (the warning must not lag the flip), promoted to `E_` after
   corpus burn-down (Core-#6 ratchet). Enforcement: the CoW campaign Track 2E carries it as a
   mandate; registry row + prose land with it (all lanes per invariant #9; ggdef within subset).
+  **LANDED 2026-07-17 (wave-2 landing 1) as an on-by-default `W_` (production-only surface).**
+  `self` seeded into the dead-write tracking set (Copy-exclusion skipped — self is always
+  pointer-passed, so it materialises); the scratch-copy idiom stays legal via read hooks on the
+  Identifier, f-string interpolation, AND SelfExpr read paths. Fixtures `deadwrite_warn_self`
+  (fires, `&self` flavor), `cow_self_scratch_read` + `cow_self_scratch_fstring` (silent). Corpus is
+  at 1 true-positive post-migration (`generic_equip_method` → `&self`), so the `E_` promotion is
+  filed as a follow-up (owner's call on whether `W_` rides one full round first).
 - 2026-07-16 (later) — **STAGING RULING (owner): wrapper deref access REJECTS until implemented.**
   `Box[T].field` / wrapper method auto-deref (§9.4 deref coercion) is UNIMPLEMENTED end-to-end
   (field read returns 0; method deref cc-fails — RV-A scout measured). The earlier staged

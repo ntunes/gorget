@@ -174,7 +174,7 @@ and is cited concretely.
 | `W_UncheckedUnwrap` | `UncheckedUnwrap` | — |
 | `W_CouldBeConst` | `CouldBeConst` | — |
 | `W_NeedlessMutableBorrow` | `NeedlessMutableBorrow` | — |
-| `W_DeadBareParamWrite` | `DeadBareParamWrite` | — |
+| `W_DeadBareParamWrite` | `DeadBareParamWrite` | [`11`](../../docs/devbook/11-copy-on-write.md) — D2-rider; extended to plain `self` 2026-07-17. Promotes to a reserved `E_DeadBareParamWrite` after corpus burn-down (Core-#6 ratchet). |
 | `W_CowBorrowMutation` | `CowBorrowMutation` | — |
 | `W_SuggestThrowsRefactor` | `SuggestThrowsRefactor` | — |
 

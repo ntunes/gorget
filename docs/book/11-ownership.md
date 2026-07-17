@@ -448,6 +448,26 @@ void main():
     print(world[0].label)            # "start" — the caller sees it
 ```
 
+**A method's `self` is just the first parameter, and the same split
+applies.** Plain `self` is a read-only borrow: a write through it
+materializes a private copy and the caller's object is untouched — perfect
+for a read-only method, or one that scratches a private copy. When a method
+is *meant* to change the receiver, declare it `&self`:
+
+```gorget
+equip Counter:
+    void bump(self):        # plain self — read-only borrow
+        self.n = self.n + 1  # writes a private copy; the caller's Counter is unchanged
+    void bump_through(&self):   # &self — write-through
+        self.n = self.n + 1  # the caller sees the increment
+```
+
+Because a write to plain `self` that the method never reads back is almost
+always a mistake (you meant to change the caller), the compiler warns:
+*"this writes to a private copy that is never read — the caller's value is
+unchanged; did you mean `&self`?"*. The fix is usually a one-character edit:
+`self` → `&self`.
+
 The same split shows up in `for` loops. `for x in coll` borrows each
 element read-only, so mutating `x` copies-on-write and the collection is
 left intact; `for x in &coll` asks for write access, so the mutation

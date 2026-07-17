@@ -2445,6 +2445,26 @@ the same; only the cost differs.)
 12. **Borrowed-extern return** — the result of an `extern borrowed T f(...)` call (the FFI returned a non-owning alias, cloned so the caller's slot survives later FFI mutations)
 13. **Comprehension into an owned collection** — a comprehension whose elements are collected into an owned collection
 
+**Materialize-on-write and drop-tainted values.** The *materialize-on-write*
+positions — a write to a bare/borrowed binding that privatizes a copy: a
+field/index store (`s.field = x`, `s[i] = x`), a compound-assign, a mutating
+method on a borrowed receiver, and the `&`-of-value **formation** of a call arg
+(`f(&s.field)`, `f(&s)`) — are implicit-copy positions like any other. For a
+**drop-tainted** type (one with a custom `Drop` anywhere in its field graph) a
+silent copy here would run the destructor twice (the double-close class), so
+these positions **reject** with `E_MoveWithoutOperator`: write `&self`/`&<param>`
+to write through, or an explicit `!` / `.clone()`. Plain **value** types keep the
+silent materialize (the intended CoW semantics).
+
+**Plain `self` is a bare binding.** A method's plain `self` (not `&self`) follows
+the same rule as any bare parameter: a write through it materializes a private
+copy and the caller is untouched; `&self` is the write-through opt-in. A write to
+plain `self` (or any bare parameter) whose private copy is **never subsequently
+read** is almost always a mistake — the caller sees no change — so the compiler
+warns: *"this writes to a private copy that is never read — the caller's value is
+unchanged; did you mean `&self`?"*. The scratch-copy idiom (mutate a private copy,
+then read it) stays silent and legal.
+
 These boundaries are enforced by `validate_consume_sites`
 (`src/ir/validate.rs`) via `ConsumeSiteClass`, and each implicit clone is
 emitted tagged with an `ImplicitCloneReason` (`src/ir/mod.rs`) — those enums
