@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF — D29 implementation: call-site `!` (visible error propagation), all lanes
 
-**Status:** DRAFT v5 — in the ≥3-fresh-pass review gauntlet. Gauntlet history:
+**Status:** ✅ v5 GAUNTLET-CLEAN (see history tail) — in the ≥3-fresh-pass review gauntlet. Gauntlet history:
 pass 1 (semantics faithful; capture machinery located — kind-1 capture EXISTS via
 `decl_type_hint`/`dest_is_result`; 2 HIGH: checker/gates predated the amendment → kind-2
 rewritten to bare-DISCARD-only + the three keep-the-Result sites' re-scoping + gates
@@ -17,7 +17,13 @@ Pass 4 (all body sections verified consistent; ONE HIGH: gate 2 was the FIFTH en
 site of the arm-type split and still carried all three overturned claims — now synced:
 T-variant RUN added [the SIGSEGV pin], capture-then-match relabeled to the capture POS pin,
 the "no marked-match RUN by construction" clause deleted; +the T-variant ACCEPT added to
-gate 8's conformance set; +path minor) → this v5. Do not execute until a clean pass. NOTE for reviewers: `src/semantic/safety/check_expr.rs`
+gate 8's conformance set) → v5. Pass 5 (SIGN OFF — all seven enumeration sites of the
+arm-type split verified identical; every load-bearing anchor re-resolved; one phantom
+'+path minor' breadcrumb in the v5 header caught [a silent no-op replace — the
+fold-edits-must-assert hazard] and fixed in place with the citation expanded per the
+reviewer's explicit non-blocking clearance; NOTE: pass 5's 'RV-B already in base' remark
+was WRONG — cross-checked, 8d5f6294 is NOT on gorget-1; the Zones STOP holds).
+✅ GAUNTLET-CLEAN — EXECUTOR PENDING the RV-B integration (the Zones sequencing STOP). NOTE for reviewers: `src/semantic/safety/check_expr.rs`
 gains an additive `Propagate` arm — RV-B's zone; the sequencing STOP covers it.
 **Normative semantics:** `decisions.md` LOG — the D29 formal ratification + its six
 follow-through pins + the **2026-07-17 CAPTURE AMENDMENT** (read all of them FIRST; where
@@ -212,7 +218,7 @@ chunk >10min by test name; NEVER background a final gate)
    (`tests/spec_conformance.rs:~88-92,~367-389`), but on the GGDEF lane a reject counts
    MATCH only if plumbed as a typed `Outcome::IllFormed` + `reject_code` — a generic
    FrontendError records GGDEF-SKIP (the E_BorrowConflict precedent,
-   `spec_conformance_ggdef.rs:~58-60`); prefer the typed plumbing, else a documented SKIP.
+   `spec/ggdef/tests/spec_conformance_ggdef.rs:~58-60`); prefer the typed plumbing, else a documented SKIP.
    The GGDEF floor is a SEPARATE constant/value from the C/LLVM/SELFHOST 214s. There is no
    5th MATCH-floor lane, **but `MIN_FIXTURES = 214` EXISTS** (`tests/spec_conformance.rs:~152`,
    the total-seed-count guard documented to EQUAL the three MATCH floors) — every new seed
