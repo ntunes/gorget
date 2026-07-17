@@ -2375,8 +2375,6 @@ fn lower_field_access(
     Operand::Constant(Constant::Unit)
 }
 
-/// Extract a dot-separated field path string from a field-access expression.
-/// Returns `Some("self.data")` for `FieldAccess { SelfExpr, "data" }`,
 /// Auto-deref a Ptr-typed non-string iterable to a value borrow, mirroring the
 /// legacy collection deref that both the statement-for loop and the list
 /// comprehension need. When the lowered iterable is `Ptr(Coll)` (a `&coll`
@@ -2422,8 +2420,6 @@ pub(in crate::ir::lowering) fn deref_ptr_collection_iterable(
     }
 }
 
-/// `Some("game.entities")` for `FieldAccess { Identifier("game"), "entities" }`,
-/// `Some("self.game.entities")` for nested chains.
 /// G1 PROTOTYPE (r33 materialize scout): walk a projection chain
 /// (`v[i]`, `v.f`, `v[i].f[j]`) to its base identifier and return that
 /// local. Returns None when the base is not a simple named local (a call
@@ -2460,6 +2456,10 @@ pub(super) fn expr_projection_contains_index(expr: &Expr) -> bool {
     }
 }
 
+/// Extract a dot-separated field path string from a field-access expression.
+/// Returns `Some("self.data")` for `FieldAccess { SelfExpr, "data" }`,
+/// `Some("game.entities")` for `FieldAccess { Identifier("game"), "entities" }`,
+/// `Some("self.game.entities")` for nested chains.
 pub(super) fn extract_field_path_string(expr: &Expr) -> Option<String> {
     match expr {
         Expr::FieldAccess { object, field } => {

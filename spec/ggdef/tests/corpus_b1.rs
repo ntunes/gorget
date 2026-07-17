@@ -62,6 +62,10 @@ const EXCLUDE: &[&str] = &[
     "cow_for_amp_vector_alias_root.gg",
     "cow_for_amp_resource_elem_writethrough.gg",
     "cow_for_enumerate_bare_resource_materialize.gg",
+    // 1A remediation: enumerate-over-`&` write-through — the same enumerate
+    // 2-tuple pattern is out of the phase-0 subset (`binding_name`,
+    // elaborate/mod.rs:~969); expected output (`101`) is §3.1-prose-derived.
+    "cow_for_enumerate_amp_writethrough.gg",
     "cow_comprehension_amp_source.gg",
 ];
 

@@ -26,7 +26,7 @@ from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_M
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for, is_guard_struct_type, guard_method_prefix, is_opaque_pointer_type
-from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types, resolve_elem_type_id
+from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types, resolve_elem_type_id, for_iterable_mode
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains

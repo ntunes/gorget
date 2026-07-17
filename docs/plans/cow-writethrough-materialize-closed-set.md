@@ -41,11 +41,18 @@
 > Self-host: shared `for_iterable_mode` feeds `lower_for` AND `lower_list_comprehension`;
 > `lower_for_vector` gained the write-through Ptr element. 7 cross-lane fixtures (C 7/7, LLVM 7/7,
 > self-host 7/7, ASan clean); ggdef corpus_b1 (107) + corpus_b (120) green — 5 out-of-subset
-> EXCLUDE rows + 2 bare fixtures MATCH (3-lane agreement). **DEFERRED write facets** (both a
-> NO-OP today, never silently wrong; filed TODO): comprehension element WRITE-THROUGH
-> (`[f(x) for x in &v]` mutating `x.field`) and enumerate-over-`&` write-through. **ggdef subset
-> gaps** (both gates): `for &` iteration (elaborate/mod.rs:967 "Increment B2"), enumerate 2-tuple
-> pattern (:969 `binding_name`), comprehension expression (no `elaborate_expr` arm).
+> EXCLUDE rows + 2 bare fixtures MATCH (3-lane agreement).
+> **1A REMEDIATION (2026-07-17, from the Fable output-review):** the original landing had
+> silently FLIPPED enumerate-over-`&` AWAY from §3.1 (merge-base printed `101` via the A2-twin
+> accident; the landing printed `1` and mislabeled the facet "a no-op deferral"). Enumerate-
+> over-`&` write-through is now IMPLEMENTED both lanes through the same shared mode-driven
+> element binding (+ the enumerate-path alias-root sever on Rust), pinned by
+> `cow_for_enumerate_amp_writethrough.gg` (`101`; ggdef EXCLUDE — enumerate patterns out of
+> subset). **The ONE remaining deferred facet** (a real behavioral deferral, filed TODO):
+> comprehension element WRITE-THROUGH (`[f(x) for x in &v]` mutating `x.field` lands on a
+> private copy, not the collection). **ggdef subset gaps** (both gates): `for &` iteration
+> (elaborate/mod.rs:967 "Increment B2"), enumerate 2-tuple pattern (:969 `binding_name`),
+> comprehension expression (no `elaborate_expr` arm).
 > **FINDING:** `Deque` is not constructible in surface Gorget (absent from `resolve.rs`
 > `BUILTIN_GENERIC_TYPES`; `language-design.md:3381` = VecDeque "Not yet implemented"), so the
 > brief's Deque probe was infeasible and dropped — the fix is `CollectionKind::Array`-generic, so

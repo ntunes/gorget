@@ -137,9 +137,9 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # a wrapper iterator). The probe is purely speculative; we commit to
     # the strip only after type-checking `recv`.
     # Track 1A: strip a `for x in &coll` write-through wrapper (shared helper),
-    # then detect `.enumerate()` on the STRIPPED iterable. Enumerate-over-`&`
-    # write-through is deferred — `lower_for_vector` gates write_through on
-    # `!is_enumerate`, so `&a.enumerate()` falls back to materialize-on-write.
+    # then detect `.enumerate()` on the STRIPPED iterable. `&a.enumerate()`
+    # threads write_through into `lower_for_vector`'s enumerate arm — the
+    # element binds as the same write-through pointer as the plain `&` loop.
     bool for_write_through = false
     SpannedExpr wt_iter = for_iterable_mode(iter_expr, &for_write_through)
     SpannedExpr probe_coll = wt_iter
@@ -289,21 +289,33 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     # a borrow and any consume/mutation clones on demand (a-5), so the alias
     # is safe. The general `.get()` keeps the eager clone because its result
     # may be bound to a user local and mutated in place (get-mutate-set).
-    # Track 1A write-through (`for x in &coll`): bind the element as a raw
-    # POINTER INTO the collection buffer (gorget_array_get → GtPtr(elem),
-    # LoBorrowed, no drop reg — the 1B `v[i].field=` element-ptr shape) so a body
-    # `x.field = v` writes THROUGH to the collection instead of materializing a
-    # private copy. Struct/resource elements only (elem_tid >= PRIM_COUNT): a
-    # scalar element has no field to write through and `x = ...` is a rebind, not
-    # a through-write. Enumerate-over-`&` is deferred (gated `not is_enumerate`),
-    # falling to the materialize-on-write borrow-alias below. Bare `for x in coll`
-    # keeps the borrow-alias element (materialize-on-write via BoCollectionElement).
-    if write_through and not is_enumerate and elem_tid >= PRIM_COUNT:
+    # Track 1A write-through (`for x in &coll` / `for i, x in &coll.enumerate()`):
+    # bind the element as a raw POINTER INTO the collection buffer
+    # (gorget_array_get → GtPtr(elem), LoBorrowed, no drop reg — the 1B
+    # `v[i].field=` element-ptr shape) so a body `x.field = v` writes THROUGH to
+    # the collection instead of materializing a private copy. Struct/resource
+    # elements only (elem_tid >= PRIM_COUNT): a scalar element has no field to
+    # write through and `x = ...` is a rebind, not a through-write. The enumerate
+    # form binds the index (first tuple part) + the element ptr (second part) —
+    # same mode, same pointer. Bare `for x in coll` keeps the borrow-alias
+    # element (materialize-on-write via BoCollectionElement).
+    if write_through and elem_tid >= PRIM_COUNT:
         int wt_ptr_tid = register_ptr(&gmod, elem_tid)
         int wt_ptr = add_local_with(&ctx, wt_ptr_tid, None, LoBorrowed(), BoNone())
         Vector[Operand] wt_get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
         emit(&ctx, GICallExtern(wt_ptr, "gorget_array_get", wt_get_args))
-        bind_for_local(&ctx, pat, wt_ptr, wt_ptr_tid, &gmod)
+        if is_enumerate:
+            match pat.pat:
+                case PTuple(wt_parts):
+                    if wt_parts.len() == 2:
+                        bind_for_local(&ctx, wt_parts.get(0).unwrap(), idx_local, I64_TYPE, &gmod)
+                        bind_for_local(&ctx, wt_parts.get(1).unwrap(), wt_ptr, wt_ptr_tid, &gmod)
+                    else:
+                        lower_fail("SFor enumerate: expected 2-tuple pattern, got " + int_to_str(wt_parts.len()) + " parts")
+                else:
+                    lower_fail("SFor enumerate: expected tuple pattern")
+        else:
+            bind_for_local(&ctx, pat, wt_ptr, wt_ptr_tid, &gmod)
     else:
         int got_local = add_local_with(&ctx, opt_tid, None, LoBorrowed(), BoCollectionElement(coll_local))
         Vector[Operand] get_args = [OpBorrow(coll_local), OpCopy(idx_local)]

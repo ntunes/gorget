@@ -1,0 +1,19 @@
+# CoW Track 1A (remediation) — `.enumerate()` over `&coll` writes through.
+#
+# `for i, x in &a.enumerate():` binds the element as a WRITE-THROUGH place —
+# §3.1: an unbroken `&` chain writes through to the real owner — exactly like
+# the plain `for x in &a:` loop (the shared mode-driven element binding covers
+# the enumerate form; the index binds alongside the element pointer). Pins the
+# cell the original 1A landing left on materialize (`1`); the intended output
+# is `101` (the merge-base's accidental `101` came from the A2-twin bug — same
+# digits, wrong mechanism).
+# Output must be correct on BOTH backends.
+
+struct Cell:
+    int v
+
+void main():
+    Vector[Cell] a = [Cell(1)]
+    for i, x in &a.enumerate():
+        x.v = x.v + 100 + i
+    print(a.get(0).unwrap().v)

@@ -28662,6 +28662,15 @@ fn cow_for_enumerate_bare_resource_materialize() {
     run_gg("cow_for_enumerate_bare_resource_materialize.gg", "1");
 }
 
+/// CoW Track 1A (remediation) — `.enumerate()` over `&coll` WRITES THROUGH
+/// (`101`): §3.1's unbroken-`&`-chain rule, via the same shared mode-driven
+/// element binding as the plain `for x in &a` loop (the index binds alongside
+/// the element pointer).
+#[test]
+fn cow_for_enumerate_amp_writethrough() {
+    run_gg("cow_for_enumerate_amp_writethrough.gg", "101");
+}
+
 /// CoW Track 1A — `[x * 2 for x in &a]` reads correctly (yields-empty fix). The
 /// comprehension lowered `&a` to a Ptr but never deref'd it → the len-read hit
 /// garbage → an EMPTY result. The shared iterable-deref (also used by the

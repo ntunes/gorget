@@ -60,9 +60,11 @@ const EXCLUDE: &[&str] = &[
     "cow_for_amp_vector_field_writethrough.gg",
     "cow_for_amp_vector_alias_root.gg",
     "cow_for_amp_resource_elem_writethrough.gg",
-    //   - bare `.enumerate()`: `desugar_for`'s `binding_name(pattern)?`
-    //     (elaborate/mod.rs:969) rejects the enumerate 2-tuple pattern.
+    //   - `.enumerate()` (bare AND `&`): `desugar_for`'s `binding_name(pattern)?`
+    //     (elaborate/mod.rs:969) rejects the enumerate 2-tuple pattern. The `&`
+    //     row's expected output (`101`) is §3.1-prose-derived (1A remediation).
     "cow_for_enumerate_bare_resource_materialize.gg",
+    "cow_for_enumerate_amp_writethrough.gg",
     //   - list comprehension: `elaborate_expr` has no comprehension arm, so the
     //     `[x*2 for x in &a]` expression is "outside the phase-0 subset".
     "cow_comprehension_amp_source.gg",

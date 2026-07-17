@@ -131,12 +131,34 @@ pub(super) fn lower_for(
         }
     }
 
-    // Detect `for (i, elem) in collection.enumerate():` and lower as index-tracked loop
+    // Detect `for (i, elem) in collection.enumerate():` and lower as index-tracked loop.
+    // Track 1A remediation: the `&` write-through mode applies to enumerate too —
+    // `for i, x in &a.enumerate():` carries the `&` in the statement's ownership
+    // field (or, parenthesized, as `Expr::MutableBorrow` around the call / the
+    // receiver). Strip every shape and thread `write_through` so the element
+    // binds as a write-through place (§3.1: an unbroken `&` chain writes through).
     if let Pattern::Tuple(parts) = &pattern.node {
         if parts.len() == 2 {
-            if let Expr::MethodCall { receiver, method, args: call_args, .. } = &iterable.node {
+            let (en_wt_stmt, en_iterable): (bool, &Spanned<Expr>) =
+                match (&ownership, &iterable.node) {
+                    (Ownership::MutableBorrow, Expr::MutableBorrow { expr }) => (true, expr),
+                    (Ownership::MutableBorrow, _) => (true, iterable),
+                    (_, Expr::MutableBorrow { expr }) => (true, expr),
+                    _ => (false, iterable),
+                };
+            if let Expr::MethodCall { receiver, method, args: call_args, .. } = &en_iterable.node {
                 if method.node == "enumerate" && call_args.is_empty() {
-                    lower_for_enumerate(ctx, builder, parts, receiver, body, else_arm);
+                    // `(&a).enumerate()`: the `&` lands on the RECEIVER instead.
+                    let (en_wt_recv, receiver): (bool, &Spanned<Expr>) =
+                        if let Expr::MutableBorrow { expr } = &receiver.node {
+                            (true, expr)
+                        } else {
+                            (false, receiver)
+                        };
+                    lower_for_enumerate(
+                        ctx, builder, parts, receiver, body, else_arm,
+                        en_wt_stmt || en_wt_recv,
+                    );
                     return;
                 }
             }
@@ -631,6 +653,9 @@ fn lower_for_array(
 
 /// Lower `for (i, elem) in collection.enumerate(): body` — iterate with index tracking.
 /// Instead of materializing an enumerate array, we emit a regular for-loop with a counter.
+/// `write_through` (Track 1A): true for `for i, x in &coll.enumerate()` — the element
+/// binds as a write-through place, exactly like the plain `for x in &coll` loop
+/// (the caller has already stripped the `&` off the receiver / statement ownership).
 fn lower_for_enumerate(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -638,7 +663,22 @@ fn lower_for_enumerate(
     receiver: &Spanned<Expr>,
     body: &Block,
     else_arm: Option<&Block>,
+    write_through: bool,
 ) {
+    // Alias-root SEVER — the enumerate sibling of the `lower_for` entry sever: a
+    // write-through enumerate loop over a lazy borrow-alias root (`b = a;
+    // for i, c in &b.enumerate():`) must materialize the root ONCE before the
+    // loop (`cow_before_mutation` Case 1) so through-writes land in b's PRIVATE
+    // buffer; a no-op on an owned root. Before the receiver is lowered and
+    // before `save_locals`, so the rebind survives.
+    if write_through {
+        if let Expr::Identifier(root_name) = &receiver.node {
+            if let Some((root_local, _)) = ctx.lookup_local(root_name) {
+                ctx.cow_before_mutation(builder, root_local, receiver.span);
+            }
+        }
+    }
+
     // Lower the receiver collection
     let mut iter_op = lower_expr(ctx, builder, receiver);
     let raw_iter_type = infer_operand_type_full(ctx, &iter_op, builder);
@@ -729,18 +769,18 @@ fn lower_for_enumerate(
     let elem_type = super::super::exprs::infer_collection_element_type(ctx, iter_type);
 
     // Track 1A enumerate twin: bind the element via the SHARED mode-driven
-    // helper (Core #4 — one binding path, never two drifting copies). Enumerate
-    // over `&coll` write-through is DEFERRED, so `write_through=false` here: a
-    // bare `for i, x in v.enumerate()` over a RESOURCE struct/enum element binds
-    // materialize-on-write (a body `x.f = v` clones a private copy; the
-    // collection is untouched — §3.1), fixing the A2 enumerate twin. Read-only
-    // scans (the dominant `m.structs.enumerate()` self-host consumers) still pay
-    // zero per-iter clone. Value structs / strings / non-bindings fall through.
+    // helper (Core #4 — one binding path, never two drifting copies), same as
+    // the plain for-loop: `&coll.enumerate()` → write-through place; bare
+    // `v.enumerate()` over a RESOURCE struct/enum element → materialize-on-write
+    // (a body `x.f = v` clones a private copy; the collection is untouched —
+    // §3.1, the A2 enumerate-twin fix). Read-only scans (the dominant
+    // `m.structs.enumerate()` self-host consumers) still pay zero per-iter
+    // clone. Bare value structs / strings / non-bindings fall through.
     let elem_binding_name = if let Pattern::Binding(n) = &parts[1].node { n.as_str() } else { "" };
     let elem_is_binding = matches!(parts[1].node, Pattern::Binding(_));
     if elem_is_binding && bind_for_vector_element(
         ctx, builder, elem_binding_name, elem_is_binding, iter_local, idx, elem_type,
-        /*write_through=*/ false, iter_source_coll.clone(),
+        write_through, iter_source_coll.clone(),
     ).is_some() {
         lower_block(ctx, builder, body);
 

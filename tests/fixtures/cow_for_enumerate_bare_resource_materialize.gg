@@ -3,8 +3,8 @@
 # The enumerate twin of gap A2: `for i, x in a.enumerate():` over a bare resource
 # element wrongly wrote through on Rust gg (`101`). Enumerate shares the mode-
 # driven element binding with the plain for-loop, so the bare resource element
-# materializes on write → the collection stays `1`. (Enumerate-over-`&`
-# write-through is deferred.)
+# materializes on write → the collection stays `1`. (The `&` counterpart —
+# `cow_for_enumerate_amp_writethrough.gg` — pins the write-through side.)
 # Output must be correct on BOTH backends.
 
 struct Rec:
