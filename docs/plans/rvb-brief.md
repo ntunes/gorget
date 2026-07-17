@@ -1,14 +1,26 @@
 # EXECUTOR BRIEF — RV-B: DotShorthand enum-init consume position (both lanes)
 
-**Status:** DRAFT — in the ≥3-fresh-pass review gauntlet. Do not execute until a clean pass.
+**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet. Pass 1 (all premises confirmed
+by reproduction incl. the compile-error safety property [CallArg vs SpannedExpr nominal];
+extraction verified byte-faithful; is_constructor=true verified for all resolutions; 12-site
+set verified complete; 85/86 baselines verified FRESH; 4 reservations: +2 matrix fixtures
+[the `!`-then-use NEG — the second Rust bug was unpinned — and the bare-String POS pinning
+dot-shorthand==longhand]; TODO:264 narrowed to EStructLiteral-only; the `#[ignore]` runtime
+test asserts intended output; queue-order vs landing-order reconciled + the 6-hunks/7-arms
+no-op wording) ALL FOLDED into this v2. Do not execute until a clean pass.
 **⚠ SEQUENCING GATE:** the self-host half changes the `EDotShorthand` AST shape
-(`Vector[SpannedExpr]` → `Vector[CallArg]`), which requires 7 mechanical arm updates in the
-LOWERER files (`lower_expr.gg`, `lower.gg`, `lower_closures.gg` ×3, `lower_generics.gg`).
-The Root-A iterator-receiver track is landing in those files first. **This executor launches
-only after Root-A has landed on gorget-1 (or its track is killed), and REBASES the prototype
-on that state.** If the patch no longer applies after Root-A, re-derive the mechanical arms
-by compiler-error-chasing (the shape change makes every stale site a compile error — that is
-the safety property of Option A) and STOP-AND-REPORT only if a site is non-mechanical.
+(`Vector[SpannedExpr]` → `Vector[CallArg]`), which requires **6 mechanical hunks across 7
+lowerer case-arms** (`lower_expr.gg`, `lower_closures.gg` ×3, `lower_generics.gg`, plus one —
+the `lower.gg:~596` arm binds `_,_` and is a DELIBERATE no-op: it will correctly NOT produce
+a compile error; do not be thrown by it during the error-chase). The Root-A iterator-receiver
+track is landing in those files first. **This executor launches only after Root-A has landed
+on gorget-1 (or its track is killed), and REBASES the prototype on that state.** (NOTE the
+handover queue lists RV-B before Root-A — that is PRIORITY order, not landing order; this
+gate governs landing order and the pass-1 review verified the rationale.) If the patch no
+longer applies after Root-A, re-derive the mechanical arms by compiler-error-chasing —
+pass 1 VERIFIED the safety property: `CallArg` and `SpannedExpr` are distinct nominal types,
+so every stale value-binding site fails to compile; no silent-pass risk — and
+STOP-AND-REPORT only if a site is non-mechanical.
 
 **Scout evidence (THE measured spec):** `docs/plans/rvb-scout.md` — GO, both lanes
 prototyped + measured. Prototype: `/tmp/rvb_proto.patch` (465 lines; live-diff variant
@@ -47,7 +59,9 @@ scout-verified both lanes)
 |---|---|---|
 | `dotshorthand_tainted_bare_reject.gg` | `check_gg_fails(…, E_MoveWithoutOperator)` + add to `self_host_driver_rejects_d12_drop_purity` | reject, both compilers, same code |
 | `dotshorthand_move_ok.gg` | `run_gg(…, "built\ndrop 1")` + add to `self_host_driver_accepts_d12_legal` | single drop; ASan clean (pins the double-drop) |
-| `dotshorthand_callable_move_ok.gg` | `check_gg_ok` + self-host accepts; RUNTIME `#[ignore]`-gated on the filed callable-enum-payload lowering panic (cite the TODO entry) | check-accept all lanes |
+| `dotshorthand_move_then_use_reject.gg` (pass-1 R1) | `check_gg_fails(…, "error[E_UseAfterMove]")` + self-host driver reject test | `.Wrap(!r); use r` rejects — pins the SECOND Rust bug (the ignored `!` → missed move); nothing else guards it |
+| `dotshorthand_bare_value_ok.gg` (pass-1 R1) | `run_gg` POS, String payload | legal bare non-resource `.Wrap(s)` ACCEPTS and runs — pins the whole "dot-shorthand == longhand" property against future over-tightening |
+| `dotshorthand_callable_move_ok.gg` | `check_gg_ok` (both lanes accept) **+ a `run_gg(…, "built")` runtime test wired `#[ignore]` citing the filed callable-enum-payload lowering-panic TODO** — the ignored test asserts the INTENDED runtime behavior per don't-redesign-around-gaps; un-ignore when that gap lands | check-accept all lanes; intended runtime pinned |
 
 ggdef lane: value-position dot-shorthand is OUT of the ggdef subset (`expr_kind` catch-all;
 ggdef handles DotShorthand PATTERNS only) — no ggdef edit; add the explicit subset-gap note
@@ -74,7 +88,11 @@ chunk >10min; NEVER background a final gate)
 - TODO: RV-B entry (~:243) retires to DONE (datestamped, with the double-drop precision
   wording); the LOW EDotShorthand-misfire entry (~:873) retires with a pointer to the
   callable fixture; the flip-track in-code misfire notes at the typecheck.gg arms are
-  updated to "resolved by RV-B" or removed (one coherent story per arm — no stale notes).
+  updated to "resolved by RV-B" or removed (one coherent story per arm — no stale notes);
+  **the MEDIUM "Extend CallArg to EStructLiteral/EDotShorthand" entry (~:264) is NARROWED to
+  EStructLiteral-only** (its "these two nodes still keep bare Vector[SpannedExpr]" and
+  "unconditional reject" claims become false for EDotShorthand after this landing — leaving
+  them is the false-historical-record class the breadcrumb check exists to catch).
 - The two ORTHOGONAL gaps the scout found stay filed (do NOT touch them).
 - Stage EXPLICITLY by file name (the 12 self-host sites + `src/semantic/safety/check_expr.rs`
   + fixtures + `tests/integration.rs` wiring + TODO/DONE — adjust to actual). Trailers:
