@@ -1,0 +1,17 @@
+# 2E/D2 closure boundary: a closure inside a plain-`self` method captures `self`
+# BY VALUE (D5) — a `self.field` write inside the closure body targets the
+# closure's OWN copy, not the method's `self`. The 2T/2E self-root gate must NOT
+# fire here (it is keyed on the method's self-mode, RESET on a closure-body walk).
+# The closure sees its incremented copy (6); the caller's Counter is unchanged (5).
+struct Counter:
+    int n
+equip Counter:
+    void run(self):
+        auto f = ():
+            self.n = self.n + 1
+            print(f"closure {self.n}")
+        f()
+void main():
+    Counter c = Counter(5)
+    c.run()
+    print(f"caller {c.n}")

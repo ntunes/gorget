@@ -29872,6 +29872,15 @@ fn cow_self_scratch_fstring() {
     run_gg("cow_self_scratch_fstring.gg", "now 6\ncaller 5");
 }
 
+/// 2E/D2 closure boundary: a closure inside a plain-`self` method captures self
+/// BY VALUE, so a `self.field` write in the closure targets the closure's own
+/// copy — the self-root gate must NOT fire (it is reset on a closure-body walk).
+/// Accepts + runs (closure sees 6, caller unchanged at 5).
+#[test]
+fn closure_self_capture_ok() {
+    run_gg("closure_self_capture_ok.gg", "closure 6\ncaller 5");
+}
+
 /// CoW G2 site 3 with a SIDE-EFFECTING index (`&arr[side()]`): the root
 /// materializes, but the index expression must be evaluated EXACTLY ONCE
 /// (materialize-before-single-lower, never lower→materialize→re-lower). "SIDE"
