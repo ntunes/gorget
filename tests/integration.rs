@@ -663,7 +663,7 @@ fn static_vec_literal() {
     // the fix they fell through to GlobalInit::Zeroed, silently dropping every
     // element (table_len=0). Covers a Vector[struct] static, a Dict[String,int]
     // static, and an empty Vector[int] static pushed to in main.
-    // See docs/plans/bugB_static_collection_init.md.
+    // See the static-collection-init writeup (git history).
     run_gg(
         "static_vec_literal.gg",
         "\
@@ -729,7 +729,7 @@ fn static_struct_resource_field() {
     // non-literal-arg struct ctor through the synthesized __gg_static_init_B().
     // Bug #1 (addressing): `B.items.push(7)` needs an addressable place at the
     // global. Asserts the pushed value (7) and .len() after a second push (2).
-    // See DONE.md (`743412da`/`6ac72607`) + docs/plans/bugB_static_collection_init.md.
+    // See DONE.md (`743412da`/`6ac72607`) + the static-collection-init writeup (git history).
     run_gg("static_struct_resource_field.gg", "first=7\nlen=2\nsecond=11");
 }
 
@@ -2142,7 +2142,7 @@ fn int_range() {
 // narrow to a `uint8` operand even when that operand is a Ref/Owned-wrapped integer (an inline
 // `Vector[uint8].get(i).unwrap()` chain), not only a bare `Primitive`. The fix (peel Ref/Owned
 // before the int-literal narrowing gate) landed in `b6f67cd9`; see
-// docs/plans/uint8_literal_narrow_ref_operand.md.
+// the uint8-literal-narrow-ref writeup (git history).
 #[test]
 fn narrow_int_literal_vs_ref_operand() {
     run_gg(
@@ -4081,7 +4081,7 @@ fn equip_on_primitive_scalar_variants() {
     );
 }
 
-// ── gorget-sheets snags (filed 2026-07-07) — see docs/plans/gorget-sheets-snag-report.md ──
+// ── gorget-sheets snags (filed 2026-07-07) — see the gorget-sheets snag report (git history) ──
 
 #[test]
 #[ignore = "gorget-sheets snag #53: nested struct field mutation through \
@@ -6326,7 +6326,7 @@ drop elem-b",
 //   P2 — a custom-Drop type WITH a droppable field had elem_drop wired to the
 //        user body `{T}__drop` instead of the composite `__gorget_dtor_{T}`
 //        ⇒ the field LEAKED (ASan-only; the `*_asan` gates below catch it).
-// Shared LIR ⇒ both C and LLVM backends. See docs/plans/elemdrop-fix-brief.md.
+// Shared LIR ⇒ both C and LLVM backends. See the elemdrop-fix brief (git history).
 
 #[test]
 fn drop_collection_custom_elem() {
@@ -19858,7 +19858,7 @@ fn self_host_driver_accepts_liveness() {
 // edges: each asserts the ratified `error[E_<code>]` headline, its message text,
 // the codespan box rule, and NO C on stdout (the gate halts BEFORE lowering).
 // Verified verdict-for-verdict against production `gg check` in the scout
-// (docs/plans/define-gorget/scouts/scout-rvd-safety-walk.md). Parity-neutral —
+// (the RV-D safety-walk scout (git history)). Parity-neutral —
 // every reject fixture is Rust-rejected, excluded from the parity denominator.
 #[test]
 #[serial(self_host_lowerer_driver)]
@@ -28127,7 +28127,7 @@ fn default_params_basic() {
 // P0 self-host default-arg fill proof. `f(5)` synthesizes the `b = 10`
 // default at the call site → 15; `f(5, 20)` → 25. Mirrors the Rust default
 // fill in `resolve_call_args`; the self-host now fills the trailing slot too
-// (see docs/plans/brief_expr_depth_limit_and_run_with_stack.md §P0).
+// (see the expr-depth-limit brief (git history) §P0).
 #[test]
 fn default_param_selfhost() {
     run_gg(
@@ -31663,7 +31663,7 @@ fn gorget_js_snag_7_view_through_struct_literal() {
 
 // ---------------------------------------------------------------------------
 // Bare-`None`-at-call-arg expected-type fixtures (self-host peel fix chain;
-// see docs/plans/none_peel_fix.patch).
+// see the none-peel-fix patch (git history)).
 // Sibling of `none_literal_at_call_arg` (Option[int] — primitive payload).
 // ---------------------------------------------------------------------------
 
@@ -31700,7 +31700,7 @@ fn none_literal_sigiled_arg() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Lazy loop-carried CoW materialization (#37 Phase 1,
-// docs/plans/brief_37_phase1_lazy_default.md; devbook/11 "Lazy loop-carried
+// the #37 phase-1 lazy-default brief (git history); devbook/11 "Lazy loop-carried
 // materialization"). A String bound from a CoW element borrow whose source
 // collection is mutated on a forward path binds as a cap=0 VIEW + pre-loop
 // flag; the deep clone is deferred to a flag-guarded in-place materialize at
@@ -32667,7 +32667,7 @@ fn stack_guard_runtime_deep_recursion() {
 
 // ───────────────────────────────────────────────────────────────────────────
 // Parse-time expression-depth guard (B-rust,
-// docs/plans/brief_expr_depth_limit_and_run_with_stack.md). A pathologically
+// the expr-depth-limit brief (git history)). A pathologically
 // deep single expression overflows the lowering recursion (SIGSEGV); the parser
 // rejects it first with a clean teaching error (MAX_EXPR_DEPTH = 128, à la clang
 // `-fbracket-depth` / rustc `recursion_limit`). Both fixtures use long flat
@@ -32695,7 +32695,7 @@ fn expr_nesting_max_depth() {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Print-temp leak class (docs/plans/brief_print_temp_leak_fix.md): a String
+// Print-temp leak class (the print-temp-leak-fix brief (git history)): a String
 // temp freshly materialized to feed a printf/format consumer is registered
 // for drop at its birth — five producer sites (format_for_printf Ptr(String)
 // + Displayable branches, lower_interp_segment branches 2/3, apply_format_spec

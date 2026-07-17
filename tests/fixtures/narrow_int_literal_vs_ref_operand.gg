@@ -9,7 +9,7 @@
 # only bare `Primitive`, so the inline-chain form (case 3 below) failed to type-check
 # with "cannot implicitly convert `int` to `uint8`". Fix = peel Ref/Owned before the
 # Primitive check (mirror the cast auto-deref at typecheck.rs:~2667). See
-# docs/plans/uint8_literal_narrow_ref_operand.md. Surfaced in gorget-arena
+# the uint8-literal-narrow-ref writeup (git history). Surfaced in gorget-arena
 # (md3.gg:32, bsp.gg:171/403) after c462cffa stopped masking imported-module errors.
 #
 # All three narrowing forms must type-check, AND the inline-chain comparison branch

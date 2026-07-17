@@ -1010,7 +1010,7 @@ fn self_host_d12_reject_hook_count() {
          If a new consuming ownership boundary was added, route it through the \
          shared `reject_tainted_place` producer and bump EXPECTED. If a hook was \
          removed, a D12 under-rejection hole re-opened — restore it, do NOT lower \
-         EXPECTED. See docs/plans/define-gorget/wave-a2-s-selfhost-drop-purity-brief.md.",
+         EXPECTED. See the A2-S self-host drop-purity brief (git history).",
     );
 }
 
@@ -1080,7 +1080,7 @@ fn compound_assign_root_materialize_arms_count() {
 /// `{T}__drop` (the user body) instead of the composite `__gorget_dtor_{T}`, so
 /// droppable fields LEAKED (P2 — ASan-only). `type_drop_fns` records
 /// custom-with-trivial-fields AND carries the correct composite `drop_fn_name`,
-/// so routing through it fixes BOTH. Full context: docs/plans/elemdrop-fix-brief.md.
+/// so routing through it fixes BOTH. Full context: the elemdrop-fix brief (git history).
 ///
 /// **If this fails:**
 ///   - `recursive_drop_*` reintroduced → a new sibling family re-opened the P1/P2
@@ -1121,7 +1121,7 @@ fn collection_elem_drop_routes_through_type_drop_fns() {
              and its `{{T}}__drop` name is the user body, not the composite \
              `__gorget_dtor_{{T}}` (P2 field-leak). Route the drop slot through \
              `self.type_drop_fns.get(t).drop_fn_name` instead. See \
-             docs/plans/elemdrop-fix-brief.md.",
+             the elemdrop-fix brief (git history).",
         );
     }
 
@@ -2711,7 +2711,7 @@ enum ViewRoute {
 /// the GIR-level mechanism that keeps the lazy-CoW default sound for it
 /// (the four materialize hooks W3a/W3b/W3c/W3d, per
 /// `docs/devbook/11-copy-on-write.md` §"View-producer enumeration rule" and
-/// `docs/plans/brief_37_phase1_lazy_default.md` Appendix A).
+/// `the #37 phase-1 lazy-default brief (git history)` Appendix A).
 ///
 /// **Adding a new view producer?** It is UNSOUND under the lazy-CoW default
 /// unless a GIR materialize hook dominates every capture of its result while
@@ -2910,7 +2910,7 @@ fn str_view_producer_enumeration_is_closed() {
          A function returning a cap=0 view aliasing another buffer is UNSOUND under \
          the lazy-CoW default unless a GIR materialize hook dominates every capture \
          of its result (docs/devbook/11-copy-on-write.md §\"View-producer enumeration \
-         rule\"; docs/plans/brief_37_phase1_lazy_default.md Appendix A).\n\
+         rule\"; the #37 phase-1 lazy-default brief (git history) Appendix A).\n\
          For a NEW producer: wire a hook (sibling call site of \
          materialize_lazy_source_if_needed — W3a bind / W3b receiver / W3c index \
          base / W3d for-string source), add a row to STR_VIEW_PRODUCERS in this \
@@ -5071,7 +5071,7 @@ fn owning_param_ctor_move_helper_site_count() {
 }
 
 /// The **ggdef import ratchet** — the project's most important fence
-/// (`docs/plans/define-gorget/` RFC §2.4/§7, HANDOVER.md rule 5).
+/// (the define-gorget RFC §2.4/§7 + orchestration-handover rule 5, in git history).
 ///
 /// `ggdef` (the executable language definition, `spec/ggdef/`) shares the
 /// production **lexer + parser + AST + span** ONLY. It must NEVER reach into
@@ -5395,5 +5395,58 @@ fn self_host_trap_code_parity() {
          A direct trap site regressed to gorget_panic (or was removed). \
          (T_Bounds is intentionally NOT required — that is T2b.)\n\
          Found: {found:?}",
+    );
+}
+
+/// **Repo-hygiene guard — `docs/plans/` stays gone; `docs/define-gorget/` is
+/// ledger-only.** Owner ruling 2026-07-17 (memory `feedback-no-scouts-briefs-in-repo`):
+/// round-scoped scouts, briefs, censuses, and plans are `/tmp`-ONLY and are never
+/// committed. The former `docs/plans/` tree — a decade of scout/brief/plan ephemera —
+/// was retired to git history in the 2026-07-17 hygiene slice; the one surviving
+/// define-gorget artifact is the normative ledger `docs/define-gorget/decisions.md`.
+///
+/// This is a **shrink-only allowlist** (the `EXPECTED_HANGS` idiom): `docs/plans/`
+/// must stay absent, and `docs/define-gorget/` must contain exactly the files in
+/// `ALLOWED`. A new file appearing under either path fails the build until it is
+/// either removed (an ephemeral scout/brief belongs in `/tmp`; a durable design doc
+/// belongs in `docs/devbook/` or the reference/book) or `ALLOWED` is intentionally
+/// widened here with a cited justification. The allowlist only ever shrinks.
+#[test]
+fn docs_plans_removed_and_define_gorget_is_ledger_only() {
+    // `docs/plans/` was retired to git history; nothing may re-create it.
+    assert!(
+        !Path::new("docs/plans").exists(),
+        "docs/plans/ has reappeared. Round-scoped scouts / briefs / censuses / plans are \
+         /tmp-ONLY and never committed (owner ruling 2026-07-17, memory \
+         `feedback-no-scouts-briefs-in-repo`). Move the new artifact to /tmp; a durable design \
+         doc belongs in docs/devbook/ (or the reference/book), never docs/plans."
+    );
+
+    // `docs/define-gorget/` holds exactly the normative ledger — shrink-only allowlist.
+    const ALLOWED: &[&str] = &["decisions.md"];
+    let dir = Path::new("docs/define-gorget");
+    assert!(
+        dir.is_dir(),
+        "docs/define-gorget/ is missing — the define-gorget ledger must live at \
+         docs/define-gorget/decisions.md."
+    );
+    let mut found: Vec<String> = fs::read_dir(dir)
+        .expect("read docs/define-gorget")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    found.sort();
+    let unexpected: Vec<&String> =
+        found.iter().filter(|f| !ALLOWED.contains(&f.as_str())).collect();
+    assert!(
+        unexpected.is_empty(),
+        "Unexpected file(s) under docs/define-gorget/: {unexpected:?}. This directory holds ONLY \
+         the normative ledger `decisions.md` (owner ruling 2026-07-17). Scouts / briefs / \
+         proposals are /tmp-ONLY. If a durable ledger-adjacent doc is genuinely warranted, add it \
+         to ALLOWED here with a cited justification (this allowlist only shrinks)."
+    );
+    assert!(
+        found.iter().any(|f| f == "decisions.md"),
+        "docs/define-gorget/decisions.md (the normative ledger) is missing."
     );
 }

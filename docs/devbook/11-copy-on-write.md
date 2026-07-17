@@ -468,6 +468,85 @@ and it hoists the round-33 CoW untrack across its callers (including the
 compound-index arm and the `methods.rs` method-receiver sibling) so the
 transient element ref cannot be left CoW-tracked into a dangling Case-3 clone.
 
+### Remaining increments (campaign state 2026-07-17)
+
+The uniform rule (§3.1: a resource is a borrow until a write; the write
+write-throughs along an unbroken `&` chain to a real owner, or materializes a
+private copy at the immutable binding where the chain breaks) is a **closed
+set** of positions, and the campaign to make every one reference-grade on
+**both** production lanes (Rust gg → C/LLVM) **and** the self-host is tracked
+increment by increment. This subsection is the durable map of what is settled
+and what remains; live status stays in `TODO.md` (the "CoW WAVE 2" queue).
+
+**Settled (wave 1 — the place write-through class).** The three write-through
+gaps that silently dropped element stores are closed on both lanes, each pinned
+by cross-lane fixtures whose expected output is **ggdef-adjudicated when the
+shape is in ggdef's phase-0 subset, otherwise derived from §3.1/D1** — never
+copied from "whatever production printed", because pinning production's wrong
+output would lock a Core-#8 both-wrong bug as canonical:
+
+- Value-type `v[i].field = x` on a Vector element (the self-host mirror of the
+  round-39 Rust fix) writes through instead of losing the store.
+- `for x in &coll` element mutation write-throughs; the bare `for x in coll`
+  twin correctly materializes a private copy per element; the comprehension
+  `[e for x in &coll]` **read** yields the real elements. These share one
+  mode-driven iterable helper per lane (bare = borrow element, `&` = MutPtr
+  write-through place) rather than parallel per-form fixes.
+- Dict `d[k].field = x` write-throughs with the collection producer evaluated
+  exactly once (no double-eval of a side-effecting `make()[k].field = x`). The
+  HashMap element-typing analog is a separate, still-open upstream bug.
+
+**Remaining (wave 2 — materialize completeness).** These positions still either
+write through where the chain is broken (should materialize) or are undecided;
+each is its own scout → brief → gauntlet track, and any track that **flips or
+adds** a fixture expectation runs the **full ggdef suite** in its gates (a
+new top-level `cow_*`/`deadwrite_*` fixture is harvested by the `corpus_b`/`b1`
+ggdef lanes, so it is a definition-lane event, not just a runtime one):
+
+| Increment | Position | Lanes | Disposition |
+|-----------|----------|-------|-------------|
+| **2T** | drop-tainted value at **any** materialize-on-write site | both + ggdef | **Ruled REJECT** (owner 2026-07-17). Materialize is an implicit copy, so a custom-`Drop` value must not be silently duplicated here any more than at the six consuming positions — the user writes `&self`/`&param` (write-through) or an explicit `.clone()`/move. Emits the `E_MoveWithoutOperator` family at every materialize position + negative fixtures; ships with or immediately before 2E, or 2E converts write-through into a silent clone→double-drop. |
+| **2E** | plain `self` (not `&self`) | both | Bare `self` ≡ bare-param materialize; `&self` write-throughs. Ships **in the same landing** as the ratified D2-rider **dead-bare-param-write** diagnostic (uniform over all bare params — `self` is just the first — flagging exactly the write-to-a-never-read private copy: *"this writes to a private copy that is never read — the caller's value is unchanged; did you mean `&self`?"*, an on-by-default `W_` promoted to `E_` after corpus burn-down). Gated behind 2T for drop-tainted receivers. |
+| **2G** | loop-carried bare-param materialize | both | The root-caused **deadwrite while-loop wrong-code** class: a bare-param CoW write inside a `while` throws away its private copy every iteration (and infinite-loops when the condition reads the param), because the materialize-on-first-write slot rebind does not survive loop lowering. Fix at the **write** site (rebind the param slot / a Phase-D materialize-once decision), never phi-repair at the loop head. Blocks an honest 2E landing (its `deadwrite_*` fixtures are runtime-broken until this lands). |
+| **2D** | untracked alias chains | both | A `&`-mutation whose root is a view-returning method (`&x.slice()[i]`) that `resolve_projection_root_local` cannot name, so it still write-throughs where it should materialize. Extend the root oracle or materialize at the immutable link; **when this lands the "converging to the uniform rule" marker above is removed**. |
+| **2F** | nested `&` field place (snag #53) | both | `void set(Outer &o): o.inner.raw[k] = v` is a silent no-op — the nested MutPtr place chain isn't built. Un-ignore `known_gaps/snag53_*` when green. |
+| **2H** | generic-equip bare named-receiver materialize | self-host residual | The generic case of the `&self`-mutation-inference (`compute_method_mutates_self`) classification. |
+| **I (write)** | comprehension element write-through | both | `[f(x) for x in &v]` mutating `x.field` lands on a private element copy and does not reach the collection (the read path is correct everywhere; the comprehension threads `write_through=false`). Out of the ggdef phase-0 subset (no comprehension arm). |
+
+Two further write facets are wave-assigned as they are scoped: bare
+`v[i].method()` with a mutating receiver (the method-receiver analog of the
+value-element write-through), and the comprehension write facet above.
+
+**Self-host file-zone serialization** (these tracks share lowerer files and
+must serialize or rebase often against each other and the enforcement wave):
+
+| Zone | Increments |
+|------|------------|
+| `lower_stmt.gg` place / field / index | 1B, 1C-SH, 2F |
+| `lower_loops.gg` + comprehension desugar | 1A, I, 2G |
+| `lower_expr.gg` / `lower.gg` CoW | 1A-SH helpers, 2D, 2E, 2H, 2T |
+| Rust `for_loops.rs` + comprehension | 1A, I |
+| Rust `exprs/mod.rs`, `assigns.rs`, `methods.rs`, `context.rs` | 1C, 2D, 2E, 2T |
+
+**Verified anchors** (re-grep the function before trusting a line number —
+`lower*.gg` was split, and the Rust lowerer moves):
+`try_resolve_field_place` Index-Ptr arm `exprs/mod.rs:~2472`;
+`resolve_projection_root_local` `exprs/mod.rs:~2374`;
+`cow_before_mutation` `context.rs:~3325`; the self-host place/field-write
+producer `lower_stmt.gg:~1514–1638`; the self-host for-vector binding
+`lower_loops.gg:~224`; D2 in `docs/define-gorget/decisions.md`.
+
+**Wave-2 close gate** (and any track that flips or adds a fixture expectation):
+full C **and** full LLVM integration, `--lib`, `--test lints`, the bootstrap
+fixed-point, `spec_conformance` + the **full ggdef suite**, ASan on new
+materialize/untrack fixtures, and a **parity regen** whose WRONG-OUTPUT count
+must **drop** relative to the pre-wave baseline (never inflate parity by
+excluding a self-host miscompile). Wave 3 is the spec lock: spectest-lane wiring
+for the in-subset positions once the elaborator covers them, the language-design
+/ book / this-chapter status updates, a place-resolver `CollectionKind`
+exhaustiveness lint, and a clone-count baseline that must not regress on the
+self-host self-compile.
+
 ## Full lazy materialization (#37) — the lazy-CoW default
 
 The design goal (`docs/language-design.md`, the Performance pillar): **value

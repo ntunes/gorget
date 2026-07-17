@@ -10,7 +10,7 @@
 //! Increment A is the walking skeleton: the elaborator + evaluator for the
 //! honest subset the first ~20 `cow_*` fixtures use (int/bool/float scalars,
 //! `String`, `Vector`, structs, tuples; bare/`&`/`!` modes; materialize-on-
-//! write). See `docs/plans/define-gorget/phase0-brief.md`.
+//! write). See `the define-gorget phase-0 brief (git history)`.
 
 pub mod classify;
 pub mod elaborate;

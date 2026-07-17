@@ -343,7 +343,7 @@ pub enum SemanticErrorKind {
     /// the wrong carrier type" guard class; AGENTS.md Core invariant #8.)
     DefaultOpNonOptional { type_: String },
 
-    /// D10(a) (docs/plans/define-gorget/decisions.md, ratified 2026-07-06):
+    /// D10(a) (docs/define-gorget/decisions.md, ratified 2026-07-06):
     /// a mutable borrow (`&expr`) bound to a name — `auto r = &b`,
     /// `Vector[int] r = &b.data`, `r = &b`, or a module-level
     /// `static G = &BASE`. A named `&`-binding would create a second

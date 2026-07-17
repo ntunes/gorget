@@ -1,6 +1,6 @@
 # Bug B regression: `public static Vector[T]/Dict[K,V] = [literal]` initializers
 # must materialize their elements at module-init time (was: silently Zeroed →
-# dropped every element). See docs/plans/bugB_static_collection_init.md.
+# dropped every element). See the static-collection-init writeup (git history).
 
 struct Item:
     String name

@@ -2561,7 +2561,7 @@ fn lower_static_decl(
 /// `eval_static_init`, silently dropping every element. v1 deliberately does
 /// NOT widen to general non-const RHS (e.g. `static Foo X = some_fn()`) — that
 /// has an init-ordering interaction across statics that needs a spec first
-/// (see `docs/plans/bugB_static_collection_init.md` §3). Widening is a one-line
+/// (see `the static-collection-init writeup (git history)` §3). Widening is a one-line
 /// change here plus an init-ordering decision.
 fn initializer_needs_synthetic_fn(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::Expr;

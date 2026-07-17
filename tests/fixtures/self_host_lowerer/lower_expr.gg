@@ -4187,7 +4187,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # address-takes these args via lir_lower's needs_ptr_arg keyed on
             # the mapped runtime name, so an OpMove operand is passed by pointer
             # cleanly — NO lir_lower change is needed (the original "wrong ABI"
-            # diagnosis was inverted; see docs/plans/drop_emission.md).
+            # diagnosis was inverted; see the drop-emission notes (git history)).
             CollectionKind _recv_ck = collection_kind_of(&gmod, recv_type_name)
             # Inc-4c: a same-type Option/Result combinator (`and_then`/`or_else`/
             # `flat_map`) takes a closure that returns the SAME Option/Result type

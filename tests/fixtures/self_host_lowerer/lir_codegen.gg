@@ -6403,7 +6403,7 @@ String emit_jump_args(int target, Vector[int] &args, LirFunction &func, Vector[S
 # rewritten locals — the body text is the single choke point every
 # reference flows through. If an enumerator-based derivation is ever
 # preferred, its contract must cover ALL those routes (see
-# docs/plans/brief_37_flip_enable.md W1).
+# the #37 flip-enable brief (git history) W1).
 void mark_used_value_ids(String body, Vector[bool] &v_used, Vector[bool] &s_used):
     int mu_n = body.byte_len()
     int mu_i = 0

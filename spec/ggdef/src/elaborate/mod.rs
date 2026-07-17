@@ -2710,7 +2710,7 @@ fn place_overlap_error(a: &str, b: &str, span: Span) -> ElabError {
     )
 }
 
-/// The D10(a) rejection (`docs/plans/define-gorget/decisions.md`, ratified
+/// The D10(a) rejection (`docs/define-gorget/decisions.md`, ratified
 /// 2026-07-06; move-bind addendum 2026-07-11). A named `&`-binding creates a
 /// SECOND live writable path to a place — the exclusivity violation D10 exists
 /// to close — so the definition rejects it, mirroring production's

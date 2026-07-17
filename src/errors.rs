@@ -94,7 +94,7 @@ pub enum ParseErrorKind {
     /// at the declaration site (rather than letting `int x` fall through to
     /// expression parsing, where `x` would resolve as an undefined name).
     MissingInitializer,
-    /// D10(a) (docs/plans/define-gorget/decisions.md, ratified 2026-07-06): a
+    /// D10(a) (docs/define-gorget/decisions.md, ratified 2026-07-06): a
     /// `&` decl-sigil on a local binding (`Vector[int] &r = a`) — the
     /// decl-sigil form of a local `&`-bind, rejected in v1. Historically the
     /// sigil was silently discarded (the binding was a plain value copy that

@@ -27,7 +27,7 @@ pub enum DefKind {
 /// (`None` = not a wrapper) and read via the typed flag at the field-access
 /// reject site — never re-derived from a name downstream (layering rule 2).
 /// The three variants key the 3-way diagnostic table in the RV-A brief
-/// (`docs/plans/define-gorget/rva-fieldaccess-brief.md`).
+/// (`the RV-A fieldaccess brief (git history)`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerefWrapperKind {
     /// Guard / ReadGuard / WriteGuard — a lock/borrow guard whose `.field`

@@ -2,7 +2,7 @@
 
 > The working ledger of the **Define Gorget** project (owner-approved 2026-07-05): building the
 > executable definition of Gorget's semantics and verifying all implementations against it.
-> Raw scout material in [`scouts/`](scouts/). Every decision here is subject to two standing rules:
+> Raw scout material is preserved in git history (the former define-gorget `scouts/` tree, removed in the 2026-07-17 repo-hygiene slice). Every decision here is subject to two standing rules:
 >
 > 1. **Docs write-through is part of landing a decision** (owner directive 2026-07-05): a decision
 >    is not DONE until `docs/language-design.md`, the book, and the devbook agree with it.
@@ -134,7 +134,7 @@ A bare carrier chain with no inferable `E` (from destination type, function retu
 arguments) is a compile error ("annotate the Result type"). Resolves error-model §9 Q17 for
 spec-v1; forward-compatible with existential/inferred-set designs later. Both compilers get the
 rejection + negative fixtures (today: silent miscompile in both, TODO:153).
-**Consequences:** docs write-through to `docs/plans/error-model.md` §9 Q17 (mark resolved) +
+**Consequences:** docs write-through to the error-model notes §9 Q17 (derivation in git history) (mark resolved) +
 language-design §6; belongs to the bounded-rejection phase per the C12 gating rule.
 
 ## DECIDED (owner, 2026-07-05 — batch 3, at RFC review completion)
@@ -179,10 +179,10 @@ language-design/book examples showing float output.
   sets serve stdlib-composition boundaries (which the D17 class sweep will create).
 - **A32 → RATIFIED 2026-07-16 as basic design (forks A1–G1; see LOG): a HOF is fallible
   iff a function argument it invokes is fallible** (throws or declared-Result callback).
-  Evidence: [`scouts/scout-a32-hof.md`](scouts/scout-a32-hof.md). **+ A1×E1 COMPOSITION PIN
+  Evidence: scout-a32-hof (derivation in git history). **+ A1×E1 COMPOSITION PIN
   ratified same day (see LOG): rethrows only through opt-in latent params `U(T)!`;
   unannotated function types concretely infallible everywhere (E1 uniform); packet
-  [`scouts/scout-a32-a1xe1-composition.md`](scouts/scout-a32-a1xe1-composition.md).** Impl
+  scout-a32-a1xe1-composition (derivation in git history).** Impl
   track separate (not opened here; after D29 call-sites when scheduled). Full throws×async
   algebra later.
 - **A33 (deep-fault prep, small): spec the supervised-boundary HOOK now** — a
@@ -213,7 +213,7 @@ language-design/book examples showing float output.
   the one channel (throws/Result); faults = termination, NOT a channel; "catching" =
   explicit conversion. Candidate catchability principle if the catch SURVIVES census:
   implicit machine checks catchable, explicit programmer assertions never. Scout
-  mandate: [`a33-fault-model-scout-mandate.md`](a33-fault-model-scout-mandate.md)
+  mandate: a33-fault-model-scout-mandate (derivation in git history)
   (launched 2026-07-11); candidate rulings D24 (boundary spec) · D25 (fault-catch
   disposition) · D26 (fallible operators).
 
@@ -368,12 +368,12 @@ P1-infra reviewers' recommendation.
   Process: the seam was found at the `e44b6120` review; full packet with deadlock examples,
   alternatives (positional rule = "Option 1 in a trench coat" rejected; template-style /
   registry-only / all-latent / wrap-coerce rejected), and the external fresh-pass SIGN OFF
-  (fold-ins R1–R5, all folded): `scouts/scout-a32-a1xe1-composition.md`. Binds the future
+  (fold-ins R1–R5, all folded): scout-a32-a1xe1-composition (git history). Binds the future
   A32 impl brief; changes nothing in D29 call-sites v1.
 
 - 2026-07-16 (session) — **🎯 A32 BASIC DESIGN RATIFIED (owner): forks A1–G1.** HOF effect
   polymorphism for the **error channel only** (v1). Normative pins (evidence:
-  `scouts/scout-a32-hof.md`):
+  scout-a32-hof (git history)):
   - **Rule:** a HOF call is fallible iff it **invokes** a function-argument that is
     fallible (`throws E` or declared `Result[_,E]` return — same one-mark rule as D29).
   - **A1 inferred rethrows:** HOF source decls stay without `throws`; effect is computed
@@ -405,7 +405,7 @@ P1-infra reviewers' recommendation.
   error effect). Process: scout+design draft → owner forks → LOG ratify → impl later
   (after D29 call-sites when that track runs). **No permanent try_map.** D17 env APIs not
   blocked; fallible stdlib *combinators* blocked on A32 impl. Draft:
-  `scouts/scout-a32-hof.md` (forks A–G open). Queue item A32 remains open until owner
+  scout-a32-hof (git history) (forks A–G open). Queue item A32 remains open until owner
   pins forks; this entry records the design-pass start only. **Superseded same session:
   forks A1–G1 ratified (entry above).**
 
@@ -451,7 +451,7 @@ P1-infra reviewers' recommendation.
   open as style/guidance, not a deletion. Census/fmt instruments must cover both paths.
 
 - 2026-07-16 (session) — **D29 PACKET/READABILITY WRITE-THROUGH DONE (owner confirmed).**
-  `scouts/scout-d29-packet.md` + `scouts/scout-d29-readability.md` brought to currency:
+  scout-d29-packet + scout-d29-readability (git history) brought to currency:
   LOG is normative; `!` joins `throws` (no signature `! E`); call-sites-only migration;
   always-mark + disposition table; diagnostics prefer `throws E`; readability AFTER pages
   use `throws E` + call-site `!`. Full book/reference sweep still rides the D29 landing.
@@ -469,7 +469,7 @@ P1-infra reviewers' recommendation.
   diagnostic split, D17 sequencing+fixture hardening: PINNED same session.)
 
 - 2026-07-16 (formal ratification; the six follow-through pins above postdate it) — **🎯 D29 RATIFIED (owner, formal — packet-backed: census + accept-both
-  prototype + collision corners + readability pages, `scouts/scout-d29-packet.md`): VISIBLE
+  prototype + collision corners + readability pages, scout-d29-packet (git history)): VISIBLE
   ERROR PROPAGATION.** Final scope with both same-day amendments consolidated:
   (a) **call-site `!` is MANDATORY on every fallible call — the uniform FALLIBLE-USE MARKER**
   (Swift model): handled calls carry it too (`f()! catch (e): …`); unhandled marked call in a
@@ -575,7 +575,7 @@ P1-infra reviewers' recommendation.
   one-token `.clone()` remediation — mirrors Rust; zero current sites. **Rejected
   alternatives:** pin-order-keep-accepting (the UAF-vs-confusion dilemma); reject-only-realloc
   (not statically decidable); reject+keep-reorder (diverges from 3 lanes, churns ~20
-  snapshots). Full matrix + fix-shape per lane: `scouts/scout-rvc-compound-assign.md`.
+  snapshots). Full matrix + fix-shape per lane: scout-rvc-compound-assign (git history).
   Enforcement = the RV-C track (all three lanes + the ggdef compound-index double-eval fix
   riding its ggdef leg; queues behind RV-D/RV-F).
 - 2026-07-15 — **C11 AMENDED (owner-agreed honesty fix) + NAMING REFINED same day.**
@@ -748,7 +748,7 @@ P1-infra reviewers' recommendation.
   adjudicate against the PROSE rule, same as any divergence. **The definition LEADS; it does not trail.**
   SEQUENCING: the eval transition-table fix (revive + consume-call-kill, proven) + the elaborate may-move pass
   land as ONE merged change (owner ok'd merge 2026-07-15 once both prototypes proved out; combined patch
-  `scouts/patches/ggdef-elaborate-move-proto.patch`, ggdef 127/0, conformance 195/195, 100% production
+  the ggdef-elaborate-move prototype (git history), ggdef 127/0, conformance 195/195, 100% production
   agreement / 25 probes). **THE VERDICT TRIPLE for a static rejection (owner, 2026-07-15): channels = layers.
   stdout is EVAL's channel (what the program printed); stderr is ELABORATE's/the-judge's channel (why rejected;
   and at runtime, the trap).** A statically-rejected program never ran → **stdout = "" is semantically correct
@@ -783,7 +783,7 @@ P1-infra reviewers' recommendation.
   runtime panics (OOM/closed-channel, `panic_normal.c:5`) exit 1, colliding with the compile-error code — route
   to a distinct code or make them traps. Write-through: this scheme + a consolidated exit-code table into
   `docs/language-reference.md`, cross-ref static=1/fuel=103 in `spec/prose/trap-codes.md`, and note both
-  `static-error`/`parse-error` tiers → exit 1 in `rfc-ggc-ggdef.md`.
+  `static-error`/`parse-error` tiers → exit 1 in the ggc/ggdef RFC (git history).
   **⚠ B2 SCOPE + LIVENESS-PASS + PASS-ORDER, RATIFIED 2026-07-14 (owner, firm — two calls, one layering principle):**
   Raised by the B2 self-host-mirror scout (the self-host has NO move-tracker → accepts every use-after-move).
   **(1) B2 mirrors the FULL D10 RULE, not production's exact code — the mover-mover arm is IN.** `f(!x, !x)`
@@ -857,7 +857,7 @@ P1-infra reviewers' recommendation.
   with `a` otherwise unused — was noted and deliberately NOT filed.)
 
 - 2026-07-11 — **DECISION BATCH 5 CLOSES: D24 + D25 + D26 RATIFIED by owner (census
-  packet review, `scouts/scout-wave-census.md`) — with D27 + D28 (below), the full
+  packet review, scout-wave-census (git history)) — with D27 + D28 (below), the full
   fault-model + operator-surface redesign is ruled.**
   - **D24 — THE SUPERVISED BOUNDARY, ADOPTED, ALL 8 CODES (spec-only now; impl =
     phase 3):** Task join is the ONLY fault→value conversion point in the language.
@@ -944,14 +944,14 @@ P1-infra reviewers' recommendation.
   ~870 move-sigil sites across four corpora (⚠ CORRECTED by the wave-census scout
   2026-07-11: **~1,114** — the A33 figure omitted `lib/` [224, a missing FIFTH
   corpus], spectests [70], and the gglox/gorget-conformance projects [66]; see
-  `scouts/scout-wave-census.md`); D7 capture lists have ZERO corpus
+  scout-wave-census (git history)); D7 capture lists have ZERO corpus
   uses → the capture re-spelling (`(^name, &total)(x):`, `^():` move-all) is a
   pure spec rider on D7. Implementation = its own bootstrap-gated track (lexer/
   parser/formatter both compilers + `E_MoveWithoutOperator` and the `expr.rs:593`
   move-hint diagnostics + docs sweep; `gg fmt` is the auto-migration vehicle).
   D24 (boundary) / D25 (fault-catch removal) / D26 (fallible operators) remain
   RECOMMENDED-pending-formal-ratification from the scout report
-  (`/tmp/scout_a33_report.md`, mandate `a33-fault-model-scout-mandate.md`).
+  (`/tmp/scout_a33_report.md`, mandate a33-fault-model-scout-mandate (git history)).
 
 - 2026-07-07 — **D23 RATIFIED by owner (was queue item A30): THE THROWS TOTALITY
   INVARIANT.** Normative: "a throws call is an expression of type T in EVERY position;
@@ -989,7 +989,7 @@ P1-infra reviewers' recommendation.
   the earlier From-conversion idea is DEMOTED to explicit fallback inside A31.
 
 - 2026-07-07 — **D14 why-a-view ADDENDUM recorded** (owner second-guessed the ruling; the
-  re-derivation that settled it is now saved in decision-batch-4-proposal.md §D14: the
+  re-derivation that settled it is now saved in the batch-4 proposal §D14 (git history): the
   collection owns → copy/move/view are the only possible read-returns; the owned copy is
   the option that silently BREAKS `.push()` chaining (throwaway mutation + the measured
   round-8 double-drop); the view is what ENABLES receiver-position write-through; the
@@ -1127,7 +1127,7 @@ P1-infra reviewers' recommendation.
   standard, no recognition). 101 = Rust-panic precedent, exact semantic match, massive
   acquired recognition incl. LLM training priors. Language contract = {program's own code,
   101}; ggdef 102/103 stay tool-level; signal deaths stay OS-reported. Full D11 (T_ registry,
-  normalized stderr line, `trap:` frontmatter) still PROPOSED in decision-batch-4-proposal.md.
+  normalized stderr line, `trap:` frontmatter) still PROPOSED in the batch-4 proposal (git history).
 - 2026-07-06 (later): D9 decided (3.0 → "3.0"); P1-infra brief at v3 (2 passes folded);
   matcluster brief at v2 (1 pass folded).
 - 2026-07-06: PHASE 1 opened. P1-infra scout complete (float sequencing = hold-floats OPTION A

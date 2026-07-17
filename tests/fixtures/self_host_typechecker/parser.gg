@@ -998,7 +998,7 @@ struct Parser:
     # nesting) and tracked as a left-spine count in `parse_expr_bp_with_lhs`
     # (catches the FLAT `a+a+…+a` chain, parsed iteratively). Over the limit
     # → a clean teaching error instead of a later-pass SIGSEGV on the deep
-    # tree. See docs/plans/brief_expr_depth_limit_and_run_with_stack.md §B.
+    # tree. See the expr-depth-limit brief (git history) §B.
     int expr_depth
 
 # MAX nesting for a single expression's AST tree (parens/unary recursion OR

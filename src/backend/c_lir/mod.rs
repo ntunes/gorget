@@ -2061,7 +2061,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
 /// copies/returns, slot carriers, InlineC-rewritten locals, or test-cleanup
 /// glue — the body text is the single choke point every reference flows
 /// through. If an enumerator-based derivation is ever preferred, its
-/// contract must cover ALL those routes (docs/plans/brief_37_flip_enable.md
+/// contract must cover ALL those routes (the #37 flip-enable brief (git history)
 /// W1). The self-host twin is `mark_used_value_ids` in lir_codegen.gg.
 fn mark_used_value_ids(body: &str, v_used: &mut [bool], s_used: &mut [bool]) {
     let b = body.as_bytes();

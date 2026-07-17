@@ -4001,7 +4001,7 @@ impl<'a> TypeChecker<'a> {
 
     // ─── Statement Checking ────────────────────────────────
 
-    /// D10(a) (docs/plans/define-gorget/decisions.md, ratified 2026-07-06):
+    /// D10(a) (docs/define-gorget/decisions.md, ratified 2026-07-06):
     /// does this initializer / assignment RHS bind a mutable borrow to a
     /// name? True for a top-level `&expr` and for any value-position
     /// expression whose result is such a borrow: an if-expression branch

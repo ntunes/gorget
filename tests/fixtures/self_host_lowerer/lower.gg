@@ -280,7 +280,7 @@ struct LowerCtx:
     # context-dependent type that the local expression shape cannot
     # determine alone (the variant name does not carry the parent enum's
     # full monomorphised name, etc.). `-1` is the sentinel for "no
-    # expectation set". See `docs/plans/self_host_ssa_cleanup.md` §7.
+    # expectation set". See `the self-host SSA-cleanup brief (git history)` §7.
     int expected_type
     # `on error:` cleanup blocks registered in the current function, in
     # source order. Mirrors Rust gg's

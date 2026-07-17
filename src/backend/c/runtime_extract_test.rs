@@ -9,7 +9,7 @@
 //!
 //! The earlier byte-identity gate against frozen `runtime_snapshot/*.snap` copies was
 //! retired (the snapshots were byte-for-byte duplicates of the `.c` files, making the
-//! assertion tautological — see `docs/plans/r5_cleanup_snap_brief.md`).
+//! assertion tautological — see `the r5 cleanup-snap brief (git history)`).
 
 use super::c_runtime::*;
 

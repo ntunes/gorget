@@ -66,6 +66,18 @@ The two sides only agree if both implementations emit **the same canonical textu
 
 `check_comparison` (`:13193`) is the sister of `type_comparison`: where `type_comparison` runs `analyze()` on a single parsed module, `check_comparison` runs the full `gg check` path on the Rust side — `ModuleLoader::load_all` → `merge_modules` → `analyze` (`rust_check_output`, `:13229`) — against `self_host_check/driver.gg`, which runs its own `loader.gg` + typecheck pipeline. It wraps the Rust pipeline in `catch_unwind` and classifies a loader failure as `RustSkipped` (`:13266`) so a Rust-side loader limitation doesn't get charged against the self-host.
 
+#### Current mismatch baseline (regenerate — do not trust the number)
+
+Per the always-pass discipline above, the durable artifact is the **command**, not a transcribed count. Regenerate the type/check baseline with:
+
+```bash
+GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release \
+    -- type_comparison check_comparison --nocapture 2>&1 | tee /tmp/cmp-$RANDOM.log
+# read the "=== Type/Check Comparison Results ===" blocks: total / exact / mismatched / crashed
+```
+
+At the 2026-07-17 D29 round close this printed **`type_comparison` 1585 total / 1517 exact / 68 mismatched / 0 crashed** and **`check_comparison` 1585 / 1516 / 69 / 0** — the current floor. Those mismatches are the known self-host diagnostic-line-count parity gap plus a handful of typed-inference deltas, not regressions. A round that *adds* fixtures moves the baseline, so re-measure and re-record it at every round close — the same "round closes that add fixtures MUST regen the number" lesson the runtime-parity metric learned. (The "85/86 mismatched" figure quoted in older, since-retired briefs is stale: it predated the CoW-1A remediation and D29 fixtures.)
+
 ### Lowerer and c_emit: count-based, not text-based
 
 The two backend-facing comparisons can't diff canonical text — the emitted GIR/C is enormous and legitimately differs in formatting — so they compare **function counts** as a coarse parity proxy:
