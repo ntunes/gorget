@@ -1,0 +1,12 @@
+# D29 POS pin: `catch` on a Result-typed LOCAL is legal UNMARKED — a local is
+# a value, not a fallible call; the R2 unmarked-disposition rejection is scoped
+# to CALLS (d29_kind2_unmarked_catch_error.gg is the NEG twin).
+Result[int, String] parse2(int x):
+    if x < 0:
+        return Error("neg")
+    return Ok(x)
+
+void main():
+    Result[int, String] r = parse2(4)
+    int v = r catch (e): -1
+    print(v)

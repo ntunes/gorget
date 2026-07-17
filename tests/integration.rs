@@ -5377,6 +5377,80 @@ fn d23_traitdefault_generic_collision_unhandled() {
     );
 }
 
+// ══════════════════════════════════════════════════════════════
+// D29 — visible error propagation: the remediation NEG/POS pins
+// (`decisions.md` 2026-07-17 capture amendment; machinery-review R2/R3/R4).
+// Each NEG fixture asserts the EXACT code `error[E_MissingFallibleMark]` and
+// no `found `Result[` desugar leak (`check_gg_fails_missing_mark`).
+// ══════════════════════════════════════════════════════════════
+
+#[test]
+fn d29_kind2_unmarked_catch() {
+    // R2: a disposition on an UNMARKED kind-2 call activates the error channel
+    // without the mark — illegal on BOTH kinds (write `parse2(4)! catch …`).
+    check_gg_fails_missing_mark("d29_kind2_unmarked_catch_error.gg");
+}
+
+#[test]
+fn d29_kind2_unmarked_rethrow() {
+    // R2: same for `rethrow`.
+    check_gg_fails_missing_mark("d29_kind2_unmarked_rethrow_error.gg");
+}
+
+#[test]
+fn d29_double_mark() {
+    // R3 ("no second mark" pin): `f()!!` — the outer `!` marks a Propagate,
+    // not a fallible call.
+    check_gg_fails_missing_mark("d29_double_mark_error.gg");
+}
+
+#[test]
+fn d29_mark_on_pure_call() {
+    // R3 (lying mark): `pure(3)!` claims an error channel that does not exist.
+    check_gg_fails_missing_mark("d29_mark_on_pure_call_error.gg");
+}
+
+#[test]
+fn d29_mark_on_literal() {
+    // R3 (lying mark): `5!`.
+    check_gg_fails_missing_mark("d29_mark_on_literal_error.gg");
+}
+
+#[test]
+fn d29_mark_on_result_local() {
+    // R3 (lying mark): `r!` on a Result-typed LOCAL — the mark attaches to
+    // calls, never to values.
+    check_gg_fails_missing_mark("d29_mark_on_result_local_error.gg");
+}
+
+#[test]
+fn d29_kind2_discard_void_tail() {
+    // R4: bare kind-2 call at a void fn's TAIL (block tails are never implicit
+    // returns — the outcome is dropped).
+    check_gg_fails_missing_mark("d29_kind2_discard_void_tail_error.gg");
+}
+
+#[test]
+fn d29_kind2_discard_loop_tail() {
+    // R4: bare kind-2 call as a LOOP-BODY tail — a silent Error-drop per
+    // iteration, the exact D29 kill-class.
+    check_gg_fails_missing_mark("d29_kind2_discard_loop_tail_error.gg");
+}
+
+#[test]
+fn d29_catch_on_result_local() {
+    // POS twin of d29_kind2_unmarked_catch: `catch` on a Result LOCAL is a
+    // value disposition, not a call — legal unmarked, runs the Ok path.
+    run_gg("d29_catch_on_result_local.gg", "4");
+}
+
+#[test]
+fn d29_marked_combinator() {
+    // POS pin: a marked Result-combinator call (`r.and_then(f)!`) is a kind-2
+    // call — the mark peels + activates (no combinator carve-out).
+    run_gg("d29_marked_combinator.gg", "5");
+}
+
 #[test]
 fn d23_traitkey_extends_missing_method() {
     // E_MissingTraitMethod coupling pin: the extends site of collect_trait
@@ -8137,6 +8211,48 @@ fn check_gg_fails_dir_no_desugar(dir_name: &str, main_file: &str) {
         "Expected the exact D23 diagnostic code `{D23_CODE}` in stderr for \
          {dir_name}/{main_file} (a rejection with any OTHER diagnostic is a \
          D23 regression), got:\n{stderr}",
+    );
+}
+
+/// The exact D29 diagnostic-code pin (see `D23_CODE` for the rendering
+/// contiguity argument): the mandatory-fallible-mark code, covering the bare /
+/// redundant-on-capture / Result-arms-on-peeled / mark-on-infallible reasons.
+const D29_CODE: &str = "error[E_MissingFallibleMark]";
+
+/// D29 negative-fixture harness: `gg check` must FAIL, stderr must NOT leak
+/// `found `Result[` (the D23 desugar ban carries over — checked FIRST), AND it
+/// must carry the EXACT code `error[E_MissingFallibleMark]` — never a loose
+/// substring, so a re-coded or throws-adjacent rejection can't green a D29
+/// regression. Mirror of `check_gg_fails_no_desugar` at the D29 code.
+fn check_gg_fails_missing_mark(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let output = build_with_timeout(gg_command("check").arg(&fixture_path), fixture);
+
+    assert!(
+        !output.status.success(),
+        "Expected `gg check` to fail for {fixture}, but it succeeded.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("found `Result["),
+        "D23/D29 desugar leak: stderr for {fixture} surfaced the `Result[T, E]` \
+         desugar as the found type (should be `{D29_CODE}`), got:\n{stderr}",
+    );
+    assert!(
+        stderr.contains(D29_CODE),
+        "Expected the exact D29 diagnostic code `{D29_CODE}` in stderr for \
+         {fixture} (a rejection with any OTHER diagnostic is a D29 regression), \
+         got:\n{stderr}",
     );
 }
 

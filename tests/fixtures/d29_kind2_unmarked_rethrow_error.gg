@@ -1,0 +1,13 @@
+# D29 R2: unmarked kind-2 call with an attached `rethrow` disposition — the
+# mark is mandatory on channel activation for BOTH kinds.
+Result[int, String] parse2(int x):
+    if x < 0:
+        return Error("neg")
+    return Ok(x)
+
+int use(int x) throws String:
+    int v = parse2(x) rethrow (String e): "wrapped"
+    return v
+
+void main():
+    print("x")

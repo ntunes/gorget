@@ -655,10 +655,16 @@ fn count_container_literal_arms() -> usize {
 /// in-source mention is its single call inside `auto_prop_skips_unify`, which is
 /// the plumbing, not a propagation site — it's excluded by counting only `self.`
 /// receiver calls and subtracting that one internal call.)
+///
+/// 2026-07-17 (D29): Route-A count 1 → 2. The kind-2 producer-peel
+/// (`resolve_kind2_call_type`, the marked-propagating branch: a `!`-marked
+/// non-throws `Result[T,E]`-returning call peels to `T` in a propagating
+/// context) is a SECOND intentional producer-peel that ALSO gates the discarded
+/// `E` via `auto_prop_error_gate(e, span)` — exactly the sanctioned bump case.
 #[test]
 fn snag11_auto_prop_gate_site_count() {
     const EXPECTED_SKIPS_UNIFY: usize = 14;
-    const EXPECTED_ROUTE_A_GATE: usize = 1;
+    const EXPECTED_ROUTE_A_GATE: usize = 2;
 
     let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
     let mut skips_unify = 0usize;
@@ -767,16 +773,18 @@ fn d23_method_throws_return_sites() {
 /// whose DECLARED return is `Result[T,E]` — must route its return type through
 /// `resolve_kind2_call_type` so a `!`-mark peels + activates the error channel
 /// and an unmarked value flow stays a legal `Result`. There are exactly TWO
-/// classification points: the free-fn `Expr::Call` non-throws branch and the
-/// centralized method `None` branch inside `resolve_throws_method_ret`. A new
+/// classification points: the free-fn `Expr::Call` non-throws branch, the
+/// centralized method `None` branch inside `resolve_throws_method_ret`, and the
+/// builtin Result-combinator path (`infer_closure_method_type` returns — a
+/// marked `r.and_then(f)!` must consume its mark like any kind-2 call). A new
 /// call-shape that returns a callee `Result` without routing here silently
 /// makes `parse(s)!` a no-op (the mark ignored) — the D29 hole. Bump the count
 /// when you add a genuine kind-2 classification point.
 ///
-/// Baseline 2026-07-17: 2 `resolve_kind2_call_type` call sites.
+/// Baseline 2026-07-17 (remediation): 3 `resolve_kind2_call_type` call sites.
 #[test]
 fn d29_kind2_call_sites() {
-    const EXPECTED_KIND2_SITES: usize = 2;
+    const EXPECTED_KIND2_SITES: usize = 3;
 
     let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
     let mut kind2_sites = 0usize;

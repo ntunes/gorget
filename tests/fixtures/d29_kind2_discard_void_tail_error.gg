@@ -1,0 +1,12 @@
+# D29 R4 (tail discards): a bare kind-2 call at a void function's TAIL drops
+# its Result — a function block body's tail is never an implicit return, so
+# the outcome is silently discarded (the pin has no tail carve-out).
+Result[int, String] parse2(int x):
+    return Ok(x)
+
+void tailcase():
+    print("start")
+    parse2(5)
+
+void main():
+    tailcase()

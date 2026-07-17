@@ -275,6 +275,11 @@ pub enum FallibleMarkReason {
     /// the success value `T` — the arms cannot inspect the whole `Result`. Bind
     /// the outcome first (`Result[T,E] r = f(); match r:`).
     ResultArmsOnPeeled,
+    /// A `!` whose inner expression is NOT a fallible call — `5!`, `pure(3)!`,
+    /// `r!` on a `Result` local (values are not calls), or the outer mark of
+    /// `f()!!` (the "no second mark" pin). An unconsumed mark is a lie: it
+    /// claims an error channel that does not exist at that expression.
+    MarkOnInfallible,
 }
 
 #[derive(Debug, Clone)]
@@ -1031,18 +1036,22 @@ impl std::fmt::Display for SemanticError {
                 // D29 flip: a MARKED call that cannot propagate here (non-throws
                 // fn, no disposition). Teach handle / capture / propagate — never
                 // surface the `Result[…]` desugar as a found-type (D23 contract).
+                // Kind-neutral wording ("fail with", not "throws"): the same
+                // message serves a `throws E` callee AND a declared-Result
+                // (kind-2) callee, which does not literally `throw`.
                 write!(
                     f,
-                    "this call can fail (throws `{throws_type}`) but the error is not \
+                    "this call can fail with `{throws_type}` but the error is not \
                      handled here; handle it with `catch` or `rethrow`, capture its \
                      outcome in an explicitly-typed binding, or declare the enclosing \
                      function `throws {throws_type}` to propagate"
                 )
             }
             SemanticErrorKind::MissingFallibleMark { throws_type, reason } => match reason {
+                // Kind-neutral "fail with" — see the UnhandledThrows note.
                 FallibleMarkReason::Bare => write!(
                     f,
-                    "this call can fail (throws `{throws_type}`) — mark it with `!` to \
+                    "this call can fail with `{throws_type}` — mark it with `!` to \
                      propagate the error (`f()!`), handle it (`f()! catch (e): …` or \
                      `f()! rethrow (e): …`), or capture its outcome in an explicitly \
                      `Result`-typed binding"
@@ -1059,6 +1068,12 @@ impl std::fmt::Display for SemanticError {
                      `Ok`/`Error` arms cannot match its whole outcome — capture the \
                      outcome in an explicitly `Result`-typed binding first, then \
                      `match` that binding"
+                ),
+                FallibleMarkReason::MarkOnInfallible => write!(
+                    f,
+                    "this `!` does not mark a fallible call — `!` attaches to a \
+                     call whose callee is declared `throws` or returns \
+                     `Result[T, E]`, exactly one mark per call; remove it"
                 ),
             },
             SemanticErrorKind::InferredThrowsUnsupported => write!(

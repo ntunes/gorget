@@ -51,7 +51,7 @@
 //! fuzzed expression POSITION (binop operand / call arg / plain bind / match
 //! scrutinee / bare statement / match-arm tail), optionally nested in an
 //! `if`/`elif`/`for` context. Production MUST reject it with
-//! `E_UnhandledThrows`; the harness runs an INVERTED oracle (see `classify` in
+//! `E_MissingFallibleMark` (D29); the harness runs an INVERTED oracle (see `classify` in
 //! `main.rs`) — a check-SUCCESS is a real T3a hole, not a PASS. This tier is
 //! CHECK-ONLY (no ggdef / build / self-host / LLVM lane). The call is NEVER
 //! placed inside a `throws` fn / `catch` / match-Ok/Error / `Result`-typed dest
@@ -69,7 +69,7 @@ pub const GENERATOR_VERSION: u32 = 1;
 /// The throws-position REJECTION tier (T3b). Distinct from tier 0's
 /// differential shape: this tier emits a program that is well-formed EXCEPT for
 /// ONE unhandled `throws` call placed in a fuzzed expression position, and the
-/// harness asserts production REJECTS it with `E_UnhandledThrows` (an INVERTED
+/// harness asserts production REJECTS it with `E_MissingFallibleMark` (an INVERTED
 /// oracle — see `classify` in `main.rs`). Single source of truth for the tier
 /// number; `main.rs` refers to it as `generator::TIER_THROWS`.
 pub const TIER_THROWS: u32 = 1;
@@ -777,7 +777,8 @@ impl Gen {
     /// Emit ONE unhandled-`throws` call in a fuzzed expression POSITION at the
     /// given `ind` indent level. The surrounding lines are well-formed by
     /// construction; the ONLY defect is the single unhandled `risky()` call, so
-    /// production MUST reject with `E_UnhandledThrows`. The call is deliberately
+    /// production MUST reject with `E_MissingFallibleMark` (D29 bare-call code).
+    /// The call is deliberately
     /// NEVER inside a `throws` fn / `catch` / match-Ok/Error / `Result`-typed
     /// destination — every one of those is LEGAL and would flip the verdict.
     fn emit_throws_position(

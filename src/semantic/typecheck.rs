@@ -581,6 +581,24 @@ struct TypeChecker<'a> {
     /// entry, so it is seen only at the immediately-enclosed producer, not at a
     /// nested sub-expression.
     fallible_call_marked: bool,
+    /// D29 R3 (lying marks): set by the fallible-call produce sites
+    /// (`resolve_throws_call_type` / `resolve_kind2_call_type`) when they see a
+    /// marked call — proof the `!` was CONSUMED by a genuine fallible call. The
+    /// `Expr::Propagate` arm verifies it after inferring its inner: a mark that
+    /// no chokepoint consumed (`5!`, `pure(3)!`, `r!` on a Result local, the
+    /// second mark of `f()!!`) is an error — an unverified mark is a lie the
+    /// visibility doctrine cannot afford (and the migration's checker-as-oracle
+    /// would silently bless).
+    fallible_mark_consumed: bool,
+    /// D29 R4 (tail discards): true while checking a block whose TAIL value is
+    /// dropped — a function block body (block tails are never implicit returns;
+    /// explicit `return` is required) or a loop body (the per-iteration value is
+    /// discarded — the silent-Error-drop-per-iteration shape). `check_block`
+    /// runs the bare-fallible-discard check on the tail statement exactly when
+    /// this is set. Expression blocks (`Expr::Block`/`Expr::Do`) clear it (their
+    /// tail IS consumed as the expression's value); nested statement blocks
+    /// (if/match branches, `with`/`unsafe` bodies) inherit it.
+    tail_value_dropped: bool,
     /// Maps (function_name, span_start) → body scope id (for scope-aware lookups).
     function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
     /// Current function's body scope (for scope-aware variable lookup).
@@ -657,6 +675,8 @@ impl<'a> TypeChecker<'a> {
             decl_type_hint: None,
             suppress_auto_prop: false,
             fallible_call_marked: false,
+            fallible_mark_consumed: false,
+            tail_value_dropped: false,
             function_body_scopes,
             current_fn_scope: None,
             current_trait_bounds: Vec::new(),
@@ -2555,6 +2575,24 @@ impl<'a> TypeChecker<'a> {
 
                     // Check for closure-returning Option/Result methods (map, and_then, or_else)
                     if let Some(ret_type) = self.infer_closure_method_type(resolved_receiver, &method.node, args) {
+                        // D29 kind-2: a builtin combinator whose declared return
+                        // is `Result[T,E]` (`r.and_then(f)`, `r.map(f)`, …) is a
+                        // kind-2 call like any other — unmarked it is a legal
+                        // Result VALUE flow (consumed by the chain), marked it
+                        // peels + activates. NOT a carve-out: the uniform rule,
+                        // extended to the builtin-method typing path (otherwise
+                        // a marked combinator's `!` is never consumed → the R3
+                        // lying-mark check would false-positive on a legal shape).
+                        let ret_type = if self.type_is_result(ret_type) {
+                            self.resolve_kind2_call_type(
+                                ret_type,
+                                suppress_auto_prop,
+                                fallible_call_marked,
+                                expr.span,
+                            )
+                        } else {
+                            ret_type
+                        };
                         self.expr_types.insert(expr.span, ret_type);
                         ret_type
                     } else {
@@ -3113,10 +3151,33 @@ impl<'a> TypeChecker<'a> {
             // disposition (`catch`/`rethrow`) and its call must NOT eat the
             // suppress signal, or the call auto-props to `T` and the disposition
             // can no longer read the raw Result. Mirror on the lowering side.
+            //
+            // R3 (lying marks): the mark must be VERIFIED CONSUMED. The fallible
+            // chokepoints set `fallible_mark_consumed` when they see the mark; a
+            // `!` whose inner is NOT a fallible call (`5!`, `pure(3)!`, `r!` on a
+            // Result local, the outer mark of `f()!!` — "no second mark" pin)
+            // never consumes it → error. Save/restore so a nested inner mark's
+            // consumption can't satisfy the OUTER mark's check.
             Expr::Propagate { expr: inner } => {
+                let prev_consumed = std::mem::replace(&mut self.fallible_mark_consumed, false);
                 self.fallible_call_marked = true;
                 self.suppress_auto_prop = suppress_auto_prop;
-                self.infer_expr(inner)
+                let inner_type = self.infer_expr(inner);
+                let consumed =
+                    std::mem::replace(&mut self.fallible_mark_consumed, prev_consumed);
+                // Skip the lying-mark error when the inner inference already
+                // failed (error_id) — the chokepoint may legitimately not have
+                // run, and the real error is already reported.
+                if !consumed && self.resolve_type(inner_type) != self.types.error_id {
+                    self.error(
+                        SemanticErrorKind::MissingFallibleMark {
+                            throws_type: String::new(),
+                            reason: FallibleMarkReason::MarkOnInfallible,
+                        },
+                        expr.span,
+                    );
+                }
+                inner_type
             }
 
             Expr::Deref { expr: inner } => {
@@ -3334,7 +3395,10 @@ impl<'a> TypeChecker<'a> {
                     &s.node,
                     Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break | Stmt::Continue
                 ));
+                // Expression block: the tail IS the block's value (consumed).
+                let prev_dropped = std::mem::replace(&mut self.tail_value_dropped, false);
                 let block_ty = self.check_block(block);
+                self.tail_value_dropped = prev_dropped;
                 if last_is_divergent {
                     self.types.never_id
                 } else {
@@ -3342,7 +3406,13 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Expr::Do { body } => self.check_block(body),
+            Expr::Do { body } => {
+                // Expression block: the tail IS the do-value (consumed).
+                let prev_dropped = std::mem::replace(&mut self.tail_value_dropped, false);
+                let ty = self.check_block(body);
+                self.tail_value_dropped = prev_dropped;
+                ty
+            }
 
             Expr::Closure { params, body, .. } => {
                 // Infer closure type from params and body.
@@ -4333,7 +4403,11 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 self.loop_depth += 1;
+                // R4: a loop body's per-iteration tail value is DROPPED — a bare
+                // fallible call there silently drops its Error every iteration.
+                let prev_dropped = std::mem::replace(&mut self.tail_value_dropped, true);
                 self.check_block(body);
+                self.tail_value_dropped = prev_dropped;
                 self.loop_depth -= 1;
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);
@@ -4358,7 +4432,11 @@ impl<'a> TypeChecker<'a> {
                 // Assign types to all `is` pattern bindings (including compound conditions)
                 self.assign_compound_is_types(condition);
                 self.loop_depth += 1;
+                // R4: a loop body's per-iteration tail value is DROPPED — a bare
+                // fallible call there silently drops its Error every iteration.
+                let prev_dropped = std::mem::replace(&mut self.tail_value_dropped, true);
                 self.check_block(body);
+                self.tail_value_dropped = prev_dropped;
                 self.loop_depth -= 1;
                 if let Some(else_body) = else_body {
                     self.check_block(else_body);
@@ -4367,7 +4445,10 @@ impl<'a> TypeChecker<'a> {
 
             Stmt::Loop { body } => {
                 self.loop_depth += 1;
+                // R4: loop-body tail value dropped per iteration (see While/For).
+                let prev_dropped = std::mem::replace(&mut self.tail_value_dropped, true);
                 self.check_block(body);
+                self.tail_value_dropped = prev_dropped;
                 self.loop_depth -= 1;
             }
 
@@ -5146,15 +5227,17 @@ impl<'a> TypeChecker<'a> {
             // or a tail if/match with branches that end in expressions.
             if let Some(ty) = stmt_type {
                 last_type = ty;
-                // D29 kind-2 bare-discard: a NON-tail expression statement whose
-                // value is an un-consumed fallible `Result` silently drops the
-                // Error case — exactly what D29 kills. The TAIL (i == last_idx)
-                // is the block's value (consumed by the enclosing return / expr
-                // context — the normal return unification handles it), so it is
-                // not a discard. (Kind-1 unmarked calls already errored at the
-                // call site and type as `error`, not `Result`, so they never
-                // reach here.)
-                if i != last_idx {
+                // D29 kind-2 bare-discard: an expression statement whose value
+                // is an un-consumed fallible `Result` silently drops the Error
+                // case — exactly what D29 kills. A NON-tail statement's value is
+                // always dropped; the TAIL is dropped too when the enclosing
+                // context discards the block value (`tail_value_dropped`: a
+                // function block body or a loop body — R4's two shapes) and
+                // consumed when the block is an expression (`Expr::Block`/`Do`,
+                // where the normal unification governs). (Kind-1 unmarked calls
+                // already errored at the call site and type as `error`, not
+                // `Result`, so they never reach here.)
+                if i != last_idx || self.tail_value_dropped {
                     if let Stmt::Expr(expr) = &stmt.node {
                         self.check_bare_fallible_discard(expr, ty);
                     }
@@ -5594,6 +5677,10 @@ impl<'a> TypeChecker<'a> {
         marked: bool,
         span: Span,
     ) -> TypeId {
+        if marked {
+            // R3: the `!` reached a genuine fallible call — the mark is real.
+            self.fallible_mark_consumed = true;
+        }
         match self.scopes.lookup("Result") {
             Some(result_def_id) => {
                 let raw_result = self
@@ -5787,6 +5874,10 @@ impl<'a> TypeChecker<'a> {
         marked: bool,
         span: Span,
     ) -> TypeId {
+        if marked {
+            // R3: the `!` reached a genuine fallible call — the mark is real.
+            self.fallible_mark_consumed = true;
+        }
         // Extract T and E from the declared `Result[T, E]` return.
         let resolved = self.resolve_type(result_return_type);
         let (t, e) = match self.types.get(resolved).clone() {
@@ -5799,6 +5890,19 @@ impl<'a> TypeChecker<'a> {
             // caller's `type_is_result`); return as-is.
             _ => return result_return_type,
         };
+        // (1) Disposition inner — `catch`/`rethrow` set `suppress_auto_prop` and
+        //     read the whole raw Result. The mark is MANDATORY here for BOTH
+        //     kinds (LOG 2026-07-17 amendment: "`!` marks error-channel
+        //     ACTIVATION — the three control-flow dispositions — on BOTH call
+        //     kinds"): unmarked `parse(s) catch …` is the bare-call error. A
+        //     `catch` on a Result LOCAL is not a call and never reaches this
+        //     chokepoint — it stays legal. Checked FIRST, mirroring kind-1.
+        if suppress_auto_prop {
+            if !marked {
+                self.emit_missing_fallible_mark(e, FallibleMarkReason::Bare, span);
+            }
+            return result_return_type;
+        }
         if !marked {
             // Legal value flow: bind / match / pass / chain / receiver. The
             // bare-DISCARD case (a statement whose value is this un-consumed
@@ -5809,10 +5913,6 @@ impl<'a> TypeChecker<'a> {
         let dest_is_result = self
             .decl_type_hint
             .map_or(false, |h| self.type_is_result(h));
-        if suppress_auto_prop {
-            // `parse()! catch …` — the disposition reads the whole Result.
-            return result_return_type;
-        }
         if dest_is_result {
             // `Result[T,E] r = parse()!` — the mark is redundant (capture is the
             // unmarked spelling). Remove the `!`.
@@ -7671,7 +7771,12 @@ impl<'a> TypeChecker<'a> {
 
         match &func.body {
             FunctionBody::Block(block) => {
+                // R4: a function BLOCK body's tail is never an implicit return
+                // (explicit `return` required) — its value is dropped, so a bare
+                // fallible call at the tail of a void fn is a silent discard.
+                let prev_dropped = std::mem::replace(&mut self.tail_value_dropped, true);
                 self.check_block(block);
+                self.tail_value_dropped = prev_dropped;
                 if func.qualifiers.is_noreturn {
                     // A noreturn body must DIVERGE: terminate on every path
                     // AND contain no `return` at all (`block_terminates`
@@ -8747,24 +8852,32 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) 
             Item::Test(t) => {
                 checker.current_return_type = Some(checker.types.void_id);
                 checker.current_function_throws = false;
+                // R4: test/bench/suite bodies drop their tail value (fn-body-like).
+                checker.tail_value_dropped = true;
                 checker.check_block(&t.body);
                 checker.current_return_type = None;
             }
             Item::Bench(b) => {
                 checker.current_return_type = Some(checker.types.void_id);
                 checker.current_function_throws = false;
+                // R4: test/bench/suite bodies drop their tail value (fn-body-like).
+                checker.tail_value_dropped = true;
                 checker.check_block(&b.body);
                 checker.current_return_type = None;
             }
             Item::SuiteSetup(s) => {
                 checker.current_return_type = Some(checker.types.void_id);
                 checker.current_function_throws = false;
+                // R4: test/bench/suite bodies drop their tail value (fn-body-like).
+                checker.tail_value_dropped = true;
                 checker.check_block(&s.body);
                 checker.current_return_type = None;
             }
             Item::SuiteTeardown(s) => {
                 checker.current_return_type = Some(checker.types.void_id);
                 checker.current_function_throws = false;
+                // R4: test/bench/suite bodies drop their tail value (fn-body-like).
+                checker.tail_value_dropped = true;
                 checker.check_block(&s.body);
                 checker.current_return_type = None;
             }

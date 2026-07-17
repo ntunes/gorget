@@ -77,7 +77,8 @@
 //!   helper fns, control flow — the CoW/ownership core (the DIFFERENTIAL shape).
 //! - tier 1 = `TIER_THROWS` (this round, T3b): the throws-position REJECTION
 //!   tier — one unhandled `throws` call per program, in a fuzzed position, that
-//!   production must REJECT with `E_UnhandledThrows`. A DIFFERENT ORACLE than
+//!   production must REJECT with `E_MissingFallibleMark` (D29; pre-D29
+//!   `E_UnhandledThrows`). A DIFFERENT ORACLE than
 //!   the differential (see the "throws-position rejection tier" section below);
 //!   CHECK-ONLY, no ggdef / build / self-host / LLVM lane.
 //! - future: widen the differential grammar — the mutation-route class table of
@@ -90,7 +91,8 @@
 //! Tier 1 inverts the differential: each seed is a program well-formed EXCEPT
 //! for ONE unhandled `throws` call (`generator::program_throws_positions`), and
 //! `classify` runs an INVERTED oracle (`classify_throws`) — production is
-//! REQUIRED to reject with the EXACT diagnostic code `error[E_UnhandledThrows]`.
+//! REQUIRED to reject with the EXACT diagnostic code
+//! `error[E_MissingFallibleMark]` (D29's bare-fallible-call code).
 //! Verdicts: `UNHANDLED-THROWS-REJECTED` is the benign PASS (the exact code,
 //! never a loose "mentions throws" match); `UNHANDLED-THROWS-SLIP` (check
 //! accepted an unhandled throws) is a real T3a enforcement hole;
@@ -304,7 +306,7 @@ enum Verdict {
     GgdefSkip { detail: String },
     // ── throws-position rejection tier (T3b, `TIER_THROWS`) verdicts ──
     /// The BENIGN PASS: production correctly REJECTED the one unhandled `throws`
-    /// call with the EXACT code `error[E_UnhandledThrows]` (and no `found
+    /// call with the EXACT code `error[E_MissingFallibleMark]` (and no `found
     /// `Result[` desugar leak). A rejection without that code routes to
     /// `GenInvalid`, never here (`classify_throws_routing` pins this).
     /// The whole point of the tier — treated like `Match` for cleanup/reporting.
@@ -314,7 +316,7 @@ enum Verdict {
     /// surface distinctly from a generator bug; blocks the green gate.
     UnhandledThrowsSlip { detail: String },
     /// NON-BENIGN: `gg check` rejected but the diagnostic LEAKED the `Result[T,
-    /// E]` desugar (`found `Result[`) instead of the clean `E_UnhandledThrows`
+    /// E]` desugar (`found `Result[`) instead of the clean fallible-mark code
     /// — the pre-D23 desugar surfacing as the found type. A regression; blocks.
     ThrowsDesugarLeak { detail: String },
 }
@@ -565,7 +567,7 @@ fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict
 
     // Throws-position rejection tier (TIER_THROWS, T3b): the generated program
     // is well-formed EXCEPT for one unhandled `throws` call, so production MUST
-    // reject it with `E_UnhandledThrows`. This is an INVERTED oracle and a
+    // reject it with `E_MissingFallibleMark` (D29). This is an INVERTED oracle and a
     // CHECK-ONLY tier — none of the ggdef / build / self-host / LLVM lanes below
     // run for it (the program never compiles). `classify_throws` returns before
     // the tier-0 `match check` (which would mislabel the expected rejection as
@@ -784,15 +786,18 @@ fn classify(source: &str, work: &Path, cfg: &Config, t: &mut Timings) -> Verdict
 }
 
 /// Inverted oracle for the throws-position rejection tier (`TIER_THROWS`, T3b).
-/// The generated program is well-formed EXCEPT for one unhandled `throws` call,
-/// so production is REQUIRED to reject it with `E_UnhandledThrows`. Four
-/// verdicts via an ORDERED decision tree (mirrors `check_gg_fails_no_desugar`,
+/// The generated program is well-formed EXCEPT for one BARE (unmarked)
+/// unhandled `throws` call, so production is REQUIRED to reject it with the
+/// D29 code `E_MissingFallibleMark` (pre-D29 this was `E_UnhandledThrows`;
+/// post-D29 that code is reserved for a MARKED call that cannot propagate —
+/// emitting it on a bare call would be a mis-coded rejection). Four verdicts
+/// via an ORDERED decision tree (mirrors `check_gg_fails_no_desugar`,
 /// tests/integration.rs):
 ///
-///   check SUCCEEDS                                → UnhandledThrowsSlip   (a real T3a hole)
-///   check FAILS, stderr `found `Result[`          → ThrowsDesugarLeak    (CHECK THIS FIRST)
-///   check FAILS, code `error[E_UnhandledThrows]`  → UnhandledThrowsRejected (the BENIGN PASS)
-///   check FAILS, any other diagnostic             → GenInvalid  (generator bug OR mis-coded rejection)
+///   check SUCCEEDS                                    → UnhandledThrowsSlip   (a real enforcement hole)
+///   check FAILS, stderr `found `Result[`              → ThrowsDesugarLeak    (CHECK THIS FIRST)
+///   check FAILS, code `error[E_MissingFallibleMark]`  → UnhandledThrowsRejected (the BENIGN PASS)
+///   check FAILS, any other diagnostic                 → GenInvalid  (generator bug OR mis-coded rejection)
 ///
 /// The desugar-LEAK arm MUST precede the PASS / GEN-INVALID arms: a leak is a
 /// plain type-mismatch diagnostic (`expected `int`, found `Result[int, String]`)
@@ -828,15 +833,16 @@ fn classify_throws(check: Result<Output, TimedOut>) -> Verdict {
     if stderr.contains("found `Result[") {
         return Verdict::ThrowsDesugarLeak { detail: error_lines(&o) };
     }
-    // (2) the D23 signal → the BENIGN PASS. The EXACT diagnostic code is
-    // required (`error[E_UnhandledThrows]` — `report_semantic_error` renders
+    // (2) the D23/D29 signal → the BENIGN PASS. The EXACT diagnostic code is
+    // required (`error[E_MissingFallibleMark]` — `report_semantic_error` renders
     // `.with_code(kind.code())`, src/errors.rs, inside ONE color span, so the
     // substring is contiguous after `strip_ansi`). A rejection that merely
     // MENTIONS "throws" — a parse error whose snippet quotes the
     // `int risky() throws String:` helper line, an
-    // `E_ThrowInNonThrowingFunction`, any throws-adjacent diagnostic — is NOT
-    // the tier's pass and falls through to GEN-INVALID.
-    if stderr.contains("error[E_UnhandledThrows]") {
+    // `E_ThrowInNonThrowingFunction`, or the now-mis-coded-for-bare-calls
+    // `E_UnhandledThrows` — is NOT the tier's pass and falls through to
+    // GEN-INVALID.
+    if stderr.contains("error[E_MissingFallibleMark]") {
         return Verdict::UnhandledThrowsRejected;
     }
     // (3) rejected WITHOUT the exact code → a generator bug (a malformed
@@ -1056,12 +1062,13 @@ void main():
 }
 
 /// Always-on: `classify_throws` routing (T3b's inverted oracle). The benign
-/// PASS requires the EXACT diagnostic code — `error[E_UnhandledThrows]` — not
-/// any mention of "throws": a parse error whose snippet quotes the
-/// `int risky() throws String:` helper line, or a throws-ADJACENT diagnostic
-/// (`E_ThrowInNonThrowingFunction`), must route to GEN-INVALID, never silently
-/// green. Also pins slip-on-accept, the leak-FIRST arm ordering, and that the
-/// code substring survives `gg`'s ANSI-colored output (via `strip_ansi`).
+/// PASS requires the EXACT D29 diagnostic code — `error[E_MissingFallibleMark]`
+/// — not any mention of "throws": a parse error whose snippet quotes the
+/// `int risky() throws String:` helper line, a throws-ADJACENT diagnostic
+/// (`E_ThrowInNonThrowingFunction`), or the now-mis-coded-for-bare-calls
+/// `E_UnhandledThrows` must route to GEN-INVALID, never silently green. Also
+/// pins slip-on-accept, the leak-FIRST arm ordering, and that the code
+/// substring survives `gg`'s ANSI-colored output (via `strip_ansi`).
 #[cfg(unix)]
 #[test]
 fn classify_throws_routing() {
@@ -1080,7 +1087,7 @@ fn classify_throws_routing() {
     assert_eq!(
         classify_throws(checked(
             1,
-            "error[E_UnhandledThrows]: this call throws `String`\n\
+            "error[E_MissingFallibleMark]: this call can fail with `String`\n\
              error[E_TypeMismatch]: type mismatch: expected `int`, found `Result[int, String]`\n",
         ))
         .label(),
@@ -1092,11 +1099,23 @@ fn classify_throws_routing() {
     assert_eq!(
         classify_throws(checked(
             1,
-            "\x1b[0m\x1b[1m\x1b[38;5;9merror[E_UnhandledThrows]\x1b[0m\x1b[1m: this call throws \
-             `String` but the error is not handled here\x1b[0m\n",
+            "\x1b[0m\x1b[1m\x1b[38;5;9merror[E_MissingFallibleMark]\x1b[0m\x1b[1m: this call \
+             can fail with `String` — mark it with `!`\x1b[0m\n",
         ))
         .label(),
         "UNHANDLED-THROWS-REJECTED",
+    );
+    // The PRE-D29 code on a bare call is now a MIS-CODED rejection (the D29
+    // checker emits E_UnhandledThrows only for a MARKED call that cannot
+    // propagate) → GEN-INVALID, not the pass.
+    assert_eq!(
+        classify_throws(checked(
+            1,
+            "error[E_UnhandledThrows]: this call can fail with `String` but the \
+             error is not handled here\n",
+        ))
+        .label(),
+        "GEN-INVALID",
     );
     // A parse error whose SNIPPET quotes the `throws` helper line mentions
     // "throws" but carries NO diagnostic code → a generator bug (GEN-INVALID),

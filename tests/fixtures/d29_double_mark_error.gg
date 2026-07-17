@@ -1,0 +1,12 @@
+# D29 R3 ("no second mark" pin): `f()!!` — the outer `!` marks a Propagate
+# expression, not a fallible call. Exactly one mark per call.
+int boom(int x) throws String:
+    if x < 0:
+        throw "z"
+    return x + 1
+
+int use(int x) throws String:
+    return boom(x)!!
+
+void main():
+    print("x")

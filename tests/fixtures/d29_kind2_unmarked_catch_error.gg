@@ -1,0 +1,13 @@
+# D29 R2 (LOG 2026-07-17 amendment): `!` marks error-channel ACTIVATION on BOTH
+# call kinds — a disposition attached to an UNMARKED kind-2 call (declared
+# Result[T,E] return, no throws) is a bare fallible call. Write
+# `parse2(4)! catch (e): -1`. (A catch on a Result LOCAL stays legal — see the
+# POS pin d29_catch_on_result_local.gg.)
+Result[int, String] parse2(int x):
+    if x < 0:
+        return Error("neg")
+    return Ok(x)
+
+void main():
+    int v = parse2(4) catch (e): -1
+    print(v)

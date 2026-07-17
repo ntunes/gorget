@@ -1,0 +1,4 @@
+# D29 R3 (lying marks): `!` on a literal is not a fallible call.
+void main():
+    int a = 5!
+    print(a)

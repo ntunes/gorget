@@ -1,0 +1,8 @@
+# D29 R3 (lying marks): `!` on a call whose callee neither throws nor returns
+# Result — the mark claims an error channel that does not exist.
+int pure(int x):
+    return x * 2
+
+void main():
+    int a = pure(3)!
+    print(a)

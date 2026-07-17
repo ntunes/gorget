@@ -1,0 +1,10 @@
+# D29 R4 (tail discards): a bare kind-2 call as a LOOP-BODY tail silently
+# drops its Error once per iteration — the exact D29 kill-class.
+Result[int, String] parse2(int x):
+    return Ok(x)
+
+void main():
+    int i = 0
+    while i < 3:
+        i = i + 1
+        parse2(i)

@@ -1,0 +1,13 @@
+# D29 R3 (lying marks): `!` on a Result-typed LOCAL — the mark attaches to
+# CALLS (throws-callee or declared-Result return), never to values (LOG: "not
+# every expression of type Result").
+Result[int, String] parse2(int x):
+    return Ok(x)
+
+int use(int x) throws String:
+    Result[int, String] r = parse2(x)
+    int v = r!
+    return v
+
+void main():
+    print("x")

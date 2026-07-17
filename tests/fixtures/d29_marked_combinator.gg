@@ -1,0 +1,16 @@
+# D29 POS pin: a marked Result COMBINATOR call (`r.and_then(f)!`) is a kind-2
+# call like any other — the mark peels to T and activates the channel (no
+# combinator carve-out; the amendment dissolves the receiver-type predicate).
+Result[int, String] parse2(int x):
+    if x < 0:
+        return Error("neg")
+    return Ok(x)
+
+int use(int x) throws String:
+    Result[int, String] r = parse2(x)
+    int v = r.and_then((int n): parse2(n + 1))!
+    return v
+
+void main():
+    int a = use(4)! catch (e): -1
+    print(a)
