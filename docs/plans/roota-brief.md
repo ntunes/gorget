@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF — Root A: self-host iterator-receiver field-place borrow (3 spin fixtures flip)
 
-**Status:** DRAFT v4 — in the ≥3-fresh-pass review gauntlet. Pass 1 (core patch verified
+**Status:** ✅ v4 GAUNTLET-CLEAN (pass 4 SIGN OFF 2026-07-17 — snapshot names verified against the regen convention, the stray-restore live-probed safe, all four folds residue-free) — EXECUTABLE; executor launched. Gauntlet history: Pass 1 (core patch verified
 clean end-to-end; 4 reservations folded: guard gating + positive control, comparison-net
 facts, TODO retire disambiguation + Ref__ residual) → v2. Pass 2 (all folds re-verified
 independently incl. the load-bearing rp_is_ref exclusion at the LIR alias crux; ONE
