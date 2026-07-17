@@ -787,21 +787,7 @@ bool cow_materialize_projected_root(LowerCtx &ctx, GirModule &gmod, SpannedExpr 
     String tname = type_id_to_name(struct_tid, &gmod)
     String clone_fn = resolve_payload_clone_fn(tname, &gmod)
     if clone_fn == "":
-        # 2E-SH value-struct path: a pure-VALUE struct (no clone fn) behind a bare
-        # Ptr param — the canonical plain-`self` on a value struct (p15). No clone
-        # fn exists and none is needed: deref-copy the pointee into a fresh owned
-        # local and rebind, so the write lands on the private copy (mirror Rust
-        # `cow_materialize_alias`'s non-resource deref arm). Nothing to
-        # drop-register — no resource fields, by transitivity of resource-ness.
-        # A resource pointee without a clone fn is left alone (write-through) —
-        # deref-copying it would duplicate a droppable without registering the
-        # copy, so only pure values take this path.
-        if is_resource_type_name(tname, &gmod):
-            return false
-        int vmat = add_local(&ctx, struct_tid, None)
-        emit(&ctx, GIDeref(vmat, root_local, struct_tid))
-        nl_put(&ctx, root, vmat)
-        return true
+        return false
     int mat = add_local(&ctx, struct_tid, None)
     Vector[Operand] cargs = [OpBorrow(root_local)]
     emit(&ctx, GICallExtern(mat, clone_fn, cargs))
