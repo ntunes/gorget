@@ -1286,23 +1286,42 @@ void check_call_aliasing(Vector[CallArg] args, ScopeTable scopes, TypeTable &typ
             j = j + 1
         i = i + 1
 
-# D12 position 6 (materialize-on-write): a write through a bare BORROW-view
-# param of a drop-tainted type would privatise (materialize) an implicit
-# copy — rejected. Fires on a FIELD/INDEX write target (`s.id = 9`,
-# `s[0] = x`, and their compound forms) whose ROOT is a bare BORROW param
-# (OWN_BORROW) of a drop-tainted type. A whole-identifier rebind (`s = x`)
-# does not materialize, so it is skipped. Mirrors Rust
-# `mark_bare_param_write_def` (src/semantic/safety/helpers.rs:921-948).
+# 2T core (materialize-on-write): a write whose ROOT materialises a private
+# copy — a bare BORROW param (OWN_BORROW), OR a plain-`self` method's `self`
+# (also a bare Borrow view under D2) — of a drop-tainted type is REJECTED.
+# `self` has NO DefId (ESelfExpr is unresolved), so `place_root_def_spanned`
+# misses it; the self root is matched by NAME + the current method's self-mode
+# (`ctx.self_mode == OWN_BORROW`) + the equipped type (`types.self_type_id`),
+# mirroring Rust's `find_root_def_id(SelfExpr)` → self param DefId. Returns true
+# if it rejected (so a caller can avoid a double-report). Shared by the assign
+# target, the mutating-receiver, and the `&`-formation arg positions — one gate,
+# every site (Core #4). Mirrors Rust `reject_tainted_materialize_on_write`.
+bool reject_if_tainted_materialize_root(SpannedExpr place, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    if place_root_name(place.expr) == "self":
+        if ctx.self_mode == 0 and is_drop_tainted_type(types.self_type_id, scopes, types):
+            ctx.diagnostics.push(Diagnostic.error(place.span, DkMoveWithoutOperator(), drop_taint_message("self", 0)))
+            return true
+        return false
+    if place_root_def_spanned(place, scopes, ctx) is Some(def_id):
+        DefInfo d = scopes.get_def(def_id)
+        # bare BORROW param (OWN_BORROW == 0) of a drop-tainted type.
+        if d.is_param and d.param_ownership == 0 and is_drop_tainted_type(d.type_id, scopes, types):
+            ctx.diagnostics.push(Diagnostic.error(place.span, DkMoveWithoutOperator(), drop_taint_message(d.name, 0)))
+            return true
+    return false
+
+# D12 position 6 (materialize-on-write) — the ASSIGN/COMPOUND target position.
+# Fires on a FIELD/INDEX write target (`s.id = 9`, `s[0] = x`, and their compound
+# forms) or a plain-`self.field` write whose ROOT materialises. A whole-identifier
+# rebind (`s = x`) does not materialize, so it is skipped (the receiver and
+# formation positions do NOT skip whole — a whole `r.push()` / `&r` DOES
+# materialize). Mirrors Rust `mark_bare_param_write_def`/the assign-site gate.
 void reject_materialize_on_write(SpannedExpr target, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     if place_is_whole(target.expr):
         return
     if not expr_is_place(target.expr):
         return
-    if place_root_def_spanned(target, scopes, ctx) is Some(def_id):
-        DefInfo d = scopes.get_def(def_id)
-        # bare BORROW param (OWN_BORROW == 0) of a drop-tainted type.
-        if d.is_param and d.param_ownership == 0 and is_drop_tainted_type(d.type_id, scopes, types):
-            ctx.diagnostics.push(Diagnostic.error(target.span, DkMoveWithoutOperator(), drop_taint_message(d.name, 0)))
+    bool _r = reject_if_tainted_materialize_root(target, scopes, &types, &ctx)
 
 # Element-ingesting mutating builtin methods (mirror Rust's protocol
 # `is_mutating` element-ingest set, src/ir/lowering/builtins.rs). A bare
@@ -1311,6 +1330,19 @@ void reject_materialize_on_write(SpannedExpr target, ScopeTable scopes, TypeTabl
 # classifier (rule 2 — the typecheck stage has no protocol table to query).
 bool is_collection_ingest_method(String name):
     return name == "push" or name == "put" or name == "insert" or name == "add" or name == "send" or name == "set" or name == "extend" or name == "update" or name == "get_or_put" or name == "fill" or name == "set_at" or name == "enqueue" or name == "append" or name == "push_front" or name == "push_back"
+
+# EVERY mutating collection builtin — the ingest set PLUS the removing/reordering
+# methods (`pop`/`remove`/`clear`/`sort`/…) that mutate the receiver in place.
+# Mirrors Rust `is_mutating_builtin_method` (src/ir/lowering/builtins.rs — the
+# ALL_PROTOCOLS `is_mutating` set). Used for the 2T RECEIVER-root reject (defect
+# C): a mutating builtin on a collection receiver materialises the receiver ROOT,
+# so `r.vals.pop()` on a tainted bare param must reject just like `r.vals.push(x)`
+# (the ARG-position D12 gate stays on the narrower ingest set — only ingest ARGS
+# copy at the boundary).
+bool is_mutating_builtin_method(String name):
+    if is_collection_ingest_method(name):
+        return true
+    return name == "pop" or name == "remove" or name == "clear" or name == "reserve" or name == "reverse" or name == "sort" or name == "sort_by" or name == "sort_by_key" or name == "swap" or name == "swap_remove" or name == "pop_front" or name == "pop_back" or name == "dequeue"
 
 # Is the receiver an element-owning collection (Vector/Dict/Set/Heap/…)?
 # Gates position 3 so a plain user method named `push`/`add` on a non-
@@ -2129,6 +2161,13 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                         # callable/Box/Task ctor arg. NO param exemption at an
                         # init boundary (a param IS rejected here).
                         reject_single_owner_init(a.value, false, scopes, &types, &ctx)
+                    # 2T FORMATION: a `&`-arg (`f(&s.field)`, `f(&self)`, `f(&p)`)
+                    # materialises the projection/whole ROOT — reject a tainted
+                    # plain-self / bare-Borrow-param root (mirror Rust
+                    # `reject_tainted_formation_arg`; `&*deref` has no trackable
+                    # root, so it self-excludes via `place_root_name`).
+                    if a.ownership == OWN_MUTABLE:
+                        bool _rf = reject_if_tainted_materialize_root(a.value, scopes, &types, &ctx)
                     check_safety_expr(a.value, scope_id, &state, &scopes, &types, &ctx)
             # STEP 3: D10(b) same-call place-overlap (args only, not callee), with
             # Part A's skip-move-first — runs AFTER liveness so `f(!x,!x)` is a
@@ -2145,6 +2184,15 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # D12 position 6 sibling: a `&self` mutator on a tainted borrow-rooted
             # receiver materialises an implicit copy.
             reject_amp_self_mutator(*receiver, method_name, scopes, &types, &ctx)
+            # 2T (defect C — mutating BUILTIN receiver): a mutating builtin
+            # (`push`/`put`/…) on a collection receiver materialises the receiver
+            # ROOT — reject a plain-self / bare-Borrow-param root of a drop-tainted
+            # type (mirror Rust's `is_builtin_mut` receiver reject). Covers BOTH
+            # statement AND value position (this walk visits every method call),
+            # and — unlike the assign target — does NOT skip a WHOLE receiver
+            # (`r.push()` on a whole tainted param still materialises r).
+            if is_mutating_builtin_method(method_name) and is_collection_receiver(*receiver, scopes, &types, &ctx):
+                bool _rc = reject_if_tainted_materialize_root(*receiver, scopes, &types, &ctx)
             # PART B: a `!self`-consuming method consumes the receiver root. Only a
             # bare-place receiver participates (a temp method-chain receiver has no
             # trackable root). Mirrors Rust check_expr.rs:387-403.
@@ -2164,6 +2212,10 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                 else:
                     if ingest and a.ownership == OWN_BORROW:
                         reject_tainted_place(a.value, scopes, &types, &ctx)
+                    # 2T FORMATION (method-call kind): same `&`-arg materialize
+                    # reject as the free-call loop (mirror Rust — all call kinds).
+                    if a.ownership == OWN_MUTABLE:
+                        bool _rf = reject_if_tainted_materialize_root(a.value, scopes, &types, &ctx)
                     check_safety_expr(a.value, scope_id, &state, &scopes, &types, &ctx)
             # STEP 3: D10(b) place-overlap (explicit args only — the receiver is
             # not aliasing-checked against args, per Rust).
@@ -2240,7 +2292,14 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             ctx.d29_tail_dropped = false
             ctx.d29_can_propagate = false
             ctx.d29_return_is_result = false
+            # 2T/D2: a closure captures `self` BY VALUE (D5) — an ESelfExpr write
+            # inside the closure body targets the closure's OWN copy, not the
+            # method's plain-self, so the self-root materialize gate must NOT fire
+            # here. Reset self-mode to -1 for the body walk, restore after.
+            int cl_saved_self_mode = ctx.self_mode
+            ctx.self_mode = -1
             check_safety_stmts(body, scope_id, &cl, &scopes, &types, &ctx)
+            ctx.self_mode = cl_saved_self_mode
             ctx.d29_tail_dropped = cl_saved_tail
             ctx.d29_can_propagate = cl_saved_prop
             ctx.d29_return_is_result = cl_saved_ret
@@ -2509,7 +2568,19 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         # residual (e) checks bare-fallible there).
         bool saved_tail_dropped = ctx.d29_tail_dropped
         ctx.d29_tail_dropped = true
+        # 2T/D2: expose THIS method's self-mode to the self-root materialize gate
+        # (OWN_BORROW plain self materialises on write; `&self`/`!self` do not).
+        # `types.self_type_id` (set by the IEquip arm) is the equipped type; the
+        # first param named `self` carries the mode. Free fns / non-self methods
+        # → -1. Saved/restored so it never leaks past this body.
+        int saved_self_mode = ctx.self_mode
+        ctx.self_mode = -1
+        if func.params.len() > 0:
+            Param self_p0 = func.params.get(0).unwrap()
+            if self_p0.param_name == "self":
+                ctx.self_mode = self_p0.ownership
         check_safety_stmts(func.body, body_scope, &safety, &scopes, &types, &ctx)
+        ctx.self_mode = saved_self_mode
         ctx.d29_tail_dropped = saved_tail_dropped
         ctx.loop_depth = saved_loop_depth
         ctx.current_function_throws = saved_throws

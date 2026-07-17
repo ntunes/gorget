@@ -476,6 +476,14 @@ String cow_source_root_name(SpannedExpr e):
     match e.expr:
         case EIdentifier(idn):
             return idn
+        case ESelfExpr():
+            # 2E-SH (D2): plain `self` is a bare param like any other — a write
+            # rooted at `self` must materialise a private copy. Self is registered
+            # in the lowerer's named_locals as "self" (a LoParam) at method entry,
+            # so returning "self" lets `cow_materialize_projected_root` find and
+            # privatise it exactly as it does for a named bare param. Mirrors the
+            # Rust `resolve_projection_root_local` SelfExpr arm.
+            return "self"
         case EMethodCall(recv_box, _, _, _):
             return cow_source_root_name(*recv_box)
         case EIndex(base_box, _):

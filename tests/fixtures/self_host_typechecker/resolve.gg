@@ -83,6 +83,16 @@ struct ResolveContext:
     bool d29_in_result_capture
     bool d29_can_propagate
     bool d29_return_is_result
+    # 2T/D2 (self-root materialize gate): the CURRENT method's self-mode while
+    # its body is safety-walked — OWN_BORROW(0)=plain `self`, OWN_MUTABLE(1)=
+    # `&self`, OWN_MOVE(2)=`!self`, -1 = not in a method (free fn / closure body).
+    # `self` has no DefId (ESelfExpr is unresolved), so the def-keyed reject
+    # gates cannot root a self write; this + the equipped type `types.self_type_id`
+    # let `reject_if_tainted_materialize_root` treat a plain-self root as a bare
+    # BORROW param. Set per-method in `type_check_function`, RESET to -1 on a
+    # closure-body walk (a closure captures self BY VALUE — D5 — so an ESelfExpr
+    # write inside it targets the closure's own copy, not the method's self).
+    int self_mode
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -158,7 +168,7 @@ bool is_compiler_intrinsic_name(String name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false, false, false, false, false)
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false, false, false, false, false, -1)
 
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()
