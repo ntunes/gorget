@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF — self-host FLIP TRACKS: callable-init class (+4) + Copy-axis struct (+1) → SELFHOST floor 214
 
-**Status:** DRAFT v4 — in the ≥3-fresh-pass review gauntlet. Pass 1 (mechanics verified sound
+**Status:** ✅ v4 GAUNTLET-CLEAN (pass 4 SIGN OFF 2026-07-17; its one non-blocking symlink-direction observation folded in place per its explicit clearance) — EXECUTABLE; executor launched. Gauntlet history: DRAFT v4 — Pass 1 (mechanics verified sound
 end-to-end; module-doc range narrowed preserving History; MEMORY parity lag fixed by the
 parent) → v2. Pass 2 (independent re-derivation: exactly-5-sites confirmed by exhaustive grep;
 collection-put/closure-capture confirmed separate classes, not holes; no RTOwned variant —
@@ -104,7 +104,8 @@ and are exactly the 5 flipping).
 - Your write zone: `tests/fixtures/self_host_typechecker/**` + `tests/spec_conformance.rs` +
   TODO/DONE. Another executor is working the self-host LOWERER (`lower_loops.gg` /
   `lower_expr.gg`) + Rust `for_loops.rs`/`collections.rs` + tests/integration.rs — do NOT
-  touch those (NOTE: parser/ast under the typechecker dir are SYMLINKED to the lowerer's —
+  touch those (NOTE: the REAL parser/ast files live under the typechecker dir; the LOWERER's
+  copies are the symlinks (pass-4-corrected direction) —
   the scout's patch avoids them; keep it that way, and if the patch fails to apply because of
   drift from the other executor's landing, STOP-AND-REPORT rather than hand-merging).
 - Parity regen is NOT yours — the parent runs it at integration (the harness is fixed and
