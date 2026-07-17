@@ -904,7 +904,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
 
         case EDotShorthand(_, args):
             for arg in args:
-                resolve_expr(arg, &scopes, &ctx)
+                resolve_expr(arg.value, &scopes, &ctx)
 
         case EFString(_, exprs, _):
             # Walk pre-parsed interpolation segments so identifiers /

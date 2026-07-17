@@ -1,0 +1,21 @@
+# RV-B — the "dot-shorthand == longhand" property against future over-tightening:
+# a LEGAL bare non-resource (`String`, CoW-eligible) `.Wrap(s)` where the source
+# `s` stays LIVE afterwards. Per the CoW ownership table, a bare identifier at a
+# constructor/enum-init boundary clones-if-live / moves-if-dead — here `s` is used
+# again by `print(s)`, so the init CLONES and both `s` and the payload are valid.
+# Accepts on both backends and both lanes; prints `hi` (the still-live source)
+# then `hi` (the cloned payload). This pins the no-over-reject else-branch: a
+# naive "reject every enum-init arg" tightening would break this.
+enum E:
+    Wrap(String)
+    Empty
+
+void main():
+    String s = "hi"
+    E e = .Wrap(s)
+    print(s)
+    match e:
+        case .Wrap(inner):
+            print(inner)
+        else:
+            print("none")

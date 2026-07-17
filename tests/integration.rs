@@ -6301,6 +6301,64 @@ fn d12_legal_closure_fresh_temp_run() {
     run_gg("d12_drop_purity/legal_closure_fresh_temp.gg", "7\ndrop 7");
 }
 
+// ── RV-B: dot-shorthand enum-init (`.Variant(x)`) is a D12 pos-2 ownership
+// boundary IDENTICAL to the longhand `E.Variant(x)` ctor. Before RV-B the
+// production DotShorthand safety arm ran neither the pos-2 hook (accepted a bare
+// drop-tainted `.Wrap(r)`, then double-dropped) nor the move check (accepted
+// `.Wrap(!r); use r`). Both are now routed through the shared
+// `check_call_arg_ownership(args, is_constructor=true)`. ──
+#[test]
+fn d12_dotshorthand_tainted_bare_reject() {
+    check_gg_fails(
+        "d12_drop_purity/dotshorthand_tainted_bare_reject.gg",
+        D12_MOVE_CODE,
+    );
+}
+
+// The SECOND bug: the pre-fix arm ignored the `!` sigil, so `.Wrap(!r)` followed
+// by a use of `r` was wrongly accepted. Now identical to the longhand ctor:
+// `error[E_UseAfterMove]`.
+#[test]
+fn d12_dotshorthand_move_then_use_reject() {
+    check_gg_fails(
+        "d12_drop_purity/dotshorthand_move_then_use_reject.gg",
+        "error[E_UseAfterMove]",
+    );
+}
+
+// Legal `!` move counterpart: exactly ONE drop fires (pins the double-drop
+// regression the bare form used to cause).
+#[test]
+fn d12_dotshorthand_move_ok() {
+    run_gg("d12_drop_purity/dotshorthand_move_ok.gg", "built\ndrop 1");
+}
+
+// Legal bare non-resource (`String`, CoW-eligible) value at a dot-shorthand
+// enum-init boundary: source stays live → clones. Pins "dot-shorthand ==
+// longhand" against future over-tightening.
+#[test]
+fn d12_dotshorthand_bare_value_ok() {
+    run_gg("d12_drop_purity/dotshorthand_bare_value_ok.gg", "hi\nhi");
+}
+
+// A single-owner `Callable` enum payload REQUIRES an explicit `!` and, with it,
+// the move is ACCEPTED (all lanes). Runtime is blocked by a PRE-EXISTING,
+// ORTHOGONAL Callable-in-enum-payload lowering panic (`src/ir/lowering/mod.rs`,
+// `EnumInit(arg #0) — untracked source consumed`) that hits the LONGHAND
+// `E.Wrap(!f)` IDENTICALLY — filed in TODO.md. Per "Don't redesign around
+// compiler gaps": assert acceptance here, and pin the INTENDED runtime with an
+// `#[ignore]`d `run_gg`; un-ignore when the payload-lowering gap lands.
+#[test]
+fn d12_dotshorthand_callable_move_ok_accepts() {
+    check_gg_ok("d12_drop_purity/dotshorthand_callable_move_ok.gg");
+}
+
+#[test]
+#[ignore = "pre-existing: Callable-in-enum-payload lowering panic (filed TODO.md); longhand `E.Wrap(!f)` panics identically; un-ignore when fixed"]
+fn d12_dotshorthand_callable_move_ok_run() {
+    run_gg("d12_drop_purity/dotshorthand_callable_move_ok.gg", "built");
+}
+
 #[test]
 fn drop_field_move_zero() {
     run_gg(
@@ -19052,6 +19110,10 @@ fn self_host_driver_rejects_d12_drop_purity() {
         // position 6 (materialize-on-write / &self mutator)
         "pos6_materialize_on_write_reject",
         "pos6_amp_self_mutator_reject",
+        // RV-B: dot-shorthand enum-init (`.Wrap(r)`) is the same pos-2 boundary as
+        // the longhand `E.Wrap(r)` ctor — a bare drop-tainted place copies and
+        // rejects `cannot copy` (self-host renders `error[E_MoveWithoutOperator]`).
+        "dotshorthand_tainted_bare_reject",
     ];
     for name in reject_fixtures {
         let fixture = manifest_dir.join(format!("tests/fixtures/d12_drop_purity/{name}.gg"));
@@ -19085,6 +19147,50 @@ fn self_host_driver_rejects_d12_drop_purity() {
     }
 }
 
+// RV-B — the SECOND dot-shorthand bug, self-host half: `.Wrap(!r)` MOVES `r`, so
+// a later use of `r` is a use-after-move. This rejects with a DIFFERENT code
+// (`E_UseAfterMove`, message `use of \`r\` after it was moved`,
+// self_host_typechecker/typecheck.gg DkUseAfterMove) than the pos-2
+// `cannot copy` code asserted by `self_host_driver_rejects_d12_drop_purity`, so
+// it gets its own dedicated reject test rather than joining that list. Measured
+// live during RV-B execution (the scout's 5 self-host cases did not cover it):
+// the self-host DOES reject this shape post-fix — the shared CallArg-sigil
+// adapter threads the `!` through `live_move_operand`, exactly mirroring the
+// longhand `E.Wrap(!r); use r`. Rust half: `d12_dotshorthand_move_then_use_reject`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_dotshorthand_move_then_use() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/d12_drop_purity/dotshorthand_move_then_use_reject.gg");
+    assert!(fixture.exists(), "missing RV-B UAM fixture: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_dotshorthand_move_then_use",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "self-host driver ACCEPTED `.Wrap(!r); use r` — the DotShorthand safety arm \
+         dropped the move check (RV-B regressed). exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("use of `r` after it was moved") && stderr.contains('\u{250c}'),
+        "self-host driver rejected the UAM shape but not with the use-after-move \
+         diagnostic (+ the box rule).\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected use-after-move — the gate must \
+         halt BEFORE lowering. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
 // Over-rejection guard for A2-S: the self-host driver must ACCEPT the LEGAL
 // D4/D12 counterparts — an explicit `!`/`.clone()` move, a fresh-temp move, a
 // non-tainted field read, an owned-local `&self` mutator, AND a live tainted
@@ -19112,6 +19218,14 @@ fn self_host_driver_accepts_d12_legal() {
         // through: without this, a naive "reject every ctor/put arg" would ship
         // uncaught. NON-NEGOTIABLE guard for the CallArg-sigil re-enable.
         "legal_ctor_coll_move_accept",
+        // RV-B: dot-shorthand enum-init legal shapes — the explicit `!` move
+        // (`.Wrap(!r)`), the bare CoW-clone value (`.Wrap(s)` with `s` live), and
+        // the single-owner `Callable` explicit move (`.Wrap(!f)`). These guard the
+        // no-over-reject else-branch: the pre-RV-B sigil-discard adapter
+        // over-rejected the two `!` moves.
+        "dotshorthand_move_ok",
+        "dotshorthand_bare_value_ok",
+        "dotshorthand_callable_move_ok",
     ];
     for name in legal_fixtures {
         let fixture = manifest_dir.join(format!("tests/fixtures/d12_drop_purity/{name}.gg"));

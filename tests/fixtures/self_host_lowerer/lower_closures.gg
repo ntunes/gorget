@@ -1143,7 +1143,7 @@ bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, Gi
             return false
         case EDotShorthand(_, args):
             for a in args:
-                if closure_expr_has_capture(a, in_scope, &gmod):
+                if closure_expr_has_capture(a.value, in_scope, &gmod):
                     return true
             return false
         case ETry(inner):
@@ -1470,7 +1470,7 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
                 cc_collect_expr(&ctx, fv, in_scope, &gmod, &cc)
         case EDotShorthand(_, args):
             for a in args:
-                cc_collect_expr(&ctx, a, in_scope, &gmod, &cc)
+                cc_collect_expr(&ctx, a.value, in_scope, &gmod, &cc)
         case ETry(inner):
             cc_collect_expr(&ctx, *inner, in_scope, &gmod, &cc)
         case EMove(inner):
@@ -1729,7 +1729,7 @@ bool expr_has_nested_closure(SpannedExpr sexpr):
             return false
         case EDotShorthand(_, args):
             for a in args:
-                if expr_has_nested_closure(a):
+                if expr_has_nested_closure(a.value):
                     return true
             return false
         case ETry(inner):

@@ -853,7 +853,7 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
         # self-host `Expr` set — the next such variant is forced through. ──
         case EDotShorthand(_, dexprs):
             for de in dexprs:
-                discover_generic_calls_expr(de, &seen, &instances, &tparams)
+                discover_generic_calls_expr(de.value, &seen, &instances, &tparams)
         case EAwait(aw):
             discover_generic_calls_expr(*aw, &seen, &instances, &tparams)
         case ESpawn(sp):

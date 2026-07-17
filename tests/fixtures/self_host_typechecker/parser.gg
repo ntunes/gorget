@@ -2544,13 +2544,17 @@ equip Parser:
             self.advance()
             SpannedToken vname_tok = self.advance()
             String vname = token_ident(vname_tok.lex_token)
-            # EDotShorthand still carries bare Vector[SpannedExpr] (it is not part
-            # of the CallArg conversion scope — see scout report §5); extract the
-            # value from each parsed CallArg.
-            Vector[SpannedExpr] ds_args = Vector[SpannedExpr]()
+            # EDotShorthand carries the full CallArg list (name + ownership sigil +
+            # value), mirroring Rust gg's `Vec<Spanned<CallArg>>` (ast.rs:733) and
+            # the ECall/EMethodCall paths. The `!`/`&` sigil is a TYPED
+            # `CallArg.ownership` field — NOT discarded — so the D12 pos-2 safety
+            # walk gates on `a.ownership == OWN_BORROW` exactly like the longhand
+            # `E.Variant(args)` ECall ctor: `.Wrap(!r)` MOVES (no reject) and a
+            # bare `.Wrap(r)` on a drop-tainted place rejects.
+            Vector[CallArg] ds_args = Vector[CallArg]()
             if self.check_tok(TOK_LPAREN):
                 for dsa in self.parse_call_args():
-                    ds_args.push(dsa.value)
+                    ds_args.push(dsa)
             return SpannedExpr(EDotShorthand(vname, ds_args), Span(start, self.peek().lex_start))
 
         # Deref *expr

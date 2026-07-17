@@ -1309,7 +1309,7 @@ bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[Stri
             if mutinf_scan_expr(*is_inner, target, &gmod, &callees): m = true
         case EDotShorthand(_, ds_args):
             for da in ds_args:
-                if mutinf_scan_expr(da, target, &gmod, &callees): m = true
+                if mutinf_scan_expr(da.value, target, &gmod, &callees): m = true
         else:
             pass
     return m

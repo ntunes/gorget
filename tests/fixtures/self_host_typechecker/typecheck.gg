@@ -1208,7 +1208,7 @@ void collect_idents_expr(SpannedExpr e, Vector[SpannedExpr] &out):
                 collect_idents_expr(a, &out)
         case EDotShorthand(_v, args):
             for a in args:
-                collect_idents_expr(a, &out)
+                collect_idents_expr(a.value, &out)
         case EArrayLiteral(els):
             for a in els:
                 collect_idents_expr(a, &out)
@@ -1992,9 +1992,10 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # consuming init boundary. A bare `!x` arg is an EMove (marked below)
             # — the parser PRESERVES the prefix `!` on THIS path (an EMove node),
             # so `reject_single_owner_init` (which only matches a bare
-            # EIdentifier) never fires on a legal `S{f: !callable}`; no RV-B
-            # sigil-discard misfire applies here (contrast the EDotShorthand arm
-            # below). This arm is also UNREACHABLE in today's parser: `S(...)`
+            # EIdentifier) never fires on a legal `S{f: !callable}`. The
+            # EDotShorthand arm below now threads the same CallArg ownership sigil
+            # and gates on `a.ownership` identically (RV-B). This arm is also
+            # UNREACHABLE in today's parser: `S(...)`
             # lowers to ECall and `{...}` to a dict/set literal, so parser.gg
             # never constructs EStructLiteral — only meta.gg's
             # substitution-rebuild arms name it, and they rebuild a pre-existing
@@ -2014,22 +2015,26 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                 check_safety_expr(a, scope_id, &state, &scopes, &types, &ctx)
         case EDotShorthand(_variant, args):
             # D12 position 2 (enum variant init): `.Variant(x)` args are a
-            # consuming init boundary.
-            # ⚠ RV-B latent asymmetry (filed LOW, TODO — cross-refs the RV-B
-            # DotShorthand entry): the EDotShorthand parser adapter
-            # (parser.gg:~2553) pushes only `dsa.value` and DISCARDS the parsed
-            # `!` move sigil, so a LEGAL `MyEnum e = .Wrap(!callable)` reaches
-            # here as a bare EIdentifier — `reject_single_owner_init` would then
-            # fire a SELF-CONTRADICTING "write `!callable` to move" on code that
-            # ALREADY wrote `!`. Dormant (SELFHOST 214/214 + bootstrap green ⇒ no
-            # corpus hit) and over-reject-only; RV-B's sigil-preserving adapter
-            # (which threads CallArg.ownership through, mirroring EStructLiteral's
-            # preserved EMove) clears this misfire.
+            # consuming init boundary — IDENTICAL to the longhand `E.Variant(x)`
+            # ECall ctor arm above. The EDotShorthand adapter now threads the full
+            # CallArg (with the `!`/`&` ownership sigil) through, so we gate on
+            # `a.ownership` exactly like the ECall ctor path: an OWN_MOVE `!x` arg
+            # MOVES (marks the move — no reject), and only a bare OWN_BORROW arg
+            # hits the D12 pos-2 reject (a drop-tainted / single-owner place
+            # copies at the init boundary). This clears BOTH prior over-rejects:
+            # the tainted `.Wrap(!r)` and the single-owner `.Wrap(!callable)` that
+            # the old sigil-discard adapter mis-flagged as bare copies.
             for a in args:
-                reject_tainted_place(a, scopes, &types, &ctx)
-                # Single-owner init class (enum-variant shorthand): NO param exempt.
-                reject_single_owner_init(a, false, scopes, &types, &ctx)
-                check_safety_expr(a, scope_id, &state, &scopes, &types, &ctx)
+                if a.ownership == OWN_MOVE:
+                    live_move_operand(a.value, scope_id, &state, &scopes, &types, &ctx)
+                else:
+                    if a.ownership == OWN_BORROW:
+                        reject_tainted_place(a.value, scopes, &types, &ctx)
+                        # Single-owner init class (enum-variant): NO param exempt.
+                        reject_single_owner_init(a.value, false, scopes, &types, &ctx)
+                    check_safety_expr(a.value, scope_id, &state, &scopes, &types, &ctx)
+            # D10(b) same-call place-overlap (args only), mirroring the ECall arm.
+            check_call_aliasing(args, scopes, &types, &ctx)
         case ETry(inner):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EMove(inner):

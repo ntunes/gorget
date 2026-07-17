@@ -1,0 +1,23 @@
+# RV-B — the SECOND Rust bug this landing fixes: the pre-fix DotShorthand safety
+# arm IGNORED the `!` move sigil entirely (it hand-rolled a bare
+# `check_expr(&arg.node.value)`), so `.Wrap(!r)` followed by a use of `r` was
+# wrongly ACCEPTED. Post-fix the dot-shorthand routes through the SAME shared
+# arg-ownership path as the longhand ctor, so the `!r` is checked as a move and
+# the later `r.id` read is a use-after-move — IDENTICAL to the longhand
+# `E.Wrap(!r); use r` (both emit `error[E_UseAfterMove]`). Nothing else guards
+# this second bug.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+enum E:
+    Wrap(R)
+    Empty
+
+void main():
+    R r = R(1)
+    E e = .Wrap(!r)
+    print(r.id)

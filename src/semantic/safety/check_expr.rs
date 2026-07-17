@@ -61,6 +61,90 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Per-arg ownership handling shared by every call/constructor arg list
+    /// (`Expr::Call` AND `Expr::DotShorthand` enum-variant init). `!arg` is
+    /// checked as a move (`check_move` on the root); a bare (`Borrow`) or `&`
+    /// (`MutableBorrow`) arg marks the use and, **at a constructor**
+    /// (`is_constructor`), routes through the D4/D12 position-2 hook
+    /// (`require_explicit_move_for_single_owner_init`) so a live drop-tainted
+    /// / single-owner place rejects with `E_MoveWithoutOperator`. Extracting
+    /// this loop is the Core-#4 "fix the class" move: the DotShorthand arm used
+    /// to hand-roll a bare `check_expr(&arg.node.value)` that silently dropped
+    /// BOTH the move check (missed use-after-move on `.Wrap(!r)`) and the pos-2
+    /// hook (accepted a bare drop-tainted `.Wrap(r)` the longhand ctor rejects,
+    /// then auto-cloned/moved it — a double-drop of the resource's `Drop`).
+    pub(super) fn check_call_arg_ownership(
+        &mut self,
+        args: &[Spanned<CallArg>],
+        is_constructor: bool,
+    ) {
+        for arg in args {
+            match arg.node.ownership {
+                Ownership::Move => {
+                    // Argument passed with `!` — check the move
+                    if let Expr::Identifier(_) = &arg.node.value.node {
+                        if let Some(&def_id) =
+                            self.resolution_map.get(&arg.node.value.span.start)
+                        {
+                            let kind = self.scopes.get_def(def_id).kind;
+                            if kind == DefKind::Variable {
+                                self.check_move(def_id, arg.span);
+                            }
+                        }
+                    } else {
+                        // Field move (e.g., f(!p.field)) — mark root as moved
+                        if let Some(root_def_id) = self.find_root_def_id(&arg.node.value) {
+                            let kind = self.scopes.get_def(root_def_id).kind;
+                            if kind == DefKind::Variable {
+                                self.check_move(root_def_id, arg.span);
+                            }
+                        }
+                        self.check_expr(&arg.node.value);
+                    }
+                }
+                Ownership::MutableBorrow | Ownership::Borrow => {
+                    if arg.node.ownership == Ownership::MutableBorrow {
+                        // Track passing `&` param with `&` to callee as mutation
+                        self.mark_mut_param_if_applicable(&arg.node.value);
+                        // Borrow-fields: passing `&v` to a callee that
+                        // mutates v invalidates any borrow-field struct
+                        // currently borrowing from v. Only flag when the
+                        // borrower is a borrow-field struct — sigil
+                        // borrows have their own existing rules.
+                        if let Some(src_def_id) = self.find_root_def_id(&arg.node.value) {
+                            self.check_borrow_field_mutation(src_def_id, arg.node.value.span);
+                        }
+                    }
+                    // CoW rule (b): a bare non-Copy identifier arg at a
+                    // constructor (Variant/Newtype) is NOT an implicit
+                    // move that rejects a live source. The lowering
+                    // clones-if-live and moves-if-dead at the init
+                    // boundary (`clone_resource_args_for_init` →
+                    // `is_last_use_at`), exactly as collection
+                    // mutators / tuple-array literals do. So we fall
+                    // through to `check_expr`, which marks the use
+                    // without consuming the source. Explicit `!arg`
+                    // moves still go through the `Ownership::Move` arm
+                    // above. Carve-out: single-owner types (closures/
+                    // `Box`/`Owned`/`Task`/...) AND drop-tainted resources
+                    // still require explicit `!` at a CONSTRUCTOR (they have
+                    // no implicit-copy path — D12 pos-2) — but NOT at a plain
+                    // function call, where the arg is just borrowed. Hence
+                    // the `is_constructor` gate.
+                    if is_constructor {
+                        self.require_explicit_move_for_single_owner_init(&arg.node.value);
+                    }
+                    self.check_expr(&arg.node.value);
+                    // Dead-write lint: `&p` args are NOT
+                    // counted as writes in v1 — without callee purity
+                    // info a read-only `&` callee (NeedlessMutableBorrow
+                    // shape) would false-positive. Follow-up: gate on
+                    // callee purity == MutatesArgs+.
+                }
+            }
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             // Literals — no ownership concerns
@@ -218,70 +302,7 @@ impl<'a> BorrowChecker<'a> {
                     .map(|id| matches!(self.scopes.get_def(id).kind, DefKind::Variant | DefKind::Newtype))
                     .unwrap_or(false);
 
-                for arg in args {
-                    match arg.node.ownership {
-                        Ownership::Move => {
-                            // Argument passed with `!` — check the move
-                            if let Expr::Identifier(_) = &arg.node.value.node {
-                                if let Some(&def_id) =
-                                    self.resolution_map.get(&arg.node.value.span.start)
-                                {
-                                    let kind = self.scopes.get_def(def_id).kind;
-                                    if kind == DefKind::Variable {
-                                        self.check_move(def_id, arg.span);
-                                    }
-                                }
-                            } else {
-                                // Field move (e.g., f(!p.field)) — mark root as moved
-                                if let Some(root_def_id) = self.find_root_def_id(&arg.node.value) {
-                                    let kind = self.scopes.get_def(root_def_id).kind;
-                                    if kind == DefKind::Variable {
-                                        self.check_move(root_def_id, arg.span);
-                                    }
-                                }
-                                self.check_expr(&arg.node.value);
-                            }
-                        }
-                        Ownership::MutableBorrow | Ownership::Borrow => {
-                            if arg.node.ownership == Ownership::MutableBorrow {
-                                // Track passing `&` param with `&` to callee as mutation
-                                self.mark_mut_param_if_applicable(&arg.node.value);
-                                // Borrow-fields: passing `&v` to a callee that
-                                // mutates v invalidates any borrow-field struct
-                                // currently borrowing from v. Only flag when the
-                                // borrower is a borrow-field struct — sigil
-                                // borrows have their own existing rules.
-                                if let Some(src_def_id) = self.find_root_def_id(&arg.node.value) {
-                                    self.check_borrow_field_mutation(src_def_id, arg.node.value.span);
-                                }
-                            }
-                            // CoW rule (b): a bare non-Copy identifier arg at a
-                            // constructor (Variant/Newtype) is NOT an implicit
-                            // move that rejects a live source. The lowering
-                            // clones-if-live and moves-if-dead at the init
-                            // boundary (`clone_resource_args_for_init` →
-                            // `is_last_use_at`), exactly as collection
-                            // mutators / tuple-array literals do. So we fall
-                            // through to `check_expr`, which marks the use
-                            // without consuming the source. Explicit `!arg`
-                            // moves still go through the `Ownership::Move` arm
-                            // above. Carve-out: single-owner types (closures/
-                            // `Box`/`Owned`/`Task`/...) still require explicit
-                            // `!` at a CONSTRUCTOR (they have no clone path) — but
-                            // NOT at a plain function call, where the arg is just
-                            // borrowed. Hence the `is_constructor` gate.
-                            if is_constructor {
-                                self.require_explicit_move_for_single_owner_init(&arg.node.value);
-                            }
-                            self.check_expr(&arg.node.value);
-                            // Dead-write lint: `&p` args are NOT
-                            // counted as writes in v1 — without callee purity
-                            // info a read-only `&` callee (NeedlessMutableBorrow
-                            // shape) would false-positive. Follow-up: gate on
-                            // callee purity == MutatesArgs+.
-                        }
-                    }
-                }
+                self.check_call_arg_ownership(args, is_constructor);
 
                 // §3.4 Stale-condition: blocking calls release the token just like await.
                 if self.current_function_is_async {
@@ -1203,9 +1224,17 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::DotShorthand { args, .. } => {
-                for arg in args {
-                    self.check_expr(&arg.node.value);
-                }
+                // A dot-shorthand ALWAYS resolves to an enum-variant constructor
+                // (`EnumType.Variant(args)` — typecheck.rs:3681), so it is an
+                // ownership boundary exactly like the longhand `E.Variant(args)`
+                // Call. Route through the SAME shared arg-ownership path with
+                // `is_constructor = true`: `!arg` is checked as a move (fixes the
+                // missed use-after-move on `.Wrap(!r)`), and a bare drop-tainted /
+                // single-owner place hits the D12 pos-2 hook (fixes the double-drop
+                // on `.Wrap(r)` that the longhand ctor already rejects). Also run
+                // the D10(b) intra-call aliasing check, as the Call arm does.
+                self.check_call_aliasing(args);
+                self.check_call_arg_ownership(args, true);
             }
             Expr::MetaOpInfix { left, right, .. } => {
                 self.check_expr(left);

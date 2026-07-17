@@ -267,7 +267,7 @@ String format_expr(SpannedExpr se):
             for (i, a) in args.enumerate():
                 if i > 0:
                     result = result + ", "
-                result = result + format_expr(a)
+                result = result + format_expr(a.value)
             result = result + ")"
             return result
         case ETry(inner):

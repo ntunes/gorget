@@ -5787,8 +5787,12 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # through the same typed path.
             String ds_name = variant.clone()
             Vector[SpannedType] ds_no_targs = []
-            Vector[String] ds_no_names = []
-            return lower_call(&ctx, &ds_name, &sargs, &ds_no_names, &ds_no_targs, &gmod)
+            # RV-B: EDotShorthand now carries Vector[CallArg]; adapt to lower_call's
+            # bare-value + names interface exactly like the ECall arm (lower_call
+            # keys off the callee's borrow_flags, NOT the arg sigil — ast.gg:43).
+            Vector[SpannedExpr] ds_vals = callarg_values(sargs)
+            Vector[String] ds_names = callarg_names(sargs)
+            return lower_call(&ctx, &ds_name, &ds_vals, &ds_names, &ds_no_targs, &gmod)
         case EBlock(block_stmts):
             # Block in value position — lower via `lower_block_expr` and return
             # its tail value (was dropping it into a fresh UNIT local). Mirrors

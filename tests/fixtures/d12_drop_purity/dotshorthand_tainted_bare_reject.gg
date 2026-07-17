@@ -1,0 +1,26 @@
+# RV-B — D12 position 2 (enum-variant init via DOT-SHORTHAND). A bare
+# drop-tainted place used as a `.Variant(x)` argument is an implicit copy at the
+# init boundary — `E_MoveWithoutOperator`, IDENTICAL to the longhand
+# `E.Wrap(r)` ctor. Before RV-B the production DotShorthand safety arm had no
+# pos-2 hook (accepted this, then double-dropped the resource) and the self-host
+# discarded the arg sigil (over-rejected the legal `!` move). Write `!r` to move
+# or `r.clone()` to copy.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        pass
+
+enum E:
+    Wrap(R)
+    Empty
+
+void main():
+    R r = R(1)
+    E e = .Wrap(r)
+    match e:
+        case .Wrap(inner):
+            print(inner.id)
+        else:
+            print(0)

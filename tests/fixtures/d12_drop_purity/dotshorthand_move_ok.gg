@@ -1,0 +1,22 @@
+# RV-B legal counterpart: an explicit `!` move at a dot-shorthand enum-variant
+# arg transfers ownership (source dead after) — accepted, and exactly ONE drop
+# fires at scope end. Pins the double-drop regression: the pre-fix bare
+# `.Wrap(r)` silently auto-cloned a LIVE tainted place so `drop` ran TWICE
+# (now that bare form REJECTS — see dotshorthand_tainted_bare_reject.gg). The
+# dot-shorthand `.Wrap(!r)` is IDENTICAL to the longhand `E.Wrap(!r)` ctor.
+# Rust gg + self-host agree.
+struct R:
+    int id
+
+equip R with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+enum E:
+    Wrap(R)
+    Empty
+
+void main():
+    R r = R(1)
+    E e = .Wrap(!r)
+    print("built")

@@ -1,0 +1,14 @@
+# RV-B single-owner counterpart: a `Callable` (single-owner, no clone path) at a
+# dot-shorthand enum-variant arg REQUIRES an explicit `!` — and with it the move
+# is ACCEPTED. Before RV-B the self-host discarded the sigil and fired a
+# SELF-CONTRADICTING "write `!callable` to move" on code that already wrote `!`
+# (the flip-tracks documented misfire). Clears with the sigil-preserving adapter.
+# Rust gg + self-host both accept.
+enum E:
+    Wrap(Callable[int(int)])
+    Empty
+
+void main():
+    Callable[int(int)] f = (int x): x + 1
+    E e = .Wrap(!f)
+    print("built")

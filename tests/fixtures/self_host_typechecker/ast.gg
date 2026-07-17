@@ -111,7 +111,7 @@ enum Expr:
     ETupleLiteral(Vector[SpannedExpr])
     EDictLiteral(Vector[SpannedExpr], Vector[SpannedExpr])
     EStructLiteral(String, Vector[String], Vector[SpannedExpr])
-    EDotShorthand(String, Vector[SpannedExpr])
+    EDotShorthand(String, Vector[CallArg])
     ETry(Box[SpannedExpr])
     EMove(Box[SpannedExpr])
     EMutableBorrow(Box[SpannedExpr])
