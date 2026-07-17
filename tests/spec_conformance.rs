@@ -140,16 +140,29 @@ use ggdef::{parse_frontmatter, Expect};
 // struct is Copy — the D10(b) place-overlap check ACCEPTs the bare field read
 // under `&h` (was a scalar-only BUILD-FAIL). The self-host floor now equals the
 // corpus (202 → 214), level with C and LLVM.
-const C_MATCH_FLOOR: usize = 214;
-const LLVM_MATCH_FLOOR: usize = 214;
-const SELFHOST_MATCH_FLOOR: usize = 214;
+//
+// D29 (visible error propagation) added SIX gate-8 seeds — all four-lane MATCH:
+// two ACCEPT+run (`d29_unmarked_capture_accept`, `d29_tvariant_marked_match_accept`
+// — the snag48 T-variant-marked-match) and four rejects, all
+// `error[E_MissingFallibleMark]` (`d29_bare_throws_discard_reject` [kind-1 bare],
+// `d29_kind2_bare_discard_reject` [kind-2 bare], `d29_mark_capture_reject`
+// [redundant mark on capture], `d29_marked_match_result_arms_reject`
+// [`match f()!: case Ok/Error` peeled arms]). C/LLVM reject/run via the shared
+// frontend; the self-host renders the reject off its typed `DkMissingFallibleMark`
+// + runs the accepts through the D29-enforced `check_safety_*` walk. Every floor
+// rose by all SIX (214 → 220). (The D29 chain also migrated 8 pre-existing
+// `throws` spectests the earlier corpus migration had missed — behavior-
+// preserving marks, so the count is unchanged, only their build-verdict restored.)
+const C_MATCH_FLOOR: usize = 220;
+const LLVM_MATCH_FLOOR: usize = 220;
+const SELFHOST_MATCH_FLOOR: usize = 220;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the TOTAL seed COUNT (202 pre-RV-F + the 12 RV-F seeds = 214). It EQUALS all
-/// three production MATCH floors (C, LLVM, and self-host all reject/run the whole
-/// corpus).
-const MIN_FIXTURES: usize = 214;
+/// the TOTAL seed COUNT (214 pre-D29 + the 6 D29 gate-8 seeds = 220). It EQUALS
+/// all three production MATCH floors (C, LLVM, and self-host all reject/run the
+/// whole corpus).
+const MIN_FIXTURES: usize = 220;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs

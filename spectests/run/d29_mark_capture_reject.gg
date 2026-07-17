@@ -1,0 +1,24 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [throws]
+# doc: |
+#   D29 capture amendment: an explicitly `Result[T,E]`-annotated binding CAPTURES
+#   the UNMARKED fallible call (the annotation carries the visibility). Marking it
+#   too is redundant — E_MissingFallibleMark with the remove-the-`!` fix-it. One
+#   way to write everything.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MissingFallibleMark
+#!end
+
+int risky(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return x
+
+void main():
+    Result[int, String] r = risky(5)!
+    print("done")

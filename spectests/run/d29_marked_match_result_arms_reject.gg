@@ -1,0 +1,31 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [throws]
+# doc: |
+#   D29 marked-match peel: `match f()!:` peels the `Result` to its success value
+#   `T`, so `Ok`/`Error` arms can no longer match — bind the `Result` first
+#   (`Result[T,E] r = f()`), then match `r`. E_MissingFallibleMark on all lanes.
+#   (The T-variant marked match — matching the peeled success value's OWN variants
+#   — is the LEGAL companion, pinned by d29_tvariant_marked_match_accept.)
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MissingFallibleMark
+#!end
+
+int risky(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return x
+
+int pick(int x) throws String:
+    match risky(x)!:
+        case Ok(v):
+            return v
+        case Error(e):
+            return -1
+
+void main():
+    print("x")

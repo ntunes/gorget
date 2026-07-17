@@ -1,0 +1,26 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [throws]
+# doc: |
+#   D29 capture (the over-rejection guard): an explicitly `Result[T,E]`-annotated
+#   binding captures the UNMARKED fallible call and RUNS — the Result is held as a
+#   value and destructured. Legal on all four lanes (no mark, no reject).
+# expect:
+#   exit: 0
+#   stdout: "ok 5\n"
+#!end
+
+int risky(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return x
+
+void main():
+    Result[int, String] r = risky(5)
+    match r:
+        case Ok(v):
+            print(f"ok {v}")
+        case Error(e):
+            print(f"err {e}")

@@ -1,0 +1,24 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [throws]
+# doc: |
+#   D29 one-mark-for-both-kinds: a bare call whose DECLARED return is
+#   `Result[T,E]` (kind-2, no `throws`) is fallible too — discarding its outcome
+#   as a statement drops the Error case (the one NEW breakage class D29 introduces
+#   for Result-returning APIs). E_MissingFallibleMark on all four lanes.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MissingFallibleMark
+#!end
+
+Result[int, String] parse2(int x):
+    if x < 0:
+        return Error("neg")
+    return Ok(x)
+
+void main():
+    parse2(5)
+    print("done")

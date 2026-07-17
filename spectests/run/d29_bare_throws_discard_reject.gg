@@ -1,0 +1,24 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [throws]
+# doc: |
+#   D29 (visible error propagation): a bare `throws` call (kind-1) whose outcome
+#   is DISCARDED as a statement silently drops the error — E_MissingFallibleMark.
+#   Mark it (`risky()!`), handle it (`catch`/`rethrow`), or capture it into a
+#   `Result` binding. Four-lane reject: C/LLVM/self-host affirm at build with the
+#   `error[E_MissingFallibleMark]` headline; the ggdef run-surface affirms it as a
+#   coded `IllFormed` (the reject code is TYPED metadata on `Program.d29_reject`).
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_MissingFallibleMark
+#!end
+
+int risky() throws String:
+    throw "boom"
+
+void main():
+    risky()
+    print("done")

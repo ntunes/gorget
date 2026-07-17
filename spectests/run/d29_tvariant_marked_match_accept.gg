@@ -1,0 +1,39 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [throws, enum]
+# doc: |
+#   D29 T-variant marked match (the snag48 class — the Finding-5 direct-scrutinee
+#   `Propagate` lowering, historically the SIGSEGV site): `match f()!:` peels the
+#   `Result` to its success value `T`; matching `T`'s OWN variants is LEGAL and
+#   RUNS (only `Ok`/`Error` arms on the peeled value are the reject). Four-lane
+#   accept + run.
+# expect:
+#   exit: 0
+#   stdout: "got 5\n"
+#!end
+
+enum Tagged:
+    IntV(int)
+    StringV(String)
+
+Tagged make(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return Tagged.IntV(x)
+
+int classify(int x) throws String:
+    match make(x)!:
+        case Tagged.IntV(n):
+            return n
+        case Tagged.StringV(s):
+            return 0
+
+void main():
+    Result[int, String] r = classify(5)
+    match r:
+        case Ok(v):
+            print(f"got {v}")
+        case Error(e):
+            print(f"err {e}")

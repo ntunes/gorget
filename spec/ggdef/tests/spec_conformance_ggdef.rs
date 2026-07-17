@@ -61,10 +61,21 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 /// build time (`tests/spec_conformance.rs`); the definition owns them at the
 /// elaborate boundary, off this lane's run-surface.
 ///
+/// D29 (visible error propagation) added SIX gate-8 seeds, ALL `adjudicator:
+/// ggdef` and ALL MATCH here (the count rose 209 → 215): two ACCEPT+run
+/// (`d29_unmarked_capture_accept`, `d29_tvariant_marked_match_accept`) and four
+/// rejects the ggdef run-surface AFFIRMS on the CODE axis as a coded `IllFormed`
+/// (`E_MissingFallibleMark`, TYPED metadata on `Program.d29_reject` surfaced by
+/// `run` before eval) — NOT a `FrontendError` SKIP: `d29_bare_throws_discard_
+/// reject`, `d29_kind2_bare_discard_reject`, `d29_mark_capture_reject`,
+/// `d29_marked_match_result_arms_reject`. The auto-wrap retirement makes a bare
+/// fallible call a codeful reject rather than an auto-propagate, so all four are
+/// MATCH (not SKIP). GGDEF-SKIP stays 5.
+///
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 209;
+const GGDEF_MATCH_FLOOR: usize = 215;
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
