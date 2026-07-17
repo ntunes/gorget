@@ -3661,6 +3661,43 @@ impl<'a> LoweringContext<'a> {
                 self.register_local(&name, owned_local, inner_type);
                 self.func_state.named_locals.insert(owned_local);
             }
+        } else if !self.type_registry.is_resource_type(inner_type) {
+            // 2E scout: non-resource pointee (a pure-value struct behind a
+            // bare Ptr param — plain-`self` on a value struct is the
+            // canonical shape). No clone fn exists and none is needed:
+            // deref-copy the pointee into a fresh owned local and rebind, so
+            // the write lands on the private copy (mirrors
+            // cow_materialize_collection_ref's deref arm; nothing to
+            // drop-register — no resource fields, by transitivity of
+            // resource-ness).
+            //
+            // T1.4 (wave-2 executor decision): this arm is DELIBERATELY silent —
+            // no `warn_implicit_clone`. Unlike the clone-fn arm above (which
+            // routes through `warn_clone_and_hit`), a pure-value struct memcpy
+            // is not a runtime clone: no alloc, no drop, no `runtime_fn`, so it
+            // never bumps `[clone-stats]`. Minting a Clone-Report row here would
+            // create a site that reads "0 hits" forever — exactly the
+            // silent-under-attribution the `clone_warn_hit_pairing` lint exists
+            // to forbid (context.rs is budgeted 3 bare warns / 3 hits, all
+            // conditional). The sibling `cow_materialize_collection_ref` mints
+            // ONE CloneId because it is a CONDITIONAL site (its own resource arm
+            // may clone); this else-if is unconditionally value-only, so there
+            // is nothing to attribute.
+            let name_hint = builder.local_name(alias_local).map(|s| s.to_string());
+            let owned_local = builder.add_local(inner_type, name_hint.as_deref());
+            builder.assign(
+                crate::ir::instructions::Place::local(owned_local),
+                Operand::Copy(crate::ir::instructions::Place {
+                    local: alias_local,
+                    projections: vec![crate::ir::instructions::Projection::Deref],
+                }),
+            );
+            self.set_owned(builder, owned_local);
+            if let Some(ref hint) = name_hint {
+                let name = hint.clone();
+                self.register_local(&name, owned_local, inner_type);
+                self.func_state.named_locals.insert(owned_local);
+            }
         }
     }
 

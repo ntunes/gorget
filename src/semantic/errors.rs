@@ -194,7 +194,10 @@ impl std::fmt::Display for SemanticWarning {
                 write!(f, "parameter `&{name}` is never mutated — consider removing `&`")
             }
             SemanticWarningKind::DeadBareParamWrite { name, .. } => {
-                write!(f, "write to bare parameter `{name}` lands on a private copy that is discarded — the caller's value is unchanged; declare it `&{name}` to write through")
+                // D2-rider RATIFIED verbatim message (decisions.md LOG
+                // 2026-07-16): one format string yields both flavors —
+                // `&self` for the self param, `&<param>` otherwise.
+                write!(f, "this writes to a private copy that is never read — the caller's value is unchanged; did you mean `&{name}`?")
             }
             SemanticWarningKind::CowBorrowMutation { source, borrow } => {
                 write!(f, "`{source}` mutated while `{borrow}` holds an element — clone is inserted automatically")
@@ -530,7 +533,18 @@ pub enum SemanticErrorKind {
     /// Non-Copy type implicitly copied at an ownership boundary. `reason` is
     /// WHY (drop-taint vs single-owner-by-design); `shape` is the place shape
     /// that decides the valid remedy (Whole / field-index sub-place / capture).
-    MoveWithoutOperator { name: String, reason: MoveReason, shape: MoveShape },
+    /// `write_through_available` (2T/D2): TRUE only at a materialize-on-write
+    /// position (assign / compound / mutating-receiver / `&`-formation) where
+    /// re-declaring the root `&self` / `&<param>` writes through — that `&`
+    /// remedy is offered ONLY when this is set. At ctor/field-init/capture/bind
+    /// it is FALSE (an `&` there is not a valid fix, e.g. `Some(&fh)`), and the
+    /// message is byte-identical to the pre-discriminator text.
+    MoveWithoutOperator {
+        name: String,
+        reason: MoveReason,
+        shape: MoveShape,
+        write_through_available: bool,
+    },
 
     /// Borrow exclusivity violation.
     BorrowConflict { name: String, detail: String },
@@ -1118,7 +1132,7 @@ impl std::fmt::Display for SemanticError {
             SemanticErrorKind::UseAfterMove { name, .. } => {
                 write!(f, "use of moved value `{name}`")
             }
-            SemanticErrorKind::MoveWithoutOperator { name, reason, shape } => {
+            SemanticErrorKind::MoveWithoutOperator { name, reason, shape, write_through_available } => {
                 // The "why" clause depends on the reason; the REMEDY depends on
                 // the place shape (D12 pin-4). `!` is today's move sigil — a
                 // `# D27: !→^` breadcrumb marks it for D27's re-sigil sweep
@@ -1128,6 +1142,32 @@ impl std::fmt::Display for SemanticError {
                     MoveReason::SingleOwner => "a single-owner type (no implicit copy)",
                 };
                 match shape {
+                    // Materialize-on-write position (2T/D2): re-declaring the
+                    // root `&self` / `&<param>` writes through, so that is the
+                    // PRIMARY remedy the ledger names first — it leads, then the
+                    // `!` move / `.clone()` copy. This flavor fires ONLY when
+                    // `write_through_available` is set (the reject helper's
+                    // assign / compound / receiver / `&`-formation sites); at
+                    // ctor/field-init/bind an `&` is not a valid fix, so those
+                    // sites keep `write_through_available == false` and render
+                    // the byte-identical no-`&` Whole arm below. D27: !→^
+                    MoveShape::Whole if *write_through_available => {
+                        if name == "self" {
+                            write!(
+                                f,
+                                "cannot copy `self`: `self` is {why} — declare the method \
+                                 `&self` to write through, or write `!self` to move or \
+                                 `self.clone()` to copy"
+                            )
+                        } else {
+                            write!(
+                                f,
+                                "cannot copy `{name}`: `{name}` is {why} — declare the parameter \
+                                 `&{name}` to write through, or write `!{name}` to move or \
+                                 `{name}.clone()` to copy"
+                            )
+                        }
+                    }
                     // D27: !→^
                     MoveShape::Whole => write!(
                         f,
@@ -1404,14 +1444,37 @@ mod code_tests {
             name: "x".into(),
             reason: MoveReason::DropTaint,
             shape: MoveShape::Whole,
+            write_through_available: false,
         };
         assert_eq!(k.code(), "E_MoveWithoutOperator");
     }
 
     fn mwo(name: &str, reason: MoveReason, shape: MoveShape) -> String {
         // Message text is rendered by `impl Display for SemanticError`.
+        // The bare-boundary helper renders the no-`&` flavor (ctor/bind/etc);
+        // the write-through flavor is covered by `mwo_write_through` below.
         SemanticError {
-            kind: SemanticErrorKind::MoveWithoutOperator { name: name.into(), reason, shape },
+            kind: SemanticErrorKind::MoveWithoutOperator {
+                name: name.into(),
+                reason,
+                shape,
+                write_through_available: false,
+            },
+            span: sp(),
+        }
+        .to_string()
+    }
+
+    fn mwo_write_through(name: &str, reason: MoveReason) -> String {
+        // The materialize-on-write flavor: `&self` / `&<param>` write-through
+        // leads. Always a Whole place (the reject helper's only shape).
+        SemanticError {
+            kind: SemanticErrorKind::MoveWithoutOperator {
+                name: name.into(),
+                reason,
+                shape: MoveShape::Whole,
+                write_through_available: true,
+            },
             span: sp(),
         }
         .to_string()
@@ -1435,6 +1498,39 @@ mod code_tests {
         let field = mwo("hh", MoveReason::DropTaint, MoveShape::FieldIndex);
         assert!(field.contains("hh.clone()"), "sub-place offers clone: {field}");
         assert!(field.contains("partial move"), "sub-place warns partial move: {field}");
+    }
+
+    /// 2T/D2 discriminator: the materialize-on-write flavor leads with the
+    /// `&self` / `&<param>` write-through remedy the ledger names first, THEN
+    /// offers `!` move / `.clone()` copy — and the no-`&` bare-boundary flavor
+    /// (`write_through_available == false`) stays byte-identical to the
+    /// pre-discriminator text (so ctor/bind/field-init `.expected` files never
+    /// churn and no `&` is ever offered where it is an invalid fix).
+    #[test]
+    fn move_without_operator_write_through_flavor() {
+        // Self root → "declare the method `&self` to write through".
+        let self_msg = mwo_write_through("self", MoveReason::DropTaint);
+        assert!(self_msg.contains("declare the method `&self` to write through"),
+            "self write-through hint: {self_msg}");
+        assert!(self_msg.contains("!self") && self_msg.contains("self.clone()"),
+            "self still offers move/copy: {self_msg}");
+
+        // Param root → "declare the parameter `&<name>` to write through".
+        let param_msg = mwo_write_through("fh", MoveReason::DropTaint);
+        assert!(param_msg.contains("declare the parameter `&fh` to write through"),
+            "param write-through hint: {param_msg}");
+        assert!(param_msg.contains("!fh") && param_msg.contains("fh.clone()"),
+            "param still offers move/copy: {param_msg}");
+
+        // The no-`&` Whole flavor is UNCHANGED and offers no `&` remedy — this
+        // is the exact text ctor/bind/field-init positions render.
+        let bare = mwo("fh", MoveReason::DropTaint, MoveShape::Whole);
+        assert_eq!(
+            bare,
+            "cannot copy `fh`: `fh` is a resource (a type with a custom `Drop` \
+             is single-owner) — write `!fh` to move or `fh.clone()` to copy",
+            "bare Whole flavor must stay byte-identical (no `&` offered): {bare}"
+        );
     }
 
     /// D12 pin-4 GATE (reference-grade): the CAPTURE-position message must

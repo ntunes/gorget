@@ -34,6 +34,9 @@ impl<'a> BorrowChecker<'a> {
                     name,
                     reason: MoveReason::DropTaint,
                     shape,
+                    // ctor / field-init boundary: `&` is not a valid fix here
+                    // (`Some(&fh)` is not a thing) — no write-through hint.
+                    write_through_available: false,
                 },
                 arg.span,
             );
@@ -51,6 +54,8 @@ impl<'a> BorrowChecker<'a> {
                                     name,
                                     reason: MoveReason::SingleOwner,
                                     shape: MoveShape::Whole,
+                                    // ctor single-owner-init: no write-through fix.
+                                    write_through_available: false,
                                 },
                                 arg.span,
                             );
@@ -103,6 +108,12 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
                 Ownership::MutableBorrow | Ownership::Borrow => {
+                    // 2T formation gate (Call / DotShorthand kind): reject a
+                    // `&`-of-projection arg (`f(&s.field)`) whose root is a
+                    // drop-tainted bare param — the `&`-formation would
+                    // materialize a hidden clone (double-drop). One of the two
+                    // arg-loop call sites the sibling lint pins.
+                    self.reject_tainted_formation_arg(arg);
                     if arg.node.ownership == Ownership::MutableBorrow {
                         // Track passing `&` param with `&` to callee as mutation
                         self.mark_mut_param_if_applicable(&arg.node.value);
@@ -152,8 +163,17 @@ impl<'a> BorrowChecker<'a> {
             | Expr::FloatLiteral(_)
             | Expr::BoolLiteral(_)
             | Expr::NoneLiteral
-            | Expr::SelfExpr
             | Expr::It => {}
+
+            // D2-rider scout: a `self` read counts for the dead-write lint —
+            // without this, every scratch-copy plain-`self` method (mutate
+            // then READ the private copy) would false-positive once `self` is
+            // seeded into the tracking set.
+            Expr::SelfExpr => {
+                if let Some(&def_id) = self.resolution_map.get(&expr.span.start) {
+                    self.mark_bare_param_read(def_id);
+                }
+            }
 
             Expr::StringLiteral(lit, _) => {
                 // Re-parse and check interpolation expressions for borrow safety.
@@ -351,6 +371,46 @@ impl<'a> BorrowChecker<'a> {
                 // (think `handlers.pop().run()`). Do not "tighten" this to
                 // exact-node identity — that silently flips this class to
                 // silent (pinned by fixture deadwrite_warn_chained_stmt.gg).
+                // Receiver-mutation classification, POSITION-INDEPENDENT (2T
+                // scout hoist): consumed by both the semantic taint gate
+                // (any position) and the dead-write lint (statement position
+                // + tracked roots only).
+                let receiver_is_mutating = {
+                    // Builtin mutating method: gate the (name-keyed)
+                    // protocol flag on the RECEIVER's type actually being
+                    // a buffer-owning builtin (collection/Channel/Heap) or
+                    // the owned String — interior-mutability handles
+                    // (AtomicInt, WaitGroup, ...) are FFI-backed and write
+                    // through, not CoW.
+                    let recv_tid = self
+                        .expr_types
+                        .get(&receiver.span)
+                        .copied()
+                        .or_else(|| self.lvalue_value_type(receiver));
+                    let is_builtin_mut = crate::ir::lowering::builtins::is_mutating_builtin_method(
+                        method.node.as_str(),
+                    ) && (self.is_buffer_owning_receiver(receiver)
+                        || recv_tid.map_or(false, |t| {
+                            self.is_buffer_owning_type(t)
+                                || t == self.types.owned_string_id
+                        }));
+                    let is_user_mut = self
+                        .method_resolutions
+                        .get(&method.span.start)
+                        .and_then(|mdid| self.function_info.get(mdid))
+                        .map_or(false, |info| {
+                            info.param_ownerships.first() == Some(&Ownership::MutableBorrow)
+                        });
+                    is_builtin_mut || is_user_mut
+                };
+                // 2T: the SEMANTIC taint gate fires on the UNFILTERED root
+                // (incl. `self` / `_`-named params, value OR statement
+                // position) — never on the lint's tracking subset.
+                if receiver_is_mutating {
+                    if let Some(root) = self.find_root_def_id(receiver) {
+                        self.reject_tainted_materialize_on_write(root, receiver.span);
+                    }
+                }
                 let deadwrite_mut_root: Option<crate::semantic::ids::DefId> = {
                     let in_stmt_position =
                         self.deadwrite_stmt_expr_start == Some(expr.span.start);
@@ -360,34 +420,7 @@ impl<'a> BorrowChecker<'a> {
                     } else {
                         None
                     };
-                    root.filter(|_| {
-                        // Builtin mutating method: gate the (name-keyed)
-                        // protocol flag on the RECEIVER's type actually being
-                        // a buffer-owning builtin (collection/Channel/Heap) or
-                        // the owned String — interior-mutability handles
-                        // (AtomicInt, WaitGroup, ...) are FFI-backed and write
-                        // through, not CoW.
-                        let recv_tid = self
-                            .expr_types
-                            .get(&receiver.span)
-                            .copied()
-                            .or_else(|| self.lvalue_value_type(receiver));
-                        let is_builtin_mut = crate::ir::lowering::builtins::is_mutating_builtin_method(
-                            method.node.as_str(),
-                        ) && (self.is_buffer_owning_receiver(receiver)
-                            || recv_tid.map_or(false, |t| {
-                                self.is_buffer_owning_type(t)
-                                    || t == self.types.owned_string_id
-                            }));
-                        let is_user_mut = self
-                            .method_resolutions
-                            .get(&method.span.start)
-                            .and_then(|mdid| self.function_info.get(mdid))
-                            .map_or(false, |info| {
-                                info.param_ownerships.first() == Some(&Ownership::MutableBorrow)
-                            });
-                        is_builtin_mut || is_user_mut
-                    })
+                    root.filter(|_| receiver_is_mutating)
                 };
                 let deadwrite_prev_root = self.deadwrite_write_root;
                 if deadwrite_mut_root.is_some() {
@@ -639,6 +672,9 @@ impl<'a> BorrowChecker<'a> {
                                         name,
                                         reason: MoveReason::DropTaint,
                                         shape,
+                                        // ingest-arg boundary (`v.push(fh.field)`):
+                                        // `&` is not a valid fix — no hint.
+                                        write_through_available: false,
                                     },
                                     arg.node.value.span,
                                 );
@@ -699,6 +735,11 @@ impl<'a> BorrowChecker<'a> {
                             }
                         }
                         Ownership::MutableBorrow | Ownership::Borrow => {
+                            // 2T formation gate (MethodCall kind): reject a
+                            // `&`-of-projection arg on a tainted bare root — the
+                            // second of the two arg-loop call sites the sibling
+                            // lint pins (all three call kinds share the gate).
+                            self.reject_tainted_formation_arg(arg);
                             // Track passing `&` param with `&` to callee as mutation
                             if arg.node.ownership == Ownership::MutableBorrow {
                                 self.mark_mut_param_if_applicable(&arg.node.value);
@@ -1016,6 +1057,9 @@ impl<'a> BorrowChecker<'a> {
                             name,
                             reason: MoveReason::DropTaint,
                             shape: MoveShape::Capture,
+                            // capture boundary: neither `&` nor `!`/clone is a
+                            // valid fix (Capture arm renders its own remedy).
+                            write_through_available: false,
                         },
                         expr.span,
                     );
@@ -1045,6 +1089,9 @@ impl<'a> BorrowChecker<'a> {
                                     name,
                                     reason: MoveReason::DropTaint,
                                     shape,
+                                    // closure expr-tail (return boundary): no
+                                    // write-through hint.
+                                    write_through_available: false,
                                 },
                                 body.span,
                             );
@@ -1303,6 +1350,16 @@ impl<'a> BorrowChecker<'a> {
                         entry.2 = true;
                     }
                     // Dead-write lint: f-string reads count.
+                    self.mark_bare_param_read(def_id);
+                }
+            }
+            // D2-rider scout: `{self.n}` inside an f-string is a genuine read
+            // of the private copy — resolve by name (re-parsed interpolations
+            // carry synthetic spans, so the resolution_map path can't work
+            // here) and mark it, or every write-then-print plain-self method
+            // would false-positive.
+            Expr::SelfExpr => {
+                if let Some(def_id) = self.find_def_by_name("self") {
                     self.mark_bare_param_read(def_id);
                 }
             }

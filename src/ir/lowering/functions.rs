@@ -2041,6 +2041,19 @@ fn lower_equip_method_with_subs(
     ctx.callable_return_types_clear();
     let mut param_idx = if has_self {
         ctx.register_local("self", LocalId(1), self_ptr_type);
+        // 2E scout (sibling of the non-generic path's mark at ~:1320): mark
+        // immutable plain `self` as BareParam so CoW materializes on
+        // mutation — the generic-equip lowering forgot the mark, so
+        // plain-`self` writes in generic methods wrote through (probe p13).
+        let self_is_consuming = method_def.params.first()
+            .map(|p| matches!(p.node.ownership, Ownership::Move))
+            .unwrap_or(false);
+        if !self_is_mutable
+            && !self_is_consuming
+            && matches!(ctx.type_registry.get(self_ptr_type), Some(GirType::Ptr(_)))
+        {
+            ctx.set_bare_param(&mut builder, LocalId(1));
+        }
         2u32
     } else {
         1u32

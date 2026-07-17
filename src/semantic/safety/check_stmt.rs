@@ -633,6 +633,12 @@ impl<'a> BorrowChecker<'a> {
                     _ => {
                         // Track mutation of `&` params
                         self.mark_mut_param_if_applicable(target);
+                        // 2T: the SEMANTIC taint gate fires on the UNFILTERED
+                        // root (incl. `self` / `_`-named params) — never on
+                        // the lint's tracking subset.
+                        if let Some(root) = self.find_root_def_id(target) {
+                            self.reject_tainted_materialize_on_write(root, target.span);
+                        }
                         // Dead-write lint: the target walk is a
                         // write-position read of the root, not a use of the
                         // materialized copy.
@@ -797,6 +803,10 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
+                // 2T: unfiltered-root taint gate (sibling of the Assign site).
+                if let Some(root) = self.find_root_def_id(target) {
+                    self.reject_tainted_materialize_on_write(root, target.span);
+                }
                 // Dead-write lint: compound assign mutates through
                 // the target root (e.g. `p[0] += 1`, `p.f += x`, `p += x` on a
                 // resource). The target walk is a write-position read; the RHS
@@ -836,6 +846,8 @@ impl<'a> BorrowChecker<'a> {
                                     name,
                                     reason: MoveReason::DropTaint,
                                     shape,
+                                    // return boundary: no write-through hint.
+                                    write_through_available: false,
                                 },
                                 expr.span,
                             );
@@ -1450,6 +1462,8 @@ impl<'a> BorrowChecker<'a> {
                     name,
                     reason: MoveReason::DropTaint,
                     shape,
+                    // bind boundary (`R b = place`): no write-through hint.
+                    write_through_available: false,
                 },
                 value.span,
             );
@@ -1495,6 +1509,8 @@ impl<'a> BorrowChecker<'a> {
                                     name: def.name.clone(),
                                     reason: MoveReason::SingleOwner,
                                     shape: MoveShape::Whole,
+                                    // bare-assign single-owner: no write-through fix.
+                                    write_through_available: false,
                                 },
                                 value.span,
                             );
@@ -1723,25 +1739,27 @@ impl<'a> BorrowChecker<'a> {
                 // DeadBareParamWrite. Exclusions (v1 non-goals, deliberate):
                 // - Copy types: mutation of a by-value copy is the
                 //   Python-identical rebind model, not the CoW footgun.
-                // - `self`: SelfExpr reads bypass the Identifier read hook,
-                //   so tracking it would false-positive on every plain-self
-                //   method — AND plain-self mutation currently WRITES THROUGH
-                //   (known bug, TODO.md HIGH entry filed 2026-07-05), so the
-                //   warning text would be wrong for it anyway. Revisit when
-                //   that bug is fixed.
+                // - `self` (D2-rider scout): tracked like any other bare
+                //   param — a write materializes a private copy under 2E even
+                //   for Copy value structs (self is always pointer-passed), so
+                //   `self` skips the Copy exclusion. SelfExpr reads are marked
+                //   by the check_expr SelfExpr arm, so the scratch-copy idiom
+                //   stays silent. Eligibility rule = "the write MATERIALIZES
+                //   a private copy": by-value Copy params never materialize;
+                //   pointer-passed self always does.
                 // - `_`-prefixed names (deliberate-ignore convention).
                 // Also out of scope for v1: writes via `f(&p)` call args
                 // (needs callee purity — §3.8 MutatesArgs — to avoid
                 // false-positiving on read-only `&` callees), closure-captured
                 // params, and `for x in &p` iteration.
                 if param.node.ownership == Ownership::Borrow
-                    && param.node.name.node != "self"
                     && !param.node.name.node.starts_with('_')
                 {
+                    let is_self = param.node.name.node == "self";
                     let is_resource = param_def.type_id.map_or(false, |tid| {
                         !is_copy_type(tid, self.types, self.scopes)
                     });
-                    if is_resource {
+                    if is_self || is_resource {
                         self.deadwrite_params.insert(def_id, super::DeadWriteInfo {
                             name: param.node.name.node.clone(),
                             param_span: param.node.name.span,
@@ -1810,6 +1828,8 @@ impl<'a> BorrowChecker<'a> {
                             name,
                             reason: MoveReason::DropTaint,
                             shape,
+                            // expr-body tail (return boundary): no write-through hint.
+                            write_through_available: false,
                         },
                         expr.span,
                     );

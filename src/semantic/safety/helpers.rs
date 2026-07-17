@@ -951,36 +951,80 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// D4/D12/2T (materialize-on-write): a write through a bare BORROW-view
+    /// param of a drop-tainted type would materialize (privatise) an implicit
+    /// copy — rejected. Mirrors ggdef's `reject_materialize_on_write`.
+    ///
+    /// DECOUPLED from the dead-write LINT's tracking set (2T scout): the lint
+    /// excludes `self`, `_`-named params, and value-position receivers as a
+    /// warning courtesy, but the SEMANTIC taint gate must fire on the
+    /// UNFILTERED root — an accept/reject decision must never depend on a
+    /// param's name or the lint's statement-position scoping.
+    pub(super) fn reject_tainted_materialize_on_write(&mut self, def_id: DefId, span: Span) {
+        let def = self.scopes.get_def(def_id);
+        if def.is_param
+            && def.param_ownership == Some(Ownership::Borrow)
+            && def.type_id.map_or(false, |t| {
+                crate::semantic::is_drop_tainted_type(t, self.types, self.scopes)
+            })
+        {
+            let name = def.name.clone();
+            // Materialize-on-write is always a WHOLE bare borrow-param place;
+            // this is the ONLY position where `&self` / `&<param>` write-through
+            // is a valid remedy, so it advertises it (2T/D2 discriminator).
+            self.error(
+                SemanticErrorKind::MoveWithoutOperator {
+                    name,
+                    reason: MoveReason::DropTaint,
+                    shape: MoveShape::Whole,
+                    write_through_available: true,
+                },
+                span,
+            );
+        }
+    }
+
+    /// 2T FORMATION-position gate (materialize-on-write, `&`-arg). A `&`-formation
+    /// call arg whose ROOT is a bare drop-tainted BORROW param materializes a
+    /// private copy of that root at the `&`-formation (`lower_call_arg` G2
+    /// site-3 → `cow_before_mutation`, calls.rs). For a drop-tainted root that
+    /// materialize is a hidden clone → the drop side-effect runs twice (the
+    /// double-close class 2T exists to kill). Two shapes reach it:
+    ///   * projected  — `f(&s.field)`, `obj.m(&arr[i])`, `bump(&self.fh)`;
+    ///   * whole-value on a bare param — `f(&p)` / `bump(&self)` (materialises
+    ///     the whole param/self, caller untouched — MEASURED double-close of the
+    ///     same fd on a read-only `&`-callee).
+    /// Reject both, mirroring the assign / compound / receiver positions.
+    ///
+    /// Deref (`&*box`) is EXCLUDED — it write-throughs to the heap pointee, no
+    /// root materialize (Snag #26). A whole bare `&x` on an OWNED local / a
+    /// `&`-param is a no-op here: `reject_tainted_materialize_on_write` gates on
+    /// `is_param + Borrow + tainted`, so only a bare tainted borrow-param root
+    /// rejects — that typed gate, not a syntactic identifier exclusion, is what
+    /// distinguishes a materialize from a write-through. (The lowering excludes
+    /// `Identifier` only because the whole-value `&`-arg is materialised by a
+    /// SEPARATE lowering block; excluding it in the SAFETY gate as well was the
+    /// hole that let `void poke(FH p): reader(&p)` double-close — wave-2 fix.)
+    ///
+    /// Called from BOTH per-arg loops — `check_call_arg_ownership` (Call +
+    /// DotShorthand) and the `MethodCall` arm's own arg loop — so all THREE call
+    /// KINDS route through this one gate (fix the class, not the instance). The
+    /// `tainted_formation_arg_gate_sites` lint pins that both call sites exist.
+    pub(super) fn reject_tainted_formation_arg(&mut self, arg: &Spanned<CallArg>) {
+        if arg.node.ownership == Ownership::MutableBorrow
+            && !matches!(&arg.node.value.node, Expr::Deref { .. })
+        {
+            if let Some(root) = self.find_root_def_id(&arg.node.value) {
+                self.reject_tainted_materialize_on_write(root, arg.node.value.span);
+            }
+        }
+    }
+
     /// Dead-write lint: record a mutation through a tracked bare
     /// resource param. `span` is the mutation site (used as the warning
     /// span). Must be called AFTER the target/receiver walk so the write's
     /// clock exceeds any read recorded by that walk.
     pub(super) fn mark_bare_param_write_def(&mut self, def_id: DefId, span: Span) {
-        // D4/D12 position 6 (materialize-on-write): a write through a bare
-        // BORROW-view param of a drop-tainted type would materialize
-        // (privatise) an implicit copy — rejected. Mirrors ggdef's
-        // `reject_materialize_on_write`
-        // (spec/ggdef/src/elaborate/mod.rs:588-596, :1664-1676).
-        {
-            let def = self.scopes.get_def(def_id);
-            if def.is_param
-                && def.param_ownership == Some(Ownership::Borrow)
-                && def.type_id.map_or(false, |t| {
-                    crate::semantic::is_drop_tainted_type(t, self.types, self.scopes)
-                })
-            {
-                let name = def.name.clone();
-                // Materialize-on-write is always a WHOLE bare borrow-param place.
-                self.error(
-                    SemanticErrorKind::MoveWithoutOperator {
-                        name,
-                        reason: MoveReason::DropTaint,
-                        shape: MoveShape::Whole,
-                    },
-                    span,
-                );
-            }
-        }
         if !self.deadwrite_params.contains_key(&def_id) {
             return;
         }

@@ -1067,6 +1067,101 @@ fn compound_assign_root_materialize_arms_count() {
     );
 }
 
+/// Structural guard (Core #6 "convert a recurring bug class into an executable
+/// guard" + Core #2 "typed metadata, never name-matching"): the 2T SEMANTIC
+/// taint reject (`reject_tainted_materialize_on_write` + its formation sibling
+/// `reject_tainted_formation_arg`) must NEVER read the dead-write LINT's
+/// tracking set (`deadwrite_params` / `deadwrite_*`). Coupling an accept/reject
+/// DECISION to the lint's filters (the `_`-prefix name exclusion, the
+/// statement-position scoping) is what produced the live double-drops p11/p12 —
+/// production accepted+double-dropped a `void poke(FH _fh): _fh.fd = 9` because
+/// the reject rode the lint's `_`-name courtesy. The two helpers take an
+/// UNFILTERED `find_root_def_id` root and decide purely from typed def state
+/// (`is_param` + `Borrow` + `is_drop_tainted_type`); they must stay decoupled.
+///
+/// **If this fails:** a `deadwrite`-flavored read crept into a semantic reject
+/// producer — the accept/reject decision is being re-coupled to the lint filter.
+/// Route the reject off the unfiltered `find_root_def_id` root instead; the lint
+/// keeps its filtered marking in `mark_bare_param_write_def`, separately.
+#[test]
+fn tainted_reject_never_reads_lint_state() {
+    let src = fs::read_to_string("src/semantic/safety/helpers.rs")
+        .expect("read src/semantic/safety/helpers.rs");
+    // Extract each helper body (from its `pub(super) fn NAME(` to the next
+    // top-level `    pub(super) fn ` / `    fn ` at 4-space indent) and assert
+    // it references neither `deadwrite` nor the lint's `mark_bare_param_write`.
+    for helper in ["reject_tainted_materialize_on_write", "reject_tainted_formation_arg"] {
+        let sig = format!("fn {helper}(");
+        let start = src.find(&sig).unwrap_or_else(|| panic!("locate {helper}"));
+        let after = start + sig.len();
+        let end = src[after..]
+            .find("\n    pub(super) fn ")
+            .or_else(|| src[after..].find("\n    fn "))
+            .map(|i| after + i)
+            .unwrap_or(src.len());
+        let body = &src[start..end];
+        assert!(
+            !body.contains("deadwrite"),
+            "SEMANTIC taint reject `{helper}` reads the dead-write LINT's tracking \
+             state (`deadwrite*`). An accept/reject DECISION must not depend on the \
+             lint's name/position filters (that coupling produced the p11/p12 \
+             double-drops). Root off the UNFILTERED `find_root_def_id` instead.",
+        );
+    }
+    // Every DIRECT-position reject call (assign / compound / receiver) roots via
+    // the unfiltered `find_root_def_id` — never a `deadwrite_params` lookup.
+    for file in [
+        "src/semantic/safety/check_stmt.rs",
+        "src/semantic/safety/check_expr.rs",
+    ] {
+        let content = fs::read_to_string(file).unwrap_or_default();
+        let lines: Vec<&str> = content.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.contains("self.reject_tainted_materialize_on_write(") {
+                let window_start = i.saturating_sub(3);
+                let window = lines[window_start..i].join("\n");
+                assert!(
+                    window.contains("find_root_def_id("),
+                    "`reject_tainted_materialize_on_write` call at {file}:{} is not \
+                     fed by an unfiltered `find_root_def_id` root — a semantic \
+                     reject must never be gated on the lint's tracked-root subset.",
+                    i + 1,
+                );
+            }
+        }
+    }
+}
+
+/// Ratchet (Core #4 "one fix, all siblings" / Layering-discipline "Sibling-site
+/// drift"): the 2T FORMATION-position gate (`reject_tainted_formation_arg`) must
+/// be wired into every per-arg ownership loop so all THREE call KINDS —
+/// free-call (`Expr::Call`), enum-init (`Expr::DotShorthand`, both via
+/// `check_call_arg_ownership`), and method-call (`Expr::MethodCall`'s own arg
+/// loop) — reject a `&`-of-projection arg (`f(&s.field)`) on a drop-tainted bare
+/// root. Miss one loop and that call kind silently materializes a hidden clone
+/// (double-drop). Two loops cover the three kinds, so exactly 2 call sites live
+/// in `check_expr.rs`.
+///
+/// **If this fails:** a new per-arg loop (a new call kind) was added without the
+/// formation gate, or a call site was dropped. Add
+/// `self.reject_tainted_formation_arg(arg);` at the top of the new loop's
+/// `MutableBorrow | Borrow` arm and bump EXPECTED — do NOT lower it (a removed
+/// site re-opens the formation double-drop hole).
+#[test]
+fn tainted_formation_arg_gate_sites() {
+    const EXPECTED: usize = 2;
+    let src = fs::read_to_string("src/semantic/safety/check_expr.rs")
+        .expect("read src/semantic/safety/check_expr.rs");
+    let count = src.matches("self.reject_tainted_formation_arg(").count();
+    assert_eq!(
+        count, EXPECTED,
+        "`reject_tainted_formation_arg` call-site count in check_expr.rs changed: \
+         {count} vs expected {EXPECTED} (the two per-arg loops covering all three \
+         call kinds). A new call kind's arg loop must call the formation gate too; \
+         a removed site re-opens the `f(&s.field)` tainted double-drop.",
+    );
+}
+
 /// Ratchet (Core #4 "one fix, all siblings" / devbook-24 rule 3 "one source of
 /// truth per axis"): every collection family in `infer_fn_ptr_stores_from_types`
 /// (`src/lir/lower/insts.rs`) must wire its element/value/key DROP slot through

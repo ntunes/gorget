@@ -405,6 +405,18 @@ fn lower_expr_inner(
             // transient element/field handles the projection mints MUST be
             // untracked. Identifier / Deref shapes are handled above; only
             // genuine projections reach here.
+            //
+            // 2T (wave-2 executor T1.2c): the `Expr::SelfExpr` arm added to
+            // `resolve_projection_root_local` makes `&self.field` resolvable
+            // here too, but a tainted-self DOUBLE-DROP cannot arise at THIS
+            // (standalone-formation) site: the only surface form that lowers a
+            // standalone `Expr::MutableBorrow` of a projection is a NAMED
+            // `&`-binding (`auto r = &self.field` / `= &p.field`), and the
+            // safety pass rejects every named `&`-binding with `E_LocalBorrowBind`
+            // BEFORE lowering (measured, all spellings). So this call is
+            // source-unreachable for the tainted case — the CALL-ARG formation
+            // (`calls.rs`), gated by `reject_tainted_formation_arg`, is the only
+            // reachable formation-materialize. No fixture pins an unreachable arm.
             let mut g2_projected_untrack_start: Option<usize> = None;
             if !matches!(&inner.node, Expr::Identifier(_) | Expr::Deref { .. }) {
                 if let Some(root_local) = resolve_projection_root_local(ctx, &inner.node) {
@@ -2445,6 +2457,11 @@ pub(super) fn resolve_projection_root_local(
 ) -> Option<crate::ir::types::LocalId> {
     match expr {
         Expr::Identifier(name) => ctx.lookup_local(name).map(|(l, _)| l),
+        // 2E (D2): plain `self` is a bare param like any other — a write
+        // rooted at `self` must reach `cow_before_mutation` so the existing
+        // bare-Ptr-param case materializes a private copy (`&self` roots are
+        // Unique borrows, a no-op there — write-through preserved).
+        Expr::SelfExpr => ctx.lookup_local("self").map(|(l, _)| l),
         Expr::Index { object, .. }
         | Expr::FieldAccess { object, .. }
         | Expr::TupleFieldAccess { object, .. } => {
