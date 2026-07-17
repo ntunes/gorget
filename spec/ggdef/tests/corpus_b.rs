@@ -53,18 +53,26 @@ const EXCLUDE: &[&str] = &[
     // producer) — the CoW-1C double-eval regression fixture is likewise outside
     // the phase-0 subset; it pins EVAL-ORDER on the real compilers, not ggdef.
     "cow_dict_index_field_single_eval.gg",
-    // Track 1A: the five out-of-phase-0-subset for-element fixtures (the same
-    // rows EXCLUDEd from corpus_b1 — both gates share the phase-0 elaboration).
+    // Track 1A (+ remediations): the out-of-phase-0-subset for-element fixtures
+    // (the same rows EXCLUDEd from corpus_b1 — both gates share the phase-0
+    // elaboration; each citation is ggdef-run-verified).
     //   - for `x in &coll`: `desugar_for` returns the "`for &`/`for !` iteration
-    //     is Increment B2" error (elaborate/mod.rs:967).
+    //     is Increment B2" error (elaborate/mod.rs:~967).
     "cow_for_amp_vector_field_writethrough.gg",
     "cow_for_amp_vector_alias_root.gg",
     "cow_for_amp_resource_elem_writethrough.gg",
-    //   - `.enumerate()` (bare AND `&`): `desugar_for`'s `binding_name(pattern)?`
-    //     (elaborate/mod.rs:969) rejects the enumerate 2-tuple pattern. The `&`
-    //     row's expected output (`101`) is §3.1-prose-derived (1A remediation).
+    //   - bare `.enumerate()`: `desugar_for`'s `binding_name(pattern)?`
+    //     (elaborate/mod.rs:~969) rejects the enumerate 2-tuple pattern.
     "cow_for_enumerate_bare_resource_materialize.gg",
+    //   - statement-`&` enumerate (`for i, x in &a.enumerate()` + the alias-root
+    //     sibling): the :~967 `for &` B2 gate fires FIRST (the ownership check
+    //     precedes `binding_name`). Expected outputs §3.1-prose-derived.
     "cow_for_enumerate_amp_writethrough.gg",
+    "cow_for_enumerate_amp_alias_root.gg",
+    //   - RECEIVER-wrap `(&a).enumerate()`: statement ownership is Borrow (the
+    //     `&` sits inside the expression), so :~967 does NOT fire — it falls to
+    //     `binding_name` (:~969, "only simple bindings…").
+    "cow_for_enumerate_amp_recv_wrap.gg",
     //   - list comprehension: `elaborate_expr` has no comprehension arm, so the
     //     `[x*2 for x in &a]` expression is "outside the phase-0 subset".
     "cow_comprehension_amp_source.gg",

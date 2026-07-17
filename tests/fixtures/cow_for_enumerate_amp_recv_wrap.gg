@@ -1,0 +1,19 @@
+# CoW Track 1A (remediation-2) — `(&a).enumerate()` receiver-wrap writes through.
+#
+# The `&` can land on the RECEIVER of `.enumerate()` instead of the statement:
+# `for i, x in (&a).enumerate():` must behave identically to
+# `for i, x in &a.enumerate():` (§3.1 — same unbroken `&` chain, spelled with
+# parens). Pins the shape where the first remediation introduced a cross-lane
+# divergence (Rust stripped the receiver wrap; the self-host probe did not →
+# Rust `101` vs self-host `1`). All three `&` spellings now share one strip
+# path per lane.
+# Output must be correct on BOTH backends.
+
+struct Cell:
+    int v
+
+void main():
+    Vector[Cell] a = [Cell(1)]
+    for i, x in (&a).enumerate():
+        x.v = x.v + 100 + i
+    print(a.get(0).unwrap().v)

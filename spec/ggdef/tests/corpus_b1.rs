@@ -38,15 +38,16 @@ use std::path::{Path, PathBuf};
 /// `cow_dict_index_field_single_eval` is the same Dict index write-place
 /// (`make()[0].x`) — likewise out of subset; it pins eval-order, not ggdef.
 ///
-/// Track 1A adds seven cross-lane `cow_for_*` / `cow_comprehension_*` fixtures.
-/// Five are out of the phase-0 subset and get EXCLUDE rows here:
+/// Track 1A (+ its two remediations) adds ten cross-lane `cow_for_*` /
+/// `cow_comprehension_*` fixtures. Eight are out of the phase-0 subset and get
+/// EXCLUDE rows here (each row cites the ggdef-run-verified gate that fires):
 ///   - `cow_for_amp_vector_field_writethrough` / `cow_for_amp_vector_alias_root` /
 ///     `cow_for_amp_resource_elem_writethrough`: a `for x in &coll` iterable is
 ///     Increment B2 (`desugar_for` hits the `elaborate/mod.rs` "Increment B2"
 ///     error on the `&`-mode iterable), same as the standing for-`&` gap.
-///   - `cow_for_enumerate_bare_resource_materialize`: `desugar_for`
-///     (`binding_name(pattern)?`) accepts only a single binding, so the
-///     enumerate 2-tuple pattern is out of the phase-0 subset.
+///   - the enumerate rows: gate depends on the SPELLING — statement-`&` forms
+///     hit the :~967 B2 gate first; bare and receiver-wrap forms fall to
+///     `binding_name` (:~969). Per-row comments below.
 ///   - `cow_comprehension_amp_source`: `elaborate_expr` has no comprehension arm,
 ///     so it hits the catch-all "expression outside the phase-0 subset" error —
 ///     a DIFFERENT site than the for-`&` B2 gate.
@@ -61,11 +62,22 @@ const EXCLUDE: &[&str] = &[
     "cow_for_amp_vector_field_writethrough.gg",
     "cow_for_amp_vector_alias_root.gg",
     "cow_for_amp_resource_elem_writethrough.gg",
+    // bare `.enumerate()`: `binding_name(pattern)?` (elaborate/mod.rs:~969)
+    // rejects the enumerate 2-tuple ("only simple bindings…"; ggdef-run-verified).
     "cow_for_enumerate_bare_resource_materialize.gg",
-    // 1A remediation: enumerate-over-`&` write-through — the same enumerate
-    // 2-tuple pattern is out of the phase-0 subset (`binding_name`,
-    // elaborate/mod.rs:~969); expected output (`101`) is §3.1-prose-derived.
+    // 1A remediation: statement-`&` enumerate (`for i, x in &a.enumerate()`)
+    // hits the `for &` B2 gate FIRST (elaborate/mod.rs:~967 "`for &`/`for !`
+    // iteration is Increment B2" — the ownership check precedes `binding_name`;
+    // ggdef-run-verified). Expected output (`101`) is §3.1-prose-derived.
     "cow_for_enumerate_amp_writethrough.gg",
+    // 1A remediation-2: the alias-root sibling — same statement-`&` shape,
+    // same :~967 B2 gate (ggdef-run-verified). Expected `1`/`101` prose-derived.
+    "cow_for_enumerate_amp_alias_root.gg",
+    // 1A remediation-2: the RECEIVER-wrap spelling `(&a).enumerate()` carries
+    // the `&` inside the expression, so statement ownership is Borrow and the
+    // :~967 gate does NOT fire — it falls to `binding_name` (:~969, "only
+    // simple bindings…"; ggdef-run-verified). Expected `101` prose-derived.
+    "cow_for_enumerate_amp_recv_wrap.gg",
     "cow_comprehension_amp_source.gg",
 ];
 

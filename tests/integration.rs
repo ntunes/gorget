@@ -28671,6 +28671,29 @@ fn cow_for_enumerate_amp_writethrough() {
     run_gg("cow_for_enumerate_amp_writethrough.gg", "101");
 }
 
+/// CoW Track 1A (remediation-2) — the RECEIVER-wrap spelling `(&a).enumerate()`
+/// behaves identically to `&a.enumerate()` (`101`). Pins the shape where the
+/// first remediation briefly diverged the lanes (Rust stripped the receiver
+/// wrap; the self-host probe did not).
+#[test]
+fn cow_for_enumerate_amp_recv_wrap() {
+    run_gg("cow_for_enumerate_amp_recv_wrap.gg", "101");
+}
+
+/// CoW Track 1A (remediation-2) — write-through enumerate over a lazy
+/// borrow-alias root SEVERS at loop entry: `a` stays `1`, `b` gets `101`. Pins
+/// the `lower_for_enumerate` entry sever (disabling it prints `101`/`101` — a
+/// write into the shared buffer).
+#[test]
+fn cow_for_enumerate_amp_alias_root() {
+    run_gg(
+        "cow_for_enumerate_amp_alias_root.gg",
+        "\
+1
+101",
+    );
+}
+
 /// CoW Track 1A — `[x * 2 for x in &a]` reads correctly (yields-empty fix). The
 /// comprehension lowered `&a` to a Ptr but never deref'd it → the len-read hit
 /// garbage → an EMPTY result. The shared iterable-deref (also used by the

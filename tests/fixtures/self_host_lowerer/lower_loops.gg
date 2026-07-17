@@ -140,6 +140,11 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # then detect `.enumerate()` on the STRIPPED iterable. `&a.enumerate()`
     # threads write_through into `lower_for_vector`'s enumerate arm — the
     # element binds as the same write-through pointer as the plain `&` loop.
+    # The RECEIVER-wrap shape `(&a).enumerate()` carries the `&` inside the
+    # method call instead — strip it off the probed receiver too, so all three
+    # `&` shapes (top-level wrap, receiver wrap, and the parser's ownership
+    # split) behave identically on both lanes (mirrors the Rust dispatch,
+    # stmts/for_loops.rs).
     bool for_write_through = false
     SpannedExpr wt_iter = for_iterable_mode(iter_expr, &for_write_through)
     SpannedExpr probe_coll = wt_iter
@@ -147,7 +152,10 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     match wt_iter.expr:
         case EMethodCall(recv_box, mname, margs, _):
             if mname == "enumerate" and margs.len() == 0:
-                probe_coll = SpannedExpr((*recv_box).expr, (*recv_box).span)
+                bool recv_write_through = false
+                probe_coll = for_iterable_mode(SpannedExpr((*recv_box).expr, (*recv_box).span), &recv_write_through)
+                if recv_write_through:
+                    for_write_through = true
                 probe_is_enumerate = true
         else:
             pass

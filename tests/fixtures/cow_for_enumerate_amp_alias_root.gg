@@ -1,0 +1,21 @@
+# CoW Track 1A (remediation-2) — `.enumerate()` over `&` on a lazy alias root SEVERS.
+#
+# The enumerate sibling of `cow_for_amp_vector_alias_root`: `Vector[T] b = a` is
+# a 0-clone lazy borrow-alias, so a write-through `for i, x in &b.enumerate():`
+# must SEVER the alias (materialize b) at loop entry — `a` stays `1`, `b`
+# becomes `101`. Pins the `lower_for_enumerate` entry sever, which a review
+# probe showed was load-bearing but unpinned: with the sever disabled this
+# prints `101`/`101` (a write into the SHARED buffer — corruption of the alias
+# source).
+# Output must be correct on BOTH backends.
+
+struct Cell:
+    int v
+
+void main():
+    Vector[Cell] a = [Cell(1)]
+    Vector[Cell] b = a
+    for i, x in &b.enumerate():
+        x.v = x.v + 100 + i
+    print(a.get(0).unwrap().v)
+    print(b.get(0).unwrap().v)
