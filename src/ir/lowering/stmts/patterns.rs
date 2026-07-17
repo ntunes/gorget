@@ -864,20 +864,36 @@ pub fn emit_pattern_bindings(
                 if matches!(field_pat.node, Pattern::Wildcard) {
                     continue;
                 }
-                // Determine the field type from the enum variant definition
+                // Determine the field type from the enum variant OR struct
+                // definition. Struct constructor patterns (`case Point(x,y):`)
+                // share this AST shape; using enum payload layout (+tag offset)
+                // on a struct mis-binds by one field (Core #8).
+                let is_struct_ctor = ctx
+                    .type_registry
+                    .get_type_def(&enum_name)
+                    .map(|td| matches!(td.kind, TypeDefKind::Struct(_)))
+                    .unwrap_or(false);
                 let mut field_type = if let Some(type_def) = ctx.type_registry.get_type_def(&enum_name) {
-                    if let TypeDefKind::Enum(ref e) = type_def.kind {
-                        if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
-                            if let Some(f) = v.fields.get(i) {
+                    match &type_def.kind {
+                        TypeDefKind::Enum(e) => {
+                            if let Some(v) = e.variants.iter().find(|v| v.name == variant_name) {
+                                if let Some(f) = v.fields.get(i) {
+                                    f.type_id
+                                } else {
+                                    I64_TYPE
+                                }
+                            } else {
+                                I64_TYPE
+                            }
+                        }
+                        TypeDefKind::Struct(s) => {
+                            if let Some(f) = s.fields.get(i) {
                                 f.type_id
                             } else {
                                 I64_TYPE
                             }
-                        } else {
-                            I64_TYPE
                         }
-                    } else {
-                        I64_TYPE
+                        _ => I64_TYPE,
                     }
                 } else {
                     I64_TYPE
@@ -898,12 +914,21 @@ pub fn emit_pattern_bindings(
                     }
                 }
 
-                let dst = builder.enum_field_load_move(
-                    Place::local(scrut_local),
-                    variant_name.clone(),
-                    i as u32,
-                    field_type,
-                );
+                let dst = if is_struct_ctor {
+                    // Struct fields are 0-based on the value layout (no tag).
+                    builder.field_load(
+                        Place::local(scrut_local),
+                        i as u32,
+                        field_type,
+                    )
+                } else {
+                    builder.enum_field_load_move(
+                        Place::local(scrut_local),
+                        variant_name.clone(),
+                        i as u32,
+                        field_type,
+                    )
+                };
 
                 // Mark Ptr-extracted locals as ref_locals (no auto-deref, no drop).
                 // Phase D: origin is Field { base: scrut_local, field: i }.

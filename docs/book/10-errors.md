@@ -74,44 +74,52 @@ int divide(int a, int b) throws String:
     return a / b
 ```
 
-### Auto-Propagation
+### The fallible mark (`!`) and auto-propagation
 
-Here's the key feature: inside a `throws` function, calls to other `throws` functions
-automatically propagate errors. If the callee fails, the caller immediately returns that
-error — no extra syntax needed.
+Fallible calls (`throws` callees and functions that return `Result[T, E]`) do **not**
+silently enter the error channel. You activate the channel with a **postfix** `!` on the
+call (D29 — visible error propagation). Inside a `throws` function (or a function that
+returns `Result`), a marked call peels to the success type and propagates on failure:
 
 ```gorget
 Config load_config(String path) throws String:
-    String content = read_file(path)      # if this throws, we throw too
-    Config cfg = parse_config(content)    # same here
+    String content = read_file(path)!     # mark: propagate if this fails
+    Config cfg = parse_config(content)!   # same here
     return cfg
 ```
 
-If `read_file` throws `"file not found"`, then `load_config` immediately returns that
-same error. If `parse_config` throws `"invalid syntax"`, same thing. The happy path
-reads like straight-line code — no error checks between each call.
+Three exits for a fallible call (the compiler rejects silent bare discards):
+
+| Form | Meaning |
+|------|---------|
+| `f()!` | Activate the channel — propagate in a `throws`/`Result` function |
+| `f()! catch (e): …` / `f()! rethrow …` | Activate and handle / transform |
+| `Result[T, E] r = f()` | **Capture** — explicit Result annotation, **no** mark |
+
+Mark + Result capture together is an error (remove the `!`). Marking a non-fallible
+expression (`5!`, `pure()!`) is also an error. A mark in a function that cannot
+propagate and has no handler is `E_UnhandledThrows`.
 
 This is similar to exceptions in other languages, but with two critical differences:
 
 1. **It's in the type signature.** A `throws` function declares its error type. You can
    see at a glance which functions can fail and what they fail with.
 
-2. **It's checked.** You cannot call a `throws` function from a non-`throws` function
-   without handling the error. The compiler forces the issue.
+2. **It's checked and marked.** You cannot call a fallible function without either a mark
+   (channel activation) or an explicit Result capture. The compiler forces the issue.
 
-Auto-propagation also works in functions that explicitly return `Result`:
+Marked propagation also works in functions that explicitly return `Result`:
 
 ```gorget
 Result[int, String] double_parsed(String s):
-    int val = parse_int(s)      # auto-propagates Error if parse fails
+    int val = parse_int(s)!     # peels Ok / propagates Error
     return Ok(val * 2)
 ```
 
 ### Capturing as a Result
 
-Sometimes you don't want an error to propagate — you want to handle it locally. When
-you declare the destination variable with a `Result[T, E]` type, the compiler suppresses
-auto-unwrap and captures the full `Result` value:
+Sometimes you don't want an error to propagate — you want the full `Result` value.
+When the destination is annotated `Result[T, E]`, leave the call **unmarked**:
 
 ```gorget
 void main():

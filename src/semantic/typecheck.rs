@@ -2960,6 +2960,22 @@ impl<'a> TypeChecker<'a> {
                             }
                         }
                     }
+                    // Named fields on tuples: only the underscore alias
+                    // `._0`/`._1`/… is legal (language-reference §4.2 / §7.8);
+                    // bare `.0` is `TupleFieldAccess`. Any other name is absent.
+                    ResolvedType::Tuple(elems) => {
+                        let name = field.node.as_str();
+                        if let Some(rest) = name.strip_prefix('_') {
+                            if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+                                if let Ok(idx) = rest.parse::<usize>() {
+                                    if let Some(&elem_tid) = elems.get(idx) {
+                                        return elem_tid;
+                                    }
+                                }
+                            }
+                        }
+                        FieldDisp::NoField
+                    }
                     _ => FieldDisp::Accept,
                 };
                 match disp {
@@ -4974,6 +4990,20 @@ impl<'a> TypeChecker<'a> {
             Pattern::Constructor { path, fields } => {
                 let variant_name = path.last().map(|s| s.node.as_str()).unwrap_or("");
                 let field_types = self.resolve_variant_field_types(scrutinee_type, variant_name);
+                // Arity gate: when we know the payload/field list, wrong arity is a type error
+                // (was silent — struct patterns then mis-bound via enum tag offset).
+                if !field_types.is_empty() && field_types.len() != fields.len() {
+                    self.error(
+                        SemanticErrorKind::TypeMismatch {
+                            expected: format!(
+                                "pattern with {} field(s) for `{variant_name}`",
+                                field_types.len()
+                            ),
+                            found: format!("{} field(s)", fields.len()),
+                        },
+                        pattern.span,
+                    );
+                }
                 for (i, field_pat) in fields.iter().enumerate() {
                     if let Some(&field_tid) = field_types.get(i) {
                         self.assign_pattern_types(field_pat, field_tid);
@@ -5024,6 +5054,9 @@ impl<'a> TypeChecker<'a> {
     }
 
     /// Resolve the field types for a particular variant given the scrutinee type.
+    /// Also handles **struct** constructor patterns (`case Point(x, y):`) by
+    /// matching the type name to `variant_name` and returning positional field
+    /// types (with arity left to the caller via the returned vec length).
     fn resolve_variant_field_types(&mut self, scrutinee_type: TypeId, variant_name: &str) -> Vec<TypeId> {
         let resolved = self.resolve_type(scrutinee_type);
         match self.types.get(resolved).clone() {
@@ -5047,6 +5080,34 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             ResolvedType::Defined(def_id) => {
+                // Struct constructor pattern: `match p: case Point(x, y):`
+                // when scrutinee is a struct named Point. Field TypeIds live on
+                // DefInfo.field_types (populated in populate_def_field_types);
+                // StructFieldInfo.fields is only (name, span).
+                if let Some(sfi) = self.struct_fields.get(&def_id) {
+                    let def_name = self.scopes.get_def(def_id).name.clone();
+                    if def_name == variant_name {
+                        if let Some(field_tids) = &self.scopes.get_def(def_id).field_types {
+                            if field_tids.len() == sfi.fields.len() {
+                                return field_tids.clone();
+                            }
+                        }
+                        // Fallback: resolve field AST types at pattern site.
+                        return sfi
+                            .field_ast_types
+                            .iter()
+                            .filter_map(|ast_ty| {
+                                super::types::ast_type_to_resolved(
+                                    &ast_ty.node,
+                                    ast_ty.span,
+                                    self.scopes,
+                                    self.types,
+                                )
+                                .ok()
+                            })
+                            .collect();
+                    }
+                }
                 // Non-generic user-defined enum
                 self.resolve_user_enum_field_types(def_id, &[], variant_name)
             }
@@ -7706,6 +7767,23 @@ impl<'a> TypeChecker<'a> {
         // rejected until A31 lands — steer the user to `throws E`.
         if let crate::parser::ast::ThrowsSpec::Inferred(bang_span) = &func.throws {
             self.error(SemanticErrorKind::InferredThrowsUnsupported, *bang_span);
+        }
+        // R5: default-param expressions are definition-site values evaluated in a
+        // non-propagating context — a bare fallible call is E_MissingFallibleMark
+        // (same discipline as a statement discard). Saved/restored so a default
+        // cannot pollute the body walk's fallible_call_marked one-shot.
+        {
+            let saved_marked = self.fallible_call_marked;
+            let saved_throws = self.current_function_throws;
+            self.current_function_throws = false;
+            self.fallible_call_marked = false;
+            for p in &func.params {
+                if let Some(def_expr) = &p.node.default {
+                    let _ = self.infer_expr(def_expr);
+                }
+            }
+            self.current_function_throws = saved_throws;
+            self.fallible_call_marked = saved_marked;
         }
         self.current_function_throws = func.throws.declares_throws();
         // Snag #11: resolve the CALLER's error type (`throws E`) so the

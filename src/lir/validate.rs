@@ -1363,6 +1363,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "assert_module_valid is a no-op in release without GG_VALIDATE_PASSES"
+    )]
     #[should_panic(expected = "LIR invariant violated after test_pass")]
     fn assert_module_valid_panics_with_pass_name() {
         // Construct a module with an invalid jump target so the structural
@@ -1376,6 +1380,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "assert_module_valid is a no-op in release without GG_VALIDATE_PASSES"
+    )]
     #[should_panic(expected = "invalid bb99")]
     fn assert_module_valid_includes_validator_error() {
         // Verify the validator's per-error text reaches the panic message.

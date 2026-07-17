@@ -82,50 +82,8 @@ fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
-/// Parse a Rust double-quoted string literal starting at `s[0] == '"'`,
-/// processing the escapes the harness expectations use — including the
-/// `\`+newline string-continuation (drops the newline + next-line indent).
-fn parse_rust_str_lit(s: &str) -> Option<String> {
-    let b = s.as_bytes();
-    if b.first() != Some(&b'"') {
-        return None;
-    }
-    let mut i = 1;
-    let mut out = String::new();
-    while i < b.len() {
-        match b[i] {
-            b'"' => return Some(out),
-            b'\\' => {
-                i += 1;
-                if i >= b.len() {
-                    return None;
-                }
-                match b[i] {
-                    b'n' => out.push('\n'),
-                    b't' => out.push('\t'),
-                    b'r' => out.push('\r'),
-                    b'\\' => out.push('\\'),
-                    b'"' => out.push('"'),
-                    b'0' => out.push('\0'),
-                    b'\n' => {
-                        i += 1;
-                        while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
-                            i += 1;
-                        }
-                        continue;
-                    }
-                    other => out.push(other as char),
-                }
-                i += 1;
-            }
-            other => {
-                out.push(other as char);
-                i += 1;
-            }
-        }
-    }
-    None
-}
+use ggdef::parse_rust_str_lit;
+
 
 #[derive(PartialEq, Debug)]
 enum Provenance {

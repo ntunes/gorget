@@ -72,82 +72,19 @@ fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
-/// Parse a Rust double-quoted string literal starting at `s[0] == '"'`,
-/// processing the escapes the harness expectations actually use — including
-/// the `\`+newline **string-continuation** (which drops the newline and the
-/// next line's leading whitespace). Returns the decoded content.
-fn parse_rust_str_lit(s: &str) -> Option<String> {
-    let b = s.as_bytes();
-    if b.first() != Some(&b'"') {
-        return None;
-    }
-    let mut i = 1;
-    let mut out = String::new();
-    while i < b.len() {
-        match b[i] {
-            b'"' => return Some(out),
-            b'\\' => {
-                i += 1;
-                if i >= b.len() {
-                    return None;
-                }
-                match b[i] {
-                    b'n' => {
-                        out.push('\n');
-                        i += 1;
-                    }
-                    b't' => {
-                        out.push('\t');
-                        i += 1;
-                    }
-                    b'r' => {
-                        out.push('\r');
-                        i += 1;
-                    }
-                    b'\\' => {
-                        out.push('\\');
-                        i += 1;
-                    }
-                    b'"' => {
-                        out.push('"');
-                        i += 1;
-                    }
-                    b'0' => {
-                        out.push('\0');
-                        i += 1;
-                    }
-                    b'\n' => {
-                        // String-continuation escape: skip the newline and the
-                        // next line's leading whitespace.
-                        i += 1;
-                        while i < b.len() && (b[i] == b' ' || b[i] == b'\t') {
-                            i += 1;
-                        }
-                    }
-                    other => {
-                        out.push(other as char);
-                        i += 1;
-                    }
-                }
-            }
-            other => {
-                out.push(other as char);
-                i += 1;
-            }
-        }
-    }
-    None
-}
-
 /// The committed expected stdout for `fixture_file` (e.g. `cow_x.gg`), read
 /// from the FIRST `run_gg(...)` pair that names it in `integration.rs`.
 fn expected_for(integration_src: &str, fixture_file: &str) -> Option<String> {
-    let needle = format!("\"{fixture_file}\"");
-    let pos = integration_src.find(&needle)?;
-    let after = pos + needle.len();
-    let rest = &integration_src[after..];
-    let open = rest.find('"')?;
-    parse_rust_str_lit(&rest[open..])
+    ggdef::extract_run_gg_expectation(integration_src, fixture_file)
+        .or_else(|| {
+            // Fallback: loose first-string-after-fixture-name scan (legacy).
+            let needle = format!("\"{fixture_file}\"");
+            let pos = integration_src.find(&needle)?;
+            let after = pos + needle.len();
+            let rest = &integration_src[after..];
+            let open = rest.find('"')?;
+            ggdef::parse_rust_str_lit(&rest[open..])
+        })
 }
 
 #[test]

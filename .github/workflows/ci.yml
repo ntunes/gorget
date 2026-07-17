@@ -43,6 +43,15 @@ jobs:
           # x86_64 runner, so the 120s default trips on CI. (See TODO.md.)
           GG_STAGE1_TIMEOUT_SECS: 900
 
+      - name: Spec conformance (ggdef)
+        run: cargo test -p ggdef -- --test-threads=4
+
+      - name: Spec conformance (production lanes)
+        run: cargo test --test spec_conformance -- --test-threads=1
+        env:
+          GG_BUILD_TIMEOUT_SECS: 600
+          GG_TEST_TIMEOUT_SECS: 600
+
       - name: Security tests (ASan + UBSan)
         run: cargo test --test security -- --test-threads=1
         env:

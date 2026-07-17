@@ -188,16 +188,7 @@ impl TraitRegistry {
                 }
                 if default_hit.is_none() {
                     if let Some(trait_def_id) = impl_info.trait_ {
-                        if let Some(trait_info) = self.traits.get(&trait_def_id) {
-                            let has_default = trait_info
-                                .has_default_body
-                                .get(method)
-                                .copied()
-                                .unwrap_or(false);
-                            if has_default && trait_info.methods.contains_key(method) {
-                                default_hit = Some(trait_info);
-                            }
-                        }
+                        default_hit = self.find_default_method(trait_def_id, method);
                     }
                 }
             }
@@ -208,6 +199,37 @@ impl TraitRegistry {
             }
         }
 
+        None
+    }
+
+    /// Walk a trait + its `extends` parents for a default method body (D23 hole fix).
+    /// Mirrors `collect_all_required_methods_inner`'s parent walk; cycle-guarded.
+    fn find_default_method<'a>(
+        &'a self,
+        trait_def_id: DefId,
+        method: &str,
+    ) -> Option<&'a TraitInfo> {
+        let mut visited = FxHashSet::default();
+        let mut stack = vec![trait_def_id];
+        while let Some(id) = stack.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            let Some(info) = self.traits.get(&id) else {
+                continue;
+            };
+            let has_default = info
+                .has_default_body
+                .get(method)
+                .copied()
+                .unwrap_or(false);
+            if has_default && info.methods.contains_key(method) {
+                return Some(info);
+            }
+            for &parent in &info.extends {
+                stack.push(parent);
+            }
+        }
         None
     }
 
@@ -239,7 +261,7 @@ impl TraitRegistry {
             for &idx in impl_indices {
                 let impl_info = &self.impls[idx];
                 let Some(trait_def_id) = impl_info.trait_ else { continue };
-                if let Some(trait_info) = self.traits.get(&trait_def_id) {
+                if let Some(trait_info) = self.find_default_method(trait_def_id, method) {
                     if let Some(shape) = trait_info.method_shapes.get(method) {
                         return Some(shape);
                     }
@@ -266,7 +288,7 @@ impl TraitRegistry {
         for impl_info in &self.impls {
             if impl_info.self_type_name != type_name { continue; }
             let trait_def_id = match impl_info.trait_ { Some(id) => id, None => continue };
-            if let Some(trait_info) = self.traits.get(&trait_def_id) {
+            if let Some(trait_info) = self.find_default_method(trait_def_id, method) {
                 if let Some(shape) = trait_info.method_shapes.get(method) {
                     return Some(shape);
                 }
@@ -289,20 +311,16 @@ impl TraitRegistry {
                 }
             }
         }
-        // Same default-method fallback as `resolve_method`.
+        // Same default-method fallback as `resolve_method` (incl. extends walk).
         for impl_info in &self.impls {
             if impl_info.self_type_name != type_name { continue; }
             let trait_def_id = match impl_info.trait_ {
                 Some(id) => id,
                 None => continue,
             };
-            if let Some(trait_info) = self.traits.get(&trait_def_id) {
-                let has_default = trait_info.has_default_body
-                    .get(method).copied().unwrap_or(false);
-                if has_default {
-                    if let Some(sig) = trait_info.methods.get(method) {
-                        return Some((&trait_info.def_id, sig));
-                    }
+            if let Some(trait_info) = self.find_default_method(trait_def_id, method) {
+                if let Some(sig) = trait_info.methods.get(method) {
+                    return Some((&trait_info.def_id, sig));
                 }
             }
         }

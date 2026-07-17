@@ -2496,13 +2496,13 @@ A function declared with `throws` may fail:
 
 ```gorget
 Data process(String path) throws AppError:
-    String content = read_file(path)    # auto-propagates errors
-    return transform(content)
+    String content = read_file(path)!   # postfix `!` activates the error channel
+    return transform(content)!
 ```
 
-Inside a `throws` function (or any function returning `Result`), calls to other throwing or `Result`-returning functions **auto-propagate** errors — if the callee fails, the caller immediately returns the error. No explicit unwrapping is needed; the compiler inserts the unwrap automatically.
+Fallible calls (`throws` callees and `Result`-returning functions) require **visible channel activation** (D29). A **postfix** `!` on the call marks it: in a `throws` / `Result`-returning function the error propagates and the expression types as the success type `T`; with `catch` / `rethrow` the mark is also required. An unmarked call is legal only when captured into an **explicitly** `Result[T, E]`-annotated destination (§10.3). Bare discard of a fallible call is `E_MissingFallibleMark`. A marked call that cannot propagate and has no handler is `E_UnhandledThrows`. A mark on a non-fallible expression is also `E_MissingFallibleMark`.
 
-A `throws` call is an expression of type `T` in **every** position — its `Result[T, E]` desugar is never observable. In a `throws` (or `Result`-returning) function the error auto-propagates; anywhere else you must handle it with `catch`, `rethrow`, or by binding to a `Result[T, E]` (§10.3). A `throws` call whose error is neither propagated nor handled is a compile-time error (`E_UnhandledThrows`) — never a silently-typed `Result`. This holds uniformly across all positions (binding, binary operand, call argument, `return`/expression-body tail, match scrutinee or arm, bare statement) and for both free functions and methods.
+A marked fallible call is an expression of type `T` in every position once the channel is activated — its `Result[T, E]` desugar is never a user-visible type at use sites (D23). This holds uniformly across binding, binary operand, call argument, `return`/expression-body tail, match scrutinee or arm, and bare statement, for free functions and methods.
 
 ### 10.2 Throw
 
@@ -2516,7 +2516,7 @@ It is a compile-time error to use `throw` in a function not declared with `throw
 
 ### 10.3 Type-Directed Result Capture
 
-When the destination variable's type is `Result[T, E]`, the compiler suppresses auto-propagation and captures the full `Result` value:
+When the destination is annotated `Result[T, E]`, leave the call **unmarked** — the annotation captures the full value (no channel activation):
 
 ```gorget
 Result[String, IOError] result = read_file(path)
@@ -2525,17 +2525,17 @@ match result:
     case Error(e): handle(e)
 ```
 
-This is type-directed: the compiler sees the `Result` type on the left-hand side and infers that you want to capture the result rather than auto-unwrap it.
+`auto` / non-`Result` destinations do **not** capture a `throws` call — write `f()!` or annotate `Result[…]`. Mark + Result capture together (`Result[…] r = f()!`) is `E_MissingFallibleMark` (remove the `!`).
 
 ### 10.4 Rethrow
 
-The `rethrow` keyword catches an error from a throwing call, transforms it, and re-throws.
+The `rethrow` keyword catches an error from a **marked** fallible call, transforms it, and re-throws.
 
 **Bare form** — replace the error without inspecting it:
 
 ```gorget
 void main() throws int:
-    Json doc = json_parse(input) rethrow 1
+    Json doc = json_parse(input)! rethrow 1
 ```
 
 **Binding form** — bind the original error and transform it:

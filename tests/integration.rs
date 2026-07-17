@@ -8299,6 +8299,47 @@ fn fmt_binary_chain_round_trips() {
     );
 }
 
+/// D29: `Expr::Propagate` must round-trip as a **postfix** `!` on the call
+/// (not a prefix bang, not fused with `!=`). Without this pin a missing
+/// formatter arm silently drops marks on `gg fmt` of marked corpus.
+#[test]
+fn fmt_propagate_round_trips() {
+    let src = "\
+int parse(String s) throws String:
+    return 1
+
+int f(String s) throws String:
+    return parse(s)!
+
+void main():
+    print(f(\"x\")! catch (e): 0)
+";
+    assert_fmt_round_trips("propagate_postfix", src);
+    let formatted = gorget::formatter::format_source(src);
+    assert!(
+        formatted.contains("parse(s)!"),
+        "formatter must render Propagate as postfix `!` after the call.\nformatted:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("!parse"),
+        "Propagate must not format as a prefix bang.\nformatted:\n{formatted}"
+    );
+    // Comparison with spaces must not fuse: `f()! != b` stays spaced.
+    let cmp = "\
+int g() throws String:
+    return 1
+void main():
+    bool ok = g()! != 0
+    print(ok)
+";
+    assert_fmt_round_trips("propagate_ne_compare", cmp);
+    let cmp_fmt = gorget::formatter::format_source(cmp);
+    assert!(
+        cmp_fmt.contains("!") && cmp_fmt.contains("!="),
+        "postfix mark and `!=` must both survive fmt.\nformatted:\n{cmp_fmt}"
+    );
+}
+
 // ══════════════════════════════════════════════════════════════
 // Semantic error tests (expected check failures)
 // ══════════════════════════════════════════════════════════════

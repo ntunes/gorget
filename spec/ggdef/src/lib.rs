@@ -20,7 +20,8 @@ pub mod ggc;
 pub mod trace;
 
 pub use classify::{
-    classifiable_fixture_names, classify_fixture, Classification, CLASSIFY_EXCLUDE, CLASSIFY_FUEL,
+    classifiable_fixture_names, classify_fixture, extract_run_gg_expectation, parse_rust_str_lit,
+    Classification, CLASSIFY_EXCLUDE, CLASSIFY_FUEL,
 };
 pub use elaborate::{elaborate, ElabError};
 pub use eval::{run, Outcome, Run, TrapKind, EXIT_FUEL, EXIT_ILLFORMED, EXIT_TRAP, EXIT_VALUE};
