@@ -22271,13 +22271,19 @@ fn self_host_runtime_diff() {
     // and stdlib_iter_set as a runaway-output kill) — the jitter the floor
     // discounts.
     //
-    // Floor = 1156 − 5 (regenerated MATCH minus measured timeout jitter,
-    // nothing more) = 1151.
+    // Floor = regenerated MATCH minus measured timeout jitter (5), nothing
+    // more. Reseeded 2026-07-17 at the CoW-1A + flip-tracks round close:
+    // MATCH 1166 (of 1240; the +10 = the ten new CoW-1A cross-lane fixtures,
+    // all three-lane MATCHes) − 5 = 1161. Regen command: GG_RUNTIME_DIFF=1
+    // GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release
+    // self_host_runtime_diff -- --nocapture (leave GG_TEST_TIMEOUT_SECS at
+    // its default — 600 makes each hang-class fixture stall a worker 20x
+    // longer for identical counts).
     //
     // Bump-on-improvement: when MATCH rises, raise the floor in the same
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter. Floors ratchet — never lower.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1151;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1161;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
