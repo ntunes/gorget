@@ -1,26 +1,20 @@
 # EXECUTOR BRIEF — D29 implementation: call-site `!` (visible error propagation), all lanes
 
-**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 2 (the fold verified
-amendment-correct on the checker split + three-site re-scoping + transparency section; ONE
-HIGH: the migration planned the WRONG edit for the ~12 auto-capture-then-match fixtures —
-`!` insertion would peel and break the match; now a REWRITE-to-explicit-capture transform
-with the stale scout proof retired and snag48 flipped NEG; +R2 gate-2's stale marked-match
-RUN remnant synced to the NEG+POS pair; +R3 gate-8 floor handling split accept/reject with
-the ggdef IllFormed/SKIP mechanics and the nonexistent MIN floor dropped; +R4 the auto
-clause scoped to kind-1) FOLDED into this v3. Prior: v2 ←pass-1 (checker/gates
-amendment-reconciliation). Do not execute until a clean pass. Pass 1 (semantics section
-verified faithful to the LOG incl. the kind-2 peel pin; scout claims + all cited source
-locations verified; the capture machinery located — `decl_type_hint`/`dest_is_result`,
-kind-1 capture EXISTS today; TWO HIGH reservations: the checker-design + gates sections
-predated the capture amendment — kind-2 enforcement rewritten to bare-DISCARD-only at
-statement position with the three existing keep-the-Result sites' re-scoping enumerated
-[dest_is_result keeps-unmarked / auto-capture REMOVED / match-arm suppress removed for
-kind-1, kept for kind-2], and the marked-match acceptance gate flipped to the
-amendment-correct NEG+POS pair; +R3 the stale 267 census now re-measure-mandated; +R4
-four-lane conformance + floors + anchored-test grep gates added; +R5 machinery named;
-"bare" disambiguated) ALL FOLDED into this v2. Do not execute until a clean pass. NOTE for
-reviewers: `src/semantic/safety/check_expr.rs` gains an additive `Propagate` arm — RV-B's
-zone; the sequencing STOP covers it.
+**Status:** DRAFT v4 — in the ≥3-fresh-pass review gauntlet. Gauntlet history:
+pass 1 (semantics faithful; capture machinery located — kind-1 capture EXISTS via
+`decl_type_hint`/`dest_is_result`; 2 HIGH: checker/gates predated the amendment → kind-2
+rewritten to bare-DISCARD-only + the three keep-the-Result sites' re-scoping + gates
+reconciled; census re-measure; conformance/anchored gates; machinery named) → v2.
+Pass 2 (1 HIGH: the auto-capture migration planned the WRONG edit — now a
+rewrite-to-explicit-capture transform; gate-2 remnant synced; gate-8 accept/reject floor
+split + ggdef IllFormed mechanics; auto clause scoped kind-1) → v3.
+Pass 3 (caught the v3 fold's OWN defect: marked-match SPLITS BY ARM TYPE — T-variant arms
+are LEGAL and keep their RUN net [snag48's class, the actual SIGSEGV site; its scout proof
+STANDS], only Ok/Error arms are the check error; snag48's wrong NEG flip reverted to
+mechanical-mark POS; +R2 `MIN_FIXTURES=214` EXISTS as the total-seed guard and bumps in
+lockstep; +R3 the self-host lane given the explicit kind-1/kind-2 split) → this v4.
+Do not execute until a clean pass. NOTE for reviewers: `src/semantic/safety/check_expr.rs`
+gains an additive `Propagate` arm — RV-B's zone; the sequencing STOP covers it.
 **Normative semantics:** `decisions.md` LOG — the D29 formal ratification + its six
 follow-through pins + the **2026-07-17 CAPTURE AMENDMENT** (read all of them FIRST; where
 any other document disagrees, the LOG wins).
@@ -105,15 +99,17 @@ holds the grammar evidence and disposition table.
 - **THE TWO-LAYER TRANSPARENCY FIX (mandatory-gate finding, AMENDMENT-CORRECTED per pass-1
   R2):** the `Propagate` node eats the `suppress_auto_prop` one-shot in BOTH the typechecker
   AND the IR lowerer — the scout APPLIED both fixes for the `catch`/`rethrow` attachments,
-  and those remain correct and required (`f()! catch` must type and RUN). BUT the scout's
-  marked-match-scrutinee case encoded PRE-amendment behavior (keep-the-Result so
-  `match f()!:` with Ok/Error arms runs) — under the amendment that exact program is a
-  CHECK ERROR (the scrutinee peels; bind to a Result first). **Acceptance gates therefore:
-  (a) `f()! catch (e): …` types and RUNS (the transparency pin); (b) `match f()!:` with
-  Ok/Error arms → CHECK ERROR (NEG test — the amendment pin); (c)
-  `Result[T,E] r = f()` then `match r:` → RUNS (the capture-then-match POS pin); (d) the
-  kind-2 marked variants of (a). The scout's SIGSEGV class is covered by (a)+(c) reaching
-  the lowerer; nothing marked-match reaches it anymore by construction.**
+  and those remain correct and required (`f()! catch` must type and RUN). **MARKED-MATCH SPLITS BY ARM TYPE
+  (pass-3 R1 — do not conflate the two cases):** `match f()!:` peels the scrutinee to `T`.
+  With **T-VARIANT arms** (the snag48 shape — `case Tagged.StringV(s)…` inside a throws fn)
+  that is LEGAL and MUST RUN: this is the direct-scrutinee `Propagate` lowering, the ACTUAL
+  Finding-5 SIGSEGV site, and it KEEPS its RUN regression net (the scout proved snag48
+  stdout-identical under mechanical marking — that proof STANDS). With **Ok/Error arms** it
+  is a CHECK ERROR (you matched the peeled `T` against Result variants — bind to a Result
+  first; the amendment pin). **Acceptance gates therefore: (a) `f()! catch (e): …` types
+  and RUNS; (b) `match f()!:` with T-VARIANT arms RUNS — the SIGSEGV pin, snag48's class;
+  (c) `match f()!:` with Ok/Error arms → CHECK ERROR (NEG); (d) `Result[T,E] r = f()` then
+  `match r:` RUNS (the capture POS pin); (e) the kind-2 marked variants of (a).**
 - **Diagnostics:** `E_MissingFallibleMark` registered (`errors.rs`; registry count 96→97;
   `spec/prose/diagnostic-codes.md` row); `E_UnhandledThrows` message flip per the pinned
   drafts; smith/D23 ratchets gain the new code.
@@ -140,9 +136,14 @@ holds the grammar evidence and disposition table.
   capture, UNMARKED; derive the concrete T/E from the callee's signature). fmt cannot
   derive this from the missing-mark diagnostic — enumerate the class by grep + checker
   triage, rewrite by hand or a dedicated script, and verify each rewritten fixture
-  build+runs stdout-identical. `snag48_throws_match_scrutinee.gg` (`match throws_call():`)
-  is now REJECTED by design — flip it to a NEG fixture (or capture-bind form) per
-  don't-redesign-around-gaps, reporting the disposition. **The scout's
+  build+runs stdout-identical. **CLASSIFY THE MATCH MIGRATIONS BY ARM TYPE (pass-3 R1):**
+  `snag48_throws_match_scrutinee.gg` has T-VARIANT arms — it gets the MECHANICAL `!` on the
+  scrutinee (`match stringv_throws()!:`) and STAYS a POS run fixture (the scout's
+  stdout-identical proof for it STANDS); only auto-capture-then-Ok/Error-match fixtures get
+  the rewrite-to-explicit-capture. Triage the whole direct-scrutinee-match class
+  (snag41/43/46/49*, d23_*) by the same arm-type rule; the rewrite class = kind-1
+  throws-call auto-binds ONLY (a kind-2 `auto r = parse_int(s); match r:` is a legal value
+  flow — no rewrite). **The scout's
   "test_error_handling.gg 14 marks stdout-identical" proof is PRE-AMENDMENT STALE**
   (mark+capture was legal then; it is now an error) — do not cite it; re-prove on the
   amendment-correct transforms.
@@ -154,7 +155,9 @@ holds the grammar evidence and disposition table.
 ### ggdef lane (within subset)
 Shares the production parser+AST (gets `Expr::Propagate` for free); GGC already evaluates
 Propagate. Needs: the elaboration arm (production `Expr::Propagate` → GGC) + reject-bare
-within its subset with the SAME E_ code + the capture-position acceptance. ~19 inline
+within its subset with the SAME E_ code — **plumbed as typed `Outcome::IllFormed` +
+`reject_code` so the conformance rejects count MATCH on the GGDEF lane (see gate 8; a
+generic FrontendError records only GGDEF-SKIP)** — + the capture-position acceptance. ~19 inline
 `throws` unit tests flip (scout-measured); the full `cargo test -p ggdef` suite is a gate
 (the Batch-A lesson). The cow/deadwrite corpus is throws-free — no corpus_b churn expected;
 verify, don't assume.
@@ -162,8 +165,16 @@ verify, don't assume.
 ### Self-host lane
 Port: `EPropagate` variant + the postfix arm in `parse_expr_bp` (`parser.gg:~1634-1693`;
 the lexer already splits `TkBang`/`TkBangEq` — corner free); signature `!:`
-parse+teaching-reject; the mark/capture enforcement in `typecheck.gg` mirroring the Rust
-decision point; **the SAME two-layer transparency in its lowerer**. Follow the A2-S port
+parse+teaching-reject; the enforcement in `typecheck.gg` **with the SAME kind-1/kind-2
+ARCHITECTURAL SPLIT as the Rust section (pass-3 R3 — "mirror the decision point" does NOT
+mean one rule): kind-1 = the throws-chokepoint re-scope (unmarked→error unless
+explicit-Result-captured; marked→peel+disposition; mark+capture→error; auto doesn't
+capture; match-arm suppress removed for kind-1), kind-2 = the bare-DISCARD statement-position
+check ONLY (value flows stay legal unmarked)** — a kind-1-only mirror yields the kind-2
+bare-discard conformance fixture rejected by C/LLVM but accepted by the self-host = a
+Core-#9 lane divergence; **the SAME two-layer transparency in its lowerer**. The driver
+tests pin BOTH kinds' rejects + the unmarked-capture accept + the T-variant marked-match
+run. Follow the A2-S port
 pattern (extend the existing walker; prototype+revert measurement style). The self-host
 sources themselves contain zero throws decls — the migration does not touch them; the
 DRIVER tests pin the lane (reject-bare + accept-marked + capture cases through the driver).
@@ -196,9 +207,12 @@ chunk >10min by test name; NEVER background a final gate)
    MATCH only if plumbed as a typed `Outcome::IllFormed` + `reject_code` — a generic
    FrontendError records GGDEF-SKIP (the E_BorrowConflict precedent,
    `spec_conformance_ggdef.rs:~58-60`); prefer the typed plumbing, else a documented SKIP.
-   The GGDEF floor is a SEPARATE constant/value from the C/LLVM/SELFHOST 214s; there is NO
-   "MIN" floor constant (pass-2 verified) — bump exactly the constants that exist, with
-   regenerated counts, same commit.
+   The GGDEF floor is a SEPARATE constant/value from the C/LLVM/SELFHOST 214s. There is no
+   5th MATCH-floor lane, **but `MIN_FIXTURES = 214` EXISTS** (`tests/spec_conformance.rs:~152`,
+   the total-seed-count guard documented to EQUAL the three MATCH floors) — every new seed
+   (accept AND reject) increments the corpus, so bump `MIN_FIXTURES` in lockstep (the `>=`
+   stays silently green if forgotten — that is documented-invariant staleness). Bump exactly
+   the constants that exist, with regenerated counts, same commit.
 9. **Emitted-shape / anchored-test grep (pass-1 R4):** before the gates, grep `tests/` for
    anchored landmarks a new parser node + error code can trip (snapshot tests, message
    asserts on the old E_UnhandledThrows wording, smith ratchet expectations); list what you
