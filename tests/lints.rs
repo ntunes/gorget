@@ -768,6 +768,57 @@ fn d23_method_throws_return_sites() {
     );
 }
 
+/// D29 R-B ratchet (chain review 2; CLAUDE.md Core #6 — convert the recurring
+/// class into an executable guard): the `Expr::Propagate` TRANSPARENT-WRAPPER
+/// arms across the Rust-side walkers, pinned per file. The migration exposed
+/// that Rust AST walkers drift where the self-host's arm-count-exhaustiveness
+/// lints forced completeness: the generics discovery was missing the WHOLE
+/// error-handling wrapper class (Catch/Rethrow/FaultCatch — an undefined
+/// symbol at link for `write_str[File](&f, s)! catch …`), and every
+/// `_ => {{}}` catch-all walker silently skips a wrapper node it has no arm
+/// for (missed use → conservative clone; silent under-capture; lost instance).
+/// This pins today's Propagate coverage so an arm cannot be silently REMOVED,
+/// and the failure message carries the sweep obligation for the next wrapper
+/// variant: when you add a wrapper Expr node, grep every file listed here and
+/// extend each walker's wrapper group (then bump its count with justification).
+#[test]
+fn d29_propagate_walker_arm_coverage() {
+    // (file, expected `Expr::Propagate` occurrence count). Source-derived
+    // 2026-07-17 after the full `Expr::Move` sibling sweep. Counts include
+    // pattern arms and constructions alike — the pin is on coverage presence,
+    // not arm shape.
+    const EXPECTED: &[(&str, usize)] = &[
+        ("src/formatter/mod.rs", 1),
+        ("src/ir/lowering/closures.rs", 1),
+        ("src/ir/lowering/context.rs", 1),
+        ("src/ir/lowering/exprs/mod.rs", 2),
+        ("src/ir/lowering/functions.rs", 1),
+        ("src/ir/lowering/generics/mod.rs", 2),
+        ("src/ir/lowering/generics/substitute.rs", 1),
+        ("src/ir/lowering/liveness.rs", 1),
+        ("src/loader.rs", 2),
+        ("src/parser/expr.rs", 2),
+        ("src/parser/visitor.rs", 1),
+        ("src/semantic/meta.rs", 2),
+        ("src/semantic/resolve.rs", 1),
+        ("src/semantic/rewrite.rs", 2),
+        ("src/semantic/safety/check_expr.rs", 1),
+        ("src/semantic/safety/helpers.rs", 5),
+        ("src/semantic/safety/origins.rs", 1),
+        ("src/semantic/safety/return_borrows.rs", 2),
+        ("src/semantic/safety/validation.rs", 1),
+        ("src/semantic/typecheck.rs", 7),
+    ];
+    for (file, expected) in EXPECTED {
+        let content = fs::read_to_string(file).unwrap_or_default();
+        let count = content.matches("Expr::Propagate").count();
+        assert_eq!(
+            count, *expected,
+            "`Expr::Propagate` arm coverage changed in {file}: {count} vs              {expected}.\n\n             The D29 mark is a TRANSPARENT wrapper: every AST walker that has a              `Expr::Move`/wrapper group must see THROUGH it, and `_ => {{}}`              catch-alls make a missing arm silent (missed use → conservative              clone; lost generic instance → undefined symbol; silent              under-capture). If you removed an arm, restore it (or justify +              lower the count). If you are adding a NEW wrapper Expr variant,              extend the wrapper group in EVERY file in this table (the              sibling-sweep obligation), then bump the counts.",
+        );
+    }
+}
+
 /// D29 (visible error propagation) kind-2 sibling-guard ratchet (CLAUDE.md rule
 /// 4 "one fix, all siblings"). A KIND-2 fallible call — a non-`throws` callee
 /// whose DECLARED return is `Result[T,E]` — must route its return type through

@@ -384,7 +384,7 @@ Result[bool, String] p2p_bootstrap(Node &node, Vector[String] addrs):
                 int d = port_str.byte_at(k) as int - 48
                 port = port * 10 + d
                 k = k + 1
-            p2p_send_raw(&node, host, port, 1, Vector[uint8]())!
+            p2p_send_raw(&node, host, port, 1, Vector[uint8]())! catch (e): false
         i = i + 1
     return Ok(true)
 
@@ -489,7 +489,7 @@ Result[Vector[uint8], String] p2p_dht_get(Node &node, Vector[uint8] key, int tim
     int i = 0
     while i < node.peers.len():
         auto pi = node.peers.get(i).unwrap()
-        p2p_send_raw(&node, pi.host, pi.port, 23, key)!
+        p2p_send_raw(&node, pi.host, pi.port, 23, key)! catch (e): false
         i = i + 1
     # Poll until we get a FIND_VALUE_REPLY or timeout
     int start = time_ms()
@@ -522,7 +522,7 @@ struct ExternalAddr:
 
 Result[ExternalAddr, String] p2p_discover_external_addr(Node &node, String probe_host, int probe_port, int timeout_ms):
     # Send ADDR_PROBE to the specified peer
-    p2p_send_raw(&node, probe_host, probe_port, 40, Vector[uint8]())!
+    p2p_send_raw(&node, probe_host, probe_port, 40, Vector[uint8]())! catch (e): false
     # Poll until we get an ADDR_REPLY
     int start = time_ms()
     while time_ms() - start < timeout_ms:
@@ -558,7 +558,7 @@ Result[bool, String] p2p_hole_punch(Node &node, PeerId target, PeerId rendezvous
     Vector[uint8] payload = target.bytes
     Vector[uint8] addr_payload = p2p_encode_announce_payload(our_ext.host, our_ext.port)
     payload = bytes_concat(payload, addr_payload)
-    p2p_send_to_peer(&node, rendezvous, 42, payload)!
+    p2p_send_to_peer(&node, rendezvous, 42, payload)! catch (e): false
     # Also start sending probes directly to target's known address
     # (if we know it from the peer table)
     return Ok(true)
@@ -866,7 +866,7 @@ Result[int, String] p2p_stream_open(Node &node, String peer_hex):
     # Send SYN
     Vector[uint8] payload = p2p_encode_syn_payload(sid, 0)
     auto pi = node.peers.get(idx).unwrap()
-    p2p_send_raw(&node, pi.host, pi.port, 52, payload)!
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)! catch (e): false
     return Ok(sid)
 
 Result[int, String] p2p_stream_open_encrypted(Node &node, String peer_hex):
@@ -893,7 +893,7 @@ Result[int, String] p2p_stream_open_encrypted(Node &node, String peer_hex):
     # Send authenticated SYN (flags=0x03): ephemeral + Ed25519 pubkey + signature
     Vector[uint8] payload = p2p_encode_syn_auth_payload(sid, 0, epub, node.identity.public_key, sig)
     auto pi = node.peers.get(idx).unwrap()
-    p2p_send_raw(&node, pi.host, pi.port, 52, payload)!
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)! catch (e): false
     return Ok(sid)
 
 # ── Protocol-tagged stream open ──────────────────────────
@@ -913,7 +913,7 @@ Result[int, String] p2p_stream_open_protocol(Node &node, String peer_hex, String
     # Send SYN with protocol tag
     Vector[uint8] payload = p2p_encode_syn_protocol_payload(sid, 0, protocol)
     auto pi = node.peers.get(idx).unwrap()
-    p2p_send_raw(&node, pi.host, pi.port, 52, payload)!
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)! catch (e): false
     return Ok(sid)
 
 Result[int, String] p2p_stream_open_encrypted_protocol(Node &node, String peer_hex, String protocol):
@@ -938,7 +938,7 @@ Result[int, String] p2p_stream_open_encrypted_protocol(Node &node, String peer_h
     Vector[uint8] sig = crypto_ed25519_sign(node.identity.private_key, epub).unwrap()
     Vector[uint8] payload = p2p_encode_syn_auth_protocol_payload(sid, 0, epub, node.identity.public_key, sig, protocol)
     auto pi = node.peers.get(idx).unwrap()
-    p2p_send_raw(&node, pi.host, pi.port, 52, payload)!
+    p2p_send_raw(&node, pi.host, pi.port, 52, payload)! catch (e): false
     return Ok(sid)
 
 String p2p_stream_protocol(Node node, int stream_id):
