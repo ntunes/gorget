@@ -5384,6 +5384,42 @@ fn d23_traitdefault_generic_collision_unhandled() {
 // no `found `Result[` desugar leak (`check_gg_fails_missing_mark`).
 // ══════════════════════════════════════════════════════════════
 
+/// Core #9 lane pin (EXPLICIT gap, not a silent one): the self-host lane has
+/// the D29 PARSER + transparent pass-through (commit `9f8277be`) but NOT the
+/// ENFORCEMENT — it still ACCEPTS the bare fallible calls the Rust lane
+/// rejects with E_MissingFallibleMark. This test wires the INTENDED final
+/// state (the self-host driver rejects a bare kind-1 call) and stays ignored
+/// until the typecheck.gg enforcement lands (the D29 chain's next commit; see
+/// TODO.md "D29 self-host enforcement"). The corrected-brief rules it must
+/// implement: kind-1 chokepoint (unmarked→reject unless explicitly-Result-
+/// captured; marked→peel+disposition; mark+capture→reject; auto doesn't
+/// capture), kind-2 bare-discard INCLUDING void-fn/loop tails, unmarked-
+/// disposition rejection on BOTH kinds, and the lying-mark (`5!`/`pure()!`/
+/// `f()!!`/Result-local `r!`) rejection.
+#[test]
+#[ignore = "D29 self-host enforcement pending (chain commit 5): the self-host driver still ACCEPTS bare fallible calls. Expected state per the corrected brief + decisions.md 2026-07-17 amendment: reject with the E_MissingFallibleMark analog. Un-ignore with the typecheck.gg enforcement port."]
+fn d29_selfhost_driver_rejects_bare_fallible() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    // The Rust-lane NEG fixture: a bare unhandled throws call (kind-1).
+    let fixture = manifest_dir.join("tests/fixtures/d23_unhandled_statement.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "d29_selfhost_driver_rejects_bare_fallible",
+    );
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a bare fallible call the Rust lane rejects          (E_MissingFallibleMark) — the D29 enforcement lane gap. stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 #[test]
 fn d29_hardening_stdlib_shape() {
     // The pinned hardening fixture (decisions.md D29↔D17 ruling): a
