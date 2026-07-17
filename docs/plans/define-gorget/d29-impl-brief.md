@@ -1,6 +1,14 @@
 # EXECUTOR BRIEF — D29 implementation: call-site `!` (visible error propagation), all lanes
 
-**Status:** DRAFT v2 — in the ≥3-fresh-pass review gauntlet. Pass 1 (semantics section
+**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 2 (the fold verified
+amendment-correct on the checker split + three-site re-scoping + transparency section; ONE
+HIGH: the migration planned the WRONG edit for the ~12 auto-capture-then-match fixtures —
+`!` insertion would peel and break the match; now a REWRITE-to-explicit-capture transform
+with the stale scout proof retired and snag48 flipped NEG; +R2 gate-2's stale marked-match
+RUN remnant synced to the NEG+POS pair; +R3 gate-8 floor handling split accept/reject with
+the ggdef IllFormed/SKIP mechanics and the nonexistent MIN floor dropped; +R4 the auto
+clause scoped to kind-1) FOLDED into this v3. Prior: v2 ←pass-1 (checker/gates
+amendment-reconciliation). Do not execute until a clean pass. Pass 1 (semantics section
 verified faithful to the LOG incl. the kind-2 peel pin; scout claims + all cited source
 locations verified; the capture machinery located — `decl_type_hint`/`dest_is_result`,
 kind-1 capture EXISTS today; TWO HIGH reservations: the checker-design + gates sections
@@ -35,9 +43,12 @@ holds the grammar evidence and disposition table.
    param, return — captures the UNMARKED call: `Result[int, Error] r = f()`. For kind-1 the
    call types as `Result[T,E]` in exactly that position (the D23 addendum); kind-2 already
    does. **Mark + Result-annotated destination = error** with the remove-the-`!` fix-it.
-   Inferred/`auto` destinations do NOT capture (type as `T`, mark required). Match scrutinee
-   stays `T`-typed (mark required; bind first to match Ok/Error — kind-2 `match g():`
-   matching the Result value stays legal as today).
+   **KIND-1 ONLY (pass-2 R4):** inferred/`auto` destinations do NOT capture a throws call —
+   it types as `T`, mark required. (A KIND-2 `auto` bind is an ordinary Result VALUE flow —
+   legal unmarked, types as `Result[T,E]` as today; the LOG's "kind-2 calls stay
+   Result-typed everywhere" governs.) Match scrutinee of a KIND-1 call stays `T`-typed
+   (mark required; bind first to match Ok/Error — kind-2 `match g():` matching the Result
+   value stays legal as today).
 4. **Bare fallible call anywhere else → NEW code `E_MissingFallibleMark`** (message teaches
    all three exits: mark / handle / capture; never surfaces `Result[` per the D23 contract;
    never fix-its toward a signature `!`). **Bare-DISCARD (statement position, outcome
@@ -120,7 +131,21 @@ holds the grammar evidence and disposition table.
   coincidence: 206 is ALSO the kind-2 declaration count — two different quantities; do not
   conflate in the regen.
 - Run the fmt insertion across the corpus; every migrated fixture must build+run
-  STDOUT-IDENTICAL (the scout proved the mechanics on 41 marks; now the full set).
+  STDOUT-IDENTICAL. **⚠ THE AUTO-CAPTURE CLASS NEEDS A DIFFERENT TRANSFORM (pass-2 R1 —
+  the mechanical `!` insertion is WRONG for it):** ~12 fixtures use
+  `auto r = throws_call()` then `match r:` with Ok/Error arms (e.g.
+  `test_error_handling.gg:19-24`, `error_raw_nested.gg:7-14`). Post-amendment the
+  auto-capture is removed, and inserting `!` would peel `r` to `T` and BREAK the match —
+  the correct migration is the REWRITE `auto r = f()` → `Result[T,E] r = f()` (explicit
+  capture, UNMARKED; derive the concrete T/E from the callee's signature). fmt cannot
+  derive this from the missing-mark diagnostic — enumerate the class by grep + checker
+  triage, rewrite by hand or a dedicated script, and verify each rewritten fixture
+  build+runs stdout-identical. `snag48_throws_match_scrutinee.gg` (`match throws_call():`)
+  is now REJECTED by design — flip it to a NEG fixture (or capture-bind form) per
+  don't-redesign-around-gaps, reporting the disposition. **The scout's
+  "test_error_handling.gg 14 marks stdout-identical" proof is PRE-AMENDMENT STALE**
+  (mark+capture was legal then; it is now an error) — do not cite it; re-prove on the
+  amendment-correct transforms.
 - The pinned HARDENING FIXTURE: a stdlib-shaped thin local `throws` wrapper exercising
   always-mark + ALL dispositions (prop / catch / rethrow / unmarked-capture / the
   mark+capture error / bare-discard error) end-to-end — expected outputs are
@@ -146,9 +171,12 @@ DRIVER tests pin the lane (reject-bare + accept-marked + capture cases through t
 ## Gates (FOREGROUND; self-host commands `GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600`;
 chunk >10min by test name; NEVER background a final gate)
 1. `cargo build` + `cargo test --lib` + the full parser suite.
-2. The disposition matrix as RUN tests (both backends): prop / catch / rethrow /
-   unmarked-capture / mark+capture-error / bare-discard-error / marked-match-scrutinee
-   (the SIGSEGV pin) / nested `g(f()!)!` / `a()!=b` / kind-2 variants of each.
+2. The disposition matrix (both backends): RUN tests — prop / catch / rethrow /
+   unmarked-capture / **capture-then-match (`Result r = f(); match r:` — the real SIGSEGV
+   coverage)** / nested `g(f()!)!` / `a()!=b` / the kind-2 variants; NEG tests —
+   mark+capture-error / bare-discard-error / **kind-1 `match f()!:` with Ok/Error arms
+   (CHECK ERROR per the amendment — the pass-2-corrected gate; no marked-match RUN test
+   exists anymore by construction)**.
 3. The migrated corpus: full C sweep is the PARENT's; you run the migrated-fixture filter
    (every touched fixture builds + runs stdout-identical) on C AND LLVM.
 4. `cargo test -p ggdef` full suite.
@@ -158,12 +186,19 @@ chunk >10min by test name; NEVER background a final gate)
    report the fresh counts vs the DOCUMENTED baselines (regenerate, don't trust dated
    figures); deltas explained-or-STOP.
 7. Registry lint: `grep -cE '=> "E_' src/semantic/errors.rs` == the new documented count.
-8. **Four-lane conformance (pass-1 R4 — D29 changes accept/reject on every lane):** new
-   `spec_conformance` fixtures for the disposition matrix's accept/reject flips (at minimum:
+8. **Four-lane conformance (pass-1 R4, pass-2-R3-corrected — D29 changes accept/reject on
+   every lane):** new `spec_conformance` fixtures for the flips (at minimum:
    unmarked-throws-call reject; unmarked-capture accept; mark+capture reject;
-   kind-1-marked-match reject; bare-discard reject both kinds), adjudicated by all four
-   lanes; bump the C/LLVM/SELFHOST/GGDEF/MIN floors by the adds in the same commit with the
-   regenerated counts.
+   kind-1-marked-match reject; bare-discard reject both kinds). **Floor handling SPLITS by
+   fixture kind:** ACCEPT fixtures bump C/LLVM/SELFHOST (run-MATCH, all three); REJECT
+   fixtures bump C/LLVM/SELFHOST via the `error[E_]` marker mechanism
+   (`tests/spec_conformance.rs:~88-92,~367-389`), but on the GGDEF lane a reject counts
+   MATCH only if plumbed as a typed `Outcome::IllFormed` + `reject_code` — a generic
+   FrontendError records GGDEF-SKIP (the E_BorrowConflict precedent,
+   `spec_conformance_ggdef.rs:~58-60`); prefer the typed plumbing, else a documented SKIP.
+   The GGDEF floor is a SEPARATE constant/value from the C/LLVM/SELFHOST 214s; there is NO
+   "MIN" floor constant (pass-2 verified) — bump exactly the constants that exist, with
+   regenerated counts, same commit.
 9. **Emitted-shape / anchored-test grep (pass-1 R4):** before the gates, grep `tests/` for
    anchored landmarks a new parser node + error code can trip (snapshot tests, message
    asserts on the old E_UnhandledThrows wording, smith ratchet expectations); list what you
