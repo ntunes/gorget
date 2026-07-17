@@ -323,6 +323,23 @@ pub struct Run {
 
 /// Evaluate a program from `main`, bounded by `fuel`.
 pub fn run(program: &Program, fuel: u64) -> Run {
+    // D29 (visible error propagation): a bare fallible call — unmarked,
+    // uncaptured, unhandled — is a ratified static rejection the elaborator
+    // recorded as TYPED metadata. Surface it here FIRST (before the may-move
+    // gate and eval), on the SAME `IllFormed` + `reject_code` channel the
+    // liveness gate uses, so the conformance lane compares the ratified
+    // `E_MissingFallibleMark` code. The program never executes → stdout is
+    // exactly empty (the verdict IS the empty output).
+    if let Some(rej) = &program.d29_reject {
+        return Run {
+            outcome: Outcome::IllFormed(rej.message.clone()),
+            stdout: String::new(),
+            trace: Vec::new(),
+            trap_span: None,
+            reject_code: Some(crate::ggc::D29Reject::CODE),
+            illformed_span: Some(rej.span),
+        };
+    }
     // The STATIC gate (verdict = check_liveness ∘ eval): a flow-sensitive
     // may-move analysis rejects the conditional-move-then-use / double-move /
     // move-in-loop class BEFORE eval runs, so those programs never reach the

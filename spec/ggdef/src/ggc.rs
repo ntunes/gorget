@@ -33,6 +33,35 @@ pub struct Program {
     /// drop of a value of that type (RFC §2.2 D4: custom drops run in reverse
     /// declaration order). `eval::Ctx` resolves the fn-name to its index.
     pub drop_fns: Vec<(String, String)>,
+    /// D29 (visible error propagation): the FIRST bare-fallible-mark violation
+    /// the elaborator saw, if any — a fallible call whose outcome is neither
+    /// marked (`f()!`), captured (`Result[T,E] r = f()`), nor handled. Recorded
+    /// as TYPED metadata during elaboration (where callee fallibility + capture
+    /// context live) and surfaced by `run` as `Outcome::IllFormed` + the ratified
+    /// `E_MissingFallibleMark` reject code BEFORE any evaluation — so the ggdef
+    /// conformance lane AFFIRMS the reject on the CODE axis (a `MATCH`), not a
+    /// generic `FrontendError` (a `GGDEF-SKIP`). `None` when the program is
+    /// D29-clean. Deliberately on `Program`, NOT surfaced as an `ElabError`: a
+    /// ratified static rejection carries its `E_` code, exactly like the may-move
+    /// gate's `check_liveness` → `IllFormed` + `reject_code` pathway.
+    pub d29_reject: Option<D29Reject>,
+}
+
+/// A recorded D29 bare-fallible-mark violation: the (impl-defined) human message
+/// and the offending call's span. The reject CODE is the constant
+/// `E_MissingFallibleMark` (the sole D29 code; the reason — bare / redundant-on-
+/// capture / result-arms-on-peeled — rides the message, never the code, per the
+/// one-code-per-family doctrine). Mirrors `liveness::LivenessError` for the
+/// throws/Result-mark axis.
+#[derive(Debug, Clone)]
+pub struct D29Reject {
+    pub message: String,
+    pub span: Span,
+}
+
+impl D29Reject {
+    /// The ratified registry code — the conformance-compared axis (pin 3).
+    pub const CODE: &'static str = "E_MissingFallibleMark";
 }
 
 /// A struct's field names, in declaration order (the ctor is positional).

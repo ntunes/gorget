@@ -6,6 +6,7 @@
 #   exit: 0
 #   stdout: "state: ready\n"
 #!end
+
 # Snag #49b — auto-propagate `Result[bool, E]` at an if-condition
 # position. Sibling to Snag #43 / #46 / #48. Without auto-prop the
 # branch reads the Result struct's bytes as the bool condition.
@@ -20,14 +21,15 @@ bool is_done() throws E:
     return false
 
 String describe() throws E:
-    if is_ready():
-        if is_done():
+    if is_ready()!:
+        if is_done()!:
             return "ready+done"
         return "ready"
     return "not ready"
 
 void main():
-    match describe():
+    Result[String, E] __d29_r1 = describe()
+    match __d29_r1:
         case Ok(s):
             print(f"state: {s}")
         case Error(_):

@@ -1632,12 +1632,14 @@ int compute(int x) throws String:
             return -1
 
 void main():
-    match compute(-5):
+    Result[int, String] r1 = compute(-5)
+    match r1:
         case Ok(v):
             print(f\"got {{v}}\")
         case Error(e):
             print(f\"propagated {{e}}\")
-    match compute(5):
+    Result[int, String] r2 = compute(5)
+    match r2:
         case Ok(v):
             print(f\"got {{v}}\")
         case Error(e):
@@ -1686,7 +1688,8 @@ int compute(int x) throws String:
             return -1
 
 void main():
-    match compute(-5):
+    Result[int, String] outcome = compute(-5)
+    match outcome:
         case Ok(v):
             print(f\"got {{v}}\")
         case Error(e):
@@ -1741,7 +1744,8 @@ int go() throws String:
 
 void main():
     show(risky(-7))
-    match go():
+    Result[int, String] g_out = go()
+    match g_out:
         case Ok(_):
             print(\"go done\")
         case Error(e):
@@ -1770,7 +1774,8 @@ int go() throws String:
     return 0
 
 void main():
-    match go():
+    Result[int, String] g_out = go()
+    match g_out:
         case Ok(_):
             print(\"go done\")
         case Error(e):
@@ -1791,7 +1796,8 @@ Result[int, String] outer(int x) throws String:
     return risky(x)
 
 void main():
-    match outer(-5):
+    Result[Result[int, String], String] o1 = outer(-5)
+    match o1:
         case Ok(inner):
             match inner:
                 case Ok(v):
@@ -1800,7 +1806,8 @@ void main():
                     print(f\"inner err {{e}}\")
         case Error(e):
             print(f\"outer err {{e}}\")
-    match outer(5):
+    Result[Result[int, String], String] o2 = outer(5)
+    match o2:
         case Ok(inner):
             match inner:
                 case Ok(v):
@@ -1829,10 +1836,11 @@ Result[int, String] g(int x) throws String:
     return Ok(x * 2)
 
 Result[int, String] f(int x) throws String:
-    return g(x)
+    return g(x)!
 
 void main():
-    match f(0):
+    Result[Result[int, String], String] f0 = f(0)
+    match f0:
         case Ok(inner):
             match inner:
                 case Ok(v):
@@ -1841,7 +1849,8 @@ void main():
                     print(f\"inner err {e}\")
         case Error(e):
             print(f\"outer err {e}\")
-    match f(-3):
+    Result[Result[int, String], String] fneg3 = f(-3)
+    match fneg3:
         case Ok(inner):
             match inner:
                 case Ok(v):
@@ -1850,7 +1859,8 @@ void main():
                     print(f\"inner err {e}\")
         case Error(e):
             print(f\"outer err {e}\")
-    match f(3):
+    Result[Result[int, String], String] f3 = f(3)
+    match f3:
         case Ok(inner):
             match inner:
                 case Ok(v):
@@ -1870,7 +1880,7 @@ fn s103_nested_arg_still_propagates_inside_capture() {
     let src = format!(
         "{RISKY}
 int go(int x) throws String:
-    Result[int, String] r = risky(risky(x))
+    Result[int, String] r = risky(risky(x)!)
     match r:
         case Ok(v):
             return v
@@ -1879,12 +1889,14 @@ int go(int x) throws String:
             return -1
 
 void main():
-    match go(3):
+    Result[int, String] g3 = go(3)
+    match g3:
         case Ok(v):
             print(f\"got {{v}}\")
         case Error(e):
             print(f\"propagated {{e}}\")
-    match go(-3):
+    Result[int, String] gneg3 = go(-3)
+    match gneg3:
         case Ok(v):
             print(f\"got {{v}}\")
         case Error(e):
@@ -1895,11 +1907,12 @@ void main():
 }
 
 #[test]
-fn s103_callee_t_result_at_typed_dest_is_loud() {
-    // A throws-callee whose declared T is ITSELF Result, feeding a Result-
-    // typed VarDecl: name-level types cannot tell capture (outer) from
-    // propagate (inner) apart — and production MISCOMPILES this shape
-    // (garbage payloads, probed 2026-07-06). LOUD, never modeled.
+fn s103_callee_t_result_at_typed_dest_captures() {
+    // D29 RETIRED the old "undecidable" LOUD reject for a throws-callee whose
+    // declared T is ITSELF Result feeding a Result-typed VarDecl: propagation
+    // now needs the visible `!` mark, so an UNMARKED capture is unambiguous.
+    // Ground-truthed 2026-07-17 that Rust gg ACCEPTS + RUNS this (prints "ok");
+    // ggdef now matches (fossil retired, `maybe_wrap` TypedDest guard removed).
     let src = "
 Result[int, String] g(int x) throws String:
     if x == 0:
@@ -1911,34 +1924,51 @@ int go(int x) throws String:
     return 0
 
 void main():
-    match go(3):
+    Result[int, String] outcome = go(3)
+    match outcome:
         case Ok(_):
-            pass
+            print(\"ok\")
         case Error(_):
-            pass
+            print(\"err\")
 ";
-    elab_rejects(src, "undecidable", "callee-T-Result at a typed dest");
+    assert_eq!(out(src), "ok");
 }
 
 #[test]
-fn s103_expr_body_tail_throws_call_into_result_ret_is_loud() {
-    // Production REJECTS a throws-call expression-body tail where the declared
-    // return is Result (capture does not apply at expr-body tails; probed:
-    // "type mismatch: expected Result[int, String], found int"). Mirrored as
-    // a loud ElabError, not a silently differently-shaped value.
+fn s103_expr_body_tail_throws_call_into_result_ret_captures() {
+    // D29 RETIRED the old expr-body-tail LOUD reject: a fallible expression-body
+    // tail is an UNMARKED capture at a `Result`-declared return (the tail slot
+    // IS the annotated return type), mirroring the block-body return capture.
+    // Ground-truthed 2026-07-17 that Rust gg ACCEPTS + RUNS it; ggdef now
+    // matches. `outer(5)` → `Ok(Ok(10))`; `outer(-5)` → `Ok(Error("negative"))`.
     let src = format!(
         "{RISKY}
 Result[int, String] outer(int x) throws String: risky(x)
 
 void main():
-    match outer(5):
-        case Ok(_):
-            pass
-        case Error(_):
-            pass
+    Result[Result[int, String], String] a = outer(5)
+    match a:
+        case Ok(inner):
+            match inner:
+                case Ok(v):
+                    print(f\"ok {{v}}\")
+                case Error(e):
+                    print(f\"err {{e}}\")
+        case Error(e):
+            print(f\"outer err {{e}}\")
+    Result[Result[int, String], String] b = outer(-5)
+    match b:
+        case Ok(inner):
+            match inner:
+                case Ok(v):
+                    print(f\"ok {{v}}\")
+                case Error(e):
+                    print(f\"err {{e}}\")
+        case Error(e):
+            print(f\"outer err {{e}}\")
 "
     );
-    elab_rejects(&src, "expression-body tail", "expr-body tail capture");
+    assert_eq!(out(&src), "ok 10\nerr negative");
 }
 
 // ── D10(a): local `&`-binds are rejected in the definition ──────────────────

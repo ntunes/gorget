@@ -31,8 +31,8 @@ use gorget::parser::ast;
 use gorget::span::{Span, Spanned};
 
 use crate::ggc::{
-    BinOp, BuiltinMethod, CastTarget, ClosureDef, ConstructKind, EnumDef, Expr, ExprArm, FPart,
-    Function, Mode, Param, Pattern, Program, Source, Stmt, StmtArm, StructDef, UnOp,
+    BinOp, BuiltinMethod, CastTarget, ClosureDef, ConstructKind, D29Reject, EnumDef, Expr, ExprArm,
+    FPart, Function, Mode, Param, Pattern, Program, Source, Stmt, StmtArm, StructDef, UnOp,
 };
 
 /// A faithful-elaboration failure: a surface construct outside the A subset,
@@ -152,6 +152,9 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
         enums: el.enums,
         closures: el.closures,
         drop_fns: el.drop_fns,
+        // D29: the first bare-fallible-mark violation (if any), surfaced by `run`
+        // as an `IllFormed` + `E_MissingFallibleMark` reject BEFORE eval.
+        d29_reject: el.d29_reject,
     })
 }
 
@@ -214,26 +217,25 @@ struct MethodInfo {
     self_mode: Mode,
 }
 
-/// Why auto-propagation is suppressed for the throws-call currently being
-/// elaborated (language-reference §10.3 "Type-Directed Result Capture" +
-/// the `match … case Ok/Error` consumer). Set by the destination position
-/// JUST before its value expression elaborates; consumed (`mem::take`) by the
-/// outermost function/method call so nested calls in args still propagate
-/// (ground-truthed: production propagates a nested throws-call inside a
-/// captured call's args).
+/// The §10.3 "Type-Directed Result Capture" context of the fallible call
+/// currently being elaborated. Set by the destination position JUST before its
+/// value expression elaborates; consumed (`mem::take`) by the outermost
+/// function/method call so nested calls in args still take the D29 bare-mark
+/// path (ground-truthed: production requires a mark on a nested fallible call
+/// inside a captured call's args). The `Scrutinee` context was RETIRED by D29
+/// (2026-07-17): a bare `match f():` scrutinee is a bare call — bind to a
+/// `Result` first, or mark + match the success value.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum CaptureCtx {
-    /// Not a capturing destination: a throws-call auto-propagates (§10.1)
-    /// inside a `throws` fn, and is a LOUD error elsewhere.
+    /// Not a capturing destination: a bare (unmarked) fallible call here is the
+    /// `E_MissingFallibleMark` reject (D29 — propagation needs the `f()!` mark).
     #[default]
     None,
-    /// The direct scrutinee of a `match` whose arms destructure `Result`
-    /// (`case Ok/Error`): the call yields its full widened `Result` value.
-    Scrutinee,
     /// A destination whose DECLARED type is `Result[_,_]` (§10.3): VarDecl,
     /// assign target, return slot, declared fn/method param, struct field.
-    /// The call yields its full `Result` — with the callee-T-is-itself-Result
-    /// ambiguity rejected loudly (see `maybe_wrap_throws_call`).
+    /// The call yields its full `Result` (an UNMARKED capture — the amendment),
+    /// with the callee-T-is-itself-Result ambiguity rejected loudly (see
+    /// `maybe_wrap_throws_call`).
     TypedDest,
 }
 
@@ -300,6 +302,19 @@ struct Elaborator {
     /// (see `CaptureCtx`). Set by a destination position just before its value
     /// elaborates; consumed by the outermost call.
     capture_ctx: CaptureCtx,
+    /// D29: the FIRST bare-fallible-mark violation seen while elaborating (first
+    /// wins, mirroring the liveness gate's first-Halt). Carried onto the emitted
+    /// `Program` and surfaced by `run` as an `IllFormed` + `E_MissingFallibleMark`
+    /// reject code. `None` when the program is D29-clean.
+    d29_reject: Option<D29Reject>,
+    /// D29 mark one-shot (the ggdef analog of the Rust checker's
+    /// `fallible_call_marked`): set true by the `ast::Expr::Propagate` arm just
+    /// before its inner elaborates, TAKEN by the DIRECT call it wraps (so the
+    /// call is NOT the missing-mark reject). Captured at `elaborate_call` /
+    /// method-call entry (via `mem::take`) BEFORE the args elaborate, so a nested
+    /// bare fallible call in an arg (`parse(g())!`) still takes the bare-mark
+    /// path — the mark binds to the call it directly wraps.
+    fallible_marked: bool,
     gensym: usize,
 }
 
@@ -308,6 +323,18 @@ impl Elaborator {
         let n = self.gensym;
         self.gensym += 1;
         format!("__{hint}_{n}")
+    }
+
+    /// D29: record a bare-fallible-mark violation (first wins). Elaboration
+    /// CONTINUES after recording — the reject is surfaced by `run` (as
+    /// `IllFormed` + `E_MissingFallibleMark`) which short-circuits before eval,
+    /// so the placeholder the recording site returns is never evaluated. This is
+    /// the ratified-static-rejection channel (a coded `IllFormed`), distinct from
+    /// an `ElabError` (an out-of-subset `FrontendError`).
+    fn record_d29_reject(&mut self, message: impl Into<String>, span: Span) {
+        if self.d29_reject.is_none() {
+            self.d29_reject = Some(D29Reject { message: message.into(), span });
+        }
     }
 
     /// A free function: elaborate its body, keeping its own name.
@@ -375,35 +402,25 @@ impl Elaborator {
                 // Expression-body function: evaluate and return the value.
                 // (D4 position 4 — return of a live tainted place is rejected.)
                 self.reject_if_tainted_live_place(&e.node, e.span, "return")?;
-                // §10.3 capture does NOT apply at an expression-body tail —
-                // production REJECTS a throws-call tail whose peeled `T` does
-                // not match a Result-declared return ("type mismatch: expected
-                // Result[…], found <T>"; probed 2026-07-06 on both the
-                // non-throws and the throws-with-T=Result shapes). Auto-prop
-                // would silently produce a differently-shaped value here, so
-                // this is a LOUD error, mirroring the production rejection.
-                // (A throws-call tail whose declared T is ITSELF Result
-                // propagates+rewraps — the inner Result matches T; that is the
-                // block-`return mk(x)` sibling and stays modeled.)
-                if self.current_fn_throws && self.current_fn_ret_is_result {
-                    if let Some(callee) = self.root_throws_callee(&e.node) {
-                        if !self.callee_ret_is_result(&callee) {
-                            return Err(ElabError::new(
-                                format!(
-                                    "expression-body tail call to `throws` function `{callee}` \
-                                     where the declared return type is `Result[…]`: production \
-                                     rejects this shape (capture does not apply at expression-\
-                                     body tails); use a block body with `return`"
-                                ),
-                                e.span,
-                            ));
-                        }
-                    }
+                // D29: a fallible expression-body tail is an UNMARKED capture at
+                // a `Result`-declared return (the tail slot is the annotated
+                // return type) — legal, mirroring the block-body return capture.
+                // (The old "production REJECTS this shape" LOUD guard was a
+                // pre-D23/D29 fossil; ground-truthed 2026-07-17 that Rust gg
+                // accepts+runs `Result[…] f(…) throws E: risky(x)`.) A bare tail
+                // that is NOT a capture (a non-`throws`/`Result`-returning fn)
+                // still takes the ordinary bare-mark path via `maybe_wrap`.
+                if self.current_fn_ret_is_result
+                    && (self.root_throws_callee(&e.node).is_some()
+                        || self.root_kind2_callee(&e.node).is_some())
+                {
+                    self.capture_ctx = CaptureCtx::TypedDest;
                 }
                 let tail = self.elaborate_expr(e)?;
-                // A `throws` expression-body fn wraps its tail in `Ok(...)`
-                // exactly once (a throws-call tail already auto-propagated to
-                // the bare `T`, which this re-wraps — never a double-`Ok`).
+                self.capture_ctx = CaptureCtx::None;
+                // A `throws` expression-body fn wraps its captured tail in
+                // `Ok(...)` exactly once — the tail captured the callee's full
+                // `Result` as the declared success value `T`.
                 let value = if self.current_fn_throws { ok_wrap(tail) } else { tail };
                 vec![Stmt::Return { value: Some(value), span: e.span }]
             }
@@ -747,6 +764,23 @@ impl Elaborator {
                 {
                     self.capture_ctx = CaptureCtx::TypedDest;
                 }
+                // D29 mark+capture: `Result[T,E] r = f()!` — a MARK on a call
+                // whose outcome a `Result`-annotated binding already captures is
+                // redundant (capture is the UNMARKED spelling). Reject with the
+                // remove-the-`!` fix-it (both kinds).
+                if ty_is_result(&ty_of_type(&type_.node)) {
+                    if let ast::Expr::Propagate { expr } = &value.node {
+                        if self.root_throws_callee(&expr.node).is_some()
+                            || self.root_kind2_callee(&expr.node).is_some()
+                        {
+                            self.record_d29_reject(
+                                "remove the `!`: a `Result`-annotated binding captures the \
+                                 fallible outcome without a mark",
+                                value.span,
+                            );
+                        }
+                    }
+                }
                 // D4 position 1 (bind) fires inside `bind_source`'s Copy branch.
                 let source = self.bind_source(value)?;
                 self.capture_ctx = CaptureCtx::None;
@@ -818,6 +852,19 @@ impl Elaborator {
                 if let Some(arg) = as_print_call(e) {
                     let expr = self.elaborate_expr(arg)?;
                     return Ok(vec![Stmt::Print { expr, span }]);
+                }
+                // D29 kind-2 bare-DISCARD: a bare (unmarked) call whose declared
+                // return is `Result[_,_]`, used as an expression statement,
+                // silently drops the outcome. (Kind-1 throws calls are caught at
+                // `maybe_wrap`; a MARKED call `f()!` is an `ast::Expr::Propagate`,
+                // not a bare `Call`, so it is exempt and activates its channel.)
+                if self.root_kind2_callee(&e.node).is_some() {
+                    self.record_d29_reject(
+                        "this fallible call must be marked with `!` — its `Result` outcome is \
+                         dropped; mark it to propagate, handle it with `catch`/`rethrow`, or \
+                         capture it into a `Result` binding",
+                        e.span,
+                    );
                 }
                 Ok(vec![Stmt::Expr { expr: self.elaborate_expr(e)?, span }])
             }
@@ -1333,6 +1380,25 @@ impl Elaborator {
                 self.elaborate_expr(expr)
             }
 
+            // D29 `call()!`: the postfix mark ACTIVATES the error channel. Wrap
+            // the elaborated inner call in the GGC `Propagate` node — `Ok(x)`
+            // peels to `x`, `Error(e)` early-returns via `Halt::Propagate` (the
+            // `?`-operator semantics eval already implements). The mark is NOT a
+            // capture (capture is the UNMARKED annotated-dest form); a marked
+            // call reaching a capture/scrutinee position is the redundant-mark /
+            // peeled-arms reject, recorded at those positions.
+            ast::Expr::Propagate { expr } => {
+                // Signal the DIRECT inner call that it carries the mark (so its
+                // `maybe_wrap` peels+activates instead of recording the bare-mark
+                // reject). Save/restore so a nested marked call in an arg
+                // (`g(f()!)!`) leaves the outer mark intact for `g`.
+                let saved = self.fallible_marked;
+                self.fallible_marked = true;
+                let inner = self.elaborate_expr(expr)?;
+                self.fallible_marked = saved;
+                Ok(Expr::Propagate(Box::new(inner)))
+            }
+
             ast::Expr::Call { callee, generic_args, args } => {
                 self.elaborate_call(callee, generic_args.is_some(), args, span)
             }
@@ -1377,14 +1443,16 @@ impl Elaborator {
             }
 
             ast::Expr::Match { scrutinee, arms, else_arm } => {
-                // See `elaborate_match_stmt`: a throws-call scrutinee whose
-                // arms consume the `Result` itself (`case Ok/Error`) yields the
-                // full Result (no auto-prop).
-                if arms.iter().any(|a| pattern_consumes_result(&a.pattern.node))
-                    && self.root_throws_callee(&scrutinee.node).is_some()
-                {
-                    self.capture_ctx = CaptureCtx::Scrutinee;
-                }
+                // D29 marked-match peel: `match f()!: case Ok/Error` — the `!`
+                // peeled the `Result` to its success `T`, so `Ok`/`Error` arms
+                // cannot match (bind the `Result` first). A T-VARIANT marked
+                // scrutinee (`match f()!: case UserVariant`) is LEGAL and runs.
+                // A BARE throws-call scrutinee (`match f():`) is a bare call —
+                // rejected at the scrutinee's `maybe_wrap` (Scrutinee capture is
+                // retired). (See `elaborate_match_stmt` for the statement twin.)
+                let has_result_arm =
+                    arms.iter().any(|a| pattern_consumes_result(&a.pattern.node));
+                self.reject_marked_match_result_arms(scrutinee, has_result_arm);
                 let scrut = self.elaborate_expr(scrutinee)?;
                 self.capture_ctx = CaptureCtx::None;
                 let mut ggc_arms = Vec::with_capacity(arms.len());
@@ -1544,13 +1612,15 @@ impl Elaborator {
         // are REORDERED to the callee's param order via the pass-1 signature
         // registry, replacing the B1-interim rejection.
         if self.func_names.contains(name) {
-            // Consume the capture flag for THIS (outermost) call before its
-            // args elaborate, so a nested throws-call in an arg still auto-
-            // propagates (ground-truthed against production, probe j).
+            // Consume the capture + mark flags for THIS (outermost) call before
+            // its args elaborate, so a nested fallible call in an arg still takes
+            // its own bare-mark / capture path (the mark/capture binds to the
+            // call it directly wraps, not a nested arg call).
             let capture = std::mem::take(&mut self.capture_ctx);
+            let marked = std::mem::take(&mut self.fallible_marked);
             let out = self.call_args_reordered(name, args)?;
             let call = Expr::Call { func: name.clone(), args: out };
-            return self.maybe_wrap_throws_call(call, name, callee.span, capture);
+            return self.maybe_wrap_throws_call(call, name, callee.span, capture, marked);
         }
         Err(ElabError::new(
             format!("unresolved callee `{name}` (unknown function/struct/enum; may need Increment B2)"),
@@ -1575,42 +1645,55 @@ impl Elaborator {
     ///     error; ggdef refuses it rather than silently mis-evaluating the
     ///     dropped `throws` effect (the flagship safety bug).
     fn maybe_wrap_throws_call(
-        &self,
+        &mut self,
         call: Expr,
         callee_name: &str,
         span: Span,
         capture: CaptureCtx,
+        marked: bool,
     ) -> ElabResult<Expr> {
         if !self.fn_throws.contains(callee_name) {
             return Ok(call);
         }
+        // D29: the call carries the `!` mark (it is the inner of an
+        // `ast::Expr::Propagate`). The `Propagate` arm wraps it in the GGC
+        // `Propagate` node — here we just hand the bare call back (no reject, no
+        // double-wrap). Mark + `Result`-capture together is the redundant-mark
+        // reject, recorded at the capture position (VarDecl), not here.
+        if marked {
+            return Ok(call);
+        }
         match capture {
-            CaptureCtx::Scrutinee => Ok(call),
-            CaptureCtx::TypedDest => {
-                if self.callee_ret_is_result(callee_name) {
-                    return Err(ElabError::new(
-                        format!(
-                            "`throws` function `{callee_name}` whose declared success type is \
-                             itself `Result[…]` used at a `Result[…]`-typed destination: \
-                             capture-vs-propagate is undecidable at ggdef's name-level types, \
-                             and production miscompiles this shape (garbage payloads observed \
-                             2026-07-06) — restructure via an intermediate binding"
-                        ),
-                        span,
-                    ));
-                }
+            // §10.3 capture (the 2026-07-17 amendment): an explicitly
+            // `Result[_,_]`-annotated destination captures the UNMARKED fallible
+            // call — legal, the annotation carries the visibility. (D29 RETIRED
+            // the old callee-T-is-Result "undecidable" guard: propagation now
+            // requires the visible `!` mark, so an UNMARKED capture is
+            // unambiguously the full widened `Result` — and Rust gg accepts both
+            // the full-widened and the peel-typed capture of a Result-T throws
+            // callee. The "production miscompiles" rationale was a pre-D23/D29
+            // fossil; ground-truthed 2026-07-17 that Rust gg now accepts+runs it.)
+            CaptureCtx::TypedDest => Ok(call),
+            // D29 (auto-wrap RETIRED): a BARE throws call — no `!` mark, no
+            // `Result[_,_]` capture — silently drops the error. This is the
+            // `E_MissingFallibleMark` class (the former auto-propagate site is
+            // now a reject: propagation requires the visible `f()!` mark). The
+            // (`Scrutinee` context is retired too — a bare `match f():`
+            // scrutinee is a bare call.) Record the reject (surfaced as
+            // `IllFormed` + `E_MissingFallibleMark`) and return the unwrapped
+            // call as an inert placeholder — `run` short-circuits before eval,
+            // so it is never evaluated.
+            CaptureCtx::None => {
+                self.record_d29_reject(
+                    format!(
+                        "this fallible call to `{callee_name}` must be marked with `!` — mark it \
+                         to propagate, handle it with `catch`/`rethrow`, or capture it into a \
+                         `Result` binding"
+                    ),
+                    span,
+                );
                 Ok(call)
             }
-            CaptureCtx::None if self.current_fn_throws => Ok(Expr::Propagate(Box::new(call))),
-            CaptureCtx::None => Err(ElabError::new(
-                format!(
-                    "call to `throws` function `{callee_name}` in a non-`throws` context that \
-                     does not consume or capture the `Result` (no `match … case Ok/Error`, no \
-                     `Result[…]`-typed destination); ggdef does not model `catch`/`??`/\
-                     `rethrow` error recovery yet"
-                ),
-                span,
-            )),
         }
     }
 
@@ -1646,6 +1729,52 @@ impl Elaborator {
     /// positions and the ambiguity guard at typed destinations.
     fn callee_ret_is_result(&self, callee_name: &str) -> bool {
         self.fn_ret.get(callee_name).map(ty_is_result).unwrap_or(false)
+    }
+
+    /// D29 kind-2: if `e`'s ROOT is a call to a NON-`throws` function whose
+    /// DECLARED return is `Result[_,_]`, its GGC callee name. This is the
+    /// one-mark-for-both-kinds companion of `root_throws_callee` (kind-1): a
+    /// declared-`Result` return makes a call fallible too, so a bare-DISCARD of
+    /// its outcome is `E_MissingFallibleMark`. `None` for throws callees (kind-1,
+    /// owned by `root_throws_callee`), non-Result returns, ctors, closure-value
+    /// calls, and method calls (conservative — the corpus is throws-free).
+    fn root_kind2_callee(&self, e: &ast::Expr) -> Option<String> {
+        if let ast::Expr::Call { callee, .. } = e {
+            if let ast::Expr::Identifier(n) = &callee.node {
+                if !self.fn_throws.contains(n) && self.callee_ret_is_result(n) {
+                    return Some(n.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// D29 marked-match peel reject: a MARKED fallible-call scrutinee
+    /// (`match f()!:`, an `ast::Expr::Propagate` over a throws/Result-return
+    /// call) whose arms destructure the `Result` (`case Ok/Error`) — the mark
+    /// peeled the `Result` to `T`, so those arms cannot match. Records
+    /// `E_MissingFallibleMark`. A bare scrutinee is handled at `maybe_wrap`; a
+    /// T-variant marked scrutinee (no Result-consuming arm) is legal and runs.
+    fn reject_marked_match_result_arms(
+        &mut self,
+        scrutinee: &Spanned<ast::Expr>,
+        has_result_arm: bool,
+    ) {
+        if !has_result_arm {
+            return;
+        }
+        if let ast::Expr::Propagate { expr } = &scrutinee.node {
+            if self.root_throws_callee(&expr.node).is_some()
+                || self.root_kind2_callee(&expr.node).is_some()
+            {
+                self.record_d29_reject(
+                    "`match f()!:` peels the `Result` to its success value — `Ok`/`Error` arms \
+                     cannot match here; bind the `Result` first (`Result[T, E] r = f()`), then \
+                     match `r`",
+                    scrutinee.span,
+                );
+            }
+        }
     }
 
     /// Shared §10.3 decision for one destination slot with declared type `ty`
@@ -1954,14 +2083,15 @@ impl Elaborator {
         if minfo.self_mode == Mode::WriteThrough {
             self.reject_materialize_on_write(&receiver.node, receiver.span)?;
         }
-        // Consume the capture flag for THIS call before receiver/args
-        // elaborate (a nested throws-call in them still auto-propagates).
+        // Consume the capture + mark flags for THIS call before receiver/args
+        // elaborate (a nested fallible call in them takes its own path).
         let capture = std::mem::take(&mut self.capture_ctx);
+        let marked = std::mem::take(&mut self.fallible_marked);
         let self_src = self.self_source(receiver, minfo.self_mode)?;
         let mut out = vec![self_src];
         out.extend(self.call_args_reordered(&minfo.mangled, args)?);
         let call = Expr::Call { func: minfo.mangled.clone(), args: out };
-        self.maybe_wrap_throws_call(call, &minfo.mangled, span, capture)
+        self.maybe_wrap_throws_call(call, &minfo.mangled, span, capture, marked)
     }
 
     /// Bind a method receiver as the `self` source per the resolved self-mode.
@@ -1986,19 +2116,15 @@ impl Elaborator {
         else_arm: Option<&ast::Block>,
         span: Span,
     ) -> ElabResult<Stmt> {
-        // A scrutinee that is a throws-call yields the `Result` value (no auto-
-        // propagate) exactly when the arms destructure `Result` (`case
-        // Ok/Error`); otherwise the throws-call auto-propagates and the arms see
-        // the inner value. Gated on the ROOT being a throws-call so the flag
-        // can never leak into a nested call inside a non-call scrutinee (e.g.
-        // a throws-call payload inside `match Ok(f(x)):` still propagates).
-        let consumes = arms
+        // D29 marked-match peel (statement twin of the `ast::Expr::Match` arm):
+        // `match f()!: case Ok/Error` peels the `Result` to `T` — the `Ok`/
+        // `Error` arms cannot match; reject. A bare `match f():` scrutinee is a
+        // bare call, rejected at its `maybe_wrap` (Scrutinee capture retired).
+        let has_result_arm = arms
             .iter()
             .filter_map(|i| i.arm())
             .any(|a| pattern_consumes_result(&a.pattern.node));
-        if consumes && self.root_throws_callee(&scrutinee.node).is_some() {
-            self.capture_ctx = CaptureCtx::Scrutinee;
-        }
+        self.reject_marked_match_result_arms(scrutinee, has_result_arm);
         let scrut = self.elaborate_expr(scrutinee)?;
         self.capture_ctx = CaptureCtx::None;
         let mut out_arms = Vec::with_capacity(arms.len());

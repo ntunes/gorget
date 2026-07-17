@@ -6,6 +6,7 @@
 #   exit: 0
 #   stdout: "got: 30\n"
 #!end
+
 # Snag #49c — auto-propagate `Result[int, E]` at an index-expression
 # position. Sibling to Snag #43 / #46 / #48 — the "consumer-site
 # whack-a-mole" class.
@@ -24,10 +25,11 @@ int read_throws() throws E:
     v.push(20)
     v.push(30)
     v.push(40)
-    return v[pick()]
+    return v[pick()!]
 
 void main():
-    match read_throws():
+    Result[int, E] __d29_r1 = read_throws()
+    match __d29_r1:
         case Ok(n):
             print(f"got: {n}")
         case Error(_):

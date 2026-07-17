@@ -6,6 +6,7 @@
 #   exit: 0
 #   stdout: "sum: 6\n"
 #!end
+
 # Snag #49a — auto-propagate `Result[T, E]` at a for-loop iterable
 # position. Sibling to Snag #43 / #46 / #48 — the "consumer-site
 # whack-a-mole" class. Without the centralized hook (or an explicit
@@ -26,12 +27,13 @@ Vector[int] make() throws E:
 
 int sum_throws() throws E:
     int s = 0
-    for x in make():
+    for x in make()!:
         s = s + x
     return s
 
 void main():
-    match sum_throws():
+    Result[int, E] __d29_r1 = sum_throws()
+    match __d29_r1:
         case Ok(s):
             print(f"sum: {s}")
         case Error(_):
