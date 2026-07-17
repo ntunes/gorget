@@ -58,6 +58,22 @@ struct ResolveContext:
     # `resolve_module`), so the flip is parity-neutral for them; populated
     # only by the build/check path (`resolve_module_with_imports`).
     Dict[String, bool] import_allow
+    # D29 visible-error-propagation: the per-callee fallibility map, keyed by
+    # the callee's DefId (typed identity — layering rule 2, never a name). Value
+    # 1 = kind-1 (declared `throws E`); 2 = kind-2 (declared `Result[T,E]`
+    # return). Absent = infallible. Built once in `register_function_signature`
+    # from `func.throws_type` / the resolved return type; read at the D29
+    # enforcement arms of the safety walk (`d29_call_kind`). Mirrors the Rust
+    # lane's `function_info.throws_type_id` classification.
+    Dict[int, int] d29_callee_kind
+    # D29 tail-drop context: true when the LAST statement of the block currently
+    # being walked has its value DROPPED (a function block body or a loop body —
+    # the two shapes where a bare fallible tail is silently discarded). False
+    # inside a VALUE-producing block (EBlock / EDo / closure body / expression
+    # match-arm / expression if-branch), where the tail IS the block's value and
+    # a bare fallible call there is a legal value flow. Mirrors the Rust lane's
+    # `tail_value_dropped`. Saved/restored around each context change.
+    bool d29_tail_dropped
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -133,7 +149,7 @@ bool is_compiler_intrinsic_name(String name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool]())
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false)
 
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()

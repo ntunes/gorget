@@ -5384,20 +5384,18 @@ fn d23_traitdefault_generic_collision_unhandled() {
 // no `found `Result[` desugar leak (`check_gg_fails_missing_mark`).
 // ══════════════════════════════════════════════════════════════
 
-/// Core #9 lane pin (EXPLICIT gap, not a silent one): the self-host lane has
-/// the D29 PARSER + transparent pass-through (commit `9f8277be`) but NOT the
-/// ENFORCEMENT — it still ACCEPTS the bare fallible calls the Rust lane
-/// rejects with E_MissingFallibleMark. This test wires the INTENDED final
-/// state (the self-host driver rejects a bare kind-1 call) and stays ignored
-/// until the typecheck.gg enforcement lands (the D29 chain's next commit; see
-/// TODO.md "D29 self-host enforcement"). The corrected-brief rules it must
-/// implement: kind-1 chokepoint (unmarked→reject unless explicitly-Result-
-/// captured; marked→peel+disposition; mark+capture→reject; auto doesn't
-/// capture), kind-2 bare-discard INCLUDING void-fn/loop tails, unmarked-
-/// disposition rejection on BOTH kinds, and the lying-mark (`5!`/`pure()!`/
-/// `f()!!`/Result-local `r!`) rejection.
+/// Core #9 lane pin: the self-host lane enforces D29 (the `check_safety_*` walk
+/// in self_host_typechecker/typecheck.gg gained the kind-1/kind-2 fallibility
+/// map + the bare-discard / mark+capture / marked-match-peel / unmarked-
+/// disposition arms). This pins the flagship kind-1 case (a bare unhandled
+/// throws call as a statement) rejecting with the ratified `error[E_
+/// MissingFallibleMark]` headline — the same code the Rust lane emits — and
+/// NO C emitted (the gate halts before lowering). The broader NEG/POS matrix
+/// (both kinds' discards, mark+capture, unmarked catch/rethrow, the capture +
+/// T-variant marked-match accepts) is `self_host_driver_rejects_d29_missing_mark`
+/// / `self_host_driver_accepts_d29_legal` below.
 #[test]
-#[ignore = "D29 self-host enforcement pending (chain commit 5): the self-host driver still ACCEPTS bare fallible calls. Expected state per the corrected brief + decisions.md 2026-07-17 amendment: reject with the E_MissingFallibleMark analog. Un-ignore with the typecheck.gg enforcement port."]
+#[serial(self_host_lowerer_driver)]
 fn d29_selfhost_driver_rejects_bare_fallible() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -5413,11 +5411,134 @@ fn d29_selfhost_driver_rejects_bare_fallible() {
             .arg("--lir-c"),
         "d29_selfhost_driver_rejects_bare_fallible",
     );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !out.status.success(),
-        "self-host driver accepted a bare fallible call the Rust lane rejects          (E_MissingFallibleMark) — the D29 enforcement lane gap. stderr:\n{}",
-        String::from_utf8_lossy(&out.stderr),
+        "self-host driver accepted a bare fallible call the Rust lane rejects \
+         (E_MissingFallibleMark) — the D29 enforcement lane gap. stderr:\n{stderr}",
     );
+    assert!(
+        stderr.contains("error[E_MissingFallibleMark]"),
+        "self-host rejected the bare fallible call but not with the ratified \
+         E_MissingFallibleMark code.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host emitted C for a rejected bare fallible call — the gate must halt \
+         BEFORE lowering. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+// D29 self-host ENFORCEMENT — the NEG matrix (both kinds' bare-discards incl.
+// void-fn/loop-body tails, mark+capture redundant-mark, and an unmarked
+// disposition on both kinds). Each self-host driver reject asserts the ratified
+// `error[E_MissingFallibleMark]` headline (the code the Rust lane emits, off the
+// self-host's typed `DkMissingFallibleMark`) and NO C on stdout (halt before
+// lowering). Mirrors the Rust-lane `check_gg_fails_missing_mark` fixtures, run
+// through the self-host driver instead. The lying-mark (`f()!!`/`5!`/`pure()!`/
+// Result-local `r!`), marked-unhandled (E_UnhandledThrows), and A31 sig-`!:`
+// rejects are DOCUMENTED self-host lane gaps (the conservative-classification
+// arms — filed TODO.md); this suite pins only the shapes the self-host enforces.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_d29_missing_mark() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let reject_fixtures = [
+        // kind-2 (declared-Result-return) bare-DISCARD at a void-fn tail…
+        "d29_kind2_discard_void_tail_error.gg",
+        // …and a LOOP-body tail (the silent-drop-per-iteration shape).
+        "d29_kind2_discard_loop_tail_error.gg",
+        // kind-2 unmarked disposition (catch / rethrow on an unmarked call).
+        "d29_kind2_unmarked_catch_error.gg",
+        "d29_kind2_unmarked_rethrow_error.gg",
+        // mark + Result-annotated capture together = the redundant-mark error.
+        "d29_hardening_mark_capture_error.gg",
+    ];
+    for name in reject_fixtures {
+        let fixture = manifest_dir.join("tests/fixtures").join(name);
+        assert!(fixture.exists(), "missing D29 NEG fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_d29_missing_mark",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED the D29 NEG fixture `{name}` — an \
+             under-rejection in self_host_typechecker/typecheck.gg. exit={:?}\n\
+             stderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains("error[E_MissingFallibleMark]"),
+            "self-host rejected `{name}` but not with the ratified \
+             E_MissingFallibleMark code.\nstderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host emitted C for the rejected `{name}` — the gate must halt \
+             BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+}
+
+// D29 self-host over-rejection guard: the self-host driver must ACCEPT the LEGAL
+// D29 shapes — an UNMARKED `Result[T,E]` capture (the amendment: the annotation
+// carries the visibility), a `catch` on a Result LOCAL (a value disposition, not
+// a call), a MARKED combinator (`r.and_then(f)!` — a kind-2 call whose mark
+// peels+activates), and the snag48 T-VARIANT marked-match (`match f()!:` with
+// user-enum arms — the Finding-5 SIGSEGV site; it RUNS in the migrated corpus).
+// The bootstrap proves no UNDER-rejection on self-host source (which has zero
+// throws decls), but is silent to an OVER-rejection; this fixture is the
+// executable guard a closure-tail / capture / combinator over-reject cannot pass.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_accepts_d29_legal() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let legal_fixtures = [
+        // unmarked Result capture + all dispositions end-to-end.
+        "d29_hardening_stdlib_shape.gg",
+        // `catch` on a Result LOCAL (legal unmarked value disposition).
+        "d29_catch_on_result_local.gg",
+        // marked combinator (kind-2 method call, mark peels+activates) + a
+        // bare kind-2 call in the callback closure TAIL (a value flow, not a
+        // discard — the closure-tail over-reject guard).
+        "d29_marked_combinator.gg",
+        // snag48: `match f()!:` with T-variant arms — the marked-match ACCEPT.
+        "snag48_throws_match_scrutinee.gg",
+        // free-fn whole-Result capture (§10.3) still accepts unmarked.
+        "d23_capture_freefn.gg",
+    ];
+    for name in legal_fixtures {
+        let fixture = manifest_dir.join("tests/fixtures").join(name);
+        assert!(fixture.exists(), "missing D29 legal fixture: {}", fixture.display());
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_accepts_d29_legal",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "self-host driver REJECTED a LEGAL D29 program `{name}` — an \
+             over-rejection in self_host_typechecker/typecheck.gg. exit={:?}\n\
+             stderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            !stdout.trim().is_empty(),
+            "self-host accepted `{name}` but emitted no C — the legal path must \
+             lower. stderr:\n{stderr}",
+        );
+    }
 }
 
 #[test]

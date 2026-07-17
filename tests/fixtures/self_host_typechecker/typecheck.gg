@@ -35,7 +35,7 @@ from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, R
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -362,6 +362,16 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
         fn_def_opt = find_def_by_name(scopes, func.name, true)
     if fn_def_opt is Some(fn_def):
         scopes.set_def_type(fn_def, fn_type_id)
+        # D29: classify this callee's fallibility ONCE, keyed by its typed DefId.
+        # kind-1 (declared `throws E`) wins over kind-2; an infallible callee is
+        # simply absent from the map. The reserved bare `!` inferred-error form
+        # (`throws_inferred`) also marks kind-1 (it teaching-rejects at the sig,
+        # but a call to it is still fallible).
+        if func.throws_type.is_some() or func.throws_inferred:
+            ctx.d29_callee_kind.set(fn_def, 1)
+        else:
+            if d29_type_is_result(ret_id, scopes, &types):
+                ctx.d29_callee_kind.set(fn_def, 2)
 
 # RequiredAfterDefault — a required (no-default) parameter may not
 # follow a parameter that declares a default value. Positional
@@ -424,6 +434,140 @@ bool carrier_op_is_option_or_result(int type_id, ScopeTable &scopes, TypeTable &
             else:
                 return false
     return false
+
+# D29: True iff `type_id` resolves to a `Result[T,E]` — the kind-2 discriminator
+# (a declared-`Result` return makes a call fallible even without `throws`, per the
+# one-mark-for-both-kinds rule). Result-ONLY (unlike the `??`-carrier helper which
+# also accepts Option): the D29 mark rides Result outcomes, `??` rides Option too.
+bool d29_type_is_result(int type_id, ScopeTable scopes, TypeTable &types):
+    if type_id >= 0 and type_id < types.types.len():
+        ResolvedType rt = get_rtype_at(types.types, type_id)
+        match rt:
+            case RTGeneric(def_id, _targs):
+                return scopes.get_def(def_id).name == "Result"
+            case RTDefined(def_id2):
+                return scopes.get_def(def_id2).name == "Result"
+            else:
+                return false
+    return false
+
+# D29: the fallibility kind of a CALL expression — 1 = kind-1 (`throws E`
+# callee), 2 = kind-2 (declared-`Result` return callee), 0 = infallible OR
+# unclassifiable. Reads the per-callee `d29_callee_kind` map (built once in
+# `register_function_signature`) via the callee's TYPED DefId from
+# `resolution_map` (layering rule 2 — never the identifier string). Only free-fn
+# identifier callees are classified; a method / closure-value / unresolved callee
+# returns 0 — CONSERVATIVE by design: the mark on such a call is never a lying
+# mark and its bare use is never over-rejected (a known lane gap; the migrated
+# corpus's method marks stay accepted). Mirrors the Rust producer's
+# throws_type_id → kind-1 / type_is_result(ret) → kind-2 dispatch.
+int d29_call_kind(SpannedExpr e, ResolveContext &ctx):
+    match e.expr:
+        case ECall(callee, _args, _targs):
+            match (*callee).expr:
+                case EIdentifier(_name):
+                    int cspan = (*callee).span.start
+                    if ctx.resolution_map.contains(cspan):
+                        int def_id = ctx.resolution_map.get(cspan).unwrap()
+                        if ctx.d29_callee_kind.contains(def_id):
+                            return ctx.d29_callee_kind.get(def_id).unwrap()
+                    return 0
+                else:
+                    return 0
+        else:
+            return 0
+    return 0
+
+# D29: does an expression carry the fallible MARK (`expr!` → EPropagate)? Used to
+# distinguish a legal marked call from a bare one at each enforcement position.
+bool d29_is_marked(SpannedExpr e):
+    match e.expr:
+        case EPropagate(_inner):
+            return true
+        else:
+            return false
+
+# D29: is this declared type an explicit `Result[T,E]` annotation? Such a dest
+# CAPTURES an unmarked fallible call (legal — the annotation carries the
+# visibility, 2026-07-17 amendment); a mark on top is redundant.
+bool d29_stype_is_result(SpannedType stype):
+    match stype.ty:
+        case TNamed(name, _args):
+            return name == "Result"
+        else:
+            return false
+
+# D29 enforcement: emit E_MissingFallibleMark at `span`. ONE code for every
+# reason (bare / redundant-on-capture / result-arms-on-peeled), mirroring the
+# Rust `E_MissingFallibleMark` family; the reason rides the (impl-defined)
+# message, only the CODE is conformance-compared.
+void d29_emit(Span span, String message, ResolveContext &ctx):
+    ctx.diagnostics.push(Diagnostic.error(span, DkMissingFallibleMark(), message))
+
+# D29 (bare-call in a value-DISCARD or disposition/scrutinee position): a
+# fallible CALL used WITHOUT the mark silently drops the outcome. Reject unless
+# marked. Both kinds. A marked call (`f()!`) has already activated its channel —
+# no reject. A non-call / infallible / unclassifiable expression is a no-op.
+void d29_reject_if_bare_fallible(SpannedExpr e, ResolveContext &ctx):
+    if d29_is_marked(e):
+        return
+    if d29_call_kind(e, &ctx) >= 1:
+        d29_emit(e.span, "this fallible call must be marked with `!` — mark it to propagate, handle it with `catch`/`rethrow`, or capture it into a `Result` binding", &ctx)
+
+# D29 bind position (`T x = <init>`): an explicitly `Result`-annotated dest
+# CAPTURES the unmarked call (legal); marking it too is the redundant-mark error
+# (remove the `!`). A kind-1 (throws) call to a NON-Result dest requires the mark
+# (auto/inferred does NOT capture a throws call — 2026-07-17 amendment). A kind-2
+# unmarked bind is a legal Result VALUE flow at ANY dest (bind/pass/chain).
+void d29_check_bind(SpannedType stype, SpannedExpr init, ResolveContext &ctx):
+    bool dest_is_result = d29_stype_is_result(stype)
+    if d29_is_marked(init):
+        # `Result[T,E] r = f()!` — the mark is redundant at a capture dest.
+        if dest_is_result:
+            match init.expr:
+                case EPropagate(inner):
+                    if d29_call_kind(*inner, &ctx) >= 1:
+                        d29_emit(init.span, "remove the `!`: a `Result`-annotated binding captures the fallible outcome without a mark", &ctx)
+                else:
+                    pass
+        return
+    # Unmarked. A kind-1 call requires the mark unless the dest is a Result
+    # capture; a kind-2 unmarked call is always a legal value flow.
+    if not dest_is_result:
+        if d29_call_kind(init, &ctx) == 1:
+            d29_emit(init.span, "this fallible call must be marked with `!` — an inferred/non-`Result` binding does not capture a `throws` call; mark it, handle it, or annotate the binding `Result[T, E]`", &ctx)
+
+# D29 marked-match peel (`match f()!: case Ok/Error`): the mark peeled the
+# scrutinee's `Result` to its success `T`, so `Ok`/`Error` arms can no longer
+# match — bind the `Result` to a local first. Only a MARKED kind-1 scrutinee
+# peels; a bare scrutinee / kind-2 Result value / T-variant arms are untouched
+# (the snag48 T-variant marked-match RUNS). Fires only when an arm discriminates
+# a Result variant.
+void d29_check_match_peel(SpannedExpr scrut, Vector[MatchArm] arms, ResolveContext &ctx):
+    bool marked_kind1 = false
+    match scrut.expr:
+        case EPropagate(inner):
+            if d29_call_kind(*inner, &ctx) == 1:
+                marked_kind1 = true
+        else:
+            pass
+    if not marked_kind1:
+        return
+    for arm in arms:
+        if d29_pattern_is_result_variant(arm.pattern):
+            d29_emit(scrut.span, "`match f()!:` peels the `Result` to its success value — `Ok`/`Error` arms cannot match here; bind the `Result` first (`Result[T, E] r = f()`), then match `r`", &ctx)
+            return
+
+# D29: does a pattern discriminate a `Result` variant (`Ok` / `Error`, optionally
+# `Result.`-qualified)? Mirrors the Rust `pattern_discriminates_result` helper.
+bool d29_pattern_is_result_variant(SpannedPattern pattern):
+    match pattern.pat:
+        case PConstructor(variant_name, _fields):
+            return variant_name == "Ok" or variant_name == "Error"
+        case PDotShorthand(variant_name, _fields):
+            return variant_name == "Ok" or variant_name == "Error"
+        else:
+            return false
 
 # True iff `type_id` is a suppression shape — inference incomplete (RTVar) or
 # already errored/divergent (RTError/RTNever). Mirrors Rust's Var/error_id/
@@ -1563,7 +1707,13 @@ void safety_loop_body(Vector[Stmt] body, int scope_id, SafetyState &state, Scope
     Dict[int, int] before = state.moved.clone()
     state.loop_depth = saved_depth + 1
     state.loop_locals = Dict[int, int]()
+    # D29: a loop body drops its tail statement's value every iteration — the
+    # classic silent-Error-drop-per-iteration shape; a bare fallible tail here is
+    # a discard (`while c: risky(x)`).
+    bool saved_tail_dropped = ctx.d29_tail_dropped
+    ctx.d29_tail_dropped = true
     check_safety_stmts(body, scope_id, &state, &scopes, &types, &ctx)
+    ctx.d29_tail_dropped = saved_tail_dropped
     state.loop_depth = saved_depth
     state.loop_locals = saved_locals
     state.rebind = saved_rebind
@@ -1608,13 +1758,29 @@ bool live_is_consume_callable(SpannedExpr e, ScopeTable scopes, TypeTable &types
 # the loop) — mirroring production `origins.rs`. A move of an outer (non-loop-local,
 # non-same-stmt-rebound) place inside a loop is a MoveInLoop reject (live_mark_move).
 void check_safety_stmts(Vector[Stmt] stmts, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
-    for s in stmts:
+    int n = stmts.len()
+    for (i, s) in stmts.enumerate():
+        # D29 bare-discard: a bare fallible call whose outcome is DROPPED. A
+        # non-tail statement always drops its value; a TAIL statement drops it
+        # only in a value-drop block (`ctx.d29_tail_dropped`: a fn/loop body).
+        # In a VALUE block (EBlock/EDo/closure/expr-arm, tail_dropped=false) the
+        # tail IS the block's value — a legal kind-2 value flow, never a discard.
+        match s:
+            case SExpr(sexpr):
+                bool is_last = i == n - 1
+                if (not is_last) or ctx.d29_tail_dropped:
+                    d29_reject_if_bare_fallible(sexpr, &ctx)
+            else:
+                pass
         check_safety_stmt(s, scope_id, &state, &scopes, &types, &ctx)
 
 void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match s:
-        case SVarDecl(_stype, name, init_expr, _own, _sk, name_span):
+        case SVarDecl(stype, name, init_expr, _own, _sk, name_span):
             check_local_borrow_bind(init_expr, &ctx)
+            # D29 bind position: Result-capture (unmarked, legal) vs mark+capture
+            # (redundant) vs kind-1-to-non-Result (mark required).
+            d29_check_bind(stype, init_expr, &ctx)
             # D12 position 1 (bind): a bare bind of a live drop-tainted place.
             reject_tainted_place(init_expr, scopes, &types, &ctx)
             # Single-owner init class (bind): a bare callable/Box/Task copy at a
@@ -1681,6 +1847,8 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             check_safety_expr(target, scope_id, &state, &scopes, &types, &ctx)
             check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
         case SExpr(sexpr):
+            # D29 bare-discard is enforced in `check_safety_stmts` (index-aware:
+            # a discard is a non-tail statement, or a tail in a value-drop block).
             check_safety_expr(sexpr, scope_id, &state, &scopes, &types, &ctx)
         case SReturn(opt_expr):
             if opt_expr is Some(sexpr):
@@ -1761,6 +1929,10 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
                 if_reached = if_reached or if_eb_reached
             safety_commit(if_acc, not elsebranches_have_uncond(else_branches), if_reached, &state)
         case SMatch(scrut, arms):
+            # D29 marked-match peel: `match f()!: case Ok/Error` — the mark peeled
+            # the Result to `T`, so Result-variant arms cannot match. T-variant
+            # arms (snag48) stay legal and RUN.
+            d29_check_match_peel(scrut, arms, &ctx)
             check_safety_expr(scrut, scope_id, &state, &scopes, &types, &ctx)
             Dict[int, int] m_acc = Dict[int, int]()
             bool m_reached = false
@@ -1919,6 +2091,9 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             check_safety_expr(*cond, scope_id, &state, &scopes, &types, &ctx)
             Vector[int] eif_binds = Vector[int]()
             collect_is_defs_into(*cond, ctx, &eif_binds)
+            # D29: an if-EXPRESSION's branch tails ARE its value (not dropped).
+            bool eif_saved_tail = ctx.d29_tail_dropped
+            ctx.d29_tail_dropped = false
             Dict[int, int] eif_acc = Dict[int, int]()
             bool eif_reached = safety_branch(then_body, eif_binds, scope_id, &state, &eif_acc, &scopes, &types, &ctx)
             for br in elif_branches:
@@ -1928,9 +2103,15 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                     collect_is_defs_into(c, ctx, &br_binds)
                 bool eif_br_reached = safety_branch(br.body, br_binds, scope_id, &state, &eif_acc, &scopes, &types, &ctx)
                 eif_reached = eif_reached or eif_br_reached
+            ctx.d29_tail_dropped = eif_saved_tail
             safety_commit(eif_acc, not elsebranches_have_uncond(elif_branches), eif_reached, &state)
         case EMatch(scrutinee, arms):
+            # D29 marked-match peel (expression match) — mirror of the SMatch arm.
+            d29_check_match_peel(*scrutinee, arms, &ctx)
             check_safety_expr(*scrutinee, scope_id, &state, &scopes, &types, &ctx)
+            # D29: a match-EXPRESSION's arm tails ARE its value (not dropped).
+            bool em_saved_tail = ctx.d29_tail_dropped
+            ctx.d29_tail_dropped = false
             Dict[int, int] em_acc = Dict[int, int]()
             bool em_reached = false
             for arm in arms:
@@ -1940,6 +2121,7 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                 collect_pattern_defs_into(arm.pattern, ctx, &em_binds)
                 bool em_arm_reached = safety_branch(arm.body, em_binds, scope_id, &state, &em_acc, &scopes, &types, &ctx)
                 em_reached = em_reached or em_arm_reached
+            ctx.d29_tail_dropped = em_saved_tail
             safety_commit(em_acc, not match_has_catch_all(arms), em_reached, &state)
         case EClosure(_params, body):
             # The closure BODY executes when the closure is CALLED, not when it is
@@ -1957,7 +2139,13 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             cl.loop_depth = 0
             cl.loop_locals = Dict[int, int]()
             cl.rebind = -1
+            # D29: a closure's tail statement IS its return value (a value block),
+            # not a discard — a bare fallible tail there is a legal value flow
+            # (e.g. `.and_then((n): parse(n))` where the callback returns Result).
+            bool cl_saved_tail = ctx.d29_tail_dropped
+            ctx.d29_tail_dropped = false
             check_safety_stmts(body, scope_id, &cl, &scopes, &types, &ctx)
+            ctx.d29_tail_dropped = cl_saved_tail
             # D12 position 5 (closure capture): a captured tainted OUTER local.
             reject_tainted_captures(body, scope_id, scopes, &types, &ctx)
             # D12 position 4 (closure expression-tail): a closure whose body tail
@@ -2056,9 +2244,17 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
         case EIs(inner, _neg, _pat):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EBlock(stmts):
+            # D29: an EBlock/EDo is a VALUE expression — its tail statement is the
+            # block's value, not a discard (tail_dropped=false for the walk).
+            bool blk_saved_tail = ctx.d29_tail_dropped
+            ctx.d29_tail_dropped = false
             check_safety_stmts(stmts, scope_id, &state, &scopes, &types, &ctx)
+            ctx.d29_tail_dropped = blk_saved_tail
         case EDo(stmts):
+            bool do_saved_tail = ctx.d29_tail_dropped
+            ctx.d29_tail_dropped = false
             check_safety_stmts(stmts, scope_id, &state, &scopes, &types, &ctx)
+            ctx.d29_tail_dropped = do_saved_tail
         case EListComp(comp_e, _var, iterable, opt_cond):
             # A comprehension is a LOOP context (the body runs once per element):
             # moving an ENCLOSING local inside it re-moves it every iteration — a
@@ -2107,9 +2303,17 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
         case ESpawnBlocking(inner):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case ERethrow(e, _eopt, _etype, transform):
+            # D29: a disposition (`rethrow`) activates the error channel — the
+            # call it attaches to must carry the mark (`f()! rethrow …`) on BOTH
+            # kinds. An unmarked disposition inner is the bare-call error.
+            d29_reject_if_bare_fallible(*e, &ctx)
             check_safety_expr(*e, scope_id, &state, &scopes, &types, &ctx)
             check_safety_expr(*transform, scope_id, &state, &scopes, &types, &ctx)
         case ECatch(e, _name, recovery):
+            # D29: same as ERethrow — `catch` on a fallible CALL requires the mark
+            # (`f()! catch …`). A `catch` on a Result LOCAL is not a call and is
+            # never classified fallible here, so it stays legal unmarked.
+            d29_reject_if_bare_fallible(*e, &ctx)
             check_safety_expr(*e, scope_id, &state, &scopes, &types, &ctx)
             check_safety_expr(*recovery, scope_id, &state, &scopes, &types, &ctx)
         case EFaultCatch(fc_inner, _fc_pat, fc_handler):
@@ -2170,7 +2374,13 @@ void type_check_function(FunctionDef func, int parent_scope, ScopeTable &scopes,
         # a double move (not a place-overlap). Fresh SafetyState per function —
         # params are live at entry and no enclosing loop carries across a fn body.
         SafetyState safety = SafetyState(Dict[int, int](), 0, Dict[int, int](), -1)
+        # D29: a function BLOCK body drops its tail statement's value (block
+        # bodies return via explicit `return`; expr-body tails are SReturn, which
+        # the discard check skips) — so a bare fallible tail here is a discard.
+        bool saved_tail_dropped = ctx.d29_tail_dropped
+        ctx.d29_tail_dropped = true
         check_safety_stmts(func.body, body_scope, &safety, &scopes, &types, &ctx)
+        ctx.d29_tail_dropped = saved_tail_dropped
         ctx.loop_depth = saved_loop_depth
         ctx.current_function_throws = saved_throws
         ctx.in_function_body = saved_in_fn
