@@ -272,16 +272,27 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         # invalid — no named fields exist. REJECT.
                         ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNoFieldFound(), "no field `" + field_name + "` found on type `" + pname + "`"))
                     case RTTuple(elems):
-                        # Legal alias: `._0`/`._1`/… (language-reference §4.2).
-                        # Bare `.N` is ETupleFieldAccess (separate arm). Any
-                        # other identifier is absent → E_NoFieldFound.
+                        # Tuple index by field: both bare `.0`/`.1` and the
+                        # `._0`/`._1` alias (language-reference §4.2/§7.8) index
+                        # the tuple. The self-host parser folds BOTH into
+                        # EFieldAccess{name} (parser.gg — there is no separate
+                        # tuple-index node), so this arm must accept the bare
+                        # digit form too; any non-numeric name is absent.
+                        int tuple_idx = -1
                         if field_name.starts_with("_") and field_name.len() >= 2:
                             match parse_int(field_name.byte_slice(1, field_name.len())):
-                                case Ok(idx):
-                                    if idx >= 0 and idx < elems.len():
-                                        return elems.get(idx).unwrap()
+                                case Ok(i):
+                                    tuple_idx = i
                                 else:
                                     pass
+                        else:
+                            match parse_int(field_name):
+                                case Ok(i):
+                                    tuple_idx = i
+                                else:
+                                    pass
+                        if tuple_idx >= 0 and tuple_idx < elems.len():
+                            return elems.get(tuple_idx).unwrap()
                         ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNoFieldFound(), "no field `" + field_name + "` found on tuple type"))
                     else:
                         pass
