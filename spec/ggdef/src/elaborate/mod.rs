@@ -659,7 +659,7 @@ impl Elaborator {
         if ast_is_place(e) && self.ty_tainted(&self.infer_ast_ty(e)) {
             return Err(ElabError::new(
                 format!(
-                    "E_MoveWithoutOperator: implicit copy of a drop-tainted value at {position}; \
+                    "error[E_MoveWithoutOperator]: implicit copy of a drop-tainted value at {position}; \
                      a type with a custom `Drop` is single-owner — write `!<src>` to move or \
                      `<src>.clone()` to copy"
                 ),
@@ -696,7 +696,7 @@ impl Elaborator {
             if matches!(self.local_ty.get(n), Some(Ty::Callable { .. })) {
                 return Err(ElabError::new(
                     format!(
-                        "E_MoveWithoutOperator: implicit copy of the single-owner callable `{n}` at \
+                        "error[E_MoveWithoutOperator]: implicit copy of the single-owner callable `{n}` at \
                          {position}; a callable is single-owner (no implicit copy) — write `!{n}` to \
                          move or `{n}.clone()` to copy"
                     ),
@@ -1304,7 +1304,25 @@ impl Elaborator {
     fn call_arg_source(&mut self, arg: &ast::CallArg) -> ElabResult<Source> {
         match arg.ownership {
             ast::Ownership::Move => Ok(Source::Move(self.elaborate_expr(&arg.value)?)),
-            ast::Ownership::MutableBorrow => Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?)),
+            ast::Ownership::MutableBorrow => {
+                // 2T FORMATION position (materialize-on-write, wave-2): a
+                // `&`-arg whose ROOT is a bare BORROW binding of a tainted type
+                // materializes a private copy of the ROOT at the `&`-formation —
+                // for a drop-tainted root that is a hidden clone → the drop
+                // side-effect runs twice (double-close). Covers `&s.field`,
+                // `&arr[i]`, whole `&self`, AND whole `&p` on a bare param (all
+                // MEASURED double-closing pre-fix, in ggdef AND production).
+                // Reject, mirroring production's `reject_tainted_formation_arg`.
+                // Only `&*deref` is excluded (write-through to the heap pointee,
+                // no root materialize). `reject_materialize_on_write` roots via
+                // `root_local_name` and gates on BORROW-mode + tainted — so a
+                // WriteThrough (`&`) or Owned root is a no-op, exactly as the
+                // typed `is_param + Borrow + tainted` gate does in production.
+                if !matches!(&arg.value.node, ast::Expr::Deref { .. }) {
+                    self.reject_materialize_on_write(&arg.value.node, arg.value.span)?;
+                }
+                Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?))
+            }
             ast::Ownership::Borrow => {
                 if ast_is_place(&arg.value.node) {
                     // D10(b) Copy-snapshot: a bare read of a COPY-typed place is
@@ -2230,7 +2248,7 @@ impl Elaborator {
                 if self.ty_tainted(ty) {
                     return Err(ElabError::new(
                         format!(
-                            "E_MoveWithoutOperator: closure captures the drop-tainted local `{c}` \
+                            "error[E_MoveWithoutOperator]: closure captures the drop-tainted local `{c}` \
                              by value; a type with a custom `Drop` is single-owner — capture \
                              `!{c}` to move or `{c}.clone()` to copy"
                         ),
@@ -2260,7 +2278,7 @@ impl Elaborator {
                     if self.ty_tainted(&ty_of_type(&pty.node)) {
                         return Err(ElabError::new(
                             format!(
-                                "E_MoveWithoutOperator: implicit copy of the drop-tainted place \
+                                "error[E_MoveWithoutOperator]: implicit copy of the drop-tainted place \
                                  `{root}` at closure-tail; a type with a custom `Drop` is \
                                  single-owner — write `!{root}` to move or `{root}.clone()` to copy"
                             ),
