@@ -3899,6 +3899,27 @@ fn stdlib_iter_set() {
     );
 }
 
+/// Hang-census ROOT A regression (count facet). A lazy `FilterIter[SetIter]`
+/// `count()` terminal walks `self.inner.next()`; the self-host must borrow the
+/// `inner` field PLACE at the `&self` receiver (`lower_recv_place`,
+/// self_host_lowerer/lower_expr.gg) so the real SetIter cursor advances. Pre-fix
+/// the self-host byte-copied the receiver (SetIter holds a `Ref`, not a runtime
+/// resource) and `filter(...).count()` spun forever — the shared root of
+/// `stdlib_iter_set` / `dict_keys_lazy` / `dict_values_lazy`.
+#[test]
+fn set_filter_count() {
+    run_gg("set_filter_count.gg", "3");
+}
+
+/// Hang-census ROOT A regression (value facet). `s.iter().take(2)` must yield
+/// two DISTINCT elements (10, 20), not the same element twice (10, 10): pre-fix
+/// `TakeIter.next` advanced a discarded copy of its SetIter cursor, so every
+/// yield re-read element 0 (right count via `remaining`, wrong values).
+#[test]
+fn set_take_values() {
+    run_gg("set_take_values.gg", "10\n20");
+}
+
 #[test]
 fn stdlib_iter_dict() {
     run_gg(
@@ -22266,15 +22287,19 @@ fn self_host_runtime_diff() {
     // Last re-seeded 2026-07-16 (capped-drain landing): the canonical run above
     // reported MATCH 1156 / 1230 = 94.0% (WRONG 11, CC-FAIL 52, CRASH 11,
     // DRIVER-FAIL 0; EXCLUDED 89, RUST-REJECTED 239, RUST-CRASH 1), completing
-    // in ~198s with no OOM. The CRASH set still carries the timeout-flip class
-    // (async_select / dict_keys_lazy / dict_values_lazy 'timed out after 30s',
-    // and stdlib_iter_set as a runaway-output kill) — the jitter the floor
-    // discounts.
+    // in ~198s with no OOM. Post Root-A the only remaining timeout-flip-class
+    // CRASH is async_select ('timed out after 30s', the dropped `select:` body,
+    // Root B) — the dict_keys_lazy / dict_values_lazy / stdlib_iter_set hangs
+    // that used to swell the CRASH set are now stable MATCHes (see the
+    // NO-NEW-HANGS guard below, EXPECTED_HANGS = {async_select}).
     //
     // Floor = regenerated MATCH minus measured timeout jitter (5), nothing
-    // more. Reseeded 2026-07-17 at the CoW-1A + flip-tracks round close:
-    // MATCH 1166 (of 1240; the +10 = the ten new CoW-1A cross-lane fixtures,
-    // all three-lane MATCHes) − 5 = 1161. Regen command: GG_RUNTIME_DIFF=1
+    // more. Reseeded 2026-07-17 at the Root-A receiver-field-borrow landing:
+    // MATCH 1171 (of 1242; the +5 vs the prior 1166/1240 = the three census
+    // SPINs stdlib_iter_set/dict_keys_lazy/dict_values_lazy flipping CRASH→MATCH
+    // plus the two new regression fixtures set_filter_count/set_take_values
+    // entering as MATCHes) − 5 = 1166. Prior reseed (CoW-1A + flip-tracks close)
+    // was MATCH 1166 (of 1240) − 5 = 1161. Regen command: GG_RUNTIME_DIFF=1
     // GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release
     // self_host_runtime_diff -- --nocapture (leave GG_TEST_TIMEOUT_SECS at
     // its default — 600 makes each hang-class fixture stall a worker 20x
@@ -22283,7 +22308,7 @@ fn self_host_runtime_diff() {
     // Bump-on-improvement: when MATCH rises, raise the floor in the same
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter. Floors ratchet — never lower.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1161;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1166;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -22309,6 +22334,68 @@ fn self_host_runtime_diff() {
              tests/integration.rs in the same commit to lock in the new floor.\n\
              Emergency escape hatch (loud, temporary): GG_PARITY_FLOOR_OFF=1.",
             matched.len(),
+        );
+    }
+
+    // ── NO-NEW-HANGS guard: the hang census's shrink-only allowlist ──
+    //
+    // Pins the *set* of self-host emitted-binary hangs — every CRASH whose
+    // label is "timed out" or "runaway output" — to EXPECTED_HANGS. A hang NOT
+    // on the list is a NEW hang (fail loudly, root-cause it); an EXPECTED_HANGS
+    // entry that no longer hangs is a FIX to lock in (fail asking to shrink the
+    // list in the same commit). A shrink-only allowlist, the MATCH-floor idiom
+    // (hang census 2026-07-16, harness follow-ups item (iii)).
+    //
+    // Root A of the census removed dict_keys_lazy / dict_values_lazy /
+    // stdlib_iter_set from this set (they now MATCH — the receiver-field-borrow
+    // fix), so the list is BORN correct at exactly {async_select} — Root B, a
+    // self-host `select:` body still dropped to an empty loop (its own track).
+    //
+    // Gated identically to the MATCH floor above (debug-skip + parity_floor_active):
+    // a hang surfaces as a MATCH→CRASH timeout flip, and — UNLIKE the count
+    // floor, which discounts 5 jitter — a SET guard cannot discount a transient.
+    // So a lone timeout under load can trip this as a phantom "new hang"; the
+    // triage is IDENTICAL to a floor red: RE-RUN once before treating it as
+    // real. A genuinely-new hang reproduces; jitter does not.
+    const EXPECTED_HANGS: &[&str] = &["async_select"];
+    let hang_set: Vec<&String> = crashed
+        .iter()
+        .filter(|(_, detail)| detail.contains("timed out") || detail.contains("runaway output"))
+        .map(|(stem, _)| stem)
+        .collect();
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "NOTE [self_host_runtime_diff]: no-new-hangs guard skipped (debug profile — the \
+             hang set is timeout-flip sensitive and seeded from --release runs; use the \
+             documented --release invocation for the gate)."
+        );
+    } else if parity_floor_active("self_host_runtime_diff") {
+        let new_hangs: Vec<&str> = hang_set
+            .iter()
+            .map(|s| s.as_str())
+            .filter(|stem| !EXPECTED_HANGS.contains(stem))
+            .collect();
+        assert!(
+            new_hangs.is_empty(),
+            "NEW self-host hang(s): {new_hangs:?} spin/block that were not in the census \
+             hang set (hang census 2026-07-16). Root-cause the hang at its lowering write \
+             site — do NOT paper over it by adding it to EXPECTED_HANGS. If this is a lone \
+             transient timeout under load (a MATCH→CRASH flip), RE-RUN once before treating \
+             it as real (same triage as a MATCH-floor red — a SET guard cannot discount \
+             jitter the way the count floor does); a genuine hang reproduces.",
+        );
+        let fixed: Vec<&str> = EXPECTED_HANGS
+            .iter()
+            .copied()
+            .filter(|exp| !hang_set.iter().any(|s| s.as_str() == *exp))
+            .collect();
+        assert!(
+            fixed.is_empty(),
+            "EXPECTED_HANGS entries no longer hang: {fixed:?} — a hang was fixed. Remove it \
+             from EXPECTED_HANGS in tests/integration.rs in the SAME commit that lands the \
+             fix, to lock in the win (shrink-only allowlist, the MATCH-floor ratchet). If \
+             {fixed:?} vanished only because of a transient (an async deadlock that raced to \
+             completion this run), RE-RUN once — a real deadlock reproduces.",
         );
     }
 }

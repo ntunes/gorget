@@ -1,0 +1,21 @@
+# Regression: hang-census ROOT A — a lazy `FilterIter[SetIter[T], T]` whose
+# terminal `count()` walks `self.inner.next()` MUST advance the real SetIter
+# cursor, not a discarded by-value copy of it. Pre-fix the self-host
+# clone-materialised the `&self` receiver's `inner` field (SetIter holds a
+# `Ref`, not a runtime resource, so the field-load byte-copied), so the
+# cursor never advanced and `filter(...).count()` spun forever
+# (`stdlib_iter_set`/`dict_keys_lazy`/`dict_values_lazy` all shared this root).
+# The fix borrows the field PLACE at a method receiver (lower_recv_place).
+#
+# {10,20,30,40} filtered by `k >= 20` = {20,30,40} → count 3.
+from std.iter import SetIter
+
+int main():
+    Set[int] s = Set[int]()
+    s.add(10)
+    s.add(20)
+    s.add(30)
+    s.add(40)
+    int big = s.iter().filter((int k): k >= 20).count()
+    print(big)
+    return 0

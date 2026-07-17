@@ -1748,6 +1748,93 @@ void process_pending_shared_async(GirModule &gmod):
         build_shared_async_wrapper(&gmod, gmod.pending_shared_async.get(pi).unwrap())
         pi += 1
 
+# Method-RECEIVER place resolver. A `&self`/`!self` method receives `self`
+# BY POINTER, so a receiver that is a struct-FIELD place (`self.inner.next()`)
+# must borrow the field IN PLACE — a pointer INTO the aggregate — not a
+# by-value copy of the field. A mutating `&self` method (`SetIter.next`
+# advancing its cursor) called on a by-value copy writes the mutation into
+# the discarded copy: the Set/Dict lazy-iterator adapters (`Take`/`Skip`/
+# `Filter`/…) that hold their inner iterator by value then re-yield element 0
+# forever (the ROOT-A SPIN class). Mirrors Rust gg's dedicated receiver-field
+# branch (src/ir/lowering/exprs/methods.rs:2037-2064): borrow the field place
+# unless the field is itself a `Ref[T]`/`MutRef[T]` borrow pointer (whose
+# STORED value IS the receiver pointer — the LIR loads it).
+#
+# The `EFieldAccess` `case` in `lower_expr_inner` already Ptr-types the
+# field-load dst for RESOURCE fields (Vector/Dict/String/… → the LIR
+# GIFieldLoad handler alias-stores the field ADDRESS, no byte-copy) — that
+# is why a `VectorIter` inner (holds a `Vector` resource) borrows correctly
+# while a `SetIter`/`DictKeysIter`/`DictValuesIter` inner (holds a `Ref`,
+# NOT a resource) value-copies. This resolver closes that gap for a receiver:
+# a PLAIN (non-resource, non-Ref) struct field is Ptr-typed too, so the
+# LIR aliases its address. Scoped to a bare-local base (`self.f` / `x.f`)
+# only — `nl_get` never emits, so the fall-through re-resolve is free; every
+# other receiver shape (resource field, Ref field, scalar field, Box/Guard/
+# nested/index base) delegates to `lower_place_base` UNCHANGED (byte-identical
+# emission). The LIR handler's own `Ref__`/`MutRef__`/opaque-handle carve-out
+# (lir_lower.gg:5138-5145) is the second line of defense on the Ref case.
+int lower_recv_place(LowerCtx &ctx, SpannedExpr recv_expr, GirModule &gmod):
+    match recv_expr.expr:
+        case EFieldAccess(rp_base_box, rp_field):
+            # Bare-place base only (`self.f` / `local.f`): `nl_get` returns the
+            # local (a Ptr for a `&self`/`&param`) with NO emit, so the
+            # fall-through `lower_place_base(recv_expr)` below re-reads it for
+            # free. Any static / Box / nested / index base is left entirely to
+            # `lower_place_base` (avoids double-emitting the base). The self
+            # receiver arrives as the distinct `ESelfExpr` node (lower.gg:1067),
+            # not `EIdentifier("self")`, so both are handled.
+            int rp_base = -1
+            match (*rp_base_box).expr:
+                case ESelfExpr():
+                    if nl_contains(&ctx, "self"):
+                        rp_base = nl_get(&ctx, "self")
+                case EIdentifier(rp_bn):
+                    if nl_contains(&ctx, rp_bn):
+                        rp_base = nl_get(&ctx, rp_bn)
+                else:
+                    pass
+            if rp_base >= 0:
+                int rp_base_tid = ctx.locals.get(rp_base).unwrap().type_id
+                String rp_base_tn = type_id_to_name(rp_base_tid, &gmod)
+                # Peel Ptr/MutPtr for the struct-name lookup.
+                if rp_base_tid >= 0 and rp_base_tid < gmod.type_table.len():
+                    match gmod.type_table.get(rp_base_tid).unwrap():
+                        case GtPtr(rp_i):
+                            rp_base_tn = type_id_to_name(rp_i, &gmod)
+                        case GtMutPtr(rp_i2):
+                            rp_base_tn = type_id_to_name(rp_i2, &gmod)
+                        else:
+                            pass
+                if gmod.type_infos.contains(rp_base_tn):
+                    GirTypeInfo rp_info = gmod.type_infos.get(rp_base_tn).unwrap()
+                    int rp_found = -1
+                    String rp_ftn = ""
+                    int rp_fi = 0
+                    while rp_fi < rp_info.fields.len():
+                        GirFieldInfo rp_finfo = rp_info.fields.get(rp_fi).unwrap()
+                        if rp_finfo.name == rp_field:
+                            rp_found = rp_fi
+                            rp_ftn = rp_finfo.type_name.clone()
+                            break
+                        rp_fi += 1
+                    if rp_found >= 0:
+                        int rp_ftid = resolve_field_gir_type(rp_ftn, &gmod)
+                        bool rp_is_ref = rp_ftn.starts_with("Ref__") or rp_ftn.starts_with("MutRef__")
+                        # Specialize ONLY a plain aggregate field: a non-scalar
+                        # nominal that is neither a runtime resource (already
+                        # Ptr-loads via the resource arm) nor a `Ref`/`MutRef`
+                        # borrow ptr. This is exactly the SetIter/DictKeysIter/
+                        # DictValuesIter inner-iterator shape.
+                        if rp_ftid >= PRIM_COUNT and not is_resource_type_name(rp_ftn, &gmod) and not rp_is_ref:
+                            int rp_pt = register_ptr(&gmod, rp_ftid)
+                            int rp_dst = add_local_with(&ctx, rp_pt, None, LoBorrowed(), BoNone())
+                            set_field_borrow(&ctx, rp_dst, rp_base, rp_found)
+                            emit(&ctx, GIFieldLoad(rp_dst, rp_base, rp_found))
+                            return rp_dst
+        else:
+            pass
+    return lower_place_base(&ctx, recv_expr, &gmod)
+
 int lower_expr(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     # Consume the one-shot suppress flag for THIS expression.
     bool suppress = ctx.suppress_auto_prop
@@ -3283,10 +3370,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Place base — a method receiver is passed as `self` BY POINTER,
             # so a `&`/`!`-param (`GtMutPtr`) receiver must stay the pointer
             # (else the method mutates a discarded dereffed copy, not the
-            # caller's value). `lower_place_base` bypasses Edit-1's value-read
-            # deref for a bare identifier; non-identifier receivers (chained
-            # calls etc.) fall back to `lower_expr` unchanged.
-            int recv = lower_place_base(&ctx, *recv_box, &gmod)
+            # caller's value). `lower_recv_place` additionally borrows a
+            # struct-FIELD receiver IN PLACE (`self.inner.next()`) so a
+            # mutating `&self` method advances the real field, not a discarded
+            # by-value copy (ROOT-A lazy-iterator SPIN); it delegates every
+            # non-field-receiver shape to `lower_place_base` unchanged, which
+            # bypasses Edit-1's value-read deref for a bare identifier.
+            int recv = lower_recv_place(&ctx, *recv_box, &gmod)
             if mname == "unwrap" or mname == "unwrap_or" or mname == "expect":
                 # `unwrap`, `expect`, and `unwrap_or` share this intercept so
                 # the Option[Ref[T]] ref-payload deref (Phase 3 below) applies

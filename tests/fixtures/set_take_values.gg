@@ -1,0 +1,16 @@
+# Regression: hang-census ROOT A (value facet) — `s.iter().take(2)` must yield
+# the FIRST TWO DISTINCT elements (10, 20), not the SAME element twice
+# (10, 10). Pre-fix the self-host advanced a discarded copy of the SetIter
+# cursor inside `TakeIter.next` (`self.inner.next()`), so every yield re-read
+# element 0. The count was right (`take` decrements its own `remaining`
+# field, written in place) but the VALUES were wrong — this pins the values.
+from std.iter import SetIter, TakeIter
+
+int main():
+    Set[int] s = Set[int]()
+    s.add(10)
+    s.add(20)
+    s.add(30)
+    for x in s.iter().take(2):
+        print(x)
+    return 0
