@@ -3,7 +3,7 @@
 use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
-use crate::parser::ast::{Block, Expr, Pattern};
+use crate::parser::ast::{Block, Expr, Ownership, Pattern};
 use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
@@ -111,6 +111,10 @@ pub(super) fn lower_for(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     pattern: &Spanned<Pattern>,
+    // Track 1A: `for x in &coll` carries `&` in the statement's ownership field
+    // (the parser splits it off the iterable — `for_stmt`'s
+    // `parse_ownership_modifier`), so it arrives here, NOT as `Expr::MutableBorrow`.
+    ownership: Ownership,
     iterable: &Spanned<Expr>,
     body: &Block,
     else_arm: Option<&Block>,
@@ -139,6 +143,41 @@ pub(super) fn lower_for(
         }
     }
 
+    // Track 1A: `for x in &coll` write-through mode. The `&` normally arrives in
+    // the statement's `ownership` field (the `for_stmt` parser splits it off the
+    // iterable); a parenthesized `for x in (&coll)` instead lands as
+    // `Expr::MutableBorrow` on the iterable. Either way, `write_through` drives
+    // the element binding (a body `x.f = v` writes THROUGH into the collection),
+    // and `ident_expr` (the `&`-stripped underlying collection) feeds the
+    // identity capture + alias-root sever below. Bare `for x in coll` keeps the
+    // materialize-on-write element binding.
+    let (write_through, ident_expr): (bool, &Spanned<Expr>) =
+        match (&ownership, &iterable.node) {
+            (Ownership::MutableBorrow, Expr::MutableBorrow { expr }) => (true, expr),
+            (Ownership::MutableBorrow, _) => (true, iterable),
+            (_, Expr::MutableBorrow { expr }) => (true, expr),
+            _ => (false, iterable),
+        };
+
+    // Alias-root SEVER (Track 1A — the hard cross-lane case). A write-through
+    // loop over a lazy borrow-alias root (`Vector[T] b = a; for c in &b:`) would
+    // otherwise write THROUGH into a's SHARED buffer (`b = a` is a 0-clone lazy
+    // alias in Rust gg). Materialize the root ONCE before the loop
+    // (`cow_before_mutation` Case 1 clones the alias source in, rebinding the
+    // name to an owned local) so every through-write lands in b's PRIVATE buffer;
+    // a no-op on an owned root (no alias → 0 clones). Runs before the iterable is
+    // lowered so `&b` points into the materialized buffer, and before the loop's
+    // `save_locals` so the rebind survives `restore_locals`. Identifier roots
+    // only — a projected root (`&self.field`, `&v[i]`) routes through its own
+    // field/element mutation path (deferred write facets).
+    if write_through {
+        if let Expr::Identifier(root_name) = &ident_expr.node {
+            if let Some((root_local, _)) = ctx.lookup_local(root_name) {
+                ctx.cow_before_mutation(builder, root_local, ident_expr.span);
+            }
+        }
+    }
+
     // Lower the iterable and check its type for string/collection iteration
     let iter_op = lower_expr(ctx, builder, iterable);
     let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
@@ -147,14 +186,15 @@ pub(super) fn lower_for(
     // local resolves to `CollectionId::Local`, a field-access chain to
     // `CollectionId::FieldPath` — mirroring the `.get()` provenance derivation
     // in exprs/methods.rs. Element-FIELD borrows need this identity for CoW
-    // provenance (threaded into lower_for_array's element tag).
+    // provenance (threaded into lower_for_array's element tag). Derived from the
+    // `&`-stripped `ident_expr` so a `for c in &a` loop carries a's identity.
     let iter_source_coll: Option<crate::ir::lowering::context::CollectionId> =
-        if let Expr::Identifier(name) = &iterable.node {
+        if let Expr::Identifier(name) = &ident_expr.node {
             ctx.lookup_local(name)
                 .map(|(lid, _)| crate::ir::lowering::context::CollectionId::Local(lid))
         } else {
-            super::super::exprs::extract_field_path_string(&iterable.node)
-                .filter(|p| !ctx.is_source_mut_unsafe_at(p, iterable.span.start))
+            super::super::exprs::extract_field_path_string(&ident_expr.node)
+                .filter(|p| !ctx.is_source_mut_unsafe_at(p, ident_expr.span.start))
                 .map(crate::ir::lowering::context::CollectionId::FieldPath)
         };
 
@@ -162,35 +202,10 @@ pub(super) fn lower_for(
     // (e.g. a borrowed resource param), preserve iter_op as the Ptr — so
     // lower_for_string's source-aware picker can route through
     // slot_kind=BorrowedPtr without going through a value-typed shallow
-    // alias. For collections, keep the legacy auto-deref path: their
-    // lower_for_* helpers haven't been migrated to consume Ptr-typed
-    // iter_ops yet (separate audit).
-    let pointee = ctx.pointee_type(iter_type);
-    let pointee_is_string = pointee.map_or(false, |p| ctx.type_mapper.is_string_type(p));
-
-    let (iter_op, iter_type) = if pointee.is_some() && !pointee_is_string {
-        // Auto-deref for non-string Ptr iterables (legacy collection paths).
-        if let (Operand::Copy(p) | Operand::Move(p), Some(inner)) = (&iter_op, pointee) {
-            let deref_place = Place {
-                local: p.local,
-                projections: vec![Projection::Deref],
-            };
-            let tmp = builder.add_local(inner, None);
-            builder.assign_mode(
-                crate::ir::instructions::AssignMode::Borrow,
-                Place::local(tmp),
-                Operand::Copy(deref_place),
-            );
-            (Operand::Copy(Place::local(tmp)), inner)
-        } else {
-            (iter_op, iter_type)
-        }
-    } else {
-        // String case OR non-Ptr iterable — keep iter_op as-is. For
-        // strings: lower_for_string detects Ptr-typed source. For
-        // non-Ptr: nothing to deref.
-        (iter_op, pointee.unwrap_or(iter_type))
-    };
+    // alias. For collections, auto-deref the Ptr (shared with the list
+    // comprehension via `deref_ptr_collection_iterable`).
+    let (iter_op, iter_type) =
+        super::super::exprs::deref_ptr_collection_iterable(ctx, builder, iter_op, iter_type);
 
     // Extract the binding name (or use a temp for pattern destructuring)
     let var_name = if let Pattern::Binding(name) = &pattern.node {
@@ -231,7 +246,7 @@ pub(super) fn lower_for(
         };
         match collection_kind {
             Some(CollectionKind::Array) =>
-                lower_for_array(ctx, builder, &var_name, iter_op, body, else_arm, pattern, iter_source_coll),
+                lower_for_array(ctx, builder, &var_name, iter_op, body, else_arm, pattern, iter_source_coll, write_through),
             Some(CollectionKind::OrderedMap | CollectionKind::Map) =>
                 lower_for_dict(ctx, builder, iter_op, body, else_arm, pattern),
             Some(CollectionKind::OrderedSet | CollectionKind::Set) =>
@@ -408,6 +423,90 @@ pub(in crate::ir::lowering) fn lower_for_string(
     builder.switch_to(exit_bb);
 }
 
+/// Bind a Vector for-loop element to `elem_name`, mode-driven per Track 1A.
+/// Shared by `lower_for_array` AND `lower_for_enumerate` so the two never drift.
+///
+/// Returns `Some(elem_ptr_local)` when the Ptr-borrow-alias path was taken —
+/// the element is a `Ptr(elem)` borrow into the collection buffer (zero per-iter
+/// clone on read), and the caller must NOT drop-register it (the collection
+/// owns the data). Returns `None` when the caller should fall through to its
+/// value/string/tuple path (`index_load_borrow` value copy + drop reg).
+///
+/// The MODE decides the mutation behavior via the ownership tag:
+///  - `write_through` (`for x in &coll`): `CowBorrowPending` — `cow_before_mutation`
+///    does NOT sever it, so a body `x.f = v` writes THROUGH the pointer into the
+///    collection's buffer. Taken for ANY struct/enum element (value OR resource).
+///  - bare (`for x in coll`) over a RESOURCE struct/enum: `CollectionElement` —
+///    `cow_before_mutation` Case 1b clones the element into a private owned copy
+///    on the first `x.f = v`, so the write does NOT reach the collection (§3.1
+///    immutable for-element). A read-only scan never triggers the clone. Value
+///    structs are NOT taken here — they keep the eager value-copy path, which
+///    already realizes correct materialize semantics.
+fn bind_for_vector_element(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    elem_name: &str,
+    is_binding: bool,
+    iter_local: LocalId,
+    idx: LocalId,
+    elem_type: TypeId,
+    write_through: bool,
+    iter_source_coll: Option<crate::ir::lowering::context::CollectionId>,
+) -> Option<LocalId> {
+    let is_string = ctx.type_mapper.is_string_type(elem_type);
+    let elem_is_struct_or_enum = ctx.type_registry
+        .get(elem_type)
+        .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
+        .and_then(|name| ctx.type_registry.get_type_def(&name)
+            .map(|td| matches!(td.kind,
+                crate::ir::types::TypeDefKind::Struct(_)
+                | crate::ir::types::TypeDefKind::Enum(_))))
+        .unwrap_or(false);
+    let is_resource_struct = !is_string
+        && elem_is_struct_or_enum
+        && ctx.type_registry.is_resource_type(elem_type)
+        && !ctx.type_registry.is_collection_type(elem_type);
+    // Ptr-borrow-alias path: `&coll` takes it for any struct/enum element; bare
+    // `coll` only for a resource struct/enum (value structs keep the value-copy).
+    if !(!is_string && elem_is_struct_or_enum && is_binding && (write_through || is_resource_struct)) {
+        return None;
+    }
+    let ptr_type = ctx.register_ptr_type(elem_type);
+    let elem = builder.index_load_borrow(
+        Place::local(iter_local),
+        FunctionBuilder::copy(idx),
+        ptr_type,
+    );
+    ctx.register_local(elem_name, elem, ptr_type);
+    if write_through {
+        // `for x in &coll`: write-through. CowBorrowPending is left untouched by
+        // cow_before_mutation, so `x.f = v` writes THROUGH (the alias root was
+        // already severed at loop entry).
+        ctx.set_cow_borrow(builder, elem);
+    } else {
+        // bare resource: materialize-on-write via the CollectionElement tag.
+        // Name the element so `cow_materialize_collection_ref` can rebind it to
+        // the private owned copy on the first `x.f = v` (it rebinds by the
+        // builder name hint — `index_load_borrow` mints an anonymous temp, so
+        // without this the clone is emitted but the write still targets the
+        // collection element).
+        builder.set_local_name(elem, elem_name);
+        let cid = iter_source_coll.clone()
+            .unwrap_or(crate::ir::lowering::context::CollectionId::Local(iter_local));
+        ctx.set_collection_ref(builder, elem, cid);
+    }
+    // Record the source collection so element-FIELD borrows
+    // (`String x = elem.name`, routed through set_field_or_elem_borrow) carry
+    // collection provenance to the var-decl default-borrow branch. AST-derived
+    // identities only — an unnamed iterable temp carries no identity that
+    // downstream mutation tracking could route back to.
+    if let Some(src) = iter_source_coll {
+        ctx.set_cow_borrow_source(elem, src);
+    }
+    // Borrow alias — collection owns the data; do NOT register for drop.
+    Some(elem)
+}
+
 /// Lower `for elem in array: body` — iterate array elements by index.
 fn lower_for_array(
     ctx: &mut LoweringContext,
@@ -422,6 +521,8 @@ fn lower_for_array(
     // element-FIELD borrows need it for CoW provenance (see the
     // set_cow_borrow_source below).
     iter_source_coll: Option<crate::ir::lowering::context::CollectionId>,
+    // Track 1A: true for `for x in &coll` — the element binds write-through.
+    write_through: bool,
 ) {
     let (iter_local, iter_type) = init_borrow_iter_local(ctx, builder, iter_op);
 
@@ -458,57 +559,21 @@ fn lower_for_array(
     // elem = iter[idx] — borrow element from array (view for strings, clone for collections).
     let elem_type = super::super::exprs::infer_collection_element_type(ctx, iter_type);
 
-    // PROTOTYPE (Fix C scout): for a recursive-drop *user-struct* element that is
-    // NOT itself a direct collection, bind the for-element as a Ptr(elem) BORROW
-    // ALIAS into the array (no deep `{Type}__clone` per iteration, no drop reg) —
-    // mirroring the self-host's `lower_for_vector` LoBorrowed/BoCollectionElement
-    // element. The IndexLoad `Ptr`-dst early path returns the raw element pointer,
-    // and FieldLoad auto-derefs a Ptr base, so body reads work unchanged.
-    // Tuple-destructuring and direct-collection elements keep the old path.
-    //
-    // Covers plain `TypeDefKind::Struct` AND `TypeDefKind::Enum` elements
-    // (Option/Result/user enums). Enum method dispatch (`r.is_ok()`,
-    // `r.unwrap()`, `r.unwrap_error()`) and match scrutinees now deref a Ptr
-    // receiver: the `is_some`/`unwrap`/`unwrap_error` fast-paths gained an
-    // `is_ptr` guard (`exprs/methods.rs::build_enum_recv_ptr`), and the match
-    // path's `TagOf`/`EnumFieldLoad` already resolve through a Ptr base
-    // (`resolve_struct_id` unwraps Ptr; `EnumFieldLoad` auto-derefs at
-    // `lir/lower/insts.rs:1311`). So a borrow alias reads the enum tag/payload
-    // correctly — no per-iter `{Type}__clone`, no drop reg.
-    let is_string = ctx.type_mapper.is_string_type(elem_type);
-    let elem_is_struct_or_enum = ctx.type_registry
-        .get(elem_type)
-        .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
-        .and_then(|name| ctx.type_registry.get_type_def(&name)
-            .map(|td| matches!(td.kind,
-                crate::ir::types::TypeDefKind::Struct(_)
-                | crate::ir::types::TypeDefKind::Enum(_))))
-        .unwrap_or(false);
-    let is_recursive_struct = !is_string
-        && elem_is_struct_or_enum
-        && ctx.type_registry.is_resource_type(elem_type)
-        && !ctx.type_registry.is_collection_type(elem_type);
+    // Track 1A mode-driven element binding (shared with `lower_for_enumerate`).
+    // For a struct/enum element bound to a plain identifier, the element is a
+    // Ptr(elem) borrow alias into the array — no per-iter `{Type}__clone`, no
+    // drop reg (the IndexLoad `Ptr`-dst early path returns the raw element
+    // pointer; FieldLoad auto-derefs a Ptr base; enum method/match dispatch
+    // resolves through a Ptr receiver, so body reads work unchanged). The MODE
+    // (`&coll` write-through vs bare materialize-on-write) is encoded in the
+    // element's ownership tag — see `bind_for_vector_element`. Tuple
+    // destructuring / value-struct-bare / direct-collection / string elements
+    // fall through to the value-copy path below.
     let elem_is_binding = matches!(pattern.node, Pattern::Binding(_));
-
-    if is_recursive_struct && elem_is_binding {
-        let ptr_type = ctx.register_ptr_type(elem_type);
-        let elem = builder.index_load_borrow(
-            Place::local(iter_local),
-            FunctionBuilder::copy(idx),
-            ptr_type,
-        );
-        ctx.register_local(var_name, elem, ptr_type);
-        ctx.set_cow_borrow(builder, elem);
-        // Record the source collection so element-FIELD borrows
-        // (`String x = elem.name`, routed through set_field_or_elem_borrow)
-        // carry collection provenance to the var-decl default-borrow branch.
-        // AST-derived identities only — an unnamed iterable temp carries no
-        // identity that downstream mutation tracking could route back to
-        // (same rationale as the methods.rs Option__Ref__ provenance guard).
-        if let Some(src) = iter_source_coll.clone() {
-            ctx.set_cow_borrow_source(elem, src);
-        }
-        // Borrow alias — collection owns the data; do NOT register for drop.
+    if bind_for_vector_element(
+        ctx, builder, var_name, elem_is_binding, iter_local, idx, elem_type,
+        write_through, iter_source_coll.clone(),
+    ).is_some() {
         lower_block(ctx, builder, body);
 
         ctx.drops.pop_scope(builder, &ctx.type_registry);
@@ -663,45 +728,20 @@ fn lower_for_enumerate(
     // Bind element variable (second tuple element) — load from array.
     let elem_type = super::super::exprs::infer_collection_element_type(ctx, iter_type);
 
-    // SCOUT PROTOTYPE (Fix-C enumerate sibling): for a recursive-drop user
-    // struct/enum element bound to a plain identifier, bind it as a Ptr borrow
-    // alias into the array — mirroring `lower_for_array`'s borrow path — so the
-    // per-iteration `{Type}__clone` is elided. Read-only scans (the dominant
-    // `m.structs.enumerate()` consumers in the self-host lir_codegen) only read
-    // fields through the alias; FieldLoad auto-derefs a Ptr base, enum
-    // method/match dispatch resolves through a Ptr receiver, so body reads work.
-    let is_string = ctx.type_mapper.is_string_type(elem_type);
-    let elem_is_struct_or_enum = ctx.type_registry
-        .get(elem_type)
-        .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
-        .and_then(|name| ctx.type_registry.get_type_def(&name)
-            .map(|td| matches!(td.kind,
-                crate::ir::types::TypeDefKind::Struct(_)
-                | crate::ir::types::TypeDefKind::Enum(_))))
-        .unwrap_or(false);
-    let is_recursive_struct = !is_string
-        && elem_is_struct_or_enum
-        && ctx.type_registry.is_resource_type(elem_type)
-        && !ctx.type_registry.is_collection_type(elem_type);
+    // Track 1A enumerate twin: bind the element via the SHARED mode-driven
+    // helper (Core #4 — one binding path, never two drifting copies). Enumerate
+    // over `&coll` write-through is DEFERRED, so `write_through=false` here: a
+    // bare `for i, x in v.enumerate()` over a RESOURCE struct/enum element binds
+    // materialize-on-write (a body `x.f = v` clones a private copy; the
+    // collection is untouched — §3.1), fixing the A2 enumerate twin. Read-only
+    // scans (the dominant `m.structs.enumerate()` self-host consumers) still pay
+    // zero per-iter clone. Value structs / strings / non-bindings fall through.
+    let elem_binding_name = if let Pattern::Binding(n) = &parts[1].node { n.as_str() } else { "" };
     let elem_is_binding = matches!(parts[1].node, Pattern::Binding(_));
-
-    if is_recursive_struct && elem_is_binding {
-        let ptr_type = ctx.register_ptr_type(elem_type);
-        let elem = builder.index_load_borrow(
-            Place::local(iter_local),
-            FunctionBuilder::copy(idx),
-            ptr_type,
-        );
-        if let Pattern::Binding(elem_name) = &parts[1].node {
-            ctx.register_local(elem_name, elem, ptr_type);
-        }
-        ctx.set_cow_borrow(builder, elem);
-        // Source collection provenance for element-FIELD borrows — see the
-        // plain-array loop sibling above.
-        if let Some(src) = iter_source_coll.clone() {
-            ctx.set_cow_borrow_source(elem, src);
-        }
-        // Borrow alias — collection owns the data; do NOT register for drop.
+    if elem_is_binding && bind_for_vector_element(
+        ctx, builder, elem_binding_name, elem_is_binding, iter_local, idx, elem_type,
+        /*write_through=*/ false, iter_source_coll.clone(),
+    ).is_some() {
         lower_block(ctx, builder, body);
 
         ctx.drops.pop_scope(builder, &ctx.type_registry);

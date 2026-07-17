@@ -26,8 +26,30 @@
 > method-receiver analog of gap B — needs a row + wave assignment when its track is scoped).
 > ✅ **1C LANDED `99a52094`** (2026-07-16; Fable-reviewed with negative controls; Dict
 > write-through both compilers + double-eval closed; HashMap deferred to its filed track —
-> the M2b probe measured the self-host MORE complete than Rust there). **NEXT: Track 1A
-> (`for x in &coll` write-through + the comprehension desugar) — the wave-1 closer.**
+> the M2b probe measured the self-host MORE complete than Rust there).
+> ✅ **1A LANDED both-lane (2026-07-17) — WAVE 1 CLOSED.** For-loop element binding is
+> MODE-DRIVEN and reference-grade on Rust gg (C+LLVM) AND the self-host: gap A (value `&`
+> write-through), **gap A2** (Rust bare-for over a RESOURCE element now materializes on write
+> instead of wrongly writing through; self-host was already correct), the A2 **enumerate twin**,
+> and the comprehension-`&` **READ** bug (`[x*2 for x in &a]` yielded empty on Rust; the
+> self-host already read it correctly). Rust: `lower_for` reads the statement `ownership` field
+> (the `&` arrives there, not as `Expr::MutableBorrow`), severs a lazy-alias root ONCE at loop
+> entry via the EXISTING `cow_before_mutation` Case 1 (no new machinery — the `b=a; for c in &b`
+> fixture pins `1/101`, one `array_clone` before the loop header in the emitted C), and threads
+> `write_through` into the SHARED `bind_for_vector_element` (used by both `lower_for_array` and
+> `lower_for_enumerate`); the comprehension + statement-for share `deref_ptr_collection_iterable`.
+> Self-host: shared `for_iterable_mode` feeds `lower_for` AND `lower_list_comprehension`;
+> `lower_for_vector` gained the write-through Ptr element. 7 cross-lane fixtures (C 7/7, LLVM 7/7,
+> self-host 7/7, ASan clean); ggdef corpus_b1 (107) + corpus_b (120) green — 5 out-of-subset
+> EXCLUDE rows + 2 bare fixtures MATCH (3-lane agreement). **DEFERRED write facets** (both a
+> NO-OP today, never silently wrong; filed TODO): comprehension element WRITE-THROUGH
+> (`[f(x) for x in &v]` mutating `x.field`) and enumerate-over-`&` write-through. **ggdef subset
+> gaps** (both gates): `for &` iteration (elaborate/mod.rs:967 "Increment B2"), enumerate 2-tuple
+> pattern (:969 `binding_name`), comprehension expression (no `elaborate_expr` arm).
+> **FINDING:** `Deque` is not constructible in surface Gorget (absent from `resolve.rs`
+> `BUILTIN_GENERIC_TYPES`; `language-design.md:3381` = VecDeque "Not yet implemented"), so the
+> brief's Deque probe was infeasible and dropped — the fix is `CollectionKind::Array`-generic, so
+> a future Deque inherits it.
 
 ## Context
 

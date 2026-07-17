@@ -6265,7 +6265,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             Vector[Stmt] then_body = [SExpr(push_call)]
             Vector[ElseBranch] no_elifs = []
             body.push(SIf(cbody.clone(), then_body, no_elifs))
-        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
         return acc
     # ── flat_map: concatenate the Vector the closure returns per element ──
     # `v.flat_map(f)` ≡ `acc = []; for x in v: acc.extend(f(x))`. Mirrors
@@ -6300,7 +6300,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         Vector[CallArg] ext_args = [pos_arg(cbody.clone())]
         SpannedExpr ext_call = SpannedExpr(EMethodCall(Box(acc_ref), "extend", ext_args, no_targs), span)
         Vector[Stmt] body = [SExpr(ext_call)]
-        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
         return acc
     # ── fold: seeded scalar accumulator threaded through the closure ──
     if mname == "fold":
@@ -6378,7 +6378,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         String var_name = cparams.get(0).unwrap()
         SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
         Vector[Stmt] body = [SExpr(cbody.clone())]
-        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+        lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
         int unit_dst = add_local(&ctx, UNIT_TYPE, None)
         emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
         return unit_dst
@@ -6641,7 +6641,7 @@ int lower_vector_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExp
     SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_param), span)
     Vector[Stmt] body = [SAssign(acc_lhs, cbody.clone())]
     SpannedPattern var_pat = SpannedPattern(PBinding(elem_param), span)
-    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
     return acc
 
 # `reduce((a, b): body)` → seed the accumulator from the FIRST element,
@@ -6678,7 +6678,7 @@ int lower_vector_reduce(LowerCtx &ctx, int recv, String recv_type_name, String a
     Vector[ElseBranch] else_arms = [ElseBranch(None, rest_body)]
     Vector[Stmt] body = [SIf(seen_cond, first_body, else_arms)]
     SpannedPattern var_pat = SpannedPattern(PBinding(elem_param), span)
-    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
     return acc
 
 # `any((x): p)` / `all((x): p)` → a boolean accumulator with early break.
@@ -6705,7 +6705,7 @@ int lower_vector_any_all(LowerCtx &ctx, int recv, String recv_type_name, String 
     Vector[Stmt] then_body = [SAssign(acc_lhs, setval), SBreak()]
     Vector[ElseBranch] no_elifs = []
     Vector[Stmt] body = [SIf(guard, then_body, no_elifs)]
-    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
     return acc
 
 # `find((x): p)` / `find_index((x): p)` → a first-match Option accumulator
@@ -6755,7 +6755,7 @@ int lower_vector_find(LowerCtx &ctx, int recv, String recv_type_name, String var
     # 0th-element match records index 0).
     SpannedExpr idxc_lhs = SpannedExpr(EIdentifier(idxc_name), span)
     body.push(SCompoundAssign(idxc_lhs, "+", SpannedExpr(EIntLiteral(1), span)))
-    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, body, &gmod, false)
+    lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
     return acc
 
 # ── Dict/HashMap HOF inline-loop intercept ───────────────────
@@ -6944,9 +6944,17 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
             pass
     # Lower the iterable once; clear any leaked expected_type (the iterable
     # is collection-typed, not the surrounding context).
+    # Track 1A: strip a `for x in &coll` wrapper off the iterable via the SHARED
+    # iterable-mode helper (the same one `lower_for` uses — Core #4). The self-host
+    # reads `&a` correctly either way, but routing the strip through the one helper
+    # keeps the comprehension from drifting from the loop. Element write-through
+    # inside a comprehension is DEFERRED, so the flag is discarded and
+    # lower_for_vector is called with write_through=false.
+    bool comp_write_through = false
+    SpannedExpr comp_iter = for_iterable_mode(iterable, &comp_write_through)
     int saved_et = ctx.expected_type
     ctx.expected_type = -1
-    int coll_local = lower_expr(&ctx, iterable, &gmod)
+    int coll_local = lower_expr(&ctx, comp_iter, &gmod)
     ctx.expected_type = saved_et
     coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
     String coll_tn = local_type_name(coll_local, &ctx, &gmod)
@@ -6979,7 +6987,7 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
     String vacc_name = "__listcomp_acc_" + int_to_str(vacc)
     nl_put(&ctx, vacc_name, vacc)
     Vector[Stmt] vbody = comp_synth_body(vacc_name, comp_expr, filt_opt, span)
-    lower_for_vector(&ctx, var_pat, coll_local, coll_tn, false, vbody, &gmod, false)
+    lower_for_vector(&ctx, var_pat, coll_local, coll_tn, false, false, vbody, &gmod, false)
     return vacc
 
 # Allocate a comprehension accumulator array. When `elem_tyname` names a

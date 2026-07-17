@@ -1,0 +1,18 @@
+# CoW Track 1A — `for x in &coll` element write-through (gap A core).
+#
+# The element binding of a `for c in &a:` loop is a WRITE-THROUGH place: a body
+# `c.field = v` writes THROUGH into the collection's backing store. Uniform over
+# value AND resource elements — here a VALUE struct. Before 1A both compilers
+# ignored the `&` and materialized a private copy (printed `1`/`2`); §3.1 wants
+# the mutation to reach the collection.
+# Output must be correct on BOTH backends.
+
+struct Cell:
+    int v
+
+void main():
+    Vector[Cell] a = [Cell(1), Cell(2)]
+    for c in &a:
+        c.v = c.v + 100
+    print(a.get(0).unwrap().v)
+    print(a.get(1).unwrap().v)

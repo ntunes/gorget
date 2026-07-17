@@ -1,0 +1,20 @@
+# CoW Track 1A — `for x in &coll` over a lazy borrow-alias root (the HARD case).
+#
+# `Vector[T] b = a` is a 0-clone lazy borrow-alias (b's header aliases a's
+# buffer). A write-through `for c in &b:` mutation must SEVER the alias
+# (materialize b) on entry so the write lands in b's PRIVATE buffer and `a` is
+# untouched. Pins `1` (a) then `101` (b) — an unsevered write would corrupt both
+# to `101`/`101` (a write-to-both). The sever routes through cow_before_mutation
+# Case 1 at loop entry — one array_clone before the loop.
+# Output must be correct on BOTH backends.
+
+struct Cell:
+    int v
+
+void main():
+    Vector[Cell] a = [Cell(1)]
+    Vector[Cell] b = a
+    for c in &b:
+        c.v = c.v + 100
+    print(a.get(0).unwrap().v)
+    print(b.get(0).unwrap().v)

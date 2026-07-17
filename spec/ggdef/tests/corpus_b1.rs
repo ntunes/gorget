@@ -37,11 +37,32 @@ use std::path::{Path, PathBuf};
 /// its expected output is §3.1-prose-derived (99/41/99).
 /// `cow_dict_index_field_single_eval` is the same Dict index write-place
 /// (`make()[0].x`) — likewise out of subset; it pins eval-order, not ggdef.
+///
+/// Track 1A adds seven cross-lane `cow_for_*` / `cow_comprehension_*` fixtures.
+/// Five are out of the phase-0 subset and get EXCLUDE rows here:
+///   - `cow_for_amp_vector_field_writethrough` / `cow_for_amp_vector_alias_root` /
+///     `cow_for_amp_resource_elem_writethrough`: a `for x in &coll` iterable is
+///     Increment B2 (`desugar_for` hits the `elaborate/mod.rs` "Increment B2"
+///     error on the `&`-mode iterable), same as the standing for-`&` gap.
+///   - `cow_for_enumerate_bare_resource_materialize`: `desugar_for`
+///     (`binding_name(pattern)?`) accepts only a single binding, so the
+///     enumerate 2-tuple pattern is out of the phase-0 subset.
+///   - `cow_comprehension_amp_source`: `elaborate_expr` has no comprehension arm,
+///     so it hits the catch-all "expression outside the phase-0 subset" error —
+///     a DIFFERENT site than the for-`&` B2 gate.
+/// The two bare single-binding fixtures (`cow_for_bare_vector_control`,
+/// `cow_for_bare_resource_elem_materialize`) ARE in the subset — ggdef
+/// adjudicates them against their `run_gg` expectation (`1`).
 const EXCLUDE: &[&str] = &[
     "deadwrite_ok_atomic_add.gg",
     "cow_value_index_field_writethrough.gg",
     "cow_dict_index_field_writethrough.gg",
     "cow_dict_index_field_single_eval.gg",
+    "cow_for_amp_vector_field_writethrough.gg",
+    "cow_for_amp_vector_alias_root.gg",
+    "cow_for_amp_resource_elem_writethrough.gg",
+    "cow_for_enumerate_bare_resource_materialize.gg",
+    "cow_comprehension_amp_source.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -287,6 +308,9 @@ fn corpus_b1_all_match() {
     );
 
     // Guard the gate's shape: the B1 non-equip surface is ~105 fixtures
-    // (+2 matcluster fixtures 2026-07-06).
-    assert_eq!(fixtures.len(), 105, "B1 gate set drifted from 105 fixtures");
+    // (+2 matcluster fixtures 2026-07-06; +2 Track 1A bare for-element fixtures
+    // `cow_for_bare_vector_control` + `cow_for_bare_resource_elem_materialize`,
+    // the two in-subset rows — the five `&`/enumerate/comprehension rows are
+    // EXCLUDEd above).
+    assert_eq!(fixtures.len(), 107, "B1 gate set drifted from 107 fixtures");
 }

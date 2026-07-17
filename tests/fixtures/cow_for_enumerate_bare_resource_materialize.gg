@@ -1,0 +1,18 @@
+# CoW Track 1A — bare `.enumerate()` over a RESOURCE element materializes (A2 twin).
+#
+# The enumerate twin of gap A2: `for i, x in a.enumerate():` over a bare resource
+# element wrongly wrote through on Rust gg (`101`). Enumerate shares the mode-
+# driven element binding with the plain for-loop, so the bare resource element
+# materializes on write → the collection stays `1`. (Enumerate-over-`&`
+# write-through is deferred.)
+# Output must be correct on BOTH backends.
+
+struct Rec:
+    String name
+    int v
+
+void main():
+    Vector[Rec] a = [Rec("a", 1)]
+    for i, x in a.enumerate():
+        x.v = x.v + 100
+    print(a.get(0).unwrap().v)

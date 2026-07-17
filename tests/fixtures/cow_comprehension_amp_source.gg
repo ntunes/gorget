@@ -1,0 +1,17 @@
+# CoW Track 1A — list comprehension over `&coll` reads correctly (yields-empty fix).
+#
+# `[x * 2 for x in &a]` over a populated vector wrongly yielded an EMPTY vector on
+# Rust gg: the comprehension lowered `&a` to a Ptr but never auto-deref'd it, so
+# the length read hit the pointer's own bytes → 0 iterations. The shared
+# iterable-deref (the same one the statement-for loop uses) fixes the READ so the
+# comprehension doubles every element. Comprehension element WRITE-THROUGH is
+# deferred — this pins the read path only.
+# Output must be correct on BOTH backends.
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [x * 2 for x in &a]
+    print(b.len())
+    print(b.get(0).unwrap())
+    print(b.get(1).unwrap())
+    print(b.get(2).unwrap())

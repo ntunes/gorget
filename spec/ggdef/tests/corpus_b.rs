@@ -53,6 +53,19 @@ const EXCLUDE: &[&str] = &[
     // producer) — the CoW-1C double-eval regression fixture is likewise outside
     // the phase-0 subset; it pins EVAL-ORDER on the real compilers, not ggdef.
     "cow_dict_index_field_single_eval.gg",
+    // Track 1A: the five out-of-phase-0-subset for-element fixtures (the same
+    // rows EXCLUDEd from corpus_b1 — both gates share the phase-0 elaboration).
+    //   - for `x in &coll`: `desugar_for` returns the "`for &`/`for !` iteration
+    //     is Increment B2" error (elaborate/mod.rs:967).
+    "cow_for_amp_vector_field_writethrough.gg",
+    "cow_for_amp_vector_alias_root.gg",
+    "cow_for_amp_resource_elem_writethrough.gg",
+    //   - bare `.enumerate()`: `desugar_for`'s `binding_name(pattern)?`
+    //     (elaborate/mod.rs:969) rejects the enumerate 2-tuple pattern.
+    "cow_for_enumerate_bare_resource_materialize.gg",
+    //   - list comprehension: `elaborate_expr` has no comprehension arm, so the
+    //     `[x*2 for x in &a]` expression is "outside the phase-0 subset".
+    "cow_comprehension_amp_source.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -293,8 +306,10 @@ fn corpus_b_all_match() {
         failures.join("\n")
     );
 
-    // Guard the gate's shape: the full corpus is 118 fixtures
+    // Guard the gate's shape: the full corpus is 120 fixtures
     // (122 cow_*/deadwrite_* minus the 4 standing exclusions; +2 matcluster
-    // fixtures 2026-07-06: cow_amp_compound_writethrough, cow_dead_branch_alias_bind).
-    assert_eq!(fixtures.len(), 118, "B2 gate set drifted from 118 fixtures");
+    // fixtures 2026-07-06: cow_amp_compound_writethrough, cow_dead_branch_alias_bind;
+    // +2 Track 1A in-subset bare for-element fixtures — the five `&`/enumerate/
+    // comprehension rows are EXCLUDEd above).
+    assert_eq!(fixtures.len(), 120, "B2 gate set drifted from 120 fixtures");
 }

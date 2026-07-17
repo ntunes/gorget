@@ -28605,6 +28605,79 @@ done",
     );
 }
 
+/// CoW Track 1A — `for c in &a` element write-through (gap A core). A value-struct
+/// element under `&` is a write-through place: `c.field = v` reaches the
+/// collection. Both compilers ignored the `&` before 1A (printed `1`/`2`).
+#[test]
+fn cow_for_amp_vector_field_writethrough() {
+    run_gg(
+        "cow_for_amp_vector_field_writethrough.gg",
+        "\
+101
+102",
+    );
+}
+
+/// CoW Track 1A — `for c in &b` over a lazy borrow-alias root (`Vector[T] b = a`).
+/// The through-write must SEVER the alias (materialize b) at loop entry so `a`
+/// stays `1` while `b` becomes `101` — an unsevered write corrupts both to `101`.
+#[test]
+fn cow_for_amp_vector_alias_root() {
+    run_gg(
+        "cow_for_amp_vector_alias_root.gg",
+        "\
+1
+101",
+    );
+}
+
+/// CoW Track 1A — bare `for c in a` element is immutable (materialize control).
+/// `c.field = v` lands in a private copy; the value-struct collection stays `1`.
+#[test]
+fn cow_for_bare_vector_control() {
+    run_gg("cow_for_bare_vector_control.gg", "1");
+}
+
+/// CoW Track 1A — bare `for x in a` over a RESOURCE element materializes (gap A2).
+/// Rust gg wrongly wrote through (`101`); §3.1 makes the bare element immutable,
+/// so the write lands in a private copy and the collection stays `1`.
+#[test]
+fn cow_for_bare_resource_elem_materialize() {
+    run_gg("cow_for_bare_resource_elem_materialize.gg", "1");
+}
+
+/// CoW Track 1A — `for x in &a` over a RESOURCE element writes through (`101`).
+/// The `&` counterpart of the gap-A2 fixture — the same mode-driven binding
+/// materializes the bare resource element and writes through the `&` one.
+#[test]
+fn cow_for_amp_resource_elem_writethrough() {
+    run_gg("cow_for_amp_resource_elem_writethrough.gg", "101");
+}
+
+/// CoW Track 1A — bare `.enumerate()` over a RESOURCE element materializes (A2
+/// twin). Rust gg wrongly wrote through; enumerate shares the mode-driven element
+/// binding, so the bare resource element materializes → the collection stays `1`.
+#[test]
+fn cow_for_enumerate_bare_resource_materialize() {
+    run_gg("cow_for_enumerate_bare_resource_materialize.gg", "1");
+}
+
+/// CoW Track 1A — `[x * 2 for x in &a]` reads correctly (yields-empty fix). The
+/// comprehension lowered `&a` to a Ptr but never deref'd it → the len-read hit
+/// garbage → an EMPTY result. The shared iterable-deref (also used by the
+/// statement-for loop) fixes the READ so every element doubles.
+#[test]
+fn cow_comprehension_amp_source() {
+    run_gg(
+        "cow_comprehension_amp_source.gg",
+        "\
+3
+2
+4
+6",
+    );
+}
+
 /// is-pattern on an enum-typed field of a collection ELEMENT (round-33 DEEP-1
 /// §3 bonus). `(v.get(0).unwrap().tag) is Some(inner)` preceded by a read of
 /// the same field. Pre-fix this MISCOMPILED — the is-scrutinee read the wrong

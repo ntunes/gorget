@@ -1,0 +1,19 @@
+# CoW Track 1A — bare `for x in coll` over a RESOURCE element materializes (gap A2).
+#
+# Pins gap A2: a bare-for over a RESOURCE struct element wrongly WROTE THROUGH on
+# Rust gg (`x.field = v` reached the collection → `101`). §3.1 makes the bare
+# element immutable, so the write must land in a private materialized copy and
+# the collection stays `1`. The self-host was already correct here; 1A brings
+# Rust gg into line. A read-only scan of the same element pays no clone (the
+# CollectionElement borrow only materializes on the write).
+# Output must be correct on BOTH backends.
+
+struct Rec:
+    String name
+    int v
+
+void main():
+    Vector[Rec] a = [Rec("a", 1)]
+    for x in a:
+        x.v = x.v + 100
+    print(a.get(0).unwrap().v)

@@ -2377,6 +2377,51 @@ fn lower_field_access(
 
 /// Extract a dot-separated field path string from a field-access expression.
 /// Returns `Some("self.data")` for `FieldAccess { SelfExpr, "data" }`,
+/// Auto-deref a Ptr-typed non-string iterable to a value borrow, mirroring the
+/// legacy collection deref that both the statement-for loop and the list
+/// comprehension need. When the lowered iterable is `Ptr(Coll)` (a `&coll`
+/// borrow or a borrowed `Vector[T]` param), the downstream `.Field(2)` len-read
+/// and `IndexLoad(iter_local, …)` element-load assume `iter_local` is the VALUE
+/// collection, not the pointer — without the deref they read adjacent slots
+/// (an off-by-one panic in the for-loop, 0 iterations → an EMPTY result in the
+/// comprehension). Strings keep the Ptr: `lower_for_string` /
+/// `lower_string_comprehension` detect a Ptr-typed source themselves.
+///
+/// This is the SINGLE iterable-deref site (campaign "one shared iterable-mode
+/// helper, not two parallel fixes"): `lower_for` (`stmts/for_loops.rs`) and
+/// `lower_list_comprehension` (`exprs/collections.rs`) both call it, so the
+/// comprehension can never again drift from the for-loop's deref handling.
+pub(in crate::ir::lowering) fn deref_ptr_collection_iterable(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    iter_op: Operand,
+    iter_type: crate::ir::types::TypeId,
+) -> (Operand, crate::ir::types::TypeId) {
+    let pointee = ctx.pointee_type(iter_type);
+    let pointee_is_string = pointee.map_or(false, |p| ctx.type_mapper.is_string_type(p));
+    if pointee.is_some() && !pointee_is_string {
+        // Non-string Ptr iterable: deref to a value borrow.
+        if let (Operand::Copy(p) | Operand::Move(p), Some(inner)) = (&iter_op, pointee) {
+            let deref_place = Place {
+                local: p.local,
+                projections: vec![Projection::Deref],
+            };
+            let tmp = builder.add_local(inner, None);
+            builder.assign_mode(
+                AssignMode::Borrow,
+                Place::local(tmp),
+                Operand::Copy(deref_place),
+            );
+            (Operand::Copy(Place::local(tmp)), inner)
+        } else {
+            (iter_op, iter_type)
+        }
+    } else {
+        // String case OR non-Ptr iterable — keep iter_op as-is.
+        (iter_op, pointee.unwrap_or(iter_type))
+    }
+}
+
 /// `Some("game.entities")` for `FieldAccess { Identifier("game"), "entities" }`,
 /// `Some("self.game.entities")` for nested chains.
 /// G1 PROTOTYPE (r33 materialize scout): walk a projection chain

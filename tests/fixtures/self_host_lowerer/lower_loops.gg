@@ -80,6 +80,25 @@ from lower_match import match_enum_type, match_variant_index, try_lift_option_re
 # the loop completes WITHOUT hitting a break. Wired for the range/set/
 # iterator paths (else_bb scaffold); the vector/dict paths still
 # `lower_fail` loudly (never silently drop) until a self-host site needs them.
+# Track 1A: strip a `for x in &coll` mutable-borrow wrapper off the iterable and
+# report write-through mode. The parser wraps a `&`-iterable in EMutableBorrow
+# (parse_prefix); a bare iterable is returned unchanged. Shared by the
+# statement-for path (`lower_for`) AND the list-comprehension site
+# (`lower_list_comprehension`) so the `&`-strip lives in ONE place (Core #4) and
+# the comprehension can never drift from the loop's handling. The comprehension
+# passes write_through=false to lower_for_vector — element write-through inside a
+# comprehension is the deferred write facet — but still routes the strip through
+# here so the READ path is uniform. Mirrors Rust's `deref_ptr_collection_iterable`
+# + the ownership-driven `write_through` in `stmts/for_loops.rs`.
+SpannedExpr for_iterable_mode(SpannedExpr iter_expr, bool &write_through):
+    write_through = false
+    match iter_expr.expr:
+        case EMutableBorrow(inner_box):
+            write_through = true
+            return SpannedExpr((*inner_box).expr, (*inner_box).span)
+        else:
+            return iter_expr
+
 void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
     # Range fast path — `for i in start..end` over a literal `ERange`.
     # Mirrors Rust's `lower_for` first branch (src/ir/lowering/stmts/
@@ -117,9 +136,15 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # iterables `coll.enumerate()` is just a regular method call returning
     # a wrapper iterator). The probe is purely speculative; we commit to
     # the strip only after type-checking `recv`.
-    SpannedExpr probe_coll = iter_expr
+    # Track 1A: strip a `for x in &coll` write-through wrapper (shared helper),
+    # then detect `.enumerate()` on the STRIPPED iterable. Enumerate-over-`&`
+    # write-through is deferred — `lower_for_vector` gates write_through on
+    # `!is_enumerate`, so `&a.enumerate()` falls back to materialize-on-write.
+    bool for_write_through = false
+    SpannedExpr wt_iter = for_iterable_mode(iter_expr, &for_write_through)
+    SpannedExpr probe_coll = wt_iter
     bool probe_is_enumerate = false
-    match iter_expr.expr:
+    match wt_iter.expr:
         case EMethodCall(recv_box, mname, margs, _):
             if mname == "enumerate" and margs.len() == 0:
                 probe_coll = SpannedExpr((*recv_box).expr, (*recv_box).span)
@@ -172,7 +197,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
         case None:
             pass
     if coll_is_vec_like:
-        lower_for_vector(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, body, &gmod, is_main)
+        lower_for_vector(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, for_write_through, body, &gmod, is_main)
         if else_body.len() > 0:
             lower_fail("SFor Vector with else-body not yet implemented")
         return
@@ -221,7 +246,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
 # Vector/Deque fast path: idx-based scaffold matching the manual idiom
 # users write today (`int i = 0; while i < x.len(): T v = x.get(i).unwrap();
 # ...; i += 1`). Direct GIR emission, no recursive lower_stmt round-trip.
-void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, bool is_enumerate, Vector[Stmt] body, GirModule &gmod, bool is_main):
+void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, bool is_enumerate, bool write_through, Vector[Stmt] body, GirModule &gmod, bool is_main):
     String elem_name = collection_element_type(coll_tn)
     if elem_name == "":
         lower_fail("SFor: could not resolve element type for " + coll_tn)
@@ -264,25 +289,41 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     # a borrow and any consume/mutation clones on demand (a-5), so the alias
     # is safe. The general `.get()` keeps the eager clone because its result
     # may be bound to a user local and mutated in place (get-mutate-set).
-    int got_local = add_local_with(&ctx, opt_tid, None, LoBorrowed(), BoCollectionElement(coll_local))
-    Vector[Operand] get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
-    emit(&ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
-    int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, got_local)
-    # CoW for-element: bind the element as a borrow alias into the
-    # collection (no clone). Body consume/mutation sites clone on demand.
-    int elem_local = emit_payload_read_mode(&ctx, scr_ptr, opt_name, "Some", 0, elem_tid, &gmod, true)
-    if is_enumerate:
-        match pat.pat:
-            case PTuple(parts):
-                if parts.len() == 2:
-                    bind_for_local(&ctx, parts.get(0).unwrap(), idx_local, I64_TYPE, &gmod)
-                    bind_for_local(&ctx, parts.get(1).unwrap(), elem_local, elem_tid, &gmod)
-                else:
-                    lower_fail("SFor enumerate: expected 2-tuple pattern, got " + int_to_str(parts.len()) + " parts")
-            else:
-                lower_fail("SFor enumerate: expected tuple pattern")
+    # Track 1A write-through (`for x in &coll`): bind the element as a raw
+    # POINTER INTO the collection buffer (gorget_array_get → GtPtr(elem),
+    # LoBorrowed, no drop reg — the 1B `v[i].field=` element-ptr shape) so a body
+    # `x.field = v` writes THROUGH to the collection instead of materializing a
+    # private copy. Struct/resource elements only (elem_tid >= PRIM_COUNT): a
+    # scalar element has no field to write through and `x = ...` is a rebind, not
+    # a through-write. Enumerate-over-`&` is deferred (gated `not is_enumerate`),
+    # falling to the materialize-on-write borrow-alias below. Bare `for x in coll`
+    # keeps the borrow-alias element (materialize-on-write via BoCollectionElement).
+    if write_through and not is_enumerate and elem_tid >= PRIM_COUNT:
+        int wt_ptr_tid = register_ptr(&gmod, elem_tid)
+        int wt_ptr = add_local_with(&ctx, wt_ptr_tid, None, LoBorrowed(), BoNone())
+        Vector[Operand] wt_get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
+        emit(&ctx, GICallExtern(wt_ptr, "gorget_array_get", wt_get_args))
+        bind_for_local(&ctx, pat, wt_ptr, wt_ptr_tid, &gmod)
     else:
-        bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
+        int got_local = add_local_with(&ctx, opt_tid, None, LoBorrowed(), BoCollectionElement(coll_local))
+        Vector[Operand] get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
+        emit(&ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
+        int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, got_local)
+        # CoW for-element: bind the element as a borrow alias into the
+        # collection (no clone). Body consume/mutation sites clone on demand.
+        int elem_local = emit_payload_read_mode(&ctx, scr_ptr, opt_name, "Some", 0, elem_tid, &gmod, true)
+        if is_enumerate:
+            match pat.pat:
+                case PTuple(parts):
+                    if parts.len() == 2:
+                        bind_for_local(&ctx, parts.get(0).unwrap(), idx_local, I64_TYPE, &gmod)
+                        bind_for_local(&ctx, parts.get(1).unwrap(), elem_local, elem_tid, &gmod)
+                    else:
+                        lower_fail("SFor enumerate: expected 2-tuple pattern, got " + int_to_str(parts.len()) + " parts")
+                else:
+                    lower_fail("SFor enumerate: expected tuple pattern")
+        else:
+            bind_for_local(&ctx, pat, elem_local, elem_tid, &gmod)
     lower_stmts(&ctx, body, &gmod, is_main)
     Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
     match body_term:

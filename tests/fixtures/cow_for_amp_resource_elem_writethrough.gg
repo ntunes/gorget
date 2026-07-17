@@ -1,0 +1,17 @@
+# CoW Track 1A — `for x in &coll` over a RESOURCE element writes through.
+#
+# The `&` counterpart of the gap-A2 fixture: a resource struct element under `&`
+# is a write-through place, so `x.field = v` reaches the collection → `101`. The
+# same mode-driven element binding that materializes the bare resource element
+# writes through the `&` one — uniform over value and resource.
+# Output must be correct on BOTH backends.
+
+struct Rec:
+    String name
+    int v
+
+void main():
+    Vector[Rec] a = [Rec("a", 1)]
+    for x in &a:
+        x.v = x.v + 100
+    print(a.get(0).unwrap().v)

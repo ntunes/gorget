@@ -1,0 +1,16 @@
+# CoW Track 1A — bare `for x in coll` element is immutable (materialize control).
+#
+# A bare-for element binding is IMMUTABLE (§3.1): a body `c.field = v` lands in a
+# private materialized copy and does NOT reach the collection. VALUE struct
+# control for the `&` write-through fixtures — pins `1` (collection untouched).
+# Compiles clean (the DeadBareParamWrite lint excludes for-iteration).
+# Output must be correct on BOTH backends.
+
+struct Cell:
+    int v
+
+void main():
+    Vector[Cell] a = [Cell(1)]
+    for c in a:
+        c.v = c.v + 100
+    print(a.get(0).unwrap().v)

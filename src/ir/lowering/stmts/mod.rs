@@ -248,13 +248,13 @@ pub fn lower_stmt(
 
         Stmt::For {
             pattern,
+            ownership,
             iterable,
             body,
             else_body,
-            ..
         } => {
             __kind_key = "lower_function::body::lower_block::stmt::for";
-            lower_for(ctx, builder, pattern, iterable, body, else_body.as_ref());
+            lower_for(ctx, builder, pattern, *ownership, iterable, body, else_body.as_ref());
         }
 
         Stmt::Loop { body } => {

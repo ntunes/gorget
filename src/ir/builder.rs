@@ -99,6 +99,14 @@ impl FunctionBuilder {
         self.locals[id.0 as usize].name_hint.as_ref().map(|s| s.as_str())
     }
 
+    /// Attach a name hint to an existing local (e.g. a `Ptr(elem)` for-loop
+    /// element materialized via `index_load_borrow`, which creates an anonymous
+    /// temp). The hint is what `cow_materialize_collection_ref` rebinds when a
+    /// bare for-element is written in place (Track 1A materialize-on-write).
+    pub fn set_local_name(&mut self, id: LocalId, name: &str) {
+        self.locals[id.0 as usize].name_hint = Some(name.to_string());
+    }
+
     /// Update the type of an existing local (e.g., after discovering the actual
     /// type from lowering a branch of an if-expression).
     pub fn set_local_type(&mut self, id: LocalId, type_id: TypeId) {

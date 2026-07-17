@@ -644,6 +644,16 @@ pub(super) fn lower_list_comprehension(
                 );
             }
         }
+        // Track 1A: auto-deref a Ptr-typed non-string iterable (`[x*2 for x in
+        // &a]`, or a comprehension over a borrowed `Vector[T]` param). Without
+        // it the `iter_local.Field(2)` len-read below reads the pointer's own
+        // bytes instead of the collection's length → 0 iterations → a silently
+        // EMPTY result vector. The SAME deref the statement-for loop applies
+        // (shared `deref_ptr_collection_iterable`), so the comprehension can no
+        // longer drift from `lower_for`. Comprehension element WRITE-THROUGH is
+        // deferred — this is the READ fix only.
+        let (iter_op, iter_type) =
+            super::deref_ptr_collection_iterable(ctx, builder, iter_op, iter_type);
         let iter_local = builder.add_local(iter_type, None);
         // Phase C: iter_local is non-owning view of the source — Borrow.
         let iter_mode = if ctx.type_registry.is_resource_type(iter_type) {
