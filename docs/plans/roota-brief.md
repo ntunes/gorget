@@ -1,6 +1,6 @@
 # EXECUTOR BRIEF — Root A: self-host iterator-receiver field-place borrow (3 spin fixtures flip)
 
-**Status:** DRAFT v3 — in the ≥3-fresh-pass review gauntlet. Pass 1 (core patch verified
+**Status:** DRAFT v4 — in the ≥3-fresh-pass review gauntlet. Pass 1 (core patch verified
 clean end-to-end; 4 reservations folded: guard gating + positive control, comparison-net
 facts, TODO retire disambiguation + Ref__ residual) → v2. Pass 2 (all folds re-verified
 independently incl. the load-bearing rp_is_ref exclusion at the LIR alias crux; ONE
@@ -8,7 +8,11 @@ SUBSTANTIVE catch: the run_gg wiring pins only the RUST lane — for this self-h
 NO default-CI test would fail on revert; scope 2b now seeds the 5 runtime snapshots into
 the default `self_host_runtime` net with a revert-verify, per the CoW-1B/1C practice; +m1
 ggdef standing-exclusion citation, m2 sub-bullet promotion, m3 the second-regen cost)
-→ this v3. Do not execute until a clean pass.
+→ v3. Pass 3 (scope 2b's mechanism verified real end-to-end — env var, net, snapshot dir,
+auto-pickup, revert-verify all confirmed; 2 residuals: the staging manifest omitted the 5
+snapshot files scope 2b requires — an executor staging from the manifest would silently
+drop the lock-in; the regen's wipe-and-rewrite semantics now framed as expect-exactly-5 +
+STOP-AND-REPORT on strays) FOLDED into this v4. Do not execute until a clean pass.
 **Scout evidence (THE measured spec):** `docs/plans/roota-scout.md` — GO, fully validated.
 Prototype: `/tmp/roota_proto.patch` (197 lines, 4 files: `lower_expr.gg` + `tests/integration.rs`
 + 2 new fixtures; applies cleanly, round-trip verified; backup `/tmp/recover_roota_proto.patch`).
@@ -119,8 +123,18 @@ chunk >10min; NEVER background a final gate)
   standing one is not actually recorded. MEMORY's parity line is the PARENT's to update —
   report your fresh number, don't edit memory.
 - Stage EXPLICITLY: `tests/fixtures/self_host_lowerer/lower_expr.gg tests/integration.rs
-  tests/fixtures/set_filter_count.gg tests/fixtures/set_take_values.gg TODO.md DONE.md`
-  (adjust to actual). Trailers:
+  tests/fixtures/set_filter_count.gg tests/fixtures/set_take_values.gg
+  tests/fixtures/runtime_snapshots/stdlib_iter_set.out
+  tests/fixtures/runtime_snapshots/dict_keys_lazy.out
+  tests/fixtures/runtime_snapshots/dict_values_lazy.out
+  tests/fixtures/runtime_snapshots/set_filter_count.out
+  tests/fixtures/runtime_snapshots/set_take_values.out TODO.md DONE.md`
+  (adjust to actual — but the 5 snapshot files are REQUIRED by scope 2b, not discovery).
+  ⚠ SNAPSHOT-REGEN SEMANTICS (pass-3 R2): `regenerate_runtime_snapshots` WIPES all ~979
+  snapshots and rewrites the stable-match set — byte-identical rewrites leave no git diff,
+  so EXPECT exactly the 5 new files as the only `runtime_snapshots/` change; ANY other
+  add/delete/modify there = STOP-AND-REPORT and `git checkout -- tests/fixtures/runtime_snapshots/`
+  the strays before staging. Trailers:
 
       Co-Authored-By: Claude Opus <noreply@anthropic.com>
       Claude-Session: https://claude.ai/code/session_01TYkkHveF8WhhTVX4DjbCTN
