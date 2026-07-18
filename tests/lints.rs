@@ -5545,3 +5545,235 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
         "docs/define-gorget/decisions.md (the normative ledger) is missing."
     );
 }
+
+// ===========================================================================
+// SCOUT PROTOTYPE — Guards-slice Track G1 (Ratchets A + B). NOT FINAL.
+// ===========================================================================
+
+/// Returns the (1-based) line numbers of "silent catch-all" match arms in a fn
+/// body: an arm whose pattern is the wildcard `_` and whose body neither lowers
+/// nor rejects — it is EMPTY or comment-only. Three syntactic forms:
+///   `_ => {}` / `_ => ()`  (single line)
+///   `_ => {`  … only blank/`//`-comment lines … `}` (multi-line block)
+/// A `_ =>` arm whose body contains ANY code (a call, a `panic!`, a rejection,
+/// an assignment) is NOT silent and is skipped. Line-based (never brace-matched
+/// inside strings) — mirrors `top_level_fn_bodies`' robustness note.
+fn silent_catchall_arm_lines(body: &str) -> Vec<usize> {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut hits = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim();
+        // Strip a trailing line comment for the single-line forms.
+        let code = t.split("//").next().unwrap_or("").trim();
+        if code == "_ => {}" || code == "_ => ()" || code == "_ => (),"
+            || code == "_ => {}," {
+            hits.push(i + 1);
+        } else if code == "_ => {" {
+            // Multi-line block: scan to the matching `}` at the arm's indent.
+            let indent = lines[i].len() - lines[i].trim_start().len();
+            let mut j = i + 1;
+            let mut only_comments = true;
+            while j < lines.len() {
+                let jt = lines[j];
+                let jindent = jt.len() - jt.trim_start().len();
+                let jtrim = jt.trim();
+                if jtrim == "}" && jindent == indent {
+                    break;
+                }
+                if !jtrim.is_empty() && !jtrim.starts_with("//") {
+                    only_comments = false;
+                }
+                j += 1;
+            }
+            if only_comments {
+                hits.push(i + 1);
+            }
+            i = j;
+        }
+        i += 1;
+    }
+    hits
+}
+
+/// RATCHET A (Core #10 "lower-or-reject — never silently drop user syntax").
+///
+/// The vulnerable class is a PARTIAL match over a large AST enum (an assign
+/// TARGET `Expr`, or a binding `Pattern`) in a *lowering-emit* position. Rust's
+/// exhaustiveness protects the FULL dispatchers (`lower_stmt` over `Stmt`,
+/// `lower_expr` over `Expr`) — but a partial match with a `_ =>` catch-all (or
+/// an if-let chain with no final `else`) can silently DROP a write/binding the
+/// user wrote. Found live 2026-07-18: `xs.0 = v` (a tuple-field store) compiles,
+/// runs, and prints the OLD value — the assignment vanished.
+///
+/// This ratchet freezes the set of lowering-emit functions in the assign/bind
+/// files whose target/pattern dispatch has a *silent* `_ =>` catch-all, so a NEW
+/// one fails CI (must lower-or-reject) and a FIXED one forces an allowlist edit
+/// (the burn-down is visible). The two OPEN offenders that hide in non-`_ =>`
+/// shapes (a missing final `else`, a nested `else "__throwaway"`) are pinned
+/// separately by marker, since a wildcard-arm scan cannot see them.
+#[test]
+fn ratchet_a_lowering_dispatch_silent_fallthrough() {
+    // Files where every silent `_ =>` catch-all is the user-syntax-drop class.
+    // (Detection/analysis walkers — liveness, closures capture, generics
+    // discovery — live elsewhere and are a DIFFERENT class, already guarded by
+    // the exhaustive-walker lints.)
+    const FILES: &[&str] = &[
+        "src/ir/lowering/stmts/assigns.rs",
+        "src/ir/lowering/stmts/mod.rs",
+        "src/ir/lowering/stmts/for_loops.rs",
+    ];
+    // The CURRENT open set: each fn's target/pattern dispatch silently drops the
+    // unhandled shapes. BURN-DOWN — as each is fixed (lower-or-reject), delete
+    // it here; the set only shrinks without a cited re-pin.
+    //   lower_assign        — `xs.0 = v` (Expr::TupleFieldAccess target) dropped.
+    //   lower_var_decl      — non-Binding/Tuple VarDecl patterns (defensive:
+    //                         parser+semantic gate these today, so unreachable —
+    //                         but the arm is silent, not a loud `unreachable!`).
+    //   lower_for_dict      — `for (a,b,c) in dict` (Tuple arity != 2) → no
+    //                         bindings, garbage output.
+    const ALLOWED: &[&str] = &["lower_assign", "lower_var_decl", "lower_for_dict"];
+
+    let mut found: Vec<String> = Vec::new();
+    for file in FILES {
+        let content = fs::read_to_string(file).unwrap_or_default();
+        for (name, body) in top_level_fn_bodies(&content) {
+            if !silent_catchall_arm_lines(&body).is_empty() {
+                found.push(name);
+            }
+        }
+    }
+    found.sort();
+    found.dedup();
+    let mut expected: Vec<String> = ALLOWED.iter().map(|s| s.to_string()).collect();
+    expected.sort();
+    assert_eq!(
+        found, expected,
+        "Silent `_ =>` catch-all set in the assign/bind lowering files changed.\n\
+         found={found:?} expected={expected:?}\n\
+         A NEW entry = a lowering-emit dispatch that silently drops user syntax \
+         (Core #10). Fix it (lower the construct or emit a check-time rejection) \
+         — do NOT just add it here. A MISSING entry = an offender was fixed; \
+         delete it from ALLOWED (burn-down)."
+    );
+
+    // The two OPEN offenders with NO `_ =>` to scan — pinned by marker so a fix
+    // forces this list to shrink. BURN-DOWN.
+    //   A2: lower_compound_assign is an if-let chain (Identifier / FieldAccess /
+    //       Index) with NO final `else` → `xs.0 += v` / `*p += v` fall through
+    //       to nothing. Pinned by the absence of a rejection sentinel: today the
+    //       fn ends with the Index arm's untrack call and never rejects a
+    //       tuple/deref target.
+    let assigns = fs::read_to_string("src/ir/lowering/stmts/assigns.rs").unwrap_or_default();
+    let compound = top_level_fn_bodies(&assigns)
+        .into_iter()
+        .find(|(n, _)| n == "lower_compound_assign")
+        .map(|(_, b)| b)
+        .expect("lower_compound_assign not found");
+    assert!(
+        !compound.contains("REJECT_UNLOWERABLE_TARGET"),
+        "lower_compound_assign now rejects unlowerable targets — the A2 \
+         missing-else offender is fixed. Remove this pin (burn-down)."
+    );
+    //   A4b: lower_for_dict's `Tuple(2)` arm binds each sub-pattern only via
+    //       `if let Binding(n) .. else \"__k\"/\"__v\"` — a nested destructure
+    //       (`for k,(a,b) in dict`) is silently dropped into a throwaway.
+    let for_loops = fs::read_to_string("src/ir/lowering/stmts/for_loops.rs").unwrap_or_default();
+    let for_dict = top_level_fn_bodies(&for_loops)
+        .into_iter()
+        .find(|(n, _)| n == "lower_for_dict")
+        .map(|(_, b)| b)
+        .expect("lower_for_dict not found");
+    assert!(
+        for_dict.contains("\"__v\".to_string()") || for_dict.contains("\"__k\".to_string()"),
+        "lower_for_dict no longer uses the `__k`/`__v` throwaway fallback — the \
+         A4b nested-destructure offender may be fixed. Re-pin or remove (burn-down)."
+    );
+}
+
+/// RATCHET B — materialize-site convergence meter (Core #6). The count of direct
+/// call sites of the mutation-root materialize helpers can only DECREASE without
+/// a cited re-pin. This is the materialization-planner campaign's meter: as the
+/// planner subsumes ad-hoc per-site materialize calls, the ceilings drop.
+///   Rust: `cow_before_mutation` (def `src/ir/lowering/context.rs`).
+///   Self-host lowerer: `cow_materialize_projected_root` /
+///   `cow_materialize_root_by_name` (defs in `lower.gg`).
+#[test]
+fn ratchet_b_materialize_site_count() {
+    // --- Rust side: `.cow_before_mutation(` call expressions in src/ir/lowering.
+    const RUST_CEILING: usize = 20;
+    let mut rust_sites = 0usize;
+    let mut per_file: Vec<(String, usize)> = Vec::new();
+    for entry in walk_files("src/ir/lowering", "rs") {
+        let content = fs::read_to_string(&entry).unwrap_or_default();
+        let mut n = 0;
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") { continue; }
+            // A call, not the `pub fn cow_before_mutation(` definition.
+            if t.contains(".cow_before_mutation(") {
+                n += line.matches(".cow_before_mutation(").count();
+            }
+        }
+        if n > 0 { per_file.push((entry, n)); }
+        rust_sites += n;
+    }
+    assert!(
+        rust_sites <= RUST_CEILING,
+        "cow_before_mutation call sites grew to {rust_sites} (ceiling {RUST_CEILING}). \
+         The materialization-planner campaign is a convergence meter — sites only \
+         DECREASE. If a genuinely-new mutation-root materialize is unavoidable, \
+         raise RUST_CEILING with a cited re-pin. Per-file: {per_file:?}"
+    );
+
+    // --- Self-host side: projected_root + root_by_name call expressions in the
+    // self-host lowerer .gg (exclude the `bool NAME(` defs and `from … import`).
+    const SH_CEILING: usize = 8;
+    const SH_FNS: &[&str] = &["cow_materialize_projected_root", "cow_materialize_root_by_name"];
+    let mut sh_sites = 0usize;
+    let mut sh_per_file: Vec<(String, usize)> = Vec::new();
+    for entry in walk_files("tests/fixtures/self_host_lowerer", "gg") {
+        let content = fs::read_to_string(&entry).unwrap_or_default();
+        let mut n = 0;
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("#") { continue; }
+            if t.starts_with("from ") && t.contains("import") { continue; }
+            for f in SH_FNS {
+                let call = format!("{f}(");
+                if line.contains(&call) {
+                    // Exclude the definition line `bool NAME(` / `void NAME(`.
+                    let def = format!("bool {f}(");
+                    if t.starts_with(&def) { continue; }
+                    n += line.matches(&call).count();
+                }
+            }
+        }
+        if n > 0 { sh_per_file.push((entry, n)); }
+        sh_sites += n;
+    }
+    assert!(
+        sh_sites <= SH_CEILING,
+        "self-host materialize call sites grew to {sh_sites} (ceiling {SH_CEILING}). \
+         Decrease-only. Per-file: {sh_per_file:?}"
+    );
+}
+
+/// Minimal recursive file walk (extension-filtered) for the scout prototype.
+fn walk_files(root: &str, ext: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![std::path::PathBuf::from(root)];
+    while let Some(dir) = stack.pop() {
+        if let Ok(rd) = fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().and_then(|s| s.to_str()) == Some(ext) {
+                    out.push(p.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    out
+}
