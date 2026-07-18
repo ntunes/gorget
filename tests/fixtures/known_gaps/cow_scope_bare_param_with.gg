@@ -4,7 +4,9 @@
 # resolve, so this lives in known_gaps/ and is validated on the two production
 # backends only: C=3,4 and LLVM=3,4 (pre-fix both printed 4,4). SH note: the SH
 # `with` lowering does not snapshot/restore the name map (no rebind-reverting
-# hole), so no SH pre-scope hoist is required there.
+# hole), so no SH pre-scope hoist is required there; its `with Arena` allocator
+# runtime diverges for unrelated reasons (Arena out of clean SH support). This
+# fixture is known_gaps (NOT corpus-harvested), so it is a documented lane note.
 from std.alloc import Arena
 
 void f(Vector[int] xs):

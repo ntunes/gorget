@@ -3,8 +3,9 @@
 # recv-arm body). Channels/async/spawn are OUT of the ggdef phase-0 subset, so
 # this lives in known_gaps/ and is validated on the two production backends only:
 # C=3,4 and LLVM=3,4 (pre-fix both printed 4,4). SH note: the SH lowerer has no
-# `select` dispatch arm (out of the self-host subset) — construct-unimplemented,
-# no lane divergence.
+# `select` dispatch arm (out of the self-host subset) — the SH runtime output
+# diverges (construct-unimplemented), but this fixture is known_gaps (NOT
+# corpus-harvested by the parity lane), so it is a documented lane note.
 from std.channel import Channel
 
 async void f(Vector[int] xs, Channel[int] ch):
