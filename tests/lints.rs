@@ -220,7 +220,20 @@ fn no_growth_in_name_prefix_routing() {
     /// fallbacks were unreachable (proven by panic-instrumenting both
     /// blocks and running the collection-fixture corpus + the full
     /// self-host self-compile — never hit).
-    const BUDGET: usize = 257;
+    /// Bumped 257 → 259 (2026-07-18): the refcount-handle struct/enum
+    /// field-clone fix (`refcount_field_retain_fn` in c_lir/emit_types.rs)
+    /// added `starts_with("Shared__")` / `starts_with("Weak__")` /
+    /// `starts_with("Channel__")` (+3 over the 256 floor) to detect a
+    /// refcount-handle field's drop wrapper and emit the by-value RETAIN
+    /// (`gorget_shared_clone` / `gorget_weak_clone` / `gorget_channel_retain`)
+    /// that balances its drop's RELEASE — without it the struct clone
+    /// shallow-copies the handle → refcount underflow → UAF
+    /// (`known_gaps/shared_struct_field_clone.gg`). This is the sanctioned
+    /// C-emit-boundary spelling: the `{Family}__` mangling IS the runtime
+    /// contract (identical form to the adjacent `is_wrapper_method`
+    /// `starts_with("Shared__")` dispatcher), so it genuinely cannot be
+    /// typed away. `refcount_clone_arm_symmetry` locks the arm set.
+    const BUDGET: usize = 259;
 
     let count = count_name_prefix_sites();
     assert!(
@@ -5789,4 +5802,157 @@ fn walk_files(root: &str, ext: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// Extract a top-level Rust fn's source (signature through the line before the
+/// NEXT top-level `fn`). Boundary-based rather than brace-counted so the
+/// `writeln!(out, "...{{...}}")` string-literal braces in the C emitters don't
+/// throw the scan off. Nested fns (indented) don't terminate the scan.
+fn rust_fn_body(content: &str, fn_name: &str) -> String {
+    let needle = format!("fn {fn_name}(");
+    let mut in_fn = false;
+    let mut body = String::new();
+    for line in content.lines() {
+        if !in_fn {
+            if line.contains(&needle) {
+                in_fn = true;
+                body.push_str(line);
+                body.push('\n');
+            }
+            continue;
+        }
+        let starts_top_level_fn = line.starts_with("fn ")
+            || line.starts_with("pub fn ")
+            || line.starts_with("pub(super) fn ")
+            || line.starts_with("pub(crate) fn ")
+            || line.starts_with("async fn ");
+        if starts_top_level_fn {
+            break;
+        }
+        body.push_str(line);
+        body.push('\n');
+    }
+    body
+}
+
+/// Extract a top-level Gorget (`.gg`) fn's source (signature line through the
+/// line before the next column-0 definition). Comment/blank lines are kept
+/// (they aren't definition boundaries); only a non-blank, non-`#`, column-0
+/// line ends the body.
+fn gg_fn_body(content: &str, sig_contains: &str) -> String {
+    let mut in_fn = false;
+    let mut body = String::new();
+    for line in content.lines() {
+        if !in_fn {
+            if line.contains(sig_contains) && !line.trim_start().starts_with('#') {
+                in_fn = true;
+                body.push_str(line);
+                body.push('\n');
+            }
+            continue;
+        }
+        let is_boundary = !line.is_empty()
+            && !line.starts_with(char::is_whitespace)
+            && !line.trim_start().starts_with('#');
+        if is_boundary {
+            break;
+        }
+        body.push_str(line);
+        body.push('\n');
+    }
+    body
+}
+
+/// Refcount-handle clone-arm symmetry ratchet (CLAUDE.md rule 4 "one fix, all
+/// siblings" + Core #6 — convert a recurring bug class into an executable
+/// guard). BOTH lanes shipped the SAME defect: a struct/enum holding a
+/// refcount-handle field (`Shared` / `Weak` / `Channel`) had its DROP synthesis
+/// RELEASE the handle (`gorget_shared_drop` / `gorget_weak_drop` /
+/// `gorget_channel_release`) while its CLONE synthesis merely shallow-copied it
+/// — no RETAIN — so the copy's drop underflowed the refcount → premature free /
+/// double-free / UAF (`known_gaps/shared_struct_field_clone.gg`; the self-host
+/// sibling was fixed in `lir_codegen.gg`'s `field_clone_c`). The clone must
+/// balance the drop.
+///
+/// This lint locks the symmetry structurally, per lane:
+///   - Rust: every by-value RETAIN lives in the single helper
+///     `refcount_field_retain_fn`, and EVERY clone-synthesis path consults it —
+///     so a fourth clone path, or a dropped family arm, trips here.
+///   - Self-host: `field_clone_c` carries the Shared-family RETAIN arm.
+///
+/// **If this fails**: a refcount family's clone RETAIN was dropped, or a new
+/// clone-synthesis path was added that skips `refcount_field_retain_fn`. Route
+/// the new path through the helper (Rust) / add the arm to `field_clone_c`
+/// (self-host) — do NOT relax the assertion.
+#[test]
+fn refcount_clone_arm_symmetry() {
+    // (RELEASE drop symbol, by-value RETAIN clone symbol) for every refcount
+    // family whose field drop releases a strong/weak/channel ref. Rc/Arc were
+    // removed (A2) — intentionally absent.
+    const PAIRS: &[(&str, &str)] = &[
+        ("gorget_shared_drop", "gorget_shared_clone"),
+        ("gorget_weak_drop", "gorget_weak_clone"),
+        ("gorget_channel_release", "gorget_channel_retain"),
+    ];
+
+    // ---- Rust lane ----
+    let emit = fs::read_to_string("src/backend/c_lir/emit_types.rs")
+        .expect("emit_types.rs readable");
+    let helpers = fs::read_to_string("src/backend/c_lir/helpers.rs")
+        .expect("helpers.rs readable");
+    let retain_fn = rust_fn_body(&emit, "refcount_field_retain_fn");
+    assert!(!retain_fn.is_empty(), "refcount_field_retain_fn not found in emit_types.rs");
+    for (release, retain) in PAIRS {
+        // Match the returned string literal `Some("<retain>")`, not a mention in
+        // prose, so deleting the arm actually trips the assert.
+        let retain_lit = format!("\"{retain}\"");
+        assert!(
+            retain_fn.contains(&retain_lit),
+            "refcount_field_retain_fn is missing the `{retain}` RETAIN arm. A \
+             struct/enum clone of that refcount family would shallow-copy the \
+             handle while its drop RELEASEs it → refcount underflow → UAF."
+        );
+        assert!(
+            helpers.contains(release),
+            "helpers.rs no longer emits the `{release}` drop wrapper this RETAIN \
+             balances. If the family was removed, drop it from PAIRS and from \
+             refcount_field_retain_fn together."
+        );
+    }
+    for f in [
+        "emit_recursive_struct_clones",
+        "emit_recursive_enum_clones",
+        "emit_type_drop_fns",
+    ] {
+        let body = rust_fn_body(&emit, f);
+        assert!(!body.is_empty(), "clone-synthesis fn `{f}` not found in emit_types.rs");
+        assert!(
+            body.contains("refcount_field_retain_fn"),
+            "clone-synthesis path `{f}` does not consult `refcount_field_retain_fn`. \
+             A clone path that skips refcount RETAIN is the exact asymmetry that \
+             caused the Shared-struct-field-clone UAF (both lanes). Route it \
+             through the helper."
+        );
+    }
+
+    // ---- Self-host lane ----
+    let sh = fs::read_to_string("tests/fixtures/self_host_lowerer/lir_codegen.gg")
+        .expect("lir_codegen.gg readable");
+    let field_clone = gg_fn_body(&sh, "String field_clone_c(");
+    assert!(!field_clone.is_empty(), "field_clone_c not found in lir_codegen.gg");
+    // Match the CODE fragments, not prose: the emit `... = gorget_shared_clone(...)`
+    // and the guard `== "gorget_shared_drop"`. The surrounding rationale comment
+    // also names both symbols, so a bare `contains("gorget_shared_clone")` would
+    // pass even with the arm deleted (verified: it did).
+    assert!(
+        field_clone.contains("gorget_shared_clone(\" +"),
+        "self-host `field_clone_c` is missing the Shared-family RETAIN emit \
+         (`... = gorget_shared_clone(...)`). Its struct-drop RELEASEs the handle; \
+         without the clone RETAIN a Shared-containing struct clone underflows → UAF."
+    );
+    assert!(
+        field_clone.contains("== \"gorget_shared_drop\""),
+        "self-host `field_clone_c` no longer guards on `== \"gorget_shared_drop\"` \
+         — the Shared field-clone arm's detection is gone."
+    );
 }

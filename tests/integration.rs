@@ -9194,16 +9194,8 @@ fn cow_loop_bare_param_user_mutator() {
 }
 
 #[test]
-#[ignore = "RUST-lane Shared-field struct-clone under-incref: the materialize \
-struct-clone of a Shared-containing struct does not incref the Shared handle, so \
-the copy's drop underflows the refcount and a later strong_count/drop reads freed \
-memory (garbage; silent UAF, BOTH backends, pre-existing at caf63817). The \
-SELF-HOST is already CORRECT here (its sibling bug was fixed in lir_codegen.gg's \
-Shared-family clone arm this round) — the reference lags the self-host. Asserts \
-the intended 1,13,10,1,done. See TODO 'Rust Shared-field struct-clone \
-under-incref'."]
 fn shared_struct_field_clone_gap() {
-    run_gg("known_gaps/shared_struct_field_clone.gg", "1\n13\n10\n1\ndone");
+    run_gg("shared_struct_field_clone.gg", "1\n13\n10\n1\ndone");
 }
 
 #[test]
