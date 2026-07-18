@@ -119,6 +119,16 @@ pub(super) fn lower_for(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
+    // CoW 2G: materialize loop-carried bare-param mutations in the PRE-HEADER
+    // (before the iterable is lowered and before any for-variant's
+    // save_locals), so the body's read-before-write / mutate reads the
+    // persistent private copy rather than a per-iteration throwaway clone.
+    // Shared across every for variant (range/vector/string/dict/set/enum/
+    // iterable). No condition to scan — the iterable is evaluated once
+    // pre-loop, so body-only detection. A no-op on an owned root or a body
+    // that does not mutate the param.
+    super::materialize_loop_carried_bare_params(ctx, builder, body, None, iterable.span);
+
     if let Pattern::Binding(var_name) = &pattern.node {
         if let Expr::Range {
             start: Some(start),

@@ -433,6 +433,55 @@ fn compute_cow_reassigned_after(
     result
 }
 
+/// CoW 2G — loop-carried bare-param mutation detection. Runs the SHARED prescan
+/// collectors (`cow_after_block` + `cow_after_expr_moves`) FRESH over a single
+/// loop's own statements (and, for `while`, its condition expr, which
+/// re-executes every iteration), returning the UNION mutation-marker set.
+///
+/// This is deliberately NOT the recorded per-position `cow_reassigned_after` map
+/// (`is_source_mut_unsafe_at`): that map is exclusive-of-self and suffix-scoped
+/// (the reverse walk records each position's set BEFORE processing that stmt), so
+/// a single-statement loop body returns EMPTY. A fresh union over the loop's own
+/// statements is the only sound query for "does THIS loop mutate param P".
+///
+/// One source of truth (devbook/24): the answer comes from the exact same
+/// collectors that drive the in-body materialize decision — no parallel AST
+/// walker to drift.
+pub(crate) fn cow_mutations_in_loop(
+    body: &[Spanned<Stmt>],
+    condition: Option<&Expr>,
+    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+) -> rustc_hash::FxHashSet<std::rc::Rc<str>> {
+    let mut result = rustc_hash::FxHashMap::default();
+    let mut future: rustc_hash::FxHashSet<std::rc::Rc<str>> = rustc_hash::FxHashSet::default();
+    let mut interner: rustc_hash::FxHashMap<String, std::rc::Rc<str>> = rustc_hash::FxHashMap::default();
+    cow_after_block(body, &mut future, &mut result, fn_param_ownerships, &mut interner);
+    if let Some(cond) = condition {
+        cow_after_expr_moves(cond, &mut future, fn_param_ownerships, &mut interner);
+    }
+    future
+}
+
+/// CoW 2G — does the loop-mutation set produced by `cow_mutations_in_loop` mark
+/// the bare-param root `name` as mutated? Matches a bare name (reassignment /
+/// `!`-move / dotless index-or-tuple target), an exact `@mut:name` receiver
+/// mutation, OR any `@mut:name.…` projection mutation (`self.items.push()` marks
+/// `@mut:self.items`, which the pre-header materialize of `self` must catch).
+pub(crate) fn loop_set_mutates(
+    set: &rustc_hash::FxHashSet<std::rc::Rc<str>>,
+    name: &str,
+) -> bool {
+    if set.contains(name) {
+        return true;
+    }
+    let direct = format!("@mut:{}", name);
+    if set.contains(direct.as_str()) {
+        return true;
+    }
+    let prefix = format!("@mut:{}.", name);
+    set.iter().any(|e| e.starts_with(prefix.as_str()))
+}
+
 /// Intern a `&str` as `Rc<str>`. Subsequent inserts of the same name reuse the
 /// existing `Rc` cell, which lets `future.clone()` propagate refcount bumps
 /// instead of allocating fresh `String`s per entry.
@@ -448,6 +497,20 @@ fn intern_rc(s: &str, interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<s
 
 /// Method names that mutate a collection receiver in place. Any `receiver.method(...)`
 /// with method in this list contributes `@mut:{receiver_path}` to the prescan set.
+///
+/// This hand-list is now a *conservative fallback* layered UNDER the typed
+/// builtin predicate (`is_mutating_method_name`): the authoritative source is
+/// `builtins::is_mutating_builtin_method`, which reads the `is_mutating` flag
+/// off each builtin type protocol (no drift). The list is retained ONLY as an
+/// over-approximation for USER methods whose typed `&self`-mutator signature is
+/// not resolvable in this untyped AST prescan — a user method named like one of
+/// these entries stays conservatively marked "mutating" (an extra private copy,
+/// never a missed one). Deleting the phantom names is coupled to landing the
+/// step-4 typed user-`&self`-mutator over-approximation; until that ships, the
+/// user-method receiver gap is filed in TODO.md ("CoW 2G user-&self-mutator
+/// loop-carried receiver"). See CLAUDE.md "No name matching" — the typed
+/// predicate is the source of truth; this list survives only as the escape
+/// hatch for what typed metadata the prescan cannot yet reach.
 const MUTATING_METHODS: &[&str] = &[
     "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
     "reverse", "swap", "swap_remove", "extend", "append", "truncate",
@@ -455,8 +518,27 @@ const MUTATING_METHODS: &[&str] = &[
     "put", "remove_key", "sort_by", "sort_by_key",
 ];
 
-/// Extract the dotted path from a field-access chain or identifier.
-/// Returns `"self.data"` for `self.data`, `"x"` for `x`, None for complex expressions.
+/// Is `method` a mutating-receiver method for prescan purposes? Typed-builtin
+/// predicate (the source of truth — picks up `add`, `close`, `get_or_put`,
+/// `push_char`, `push_line`, `send`, `set_at`, `store`, `update` and any future
+/// `is_mutating` builtin for free) UNION the conservative `MUTATING_METHODS`
+/// fallback (see that const's doc — the user-`&self`-mutator escape hatch).
+fn is_mutating_method_name(method: &str) -> bool {
+    crate::ir::lowering::builtins::is_mutating_builtin_method(method)
+        || MUTATING_METHODS.contains(&method)
+}
+
+/// Extract the dotted path from a place expression (field/tuple-field/index
+/// chain or identifier). Returns `"self.data"` for `self.data`, `"x"` for `x`,
+/// `"xs.0"` for `xs.0`, and — for an index — the dotted-path prefix ABOVE the
+/// index (`self.data[i]` → `"self.data"`, `xs[i]` → `"xs"`), since mutating one
+/// element invalidates borrows of the whole collection. None for complex roots.
+///
+/// The caller decides how to record the result: `record_path_mutation` (mutating
+/// RECEIVERS) emits `@mut:{path}` unconditionally, so a dotless root like `xs`
+/// becomes `@mut:xs`; the Assign/CompoundAssign TARGET path (`record_place_target`)
+/// splits on the dot so a dotless bare-param index/tuple target inserts the bare
+/// name (the DOTLESS-ROOT insert — the Assign arm otherwise drops it).
 fn extract_path_for_mut(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Identifier(name) => Some(name.clone()),
@@ -465,7 +547,39 @@ fn extract_path_for_mut(expr: &Expr) -> Option<String> {
             let prefix = extract_path_for_mut(&object.node)?;
             Some(format!("{}.{}", prefix, field.node))
         }
+        Expr::TupleFieldAccess { object, index } => {
+            let prefix = extract_path_for_mut(&object.node)?;
+            Some(format!("{}.{}", prefix, index))
+        }
+        // Peel to the deepest dotted-path prefix ABOVE the index. `resolve_
+        // projection_root_local` (exprs/mod.rs) peels Index the same way at the
+        // in-body materialize sites (`lower_index_assign`, the projected mutating
+        // receiver), so recording the prefix here keeps the prescan in step.
+        Expr::Index { object, .. } => extract_path_for_mut(&object.node),
         _ => None,
+    }
+}
+
+/// Record the mutation marker(s) for an assignment / compound-assignment TARGET
+/// place expression (`x = …`, `xs[i] = …`, `self.data = …`, `self.data[i] = …`,
+/// `xs.0 = …`). Splits on whether the peeled place path has a dot:
+/// - dotted (`self.data`) → `@mut:self.data` (invalidates borrows of the field
+///   path and, via `is_source_mut_unsafe_at`'s ancestor walk, its projections);
+/// - dotless (`x`, `xs` from `xs[i]`) → the bare name (the DOTLESS-ROOT insert:
+///   a bare-param index/tuple target peels to a dotless root the `@mut:` path
+///   would otherwise drop, leaving the loop-carried materialize blind).
+fn record_place_target(
+    target: &Expr,
+    future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
+    interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
+) {
+    if let Some(path) = extract_path_for_mut(target) {
+        if path.contains('.') {
+            let marker = format!("@mut:{}", path);
+            future.insert(intern_rc(&marker, interner));
+        } else {
+            future.insert(intern_rc(&path, interner));
+        }
     }
 }
 
@@ -513,32 +627,18 @@ fn cow_after_stmt(
             cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
         }
         Stmt::Assign { target, value, .. } => {
-            // Name reassignment: `x = rhs` marks `x` unsafe for CoW propagation.
-            if let Expr::Identifier(name) = &target.node {
-                future.insert(intern_rc(name, interner));
-            }
-            // Field reassignment: `self.data = rhs` means any CoW borrow sourced
-            // from self.data later would dangle. Emit `@mut:self.data`.
-            if let Some(path) = extract_path_for_mut(&target.node) {
-                // Only meaningful for multi-component paths (at least one '.') —
-                // bare identifiers are covered by the Identifier case above.
-                if path.contains('.') {
-                    let marker = format!("@mut:{}", path);
-                    future.insert(intern_rc(&marker, interner));
-                }
-            }
+            // Target place reassignment: `x = rhs` marks `x`; `self.data = rhs`
+            // emits `@mut:self.data`; `xs[i] = rhs` / `xs.0 = rhs` mark the
+            // dotless bare root `xs` (see `record_place_target`).
+            record_place_target(&target.node, future, interner);
+            // A mutating call can also hide in the TARGET's index/receiver
+            // sub-expr (`ys[xs.pop()] = 0` mutates `xs` inside the target).
+            cow_after_expr_moves(&target.node, future, fn_param_ownerships, interner);
             cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
         }
         Stmt::CompoundAssign { target, value, .. } => {
-            if let Expr::Identifier(name) = &target.node {
-                future.insert(intern_rc(name, interner));
-            }
-            if let Some(path) = extract_path_for_mut(&target.node) {
-                if path.contains('.') {
-                    let marker = format!("@mut:{}", path);
-                    future.insert(intern_rc(&marker, interner));
-                }
-            }
+            record_place_target(&target.node, future, interner);
+            cow_after_expr_moves(&target.node, future, fn_param_ownerships, interner);
             cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
         }
         Stmt::Expr(expr) => {
@@ -547,17 +647,37 @@ fn cow_after_stmt(
         Stmt::Return(Some(expr)) => {
             cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
         }
-        Stmt::While { body, else_body, .. } => {
+        // `throw expr` can carry a mutating call (`throw make(xs.pop())`).
+        Stmt::Throw(expr) => {
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
+        }
+        Stmt::While { condition, body, else_body } => {
+            // The condition re-executes every iteration — a mutation there
+            // (`while shrink(&xs):`) is loop-carried with the body.
+            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
             // Loop body reassignments are visible to statements before the loop
             cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
             if let Some(eb) = else_body {
                 cow_after_block(&eb.stmts, future, result, fn_param_ownerships, interner);
             }
         }
-        Stmt::For { body, .. } => {
+        Stmt::For { iterable, body, else_body, .. } => {
+            // The iterable expr is evaluated once, but a mutating call inside it
+            // (`for x in drain(&xs):`) is still a forward mutation w.r.t. earlier
+            // statements. The `else_body` was previously dropped (unlike While).
+            cow_after_expr_moves(&iterable.node, future, fn_param_ownerships, interner);
             cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+            if let Some(eb) = else_body {
+                cow_after_block(&eb.stmts, future, result, fn_param_ownerships, interner);
+            }
         }
-        Stmt::If { then_body, elif_branches, else_body, .. } => {
+        Stmt::If { condition, then_body, elif_branches, else_body, .. } => {
+            // The if/elif conditions execute unconditionally on entry — scan them
+            // for mutating calls (previously only the branch BODIES were scanned).
+            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
+            for (elif_cond, _) in elif_branches {
+                cow_after_expr_moves(&elif_cond.node, future, fn_param_ownerships, interner);
+            }
             // Union all branches: if a name is reassigned in any branch, it's unsafe
             let saved = future.clone();
             cow_after_block(&then_body.stmts, future, result, fn_param_ownerships, interner);
@@ -573,13 +693,23 @@ fn cow_after_stmt(
             // Union: include then-branch reassignments too
             future.extend(then_set);
         }
-        Stmt::Match { arms, else_arm, .. } => {
+        Stmt::Match { scrutinee, arms, else_arm } => {
+            // The scrutinee evaluates on entry (`match xs.pop():`).
+            cow_after_expr_moves(&scrutinee.node, future, fn_param_ownerships, interner);
             let saved = future.clone();
             for item in arms {
                 if let crate::parser::ast::MatchItem::Arm(arm) = item {
                     let mut branch = saved.clone();
+                    // A guard runs before the arm body (`case p if xs.pop() > 0:`).
+                    if let Some(guard) = &arm.guard {
+                        cow_after_expr_moves(&guard.node, &mut branch, fn_param_ownerships, interner);
+                    }
+                    // Arm bodies may be a Block OR a bare expression — the latter
+                    // was previously skipped (`case p: xs.pop()`).
                     if let Expr::Block(block) = &arm.body.node {
                         cow_after_block(&block.stmts, &mut branch, result, fn_param_ownerships, interner);
+                    } else {
+                        cow_after_expr_moves(&arm.body.node, &mut branch, fn_param_ownerships, interner);
                     }
                     future.extend(branch);
                 }
@@ -616,6 +746,23 @@ fn cow_after_stmt(
         // Treating select as a union of its arm bodies keeps the prescan honest
         // (mirrors the `Match` arm above; `SelectArm { op, body: Block, .. }`).
         Stmt::Select { arms, else_arm } => {
+            use crate::parser::ast::SelectOp;
+            // Each arm's channel OP runs on entry: `send` mutates the channel
+            // (typed-mutating), and either op's channel/value expr can carry a
+            // nested mutating call. These execute unconditionally w.r.t. the arm
+            // bodies, so record them on the outer `future`, not a per-arm branch.
+            for arm in arms {
+                match &arm.op {
+                    SelectOp::Send { channel, value } => {
+                        record_path_mutation(&channel.node, future, interner);
+                        cow_after_expr_moves(&channel.node, future, fn_param_ownerships, interner);
+                        cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
+                    }
+                    SelectOp::Recv { channel, .. } => {
+                        cow_after_expr_moves(&channel.node, future, fn_param_ownerships, interner);
+                    }
+                }
+            }
             let saved = future.clone();
             for arm in arms {
                 let mut branch = saved.clone();
@@ -671,8 +818,9 @@ fn cow_after_expr_moves(
         }
         Expr::MethodCall { receiver, args, method, .. } => {
             cow_after_expr_moves(&receiver.node, future, fn_param_ownerships, interner);
-            // Mutating method on a collection receiver → the receiver path is mutated.
-            if MUTATING_METHODS.contains(&method.node.as_str()) {
+            // Mutating method on a collection receiver → the receiver path is
+            // mutated. Typed-builtin predicate + conservative fallback.
+            if is_mutating_method_name(method.node.as_str()) {
                 record_path_mutation(&receiver.node, future, interner);
             }
             for arg in args {
@@ -690,6 +838,17 @@ fn cow_after_expr_moves(
         Expr::BinaryOp { left, right, .. } => {
             cow_after_expr_moves(&left.node, future, fn_param_ownerships, interner);
             cow_after_expr_moves(&right.node, future, fn_param_ownerships, interner);
+        }
+        // Recurse into place-projection sub-exprs so a mutating call nested in an
+        // index / field object (`total + arr[xs.pop()]`, `pair.0.f(xs.pop())`) is
+        // not missed (under-approximation is the bug — over-approx is safe).
+        Expr::Index { object, index } => {
+            cow_after_expr_moves(&object.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&index.node, future, fn_param_ownerships, interner);
+        }
+        Expr::FieldAccess { object, .. }
+        | Expr::TupleFieldAccess { object, .. } => {
+            cow_after_expr_moves(&object.node, future, fn_param_ownerships, interner);
         }
         _ => {}
     }
