@@ -308,95 +308,103 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
 # bodies recurse.
 void cow_scan_stmts(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] stmts, bool in_closure):
     for st in stmts:
-        match st:
-            case SVarDecl(sv_stype, sv_name, init_e, _, _, _):
-                cow_record_decl_type(&ctx, sv_stype, sv_name, init_e)
-                cow_scan_expr(&ctx, &gmod, init_e, in_closure)
-            case SAssign(lhs_e, rhs_e):
-                # `x = …` reassigns x; `x[i] = …` / `x.f = …` mutates the
-                # base x. Mark the root identifier of the LHS path at the
-                # LHS's textual position.
-                cow_mark_assign_target(&ctx, lhs_e, lhs_e.span.start, in_closure)
-                cow_scan_expr(&ctx, &gmod, lhs_e, in_closure)
-                cow_scan_expr(&ctx, &gmod, rhs_e, in_closure)
-            case SCompoundAssign(lhs_e, _, rhs_e):
-                cow_mark_assign_target(&ctx, lhs_e, lhs_e.span.start, in_closure)
-                cow_scan_expr(&ctx, &gmod, lhs_e, in_closure)
-                cow_scan_expr(&ctx, &gmod, rhs_e, in_closure)
-            case SExpr(ex):
-                cow_scan_expr(&ctx, &gmod, ex, in_closure)
-            case SReturn(opt_e):
-                match opt_e:
-                    case Some(re):
-                        cow_scan_expr(&ctx, &gmod, re, in_closure)
+        cow_scan_stmt_one(&ctx, &gmod, st, in_closure)
+
+# The SINGLE-STATEMENT entry of the shared forward-scan walker — the body of
+# the old inline `for st: match st:` moved verbatim (zero drift; one walker).
+# Exists so the consumer-#1 SCOPE hoist can run the SHARED walker over JUST
+# one scope statement's subtree (a bare `Stmt` param is a zero-cost borrow),
+# mirroring Rust's `cow_mutations_in_stmt` = `cow_after_stmt` over `&Stmt`.
+void cow_scan_stmt_one(LowerCtx &ctx, GirModule &gmod, Stmt st, bool in_closure):
+    match st:
+        case SVarDecl(sv_stype, sv_name, init_e, _, _, _):
+            cow_record_decl_type(&ctx, sv_stype, sv_name, init_e)
+            cow_scan_expr(&ctx, &gmod, init_e, in_closure)
+        case SAssign(lhs_e, rhs_e):
+            # `x = …` reassigns x; `x[i] = …` / `x.f = …` mutates the
+            # base x. Mark the root identifier of the LHS path at the
+            # LHS's textual position.
+            cow_mark_assign_target(&ctx, lhs_e, lhs_e.span.start, in_closure)
+            cow_scan_expr(&ctx, &gmod, lhs_e, in_closure)
+            cow_scan_expr(&ctx, &gmod, rhs_e, in_closure)
+        case SCompoundAssign(lhs_e, _, rhs_e):
+            cow_mark_assign_target(&ctx, lhs_e, lhs_e.span.start, in_closure)
+            cow_scan_expr(&ctx, &gmod, lhs_e, in_closure)
+            cow_scan_expr(&ctx, &gmod, rhs_e, in_closure)
+        case SExpr(ex):
+            cow_scan_expr(&ctx, &gmod, ex, in_closure)
+        case SReturn(opt_e):
+            match opt_e:
+                case Some(re):
+                    cow_scan_expr(&ctx, &gmod, re, in_closure)
+                case None:
+                    pass
+        case SThrow(te):
+            cow_scan_expr(&ctx, &gmod, te, in_closure)
+        case SBreak():
+            pass
+        case SWhile(cond_e, body_w, else_w):
+            cow_scan_expr(&ctx, &gmod, cond_e, in_closure)
+            cow_scan_stmts(&ctx, &gmod, body_w, in_closure)
+            cow_scan_stmts(&ctx, &gmod, else_w, in_closure)
+        case SLoop(body_l):
+            cow_scan_stmts(&ctx, &gmod, body_l, in_closure)
+        case SFor(_, iter_e, body_f, _, else_f):
+            cow_scan_expr(&ctx, &gmod, iter_e, in_closure)
+            cow_scan_stmts(&ctx, &gmod, body_f, in_closure)
+            cow_scan_stmts(&ctx, &gmod, else_f, in_closure)
+        case SIf(cond_if, then_if, elses_if):
+            cow_scan_expr(&ctx, &gmod, cond_if, in_closure)
+            cow_scan_stmts(&ctx, &gmod, then_if, in_closure)
+            for eb_if in elses_if:
+                # Planner consumer #1 fold: scan the ELIF CONDITION too
+                # (`elif shrink(&xs):` mutates via a mut-borrow arg). Only
+                # the branch BODIES were walked, so an elif-cond-only
+                # mutation was scan-invisible and the pre-scope hoist never
+                # fired — the SH analog of the Rust proto's
+                # cow_mutations_in_branches drift (both missed elif conds;
+                # match GUARDS were already scanned, making this the odd
+                # one out). Mirrors Rust cow_after_stmt's Stmt::If arm:
+                # cond + all elif-conds + body union.
+                match eb_if.condition:
+                    case Some(eb_cond):
+                        cow_scan_expr(&ctx, &gmod, eb_cond, in_closure)
                     case None:
                         pass
-            case SThrow(te):
-                cow_scan_expr(&ctx, &gmod, te, in_closure)
-            case SBreak():
-                pass
-            case SWhile(cond_e, body_w, else_w):
-                cow_scan_expr(&ctx, &gmod, cond_e, in_closure)
-                cow_scan_stmts(&ctx, &gmod, body_w, in_closure)
-                cow_scan_stmts(&ctx, &gmod, else_w, in_closure)
-            case SLoop(body_l):
-                cow_scan_stmts(&ctx, &gmod, body_l, in_closure)
-            case SFor(_, iter_e, body_f, _, else_f):
-                cow_scan_expr(&ctx, &gmod, iter_e, in_closure)
-                cow_scan_stmts(&ctx, &gmod, body_f, in_closure)
-                cow_scan_stmts(&ctx, &gmod, else_f, in_closure)
-            case SIf(cond_if, then_if, elses_if):
-                cow_scan_expr(&ctx, &gmod, cond_if, in_closure)
-                cow_scan_stmts(&ctx, &gmod, then_if, in_closure)
-                for eb_if in elses_if:
-                    # Planner consumer #1 fold: scan the ELIF CONDITION too
-                    # (`elif shrink(&xs):` mutates via a mut-borrow arg). Only
-                    # the branch BODIES were walked, so an elif-cond-only
-                    # mutation was scan-invisible and the pre-scope hoist never
-                    # fired — the SH analog of the Rust proto's
-                    # cow_mutations_in_branches drift (both missed elif conds;
-                    # match GUARDS were already scanned, making this the odd
-                    # one out). Mirrors Rust cow_after_stmt's Stmt::If arm:
-                    # cond + all elif-conds + body union.
-                    match eb_if.condition:
-                        case Some(eb_cond):
-                            cow_scan_expr(&ctx, &gmod, eb_cond, in_closure)
-                        case None:
-                            pass
-                    cow_scan_stmts(&ctx, &gmod, eb_if.body, in_closure)
-            case SMatch(scrut_if, arms_if):
-                cow_scan_expr(&ctx, &gmod, scrut_if, in_closure)
-                for arm_if in arms_if:
-                    match arm_if.guard:
-                        case Some(gif):
-                            cow_scan_expr(&ctx, &gmod, gif, in_closure)
-                        case None:
-                            pass
-                    cow_scan_stmts(&ctx, &gmod, arm_if.body, in_closure)
-            case SWith(with_e, _, body_with):
-                cow_scan_expr(&ctx, &gmod, with_e, in_closure)
-                cow_scan_stmts(&ctx, &gmod, body_with, in_closure)
-            case SNamedScope(_, body_ns):
-                cow_scan_stmts(&ctx, &gmod, body_ns, in_closure)
-            case SOnError(body_oe):
-                cow_scan_stmts(&ctx, &gmod, body_oe, in_closure)
-            case SAssert(ae, _):
-                cow_scan_expr(&ctx, &gmod, ae, in_closure)
-            case SAssertReturn(are, _):
-                cow_scan_expr(&ctx, &gmod, are, in_closure)
-            case SSnapshot(_, _, se):
-                cow_scan_expr(&ctx, &gmod, se, in_closure)
-            case SSelect(sel_arms):
-                for sel_arm in sel_arms:
-                    match sel_arm.op:
-                        case SORecv(_, _, recv_e):
-                            cow_scan_expr(&ctx, &gmod, recv_e, in_closure)
-                        case SOSend(send_ch, send_v):
-                            cow_scan_expr(&ctx, &gmod, send_ch, in_closure)
-                            cow_scan_expr(&ctx, &gmod, send_v, in_closure)
-                    cow_scan_stmts(&ctx, &gmod, sel_arm.body, in_closure)
-            else:
-                pass
+                cow_scan_stmts(&ctx, &gmod, eb_if.body, in_closure)
+        case SMatch(scrut_if, arms_if):
+            cow_scan_expr(&ctx, &gmod, scrut_if, in_closure)
+            for arm_if in arms_if:
+                match arm_if.guard:
+                    case Some(gif):
+                        cow_scan_expr(&ctx, &gmod, gif, in_closure)
+                    case None:
+                        pass
+                cow_scan_stmts(&ctx, &gmod, arm_if.body, in_closure)
+        case SWith(with_e, _, body_with):
+            cow_scan_expr(&ctx, &gmod, with_e, in_closure)
+            cow_scan_stmts(&ctx, &gmod, body_with, in_closure)
+        case SNamedScope(_, body_ns):
+            cow_scan_stmts(&ctx, &gmod, body_ns, in_closure)
+        case SOnError(body_oe):
+            cow_scan_stmts(&ctx, &gmod, body_oe, in_closure)
+        case SAssert(ae, _):
+            cow_scan_expr(&ctx, &gmod, ae, in_closure)
+        case SAssertReturn(are, _):
+            cow_scan_expr(&ctx, &gmod, are, in_closure)
+        case SSnapshot(_, _, se):
+            cow_scan_expr(&ctx, &gmod, se, in_closure)
+        case SSelect(sel_arms):
+            for sel_arm in sel_arms:
+                match sel_arm.op:
+                    case SORecv(_, _, recv_e):
+                        cow_scan_expr(&ctx, &gmod, recv_e, in_closure)
+                    case SOSend(send_ch, send_v):
+                        cow_scan_expr(&ctx, &gmod, send_ch, in_closure)
+                        cow_scan_expr(&ctx, &gmod, send_v, in_closure)
+                cow_scan_stmts(&ctx, &gmod, sel_arm.body, in_closure)
+        else:
+            pass
 
 # Mark the root identifier of an assignment LHS as mutated. For a bare
 # `x` this is x; for `x[i]` / `x.f` / `x.f[i]` it walks down to the

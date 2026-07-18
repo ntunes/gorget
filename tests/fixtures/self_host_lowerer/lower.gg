@@ -44,7 +44,7 @@ from gir import CollectionKind, CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet,
 # memoises results into `gmod.resource_metadata`.
 from lir_lower import resource_meta_for
 from gir import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
-from lower_cow import compute_cow_scan, cow_pristine_after, cow_source_root_name
+from lower_cow import compute_cow_scan, cow_pristine_after, cow_source_root_name, cow_scan_stmt_one
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, try_register_sync_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
@@ -900,6 +900,49 @@ void materialize_loop_carried_bare_params(LowerCtx &ctx, GirModule &gmod, int an
             cand_names.push(pn)
     for cn in cand_names:
         cow_materialize_root_by_name(&ctx, &gmod, cn)
+
+# ── Planner consumer #1 — SCOPE-carried bare-param materialize (SH mirror,
+# SUBTREE-scoped) ─────────────────────────────────────────────────────────
+#
+# Called at the `lower_stmt` dispatch arm of the non-loop scope forms the SH
+# lowers with an nl_snapshot/nl_restore hole (SIf, SMatch, SNamedScope) —
+# BEFORE the scope fn runs. Decides from the SCOPE STATEMENT'S OWN SUBTREE
+# ONLY, exactly like Rust's `materialize_scope_carried_bare_params` /
+# `cow_mutations_in_stmt` (a per-scope union), NOT from the whole-fn suffix
+# scan: the suffix negation (`cow_pristine_after` at an anchor) fires for a
+# mutation ANYWHERE at/after the anchor — over-approximating at every branch
+# entry, which the stage-1 bootstrap measured as an entry clone per call in
+# hot classifier helpers (the 600s blowout). The loop hoist above KEEPS the
+# suffix scan (proven 2G shape: a loop re-executes, so at/after-the-anchor is
+# the right question there; a branch does not).
+#
+# Mechanism — reuse, never mirror (one walker, one funnel; ratchet stays 8):
+#   1. set the three scan accumulators aside and start empty ones;
+#   2. run the SHARED walker (`cow_scan_stmt_one`) over JUST this statement —
+#      its own SIf/SMatch arms fold in conditions, elif-conds, guards, arm
+#      bodies and nested scopes, so the subtree union inherits every collector
+#      property (no parallel walker to drift);
+#   3. run the EXISTING `materialize_loop_carried_bare_params` with anchor=0 —
+#      against the subtree-only maps the pristine-negation degenerates to
+#      exact subtree membership, and the materialize routes through the same
+#      single `cow_materialize_root_by_name` funnel (no new ratchet site);
+#   4. restore the whole-fn scan maps (side channels `cow_decl_types` /
+#      moved-roots are idempotent re-records over a subtree — left alone).
+void materialize_scope_carried_bare_params(LowerCtx &ctx, GirModule &gmod, Stmt scope_stmt):
+    Dict[String, bool] scz_saved_mut = ctx.cow_mutated_names.clone()
+    Dict[String, int] scz_saved_span = ctx.cow_mut_max_span.clone()
+    Dict[String, bool] scz_saved_clo = ctx.cow_closure_mutated.clone()
+    Dict[String, bool] scz_fresh_mut = {}
+    Dict[String, int] scz_fresh_span = {}
+    Dict[String, bool] scz_fresh_clo = {}
+    ctx.cow_mutated_names = scz_fresh_mut
+    ctx.cow_mut_max_span = scz_fresh_span
+    ctx.cow_closure_mutated = scz_fresh_clo
+    cow_scan_stmt_one(&ctx, &gmod, scope_stmt, false)
+    materialize_loop_carried_bare_params(&ctx, &gmod, 0)
+    ctx.cow_mutated_names = scz_saved_mut
+    ctx.cow_mut_max_span = scz_saved_span
+    ctx.cow_closure_mutated = scz_saved_clo
 
 # Phase 3 (2026-05-22) — Class 8 keystone fix.
 #
