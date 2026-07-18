@@ -5547,7 +5547,9 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
 }
 
 // ===========================================================================
-// SCOUT PROTOTYPE — Guards-slice Track G1 (Ratchets A + B). NOT FINAL.
+// Guards-slice ratchets (Core #6 + #10, owner 2026-07-18): A = silent-fallthrough
+// allowlist (lowering arms must lower or reject, never silently drop); B =
+// materialize-site convergence meter (the planner campaign's ratchet).
 // ===========================================================================
 
 /// Returns the (1-based) line numbers of "silent catch-all" match arms in a fn
@@ -5670,10 +5672,14 @@ fn ratchet_a_lowering_dispatch_silent_fallthrough() {
         .find(|(n, _)| n == "lower_compound_assign")
         .map(|(_, b)| b)
         .expect("lower_compound_assign not found");
+    // Pin on the ABSENCE of a TupleFieldAccess arm: any real A2 fix (lowering
+    // the target or rejecting it) must name the variant, tripping this pin so
+    // the burn-down list shrinks WITH the fix. (A forward-declared sentinel
+    // was vacuous — nothing forced the fix to spell it.)
     assert!(
-        !compound.contains("REJECT_UNLOWERABLE_TARGET"),
-        "lower_compound_assign now rejects unlowerable targets — the A2 \
-         missing-else offender is fixed. Remove this pin (burn-down)."
+        !compound.contains("TupleFieldAccess"),
+        "lower_compound_assign now handles (or rejects) TupleFieldAccess targets — \
+         the A2 missing-else offender is fixed. Remove this pin (burn-down)."
     );
     //   A4b: lower_for_dict's `Tuple(2)` arm binds each sub-pattern only via
     //       `if let Binding(n) .. else \"__k\"/\"__v\"` — a nested destructure
@@ -5684,10 +5690,17 @@ fn ratchet_a_lowering_dispatch_silent_fallthrough() {
         .find(|(n, _)| n == "lower_for_dict")
         .map(|(_, b)| b)
         .expect("lower_for_dict not found");
+    // Pin each throwaway side SEPARATELY (an `||` would stay green after a
+    // value-side-only fix, hiding a half-landed A4b).
     assert!(
-        for_dict.contains("\"__v\".to_string()") || for_dict.contains("\"__k\".to_string()"),
-        "lower_for_dict no longer uses the `__k`/`__v` throwaway fallback — the \
-         A4b nested-destructure offender may be fixed. Re-pin or remove (burn-down)."
+        for_dict.contains("\"__v\".to_string()"),
+        "lower_for_dict no longer uses the `__v` value-side throwaway fallback — the \
+         A4b nested-destructure offender may be (half-)fixed. Re-pin or remove (burn-down)."
+    );
+    assert!(
+        for_dict.contains("\"__k\".to_string()"),
+        "lower_for_dict no longer uses the `__k` key-side throwaway fallback — the \
+         A4b nested-destructure offender may be (half-)fixed. Re-pin or remove (burn-down)."
     );
 }
 
@@ -5759,7 +5772,7 @@ fn ratchet_b_materialize_site_count() {
     );
 }
 
-/// Minimal recursive file walk (extension-filtered) for the scout prototype.
+/// Minimal recursive file walk (extension-filtered) shared by the ratchets.
 fn walk_files(root: &str, ext: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack = vec![std::path::PathBuf::from(root)];
