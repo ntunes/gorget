@@ -29,6 +29,7 @@ from lir_lower import resource_meta_for
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, is_mut_borrow_param_local, cow_materialize_projected_root, materialize_loop_carried_bare_params, materialize_scope_carried_bare_params
+from lower_cow import stmts_first_pos
 from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
@@ -793,12 +794,12 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             lower_expr(&ctx, sexpr, &gmod)
         case SIf(cond_expr, then_body, elif_branches):
             # Planner consumer #1 (SH mirror): SUBTREE-scoped pre-branch
-            # bare-param materialize — decided from THIS statement's own
-            # subtree (cond + elif-conds + all branch bodies), mirroring
-            # Rust's dispatch-arm hoist. Covers the elif recursion inside
-            # lower_if too (the union spans every ElseBranch), so lower_if
-            # itself carries no hoist. See materialize_scope_carried_bare_params.
-            materialize_scope_carried_bare_params(&ctx, &gmod, stmt)
+            # bare-param materialize -- exact subtree membership from the
+            # ONE-PASS scope sets (anchor = cond span start, matching the
+            # walker's SIf push). Covers the elif recursion inside lower_if
+            # too (the set spans every ElseBranch), so lower_if itself
+            # carries no hoist. See materialize_scope_carried_bare_params.
+            materialize_scope_carried_bare_params(&ctx, &gmod, cond_expr.span.start)
             lower_if(&ctx, cond_expr, then_body, elif_branches, &gmod, is_main)
         case SWhile(cond_expr, body, else_body):
             lower_while(&ctx, cond_expr, body, else_body, &gmod, is_main)
@@ -1059,13 +1060,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             pass
         case SMatch(scrutinee, arms):
             # Planner consumer #1 (SH mirror): SUBTREE-scoped pre-scrutinee
-            # bare-param materialize (scrutinee + guards + arm bodies — the
-            # walker's SMatch arm computes the union). Match arm bodies +
-            # guards lower inside per-arm nl_snapshot/nl_restore scopes
-            # (lower_match.gg); an in-arm CoW rebind is reverted, so a
-            # bare-param mutation in an arm/guard is thrown away without
-            # this hoist. Dominates every arm. SH ratchet stays 8.
-            materialize_scope_carried_bare_params(&ctx, &gmod, stmt)
+            # bare-param materialize (scrutinee + guards + arm bodies -- the
+            # walker's SMatch arm captures the set; anchor = scrutinee span
+            # start). Match arm bodies + guards lower inside per-arm
+            # nl_snapshot/nl_restore scopes (lower_match.gg); an in-arm CoW
+            # rebind is reverted, so a bare-param mutation in an arm/guard
+            # is thrown away without this hoist. Dominates every arm.
+            materialize_scope_carried_bare_params(&ctx, &gmod, scrutinee.span.start)
             # Real SMatch lowering — delegates to lower_match_stmt for
             # the per-arm ctor / binding / guard scaffolding. Payload
             # binds of type Box[T] are consumed via EDeref → GIDeref
@@ -1438,13 +1439,12 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # (src/ir/lowering/stmts/mod.rs:2878) + the SWith block pattern.
             #
             # Planner consumer #1 (SH mirror): SUBTREE-scoped pre-scope
-            # bare-param materialize — nl_restore below reverts an in-body
+            # bare-param materialize -- nl_restore below reverts an in-body
             # CoW rebind, so a bare-param mutation in the named scope is
-            # thrown away without this hoist. Decided from the scope body's
-            # own subtree (SNamedScope needs no span — the subtree scan
-            # replaces the old anchor=0 whole-fn-membership degeneration,
-            # which over-fired). SH ratchet stays 8.
-            materialize_scope_carried_bare_params(&ctx, &gmod, stmt)
+            # thrown away without this hoist. SNamedScope carries no span;
+            # anchor = stmts_first_pos(body), the SAME shared helper the
+            # walker's push uses (keying cannot drift).
+            materialize_scope_carried_bare_params(&ctx, &gmod, stmts_first_pos(ns_body))
             Dict[String, int] ns_snapshot = nl_snapshot(&ctx)
             push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
             lower_stmts(&ctx, ns_body, &gmod, is_main)

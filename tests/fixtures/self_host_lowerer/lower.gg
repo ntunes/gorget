@@ -44,7 +44,7 @@ from gir import CollectionKind, CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet,
 # memoises results into `gmod.resource_metadata`.
 from lir_lower import resource_meta_for
 from gir import BoxKind, BkNotBox, BkRegularBox, BkTraitBox
-from lower_cow import compute_cow_scan, cow_pristine_after, cow_source_root_name, cow_scan_stmt_one
+from lower_cow import compute_cow_scan, cow_pristine_after, cow_source_root_name
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, try_register_sync_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
@@ -59,7 +59,7 @@ from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid
 # lowerer used to recognise via raw name-match lists (CLAUDE.md "No name
 # matching"). Read via `string_builtin_method` / `collection_builtin_method`
 # (mirror lir_lower.gg's `build_resource_metadata` reading RESOURCES).
-from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
+from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES, RUST_PRESCAN_MUTATOR_FALLBACK
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 
@@ -480,6 +480,26 @@ struct LowerCtx:
     # wrapper + forwards the carrier. Mirrors Rust gg's
     # `BuilderState.inner_shared_spawns` (`src/ir/builder.rs:19`).
     Vector[InnerSharedSpawn] inner_shared_spawns
+    # -- Planner consumer #1 scope-set channel (ONE-PASS; bootstrap-hotfix) --
+    # The whole-fn CoW scan records, PER open scope statement, which names its
+    # SUBTREE mutates -- captured DURING the single forward scan (never by
+    # re-walking subtrees at lowering time: a per-scope rescan multiplied the
+    # scan cost by nesting depth and blew the stage-1 bootstrap deadline).
+    # cow_scope_anchor_stack holds the anchors of the scope statements the
+    # scan is currently inside (SIf cond start / SMatch scrutinee start /
+    # SNamedScope first-pos); cow_mark_name flat-records "anchor@name" into
+    # cow_scope_muts for every open anchor (flat String keys -- never a
+    # nested Dict, per the SH nested-collection-mutation trap). The dispatch
+    # hoist then queries exact subtree membership per candidate param.
+    Vector[int] cow_scope_anchor_stack
+    Dict[String, bool] cow_scope_muts
+    # Scan-scoped flag: true while recording a mutation mark that RUST's
+    # prescan would NOT record (a user &self-mutator / unknown-method
+    # receiver). Such marks stay in the whole-fn maps (bind-flip safety,
+    # loop hoist) but are kept OUT of the scope sets, so the branch hoist
+    # fires on exactly the shapes Rust's collector marks (lane symmetry;
+    # see rust_prescan_marks_method).
+    bool cow_scope_mark_suppress
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -884,10 +904,45 @@ bool cow_materialize_root_by_name(LowerCtx &ctx, GirModule &gmod, String root):
 # single clone earlier — never an extra clone. Under-approximation would be the
 # bug; there is none (the scan is the same one the per-site materialize trusts).
 void materialize_loop_carried_bare_params(LowerCtx &ctx, GirModule &gmod, int anchor_pos):
-    # Snapshot the candidate param NAMES first — the materialize `nl_put`s (rebinds
-    # named_locals), so we must not mutate the map while iterating its keys.
+    materialize_carried_bare_params_core(&ctx, &gmod, anchor_pos, false)
+
+# -- Planner consumer #1 -- SCOPE-carried bare-param materialize (SH mirror,
+# ONE-PASS subtree sets) --------------------------------------------------
+#
+# Called at the lower_stmt dispatch arm of the non-loop scope forms the SH
+# lowers with an nl_snapshot/nl_restore hole (SIf, SMatch, SNamedScope) --
+# BEFORE the scope fn runs. Decides from the SCOPE STATEMENT'S OWN SUBTREE
+# ONLY, exactly like Rust's per-scope union (cow_mutations_in_stmt) -- NOT
+# from the whole-fn suffix scan (which over-fired at every branch entry:
+# the stage-1 bootstrap blowout), and NOT by re-walking the subtree at
+# lowering time (a per-scope rescan multiplied scan cost by nesting depth:
+# the second stage-1 blowout, 7x runtime clones). The subtree sets are
+# captured DURING the single whole-fn forward scan: the walker's
+# SIf/SMatch/SNamedScope arms push their anchor on cow_scope_anchor_stack
+# and cow_mark_name flat-records "anchor@name" into cow_scope_muts for
+# every open anchor. This query is a pure lookup.
+#
+# anchor keying (must equal the walker's push): SIf = cond span start;
+# SMatch = scrutinee span start; SNamedScope = stmts_first_pos(body) (the
+# shared helper -- keying cannot drift). The loop hoist above keeps the
+# whole-fn suffix scan (a loop re-executes; at/after-the-anchor is the
+# right question there; a branch does not).
+void materialize_scope_carried_bare_params(LowerCtx &ctx, GirModule &gmod, int scope_anchor):
+    materialize_carried_bare_params_core(&ctx, &gmod, scope_anchor, true)
+
+# The ONE shared candidate-filter + materialize funnel behind BOTH hoists
+# (single cow_materialize_root_by_name site -- the ratchet's convergence
+# meter). subtree_mode=false: loop semantics (pristine-negation at/after
+# anchor_pos over the whole-fn maps). subtree_mode=true: scope semantics
+# (exact subtree membership via the one-pass "anchor@name" scope sets).
+void materialize_carried_bare_params_core(LowerCtx &ctx, GirModule &gmod, int anchor_pos, bool subtree_mode):
+    # Snapshot the candidate param NAMES first -- the materialize nl_puts
+    # (rebinds named_locals), so we must not mutate the map while iterating.
     Vector[String] cand_names = []
     Vector[String] all_names = ctx.named_locals.keys()
+    String core_prefix = ""
+    if subtree_mode:
+        core_prefix = int_to_str(anchor_pos) + "@"
     for pn in all_names:
         int lid = nl_get(&ctx, pn)
         bool is_param = false
@@ -896,53 +951,16 @@ void materialize_loop_carried_bare_params(LowerCtx &ctx, GirModule &gmod, int an
                 is_param = true
             else:
                 pass
-        if is_param and not is_mut_borrow_param_local(&ctx, &gmod, lid) and not cow_pristine_after(&ctx, pn, anchor_pos):
-            cand_names.push(pn)
+        if is_param and not is_mut_borrow_param_local(&ctx, &gmod, lid):
+            bool core_hit = false
+            if subtree_mode:
+                core_hit = ctx.cow_scope_muts.contains(core_prefix + pn)
+            else:
+                core_hit = not cow_pristine_after(&ctx, pn, anchor_pos)
+            if core_hit:
+                cand_names.push(pn)
     for cn in cand_names:
         cow_materialize_root_by_name(&ctx, &gmod, cn)
-
-# ── Planner consumer #1 — SCOPE-carried bare-param materialize (SH mirror,
-# SUBTREE-scoped) ─────────────────────────────────────────────────────────
-#
-# Called at the `lower_stmt` dispatch arm of the non-loop scope forms the SH
-# lowers with an nl_snapshot/nl_restore hole (SIf, SMatch, SNamedScope) —
-# BEFORE the scope fn runs. Decides from the SCOPE STATEMENT'S OWN SUBTREE
-# ONLY, exactly like Rust's `materialize_scope_carried_bare_params` /
-# `cow_mutations_in_stmt` (a per-scope union), NOT from the whole-fn suffix
-# scan: the suffix negation (`cow_pristine_after` at an anchor) fires for a
-# mutation ANYWHERE at/after the anchor — over-approximating at every branch
-# entry, which the stage-1 bootstrap measured as an entry clone per call in
-# hot classifier helpers (the 600s blowout). The loop hoist above KEEPS the
-# suffix scan (proven 2G shape: a loop re-executes, so at/after-the-anchor is
-# the right question there; a branch does not).
-#
-# Mechanism — reuse, never mirror (one walker, one funnel; ratchet stays 8):
-#   1. set the three scan accumulators aside and start empty ones;
-#   2. run the SHARED walker (`cow_scan_stmt_one`) over JUST this statement —
-#      its own SIf/SMatch arms fold in conditions, elif-conds, guards, arm
-#      bodies and nested scopes, so the subtree union inherits every collector
-#      property (no parallel walker to drift);
-#   3. run the EXISTING `materialize_loop_carried_bare_params` with anchor=0 —
-#      against the subtree-only maps the pristine-negation degenerates to
-#      exact subtree membership, and the materialize routes through the same
-#      single `cow_materialize_root_by_name` funnel (no new ratchet site);
-#   4. restore the whole-fn scan maps (side channels `cow_decl_types` /
-#      moved-roots are idempotent re-records over a subtree — left alone).
-void materialize_scope_carried_bare_params(LowerCtx &ctx, GirModule &gmod, Stmt scope_stmt):
-    Dict[String, bool] scz_saved_mut = ctx.cow_mutated_names.clone()
-    Dict[String, int] scz_saved_span = ctx.cow_mut_max_span.clone()
-    Dict[String, bool] scz_saved_clo = ctx.cow_closure_mutated.clone()
-    Dict[String, bool] scz_fresh_mut = {}
-    Dict[String, int] scz_fresh_span = {}
-    Dict[String, bool] scz_fresh_clo = {}
-    ctx.cow_mutated_names = scz_fresh_mut
-    ctx.cow_mut_max_span = scz_fresh_span
-    ctx.cow_closure_mutated = scz_fresh_clo
-    cow_scan_stmt_one(&ctx, &gmod, scope_stmt, false)
-    materialize_loop_carried_bare_params(&ctx, &gmod, 0)
-    ctx.cow_mutated_names = scz_saved_mut
-    ctx.cow_mut_max_span = scz_saved_span
-    ctx.cow_closure_mutated = scz_saved_clo
 
 # Phase 3 (2026-05-22) — Class 8 keystone fix.
 #
@@ -1151,6 +1169,26 @@ Option[BuiltinMethodDecl] builtin_method_mutates(String mname):
 # The user path is tried FIRST: a user type may legitimately name a
 # method `get`/`map`/… that takes `&self` and mutates; its typed
 # self-convention is authoritative over the builtin name table.
+# The LANE-SYMMETRY predicate for the scope-hoist channel: would RUST'S
+# untyped prescan mark a receiver mutated by a call of `mname`? Rust =
+# typed builtin `is_mutating` table UNION the MUTATING_METHODS name
+# fallback; unknown names are NOT marked (Rust is blind to user `&self`
+# mutators -- the shared filed gap). The SH's richer typed user-method
+# detection stays authoritative for the whole-fn maps (bind-flip safety,
+# loop hoist); ONLY the scope-set channel filters through this predicate,
+# so both lanes' branch hoists fire on identical shapes (Core #9).
+bool rust_prescan_marks_method(String mname):
+    match builtin_method_mutates(mname):
+        case Some(rpm_decl):
+            if rpm_decl.is_mutating:
+                return true
+        case None:
+            pass
+    for rpm_fb in RUST_PRESCAN_MUTATOR_FALLBACK:
+        if rpm_fb == mname:
+            return true
+    return false
+
 bool method_mutates_receiver(SpannedExpr recv, String mname, GirModule &gmod):
     # (1) USER method: resolve receiver type → equip-method key.
     int recv_tid = lookup_expr_gir_type(recv, &gmod)
@@ -2919,7 +2957,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Dict[String, int] _sb_cow_span = {}
     Dict[String, bool] _sb_cow_clo = {}
     # suite setup/teardown bodies are void, non-throws → fn_is_throws=false.
-    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [])
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
     Vector[Instruction] sinit = []
     sctx.block_insts.push(!sinit)
     sctx.block_terms.push(GTNone())
@@ -5179,7 +5217,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
                         # Test bodies are void, non-throws → fn_is_throws=false.
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [])
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

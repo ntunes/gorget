@@ -13,9 +13,10 @@
 # flat-merge model that makes the mutual import safe.
 
 from std.collections import Vector, Dict
+from std.conv import int_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
 from gir import GirModule, GirFunction, GirLocal
-from lower import LowerCtx, method_mutates_receiver, call_arg_lets_callee_mutate, method_arg_lets_callee_mutate
+from lower import LowerCtx, method_mutates_receiver, call_arg_lets_callee_mutate, method_arg_lets_callee_mutate, rust_prescan_marks_method
 
 # ── CoW resource-bind forward-scan (substrate ii) ───────────────────
 #
@@ -65,6 +66,15 @@ from lower import LowerCtx, method_mutates_receiver, call_arg_lets_callee_mutate
 # is load-bearing — see the field docstring.
 void cow_mark_name(LowerCtx &ctx, String idn, int pos, bool in_closure):
     ctx.cow_mutated_names.put(idn, true)
+    # Planner consumer #1 (one-pass scope sets): flat-record this mutation
+    # into every OPEN scope statement's subtree set ("anchor@name"). Rare
+    # events (real mutations only) x small stack depth. Closure-deferred
+    # marks are recorded too (same conservatism as the never-pristine loop
+    # treatment: an extra pre-scope clone, never a missed hoist).
+    if not ctx.cow_scope_mark_suppress:
+        Vector[int] csa_stack = ctx.cow_scope_anchor_stack.clone()
+        for csa_anchor in csa_stack:
+            ctx.cow_scope_muts.put(int_to_str(csa_anchor) + "@" + idn, true)
     if in_closure:
         ctx.cow_closure_mutated.put(idn, true)
     else:
@@ -120,7 +130,15 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             # self-convention (method_mutates_receiver). A read-only call
             # does NOT mark its receiver; a mutating one marks the root.
             if method_mutates_receiver(*recv_box, mname, &gmod):
+                # Scope-set lane symmetry: a receiver mark that only the
+                # SH's TYPED user-method path (or the conservative unknown
+                # default) produces -- one Rust's prescan would NOT mark --
+                # is suppressed from the scope sets (the whole-fn maps
+                # still record it). See rust_prescan_marks_method.
+                if not rust_prescan_marks_method(mname):
+                    ctx.cow_scope_mark_suppress = true
                 cow_mark_if_ident(&ctx, *recv_box, e.span.start, in_closure)
+                ctx.cow_scope_mark_suppress = false
             cow_scan_expr(&ctx, &gmod, *recv_box, in_closure)
             # F1 soundness (method half): the parser DISCARDS `&`/`!`
             # sigils on call args (parser.gg skip_ownership_markers), so
@@ -354,6 +372,10 @@ void cow_scan_stmt_one(LowerCtx &ctx, GirModule &gmod, Stmt st, bool in_closure)
             cow_scan_stmts(&ctx, &gmod, body_f, in_closure)
             cow_scan_stmts(&ctx, &gmod, else_f, in_closure)
         case SIf(cond_if, then_if, elses_if):
+            # Scope-set capture (one-pass): marks recorded while this SIf is
+            # open belong to its subtree set, keyed by the cond start -- the
+            # SAME anchor the lower_stmt dispatch hoist queries.
+            ctx.cow_scope_anchor_stack.push(cond_if.span.start)
             cow_scan_expr(&ctx, &gmod, cond_if, in_closure)
             cow_scan_stmts(&ctx, &gmod, then_if, in_closure)
             for eb_if in elses_if:
@@ -372,7 +394,10 @@ void cow_scan_stmt_one(LowerCtx &ctx, GirModule &gmod, Stmt st, bool in_closure)
                     case None:
                         pass
                 cow_scan_stmts(&ctx, &gmod, eb_if.body, in_closure)
+            ctx.cow_scope_anchor_stack.pop()
         case SMatch(scrut_if, arms_if):
+            # Scope-set capture: anchor = scrutinee start (the dispatch's key).
+            ctx.cow_scope_anchor_stack.push(scrut_if.span.start)
             cow_scan_expr(&ctx, &gmod, scrut_if, in_closure)
             for arm_if in arms_if:
                 match arm_if.guard:
@@ -381,11 +406,17 @@ void cow_scan_stmt_one(LowerCtx &ctx, GirModule &gmod, Stmt st, bool in_closure)
                     case None:
                         pass
                 cow_scan_stmts(&ctx, &gmod, arm_if.body, in_closure)
+            ctx.cow_scope_anchor_stack.pop()
         case SWith(with_e, _, body_with):
             cow_scan_expr(&ctx, &gmod, with_e, in_closure)
             cow_scan_stmts(&ctx, &gmod, body_with, in_closure)
         case SNamedScope(_, body_ns):
+            # Scope-set capture: SNamedScope carries no span; anchor =
+            # stmts_first_pos(body) -- the SAME shared helper the dispatch
+            # uses, so keying cannot drift.
+            ctx.cow_scope_anchor_stack.push(stmts_first_pos(body_ns))
             cow_scan_stmts(&ctx, &gmod, body_ns, in_closure)
+            ctx.cow_scope_anchor_stack.pop()
         case SOnError(body_oe):
             cow_scan_stmts(&ctx, &gmod, body_oe, in_closure)
         case SAssert(ae, _):
@@ -405,6 +436,62 @@ void cow_scan_stmt_one(LowerCtx &ctx, GirModule &gmod, Stmt st, bool in_closure)
                 cow_scan_stmts(&ctx, &gmod, sel_arm.body, in_closure)
         else:
             pass
+
+# -- Anchor helpers for span-less scope forms (SNamedScope) --------------
+# The textual start of the first spanned expression under a statement (list).
+# Used by BOTH the scan's SNamedScope arm and the lower_stmt dispatch hoist
+# -- one shared helper, so the two keying sites cannot drift. Returns 0 when
+# the subtree holds no spanned expr (nothing to mutate there either).
+int stmt_first_pos(Stmt st):
+    match st:
+        case SVarDecl(_, _, sfp_init, _, _, _):
+            return sfp_init.span.start
+        case SAssign(sfp_lhs, _):
+            return sfp_lhs.span.start
+        case SCompoundAssign(sfp_clhs, _, _):
+            return sfp_clhs.span.start
+        case SExpr(sfp_e):
+            return sfp_e.span.start
+        case SReturn(sfp_opt):
+            match sfp_opt:
+                case Some(sfp_re):
+                    return sfp_re.span.start
+                case None:
+                    return 0
+        case SThrow(sfp_te):
+            return sfp_te.span.start
+        case SWhile(sfp_wc, _, _):
+            return sfp_wc.span.start
+        case SFor(_, sfp_it, _, _, _):
+            return sfp_it.span.start
+        case SIf(sfp_ic, _, _):
+            return sfp_ic.span.start
+        case SMatch(sfp_sc, _):
+            return sfp_sc.span.start
+        case SWith(sfp_we, _, _):
+            return sfp_we.span.start
+        case SNamedScope(_, sfp_nb):
+            return stmts_first_pos(sfp_nb)
+        case SLoop(sfp_lb):
+            return stmts_first_pos(sfp_lb)
+        case SOnError(sfp_ob):
+            return stmts_first_pos(sfp_ob)
+        case SAssert(sfp_ae, _):
+            return sfp_ae.span.start
+        case SAssertReturn(sfp_are, _):
+            return sfp_are.span.start
+        case SSnapshot(_, _, sfp_se):
+            return sfp_se.span.start
+        else:
+            return 0
+
+int stmts_first_pos(Vector[Stmt] stmts):
+    for sfp_st in stmts:
+        int sfp_p = stmt_first_pos(sfp_st)
+        if sfp_p > 0:
+            return sfp_p
+    return 0
+
 
 # Mark the root identifier of an assignment LHS as mutated. For a bare
 # `x` this is x; for `x[i]` / `x.f` / `x.f[i]` it walks down to the
