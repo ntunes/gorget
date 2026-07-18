@@ -450,6 +450,7 @@ fn compute_cow_reassigned_after(
 pub(crate) fn cow_mutations_in_loop(
     body: &[Spanned<Stmt>],
     condition: Option<&Expr>,
+    else_body: Option<&[Spanned<Stmt>]>,
     fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
 ) -> rustc_hash::FxHashSet<std::rc::Rc<str>> {
     let mut result = rustc_hash::FxHashMap::default();
@@ -459,6 +460,49 @@ pub(crate) fn cow_mutations_in_loop(
     if let Some(cond) = condition {
         cow_after_expr_moves(cond, &mut future, fn_param_ownerships, &mut interner);
     }
+    // Planner consumer #1 (loop-else): a bare-param mutation in a `for … else:` /
+    // `while … else:` body has the IDENTICAL save/restore hole — the else body
+    // lowers via `lower_block_scoped`, whose `restore_locals` reverts the in-body
+    // materialize rebind. The pre-LOOP hoist (`materialize_loop_carried_bare_params`)
+    // dominates the else exit, so folding the else body into the loop's pre-header
+    // scan lets that single hoist cover it too (keeping `LoopPreHeaderMaterialize`).
+    if let Some(eb) = else_body {
+        cow_after_block(eb, &mut future, &mut result, fn_param_ownerships, &mut interner);
+    }
+    future
+}
+
+/// Planner consumer #1 (scope pre-header) — the drift-free scope analog of
+/// `cow_mutations_in_loop`. Returns the UNION mutation-marker set that a whole
+/// non-loop SCOPE statement (`if`/`with`/`unsafe`/named-scope/`match`/`select`)
+/// contributes, so its pre-scope hoist can materialize every bare param the scope
+/// mutates on any path — before the scope's `save_locals`, so the post-scope read
+/// sees the private copy on every path without a phi (the same write-site-hoist
+/// logic as the loop pre-header, devbook/11 2G).
+///
+/// One source of truth (devbook/24): this IS the shared collector `cow_after_stmt`
+/// run over the whole scope statement — NOT a hand-mirror of its per-form arms.
+/// That is what keeps it drift-free: the collector's own `Stmt::If` / `Stmt::With`
+/// / `Stmt::Match` / `Stmt::Select` arms already fold in the `if`/elif CONDITIONS,
+/// the match GUARDS, the `with` BINDINGS, the arm-Expr-vs-Block bodies, the
+/// `else` bodies, and any NESTED scopes — so a new sub-form the collector learns
+/// to scan is covered here automatically, with no parallel walker to fall behind.
+/// (The proto's earlier `cow_mutations_in_branches` hand-mirrored the branch-body
+/// union and had already drifted by missing the elif conditions — the exact
+/// Core #2/#3 failure this replacement retires.)
+///
+/// Including the `if` condition (which runs on the dominating path) is harmless:
+/// the pre-scope rebind makes the at-site condition materialize a no-op — no
+/// double clone. Over-approximation costs one extra clone; under-approximation
+/// revives the thrown-away private copy.
+pub(crate) fn cow_mutations_in_stmt(
+    stmt: &Stmt,
+    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+) -> rustc_hash::FxHashSet<std::rc::Rc<str>> {
+    let mut result = rustc_hash::FxHashMap::default();
+    let mut future: rustc_hash::FxHashSet<std::rc::Rc<str>> = rustc_hash::FxHashSet::default();
+    let mut interner: rustc_hash::FxHashMap<String, std::rc::Rc<str>> = rustc_hash::FxHashMap::default();
+    cow_after_stmt(stmt, &mut future, &mut result, fn_param_ownerships, &mut interner);
     future
 }
 

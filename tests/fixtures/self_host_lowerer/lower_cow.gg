@@ -227,6 +227,14 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             cow_scan_expr(&ctx, &gmod, *cond_box, in_closure)
             cow_scan_stmts(&ctx, &gmod, then_b, in_closure)
             for eb in elses:
+                # Same elif-CONDITION scan as the SIf arm (see there): an
+                # `elif shrink(&xs):` inside an if-EXPRESSION was equally
+                # scan-invisible.
+                match eb.condition:
+                    case Some(eb_cond_e):
+                        cow_scan_expr(&ctx, &gmod, eb_cond_e, in_closure)
+                    case None:
+                        pass
                 cow_scan_stmts(&ctx, &gmod, eb.body, in_closure)
         case EMatch(scrut_box, arms):
             cow_scan_expr(&ctx, &gmod, *scrut_box, in_closure)
@@ -341,6 +349,20 @@ void cow_scan_stmts(LowerCtx &ctx, GirModule &gmod, Vector[Stmt] stmts, bool in_
                 cow_scan_expr(&ctx, &gmod, cond_if, in_closure)
                 cow_scan_stmts(&ctx, &gmod, then_if, in_closure)
                 for eb_if in elses_if:
+                    # Planner consumer #1 fold: scan the ELIF CONDITION too
+                    # (`elif shrink(&xs):` mutates via a mut-borrow arg). Only
+                    # the branch BODIES were walked, so an elif-cond-only
+                    # mutation was scan-invisible and the pre-scope hoist never
+                    # fired — the SH analog of the Rust proto's
+                    # cow_mutations_in_branches drift (both missed elif conds;
+                    # match GUARDS were already scanned, making this the odd
+                    # one out). Mirrors Rust cow_after_stmt's Stmt::If arm:
+                    # cond + all elif-conds + body union.
+                    match eb_if.condition:
+                        case Some(eb_cond):
+                            cow_scan_expr(&ctx, &gmod, eb_cond, in_closure)
+                        case None:
+                            pass
                     cow_scan_stmts(&ctx, &gmod, eb_if.body, in_closure)
             case SMatch(scrut_if, arms_if):
                 cow_scan_expr(&ctx, &gmod, scrut_if, in_closure)

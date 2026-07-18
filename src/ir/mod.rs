@@ -229,6 +229,16 @@ pub enum ImplicitCloneReason {
     /// loop-pre-header materialize path (`materialize_loop_carried_bare_params`
     /// → `cow_before_mutation`); at-site CoW keeps `CoWMaterialization`.
     LoopPreHeaderMaterialize,
+    /// CoW materialization hoisted to a SCOPE PRE-HEADER (a bare param a
+    /// non-loop scope — an `if`/elif/else branch (bodies + conditions), `with`,
+    /// `unsafe`, named-scope, `match` arms (bodies + guards), `select` recv
+    /// arms — mutates, hoisted once before the scope dispatch so the post-merge
+    /// read sees the private copy without a phi). Distinct from
+    /// `LoopPreHeaderMaterialize` (per-loop hoist; also covers loop-`else`
+    /// bodies) and at-site `CoWMaterialization` so the planner can cost the
+    /// once-per-scope hoist. Emitted only by the scope pre-header materialize
+    /// path (`materialize_scope_carried_bare_params` → `cow_before_mutation`).
+    BranchPreHeaderMaterialize,
     /// User wrote `.clone()` explicitly. The clone is a user directive, not a
     /// compiler-inserted materialization; still a clone the validator must see.
     /// Tags the INSTRUCTION only — it does NOT mint an `ImplicitCloneWarning`
@@ -256,6 +266,7 @@ impl std::fmt::Display for ImplicitCloneReason {
             Self::CallArg => write!(f, "borrowed reference cloned at call boundary"),
             Self::BorrowedExternReturn => write!(f, "extern returns borrowed alias — cloned to caller-owned"),
             Self::LoopPreHeaderMaterialize => write!(f, "loop-carried materialize hoisted to pre-header"),
+            Self::BranchPreHeaderMaterialize => write!(f, "branch-carried materialize hoisted to pre-branch"),
             Self::ExplicitUserClone => write!(f, "explicit `.clone()`"),
             Self::NeedsClassification => write!(f, "UNCLASSIFIED clone (burn-down marker)"),
         }

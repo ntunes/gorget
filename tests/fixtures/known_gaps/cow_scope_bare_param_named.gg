@@ -1,0 +1,14 @@
+# Planner consumer #1 — bare-param mutation inside a NAMED SCOPE (`label:`
+# block; a straight-line scope). Named-scope is OUT of the ggdef phase-0 subset
+# (elaboration rejects it), so this lives in known_gaps/ and is validated on the
+# two production backends only: C=3,4 and LLVM=3,4 (pre-fix both printed 4,4).
+# SH note: mirrored on the self-host (SNamedScope pre-scope hoist), same round.
+void f(Vector[int] xs):
+    scope1:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

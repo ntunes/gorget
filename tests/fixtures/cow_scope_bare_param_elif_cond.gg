@@ -1,0 +1,26 @@
+# Planner consumer #1 — bare-param mutation reached ONLY through an elif
+# CONDITION (`elif shrink(&xs):`, a mut-borrow-arg mutation; the elif is TAKEN).
+# The drift-free scope collector (`cow_mutations_in_stmt` = `cow_after_stmt`
+# over the whole `if`) folds elif CONDITIONS into the pre-scope hoist set — an
+# at-site materialize inside the elif-cond block would rebind in a
+# conditionally-reached, non-dominating else-chain block (worse than the
+# throwaway class). SH lane: `cow_scan_stmts`' SIf arm scans each ElseBranch
+# condition (it previously walked only branch BODIES — the SH analog of the
+# Rust proto's drift; match guards were already scanned). All four lanes agree:
+# shrink pops the private copy → 1 (arm), 3 (post-if), caller 4.
+# ggdef-adjudicated 1,3,4.
+bool shrink(Vector[int] &v):
+    v.pop()
+    return true
+
+void f(Vector[int] xs):
+    if xs.len() > 99:
+        print(0)
+    elif shrink(&xs):
+        print(1)
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

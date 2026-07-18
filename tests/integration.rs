@@ -9146,18 +9146,110 @@ fn cow_loop_bare_param_tuple_receiver() {
     run_gg("cow_loop_bare_param_tuple_receiver.gg", "3\n1");
 }
 
-// ── CoW 2G OUT-OF-SCOPE siblings (filed gaps — `#[ignore]`, assert INTENDED
-// output per "Don't redesign around compiler gaps"). Un-ignore when fixed.
+// ── Planner consumer #1 — the branch/scope bare-param pre-header materialize
+// class (both lanes). A bare-param mutation inside ANY save/restore scope was
+// thrown away by the scope's restore_locals reverting the in-body CoW rebind;
+// the dispatch-arm hoist (`materialize_scope_carried_bare_params`) materializes
+// the param BEFORE the scope so the fresh owned local dominates the post-scope
+// read. See docs/devbook/11-copy-on-write.md and TODO. In-subset / ggdef-
+// adjudicated shapes are TOP-LEVEL (corpus-harvested); out-of-ggdef-subset
+// shapes (unsafe/named-scope/loop-else/match-guard/with/select) live in
+// known_gaps/ (not corpus-harvested), validated on C+LLVM only.
 
 #[test]
-#[ignore = "CoW 2G branch-boundary sibling: a bare-param mutation in an `if` \
-branch (not a loop) is thrown away by lower_if's save/restore, same shape as the \
-pre-fix loop body. The 2G fix hooks LOOP pre-headers only; if/with/unsafe/\
-named-scope/select + while-else/loop-else bodies need the same treatment. \
-Asserts 3,4 (private copy); compiler currently prints 4,4. See TODO 'CoW 2G \
-branch-boundary sibling'."]
 fn cow_loop_bare_param_if_branch() {
-    run_gg("known_gaps/cow_loop_bare_param_if_branch.gg", "3\n4");
+    // then-branch mutation. ggdef-adjudicated 3,4 (was a Core-#8 both-backends
+    // -wrong miscompile: pre-fix 4,4).
+    run_gg("cow_loop_bare_param_if_branch.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_if_else() {
+    run_gg("cow_scope_bare_param_if_else.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_if_both() {
+    // Union over both branches → one pre-branch materialize. ggdef 3,4,0,2.
+    run_gg("cow_scope_bare_param_if_both.gg", "3\n4\n0\n2");
+}
+
+#[test]
+fn cow_scope_bare_param_if_elif() {
+    run_gg("cow_scope_bare_param_if_elif.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_nested_if_loop() {
+    // Loop (2G) + branch hoists compose; inner if sees an owned local → no-op.
+    run_gg("cow_scope_bare_param_nested_if_loop.gg", "2\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_amp_guard() {
+    // Regression guard: `&` param writes THROUGH (not materialized) → 3,3.
+    run_gg("cow_scope_bare_param_amp_guard.gg", "3\n3");
+}
+
+#[test]
+fn cow_scope_bare_param_match_arm() {
+    // Mutation in a match ARM body; pre-scrutinee hoist. ggdef 3,4.
+    run_gg("cow_scope_bare_param_match_arm.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_elif_cond() {
+    // Mutation ONLY via an elif CONDITION (`elif shrink(&xs):`), elif taken.
+    // Pins the collector's elif-cond fold on BOTH lanes (the SH SIf scan
+    // previously walked only branch bodies → SH printed 1,4,4). ggdef 1,3,4.
+    run_gg("cow_scope_bare_param_elif_cond.gg", "1\n3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_elif_cond_then() {
+    // Elif-cond mutation present but THEN taken: pins the silently-fixed
+    // undef-read wrong-code bug (base printed 0,0,4 on C AND LLVM — the
+    // at-site rebind in the non-dominating else-chain block). ggdef 0,4,4.
+    run_gg("cow_scope_bare_param_elif_cond_then.gg", "0\n4\n4");
+}
+
+// Out-of-ggdef-subset scope shapes (known_gaps/, C+LLVM validated on Rust gg,
+// not corpus-harvested). Each fixture header records the C+LLVM verdict + SH
+// lane note.
+
+#[test]
+fn cow_scope_bare_param_unsafe() {
+    run_gg("known_gaps/cow_scope_bare_param_unsafe.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_named() {
+    run_gg("known_gaps/cow_scope_bare_param_named.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_while_else() {
+    run_gg("known_gaps/cow_scope_bare_param_while_else.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_for_else() {
+    run_gg("known_gaps/cow_scope_bare_param_for_else.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_match_guard() {
+    run_gg("known_gaps/cow_scope_bare_param_match_guard.gg", "99\n3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_with() {
+    run_gg("known_gaps/cow_scope_bare_param_with.gg", "3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_select() {
+    run_gg("known_gaps/cow_scope_bare_param_select.gg", "3\n4");
 }
 
 #[test]

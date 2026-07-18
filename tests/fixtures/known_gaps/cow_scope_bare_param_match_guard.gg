@@ -1,0 +1,24 @@
+# Planner consumer #1 — bare-param mutation through a MATCH GUARD (`case p if
+# shrink(&xs):`). The guard lowers inside the arm's save/restore; the drift-free
+# scope collector folds guards into the pre-scrutinee hoist set, so the param is
+# materialized before the guard runs. Guard mutates via `&xs` (a mut-borrow
+# callee), arm prints 99. Match guards are OUT of the ggdef phase-0 subset, so
+# this lives in known_gaps/ and is validated on the two production backends only:
+# C=99,3,4 and LLVM=99,3,4 (pre-fix both printed 99,4,4). SH note: mirrored on
+# the self-host via the SMatch pre-scrutinee hoist.
+bool shrink(Vector[int] &v):
+    v.pop()
+    return true
+
+void f(Vector[int] xs):
+    match xs.len():
+        case 4 if shrink(&xs):
+            print(99)
+        else:
+            print(88)
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

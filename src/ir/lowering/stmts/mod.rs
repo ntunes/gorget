@@ -235,6 +235,11 @@ pub fn lower_stmt(
             else_body,
         } => {
             __kind_key = "lower_function::body::lower_block::stmt::if";
+            // Planner consumer #1: pre-scope bare-param materialize (one shared
+            // hoist entry for every non-loop scope form; loops ride
+            // `materialize_loop_carried_bare_params` instead). Runs in THIS
+            // pre-scope block before the scope fn's first `save_locals`.
+            materialize_scope_carried_bare_params(ctx, builder, &stmt.node, stmt.span);
             lower_if(ctx, builder, condition, then_body, elif_branches, else_body);
         }
 
@@ -280,6 +285,10 @@ pub fn lower_stmt(
             else_arm,
         } => {
             __kind_key = "lower_function::body::lower_block::stmt::match";
+            // Planner consumer #1: pre-scrutinee bare-param materialize (arm
+            // bodies + guards, via the shared collector). Dominates every arm's
+            // save/restore. See `materialize_scope_carried_bare_params`.
+            materialize_scope_carried_bare_params(ctx, builder, &stmt.node, stmt.span);
             lower_match_stmt(ctx, builder, scrutinee, arms, else_arm);
         }
 
@@ -309,16 +318,24 @@ pub fn lower_stmt(
 
         Stmt::With { bindings, body } => {
             __kind_key = "lower_function::body::lower_block::stmt::with";
+            // Planner consumer #1: pre-scope materialize. Straight-line scope
+            // (single predecessor) — entry hoist dominates. Covers the `with`
+            // BINDINGS too (they lower inside the save/restore). See the shared fn.
+            materialize_scope_carried_bare_params(ctx, builder, &stmt.node, stmt.span);
             lower_with(ctx, builder, bindings, body);
         }
 
         Stmt::Unsafe { body } => {
             __kind_key = "lower_function::body::lower_block::stmt::unsafe";
+            // Planner consumer #1: pre-scope materialize (straight-line scope).
+            materialize_scope_carried_bare_params(ctx, builder, &stmt.node, stmt.span);
             lower_block_scoped(ctx, builder, body);
         }
 
         Stmt::NamedScope { body, .. } => {
             __kind_key = "lower_function::body::lower_block::stmt::named_scope";
+            // Planner consumer #1: pre-scope materialize (straight-line scope).
+            materialize_scope_carried_bare_params(ctx, builder, &stmt.node, stmt.span);
             lower_named_scope(ctx, builder, body);
         }
 
@@ -329,6 +346,12 @@ pub fn lower_stmt(
 
         Stmt::Select { arms, else_arm: _ } => {
             __kind_key = "lower_function::body::lower_block::stmt::select";
+            // Planner consumer #1: pre-scope materialize before the spin-loop jump
+            // (dominates every recv-arm body). The collector's `Stmt::Select` arm
+            // also scans the else body — a harmless unobserved pre-materialize,
+            // since the dispatcher discards `else_arm` (a select-else body is never
+            // lowered). See the shared fn.
+            materialize_scope_carried_bare_params(ctx, builder, &stmt.node, stmt.span);
             lower_select(ctx, builder, arms);
         }
 
@@ -2193,6 +2216,12 @@ fn lower_if(
         *ctx.lower_fn_sub_times.entry(key).or_default() += exclusive;
     };
 
+    // Planner consumer #1: the pre-branch bare-param materialize is hoisted at
+    // the `lower_stmt` DISPATCH ARM (`materialize_scope_carried_bare_params`),
+    // one shared entry for every non-loop scope form — so `lower_if` itself no
+    // longer carries it (the dispatch arm runs in the SAME pre-scope block, no
+    // block is created between there and here). See that fn's doc.
+
     // ── cond_eval: condition expression + branch setup ─────────────────
     let __cond_t0 = std::time::Instant::now();
     let __cond_nested_entry = ctx.stmt_nested_dur;
@@ -2347,11 +2376,13 @@ fn materialize_loop_carried_bare_params(
     builder: &mut FunctionBuilder,
     body: &Block,
     condition: Option<&Expr>,
+    else_body: Option<&Block>,
     span: crate::span::Span,
 ) {
     let mut_set = crate::ir::lowering::functions::cow_mutations_in_loop(
         &body.stmts,
         condition,
+        else_body.map(|b| b.stmts.as_slice()),
         &ctx.fn_param_ownerships,
     );
     if mut_set.is_empty() {
@@ -2378,6 +2409,75 @@ fn materialize_loop_carried_bare_params(
     }
 }
 
+/// Planner consumer #1 — scope-carried bare-param materialize. Called at the
+/// `lower_stmt` DISPATCH ARM of every NON-LOOP scope form (`if`/elif/else,
+/// `with`, `unsafe`, named-scope, `match` arms, `select` arms) — i.e. in the
+/// PRE-SCOPE block, before the scope fn creates any block or runs its
+/// `save_locals`. For each in-scope bare (borrow) param the scope statement
+/// mutates on ANY path, eagerly materialize a private owned copy HERE via the
+/// shared `cow_before_mutation_scope_preheader` funnel (stamped
+/// `BranchPreHeaderMaterialize`) and rebind the name — so every branch/arm and
+/// the post-scope merge read the persistent private copy.
+///
+/// Why the pre-scope hoist (not the in-body write site): the in-body materialize
+/// (`cow_before_mutation`) rebinds the name inside `lower_block(scope-body)`, but
+/// the scope's per-branch/per-arm `restore_locals` reverts that rebind, and the
+/// merge block resolves the name to the stale pre-scope param-borrow slot — so
+/// the private copy is thrown away (the `cow_loop_bare_param_if_branch` gap:
+/// prints 4 instead of 3). Hoisting the materialize BEFORE the scope dispatch
+/// makes the fresh owned local dominate the merge on every path, so the merge
+/// needs no phi. Devbook/11 2G: fix at the WRITE site, never phi-repair at the
+/// merge. (Conditional scopes therefore hoist to the dominating pre-scope point;
+/// the identical treatment is sound for the straight-line scopes too — `with` /
+/// `unsafe` / named-scope have a single predecessor, so the entry hoist trivially
+/// dominates.)
+///
+/// Eager-here-is-observationally-lazy: a bare param's private copy starts == the
+/// caller's bytes, so a pre-scope clone for a param a not-taken branch would have
+/// mutated is indistinguishable from clone-at-first-write; it only fires when the
+/// scope statically mutates the param SOMEWHERE. Over-approximation costs one
+/// extra clone; under-approximation revives the thrown-away private copy.
+///
+/// Detection routes through the SHARED prescan collector
+/// (`functions::cow_mutations_in_stmt`, which IS `cow_after_stmt` over the whole
+/// scope statement) — never a parallel AST walker (devbook/24 one-source-of-truth).
+/// `stmt` MUST be one of the non-loop scope forms; `Stmt::While`/`Stmt::For` are
+/// handled by `materialize_loop_carried_bare_params` instead (which keeps
+/// `LoopPreHeaderMaterialize`, so per-position costing stays honest).
+fn materialize_scope_carried_bare_params(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    stmt: &Stmt,
+    span: crate::span::Span,
+) {
+    let mut_set = crate::ir::lowering::functions::cow_mutations_in_stmt(
+        stmt,
+        &ctx.fn_param_ownerships,
+    );
+    if mut_set.is_empty() {
+        return;
+    }
+    let candidates: Vec<(String, LocalId)> = ctx
+        .func_state
+        .locals
+        .iter()
+        .filter(|(_, (lid, _))| ctx.is_bare_param(builder, *lid))
+        .map(|(n, (lid, _))| (n.clone(), *lid))
+        .collect();
+    for (name, local) in candidates {
+        if ctx.is_bare_param(builder, local)
+            && crate::ir::lowering::functions::loop_set_mutates(&mut_set, &name)
+        {
+            ctx.cow_before_mutation_scope_preheader(
+                builder,
+                local,
+                crate::ir::ImplicitCloneReason::BranchPreHeaderMaterialize,
+                span,
+            );
+        }
+    }
+}
+
 /// Lower a while loop.
 fn lower_while(
     ctx: &mut LoweringContext,
@@ -2390,7 +2490,7 @@ fn lower_while(
     // (the current block), BEFORE the condition is lowered into the header and
     // before the body's `save_locals`. The condition re-executes every
     // iteration, so it is scanned for mutations too.
-    materialize_loop_carried_bare_params(ctx, builder, body, Some(&condition.node), condition.span);
+    materialize_loop_carried_bare_params(ctx, builder, body, Some(&condition.node), else_arm, condition.span);
 
     let header_bb = builder.new_block();
     let body_bb = builder.new_block();
@@ -2448,7 +2548,7 @@ fn lower_loop(
     // CoW 2G: materialize loop-carried bare-param mutations in the PRE-HEADER.
     // No condition to scan for a bare `loop`; body-only detection.
     if let Some(first) = body.stmts.first() {
-        materialize_loop_carried_bare_params(ctx, builder, body, None, first.span);
+        materialize_loop_carried_bare_params(ctx, builder, body, None, None, first.span);
     }
 
     let body_bb = builder.new_block();

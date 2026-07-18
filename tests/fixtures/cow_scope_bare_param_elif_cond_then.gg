@@ -1,0 +1,25 @@
+# Planner consumer #1 — elif-COND mutation present but the THEN branch is taken
+# (the elif condition never runs). PINS A SILENTLY-FIXED WRONG-CODE BUG: at base
+# `961c44b3` Rust-C printed 0,0,4 — the at-site materialize for the elif-cond
+# `&arg` rebound the param inside the conditionally-reached else-chain block
+# (no save/restore around elif conds), so the post-if merge read an
+# undef/stale local — exactly the latent hazard the consumer-#1 CONDITIONS
+# analysis predicted. The pre-scope hoist (which folds elif conds into the
+# dominating pre-if materialize) retires that non-dominating rebind: the then
+# path prints 0, the untouched private copy stays 4, caller 4. All four lanes
+# agree; ggdef-adjudicated 0,4,4.
+bool shrink(Vector[int] &v):
+    v.pop()
+    return true
+
+void f(Vector[int] xs):
+    if xs.len() > 2:
+        print(0)
+    elif shrink(&xs):
+        print(1)
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

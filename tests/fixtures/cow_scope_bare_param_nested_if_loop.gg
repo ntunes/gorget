@@ -1,0 +1,17 @@
+# Planner consumer #1 — the loop pre-header (2G) and branch pre-header hoists
+# COMPOSE. A bare-param mutation inside an `if` inside a `for` loop: the outer
+# loop's pre-header materializes the param once (2G), so the inner `if`'s
+# dispatch-arm hoist sees an already-owned local (`is_bare_param` false) and
+# correctly no-ops — no double materialize. Two iterations each pop once → 2
+# (caller 4). Already-correct on both lanes (this is the composition guard);
+# ggdef-adjudicated 2,4.
+void f(Vector[int] xs):
+    for i in 0..2:
+        if xs.len() > 0:
+            xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

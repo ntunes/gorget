@@ -1,0 +1,19 @@
+# Planner consumer #1 — bare-param mutation inside an `unsafe:` block (a
+# straight-line scope: single predecessor, entry hoist dominates). `unsafe` is
+# OUT of the ggdef phase-0 subset (elaboration rejects it), so this fixture lives
+# in known_gaps/ (not corpus-harvested / not ggdef-adjudicated) and is validated
+# on the two production backends only: C=3,4 and LLVM=3,4 (pre-fix both printed
+# 4,4). The Rust `lower_block_scoped` save/restore reverted the in-body rebind;
+# the dispatch-arm hoist fixes it. SH note: the SH lowerer has no `unsafe`
+# dispatch arm (out of the self-host subset) — the SH runtime output diverges
+# (construct-unimplemented), but this fixture is known_gaps (NOT corpus-harvested
+# by the parity lane), so it is a documented lane note, not a red parity lane.
+void f(Vector[int] xs):
+    unsafe:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

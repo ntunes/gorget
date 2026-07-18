@@ -1,0 +1,16 @@
+# Planner consumer #1 — bare-param mutation in a `match` ARM body. The match
+# dispatch-arm hoist materializes the param before the scrutinee is staged
+# (dominating every arm's save/restore). Scrutinee `xs.len()` is 4 → matches
+# `case 4` → pops → 3 (caller 4). Pre-fix printed 4,4; ggdef-adjudicated 3,4.
+void f(Vector[int] xs):
+    match xs.len():
+        case 4:
+            xs.pop()
+        else:
+            pass
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

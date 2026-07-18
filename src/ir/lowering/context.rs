@@ -3614,8 +3614,34 @@ impl<'a> LoweringContext<'a> {
         local: LocalId,
         span: crate::span::Span,
     ) {
+        self.cow_before_mutation_scope_preheader(
+            builder,
+            local,
+            crate::ir::ImplicitCloneReason::LoopPreHeaderMaterialize,
+            span,
+        );
+    }
+
+    /// The generalized pre-header materialize funnel (planner consumer #1). Runs
+    /// `cow_before_mutation` from a SCOPE pre-header — a loop pre-header
+    /// (`LoopPreHeaderMaterialize`) or a branch pre-header
+    /// (`BranchPreHeaderMaterialize`). Identical materialize behavior; the only
+    /// difference is the `reason` stamped on every clone emitted, so the planner
+    /// can cost once-per-loop vs once-per-branch hoists distinctly from at-site
+    /// `CoWMaterialization`. Save/restore of the scoped `cow_reason` (see the
+    /// field doc for why this is caller-context ambient rather than a threaded
+    /// param). This is the SINGLE `.cow_before_mutation(` funnel for every
+    /// pre-header consumer (the ratchet's convergence meter) — loop and branch
+    /// both route through here rather than each minting a new call site.
+    pub fn cow_before_mutation_scope_preheader(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        local: LocalId,
+        reason: crate::ir::ImplicitCloneReason,
+        span: crate::span::Span,
+    ) {
         let prev = self.cow_reason;
-        self.cow_reason = crate::ir::ImplicitCloneReason::LoopPreHeaderMaterialize;
+        self.cow_reason = reason;
         self.cow_before_mutation(builder, local, span);
         self.cow_reason = prev;
     }

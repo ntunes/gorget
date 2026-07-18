@@ -1,0 +1,21 @@
+# Planner consumer #1 — bare-param mutation in BOTH branches. The pre-scope
+# hoist materializes the param ONCE before the branch dispatch (union over both
+# bodies); each path mutates the same private copy and the post-`if` merge reads
+# it. First call: len 4 > 3 → then pops once → 3 (caller 4). Second call: len 2
+# not > 3 → else pops twice → 0 (caller 2). Pre-fix printed 4,4,2,2;
+# ggdef-adjudicated 3,4,0,2.
+void f(Vector[int] xs):
+    if xs.len() > 3:
+        xs.pop()
+    else:
+        xs.pop()
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())
+    Vector[int] b = [1, 2]
+    f(b)
+    print(b.len())

@@ -1,0 +1,15 @@
+# Planner consumer #1 — REGRESSION GUARD for the `is_bare_param` gate. The same
+# program as `cow_loop_bare_param_if_branch` but with a `&` (mutable-borrow)
+# param: `&` writes THROUGH to the caller and must NOT be materialized. The
+# dispatch-arm hoist is gated on `is_bare_param` (false for `&`/`!` params), so
+# no private copy is made — the pop is visible to the caller. Both f and main
+# print 3 (contrast the bare-param fixture's 3,4). ggdef-adjudicated 3,3.
+void f(Vector[int] &xs):
+    if xs.len() > 2:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(&a)
+    print(a.len())

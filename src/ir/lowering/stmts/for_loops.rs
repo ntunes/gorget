@@ -127,7 +127,10 @@ pub(super) fn lower_for(
     // iterable). No condition to scan — the iterable is evaluated once
     // pre-loop, so body-only detection. A no-op on an owned root or a body
     // that does not mutate the param.
-    super::materialize_loop_carried_bare_params(ctx, builder, body, None, iterable.span);
+    // Planner consumer #1 (loop-else): pass the `else` body so a bare-param
+    // mutation in a `for … else:` body is folded into this single pre-loop hoist
+    // (its own `lower_block_scoped` save/restore would otherwise revert it).
+    super::materialize_loop_carried_bare_params(ctx, builder, body, None, else_arm, iterable.span);
 
     if let Pattern::Binding(var_name) = &pattern.node {
         if let Expr::Range {
