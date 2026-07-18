@@ -22379,7 +22379,10 @@ fn runtime_parity_excluded(stem: &str) -> Option<&'static str> {
 /// Outcome of one fixture under the runtime-parity diagnostic.
 #[derive(Debug, Clone)]
 enum RuntimeParityOutcome {
-    Match,
+    /// Both compilers agree. `agreed` is that shared (trimmed) stdout — retained
+    /// so the ggdef adjudication post-pass (Track G2) can diff the definitional
+    /// interpreter's output against it WITHOUT re-running the oracle.
+    Match { agreed: String },
     WrongOutput { first_diff: String },
     CcFailed { detail: String },
     DriverFailed { detail: String },
@@ -22391,6 +22394,133 @@ enum RuntimeParityOutcome {
     RustRejected,
     /// Rust `gg run` crashed (signal-terminated). Logged separately.
     RustCrash,
+}
+
+/// A MATCH whose agreed (both-compiler) output the definitional interpreter
+/// (ggdef) contradicts — the rbw class (Track G2). `agreed` is what BOTH
+/// compilers printed; `ggdef` is what the definition printed.
+#[derive(Debug, Clone)]
+struct BothWrong {
+    stem: String,
+    agreed: String,
+    ggdef: String,
+}
+
+/// Adjudicate the MATCH set against ggdef, the definitional interpreter (Track
+/// G2). Returns `(adj_match, unadj_match, both_wrong)`:
+///   * `adj_match`   — stems where ggdef reached a `Value` AND its stdout equals
+///     the agreed (both-compiler) output. The MATCH is confirmed by a third,
+///     normative opinion.
+///   * `unadj_match` — `(stem, reason)` where ggdef could NOT weigh in: outside
+///     its phase-0 subset (FrontendError), a non-`Value` outcome
+///     (trap/illformed/fuel), a float-render HOLD (D8 — a known ggdef gap, NOT a
+///     both-wrong), an ICE (caught panic), or the native-stack exclude.
+///   * `both_wrong`  — ggdef reached a `Value` that DISAGREES with the agreed
+///     output. Each is a red-alert defect.
+///
+/// The verdict is TYPED on ggdef's `Outcome` enum (Core #2), never string-
+/// matched. Runs SERIALLY in one 2 GiB-stack thread: ggdef's big-step evaluator
+/// recurses on the native stack (fuel bounds the STEP count, not eval depth), so
+/// it needs a large native stack — the setup `converter_agreement.rs` validated.
+/// Serial is fine: ggdef is ~1ms/fixture, so the whole MATCH set adds ~1-2s.
+fn adjudicate_matches(
+    matched: &[String],
+    agreed_by_stem: &std::collections::HashMap<String, String>,
+    fixtures_dir: &Path,
+) -> (Vec<String>, Vec<(String, String)>, Vec<BothWrong>) {
+    let matched = matched.to_vec();
+    let agreed = agreed_by_stem.clone();
+    let fixtures_dir = fixtures_dir.to_path_buf();
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024 * 1024)
+        .name("ggdef-adjudicate".to_string())
+        .spawn(move || {
+            // Silence the panic hook for the duration: a ggdef ICE (a panic, not a
+            // clean `Outcome`) on one fixture is caught below and recorded as
+            // UNADJ; without this the report would be buried under its backtrace.
+            with_silent_panic_hook(|| adjudicate_matches_body(&matched, &agreed, &fixtures_dir))
+        })
+        .expect("failed to spawn ggdef-adjudicate thread")
+        .join()
+        .expect("ggdef-adjudicate thread panicked")
+}
+
+fn adjudicate_matches_body(
+    matched: &[String],
+    agreed_by_stem: &std::collections::HashMap<String, String>,
+    fixtures_dir: &Path,
+) -> (Vec<String>, Vec<(String, String)>, Vec<BothWrong>) {
+    let mut adj: Vec<String> = Vec::new();
+    let mut unadj: Vec<(String, String)> = Vec::new();
+    let mut both_wrong: Vec<BothWrong> = Vec::new();
+
+    for stem in matched {
+        // The designed unbounded-recursion fixture blows ggdef's native stack
+        // even at 2 GiB (a filed native-recursion finding) — CLASSIFY_EXCLUDE.
+        if ggdef::CLASSIFY_EXCLUDE.contains(&format!("{stem}.gg").as_str()) {
+            unadj.push((stem.clone(), "ggdef-excluded (native-stack)".to_string()));
+            continue;
+        }
+        let src = match std::fs::read_to_string(fixtures_dir.join(format!("{stem}.gg"))) {
+            Ok(s) => s,
+            Err(_) => {
+                unadj.push((stem.clone(), "source-read-failed".to_string()));
+                continue;
+            }
+        };
+        let agreed_out = agreed_by_stem.get(stem).cloned().unwrap_or_default();
+
+        // catch_unwind: a ggdef ICE (internal panic) on one fixture must not abort
+        // the whole adjudication — record it UNADJ and move on. `run_source` only
+        // reads the source and builds owned values, so `AssertUnwindSafe` is sound.
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ggdef::run_source(&src, ggdef::CLASSIFY_FUEL)
+        }));
+        let run = match run {
+            Ok(Ok(r)) => r,
+            // Parse OR elaborate error ⇒ outside ggdef's definitional surface.
+            Ok(Err(_)) => {
+                unadj.push((stem.clone(), "ggdef-frontend-error (out of subset)".to_string()));
+                continue;
+            }
+            Err(_) => {
+                unadj.push((stem.clone(), "ggdef-panic (ICE)".to_string()));
+                continue;
+            }
+        };
+
+        match &run.outcome {
+            ggdef::Outcome::Value(_) => {
+                if run.stdout.trim_end() == agreed_out.trim_end() {
+                    adj.push(stem.clone());
+                } else if ggdef::classify::has_decimal_number(&agreed_out)
+                    || ggdef::classify::has_decimal_number(&run.stdout)
+                {
+                    // D8 float-render HOLD: ggdef's decimal formatting differs from
+                    // the backends' — a KNOWN ggdef gap, not a both-wrong. Mirrors
+                    // classify.rs's `Float` route. (Crude: could mask a real
+                    // both-wrong whose diff lines also carry decimals — noted in the
+                    // scout report as the heuristic's limitation.)
+                    unadj.push((stem.clone(), "float-render HOLD (D8)".to_string()));
+                } else {
+                    both_wrong.push(BothWrong {
+                        stem: stem.clone(),
+                        agreed: agreed_out.clone(),
+                        ggdef: run.stdout.clone(),
+                    });
+                }
+            }
+            ggdef::Outcome::Trap(_) => unadj.push((stem.clone(), "ggdef-trap (101)".to_string())),
+            ggdef::Outcome::IllFormed(_) => {
+                unadj.push((stem.clone(), "ggdef-illformed (static reject)".to_string()))
+            }
+            ggdef::Outcome::FuelExhausted => {
+                unadj.push((stem.clone(), "ggdef-fuel-exhausted".to_string()))
+            }
+        }
+    }
+
+    (adj, unadj, both_wrong)
 }
 
 /// First-differing-line summary between an oracle and a self-host stdout.
@@ -22993,7 +23123,7 @@ fn self_host_runtime_diff() {
             ) {
                 Ok(self_stdout) => {
                     if self_stdout == oracle_stdout {
-                        (stem, RuntimeParityOutcome::Match)
+                        (stem, RuntimeParityOutcome::Match { agreed: oracle_stdout })
                     } else {
                         (stem, RuntimeParityOutcome::WrongOutput {
                             first_diff: first_diff_line(&oracle_stdout, &self_stdout),
@@ -23011,6 +23141,9 @@ fn self_host_runtime_diff() {
 
     // Tally + per-category lists.
     let mut matched: Vec<String> = Vec::new();
+    // stem → agreed (both-compiler) stdout, for the ggdef adjudication post-pass.
+    let mut agreed_by_stem: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
     let mut wrong: Vec<(String, String)> = Vec::new();
     let mut cc_fail: Vec<(String, String)> = Vec::new();
     let mut driver_fail: Vec<(String, String)> = Vec::new();
@@ -23021,7 +23154,10 @@ fn self_host_runtime_diff() {
 
     for (stem, outcome) in &results {
         match outcome {
-            RuntimeParityOutcome::Match => matched.push(stem.clone()),
+            RuntimeParityOutcome::Match { agreed } => {
+                matched.push(stem.clone());
+                agreed_by_stem.insert(stem.clone(), agreed.clone());
+            }
             RuntimeParityOutcome::WrongOutput { first_diff } => {
                 wrong.push((stem.clone(), first_diff.clone()))
             }
@@ -23085,6 +23221,171 @@ fn self_host_runtime_diff() {
         eprintln!("  RUST-CRASH    {stem}");
     }
     eprintln!("================================\n");
+
+    // ── ggdef ADJUDICATION of the MATCH set (Track G2) ──
+    //
+    // A parity MATCH means the two *compilers* agree — but two compilers can
+    // agree on a WRONG answer (the motivating incident:
+    // deadwrite_ok_loop_read_before_write sat as a MATCH for weeks while BOTH
+    // printed 1,1,1,1; ggdef always said 1,2,3,1). ggdef is the definitional
+    // interpreter — a third, NORMATIVE opinion. Split each MATCH by whether ggdef
+    // can weigh in:
+    //   ADJ-MATCH   — ggdef elaborated + ran cleanly (Value) AND agrees. A third
+    //                 opinion exists and confirms the MATCH.
+    //   UNADJ-MATCH — ggdef could not adjudicate (out of its phase-0 subset, a
+    //                 trap/illformed/fuel outcome, a float-render HOLD, or an
+    //                 ICE). Only the two compilers vouch for it — where false
+    //                 MATCHes still hide.
+    //   BOTH-WRONG  — ggdef ran cleanly (Value) but DISAGREES with the agreed
+    //                 output. Either both compilers are wrong or ggdef is — a
+    //                 red-alert finding either way. This is the rbw class.
+    //
+    // The verdict is TYPED on ggdef's `Outcome` enum + exit shape (Core #2),
+    // never string-matched. Runs as a serial post-pass in one 2 GiB-stack thread
+    // (ggdef's big-step eval recurses on the native stack — mirrors
+    // converter_agreement.rs); ggdef is ~1ms/fixture, so the whole MATCH set adds
+    // ~1-2s to the run.
+    let (adj_match, unadj_match, both_wrong) =
+        adjudicate_matches(&matched, &agreed_by_stem, &manifest_dir.join("tests/fixtures"));
+
+    eprintln!("──────── ggdef ADJUDICATION of the MATCH set ────────");
+    eprintln!("  MATCH (both compilers agree)         : {}", matched.len());
+    eprintln!("  ├─ ADJ-MATCH  (ggdef ran + AGREES)   : {}", adj_match.len());
+    eprintln!("  ├─ UNADJ-MATCH(ggdef can't weigh in) : {}", unadj_match.len());
+    eprintln!("  └─ BOTH-WRONG (ggdef ran + DISAGREES): {}", both_wrong.len());
+
+    // UNADJ reason census — WHY ggdef couldn't adjudicate (subset gap vs trap vs
+    // float HOLD vs ICE). A rising subset-coverage share is the succession-safety
+    // signal to chase.
+    let mut unadj_census: std::collections::BTreeMap<&str, usize> =
+        std::collections::BTreeMap::new();
+    for (_, reason) in &unadj_match {
+        *unadj_census.entry(reason.as_str()).or_default() += 1;
+    }
+    eprintln!("\n  --- UNADJ-MATCH reason census ---");
+    for (reason, n) in &unadj_census {
+        eprintln!("    {n:>4}  {reason}");
+    }
+
+    // BOTH-WRONG: the screaming section. Each entry is a genuine defect — print
+    // the full three-way so the triage is immediate.
+    if both_wrong.is_empty() {
+        eprintln!("\n  ✅ BOTH-WRONG: none — every ggdef-adjudicable MATCH agrees with the definition.");
+    } else {
+        eprintln!(
+            "\n  🚨🚨🚨 BOTH-WRONG ({}) — the two compilers AGREE on an output the \
+             DEFINITION rejects. Each is ≥1 real bug (both compilers wrong, OR a ggdef \
+             coverage gap that must become a LOUD ElabError). 🚨🚨🚨",
+            both_wrong.len()
+        );
+        for bw in &both_wrong {
+            eprintln!(
+                "  BOTH-WRONG  {}\n      compilers agree : {:?}\n      ggdef (definition): {:?}",
+                bw.stem, bw.agreed, bw.ggdef
+            );
+        }
+    }
+    eprintln!("──────────────────────────────────────────────────────\n");
+
+    // ── GGDEF_ADJUDICATED_FLOOR: upward-only ratchet on the ADJ-MATCH count ──
+    //
+    // The truth axis (per the 2026-07-18 succession plan): the count of MATCHes a
+    // THIRD normative opinion confirms. Ratchets like the MATCH floor — bump on
+    // improvement, never lower. Seeded from a fresh full-parity run in THIS
+    // worktree (same invocation as the MATCH floor; the count is timeout-flip
+    // sensitive via the MATCH set it derives from). Gated identically
+    // (debug-skip + parity_floor_active); the floor already absorbs the MATCH
+    // floor's jitter through the shared MATCH set.
+    //
+    // Reseed: rm tests/fixtures/self_host_lowerer/driver{,.c}; GG_RUNTIME_DIFF=1
+    // GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release
+    // self_host_runtime_diff -- --nocapture (default GG_TEST_TIMEOUT_SECS).
+    // Seeded 2026-07-18 (G2 scout): fresh full run measured ADJ-MATCH 344 (of
+    // MATCH 1192 = ADJ 344 + UNADJ 835 + BOTH-WRONG 13); floor = 344 − 5 (the
+    // MATCH floor's measured timeout jitter — ADJ derives from the MATCH set,
+    // so it inherits at most that jitter) = 339.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 339;
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
+        );
+    } else if parity_floor_active("self_host_runtime_diff") {
+        assert!(
+            adj_match.len() >= GGDEF_ADJUDICATED_FLOOR,
+            "GGDEF_ADJUDICATED_FLOOR regression: ADJ-MATCH {} < floor {GGDEF_ADJUDICATED_FLOOR}. \
+             ggdef (the definitional interpreter) confirms fewer MATCHes than before — either a \
+             MATCH regressed (see the MATCH backlogs above) or a ggdef-adjudicable fixture \
+             stopped agreeing (a BOTH-WRONG, see the screaming section). Fix the regression \
+             rather than lowering the floor; if ADJ-MATCH rose (an improvement), raise \
+             GGDEF_ADJUDICATED_FLOOR in the same commit.",
+            adj_match.len(),
+        );
+    }
+
+    // ── BOTH-WRONG shrink-only allowlist: the succession-safety zero-target ──
+    //
+    // Every BOTH-WRONG is a known defect (Core #8: "both backends agree" is a
+    // red flag, never a pass). The target is ZERO. Any NOT on EXPECTED_BOTH_WRONG
+    // is a NEW both-wrong — fail loudly and root-cause it. An EXPECTED entry that
+    // no longer appears is a FIX to lock in (fail asking to shrink the list in the
+    // same commit). Shrink-only allowlist, the EXPECTED_HANGS idiom. Seeded from
+    // the fresh run; each entry MUST carry a filed TODO citation.
+    // Seeded 2026-07-18 from the G2 scout's fresh full run + per-fixture triage
+    // (all 13 verified by direct `ggdef run` vs `gg run`): every entry today is a
+    // GGDEF-side defect — production agrees with the fixture-documented expected
+    // output. Two classes (file + burn down; the target is the EMPTY list):
+    //   (A) ggdef mis-defines RATIFIED semantics: method_mut_borrow_arg (`&`
+    //       param write-through), set_literal_basic (Set-literal dedupe),
+    //       vec_get_unwrap_push_chain (`.get().unwrap().push()` Ref write-through).
+    //   (B) ggdef silently mis-models out-of-model surface that classify.rs's
+    //       invariant #8 says must become a LOUD ElabError: user Str/Display
+    //       impls (core_traits, print_display_temp_leak), custom-drop hooks /
+    //       drop ordering (drop_collection_custom_elem_leak, drop_reassign,
+    //       drop_struct_collection_fields), `:b` format specs
+    //       (fstring_binary_spec_leak), print sep/end/stderr kwargs
+    //       (print_builtin, print_terminator), struct match patterns → silent
+    //       "no match" (struct_value_match_bind, struct_value_match_bind3).
+    const EXPECTED_BOTH_WRONG: &[&str] = &[
+        "core_traits",
+        "drop_collection_custom_elem_leak",
+        "drop_reassign",
+        "drop_struct_collection_fields",
+        "fstring_binary_spec_leak",
+        "method_mut_borrow_arg",
+        "print_builtin",
+        "print_display_temp_leak",
+        "print_terminator",
+        "set_literal_basic",
+        "struct_value_match_bind",
+        "struct_value_match_bind3",
+        "vec_get_unwrap_push_chain",
+    ];
+    if !cfg!(debug_assertions) && parity_floor_active("self_host_runtime_diff") {
+        let new_both_wrong: Vec<&str> = both_wrong
+            .iter()
+            .map(|bw| bw.stem.as_str())
+            .filter(|s| !EXPECTED_BOTH_WRONG.contains(s))
+            .collect();
+        assert!(
+            new_both_wrong.is_empty(),
+            "NEW BOTH-WRONG (ggdef, the definition, disagrees with an output BOTH compilers \
+             agree on): {new_both_wrong:?}. The three-way outputs are in the screaming section \
+             above. This is ≥1 real bug — either both compilers miscompile (fix BOTH + a negative \
+             fixture, Core #8), or ggdef has a coverage gap that must become a LOUD ElabError. Do \
+             NOT paper over it by adding to EXPECTED_BOTH_WRONG without a filed TODO + triage.",
+        );
+        let fixed: Vec<&str> = EXPECTED_BOTH_WRONG
+            .iter()
+            .copied()
+            .filter(|s| !both_wrong.iter().any(|bw| bw.stem == *s))
+            .collect();
+        assert!(
+            fixed.is_empty(),
+            "EXPECTED_BOTH_WRONG entries no longer disagree: {fixed:?} — a both-wrong was fixed. \
+             Remove it from EXPECTED_BOTH_WRONG in the SAME commit that lands the fix (shrink-only \
+             allowlist).",
+        );
+    }
 
     // ── MATCH-count floor: the north-star number as an executable ratchet ──
     //
