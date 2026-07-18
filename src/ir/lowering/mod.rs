@@ -2131,8 +2131,12 @@ pub fn lower_module(
     {
         let env = std::env::var("GG_VALIDATE_CLONE_REASONS").ok();
         let env_ref = env.as_deref();
+        // An EXPLICIT mode always means exactly what it says: "report" prints the
+        // census without panicking even in debug (the review found the debug
+        // default was overriding it — over-enforcing, but the doc table lied).
+        // Debug default (env unset) = strict.
         let strict = matches!(env_ref, Some("strict"))
-            || (cfg!(debug_assertions) && env_ref != Some("off"));
+            || (cfg!(debug_assertions) && env_ref.is_none());
         let report = matches!(env_ref, Some(m) if !m.is_empty() && m != "off" && m != "strict");
         if strict || report {
             let census = crate::ir::validate::validate_clone_reasons(&module);
