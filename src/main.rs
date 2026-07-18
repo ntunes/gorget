@@ -598,6 +598,7 @@ fn try_build_ir(
                 gorget::ir::ImplicitCloneReason::CallArg => "call argument",
                 gorget::ir::ImplicitCloneReason::BorrowedExternReturn => "borrowed extern return",
                 gorget::ir::ImplicitCloneReason::LoopPreHeaderMaterialize => "loop pre-header materialize",
+                gorget::ir::ImplicitCloneReason::BranchPreHeaderMaterialize => "branch pre-header materialize",
                 gorget::ir::ImplicitCloneReason::ExplicitUserClone => "explicit .clone()",
                 gorget::ir::ImplicitCloneReason::NeedsClassification => "unclassified clone",
             };
