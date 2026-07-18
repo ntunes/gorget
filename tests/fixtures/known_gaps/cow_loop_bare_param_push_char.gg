@@ -1,0 +1,22 @@
+# CoW 2G — String.push_char builtin drift. The prescan's hand-written
+# MUTATING_METHODS list had drifted from the typed builtin registry, missing
+# real is_mutating builtins (add, close, get_or_put, push_char, push_line, send,
+# set_at, store, update). Routing the mutating check through the typed
+# `is_mutating_builtin_method` predicate picks these up for free, so a bare
+# String param mutated with `push_char` in a loop gets the loop-carried
+# materialize. Expect the private copy grows to 5 (2 + 3), caller stays 2.
+#
+# In known_gaps/ (out of the runtime-diff corpus) because push_char is OUTSIDE
+# the ggdef phase-0 subset (Core #9 subset gap, filed in TODO). Rust lane is
+# correct.
+void g(String s):
+    int i = 0
+    while i < 3:
+        s.push_char('x')
+        i = i + 1
+    print(s.len())
+
+void main():
+    String t = "ab"
+    g(t)
+    print(t.len())

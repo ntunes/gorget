@@ -1,0 +1,44 @@
+# CoW 2G — mutation in a loop's CONDITION, not only its body. The while
+# condition re-executes every iteration, so a mutation there is loop-carried and
+# needs the pre-header materialize; without scanning the condition (and nested
+# if-conditions) the prescan is blind and the mutation reads a stale borrow
+# forever — an INFINITE LOOP (the owner-reported orphan spinner). With the 2G
+# condition scan both terminate on a persistent private copy.
+#
+# In known_gaps/ (out of the runtime-diff corpus): this shape HANGS on the
+# self-host lane until its CoW-2G mirror lands, so keeping it top-level would
+# trip the runtime-diff no-new-hang guard. Rust lane is correct (terminates).
+bool shrink_to_two(Vector[int] &v):
+    if v.len() > 2:
+        v.pop()
+        return true
+    return false
+
+bool shrink_any(Vector[int] &v):
+    if v.len() > 0:
+        v.pop()
+        return true
+    return false
+
+# mutation ONLY in the while condition
+void while_cond(Vector[int] xs):
+    while shrink_to_two(&xs):
+        pass
+    print(xs.len())
+
+# mutation in a nested if-condition inside a while loop body
+void nested_cond(Vector[int] xs):
+    int n = 0
+    while n < 2:
+        if shrink_any(&xs):
+            pass
+        n = n + 1
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    while_cond(a)
+    print(a.len())
+    Vector[int] b = [1, 2, 3, 4]
+    nested_cond(b)
+    print(b.len())

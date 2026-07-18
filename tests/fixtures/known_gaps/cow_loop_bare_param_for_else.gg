@@ -1,0 +1,21 @@
+# CoW 2G — mutation in a nested for's ELSE body inside a loop. `cow_after_stmt`'s
+# For arm destructured only `body`, dropping `else_body` (unlike the While arm),
+# so a mutation in `for … else: xs.pop()` was prescan-blind. With the 2G
+# For-else scan the outer while's pre-header materialize catches it.
+#
+# In known_gaps/ (out of the runtime-diff corpus) pending the self-host CoW-2G
+# mirror. Rust lane is correct.
+void f(Vector[int] xs):
+    int n = 0
+    while n < 2:
+        for i in 0..0:
+            print(i)
+        else:
+            xs.pop()
+        n = n + 1
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

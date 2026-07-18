@@ -2303,6 +2303,70 @@ fn lower_if(
     __if_phase(ctx, "lower_function::body::lower_block::stmt::if::phi_merge", __merge_t0, __merge_nested_entry);
 }
 
+/// CoW 2G — loop-carried bare-param materialize. Called at every loop
+/// PRE-HEADER (before the header/condition is lowered and before the body's
+/// `save_locals`). For each in-scope bare (borrow) param the loop's own
+/// statements (+ the `while` condition, which re-executes each iteration)
+/// mutate, eagerly materialize a private owned copy HERE via the EXISTING
+/// `cow_before_mutation` and rebind the name — so the loop condition, body, and
+/// exit all read the persistent private copy.
+///
+/// Why the pre-header (not the in-body write site): the in-body materialize
+/// (`cow_before_mutation`) rebinds the name inside `lower_block(body)`, but the
+/// loop's `restore_locals` reverts that rebind every iteration AND the
+/// condition/exit blocks resolve the name to the pre-loop param-borrow slot — so
+/// the private copy is thrown away each iteration (per-iteration throwaway
+/// clone; infinite loop when the condition reads the param). Hoisting the
+/// materialize to the pre-header makes the fresh owned local a pre-loop slot
+/// that LIR-SSA phis at the header (the same loop-carried-slot substrate
+/// `emit_lazy_loopcarried_borrow` relies on), and the rebind is captured by
+/// `save_locals` so it survives `restore_locals`. Devbook/11 2G: fix at the
+/// WRITE site, never phi-repair at the loop head.
+///
+/// Detection routes through the SHARED CoW prescan collectors
+/// (`functions::cow_mutations_in_loop`) — never a parallel AST walker
+/// (devbook/24 one-source-of-truth). OVER-approximation is safe (a private copy
+/// for a param the body does not actually mutate is observationally identical —
+/// bare-param private-copy semantics start == the caller's bytes, so a pre-loop
+/// clone equals lazy-at-first-write; just an extra clone). UNDER-approximation
+/// re-creates the per-iteration throwaway, so the prescan errs toward MORE
+/// mutation markers.
+fn materialize_loop_carried_bare_params(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    body: &Block,
+    condition: Option<&Expr>,
+    span: crate::span::Span,
+) {
+    let mut_set = crate::ir::lowering::functions::cow_mutations_in_loop(
+        &body.stmts,
+        condition,
+        &ctx.fn_param_ownerships,
+    );
+    if mut_set.is_empty() {
+        return;
+    }
+    // Snapshot the (name, local) candidates first to avoid borrowing
+    // `ctx.func_state.locals` across the `&mut ctx` materialize calls.
+    let candidates: Vec<(String, LocalId)> = ctx
+        .func_state
+        .locals
+        .iter()
+        .filter(|(_, (lid, _))| ctx.is_bare_param(builder, *lid))
+        .map(|(n, (lid, _))| (n.clone(), *lid))
+        .collect();
+    for (name, local) in candidates {
+        // Re-check is_bare_param defensively (an earlier candidate's materialize
+        // rebinds only its own name, but guard against shadows) and query the
+        // shared prescan set.
+        if ctx.is_bare_param(builder, local)
+            && crate::ir::lowering::functions::loop_set_mutates(&mut_set, &name)
+        {
+            ctx.cow_before_mutation(builder, local, span);
+        }
+    }
+}
+
 /// Lower a while loop.
 fn lower_while(
     ctx: &mut LoweringContext,
@@ -2311,6 +2375,12 @@ fn lower_while(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
+    // CoW 2G: materialize loop-carried bare-param mutations in the PRE-HEADER
+    // (the current block), BEFORE the condition is lowered into the header and
+    // before the body's `save_locals`. The condition re-executes every
+    // iteration, so it is scanned for mutations too.
+    materialize_loop_carried_bare_params(ctx, builder, body, Some(&condition.node), condition.span);
+
     let header_bb = builder.new_block();
     let body_bb = builder.new_block();
     let exit_bb = builder.new_block();
@@ -2364,6 +2434,12 @@ fn lower_loop(
     builder: &mut FunctionBuilder,
     body: &Block,
 ) {
+    // CoW 2G: materialize loop-carried bare-param mutations in the PRE-HEADER.
+    // No condition to scan for a bare `loop`; body-only detection.
+    if let Some(first) = body.stmts.first() {
+        materialize_loop_carried_bare_params(ctx, builder, body, None, first.span);
+    }
+
     let body_bb = builder.new_block();
     let exit_bb = builder.new_block();
 

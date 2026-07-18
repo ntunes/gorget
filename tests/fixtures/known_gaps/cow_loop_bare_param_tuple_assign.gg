@@ -1,0 +1,22 @@
+# CoW 2G tuple-field ASSIGN silent no-op (PRE-EXISTING miscompile — filed gap).
+# `lower_assign` / `lower_compound_assign` have NO TupleFieldAccess target arm:
+# `t.0 = v` falls to `_ => // Other target types not yet supported` and the
+# assignment is SILENTLY DISCARDED (a miscompile class per Core #8 — the
+# language must either lower it or REJECT it at check time, never drop it).
+# There is no in-body materialize to match, so the 2G loop fix does NOT cover
+# the assign half (only the RECEIVER shape, `t.0.push()`, works — see
+# cow_loop_bare_param_tuple_receiver.gg).
+#
+# Asserts the CORRECT output: private copy of the tuple, first field += 1 thrice
+# → 13, caller stays 10. The compiler currently prints 10,10 (both writes lost).
+void f((int, int) t):
+    int i = 0
+    while i < 3:
+        t.0 = t.0 + 1
+        i = i + 1
+    print(t.0)
+
+void main():
+    (int, int) p = (10, 0)
+    f(p)
+    print(p.0)

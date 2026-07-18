@@ -1,0 +1,23 @@
+# CoW 2G — plain-`self` field mutation in a while inside an equip method. `self`
+# IS a bare (borrow) param, so `self.items.push(i)` in a loop needs the same
+# loop-carried pre-header materialize. The prescan records `@mut:self.items`
+# (via the SelfExpr path) and the pre-header materializes `self` once. Expect the
+# private copy grows to 4 inside `grow`, while the caller's Counter stays 1.
+#
+# In known_gaps/ (out of the runtime-diff corpus) pending the self-host CoW-2G
+# mirror. Rust lane is correct.
+struct Counter:
+    Vector[int] items
+
+equip Counter:
+    void grow(self):
+        int i = 0
+        while i < 3:
+            self.items.push(i)
+            i = i + 1
+        print(self.items.len())
+
+void main():
+    Counter c = Counter([7])
+    c.grow()
+    print(c.items.len())

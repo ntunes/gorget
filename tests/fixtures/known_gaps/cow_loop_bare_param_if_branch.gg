@@ -1,0 +1,18 @@
+# CoW 2G branch-boundary sibling (OUT OF SCOPE — filed gap). A bare-param
+# mutation inside an `if` branch (NOT a loop) is thrown away the same way the
+# loop body was pre-fix: `lower_if` wraps the branch in save_locals/
+# restore_locals, reverting the in-body materialize rebind, and the read after
+# the `if` resolves the stale pre-branch borrow. The 2G fix hooks LOOP
+# pre-headers only; branches (if/with/unsafe/named-scope/select + while-else/
+# loop-else bodies) share the identical save/restore shape and need the same
+# treatment. Asserts the CORRECT private-copy output (3 = 4 - 1 pop, caller 4);
+# the compiler currently prints 4,4.
+void f(Vector[int] xs):
+    if xs.len() > 2:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

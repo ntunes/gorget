@@ -1,0 +1,87 @@
+# CoW 2G — loop-carried bare-param materialize. A bare (borrow) param mutated
+# inside a loop must get ONE persistent private copy (hoisted to the loop
+# pre-header), not a per-iteration throwaway clone. Each function mutates its
+# bare param; the caller's value stays untouched (bare params are borrows). This
+# covers while+method, for+push (read-before-write), bare loop, compound-index,
+# mutation-via-&param-to-a-callee, projection (`b.items.push`), and a read-only
+# control (no behavior change).
+#
+# In known_gaps/ so it stays OUT of the runtime-diff corpus: the Rust lane is
+# correct here, but the self-host lane lags until its CoW-2G mirror lands
+# (Core #9). Promote to a top-level cross-lane pin once both lanes agree.
+struct Bag:
+    Vector[int] items
+
+void while_pop(Vector[int] xs):
+    int i = 0
+    while i < 2:
+        xs.pop()
+        i = i + 1
+    print(xs.len())
+
+void for_push(Vector[int] xs):
+    for i in 0..3:
+        xs.push(i)
+    print(xs.len())
+
+void loop_pop(Vector[int] xs):
+    loop:
+        if xs.len() <= 1:
+            break
+        xs.pop()
+    print(xs.len())
+
+void compound(Vector[int] xs):
+    int i = 0
+    while i < 3:
+        xs[0] += 5
+        i = i + 1
+    print(xs.get(0).unwrap())
+
+void drainer(Vector[int] &v):
+    v.pop()
+
+void amp_callee(Vector[int] xs):
+    int i = 0
+    while i < 2:
+        drainer(&xs)
+        i = i + 1
+    print(xs.len())
+
+void projection(Bag b):
+    int i = 0
+    while i < 2:
+        b.items.push(i)
+        i = i + 1
+    print(b.items.len())
+
+void readonly(Vector[int] xs):
+    int total = 0
+    int i = 0
+    while i < 3:
+        total = total + xs.get(i).unwrap()
+        i = i + 1
+    print(total)
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    while_pop(a)
+    print(a.len())
+    Vector[int] b = [7]
+    for_push(b)
+    print(b.len())
+    Vector[int] c = [1, 2, 3, 4]
+    loop_pop(c)
+    print(c.len())
+    Vector[int] cc = [100]
+    compound(cc)
+    print(cc.get(0).unwrap())
+    Vector[int] d = [1, 2, 3, 4]
+    amp_callee(d)
+    print(d.len())
+    Bag bg = Bag([9])
+    projection(bg)
+    print(bg.items.len())
+    Vector[int] e = [10, 20, 30]
+    readonly(e)
+    print(e.len())
