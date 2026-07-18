@@ -2433,6 +2433,90 @@ pub fn validate_consume_sites(module: &Module) -> Vec<ConsumeSiteWarning> {
     warnings
 }
 
+// ── G3: clone-reason validation ──────────────────────────────────────
+// Design goal (TODO.md materialization-planner campaign; CLAUDE.md Core
+// #2/#3/#6 + devbook/24 layering): every compiler-emitted CLONE carries a
+// typed `MaterializeReason` (`Instruction::Call.reason`) naming WHICH
+// ownership boundary demanded it. This validator asserts direction (a):
+// no clone-emitting instruction without a reason. Direction (b) — no
+// planned directive left unconsumed — arrives with the planner-directive
+// table (a future `position` axis the planner emits and lowering
+// consumes); this stub validates only (a) during burn-down.
+//
+// A clone Call is identified WITHOUT name-matching the callee: `clone_fns`
+// is the module's authoritative typed clone-fn set (`clone_fn_names_set`,
+// built from per-TypeDef `clone_fn_name_for_def`). `reason.is_some()` is
+// the classified signal. The `func ∈ clone_fns` fallback lets the
+// validator SEE a not-yet-migrated clone site (reason == None). When the
+// census hits zero the fallback is pure belt-and-braces: every clone Call
+// already carries `Some(reason)`.
+//
+// SCOPE BOUNDARY: this walks `Instruction::Call`, so it sees Call-shaped
+// clones (the migrated warn sites + explicit `.clone()` dispatched as a
+// call). It does NOT see clones born as `Assign{mode:Clone}` /
+// `IndexLoad{read:Clone}` — those become clone CALLS only at LIR and
+// self-classify via their typed `mode`, so they are OUT of this GIR
+// foundation invariant by design (the planner decides whether var-copy
+// materializations need the boundary WHY). It also cannot see closure
+// clones emitted as `Instruction::CallExtern` (`gorget_closure_clone_to_owned`).
+
+/// Per-module clone-reason census: how many clone Calls are tagged with a
+/// real reason vs still unclassified (`reason.is_none()`, identified via
+/// the typed clone-fn set).
+#[derive(Debug, Clone, Default)]
+pub struct CloneReasonCensus {
+    /// Clone Calls carrying `Some(reason)` where reason != NeedsClassification.
+    pub tagged: usize,
+    /// Clone Calls carrying `Some(NeedsClassification)` (explicitly deferred).
+    pub needs_classification: usize,
+    /// Clone Calls with `reason.is_none()` whose callee IS in the typed
+    /// clone-fn set — the real burn-down set.
+    pub untagged: usize,
+    /// Per-reason-display tagged breakdown.
+    pub by_reason: rustc_hash::FxHashMap<String, usize>,
+    /// (function, block, inst_index, callee) for each untagged clone Call.
+    pub untagged_sites: Vec<(String, usize, usize, String)>,
+}
+
+impl CloneReasonCensus {
+    pub fn total_clones(&self) -> usize {
+        self.tagged + self.needs_classification + self.untagged
+    }
+}
+
+/// Walk the module and census every clone-emitting `Instruction::Call`.
+/// Env-gated by the caller (`GG_VALIDATE_CLONE_REASONS`).
+pub fn validate_clone_reasons(module: &Module) -> CloneReasonCensus {
+    let clone_fns = module.type_registry.clone_fn_names_set();
+    let mut census = CloneReasonCensus::default();
+    for func in &module.functions {
+        for (b, bb) in func.blocks.iter().enumerate() {
+            for (i, inst) in bb.instructions.iter().enumerate() {
+                if let Instruction::Call { func: callee, reason, .. } = inst {
+                    let is_clone_callee = clone_fns.contains(callee);
+                    match reason {
+                        Some(crate::ir::ImplicitCloneReason::NeedsClassification) => {
+                            census.needs_classification += 1;
+                        }
+                        Some(r) => {
+                            census.tagged += 1;
+                            *census.by_reason.entry(r.to_string()).or_insert(0) += 1;
+                        }
+                        None if is_clone_callee => {
+                            census.untagged += 1;
+                            census.untagged_sites.push((
+                                func.name.clone(), b, i, callee.clone(),
+                            ));
+                        }
+                        None => {} // ordinary non-clone call — ignore
+                    }
+                }
+            }
+        }
+    }
+    census
+}
+
 /// Walker: identifies every consume site and routes through
 /// [`validate_consume`]. The walker is shape-driven on Instruction
 /// variants; ABI-based dispatch reads the typed `module.fn_param_abis`

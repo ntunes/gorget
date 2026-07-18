@@ -85,6 +85,25 @@ pub struct BuiltinMethodDecl {
     pub return_type: fn(&BuiltinTypeArgs, &LookupCtx) -> TypeId,
 }
 
+impl BuiltinMethodDecl {
+    /// G3: true when this builtin method is a `.clone()` — a user-directed deep
+    /// clone (`gorget_array_clone` / `gorget_map_clone` / `gorget_set_clone`,
+    /// and the refcount-handle clones). The clone-reason validator needs the
+    /// dispatch to tag the emitted clone `Call` with `ExplicitUserClone`
+    /// (`builtin_method_is_clone` reads this accessor).
+    ///
+    /// Derived from the decl's OWN declared method name — the protocol table is
+    /// the single source of truth for builtin-method semantics — NOT from the
+    /// resolved runtime symbol downstream (Core #2: never route on the resolved
+    /// name). A dedicated `is_clone: bool` field would have to be spelled on all
+    /// 178 method decls (173 of them `false`), which is exactly the hand-synced
+    /// parallel-list smell Core #2 forbids; a single accessor keyed on the
+    /// method's canonical name avoids that and stays in one place.
+    pub fn is_clone(&self) -> bool {
+        self.name == "clone"
+    }
+}
+
 /// A builtin type family (Vector, Dict, Channel, etc.).
 pub struct BuiltinTypeProtocol {
     /// Base name before monomorphization (e.g., "Vector", "Dict").

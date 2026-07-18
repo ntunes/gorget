@@ -755,7 +755,7 @@ fn lower_expr_inner(
                         let ptr_ty = ctx.register_ptr_type(deref_type);
                         let ptr_local = builder.add_local(ptr_ty, None);
                         builder.emit_borrow(ptr_local, Place::local(shallow));
-                        let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], deref_type);
+                        let cloned = builder.call_clone(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], deref_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
                         let dst = builder.add_local(deref_type, None);
                         // Phase C: cloned is fresh + dead — Move into dst.
                         builder.assign_mode(
@@ -947,8 +947,7 @@ fn lower_expr_inner(
                 // path at `src/ir/lowering/exprs/calls.rs:237-245`.
                 let p = raw_src_place.expect("borrowed source implies place");
                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(lhs_type) {
-                    ctx.warn_clone_and_hit(builder, lhs.span, lhs_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
-                    let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(p.local)], lhs_type);
+                    let cloned = ctx.emit_clone(builder, &clone_fn, vec![FunctionBuilder::copy(p.local)], lhs.span, lhs_type, crate::ir::ImplicitCloneReason::CoWMaterialization);
                     let lhs_local = builder.add_local(lhs_type, None);
                     builder.assign_mode(
                         crate::ir::instructions::AssignMode::Move,
@@ -4485,7 +4484,7 @@ fn clone_multi_use_resource_args(
                                 builder.emit_borrow(ptr, crate::ir::instructions::Place::local(local));
                                 FunctionBuilder::copy(ptr)
                             };
-                            let cloned = builder.call(&clone_fn, vec![clone_arg], inner_type);
+                            let cloned = builder.call_clone(&clone_fn, vec![clone_arg], inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
                             ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
                             // Tier 2a Phase 2A: clone temps own a fresh
                             // heap allocation, so tag FreshOwned. Mirrors

@@ -964,10 +964,11 @@ pub fn emit_pattern_bindings(
                             let ptr_type = ctx.register_ptr_type(field_type);
                             let ptr = builder.add_local(ptr_type, None);
                             builder.emit_borrow(ptr, Place::local(dst));
-                            let cloned = builder.call(
+                            let cloned = builder.call_clone(
                                 &clone_fn,
                                 vec![FunctionBuilder::copy(ptr)],
                                 field_type,
+                                crate::ir::ImplicitCloneReason::PatternExtraction,
                             );
                             // Phase C: cloned is a fresh owned local; this assign
                             // transfers ownership into dst (the binding). Move

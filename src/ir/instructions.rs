@@ -333,6 +333,15 @@ pub enum Instruction {
         dst: Option<LocalId>,
         func: String,
         args: Vec<Operand>,
+        /// G3 MaterializeReason: `Some(_)` iff this Call is a clone the compiler
+        /// emitted at an ownership boundary (or an explicit `.clone()`), naming
+        /// WHICH boundary demanded it. `None` for every ordinary call. This is
+        /// the typed field that lets the clone-reason validator identify clones
+        /// WITHOUT name-matching the callee (devbook/24 rule 2). Set via
+        /// `builder.call_clone`; ordinary `builder.call` leaves it `None`.
+        /// GIR-only — dropped (`..`) at GIR→LIR lowering; the backend never
+        /// sees it.
+        reason: Option<crate::ir::ImplicitCloneReason>,
     },
     /// Reserved for future dynamic dispatch (function pointers, closures).
     /// Currently not emitted by the lowering layer.
@@ -552,6 +561,7 @@ mod tests {
             dst: Some(LocalId(3)),
             func: "foo".into(),
             args: vec![Operand::Copy(Place::local(LocalId(1)))],
+            reason: None,
         };
         let _drop = Instruction::Drop {
             place: Place::local(LocalId(1)),

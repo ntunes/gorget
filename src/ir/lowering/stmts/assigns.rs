@@ -80,8 +80,7 @@ pub(super) fn lower_assign(
                     if !is_mut {
                         if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(type_id).cloned() {
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                ctx.warn_clone_and_hit(builder, value.span, inner, crate::ir::ImplicitCloneReason::NamedToNamed);
-                                let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(local_id)], inner);
+                                let cloned = ctx.emit_clone(builder, &clone_fn, vec![FunctionBuilder::copy(local_id)], value.span, inner, crate::ir::ImplicitCloneReason::NamedToNamed);
                                 // matcluster #3: a full rebind of a bare-VALUE Ptr param
                                 // (`xs = <expr>`, `xs` a `Vector[T]`/resource param stored
                                 // as `void* __v0 = (void*)__p0`) binds the name to the FRESH
@@ -166,11 +165,13 @@ pub(super) fn lower_assign(
                                 // frees the buffer, and subsequent clones or reads use-after-free.
                                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
                                     if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
-                                        ctx.warn_clone_and_hit(builder, value.span, inner, crate::ir::ImplicitCloneReason::NamedToNamed);
-                                        let cloned = builder.call(
+                                        let cloned = ctx.emit_clone(
+                                            builder,
                                             &clone_fn,
                                             vec![crate::ir::builder::FunctionBuilder::copy(p.local)],
+                                            value.span,
                                             inner,
+                                            crate::ir::ImplicitCloneReason::NamedToNamed,
                                         );
                                         ctx.drops.register_local(cloned, inner, &ctx.type_registry);
                                         ctx.set_owned(builder, cloned);
@@ -194,11 +195,13 @@ pub(super) fn lower_assign(
                             && !ctx.is_fresh_string(builder, place.local)
                         {
                             let owned = ctx.type_mapper.owned_string_type;
-                            ctx.warn_clone_and_hit(builder, value.span, owned, crate::ir::ImplicitCloneReason::NamedToNamed);
-                            let cloned = builder.call(
+                            let cloned = ctx.emit_clone(
+                                builder,
                                 "gorget_string_clone_to_owned",
                                 vec![FunctionBuilder::copy(place.local)],
+                                value.span,
                                 owned,
+                                crate::ir::ImplicitCloneReason::NamedToNamed,
                             );
                             ctx.drops.register_local(cloned, owned, &ctx.type_registry);
                             ctx.set_owned(builder, cloned);
@@ -306,7 +309,7 @@ pub(super) fn lower_assign(
                                 // not the source type. clone_fn may
                                 // produce an owned T from a view/borrow
                                 // shape distinct from the RHS type.
-                                let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], type_id);
+                                let cloned = builder.call_clone(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], type_id, crate::ir::ImplicitCloneReason::NamedToNamed);
                                 ctx.set_owned(builder, cloned);
                                 operand = FunctionBuilder::copy(cloned);
                                 assign_mode = AssignMode::Move;
@@ -327,7 +330,7 @@ pub(super) fn lower_assign(
                                     let ptr_type = ctx.register_ptr_type(rhs_type);
                                     let ptr_local = builder.add_local(ptr_type, None);
                                     builder.emit_borrow(ptr_local, place.clone());
-                                    let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type);
+                                    let cloned = builder.call_clone(&clone_fn, vec![FunctionBuilder::copy(ptr_local)], rhs_type, crate::ir::ImplicitCloneReason::NamedToNamed);
                                     ctx.set_owned(builder, cloned);
                                     operand = FunctionBuilder::copy(cloned);
                                     assign_mode = AssignMode::Move;

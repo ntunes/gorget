@@ -1081,7 +1081,7 @@ pub(super) fn lower_method_call(
                 match method_name {
                     "clone" => {
                         let clone_fn = format!("{stn}__clone");
-                        let dst = builder.call(&clone_fn, vec![recv], recv_type);
+                        let dst = builder.call_clone(&clone_fn, vec![recv], recv_type, crate::ir::ImplicitCloneReason::ExplicitUserClone);
                         return FunctionBuilder::copy(dst);
                     }
                     "get" => {
@@ -1144,7 +1144,7 @@ pub(super) fn lower_method_call(
                 match method_name {
                     "clone" => {
                         let clone_fn = format!("{stn}__clone");
-                        let dst = builder.call(&clone_fn, vec![recv], recv_type);
+                        let dst = builder.call_clone(&clone_fn, vec![recv], recv_type, crate::ir::ImplicitCloneReason::ExplicitUserClone);
                         return FunctionBuilder::copy(dst);
                     }
                     "upgrade" => {
@@ -1669,7 +1669,7 @@ pub(super) fn lower_method_call(
                     }
                     _ => recv.clone(),
                 };
-                let dst = ctx.call_tracked(builder, clone_fn, vec![ptr_arg], recv_type_id);
+                let dst = ctx.call_tracked_clone(builder, clone_fn, vec![ptr_arg], recv_type_id, crate::ir::ImplicitCloneReason::ExplicitUserClone);
                 return FunctionBuilder::copy(dst);
             }
             // String .clone(): use gorget_string_clone_to_owned to produce an
@@ -1692,7 +1692,7 @@ pub(super) fn lower_method_call(
                     }
                     _ => recv.clone(),
                 };
-                let dst = ctx.call_tracked(builder, "gorget_string_clone_to_owned", vec![ptr_arg], owned_type);
+                let dst = ctx.call_tracked_clone(builder, "gorget_string_clone_to_owned", vec![ptr_arg], owned_type, crate::ir::ImplicitCloneReason::ExplicitUserClone);
                 return FunctionBuilder::copy(dst);
             }
             // Non-resource type: .clone() is a trivial copy (no deep clone needed).
@@ -1818,10 +1818,11 @@ pub(super) fn lower_method_call(
                         let ptr_type = ctx.register_ptr_type(recv_type);
                         let ptr_local = builder.add_local(ptr_type, None);
                         builder.emit_borrow(ptr_local, Place::local(recv_local));
-                        let cloned = builder.call(
+                        let cloned = builder.call_clone(
                             &clone_fn,
                             vec![FunctionBuilder::copy(ptr_local)],
                             recv_type,
+                            crate::ir::ImplicitCloneReason::CallArg,
                         );
                         ctx.set_owned(builder, cloned);
                         // Route the call through the clone. The original
@@ -2758,9 +2759,8 @@ pub(super) fn lower_method_call(
             if let Some((ptr_local, inner_type)) = needs_clone {
                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
                     let span = args.get(value_idx).map(|a| a.span).unwrap_or(receiver.span);
-                    ctx.warn_clone_and_hit(builder, span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
-                    let cloned = builder.call(&clone_fn,
-                        vec![FunctionBuilder::copy(ptr_local)], inner_type);
+                    let cloned = ctx.emit_clone(builder, &clone_fn,
+                        vec![FunctionBuilder::copy(ptr_local)], span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
                     ctx.drops.register_local(cloned, inner_type, &ctx.type_registry);
                     ctx.set_owned(builder, cloned);
                     consuming_clone_temps.push(cloned);
@@ -2932,7 +2932,15 @@ pub(super) fn lower_method_call(
             builder.call_void(call_name, call_args);
             Operand::Constant(Constant::Unit)
         } else {
-            let dst = ctx.call_tracked(builder, call_name, call_args, ret_type);
+            // G3: collection `.clone()` (gorget_array_clone/map_clone/set_clone)
+            // dispatches here through the generic builtin path — tag the emitted
+            // clone Call `ExplicitUserClone` so the clone-reason validator sees
+            // it, keyed on the typed `is_clone` decl flag (not the resolved name).
+            let dst = if ctx.builtin_method_is_clone(&type_name, method_name) {
+                ctx.call_tracked_clone(builder, call_name, call_args, ret_type, crate::ir::ImplicitCloneReason::ExplicitUserClone)
+            } else {
+                ctx.call_tracked(builder, call_name, call_args, ret_type)
+            };
             // Trivial getter clone elision: result is Ptr(T) — mark as CowBorrow
             // so the caller sees a zero-cost borrow with collection provenance.
             // Trivial-getter / Option__Ref__ provenance tracking. The
@@ -3282,10 +3290,11 @@ fn try_lower_option_result_combinator(
             let ptr_type = ctx.register_ptr_type(recv_type);
             let ptr_local = builder.add_local(ptr_type, None);
             builder.emit_borrow(ptr_local, p.clone());
-            let cloned = builder.call(
+            let cloned = builder.call_clone(
                 &clone_fn,
                 vec![FunctionBuilder::copy(ptr_local)],
                 recv_type,
+                crate::ir::ImplicitCloneReason::CallArg,
             );
             ctx.set_owned(builder, cloned);
             builder.assign_mode(

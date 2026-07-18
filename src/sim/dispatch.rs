@@ -1177,6 +1177,7 @@ impl<'m> Interpreter<'m> {
                     dst: *dst,
                     func: func.clone(),
                     args: args.clone(),
+                    reason: None,
                 };
                 return self.execute_instruction(locals, initialized, &as_call, depth);
             }

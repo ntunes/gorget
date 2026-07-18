@@ -691,6 +691,7 @@ impl<'a> FuncLowering<'a> {
                     dst: *dst,
                     func: func.clone(),
                     args: args.clone(),
+                    reason: None,
                 };
                 bb = self.lower_instruction(&as_call, bb);
 

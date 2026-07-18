@@ -381,6 +381,7 @@ impl FunctionBuilder {
             dst: Some(dst),
             func,
             args,
+            reason: None,
         })
     }
 
@@ -389,7 +390,33 @@ impl FunctionBuilder {
             dst: None,
             func: func.into(),
             args,
+            reason: None,
         });
+    }
+
+    /// G3: emit a clone call carrying its typed `MaterializeReason`. Identical
+    /// to [`Self::call`] except the emitted `Instruction::Call` records WHY the
+    /// clone happened, so the clone-reason validator can identify it without
+    /// name-matching the callee (devbook/24 rule 2). Every compiler-emitted
+    /// clone should route through here — usually via
+    /// `LoweringContext::emit_clone` (which also mints the CloneId + the
+    /// `--clones=stats` hit); called directly only from the conditional
+    /// split-across-a-branch clone sites and the explicit-`.clone()` paths
+    /// (which must NOT warn, so cannot use the warn-folding `emit_clone`).
+    pub fn call_clone(
+        &mut self,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        return_type: TypeId,
+        reason: crate::ir::ImplicitCloneReason,
+    ) -> LocalId {
+        let func = func.into();
+        self.emit_with_temp(return_type, |dst| Instruction::Call {
+            dst: Some(dst),
+            func,
+            args,
+            reason: Some(reason),
+        })
     }
 
     /// Emit a fault-`catch`able direct call (error-model.md §11, Increment
