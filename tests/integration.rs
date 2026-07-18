@@ -9194,7 +9194,7 @@ fn cow_loop_bare_param_user_mutator() {
 }
 
 #[test]
-fn shared_struct_field_clone_gap() {
+fn shared_struct_field_clone_regression() {
     run_gg("shared_struct_field_clone.gg", "1\n13\n10\n1\ndone");
 }
 

@@ -228,7 +228,7 @@ fn no_growth_in_name_prefix_routing() {
     /// (`gorget_shared_clone` / `gorget_weak_clone` / `gorget_channel_retain`)
     /// that balances its drop's RELEASE — without it the struct clone
     /// shallow-copies the handle → refcount underflow → UAF
-    /// (`known_gaps/shared_struct_field_clone.gg`). This is the sanctioned
+    /// (`shared_struct_field_clone.gg`). This is the sanctioned
     /// C-emit-boundary spelling: the `{Family}__` mangling IS the runtime
     /// contract (identical form to the adjacent `is_wrapper_method`
     /// `starts_with("Shared__")` dispatcher), so it genuinely cannot be
@@ -5870,7 +5870,7 @@ fn gg_fn_body(content: &str, sig_contains: &str) -> String {
 /// RELEASE the handle (`gorget_shared_drop` / `gorget_weak_drop` /
 /// `gorget_channel_release`) while its CLONE synthesis merely shallow-copied it
 /// — no RETAIN — so the copy's drop underflowed the refcount → premature free /
-/// double-free / UAF (`known_gaps/shared_struct_field_clone.gg`; the self-host
+/// double-free / UAF (`shared_struct_field_clone.gg`; the self-host
 /// sibling was fixed in `lir_codegen.gg`'s `field_clone_c`). The clone must
 /// balance the drop.
 ///
