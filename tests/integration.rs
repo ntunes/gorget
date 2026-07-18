@@ -9197,6 +9197,22 @@ fn cow_scope_bare_param_match_arm() {
     run_gg("cow_scope_bare_param_match_arm.gg", "3\n4");
 }
 
+#[test]
+fn cow_scope_bare_param_elif_cond() {
+    // Mutation ONLY via an elif CONDITION (`elif shrink(&xs):`), elif taken.
+    // Pins the collector's elif-cond fold on BOTH lanes (the SH SIf scan
+    // previously walked only branch bodies → SH printed 1,4,4). ggdef 1,3,4.
+    run_gg("cow_scope_bare_param_elif_cond.gg", "1\n3\n4");
+}
+
+#[test]
+fn cow_scope_bare_param_elif_cond_then() {
+    // Elif-cond mutation present but THEN taken: pins the silently-fixed
+    // undef-read wrong-code bug (base printed 0,0,4 on C AND LLVM — the
+    // at-site rebind in the non-dominating else-chain block). ggdef 0,4,4.
+    run_gg("cow_scope_bare_param_elif_cond_then.gg", "0\n4\n4");
+}
+
 // Out-of-ggdef-subset scope shapes (known_gaps/, C+LLVM validated on Rust gg,
 // not corpus-harvested). Each fixture header records the C+LLVM verdict + SH
 // lane note.
