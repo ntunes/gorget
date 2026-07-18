@@ -1051,6 +1051,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # non-generic / unevaluable, so drop (inert, like SMetaIf).
             pass
         case SMatch(scrutinee, arms):
+            # Planner consumer #1 (self-host mirror) — pre-scrutinee bare-param
+            # materialize. Match arm bodies + guards lower inside per-arm nl_snapshot
+            # /nl_restore scopes (lower_match.gg); an in-arm CoW rebind is reverted,
+            # so a bare-param mutation in an arm/guard is thrown away. Hoist HERE
+            # (dominates every arm) via the existing loop pre-header funnel; anchor
+            # = scrutinee span. SH ratchet stays 8. Mirrors Rust's SMatch dispatch-arm.
+            materialize_loop_carried_bare_params(&ctx, &gmod, scrutinee.span.start)
             # Real SMatch lowering — delegates to lower_match_stmt for
             # the per-arm ctor / binding / guard scaffolding. Payload
             # binds of type Box[T] are consumed via EDeref → GIDeref
@@ -1421,6 +1428,16 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # terminated via return/break — those emitted their own drops),
             # then restore the name map. Mirrors Rust's `lower_named_scope`
             # (src/ir/lowering/stmts/mod.rs:2878) + the SWith block pattern.
+            #
+            # Planner consumer #1 (self-host mirror) — pre-scope bare-param
+            # materialize: nl_restore below reverts an in-body CoW rebind, so a
+            # bare-param mutation in the named scope is thrown away. Hoist HERE
+            # (this block dominates the body) via the existing loop pre-header
+            # funnel. SNamedScope carries no span, so anchor=0 degenerates the
+            # scan negation to whole-fn membership (safe: idempotent per root —
+            # a param mutated only before the scope is already LoOwned, skipped).
+            # SH ratchet stays 8.
+            materialize_loop_carried_bare_params(&ctx, &gmod, 0)
             Dict[String, int] ns_snapshot = nl_snapshot(&ctx)
             push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
             lower_stmts(&ctx, ns_body, &gmod, is_main)
@@ -1829,6 +1846,17 @@ void lower_stmts(LowerCtx &ctx, Vector[Stmt] stmts, GirModule &gmod, bool is_mai
         cow_lazy_retire_stmt_temps(&ctx)
 
 void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] elif_branches, GirModule &gmod, bool is_main):
+    # Planner consumer #1 (self-host mirror) — branch pre-header bare-param
+    # materialize. The then/else branches lower inside nl_snapshot/nl_restore
+    # scopes (below); an in-branch CoW rebind is reverted by nl_restore and the
+    # post-`if` read resolves the stale pre-branch param borrow (the branch
+    # sibling of the 2G loop hole). Hoist the materialize HERE — the current block
+    # dominates every branch — reusing the EXISTING loop pre-header funnel over
+    # the whole-fn CoW scan (anchor = cond span; the elif RECURSION's inner call
+    # re-runs this as a harmless no-op — the param is already LoOwned). SH ratchet
+    # stays 8 (no new cow_materialize_* site). Mirrors Rust's dispatch-arm
+    # `materialize_scope_carried_bare_params`.
+    materialize_loop_carried_bare_params(&ctx, &gmod, cond_expr.span.start)
     # The condition is bool-typed and independent of any enclosing
     # destination — clear `expected_type` around it so a leaked Result-typed
     # expectation doesn't make the centralized auto-prop hook's capture-form
