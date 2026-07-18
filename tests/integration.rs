@@ -23274,8 +23274,9 @@ fn self_host_runtime_diff() {
     } else {
         eprintln!(
             "\n  🚨🚨🚨 BOTH-WRONG ({}) — the two compilers AGREE on an output the \
-             DEFINITION rejects. Each is ≥1 real bug (both compilers wrong, OR a ggdef \
-             coverage gap that must become a LOUD ElabError). 🚨🚨🚨",
+             DEFINITION contradicts (ggdef ran cleanly and produced a DIFFERENT value — \
+             static rejection routes UNADJ instead). Each is ≥1 real bug (both compilers \
+             wrong, OR a ggdef defect / coverage gap that must become a LOUD ElabError). 🚨🚨🚨",
             both_wrong.len()
         );
         for bw in &both_wrong {
@@ -23381,9 +23382,10 @@ fn self_host_runtime_diff() {
             .collect();
         assert!(
             fixed.is_empty(),
-            "EXPECTED_BOTH_WRONG entries no longer disagree: {fixed:?} — a both-wrong was fixed. \
-             Remove it from EXPECTED_BOTH_WRONG in the SAME commit that lands the fix (shrink-only \
-             allowlist).",
+            "EXPECTED_BOTH_WRONG entries no longer disagree: {fixed:?} — EITHER a both-wrong was \
+             fixed (remove it from EXPECTED_BOTH_WRONG in the SAME commit that lands the fix — \
+             shrink-only allowlist), OR the fixture left the MATCH set this run (timeout flip \
+             under load — check the non-MATCH backlog above before celebrating).",
         );
     }
 
