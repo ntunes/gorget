@@ -202,6 +202,22 @@ ownership" from "clone and keep."
 > (`docs/language-reference.md` §9.6, kept in sync with the two enums). A fixed
 > hard-coded count in a doc drifts; the enums don't.
 
+Every implicit clone now carries its `ImplicitCloneReason` not just in the
+side-car diagnostic but **on the emitted instruction** — a typed
+`Instruction::Call.reason: Option<ImplicitCloneReason>`, stamped at the producer
+through the single `emit_clone` / `call_clone` chokepoint and asserted by an
+env-gated ratchet (`GG_VALIDATE_CLONE_REASONS`, always-on strict in debug: no
+compiler-emitted clone may reach the backend untagged). That turns the reason
+enum into the **planner's directive table**: today it is a read-only annotation
+(WHICH boundary demanded this clone — consuming arg, struct-field init, return,
+at-site CoW, or a loop-pre-header hoist, split out as its own
+`LoopPreHeaderMaterialize` so once-per-loop costs are distinguishable from
+per-iteration ones); a future materialization planner reads the same field as an
+instruction to CHOOSE a strategy per boundary (clone here, hoist there, elide
+where liveness proves it safe). See devbook/24 Rule 1 for why the fact rides the
+instruction rather than a name-keyed side table, and the "GIR-only today" scope
+note (it is dropped at GIR→LIR until a LIR consumer needs it).
+
 Live call-site inventory (re-derive with the grep, do not transcribe — these
 move):
 

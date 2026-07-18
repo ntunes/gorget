@@ -52,6 +52,7 @@ invariant. The invariants Gorget tracks, and where they live as typed fields:
 | View-vs-fresh result of a builtin | `BuiltinMethodDecl.returns_view` / `.returns_fresh`, `src/ir/lowering/builtins.rs:71,79` |
 | Box inner type for drop/alloc codegen | `StructDef.box_inner_type: Option<String>`, `src/lir/mod.rs:1541` |
 | Receiver convention (by-ptr vs by-value) | `BuiltinMethodDecl.self_conv: SelfConvention`, `src/ir/lowering/builtins.rs:65` |
+| Why a compiler-inserted clone happened | `Instruction::Call.reason: Option<ImplicitCloneReason>`, `src/ir/instructions.rs` (GIR-only — see below) |
 
 `Local.ownership` is explicit about *not* defaulting: the `LocalOwnership::Untracked`
 variant (it is the `#[default]`) means "no decision recorded yet" and readers must
@@ -59,6 +60,24 @@ variant (it is the `#[default]`) means "no decision recorded yet" and readers mu
 exactly the silent-mis-drop bug that collapsing the distinction would reintroduce.
 That is Rule 1 in miniature: a third state (`Untracked`) is itself an invariant, and
 folding it into a default *loses* information.
+
+The `MaterializeReason` on a clone call is the same rule seen from the *accumulation*
+side. When the lowering inserts an implicit clone at an ownership boundary — a
+consuming push, a struct-field init from a borrow, a return of a borrowed value, a
+CoW materialization — it already *knows* which boundary demanded it. Historically that
+"why" lived only in a side-car diagnostic (`ImplicitCloneWarning`) keyed to no
+instruction, so nothing downstream could recover it: given a clone `Call`, the reason
+was gone. The fix is Rule 1's positive direction — carry the fact as a typed field on
+the instruction that embodies it (`Instruction::Call.reason: Option<ImplicitCloneReason>`),
+set once at the producer through the single `emit_clone` / `call_clone` chokepoint, and
+guard it with an env-gated ratchet (`GG_VALIDATE_CLONE_REASONS`, always-on strict in
+debug builds) that fails on any clone `Call` left untagged. The invariant now accumulates
+*at GIR*: every compiler-emitted clone names its boundary. It deliberately does **not**
+yet survive GIR→LIR — `Instruction::Call` is destructured with `..` when it lowers, and
+`Inst::Call` carries no reason field — because no LIR consumer needs it today. Threading
+it to LIR (so a future materialization planner can read a directive at the layer it costs
+against) is the follow-up; when a consumer arrives, Rule 1 says the reason must reach it
+as a typed field, never be reconstructed from the callee name.
 
 ### Rule 2 — Typed metadata, not name-matched
 

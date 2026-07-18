@@ -177,7 +177,26 @@ pub struct MoveSuggestion {
 }
 
 /// Why the compiler inserted an implicit clone.
-#[derive(Debug, Clone)]
+///
+/// G3 note: this is the `MaterializeReason` carrier. It is `Copy` so it can
+/// ride as a typed field on the clone-emitting `Instruction::Call` (see
+/// `builder.call_clone`) without allocation, naming WHICH ownership boundary
+/// demanded the clone. Every variant names a distinct boundary kind; there is
+/// no `Other` catch-all.
+///
+/// Scope today: the reason is a GIR-only fact. It does NOT survive GIR→LIR —
+/// `Instruction::Call` is destructured with `..` at `lir/lower/insts.rs`
+/// (LIR's `Inst::Call` has no reason field), so backends never see it. LIR
+/// survival (so the planner can read a directive at the layer it costs
+/// against) is the planner follow-up, not this foundation. The Core-#9
+/// exemption for this landing rests on that non-survival: nothing observable
+/// changes.
+///
+/// `NeedsClassification` is the TRANSITIONAL burn-down marker only — a clone
+/// site not yet migrated to pass its real reason. The strict validator
+/// (`GG_VALIDATE_CLONE_REASONS=strict`) fails on it; it is deleted when the
+/// burn-down hits zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImplicitCloneReason {
     /// `Type x = borrowed_ref` — explicit type receives a borrow
     VarDeclFromBorrow,
@@ -204,6 +223,22 @@ pub enum ImplicitCloneReason {
     /// caller's slot survives subsequent FFI state mutations that may
     /// invalidate the borrowed buffer.
     BorrowedExternReturn,
+    /// CoW materialization hoisted to a loop PRE-HEADER (loop-carried
+    /// bare-param). Distinct from at-site `CoWMaterialization` so the planner
+    /// can cost per-iteration vs once-per-loop. Emitted only by the
+    /// loop-pre-header materialize path (`materialize_loop_carried_bare_params`
+    /// → `cow_before_mutation`); at-site CoW keeps `CoWMaterialization`.
+    LoopPreHeaderMaterialize,
+    /// User wrote `.clone()` explicitly. The clone is a user directive, not a
+    /// compiler-inserted materialization; still a clone the validator must see.
+    /// Tags the INSTRUCTION only — it does NOT mint an `ImplicitCloneWarning`
+    /// or a Clone-Report row (the report's "N implicit clone(s)" count and the
+    /// zero-clone ratchet tests depend on explicit clones staying out).
+    ExplicitUserClone,
+    /// TRANSITIONAL burn-down marker: a clone site not yet threaded with its
+    /// real reason. `GG_VALIDATE_CLONE_REASONS=strict` fails on any of these.
+    /// Delete this variant when the census hits zero.
+    NeedsClassification,
 }
 
 impl std::fmt::Display for ImplicitCloneReason {
@@ -220,6 +255,9 @@ impl std::fmt::Display for ImplicitCloneReason {
             Self::ConsumingArg => write!(f, "consuming operation requires owned data"),
             Self::CallArg => write!(f, "borrowed reference cloned at call boundary"),
             Self::BorrowedExternReturn => write!(f, "extern returns borrowed alias — cloned to caller-owned"),
+            Self::LoopPreHeaderMaterialize => write!(f, "loop-carried materialize hoisted to pre-header"),
+            Self::ExplicitUserClone => write!(f, "explicit `.clone()`"),
+            Self::NeedsClassification => write!(f, "UNCLASSIFIED clone (burn-down marker)"),
         }
     }
 }

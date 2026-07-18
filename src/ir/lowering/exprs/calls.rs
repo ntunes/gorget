@@ -349,8 +349,7 @@ pub(super) fn lower_call_arg(
                     let local_type = builder.local_type(place.local);
                     if let Some(inner) = ctx.pointee_type(local_type) {
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                            ctx.warn_clone_and_hit(builder, arg.span, inner, crate::ir::ImplicitCloneReason::MoveParamFromBorrow);
-                            let cloned = builder.call(&clone_fn, vec![FunctionBuilder::copy(place.local)], inner);
+                            let cloned = ctx.emit_clone(builder, &clone_fn, vec![FunctionBuilder::copy(place.local)], arg.span, inner, crate::ir::ImplicitCloneReason::MoveParamFromBorrow);
                             let ptr_type = ctx.register_mut_ptr_type(inner);
                             let dst = builder.add_local(ptr_type, None);
                             builder.emit_borrow_mut(dst, Place::local(cloned));
@@ -1711,10 +1710,11 @@ pub(super) fn lower_call(
                         ret_type,
                         crate::ir::ImplicitCloneReason::BorrowedExternReturn,
                     );
-                    let cloned = builder.call(
+                    let cloned = builder.call_clone(
                         &clone_fn,
                         vec![FunctionBuilder::copy(dst)],
                         ret_type,
+                        crate::ir::ImplicitCloneReason::BorrowedExternReturn,
                     );
                     ctx.drops.register_local(cloned, ret_type, &ctx.type_registry);
                     ctx.set_owned(builder, cloned);
@@ -2066,7 +2066,11 @@ pub(super) fn lower_interp_segment(
                 && ctx.type_registry.is_resource_type(value_type);
             let tmp = if needs_deep_clone {
                 if let Some(clone_fn) = ctx.clone_fn_for_ptr(value_type) {
-                    ctx.call_tracked(builder, &clone_fn, vec![FunctionBuilder::copy(local_id)], value_type)
+                    // G3: a borrowed resource-struct param deref-cloned so the
+                    // f-string interpolation gets an OWNED independent copy at the
+                    // format-call boundary — CallArg ("borrowed reference cloned
+                    // at call boundary"). Tags the instruction; unwarned as before.
+                    ctx.call_tracked_clone(builder, &clone_fn, vec![FunctionBuilder::copy(local_id)], value_type, crate::ir::ImplicitCloneReason::CallArg)
                 } else {
                     let t = builder.add_local(value_type, None);
                     builder.assign(Place::local(t), Operand::Copy(deref_place));

@@ -4714,6 +4714,44 @@ fn clone_warn_hit_pairing() {
         "Expected exactly one `warn_clone_and_hit` definition in \
          src/ir/lowering/context.rs, found {helper_defs}.",
     );
+
+    // G3 extension: no bare UNTAGGED clone call. Every compiler-emitted clone
+    // must carry its typed `MaterializeReason` on the emitted `Instruction::Call`
+    // (so the clone-reason validator identifies it without name-matching the
+    // callee) — routed through `ctx.emit_clone(...)` (straight-line: folds the
+    // warn) or `builder.call_clone(..., reason)` (conditional / between-setup /
+    // explicit `.clone()`). A bare `builder.call(&clone_fn, …)` leaves
+    // `reason == None`; the validator would flag it and the always-on strict
+    // gate (debug builds) would panic. Scans src/ir/lowering with comment lines
+    // stripped and ALL whitespace removed, so the multi-line
+    // `builder.call(\n    &clone_fn,` shape collapses to `builder.call(&clone_fn`
+    // and is caught too. Counterfactual: re-introducing a raw
+    // `builder.call(&clone_fn, args, ty)` (instead of `call_clone`) trips this.
+    let mut bare_clone_calls = Vec::new();
+    visit_rs_files(Path::new("src/ir/lowering"), &mut |path| {
+        let p = path.to_str().unwrap_or_default();
+        let content = fs::read_to_string(p).unwrap_or_default();
+        let code: String = content
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .flat_map(|l| l.chars())
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        let n = code.matches("builder.call(&clone_fn").count();
+        if n > 0 {
+            bare_clone_calls.push(format!("{p}: {n} bare `builder.call(&clone_fn`"));
+        }
+    });
+    assert!(
+        bare_clone_calls.is_empty(),
+        "Bare UNTAGGED clone call(s) found — a `builder.call(&clone_fn, …)` emits \
+         an `Instruction::Call` with no `MaterializeReason`, which the clone-reason \
+         validator (GG_VALIDATE_CLONE_REASONS, always-on strict in debug) flags. \
+         Route straight-line sites through `ctx.emit_clone(builder, &clone_fn, \
+         args, span, ty, reason)`; conditional / between-setup / explicit-`.clone()` \
+         sites through `builder.call_clone(&clone_fn, args, ty, reason)`:\n  {}",
+        bare_clone_calls.join("\n  "),
+    );
 }
 
 /// Completeness guard (Core #6) for the arena-escape STORE/INGEST

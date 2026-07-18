@@ -597,6 +597,9 @@ fn try_build_ir(
                 gorget::ir::ImplicitCloneReason::ConsumingArg => "consuming argument",
                 gorget::ir::ImplicitCloneReason::CallArg => "call argument",
                 gorget::ir::ImplicitCloneReason::BorrowedExternReturn => "borrowed extern return",
+                gorget::ir::ImplicitCloneReason::LoopPreHeaderMaterialize => "loop pre-header materialize",
+                gorget::ir::ImplicitCloneReason::ExplicitUserClone => "explicit .clone()",
+                gorget::ir::ImplicitCloneReason::NeedsClassification => "unclassified clone",
             };
             entries.push(CloneEntry {
                 file, line, col,

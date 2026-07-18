@@ -189,6 +189,7 @@ pub fn inject_shared_token_management(
             dst: Some(sl.mutex_val),
             func: format!("{shared_mutex_mangled}__get"),
             args: vec![Operand::Copy(Place::local(sl.param_local))],
+            reason: None,
                    });
 
         // Lock mutex → Guard[T]
@@ -196,6 +197,7 @@ pub fn inject_shared_token_management(
             dst: Some(sl.guard),
             func: format!("{mutex_mangled}__lock"),
             args: vec![Operand::Copy(Place::local(sl.mutex_val))],
+            reason: None,
                    });
 
         // Borrow guard → &Guard[T]
@@ -210,12 +212,14 @@ pub fn inject_shared_token_management(
                 dst: Some(sl.facade),
                 func: format!("{guard_mangled}__get_ptr"),
                 args: vec![Operand::Copy(Place::local(sl.guard_ptr))],
+                reason: None,
                            });
         } else {
             preamble.push(Instruction::Call {
                 dst: Some(sl.facade),
                 func: format!("{guard_mangled}__get"),
                 args: vec![Operand::Copy(Place::local(sl.guard_ptr))],
+                reason: None,
                            });
         }
     }
@@ -388,6 +392,7 @@ fn build_release_sequence(
             dst: None,
             func: format!("{guard_mangled}__drop"),
             args: vec![Operand::Copy(Place::local(sl.guard_ptr))],
+            reason: None,
                    }
     }).collect()
 }
@@ -413,6 +418,7 @@ fn build_reacquire_sequence(
             dst: Some(sl.mutex_val),
             func: format!("{shared_mutex_mangled}__get"),
             args: vec![Operand::Copy(Place::local(sl.param_local))],
+            reason: None,
                    });
 
         // Lock
@@ -420,6 +426,7 @@ fn build_reacquire_sequence(
             dst: Some(sl.guard),
             func: format!("{mutex_mangled}__lock"),
             args: vec![Operand::Copy(Place::local(sl.mutex_val))],
+            reason: None,
                    });
 
         // Re-derive guard pointer (reuse same local)
@@ -435,6 +442,7 @@ fn build_reacquire_sequence(
                 dst: Some(sl.facade),
                 func: format!("{guard_mangled}__get_ptr"),
                 args: vec![Operand::Copy(Place::local(sl.guard_ptr))],
+                reason: None,
                            };
             // For mutable, the facade IS the pointer, so calling get_ptr and assigning to facade works.
             // But we need a temp because facade already holds the old pointer.
@@ -446,6 +454,7 @@ fn build_reacquire_sequence(
                 dst: Some(sl.facade),
                 func: format!("{guard_mangled}__get"),
                 args: vec![Operand::Copy(Place::local(sl.guard_ptr))],
+                reason: None,
                            });
         }
     }
@@ -746,7 +755,9 @@ mod tests {
                         Instruction::Call {
                             dst: Some(LocalId(4)),
                             func: "__gorget_await_compute".into(),
-                            args: vec![Operand::Move(Place::local(LocalId(3)))],                        },
+                            args: vec![Operand::Move(Place::local(LocalId(3)))],
+                            reason: None,
+                        },
                         // Use result — add await_res to counter deref
                         Instruction::BinOp {
                             dst: LocalId(5),
