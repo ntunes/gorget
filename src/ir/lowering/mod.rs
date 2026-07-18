@@ -2118,16 +2118,21 @@ pub fn lower_module(
     // G3: clone-reason census (the materialization-planner foundation).
     // Every compiler-emitted CLONE carries a typed `MaterializeReason` on its
     // `Instruction::Call.reason` — the house env-gate → burn-down → fatal
-    // ratchet (mirrors GG_VALIDATE_CONSUME_SITES). Env-gated:
-    //   unset / empty          → off (zero cost) — the default everywhere.
-    //   "1" / "report" / a log → print the per-module census (no panic).
-    //   "strict"               → panic on the first untagged clone.
-    // (The always-on-in-debug flip lands as a separate final commit once the
-    // burn-down census is zero; until then this stays opt-in.)
+    // ratchet (mirrors GG_VALIDATE_CONSUME_SITES), now PROMOTED to always-on in
+    // debug builds: the burn-down closed (untagged=0 across the fixture corpus
+    // and every self-host driver), so a stray untagged clone is a regression the
+    // debug build must catch, not an opt-in check. Modes:
+    //   debug default                       → strict (panic on first untagged).
+    //   release default (env unset)         → off (zero cost).
+    //   "1" / "report" / a log path         → print the per-module census, no
+    //                                          panic (opt-in even in release).
+    //   "strict"                            → force strict (also in release).
+    //   "off"                               → disable entirely (debug escape hatch).
     {
         let env = std::env::var("GG_VALIDATE_CLONE_REASONS").ok();
         let env_ref = env.as_deref();
-        let strict = matches!(env_ref, Some("strict"));
+        let strict = matches!(env_ref, Some("strict"))
+            || (cfg!(debug_assertions) && env_ref != Some("off"));
         let report = matches!(env_ref, Some(m) if !m.is_empty() && m != "off" && m != "strict");
         if strict || report {
             let census = crate::ir::validate::validate_clone_reasons(&module);
