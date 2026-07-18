@@ -1,0 +1,20 @@
+# Planner consumer #1 — bare-param mutation in a `while … else:` ELSE body
+# (mutated ONLY in the else, so this exercises the loop-else scan extension, not
+# the loop body). The else body lowers via `lower_block_scoped`; folding it into
+# the pre-LOOP hoist scan (which dominates the else exit) materializes the param
+# there. `while … else` is OUT of the ggdef phase-0 subset, so this lives in
+# known_gaps/ and is validated on the two production backends only: C=3,4 and
+# LLVM=3,4 (pre-fix both printed 4,4). SH note: the SH loop pre-header uses a
+# whole-fn suffix scan that already reaches the else body — no divergence.
+void f(Vector[int] xs):
+    int i = 0
+    while i < 1:
+        i = i + 1
+    else:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

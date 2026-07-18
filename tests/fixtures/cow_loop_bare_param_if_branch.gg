@@ -1,0 +1,17 @@
+# Planner consumer #1 — bare-param mutation inside an `if` branch (the scope
+# pre-header materialize class). `lower_if` wraps each branch in save_locals/
+# restore_locals; the in-body CoW materialize rebind was reverted and the read
+# after the `if` resolved the stale pre-branch borrow (printed 4,4). The
+# pre-scope hoist (dispatch-arm `materialize_scope_carried_bare_params`) clones
+# once BEFORE the branch dispatch so the fresh owned local dominates the merge —
+# the private-copy pop now persists (3), the caller is untouched (4).
+# ggdef-adjudicated 3,4 (in-subset: bare Vector param, if, mutating method, print).
+void f(Vector[int] xs):
+    if xs.len() > 2:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

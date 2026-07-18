@@ -1,0 +1,16 @@
+# Planner consumer #1 — bare-param mutation in an `elif` branch. The drift-free
+# scope collector (`cow_mutations_in_stmt` = `cow_after_stmt` over the whole `if`)
+# folds in elif conditions AND elif bodies, so the mutation in the elif body is
+# materialized before the branch dispatch. Pre-fix printed 4,4;
+# ggdef-adjudicated 3,4.
+void f(Vector[int] xs):
+    if xs.len() < 1:
+        print(0)
+    elif xs.len() > 2:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

@@ -1,0 +1,22 @@
+# Planner consumer #1 — bare-param mutation inside a `select:` RECV arm body.
+# The select dispatch-arm hoist runs before the spin-loop jump (dominating every
+# recv-arm body). Channels/async/spawn are OUT of the ggdef phase-0 subset, so
+# this lives in known_gaps/ and is validated on the two production backends only:
+# C=3,4 and LLVM=3,4 (pre-fix both printed 4,4). SH note: the SH lowerer has no
+# `select` dispatch arm (out of the self-host subset) — construct-unimplemented,
+# no lane divergence.
+from std.channel import Channel
+
+async void f(Vector[int] xs, Channel[int] ch):
+    select:
+        case int v = ch.recv():
+            xs.pop()
+    print(xs.len())
+
+async void main():
+    Channel[int] ch = Channel[int](1)
+    ch.send(1)
+    Vector[int] a = [1, 2, 3, 4]
+    f(a, ch).await()
+    print(a.len())
+    ch.close()

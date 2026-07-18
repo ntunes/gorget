@@ -1,0 +1,18 @@
+# Planner consumer #1 — bare-param mutation inside a `with … as:` block (a
+# straight-line scope; the bindings + body lower inside the save/restore). Uses
+# an allocator resource (`Arena`), which the ggdef phase-0 subset does not
+# resolve, so this lives in known_gaps/ and is validated on the two production
+# backends only: C=3,4 and LLVM=3,4 (pre-fix both printed 4,4). SH note: the SH
+# `with` lowering does not snapshot/restore the name map (no rebind-reverting
+# hole), so no SH pre-scope hoist is required there.
+from std.alloc import Arena
+
+void f(Vector[int] xs):
+    with Arena(4096) as pool:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())

@@ -1,0 +1,20 @@
+# Planner consumer #1 — bare-param mutation in a top-level `for … else:` ELSE
+# body (a range shape, which the self-host DOES lower). Distinct from the 2G
+# fixture `cow_loop_bare_param_for_else` (a for-else nested inside a while): here
+# the for loop's OWN pre-header scan is extended to fold in the else body. `for …
+# else` is OUT of the ggdef phase-0 subset, so this lives in known_gaps/ and is
+# validated on the two production backends only: C=3,4 and LLVM=3,4 (pre-fix both
+# printed 4,4). SH note: SH for-else is implemented for range/set (not
+# Vector/Dict); the range shape here is SH-supported and the whole-fn suffix
+# scan reaches the else body.
+void f(Vector[int] xs):
+    for i in 0..1:
+        pass
+    else:
+        xs.pop()
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4]
+    f(a)
+    print(a.len())
