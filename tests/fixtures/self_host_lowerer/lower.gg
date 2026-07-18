@@ -778,6 +778,20 @@ bool cow_materialize_projected_root(LowerCtx &ctx, GirModule &gmod, SpannedExpr 
     # from the lazy-family root path.
     if root == "" and mutinf_expr_is_self_rooted(target):
         root = "self"
+    return cow_materialize_root_by_name(&ctx, &gmod, root)
+
+# CoW materialize CORE, keyed by the resolved root NAME. Clones (resource) or
+# deref-copies (pure-value pointee) a bare (immutable-in-context) by-value param
+# into a fresh owned local and rebinds the name so a following mutation lands on
+# the private copy. Shared single-source-of-truth between the per-site projected
+# materialize (`cow_materialize_projected_root`, which resolves the root from a
+# mutation TARGET expr) and the CoW 2G loop pre-header hoist
+# (`materialize_loop_carried_bare_params`, which drives it by PARAM NAME). A
+# `&`/`!` mut-borrow root (GtMutPtr) or an already-owned local root (LoOwned !=
+# LoParam) is SKIPPED (writes through, unchanged). Idempotent per root: after the
+# rebind the root is LoOwned, so a second call finds a non-param and returns
+# false (no double-clone).
+bool cow_materialize_root_by_name(LowerCtx &ctx, GirModule &gmod, String root):
     if root == "":
         return false
     if not nl_contains(&ctx, root):
@@ -832,6 +846,60 @@ bool cow_materialize_projected_root(LowerCtx &ctx, GirModule &gmod, SpannedExpr 
     nl_put(&ctx, root, mat)
     register_local_for_drop(&ctx, mat, struct_tid, &gmod)
     return true
+
+# ── CoW 2G — loop-carried bare-param materialize (self-host mirror) ──────
+#
+# Called at every loop PRE-HEADER — the top of `lower_while`, the `lower_for`
+# dispatch, and the `SLoop` inline lowering — BEFORE the loop's header/condition
+# block is created and BEFORE `push_drop_scope(DSK_LOOP)`. For each in-scope bare
+# (LoParam, non-mut-borrow) param the whole-function CoW scan saw MUTATED at/after
+# this loop, eagerly materialize a private owned copy HERE and rebind the name,
+# so the loop condition, body, AND exit all read the persistent private copy.
+#
+# WHY the pre-header (write-site hoist, not phi-repair at the loop head): the
+# per-site materialize (`cow_materialize_projected_root`) rebinds the name inside
+# the loop BODY, minting a fresh `mat` cloned from the param and registered in the
+# DSK_LOOP drop scope — so `mat` is FREED every iteration (post-loop reads the
+# freed slot → len 0 / index trap) and the condition + back-edge resolve the name
+# to the untouched pre-loop param (a `while xs.len()>2:` drain then never shrinks
+# → HANG). Cloning ONCE in the pre-header block registers `mat` in the ENCLOSING
+# (function) drop scope — not freed per iteration — and rebinds the name BEFORE
+# the condition is lowered, so the private copy is loop-carried (LIR-SSA phis the
+# pre-loop slot across the back-edge on the self-host's flat slot model — zero
+# lir_ssa.gg changes) and the body finds the name already LoOwned →
+# `cow_materialize_projected_root` returns false (idempotent) → mutates `mat` in
+# place. Devbook/11 2G; mirrors Rust `materialize_loop_carried_bare_params`.
+#
+# Detection reuses the EXISTING whole-fn scan via `cow_pristine_after` NEGATION —
+# NO parallel AST walker (single-source-of-truth with the scan that already covers
+# push/push_char/pop via the typed `method_mutates_receiver`, index/field stores
+# via `cow_mark_assign_target`, and `&arg`/`!arg`-to-callee via the signature-
+# driven routes). `anchor_pos` is a textual position at-or-before every condition+
+# body token reachable from this entry (the condition/iterable `span.start`; a
+# `0` anchor at the span-less `SLoop` degenerates the negation to plain
+# whole-fn membership). Over-approximation (a param the loop only reads but that
+# is mutated elsewhere) is SAFE: the copy starts == the caller's bytes and the
+# clone is idempotent (LoParam→LoOwned), so a param mutated only BEFORE this loop
+# is already owned and skipped, and a later/sibling-loop mutation merely moves its
+# single clone earlier — never an extra clone. Under-approximation would be the
+# bug; there is none (the scan is the same one the per-site materialize trusts).
+void materialize_loop_carried_bare_params(LowerCtx &ctx, GirModule &gmod, int anchor_pos):
+    # Snapshot the candidate param NAMES first — the materialize `nl_put`s (rebinds
+    # named_locals), so we must not mutate the map while iterating its keys.
+    Vector[String] cand_names = []
+    Vector[String] all_names = ctx.named_locals.keys()
+    for pn in all_names:
+        int lid = nl_get(&ctx, pn)
+        bool is_param = false
+        match ctx.locals.get(lid).unwrap().ownership:
+            case LoParam():
+                is_param = true
+            else:
+                pass
+        if is_param and not is_mut_borrow_param_local(&ctx, &gmod, lid) and not cow_pristine_after(&ctx, pn, anchor_pos):
+            cand_names.push(pn)
+    for cn in cand_names:
+        cow_materialize_root_by_name(&ctx, &gmod, cn)
 
 # Phase 3 (2026-05-22) — Class 8 keystone fix.
 #

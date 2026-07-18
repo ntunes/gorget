@@ -7153,6 +7153,23 @@ String field_clone_c(String access, String ftype_name, String drop_fn_name, LirM
         if inner_clone != "":
             s = s + " " + inner_clone + "(" + access + ");"
         return s
+    # Shared[T] (and the Rc/Arc reference-counted family) field: the drop is
+    # `gorget_shared_drop(field)` where the handle is a POINTER passed BY VALUE
+    # (NOT by address — contrast a by-value Vector/String struct field, cloned
+    # via `<clone>(&field)`). Its clone is the atomic strong++
+    # `gorget_shared_clone(field)`, likewise BY VALUE / no `&`. Without this arm
+    # `drop_to_clone_fn("gorget_shared_drop")` returns "" (it ends in `_drop`,
+    # not `__drop`) → the enclosing struct's clone SHALLOW-copies the Shared
+    # handle WITHOUT retaining, while the struct's drop STILL `gorget_shared_drop`s
+    # it → the clone and its source share one control block whose refcount is
+    # decremented twice but incremented once → premature free / double-free / UAF
+    # (surfaced by CoW 2G materializing a `Tensor`, whose `storage` is
+    # `Shared[Vector[T]]`). Rust gg's `field_clone_c` sibling clones the Shared
+    # field correctly; this is the self-host codegen catching up (Core #9
+    # implementation-internal — no cross-lane semantic pin). Detected by the
+    # by-value drop-symbol contract, not a name-prefix on the field type (Core #2).
+    if drop_fn_name == "gorget_shared_drop" or drop_fn_name == "gorget_rc_drop" or drop_fn_name == "gorget_arc_drop":
+        return access + " = gorget_shared_clone(" + access + ");"
     String cf = drop_to_clone_fn(drop_fn_name)
     if cf != "":
         return access + " = " + cf + "(&" + access + ");"

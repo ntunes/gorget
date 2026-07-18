@@ -1,0 +1,27 @@
+# Regression: the COMPILER-GENERATED clone of a struct holding a Shared field must
+# clone (incref) the Shared handle. The self-host backend once shallow-copied the
+# handle while struct-drop still decrefed it — refcount underflow → UAF on any
+# Shared-containing struct clone (found by the 2G loop-materialize exercising
+# Tensor's Shared[Vector] storage; fixed in lir_codegen.gg's Shared-family clone arm).
+# probe's bare-param loop mutation forces the pre-header materialize = struct clone;
+# strong_count stays balanced (probe's private copy increfs, its drop decrefs) and
+# the process exits cleanly — on the broken codegen the underflow freed the payload
+# while `a` still held it.
+struct Cell:
+    Shared[Vector[int]] storage
+    int tag
+
+int probe(Cell c, int rounds):
+    int i = 0
+    while i < rounds:
+        c.tag = c.tag + 1
+        i = i + 1
+    return c.tag
+
+void main():
+    Cell a = Cell(Shared[Vector[int]]([1, 2, 3]), 10)
+    print(a.storage.strong_count())
+    print(probe(a, 3))
+    print(a.tag)
+    print(a.storage.strong_count())
+    print("done")

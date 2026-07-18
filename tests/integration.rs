@@ -9088,7 +9088,7 @@ fn cow_loop_bare_param_materialize() {
     // while+method, for+push (read-before-write), bare loop, compound-index,
     // mutation via &param to a callee, projection (b.items.push), read-only ctrl.
     run_gg(
-        "known_gaps/cow_loop_bare_param_materialize.gg",
+        "cow_loop_bare_param_materialize.gg",
         "2\n4\n4\n1\n1\n4\n115\n100\n2\n4\n3\n1\n60\n3",
     );
 }
@@ -9097,7 +9097,7 @@ fn cow_loop_bare_param_materialize() {
 fn cow_loop_bare_param_index_assign() {
     // `xs[0] = xs[0] + 1` peels to a DOTLESS root — the prescan's dotless-root
     // insert makes the loop-carried materialize fire. 10 + 3 = 13, caller 10.
-    run_gg("known_gaps/cow_loop_bare_param_index_assign.gg", "13\n10");
+    run_gg("cow_loop_bare_param_index_assign.gg", "13\n10");
 }
 
 #[test]
@@ -9111,14 +9111,14 @@ fn cow_loop_bare_param_self_field() {
 fn cow_loop_bare_param_while_cond() {
     // Mutation in the loop CONDITION (and a nested if-condition) — re-executes
     // every iteration, so it is loop-carried. Pre-fix this INFINITE-LOOPED.
-    run_gg("known_gaps/cow_loop_bare_param_while_cond.gg", "2\n4\n2\n4");
+    run_gg("cow_loop_bare_param_while_cond.gg", "2\n4\n2\n4");
 }
 
 #[test]
 fn cow_loop_bare_param_match_scrutinee() {
     // Mutation in a MATCH SCRUTINEE inside a loop body (`match xs.pop():`).
     run_gg(
-        "known_gaps/cow_loop_bare_param_match_scrutinee.gg",
+        "cow_loop_bare_param_match_scrutinee.gg",
         "5\n4\n3\n2\n5",
     );
 }
@@ -9127,7 +9127,7 @@ fn cow_loop_bare_param_match_scrutinee() {
 fn cow_loop_bare_param_for_else() {
     // Mutation in a nested for's ELSE body (`for … else: xs.pop()`) — the For
     // arm previously dropped else_body, unlike the While arm.
-    run_gg("known_gaps/cow_loop_bare_param_for_else.gg", "2\n4");
+    run_gg("cow_loop_bare_param_for_else.gg", "2\n4");
 }
 
 #[test]
@@ -9135,14 +9135,14 @@ fn cow_loop_bare_param_push_char() {
     // Typed-builtin drift: `push_char` (one of 9 is_mutating builtins the
     // hand-list missed) now recognized via is_mutating_builtin_method. 2→5,
     // caller 2. push_char is outside the ggdef phase-0 subset (subset gap filed).
-    run_gg("known_gaps/cow_loop_bare_param_push_char.gg", "5\n2");
+    run_gg("cow_loop_bare_param_push_char.gg", "5\n2");
 }
 
 #[test]
 fn cow_loop_bare_param_tuple_receiver() {
     // Mutating method on a TUPLE-FIELD receiver (`t.0.push(i)`) — records
     // `@mut:t.0` via the TupleFieldAccess arm. 1→3, caller 1.
-    run_gg("known_gaps/cow_loop_bare_param_tuple_receiver.gg", "3\n1");
+    run_gg("cow_loop_bare_param_tuple_receiver.gg", "3\n1");
 }
 
 // ── CoW 2G OUT-OF-SCOPE siblings (filed gaps — `#[ignore]`, assert INTENDED
@@ -9190,6 +9190,39 @@ Asserts 3,2,2,4; compiler currently prints 3,3,4,4. See TODO 'CoW 2G \
 user-&self-mutator loop-carried receiver'."]
 fn cow_loop_bare_param_user_mutator() {
     run_gg("known_gaps/cow_loop_bare_param_user_mutator.gg", "3\n2\n2\n4");
+}
+
+#[test]
+#[ignore = "RUST-lane Shared-field struct-clone under-incref: the materialize \
+struct-clone of a Shared-containing struct does not incref the Shared handle, so \
+the copy's drop underflows the refcount and a later strong_count/drop reads freed \
+memory (garbage; silent UAF, BOTH backends, pre-existing at caf63817). The \
+SELF-HOST is already CORRECT here (its sibling bug was fixed in lir_codegen.gg's \
+Shared-family clone arm this round) — the reference lags the self-host. Asserts \
+the intended 1,13,10,1,done. See TODO 'Rust Shared-field struct-clone \
+under-incref'."]
+fn shared_struct_field_clone_gap() {
+    run_gg("known_gaps/shared_struct_field_clone.gg", "1\n13\n10\n1\ndone");
+}
+
+#[test]
+#[ignore = "Consuming-position move fires on a Shared-containing struct despite a \
+LATER READ of the source: `[a]` with `a.tag` read after trips the GIR validator \
+(read after MoveZero -> compiler PANIC); the `Cell(s, 10)`-with-s-read-later \
+sibling is SILENT (moves s; strong_count 1-then-garbage UAF). Pre-existing at \
+caf63817. Intended = clone at the boundary (source live): 10,3,done. See TODO \
+'Shared-struct consuming-position move despite later read'."]
+fn shared_struct_vec_literal_move_panic() {
+    run_gg("known_gaps/shared_struct_vec_literal_move_panic.gg", "10\n3\ndone");
+}
+
+#[test]
+fn shared_vector_get_selfhost_emit() {
+    // Rust lane is CORRECT (prints 3) — live pin. The fixture sits in known_gaps/
+    // (out of the parity corpus) because the SELF-HOST emit CC-FAILs on it: the
+    // synthesized Shared[Vector[T]].get() wrapper references __gg_Vector__int64_t
+    // without emitting it. See TODO 'self-host Shared[Vector[T]].get() emit'.
+    run_gg("known_gaps/shared_vector_get_selfhost_emit.gg", "3");
 }
 
 #[test]

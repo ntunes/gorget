@@ -32,7 +32,7 @@ from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
-from lower import cow_lazy_materialize_slot
+from lower import cow_lazy_materialize_slot, materialize_loop_carried_bare_params
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
@@ -100,6 +100,16 @@ SpannedExpr for_iterable_mode(SpannedExpr iter_expr, bool &write_through):
             return iter_expr
 
 void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
+    # CoW 2G: hoist any loop-carried bare-param materialize into the pre-header
+    # (the CURRENT block) BEFORE the iterable is lowered and BEFORE any variant's
+    # DSK_LOOP drop scope opens, so a `for i in ..: xs.push(i)` reads/writes the
+    # persistent private copy across iterations rather than a per-iteration
+    # throwaway clone (freed each pass → post-loop len 0). Placed in the SHARED
+    # dispatch so every statement-for variant (range/vector/dict/set/string/
+    # iterator) is covered from ONE site — Core #4 (the comprehension entries that
+    # call the lower_for_* variants directly are a filed sibling gap; see the 2G
+    # note in TODO). `iter_expr.span.start` is at-or-before every body token.
+    materialize_loop_carried_bare_params(&ctx, &gmod, iter_expr.span.start)
     # Range fast path — `for i in start..end` over a literal `ERange`.
     # Mirrors Rust's `lower_for` first branch (src/ir/lowering/stmts/
     # for_loops.rs:118-128 → lower_for_range :1003): when the pattern is a
@@ -1236,6 +1246,14 @@ int resolve_elem_type_id(String elem_name, GirModule &gmod):
     return lookup_or_register_named(&gmod, elem_name)
 
 void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
+    # CoW 2G: hoist any loop-carried bare-param materialize into THIS (pre-header)
+    # block, BEFORE the header/condition block is created and BEFORE the DSK_LOOP
+    # drop scope opens, so the private copy is loop-carried and the condition reads
+    # it (a `while xs.len()>2: xs.pop()` drain shrinks instead of spinning). The
+    # condition's span.start is the at-or-before anchor for the whole-fn scan
+    # negation (the condition's own mutations, e.g. `while shrink(&xs):`, sit at
+    # pos >= this anchor).
+    materialize_loop_carried_bare_params(&ctx, &gmod, cond_expr.span.start)
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
     int exit_bb = new_block(&ctx)

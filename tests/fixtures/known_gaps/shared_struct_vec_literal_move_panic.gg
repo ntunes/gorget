@@ -1,0 +1,19 @@
+# Pre-existing (verified at caf63817, pre-2G): a consuming-position MOVE fires on a
+# Shared-containing struct even though the source is read LATER. Two symptoms of the
+# one class: (a) THIS shape — vector literal `[a]` with `a.tag` read after — trips the
+# GIR validator ("local read after MoveZero" -> compiler PANIC, not even a graceful
+# error); (b) the SILENT sibling — `Cell(s, 10)` with `s` read after MOVES `s`
+# (strong_count then prints 1 instead of 2, and a later read returns freed-memory
+# garbage — a UAF the validator does not catch). Intended semantics: the boundary
+# CLONES because the source is live (CoW contract); expected output below encodes it.
+struct Cell:
+    Shared[Vector[int]] storage
+    int tag
+
+void main():
+    Shared[Vector[int]] s = Shared[Vector[int]]([1, 2, 3])
+    Cell a = Cell(s, 10)
+    Vector[Cell] _vc = [a]
+    print(a.tag)
+    print(s.strong_count())
+    print("done")

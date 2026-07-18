@@ -1,0 +1,8 @@
+# Pre-existing SELF-HOST emit gap: the synthesized `Shared[Vector[T]].get()` wrapper
+# references the payload's C value-type name (`__gg_Vector__int64_t`) without emitting
+# or aliasing it -> CC-FAIL ("unknown type name") on any by-value get of a
+# Shared-wrapped collection. Rust gg compiles and runs this correctly (prints 3).
+void main():
+    Shared[Vector[int]] s = Shared[Vector[int]]([1, 2, 3])
+    Vector[int] v = s.get()
+    print(v.len())

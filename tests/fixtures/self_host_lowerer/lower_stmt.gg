@@ -28,7 +28,7 @@ from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
-from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, is_mut_borrow_param_local, cow_materialize_projected_root
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, is_mut_borrow_param_local, cow_materialize_projected_root, materialize_loop_carried_bare_params
 from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
@@ -1060,6 +1060,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # Unconditional loop — `loop: body`, exit via break. Same
             # shape as `while true:`, but the body's default back-edge
             # jumps to the body itself rather than a condition header.
+            # CoW 2G: hoist any loop-carried bare-param materialize into the
+            # pre-header (current block) BEFORE the loop block + DSK_LOOP scope.
+            # SLoop carries NO condition/iterable span, so anchor=0 degenerates
+            # the scan negation to whole-fn membership (safe over-approximation:
+            # the clone is idempotent per root, so a param mutated only before the
+            # loop is already owned and skipped).
+            materialize_loop_carried_bare_params(&ctx, &gmod, 0)
             int loop_bb = new_block(&ctx)
             int loop_exit_bb = new_block(&ctx)
             set_terminator(&ctx, GTJump(loop_bb))
