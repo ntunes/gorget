@@ -1,0 +1,19 @@
+# CoW 2G — index-assign on a bare param inside a loop. `xs[0] = xs[0] + 1`
+# peels to a DOTLESS root (`xs`), which the prescan's Assign arm dropped before
+# the 2G hardening (the `@mut:` path requires a dot; a bare-param index target
+# has none). With the dotless-root insert the loop-carried materialize fires and
+# the write persists across iterations. Expect 13 (10 + 3), caller stays 10.
+#
+# In known_gaps/ (out of the runtime-diff corpus) pending the self-host CoW-2G
+# mirror closing the same index-root recording hole. Rust lane is correct.
+void h(Vector[int] xs):
+    int i = 0
+    while i < 3:
+        xs[0] = xs[0] + 1
+        i = i + 1
+    print(xs[0])
+
+void main():
+    Vector[int] a = [10]
+    h(a)
+    print(a[0])

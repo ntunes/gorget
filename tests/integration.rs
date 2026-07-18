@@ -9054,6 +9054,144 @@ fn deadwrite_ok_while_drain() {
     check_gg_silent_for("deadwrite_ok_while_drain.gg", DEADWRITE_MSG);
 }
 
+// ── CoW 2G — loop-carried bare-param materialize (see devbook/11 §2G) ──
+// The bare-param CoW write inside a loop must get ONE persistent private copy
+// hoisted to the loop pre-header, not a per-iteration throwaway clone. Pre-fix,
+// `while i < 2: xs.pop()` printed 4 instead of 2 and `while xs.len() > 2:
+// xs.pop()` INFINITE-LOOPED (the orphan spinner). These wire the two formerly-
+// both-wrong deadwrite fixtures to LIVE run expectations (the silent-check tests
+// above stay — the silence check and the stdout check are orthogonal).
+
+#[test]
+fn deadwrite_while_drain_runs() {
+    // Formerly HUNG (both backends): the condition re-read the stale pre-loop
+    // borrow forever. Now the private copy is loop-carried and drains to len 4.
+    run_gg("deadwrite_ok_while_drain.gg", "4");
+}
+
+#[test]
+fn deadwrite_loop_read_before_write_runs() {
+    // matcluster #2: read-before-write in the SAME loop — iteration 2 must read
+    // iteration 1's write. Formerly printed 1,1,1,1 on BOTH lanes (Core #8
+    // both-wrong masking); now the persistent private copy grows 1→2→3, caller 1.
+    run_gg("deadwrite_ok_loop_read_before_write.gg", "1\n2\n3\n1");
+}
+
+// ── CoW 2G exercising fixtures (known_gaps/ = OUT of the runtime-diff corpus).
+// The Rust lane is correct on every shape below; each lives in known_gaps/ so it
+// does NOT perturb the runtime-diff parity corpus while the self-host CoW-2G
+// mirror lands on its parallel track (Core #9). Promote to top-level cross-lane
+// pins once both lanes agree.
+
+#[test]
+fn cow_loop_bare_param_materialize() {
+    // while+method, for+push (read-before-write), bare loop, compound-index,
+    // mutation via &param to a callee, projection (b.items.push), read-only ctrl.
+    run_gg(
+        "known_gaps/cow_loop_bare_param_materialize.gg",
+        "2\n4\n4\n1\n1\n4\n115\n100\n2\n4\n3\n1\n60\n3",
+    );
+}
+
+#[test]
+fn cow_loop_bare_param_index_assign() {
+    // `xs[0] = xs[0] + 1` peels to a DOTLESS root — the prescan's dotless-root
+    // insert makes the loop-carried materialize fire. 10 + 3 = 13, caller 10.
+    run_gg("known_gaps/cow_loop_bare_param_index_assign.gg", "13\n10");
+}
+
+#[test]
+fn cow_loop_bare_param_self_field() {
+    // plain `self` IS a bare param — `self.items.push(i)` in a while records
+    // `@mut:self.items` and materializes `self` at the pre-header. 1→4, caller 1.
+    run_gg("known_gaps/cow_loop_bare_param_self_field.gg", "4\n1");
+}
+
+#[test]
+fn cow_loop_bare_param_while_cond() {
+    // Mutation in the loop CONDITION (and a nested if-condition) — re-executes
+    // every iteration, so it is loop-carried. Pre-fix this INFINITE-LOOPED.
+    run_gg("known_gaps/cow_loop_bare_param_while_cond.gg", "2\n4\n2\n4");
+}
+
+#[test]
+fn cow_loop_bare_param_match_scrutinee() {
+    // Mutation in a MATCH SCRUTINEE inside a loop body (`match xs.pop():`).
+    run_gg(
+        "known_gaps/cow_loop_bare_param_match_scrutinee.gg",
+        "5\n4\n3\n2\n5",
+    );
+}
+
+#[test]
+fn cow_loop_bare_param_for_else() {
+    // Mutation in a nested for's ELSE body (`for … else: xs.pop()`) — the For
+    // arm previously dropped else_body, unlike the While arm.
+    run_gg("known_gaps/cow_loop_bare_param_for_else.gg", "2\n4");
+}
+
+#[test]
+fn cow_loop_bare_param_push_char() {
+    // Typed-builtin drift: `push_char` (one of 9 is_mutating builtins the
+    // hand-list missed) now recognized via is_mutating_builtin_method. 2→5,
+    // caller 2. push_char is outside the ggdef phase-0 subset (subset gap filed).
+    run_gg("known_gaps/cow_loop_bare_param_push_char.gg", "5\n2");
+}
+
+#[test]
+fn cow_loop_bare_param_tuple_receiver() {
+    // Mutating method on a TUPLE-FIELD receiver (`t.0.push(i)`) — records
+    // `@mut:t.0` via the TupleFieldAccess arm. 1→3, caller 1.
+    run_gg("known_gaps/cow_loop_bare_param_tuple_receiver.gg", "3\n1");
+}
+
+// ── CoW 2G OUT-OF-SCOPE siblings (filed gaps — `#[ignore]`, assert INTENDED
+// output per "Don't redesign around compiler gaps"). Un-ignore when fixed.
+
+#[test]
+#[ignore = "CoW 2G branch-boundary sibling: a bare-param mutation in an `if` \
+branch (not a loop) is thrown away by lower_if's save/restore, same shape as the \
+pre-fix loop body. The 2G fix hooks LOOP pre-headers only; if/with/unsafe/\
+named-scope/select + while-else/loop-else bodies need the same treatment. \
+Asserts 3,4 (private copy); compiler currently prints 4,4. See TODO 'CoW 2G \
+branch-boundary sibling'."]
+fn cow_loop_bare_param_if_branch() {
+    run_gg("known_gaps/cow_loop_bare_param_if_branch.gg", "3\n4");
+}
+
+#[test]
+#[ignore = "CoW 2G comprehension-loop sibling: the comprehension emitters \
+synthesize header/body/incr loops with no save/restore, so an in-body \
+materialize lands in the re-executing body — per-iteration throwaway by a \
+different route. LANE ASYMMETRY: the self-host fixes these FIRST (its \
+comprehensions desugar through lower_for_*). Asserts 2,2,4; compiler prints \
+3,2,4. See TODO 'CoW 2G comprehension-loop sibling'."]
+fn cow_loop_bare_param_comprehension() {
+    run_gg("known_gaps/cow_loop_bare_param_comprehension.gg", "2\n2\n4");
+}
+
+#[test]
+#[ignore = "CoW 2G tuple-field ASSIGN silent no-op: `t.0 = v` falls to \
+lower_assign's `_ => // not yet supported` and is SILENTLY DISCARDED (Core #8 \
+miscompile — must lower or reject, never drop). Only the RECEIVER shape works. \
+Asserts 13,10; compiler currently prints 10,10 (both writes lost). See TODO \
+'CoW 2G tuple-field assign silent no-op'."]
+fn cow_loop_bare_param_tuple_assign() {
+    run_gg("known_gaps/cow_loop_bare_param_tuple_assign.gg", "13\n10");
+}
+
+#[test]
+#[ignore = "CoW 2G user `&self`-mutator receiver in a loop (step-4 gap): the \
+untyped prescan cannot resolve that a user method name (`compact`) mutates its \
+receiver, so the loop-carried pre-header materialize does not fire and the \
+private copy is thrown away each iteration. A name-based over-approximation is \
+deferred (clone-balloon + generic-instance-tail risk; the R38 residual). \
+Asserts 3,2,2,4; compiler currently prints 3,3,4,4. See TODO 'CoW 2G \
+user-&self-mutator loop-carried receiver'."]
+fn cow_loop_bare_param_user_mutator() {
+    run_gg("known_gaps/cow_loop_bare_param_user_mutator.gg", "3\n2\n2\n4");
+}
+
 #[test]
 fn deadwrite_ok_rebind() {
     check_gg_silent_for("deadwrite_ok_rebind.gg", DEADWRITE_MSG);

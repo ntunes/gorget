@@ -1,0 +1,35 @@
+# CoW 2G user `&self`-mutator receiver in a loop (step-4 gap — filed). The
+# in-body materialize for a user `&self`-mutating method fires via the TYPED
+# fn_sigs first-param-MutPtr lookup, but the shared prescan is an UNTYPED AST
+# walk: it cannot resolve that a user method NAME (`compact`) mutates its
+# receiver, so the pre-header materialize does not fire and the private copy is
+# thrown away every iteration. A conservative name-based over-approximation
+# (any known `&self`-mutator method name marks its receiver mutated) is possible
+# but risks a clone balloon program-wide and misses generic-instance sigs
+# registered during lowering (the already-filed R38 generic-equip residual), so
+# it is deferred; the MUTATING_METHODS fallback still catches user methods named
+# like a builtin mutator (push/pop/append/…), but arbitrarily-named ones
+# (compact/bump) stay uncovered.
+#
+# Asserts the CORRECT loop-carried output: private copy [1,2,3,4] compacted
+# twice → 3, 2, final 2, caller 4. The compiler currently prints 3,3,4,4 (the
+# per-iteration throwaway — the in-body materialize is reverted each iteration).
+struct Buf:
+    Vector[int] data
+
+equip Buf:
+    void compact(&self):
+        self.data.pop()
+
+void f(Buf b):
+    int i = 0
+    while i < 2:
+        b.compact()
+        print(b.data.len())
+        i = i + 1
+    print(b.data.len())
+
+void main():
+    Buf x = Buf([1, 2, 3, 4])
+    f(x)
+    print(x.data.len())

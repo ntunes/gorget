@@ -1,0 +1,23 @@
+# CoW 2G — mutating method on a TUPLE-FIELD receiver of a bare tuple param.
+# `t.0.push(i)` root-peels through the tuple field to `t`; the prescan records
+# `@mut:t.0` (via the TupleFieldAccess arm of extract_path_for_mut) so the
+# loop-carried materialize of `t` fires. Expect the private copy's first field
+# grows to 3 (1 + 2), caller stays 1.
+#
+# NOTE: only the RECEIVER shape is covered. A tuple-field ASSIGN target
+# (`t.0 = v`) is a PRE-EXISTING silent no-op (lower_assign has no
+# TupleFieldAccess arm) — see cow_loop_bare_param_tuple_assign.gg.
+#
+# In known_gaps/ (out of the runtime-diff corpus) pending the self-host CoW-2G
+# mirror. Rust lane is correct.
+void f((Vector[int], int) t):
+    int i = 0
+    while i < 2:
+        t.0.push(i)
+        i = i + 1
+    print(t.0.len())
+
+void main():
+    (Vector[int], int) p = ([9], 0)
+    f(p)
+    print(p.0.len())

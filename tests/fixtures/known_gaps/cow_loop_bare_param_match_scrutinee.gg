@@ -1,0 +1,22 @@
+# CoW 2G — mutation in a MATCH SCRUTINEE inside a loop body. `match xs.pop():`
+# evaluates the scrutinee every iteration; the prescan's Match arm previously
+# scanned only the arm bodies, missing the scrutinee. With the 2G scrutinee scan
+# the loop-carried materialize fires and the pops persist across iterations.
+#
+# In known_gaps/ (out of the runtime-diff corpus) pending the self-host CoW-2G
+# mirror closing the same scrutinee hole. Rust lane is correct.
+void f(Vector[int] xs):
+    int i = 0
+    while i < 3:
+        match xs.pop():
+            case Some(v):
+                print(v)
+            case None:
+                print(0 - 1)
+        i = i + 1
+    print(xs.len())
+
+void main():
+    Vector[int] a = [1, 2, 3, 4, 5]
+    f(a)
+    print(a.len())
