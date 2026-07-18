@@ -5823,6 +5823,80 @@ fn ratchet_b_materialize_site_count() {
     );
 }
 
+/// Arm-count lint (Core #4 "one fix, all siblings" / Core #6 "class-retiring
+/// guard"): the planner consumer #1 scope pre-header materialize must be hoisted
+/// at the `lower_stmt` DISPATCH ARM of EVERY non-loop scope form — one shared
+/// entry (`materialize_scope_carried_bare_params`), never open-coded per form —
+/// so a new scope form cannot silently skip it (the `cow_loop_bare_param_if_branch`
+/// class: a bare-param mutation inside a save/restore scope thrown away by the
+/// scope's restore_locals). The non-loop scope forms are exactly six:
+///   If · With · Unsafe · NamedScope · Match · Select.
+/// The LOOP forms (While · For · Loop) are hoisted through the SEPARATE
+/// `materialize_loop_carried_bare_params` funnel (which keeps
+/// `LoopPreHeaderMaterialize` so per-position costing stays honest — a
+/// dispatch-arm hoist for a loop would mis-stamp `BranchPreHeaderMaterialize`);
+/// its three call sites (while + bare loop in stmts/mod.rs, for in for_loops.rs)
+/// are pinned too. For while-else/for-else a presence-count cannot detect a
+/// MISSING else-body scan — the loop-else regression FIXTURES
+/// (`cow_scope_bare_param_while_else` / `_for_else`) are the real guard there.
+///
+/// **If this fails:**
+///   - A NEW non-loop scope form was added → it MUST call
+///     `materialize_scope_carried_bare_params(ctx, builder, &stmt.node, …)` at
+///     its dispatch arm (do NOT open-code the scan); bump SCOPE_ARMS with a
+///     justification. `lower_block_scoped` itself must stay materialize-free (an
+///     unconditional entry hoist there would break the conditional callers).
+///   - The count went DOWN → a scope form lost its hoist, re-opening the
+///     throw-away hole; restore the call, do NOT lower the constant.
+#[test]
+fn planner_scope_preheader_arm_count() {
+    let src = fs::read_to_string("src/ir/lowering/stmts/mod.rs")
+        .expect("read src/ir/lowering/stmts/mod.rs");
+
+    // Non-loop scope dispatch-arm hoists: `materialize_scope_carried_bare_params(
+    // ctx, builder, &stmt.node, …)` — one per scope form (If/With/Unsafe/
+    // NamedScope/Match/Select).
+    const SCOPE_ARMS: usize = 6;
+    let scope_calls = src
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with("//")
+                && t.contains("materialize_scope_carried_bare_params(ctx, builder, &stmt.node")
+        })
+        .count();
+    assert_eq!(
+        scope_calls, SCOPE_ARMS,
+        "planner scope pre-header dispatch-arm hoist count changed: {scope_calls} vs \
+         expected {SCOPE_ARMS} (If/With/Unsafe/NamedScope/Match/Select). A new scope \
+         form must route through `materialize_scope_carried_bare_params` at its \
+         `lower_stmt` dispatch arm — see the fn doc + the arm-count lint comment.",
+    );
+
+    // Loop pre-header hoists route through the distinct
+    // `materialize_loop_carried_bare_params` funnel (while + bare loop here, for in
+    // for_loops.rs). Pinned so a loop form can't lose its 2G/loop-else hoist.
+    const LOOP_CALLS: usize = 3;
+    let for_src = fs::read_to_string("src/ir/lowering/stmts/for_loops.rs")
+        .expect("read src/ir/lowering/stmts/for_loops.rs");
+    let loop_calls = src
+        .lines()
+        .chain(for_src.lines())
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with("//")
+                && (t.contains("materialize_loop_carried_bare_params(ctx, builder")
+                    || t.contains("super::materialize_loop_carried_bare_params(ctx, builder"))
+        })
+        .count();
+    assert_eq!(
+        loop_calls, LOOP_CALLS,
+        "loop pre-header hoist call count changed: {loop_calls} vs expected \
+         {LOOP_CALLS} (while + bare loop + for). The loop-else regression fixtures \
+         guard the else-body scan; this presence-count guards the hoist itself.",
+    );
+}
+
 /// Minimal recursive file walk (extension-filtered) shared by the ratchets.
 fn walk_files(root: &str, ext: &str) -> Vec<String> {
     let mut out = Vec::new();
