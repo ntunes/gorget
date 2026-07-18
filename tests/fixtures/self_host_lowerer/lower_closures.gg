@@ -630,7 +630,23 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
                 else:
                     self_tid = register_ptr(&gmod, UNIT_TYPE)
             param_types.push(self_tid)
-            int self_lid = add_local(&ctx, self_tid, Some("self_void"))
+            # 2E-SH (D2): plain non-scalar `self` is a bare BORROW param — a GtPtr
+            # VIEW of the caller's value, exactly like a named bare param — so tag
+            # it LoParam (not the default LoOwned) so `cow_materialize_projected_root`
+            # privatises it on a genuine self-write (materialise-on-mutation).
+            # Mirrors Rust's `set_bare_param` for immutable plain self
+            # (functions.rs:1322) — ALWAYS bare, regardless of whether the body
+            # mutates; the materialize GATE (precise, self-rooted mutation only) is
+            # what keeps a read-only method (`hash`/`eq`) from cloning self. A scalar
+            # self passes BY VALUE (Copy — never materialises); `&self`/`!self` are
+            # GtMutPtr (write-through / consume) and keep the owned tag (the
+            # `is_mut_borrow_param_local` guard skips them, and `!self` must stay
+            # owned so it is dropped once).
+            int self_lid = -1
+            if self_ownership == 0 and not target_is_scalar:
+                self_lid = add_local_with(&ctx, self_tid, Some("self_void"), LoParam(), BoParam(-1))
+            else:
+                self_lid = add_local(&ctx, self_tid, Some("self_void"))
             if is_explicit_trait:
                 # Defer alias creation; bind `self` to the alias once
                 # all params have been added.

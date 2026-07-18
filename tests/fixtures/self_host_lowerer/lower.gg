@@ -767,6 +767,17 @@ bool is_mut_borrow_param_local(LowerCtx &ctx, GirModule &gmod, int local):
 # non-param and returns false (no double-clone) — idempotent per root.
 bool cow_materialize_projected_root(LowerCtx &ctx, GirModule &gmod, SpannedExpr target):
     String root = cow_source_root_name(target)
+    # 2E-SH (D2): plain `self` roots the materialize like any bare param. `self`
+    # is the distinct `ESelfExpr` AST node (NOT `EIdentifier("self")`), so the
+    # SHARED `cow_source_root_name` — which the lazy-CoW family path also consumes
+    # — deliberately returns "" for it (keying the lazy family by "self" spuriously
+    # fires unrelated view guards). Resolve the self-root HERE, LOCAL to the
+    # materialize path, via the existing `mutinf_expr_is_self_rooted` walker — self
+    # binds to the lowerer's named-local "self" at method entry. Mirrors Rust's
+    # dedicated projection-root resolver (functions.rs SelfExpr arm), kept separate
+    # from the lazy-family root path.
+    if root == "" and mutinf_expr_is_self_rooted(target):
+        root = "self"
     if root == "":
         return false
     if not nl_contains(&ctx, root):
@@ -787,7 +798,34 @@ bool cow_materialize_projected_root(LowerCtx &ctx, GirModule &gmod, SpannedExpr 
     String tname = type_id_to_name(struct_tid, &gmod)
     String clone_fn = resolve_payload_clone_fn(tname, &gmod)
     if clone_fn == "":
-        return false
+        # 2E-SH value-struct path: a pure-VALUE struct (no clone fn) behind a bare
+        # POINTER param — the canonical plain-`self` on a value struct (Counter/Bag),
+        # which is passed by pointer. No clone fn exists and none is needed: deref-copy
+        # the pointee into a fresh owned local and rebind so the write lands on the
+        # private copy (mirror Rust `cow_materialize_alias`'s non-resource deref arm).
+        # Nothing to drop-register — a pure value has no resource fields by transitivity.
+        #
+        # GATE (root_is_ptr): the `GIDeref` deref-copy is only valid when the root is a
+        # POINTER. A by-VALUE value-struct param (`Point p` free-fn arg → GtNamed) is
+        # ALREADY a private copy — a write through it is Rust's Copy-param semantics, so
+        # write-through (return false); deref-copying a non-pointer is a C type error
+        # (`void* = __gg_Point`). A resource pointee without a clone fn is likewise left
+        # alone — deref-copying it would duplicate a droppable without registering the copy.
+        bool root_is_ptr = false
+        if root_tid >= PRIM_COUNT and root_tid < gmod.type_table.len():
+            match gmod.type_table.get(root_tid).unwrap():
+                case GtPtr(_):
+                    root_is_ptr = true
+                else:
+                    pass
+        if not root_is_ptr:
+            return false
+        if is_resource_type_name(tname, &gmod):
+            return false
+        int vmat = add_local(&ctx, struct_tid, None)
+        emit(&ctx, GIDeref(vmat, root_local, struct_tid))
+        nl_put(&ctx, root, vmat)
+        return true
     int mat = add_local(&ctx, struct_tid, None)
     Vector[Operand] cargs = [OpBorrow(root_local)]
     emit(&ctx, GICallExtern(mat, clone_fn, cargs))
@@ -1506,6 +1544,20 @@ String mutinf_recv_type_name(LowerCtx &ctx, GirModule &gmod, SpannedExpr e):
                 return ""
             int mrt_tid = peel_ptr_tid(&gmod, ctx.locals.get(mrt_lid).unwrap().type_id)
             return type_id_to_name(mrt_tid, &gmod)
+        case ESelfExpr():
+            # 2E-SH: `self` binds to the named-local "self" at method entry (a GtPtr
+            # to the equipped type). Resolve its type name the same way a named root
+            # does, so a self-rooted projected receiver (`self.inner.set_name()`)
+            # resolves precisely for the mutation-inference gate (Part 2). A read-only
+            # self-projection (`self.id.hash()`) resolves to the field type whose
+            # method is absent from `method_mutates_self` → false → no spurious clone.
+            if not nl_contains(&ctx, "self"):
+                return ""
+            int mrt_slid = nl_get(&ctx, "self")
+            if mrt_slid < 0:
+                return ""
+            int mrt_stid = peel_ptr_tid(&gmod, ctx.locals.get(mrt_slid).unwrap().type_id)
+            return type_id_to_name(mrt_stid, &gmod)
         case EIndex(mrt_base, _):
             String mrt_bt = mutinf_recv_type_name(&ctx, &gmod, *mrt_base)
             if mrt_bt.len() > 0:

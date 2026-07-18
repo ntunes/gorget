@@ -31,7 +31,7 @@ from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, Capture
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
-from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver, cow_materialize_projected_root, mutinf_named_recv_writes_self, mutinf_projected_recv_writes_self
+from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver, cow_materialize_projected_root, mutinf_named_recv_writes_self, mutinf_projected_recv_writes_self, mutinf_expr_is_self_rooted
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
 from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_mutate, cow_lazy_join_view_result
@@ -3360,9 +3360,27 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 case None:
                     match (*recv_box).expr:
                         case EIndex(_r37ib, _r37ii):
-                            _r37_mut = method_mutates_receiver(*recv_box, mname, &gmod)
+                            # 2E-SH: a SELF-ROOTED projected receiver (`self.v[i].m()`)
+                            # must use the PRECISE mutation-inference gate, not the
+                            # conservative `method_mutates_receiver` (which returns TRUE
+                            # for an unresolvable self-projection — a false positive that,
+                            # now that plain self is a materializable LoParam, would clone
+                            # self inside a READ-ONLY method). `mutinf_projected_recv_writes_self`
+                            # resolves the projected type and reads `method_mutates_self`
+                            # (genuine user &self/!self mutators only) → bomb-safe. Non-self
+                            # receivers keep the existing conservative gate (unchanged).
+                            if mutinf_expr_is_self_rooted(*recv_box):
+                                _r37_mut = mutinf_projected_recv_writes_self(&ctx, &gmod, *recv_box, mname)
+                            else:
+                                _r37_mut = method_mutates_receiver(*recv_box, mname, &gmod)
                         case EFieldAccess(_r37fb, _r37ff):
-                            _r37_mut = method_mutates_receiver(*recv_box, mname, &gmod)
+                            # 2E-SH: same self-rooted precise-gate routing as EIndex above
+                            # (`self.id.hash(&h)` in a derived Hashable body must NOT clone
+                            # self — int's `hash` is read-only, absent from method_mutates_self).
+                            if mutinf_expr_is_self_rooted(*recv_box):
+                                _r37_mut = mutinf_projected_recv_writes_self(&ctx, &gmod, *recv_box, mname)
+                            else:
+                                _r37_mut = method_mutates_receiver(*recv_box, mname, &gmod)
                         case EIdentifier(_r37id):
                             # R38: a NAMED (bare-identifier) receiver materializes
                             # ONLY when the `&self`/`!self` mutation-inference pass
