@@ -9077,11 +9077,12 @@ fn deadwrite_loop_read_before_write_runs() {
     run_gg("deadwrite_ok_loop_read_before_write.gg", "1\n2\n3\n1");
 }
 
-// ── CoW 2G exercising fixtures (known_gaps/ = OUT of the runtime-diff corpus).
-// The Rust lane is correct on every shape below; each lives in known_gaps/ so it
-// does NOT perturb the runtime-diff parity corpus while the self-host CoW-2G
-// mirror lands on its parallel track (Core #9). Promote to top-level cross-lane
-// pins once both lanes agree.
+// ── CoW 2G exercising fixtures. Seven are PROMOTED top-level cross-lane pins
+// (both lanes agree — verified oracle==self-host at the mirror landing db25f0ef):
+// materialize, index_assign, while_cond, push_char, match_scrutinee, for_else,
+// tuple_receiver. The rest stay in known_gaps/ (OUT of the runtime-diff corpus):
+// self_field (the SH scan never marks `self` — filed) and the four `#[ignore]`
+// sibling-gap fixtures asserting intended output (Core #9 explicit lane gaps).
 
 #[test]
 fn cow_loop_bare_param_materialize() {
@@ -18518,6 +18519,103 @@ fn self_host_bootstrap() {
 // bootstraps (Rust, OCaml, GHC) routinely allow N=4-5. The strict
 // N=2 invariant will be restored once Phase 2c stabilises and the
 // ownership cascade quiesces.
+// ═══════════════════════════════════════════════════════════════
+// CLONE-PRESSURE CEILING — the self-host self-compile's array_clone
+// count, pinned as a tighten-only ratchet (owner 2026-07-18: pin the
+// 2G clone-bomb windfall immediately so it cannot silently erode
+// between campaigns; the DEEP-1 / materialization-planner companion
+// guard).
+//
+// Seeded at db25f0ef: 525,446,547 (regenerated TWICE same-session,
+// bit-identical — the count is deterministic for a fixed tree). The
+// pre-2G baseline was 694,815,790; the 2G loop-carried fix disarmed
+// the per-iteration throwaway clone (−24%). Ceiling = seed + ~1%
+// headroom for legitimate small fluctuations from unrelated
+// driver-source edits.
+//
+// Discipline: measured ≤ CEILING, always. A deliberate increase
+// needs a cited re-pin HERE (what changed, why the clones are
+// justified). Round closes RE-SEED downward when the fresh number
+// drops — the ratchet only tightens. Regenerate by hand:
+//   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
+//   → .clone_stats.array_clone
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 530_700_000;
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_clone_ceiling() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let driver_gg = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.gg");
+    let lib_dir = manifest_dir.join("lib");
+    let exe = std::env::temp_dir().join(format!("gg_clone_ceiling_{}", std::process::id()));
+
+    // Build the stage-0 driver with --clones=stats so its binary reports the
+    // [clone-stats] line at exit. Built to a private path — never clobbers the
+    // cached driver the other self-host tests share.
+    let build = run_with_deadline(
+        Command::new(env!("CARGO_BIN_EXE_gg"))
+            .arg("build")
+            .arg("--clones=stats")
+            .arg(&driver_gg)
+            .arg("-o")
+            .arg(&exe),
+        "clone_ceiling_build",
+        build_timeout(),
+    );
+    assert!(
+        build.status.success(),
+        "clone-ceiling driver build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    // The canonical clone-pressure workload: the driver compiling its own source
+    // (same as scripts/self_host_mem_baseline.sh). Stats land on stderr at exit.
+    let run = run_with_deadline(
+        Command::new(&exe)
+            .arg(&driver_gg)
+            .arg(&lib_dir)
+            .arg("--lir-c")
+            .stdout(Stdio::null()),
+        "clone_ceiling_run",
+        build_timeout(),
+    );
+    let _ = std::fs::remove_file(&exe);
+    assert!(
+        run.status.success(),
+        "clone-ceiling self-compile failed: {}",
+        String::from_utf8_lossy(&run.stderr).lines().last().unwrap_or("(no stderr)")
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let stats_line = stderr
+        .lines()
+        .rev()
+        .find(|l| l.starts_with("[clone-stats]"))
+        .expect("no [clone-stats] line on driver stderr — was the build missing --clones=stats?");
+    let measured: u64 = stats_line
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("array_clone="))
+        .expect("no array_clone= field in the [clone-stats] line")
+        .parse()
+        .expect("array_clone value not a u64");
+
+    // Always print the fresh number — round closes read it to re-seed downward.
+    println!(
+        "[clone-ceiling] array_clone={} ceiling={} headroom={}",
+        measured,
+        SELF_COMPILE_ARRAY_CLONE_CEILING,
+        SELF_COMPILE_ARRAY_CLONE_CEILING.saturating_sub(measured),
+    );
+    assert!(
+        measured <= SELF_COMPILE_ARRAY_CLONE_CEILING,
+        "CLONE-PRESSURE RATCHET TRIPPED: self-compile array_clone={measured} exceeds the \
+         ceiling {SELF_COMPILE_ARRAY_CLONE_CEILING}. A change made the compiler clone more. \
+         Either fix the regression (likely an over-materialize or a lost move/borrow), or — \
+         only if the increase is a justified semantic cost — re-pin the ceiling WITH a \
+         citation in the comment above. Regenerate: \
+         bash scripts/self_host_mem_baseline.sh --out /tmp/m.json → .clone_stats.array_clone"
+    );
+}
+
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_bootstrap_fixed_point() {
