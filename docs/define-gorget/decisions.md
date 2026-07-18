@@ -24,6 +24,15 @@
   (fixed task suite; model given only the generated semantic context pack; score
   compiles-first-try and runs-correct rates) as a first-class language-quality metric. Filed
   in TODO; depends on the phase-2 context pack.
+- **Syntax-budget section required on syntax-adding decisions (added 2026-07-18, guards slice):**
+  any decision that adds surface syntax — a sigil, operator, keyword, call-site marker, or
+  punctuation form — must include a **"Syntax budget"** section stating: (a) the FULL current
+  inventory of sigils/operators restated in one place (so creep is visible at ratification
+  time, not discovered later); (b) what the addition costs a newcomer (what it can be confused
+  with, what it looks like it means but doesn't); (c) collisions/near-collisions with existing
+  forms. Rationale: each addition is locally justified; the SUM is a growing symbol vocabulary
+  in a language whose pitch is Python-like readability — the budget makes the sum a reviewed
+  quantity. A pre-book-freeze consolidation review of the whole inventory is queued in TODO.
 - **Actively RETIRE sidecars + parallel structures (added 2026-07-13):** "all opportunities to
   reduce sidecars and parallel structures should be taken." This UPGRADES layering rule 3 (one
   source of truth per axis; no parallel sidecar maps) from a *don't-add* rule to a *hunt-and-fold*
