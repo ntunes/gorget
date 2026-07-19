@@ -23804,11 +23804,14 @@ fn self_host_runtime_diff() {
     // Reseed: rm tests/fixtures/self_host_lowerer/driver{,.c}; GG_RUNTIME_DIFF=1
     // GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release
     // self_host_runtime_diff -- --nocapture (default GG_TEST_TIMEOUT_SECS).
-    // Seeded 2026-07-18 (G2 scout): fresh full run measured ADJ-MATCH 344 (of
-    // MATCH 1192 = ADJ 344 + UNADJ 835 + BOTH-WRONG 13); floor = 344 − 5 (the
-    // MATCH floor's measured timeout jitter — ADJ derives from the MATCH set,
-    // so it inherits at most that jitter) = 339.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 354;
+    // Reseeded 2026-07-19 (burn-down stage 1a): the 3 class-A ggdef oracle fixes
+    // flipped their fixtures BOTH-WRONG→ADJ-MATCH (+3) and additionally unblocked
+    // 5 previously-UNADJ fixtures whose `.get().unwrap()` chains / set iteration
+    // ggdef could not run before (+5). Fresh full run measured ADJ-MATCH 362 (of
+    // MATCH 1203 = ADJ 362 + UNADJ 831 + BOTH-WRONG 10); floor = the measured
+    // count (the prior seed tracked the measured value exactly; a downward-jitter
+    // margin can be subtracted here if a MATCH-set timeout ever trips it).
+    const GGDEF_ADJUDICATED_FLOOR: usize = 362;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -23835,12 +23838,14 @@ fn self_host_runtime_diff() {
     // same commit). Shrink-only allowlist, the EXPECTED_HANGS idiom. Seeded from
     // the fresh run; each entry MUST carry a filed TODO citation.
     // Seeded 2026-07-18 from the G2 scout's fresh full run + per-fixture triage
-    // (all 13 verified by direct `ggdef run` vs `gg run`): every entry today is a
-    // GGDEF-side defect — production agrees with the fixture-documented expected
-    // output. Two classes (file + burn down; the target is the EMPTY list):
-    //   (A) ggdef mis-defines RATIFIED semantics: method_mut_borrow_arg (`&`
-    //       param write-through), set_literal_basic (Set-literal dedupe),
-    //       vec_get_unwrap_push_chain (`.get().unwrap().push()` Ref write-through).
+    // (all 13 then-current entries verified by direct `ggdef run` vs `gg run`):
+    // every entry is a GGDEF-side defect — production agrees with the fixture-
+    // documented expected output. Two classes (the target is the EMPTY list):
+    //   (A) ggdef mis-DEFINED ratified semantics — BURNED DOWN 2026-07-19
+    //       (stage 1a): method_mut_borrow_arg (`&`-param write-through),
+    //       set_literal_basic (Set-literal dedupe), vec_get_unwrap_push_chain
+    //       (`.get().unwrap().push()` Ref write-through) were fixed in ggdef and
+    //       left this list in the same change (ADJ-MATCH absorbed all three).
     //   (B) ggdef silently mis-models out-of-model surface that classify.rs's
     //       invariant #8 says must become a LOUD ElabError: user Str/Display
     //       impls (core_traits, print_display_temp_leak), custom-drop hooks /
@@ -23855,14 +23860,11 @@ fn self_host_runtime_diff() {
         "drop_reassign",
         "drop_struct_collection_fields",
         "fstring_binary_spec_leak",
-        "method_mut_borrow_arg",
         "print_builtin",
         "print_display_temp_leak",
         "print_terminator",
-        "set_literal_basic",
         "struct_value_match_bind",
         "struct_value_match_bind3",
-        "vec_get_unwrap_push_chain",
     ];
     if !cfg!(debug_assertions) && parity_floor_active("self_host_runtime_diff") {
         let new_both_wrong: Vec<&str> = both_wrong

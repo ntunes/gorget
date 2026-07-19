@@ -502,7 +502,7 @@ fn closure_body_double_move_of_a_consume_param_is_rejected() {
 Callable[int()] make(ConsumeCallable[int(int)] g):
     return (): g(1) + g(2)
 void main():
-    Callable[int()] f = make(!(n): n * 10)
+    Callable[int()] f = make((n): n * 10)
     print(f())
 "#;
     let run = go(src);
@@ -2113,7 +2113,7 @@ fn d10b_disjoint_siblings_legal() {
 struct M:
     Vector[int] a
     Vector[int] b
-void f(Vector[int] x, Vector[int] y):
+void f(Vector[int] &x, Vector[int] &y):
     print(x.len())
     print(y.len())
 void main():
@@ -2131,7 +2131,7 @@ fn d10b_writer_copy_read_exempt() {
 struct S:
     int copy_int
     Vector[int] vec
-void f(S whole, int val):
+void f(S &whole, int val):
     print(val)
 void main():
     S s = S(7, [1, 2])
@@ -2151,7 +2151,7 @@ fn d10b_mover_copy_read_is_illformed_not_overlap() {
 struct S:
     int copy_field
     Vector[int] vec
-void f(S owned, int val):
+void f(S !owned, int val):
     print(val)
 void main():
     S s = S(7, [1, 2])
@@ -2177,13 +2177,96 @@ fn d10b_order_twin_read_before_move_legal() {
 struct S:
     int copy_field
     Vector[int] vec
-void f(int val, S owned):
+void f(int val, S !owned):
     print(val)
 void main():
     S s = S(7, [1, 2])
     f(s.copy_field, !s)
 "#;
     assert_eq!(out(src), "7");
+}
+
+// ── the free-fn/method call-site sigil ASYMMETRY (mirrors production) ────────
+
+#[test]
+fn free_fn_bare_place_into_amp_param_rejects() {
+    // Production's `check_call_ownership` runs on `Expr::Call` ONLY
+    // (check_expr.rs:315): at a FREE-FN call site the arg sigil must match the
+    // declared param mode — a bare place into a `&` param is E_OwnershipMismatch,
+    // never a silent write-through (probes p2/p3/p10/p11, all production-rejected).
+    let src = r#"
+void grow(Vector[int] &v):
+    v.push(5)
+void main():
+    Vector[int] xs = [1]
+    grow(xs)
+    print(xs.len())
+"#;
+    match run_source(src, FUEL) {
+        Err(e) => assert!(
+            e.to_string().contains("E_OwnershipMismatch"),
+            "expected the sigil-mismatch reject, got: {e}"
+        ),
+        Ok(run) => panic!("free-fn bare-into-& must statically reject, ran to {:?}", run.outcome),
+    }
+}
+
+#[test]
+fn method_bare_place_into_amp_param_writes_through() {
+    // The METHOD face of the asymmetry: production never reaches the ownership
+    // check on `Expr::MethodCall`, so a bare place arg into a `&` param binds
+    // the alias and WRITES THROUGH (the ratified `method_mut_borrow_arg`
+    // family; probes pm_vec/pm_int/pm_str, all production-run).
+    let src = r#"
+struct C:
+    int total
+equip C:
+    void add_all(&self, Vector[int] &vals):
+        vals.push(7)
+void main():
+    Vector[int] v = [1]
+    C c = C(0)
+    c.add_all(v)
+    print(v.len())
+"#;
+    assert_eq!(out(src), "2");
+}
+
+// ── set-literal destination positions (the dest_ty_hint lifecycle) ───────────
+
+#[test]
+fn set_literal_dedupes_at_reassign_and_nested_element() {
+    // The literal's set-vs-vector kind is DESTINATION-TYPE directed at every
+    // proven position: whole-local re-assignment (probe p15) and a nested
+    // literal element via the container's element type (probe p13). Production
+    // agrees on both.
+    let src = r#"
+void main():
+    Set[int] s = {1, 2}
+    s = {3, 3, 4}
+    print(s.len())
+    Vector[Set[int]] vs = [{1, 1, 2}]
+    print(vs.len())
+    print(vs.get(0).unwrap().len())
+"#;
+    assert_eq!(out(src), "2\n1\n2");
+}
+
+#[test]
+fn set_hint_does_not_leak_into_call_arg_literal() {
+    // The p5 leak, pinned: a `Set[T]`-annotated binding whose RHS is a CALL
+    // must NOT dedupe a literal inside the call's args — the hint dies at
+    // every non-literal node.
+    let src = r#"
+Set[int] mk(Vector[int] v):
+    print(v.len())
+    Set[int] outv = {7}
+    return outv
+void main():
+    Set[int] s = mk([9, 9, 8])
+    print(s.len())
+"#;
+    assert_eq!(out(src), "3\n1");
 }
 
 // ── the `render_expect_block_from` seam round-trips json_escape (D2 prep) ─────

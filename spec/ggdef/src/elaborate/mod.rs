@@ -106,6 +106,10 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
                     name.clone(),
                     fd.params.iter().map(|p| ty_of_type(&p.node.type_.node)).collect(),
                 );
+                el.fn_param_modes.insert(
+                    name.clone(),
+                    fd.params.iter().map(|p| mode_of(p.node.ownership)).collect(),
+                );
                 el.fn_ret.insert(name.clone(), ty_of_type(&fd.return_type.node));
                 if fd.throws.declares_throws() {
                     el.fn_throws.insert(name);
@@ -217,6 +221,18 @@ struct MethodInfo {
     self_mode: Mode,
 }
 
+/// The surface form a `call_args_reordered` call was spelled in. Production's
+/// call-site sigil check is ASYMMETRIC (`check_call_ownership` runs on the
+/// `Expr::Call` arm only, `check_expr.rs:315`): free-fn call sites require the
+/// arg sigil to match the declared param mode; method calls never reach the
+/// check, so a bare place arg into a `&` param silently binds the alias and
+/// writes through. Typed here so the two behaviors cannot blur.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum CallForm {
+    FreeFn,
+    Method,
+}
+
 /// The §10.3 "Type-Directed Result Capture" context of the fallible call
 /// currently being elaborated. Set by the destination position JUST before its
 /// value expression elaborates; consumed (`mem::take`) by the outermost
@@ -266,6 +282,12 @@ struct Elaborator {
     /// §10.3 type-directed capture at call args (a throws-call arg whose param
     /// is declared `Result[_,_]` captures instead of auto-propagating).
     fn_param_tys: HashMap<String, Vec<Ty>>,
+    /// Signature registry: fn / method name → declared param MODES, in decl
+    /// order (methods exclude `self`, aligning with `fn_param_names`). Serves
+    /// the "unbroken `&`-chain" (§3.1): a bare place arg into a `&`
+    /// (WriteThrough) param aliases the caller's place — the `&` on the PARAM
+    /// declaration drives write-through, no call-site sigil required.
+    fn_param_modes: HashMap<String, Vec<Mode>>,
     /// `(type-name, method-name) → MethodInfo` for user `equip` methods.
     equip_methods: HashMap<(String, String), MethodInfo>,
     /// `equip T with Drop` registry: `(type-name, drop-fn-name)`.
@@ -302,6 +324,18 @@ struct Elaborator {
     /// (see `CaptureCtx`). Set by a destination position just before its value
     /// elaborates; consumed by the outermost call.
     capture_ctx: CaptureCtx,
+    /// The DECLARED/INFERRED type of the destination whose value is currently
+    /// being elaborated. A brace literal `{a, b, c}` and a bracket literal
+    /// `[a, b, c]` share ONE AST node (`ArrayLiteral`) — set vs vector is
+    /// DESTINATION-TYPE directed (production disambiguates the same way, both
+    /// spellings). Lifecycle: SET at a destination position (VarDecl annotation;
+    /// assignment target's inferred type; re-armed per element with the
+    /// container's element type inside the `ArrayLiteral` arm), CONSUMED
+    /// (`take`) by the `ArrayLiteral` arm, and KILLED at the entry of every
+    /// other `elaborate_expr` node — so the hint reaches exactly the literal
+    /// that IS the destination's value, never a literal nested in a call arg
+    /// (the p5 leak) or any other unrelated position.
+    dest_ty_hint: Option<Ty>,
     /// D29: the FIRST bare-fallible-mark violation seen while elaborating (first
     /// wins, mirroring the liveness gate's first-Halt). Carried onto the emitted
     /// `Program` and surfaced by `run` as an `IllFormed` + `E_MissingFallibleMark`
@@ -472,9 +506,17 @@ impl Elaborator {
                 .filter(|p| !is_self_param(&p.node))
                 .map(|p| ty_of_type(&p.node.type_.node))
                 .collect();
+            let param_modes: Vec<Mode> = m
+                .node
+                .params
+                .iter()
+                .filter(|p| !is_self_param(&p.node))
+                .map(|p| mode_of(p.node.ownership))
+                .collect();
             self.func_names.insert(mangled.clone());
             self.fn_param_names.insert(mangled.clone(), param_names);
             self.fn_param_tys.insert(mangled.clone(), param_tys);
+            self.fn_param_modes.insert(mangled.clone(), param_modes);
             self.fn_ret.insert(mangled.clone(), ty_of_type(&m.node.return_type.node));
             if m.node.throws.declares_throws() {
                 self.fn_throws.insert(mangled.clone());
@@ -781,8 +823,15 @@ impl Elaborator {
                         }
                     }
                 }
+                // A brace/bracket literal RHS is set-vs-vector directed by the
+                // DECLARED type (they share one `ArrayLiteral` node): hand the
+                // annotation to the `ArrayLiteral` arm, cleared after the bind.
+                if !matches!(type_.node, ast::Type::Inferred) {
+                    self.dest_ty_hint = Some(ty_of_type(&type_.node));
+                }
                 // D4 position 1 (bind) fires inside `bind_source`'s Copy branch.
                 let source = self.bind_source(value)?;
+                self.dest_ty_hint = None;
                 self.capture_ctx = CaptureCtx::None;
                 // Record the binding's type + mode in the env (annotation, or
                 // inferred from the initializer for `auto`).
@@ -832,7 +881,18 @@ impl Elaborator {
                 if matches!(target.node, ast::Expr::Identifier(_)) {
                     self.reject_if_single_owner_callable_init(&value.node, value.span, "bind", true)?;
                 }
+                // Set-vs-vector literal disambiguation at an ASSIGNMENT
+                // destination (probe p15: `s = {3,3,4}` re-assign must dedupe
+                // exactly like the VarDecl form): hand the target's inferred
+                // type to the ArrayLiteral arm. Set AFTER the target elaborated
+                // (its own elaboration clears the hint) and cleared right after
+                // the value; an unresolvable target type simply leaves no hint.
+                match self.infer_ast_ty(&target.node) {
+                    Ty::Unknown => {}
+                    t => self.dest_ty_hint = Some(t),
+                }
                 let value_src = self.owning_source_from_expr(value)?;
+                self.dest_ty_hint = None;
                 self.capture_ctx = CaptureCtx::None;
                 Ok(vec![Stmt::Assign { target: target_expr, value: value_src, span }])
             }
@@ -1301,7 +1361,7 @@ impl Elaborator {
         Ok(())
     }
 
-    fn call_arg_source(&mut self, arg: &ast::CallArg) -> ElabResult<Source> {
+    fn call_arg_source(&mut self, arg: &ast::CallArg, param_mode: Option<Mode>) -> ElabResult<Source> {
         match arg.ownership {
             ast::Ownership::Move => Ok(Source::Move(self.elaborate_expr(&arg.value)?)),
             ast::Ownership::MutableBorrow => {
@@ -1324,6 +1384,21 @@ impl Elaborator {
                 Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?))
             }
             ast::Ownership::Borrow => {
+                // The "unbroken `&`-chain" (§3.1), METHOD-CALL PATH ONLY
+                // (`param_mode` is Some solely via `CallForm::Method` — see
+                // `free_fn_sigil_check`; free-fn sites loud-reject the mismatch
+                // instead, mirroring production's asymmetric check): a bare
+                // place arg passed to a `&` (WriteThrough) param aliases the
+                // caller's place — writes in the callee reach it, no call-site
+                // sigil (`c.add_all(v)` into `&vals`). Same tainted-Borrow-root
+                // formation guard as the explicit-`&` arm (a hidden clone of a
+                // drop-tainted root double-closes).
+                if param_mode == Some(Mode::WriteThrough) && ast_is_place(&arg.value.node) {
+                    if !matches!(&arg.value.node, ast::Expr::Deref { .. }) {
+                        self.reject_materialize_on_write(&arg.value.node, arg.value.span)?;
+                    }
+                    return Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?));
+                }
                 if ast_is_place(&arg.value.node) {
                     // D10(b) Copy-snapshot: a bare read of a COPY-typed place is
                     // a VALUE SNAPSHOT evaluated eagerly at the call site into an
@@ -1351,6 +1426,14 @@ impl Elaborator {
 
     fn elaborate_expr(&mut self, expr: &Spanned<ast::Expr>) -> ElabResult<Expr> {
         let span = expr.span;
+        // `dest_ty_hint` scope rule: the hint applies ONLY when the destination's
+        // value IS the literal directly. Any other node between the destination
+        // and a literal (a call whose ARG is a literal — the p5 leak —, a binary
+        // op, a method call, …) kills it, so a `Set[T]` annotation can never
+        // dedupe a literal nested in an unrelated position.
+        if !matches!(&expr.node, ast::Expr::ArrayLiteral(_)) {
+            self.dest_ty_hint = None;
+        }
         match &expr.node {
             ast::Expr::IntLiteral(i) => Ok(Expr::Int(*i)),
             ast::Expr::FloatLiteral(f) => Ok(Expr::Float(*f)),
@@ -1426,11 +1509,25 @@ impl Elaborator {
             }
 
             ast::Expr::ArrayLiteral(elems) => {
+                // `{a, b, c}` and `[a, b, c]` are the SAME node; a `Set[T]`
+                // destination makes this a set literal (dedup on build), else a
+                // vector — matching production, which dedupes BOTH spellings
+                // into a Set destination (probe p12). The hint's ELEMENT type
+                // re-arms the hint per element, so a nested literal element
+                // (`Vector[Set[int]] vs = [{1,1,2}]`) builds by ITS declared
+                // element type; a non-literal element clears it on entry.
+                let (kind, elem_hint) = match self.dest_ty_hint.take() {
+                    Some(Ty::Set(el)) => (ConstructKind::Set, Some(*el)),
+                    Some(Ty::Vector(el)) => (ConstructKind::Vector, Some(*el)),
+                    _ => (ConstructKind::Vector, None),
+                };
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
+                    self.dest_ty_hint = elem_hint.clone();
                     out.push(self.owning_source_from_expr(e)?);
                 }
-                Ok(Expr::Construct { kind: ConstructKind::Vector, args: out })
+                self.dest_ty_hint = None;
+                Ok(Expr::Construct { kind, args: out })
             }
             ast::Expr::TupleLiteral(elems) => {
                 let mut out = Vec::with_capacity(elems.len());
@@ -1553,7 +1650,7 @@ impl Elaborator {
         if name == "print" {
             let mut out = Vec::with_capacity(args.len());
             for a in args {
-                out.push(self.call_arg_source(&a.node)?);
+                out.push(self.call_arg_source(&a.node, None)?);
             }
             return Ok(Expr::Call { func: "print".to_string(), args: out });
         }
@@ -1613,7 +1710,7 @@ impl Elaborator {
             self.reject_named_args(args, "closure-value call")?;
             let mut out = Vec::with_capacity(args.len());
             for a in args {
-                out.push(self.call_arg_source(&a.node)?);
+                out.push(self.call_arg_source(&a.node, None)?);
             }
             // Single-owner `ConsumeCallable`: the call consumes the callee (D5
             // kind axis). Read the typed callable classification resolved at
@@ -1636,7 +1733,7 @@ impl Elaborator {
             // call it directly wraps, not a nested arg call).
             let capture = std::mem::take(&mut self.capture_ctx);
             let marked = std::mem::take(&mut self.fallible_marked);
-            let out = self.call_args_reordered(name, args)?;
+            let out = self.call_args_reordered(name, args, CallForm::FreeFn)?;
             let call = Expr::Call { func: name.clone(), args: out };
             return self.maybe_wrap_throws_call(call, name, callee.span, capture, marked);
         }
@@ -1898,10 +1995,21 @@ impl Elaborator {
     /// them to the callee's declared param order (mirrors `struct_ctor_args`,
     /// but classifies each arg with the borrow-view call rule). Positional args
     /// pass through unchanged.
+    ///
+    /// `form` carries production's ASYMMETRIC call-site sigil discipline
+    /// (verified: `check_call_ownership` runs on the `Expr::Call` arm ONLY —
+    /// `check_expr.rs:315` — never on `Expr::MethodCall`):
+    ///   * `FreeFn`: the call-site sigil must MATCH the declared param mode
+    ///     exactly (production `E_OwnershipMismatch`) — a bare place into a `&`
+    ///     param is a loud static reject, never a silent write-through.
+    ///   * `Method`: production never reaches the check; a bare place arg into
+    ///     a `&` param binds the alias and WRITES THROUGH (the ratified fixture
+    ///     family — `method_mut_borrow_arg`'s `c.add_all(v)` into `&vals`).
     fn call_args_reordered(
         &mut self,
         func_name: &str,
         args: &[Spanned<ast::CallArg>],
+        form: CallForm,
     ) -> ElabResult<Vec<Source>> {
         let any_named = args.iter().any(|a| a.node.name.is_some());
         if !any_named {
@@ -1917,7 +2025,9 @@ impl Elaborator {
                         a.span,
                     )?;
                 }
-                out.push(self.call_arg_source(&a.node)?);
+                let pmode = self.fn_param_modes.get(func_name).and_then(|v| v.get(i)).copied();
+                let effective = self.free_fn_sigil_check(func_name, i, pmode, a, form)?;
+                out.push(self.call_arg_source(&a.node, effective)?);
                 self.capture_ctx = CaptureCtx::None;
             }
             return Ok(out);
@@ -1946,7 +2056,12 @@ impl Elaborator {
                     )?;
                 }
             }
-            by_name.push((name, self.call_arg_source(&a.node)?));
+            let pidx = order.iter().position(|p| p == &name);
+            let pmode = pidx
+                .and_then(|i| self.fn_param_modes.get(func_name).and_then(|v| v.get(i)).copied());
+            let effective =
+                self.free_fn_sigil_check(func_name, pidx.unwrap_or(usize::MAX), pmode, a, form)?;
+            by_name.push((name, self.call_arg_source(&a.node, effective)?));
             self.capture_ctx = CaptureCtx::None;
         }
         let mut out = Vec::with_capacity(order.len());
@@ -1957,6 +2072,56 @@ impl Elaborator {
             out.push(by_name.remove(pos).1);
         }
         Ok(out)
+    }
+
+    /// Production's free-fn call-site sigil rule (`check_call_ownership`,
+    /// `src/semantic/safety/helpers.rs:1258`, wired to `Expr::Call` ONLY):
+    /// the arg's sigil must equal the declared param mode, else
+    /// `E_OwnershipMismatch`. Returns the EFFECTIVE param mode to hand
+    /// `call_arg_source`: at a METHOD call the declared mode drives the
+    /// bare-place write-through; at a matched free-fn call the explicit-sigil
+    /// arms already classify correctly, so `None`.
+    fn free_fn_sigil_check(
+        &self,
+        func_name: &str,
+        param_idx: usize,
+        pmode: Option<Mode>,
+        arg: &Spanned<ast::CallArg>,
+        form: CallForm,
+    ) -> ElabResult<Option<Mode>> {
+        match form {
+            CallForm::Method => Ok(pmode),
+            CallForm::FreeFn => {
+                if let Some(pm) = pmode {
+                    let found = mode_of(arg.node.ownership);
+                    if found != pm {
+                        let pname = self
+                            .fn_param_names
+                            .get(func_name)
+                            .and_then(|v| v.get(param_idx))
+                            .cloned()
+                            .unwrap_or_else(|| format!("#{param_idx}"));
+                        let render = |m: Mode| match m {
+                            Mode::Borrow => "borrow (bare)",
+                            Mode::WriteThrough => "mutable borrow (&)",
+                            Mode::Move => "consume (!)",
+                        };
+                        return Err(ElabError::new(
+                            format!(
+                                "argument for parameter `{pname}` of `{func_name}` expects \
+                                 {}, found {} — the call-site sigil must match the declared \
+                                 param at a function call (production E_OwnershipMismatch; \
+                                 method calls are exempt)",
+                                render(pm),
+                                render(found)
+                            ),
+                            arg.span,
+                        ));
+                    }
+                }
+                Ok(None)
+            }
+        }
     }
 
     /// The enum a user-declared variant belongs to (for bare-spelled ctors).
@@ -2107,7 +2272,7 @@ impl Elaborator {
         let marked = std::mem::take(&mut self.fallible_marked);
         let self_src = self.self_source(receiver, minfo.self_mode)?;
         let mut out = vec![self_src];
-        out.extend(self.call_args_reordered(&minfo.mangled, args)?);
+        out.extend(self.call_args_reordered(&minfo.mangled, args, CallForm::Method)?);
         let call = Expr::Call { func: minfo.mangled.clone(), args: out };
         self.maybe_wrap_throws_call(call, &minfo.mangled, span, capture, marked)
     }
