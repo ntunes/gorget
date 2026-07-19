@@ -1171,3 +1171,4 @@ P1-infra reviewers' recommendation.
 - 2026-07-05 (later): batch-2 decided → D4 (drop-purity), D5 (explicit capture sigil),
   D6 (reject unbound carrier chains). Owner clarification round on D4 recorded in-message
   (drop-purity implications + honest correction re Box/Callable). RFC drafting begins.
+- 2026-07-19 — **DIAGNOSTIC-POLICY RULING (owner): `NeedlessMutableBorrow` stays a WARNING, never promoted to an error.** A read-only `&` param is charter-suspect noise (an unnecessary clone at the formation site) but not unsound — the program means what it says and runs correctly. The warning is the vocal teaching instrument ("consider removing `&`"); a hard `E_` reject was judged too much. Pairs with the same-day dead-temp-write ruling (writes landing on owned temps nobody reads: warning track via the D2-rider convergence, not a reject). Both cohere as one stance: UNSOUND shapes reject; WASTEFUL-but-correct shapes warn.
