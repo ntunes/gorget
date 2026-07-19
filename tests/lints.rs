@@ -5786,6 +5786,17 @@ fn ratchet_a_lowering_dispatch_silent_fallthrough() {
 ///   Rust: `cow_before_mutation` (def `src/ir/lowering/context.rs`).
 ///   Self-host lowerer: `cow_materialize_projected_root` /
 ///   `cow_materialize_root_by_name` (defs in `lower.gg`).
+///
+/// THE CONVERSION RULE (planner round 3): when an at-site materialize CLASS
+/// migrates behind the `MaterializePlan`, its `.cow_before_mutation(` count moves
+/// OUT of this text census and INTO the plan (it now reaches the lone real call
+/// through `apply_materialize_directive` → `cow_before_mutation_planned`, which is
+/// not a `.cow_before_mutation(` textual call). So the census only ever DECREASES
+/// per conversion. The ONLY legitimate INCREASE is a genuinely-new mutation-root
+/// materialize that cannot route through the plan yet — and it must justify itself
+/// with a cited re-pin (raise `RUST_CEILING` + a comment naming the new site and
+/// why it can't be planned). A silent bump is a red flag: the campaign's whole
+/// point is that new mutation roots go through the plan, not a fresh ad-hoc call.
 #[test]
 fn ratchet_b_materialize_site_count() {
     // --- Rust side: `.cow_before_mutation(` call expressions in src/ir/lowering.
@@ -5793,8 +5804,10 @@ fn ratchet_b_materialize_site_count() {
     // 20 → 14. `lower_field_assign` + `lower_index_assign` + the compound path
     // (six open-coded `cow_before_mutation` calls, Core #4 sibling drift) now
     // route through the shared `materialize_assign_target_root` →
-    // `plan_materialize_at_site` → the single reason-stamping funnel, removing
-    // all six direct calls behind the `MaterializePlan`.
+    // `plan_materialize_at_site` → the single reason-stamping funnel
+    // (`cow_before_mutation_planned`), removing all six direct calls behind the
+    // `MaterializePlan`. Remaining 14 = the un-migrated classes B/C/D/E/F + the
+    // funnel's own lone real call; each future class conversion drops the ceiling.
     const RUST_CEILING: usize = 14;
     let mut rust_sites = 0usize;
     let mut per_file: Vec<(String, usize)> = Vec::new();
