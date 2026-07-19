@@ -505,10 +505,10 @@ struct LowerCtx:
 
 # named_locals helpers — kept as a thin layer over the Dict so we can
 # swap the storage shape without touching call sites.
-bool nl_contains(LowerCtx &ctx, String name):
+bool nl_contains(LowerCtx ctx, String name):
     return ctx.named_locals.contains(name)
 
-int nl_get(LowerCtx &ctx, String name):
+int nl_get(LowerCtx ctx, String name):
     if ctx.named_locals.contains(name):
         return ctx.named_locals.get(name).unwrap()
     return -1
@@ -522,7 +522,7 @@ void nl_put(LowerCtx &ctx, String name, int val):
 # binding) must NOT leak into the next arm or the `else`. Without the restore,
 # `match cmd: case "q": …; case cmd: …` rebinds `cmd` to a fresh by-value local
 # that then shadows the parameter in the `else`/later arms — corrupting reads.
-Dict[String, int] nl_snapshot(LowerCtx &ctx):
+Dict[String, int] nl_snapshot(LowerCtx ctx):
     return ctx.named_locals.clone()
 
 void nl_restore(LowerCtx &ctx, Dict[String, int] snap):
@@ -756,7 +756,7 @@ int add_local_with(LowerCtx &ctx, int type_id, Option[String] name, LocalOwnersh
 # LoParam + GtMutPtr)? Typed predicate (Layering rule 2) — reads the local's
 # ownership tag + GIR type, never a name. Used by the SWith with-refresh
 # recorder to detect a `with <&param>:` block.
-bool is_mut_borrow_param_local(LowerCtx &ctx, GirModule &gmod, int local):
+bool is_mut_borrow_param_local(LowerCtx ctx, GirModule gmod, int local):
     if local < 0 or local >= ctx.locals.len():
         return false
     GirLocal gl = ctx.locals.get(local).unwrap()
@@ -814,9 +814,9 @@ bool cow_materialize_projected_root(LowerCtx &ctx, GirModule &gmod, SpannedExpr 
 bool cow_materialize_root_by_name(LowerCtx &ctx, GirModule &gmod, String root):
     if root == "":
         return false
-    if not nl_contains(&ctx, root):
+    if not nl_contains(ctx, root):
         return false
-    int root_local = nl_get(&ctx, root)
+    int root_local = nl_get(ctx, root)
     bool is_param = false
     match ctx.locals.get(root_local).unwrap().ownership:
         case LoParam():
@@ -825,7 +825,7 @@ bool cow_materialize_root_by_name(LowerCtx &ctx, GirModule &gmod, String root):
             pass
     if not is_param:
         return false
-    if is_mut_borrow_param_local(&ctx, &gmod, root_local):
+    if is_mut_borrow_param_local(ctx, gmod, root_local):
         return false
     int root_tid = ctx.locals.get(root_local).unwrap().type_id
     int struct_tid = peel_ptr_tid(&gmod, root_tid)
@@ -857,12 +857,12 @@ bool cow_materialize_root_by_name(LowerCtx &ctx, GirModule &gmod, String root):
         if is_resource_type_name(tname, &gmod):
             return false
         int vmat = add_local(&ctx, struct_tid, None)
-        emit(&ctx, GIDeref(vmat, root_local, struct_tid))
+        emit(ctx, GIDeref(vmat, root_local, struct_tid))
         nl_put(&ctx, root, vmat)
         return true
     int mat = add_local(&ctx, struct_tid, None)
     Vector[Operand] cargs = [OpBorrow(root_local)]
-    emit(&ctx, GICallExtern(mat, clone_fn, cargs))
+    emit(ctx, GICallExtern(mat, clone_fn, cargs))
     nl_put(&ctx, root, mat)
     register_local_for_drop(&ctx, mat, struct_tid, &gmod)
     return true
@@ -944,19 +944,19 @@ void materialize_carried_bare_params_core(LowerCtx &ctx, GirModule &gmod, int an
     if subtree_mode:
         core_prefix = int_to_str(anchor_pos) + "@"
     for pn in all_names:
-        int lid = nl_get(&ctx, pn)
+        int lid = nl_get(ctx, pn)
         bool is_param = false
         match ctx.locals.get(lid).unwrap().ownership:
             case LoParam():
                 is_param = true
             else:
                 pass
-        if is_param and not is_mut_borrow_param_local(&ctx, &gmod, lid):
+        if is_param and not is_mut_borrow_param_local(ctx, gmod, lid):
             bool core_hit = false
             if subtree_mode:
                 core_hit = ctx.cow_scope_muts.contains(core_prefix + pn)
             else:
-                core_hit = not cow_pristine_after(&ctx, pn, anchor_pos)
+                core_hit = not cow_pristine_after(ctx, pn, anchor_pos)
             if core_hit:
                 cand_names.push(pn)
     for cn in cand_names:
@@ -1235,7 +1235,7 @@ bool method_mutates_receiver(SpannedExpr recv, String mname, GirModule &gmod):
 # Is `key` (Type__mname) a user method that takes `&self`/`!self` at
 # param 0? (Only such methods can mutate the caller's receiver.) Reads the
 # self-convention from the typed fn_borrow_params / fn_move_params maps.
-bool mutinf_takes_mut_self(GirModule &gmod, String key):
+bool mutinf_takes_mut_self(GirModule gmod, String key):
     if gmod.fn_borrow_params.contains(key):
         Vector[bool] bf = gmod.fn_borrow_params.get(key).unwrap()
         if bf.len() > 0 and bf.get(0).unwrap():
@@ -1248,8 +1248,8 @@ bool mutinf_takes_mut_self(GirModule &gmod, String key):
 
 # Does callee `Type__mname` let its `arg_idx`-th (self-excluded) arg be
 # mutated (declared `&`/`!`)? Ctx-free sibling of method_arg_lets_callee_mutate.
-bool mutinf_method_arg_mut(GirModule &gmod, String mkey, int arg_idx):
-    return call_arg_lets_callee_mutate(&gmod, mkey, arg_idx + 1)
+bool mutinf_method_arg_mut(GirModule gmod, String mkey, int arg_idx):
+    return call_arg_lets_callee_mutate(gmod, mkey, arg_idx + 1)
 
 # Is `e` a projection path rooted at the method's `self` receiver
 # (`self`, `self.f`, `self.f[i]`, `*self`, `self.m()`)? `self` is the
@@ -1349,7 +1349,7 @@ bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[Stri
             int mai = 0
             for ma in margs:
                 if mutinf_expr_is_self_rooted(ma.value):
-                    if rtn2.len() > 0 and mutinf_method_arg_mut(&gmod, rtn2 + "__" + mname, mai):
+                    if rtn2.len() > 0 and mutinf_method_arg_mut(gmod, rtn2 + "__" + mname, mai):
                         m = true
                 if mutinf_scan_expr(ma.value, target, &gmod, &callees):
                     m = true
@@ -1368,7 +1368,7 @@ bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[Stri
             int cai = 0
             for ca in cargs:
                 if fname.len() > 0 and mutinf_expr_is_self_rooted(ca.value):
-                    if call_arg_lets_callee_mutate(&gmod, fname, cai):
+                    if call_arg_lets_callee_mutate(gmod, fname, cai):
                         m = true
                 if mutinf_scan_expr(ca.value, target, &gmod, &callees):
                     m = true
@@ -1614,7 +1614,7 @@ void compute_method_mutates_self(GirModule &gmod, Module m):
                             # `self` ownership is reset to bare by the
                             # apply_collect_target_rewrites reconstruction.
                             String mkey = mi_tn + "__" + mi_meth.name
-                            bool takes_mut = mutinf_takes_mut_self(&gmod, mkey)
+                            bool takes_mut = mutinf_takes_mut_self(gmod, mkey)
                             if takes_mut:
                                 Vector[String] ces = []
                                 bool dm = mutinf_scan_stmts(mi_meth.body, mi_tn, &gmod, &ces)
@@ -1645,10 +1645,10 @@ void compute_method_mutates_self(GirModule &gmod, Module m):
 # (a copy — no write-through) or is a generic-equip instance (not yet
 # classified) → treat as read-only (the BASE gate already did not
 # materialize named receivers, so this is no regression — degrade-to-BASE).
-bool mutinf_named_recv_writes_self(LowerCtx &ctx, GirModule &gmod, String recv_name, String mname):
-    if not nl_contains(&ctx, recv_name):
+bool mutinf_named_recv_writes_self(LowerCtx ctx, GirModule &gmod, String recv_name, String mname):
+    if not nl_contains(ctx, recv_name):
         return false
-    int rlocal = nl_get(&ctx, recv_name)
+    int rlocal = nl_get(ctx, recv_name)
     if rlocal < 0:
         return false
     int rtid = ctx.locals.get(rlocal).unwrap().type_id
@@ -1664,7 +1664,7 @@ bool mutinf_named_recv_writes_self(LowerCtx &ctx, GirModule &gmod, String recv_n
 # Type NAME of struct field `fname` on struct type `tname` (from the typed
 # GirTypeInfo field table), "" if unknown. Used by the projected-receiver
 # resolver below to walk `s.v` field projections.
-String mutinf_field_type_name(GirModule &gmod, String tname, String fname):
+String mutinf_field_type_name(GirModule gmod, String tname, String fname):
     if gmod.type_infos.contains(tname):
         GirTypeInfo mfti = gmod.type_infos.get(tname).unwrap()
         for mfti_f in mfti.fields:
@@ -1686,9 +1686,9 @@ String mutinf_field_type_name(GirModule &gmod, String tname, String fname):
 String mutinf_recv_type_name(LowerCtx &ctx, GirModule &gmod, SpannedExpr e):
     match e.expr:
         case EIdentifier(mrt_idn):
-            if not nl_contains(&ctx, mrt_idn):
+            if not nl_contains(ctx, mrt_idn):
                 return ""
-            int mrt_lid = nl_get(&ctx, mrt_idn)
+            int mrt_lid = nl_get(ctx, mrt_idn)
             if mrt_lid < 0:
                 return ""
             int mrt_tid = peel_ptr_tid(&gmod, ctx.locals.get(mrt_lid).unwrap().type_id)
@@ -1700,9 +1700,9 @@ String mutinf_recv_type_name(LowerCtx &ctx, GirModule &gmod, SpannedExpr e):
             # resolves precisely for the mutation-inference gate (Part 2). A read-only
             # self-projection (`self.id.hash()`) resolves to the field type whose
             # method is absent from `method_mutates_self` → false → no spurious clone.
-            if not nl_contains(&ctx, "self"):
+            if not nl_contains(ctx, "self"):
                 return ""
-            int mrt_slid = nl_get(&ctx, "self")
+            int mrt_slid = nl_get(ctx, "self")
             if mrt_slid < 0:
                 return ""
             int mrt_stid = peel_ptr_tid(&gmod, ctx.locals.get(mrt_slid).unwrap().type_id)
@@ -1715,7 +1715,7 @@ String mutinf_recv_type_name(LowerCtx &ctx, GirModule &gmod, SpannedExpr e):
         case EFieldAccess(mrt_fbase, mrt_fname):
             String mrt_ft = mutinf_recv_type_name(&ctx, &gmod, *mrt_fbase)
             if mrt_ft.len() > 0:
-                return mutinf_field_type_name(&gmod, mrt_ft, mrt_fname)
+                return mutinf_field_type_name(gmod, mrt_ft, mrt_fname)
             return ""
         case EDeref(mrt_inner):
             return mutinf_recv_type_name(&ctx, &gmod, *mrt_inner)
@@ -1758,7 +1758,7 @@ bool mutinf_projected_recv_writes_self(LowerCtx &ctx, GirModule &gmod, SpannedEx
 # MANGLES imported fn names (loader.gg, mod_prefix + name), keying the
 # signature maps by the mangled name while the AST callee is bare —
 # callers mirror lower_call's resolution order (redirects first).
-bool call_arg_lets_callee_mutate(GirModule &gmod, String fname, int arg_idx):
+bool call_arg_lets_callee_mutate(GirModule gmod, String fname, int arg_idx):
     if gmod.fn_borrow_params.contains(fname):
         Vector[bool] cab_flags = gmod.fn_borrow_params.get(fname).unwrap()
         if arg_idx >= 0 and arg_idx < cab_flags.len() and cab_flags.get(arg_idx).unwrap():
@@ -1783,7 +1783,7 @@ bool call_arg_lets_callee_mutate(GirModule &gmod, String fname, int arg_idx):
 # tid<0 for every `h.m(...)` receiver during the pre-lowering scan), so
 # the primary source is the scan's own declared-type side channel
 # (`ctx.cow_decl_types`), with the side table as the secondary read.
-bool method_arg_lets_callee_mutate(LowerCtx &ctx, SpannedExpr recv, String mname, int arg_idx, GirModule &gmod):
+bool method_arg_lets_callee_mutate(LowerCtx ctx, SpannedExpr recv, String mname, int arg_idx, GirModule &gmod):
     String marg_recv_tname = ""
     match recv.expr:
         case EIdentifier(marg_recv_idn):
@@ -1797,9 +1797,9 @@ bool method_arg_lets_callee_mutate(LowerCtx &ctx, SpannedExpr recv, String mname
             marg_recv_tname = type_id_to_name(marg_recv_tid, &gmod)
     if marg_recv_tname.len() == 0:
         return false
-    return call_arg_lets_callee_mutate(&gmod, marg_recv_tname + "__" + mname, arg_idx + 1)
+    return call_arg_lets_callee_mutate(gmod, marg_recv_tname + "__" + mname, arg_idx + 1)
 
-void emit(LowerCtx &ctx, Instruction inst):
+void emit(LowerCtx ctx, Instruction inst):
     ctx.block_insts.get(ctx.current_block).unwrap().push(inst)
 
 int new_block(LowerCtx &ctx):
@@ -1937,7 +1937,7 @@ void set_field_borrow(LowerCtx &ctx, int dst, int base, int field):
 #
 # Dead code at C.1: no caller reads. E.1 wires the return-path
 # validator that pattern-matches on this.
-Option[FieldBorrowPair] field_borrow_origin(LowerCtx &ctx, int local):
+Option[FieldBorrowPair] field_borrow_origin(LowerCtx ctx, int local):
     if local < 0 or local >= ctx.locals.len():
         return None
     GirLocal loc = ctx.locals.get(local).unwrap()
@@ -2048,7 +2048,7 @@ enum SVarDeclEmission:
 # `cow_pristine_after(bind_pos)` (never mutated, or last-mutated strictly
 # before the bind, and not closure-deferred). See `compute_cow_scan` /
 # `cow_pristine_after`.
-SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int val, int var_type, String bound_name, String source_root, int bind_pos, bool source_is_static_global):
+SVarDeclEmission decide_svardecl_emission(LowerCtx ctx, GirModule &gmod, int val, int var_type, String bound_name, String source_root, int bind_pos, bool source_is_static_global):
     if val < 0 or val >= ctx.locals.len():
         return MoveDirect()
     GirLocal val_loc = ctx.locals.get(val).unwrap()
@@ -2186,14 +2186,14 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
                 if is_droppable_type(agg_inner, &gmod):
                     String agg_pointee = type_id_to_name(agg_inner, &gmod)
                     if resolve_payload_clone_fn(agg_pointee, &gmod) == "":
-                        if source_root != "" and not (cow_pristine_after(&ctx, bound_name, bind_pos) and cow_pristine_after(&ctx, source_root, bind_pos)):
+                        if source_root != "" and not (cow_pristine_after(ctx, bound_name, bind_pos) and cow_pristine_after(ctx, source_root, bind_pos)):
                             return EagerAggClone()
                         return BorrowAlias()
             case GtMutPtr(agg_inner_m):
                 if is_droppable_type(agg_inner_m, &gmod):
                     String agg_pointee_m = type_id_to_name(agg_inner_m, &gmod)
                     if resolve_payload_clone_fn(agg_pointee_m, &gmod) == "":
-                        if source_root != "" and not (cow_pristine_after(&ctx, bound_name, bind_pos) and cow_pristine_after(&ctx, source_root, bind_pos)):
+                        if source_root != "" and not (cow_pristine_after(ctx, bound_name, bind_pos) and cow_pristine_after(ctx, source_root, bind_pos)):
                             return EagerAggClone()
                         return BorrowAlias()
             else:
@@ -2276,7 +2276,7 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
                     # dead), and never closure-deferred (property (d)). A
                     # mutation while the alias is live (`max_span >= bind_pos`)
                     # keeps tier-1's eager deref+clone.
-                    if source_root != "" and cow_pristine_after(&ctx, bound_name, bind_pos) and cow_pristine_after(&ctx, source_root, bind_pos):
+                    if source_root != "" and cow_pristine_after(ctx, bound_name, bind_pos) and cow_pristine_after(ctx, source_root, bind_pos):
                         return BorrowAlias()
                     # #37 Phase 2 — LAZY loop-carried bind (the ViewOf
                     # provenance design, docs/language-design.md "compile-
@@ -2307,7 +2307,7 @@ SVarDeclEmission decide_svardecl_emission(LowerCtx &ctx, GirModule &gmod, int va
                     #     deep-copy clone fn (pointee_clone_fn →
                     #     clone_to_owned); presence is the eligibility
                     #     axis only.
-                    if source_root != "" and cow_pristine_after(&ctx, bound_name, bind_pos) and (not ctx.cow_closure_mutated.contains(source_root)) and (not ctx.cow_moved_names.contains(source_root)):
+                    if source_root != "" and cow_pristine_after(ctx, bound_name, bind_pos) and (not ctx.cow_closure_mutated.contains(source_root)) and (not ctx.cow_moved_names.contains(source_root)):
                         match resource_meta_for(&gmod, pointee_tname):
                             case Some(lv_meta):
                                 match lv_meta.materialize_fn:
@@ -2444,9 +2444,9 @@ void cow_lazy_emit_guard(LowerCtx &ctx, LazyMember lzm):
     switch_to(&ctx, lz_mat_bb)
     int lz_tmp = add_local(&ctx, lzm.slot_type, None)
     Vector[Operand] lz_args = [OpBorrow(lzm.slot)]
-    emit(&ctx, GICallExtern(lz_tmp, lzm.clone_fn, lz_args))
-    emit(&ctx, GIAssign(lzm.slot, OpMove(lz_tmp)))
-    emit(&ctx, GIAssign(lzm.flag, OpConstBool(true)))
+    emit(ctx, GICallExtern(lz_tmp, lzm.clone_fn, lz_args))
+    emit(ctx, GIAssign(lzm.slot, OpMove(lz_tmp)))
+    emit(ctx, GIAssign(lzm.flag, OpConstBool(true)))
     set_terminator(&ctx, GTJump(lz_join_bb))
     switch_to(&ctx, lz_join_bb)
 
@@ -2506,7 +2506,7 @@ bool cow_lazy_join_view_result(LowerCtx &ctx, int recv_slot, int result_slot, in
         LazyMember lzj_m = ctx.cow_lazy_members.get(lzj_i).unwrap()
         if lzj_m.slot == recv_slot:
             int lzj_flag = add_local(&ctx, BOOL_TYPE, None)
-            emit(&ctx, GIAssign(lzj_flag, OpConstBool(false)))
+            emit(ctx, GIAssign(lzj_flag, OpConstBool(false)))
             ctx.cow_lazy_members.push(LazyMember(lzj_m.root.clone(), result_slot, lzj_flag, result_type, lzj_m.clone_fn.clone(), true))
             return true
         lzj_i = lzj_i + 1
@@ -2576,7 +2576,7 @@ void cow_lazy_retire_stmt_temps(LowerCtx &ctx):
 # Sites whose callee signature is genuinely unknown (closure/__callable_N
 # dispatch, user-op-overload fallback) pass CkCallArgBorrow directly —
 # borrow is the safe default per the docs.
-ConsumeKind classify_call_arg(GirModule &gmod, String fname, int arg_idx):
+ConsumeKind classify_call_arg(GirModule gmod, String fname, int arg_idx):
     if not gmod.fn_move_params.contains(fname):
         return CkCallArgBorrow()
     Vector[bool] mflags = gmod.fn_move_params.get(fname).unwrap()
@@ -2608,7 +2608,7 @@ bool is_consume_kind(ConsumeKind k):
         case CkMatchPtr():
             return false
 
-Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
+Operand op_consume(LowerCtx ctx, GirModule &gmod, int lid, ConsumeKind kind):
     if lid < 0 or lid >= ctx.locals.len():
         return OpCopy(lid)
     # Non-consume position: unconditional borrow. Liveness/ownership
@@ -2783,7 +2783,7 @@ Operand op_consume(LowerCtx &ctx, GirModule &gmod, int lid, ConsumeKind kind):
 # Ptr/MutPtr/FnPtr aliases at consume positions resolve as OpCopy: a
 # pointer byte-copy is a pointer copy, not a resource copy. The
 # validator filters these out separately.
-Operand decide_operand_at_consuming_arg(LowerCtx &ctx, GirModule &gmod, int src_lid, GirType src_ty, String reason, bool is_last_use):
+Operand decide_operand_at_consuming_arg(LowerCtx ctx, GirModule &gmod, int src_lid, GirType src_ty, String reason, bool is_last_use):
     # Touch `reason` so the unused-param warning doesn't fire while
     # this helper is dead code. Phase 2.3.a will route this into
     # `warn_implicit_clone` style diagnostics at the wire-up sites.
@@ -2969,7 +2969,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Terminator sterm = sctx.block_terms.get(sctx.current_block).unwrap()
     match sterm:
         case GTNone():
-            emit_drops_for_early_exit(&sctx, DSK_FUNCTION, Some(0))
+            emit_drops_for_early_exit(sctx, DSK_FUNCTION, Some(0))
             set_terminator(&sctx, GTReturn(OpConstUnit()))
         else:
             pass
@@ -3738,7 +3738,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
     # byte-identical → bootstrap unaffected. Mirrors Rust gg's pre-pass
     # `compute_participating_fault_fns` (`src/ir/lowering/mod.rs`, after the
     # fn_sigs prescan, before body lowering).
-    compute_participating_fault_fns(&m, &gmod)
+    compute_participating_fault_fns(m, &gmod)
 
     # Pre-scan equip blocks to build the trait-impl registry for the
     # compile-time `implements(T, "Trait")` meta-predicate. Runs HERE — before
@@ -4000,7 +4000,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                                         gmod.bool_const_decls.put(cd_name.clone(), cbv)
                                     case None:
                                         # String fallback: `const String G = "hi"`.
-                                        Option[String] cd_seval = eval_const_string_expr(cd_val, &gmod)
+                                        Option[String] cd_seval = eval_const_string_expr(cd_val, gmod)
                                         match cd_seval:
                                             case Some(csv):
                                                 gmod.string_const_decls.put(cd_name.clone(), csv)
@@ -5230,7 +5230,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                         Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
                         match tterm:
                             case GTNone():
-                                emit_drops_for_early_exit(&tctx, DSK_FUNCTION, Some(0))
+                                emit_drops_for_early_exit(tctx, DSK_FUNCTION, Some(0))
                                 set_terminator(&tctx, GTReturn(OpConstUnit()))
                             else:
                                 pass

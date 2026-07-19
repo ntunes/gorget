@@ -3979,7 +3979,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             # Lower call arguments — check function param types for Ptr(T) params.
             # User functions with resource-type bare params receive Ptr(T),
             # so the caller must pass SlotAddr (pointer) instead of SlotLoad (value).
-            Vector[int] fn_param_tys = get_fn_param_types(func_name, &gmod)
+            Vector[int] fn_param_tys = get_fn_param_types(func_name, gmod)
             # Effective runtime name (post map_runtime_name) so the
             # `needs_ptr_arg` runtime ABI table is consulted here too — the
             # extern-by-value declaration of a runtime fn (e.g.
@@ -4331,7 +4331,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             if mapped_early != "":
                 effective_name = mapped_early
             # Look up function param types for Ptr(T) detection (user struct methods)
-            Vector[int] ext_param_tys = get_fn_param_types(func_name, &gmod)
+            Vector[int] ext_param_tys = get_fn_param_types(func_name, gmod)
             Vector[int] lir_args = []
             int ai = 0
             while ai < args.len():
@@ -5876,7 +5876,7 @@ LirModule lower_gir_to_lir(GirModule &gmod):
         # current corpus (only Channel both passes `spawn_shape_supported` AND is
         # CsRefCounted) and future-proofs the Slice-3 Shared carrier (already
         # CsRefCounted, so it joins clone_params with no new name test).
-        Vector[int] sp_gir_ptys = get_fn_param_types(spawn_rec.fn_name, &gmod)
+        Vector[int] sp_gir_ptys = get_fn_param_types(spawn_rec.fn_name, gmod)
         int spci = 0
         while spci < sp_gir_ptys.len():
             String spc_nm = type_id_to_name(sp_gir_ptys.get(spci).unwrap(), &gmod)

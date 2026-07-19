@@ -446,13 +446,13 @@ void compile_main():
     # `GG_VALIDATE_PASSES` is set; when set, runs the GIR validators
     # with a pass-tagged failure message that surfaces mid-pipeline
     # regressions.
-    validate_gir_after("gir-lowering", &gir)
+    validate_gir_after("gir-lowering", gir)
     # Phase C validators run BEFORE the GIR/LIR print so a fatal
     # violation (closed-class with non-zero count) halts the build
     # with the violations as the diagnostic. All three classes
     # (field_reads, call_args, moves) are unconditional fatal as
     # of step 5c.
-    run_validators(&gir)
+    run_validators(gir)
     _t1 = time_ms()
     if _timing: print("PHASE run_validators(GIR) " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
@@ -679,8 +679,8 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
         report_diagnostics(ctx.diagnostics, source, input_path)
         exit(1)
     GirModule gir = lower_module(&m, scopes, types, call_redirects, imported_fns)
-    validate_gir_after("gir-lowering", &gir)
-    run_validators(&gir)
+    validate_gir_after("gir-lowering", gir)
+    run_validators(gir)
     # --emit-gir: dump GIR text and stop before LIR lowering (mirrors the legacy
     # path :178 and Rust's --emit-gir; src/main.rs:638).
     if emit_gir:

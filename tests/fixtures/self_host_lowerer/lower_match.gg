@@ -159,7 +159,7 @@ int try_lift_option_ref(LowerCtx &ctx, int val, int dst_type, GirModule &gmod):
     int tag = emit_tag_read(&ctx, scr_ptr, src_name, &gmod)
     # tag == 0 → Some arm.
     int cmp_dst = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(cmp_dst, CMP_EQ, I64_TYPE, OpCopy(tag), OpConstI64(0)))
+    emit(ctx, GICmp(cmp_dst, CMP_EQ, I64_TYPE, OpCopy(tag), OpConstI64(0)))
     int some_bb = new_block(&ctx)
     int none_bb = new_block(&ctx)
     int lift_merge_bb = new_block(&ctx)
@@ -170,16 +170,16 @@ int try_lift_option_ref(LowerCtx &ctx, int val, int dst_type, GirModule &gmod):
     switch_to(&ctx, some_bb)
     int payload = emit_payload_read(&ctx, scr_ptr, src_name, "Some", 0, ptr_tid, &gmod)
     int some_res = add_local(&ctx, dst_type, None)
-    Vector[Operand] some_args = [op_consume(&ctx, &gmod, payload, CkCallArgOwning())]
-    emit(&ctx, GICallExtern(some_res, "Some", some_args))
-    emit(&ctx, GIAssign(merge, op_consume(&ctx, &gmod, some_res, CkAssign())))
+    Vector[Operand] some_args = [op_consume(ctx, &gmod, payload, CkCallArgOwning())]
+    emit(ctx, GICallExtern(some_res, "Some", some_args))
+    emit(ctx, GIAssign(merge, op_consume(ctx, &gmod, some_res, CkAssign())))
     set_terminator(&ctx, GTJump(lift_merge_bb))
     # None arm: build None directly.
     switch_to(&ctx, none_bb)
     int none_res = add_local(&ctx, dst_type, None)
     Vector[Operand] none_args = []
-    emit(&ctx, GICallExtern(none_res, "None", none_args))
-    emit(&ctx, GIAssign(merge, op_consume(&ctx, &gmod, none_res, CkAssign())))
+    emit(ctx, GICallExtern(none_res, "None", none_args))
+    emit(ctx, GIAssign(merge, op_consume(ctx, &gmod, none_res, CkAssign())))
     set_terminator(&ctx, GTJump(lift_merge_bb))
     switch_to(&ctx, lift_merge_bb)
     return merge
@@ -191,9 +191,9 @@ int try_lift_option_ref(LowerCtx &ctx, int val, int dst_type, GirModule &gmod):
 # first `_` and confuses `Option__int64_t` with the `Option` type.
 int emit_tag_read(LowerCtx &ctx, int scrutinee_ptr, String enum_name, GirModule &gmod):
     String read_fn = "__field_read_" + enum_name + "_tag"
-    Vector[Operand] args = [op_consume(&ctx, &gmod, scrutinee_ptr, CkMatchPtr()), OpConstI64(0)]
+    Vector[Operand] args = [op_consume(ctx, &gmod, scrutinee_ptr, CkMatchPtr()), OpConstI64(0)]
     int tag = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GICallExtern(tag, read_fn, args))
+    emit(ctx, GICallExtern(tag, read_fn, args))
     return tag
 
 # Resolve the runtime clone function for a payload type, or "" if no
@@ -293,7 +293,7 @@ int emit_payload_read_mode(LowerCtx &ctx, int scrutinee_ptr, String enum_name, S
 int emit_payload_read_mode_full(LowerCtx &ctx, int scrutinee_ptr, String enum_name, String variant_name, int field_idx, int dst_type, GirModule &gmod, bool borrow_only, bool borrow_all):
     String field = variant_name + "_" + int_to_str(field_idx)
     String read_fn = "__field_read_" + enum_name + "_" + field
-    Vector[Operand] args = [op_consume(&ctx, &gmod, scrutinee_ptr, CkMatchPtr()), OpConstI64(field_idx)]
+    Vector[Operand] args = [op_consume(ctx, &gmod, scrutinee_ptr, CkMatchPtr()), OpConstI64(field_idx)]
     # The field read produces a byte-copy of the variant's payload
     # bytes — for resource payloads (Vector, Dict, String, user enums
     # with resource sub-fields), those bytes alias the scrutinee's
@@ -309,7 +309,7 @@ int emit_payload_read_mode_full(LowerCtx &ctx, int scrutinee_ptr, String enum_na
     # — Phase D step 3's OpBorrow lowering at lir_lower.gg already
     # threads SlotAddr for pass-by-ptr args.
     int dst = add_local_with(&ctx, dst_type, None, LoBorrowed(), BoField(-1, -1))
-    emit(&ctx, GICallExtern(dst, read_fn, args))
+    emit(ctx, GICallExtern(dst, read_fn, args))
     # option_ref_borrow Phase 3 (RES-2 guard): a `GtPtr(T)` payload (the
     # Some_0 of an `Option__Ref__T` borrowing-getter result) IS the element
     # pointer — never clone-extract it. dst_tname collapses GtPtr(T)→"T", so
@@ -355,7 +355,7 @@ int emit_payload_read_mode_full(LowerCtx &ctx, int scrutinee_ptr, String enum_na
                     # value-typed local of the pointee type. GIDeref lowers
                     # to a sized load (gir.gg:117).
                     int value_local = add_local(&ctx, inner, None)
-                    emit(&ctx, GIDeref(value_local, dst, inner))
+                    emit(ctx, GIDeref(value_local, dst, inner))
                     return value_local
             else:
                 pass
@@ -381,7 +381,7 @@ int emit_payload_read_mode_full(LowerCtx &ctx, int scrutinee_ptr, String enum_na
     if clone_fn != "":
         int cloned = add_local(&ctx, dst_type, None)
         Vector[Operand] clone_args = [OpBorrow(dst)]
-        emit(&ctx, GICallExtern(cloned, clone_fn, clone_args))
+        emit(ctx, GICallExtern(cloned, clone_fn, clone_args))
         return cloned
     return dst
 
@@ -412,7 +412,7 @@ int match_scrutinee_ptr(LowerCtx &ctx, GirModule &gmod, int scrutinee):
     # op_consume yields OpBorrow (Ptr alias), not OpClone. CkAssign here forced
     # a clone for resource enums, and the clone result is a value — the
     # downstream tag-read `((Enum*)tmp)->tag` then can't cast it to a pointer.
-    emit(&ctx, GIAssign(tmp, op_consume(&ctx, &gmod, scrutinee, CkMatchPtr())))
+    emit(ctx, GIAssign(tmp, op_consume(ctx, &gmod, scrutinee, CkMatchPtr())))
     return tmp
 
 # True when `name` resolves to a module-level `const` whose folded value is
@@ -421,7 +421,7 @@ int match_scrutinee_ptr(LowerCtx &ctx, GirModule &gmod, int scrutinee):
 # (a value-compare) from `case x:` (a fresh binding). A name that is NOT in
 # any const table is treated as a genuine binding, so locals / pattern vars
 # that happen to collide with nothing keep binding correctly.
-bool is_const_name(GirModule &gmod, String name):
+bool is_const_name(GirModule gmod, String name):
     if gmod.const_decls.contains(name):
         return true
     if gmod.bool_const_decls.contains(name):
@@ -440,23 +440,23 @@ int lower_const_name_value(LowerCtx &ctx, GirModule &gmod, String name):
     if gmod.const_decls.contains(name):
         int cv = gmod.const_decls.get(name).unwrap()
         int cdst = add_local(&ctx, I64_TYPE, None)
-        emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
+        emit(ctx, GIAssign(cdst, OpConstI64(cv)))
         return cdst
     if gmod.bool_const_decls.contains(name):
         bool bcv = gmod.bool_const_decls.get(name).unwrap()
         int bcdst = add_local(&ctx, BOOL_TYPE, None)
-        emit(&ctx, GIAssign(bcdst, OpConstBool(bcv)))
+        emit(ctx, GIAssign(bcdst, OpConstBool(bcv)))
         return bcdst
     if gmod.string_const_decls.contains(name):
         String scv = gmod.string_const_decls.get(name).unwrap()
         int gs_tid_sc = lookup_or_register_named(&gmod, "GorgetString")
         int scdst = add_local(&ctx, gs_tid_sc, None)
-        emit(&ctx, GIAssign(scdst, OpConstStr(scv)))
+        emit(ctx, GIAssign(scdst, OpConstStr(scv)))
         return scdst
     # float const
     float fcv = gmod.float_const_decls.get(name).unwrap()
     int fdst = add_local(&ctx, F64_TYPE, None)
-    emit(&ctx, GIAssign(fdst, OpConstF64(fcv)))
+    emit(ctx, GIAssign(fdst, OpConstF64(fcv)))
     return fdst
 
 # Lower a single match arm's pattern-match test. Emits branches to
@@ -475,7 +475,7 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
             if enum_name != "" and match_variant_index(enum_name, name, &gmod) >= 0:
                 Vector[SpannedPattern] no_sub_pats = []
                 lower_ctor_pattern(&ctx, scrutinee, name, no_sub_pats, enum_name, match_bb, no_match_bb, &gmod)
-            elif not nl_contains(&ctx, name) and is_const_name(&gmod, name):
+            elif not nl_contains(ctx, name) and is_const_name(gmod, name):
                 # `case FOO:` where `FOO` is a module-level `const` — compare the
                 # scrutinee against the const's VALUE, NOT bind a fresh variable.
                 # SCOPE PRECEDENCE: only treat `name` as a const when NO in-scope
@@ -497,7 +497,7 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                 if scr_tid == BOOL_TYPE:
                     cmp_tid = BOOL_TYPE
                 int is_match = add_local(&ctx, BOOL_TYPE, None)
-                emit(&ctx, GICmp(is_match, CMP_EQ, cmp_tid, op_consume(&ctx, &gmod, scrutinee, CkBinOpArg()), op_consume(&ctx, &gmod, const_val, CkBinOpArg())))
+                emit(ctx, GICmp(is_match, CMP_EQ, cmp_tid, op_consume(ctx, &gmod, scrutinee, CkBinOpArg()), op_consume(ctx, &gmod, const_val, CkBinOpArg())))
                 set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
             else:
                 # Real binding: always match; bind scrutinee into a fresh
@@ -510,7 +510,7 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                 # a fresh owner that COMMIT 3 would later double-free.
                 Option[String] name_opt = Some(name)
                 int bound = add_local_inheriting(&ctx, scr_tid, name_opt, scrutinee)
-                emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, scrutinee, CkAssign())))
+                emit(ctx, GIAssign(bound, op_consume(ctx, &gmod, scrutinee, CkAssign())))
                 nl_put(&ctx, name, bound)
                 set_terminator(&ctx, GTJump(match_bb))
         case PConstructor(variant_name, sub_pats):
@@ -543,7 +543,7 @@ void lower_pattern_match(LowerCtx &ctx, int scrutinee, SpannedPattern spat, Stri
                     if scr_tid == BOOL_TYPE:
                         cmp_tid = BOOL_TYPE
                     int is_match = add_local(&ctx, BOOL_TYPE, None)
-                    emit(&ctx, GICmp(is_match, CMP_EQ, cmp_tid, op_consume(&ctx, &gmod, scrutinee, CkBinOpArg()), op_consume(&ctx, &gmod, lit_val, CkBinOpArg())))
+                    emit(ctx, GICmp(is_match, CMP_EQ, cmp_tid, op_consume(ctx, &gmod, scrutinee, CkBinOpArg()), op_consume(ctx, &gmod, lit_val, CkBinOpArg())))
                     set_terminator(&ctx, GTBranch(OpCopy(is_match), match_bb, no_match_bb))
         case POr(alts):
             # `case A | B | C:` — match if any alternative matches. Each
@@ -703,7 +703,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                     else:
                         # Scalar / non-resource: value-typed field load.
                         sdst = add_local(&ctx, sfty, sb_opt)
-                    emit(&ctx, GIFieldLoad(sdst, scrutinee, sfi))
+                    emit(ctx, GIFieldLoad(sdst, scrutinee, sfi))
                     nl_put(&ctx, sbname, sdst)
                 else:
                     lower_fail("nested non-binding pattern in struct PConstructor — wildcard fallback (got: " + pat_kind(ssp.pat) + ")")
@@ -725,9 +725,9 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
     int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, scrutinee)
     int tag = emit_tag_read(&ctx, scrutinee_ptr, effective_enum, &gmod)
     int expected = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(expected, OpConstI64(expected_tag)))
+    emit(ctx, GIAssign(expected, OpConstI64(expected_tag)))
     int is_match = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(is_match, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(expected)))
+    emit(ctx, GICmp(is_match, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(expected)))
     # Unit variants (no sub_pats): skip the intermediate bind_bb — branch
     # straight to match_bb on success. Saves 1 block per arm, which matters
     # for matches on big imported enums (Keyword has ~60 variants; without
@@ -774,7 +774,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # compounded O(tree^2) through the recursive walkers. When the
                 # scrutinee OWNS its data, keep the eager clone (independent
                 # owner — matches the original Class-8 double-free fix).
-                bool scrut_borrow = scrutinee_nonowning(&ctx, &gmod, scrutinee)
+                bool scrut_borrow = scrutinee_nonowning(ctx, gmod, scrutinee)
                 # Owned-whole-dropped scrutinee (Result/Option local whose own
                 # whole-drop frees the payload once): borrow the payload instead
                 # of deep-cloning it — for ALL payload types incl. String. This
@@ -782,7 +782,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # second heap (Prototype A's leak), no second drop (Prototype B's
                 # double-free). The bound alias is read-only here; a consuming arm
                 # clones on demand via op_consume LoBorrowed→OpClone.
-                bool scrut_owned_dropped = scrutinee_owned_whole_dropped(&ctx, &gmod, scrutinee)
+                bool scrut_owned_dropped = scrutinee_owned_whole_dropped(ctx, &gmod, scrutinee)
                 # Leak 1 (#8-residual): a borrow-flipped read bind (`T back =
                 # coll.get(i).unwrap()`, Branch A-agg) is a `Ptr(T)` LoBorrowed
                 # alias into a collection element the COLLECTION owns + frees
@@ -796,7 +796,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # so `s` is a read-only LoBorrowed alias; a consuming arm clones
                 # on demand (op_consume LoBorrowed→OpClone). Typed test on the
                 # `Ptr`-pointee droppability, not a name match.
-                if scrutinee_borrow_into_owning_collection(&ctx, &gmod, scrutinee):
+                if scrutinee_borrow_into_owning_collection(ctx, &gmod, scrutinee):
                     scrut_owned_dropped = true
                 int field_val = emit_payload_read_mode_full(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, fty, &gmod, scrut_borrow, scrut_owned_dropped)
                 Option[String] bname_opt = Some(bname)
@@ -819,9 +819,9 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 # NON-consume kind, so op_consume yields OpBorrow (pure alias);
                 # CkAssign would route LoBorrowed→OpClone and re-clone the very
                 # payload we just elided.
-                if (scrut_borrow or scrut_owned_dropped) and local_is_borrow_alias(&ctx, field_val):
+                if (scrut_borrow or scrut_owned_dropped) and local_is_borrow_alias(ctx, field_val):
                     bk = CkCallArgBorrow()
-                emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, field_val, bk)))
+                emit(ctx, GIAssign(bound, op_consume(ctx, &gmod, field_val, bk)))
                 nl_put(&ctx, bname, bound)
             case PLiteral(lit_expr):
                 # Literal sub-pattern: read the payload field, compare against
@@ -856,7 +856,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
                 int lit_field_val = emit_payload_read(&ctx, scrutinee_ptr, effective_enum, effective_variant, fi, lit_fty, &gmod)
                 int lit_val = lower_expr(&ctx, lit_expr, &gmod)
                 int lit_eq = add_local(&ctx, BOOL_TYPE, None)
-                emit(&ctx, GICmp(lit_eq, CMP_EQ, lit_cmp_ty, OpCopy(lit_field_val), OpCopy(lit_val)))
+                emit(ctx, GICmp(lit_eq, CMP_EQ, lit_cmp_ty, OpCopy(lit_field_val), OpCopy(lit_val)))
                 int lit_continue_bb = new_block(&ctx)
                 set_terminator(&ctx, GTBranch(OpCopy(lit_eq), lit_continue_bb, no_match_bb))
                 switch_to(&ctx, lit_continue_bb)
@@ -1028,13 +1028,13 @@ void lower_throw_stmt(LowerCtx &ctx, SpannedExpr expr, GirModule &gmod):
     # `slot_ty >= LT_STRUCT_BASE` gate passes). A fully-mangled name
     # would fall through to a raw extern call → stage-1 link error.
     int err_dst = add_local(&ctx, result_type, None)
-    Vector[Operand] err_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
-    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
+    Vector[Operand] err_args = [op_consume(ctx, &gmod, val, CkCallArgOwning())]
+    emit(ctx, GICallExtern(err_dst, "Error", err_args))
     # Assign into the return place, run cleanups + drops, then return.
-    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    emit(ctx, GIAssign(0, op_consume(ctx, &gmod, err_dst, CkReturn())))
     emit_on_error_cleanups(&ctx, &gmod)
-    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
-    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
     # Dead block for any statements after the throw.
     int dead_bb = new_block(&ctx)
     switch_to(&ctx, dead_bb)
@@ -1064,9 +1064,9 @@ int lower_catch_expr(LowerCtx &ctx, SpannedExpr inner, String error_binding, Spa
     int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
     int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
     int zero = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    emit(ctx, GIAssign(zero, OpConstI64(0)))
     int is_ok = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    emit(ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
     int ok_bb = new_block(&ctx)
     int err_bb = new_block(&ctx)
     int merge_bb = new_block(&ctx)
@@ -1077,17 +1077,17 @@ int lower_catch_expr(LowerCtx &ctx, SpannedExpr inner, String error_binding, Spa
     # store into result.
     switch_to(&ctx, ok_bb)
     int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
-    emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    emit(ctx, GIAssign(result_local, op_consume(ctx, &gmod, ok_val, CkAssign())))
     set_terminator(&ctx, GTJump(merge_bb))
     # Error path: bind error to `error_binding`, evaluate recovery, store.
     switch_to(&ctx, err_bb)
     int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
     Option[String] errn_opt = Some(error_binding)
     int err_local = add_local_inheriting(&ctx, ctx.locals.get(err_val).unwrap().type_id, errn_opt, err_val)
-    emit(&ctx, GIAssign(err_local, op_consume(&ctx, &gmod, err_val, CkAssign())))
+    emit(ctx, GIAssign(err_local, op_consume(ctx, &gmod, err_val, CkAssign())))
     nl_put(&ctx, error_binding, err_local)
     int recovery_val = lower_expr(&ctx, recovery, &gmod)
-    emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, recovery_val, CkAssign())))
+    emit(ctx, GIAssign(result_local, op_consume(ctx, &gmod, recovery_val, CkAssign())))
     set_terminator(&ctx, GTJump(merge_bb))
     switch_to(&ctx, merge_bb)
     return result_local
@@ -1199,8 +1199,8 @@ int lower_fault_catch_expr(LowerCtx &ctx, SpannedExpr inner, FaultCatchPattern p
 
     # No-fault path: the wrapped value flows to the result, then to merge.
     # Skip when a divergent inner already terminated the block.
-    if not block_terminated(&ctx):
-        emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, inner_val, CkAssign())))
+    if not block_terminated(ctx):
+        emit(ctx, GIAssign(result_local, op_consume(ctx, &gmod, inner_val, CkAssign())))
         set_terminator(&ctx, GTJump(merge_bb))
 
     # Fill each handler-entry block. The handler body is lowered ONCE PER
@@ -1212,8 +1212,8 @@ int lower_fault_catch_expr(LowerCtx &ctx, SpannedExpr inner, FaultCatchPattern p
             if fault_val >= 0:
                 nl_put(&ctx, binding_name, fault_val)
         int oh_val = lower_expr(&ctx, handler, &gmod)
-        if not block_terminated(&ctx):
-            emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, oh_val, CkAssign())))
+        if not block_terminated(ctx):
+            emit(ctx, GIAssign(result_local, op_consume(ctx, &gmod, oh_val, CkAssign())))
             set_terminator(&ctx, GTJump(merge_bb))
     if catch_divzero:
         switch_to(&ctx, divzero_entry)
@@ -1222,8 +1222,8 @@ int lower_fault_catch_expr(LowerCtx &ctx, SpannedExpr inner, FaultCatchPattern p
             if fault_val >= 0:
                 nl_put(&ctx, binding_name, fault_val)
         int dh_val = lower_expr(&ctx, handler, &gmod)
-        if not block_terminated(&ctx):
-            emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, dh_val, CkAssign())))
+        if not block_terminated(ctx):
+            emit(ctx, GIAssign(result_local, op_consume(ctx, &gmod, dh_val, CkAssign())))
             set_terminator(&ctx, GTJump(merge_bb))
     if catch_bounds:
         switch_to(&ctx, bounds_entry)
@@ -1232,8 +1232,8 @@ int lower_fault_catch_expr(LowerCtx &ctx, SpannedExpr inner, FaultCatchPattern p
             if fault_val >= 0:
                 nl_put(&ctx, binding_name, fault_val)
         int bh_val = lower_expr(&ctx, handler, &gmod)
-        if not block_terminated(&ctx):
-            emit(&ctx, GIAssign(result_local, op_consume(&ctx, &gmod, bh_val, CkAssign())))
+        if not block_terminated(ctx):
+            emit(ctx, GIAssign(result_local, op_consume(ctx, &gmod, bh_val, CkAssign())))
             set_terminator(&ctx, GTJump(merge_bb))
 
     switch_to(&ctx, merge_bb)
@@ -1259,9 +1259,9 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
     int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
     int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
     int zero = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    emit(ctx, GIAssign(zero, OpConstI64(0)))
     int is_ok = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    emit(ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
     int ok_bb = new_block(&ctx)
     int err_bb = new_block(&ctx)
     int merge_bb = new_block(&ctx)
@@ -1271,7 +1271,7 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
     # Ok path: extract Ok payload, continue.
     switch_to(&ctx, ok_bb)
     int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
-    emit(&ctx, GIAssign(ok_result, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    emit(ctx, GIAssign(ok_result, op_consume(ctx, &gmod, ok_val, CkAssign())))
     set_terminator(&ctx, GTJump(merge_bb))
     # Error path: optionally bind the error, evaluate transform, wrap that
     # in the enclosing fn's Result.Error and return.
@@ -1281,7 +1281,7 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
             int err_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Error", 0, err_tid, &gmod, false)
             Option[String] errn_opt = Some(err_name)
             int err_local = add_local_inheriting(&ctx, ctx.locals.get(err_val).unwrap().type_id, errn_opt, err_val)
-            emit(&ctx, GIAssign(err_local, op_consume(&ctx, &gmod, err_val, CkAssign())))
+            emit(ctx, GIAssign(err_local, op_consume(ctx, &gmod, err_val, CkAssign())))
             nl_put(&ctx, err_name, err_local)
         case None:
             pass
@@ -1290,12 +1290,12 @@ int lower_rethrow_expr(LowerCtx &ctx, SpannedExpr inner, Option[String] error_bi
     int new_err = lower_expr(&ctx, transform, &gmod)
     ctx.expected_type = prev_expected_rt
     int err_dst = add_local(&ctx, fn_result_type, None)
-    Vector[Operand] err_args = [op_consume(&ctx, &gmod, new_err, CkCallArgOwning())]
-    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
-    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    Vector[Operand] err_args = [op_consume(ctx, &gmod, new_err, CkCallArgOwning())]
+    emit(ctx, GICallExtern(err_dst, "Error", err_args))
+    emit(ctx, GIAssign(0, op_consume(ctx, &gmod, err_dst, CkReturn())))
     emit_on_error_cleanups(&ctx, &gmod)
-    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
-    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
     switch_to(&ctx, merge_bb)
     return ok_result
 
@@ -1371,8 +1371,8 @@ int maybe_emit_from_conversion(LowerCtx &ctx, int err_val, int callee_err_tid, i
         return err_val
     # Call `B from(A)`: consume the loaded error, get the converted B back.
     int converted = add_local(&ctx, caller_err_tid, None)
-    Vector[Operand] from_args = [op_consume(&ctx, &gmod, err_val, CkCallArgOwning())]
-    emit(&ctx, GICall(converted, chosen, from_args))
+    Vector[Operand] from_args = [op_consume(ctx, &gmod, err_val, CkCallArgOwning())]
+    emit(ctx, GICall(converted, chosen, from_args))
     return converted
 
 int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
@@ -1410,9 +1410,9 @@ int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     int scrutinee_ptr = match_scrutinee_ptr(&ctx, &gmod, val)
     int tag = emit_tag_read(&ctx, scrutinee_ptr, result_tn, &gmod)
     int zero = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(zero, OpConstI64(0)))
+    emit(ctx, GIAssign(zero, OpConstI64(0)))
     int is_ok = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
+    emit(ctx, GICmp(is_ok, CMP_EQ, I64_TYPE, OpCopy(tag), OpCopy(zero)))
     int ok_bb = new_block(&ctx)
     int err_bb = new_block(&ctx)
     int merge_bb = new_block(&ctx)
@@ -1422,7 +1422,7 @@ int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     # Ok path: extract Ok payload (clone-extract), continue.
     switch_to(&ctx, ok_bb)
     int ok_val = emit_payload_read_mode(&ctx, scrutinee_ptr, result_tn, "Ok", 0, ok_tid, &gmod, false)
-    emit(&ctx, GIAssign(ok_result, op_consume(&ctx, &gmod, ok_val, CkAssign())))
+    emit(ctx, GIAssign(ok_result, op_consume(ctx, &gmod, ok_val, CkAssign())))
     set_terminator(&ctx, GTJump(merge_bb))
     # Error path: forward the error payload re-wrapped in the enclosing fn's
     # Result.Error and early-return (no user transform).
@@ -1434,12 +1434,12 @@ int maybe_auto_propagate(LowerCtx &ctx, int val, GirModule &gmod):
     ResultPayloadTypes caller_pt = result_payload_types(fn_result_type, &gmod)
     int err_val_conv = maybe_emit_from_conversion(&ctx, err_val, err_tid, caller_pt.err_type, &gmod)
     int err_dst = add_local(&ctx, fn_result_type, None)
-    Vector[Operand] err_args = [op_consume(&ctx, &gmod, err_val_conv, CkCallArgOwning())]
-    emit(&ctx, GICallExtern(err_dst, "Error", err_args))
-    emit(&ctx, GIAssign(0, op_consume(&ctx, &gmod, err_dst, CkReturn())))
+    Vector[Operand] err_args = [op_consume(ctx, &gmod, err_val_conv, CkCallArgOwning())]
+    emit(ctx, GICallExtern(err_dst, "Error", err_args))
+    emit(ctx, GIAssign(0, op_consume(ctx, &gmod, err_dst, CkReturn())))
     emit_on_error_cleanups(&ctx, &gmod)
-    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
-    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
+    set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
     switch_to(&ctx, merge_bb)
     return ok_result
 
@@ -1521,7 +1521,7 @@ void lower_match_stmt(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm
         # Per-arm name-map snapshot (Rust `save_locals`, `context.rs:1481`):
         # arms are mutually-exclusive scopes, so a `case x:` binding must not
         # leak into the next arm or `else`. Restored at the arm's tail below.
-        Dict[String, int] nl_snap = nl_snapshot(&ctx)
+        Dict[String, int] nl_snap = nl_snapshot(ctx)
         # Guards (`case PAT if COND:`): mirror Rust `patterns.rs:450-460`.
         # The pattern match routes to a `guard_bb` (NOT straight to the body);
         # the pattern bindings are emitted inline in the pre-arm block (the
@@ -1652,7 +1652,7 @@ int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm]
         int arm_body_bb = new_block(&ctx)
         int next_arm_bb = new_block(&ctx)
         # Per-arm name-map snapshot (Rust `save_locals`) — see lower_match_stmt.
-        Dict[String, int] nl_snap = nl_snapshot(&ctx)
+        Dict[String, int] nl_snap = nl_snapshot(ctx)
         # Guards (`case PAT if COND:`): same shape as `lower_match_stmt` — route
         # the pattern match to a `guard_bb` that evaluates COND and branches to
         # the arm body (true) or the next arm (false). Mirrors Rust
@@ -1680,13 +1680,13 @@ int lower_match_expr(LowerCtx &ctx, SpannedExpr scrutinee_expr, Vector[MatchArm]
         switch_to(&ctx, arm_body_bb)
         push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
         int arm_val = lower_block_expr(&ctx, arm.body, &gmod)
-        if not block_terminated(&ctx):
+        if not block_terminated(ctx):
             if not result_type_refined:
                 int aty = ctx.locals.get(arm_val).unwrap().type_id
                 if aty != UNIT_TYPE:
-                    refine_local_type(&ctx, result, aty)
+                    refine_local_type(ctx, result, aty)
                     result_type_refined = true
-            emit(&ctx, GIAssign(result, op_consume(&ctx, &gmod, arm_val, CkAssign())))
+            emit(ctx, GIAssign(result, op_consume(ctx, &gmod, arm_val, CkAssign())))
             pop_drop_scope(&ctx)
             set_terminator(&ctx, GTJump(merge_bb))
         else:

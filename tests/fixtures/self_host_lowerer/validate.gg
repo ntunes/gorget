@@ -64,7 +64,7 @@ String resolve_type_name(int tid, GirModule gmod):
 # True if the local's slot type is a resource (per `build_resource_metadata`).
 # Borrowed locals are also resource-typed at the slot level; the
 # ownership flag (LocalOwnership) is what distinguishes the cases.
-bool local_is_resource(int lid, GirFunction func, GirModule &gmod):
+bool local_is_resource(int lid, GirFunction func, GirModule gmod):
     if lid < 0 or lid >= func.locals.len():
         return false
     GirLocal loc = func.locals.get(lid).unwrap()
@@ -90,42 +90,42 @@ String fmt_loc(String fn_name, int bi, int ii):
 #   • OpBorrow(local) — non-owning alias; consumer must accept borrow.
 #
 # Mirrors Rust's `validate_resource_moves` (`src/ir/validate.rs`).
-Vector[String] validate_resource_moves(GirModule &gmod):
+Vector[String] validate_resource_moves(GirModule gmod):
     Vector[String] violations = []
     for (fi, func) in gmod.functions.enumerate():
         for (bi, blk) in func.blocks.enumerate():
             for (ii, inst) in blk.insts.enumerate():
-                check_inst_for_copy(inst, func, &gmod, &violations, fi, bi, ii)
+                check_inst_for_copy(inst, func, gmod, &violations, fi, bi, ii)
     return violations
 
 # Check every Operand argument in a single Instruction for OpCopy on
 # a resource-typed local. Walks each instruction shape explicitly so
 # every operand site is covered.
-void check_inst_for_copy(Instruction inst, GirFunction func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+void check_inst_for_copy(Instruction inst, GirFunction func, GirModule gmod, Vector[String] &violations, int fi, int bi, int ii):
     match inst:
         case GIAssign(_, op):
-            check_operand_for_copy(op, &func, &gmod, &violations, fi, bi, ii)
+            check_operand_for_copy(op, func, gmod, &violations, fi, bi, ii)
         case GIBinOp(_, _, _, lhs, rhs):
-            check_operand_for_copy(lhs, &func, &gmod, &violations, fi, bi, ii)
-            check_operand_for_copy(rhs, &func, &gmod, &violations, fi, bi, ii)
+            check_operand_for_copy(lhs, func, gmod, &violations, fi, bi, ii)
+            check_operand_for_copy(rhs, func, gmod, &violations, fi, bi, ii)
         case GIUnOp(_, _, _, src):
-            check_operand_for_copy(src, &func, &gmod, &violations, fi, bi, ii)
+            check_operand_for_copy(src, func, gmod, &violations, fi, bi, ii)
         case GICmp(_, _, _, lhs, rhs):
-            check_operand_for_copy(lhs, &func, &gmod, &violations, fi, bi, ii)
-            check_operand_for_copy(rhs, &func, &gmod, &violations, fi, bi, ii)
+            check_operand_for_copy(lhs, func, gmod, &violations, fi, bi, ii)
+            check_operand_for_copy(rhs, func, gmod, &violations, fi, bi, ii)
         case GICall(_, _, args):
             for arg in args:
-                check_operand_for_copy(arg, &func, &gmod, &violations, fi, bi, ii)
+                check_operand_for_copy(arg, func, gmod, &violations, fi, bi, ii)
         case GICallExtern(_, _, args):
             for arg in args:
-                check_operand_for_copy(arg, &func, &gmod, &violations, fi, bi, ii)
+                check_operand_for_copy(arg, func, gmod, &violations, fi, bi, ii)
         else:
             pass
 
-void check_operand_for_copy(Operand op, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+void check_operand_for_copy(Operand op, GirFunction func, GirModule gmod, Vector[String] &violations, int fi, int bi, int ii):
     match op:
         case OpCopy(lid):
-            if local_is_resource(lid, func, &gmod):
+            if local_is_resource(lid, func, gmod):
                 GirFunction fr = gmod.functions.get(fi).unwrap()
                 GirLocal loc = fr.locals.get(lid).unwrap()
                 # View-awareness skip (mirror of Rust's `validate_read` at
@@ -159,15 +159,15 @@ void check_operand_for_copy(Operand op, GirFunction &func, GirModule &gmod, Vect
 #
 # Mirrors Rust's `validate_resource_field_reads`
 # (`src/ir/validate.rs` IFieldLoad-mode-Copy class).
-Vector[String] validate_resource_field_reads(GirModule &gmod):
+Vector[String] validate_resource_field_reads(GirModule gmod):
     Vector[String] violations = []
     for (fi, func) in gmod.functions.enumerate():
         for (bi, blk) in func.blocks.enumerate():
             for (ii, inst) in blk.insts.enumerate():
-                check_inst_for_field_read(inst, func, &gmod, &violations, fi, bi, ii)
+                check_inst_for_field_read(inst, func, gmod, &violations, fi, bi, ii)
     return violations
 
-void check_inst_for_field_read(Instruction inst, GirFunction func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+void check_inst_for_field_read(Instruction inst, GirFunction func, GirModule gmod, Vector[String] &violations, int fi, int bi, int ii):
     match inst:
         case GICallExtern(dst, name, _):
             if dst < 0:
@@ -225,24 +225,24 @@ void check_inst_for_field_read(Instruction inst, GirFunction func, GirModule &gm
 #
 # Mirrors Rust's `validate_resource_call_args`
 # (`src/ir/validate.rs` Call/CallExtern arg-mode class).
-Vector[String] validate_resource_call_args(GirModule &gmod):
+Vector[String] validate_resource_call_args(GirModule gmod):
     Vector[String] violations = []
     for (fi, func) in gmod.functions.enumerate():
         for (bi, blk) in func.blocks.enumerate():
             for (ii, inst) in blk.insts.enumerate():
-                check_inst_for_call_arg(inst, func, &gmod, &violations, fi, bi, ii)
+                check_inst_for_call_arg(inst, func, gmod, &violations, fi, bi, ii)
     return violations
 
-void check_inst_for_call_arg(Instruction inst, GirFunction func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+void check_inst_for_call_arg(Instruction inst, GirFunction func, GirModule gmod, Vector[String] &violations, int fi, int bi, int ii):
     match inst:
         case GICall(_, callee, args):
-            check_call_args(callee, args, func, &gmod, &violations, fi, bi, ii)
+            check_call_args(callee, args, func, gmod, &violations, fi, bi, ii)
         case GICallExtern(_, callee, args):
-            check_call_args(callee, args, func, &gmod, &violations, fi, bi, ii)
+            check_call_args(callee, args, func, gmod, &violations, fi, bi, ii)
         else:
             pass
 
-void check_call_args(String callee, Vector[Operand] args, GirFunction func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+void check_call_args(String callee, Vector[Operand] args, GirFunction func, GirModule gmod, Vector[String] &violations, int fi, int bi, int ii):
     for (ai, op) in args.enumerate():
         match op:
             case OpMove(lid):
@@ -285,17 +285,17 @@ void check_call_args(String callee, Vector[Operand] args, GirFunction func, GirM
 # for diagnostic logging when a violation re-appears — the writer
 # is a sweep entry point for `tools/sweep-validate.sh`-style harnesses.
 
-void run_validators(GirModule &gmod):
+void run_validators(GirModule gmod):
     # ── Closed classes: fatal-on-violation, no gate ──
-    Vector[String] fr_v = validate_resource_field_reads(&gmod)
+    Vector[String] fr_v = validate_resource_field_reads(gmod)
     if fr_v.len() > 0:
         print_violations_to_stderr("validate_resource_field_reads (FATAL)", fr_v)
         exit(1)
-    Vector[String] ca_v = validate_resource_call_args(&gmod)
+    Vector[String] ca_v = validate_resource_call_args(gmod)
     if ca_v.len() > 0:
         print_violations_to_stderr("validate_resource_call_args (FATAL)", ca_v)
         exit(1)
-    Vector[String] mv_v = validate_resource_moves(&gmod)
+    Vector[String] mv_v = validate_resource_moves(gmod)
     if mv_v.len() > 0:
         print_violations_to_stderr("validate_resource_moves (FATAL)", mv_v)
         exit(1)
@@ -305,7 +305,7 @@ void run_validators(GirModule &gmod):
     # than a single fatal-on-first stop.
     String moves_path = getenv("GG_VALIDATE_RESOURCE_MOVES")
     if moves_path.len() > 0:
-        Vector[String] mv = validate_resource_moves(&gmod)
+        Vector[String] mv = validate_resource_moves(gmod)
         write_violations(moves_path, "validate_resource_moves", mv)
 
 # Emit violations to stdout. The closed-class fatal path runs BEFORE
@@ -358,17 +358,17 @@ bool validate_passes_enabled():
 # run unconditionally from `run_validators(&gir)`, so this hook adds
 # the per-pass naming + a pass-name-tagged error message when any
 # violations turn up.
-void validate_gir_after(String after, GirModule &gmod):
+void validate_gir_after(String after, GirModule gmod):
     if not validate_passes_enabled():
         return
     Vector[String] errors = []
-    Vector[String] fr_v = validate_resource_field_reads(&gmod)
+    Vector[String] fr_v = validate_resource_field_reads(gmod)
     for v in fr_v:
         errors.push("[field_reads] " + v)
-    Vector[String] ca_v = validate_resource_call_args(&gmod)
+    Vector[String] ca_v = validate_resource_call_args(gmod)
     for v in ca_v:
         errors.push("[call_args] " + v)
-    Vector[String] mv_v = validate_resource_moves(&gmod)
+    Vector[String] mv_v = validate_resource_moves(gmod)
     for v in mv_v:
         errors.push("[moves] " + v)
     if errors.len() > 0:
@@ -417,7 +417,7 @@ void validate_lir_function(LirFunction func, Vector[String] &errors):
         for inst in blk.insts:
             check_inst_slot_refs(inst, blk.id, num_slots, func.name, &errors)
         # Terminator successor sanity + args-length-matches-target-params.
-        check_term_successors(blk.term, blk.id, num_blocks, &func, &errors)
+        check_term_successors(blk.term, blk.id, num_blocks, func, &errors)
 
 void check_inst_slot_refs(LirInst inst, int blk_id, int num_slots, String fn_name, Vector[String] &errors):
     int slot = -1
@@ -443,7 +443,7 @@ void check_inst_slot_refs(LirInst inst, int blk_id, int num_slots, String fn_nam
     if slot < 0 or slot >= num_slots:
         errors.push("@" + fn_name + " bb" + int_to_str(blk_id) + ": " + label + " references slot s" + int_to_str(slot) + " out of range (0.." + int_to_str(num_slots) + ")")
 
-void check_term_successors(LirTerm term, int blk_id, int num_blocks, LirFunction &func, Vector[String] &errors):
+void check_term_successors(LirTerm term, int blk_id, int num_blocks, LirFunction func, Vector[String] &errors):
     match term:
         case TJump(tgt, args):
             if tgt < 0 or tgt >= num_blocks:

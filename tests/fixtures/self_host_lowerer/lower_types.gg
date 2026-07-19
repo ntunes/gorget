@@ -579,7 +579,7 @@ int lookup_expr_gir_type(SpannedExpr sexpr, GirModule &gmod):
 # but one link's entry. span.end is unique per link (same invariant
 # `expr_link_types` uses). The recorded method NAME is still cross-checked as
 # a cheap belt-and-suspenders guard.
-Vector[int] bare_method_targ_rtids(int span_end, String mname, GirModule &gmod):
+Vector[int] bare_method_targ_rtids(int span_end, String mname, GirModule gmod):
     if gmod.tc_types.expr_method_targs.contains(span_end):
         if gmod.tc_types.expr_method_targs_name.contains(span_end):
             String recorded = gmod.tc_types.expr_method_targs_name.get(span_end).unwrap()
@@ -752,7 +752,7 @@ String type_id_to_name(int tid, GirModule &gmod):
 # ── Resource type detection ──────────────────────────────
 
 # Get parameter type IDs for a function from the GIR module.
-Vector[int] get_fn_param_types(String name, GirModule &gmod):
+Vector[int] get_fn_param_types(String name, GirModule gmod):
     Vector[int] types = []
     int i = 0
     while i < gmod.functions.len():
@@ -799,7 +799,7 @@ String binop_method_name(String op):
 # Returns the parent enum name if `name` is a variant of a known enum,
 # or "" if not a variant. Used to route bare variant constructors
 # (IntCol, Red, Ok, ...) to their enclosing enum's named type.
-String enum_variant_parent(String name, GirModule &gmod):
+String enum_variant_parent(String name, GirModule gmod):
     # O(1) lookup into the flat variant→enum index (built FIRST-WRITE-WINS
     # at lower_module construction, mirroring this scan's old insertion-order
     # first-match). Replaces an O(types) scan that deep-cloned a
@@ -921,7 +921,7 @@ String allocator_type_destroy_name(String type_name):
     return ""
 
 # Get the type name for a GIR local (e.g., "Vector__int64_t", "GorgetString").
-String local_type_name(int local_id, LowerCtx &ctx, GirModule &gmod):
+String local_type_name(int local_id, LowerCtx ctx, GirModule &gmod):
     if local_id < 0 or local_id >= ctx.locals.len():
         return "int64_t"
     int tid = ctx.locals.get(local_id).unwrap().type_id
@@ -932,8 +932,8 @@ String local_type_name(int local_id, LowerCtx &ctx, GirModule &gmod):
 # — a TYPED single-source dispatch (Core #2 / layering rule 2), NOT a `Shared__`/
 # `Channel__` name-prefix test. Used to route `Shared[T].clone()` to the refcount-
 # bump wrapper (method_prefix == "gorget_shared") instead of the byte-copy OpClone.
-bool local_method_prefix_is(int local_id, String want_prefix, LowerCtx &ctx, GirModule &gmod):
-    String base = local_type_name(local_id, &ctx, &gmod)
+bool local_method_prefix_is(int local_id, String want_prefix, LowerCtx ctx, GirModule &gmod):
+    String base = local_type_name(local_id, ctx, &gmod)
     match resource_meta_for(&gmod, base):
         case Some(rmeta):
             match rmeta.method_prefix:
@@ -1058,7 +1058,7 @@ void record_field_enum_category(String type_name, int enum_tid, GirModule &gmod)
                 # Accept the boundary whose Err half is a known concrete type
                 # (registered user type / mono'd collection / primitive). The
                 # Ok half is then whatever precedes it — possibly compound.
-                if is_known_field_type_name(e_try, &gmod):
+                if is_known_field_type_name(e_try, gmod):
                     ok_name = rest.slice(0, si)
                     err_name = e_try
                     break
@@ -1075,7 +1075,7 @@ void record_field_enum_category(String type_name, int enum_tid, GirModule &gmod)
 # True when `name` is a CONCRETE field-type name: a primitive, a
 # registered user struct/enum, or a mono'd collection prefix. Used only by
 # `record_field_enum_category` to pick the Result Ok/Err `__` boundary.
-bool is_known_field_type_name(String name, GirModule &gmod):
+bool is_known_field_type_name(String name, GirModule gmod):
     if name == "int" or name == "int64_t" or name == "float" or name == "double" or name == "bool":
         return true
     if name == "String" or name == "GorgetString" or name == "Str":
@@ -1107,11 +1107,11 @@ bool is_known_field_type_name(String name, GirModule &gmod):
 # Helper extracted from `lower_expr`'s EIdentifier arm — keeps that
 # function's already-massive stack frame from growing further.
 # Returns the new local id on hit (>= 0); -1 on miss.
-int lower_float_const_ident(LowerCtx &ctx, GirModule &gmod, String name):
+int lower_float_const_ident(LowerCtx &ctx, GirModule gmod, String name):
     if not gmod.float_const_decls.contains(name):
         return -1
     int fdst = add_local(&ctx, F64_TYPE, None)
-    emit(&ctx, GIAssign(fdst, OpConstF64(gmod.float_const_decls.get(name).unwrap())))
+    emit(ctx, GIAssign(fdst, OpConstF64(gmod.float_const_decls.get(name).unwrap())))
     return fdst
 
 # Function-as-value: `filter(is_even)` / `map(double)` etc. — a bare
@@ -1133,7 +1133,7 @@ int lower_fn_addr_ident(LowerCtx &ctx, GirModule &gmod, String name):
     int gs_tid = lookup_or_register_named(&gmod, "GorgetClosure")
     int adst = add_local(&ctx, gs_tid, None)
     Vector[Operand] no_args = []
-    emit(&ctx, GICallExtern(adst, "__fn_addr__" + name, no_args))
+    emit(ctx, GICallExtern(adst, "__fn_addr__" + name, no_args))
     return adst
 
 # Module-level static reference: `stdout` / `stderr` / `stdin` etc.
@@ -1143,13 +1143,13 @@ int lower_fn_addr_ident(LowerCtx &ctx, GirModule &gmod, String name):
 # (`src/ir/lowering/exprs/mod.rs:128-130`). Returns the new local id
 # on hit (>= 0); -1 on miss. Out-of-line for the same stack-frame
 # reason as `lower_float_const_ident` / `lower_fn_addr_ident`.
-int lower_static_ref_ident(LowerCtx &ctx, GirModule &gmod, String name):
+int lower_static_ref_ident(LowerCtx &ctx, GirModule gmod, String name):
     if not static_contains(gmod, name):
         return -1
     int sty = static_lookup_type(gmod, name)
     int sdst = add_local(&ctx, sty, None)
     Vector[Operand] no_args = []
-    emit(&ctx, GICallExtern(sdst, "__global_ref__" + name, no_args))
+    emit(ctx, GICallExtern(sdst, "__global_ref__" + name, no_args))
     return sdst
 
 # Bare nullary enum-variant used as a value: `IDropGuardClose` brought
@@ -1173,13 +1173,13 @@ int lower_static_ref_ident(LowerCtx &ctx, GirModule &gmod, String name):
 # ~148 KB and overflows on deep recursion). Returns the new local id
 # (>= 0) on hit, -1 on miss.
 int lower_nullary_variant_ident(LowerCtx &ctx, GirModule &gmod, String name):
-    String parent = enum_variant_parent(name, &gmod)
+    String parent = enum_variant_parent(name, gmod)
     if parent == "":
         return -1
     Vector[SpannedExpr] no_args = []
     Vector[String] no_arg_names = []
     Vector[SpannedType] no_targs = []
-    return lower_call(&ctx, &name, &no_args, &no_arg_names, &no_targs, &gmod)
+    return lower_call(&ctx, name, no_args, no_arg_names, no_targs, &gmod)
 
 # Meta-op token (`meta +`, `meta /`, …): the parser encodes these
 # as `EIdentifier("__metaop__add")` / `__metaop__div` / etc. and
@@ -1207,7 +1207,7 @@ int lower_metaop_ident(LowerCtx &ctx, String name):
     if not name.starts_with("__metaop__"):
         return -1
     int mdst = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(mdst, OpConstI64(0)))
+    emit(ctx, GIAssign(mdst, OpConstI64(0)))
     return mdst
 
 # Module-level static with a runtime-call init: `public static File
@@ -1730,7 +1730,7 @@ Option[bool] eval_const_bool_expr(SpannedExpr spe, GirModule &gmod):
 # limited to NON-interpolated string literals (same restriction Rust
 # applies). Used by the module-const registration loop to populate
 # `gmod.string_const_decls`, read by the EIdentifier arm.
-Option[String] eval_const_string_expr(SpannedExpr spe, GirModule &gmod):
+Option[String] eval_const_string_expr(SpannedExpr spe, GirModule gmod):
     match spe.expr:
         case EStringLiteral(s, _):
             return Some(s)
@@ -1811,7 +1811,7 @@ String map_kv_payload(String recv_name):
         return recv_name.slice(11, recv_name.len())
     return ""
 
-int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &gmod):
+int infer_method_return_type(String method, int recv, LowerCtx ctx, GirModule &gmod):
     # Void-returning methods. `Vector[T].remove(idx)` was previously
     # treated as void, but actually returns `Option[T]` — the void
     # classification left bindings in `T x = v.remove(i).unwrap()`
@@ -2017,7 +2017,7 @@ int infer_method_return_type(String method, int recv, LowerCtx &ctx, GirModule &
     # and mint a bogus i64 dst → cc "void value not ignored". Gated on a String
     # receiver so a same-named user/collection method is unaffected (`push`/
     # `clear`/`capacity` are already classified receiver-independent above).
-    if is_string_local(recv, &ctx, &gmod):
+    if is_string_local(recv, ctx, &gmod):
         if method == "push_line" or method == "push_char":
             return UNIT_TYPE
     # String-returning methods — declared in STRING_BUILTIN_METHODS
@@ -2708,7 +2708,7 @@ int collection_accumulator_tid(GirModule &gmod, String kind, String elem_name, S
 # covering the std.conv / std.fs / env extern surface —
 # adding a new cstr-returning extern here is the same shape of
 # change as the Rust-side `fn_return_abis` registration.
-bool is_cstr_returning_call(SpannedExpr init_expr, GirModule &gmod):
+bool is_cstr_returning_call(SpannedExpr init_expr, GirModule gmod):
     match init_expr.expr:
         case ECall(callee_box, _, _):
             match (*callee_box).expr:
@@ -2735,7 +2735,7 @@ bool is_cstr_returning_call(SpannedExpr init_expr, GirModule &gmod):
     return false
 
 # Check if a GIR local holds a string type.
-bool is_string_local(int local_id, LowerCtx &ctx, GirModule &gmod):
+bool is_string_local(int local_id, LowerCtx ctx, GirModule &gmod):
     if local_id < 0 or local_id >= ctx.locals.len():
         return false
     int tid = ctx.locals.get(local_id).unwrap().type_id
@@ -2940,7 +2940,7 @@ int map_compound_binop(String op):
 # becomes a raw C `+` on `Str` and the emitted program fails to compile.
 # Every other op (and `+=` on non-String operands) is byte-identical to the
 # original `GIBinOp(dst, map_compound_binop(op), result_ty, …)` call.
-void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs_val, int result_ty, GirModule &gmod):
+void emit_compound_arith(LowerCtx ctx, String op, int dst, int lhs_val, int rhs_val, int result_ty, GirModule &gmod):
     # R42-A (Core #4 — centralize at the producer): user operator-overload
     # compound-assign (`a += b` on a struct/enum with `equip X with Add`) is
     # dispatched HERE rather than at each of the 5+ emit_compound_arith call
@@ -2955,7 +2955,7 @@ void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs
     # assign's identifier overload arm (src/ir/lowering/stmts/assigns.rs:1292-1330).
     String ov_meth = compound_op_overload_method(op)
     if ov_meth != "":
-        String ov_tn = local_type_name(lhs_val, &ctx, &gmod)
+        String ov_tn = local_type_name(lhs_val, ctx, &gmod)
         bool ov_user = gmod.type_infos.contains(ov_tn)
         if not ov_user and ov_tn.contains("__"):
             int ov_dd = ov_tn.index_of("__").unwrap()
@@ -2963,16 +2963,16 @@ void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs
                 ov_user = true
         String ov_full = ov_tn + "__" + ov_meth
         if ov_user and gmod.fn_sigs.contains(ov_full):
-            Vector[Operand] ov_args = [OpMove(lhs_val), op_consume(&ctx, &gmod, rhs_val, classify_call_arg(&gmod, ov_full, 1))]
-            emit(&ctx, GICallExtern(dst, ov_full, ov_args))
+            Vector[Operand] ov_args = [OpMove(lhs_val), op_consume(ctx, &gmod, rhs_val, classify_call_arg(gmod, ov_full, 1))]
+            emit(ctx, GICallExtern(dst, ov_full, ov_args))
             return
-    if op == "+=" and (is_string_local(lhs_val, &ctx, &gmod) or is_string_local(rhs_val, &ctx, &gmod)):
+    if op == "+=" and (is_string_local(lhs_val, ctx, &gmod) or is_string_local(rhs_val, ctx, &gmod)):
         Vector[Operand] cat_args = []
-        cat_args.push(op_consume(&ctx, &gmod, lhs_val, CkCallArgBorrow()))
-        cat_args.push(op_consume(&ctx, &gmod, rhs_val, CkCallArgBorrow()))
-        emit(&ctx, GICallExtern(dst, "gorget_str_cat", cat_args))
+        cat_args.push(op_consume(ctx, &gmod, lhs_val, CkCallArgBorrow()))
+        cat_args.push(op_consume(ctx, &gmod, rhs_val, CkCallArgBorrow()))
+        emit(ctx, GICallExtern(dst, "gorget_str_cat", cat_args))
     else:
-        emit(&ctx, GIBinOp(dst, map_compound_binop(op), result_ty, op_consume(&ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(&ctx, &gmod, rhs_val, CkBinOpArg())))
+        emit(ctx, GIBinOp(dst, map_compound_binop(op), result_ty, op_consume(ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(ctx, &gmod, rhs_val, CkBinOpArg())))
 
 # R42-A: compound-assign operator → the user-overload method name it dispatches
 # to (`a += b` → X__add(&a, b)). Only the arithmetic ops overload; wrap/bitwise/

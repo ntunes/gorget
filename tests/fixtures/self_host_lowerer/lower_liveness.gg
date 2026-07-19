@@ -866,7 +866,7 @@ int liveness_instrumentation_diff(LowerCtx ctx, LivenessAnalysis liveness):
 # Idempotent: a second run sees the same operands and applies the
 # same rule, producing identical output.
 
-void wire_liveness_into_modes(LowerCtx &ctx, GirModule &gmod, LivenessAnalysis &liveness):
+void wire_liveness_into_modes(LowerCtx &ctx, GirModule &gmod, LivenessAnalysis liveness):
     int n = ctx.block_insts.len()
     if n == 0:
         return
@@ -886,7 +886,7 @@ void wire_liveness_into_modes(LowerCtx &ctx, GirModule &gmod, LivenessAnalysis &
             # zeros stay anchored to their producing instruction
             # (COMMIT 3 step 1).
             Vector[int] moved_lids = []
-            Instruction rewritten = rewrite_inst_modes(&ctx, &gmod, insts.get(ii).unwrap(), bi, ii, &liveness, &moved_lids)
+            Instruction rewritten = rewrite_inst_modes(&ctx, &gmod, insts.get(ii).unwrap(), bi, ii, liveness, &moved_lids)
             new_insts.push(rewritten)
             int mi = 0
             while mi < moved_lids.len():
@@ -904,7 +904,7 @@ void wire_liveness_into_modes(LowerCtx &ctx, GirModule &gmod, LivenessAnalysis &
         # propagate "uninitialized" into successor blocks correctly.
         int term_inst_idx = insts.len()
         Vector[int] term_moved_lids = []
-        Terminator new_term = rewrite_term_modes(&ctx, &gmod, ctx.block_terms.get(bi).unwrap(), bi, term_inst_idx, &liveness, &term_moved_lids)
+        Terminator new_term = rewrite_term_modes(&ctx, &gmod, ctx.block_terms.get(bi).unwrap(), bi, term_inst_idx, liveness, &term_moved_lids)
         int tmi = 0
         while tmi < term_moved_lids.len():
             new_insts.push(GIMoveZero(term_moved_lids.get(tmi).unwrap()))
@@ -967,7 +967,7 @@ Operand wire_one_operand(LowerCtx &ctx, GirModule &gmod, Operand op, int b, int 
     GirType src_ty = gmod.type_table.get(loc.type_id).unwrap()
     int key = liveness_encode_key(b, i, op_idx)
     bool last_use = liveness.last_use_of_op.contains(key)
-    Operand result = decide_operand_at_consuming_arg(&ctx, &gmod, lid, src_ty, "wire_pass: consuming operand", last_use)
+    Operand result = decide_operand_at_consuming_arg(ctx, &gmod, lid, src_ty, "wire_pass: consuming operand", last_use)
     # On a finalised OpMove, the slot is logically dead from this
     # point on. Tell drop_elab (so the scope-drop emitter skips it)
     # and record the lid so `wire_liveness_into_modes` can emit a
@@ -986,7 +986,7 @@ Operand wire_one_operand(LowerCtx &ctx, GirModule &gmod, Operand op, int b, int 
 # left-to-right order of operand reads in this instruction shape.
 # `moved_lids` is the side-channel for per-inst GIMoveZero
 # emission — see `wire_one_operand`.
-Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst, int b, int i, LivenessAnalysis liveness, Vector[int] &moved_lids):
     match inst:
         case GIAssign(dst, op):
             return GIAssign(dst, wire_one_operand(&ctx, &gmod, op, b, i, 0, liveness, &moved_lids))
@@ -1033,7 +1033,7 @@ Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst,
             # so there's nothing to rewrite.
             return inst
 
-Terminator rewrite_term_modes(LowerCtx &ctx, GirModule &gmod, Terminator term, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+Terminator rewrite_term_modes(LowerCtx &ctx, GirModule &gmod, Terminator term, int b, int i, LivenessAnalysis liveness, Vector[int] &moved_lids):
     match term:
         case GTReturn(op):
             return GTReturn(wire_one_operand(&ctx, &gmod, op, b, i, 0, liveness, &moved_lids))

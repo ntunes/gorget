@@ -134,7 +134,7 @@ Vector[int] ss_all_uninit(int n_slots):
 
 # Read a slot's state from a packed word vector — thin alias kept so the
 # guard-phase call sites read like the Rust `slot_state`.
-int slot_state(Vector[int] &states, int slot):
+int slot_state(Vector[int] states, int slot):
     return ss_get(states, slot)
 
 # ── Helper: value → slot map ───────────────────────────────────
@@ -218,7 +218,7 @@ void apply_inst_effect(LirInst inst, Vector[int] &state, Dict[int, int] val_to_s
 # of the in-state, return the resulting out-state. `state` is the packed
 # WORD vector (n_words ints), so this copy is ~32× cheaper than the prior
 # 1-int-per-slot representation.
-Vector[int] compute_transfer(LirBlock blk, Vector[int] in_state, Dict[int, int] &val_to_slot):
+Vector[int] compute_transfer(LirBlock blk, Vector[int] in_state, Dict[int, int] val_to_slot):
     Vector[int] state = []
     int i = 0
     while i < in_state.len():
@@ -277,7 +277,7 @@ bool states_equal(Vector[int] a, Vector[int] b):
 #
 # This precise seed is what lets the bool-flag phase emit
 # `flag := true` for owning params without a separate fix-up.
-void forward_dataflow(LirFunction f, Dict[int, int] &val_to_slot, Vector[Vector[int]] &in_states_out, Vector[bool] &in_states_present_out):
+void forward_dataflow(LirFunction f, Dict[int, int] val_to_slot, Vector[Vector[int]] &in_states_out, Vector[bool] &in_states_present_out):
     int n = f.blocks.len()
     in_states_out.clear()
     in_states_present_out.clear()
@@ -336,7 +336,7 @@ void forward_dataflow(LirFunction f, Dict[int, int] &val_to_slot, Vector[Vector[
         # (the residual of the lower_operand LirBlock-clone class). The read
         # must borrow, not copy (CoW contract); mirrors Rust drop_elab.rs
         # iterating `&func.blocks[bid]`.
-        Vector[int] out = compute_transfer(f.blocks.get(bid).unwrap(), in_state, &val_to_slot)
+        Vector[int] out = compute_transfer(f.blocks.get(bid).unwrap(), in_state, val_to_slot)
         Vector[int] prev_out = out_states.get(bid).unwrap()
         if not states_equal(out, prev_out):
             out_states.set(bid, out)
@@ -410,7 +410,7 @@ int find_matching_close(Vector[LirInst] insts, int open_idx):
 #   * maybe_init_slots — slots that hit a MaybeInitialized guard;
 #     get bool drop-flags in phase 3.
 # Returns the number of instructions deleted.
-int elaborate_block(LirBlock &blk, Vector[int] in_state, Dict[int, int] &val_to_slot, Dict[int, bool] &deleted_slots, Dict[int, bool] &maybe_init_slots):
+int elaborate_block(LirBlock &blk, Vector[int] in_state, Dict[int, int] val_to_slot, Dict[int, bool] &deleted_slots, Dict[int, bool] &maybe_init_slots):
     Vector[LirInst] insts = blk.insts
     # to_delete: dense bool vector parallel to insts. true → drop.
     Vector[bool] to_delete = []
@@ -455,7 +455,7 @@ int elaborate_block(LirBlock &blk, Vector[int] in_state, Dict[int, int] &val_to_
                     # Structural error — skip without modifying anything.
                     i += 1
                     continue
-                int state = slot_state(&current_state, slot)
+                int state = slot_state(current_state, slot)
                 if state == IS_UNINITIALIZED:
                     # Delete the entire guard sequence (open + body + close).
                     int k = i
@@ -555,7 +555,7 @@ int remove_companion_memsets(LirFunction &f, Dict[int, int] val_to_slot, Dict[in
 #      closes by nesting depth (replaced vs. passthrough).
 #
 # Returns the number of guard sequences replaced.
-int insert_drop_flags(LirFunction &f, Dict[int, int] val_to_slot, Dict[int, bool] maybe_init_slots, Vector[int] &bb0_in_state):
+int insert_drop_flags(LirFunction &f, Dict[int, int] val_to_slot, Dict[int, bool] maybe_init_slots, Vector[int] bb0_in_state):
     if maybe_init_slots.len() == 0:
         return 0
 
@@ -597,7 +597,7 @@ int insert_drop_flags(LirFunction &f, Dict[int, int] val_to_slot, Dict[int, bool
     while initi < sorted_slots.len():
         int slot = sorted_slots.get(initi).unwrap()
         int flag_slot = slot_to_flag.get(slot).unwrap()
-        int seed = slot_state(&bb0_in_state, slot)
+        int seed = slot_state(bb0_in_state, slot)
         bool initial = false
         if seed == IS_INITIALIZED:
             initial = true
@@ -805,7 +805,7 @@ void elaborate_drops(LirModule &m):
 
         Vector[Vector[int]] in_states = []
         Vector[bool] in_states_present = []
-        forward_dataflow(f, &val_to_slot, &in_states, &in_states_present)
+        forward_dataflow(f, val_to_slot, &in_states, &in_states_present)
 
         # Phase 1: guard elimination.
         Dict[int, bool] deleted_slots = {}
@@ -814,7 +814,7 @@ void elaborate_drops(LirModule &m):
         while bi < f.blocks.len():
             if in_states_present.get(bi).unwrap():
                 Vector[int] state = in_states.get(bi).unwrap()
-                elaborate_block(&f.blocks.get(bi).unwrap(), state, &val_to_slot, &deleted_slots, &maybe_init_slots)
+                elaborate_block(&f.blocks.get(bi).unwrap(), state, val_to_slot, &deleted_slots, &maybe_init_slots)
             bi += 1
 
         # Phase 2: Memset cleanup.
@@ -824,7 +824,7 @@ void elaborate_drops(LirModule &m):
         Vector[int] bb0_state = []
         if in_states.len() > 0 and in_states_present.get(0).unwrap():
             bb0_state = in_states.get(0).unwrap()
-        insert_drop_flags(&f, val_to_slot, maybe_init_slots, &bb0_state)
+        insert_drop_flags(&f, val_to_slot, maybe_init_slots, bb0_state)
 
         # Phase 4: MoveSlot sweep.
         sweep_move_slots(&f)
