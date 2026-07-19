@@ -23838,12 +23838,14 @@ fn self_host_runtime_diff() {
     // same commit). Shrink-only allowlist, the EXPECTED_HANGS idiom. Seeded from
     // the fresh run; each entry MUST carry a filed TODO citation.
     // Seeded 2026-07-18 from the G2 scout's fresh full run + per-fixture triage
-    // (all 13 verified by direct `ggdef run` vs `gg run`): every entry today is a
-    // GGDEF-side defect — production agrees with the fixture-documented expected
-    // output. Two classes (file + burn down; the target is the EMPTY list):
-    //   (A) ggdef mis-defines RATIFIED semantics: method_mut_borrow_arg (`&`
-    //       param write-through), set_literal_basic (Set-literal dedupe),
-    //       vec_get_unwrap_push_chain (`.get().unwrap().push()` Ref write-through).
+    // (all 13 then-current entries verified by direct `ggdef run` vs `gg run`):
+    // every entry is a GGDEF-side defect — production agrees with the fixture-
+    // documented expected output. Two classes (the target is the EMPTY list):
+    //   (A) ggdef mis-DEFINED ratified semantics — BURNED DOWN 2026-07-19
+    //       (stage 1a): method_mut_borrow_arg (`&`-param write-through),
+    //       set_literal_basic (Set-literal dedupe), vec_get_unwrap_push_chain
+    //       (`.get().unwrap().push()` Ref write-through) were fixed in ggdef and
+    //       left this list in the same change (ADJ-MATCH absorbed all three).
     //   (B) ggdef silently mis-models out-of-model surface that classify.rs's
     //       invariant #8 says must become a LOUD ElabError: user Str/Display
     //       impls (core_traits, print_display_temp_leak), custom-drop hooks /
