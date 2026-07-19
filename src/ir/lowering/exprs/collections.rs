@@ -424,7 +424,7 @@ pub(super) fn lower_dict_literal(
     // buffer with the slot. Without the Move-mode staging + MoveZero
     // discipline below, the temp's scope-exit drop and the dict's elem_drop
     // both free the same buffer — double-free. Mirrors lower_array_literal.
-    insert_pair(ctx, builder, dict_local, dict_type, &put_fn, first_key, first_val, key_type, val_type);
+    insert_pair(ctx, builder, dict_local, dict_type, &put_fn, first_key, first_val, key_type, val_type, &pairs[0].0, &pairs[0].1);
     for (key_expr, val_expr) in &pairs[1..] {
         let k = lower_expr(ctx, builder, key_expr);
         // Same value-override / clear as the first pair (see above) so a
@@ -432,7 +432,7 @@ pub(super) fn lower_dict_literal(
         ctx.func_state.expected_type = val_expected_override;
         let v = lower_expr(ctx, builder, val_expr);
         ctx.func_state.expected_type = saved_expected;
-        insert_pair(ctx, builder, dict_local, dict_type, &put_fn, k, v, key_type, val_type);
+        insert_pair(ctx, builder, dict_local, dict_type, &put_fn, k, v, key_type, val_type, key_expr, val_expr);
     }
 
     FunctionBuilder::copy(dict_local)
@@ -452,9 +452,11 @@ fn insert_pair(
     val_op: Operand,
     key_type: TypeId,
     val_type: TypeId,
+    key_expr: &Spanned<Expr>,
+    val_expr: &Spanned<Expr>,
 ) {
-    let key_arg = stage_dict_arg(ctx, builder, key_op, key_type);
-    let val_arg = stage_dict_arg(ctx, builder, val_op, val_type);
+    let key_arg = stage_dict_arg(ctx, builder, key_op, key_type, key_expr);
+    let val_arg = stage_dict_arg(ctx, builder, val_op, val_type, val_expr);
     let dict_ref = builder.borrow_mut(Place::local(dict_local), ctx.register_mut_ptr_type(dict_type));
     builder.call_extern(
         put_fn,
@@ -474,9 +476,28 @@ fn stage_dict_arg(
     builder: &mut FunctionBuilder,
     op: Operand,
     ty: TypeId,
+    arg_expr: &Spanned<Expr>,
 ) -> Operand {
     use crate::ir::instructions::AssignMode;
-    if !ctx.type_registry.is_resource_type(ty) {
+    // Defect A (dict-literal sibling): route through the SAME consuming-position
+    // helper the array literal / push / put / ctor use, so a LIVE named resource
+    // source is CLONED (not moved — `Dict[K,Bag] d = {"k": a}` then read `a.tag`
+    // was a "read after MoveZero" panic) and a dead temp is left to be moved.
+    // This also ADMITS refcount handles (Shared/Weak/Channel), which
+    // `is_resource_type` excludes — a live Shared value was shallow-aliased with
+    // no incref (the under-incref class). The by-value clone the helper emits for
+    // a refcount handle is the incref; put memcpys it into the slot, whose
+    // val_drop balances it.
+    let op = ctx.ensure_owned_at_consuming_arg(
+        builder, op, arg_expr, crate::ir::ImplicitCloneReason::ConsumingArg);
+    // Primitives pass straight through: the backend auto-takes the address of
+    // the by-value operand for the put's `void* value` param. Deep resources
+    // AND refcount handles need the fresh-slot + MoveZero staging below (so the
+    // source temp's scope-exit drop does not double-free / double-decref the
+    // slot the dict now owns).
+    let is_resource = ctx.type_registry.is_resource_type(ty);
+    let is_refcount = ctx.type_registry.is_refcount_clone_type(ty);
+    if !is_resource && !is_refcount {
         return op;
     }
     // Pick Move when source is owned (last-use by construction at this site
@@ -510,6 +531,17 @@ fn stage_dict_arg(
                 ctx.move_zero_and_mark(builder, place.local);
             }
         }
+    }
+    if is_refcount {
+        // A refcount handle is pointer-represented (`void*`), so the backend's
+        // auto-address-of for a by-value operand does NOT fire — it would pass
+        // the handle itself where `gorget_map_put` expects `&handle`, memcpying
+        // the control block's bytes into the slot (garbage → SIGSEGV at the
+        // slot's val_drop, and the incref never balances). Pass an EXPLICIT
+        // borrow of the staged slot, exactly as lower_array_literal borrows its
+        // element local before `gorget_array_push`.
+        let ref_local = builder.borrow(Place::local(elem_local), ctx.register_ptr_type(ty));
+        return FunctionBuilder::copy(ref_local);
     }
     FunctionBuilder::copy(elem_local)
 }
