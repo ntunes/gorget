@@ -60,7 +60,7 @@ int eval_int(Expr e, Dict[String, int] &int_env):
             return 0
 
 # Evaluate a meta const expression to a bool value.
-bool eval_bool(Expr e, Dict[String, bool] &bool_env):
+bool eval_bool(Expr e, Dict[String, bool] bool_env):
     match e:
         case EBoolLiteral(b):
             return b
@@ -91,7 +91,7 @@ String meta_type_to_name(Type ty):
 
 # Evaluate a call to a meta type function like sized_int(8).
 # Returns the resolved type name or "" on failure.
-String eval_type_func_call(String callee, Vector[SpannedExpr] &call_args,
+String eval_type_func_call(String callee, Vector[SpannedExpr] call_args,
                         Dict[String, int] &int_env):
     # Currently handles well-known type functions
     if callee == "sized_int" and call_args.len() == 1:
@@ -156,7 +156,7 @@ String meta_typename(Type ty):
 # Interprets a pure primitive-typed function body at compile time so
 # `meta int X = square(2)` resolves. Mirrors Rust eval_meta_fn_call.
 
-FunctionDef find_meta_fn(Module &m, String name, bool &found):
+FunctionDef find_meta_fn(Module m, String name, bool &found):
     int i = 0
     while i < m.items.len():
         match m.items.get(i).unwrap():
@@ -218,7 +218,7 @@ int eval_int_ex(Expr e, Dict[String, int] &env, Module &m, int depth, bool &ok):
                         return 64
                     # User meta-fn call
                     bool fnd = false
-                    FunctionDef fdef = find_meta_fn(&m, fn_name, &fnd)
+                    FunctionDef fdef = find_meta_fn(m, fn_name, &fnd)
                     if fnd:
                         Dict[String, int] callenv = Dict[String, int]()
                         int pi = 0
@@ -1242,7 +1242,7 @@ void expand_meta_types(Module &m, TypeTable &types, String source_dir):
                                 else:
                                     resolved_args.push(arg)
                             j = j + 1
-                        String result = eval_type_func_call(callee, &resolved_args, &int_consts)
+                        String result = eval_type_func_call(callee, resolved_args, &int_consts)
                         if result != "":
                             types.meta_aliases[mt_name] = result
                             meta_amap[mt_name] = result
