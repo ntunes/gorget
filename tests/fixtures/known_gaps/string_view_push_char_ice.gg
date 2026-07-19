@@ -1,0 +1,21 @@
+# KNOWN GAP (planner round 3, D4(i)) — ICE, not a miscompile. Calling an IN-PLACE
+# mutating String method (`push_char`) on a binding derived from a String VIEW
+# passed via `&` panics the C backend at src/backend/c_lir/emit_types.rs:850
+# (`GorgetString ABI received non-Str value` debug_assert) — the String-view
+# mutating-arg ABI does not carry the view through to a GorgetString param. This
+# is a SEPARATE bug from the 2D write-through class: the mutation never reaches a
+# live source (base is a String view; String views are read-only codepoint
+# views), so the INTENDED behavior once the ABI is fixed is a DEAD-TEMP ACCEPT —
+# the view materializes to an owned copy at the mutation boundary, push_char
+# mutates the copy, and `base` is UNCHANGED (`hello world`), consistent with the
+# `bump(&base.slice(...))` shape in cow_2d_method_result_dead_write.gg. (An
+# equally-defensible alternative once revisited: REJECT an in-place mutating
+# method on a view-derived binding; the dead-temp-accept output below matches the
+# 2D ruling's warning-track posture and is the value asserted here.)
+void grow(String &s):
+    s.push_char(0x21)
+
+void main():
+    String base = "hello world"
+    grow(&base.slice(0, 5))
+    print(base)

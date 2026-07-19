@@ -1380,6 +1380,21 @@ fn string_index_compound_assign_error() {
     );
 }
 
+// Planner round 3, the 2D close: the method-call-ROOTED sibling of
+// string_index_assign_error — `base.slice(0, 3)[0] = "H"` where the index root is
+// a String view-returning method call (the 2D untracked-alias-chain shape
+// `resolve_projection_root_local` bails on). The same E_StringIndexAssign reject
+// fires (it keys on the indexed object resolving to a String primitive, not on
+// the root being a bare name), blocking the one 2D shape that WOULD reach a live
+// source. SH-lane sibling: `self_host_driver_rejects_string_slice_index_assign`.
+#[test]
+fn string_slice_index_assign_error() {
+    check_gg_fails(
+        "string_slice_index_assign_error.gg",
+        "strings are not index-assignable",
+    );
+}
+
 // A module-level `const` is inlined at every use site, so its initializer must
 // fold to a compile-time constant. An enum/struct constructor cannot — the
 // lowering substituted a zero placeholder (a zeroed Option tag reads as `Some`,
@@ -9250,6 +9265,56 @@ fn cow_scope_bare_param_with() {
 #[test]
 fn cow_scope_bare_param_select() {
     run_gg("known_gaps/cow_scope_bare_param_select.gg", "3\n4");
+}
+
+// ── Planner round 3 — the 2D close (untracked-alias-chain: a mutation ROOTED at
+// a view-returning method call `resolve_projection_root_local` cannot name).
+// The scout REFUTED the filed "still writes through to a live source" premise:
+// every reachable shape is either a hard REJECT (the one live-source path,
+// string_slice_index_assign_error.gg) or a DEAD-TEMP write (the method result is
+// an owned/view temp no one reads). This fixture pins the dead-temp ACCEPT so a
+// future change can't silently promote it to a live-source write-through. Out of
+// the ggdef phase-0 subset (slice / container-method / struct-view shapes) →
+// known_gaps/, C+LLVM validated on Rust gg, not corpus-harvested. Design +
+// disposition matrix: docs/devbook/11-copy-on-write.md § the 2D untracked-alias
+// close.
+#[test]
+fn cow_2d_method_result_dead_write() {
+    run_gg("known_gaps/cow_2d_method_result_dead_write.gg", "hello\n10\n10");
+}
+
+// Planner round 3, D4(i): ICE, not a miscompile — an in-place mutating String
+// method (`push_char`) on a String-view-derived `&` binding panics the C backend
+// at emit_types.rs:850 (String-view mutating-arg ABI). A SEPARATE bug from the 2D
+// write-through class (no live source is reached). Intended (once the ABI is
+// fixed): dead-temp accept, base unchanged. See TODO 'D4(i) push_char-on-String-
+// view ICE'.
+#[test]
+#[ignore = "planner-r3 D4(i): push_char on a String-view `&` binding ICEs at \
+src/backend/c_lir/emit_types.rs:850 (GorgetString ABI received a non-Str value — \
+the String-view mutating-arg ABI). Un-ignore when the view materializes to an \
+owned copy at the mutating-method boundary (dead-temp accept: base unchanged). \
+Fixture in known_gaps/ so it stays OUT of the runtime-diff corpus. See TODO."]
+fn string_view_push_char_ice() {
+    run_gg("known_gaps/string_view_push_char_ice.gg", "hello world");
+}
+
+// Planner round 3, D4(ii): ICE, not a miscompile — a nested index-assign rooted
+// at `windows`/`chunks` (`v.windows(2)[0][0] = 777`) hits the pre-existing
+// Chain-C hard panic at assigns.rs:1100 ("index-assign found no setter"); the
+// compound sibling panics at assigns.rs:1809. windows/chunks return
+// Vector[Vector[int]] by eager materialization (owned), so the write targets a
+// dead temp. Intended (once the setter-dispatch gap is closed): dead-temp accept,
+// v unchanged (`1`). See TODO 'D4(ii) windows/chunks nested index-assign ICE'.
+#[test]
+#[ignore = "planner-r3 D4(ii): a nested index-assign rooted at windows/chunks \
+(`v.windows(2)[0][0] = 777`) ICEs at src/ir/lowering/stmts/assigns.rs:1100 \
+(\"index-assign found no setter\"); compound sibling at :1809. Un-ignore when the \
+nested index-assign lowers a setter over the owned windows/chunks temp (dead-temp \
+accept: v unchanged). Fixture in known_gaps/ so it stays OUT of the runtime-diff \
+corpus. See TODO."]
+fn vector_windows_nested_index_assign_ice() {
+    run_gg("known_gaps/vector_windows_nested_index_assign_ice.gg", "1");
 }
 
 #[test]
@@ -21179,6 +21244,69 @@ fn self_host_driver_rejects_string_index_compound_assign() {
          index-assign, `s[0] += \"x\"`). The SCompoundAssign arm of \
          self_host_typechecker/typecheck.gg's type_check_stmt was removed or \
          stopped calling check_string_index_assign. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    assert!(
+        stderr.contains("error[E_StringIndexAssign]")
+            && stderr.contains(
+                "strings are not index-assignable: `s[i]` is a read-only \
+                 codepoint view",
+            )
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but emitted no codespan diagnostic \
+         to stderr — the reject path must render, not crash silently.\n\
+         stderr:\n{stderr}",
+    );
+
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program — the gate must \
+         halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+// Planner round 3, the 2D close (SH lane): the method-call-ROOTED sibling of
+// self_host_driver_rejects_string_index_assign. The self-host must ALSO reject
+// `base.slice(0, 3)[0] = "H"` (E_StringIndexAssign), matching Rust gg
+// (`string_slice_index_assign_error()`). The self-host's check_string_index_assign
+// (self_host_typechecker/typecheck.gg:3472) infers the indexed object's type via
+// `infer_expr_type`, and infer.gg's EMethodCall arm resolves `slice` on a String
+// receiver to `string_id` (infer.gg:561-574), so the RTPrimitive("str"|"String")
+// guard fires on the method-rooted shape exactly as on a bare name — the reject
+// is UNIFORM across both lanes (Core #9). Same contract as the sibling guards:
+// non-zero exit, a source-grounded codespan diagnostic on stderr, NO C on stdout.
+// Parity-neutral (Rust-rejected → excluded from the parity denominator).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_string_slice_index_assign() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/string_slice_index_assign_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_string_slice_index_assign",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted a Rust-REJECTED program (a String index-assign \
+         rooted at a view-returning method call, `base.slice(0, 3)[0] = \"H\"`). \
+         The check_string_index_assign call in the SAssign arm of \
+         self_host_typechecker/typecheck.gg must fire whenever the indexed object \
+         infers to a String primitive — method-rooted or not. exit={:?}\nstderr:\n{stderr}",
         out.status.code(),
     );
 

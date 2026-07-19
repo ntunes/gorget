@@ -1,0 +1,44 @@
+# DEAD-TEMP ACCEPT (planner round 3, the 2D close). A mutation whose projection
+# root is an UNNAMEABLE view-returning method call lands on a DEAD TEMP (the
+# method's owned/view result that no one reads), NOT on any live source. The 2D
+# ruling: such writes are ACCEPTED today (source provably unchanged) and ruled
+# onto the WARNING track (the existing "writes to a private copy that is never
+# read — did you mean `&o`?" dead-write class; extending it to method-rooted dead
+# temps is a filed D2-rider follow-up). This pins the CURRENT accept behavior so
+# a future change can't silently turn a dead-temp write into a live-source
+# write-through (which WOULD be a corruption bug — see string_slice_index_assign_error.gg
+# for the one shape that DOES reach a live source, which hard-rejects instead).
+#
+# Placed in known_gaps/ (C+LLVM validated on Rust gg, NOT corpus-harvested):
+# slice / container-returning-method / struct-view shapes are outside the ggdef
+# phase-0 subset, so this stays out of the runtime-diff + adjudication corpus
+# until self-host parity for these shapes is confirmed (subset gap filed).
+from std.collections import Vector
+
+struct Holder:
+    Vector[int] items
+
+void bump(String &s):
+    s = s + "!"
+
+Vector[int] view_of(Holder h):
+    return h.items
+
+void main():
+    # Probe A: String slice VIEW passed via `&` to a mutating fn — the mutation
+    # lands on the dead view temp, base unchanged.
+    String base = "hello"
+    bump(&base.slice(0, 3))
+    print(base)                     # hello
+
+    # slice-on-Vector[int] returns an OWNED copy; the index write hits the dead
+    # copy, v unchanged.
+    Vector[int] v = [10, 20, 30]
+    v.slice(0, 2)[0] = 88
+    print(v[0])                     # 10
+
+    # A container-returning method result is an owned copy (ReturnFromBorrow
+    # boundary); the index write hits the dead result, x unchanged.
+    Holder x = Holder([10, 20])
+    view_of(x)[0] = 999
+    print(x.items[0])               # 10
