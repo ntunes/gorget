@@ -18625,6 +18625,26 @@ fn self_host_bootstrap() {
 //   → .clone_stats.array_clone
 const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 530_700_000;
 
+// STRING-CLONE ceiling — same workload, same tighten-only discipline as
+// the array ceiling above. string_clone (calls to
+// gorget_string_clone_to_owned, including runtime-internal per-element
+// clones via gorget_string_clone_inplace) was until now UNGUARDED: at
+// 444M it is nearly the array count's peer, and a string-clone bomb
+// would ride under the array ratchet, surfacing only as a blown stage
+// deadline (the 600s deadlines are indirect clone-bomb detectors —
+// owner 2026-07-19; this makes the string axis direct).
+//
+// Seeded at 8b46f355: 443,986,737 (measured on the release-driver
+// self-compile, 2026-07-19 benchmark scout — deterministic for a fixed
+// tree, like the array count). Ceiling = seed + ~1% headroom.
+//
+// Discipline: measured ≤ CEILING, always; deliberate increases re-pin
+// HERE with a citation; round closes re-seed downward. Regenerate: re-run
+// this test (the fresh number always prints), or
+//   scripts/clone_attribution.sh (the [clone-stats] line + a per-site
+//   ranked breakdown of where the clones come from).
+const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 448_400_000;
+
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_clone_ceiling() {
@@ -18681,13 +18701,27 @@ fn self_host_clone_ceiling() {
         .expect("no array_clone= field in the [clone-stats] line")
         .parse()
         .expect("array_clone value not a u64");
+    let measured_string: u64 = stats_line
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("string_clone="))
+        .expect("no string_clone= field in the [clone-stats] line")
+        .parse()
+        .expect("string_clone value not a u64");
 
-    // Always print the fresh number — round closes read it to re-seed downward.
+    // Always print the fresh numbers — round closes read them to re-seed
+    // downward. Both print BEFORE either asserts, so a tripped ratchet still
+    // shows both measurements.
     println!(
         "[clone-ceiling] array_clone={} ceiling={} headroom={}",
         measured,
         SELF_COMPILE_ARRAY_CLONE_CEILING,
         SELF_COMPILE_ARRAY_CLONE_CEILING.saturating_sub(measured),
+    );
+    println!(
+        "[clone-ceiling] string_clone={} ceiling={} headroom={}",
+        measured_string,
+        SELF_COMPILE_STRING_CLONE_CEILING,
+        SELF_COMPILE_STRING_CLONE_CEILING.saturating_sub(measured_string),
     );
     assert!(
         measured <= SELF_COMPILE_ARRAY_CLONE_CEILING,
@@ -18697,6 +18731,16 @@ fn self_host_clone_ceiling() {
          only if the increase is a justified semantic cost — re-pin the ceiling WITH a \
          citation in the comment above. Regenerate: \
          bash scripts/self_host_mem_baseline.sh --out /tmp/m.json → .clone_stats.array_clone"
+    );
+    assert!(
+        measured_string <= SELF_COMPILE_STRING_CLONE_CEILING,
+        "STRING-CLONE-PRESSURE RATCHET TRIPPED: self-compile string_clone={measured_string} \
+         exceeds the ceiling {SELF_COMPILE_STRING_CLONE_CEILING}. A change made the compiler \
+         clone more strings. Either fix the regression (likely an over-materialize or a lost \
+         move/borrow — scripts/clone_attribution.sh ranks the clone sites by reason), or — \
+         only if the increase is a justified semantic cost — re-pin the ceiling WITH a \
+         citation in the comment above. Regenerate: re-run this test (the fresh number \
+         always prints as [clone-ceiling] string_clone=…)."
     );
 }
 
