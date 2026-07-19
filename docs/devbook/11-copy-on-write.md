@@ -257,7 +257,13 @@ with a borrow — `VarDeclFromBorrow`/`ReturnFromBorrow` on read-only use, defen
 trending to ~0 (per-reason budgets, filed); rounds are judged against the
 hand-written ideal — not against the previous release, and not against the other
 lane (the lane ratio is a different measurement; both lanes can be above the bar
-together). **Scope (owner 2026-07-19): the charter binds BOTH production
+together). **First charter-meter reading (2026-07-19):** the Class-C
+read-only-`&`-formation charter-suspect class was retired at its SOURCE (the
+(ii)+(iii) burn-down documented in "The Class-C burn-down" below — read-only
+`&`-params → bare across the whole self-host), dropping the driver.gg
+self-compile's `array_clone` 527.4M → 12.6M (−97.6%) and `string_clone` 444.0M →
+29.1M (−93.4%) with byte-identical emitted C — the meter's first large move
+toward ~0 (the Rust lane; the SH lane exposed a separate lowerer gap, filed). **Scope (owner 2026-07-19): the charter binds BOTH production
 compilers — Rust gg and the self-host — and deliberately NOT ggdef.** ggdef
 eager-clones by design: it implements value semantics the simplest faithful way,
 which is what makes it the readable definition of WHAT a program means (the
@@ -616,24 +622,42 @@ value-element write-through), and the comprehension write facet above.
 
 #### The at-site conversion roadmap (planner Phase 3)
 
-Class A is the first of six at-site materialize CLASSES the Rust ratchet counts
+Class A is the first of the at-site materialize CLASSES the Rust ratchet counts
 (the 20 `.cow_before_mutation(` sites at round-3 start, mapped to classes A–F +
 the funnel's own call). Each future class conversion moves its count OUT of the
-text census INTO the plan (ratchet decreases). The order is a **deliberate
+text census INTO the plan (ratchet decreases). **Class C is NOT one of the
+conversion targets** — its "elide the `&`-formation" disposition was retired as
+wrong-layer (Core #8) and the class was instead resolved out-of-band by the
+read-only-`&`-param burn-down (see "The Class-C burn-down" below); its
+`&`-formation site remains a correct census entry with almost no callers left.
+So A/B/D/E/F are the live conversion targets. The order is a **deliberate
 choice** because two rankings **diverge** — the parent picks per round:
 
-- **VALUE order (heat-first): C → then E/D.** The self-compile heat is dominated
-  by CLASS C **`&`-formation** args, not A/E: one site — `coal_disjoint(&lb, …)`
-  at `lir_codegen.gg:6754` — is the single hottest at-site materialize, and it
-  plus `meet_states(&…)` / enumerate `&`-formations are almost all **defensive
-  `&`-formation clones whose callee provably doesn't write** (read-only checks).
-  That is the planner's biggest prize: elide the `&`-formation materialize when
-  liveness/signature proves the callee never writes (the DEEP-1 "borrow-elidable"
-  class). C is therefore the highest-VALUE conversion — but it needs the funnel's
-  **richer return** first (a `-> Option<LocalId>` did-materialize + new-root
-  variant, so E/C/D can re-resolve the rebound name + arm the transient-handle
-  untrack); a naive C/E/D conversion that drops the re-resolve/untrack would
-  reintroduce the round-33 heap-UAF class.
+- **VALUE order (heat-first): E/D.** The self-compile heat WAS dominated by what
+  round-3 called "CLASS C **`&`-formation** args" — one site, `coal_disjoint(&lb, …)`
+  at `lir_codegen.gg:6754`, was the single hottest at-site materialize, and it plus
+  `meet_states(&…)` / the enumerate `&`-formations were almost all **`&`-formation
+  clones whose callee only reads**. Round-3 framed that as "the planner's biggest
+  prize: elide the `&`-formation materialize when liveness/signature proves the
+  callee never writes (the DEEP-1 borrow-elidable class)" — and **that framing was
+  WRONG (Core #8)**. Those clones were *correct* consequences of the `&` SPELLING:
+  `&` genuinely declares write-through, and cloning to protect a shared/borrowed
+  source is the faithful lowering of that contract. The waste was that the
+  self-host spelled `&` on params that only **read**. So Class C is **not a
+  compiler at-site conversion at all**; it was fixed as **(ii) an idiomatic-code
+  burn-down** (every read-only `&`-param → bare across the whole self-host) driven
+  by **(iii) the un-suppressed `NeedlessMutableBorrow` diagnostic** — see "The
+  Class-C burn-down" below. Compiler-side elision **(i) was REJECTED**: it is a
+  layering antipattern (a downstream pass reconstructing "the callee doesn't
+  write" to override the declared `&` — devbook/24 litmus), it is the cornerstone
+  double-free risk (one missed indirect/aliased write elides a needed clone), and
+  it leaves the non-idiomatic `&` in place for a user to copy. The `&`-formation
+  materialize **site STAYS** in the census — it correctly clones when you form `&x`
+  on a *live* `x`; it simply has almost no callers left. E/D remain genuine at-site
+  conversions and need the funnel's **richer return** first (a `-> Option<LocalId>`
+  did-materialize + new-root variant, so E/D can re-resolve the rebound name + arm
+  the transient-handle untrack); a naive E/D conversion that drops the
+  re-resolve/untrack would reintroduce the round-33 heap-UAF class.
 - **RATCHET-CHEAP order (convergence-first): F → B.** CLASS F (for-loop
   alias-root sever, 2 sites, already pre-header-shaped → a `LoopPreHeader`
   directive) and CLASS B (whole-value reassign sever, 1 site, `AtSite`, stays
@@ -644,10 +668,56 @@ choice** because two rankings **diverge** — the parent picks per round:
 The heat figures above were measured by the round-3 scout (driver.gg self-compile,
 `--clones=stats`); **regenerate before acting on them** — a `--clones=stats` build
 prints the `[clone-stats]` per-reason rollup and the per-site heat. The durable
-structural findings (not the drifting counts): CLASS C `&`-formation is the
-elision prize concentrated at `lir_codegen.gg:6754`; A/F/B are fire-and-forget,
-E/C/D need the richer funnel return. Live status + the picked order stays in
-`TODO.md`.
+structural findings (not the drifting counts): the "CLASS C `&`-formation
+elision prize" framing was WRONG (Core #8) and was retired via the (ii)+(iii)
+read-only-`&`-param burn-down, not a compiler at-site conversion (see "The
+Class-C burn-down" below); A/F/B are fire-and-forget, E/D need the richer funnel
+return. Live status + the picked order stays in `TODO.md`.
+
+#### The Class-C burn-down (2026-07-19) — (ii) idiomatic code + (iii) the un-suppressed diagnostic
+
+Class C was **not** a compiler at-site conversion. Round-3 measured the heat but
+mis-framed the fix (Core #8): the `&`-formation clones (`coal_disjoint(&lb,…)`,
+`meet_states(&…)`, the `check_inst_for_*(inst, &func, …)` validators that
+deep-cloned a whole `GirFunction` once **per instruction**) were the *faithful*
+lowering of the `&` write-through contract on a shared source. The waste was that
+the self-host spelled `&` — the write-through sigil — on params that only **read**.
+The reference-grade fix is code + diagnostic, never compiler elision:
+
+- **(iii) retire the fossil.** `NeedlessMutableBorrow` ("parameter `&x` is never
+  mutated — consider removing `&`") already existed but was SUPPRESSED for
+  non-Copy (Resource) types by a stale carve-out whose rationale — "removing `&`
+  would move the value" — was FALSE under CoW-default-borrow (a bare Resource
+  param is a read-only borrow, `const T*`, no boundary clone; dropping the unused
+  `&` does not move). Deleting the suppression needed two prerequisite fixes: the
+  `&`-param mutation-marking block now consults the unified `receiver_is_mutating`
+  classification so BUILTIN mutators (`push`/`set`/…) mark their `&`-receiver
+  (otherwise genuinely-mutating params false-warn once un-suppressed), and a
+  `GG_NEEDLESSMUT_ALL` env bypass of the imported-module gate lets the diagnostic
+  see past imports for the corpus sweep (mirrors `GG_DEADWRITE_ALL`).
+- **(ii) burn it down.** Driven by the diagnostic, every read-only `&`-param
+  across the self-host → bare (declarations + call sites; the borrow checker's
+  `E_OwnershipMismatch` is the call-site net, and the read-only guarantee makes
+  each conversion sound by construction — a wrongly-bared write fails to *compile*
+  rather than miscompiling). It IS a fixpoint: baring a callee and de-`&`ing its
+  call site exposes the caller's param as newly read-only, so it iterates.
+- **(i) compiler mutation-inference + silent elide was REJECTED** — wrong layer
+  (a downstream pass overriding the declared `&`), the cornerstone double-free
+  soundness risk (one missed indirect write elides a needed clone), and it hides
+  the anti-pattern from the user instead of teaching the fix.
+
+Measured (driver.gg self-compile, `--clones=stats`, cmp-verified byte-identical
+emitted C at every batch): stage-0 (Rust-lowered) **array_clone 527.4M → 12.6M
+(−97.6%), string_clone 444.0M → 29.1M (−93.4%)** — the largest single
+charter-meter move to date. **⚠ The SH-lowered stage-1 lane ROSE** (array
+1,018M → 1,269M): the self-host lowerer clones a live bare Resource arg at call
+sites where Rust gg borrows — a pre-existing SH-CoW gap that was MASKED while the
+source spelled `&` (the `&`-formation cloned on both lanes) and is now the SH-CoW
+campaign's headline (filed HIGH; the `self_host_stage1_clone_ceiling` re-pinned up
+with citation, to re-tighten once the SH lowerer borrows bare args). The verdict
+is unchanged by the SH-lane cost: the self-host must read idiomatically (bare
+read-only params), and keeping `&` to protect the SH lowerer's current limitation
+is exactly the anti-pattern the showcase rule forbids.
 
 **Self-host file-zone serialization** (these tracks share lowerer files and
 must serialize or rebase often against each other and the enforcement wave):
