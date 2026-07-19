@@ -636,6 +636,17 @@ impl<'a> BorrowChecker<'a> {
     pub(super) fn is_buffer_owning_type(
         &self, type_id: crate::semantic::ids::TypeId,
     ) -> bool {
+        // Peel borrow-view `Ref` wrappers: a `Ref[Vector[T]]` (an element
+        // read out of a nested collection via the auto-borrow protocol,
+        // e.g. `blocks.get(i).unwrap()`) denotes the SAME owned buffer —
+        // a mutation or ingest through the view writes into it, so every
+        // consumer of this predicate (mutating-receiver classification,
+        // arena-escape ingest gates) must classify the view like the
+        // collection itself.
+        let mut type_id = type_id;
+        while let ResolvedType::Ref(inner) = self.types.get(type_id) {
+            type_id = *inner;
+        }
         let base_def = match self.types.get(type_id) {
             ResolvedType::Defined(d) | ResolvedType::Generic(d, _) => *d,
             _ => return false,
@@ -972,6 +983,12 @@ impl<'a> BorrowChecker<'a> {
             let def = self.scopes.get_def(def_id);
             if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
                 self.mut_param_mutated.insert(def_id);
+            }
+            // GG_REPORT_BARE_MUTATED oracle: a BARE param reaching a mutation
+            // channel is one the corrected lint would keep `&` — record it so
+            // the per-function report block can surface it.
+            if def.is_param && def.param_ownership == Some(Ownership::Borrow) {
+                self.bare_param_mutated.insert(def_id);
             }
         }
     }

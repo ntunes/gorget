@@ -435,6 +435,16 @@ pub(super) struct BorrowChecker<'a> {
     pub(super) mut_param_mutated: FxHashSet<DefId>,
     /// `&` parameters in the current function: (DefId, name, span).
     pub(super) current_mut_params: Vec<(DefId, String, Span)>,
+    /// BARE (Borrow) parameters of the current function: (DefId, name).
+    /// Diagnostic mirror of `current_mut_params` for the
+    /// `GG_REPORT_BARE_MUTATED` oracle (see `check_function`'s report block).
+    pub(super) current_bare_params: Vec<(DefId, String)>,
+    /// Bare (Borrow) params the mutation classifier marked as mutated —
+    /// same marking channels as `mut_param_mutated`, recorded for the
+    /// `GG_REPORT_BARE_MUTATED` oracle. A bare param on this list is one the
+    /// corrected NeedlessMutableBorrow lint would KEEP `&` if it were `&` —
+    /// i.e. baring it was (or would be) wrong.
+    pub(super) bare_param_mutated: FxHashSet<DefId>,
     /// Dead-write lint: bare (Borrow) resource params of the current
     /// function. DefId → tracking info. Reset per function.
     pub(super) deadwrite_params: FxHashMap<DefId, DeadWriteInfo>,
@@ -556,6 +566,8 @@ impl<'a> BorrowChecker<'a> {
             var_reassigned: FxHashSet::default(),
             mut_param_mutated: FxHashSet::default(),
             current_mut_params: Vec::new(),
+            current_bare_params: Vec::new(),
+            bare_param_mutated: FxHashSet::default(),
             deadwrite_params: FxHashMap::default(),
             deadwrite_clock: 0,
             deadwrite_loop_stack: Vec::new(),

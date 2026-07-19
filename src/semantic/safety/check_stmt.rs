@@ -1684,6 +1684,8 @@ impl<'a> BorrowChecker<'a> {
         self.var_reassigned.clear();
         self.mut_param_mutated.clear();
         self.current_mut_params.clear();
+        self.current_bare_params.clear();
+        self.bare_param_mutated.clear();
         self.deadwrite_params.clear();
         self.deadwrite_clock = 0;
         self.deadwrite_loop_stack.clear();
@@ -1733,6 +1735,11 @@ impl<'a> BorrowChecker<'a> {
                 // Track `&` (MutableBorrow) parameters for needless-mut detection
                 if param.node.ownership == Ownership::MutableBorrow {
                     self.current_mut_params.push((def_id, param.node.name.node.clone(), param.node.name.span));
+                }
+                // Track BARE (Borrow) parameters for the
+                // GG_REPORT_BARE_MUTATED oracle (mirror of the `&` tracking).
+                if param.node.ownership == Ownership::Borrow {
+                    self.current_bare_params.push((def_id, param.node.name.node.clone()));
                 }
 
                 // Dead-write lint: track bare (Borrow) resource params for
@@ -1894,6 +1901,29 @@ impl<'a> BorrowChecker<'a> {
                     },
                     span: *span,
                 });
+            }
+        }
+
+        // GG_REPORT_BARE_MUTATED oracle (diagnostic-only, env-gated, ALL
+        // modules — no imported-module gate): report each BARE param that the
+        // mutation classifier marked as mutated. Such a param is one the
+        // corrected NeedlessMutableBorrow lint would keep `&` — i.e. it was
+        // (or would be) wrongly bared. Consumed by re-`&` closure sweeps
+        // (the Class-C recovery); changes nothing for normal builds.
+        if std::env::var("GG_REPORT_BARE_MUTATED").is_ok() {
+            for (def_id, name) in &self.current_bare_params {
+                if self.bare_param_mutated.contains(def_id) {
+                    let tyname = self
+                        .scopes
+                        .get_def(*def_id)
+                        .type_id
+                        .map(|t| self.types.display(t))
+                        .unwrap_or_default();
+                    eprintln!(
+                        "[bare-mutated] fn={} param={} type={}",
+                        func.name.node, name, tyname,
+                    );
+                }
             }
         }
 

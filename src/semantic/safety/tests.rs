@@ -3969,6 +3969,10 @@ void main():
     // shapes must mark:
     //   * builtin mutator through the chain  (lir_push_inst shape)
     //   * field assignment through the chain (lir_set_term shape)
+    //   * builtin mutator DIRECTLY on the unwrapped view — no field hop
+    //     (the `emit` shape: `nested.get(i).unwrap().push(v)`; the receiver
+    //     types as `Ref[Vector[T]]`, so the buffer-owning classification
+    //     must peel the view)
     //   * `&`-pass-through to a chain mutator (the transitive caller)
     // The read-only chain control MUST still warn.
     #[test]
@@ -3980,6 +3984,7 @@ struct Block:
 
 struct Func:
     Vector[Block] blocks
+    Vector[Vector[int]] nested
 
 void push_inst(Func &f, int bb, int inst):
     f.blocks.get(bb).unwrap().insts.push(inst)
@@ -3987,15 +3992,21 @@ void push_inst(Func &f, int bb, int inst):
 void set_term(Func &f, int bb, int t):
     f.blocks.get(bb).unwrap().term = t
 
+void push_nested(Func &f, int bb, int v):
+    f.nested.get(bb).unwrap().push(v)
+
 void outer(Func &f):
     push_inst(&f, 0, 42)
 
 void main():
     Vector[int] e = []
     Vector[Block] blks = [Block(insts=e, term=0)]
-    Func fn = Func(blocks=blks)
+    Vector[int] e2 = []
+    Vector[Vector[int]] nst = [e2]
+    Func fn = Func(blocks=blks, nested=nst)
     push_inst(&fn, 0, 1)
     set_term(&fn, 0, 2)
+    push_nested(&fn, 0, 3)
     outer(&fn)
     print(f\"{fn.blocks.get(0).unwrap().insts.len()}\")
 ";
