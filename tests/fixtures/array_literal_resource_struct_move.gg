@@ -1,0 +1,15 @@
+# Defect A (consuming-position clone-if-live): a resource-containing struct in an
+# array literal whose source is read AFTER the literal must be CLONED at the
+# boundary, not moved (moving a live source tripped the GIR "read after MoveZero"
+# validator -> compiler PANIC). General to any resource struct, not Shared-specific.
+# ggdef subset: IN (plain structs + Vector, no refcount handles).
+struct Bag:
+    Vector[int] items
+    int tag
+
+void main():
+    Bag a = Bag([1, 2, 3], 10)
+    Vector[Bag] vc = [a]
+    print(a.tag)
+    print(vc.len())
+    print("done")

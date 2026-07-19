@@ -1,0 +1,15 @@
+# Defect B (refcount under-incref): a Shared handle passed to a ctor field-init
+# whose source is read AFTER must CLONE (by-value incref), not shallow-alias.
+# Pre-fix: MOVE fired -> strong_count 1 then freed-memory garbage (a silent UAF
+# the GIR validator does not catch). Intended: clone at the boundary -> 2.
+# ggdef subset: OUT (Shared refcount handle is outside the ggdef subset).
+struct Cell:
+    Shared[int] storage
+    int tag
+
+void main():
+    Shared[int] s = Shared[int](42)
+    Cell a = Cell(s, 10)
+    print(a.tag)
+    print(s.strong_count())
+    print("done")

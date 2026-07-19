@@ -1,0 +1,13 @@
+# Channel consuming position: a Channel handle in a ctor field-init retains
+# (by-value incref). Channel is DropStrategy::None, so an unbalanced retain
+# would surface as a LEAK; verified leak-balanced. ggdef subset: OUT.
+struct Pipe:
+    Channel[int] ch
+
+void main():
+    Channel[int] c = Channel[int](4)
+    Pipe p = Pipe(c)
+    c.send(7)
+    int v = p.ch.recv()
+    print(v)
+    print("done")

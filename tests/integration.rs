@@ -9356,14 +9356,62 @@ fn shared_struct_field_clone_regression() {
 }
 
 #[test]
-#[ignore = "Consuming-position move fires on a Shared-containing struct despite a \
-LATER READ of the source: `[a]` with `a.tag` read after trips the GIR validator \
-(read after MoveZero -> compiler PANIC); the `Cell(s, 10)`-with-s-read-later \
-sibling is SILENT (moves s; strong_count 1-then-garbage UAF). Pre-existing at \
-caf63817. Intended = clone at the boundary (source live): 10,3,done. See TODO \
-'Shared-struct consuming-position move despite later read'."]
 fn shared_struct_vec_literal_move_panic() {
+    // FIXED: the consuming-position boundary now CLONES a live Shared-containing
+    // struct (was a MOVE -> GIR "read after MoveZero" panic). Stays in known_gaps/
+    // (out of the runtime-diff corpus) only because `Shared[Vector[int]]` triggers
+    // the SEPARATE gorget_shared_drop inner-resource leak (filed TODO HIGH); the
+    // double-free/panic this fixture pins is fixed. Rust-lane run_gg confirms it.
     run_gg("known_gaps/shared_struct_vec_literal_move_panic.gg", "10\n3\ndone");
+}
+
+// ── Defect A (consuming-position clone-if-live) — non-refcount, top-level corpus ──
+#[test]
+fn array_literal_resource_struct_move() {
+    // A resource-containing struct in an array literal, source read AFTER: must
+    // CLONE (was a GIR "read after MoveZero" compiler panic). General class.
+    // (`[a]` is length 1.) Self-host lane agrees (its wire-liveness pass
+    // handles deep-resource clone-if-live).
+    run_gg("array_literal_resource_struct_move.gg", "10\n1\ndone");
+}
+
+#[test]
+fn dict_literal_resource_value_move() {
+    // Dict-literal sibling of the above (resource VALUE, source read after).
+    run_gg("dict_literal_resource_value_move.gg", "10\n1\ndone");
+}
+
+// ── Defect B (refcount handle consuming positions) — Shared/Weak/Channel ──
+// In known_gaps/ (out of the runtime-diff corpus): Shared/Weak/Channel are
+// OUTSIDE the ggdef subset, and `Shared[Vector[T]]` shapes carry the separate
+// gorget_shared_drop inner-leak (filed). Rust-lane run_gg pins the fix.
+#[test]
+fn shared_ctor_move_clone() {
+    // Silent-UAF sibling: Cell(s, 10) with s read after -> clone (strong_count 2),
+    // was a MOVE -> strong_count 1 then freed-memory garbage (UAF).
+    run_gg("known_gaps/shared_ctor_move_clone.gg", "10\n2\ndone");
+}
+
+#[test]
+fn shared_array_literal_live() {
+    run_gg("known_gaps/shared_array_literal_live.gg", "1\n2\ndone");
+}
+
+#[test]
+fn shared_array_literal_dead() {
+    // Also pins the elem_drop fn-pointer wrapper-emission fix (undefined-symbol
+    // link fail when {T}__drop is referenced only as the array's elem_drop slot).
+    run_gg("known_gaps/shared_array_literal_dead.gg", "1\ndone");
+}
+
+#[test]
+fn weak_ctor_consume_clone() {
+    run_gg("known_gaps/weak_ctor_consume_clone.gg", "5\ndone");
+}
+
+#[test]
+fn channel_ctor_consume_retain() {
+    run_gg("known_gaps/channel_ctor_consume_retain.gg", "7\ndone");
 }
 
 #[test]

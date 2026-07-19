@@ -1,0 +1,8 @@
+# Defect A: a DEAD Shared temp in an array literal MOVES into the element (no
+# incref). Also the by-value {T}__drop wrapper is referenced ONLY as the array's
+# elem_drop fn-pointer -- it must be emitted (was an undefined-symbol link fail).
+# ggdef subset: OUT (refcount handle).
+void main():
+    Vector[Shared[int]] v = [Shared[int](42)]
+    print(v.len())
+    print("done")

@@ -1,0 +1,13 @@
+# Weak consuming position: a LIVE Weak handle in a ctor field-init must CLONE
+# (weak-count incref), not shallow-alias. Was a UAF pre-fix; the consuming
+# position is now balanced. ggdef subset: OUT (refcount handle).
+struct Holder:
+    Weak[int] w
+    int tag
+
+void main():
+    Shared[int] s = Shared[int](42)
+    Weak[int] wk = s.downgrade()
+    Holder h = Holder(wk, 5)
+    print(h.tag)
+    print("done")

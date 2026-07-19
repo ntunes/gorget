@@ -1,0 +1,13 @@
+# Defect A dict-literal sibling: a resource-containing struct VALUE in a dict
+# literal whose source is read AFTER must be CLONED, not moved (the same
+# "read after MoveZero" panic class as the array literal). ggdef subset: IN.
+struct Bag:
+    Vector[int] items
+    int tag
+
+void main():
+    Bag a = Bag([1, 2, 3], 10)
+    Dict[String, Bag] d = {"k": a}
+    print(a.tag)
+    print(d.len())
+    print("done")
