@@ -2,6 +2,16 @@
 # the last Shared is dropped, or does it read freed memory? Also exercises
 # Option[Shared[T]] drop codegen (audit originally found a void**/GorgetShared**
 # pointer mismatch here).
+#
+# Access pattern note (2026-07-19): the Some-arm reads the inner Big via
+# `alive.get()`, NOT `alive.data`. Direct field access through a Shared is
+# rejected (E_NoFieldFound) — Shared is a NonDerefContainer whose design access
+# is `.get()` (owner ruling, RV-A `afd5c327`); a wrapper `.field` shorthand was
+# never intended and used to silently read garbage. The read still dereferences
+# the (potentially freed) allocation, so the UAF defeat is exercised unchanged:
+# on the CORRECT build `upgrade()` returns None (refcount hit 0) and we print
+# -1; only a regressed upgrade that hands out a Shared into freed memory would
+# reach the Some arm, and `alive.get()` would then trip the sanitizer.
 
 struct Big:
     Vector[int] data
@@ -15,5 +25,5 @@ void main():
     drop_all(!s)
     Option[Shared[Big]] upgraded = w.upgrade()
     match upgraded:
-        case Some(alive): print(alive.data.get(0).unwrap())
+        case Some(alive): print(alive.get().data.get(0).unwrap())
         case None(): print(-1)
