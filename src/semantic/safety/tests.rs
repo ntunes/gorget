@@ -3700,9 +3700,13 @@ void main():
     }
 
     #[test]
-    fn needless_mut_param_move_type_no_warn() {
-        // Non-Copy (Move) types: `&` is a borrow, not just mutability.
-        // Removing `&` would move the value, breaking the caller.
+    fn needless_mut_param_resource_read_only_warns() {
+        // Un-suppressed (Class-C): a Resource `&`-param that is only READ is
+        // needless. Under CoW-default-borrow a bare Resource param is a
+        // read-only borrow, so dropping the `&` does NOT move the value — it
+        // makes the intent explicit and elides the write-through clone. (This
+        // used to be `needless_mut_param_move_type_no_warn`, whose "removing
+        // `&` would move the value" rationale was a pre-CoW fossil.)
         let source = "\
 void process(Vector[int] &items):
     for item in items:
@@ -3714,11 +3718,11 @@ void main():
 ";
         let warnings = check_warnings(source);
         assert!(
-            !has_warning(&warnings, |k| matches!(k,
+            has_warning(&warnings, |k| matches!(k,
                 crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
                 if name == "items"
             )),
-            "expected no NeedlessMutableBorrow for Move-type items, got: {:?}", warnings
+            "expected NeedlessMutableBorrow for read-only Resource items, got: {:?}", warnings
         );
     }
 
@@ -3811,6 +3815,149 @@ void main():
                 if name == "_items"
             )),
             "expected no NeedlessMutableBorrow for _items, got: {:?}", warnings
+        );
+    }
+
+    // ─── Class-C marking-hole probe matrix (a–g) + positive control ──
+    // Every `&`-param that IS genuinely mutated must be marked (no false
+    // NeedlessMutableBorrow), across every mutation channel; the read-only
+    // control must warn. These are the acceptance contract for D1-pre-A (the
+    // marking block consulting the unified `receiver_is_mutating`
+    // classification, closing the builtin-mutator hole).
+
+    // (a) direct field store, (b) index store, (d) pass-through `&`-arg,
+    // (e) `&self` user method on a `&`-param — plus the read-only positive
+    // control that MUST warn. One source exercises the whole surface.
+    #[test]
+    fn needless_mut_matrix_field_index_passthrough_selfmethod() {
+        let source = "\
+struct Bag:
+    Vector[int] items
+
+equip Bag:
+    void grow(&self):
+        self.items.push(7)
+
+void a_field(Bag &b):
+    b.items = [1, 2]
+
+void b_index(Vector[int] &v):
+    v[0] = 5
+
+void d_inner(Vector[int] &v):
+    v[0] = 9
+
+void d_outer(Vector[int] &v):
+    d_inner(&v)
+
+void e_selfm(Bag &b):
+    b.grow()
+
+void main():
+    Bag b = Bag(items=[0])
+    a_field(&b)
+    e_selfm(&b)
+    Vector[int] v = [1]
+    b_index(&v)
+    d_outer(&v)
+    print(f\"{v.len()} {b.items.len()}\")
+";
+        let warnings = check_warnings(source);
+        // b (a_field / e_selfm) and v (b_index / d_outer) are all mutated —
+        // none may warn.
+        for name in ["b", "v"] {
+            assert!(
+                !has_warning(&warnings, |k| matches!(k,
+                    crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name: n }
+                    if n == name)),
+                "unexpected NeedlessMutableBorrow for mutating param {name}, got: {:?}", warnings
+            );
+        }
+        // The read-only positive control MUST warn — asserted with a distinct
+        // param name so it can't collide with the mutating params above.
+        let control = "\
+void only_reads(Vector[int] &ro):
+    print(f\"{ro.len()}\")
+
+void main():
+    Vector[int] v = [1]
+    only_reads(&v)
+";
+        let cw = check_warnings(control);
+        assert!(
+            has_warning(&cw, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "ro")),
+            "expected NeedlessMutableBorrow for read-only control ro, got: {:?}", cw
+        );
+    }
+
+    // (c1) `&`-param mutated ONLY via a BUILTIN mutating method — the hole the
+    // D1-pre-A fix closes. Must NOT warn.
+    #[test]
+    fn needless_mut_builtin_mutator_no_warn() {
+        let source = "\
+void f(Vector[int] &v):
+    v.push(1)
+
+void main():
+    Vector[int] v = []
+    f(&v)
+    print(f\"{v.len()}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "v")),
+            "expected no NeedlessMutableBorrow for builtin-mutated v, got: {:?}", warnings
+        );
+    }
+
+    // (f) `&`-param mutated via a closure that captures it. Must NOT warn.
+    #[test]
+    fn needless_mut_closure_capture_no_warn() {
+        let source = "\
+void f(Vector[int] &v):
+    void() g = (): v.push(1)
+    g()
+
+void main():
+    Vector[int] v = []
+    f(&v)
+    print(f\"{v.len()}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "v")),
+            "expected no NeedlessMutableBorrow for closure-captured v, got: {:?}", warnings
+        );
+    }
+
+    // (g) `&self` mutated via a BUILTIN on one of its fields. Must NOT warn.
+    #[test]
+    fn needless_mut_self_field_builtin_no_warn() {
+        let source = "\
+struct Bag:
+    Vector[int] items
+
+equip Bag:
+    void grow(&self):
+        self.items.push(7)
+
+void main():
+    Bag b = Bag(items=[0])
+    b.grow()
+    print(f\"{b.items.len()}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "self")),
+            "expected no NeedlessMutableBorrow for &self mutated via field builtin, got: {:?}", warnings
         );
     }
 

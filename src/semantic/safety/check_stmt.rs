@@ -1869,20 +1869,25 @@ impl<'a> BorrowChecker<'a> {
             }
         }
 
-        // Emit needless mutable borrow warnings (skip in imported modules)
-        if self.imported_module_depth == 0 {
+        // Emit needless mutable borrow warnings. Skipped in imported modules
+        // like the other per-function warnings; GG_NEEDLESSMUT_ALL=1 is a
+        // diagnostic-only bypass of that gate, kept for corpus sweeps (measuring
+        // the lint over merged stdlib/self-host modules — the Class-C read-only
+        // `&`-param burn-down runs under it). It changes nothing for normal
+        // builds. Mirrors GG_DEADWRITE_ALL below.
+        let needlessmut_all = std::env::var("GG_NEEDLESSMUT_ALL").is_ok();
+        if self.imported_module_depth == 0 || needlessmut_all {
             let mut_params = self.current_mut_params.clone();
             for (def_id, name, span) in &mut_params {
                 if name.starts_with('_') { continue; }
                 if self.mut_param_mutated.contains(def_id) { continue; }
-                // Skip non-Copy (Move) types: `&` on a Move type is a borrow,
-                // removing it would move the value and break the caller.
-                let def = self.scopes.get_def(*def_id);
-                if let Some(type_id) = def.type_id {
-                    if !is_copy_type(type_id, self.types, self.scopes) {
-                        continue;
-                    }
-                }
+                // A `&`-param that is never mutated is needless for EVERY type,
+                // not only Copy types: under CoW-default-borrow a bare Resource
+                // param is a read-only borrow (`const T*`, no boundary clone),
+                // so dropping the unused `&` does NOT move the value — it makes
+                // the read-only intent explicit and elides the write-through
+                // clone the `&` would otherwise force. (The former non-Copy
+                // suppression predated CoW-default-borrow and was a fossil.)
                 self.stale_warnings.push(crate::semantic::errors::SemanticWarning {
                     kind: crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow {
                         name: name.clone(),

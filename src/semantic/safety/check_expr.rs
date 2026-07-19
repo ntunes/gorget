@@ -430,18 +430,20 @@ impl<'a> BorrowChecker<'a> {
                 self.deadwrite_write_root = deadwrite_prev_root;
                 self.check_call_aliasing(args);
 
-                // Track `&` param mutation via &self method call
-                if let Some(def_id) = self.find_root_def_id(receiver) {
-                    let def = self.scopes.get_def(def_id);
-                    if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
-                        if let Some(&method_def_id) = self.method_resolutions.get(&method.span.start) {
-                            if let Some(info) = self.function_info.get(&method_def_id) {
-                                if info.param_ownerships.first() == Some(&Ownership::MutableBorrow) {
-                                    self.mut_param_mutated.insert(def_id);
-                                }
-                            }
-                        }
-                    }
+                // Track `&` param mutation via a mutating method call. Consult
+                // the unified `receiver_is_mutating` classification computed
+                // above (builtin mutators push/set/insert/… OR a user
+                // `&self`-mutating method) — ONE source of truth for "does this
+                // call write through its receiver". The prior code re-derived
+                // only the user-method half, leaving BUILTIN mutators unmarked;
+                // once NeedlessMutableBorrow is un-suppressed for Resource
+                // types that produced false positives on genuinely-mutating
+                // `&`-params (`void f(Vector[int] &v): v.push(1)`, `&self` +
+                // `self.items.push(7)`, closure-capture mutation). Marking the
+                // root when the classification says the receiver is mutated is
+                // the layering-clean fix.
+                if receiver_is_mutating {
+                    self.mark_mut_param_if_applicable(receiver);
                 }
 
                 // !self consuming methods: mark receiver as moved.
