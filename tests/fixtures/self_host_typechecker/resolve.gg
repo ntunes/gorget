@@ -167,7 +167,7 @@ bool is_compiler_intrinsic_name(String name):
 # Pass 1: collect_top_level
 # ═══════════════════════════════════════════════════════════
 
-ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
+ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable types):
     ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false, false, false, false, false, -1)
 
     # Register built-in core traits
@@ -245,12 +245,12 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
 
     # Collect all top-level items
     for item in module.items:
-        collect_item(item, &scopes, &types)
+        collect_item(item, &scopes, types)
 
     return ctx
 
 
-void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
+void collect_item(Item item, ScopeTable &scopes, TypeTable types):
     match item:
         case IFunction(f):
             scopes.define(f.name, DkFunction(), Span(0, 0))
@@ -681,7 +681,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             scopes.pop_scope()
 
         case SItem(item):
-            collect_item(item, &scopes, &types)
+            collect_item(item, &scopes, types)
             resolve_item_body(item, &scopes, &types, &ctx)
 
 
@@ -1215,7 +1215,7 @@ ResolveContext resolve_module(Module module, ScopeTable &scopes, TypeTable &type
 # `imported_bare_names` allow-set from `load_imports` so transitively-merged
 # library bodies calling bare import names don't false-positive as undefined.
 ResolveContext resolve_module_with_imports(Module module, ScopeTable &scopes, TypeTable &types, Dict[String, bool] import_allow):
-    ResolveContext ctx = collect_top_level(module, &scopes, &types)
+    ResolveContext ctx = collect_top_level(module, &scopes, types)
     ctx.import_allow = import_allow
     resolve_bodies(module, &scopes, &types, &ctx)
     return ctx

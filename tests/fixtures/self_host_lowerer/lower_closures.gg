@@ -61,7 +61,7 @@ from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dic
 void fill_fault_return_block(LowerCtx &ctx, GirModule &gmod, int return_bb, int slot_lid, int ret_type, String variant, String panic_msg):
     # Tag = `Fault.<variant>` ordinal + 1 (0 reserved for "no fault"). Typed
     # lookup off the enum registry — no magic `1`/`2`/`3` (devbook/24 rule 2).
-    int fault_ord = enum_variant_index(&gmod, "Fault", variant)
+    int fault_ord = enum_variant_index(gmod, "Fault", variant)
     int fault_tag = fault_ord + 1
     if fault_ord < 0:
         # Fault enum somehow unregistered — fall back to the Phase-1 ordering
@@ -71,26 +71,26 @@ void fill_fault_return_block(LowerCtx &ctx, GirModule &gmod, int return_bb, int 
     switch_to(&ctx, return_bb)
     # NULL-test the slot pointer: `flag = (__fault == NULL)`.
     int null_flag = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(null_flag, CMP_EQ, I64_TYPE, OpCopy(slot_lid), OpConstNull()))
+    emit(ctx, GICmp(null_flag, CMP_EQ, I64_TYPE, OpCopy(slot_lid), OpConstNull()))
     int write_bb = new_block(&ctx)
     int panic_bb = new_block(&ctx)
     set_terminator(&ctx, GTBranch(OpCopy(null_flag), panic_bb, write_bb))
 
     # Non-NULL: write the typed tag through the slot, drop frame locals, return.
     switch_to(&ctx, write_bb)
-    emit(&ctx, GIDerefStore(slot_lid, OpConstI32(fault_tag), I32_TYPE))
+    emit(ctx, GIDerefStore(slot_lid, OpConstI32(fault_tag), I32_TYPE))
     # Early-exit drops for the whole function scope (excluding the return place).
-    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
     # Return the zero-inited sentinel `_0` (branch-before-read ⇒ never consumed
     # on the fault path). Void fns return unit.
     if ret_type == UNIT_TYPE:
         set_terminator(&ctx, GTReturn(OpConstUnit()))
     else:
-        set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+        set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
 
     # NULL slot: a non-catching caller — preserve panic-by-default.
     switch_to(&ctx, panic_bb)
-    emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(panic_msg)]))
+    emit(ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(panic_msg)]))
     # gorget_panic is noreturn; the self-host Terminator has no Unreachable, so
     # jump to a fresh dead block (mirrors the `panic` builtin idiom in
     # lower_call). A return terminator on a noreturn-preceded block is fine.
@@ -100,7 +100,7 @@ void fill_fault_return_block(LowerCtx &ctx, GirModule &gmod, int return_bb, int 
     if ret_type == UNIT_TYPE:
         set_terminator(&ctx, GTReturn(OpConstUnit()))
     else:
-        set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+        set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
 
 GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     bool is_main = fdef.name == "main"
@@ -224,7 +224,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     int fault_overflow_bb = -1
     int fault_divzero_bb = -1
     int fault_bounds_bb = -1
-    if participates_in_fault(&gmod, fdef.name):
+    if participates_in_fault(gmod, fdef.name):
         # Trailing fault-slot param: `&out`-shaped `GtMutPtr(i32)`. The slot
         # holds the raw `int32_t*` the caller passed (`&slot`); a body NULL-test
         # + GIDerefStore writes the tag through it. Registered as a PLAIN
@@ -273,8 +273,8 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             case GTNone():
                 # Emit drops for the function scope FIRST (exclude _0
                 # since the return value is being moved out).
-                emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
-                emit(&ctx, GIAssign(0, OpConstI32(0)))
+                emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
+                emit(ctx, GIAssign(0, OpConstI32(0)))
                 set_terminator(&ctx, GTReturn(OpConstI32(0)))
             else:
                 pass
@@ -292,8 +292,8 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             Terminator nm_last_term = ctx.block_terms.get(ctx.current_block).unwrap()
             match nm_last_term:
                 case GTNone():
-                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
-                    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+                    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
+                    set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
                 else:
                     pass
 
@@ -691,7 +691,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
         # the cast pointer.
         if needs_concrete_self_alias:
             int concrete_self_lid = add_local(&ctx, concrete_self_tid_saved, Some("self"))
-            emit(&ctx, GIAssign(concrete_self_lid, OpCopy(self_lid_saved)))
+            emit(ctx, GIAssign(concrete_self_lid, OpCopy(self_lid_saved)))
             nl_put(&ctx, "self", concrete_self_lid)
 
         # CoW resource-bind forward-scan (substrate ii) — same as the
@@ -1016,18 +1016,18 @@ bool expr_has_it(SpannedExpr sexpr):
 
 # True iff `name` resolves to a module-level entity (any category the
 # EIdentifier arm of `lower_expr` handles before the [bug] fallback).
-bool closure_ident_module_resolvable(String name, GirModule &gmod):
+bool closure_ident_module_resolvable(String name, GirModule gmod):
     if gmod.const_decls.contains(name):
         return true
     if gmod.float_const_decls.contains(name):
         return true
     if gmod.fn_sigs.contains(name):
         return true
-    if static_contains(&gmod, name):
+    if static_contains(gmod, name):
         return true
     if gmod.none_decls.contains(name):
         return true
-    if enum_variant_parent(name, &gmod) != "":
+    if enum_variant_parent(name, gmod) != "":
         return true
     return false
 
@@ -1061,7 +1061,7 @@ bool closure_expr_has_capture(SpannedExpr sexpr, Dict[String, bool] in_scope, Gi
         case EIdentifier(name):
             if in_scope.contains(name):
                 return false
-            if closure_ident_module_resolvable(name, &gmod):
+            if closure_ident_module_resolvable(name, gmod):
                 return false
             return true
         case EBinaryOp(lhs, _, rhs):
@@ -1377,25 +1377,25 @@ bool implicit_closure_genuine_capture(LowerCtx &ctx, SpannedExpr body, GirModule
 # (`print`, a top-level helper, an enum-variant ctor) — calling it captures
 # nothing. A callee that IS an outer local (a captured closure value, `f()`)
 # returns false here so the walk records it as a genuine capture.
-bool cc_callee_is_free_fn(LowerCtx &ctx, SpannedExpr callee, Dict[String, bool] in_scope, GirModule &gmod):
+bool cc_callee_is_free_fn(LowerCtx ctx, SpannedExpr callee, Dict[String, bool] in_scope, GirModule gmod):
     match callee.expr:
         case EIdentifier(name):
             if in_scope.contains(name):
                 return false
-            if nl_contains(&ctx, name):
+            if nl_contains(ctx, name):
                 return false
             return true
         else:
             return false
 
 # Classify a single capture-shaped free var (the EIdentifier leaf).
-void cc_classify_ident(LowerCtx &ctx, String name, GirModule &gmod, CaptureCollector &cc):
-    if nl_contains(&ctx, name):
+void cc_classify_ident(LowerCtx ctx, String name, GirModule gmod, CaptureCollector &cc):
+    if nl_contains(ctx, name):
         # A genuine outer LOCAL → record it (deduped). Walk order is
         # the single source of truth.
         if not cc.seen.contains(name):
             cc.seen.put(name.clone(), true)
-            int cap_lid = nl_get(&ctx, name)
+            int cap_lid = nl_get(ctx, name)
             int cap_tid = ctx.locals.get(cap_lid).unwrap().type_id
             cc.caps.push(ClosureCapture(name.clone(), cap_tid, cap_lid, CAP_BY_VALUE))
     else:
@@ -1409,9 +1409,9 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
         case EIdentifier(name):
             if in_scope.contains(name):
                 return
-            if closure_ident_module_resolvable(name, &gmod):
+            if closure_ident_module_resolvable(name, gmod):
                 return
-            cc_classify_ident(&ctx, name, &gmod, &cc)
+            cc_classify_ident(ctx, name, gmod, &cc)
         case EBinaryOp(lhs, _, rhs):
             cc_collect_expr(&ctx, *lhs, in_scope, &gmod, &cc)
             cc_collect_expr(&ctx, *rhs, in_scope, &gmod, &cc)
@@ -1427,7 +1427,7 @@ void cc_collect_expr(LowerCtx &ctx, SpannedExpr sexpr, Dict[String, bool] in_sco
             # captured closure value, `f()`); route THAT through the walk so
             # it's recorded. Mirrors Rust `collect_free_vars`, which resolves
             # call targets in the function namespace and never captures them.
-            if not cc_callee_is_free_fn(&ctx, *callee, in_scope, &gmod):
+            if not cc_callee_is_free_fn(ctx, *callee, in_scope, gmod):
                 cc_collect_expr(&ctx, *callee, in_scope, &gmod, &cc)
             for a in args:
                 cc_collect_expr(&ctx, a.value, in_scope, &gmod, &cc)
@@ -1925,7 +1925,7 @@ int record_implicit_it_closure(LowerCtx &ctx, SpannedExpr ic_body, GirModule &gm
     int ic_cdst = add_local(&ctx, ic_gc_tid, None)
     Vector[Operand] ic_make_args = []
     gmod.fn_sigs.put(ic_make_fn, ic_gc_tid)
-    emit(&ctx, GICallExtern(ic_cdst, ic_make_fn, ic_make_args))
+    emit(ctx, GICallExtern(ic_cdst, ic_make_fn, ic_make_args))
     ClosureSig ic_sig = compute_implicit_closure_sig(ic_cid, ic_body, &gmod, ctx.expected_type)
     # Lowerable guard (§4d): lower IFF the body neither GENUINELY captures nor
     # nests a closure. The capture check routes through the COLLECTOR (the same
@@ -2064,7 +2064,7 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
             set_field_borrow(&cctx, fdst, 1, ci)
         else:
             fdst = add_local(&cctx, cap.type_id, Some(cap.name.clone()))
-        emit(&cctx, GIFieldLoad(fdst, 1, ci))
+        emit(cctx, GIFieldLoad(fdst, 1, ci))
         nl_put(&cctx, cap.name, fdst)
         ci = ci + 1
 
@@ -2093,7 +2093,7 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     # `lower_function` finalizes a normal function's return value.
     int tail = lower_block_expr(&cctx, body_stmts, &gmod)
     cctx.expected_type = prev_cbody_et
-    if not block_terminated(&cctx):
+    if not block_terminated(cctx):
         # Mirror SReturn's Some(val) arm (lower.gg:7895-7912): emit the
         # function-scope GIDropIfAlive for every body temp BEFORE setting the
         # GTReturn terminator. The closure body ALWAYS sets a terminator here,
@@ -2108,18 +2108,18 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
         # early-exit drops (Some(excl)) so the moved-out value is dropped once
         # by the receiver, not double-freed here — identical to SReturn's a-6
         # move-out handling.
-        Operand cret_op = op_consume(&cctx, &gmod, tail, CkReturn())
+        Operand cret_op = op_consume(cctx, &gmod, tail, CkReturn())
         int cexcl = 0
         match cret_op:
             case OpMove(csrc):
                 cexcl = csrc
             else:
                 pass
-        emit(&cctx, GIAssign(0, cret_op))
+        emit(cctx, GIAssign(0, cret_op))
         if cexcl != 0:
-            emit(&cctx, GIMoveZero(cexcl))
-        emit_drops_for_early_exit(&cctx, DSK_FUNCTION, Some(cexcl))
-        set_terminator(&cctx, GTReturn(op_consume(&cctx, &gmod, 0, CkReturn())))
+            emit(cctx, GIMoveZero(cexcl))
+        emit_drops_for_early_exit(cctx, DSK_FUNCTION, Some(cexcl))
+        set_terminator(&cctx, GTReturn(op_consume(cctx, &gmod, 0, CkReturn())))
 
     Vector[BasicBlock] cblocks = finalize_body_blocks(&cctx, &gmod, call_name)
     gmod.functions.push(GirFunction(call_name, !abi_param_types, ret_type, cctx.locals, !cblocks, [], []))

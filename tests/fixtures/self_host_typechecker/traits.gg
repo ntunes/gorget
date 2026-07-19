@@ -155,7 +155,7 @@ String type_name_of(Type ty):
 
 # ── Collect a TraitDef into the registry ──────────────────────
 
-void collect_trait(TraitDef trait_def, ScopeTable &scopes, TypeTable &types, TraitRegistry &registry):
+void collect_trait(TraitDef trait_def, ScopeTable scopes, TypeTable &types, TraitRegistry &registry):
     Option[int] def_id_opt = scopes.lookup(trait_def.name)
     if def_id_opt is None:
         return
@@ -511,7 +511,7 @@ TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable 
     for item_a in module.items:
         match item_a:
             case ITrait(td):
-                collect_trait(td, &scopes, &types, &registry)
+                collect_trait(td, scopes, &types, &registry)
             else:
                 pass
     int eq_idx = 0

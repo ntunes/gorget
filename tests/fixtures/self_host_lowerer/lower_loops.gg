@@ -185,7 +185,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     ctx.expected_type = saved_expected_for
     # Auto-propagate a `throws` call used as the iterable (`for x in might()`).
     coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
-    String coll_tn = local_type_name(coll_local, &ctx, &gmod)
+    String coll_tn = local_type_name(coll_local, ctx, &gmod)
     # Phase A — typed-metadata classification (CkVector/CkDeque) via
     # the lazy `resource_meta_for` accessor; retires the legacy
     # `starts_with("Vector__")` cascade per
@@ -272,10 +272,10 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     int elem_tid = resolve_elem_type_id(elem_name, &gmod)
     # ── Iteration state ──────────────────────────────────────
     int idx_local = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(idx_local, OpConstI64(0)))
+    emit(ctx, GIAssign(idx_local, OpConstI64(0)))
     int len_local = add_local(&ctx, I64_TYPE, None)
     Vector[Operand] len_args = [OpBorrow(coll_local)]
-    emit(&ctx, GICallExtern(len_local, coll_tn + "__len", len_args))
+    emit(ctx, GICallExtern(len_local, coll_tn + "__len", len_args))
     # ── Block layout ─────────────────────────────────────────
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
@@ -285,7 +285,7 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     # Header: `idx < len ? body : exit`
     switch_to(&ctx, header_bb)
     int cond_local = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(idx_local), OpCopy(len_local)))
+    emit(ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(idx_local), OpCopy(len_local)))
     set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
     # Body: extract element via `coll.get(idx).unwrap()`, bind pattern.
     ctx.loop_continue_stack.push(incr_bb)
@@ -321,7 +321,7 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
         int wt_ptr_tid = register_ptr(&gmod, elem_tid)
         int wt_ptr = add_local_with(&ctx, wt_ptr_tid, None, LoBorrowed(), BoNone())
         Vector[Operand] wt_get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
-        emit(&ctx, GICallExtern(wt_ptr, "gorget_array_get", wt_get_args))
+        emit(ctx, GICallExtern(wt_ptr, "gorget_array_get", wt_get_args))
         if is_enumerate:
             match pat.pat:
                 case PTuple(wt_parts):
@@ -337,7 +337,7 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     else:
         int got_local = add_local_with(&ctx, opt_tid, None, LoBorrowed(), BoCollectionElement(coll_local))
         Vector[Operand] get_args = [OpBorrow(coll_local), OpCopy(idx_local)]
-        emit(&ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
+        emit(ctx, GICallExtern(got_local, coll_tn + "__get", get_args))
         int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, got_local)
         # CoW for-element: bind the element as a borrow alias into the
         # collection (no clone). Body consume/mutation sites clone on demand.
@@ -367,8 +367,8 @@ void lower_for_vector(LowerCtx &ctx, SpannedPattern pat, int coll_local, String 
     # Incr: `idx = idx + 1; goto header`.
     switch_to(&ctx, incr_bb)
     int new_idx = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIBinOp(new_idx, OP_ADD, I64_TYPE, OpCopy(idx_local), OpConstI64(1)))
-    emit(&ctx, GIAssign(idx_local, OpCopy(new_idx)))
+    emit(ctx, GIBinOp(new_idx, OP_ADD, I64_TYPE, OpCopy(idx_local), OpConstI64(1)))
+    emit(ctx, GIAssign(idx_local, OpCopy(new_idx)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 
@@ -405,7 +405,7 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, bool is
     # ── Iteration state ──────────────────────────────────────
     # byte_pos counter (seeded 0) + the BYTE-length bound (NOT codepoint count).
     int bytepos_local = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(bytepos_local, OpConstI64(0)))
+    emit(ctx, GIAssign(bytepos_local, OpConstI64(0)))
     # Codepoint-ordinal counter for `for (i, ch) in s.enumerate()`. INDEPENDENT
     # of byte_pos (which strides by the codepoint byte-length): cpidx is the
     # logical 0-based index of the current codepoint, +1 per iteration. Only
@@ -413,10 +413,10 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, bool is
     int cpidx_local = -1
     if is_enumerate:
         cpidx_local = add_local(&ctx, I64_TYPE, None)
-        emit(&ctx, GIAssign(cpidx_local, OpConstI64(0)))
+        emit(ctx, GIAssign(cpidx_local, OpConstI64(0)))
     int len_local = add_local(&ctx, I64_TYPE, None)
     Vector[Operand] len_args = [OpBorrow(coll_local)]
-    emit(&ctx, GICallExtern(len_local, "gorget_str_byte_len", len_args))
+    emit(ctx, GICallExtern(len_local, "gorget_str_byte_len", len_args))
     # ── Block layout ─────────────────────────────────────────
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
@@ -426,7 +426,7 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, bool is
     # Header: `byte_pos < len ? body : exit`
     switch_to(&ctx, header_bb)
     int cond_local = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(bytepos_local), OpCopy(len_local)))
+    emit(ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(bytepos_local), OpCopy(len_local)))
     set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
     # Body: `ch = gorget_str_codepoint_at(coll, byte_pos)` — a cap=0 view into
     # the source string; bind as a borrow alias (no clone, no owned drop).
@@ -436,7 +436,7 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, bool is
     switch_to(&ctx, body_bb)
     int ch_local = add_local_with(&ctx, gstr_tid, None, LoBorrowed(), BoCollectionElement(coll_local))
     Vector[Operand] cp_args = [OpBorrow(coll_local), OpCopy(bytepos_local)]
-    emit(&ctx, GICallExtern(ch_local, "gorget_str_codepoint_at", cp_args))
+    emit(ctx, GICallExtern(ch_local, "gorget_str_codepoint_at", cp_args))
     if is_enumerate:
         # `(i, ch)` 2-tuple bind, mirroring the Vector enumerate path
         # (:~274-283): i ← cpidx (codepoint ordinal), ch ← the codepoint view.
@@ -468,16 +468,16 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, bool is
     switch_to(&ctx, incr_bb)
     int cplen_local = add_local(&ctx, I64_TYPE, None)
     Vector[Operand] cplen_args = [OpBorrow(coll_local), OpCopy(bytepos_local)]
-    emit(&ctx, GICallExtern(cplen_local, "gorget_utf8_codepoint_len_at", cplen_args))
+    emit(ctx, GICallExtern(cplen_local, "gorget_utf8_codepoint_len_at", cplen_args))
     int new_pos = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIBinOp(new_pos, OP_ADD, I64_TYPE, OpCopy(bytepos_local), OpCopy(cplen_local)))
-    emit(&ctx, GIAssign(bytepos_local, OpCopy(new_pos)))
+    emit(ctx, GIBinOp(new_pos, OP_ADD, I64_TYPE, OpCopy(bytepos_local), OpCopy(cplen_local)))
+    emit(ctx, GIAssign(bytepos_local, OpCopy(new_pos)))
     if is_enumerate:
         # cpidx += 1 (codepoint ordinal advances by exactly one per iteration,
         # independent of the byte stride above).
         int new_cpidx = add_local(&ctx, I64_TYPE, None)
-        emit(&ctx, GIBinOp(new_cpidx, OP_ADD, I64_TYPE, OpCopy(cpidx_local), OpConstI64(1)))
-        emit(&ctx, GIAssign(cpidx_local, OpCopy(new_cpidx)))
+        emit(ctx, GIBinOp(new_cpidx, OP_ADD, I64_TYPE, OpCopy(cpidx_local), OpConstI64(1)))
+        emit(ctx, GIAssign(cpidx_local, OpCopy(new_cpidx)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 
@@ -569,10 +569,10 @@ void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String co
     # oi walks [0, cap); cap is the SLOT capacity (not logical len) — empty
     # and tombstone slots are skipped per-iteration by the state filter.
     int oi_local = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(oi_local, OpConstI64(0)))
+    emit(ctx, GIAssign(oi_local, OpConstI64(0)))
     int cap_local = add_local(&ctx, I64_TYPE, None)
     Vector[Operand] cap_args = [OpBorrow(coll_local)]
-    emit(&ctx, GICallExtern(cap_local, "gorget_map_iter_cap", cap_args))
+    emit(ctx, GICallExtern(cap_local, "gorget_map_iter_cap", cap_args))
     # ── Block layout ─────────────────────────────────────────
     int header_bb = new_block(&ctx)
     int body_bb = new_block(&ctx)
@@ -582,7 +582,7 @@ void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String co
     # Header: `oi < cap ? body : exit`
     switch_to(&ctx, header_bb)
     int cond_local = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(oi_local), OpCopy(cap_local)))
+    emit(ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(oi_local), OpCopy(cap_local)))
     set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
     # Body: filter empty/tombstone slots, bind k/v, lower body.
     ctx.loop_continue_stack.push(incr_bb)
@@ -593,9 +593,9 @@ void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String co
     # (next slot) unless USED(1). On a hit, fall into a fresh `elem_bb`.
     int state_local = add_local(&ctx, I64_TYPE, None)
     Vector[Operand] state_args = [OpBorrow(coll_local), OpCopy(oi_local)]
-    emit(&ctx, GICallExtern(state_local, "gorget_map_iter_state", state_args))
+    emit(ctx, GICallExtern(state_local, "gorget_map_iter_state", state_args))
     int state_ok = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(state_ok, CMP_EQ, I64_TYPE, OpCopy(state_local), OpConstI64(1)))
+    emit(ctx, GICmp(state_ok, CMP_EQ, I64_TYPE, OpCopy(state_local), OpConstI64(1)))
     int elem_bb = new_block(&ctx)
     set_terminator(&ctx, GTBranch(OpCopy(state_ok), elem_bb, incr_bb))
     switch_to(&ctx, elem_bb)
@@ -611,12 +611,12 @@ void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String co
                 String vname = for_pat_binding_name(parts.get(1).unwrap(), "__v")
                 int k_local = add_local(&ctx, key_tid, Some(kname))
                 Vector[Operand] k_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(k_local)]
-                emit(&ctx, GICallExtern(-1, "gorget_map_iter_key", k_args))
+                emit(ctx, GICallExtern(-1, "gorget_map_iter_key", k_args))
                 nl_put(&ctx, kname, k_local)
                 register_local_for_drop(&ctx, k_local, key_tid, &gmod)
                 int v_local = add_local(&ctx, val_tid, Some(vname))
                 Vector[Operand] v_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(v_local)]
-                emit(&ctx, GICallExtern(-1, "gorget_map_iter_value", v_args))
+                emit(ctx, GICallExtern(-1, "gorget_map_iter_value", v_args))
                 nl_put(&ctx, vname, v_local)
                 register_local_for_drop(&ctx, v_local, val_tid, &gmod)
             else:
@@ -625,7 +625,7 @@ void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String co
             # Key-only iteration: `for k in <Dict>`.
             int k_local = add_local(&ctx, key_tid, Some(kname))
             Vector[Operand] k_args = [OpBorrow(coll_local), OpCopy(oi_local), OpBorrow(k_local)]
-            emit(&ctx, GICallExtern(-1, "gorget_map_iter_key", k_args))
+            emit(ctx, GICallExtern(-1, "gorget_map_iter_key", k_args))
             nl_put(&ctx, kname, k_local)
             register_local_for_drop(&ctx, k_local, key_tid, &gmod)
         else:
@@ -643,8 +643,8 @@ void lower_for_dict(LowerCtx &ctx, SpannedPattern pat, int coll_local, String co
     # Incr: `oi = oi + 1; goto header`.
     switch_to(&ctx, incr_bb)
     int new_oi = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIBinOp(new_oi, OP_ADD, I64_TYPE, OpCopy(oi_local), OpConstI64(1)))
-    emit(&ctx, GIAssign(oi_local, OpCopy(new_oi)))
+    emit(ctx, GIBinOp(new_oi, OP_ADD, I64_TYPE, OpCopy(oi_local), OpConstI64(1)))
+    emit(ctx, GIAssign(oi_local, OpCopy(new_oi)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 
@@ -667,13 +667,13 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
     # unordered uses slot cap. Empty/tombstone slots are skipped per-iteration
     # by the state filter.
     int i_local = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIAssign(i_local, OpConstI64(0)))
+    emit(ctx, GIAssign(i_local, OpConstI64(0)))
     int limit_local = add_local(&ctx, I64_TYPE, None)
     Vector[Operand] limit_args = [OpBorrow(coll_local)]
     if is_ordered:
-        emit(&ctx, GICallExtern(limit_local, "gorget_map_iter_order_len", limit_args))
+        emit(ctx, GICallExtern(limit_local, "gorget_map_iter_order_len", limit_args))
     else:
-        emit(&ctx, GICallExtern(limit_local, "gorget_map_iter_cap", limit_args))
+        emit(ctx, GICallExtern(limit_local, "gorget_map_iter_cap", limit_args))
     # ── Block layout ─────────────────────────────────────────
     # for-else: `else_bb` sits between the header's false-exit and the
     # true `exit_bb`. The header branches to `else_bb` (not `exit_bb`)
@@ -692,7 +692,7 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
     # Header: `i < limit ? body : else_bb (or exit_bb if no else)`
     switch_to(&ctx, header_bb)
     int cond_local = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(i_local), OpCopy(limit_local)))
+    emit(ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(i_local), OpCopy(limit_local)))
     set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, else_bb))
     # Body: resolve the slot index (ordered: order[i]; unordered: i), filter
     # empty/tombstone slots, bind element, lower body.
@@ -706,15 +706,15 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
     if is_ordered:
         int real_i = add_local(&ctx, I64_TYPE, None)
         Vector[Operand] order_args = [OpBorrow(coll_local), OpCopy(i_local)]
-        emit(&ctx, GICallExtern(real_i, "gorget_map_iter_order", order_args))
+        emit(ctx, GICallExtern(real_i, "gorget_map_iter_order", order_args))
         key_idx = real_i
     # State filter: skip to incr (next slot) unless USED(1). On a hit, fall into
     # a fresh `elem_bb`.
     int state_local = add_local(&ctx, I64_TYPE, None)
     Vector[Operand] state_args = [OpBorrow(coll_local), OpCopy(key_idx)]
-    emit(&ctx, GICallExtern(state_local, "gorget_map_iter_state", state_args))
+    emit(ctx, GICallExtern(state_local, "gorget_map_iter_state", state_args))
     int state_ok = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(state_ok, CMP_EQ, I64_TYPE, OpCopy(state_local), OpConstI64(1)))
+    emit(ctx, GICmp(state_ok, CMP_EQ, I64_TYPE, OpCopy(state_local), OpConstI64(1)))
     int elem_bb = new_block(&ctx)
     set_terminator(&ctx, GTBranch(OpCopy(state_ok), elem_bb, incr_bb))
     switch_to(&ctx, elem_bb)
@@ -724,7 +724,7 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
         case PBinding(ename):
             int e_local = add_local(&ctx, elem_tid, Some(ename))
             Vector[Operand] e_args = [OpBorrow(coll_local), OpCopy(key_idx), OpBorrow(e_local)]
-            emit(&ctx, GICallExtern(-1, "gorget_map_iter_key", e_args))
+            emit(ctx, GICallExtern(-1, "gorget_map_iter_key", e_args))
             nl_put(&ctx, ename, e_local)
             register_local_for_drop(&ctx, e_local, elem_tid, &gmod)
         else:
@@ -742,8 +742,8 @@ void lower_for_set(LowerCtx &ctx, SpannedPattern pat, int coll_local, String col
     # Incr: `i = i + 1; goto header`.
     switch_to(&ctx, incr_bb)
     int new_i = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIBinOp(new_i, OP_ADD, I64_TYPE, OpCopy(i_local), OpConstI64(1)))
-    emit(&ctx, GIAssign(i_local, OpCopy(new_i)))
+    emit(ctx, GIBinOp(new_i, OP_ADD, I64_TYPE, OpCopy(i_local), OpConstI64(1)))
+    emit(ctx, GIAssign(i_local, OpCopy(new_i)))
     set_terminator(&ctx, GTJump(header_bb))
     # else block: runs only when loop exhausted without break.
     # If else_body is empty, else_bb == exit_bb and this is a no-op.
@@ -785,7 +785,7 @@ void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, Spann
     # name-hint clones-if-live (CoW), no explicit `.clone()` needed.
     int loop_var = add_local(&ctx, I64_TYPE, Some(loop_name))
     int start_local = lower_expr(&ctx, start_e, &gmod)
-    emit(&ctx, GIAssign(loop_var, OpCopy(start_local)))
+    emit(ctx, GIAssign(loop_var, OpCopy(start_local)))
     nl_put(&ctx, loop_name, loop_var)
     # End bound, lowered once (the cond re-reads this fixed value each iter).
     int end_local = lower_expr(&ctx, end_e, &gmod)
@@ -807,7 +807,7 @@ void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, Spann
     int range_cmp = CMP_LT
     if inclusive:
         range_cmp = CMP_LE
-    emit(&ctx, GICmp(cond_local, range_cmp, I64_TYPE, OpCopy(loop_var), OpCopy(end_local)))
+    emit(ctx, GICmp(cond_local, range_cmp, I64_TYPE, OpCopy(loop_var), OpCopy(end_local)))
     set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, else_bb))
     # Body: lower the loop body in a fresh loop/drop scope. Continue jumps
     # to incr (advance the counter); break jumps to exit (skips else body).
@@ -828,8 +828,8 @@ void lower_for_range(LowerCtx &ctx, String loop_name, SpannedExpr start_e, Spann
     # Incr: `loop_var = loop_var + 1; goto header`.
     switch_to(&ctx, incr_bb)
     int new_var = add_local(&ctx, I64_TYPE, None)
-    emit(&ctx, GIBinOp(new_var, OP_ADD, I64_TYPE, OpCopy(loop_var), OpConstI64(1)))
-    emit(&ctx, GIAssign(loop_var, OpCopy(new_var)))
+    emit(ctx, GIBinOp(new_var, OP_ADD, I64_TYPE, OpCopy(loop_var), OpConstI64(1)))
+    emit(ctx, GIAssign(loop_var, OpCopy(new_var)))
     set_terminator(&ctx, GTJump(header_bb))
     # else block: runs only when the range exhausted without break.
     # If else_body is empty, else_bb == exit_bb and this is a no-op.
@@ -903,7 +903,7 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     if has_iter:
         iter_local = add_local(&ctx, iter_type_tid, None)
         Vector[Operand] iter_args = [OpBorrow(coll_local)]
-        emit(&ctx, GICallExtern(iter_local, iter_fn, iter_args))
+        emit(ctx, GICallExtern(iter_local, iter_fn, iter_args))
     # ── Block layout ────────────────────────────────────────
     # No incr_bb — `.next()` advances internally, so continue goes back
     # to the header (which re-calls next()).
@@ -926,14 +926,14 @@ void lower_for_iterator(LowerCtx &ctx, SpannedPattern pat, int coll_local, Strin
     switch_to(&ctx, header_bb)
     int step_local = add_local(&ctx, opt_ret_tid, None)
     Vector[Operand] next_args = [OpBorrow(iter_local)]
-    emit(&ctx, GICallExtern(step_local, next_fn, next_args))
+    emit(ctx, GICallExtern(step_local, next_fn, next_args))
     int scr_ptr = match_scrutinee_ptr(&ctx, &gmod, step_local)
     int tag_local = emit_tag_read(&ctx, scr_ptr, opt_type_name, &gmod)
     int cmp_local = add_local(&ctx, BOOL_TYPE, None)
     # Option tag layout: 0 = Some, 1 = None (matches emit_tag_read's contract,
     # mirroring the unwrap_or path at lines ~2055-2076). On None (exhausted)
     # branch to `else_bb` (== exit_bb when there's no else).
-    emit(&ctx, GICmp(cmp_local, CMP_EQ, I64_TYPE, OpCopy(tag_local), OpConstI64(0)))
+    emit(ctx, GICmp(cmp_local, CMP_EQ, I64_TYPE, OpCopy(tag_local), OpConstI64(0)))
     set_terminator(&ctx, GTBranch(OpCopy(cmp_local), body_bb, else_bb))
     # Body: extract payload, bind pattern, lower body, jump back to header.
     ctx.loop_continue_stack.push(header_bb)
@@ -1027,9 +1027,9 @@ void bind_tuple_field(LowerCtx &ctx, int tuple_local, int idx, String sub_name, 
         fdst_type = register_ptr(&gmod, field_type)
     int fdst = add_local_with(&ctx, fdst_type, None, LoBorrowed(), BoNone())
     set_field_borrow(&ctx, fdst, tuple_local, idx)
-    emit(&ctx, GIFieldLoad(fdst, tuple_local, idx))
+    emit(ctx, GIFieldLoad(fdst, tuple_local, idx))
     int bound = add_local(&ctx, field_type, Some(sub_name))
-    emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, fdst, CkAssign())))
+    emit(ctx, GIAssign(bound, op_consume(ctx, &gmod, fdst, CkAssign())))
     nl_put(&ctx, sub_name, bound)
     register_local_for_drop(&ctx, bound, field_type, &gmod)
 
@@ -1054,9 +1054,9 @@ void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, G
             # iff src is; in that case CkCallArgBorrow keeps op_consume at
             # OpBorrow. Otherwise (LoOwned/primitive) CkAssign moves/copies.
             ConsumeKind bind_kind = CkAssign()
-            if local_is_borrow_alias(&ctx, bound):
+            if local_is_borrow_alias(ctx, bound):
                 bind_kind = CkCallArgBorrow()
-            emit(&ctx, GIAssign(bound, op_consume(&ctx, &gmod, src_local, bind_kind)))
+            emit(ctx, GIAssign(bound, op_consume(ctx, &gmod, src_local, bind_kind)))
             nl_put(&ctx, name, bound)
             # Register the owned for-element binding for per-iteration drop
             # (register-at-creation, CLAUDE.md #3). For SHALLOW-clone resource
@@ -1100,7 +1100,7 @@ void bind_for_local(LowerCtx &ctx, SpannedPattern pat, int src_local, int tid, G
             lower_fail("SFor: only PBinding / PWildcard / PTuple supported in for-loop pattern (got nested pattern)")
 
 # True iff `lid`'s ownership tag is a borrow alias (LoBorrowed/LoView).
-bool local_is_borrow_alias(LowerCtx &ctx, int lid):
+bool local_is_borrow_alias(LowerCtx ctx, int lid):
     if lid < 0 or lid >= ctx.locals.len():
         return false
     match ctx.locals.get(lid).unwrap().ownership:
@@ -1121,7 +1121,7 @@ bool local_is_borrow_alias(LowerCtx &ctx, int lid):
 # path. Owned locals (LoOwned) return false → eager clone, preserving the
 # Class-8 double-free fix for genuinely-owned scrutinees written back into a
 # collection. Used by lower_ctor_pattern's PBinding payload bind.
-bool scrutinee_nonowning(LowerCtx &ctx, GirModule &gmod, int lid):
+bool scrutinee_nonowning(LowerCtx ctx, GirModule gmod, int lid):
     if lid < 0 or lid >= ctx.locals.len():
         return false
     GirLocal loc = ctx.locals.get(lid).unwrap()
@@ -1155,7 +1155,7 @@ bool scrutinee_nonowning(LowerCtx &ctx, GirModule &gmod, int lid):
 # name matching. LoOwned and LoMaybeOwned both reach the owned whole-drop path
 # (a merged-arm scrutinee is treated as an owner here, conservatively binding
 # a borrow — sound because the whole-scrutinee drop still owns the free).
-bool scrutinee_owned_whole_dropped(LowerCtx &ctx, GirModule &gmod, int lid):
+bool scrutinee_owned_whole_dropped(LowerCtx ctx, GirModule &gmod, int lid):
     if lid < 0 or lid >= ctx.locals.len():
         return false
     GirLocal loc = ctx.locals.get(lid).unwrap()
@@ -1189,7 +1189,7 @@ bool scrutinee_owned_whole_dropped(LowerCtx &ctx, GirModule &gmod, int lid):
 # owned-whole-dropped case. Distinct from `scrutinee_owned_whole_dropped`
 # (which is the OWNED-VALUE scrutinee whose own whole-drop frees the payload):
 # here the scrutinee is a borrow and the OWNER is the collection one hop away.
-bool scrutinee_borrow_into_owning_collection(LowerCtx &ctx, GirModule &gmod, int lid):
+bool scrutinee_borrow_into_owning_collection(LowerCtx ctx, GirModule &gmod, int lid):
     if lid < 0 or lid >= ctx.locals.len():
         return false
     GirLocal loc = ctx.locals.get(lid).unwrap()
@@ -1343,16 +1343,16 @@ Vector[BasicBlock] finalize_body_blocks(LowerCtx &ctx, GirModule &gmod, String f
     # CFG-aware operand-mode post-pass `wire_liveness_into_modes` which
     # decides OpMove vs OpClone at every consuming operand read. The
     # instrumentation diff vs the legacy linear pass is a regression net.
-    LivenessAnalysis liveness = compute_liveness(&ctx)
-    int diff = liveness_instrumentation_diff(&ctx, &liveness)
+    LivenessAnalysis liveness = compute_liveness(ctx)
+    int diff = liveness_instrumentation_diff(ctx, liveness)
     if diff > 0:
         diag_warn("gir_liveness_diff", fn_name + ": " + int_to_str(diff) + " sites")
-    wire_liveness_into_modes(&ctx, &gmod, &liveness)
+    wire_liveness_into_modes(&ctx, &gmod, liveness)
 
     # Flush the deferred drop queue — `maybe_moved` is now populated by
     # `wire_liveness_into_modes`, so pending `GIDropIfAlive` records gate
     # correctly.
-    flush_drop_queue(&ctx)
+    flush_drop_queue(ctx)
 
     # Assemble BasicBlocks from separate instruction and terminator vectors.
     Vector[BasicBlock] blocks = []

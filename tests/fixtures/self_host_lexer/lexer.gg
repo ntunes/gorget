@@ -300,7 +300,7 @@ equip Lexer:
     # the Rust lexer's tuple-index disambiguation (src/lexer/mod.rs): a `D.D`
     # immediately after a Dot must scan as Int (then the trailing `.D` is a
     # separate Dot + Int), so nested tuple access composes (`a.1.2.3`).
-    bool lex_prev_is_dot(&self):
+    bool lex_prev_is_dot(self):
         int n = self.lex_tokens.len()
         if n == 0:
             return false

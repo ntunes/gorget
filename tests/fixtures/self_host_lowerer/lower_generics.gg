@@ -130,7 +130,7 @@ void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &
                 # call's span, record the SAME instance the call-site mangle
                 # produces — this drives BOTH the fn_sigs pre-reg AND the
                 # body-emit, so the bare symbol is DEFINED (not just called).
-                Vector[int] bm_tids = bare_method_targ_rtids(sexpr.span.end, mname, &gmod)
+                Vector[int] bm_tids = bare_method_targ_rtids(sexpr.span.end, mname, gmod)
                 if bm_tids.len() > 0:
                     int recv_tid_b = lookup_expr_gir_type(*recv_box, &gmod)
                     if recv_tid_b >= 0:
@@ -434,7 +434,7 @@ void fp_collect_deep_callees_stmt(Stmt stmt, Dict[String, bool] &callees):
 # construction. We additionally HARD-ERROR if a participating free-fn name
 # also appears as an equip-method (the SAME short name), which would mean the
 # free-fn scope's single param-build site is unsound for it.
-void compute_participating_fault_fns(Module &m, GirModule &gmod):
+void compute_participating_fault_fns(Module m, GirModule &gmod):
     # Phase (b): collect every direct free-fn callee inside a fault catch.
     Dict[String, bool] deep_callees = {}
     for bp_item in m.items:
@@ -554,7 +554,7 @@ void discover_adapter_chain_expr(SpannedExpr sexpr, GirModule &gmod, Dict[String
             if ctargs.len() == 0:
                 match (*callee_box).expr:
                     case EIdentifier(cfname):
-                        Vector[SpannedType] inf = infer_free_fn_targs(cfname, callarg_values(cargs), callarg_names(cargs), &gmod)
+                        Vector[SpannedType] inf = infer_free_fn_targs(cfname, callarg_values(cargs), callarg_names(cargs), gmod)
                         if inf.len() > 0:
                             String cmangled = compute_mangled_name(inf, cfname)
                             if not seen.contains(cmangled):
@@ -1105,7 +1105,7 @@ Dict[String, String] build_meta_typename_env(Vector[String] type_params, Vector[
 # Resolve a `typename(T)` / `sizeof(T)` call against the concrete env.
 # Returns "" (string result) via out-params: kind 0=unknown, 1=string,
 # 2=int. Kept minimal for the prototype.
-String eval_meta_builtin_str(SpannedExpr se, Dict[String, String] &tn_env, bool &is_str):
+String eval_meta_builtin_str(SpannedExpr se, Dict[String, String] tn_env, bool &is_str):
     is_str = false
     match se.expr:
         case EStringLiteral(s, _):
@@ -1146,7 +1146,7 @@ String eval_meta_builtin_str(SpannedExpr se, Dict[String, String] &tn_env, bool 
 # Resolve the concrete typename for a meta builtin's first argument
 # (a type-param identifier), routing through tn_env. Returns "" if the
 # arg is not a bare identifier or not in the env.
-String resolve_meta_tparam(SpannedExpr arg, Dict[String, String] &tn_env):
+String resolve_meta_tparam(SpannedExpr arg, Dict[String, String] tn_env):
     match arg.expr:
         case EIdentifier(tparam):
             if tn_env.contains(tparam):
@@ -1161,7 +1161,7 @@ String resolve_meta_tparam(SpannedExpr arg, Dict[String, String] &tn_env):
 # Mirrors Rust eval_delayed_expr's int-producing builtins (meta.rs:3045
 # variant_count, :3129 enum_ordinal). ok=false => unevaluable (caller
 # leaves the construct inert, matching Rust).
-int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, int] &int_env, GirModule &gmod, bool &ok):
+int eval_meta_int_v2(SpannedExpr se, Dict[String, String] tn_env, Dict[String, int] int_env, GirModule gmod, bool &ok):
     ok = false
     match se.expr:
         case EIntLiteral(n):
@@ -1177,7 +1177,7 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
             match (*callee).expr:
                 case EIdentifier(fname):
                     if (fname == "sizeof" or fname == "bitwidth") and args.len() == 1:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         if concrete != "":
                             int byts = meta_type_byte_size(concrete)
                             ok = true
@@ -1188,7 +1188,7 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                         # Integer-type lower bound. Mirrors Rust meta.rs:2867:
                         # signed -> type min, unsigned -> 0. Unknown/non-int
                         # type leaves ok=false (construct stays inert).
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         if concrete == "int8":
                             ok = true
                             return 0 - 128
@@ -1210,7 +1210,7 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                     elif fname == "max_val" and args.len() == 1:
                         # Integer-type upper bound. Mirrors Rust meta.rs:2886.
                         # uint/uint64 saturate at i64::MAX (same as Rust).
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         if concrete == "int8":
                             ok = true
                             return 127
@@ -1236,7 +1236,7 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                             ok = true
                             return 9223372036854775807
                     elif fname == "variant_count" and args.len() == 1:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         if concrete != "" and gmod.enum_registry.contains(concrete):
                             ok = true
                             return gmod.enum_registry.get(concrete).unwrap().len()
@@ -1245,14 +1245,14 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
                         # field_count -> s.fields.len(). Reads the registered
                         # GirTypeInfo.fields (the same data eval_meta_fields and
                         # meta_type_category_is consult).
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         if concrete != "" and gmod.type_infos.contains(concrete):
                             GirTypeInfo ti = gmod.type_infos.get(concrete).unwrap()
                             if not ti.is_enum:
                                 ok = true
                                 return ti.fields.len()
                     elif fname == "enum_ordinal" and args.len() == 2:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         # 2nd arg: a string literal (post-subst the loop var
                         # `vname` becomes an EStringLiteral).
                         String want = ""
@@ -1279,7 +1279,7 @@ int eval_meta_int_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, 
 # Handles string literals and enum_from_ordinal(T, n). ok=false =>
 # unevaluable. Mirrors Rust eval_delayed_expr enum_from_ordinal
 # (meta.rs:3157).
-String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[String, int] &int_env, GirModule &gmod, bool &ok):
+String eval_meta_str_v2(SpannedExpr se, Dict[String, String] tn_env, Dict[String, int] int_env, GirModule gmod, bool &ok):
     ok = false
     match se.expr:
         case EStringLiteral(s, _):
@@ -1299,7 +1299,7 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
                         # str-v2-only call sites (e.g. `meta const s =
                         # typename(int)`). Without it the concrete case is a
                         # Core #8 silent-drop vs the Rust oracle.
-                        String tn = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String tn = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         if tn != "":
                             ok = true
                             return tn
@@ -1317,9 +1317,9 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
                         ok = true
                         return plat
                     elif fname == "enum_from_ordinal" and args.len() == 2:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         bool iok = false
-                        int ord = eval_meta_int_v2(args.get(1).unwrap().value, &tn_env, &int_env, &gmod, &iok)
+                        int ord = eval_meta_int_v2(args.get(1).unwrap().value, tn_env, int_env, gmod, &iok)
                         if concrete != "" and iok and gmod.enum_registry.contains(concrete):
                             Vector[String] vnames = gmod.enum_registry.get(concrete).unwrap()
                             if ord >= 0 and ord < vnames.len():
@@ -1332,7 +1332,7 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
                         # registered C-level type name (int64_t/double/...) back
                         # to the Gorget spelling (int/float/...), matching Rust's
                         # canonical-name output.
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         String want = ""
                         match args.get(1).unwrap().value.expr:
                             case EStringLiteral(s, _):
@@ -1358,23 +1358,23 @@ String eval_meta_str_v2(SpannedExpr se, Dict[String, String] &tn_env, Dict[Strin
 # both (typeof/typename/enum_from_ordinal/string literal) and compares. Sets
 # ok=false if neither side pair is evaluable (caller leaves the arm unmatched).
 # Mirrors Rust meta_values_eq (meta.rs:2737) over two eval_delayed_expr results.
-bool meta_value_eq_v2(SpannedExpr a, SpannedExpr b, Dict[String, String] &tn_env, Dict[String, int] &int_env, GirModule &gmod, bool &ok):
+bool meta_value_eq_v2(SpannedExpr a, SpannedExpr b, Dict[String, String] tn_env, Dict[String, int] int_env, GirModule gmod, bool &ok):
     ok = false
     bool ai = false
     bool bi = false
-    int av = eval_meta_int_v2(a, &tn_env, &int_env, &gmod, &ai)
-    int bv = eval_meta_int_v2(b, &tn_env, &int_env, &gmod, &bi)
+    int av = eval_meta_int_v2(a, tn_env, int_env, gmod, &ai)
+    int bv = eval_meta_int_v2(b, tn_env, int_env, gmod, &bi)
     if ai and bi:
         ok = true
         return av == bv
     bool as_ = false
     bool bs = false
-    String asv = eval_meta_builtin_str(a, &tn_env, &as_)
+    String asv = eval_meta_builtin_str(a, tn_env, &as_)
     if not as_:
-        asv = eval_meta_str_v2(a, &tn_env, &int_env, &gmod, &as_)
-    String bsv = eval_meta_builtin_str(b, &tn_env, &bs)
+        asv = eval_meta_str_v2(a, tn_env, int_env, gmod, &as_)
+    String bsv = eval_meta_builtin_str(b, tn_env, &bs)
     if not bs:
-        bsv = eval_meta_str_v2(b, &tn_env, &int_env, &gmod, &bs)
+        bsv = eval_meta_str_v2(b, tn_env, int_env, gmod, &bs)
     if as_ and bs:
         ok = true
         return asv == bsv
@@ -1395,17 +1395,17 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                 # (field_type, enum_from_ordinal) on either side.
                 bool ls = false
                 bool rs = false
-                String lv = eval_meta_builtin_str(*l, &tn_env, &ls)
-                String rv = eval_meta_builtin_str(*r, &tn_env, &rs)
+                String lv = eval_meta_builtin_str(*l, tn_env, &ls)
+                String rv = eval_meta_builtin_str(*r, tn_env, &rs)
                 if not ls:
                     bool ls2 = false
-                    String lv2 = eval_meta_str_v2(*l, &tn_env, &int_env, &gmod, &ls2)
+                    String lv2 = eval_meta_str_v2(*l, tn_env, int_env, gmod, &ls2)
                     if ls2:
                         ls = true
                         lv = lv2
                 if not rs:
                     bool rs2 = false
-                    String rv2 = eval_meta_str_v2(*r, &tn_env, &int_env, &gmod, &rs2)
+                    String rv2 = eval_meta_str_v2(*r, tn_env, int_env, gmod, &rs2)
                     if rs2:
                         rs = true
                         rv = rv2
@@ -1419,8 +1419,8 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                 # int loop-var / meta-const bound in int_env.
                 bool li = false
                 bool ri = false
-                int liv = eval_meta_int_v2(*l, &tn_env, &int_env, &gmod, &li)
-                int riv = eval_meta_int_v2(*r, &tn_env, &int_env, &gmod, &ri)
+                int liv = eval_meta_int_v2(*l, tn_env, int_env, gmod, &li)
+                int riv = eval_meta_int_v2(*r, tn_env, int_env, gmod, &ri)
                 if li and ri:
                     ok = true
                     bool ieq = (liv == riv)
@@ -1430,8 +1430,8 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
             elif op == "<" or op == ">" or op == "<=" or op == ">=":
                 bool li = false
                 bool ri = false
-                int liv = eval_meta_int_v2(*l, &tn_env, &int_env, &gmod, &li)
-                int riv = eval_meta_int_v2(*r, &tn_env, &int_env, &gmod, &ri)
+                int liv = eval_meta_int_v2(*l, tn_env, int_env, gmod, &li)
+                int riv = eval_meta_int_v2(*r, tn_env, int_env, gmod, &ri)
                 if li and ri:
                     ok = true
                     if op == "<":
@@ -1488,7 +1488,7 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                     pass
             if ls and category != "":
                 bool cat_ok = false
-                bool is_cat = meta_type_category_is(lv, category, &gmod, &cat_ok)
+                bool is_cat = meta_type_category_is(lv, category, gmod, &cat_ok)
                 if cat_ok:
                     ok = true
                     if negated:
@@ -1502,7 +1502,7 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
             match (*callee).expr:
                 case EIdentifier(fname):
                     if fname == "has_field" and args.len() == 2:
-                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         String want = ""
                         match args.get(1).unwrap().value.expr:
                             case EStringLiteral(s, _):
@@ -1527,7 +1527,7 @@ bool eval_delayed_meta_cond(SpannedExpr cond, Dict[String, String] &tn_env, Dict
                         # (1) explicit/derived equip (gmod.trait_impls_by_type),
                         # then (2) intrinsic-primitive satisfaction rules. Rust
                         # returns false (NOT inert) when neither matches.
-                        String it_concrete = resolve_meta_tparam(args.get(0).unwrap().value, &tn_env)
+                        String it_concrete = resolve_meta_tparam(args.get(0).unwrap().value, tn_env)
                         String it_trait = ""
                         match args.get(1).unwrap().value.expr:
                             case EStringLiteral(s, _):
@@ -1627,7 +1627,7 @@ String demangle_field_type_name(String cname):
 # meta-for bodies. Mirrors Rust's meta `is`-category check on the
 # resolved type string. Returns the boolean and sets ok=true when the
 # predicate is recognized.
-bool meta_type_category_is(String tyname, String category, GirModule &gmod, bool &ok):
+bool meta_type_category_is(String tyname, String category, GirModule gmod, bool &ok):
     ok = true
     # Category families mirror Rust src/semantic/meta.rs eval_type_is_check.
     if category == "int" or category == "integer" or category == "numeric":
@@ -1795,7 +1795,7 @@ Vector[Stmt] subst_mf_stmts(Vector[Stmt] stmts, Dict[String, String] &sv, Dict[S
 # if the iterable is not a recognized `fields(<param>)` call or the
 # concrete type is not a registered struct. tn_env maps the type param
 # (e.g. "T") to its concrete typename (e.g. "Point").
-bool eval_meta_fields(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names, Vector[String] &out_types):
+bool eval_meta_fields(SpannedExpr iter_e, Dict[String, String] tn_env, GirModule gmod, Vector[String] &out_names, Vector[String] &out_types):
     match iter_e.expr:
         case ECall(callee, args, _):
             match (*callee).expr:
@@ -1823,7 +1823,7 @@ bool eval_meta_fields(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModul
 
 # Resolve `variant_names(T)` to the list of variant names for the
 # concrete enum T. Sets ok=false if unrecognized / not an enum.
-bool eval_meta_variant_names(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names):
+bool eval_meta_variant_names(SpannedExpr iter_e, Dict[String, String] tn_env, GirModule gmod, Vector[String] &out_names):
     match iter_e.expr:
         case ECall(callee, args, _):
             match (*callee).expr:
@@ -1851,7 +1851,7 @@ bool eval_meta_variant_names(SpannedExpr iter_e, Dict[String, String] &tn_env, G
 # order) for the concrete struct T. Mirrors Rust meta.rs:2924 field_names
 # -> s.fields.map(|f| f.name). Sets the return to false (caller leaves the
 # meta-for inert) if unrecognized / not a registered struct.
-bool eval_meta_field_names(SpannedExpr iter_e, Dict[String, String] &tn_env, GirModule &gmod, Vector[String] &out_names):
+bool eval_meta_field_names(SpannedExpr iter_e, Dict[String, String] tn_env, GirModule gmod, Vector[String] &out_names):
     match iter_e.expr:
         case ECall(callee, args, _):
             match (*callee).expr:
@@ -2028,13 +2028,13 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                 # Drop the SMetaConst statement (compile-time only). Mirrors
                 # Rust meta.rs:3320 (eval, bind into local_env, remove).
                 bool iok = false
-                int ival = eval_meta_int_v2(mc_val, &tn_env, &int_env, &gmod, &iok)
+                int ival = eval_meta_int_v2(mc_val, tn_env, int_env, gmod, &iok)
                 if iok:
                     cv_iv.put(mc_name.clone(), ival)
                     int_env.put(mc_name.clone(), ival)
                 else:
                     bool sok = false
-                    String sval = eval_meta_str_v2(mc_val, &tn_env, &int_env, &gmod, &sok)
+                    String sval = eval_meta_str_v2(mc_val, tn_env, int_env, gmod, &sok)
                     if sok:
                         cv_sv.put(mc_name.clone(), sval)
                 # If neither evaluated, the const is dropped (unevaluable);
@@ -2050,7 +2050,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                 if mf_vars.len() == 2:
                     Vector[String] fnames = Vector[String]()
                     Vector[String] ftypes = Vector[String]()
-                    if eval_meta_fields(mf_iter, &tn_env, &gmod, &fnames, &ftypes):
+                    if eval_meta_fields(mf_iter, tn_env, gmod, &fnames, &ftypes):
                         handled = true
                         String var_n = mf_vars.get(0).unwrap()
                         String var_t = mf_vars.get(1).unwrap()
@@ -2068,7 +2068,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                 # `field_names(T)` → struct field names, one loop var.
                 if mf_vars.len() == 1 and not handled:
                     Vector[String] fonly = Vector[String]()
-                    if eval_meta_field_names(mf_iter, &tn_env, &gmod, &fonly):
+                    if eval_meta_field_names(mf_iter, tn_env, gmod, &fonly):
                         handled = true
                         String var_f = mf_vars.get(0).unwrap()
                         for fn in fonly:
@@ -2082,7 +2082,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                 # `variant_names(T)` → variant names, one loop var.
                 if mf_vars.len() == 1 and not handled:
                     Vector[String] vnames = Vector[String]()
-                    if eval_meta_variant_names(mf_iter, &tn_env, &gmod, &vnames):
+                    if eval_meta_variant_names(mf_iter, tn_env, gmod, &vnames):
                         handled = true
                         String var_v = mf_vars.get(0).unwrap()
                         for vn in vnames:
@@ -2106,7 +2106,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                             match ostart:
                                 case Some(sb):
                                     bool sok = false
-                                    rstart = eval_meta_int_v2(*sb, &tn_env, &int_env, &gmod, &sok)
+                                    rstart = eval_meta_int_v2(*sb, tn_env, int_env, gmod, &sok)
                                     if not sok:
                                         rok = false
                                 case None:
@@ -2115,7 +2115,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                             match oend:
                                 case Some(eb):
                                     bool eok = false
-                                    rend = eval_meta_int_v2(*eb, &tn_env, &int_env, &gmod, &eok)
+                                    rend = eval_meta_int_v2(*eb, tn_env, int_env, gmod, &eok)
                                     if not eok:
                                         rok = false
                                 case None:
@@ -2159,7 +2159,7 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                 while ai < mm_arms.len() and not taken:
                     MetaMatchArm arm = mm_arms.get(ai).unwrap()
                     bool eqok = false
-                    bool eq = meta_value_eq_v2(mm_scrut, arm.case_value, &tn_env, &int_env, &gmod, &eqok)
+                    bool eq = meta_value_eq_v2(mm_scrut, arm.case_value, tn_env, int_env, gmod, &eqok)
                     if eqok and eq:
                         Vector[Stmt] sp = evaluate_delayed_meta_stmts(arm.body, &tn_env, &int_env, &gmod)
                         int sj = 0

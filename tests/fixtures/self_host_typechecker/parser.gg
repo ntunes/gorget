@@ -599,7 +599,7 @@ String type_to_name(SpannedType st):
 
 # Check if an expression contains the implicit `it` parameter.
 # Stops at closure boundaries (it inside a closure belongs to that closure).
-bool expr_contains_it(Expr &e):
+bool expr_contains_it(Expr e):
     # Check for implicit `it` parameter — only top-level EIt/EIdentifier.
     # Avoiding deep traversal of borrowed Expr to prevent double-free from
     # pattern-extracted fields (Box/Vector) being dropped at scope exit.
@@ -1077,7 +1077,7 @@ equip Parser:
         self.errors.push("expression nesting too deep (max 128); split into intermediate variables")
 
     # Extract a name from a token that may be an identifier or a keyword used as a name
-    String extract_name(&self, SpannedToken tok):
+    String extract_name(self, SpannedToken tok):
         String name = token_ident(tok.lex_token)
         if name != "":
             return name
@@ -2137,7 +2137,7 @@ equip Parser:
         self.call_arg_depth = self.call_arg_depth + 1
         SpannedExpr val = self.parse_expr()
         self.call_arg_depth = self.call_arg_depth - 1
-        if self.call_arg_depth == 0 and expr_contains_it(&val.expr):
+        if self.call_arg_depth == 0 and expr_contains_it(val.expr):
             return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
         return val
 

@@ -118,7 +118,7 @@ bool is_builtin(String name):
 # Pass 1: collect_top_level
 # ═══════════════════════════════════════════════════════════
 
-ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &types):
+ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable types):
     ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[Diagnostic]())
 
     # Register built-in core traits
@@ -206,13 +206,13 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     int i = 0
     while i < module.items.len():
         Item item = module.items.get(i).unwrap()
-        collect_item(item, &scopes, &types)
+        collect_item(item, &scopes, types)
         i = i + 1
 
     return ctx
 
 
-void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
+void collect_item(Item item, ScopeTable &scopes, TypeTable types):
     match item:
         case IFunction(f):
             scopes.define(f.name, DkFunction(), Span(0, 0))
@@ -639,7 +639,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 ei = ei + 1
 
         case SItem(item):
-            collect_item(item, &scopes, &types)
+            collect_item(item, &scopes, types)
             resolve_item_body(item, &scopes, &types, &ctx)
 
         case SSnapshot(_, _, value):
@@ -1177,6 +1177,6 @@ void resolve_is_condition(SpannedExpr expr, ScopeTable &scopes, ResolveContext &
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext resolve_module(Module module, ScopeTable &scopes, TypeTable &types):
-    ResolveContext ctx = collect_top_level(module, &scopes, &types)
+    ResolveContext ctx = collect_top_level(module, &scopes, types)
     resolve_bodies(module, &scopes, &types, &ctx)
     return ctx

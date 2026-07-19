@@ -14,7 +14,7 @@ from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 
 # ── Type name formatting ─────────────────────────────────
 
-String format_type_id(int tid, GirModule &gmod):
+String format_type_id(int tid, GirModule gmod):
     match tid:
         case BOOL_TYPE:
             return "bool"
@@ -63,7 +63,7 @@ String format_type_id(int tid, GirModule &gmod):
 
 # ── Operand formatting ───────────────────────────────────
 
-String format_operand(Operand op, GirModule &gmod):
+String format_operand(Operand op, GirModule gmod):
     match op:
         case OpCopy(lid):
             return f"copy _{lid}"
@@ -155,7 +155,7 @@ String cmpop_name(int op):
 
 # ── Instruction formatting ───────────────────────────────
 
-String format_args(Vector[Operand] args, GirModule &gmod):
+String format_args(Vector[Operand] args, GirModule gmod):
     String result = ""
     for (i, arg) in args.enumerate():
         if i > 0:
@@ -163,7 +163,7 @@ String format_args(Vector[Operand] args, GirModule &gmod):
         result = f"{result}{format_operand(arg, &gmod)}"
     return result
 
-String format_instruction(Instruction inst, GirModule &gmod):
+String format_instruction(Instruction inst, GirModule gmod):
     match inst:
         case GIAssign(dst, val):
             return f"        _{dst} = {format_operand(val, &gmod)}"
@@ -200,7 +200,7 @@ String format_instruction(Instruction inst, GirModule &gmod):
 
 # ── Terminator formatting ────────────────────────────────
 
-String format_terminator(Terminator term, GirModule &gmod):
+String format_terminator(Terminator term, GirModule gmod):
     match term:
         case GTReturn(val):
             return f"        return {format_operand(val, &gmod)}"
@@ -213,7 +213,7 @@ String format_terminator(Terminator term, GirModule &gmod):
 
 # ── Function formatting ──────────────────────────────────
 
-String format_function(GirFunction func, GirModule &gmod):
+String format_function(GirFunction func, GirModule gmod):
     # Signature: fn @name(param_types) -> return_type {
     String params_str = ""
     for (i, pt) in func.param_types.enumerate():
@@ -246,7 +246,7 @@ String format_function(GirFunction func, GirModule &gmod):
 
 # ── Module formatting ────────────────────────────────────
 
-String format_module(GirModule &gmod):
+String format_module(GirModule gmod):
     String result = ""
     # Extern declarations
     for ext in gmod.externs:

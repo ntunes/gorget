@@ -204,12 +204,12 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # exactly one mechanism. Without it, feeding the full 14-name set
             # to both sites double-wraps getenv → cc error "expected
             # 'const char *' but argument is of type 'Str'".
-            if declared_ty == gs_tid_decl and var_type != gs_tid_decl and is_cstr_returning_call(init_expr, &gmod):
+            if declared_ty == gs_tid_decl and var_type != gs_tid_decl and is_cstr_returning_call(init_expr, gmod):
                 int coerced = add_local(&ctx, gs_tid_decl, None)
                 # gorget_str_from_cstr reads the cstr pointer to build a
                 # new GorgetString — borrow.
-                Vector[Operand] cstr_args = [op_consume(&ctx, &gmod, val, CkCallArgBorrow())]
-                emit(&ctx, GICallExtern(coerced, "gorget_str_from_cstr", cstr_args))
+                Vector[Operand] cstr_args = [op_consume(ctx, &gmod, val, CkCallArgBorrow())]
+                emit(ctx, GICallExtern(coerced, "gorget_str_from_cstr", cstr_args))
                 val = coerced
                 var_type = gs_tid_decl
             # Auto-box closure coercion: `Box[Callable[..]] f = (n): n+100`.
@@ -247,8 +247,8 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         # downstream SVarDecl binding sees a box exactly as it
                         # would for `Box.new(closure)`.
                         int box_dst = add_local(&ctx, declared_ty, None)
-                        Vector[Operand] box_ctor_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
-                        emit(&ctx, GICall(box_dst, "Box", box_ctor_args))
+                        Vector[Operand] box_ctor_args = [op_consume(ctx, &gmod, val, CkCallArgOwning())]
+                        emit(ctx, GICall(box_dst, "Box", box_ctor_args))
                         val = box_dst
                         var_type = declared_ty
                     case None:
@@ -294,11 +294,11 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             bool src_is_static_global = false
             match init_expr.expr:
                 case EIdentifier(gv_static_nm):
-                    if static_contains(&gmod, gv_static_nm) and not nl_contains(&ctx, gv_static_nm):
+                    if static_contains(gmod, gv_static_nm) and not nl_contains(ctx, gv_static_nm):
                         src_is_static_global = true
                 else:
                     pass
-            SVarDeclEmission plan = decide_svardecl_emission(&ctx, &gmod, val, var_type, name, cow_src_root, init_expr.span.start, src_is_static_global)
+            SVarDeclEmission plan = decide_svardecl_emission(ctx, &gmod, val, var_type, name, cow_src_root, init_expr.span.start, src_is_static_global)
             int var_local = 0
             match plan:
                 case BorrowAlias():
@@ -389,7 +389,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     #   • val_loc Ptr-typed (e.g. inherited from another
                     #     Branch C / from GIFieldLoad) → ISlotLoad(src) +
                     #     ISlotStore(dst) = pointer copy = alias chain.
-                    emit(&ctx, GIAssign(var_local, alias_op))
+                    emit(ctx, GIAssign(var_local, alias_op))
                     # cow_register_alias overwrites BorrowOrigin with
                     # BoAlias(val). Only call when we DIDN'T inherit a
                     # specific origin from val — otherwise we'd lose the
@@ -449,9 +449,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     int cloned = add_local(&ctx, owned_type, None)
                     Vector[Operand] clone_args = []
                     clone_args.push(OpBorrow(val))
-                    emit(&ctx, GICallExtern(cloned, clone_fn_name, clone_args))
+                    emit(ctx, GICallExtern(cloned, clone_fn_name, clone_args))
                     var_local = add_local(&ctx, owned_type, Some(name))
-                    emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, cloned, CkAssign())))
+                    emit(ctx, GIAssign(var_local, op_consume(ctx, &gmod, cloned, CkAssign())))
                     nl_put(&ctx, name, var_local)
                     # When the source was a GtPtr/GtMutPtr (the Branch C-pre
                     # `coll.get(i).unwrap()` deref-clone), do NOT register the
@@ -512,7 +512,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # non-resource user types. op_consume picks
                     # OpCopy/OpMove as appropriate.
                     var_local = add_local(&ctx, var_type, Some(name))
-                    emit(&ctx, GIAssign(var_local, op_consume(&ctx, &gmod, val, CkAssign())))
+                    emit(ctx, GIAssign(var_local, op_consume(ctx, &gmod, val, CkAssign())))
                     nl_put(&ctx, name, var_local)
                     register_local_for_drop(&ctx, var_local, var_type, &gmod)
                     # A single-owner sync handle (`Mutex[T] m = Mutex[T](v)`) is
@@ -581,7 +581,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             else:
                                 pass
                     var_local = add_local(&ctx, eac_owned, Some(name))
-                    emit(&ctx, GIAssign(var_local, OpClone(val)))
+                    emit(ctx, GIAssign(var_local, OpClone(val)))
                     nl_put(&ctx, name, var_local)
                     register_local_for_drop(&ctx, var_local, eac_owned, &gmod)
                 case LazyViewBind(lv_clone_fn):
@@ -614,9 +614,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 pass
                     var_local = add_local_with(&ctx, lv_owned_type, Some(name), LoView(), BoRuntimeView(val))
                     Vector[Operand] lv_args = [OpBorrow(val)]
-                    emit(&ctx, GICallExtern(var_local, "gorget_string_borrow_view", lv_args))
+                    emit(ctx, GICallExtern(var_local, "gorget_string_borrow_view", lv_args))
                     int lv_flag = add_local(&ctx, BOOL_TYPE, None)
-                    emit(&ctx, GIAssign(lv_flag, OpConstBool(false)))
+                    emit(ctx, GIAssign(lv_flag, OpConstBool(false)))
                     nl_put(&ctx, name, var_local)
                     # Typed drop override: the slot OWNS its buffer
                     # post-materialize (register_local_for_drop would skip
@@ -682,7 +682,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # terminated this block. The outer assign/drops/ret below
                     # would clobber `_0` with the EDo's unit tail value (and
                     # re-set the terminator). Bail out: the block is done.
-                    if block_terminated(&ctx):
+                    if block_terminated(ctx):
                         return
                     # Throws-function Result.Ok wrapping (mirrors Rust gg's
                     # `lower_return` at `stmts/mod.rs:1585-1658`): when the
@@ -726,8 +726,8 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 pass
                     if enum_category_of(&gmod, ret_place_ty_pre).category == ENUM_CAT_RESULT and val_ty_peeled != ret_place_ty_pre:
                         int ok_dst = add_local(&ctx, ret_place_ty_pre, None)
-                        Vector[Operand] ok_args = [op_consume(&ctx, &gmod, val, CkCallArgOwning())]
-                        emit(&ctx, GICallExtern(ok_dst, "Ok", ok_args))
+                        Vector[Operand] ok_args = [op_consume(ctx, &gmod, val, CkCallArgOwning())]
+                        emit(ctx, GICallExtern(ok_dst, "Ok", ok_args))
                         val = ok_dst
                     # Option[Ref[T]] → Option[T] lift (mirrors Rust gg's
                     # `try_lift_option_ref` call at the return site,
@@ -759,7 +759,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         int lifted = try_lift_option_ref(&ctx, val, ret_place_ty, &gmod)
                         if lifted >= 0:
                             val = lifted
-                    Operand ret_op = op_consume(&ctx, &gmod, val, CkReturn())
+                    Operand ret_op = op_consume(ctx, &gmod, val, CkReturn())
                     # a-6 (concern #5, the keystone): when the value is MOVED
                     # out of a bare owned local, that local now aliases _0 and
                     # the caller's return value. Move-zero it and exclude it
@@ -772,11 +772,11 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             excl = src
                         else:
                             pass
-                    emit(&ctx, GIAssign(0, ret_op))
+                    emit(ctx, GIAssign(0, ret_op))
                     if excl != 0:
-                        emit(&ctx, GIMoveZero(excl))
-                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(excl))
-                    set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+                        emit(ctx, GIMoveZero(excl))
+                    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(excl))
+                    set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
                 case None:
                     # Explicit bare `return` in a value fn whose ret_type was
                     # widened to Result__V__E (a `void throws E`) must return the
@@ -785,9 +785,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # (ret_type UNIT, non-Result) keep the OpConstUnit route.
                     # Typed metadata (enum_category_of), not name-matching.
                     int none_ret_place_ty = ctx.locals.get(0).unwrap().type_id
-                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+                    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
                     if enum_category_of(&gmod, none_ret_place_ty).category == ENUM_CAT_RESULT:
-                        set_terminator(&ctx, GTReturn(op_consume(&ctx, &gmod, 0, CkReturn())))
+                        set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
                     else:
                         set_terminator(&ctx, GTReturn(OpConstUnit()))
         case SExpr(sexpr):
@@ -829,10 +829,10 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         # Keep the facade local in sync so any non-shared read
                         # path (defensive) sees the latest value too.
                         if sas_sh.facade_local >= 0:
-                            emit(&ctx, GIAssign(sas_sh.facade_local, OpCopy(sas_val)))
+                            emit(ctx, GIAssign(sas_sh.facade_local, OpCopy(sas_val)))
                         return
-                    if nl_contains(&ctx, name):
-                        int lid = nl_get(&ctx, name)
+                    if nl_contains(ctx, name):
+                        int lid = nl_get(ctx, name)
                         # `&`/`!`-param whole-value WRITE detection. A
                         # `GtMutPtr(inner)`-typed slot holds a `T*`; a plain
                         # GIAssign would clobber the POINTER slot instead of
@@ -868,9 +868,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         int val = lower_expr(&ctx, value_expr, &gmod)
                         ctx.expected_type = prev_expected_asn
                         if asn_inner_ty >= 0:
-                            emit(&ctx, GIDerefStore(lid, op_consume(&ctx, &gmod, val, CkAssign()), asn_inner_ty))
+                            emit(ctx, GIDerefStore(lid, op_consume(ctx, &gmod, val, CkAssign()), asn_inner_ty))
                         else:
-                            Operand rhs_op = op_consume(&ctx, &gmod, val, CkAssign())
+                            Operand rhs_op = op_consume(ctx, &gmod, val, CkAssign())
                             # ③(a) drop-on-overwrite (mirror Rust gg assigns.rs:197-231):
                             # drop `lid`'s PRIOR value AFTER computing the RHS, BEFORE the
                             # assign overwrites the slot. Gate on (1) the slot type being
@@ -919,7 +919,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 match rhs_op:
                                     case OpClone(_):
                                         int mat = add_local(&ctx, asn_lhs_full_ty, None)
-                                        emit(&ctx, GIAssign(mat, rhs_op))
+                                        emit(ctx, GIAssign(mat, rhs_op))
                                         rhs_op = OpMove(mat)
                                     else:
                                         pass
@@ -928,9 +928,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 # `tokens.push(current)` zeroes current's slot via the
                                 # post-pass GIMoveZero, then `current = ""`) is then a
                                 # runtime no-op. Mirrors Rust's is_moved -> drop_if_alive.
-                                emit(&ctx, GIDropIfAlive(lid))
-                            emit(&ctx, GIAssign(lid, rhs_op))
-                    elif static_contains(&gmod, name):
+                                emit(ctx, GIDropIfAlive(lid))
+                            emit(ctx, GIAssign(lid, rhs_op))
+                    elif static_contains(gmod, name):
                         # Module-level mutable-static WRITE (`STATIC = value`).
                         # A `static` is mutable storage; the destination is the
                         # global itself. `lower_place_base` returns a
@@ -940,14 +940,14 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         # was silently dropped (statics fell through every local
                         # arm). Mirrors Rust gg's assign into a static
                         # `Place{global,[Deref]}` (assigns.rs:389-392).
-                        int sty = static_lookup_type(&gmod, name)
+                        int sty = static_lookup_type(gmod, name)
                         int prev_expected_st = ctx.expected_type
                         if sty != I64_TYPE and sty != UNIT_TYPE:
                             ctx.expected_type = sty
                         int sval = lower_expr(&ctx, value_expr, &gmod)
                         ctx.expected_type = prev_expected_st
                         int sptr = lower_place_base(&ctx, target_expr, &gmod)
-                        emit(&ctx, GIDerefStore(sptr, op_consume(&ctx, &gmod, sval, CkAssign()), sty))
+                        emit(ctx, GIDerefStore(sptr, op_consume(ctx, &gmod, sval, CkAssign()), sty))
                 case EFieldAccess(base_box, field_name):
                     # self.field = value
                     # Lower as: __field_write_TYPE_FIELD(&base, value).
@@ -1006,7 +1006,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 ctx.expected_type = dbox_inner_tid
                             int dbox_val = lower_expr(&ctx, value_expr, &gmod)
                             ctx.expected_type = prev_expected_db
-                            emit(&ctx, GIDerefStore(dbox, op_consume(&ctx, &gmod, dbox_val, CkAssign()), dbox_inner_tid))
+                            emit(ctx, GIDerefStore(dbox, op_consume(ctx, &gmod, dbox_val, CkAssign()), dbox_inner_tid))
                         case None:
                             lower_fail("SAssign *deref target is not a Box (got: " + dbox_tname + ")")
                 else:
@@ -1019,12 +1019,12 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # innermost Loop scope before the jump.
             if ctx.loop_break_stack.len() > 0:
                 int tgt = ctx.loop_break_stack.get(ctx.loop_break_stack.len() - 1).unwrap()
-                emit_drops_for_early_exit(&ctx, DSK_LOOP, None)
+                emit_drops_for_early_exit(ctx, DSK_LOOP, None)
                 set_terminator(&ctx, GTJump(tgt))
         case SContinue:
             if ctx.loop_continue_stack.len() > 0:
                 int tgt = ctx.loop_continue_stack.get(ctx.loop_continue_stack.len() - 1).unwrap()
-                emit_drops_for_early_exit(&ctx, DSK_LOOP, None)
+                emit_drops_for_early_exit(ctx, DSK_LOOP, None)
                 set_terminator(&ctx, GTJump(tgt))
         case SPass:
             # `pass` is a literal no-op statement. Explicit case silences
@@ -1134,10 +1134,10 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         int sca_rhs = lower_expr(&ctx, value_expr, &gmod)
                         int sca_dst = emit_shared_compound(&ctx, &gmod, sca_sh, op, sca_rhs)
                         if sca_sh.facade_local >= 0:
-                            emit(&ctx, GIAssign(sca_sh.facade_local, OpCopy(sca_dst)))
+                            emit(ctx, GIAssign(sca_sh.facade_local, OpCopy(sca_dst)))
                         return
-                    if nl_contains(&ctx, name):
-                        int lid = nl_get(&ctx, name)
+                    if nl_contains(ctx, name):
+                        int lid = nl_get(ctx, name)
                         int lhs_full_type = ctx.locals.get(lid).unwrap().type_id
                         # `&`/`!`-param compound-assign (`x += 1` on `int &x`)
                         # is broken on BOTH legs: the slot holds a `T*`, so a
@@ -1157,15 +1157,15 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         if cmp_inner_ty >= 0:
                             # `&`-param path: read `*lid` into a value temp.
                             int cmp_cur = add_local(&ctx, cmp_inner_ty, None)
-                            emit(&ctx, GIDeref(cmp_cur, lid, cmp_inner_ty))
+                            emit(ctx, GIDeref(cmp_cur, lid, cmp_inner_ty))
                             int cmp_rhs = lower_expr(&ctx, value_expr, &gmod)
                             int cmp_dst = add_local(&ctx, cmp_inner_ty, None)
-                            emit_compound_arith(&ctx, op, cmp_dst, cmp_cur, cmp_rhs, cmp_inner_ty, &gmod)
-                            emit(&ctx, GIDerefStore(lid, op_consume(&ctx, &gmod, cmp_dst, CkAssign()), cmp_inner_ty))
+                            emit_compound_arith(ctx, op, cmp_dst, cmp_cur, cmp_rhs, cmp_inner_ty, &gmod)
+                            emit(ctx, GIDerefStore(lid, op_consume(ctx, &gmod, cmp_dst, CkAssign()), cmp_inner_ty))
                         else:
                             int lhs_type = lhs_full_type
                             int lhs_val = add_local(&ctx, lhs_type, None)
-                            emit(&ctx, GIAssign(lhs_val, op_consume(&ctx, &gmod, lid, CkAssign())))
+                            emit(ctx, GIAssign(lhs_val, op_consume(ctx, &gmod, lid, CkAssign())))
                             int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                             int op_dst = add_local(&ctx, lhs_type, None)
                             # R42-A: user operator-overload compound-assign
@@ -1173,9 +1173,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             # is dispatched INSIDE emit_compound_arith (Core #4
                             # "centralize at the producer"), so this and every
                             # other emit_compound_arith caller gets it uniformly.
-                            emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
-                            emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, op_dst, CkAssign())))
-                    elif static_contains(&gmod, name):
+                            emit_compound_arith(ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
+                            emit(ctx, GIAssign(lid, op_consume(ctx, &gmod, op_dst, CkAssign())))
+                    elif static_contains(gmod, name):
                         # Module-level mutable-static COMPOUND-assign
                         # (`STATIC += y` → `STATIC = STATIC <op> y`). Read the
                         # current value via `lower_expr` (routes through
@@ -1184,13 +1184,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         # back THROUGH the global-address pointer that
                         # `lower_place_base` yields. Mirrors Rust gg's compound
                         # assign into a static (assigns.rs:1120-1146).
-                        int csty = static_lookup_type(&gmod, name)
+                        int csty = static_lookup_type(gmod, name)
                         int clhs_val = lower_expr(&ctx, target_expr, &gmod)
                         int crhs_val = lower_expr(&ctx, value_expr, &gmod)
                         int cop_dst = add_local(&ctx, csty, None)
-                        emit_compound_arith(&ctx, op, cop_dst, clhs_val, crhs_val, csty, &gmod)
+                        emit_compound_arith(ctx, op, cop_dst, clhs_val, crhs_val, csty, &gmod)
                         int csptr = lower_place_base(&ctx, target_expr, &gmod)
-                        emit(&ctx, GIDerefStore(csptr, op_consume(&ctx, &gmod, cop_dst, CkAssign()), csty))
+                        emit(ctx, GIDerefStore(csptr, op_consume(ctx, &gmod, cop_dst, CkAssign()), csty))
                 case EFieldAccess(base_box, field_name):
                     # self.field <op>= value
                     # Lower as: self.field = self.field <op> value.
@@ -1208,7 +1208,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     int lhs_type = ctx.locals.get(lhs_val).unwrap().type_id
                     int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                     int op_dst = add_local(&ctx, lhs_type, None)
-                    emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
+                    emit_compound_arith(ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
                     # Wrap op_dst in a synthetic SpannedExpr to feed the
                     # same field-write path used above.
                     emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)
@@ -1260,7 +1260,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         SharedLocalInfo sw_sh = ctx.shared_locals.get(sw_name).unwrap()
                         int sw_fresh = emit_shared_read(&ctx, &gmod, sw_sh)
                         if sw_sh.facade_local >= 0:
-                            emit(&ctx, GIAssign(sw_sh.facade_local, OpCopy(sw_fresh)))
+                            emit(ctx, GIAssign(sw_sh.facade_local, OpCopy(sw_fresh)))
                         push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
                         lower_stmts(&ctx, with_body, &gmod, is_main)
                         pop_drop_scope(&ctx)
@@ -1306,9 +1306,9 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             int wr_param_local = -1
             match with_resource.expr:
                 case EIdentifier(wr_name):
-                    if nl_contains(&ctx, wr_name):
-                        int wr_cand = nl_get(&ctx, wr_name)
-                        if is_mut_borrow_param_local(&ctx, &gmod, wr_cand):
+                    if nl_contains(ctx, wr_name):
+                        int wr_cand = nl_get(ctx, wr_name)
+                        if is_mut_borrow_param_local(ctx, gmod, wr_cand):
                             wr_param_local = wr_cand
                 else:
                     pass
@@ -1319,7 +1319,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # ctx.locals, it does NOT bind the name. Body refs (`pool.…`)
             # resolve via nl_get; SVarDecl binds the same way. Without this
             # the body method calls resolve to `…__bytes_used(0)`.
-            emit(&ctx, GIAssign(with_local, op_consume(&ctx, &gmod, with_val, CkAssign())))
+            emit(ctx, GIAssign(with_local, op_consume(ctx, &gmod, with_val, CkAssign())))
             nl_put(&ctx, with_name, with_local)
             # round-16 Phase-2: record the (binding_local, param_local) refresh
             # pair captured above. When this function is later transformed into
@@ -1340,7 +1340,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             if with_alloc_kind != "":
                 Vector[Operand] with_push_args = []
                 with_push_args.push(OpCopy(with_local))
-                emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", with_push_args))
+                emit(ctx, GICallExtern(-1, "__gorget_push_allocator", with_push_args))
             # Step 3 — lower the body inside a fresh block drop-scope so locals
             # declared in the body are cleaned up at block exit (canonical
             # block pattern, mirrors lower_if's then-branch).
@@ -1351,12 +1351,12 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             pop_drop_scope(&ctx)
             # Step 5 — pop the active allocator + destroy the handle.
             if with_alloc_kind != "":
-                emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+                emit(ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
                 String with_destroy_fn = allocator_type_destroy_name(with_alloc_kind)
                 if with_destroy_fn != "":
                     Vector[Operand] with_destroy_args = []
                     with_destroy_args.push(OpCopy(with_local))
-                    emit(&ctx, GICallExtern(-1, with_destroy_fn, with_destroy_args))
+                    emit(ctx, GICallExtern(-1, with_destroy_fn, with_destroy_args))
         case SAssert(assert_cond, assert_msg_opt):
             # R11: lower an assert to a conditional panic — mirrors Rust's
             # lower_assert simple path (src/ir/lowering/stmts/mod.rs:2358-2385).
@@ -1395,7 +1395,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                 # traps as trap[T_AssertFailed] + exit 101. The T_ code is a cstr
                 # literal prepended to the message. Mirrors Rust gg
                 # src/ir/lowering/stmts/mod.rs (gorget_trap(T_AssertFailed, msg)).
-                emit(&ctx, GICallExtern(-1, "gorget_trap", [OpConstStr("T_AssertFailed"), OpConstStr(assert_msg)]))
+                emit(ctx, GICallExtern(-1, "gorget_trap", [OpConstStr("T_AssertFailed"), OpConstStr(assert_msg)]))
                 # gorget_panic is noreturn; this jump is a DEAD edge that keeps
                 # the CFG well-formed (Terminator has no GTUnreachable — Rust
                 # uses unreachable(); GTJump(pass_bb) is the faithful self-host
@@ -1445,7 +1445,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # anchor = stmts_first_pos(body), the SAME shared helper the
             # walker's push uses (keying cannot drift).
             materialize_scope_carried_bare_params(&ctx, &gmod, stmts_first_pos(ns_body))
-            Dict[String, int] ns_snapshot = nl_snapshot(&ctx)
+            Dict[String, int] ns_snapshot = nl_snapshot(ctx)
             push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
             lower_stmts(&ctx, ns_body, &gmod, is_main)
             Terminator ns_term = ctx.block_terms.get(ctx.current_block).unwrap()
@@ -1491,7 +1491,7 @@ void lower_shared_var_decl(LowerCtx &ctx, String name, SpannedExpr init_expr, in
         shared_mangled = ""
         carrier_ty = register_rwlock_carrier_type(&gmod, inner_c)
         shv_carrier = add_local(&ctx, carrier_ty, None)
-        emit(&ctx, GICall(shv_carrier, rw_mangled + "__new", [op_consume(&ctx, &gmod, shv_init, CkCallArgBorrow())]))
+        emit(ctx, GICall(shv_carrier, rw_mangled + "__new", [op_consume(ctx, &gmod, shv_init, CkCallArgBorrow())]))
     elif shared_kind == SHK_ATOMIC:
         # carrier = gorget_atomic_{int,bool}_new(init) — by-value ctor, no
         # sizeof/address shaping needed.
@@ -1500,16 +1500,16 @@ void lower_shared_var_decl(LowerCtx &ctx, String name, SpannedExpr init_expr, in
         shared_mangled = ""
         carrier_ty = register_atomic_carrier_type(&gmod, inner_ty)
         shv_carrier = add_local(&ctx, carrier_ty, None)
-        emit(&ctx, GICallExtern(shv_carrier, atomic_runtime_prefix(inner_ty) + "_new", [OpCopy(shv_init)]))
+        emit(ctx, GICallExtern(shv_carrier, atomic_runtime_prefix(inner_ty) + "_new", [OpCopy(shv_init)]))
     else:
         # SHK_MUTEX: mutex_val = Mutex__c__new(init) → gorget_mutex_new(
         # sizeof(T), &init); carrier = Shared__Mutex__c__new(mutex_val).
         carrier_ty = register_shared_carrier_type(&gmod, inner_c)
         int shv_mutex_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, mutex_mangled))
         int shv_mutex = add_local(&ctx, shv_mutex_ty, None)
-        emit(&ctx, GICall(shv_mutex, mutex_mangled + "__new", [op_consume(&ctx, &gmod, shv_init, CkCallArgBorrow())]))
+        emit(ctx, GICall(shv_mutex, mutex_mangled + "__new", [op_consume(ctx, &gmod, shv_init, CkCallArgBorrow())]))
         shv_carrier = add_local(&ctx, carrier_ty, None)
-        emit(&ctx, GICall(shv_carrier, shared_mangled + "__new", [OpCopy(shv_mutex)]))
+        emit(ctx, GICall(shv_carrier, shared_mangled + "__new", [OpCopy(shv_mutex)]))
     nl_put(&ctx, "__shared_carrier_" + name, shv_carrier)
     # Register the carrier for drop at its BIRTH (Core #3):
     #   SHK_MUTEX  → gorget_shared arm (gorget_shared_mutex_drop, refcount)
@@ -1524,7 +1524,7 @@ void lower_shared_var_decl(LowerCtx &ctx, String name, SpannedExpr init_expr, in
     SharedLocalInfo shv_info = SharedLocalInfo(-1, shv_carrier, inner_ty, carrier_ty, inner_c.clone(), mutex_mangled.clone(), guard_mangled.clone(), shared_mangled.clone(), shv_order, shared_kind)
     int shv_facade_val = emit_shared_read(&ctx, &gmod, shv_info)
     int shv_facade = add_local(&ctx, inner_ty, Some(name))
-    emit(&ctx, GIAssign(shv_facade, OpCopy(shv_facade_val)))
+    emit(ctx, GIAssign(shv_facade, OpCopy(shv_facade_val)))
     nl_put(&ctx, name, shv_facade)
     # Finalize the info with the facade local + store in the carrier table.
     SharedLocalInfo shv_final = SharedLocalInfo(shv_facade, shv_carrier, inner_ty, carrier_ty, inner_c.clone(), mutex_mangled.clone(), guard_mangled.clone(), shared_mangled.clone(), shv_order, shared_kind)
@@ -1545,18 +1545,18 @@ void lower_shared_var_decl(LowerCtx &ctx, String name, SpannedExpr init_expr, in
 int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
     match base_expr.expr:
         case EIdentifier(name):
-            if nl_contains(&ctx, name):
-                return nl_get(&ctx, name)
+            if nl_contains(ctx, name):
+                return nl_get(ctx, name)
             # static-as-place — emit a Ptr alias to the global so a method
             # receiver / field-write / index base mutates the REAL static,
             # not a value copy. A GtMutPtr slot makes lir_lower store the
             # global's address directly (no load/copy).
-            if static_contains(&gmod, name):
-                int sty = static_lookup_type(&gmod, name)
+            if static_contains(gmod, name):
+                int sty = static_lookup_type(gmod, name)
                 int pty = register_type(&gmod, GtMutPtr(sty))
                 int pdst = add_local(&ctx, pty, None)
                 Vector[Operand] no_args = []
-                emit(&ctx, GICallExtern(pdst, "__global_ref__" + name, no_args))
+                emit(ctx, GICallExtern(pdst, "__global_ref__" + name, no_args))
                 return pdst
         case EDeref(inner_box):
             # `(*b).field = X` place-base. The box VALUE is itself the heap
@@ -1677,7 +1677,7 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
                         # setter call does — NEVER OpBorrow a ptr slot (that is a
                         # pointer-to-pointer).
                         Operand fpb_base_op = OpBorrow(fpb_base)
-                        if is_ptr_type(fpb_base_tid, &gmod):
+                        if is_ptr_type(fpb_base_tid, gmod):
                             fpb_base_op = OpCopy(fpb_base)
                         # dst = gorget_array_get(base, idx) typed GtPtr(elem) +
                         # LoBorrowed — a pointer INTO the buffer. The GtPtr dst
@@ -1691,7 +1691,7 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
                         int fpb_ptr_tid = register_ptr(&gmod, fpb_elem_tid)
                         int fpb_dst = add_local_with(&ctx, fpb_ptr_tid, None, LoBorrowed(), BoNone())
                         Vector[Operand] fpb_args = [fpb_base_op, OpBorrow(fpb_idx)]
-                        emit(&ctx, GICallExtern(fpb_dst, fpb_getter, fpb_args))
+                        emit(ctx, GICallExtern(fpb_dst, fpb_getter, fpb_args))
                         return fpb_dst
         else:
             pass
@@ -1767,7 +1767,7 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
     ctx.expected_type = prev_expected_fw
     String write_fn = "__field_write_" + base_type_name + "_" + field_name
     Vector[Operand] write_args = []
-    bool base_is_ptr = is_ptr_type(base_tid, &gmod)
+    bool base_is_ptr = is_ptr_type(base_tid, gmod)
     if base_is_ptr:
         write_args.push(OpCopy(base))
     else:
@@ -1782,8 +1782,8 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
                 write_args.push(OpBorrow(base))
             else:
                 write_args.push(OpBorrow(base))
-    write_args.push(op_consume(&ctx, &gmod, val, CkFieldWrite()))
-    emit(&ctx, GICallExtern(-1, write_fn, write_args))
+    write_args.push(op_consume(ctx, &gmod, val, CkFieldWrite()))
+    emit(ctx, GICallExtern(-1, write_fn, write_args))
 
 # Variant of lower_field_write that takes a pre-lowered local id for the
 # value rather than re-lowering an expression.
@@ -1824,7 +1824,7 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
             pass
     String write_fn = "__field_write_" + base_type_name + "_" + field_name
     Vector[Operand] write_args = []
-    bool base_is_ptr = is_ptr_type(base_tid, &gmod)
+    bool base_is_ptr = is_ptr_type(base_tid, gmod)
     if base_is_ptr:
         write_args.push(OpCopy(base))
     else:
@@ -1839,8 +1839,8 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
                 write_args.push(OpBorrow(base))
             else:
                 write_args.push(OpBorrow(base))
-    write_args.push(op_consume(&ctx, &gmod, value_local, CkFieldWrite()))
-    emit(&ctx, GICallExtern(-1, write_fn, write_args))
+    write_args.push(op_consume(ctx, &gmod, value_local, CkFieldWrite()))
+    emit(ctx, GICallExtern(-1, write_fn, write_args))
 
 # ── Control flow lowering ────────────────────────────────
 
@@ -1876,7 +1876,7 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
     # edge. Use pop_drop_scope_no_emit on early-exit branches (return/
     # break/continue already emitted their drops).
     switch_to(&ctx, then_bb)
-    Dict[String, int] saved_then = nl_snapshot(&ctx)
+    Dict[String, int] saved_then = nl_snapshot(ctx)
     push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
     lower_stmts(&ctx, then_body, &gmod, is_main)
     # Only jump to merge if not already terminated (no return/break)
@@ -1890,7 +1890,7 @@ void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vect
     nl_restore(&ctx, saved_then)
     # Else branch
     switch_to(&ctx, else_bb)
-    Dict[String, int] saved_else = nl_snapshot(&ctx)
+    Dict[String, int] saved_else = nl_snapshot(ctx)
     push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
     if elif_branches.len() > 0:
         ElseBranch eb = elif_branches.get(0).unwrap()
@@ -1990,10 +1990,10 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
         String ia_set_full = base_tname + "__set"
         if gmod.fn_sigs.contains(ia_set_full):
             Operand ia_set_self = OpBorrow(base)
-            if is_ptr_type(base_tid, &gmod):
+            if is_ptr_type(base_tid, gmod):
                 ia_set_self = OpCopy(base)
-            Vector[Operand] ia_set_args = [ia_set_self, op_consume(&ctx, &gmod, idx, classify_call_arg(&gmod, ia_set_full, 1)), op_consume(&ctx, &gmod, val, classify_call_arg(&gmod, ia_set_full, 2))]
-            emit(&ctx, GICallExtern(-1, ia_set_full, ia_set_args))
+            Vector[Operand] ia_set_args = [ia_set_self, op_consume(ctx, &gmod, idx, classify_call_arg(gmod, ia_set_full, 1)), op_consume(ctx, &gmod, val, classify_call_arg(gmod, ia_set_full, 2))]
+            emit(ctx, GICallExtern(-1, ia_set_full, ia_set_args))
             return
     if setter == "":
         lower_fail("lower_index_assign: unsupported base type " + base_tname)
@@ -2009,7 +2009,7 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     # live), which clones-and-discards the base and never mutates the
     # original (the d[k]=v clone-bomb: every assign mutated a throwaway).
     Operand base_op = OpBorrow(base)
-    if is_ptr_type(base_tid, &gmod):
+    if is_ptr_type(base_tid, gmod):
         base_op = OpCopy(base)
     # `base[idx] = val` → setter(base, idx, val): the collection takes
     # ownership of BOTH key/idx AND val (consuming position per CLAUDE.md).
@@ -2018,8 +2018,8 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     # CkCallArgOwning (an owned String key would otherwise double-free).
     # For Vector int index this is inert (by-value scalar, no drop). val →
     # CkCallArgOwning (unchanged).
-    Vector[Operand] set_args = [base_op, op_consume(&ctx, &gmod, idx, CkCallArgOwning()), op_consume(&ctx, &gmod, val, CkCallArgOwning())]
-    emit(&ctx, GICallExtern(-1, setter, set_args))
+    Vector[Operand] set_args = [base_op, op_consume(ctx, &gmod, idx, CkCallArgOwning()), op_consume(ctx, &gmod, val, CkCallArgOwning())]
+    emit(ctx, GICallExtern(-1, setter, set_args))
 
 # Lower `base[idx] OP= value` (compound index-assign on a collection).
 # Desugars to: `cur = base[idx]; result = cur OP value; base[idx] = result`,
@@ -2093,17 +2093,17 @@ void lower_index_compound_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedEx
     # OpBorrow — OpCopy on a String dict key trips validate_resource_moves).
     int ica_cur = add_local(&ctx, ica_elem_tid, None)
     Vector[Operand] ica_get_args = [OpBorrow(base), OpBorrow(idx)]
-    emit(&ctx, GICallExtern(ica_cur, ica_getter, ica_get_args))
+    emit(ctx, GICallExtern(ica_cur, ica_getter, ica_get_args))
     # result = cur OP value, at the element type.
     int ica_rhs = lower_expr(&ctx, value_expr, &gmod)
     int ica_result = add_local(&ctx, ica_elem_tid, None)
-    emit_compound_arith(&ctx, op, ica_result, ica_cur, ica_rhs, ica_elem_tid, &gmod)
+    emit_compound_arith(ctx, op, ica_result, ica_cur, ica_rhs, ica_elem_tid, &gmod)
     # Write back base[idx] = result via the setter. A compound index-assign
     # never consumes the base — borrow it (Ptr base → OpCopy), exactly as
     # lower_index_assign does.
     Operand ica_base_op = OpBorrow(base)
-    if is_ptr_type(base_tid, &gmod):
+    if is_ptr_type(base_tid, gmod):
         ica_base_op = OpCopy(base)
-    Vector[Operand] ica_set_args = [ica_base_op, op_consume(&ctx, &gmod, idx, CkCallArgOwning()), op_consume(&ctx, &gmod, ica_result, CkCallArgOwning())]
-    emit(&ctx, GICallExtern(-1, ica_setter, ica_set_args))
+    Vector[Operand] ica_set_args = [ica_base_op, op_consume(ctx, &gmod, idx, CkCallArgOwning()), op_consume(ctx, &gmod, ica_result, CkCallArgOwning())]
+    emit(ctx, GICallExtern(-1, ica_setter, ica_set_args))
 

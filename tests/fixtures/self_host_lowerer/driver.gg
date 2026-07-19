@@ -384,7 +384,7 @@ void compile_main():
     Dict[String, String] lib_embedded = build_embedded_lib()
     bool lib_explicit = cmd_args.len() > 2
     Dict[String, bool] imported_bare_names = {}
-    Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_explicit, &imported_bare_names)
+    Dict[String, String] call_redirects = load_imports(&m, path, lib_dir, &imported_fns, source.byte_len(), lib_embedded, lib_explicit, &imported_bare_names)
     _t1 = time_ms()
     if _timing: print("PHASE load_imports " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
@@ -446,27 +446,27 @@ void compile_main():
     # `GG_VALIDATE_PASSES` is set; when set, runs the GIR validators
     # with a pass-tagged failure message that surfaces mid-pipeline
     # regressions.
-    validate_gir_after("gir-lowering", &gir)
+    validate_gir_after("gir-lowering", gir)
     # Phase C validators run BEFORE the GIR/LIR print so a fatal
     # violation (closed-class with non-zero count) halts the build
     # with the violations as the diagnostic. All three classes
     # (field_reads, call_args, moves) are unconditional fatal as
     # of step 5c.
-    run_validators(&gir)
+    run_validators(gir)
     _t1 = time_ms()
     if _timing: print("PHASE run_validators(GIR) " + int_to_str(_t1 - _tp) + " ms", file=stderr)
     _tp = _t1
     # --emit-gir: dump GIR text and stop before LIR lowering (matches Rust's
     # `--emit-gir`, which dumps the GIR module and returns without codegen).
     if emit_gir:
-        print(format_module(&gir))
+        print(format_module(gir))
         return
     if emit_c_full or emit_c_body or emit_lir:
         LirModule lir = lower_gir_to_lir(&gir)
         _t1 = time_ms()
         if _timing: print("PHASE lower_gir_to_lir(LIR) " + int_to_str(_t1 - _tp) + " ms", file=stderr)
         _tp = _t1
-        validate_lir_after("lir-lowering", &lir)
+        validate_lir_after("lir-lowering", lir)
         # Drop globals no function references — mirrors Rust gg's
         # `eliminate_dead_globals` in src/lir/optimize.rs. Without
         # this, stage-1's emitted .c carries dead `__lir_g<N>` decls
@@ -476,11 +476,11 @@ void compile_main():
         _t1 = time_ms()
         if _timing: print("PHASE eliminate_dead_globals " + int_to_str(_t1 - _tp) + " ms", file=stderr)
         _tp = _t1
-        run_ssa(&lir)
+        run_ssa(lir)
         _t1 = time_ms()
         if _timing: print("PHASE run_ssa " + int_to_str(_t1 - _tp) + " ms", file=stderr)
         _tp = _t1
-        validate_lir_after("ssa-construction", &lir)
+        validate_lir_after("ssa-construction", lir)
         # Phase 2c COMMIT 1: drop elaboration runs after SSA, mirroring
         # Rust's pipeline (src/lir/optimize.rs:78). Operates on the
         # non-promotable slots that survived SSA construction (those
@@ -491,7 +491,7 @@ void compile_main():
         _t1 = time_ms()
         if _timing: print("PHASE elaborate_drops " + int_to_str(_t1 - _tp) + " ms", file=stderr)
         _tp = _t1
-        validate_lir_after("drop-elaboration", &lir)
+        validate_lir_after("drop-elaboration", lir)
         _t1 = time_ms()
         if _timing: print("PHASE validate_lir_after(x3) " + int_to_str(_t1 - _tp) + " ms", file=stderr)
         _tp = _t1
@@ -499,22 +499,22 @@ void compile_main():
         # the C backend consumes). Rust's `--emit-lir` dumps post-SSA-post-opt;
         # drop elaboration is the self-host's closest analog of that opt stage.
         if emit_lir:
-            print(format_lir_module(&lir))
+            print(format_lir_module(lir))
         elif emit_c_full:
             # FULL program: runtime preamble (selected runtime .c files +
             # emit_lir_helpers) THEN the body. Order is preamble-then-body,
             # matching Rust's splice boundary (the runtime precedes the body's
             # user typedefs). No external splice needed downstream.
             Dict[String, String] _embedded = build_embedded_runtime()
-            String _pre = emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit)
-            String _body = generate_c(&lir)
+            String _pre = emit_runtime_preamble(lir, runtime_dir, _embedded, runtime_dir_explicit)
+            String _body = generate_c(lir)
             _t1 = time_ms()
             if _timing: print("PHASE generate_c " + int_to_str(_t1 - _tp) + " ms", file=stderr)
             _tp = _t1
             if _timing: print("PHASE TOTAL " + int_to_str(_t1 - _t0) + " ms", file=stderr)
             print(_pre + _body)
         else:
-            String _c = generate_c(&lir)
+            String _c = generate_c(lir)
             _t1 = time_ms()
             if _timing: print("PHASE generate_c " + int_to_str(_t1 - _tp) + " ms", file=stderr)
             _tp = _t1
@@ -522,7 +522,7 @@ void compile_main():
             print(_c)
     else:
         # Default (no dump flag): GIR text, matching prior driver behavior.
-        print(format_module(&gir))
+        print(format_module(gir))
 
 # ── usage / --help ───────────────────────────────────────────────────────────
 # Printed by `gg --help`, a bare `gg`, and on a no-input-file error. Kept in one
@@ -656,7 +656,7 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     Dict[String, bool] imported_fns = {}
     Dict[String, String] lib_embedded = build_embedded_lib()
     Dict[String, bool] imported_bare_names = {}
-    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_dir_explicit, &imported_bare_names)
+    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), lib_embedded, lib_dir_explicit, &imported_bare_names)
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
@@ -679,40 +679,40 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
         report_diagnostics(ctx.diagnostics, source, input_path)
         exit(1)
     GirModule gir = lower_module(&m, scopes, types, call_redirects, imported_fns)
-    validate_gir_after("gir-lowering", &gir)
-    run_validators(&gir)
+    validate_gir_after("gir-lowering", gir)
+    run_validators(gir)
     # --emit-gir: dump GIR text and stop before LIR lowering (mirrors the legacy
     # path :178 and Rust's --emit-gir; src/main.rs:638).
     if emit_gir:
-        print(format_module(&gir))
+        print(format_module(gir))
         return
     LirModule lir = lower_gir_to_lir(&gir)
-    validate_lir_after("lir-lowering", &lir)
+    validate_lir_after("lir-lowering", lir)
     eliminate_dead_globals(&lir)
-    run_ssa(&lir)
-    validate_lir_after("ssa-construction", &lir)
+    run_ssa(lir)
+    validate_lir_after("ssa-construction", lir)
     elaborate_drops(&lir)
-    validate_lir_after("drop-elaboration", &lir)
+    validate_lir_after("drop-elaboration", lir)
     # --emit-lir: dump the post-SSA, post-drop-elaboration LIR and stop (mirrors
     # the legacy path :218 and Rust's --emit-lir; src/main.rs:659).
     if emit_lir:
-        print(format_lir_module(&lir))
+        print(format_lir_module(lir))
         return
     # --lir-c: dump body-only C (no runtime preamble) and stop. --emit-c: dump
     # the full program (preamble + body) and stop. Both skip cc/link, matching
     # the legacy path's --lir-c/--emit-c (:220-238) + Rust's dump-and-exit.
     if emit_c_body:
-        print(generate_c(&lir))
+        print(generate_c(lir))
         return
     # Inc-2: the embedded runtime table (consulted by read_runtime when no
     # explicit --runtime-dir/GG_RUNTIME_DIR forces a disk read). Built once for
     # both the --emit-c dump and the cc/link path below.
     Dict[String, String] _embedded = build_embedded_runtime()
     if emit_c_full:
-        print(emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit) + generate_c(&lir))
+        print(emit_runtime_preamble(lir, runtime_dir, _embedded, runtime_dir_explicit) + generate_c(lir))
         return
     # Emit full C (runtime preamble + body).
-    String full_c = emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit) + generate_c(&lir)
+    String full_c = emit_runtime_preamble(lir, runtime_dir, _embedded, runtime_dir_explicit) + generate_c(lir)
 
     # ── Write C → temp file ──────────────────────────────────────────────────
     write_file(c_path, full_c)
@@ -790,7 +790,7 @@ void run_check_mode(Vector[String] cmd_args):
     Dict[String, bool] imported_fns = {}
     Dict[String, String] lib_embedded = build_embedded_lib()
     Dict[String, bool] imported_bare_names = {}
-    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), &lib_embedded, lib_dir_explicit, &imported_bare_names)
+    Dict[String, String] call_redirects = load_imports(&m, input_path, lib_dir, &imported_fns, source.byte_len(), lib_embedded, lib_dir_explicit, &imported_bare_names)
     expand_derives(&m)
     ScopeTable scopes = ScopeTable.new_scope_table()
     scopes.init()
@@ -814,7 +814,7 @@ void run_check_mode(Vector[String] cmd_args):
         exit(1)
     print("ok")
 
-void run_ssa(LirModule &m):
+void run_ssa(LirModule m):
     int fi = 0
     while fi < m.functions.len():
         construct_ssa(&m.functions.get(fi).unwrap())

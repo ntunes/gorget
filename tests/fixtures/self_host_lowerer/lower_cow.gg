@@ -150,7 +150,7 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
             # handling (functions.rs, compute_cow_reassigned_after).
             int scan_mai = 0
             for ma in margs:
-                if method_arg_lets_callee_mutate(&ctx, *recv_box, mname, scan_mai, &gmod):
+                if method_arg_lets_callee_mutate(ctx, *recv_box, mname, scan_mai, &gmod):
                     cow_mark_if_ident(&ctx, ma.value, ma.value.span.start, in_closure)
                 cow_scan_expr(&ctx, &gmod, ma.value, in_closure)
                 scan_mai = scan_mai + 1
@@ -193,7 +193,7 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
                         scan_resolved = gmod.call_redirects.get(scan_resolved).unwrap()
                     int scan_ai = 0
                     for ca_sig in cargs:
-                        if call_arg_lets_callee_mutate(&gmod, scan_resolved, scan_ai):
+                        if call_arg_lets_callee_mutate(gmod, scan_resolved, scan_ai):
                             cow_mark_if_ident(&ctx, ca_sig.value, ca_sig.value.span.start, in_closure)
                         scan_ai = scan_ai + 1
                 else:
@@ -527,7 +527,7 @@ void cow_mark_assign_target(LowerCtx &ctx, SpannedExpr lhs, int pos, bool in_clo
 #       the decide_ptr_consume/OpClone escape funnel.
 #   (d) closure-deferred — a closure-body mutation runs at an unknown
 #       time, so the name is never pristine (the cow_closure_mutated set).
-bool cow_pristine_after(LowerCtx &ctx, String name, int pos):
+bool cow_pristine_after(LowerCtx ctx, String name, int pos):
     if ctx.cow_closure_mutated.contains(name):
         return false
     if not ctx.cow_mutated_names.contains(name):

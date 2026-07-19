@@ -85,12 +85,12 @@ void push_drop_scope(DropElaborator &de, int kind):
 # `bootstrap_fixed_point` (stage-1==stage-2 byte-identical) is the
 # strongest regression net here: the driver self-compiles its own scopes
 # and re-converges.
-void emit_scope_drops(LowerCtx &ctx, Vector[DropEntry] entries):
+void emit_scope_drops(LowerCtx ctx, Vector[DropEntry] entries):
     # Cluster (a) probe: emit GIDropIfAlive unconditionally in LIFO order.
     int i = entries.len() - 1
     while i >= 0:
         DropEntry entry = entries.get(i).unwrap()
-        emit(&ctx, GIDropIfAlive(entry.local_id))
+        emit(ctx, GIDropIfAlive(entry.local_id))
         i = i - 1
 
 # Pop the innermost scope and emit its drops at the current block IF
@@ -111,7 +111,7 @@ void pop_drop_scope(LowerCtx &ctx):
         else:
             pass
     if fall_through:
-        emit_scope_drops(&ctx, scope.entries)
+        emit_scope_drops(ctx, scope.entries)
     ctx.drop_elab.scopes.pop()
 
 # Pop the innermost scope WITHOUT emitting drops. Used at the loop-
@@ -445,7 +445,7 @@ void mark_local_moved(LowerCtx &ctx, int local_id):
 # rarely exceed ~50 droppable locals per scope.
 const int SNAPSHOT_MAX_PER_SCOPE = 4096
 
-Vector[bool] snap_moved_state(DropElaborator &de):
+Vector[bool] snap_moved_state(DropElaborator de):
     Vector[bool] out = []
     int si = 0
     while si < de.scopes.len():
@@ -522,7 +522,7 @@ void union_moved(DropElaborator &de, Vector[bool] branch_snap):
 # proper move-out / drop semantics, the no-op walk below becomes a
 # one-line `emit(&ctx, GIDropIfAlive(entry.local_id))` inside the
 # skip-check.
-void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclude_local):
+void emit_drops_for_early_exit(LowerCtx ctx, int target_kind, Option[int] exclude_local):
     int si = ctx.drop_elab.scopes.len() - 1
     while si >= 0:
         DropScope scope = ctx.drop_elab.scopes.get(si).unwrap()
@@ -537,7 +537,7 @@ void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclu
                 case None:
                     pass
             if not skip:
-                emit(&ctx, GIDropIfAlive(entry.local_id))
+                emit(ctx, GIDropIfAlive(entry.local_id))
             ei -= 1
         if scope.kind == target_kind:
             return
@@ -566,7 +566,7 @@ void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclu
 # (note: scopes have been popped by now, so we'd need to snapshot
 # them at queue-record time or pre-flatten the entry directly into
 # `DropEmission`. The follow-up commit will pick the right shape).
-void flush_drop_queue(LowerCtx &ctx):
+void flush_drop_queue(LowerCtx ctx):
     # Prereq C: queue is empty (no recorders), so this loop is a
     # no-op. Touch each entry to keep the field exercised — the
     # release build's dead-field elimination would otherwise hide

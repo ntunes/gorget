@@ -422,7 +422,7 @@ String format_lir_global(int index, LirGlobal g):
 # ── Module formatting ────────────────────────────────────────────
 # Mirrors `impl Display for DisplayModule` in display.rs.
 
-String format_lir_module(LirModule &m):
+String format_lir_module(LirModule m):
     String result = ""
 
     if m.source_filename != "":

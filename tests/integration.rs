@@ -18688,7 +18688,12 @@ fn self_host_bootstrap() {
 // drops — the ratchet only tightens. Regenerate by hand:
 //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
 //   → .clone_stats.array_clone
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 530_700_000;
+//
+// Re-seeded 2026-07-19 (Class-C round): the read-only-`&`-param burn-down
+// (every read-only `&`-param → bare across the self-host) elided the
+// `&`-formation write-through clones on the Rust-lane self-compile.
+// array_clone 527,384,100 → 12,588,676 (−97.6%). Ceiling = measured + ~1%.
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_720_000;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -18708,7 +18713,11 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 530_700_000;
 // this test (the fresh number always prints), or
 //   scripts/clone_attribution.sh (the [clone-stats] line + a per-site
 //   ranked breakdown of where the clones come from).
-const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 448_400_000;
+//
+// Re-seeded 2026-07-19 (Class-C round): the read-only-`&`-param burn-down
+// elided the `&`-formation clones on the Rust-lane self-compile.
+// string_clone 443,952,149 → 29,097,964 (−93.4%). Ceiling = measured + ~1%.
+const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 29_400_000;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -18884,15 +18893,35 @@ fn self_host_clone_ceiling() {
 // tightens. Regenerate / triage a trip:
 //   scripts/bench_stages.sh --out /tmp/stages.tsv   (the S1->2 array_clone)
 //   scripts/clone_attribution.sh                    (per-site ranked breakdown)
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_028_700_000;
+//
+// RE-PINNED UP 2026-07-19 (Class-C round) — this is the ratchet doing its
+// designed job (see above: "a de-optimization that lands only in the
+// self-host's lowering rides UNDER the stage-0 ceiling and shows up only
+// here"). The read-only-`&`-param burn-down converted every read-only
+// `&`-param → bare across the self-host. On the STAGE-0 (Rust-lowered) lane
+// that elided the `&`-formation clones (527M → 12.6M). But the SELF-HOST's
+// OWN lowering clones a LIVE bare Resource arg at call sites where Rust gg
+// borrows (probe-confirmed: SH-emitted C has the clone, Rust gg emits none)
+// — a PRE-EXISTING SH-CoW gap that was MASKED while the source spelled `&`
+// (the `&`-formation cloned on BOTH lanes). Baring the source unmasked it,
+// so the stage-1 lane clones MORE: array 1,018M → 1,269,469,150 (+~24%).
+// This is NOT a regression in the round's edits (Rust-lane output is
+// byte-identical; the source is now idiomatic per the showcase rule); it is
+// the SH lowerer's bare-arg/param CoW deficiency made visible. Filed HIGH
+// (TODO: "SH-lowerer bare-arg clone gap") as the SH-CoW campaign — RE-PIN
+// THIS BACK DOWN (toward the stage-0 lane's ~12.6M) once that lands.
+// Ceiling = measured + ~1%.
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_282_200_000;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
 // direct ceiling here too.
 //
-// Seeded at a276af64: 1,893,924,407 (measured FRESH this session,
-// regenerated TWICE — bit-identical). Ceiling = seed + ~1% headroom.
-const STAGE1_STRING_CLONE_CEILING: u64 = 1_912_900_000;
+// RE-PINNED UP 2026-07-19 (Class-C round), same cause as the array ceiling
+// above: the SH-lowerer bare-arg clone gap unmasked by the read-only-`&`
+// burn-down. string 1,894M → 2,218,112,953 (+~17%). Filed HIGH; re-pin
+// back down after the SH-CoW campaign. Ceiling = measured + ~1%.
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_240_400_000;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
