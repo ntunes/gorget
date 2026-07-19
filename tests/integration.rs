@@ -23389,7 +23389,7 @@ fn self_host_runtime_diff() {
     // MATCH 1192 = ADJ 344 + UNADJ 835 + BOTH-WRONG 13); floor = 344 − 5 (the
     // MATCH floor's measured timeout jitter — ADJ derives from the MATCH set,
     // so it inherits at most that jitter) = 339.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 339;
+    const GGDEF_ADJUDICATED_FLOOR: usize = 353;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -23521,7 +23521,7 @@ fn self_host_runtime_diff() {
     // Bump-on-improvement: when MATCH rises, raise the floor in the same
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter. Floors ratchet — never lower.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1187;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1202;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
