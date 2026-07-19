@@ -327,10 +327,18 @@ impl Expr {
     /// storage location) rather than a fresh value. Drives the copy-vs-view
     /// decision at binding and call-arg positions.
     pub fn is_place(&self) -> bool {
-        matches!(
-            self,
-            Expr::Local(_) | Expr::Field(..) | Expr::TupleField(..) | Expr::Index(..)
-        )
+        match self {
+            Expr::Local(_) | Expr::Field(..) | Expr::TupleField(..) | Expr::Index(..) => true,
+            // Auto-borrow-from-get: `coll.get(i).unwrap()` denotes the PLACE
+            // `coll[i]`. `.get()` yields `Option[Ref[T]]` and `.unwrap()` the
+            // `Ref[T]` borrow (the ratified get→Ref semantics), so a mutating
+            // method on the chain writes THROUGH to the stored element and a read
+            // reads it. A place iff the underlying collection is itself a place.
+            Expr::Method { recv, method: BuiltinMethod::Unwrap, args } if args.is_empty() => {
+                matches!(&**recv, Expr::Method { recv: coll, method: BuiltinMethod::Get, .. } if coll.is_place())
+            }
+            _ => false,
+        }
     }
 
     /// A human-readable path for this place, for trace provenance

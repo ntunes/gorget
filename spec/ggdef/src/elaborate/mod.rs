@@ -106,6 +106,10 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
                     name.clone(),
                     fd.params.iter().map(|p| ty_of_type(&p.node.type_.node)).collect(),
                 );
+                el.fn_param_modes.insert(
+                    name.clone(),
+                    fd.params.iter().map(|p| mode_of(p.node.ownership)).collect(),
+                );
                 el.fn_ret.insert(name.clone(), ty_of_type(&fd.return_type.node));
                 if fd.throws.declares_throws() {
                     el.fn_throws.insert(name);
@@ -266,6 +270,12 @@ struct Elaborator {
     /// §10.3 type-directed capture at call args (a throws-call arg whose param
     /// is declared `Result[_,_]` captures instead of auto-propagating).
     fn_param_tys: HashMap<String, Vec<Ty>>,
+    /// Signature registry: fn / method name → declared param MODES, in decl
+    /// order (methods exclude `self`, aligning with `fn_param_names`). Serves
+    /// the "unbroken `&`-chain" (§3.1): a bare place arg into a `&`
+    /// (WriteThrough) param aliases the caller's place — the `&` on the PARAM
+    /// declaration drives write-through, no call-site sigil required.
+    fn_param_modes: HashMap<String, Vec<Mode>>,
     /// `(type-name, method-name) → MethodInfo` for user `equip` methods.
     equip_methods: HashMap<(String, String), MethodInfo>,
     /// `equip T with Drop` registry: `(type-name, drop-fn-name)`.
@@ -302,6 +312,13 @@ struct Elaborator {
     /// (see `CaptureCtx`). Set by a destination position just before its value
     /// elaborates; consumed by the outermost call.
     capture_ctx: CaptureCtx,
+    /// The DECLARED type of the destination whose value is currently being
+    /// elaborated (a VarDecl's annotation). A brace literal `{a, b, c}` and a
+    /// bracket literal `[a, b, c]` share ONE AST node (`ArrayLiteral`) — set vs
+    /// vector is DESTINATION-TYPE directed (production disambiguates the same
+    /// way). Set just before `bind_source`, consumed (`take`) by the
+    /// `ArrayLiteral` arm, cleared after — mirrors `capture_ctx`'s lifetime.
+    dest_ty_hint: Option<Ty>,
     /// D29: the FIRST bare-fallible-mark violation seen while elaborating (first
     /// wins, mirroring the liveness gate's first-Halt). Carried onto the emitted
     /// `Program` and surfaced by `run` as an `IllFormed` + `E_MissingFallibleMark`
@@ -472,9 +489,17 @@ impl Elaborator {
                 .filter(|p| !is_self_param(&p.node))
                 .map(|p| ty_of_type(&p.node.type_.node))
                 .collect();
+            let param_modes: Vec<Mode> = m
+                .node
+                .params
+                .iter()
+                .filter(|p| !is_self_param(&p.node))
+                .map(|p| mode_of(p.node.ownership))
+                .collect();
             self.func_names.insert(mangled.clone());
             self.fn_param_names.insert(mangled.clone(), param_names);
             self.fn_param_tys.insert(mangled.clone(), param_tys);
+            self.fn_param_modes.insert(mangled.clone(), param_modes);
             self.fn_ret.insert(mangled.clone(), ty_of_type(&m.node.return_type.node));
             if m.node.throws.declares_throws() {
                 self.fn_throws.insert(mangled.clone());
@@ -781,8 +806,15 @@ impl Elaborator {
                         }
                     }
                 }
+                // A brace/bracket literal RHS is set-vs-vector directed by the
+                // DECLARED type (they share one `ArrayLiteral` node): hand the
+                // annotation to the `ArrayLiteral` arm, cleared after the bind.
+                if !matches!(type_.node, ast::Type::Inferred) {
+                    self.dest_ty_hint = Some(ty_of_type(&type_.node));
+                }
                 // D4 position 1 (bind) fires inside `bind_source`'s Copy branch.
                 let source = self.bind_source(value)?;
+                self.dest_ty_hint = None;
                 self.capture_ctx = CaptureCtx::None;
                 // Record the binding's type + mode in the env (annotation, or
                 // inferred from the initializer for `auto`).
@@ -1301,7 +1333,7 @@ impl Elaborator {
         Ok(())
     }
 
-    fn call_arg_source(&mut self, arg: &ast::CallArg) -> ElabResult<Source> {
+    fn call_arg_source(&mut self, arg: &ast::CallArg, param_mode: Option<Mode>) -> ElabResult<Source> {
         match arg.ownership {
             ast::Ownership::Move => Ok(Source::Move(self.elaborate_expr(&arg.value)?)),
             ast::Ownership::MutableBorrow => {
@@ -1324,6 +1356,19 @@ impl Elaborator {
                 Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?))
             }
             ast::Ownership::Borrow => {
+                // The "unbroken `&`-chain" (§3.1): a bare place arg passed to a
+                // `&` (WriteThrough) param aliases the caller's place — writes in
+                // the callee reach it. The `&` on the PARAM declaration drives the
+                // write-through; Gorget's mutable borrow is param-declared, so NO
+                // call-site sigil is required (`c.add_all(v)` into `&vals`). Same
+                // tainted-Borrow-root formation guard as the explicit-`&` arm (a
+                // hidden clone of a drop-tainted root double-closes).
+                if param_mode == Some(Mode::WriteThrough) && ast_is_place(&arg.value.node) {
+                    if !matches!(&arg.value.node, ast::Expr::Deref { .. }) {
+                        self.reject_materialize_on_write(&arg.value.node, arg.value.span)?;
+                    }
+                    return Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?));
+                }
                 if ast_is_place(&arg.value.node) {
                     // D10(b) Copy-snapshot: a bare read of a COPY-typed place is
                     // a VALUE SNAPSHOT evaluated eagerly at the call site into an
@@ -1426,11 +1471,19 @@ impl Elaborator {
             }
 
             ast::Expr::ArrayLiteral(elems) => {
+                // `{a, b, c}` and `[a, b, c]` are the SAME node; a `Set[T]`
+                // destination makes this a set literal (dedup on build), else a
+                // vector. `take` so a nested literal in an element does not
+                // inherit the outer hint.
+                let kind = match self.dest_ty_hint.take() {
+                    Some(Ty::Set(_)) => ConstructKind::Set,
+                    _ => ConstructKind::Vector,
+                };
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
                     out.push(self.owning_source_from_expr(e)?);
                 }
-                Ok(Expr::Construct { kind: ConstructKind::Vector, args: out })
+                Ok(Expr::Construct { kind, args: out })
             }
             ast::Expr::TupleLiteral(elems) => {
                 let mut out = Vec::with_capacity(elems.len());
@@ -1553,7 +1606,7 @@ impl Elaborator {
         if name == "print" {
             let mut out = Vec::with_capacity(args.len());
             for a in args {
-                out.push(self.call_arg_source(&a.node)?);
+                out.push(self.call_arg_source(&a.node, None)?);
             }
             return Ok(Expr::Call { func: "print".to_string(), args: out });
         }
@@ -1613,7 +1666,7 @@ impl Elaborator {
             self.reject_named_args(args, "closure-value call")?;
             let mut out = Vec::with_capacity(args.len());
             for a in args {
-                out.push(self.call_arg_source(&a.node)?);
+                out.push(self.call_arg_source(&a.node, None)?);
             }
             // Single-owner `ConsumeCallable`: the call consumes the callee (D5
             // kind axis). Read the typed callable classification resolved at
@@ -1917,7 +1970,8 @@ impl Elaborator {
                         a.span,
                     )?;
                 }
-                out.push(self.call_arg_source(&a.node)?);
+                let pmode = self.fn_param_modes.get(func_name).and_then(|v| v.get(i)).copied();
+                out.push(self.call_arg_source(&a.node, pmode)?);
                 self.capture_ctx = CaptureCtx::None;
             }
             return Ok(out);
@@ -1946,7 +2000,11 @@ impl Elaborator {
                     )?;
                 }
             }
-            by_name.push((name, self.call_arg_source(&a.node)?));
+            let pmode = order
+                .iter()
+                .position(|p| p == &name)
+                .and_then(|i| self.fn_param_modes.get(func_name).and_then(|v| v.get(i)).copied());
+            by_name.push((name, self.call_arg_source(&a.node, pmode)?));
             self.capture_ctx = CaptureCtx::None;
         }
         let mut out = Vec::with_capacity(order.len());

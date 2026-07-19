@@ -800,6 +800,36 @@ fn eval_place(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Place, Halt> 
             p.proj.push(Proj::Index(i));
             Ok(p)
         }
+        // Auto-borrow-from-get: `coll.get(i).unwrap()` is the place `coll[i]`
+        // (`.get()` → `Option[Ref[T]]`, `.unwrap()` → the `Ref[T]` borrow). An
+        // out-of-bounds `.get()` is `None`, so `.unwrap()` traps `T_UnwrapNone` —
+        // resolved HERE so the write-through place path keeps the ratified trap
+        // identity (NOT the `[i]` bounds trap). Phase-0 Vector element only: a
+        // Dict entry-by-key is not expressible as a `Proj` (its chain stays
+        // out-of-subset / value-copy).
+        Expr::Method { recv, method: BuiltinMethod::Unwrap, args }
+            if args.is_empty()
+                && matches!(&**recv, Expr::Method { method: BuiltinMethod::Get, .. }) =>
+        {
+            let Expr::Method { recv: coll, args: get_args, .. } = &**recv else {
+                unreachable!("guarded by the matches! above")
+            };
+            let idx_src = get_args.first().ok_or_else(|| illf("`.get()` needs an index"))?;
+            let i = as_index(&eval_source_to_value(ctx, state, idx_src, state.cur_span)?)?;
+            let base = eval_place(ctx, state, coll)?;
+            match resolve_read(ctx, state, &base)? {
+                Value::Vector(items) => {
+                    if i >= items.len() {
+                        return Err(Halt::Trap(TrapKind::UnwrapNone));
+                    }
+                    Ok(base.extend(&[Proj::Index(i)]))
+                }
+                other => Err(Halt::IllFormed(format!(
+                    "`.get().unwrap()` write-through place on {} is outside the phase-0 subset",
+                    other.kind_name()
+                ))),
+            }
+        }
         _ => Err(Halt::IllFormed("expression is not a place".to_string())),
     }
 }
@@ -907,7 +937,11 @@ fn navigate_read(v: &Value, proj: &[Proj]) -> Result<Value, Halt> {
                 .find(|(n, _)| n == name)
                 .map(|(_, vv)| vv)
                 .ok_or_else(|| Halt::IllFormed(format!("no field `{name}`")))?,
-            (Value::Vector(items), Proj::Index(i)) | (Value::Tuple(items), Proj::Index(i)) => {
+            // A Set is insertion-ordered, so element iteration (`for x in s`
+            // desugars to `s[__i]`) reads by position exactly like a Vector.
+            (Value::Vector(items), Proj::Index(i))
+            | (Value::Tuple(items), Proj::Index(i))
+            | (Value::Set(items), Proj::Index(i)) => {
                 items.get(*i).ok_or(Halt::Trap(TrapKind::Bounds))?
             }
             (Value::Enum { payload, .. }, Proj::Payload(i)) => {
