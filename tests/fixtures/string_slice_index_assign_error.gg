@@ -1,0 +1,14 @@
+# NEGATIVE (planner round 3, the 2D close): `s[i] = x` where the indexed object
+# is ROOTED at a view-returning METHOD CALL (`base.slice(0, 3)[0] = "H"`) must be
+# rejected at check time — the sibling of string_index_assign_error.gg for the
+# 2D untracked-alias-chain shape (root a String view-returning method that
+# `resolve_projection_root_local` cannot name). `base.slice(0, 3)` is a read-only
+# String codepoint view (language-reference §Strings), so the index write has no
+# String setter; pre-gate it compiled as a SILENT NO-OP through the projection
+# root the resolver bails on. E_StringIndexAssign blocks the corruption path
+# (Core #10 lower-or-reject) — the reject fires whenever the indexed object
+# resolves to a String primitive, method-rooted or not.
+void main():
+    String base = "hello"
+    base.slice(0, 3)[0] = "H"
+    print(base)

@@ -1,0 +1,18 @@
+# KNOWN GAP (planner round 3, D4(ii)) — ICE, not a miscompile. A nested
+# index-assign rooted at `windows`/`chunks` (`v.windows(2)[0][0] = 777`) hits the
+# pre-existing Chain-C hard panic in src/ir/lowering/stmts/assigns.rs:1100
+# ("index-assign on `` found no setter") — the compound sibling
+# (`v.windows(2)[0][0] += 1`) panics at assigns.rs:1809 the same way. `windows` /
+# `chunks` return `Vector[Vector[int]]` by EAGER MATERIALIZATION (an owned copy),
+# so the whole result is a DEAD TEMP the method-call root cannot name. The
+# INTENDED behavior once the setter-dispatch gap is closed is a DEAD-TEMP ACCEPT:
+# the nested write lands on the owned temp, `v` is UNCHANGED (`1`), consistent
+# with the slice-on-Vector row of cow_2d_method_result_dead_write.gg and the 2D
+# ruling (dead-temp writes accepted, warning-track). `chunks` behaves identically
+# (`v.chunks(2)[0][0] = 555` → `v` unchanged).
+from std.collections import Vector
+
+void main():
+    Vector[int] v = [1, 2, 3, 4]
+    v.windows(2)[0][0] = 777
+    print(v[0])

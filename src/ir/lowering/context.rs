@@ -372,6 +372,74 @@ pub struct FaultScope {
     pub bounds_panic: BlockId,
 }
 
+/// WHERE a materialize directive fires relative to the scope structure — the
+/// planner's position axis (devbook/11 § "Materialization points"; devbook/24
+/// rule 1: the fact rides a typed field, never a name/shape heuristic). Keyed
+/// by the span the consumer applies it at, so per-position costing (once-per-
+/// loop vs once-per-branch vs per-mutation) stays honest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaterializePosition {
+    /// Materialize immediately before the mutation at this span (at-site CoW —
+    /// the assign/index/compound/method-receiver/`&`-formation positions).
+    AtSite { mutation: crate::span::Span },
+    /// Hoisted once to a loop pre-header keyed by the loop's anchor span.
+    LoopPreHeader { anchor: crate::span::Span },
+    /// Hoisted once to a conditional-scope pre-header (dominating point) keyed
+    /// by the scope's anchor span.
+    BranchPreHeader { anchor: crate::span::Span },
+}
+
+/// One materialize directive: WHICH root to break the alias on, WHY (the
+/// `ImplicitCloneReason` cost tag stamped on the emitted clone), and at WHICH
+/// position. The per-function `MaterializePlan` is the table of these — the
+/// explicit form of what today is split between the ambient `cow_reason`
+/// (why) and the scattered at-site `cow_before_mutation` calls (where). The
+/// self-host lane already carries the equivalent table (`cow_scope_muts`, the
+/// flat "anchor@name" scope-mutation set — devbook/11 § "planner consumer #1").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaterializeDirective {
+    pub root: LocalId,
+    pub reason: crate::ir::ImplicitCloneReason,
+    pub position: MaterializePosition,
+}
+
+impl MaterializeDirective {
+    /// The user-source span this directive applies its clone at (drives the
+    /// CloneId minted for `--clones` attribution — the same span the pre-fix
+    /// at-site call passed).
+    pub fn span(&self) -> crate::span::Span {
+        match self.position {
+            MaterializePosition::AtSite { mutation } => mutation,
+            MaterializePosition::LoopPreHeader { anchor }
+            | MaterializePosition::BranchPreHeader { anchor } => anchor,
+        }
+    }
+}
+
+/// The explicit per-function materialization plan (planner campaign round 3).
+/// A directive table that grows client-by-client as at-site `cow_before_mutation`
+/// call classes are converted to plan lookups (the `ratchet_b_materialize_site_count`
+/// convergence meter DECREASES with each conversion). Today it records every
+/// converted materialize for observability/costing and is applied through the
+/// SINGLE reason-stamping funnel (`cow_before_mutation_planned`); a
+/// future planner pass reads the table to CHOOSE a strategy per boundary (hoist,
+/// elide-by-liveness) rather than materializing unconditionally at each site.
+#[derive(Debug, Default)]
+pub struct MaterializePlan {
+    /// Directives recorded this function (append-order). Observability/costing
+    /// today; the future planner's working set.
+    pub directives: Vec<MaterializeDirective>,
+}
+
+impl MaterializePlan {
+    pub fn clear(&mut self) {
+        self.directives.clear();
+    }
+    pub fn record(&mut self, directive: MaterializeDirective) {
+        self.directives.push(directive);
+    }
+}
+
 /// Tracks lowering state within a function.
 pub struct LoweringContext<'a> {
     pub analysis: &'a AnalysisResult,
@@ -504,6 +572,14 @@ pub struct LoweringContext<'a> {
     /// not a property of the materialized local, and it is GIR-only (dropped at
     /// LIR), so a mis-scope can only mis-count the census, never miscompile.
     pub cow_reason: crate::ir::ImplicitCloneReason,
+    /// The explicit per-function materialization plan (planner campaign round
+    /// 3). Records every materialize routed through the plan-apply funnel; the
+    /// convergence meter (`ratchet_b_materialize_site_count`) drops as at-site
+    /// `cow_before_mutation` classes migrate here. Reset per function via
+    /// `clear_locals` (the universal per-function-body reset every lowering entry
+    /// funnels through) — so this genuinely IS per-function, not module-wide
+    /// accumulation.
+    pub materialize_plan: MaterializePlan,
     /// Suggestions to pass arguments with `!` (move) for last-use optimization.
     pub move_suggestions: Vec<crate::ir::MoveSuggestion>,
     /// Functions that clone a bare-param at a return/ownership boundary.
@@ -656,6 +732,7 @@ impl<'a> LoweringContext<'a> {
             next_clone_id: 0,
             clone_stats: false,
             cow_reason: crate::ir::ImplicitCloneReason::CoWMaterialization,
+            materialize_plan: MaterializePlan::default(),
             move_suggestions: Vec::new(),
             fn_consumed_params: FxHashMap::default(),
             runtime_callees: FxHashMap::default(),
@@ -1729,6 +1806,18 @@ impl<'a> LoweringContext<'a> {
         self.spawn.result_locals.clear();
         self.spawn.pending_fn = None;
         self.shared.locals.clear();
+        // Planner round 3: the `MaterializePlan` is per-function transient state
+        // (directives recorded this function's lowering), so it resets here — the
+        // SINGLE universal per-function-body reset chokepoint every body-lowering
+        // entry funnels through (`lower_function` / `lower_equip_method` /
+        // `lower_generic_function` / `lower_equip_method_with_subs` — which also
+        // covers `lower_method_instance`, since it delegates — PLUS the closure
+        // (`emit_closure_call_function`), trait-default, and module-loop body
+        // paths). One source of truth (devbook/24 r3) rather than a clear scattered
+        // across every entry point; closures are drained in a dedicated post-pass
+        // (mod.rs P2.4), never mid-enclosing-function, so this never wipes an
+        // in-progress plan.
+        self.materialize_plan.clear();
     }
 
     /// Clone the name→local map AND ownership snapshot for save/restore around
@@ -3605,35 +3694,39 @@ impl<'a> LoweringContext<'a> {
     /// loop body mutates, hoisted once before the loop). Identical materialize
     /// behavior; the only difference is that every clone emitted stamps
     /// `LoopPreHeaderMaterialize` instead of at-site `CoWMaterialization`, so
-    /// the planner can cost the once-per-loop hoist distinctly. Save/restore of
-    /// the scoped `cow_reason` (see the field doc for why this is caller-context
-    /// ambient rather than a threaded param).
+    /// the planner can cost the once-per-loop hoist distinctly. Routes through
+    /// the plan (`apply_materialize_directive`) with a `LoopPreHeader` directive
+    /// keyed by the loop's pre-header span, so the table's position coverage is
+    /// honest (loop hoists ARE recorded as `LoopPreHeader`, not just AtSite).
     pub fn cow_before_mutation_loop_preheader(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         local: LocalId,
         span: crate::span::Span,
     ) {
-        self.cow_before_mutation_scope_preheader(
+        self.apply_materialize_directive(
             builder,
-            local,
-            crate::ir::ImplicitCloneReason::LoopPreHeaderMaterialize,
-            span,
+            MaterializeDirective {
+                root: local,
+                reason: crate::ir::ImplicitCloneReason::LoopPreHeaderMaterialize,
+                position: MaterializePosition::LoopPreHeader { anchor: span },
+            },
         );
     }
 
-    /// The generalized pre-header materialize funnel (planner consumer #1). Runs
-    /// `cow_before_mutation` from a SCOPE pre-header — a loop pre-header
-    /// (`LoopPreHeaderMaterialize`) or a branch pre-header
-    /// (`BranchPreHeaderMaterialize`). Identical materialize behavior; the only
-    /// difference is the `reason` stamped on every clone emitted, so the planner
-    /// can cost once-per-loop vs once-per-branch hoists distinctly from at-site
-    /// `CoWMaterialization`. Save/restore of the scoped `cow_reason` (see the
-    /// field doc for why this is caller-context ambient rather than a threaded
-    /// param). This is the SINGLE `.cow_before_mutation(` funnel for every
-    /// pre-header consumer (the ratchet's convergence meter) — loop and branch
-    /// both route through here rather than each minting a new call site.
-    pub fn cow_before_mutation_scope_preheader(
+    /// The reason-stamping materialize primitive under the plan-apply funnel
+    /// (planner round 3). Runs `cow_before_mutation` with the directive's `reason`
+    /// stamped on every clone emitted — at-site (`CoWMaterialization`), loop
+    /// pre-header (`LoopPreHeaderMaterialize`), or branch pre-header
+    /// (`BranchPreHeaderMaterialize`) — so the planner can cost each position
+    /// distinctly. Identical materialize behavior across positions; only the
+    /// `reason` differs. Save/restore of the scoped `cow_reason` (see the field
+    /// doc for why this is caller-context ambient rather than a threaded param).
+    /// This owns the SINGLE `.cow_before_mutation(` call (the ratchet's
+    /// convergence meter endpoint); EVERY materialize — at-site and both
+    /// pre-header positions — reaches it exclusively through
+    /// `apply_materialize_directive`, so no client mints a new call site.
+    pub fn cow_before_mutation_planned(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         local: LocalId,
@@ -3644,6 +3737,57 @@ impl<'a> LoweringContext<'a> {
         self.cow_reason = reason;
         self.cow_before_mutation(builder, local, span);
         self.cow_reason = prev;
+    }
+
+    /// THE plan-apply funnel (planner campaign round 3). Executes ONE
+    /// `MaterializeDirective` — records it in the per-function plan (for
+    /// costing/observability + the future planner's working set) and applies it
+    /// through the SINGLE reason-stamping materialize funnel
+    /// (`cow_before_mutation_planned`, which owns the lone
+    /// `.cow_before_mutation(` call). Converting an at-site
+    /// `ctx.cow_before_mutation(...)` class to `ctx.apply_materialize_directive`
+    /// removes that direct call from the `ratchet_b_materialize_site_count`
+    /// convergence meter — the campaign's proof that a class migrated behind the
+    /// plan. `apply_materialize_directive` is NOT a `.cow_before_mutation(`
+    /// textual call, so the ratchet counts only the funnel's single call. This is
+    /// the SINGLE entry every plan client routes through — the at-site class
+    /// (`plan_materialize_at_site`) AND both pre-header consumers
+    /// (`cow_before_mutation_loop_preheader` → `LoopPreHeader`,
+    /// `materialize_scope_carried_bare_params` → `BranchPreHeader`) — so all three
+    /// `MaterializePosition` variants are genuinely constructed and recorded.
+    pub fn apply_materialize_directive(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        directive: MaterializeDirective,
+    ) {
+        self.materialize_plan.record(directive);
+        self.cow_before_mutation_planned(
+            builder,
+            directive.root,
+            directive.reason,
+            directive.span(),
+        );
+    }
+
+    /// Convenience: record + apply an AT-SITE CoW materialize of `root` at the
+    /// mutation `span` through the plan (reason `CoWMaterialization`). The
+    /// planner round-3 first-client entry for the assign-target-root class
+    /// (`s.field = x` / `d[k] = x` / `xs[i] OP= x`); mirrors the self-host
+    /// lane's shared `cow_materialize_projected_root` funnel.
+    pub fn plan_materialize_at_site(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        root: LocalId,
+        span: crate::span::Span,
+    ) {
+        self.apply_materialize_directive(
+            builder,
+            MaterializeDirective {
+                root,
+                reason: crate::ir::ImplicitCloneReason::CoWMaterialization,
+                position: MaterializePosition::AtSite { mutation: span },
+            },
+        );
     }
 
     /// Find every local borrowing some field of `base`. Phase D4.5 step

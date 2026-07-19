@@ -4996,6 +4996,7 @@ fn g1_projected_materialize_sites_untrack() {
     const UNTRACK_REQUIRED: &[&str] = &[
         "lower_field_assign",
         "lower_index_assign",
+        "lower_compound_assign",
         "lower_method_call",
         "lower_call_arg",
         "lower_expr_inner",
@@ -5004,16 +5005,16 @@ fn g1_projected_materialize_sites_untrack() {
     // own element refs before its buffer is replaced — no projection-chain / arg
     // element handles into a private copy, so no untrack needed.
     //
-    // `materialize_assign_target_root` (matcluster #1): a root-materialize-ONLY
-    // helper — it calls `cow_before_mutation(root)` (+ `cow_before_field_mutation`
+    // `materialize_assign_target_root` (planner round 3, the shared assign-root
+    // prologue): a root-materialize-ONLY helper — it routes the root materialize
+    // through the plan (`plan_materialize_at_site`) (+ `cow_before_field_mutation`
     // to sever field-path refs) and NOTHING ELSE. It does NOT lower a projected
     // store / args / RHS, so it mints no transient element handles into the
-    // private copy. The projected-store untrack is the CALLER's job: both
-    // `lower_compound_assign` projected arms (FieldAccess + Index) call this
-    // helper FIRST, then capture `stmt_locals_start` and call
-    // `untrack_transient_element_refs_in_range` at the arm's exit — so the
-    // transient handles they mint ARE untracked (verified: 3 untrack sites in
-    // lower_compound_assign). Exempt because the pairing lives one layer up.
+    // private copy. The projected-store untrack is the CALLER's job: all three
+    // callers (`lower_field_assign` / `lower_index_assign` / `lower_compound_assign`,
+    // now all UNTRACK_REQUIRED) capture `stmt_locals_start` and call
+    // `untrack_transient_element_refs_in_range` at the store's exit — verified
+    // above. Exempt because the pairing lives one layer up.
     const UNTRACK_EXEMPT: &[&str] = &["lower_assign", "materialize_assign_target_root"];
 
     let files = [
@@ -5026,7 +5027,30 @@ fn g1_projected_materialize_sites_untrack() {
     for file in files {
         let content = fs::read_to_string(file).unwrap_or_default();
         for (name, body) in top_level_fn_bodies(&content) {
-            if !body.contains("cow_before_mutation(") {
+            // "Materializes a mutation root" — via the raw primitive OR the
+            // planner round-3 plan-apply entry points. When an at-site
+            // `cow_before_mutation` class migrates behind the `MaterializePlan`,
+            // the text-based key must follow it, or this heap-UAF guard silently
+            // stops watching the site (the exact hole this test exists to close).
+            //   - `cow_before_mutation(`      : classes not yet migrated (CLASS B/C/D/E/F).
+            //   - `plan_materialize_at_site(`  : the plan at-site entry (only the
+            //     `materialize_assign_target_root` helper — exempt, pairs one layer up).
+            //   - `materialize_assign_target_root(` : the shared assign-root helper;
+            //     its callers lower the projected store → they MUST untrack.
+            //   - `apply_materialize_directive(` : THE general plan-apply funnel
+            //     (`ctx.apply_materialize_directive`, context.rs) that every plan
+            //     client routes through. Keyed here so the NEXT at-site→plan
+            //     conversion (CLASS E/C/D) that calls the funnel DIRECTLY from one
+            //     of these four files is re-taught consciously — it can't slip
+            //     behind the plan and silently stop being watched. No scanned fn
+            //     calls it today (the pre-header consumers live in context.rs /
+            //     stmts/mod.rs, outside this scan), so adding it is a no-op for the
+            //     current classification, purely forward-looking.
+            let materializes_root = body.contains("cow_before_mutation(")
+                || body.contains("plan_materialize_at_site(")
+                || body.contains("materialize_assign_target_root(")
+                || body.contains("apply_materialize_directive(");
+            if !materializes_root {
                 continue;
             }
             let requires = UNTRACK_REQUIRED.contains(&name.as_str());
@@ -5762,10 +5786,29 @@ fn ratchet_a_lowering_dispatch_silent_fallthrough() {
 ///   Rust: `cow_before_mutation` (def `src/ir/lowering/context.rs`).
 ///   Self-host lowerer: `cow_materialize_projected_root` /
 ///   `cow_materialize_root_by_name` (defs in `lower.gg`).
+///
+/// THE CONVERSION RULE (planner round 3): when an at-site materialize CLASS
+/// migrates behind the `MaterializePlan`, its `.cow_before_mutation(` count moves
+/// OUT of this text census and INTO the plan (it now reaches the lone real call
+/// through `apply_materialize_directive` → `cow_before_mutation_planned`, which is
+/// not a `.cow_before_mutation(` textual call). So the census only ever DECREASES
+/// per conversion. The ONLY legitimate INCREASE is a genuinely-new mutation-root
+/// materialize that cannot route through the plan yet — and it must justify itself
+/// with a cited re-pin (raise `RUST_CEILING` + a comment naming the new site and
+/// why it can't be planned). A silent bump is a red flag: the campaign's whole
+/// point is that new mutation roots go through the plan, not a fresh ad-hoc call.
 #[test]
 fn ratchet_b_materialize_site_count() {
     // --- Rust side: `.cow_before_mutation(` call expressions in src/ir/lowering.
-    const RUST_CEILING: usize = 20;
+    // Planner campaign round 3 (assign-target-root class, first at-site client):
+    // 20 → 14. `lower_field_assign` + `lower_index_assign` + the compound path
+    // (six open-coded `cow_before_mutation` calls, Core #4 sibling drift) now
+    // route through the shared `materialize_assign_target_root` →
+    // `plan_materialize_at_site` → the single reason-stamping funnel
+    // (`cow_before_mutation_planned`), removing all six direct calls behind the
+    // `MaterializePlan`. Remaining 14 = the un-migrated classes B/C/D/E/F + the
+    // funnel's own lone real call; each future class conversion drops the ceiling.
+    const RUST_CEILING: usize = 14;
     let mut rust_sites = 0usize;
     let mut per_file: Vec<(String, usize)> = Vec::new();
     for entry in walk_files("src/ir/lowering", "rs") {
