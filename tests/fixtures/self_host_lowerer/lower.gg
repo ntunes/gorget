@@ -857,12 +857,12 @@ bool cow_materialize_root_by_name(LowerCtx &ctx, GirModule &gmod, String root):
         if is_resource_type_name(tname, &gmod):
             return false
         int vmat = add_local(&ctx, struct_tid, None)
-        emit(ctx, GIDeref(vmat, root_local, struct_tid))
+        emit(&ctx, GIDeref(vmat, root_local, struct_tid))
         nl_put(&ctx, root, vmat)
         return true
     int mat = add_local(&ctx, struct_tid, None)
     Vector[Operand] cargs = [OpBorrow(root_local)]
-    emit(ctx, GICallExtern(mat, clone_fn, cargs))
+    emit(&ctx, GICallExtern(mat, clone_fn, cargs))
     nl_put(&ctx, root, mat)
     register_local_for_drop(&ctx, mat, struct_tid, &gmod)
     return true
@@ -1799,7 +1799,7 @@ bool method_arg_lets_callee_mutate(LowerCtx ctx, SpannedExpr recv, String mname,
         return false
     return call_arg_lets_callee_mutate(gmod, marg_recv_tname + "__" + mname, arg_idx + 1)
 
-void emit(LowerCtx ctx, Instruction inst):
+void emit(LowerCtx &ctx, Instruction inst):
     ctx.block_insts.get(ctx.current_block).unwrap().push(inst)
 
 int new_block(LowerCtx &ctx):
@@ -2444,9 +2444,9 @@ void cow_lazy_emit_guard(LowerCtx &ctx, LazyMember lzm):
     switch_to(&ctx, lz_mat_bb)
     int lz_tmp = add_local(&ctx, lzm.slot_type, None)
     Vector[Operand] lz_args = [OpBorrow(lzm.slot)]
-    emit(ctx, GICallExtern(lz_tmp, lzm.clone_fn, lz_args))
-    emit(ctx, GIAssign(lzm.slot, OpMove(lz_tmp)))
-    emit(ctx, GIAssign(lzm.flag, OpConstBool(true)))
+    emit(&ctx, GICallExtern(lz_tmp, lzm.clone_fn, lz_args))
+    emit(&ctx, GIAssign(lzm.slot, OpMove(lz_tmp)))
+    emit(&ctx, GIAssign(lzm.flag, OpConstBool(true)))
     set_terminator(&ctx, GTJump(lz_join_bb))
     switch_to(&ctx, lz_join_bb)
 
@@ -2506,7 +2506,7 @@ bool cow_lazy_join_view_result(LowerCtx &ctx, int recv_slot, int result_slot, in
         LazyMember lzj_m = ctx.cow_lazy_members.get(lzj_i).unwrap()
         if lzj_m.slot == recv_slot:
             int lzj_flag = add_local(&ctx, BOOL_TYPE, None)
-            emit(ctx, GIAssign(lzj_flag, OpConstBool(false)))
+            emit(&ctx, GIAssign(lzj_flag, OpConstBool(false)))
             ctx.cow_lazy_members.push(LazyMember(lzj_m.root.clone(), result_slot, lzj_flag, result_type, lzj_m.clone_fn.clone(), true))
             return true
         lzj_i = lzj_i + 1
@@ -2969,7 +2969,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Terminator sterm = sctx.block_terms.get(sctx.current_block).unwrap()
     match sterm:
         case GTNone():
-            emit_drops_for_early_exit(sctx, DSK_FUNCTION, Some(0))
+            emit_drops_for_early_exit(&sctx, DSK_FUNCTION, Some(0))
             set_terminator(&sctx, GTReturn(OpConstUnit()))
         else:
             pass
@@ -5230,7 +5230,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                         Terminator tterm = tctx.block_terms.get(tctx.current_block).unwrap()
                         match tterm:
                             case GTNone():
-                                emit_drops_for_early_exit(tctx, DSK_FUNCTION, Some(0))
+                                emit_drops_for_early_exit(&tctx, DSK_FUNCTION, Some(0))
                                 set_terminator(&tctx, GTReturn(OpConstUnit()))
                             else:
                                 pass

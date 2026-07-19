@@ -142,7 +142,7 @@ String apply_format_spec(LowerCtx &ctx, GirModule &gmod, Vector[Operand] &gsf_ar
             balt = 1
         int bdst = add_local(&ctx, gs_tid, None)
         Vector[Operand] bargs = [OpCopy(aloc), OpConstI64(balt)]
-        emit(ctx, GICallExtern(bdst, "gorget_int_to_binary", bargs))
+        emit(&ctx, GICallExtern(bdst, "gorget_int_to_binary", bargs))
         register_local_for_drop(&ctx, bdst, gs_tid, &gmod)
         gsf_args.push(op_consume(ctx, &gmod, bdst, CkFormatArg()))
         return "%.*s"
@@ -235,7 +235,7 @@ bool block_terminated(LowerCtx ctx):
 int lower_block_expr(LowerCtx &ctx, Vector[Stmt] block_stmts, GirModule &gmod):
     if block_stmts.len() == 0:
         int unit_dst = add_local(&ctx, UNIT_TYPE, None)
-        emit(ctx, GIAssign(unit_dst, OpConstUnit()))
+        emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
         return unit_dst
     int last_idx = block_stmts.len() - 1
     int si = 0
@@ -245,7 +245,7 @@ int lower_block_expr(LowerCtx &ctx, Vector[Stmt] block_stmts, GirModule &gmod):
     int tail = lower_stmt_as_tail_value(&ctx, block_stmts.get(last_idx).unwrap(), &gmod)
     if tail < 0:
         int unit_dst2 = add_local(&ctx, UNIT_TYPE, None)
-        emit(ctx, GIAssign(unit_dst2, OpConstUnit()))
+        emit(&ctx, GIAssign(unit_dst2, OpConstUnit()))
         return unit_dst2
     return tail
 
@@ -323,9 +323,9 @@ int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_
         if not result_type_refined:
             int tty = ctx.locals.get(then_val).unwrap().type_id
             if tty != UNIT_TYPE:
-                refine_local_type(ctx, result, tty)
+                refine_local_type(&ctx, result, tty)
                 result_type_refined = true
-        emit(ctx, GIAssign(result, op_consume(ctx, &gmod, then_val, CkAssign())))
+        emit(&ctx, GIAssign(result, op_consume(ctx, &gmod, then_val, CkAssign())))
         set_terminator(&ctx, GTJump(merge_bb))
     # Elif chain + explicit else, walking the folded ElseBranch vector.
     int current_else_bb = else_bb
@@ -346,9 +346,9 @@ int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_
                     if not result_type_refined:
                         int ety = ctx.locals.get(elif_val).unwrap().type_id
                         if ety != UNIT_TYPE:
-                            refine_local_type(ctx, result, ety)
+                            refine_local_type(&ctx, result, ety)
                             result_type_refined = true
-                    emit(ctx, GIAssign(result, op_consume(ctx, &gmod, elif_val, CkAssign())))
+                    emit(&ctx, GIAssign(result, op_consume(ctx, &gmod, elif_val, CkAssign())))
                     set_terminator(&ctx, GTJump(merge_bb))
                 current_else_bb = next_else_bb
             case None:
@@ -360,9 +360,9 @@ int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_
                     if not result_type_refined:
                         int sty = ctx.locals.get(else_val).unwrap().type_id
                         if sty != UNIT_TYPE:
-                            refine_local_type(ctx, result, sty)
+                            refine_local_type(&ctx, result, sty)
                             result_type_refined = true
-                    emit(ctx, GIAssign(result, op_consume(ctx, &gmod, else_val, CkAssign())))
+                    emit(&ctx, GIAssign(result, op_consume(ctx, &gmod, else_val, CkAssign())))
                     set_terminator(&ctx, GTJump(merge_bb))
         ebi = ebi + 1
     # No explicit else → the all-conditions-false path lands in the
@@ -372,7 +372,7 @@ int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_
     if not saw_else:
         switch_to(&ctx, current_else_bb)
         if not block_terminated(ctx):
-            emit(ctx, GIAssign(result, OpConstI64(0)))
+            emit(&ctx, GIAssign(result, OpConstI64(0)))
             set_terminator(&ctx, GTJump(merge_bb))
     switch_to(&ctx, merge_bb)
     return result
@@ -381,7 +381,7 @@ int lower_if_chain_expr(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_
 # result-type refinement: the result slot is allocated with a seed type,
 # then narrowed to the first non-Unit branch value's type). Mirrors Rust's
 # `builder.locals[result_id.0].type_id = ty` — in-place field mutation.
-void refine_local_type(LowerCtx ctx, int lid, int new_type):
+void refine_local_type(LowerCtx &ctx, int lid, int new_type):
     ctx.locals.get(lid).unwrap().type_id = new_type
 
 # ── Expression lowering ─────────────────────────────────
@@ -453,7 +453,7 @@ Option[FieldDerefResult] guard_field_deref_base(LowerCtx &ctx, int base, String 
     # guarded data. The runtime fn name is the typed method prefix + _get_ptr.
     String gd_get_ptr_fn = guard_method_prefix(base_type_name, &gmod) + "_get_ptr"
     int gd_inner_ptr = add_local(&ctx, gd_inner_ptr_tid, None)
-    emit(ctx, GICallExtern(gd_inner_ptr, gd_get_ptr_fn, [OpBorrow(base)]))
+    emit(&ctx, GICallExtern(gd_inner_ptr, gd_get_ptr_fn, [OpBorrow(base)]))
     return Some(FieldDerefResult(gd_inner_ptr, gd_inner_name))
 
 # ── Box[T] deref-as-PLACE inner-name (shared write helper) ──────────
@@ -553,10 +553,10 @@ int emit_shared_unwrap_mutex(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo inf
     # raw void* AT the stored mutex pointer (a Ptr-to-Mutex-handle).
     int su_raw_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, info.mutex_mangled))
     int su_raw = add_local(&ctx, su_raw_ty, None)
-    emit(ctx, GICallExtern(su_raw, "gorget_shared_get_ptr", [OpCopy(info.hidden_local)]))
+    emit(&ctx, GICallExtern(su_raw, "gorget_shared_get_ptr", [OpCopy(info.hidden_local)]))
     # mutex = *(Mutex__c*)raw — load the 8-byte handle pointer.
     int su_mutex = add_local(&ctx, mutex_tid, None)
-    emit(ctx, GIDeref(su_mutex, su_raw, mutex_tid))
+    emit(&ctx, GIDeref(su_mutex, su_raw, mutex_tid))
     return su_mutex
 
 # Emit the lock-chain READ of a shared var's current value, returning a
@@ -576,13 +576,13 @@ int emit_shared_mutex_lock_get(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo i
     #    `counter.lock()`/`guard.get()`/`set()` take) applies — GICall lacks
     #    the guard_set size-append + the guard_get deref-lift.
     int sg_guard = add_local(&ctx, guard_tid, None)
-    emit(ctx, GICallExtern(sg_guard, info.mutex_mangled + "__lock", [OpCopy(sg_mutex)]))
+    emit(&ctx, GICallExtern(sg_guard, info.mutex_mangled + "__lock", [OpCopy(sg_mutex)]))
     # 3. read the guarded value (Guard__c__get borrows &g, routes to
     #    gorget_guard_get which the arg-shaping derefs once for a scalar).
     int sg_val = add_local(&ctx, info.inner_type, None)
-    emit(ctx, GICallExtern(sg_val, info.guard_mangled + "__get", [OpBorrow(sg_guard)]))
+    emit(&ctx, GICallExtern(sg_val, info.guard_mangled + "__get", [OpBorrow(sg_guard)]))
     # 4. release the lock (Guard__c__drop → gorget_guard_release).
-    emit(ctx, GICallExtern(-1, info.guard_mangled + "__drop", [OpBorrow(sg_guard)]))
+    emit(&ctx, GICallExtern(-1, info.guard_mangled + "__drop", [OpBorrow(sg_guard)]))
     return sg_val
 
 # Emit the lock-chain WRITE of `value_local` into a shared var. Mirrors Rust
@@ -591,11 +591,11 @@ void emit_shared_mutex_lock_set(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo 
     int guard_tid = lookup_or_register_named(&gmod, info.guard_mangled)
     int ss_mutex = emit_shared_unwrap_mutex(&ctx, &gmod, info)
     int ss_guard = add_local(&ctx, guard_tid, None)
-    emit(ctx, GICallExtern(ss_guard, info.mutex_mangled + "__lock", [OpCopy(ss_mutex)]))
+    emit(&ctx, GICallExtern(ss_guard, info.mutex_mangled + "__lock", [OpCopy(ss_mutex)]))
     # Guard__c__set(&g, value) → gorget_guard_set(&g, &value, sizeof(T)) (the
     # arg-shaping in lir_lower address-takes the value + appends sizeof).
-    emit(ctx, GICallExtern(-1, info.guard_mangled + "__set", [OpBorrow(ss_guard), OpCopy(value_local)]))
-    emit(ctx, GICallExtern(-1, info.guard_mangled + "__drop", [OpBorrow(ss_guard)]))
+    emit(&ctx, GICallExtern(-1, info.guard_mangled + "__set", [OpBorrow(ss_guard), OpCopy(value_local)]))
+    emit(&ctx, GICallExtern(-1, info.guard_mangled + "__drop", [OpBorrow(ss_guard)]))
 
 # ── shared(<sync>) override strategies (round-33) ────────────────
 # The rwlock/atomic carriers below mirror Rust gg's ArcRwLock / ArcAtomic
@@ -647,10 +647,10 @@ int emit_rwlock_read_get(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info):
     String rg_mangled = "ReadGuard__" + info.inner_c
     int rg_guard_tid = lookup_or_register_named(&gmod, rg_mangled)
     int rg_guard = add_local(&ctx, rg_guard_tid, None)
-    emit(ctx, GICallExtern(rg_guard, "RWLock__" + info.inner_c + "__read", [OpCopy(info.hidden_local)]))
+    emit(&ctx, GICallExtern(rg_guard, "RWLock__" + info.inner_c + "__read", [OpCopy(info.hidden_local)]))
     int rg_val = add_local(&ctx, info.inner_type, None)
-    emit(ctx, GICallExtern(rg_val, rg_mangled + "__get", [OpBorrow(rg_guard)]))
-    emit(ctx, GICallExtern(-1, rg_mangled + "__drop", [OpBorrow(rg_guard)]))
+    emit(&ctx, GICallExtern(rg_val, rg_mangled + "__get", [OpBorrow(rg_guard)]))
+    emit(&ctx, GICallExtern(-1, rg_mangled + "__drop", [OpBorrow(rg_guard)]))
     return rg_val
 
 # Emit the guard-chain WRITE of a shared(rwlock) var. Mirrors Rust
@@ -659,22 +659,22 @@ void emit_rwlock_write_set(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info,
     String wg_mangled = "WriteGuard__" + info.inner_c
     int wg_guard_tid = lookup_or_register_named(&gmod, wg_mangled)
     int wg_guard = add_local(&ctx, wg_guard_tid, None)
-    emit(ctx, GICallExtern(wg_guard, "RWLock__" + info.inner_c + "__write", [OpCopy(info.hidden_local)]))
-    emit(ctx, GICallExtern(-1, wg_mangled + "__set", [OpBorrow(wg_guard), OpCopy(value_local)]))
-    emit(ctx, GICallExtern(-1, wg_mangled + "__drop", [OpBorrow(wg_guard)]))
+    emit(&ctx, GICallExtern(wg_guard, "RWLock__" + info.inner_c + "__write", [OpCopy(info.hidden_local)]))
+    emit(&ctx, GICallExtern(-1, wg_mangled + "__set", [OpBorrow(wg_guard), OpCopy(value_local)]))
+    emit(&ctx, GICallExtern(-1, wg_mangled + "__drop", [OpBorrow(wg_guard)]))
 
 # Emit the atomic LOAD of a shared(atomic) var (Rust `emit_atomic_load`,
 # shared.rs:86). Direct runtime symbol — same GICallExtern idiom as
 # `gorget_shared_get_ptr` in the carrier unwrap above.
 int emit_atomic_load(LowerCtx &ctx, GirModule gmod, SharedLocalInfo info):
     int al_val = add_local(&ctx, info.inner_type, None)
-    emit(ctx, GICallExtern(al_val, atomic_runtime_prefix(info.inner_type) + "_load", [OpCopy(info.hidden_local)]))
+    emit(&ctx, GICallExtern(al_val, atomic_runtime_prefix(info.inner_type) + "_load", [OpCopy(info.hidden_local)]))
     return al_val
 
 # Emit the atomic STORE of a shared(atomic) var (Rust `emit_atomic_store`,
 # shared.rs:99).
-void emit_atomic_store(LowerCtx ctx, GirModule gmod, SharedLocalInfo info, int value_local):
-    emit(ctx, GICallExtern(-1, atomic_runtime_prefix(info.inner_type) + "_store", [OpCopy(info.hidden_local), OpCopy(value_local)]))
+void emit_atomic_store(LowerCtx &ctx, GirModule gmod, SharedLocalInfo info, int value_local):
+    emit(&ctx, GICallExtern(-1, atomic_runtime_prefix(info.inner_type) + "_store", [OpCopy(info.hidden_local), OpCopy(value_local)]))
 
 # Kind-dispatched transparent READ of a shared var's current value. ONE
 # producer for every consumer site (EIdentifier read, `with x:` refresh,
@@ -694,7 +694,7 @@ void emit_shared_write(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info, int
         emit_rwlock_write_set(&ctx, &gmod, info, value_local)
         return
     if info.kind == SHK_ATOMIC:
-        emit_atomic_store(ctx, gmod, info, value_local)
+        emit_atomic_store(&ctx, gmod, info, value_local)
         return
     emit_shared_mutex_lock_set(&ctx, &gmod, info, value_local)
 
@@ -715,12 +715,12 @@ int emit_shared_compound(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info, S
             # NEW one — re-load after the RMW (matches the read-refresh model;
             # Rust discards the return entirely, assigns.rs:1052-1060).
             int at_old = add_local(&ctx, info.inner_type, None)
-            emit(ctx, GICallExtern(at_old, at_fn, [OpCopy(info.hidden_local), OpCopy(rhs_local)]))
+            emit(&ctx, GICallExtern(at_old, at_fn, [OpCopy(info.hidden_local), OpCopy(rhs_local)]))
             return emit_atomic_load(&ctx, gmod, info)
         int at_cur = emit_atomic_load(&ctx, gmod, info)
         int at_dst = add_local(&ctx, info.inner_type, None)
-        emit_compound_arith(ctx, op, at_dst, at_cur, rhs_local, info.inner_type, &gmod)
-        emit_atomic_store(ctx, gmod, info, at_dst)
+        emit_compound_arith(&ctx, op, at_dst, at_cur, rhs_local, info.inner_type, &gmod)
+        emit_atomic_store(&ctx, gmod, info, at_dst)
         return at_dst
     if info.kind == SHK_RWLOCK:
         # ONE write lock across the read-modify-write (Rust emit_rwlock_
@@ -728,17 +728,17 @@ int emit_shared_compound(LowerCtx &ctx, GirModule &gmod, SharedLocalInfo info, S
         String cwg_mangled = "WriteGuard__" + info.inner_c
         int cwg_guard_tid = lookup_or_register_named(&gmod, cwg_mangled)
         int cwg_guard = add_local(&ctx, cwg_guard_tid, None)
-        emit(ctx, GICallExtern(cwg_guard, "RWLock__" + info.inner_c + "__write", [OpCopy(info.hidden_local)]))
+        emit(&ctx, GICallExtern(cwg_guard, "RWLock__" + info.inner_c + "__write", [OpCopy(info.hidden_local)]))
         int cwg_cur = add_local(&ctx, info.inner_type, None)
-        emit(ctx, GICallExtern(cwg_cur, cwg_mangled + "__get", [OpBorrow(cwg_guard)]))
+        emit(&ctx, GICallExtern(cwg_cur, cwg_mangled + "__get", [OpBorrow(cwg_guard)]))
         int cwg_dst = add_local(&ctx, info.inner_type, None)
-        emit_compound_arith(ctx, op, cwg_dst, cwg_cur, rhs_local, info.inner_type, &gmod)
-        emit(ctx, GICallExtern(-1, cwg_mangled + "__set", [OpBorrow(cwg_guard), OpCopy(cwg_dst)]))
-        emit(ctx, GICallExtern(-1, cwg_mangled + "__drop", [OpBorrow(cwg_guard)]))
+        emit_compound_arith(&ctx, op, cwg_dst, cwg_cur, rhs_local, info.inner_type, &gmod)
+        emit(&ctx, GICallExtern(-1, cwg_mangled + "__set", [OpBorrow(cwg_guard), OpCopy(cwg_dst)]))
+        emit(&ctx, GICallExtern(-1, cwg_mangled + "__drop", [OpBorrow(cwg_guard)]))
         return cwg_dst
     int mx_cur = emit_shared_mutex_lock_get(&ctx, &gmod, info)
     int mx_dst = add_local(&ctx, info.inner_type, None)
-    emit_compound_arith(ctx, op, mx_dst, mx_cur, rhs_local, info.inner_type, &gmod)
+    emit_compound_arith(&ctx, op, mx_dst, mx_cur, rhs_local, info.inner_type, &gmod)
     emit_shared_mutex_lock_set(&ctx, &gmod, info, mx_dst)
     return mx_dst
 
@@ -888,7 +888,7 @@ int lower_named_fn_spawn(LowerCtx &ctx, String spawn_fn_name, Vector[SpannedExpr
         int spawn_arg_local = lower_expr(&ctx, spawn_arg, &gmod)
         spawn_call_args.push(op_consume(ctx, &gmod, spawn_arg_local, CkCallArgBorrow()))
     int spawn_dst = add_local(&ctx, spawn_task_ty, None)
-    emit(ctx, GICall(spawn_dst, "__gorget_spawn_" + spawn_fn_name, spawn_call_args))
+    emit(&ctx, GICall(spawn_dst, "__gorget_spawn_" + spawn_fn_name, spawn_call_args))
     return spawn_dst
 
 # ── Shared-spawn deferral + token wrapper (round-16 Phase 1) ─────────
@@ -1304,7 +1304,7 @@ int lower_inner_shared_spawn(LowerCtx &ctx, String callee_name, Vector[SpannedEx
         iss_call_args.push(op_consume(ctx, &gmod, iss_arg_local, CkCallArgBorrow()))
         ispa += 1
     int iss_dst = add_local(&ctx, iss_task_ty, None)
-    emit(ctx, GICall(iss_dst, "__gorget_spawn_" + callee_name, iss_call_args))
+    emit(&ctx, GICall(iss_dst, "__gorget_spawn_" + callee_name, iss_call_args))
     return iss_dst
 
 int lower_shared_spawn(LowerCtx &ctx, String callee_name, Vector[SpannedExpr] spawn_args, GirModule &gmod):
@@ -1503,7 +1503,7 @@ int lower_shared_spawn(LowerCtx &ctx, String callee_name, Vector[SpannedExpr] sp
         spa += 1
     ctx.shared_pass_raw = sp_prev_raw
     int sp_dst = add_local(&ctx, sp_task_ty, None)
-    emit(ctx, GICall(sp_dst, "__gorget_spawn_" + sp_wrapper, sp_call_args))
+    emit(&ctx, GICall(sp_dst, "__gorget_spawn_" + sp_wrapper, sp_call_args))
     return sp_dst
 
 # Is a GIR call func-name a YIELD POINT (suspension)? The lock must be released
@@ -1829,7 +1829,7 @@ int lower_recv_place(LowerCtx &ctx, SpannedExpr recv_expr, GirModule &gmod):
                             int rp_pt = register_ptr(&gmod, rp_ftid)
                             int rp_dst = add_local_with(&ctx, rp_pt, None, LoBorrowed(), BoNone())
                             set_field_borrow(&ctx, rp_dst, rp_base, rp_found)
-                            emit(ctx, GIFieldLoad(rp_dst, rp_base, rp_found))
+                            emit(&ctx, GIFieldLoad(rp_dst, rp_base, rp_found))
                             return rp_dst
         else:
             pass
@@ -1867,27 +1867,27 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
     match sexpr.expr:
         case EIntLiteral(v):
             int dst = add_local(&ctx, I64_TYPE, None)
-            emit(ctx, GIAssign(dst, OpConstI64(v)))
+            emit(&ctx, GIAssign(dst, OpConstI64(v)))
             return dst
         case EFloatLiteral(v):
             int dst = add_local(&ctx, F64_TYPE, None)
-            emit(ctx, GIAssign(dst, OpConstF64(v)))
+            emit(&ctx, GIAssign(dst, OpConstF64(v)))
             return dst
         case EBoolLiteral(v):
             int dst = add_local(&ctx, BOOL_TYPE, None)
-            emit(ctx, GIAssign(dst, OpConstBool(v)))
+            emit(&ctx, GIAssign(dst, OpConstBool(v)))
             return dst
         case EStringLiteral(s, _):
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             int dst = add_local(&ctx, gs_tid, None)
-            emit(ctx, GIAssign(dst, OpConstStr(s)))
+            emit(&ctx, GIAssign(dst, OpConstStr(s)))
             return dst
         case EFString(s, fexprs, specs):
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             if fexprs.len() == 0:
                 # No interpolation — just a string literal
                 int dst = add_local(&ctx, gs_tid, None)
-                emit(ctx, GIAssign(dst, OpConstStr(s)))
+                emit(&ctx, GIAssign(dst, OpConstStr(s)))
                 return dst
             # Walk template, replacing each "{}" placeholder with the printf
             # specifier for the corresponding fexprs[i]'s type, and build the
@@ -1929,7 +1929,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # else the f-string prints the pointer via `%lld`).
                         if is_ptr_to_string_type_id(aty, &gmod):
                             int saloc = add_local_with(&ctx, gs_tid, None, LoBorrowed(), BoNone())
-                            emit(ctx, GIDeref(saloc, aloc, gs_tid))
+                            emit(&ctx, GIDeref(saloc, aloc, gs_tid))
                             aloc = saloc
                             aty = gs_tid
                         # User format spec (`{x:.2f}`, `{n:08d}`, `{255:#x}`,
@@ -1960,7 +1960,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 # Bool → "true"/"false" via gorget_bool_to_str.
                                 int bstr = add_local(&ctx, gs_tid, None)
                                 Vector[Operand] bargs = [OpCopy(aloc)]
-                                emit(ctx, GICallExtern(bstr, "gorget_bool_to_str", bargs))
+                                emit(&ctx, GICallExtern(bstr, "gorget_bool_to_str", bargs))
                                 # FRESH-OWNED-TEMP drop registration (#7-style):
                                 # gorget_bool_to_str allocates a fresh `GorgetString`
                                 # (LoOwned) that is only BORROWED by the surrounding
@@ -1990,7 +1990,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                 # `display(self)` takes `&self` (a borrow) — pass
                                 # the value local by OpBorrow, exactly as the
                                 # explicit `.display()` method-call path does.
-                                emit(ctx, GICallExtern(disp_dst, disp_fn, [OpBorrow(aloc)]))
+                                emit(&ctx, GICallExtern(disp_dst, disp_fn, [OpBorrow(aloc)]))
                                 # FRESH-OWNED-TEMP drop registration (#7-style):
                                 # `display` returns an OWNED GorgetString (return
                                 # position = ownership boundary) that is only
@@ -2026,7 +2026,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # Overwrite fmt placeholder at position 0 with the built format string.
             gsf_args.set(0, OpConstStr(fmt))
             int gsdst = add_local(&ctx, gs_tid, None)
-            emit(ctx, GICallExtern(gsdst, "gorget_string_format", gsf_args))
+            emit(&ctx, GICallExtern(gsdst, "gorget_string_format", gsf_args))
             # FRESH-OWNED-TEMP drop registration (#7-style): gorget_string_format
             # allocates a fresh `GorgetString` (LoOwned). When this f-string
             # EXPRESSION flows into a print/format arg it is BORROWED only
@@ -2076,7 +2076,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         case GtMutPtr(eid_inner):
                             if not is_resource_type_name(type_id_to_name(eid_inner, &gmod), &gmod):
                                 int eid_value_local = add_local(&ctx, eid_inner, None)
-                                emit(ctx, GIDeref(eid_value_local, eid_lid, eid_inner))
+                                emit(&ctx, GIDeref(eid_value_local, eid_lid, eid_inner))
                                 return eid_value_local
                         else:
                             pass
@@ -2087,7 +2087,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if gmod.const_decls.contains(name):
                 int cv = gmod.const_decls.get(name).unwrap()
                 int cdst = add_local(&ctx, I64_TYPE, None)
-                emit(ctx, GIAssign(cdst, OpConstI64(cv)))
+                emit(&ctx, GIAssign(cdst, OpConstI64(cv)))
                 return cdst
             # Module-level `const bool` — inline OpConstBool(value). Without
             # this a `const bool ENABLED = true` reads as OpConstI64(0)
@@ -2096,7 +2096,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if gmod.bool_const_decls.contains(name):
                 bool bcv = gmod.bool_const_decls.get(name).unwrap()
                 int bcdst = add_local(&ctx, BOOL_TYPE, None)
-                emit(ctx, GIAssign(bcdst, OpConstBool(bcv)))
+                emit(&ctx, GIAssign(bcdst, OpConstBool(bcv)))
                 return bcdst
             # Module-level `const String` — inline OpConstStr(value) into a
             # fresh GorgetString local. Mirrors Rust's Constant::Str. The
@@ -2106,7 +2106,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 String scv = gmod.string_const_decls.get(name).unwrap()
                 int gs_tid_sc = lookup_or_register_named(&gmod, "GorgetString")
                 int scdst = add_local(&ctx, gs_tid_sc, None)
-                emit(ctx, GIAssign(scdst, OpConstStr(scv)))
+                emit(&ctx, GIAssign(scdst, OpConstStr(scv)))
                 return scdst
             # Module-level float constants — `float EPSILON = 0.000001`
             # in lib/xtd/math3d.gg etc. Mirrors Rust's unified
@@ -2163,7 +2163,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int opt_tid = gmod.none_decls.get(name).unwrap()
                 int ndst = add_local(&ctx, opt_tid, None)
                 Vector[Operand] none_args = []
-                emit(ctx, GICallExtern(ndst, "None", none_args))
+                emit(&ctx, GICallExtern(ndst, "None", none_args))
                 return ndst
             # Bare nullary enum-variant used as a value (see
             # lower_nullary_variant_ident). Runs after all the resolution
@@ -2181,7 +2181,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # diagnostic so each miss is visible.
             diag_bug("EIdentifier", "in fn '" + ctx.current_fn_name + "': unknown identifier '" + name + "' — returning OpConstI64(0) placeholder (WRONG)")
             int unk = add_local(&ctx, I64_TYPE, None)
-            emit(ctx, GIAssign(unk, OpConstI64(0)))
+            emit(&ctx, GIAssign(unk, OpConstI64(0)))
             return unk
         case EBinaryOp(lhs_box, op, rhs_box):
             # Short-circuit `and` / `or` — `a and b` is NOT `a + b`. Lower
@@ -2197,9 +2197,9 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # Initialize result to short-circuit constant so the
                 # early-exit path lands on the right value.
                 if op == "and":
-                    emit(ctx, GIAssign(result_local, OpConstBool(false)))
+                    emit(&ctx, GIAssign(result_local, OpConstBool(false)))
                 else:
-                    emit(ctx, GIAssign(result_local, OpConstBool(true)))
+                    emit(&ctx, GIAssign(result_local, OpConstBool(true)))
                 int rhs_bb = new_block(&ctx)
                 int merge_bb = new_block(&ctx)
                 # `and`: if lhs: jump to rhs else merge. `or`: opposite.
@@ -2209,7 +2209,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     set_terminator(&ctx, GTBranch(OpCopy(lhs_sc), merge_bb, rhs_bb))
                 switch_to(&ctx, rhs_bb)
                 int rhs_sc = lower_expr(&ctx, *rhs_box, &gmod)
-                emit(ctx, GIAssign(result_local, OpCopy(rhs_sc)))
+                emit(&ctx, GIAssign(result_local, OpCopy(rhs_sc)))
                 set_terminator(&ctx, GTJump(merge_bb))
                 switch_to(&ctx, merge_bb)
                 return result_local
@@ -2228,7 +2228,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # (OpMove first arg), x is just read by contains — borrow.
                 Vector[Operand] in_args = [OpMove(in_rhs), op_consume(ctx, &gmod, in_lhs, CkCallArgBorrow())]
                 int in_dst = add_local(&ctx, BOOL_TYPE, None)
-                emit(ctx, GICallExtern(in_dst, contains_method, in_args))
+                emit(&ctx, GICallExtern(in_dst, contains_method, in_args))
                 return in_dst
             # `lhs ?? rhs` — the default operator. `??` is NOT arithmetic; the
             # parser models it as an EBinaryOp with op "??" (parser.gg:838), but
@@ -2266,7 +2266,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int qq_tag = emit_tag_read(&ctx, qq_scr_ptr, qq_recv_tn, &gmod)
                     # tag == 0 → Some / Ok arm.
                     int qq_cmp = add_local(&ctx, BOOL_TYPE, None)
-                    emit(ctx, GICmp(qq_cmp, CMP_EQ, I64_TYPE, OpCopy(qq_tag), OpConstI64(0)))
+                    emit(&ctx, GICmp(qq_cmp, CMP_EQ, I64_TYPE, OpCopy(qq_tag), OpConstI64(0)))
                     int qq_some_bb = new_block(&ctx)
                     int qq_else_bb = new_block(&ctx)
                     int qq_merge_bb = new_block(&ctx)
@@ -2274,7 +2274,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # Some/Ok arm: read the payload, store into the merge slot.
                     switch_to(&ctx, qq_some_bb)
                     int qq_payload = emit_payload_read(&ctx, qq_scr_ptr, qq_recv_tn, qq_variant, 0, qq_inner_tid, &gmod)
-                    emit(ctx, GIAssign(qq_dst, op_consume(ctx, &gmod, qq_payload, CkAssign())))
+                    emit(&ctx, GIAssign(qq_dst, op_consume(ctx, &gmod, qq_payload, CkAssign())))
                     set_terminator(&ctx, GTJump(qq_merge_bb))
                     # None/Error arm: lower the rhs. It may diverge (panic /
                     # return / throw) — its lower_expr then sets a terminator
@@ -2286,7 +2286,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int qq_rhs = lower_expr(&ctx, *rhs_box, &gmod)
                     match ctx.block_terms.get(ctx.current_block).unwrap():
                         case GTNone():
-                            emit(ctx, GIAssign(qq_dst, op_consume(ctx, &gmod, qq_rhs, CkAssign())))
+                            emit(&ctx, GIAssign(qq_dst, op_consume(ctx, &gmod, qq_rhs, CkAssign())))
                             set_terminator(&ctx, GTJump(qq_merge_bb))
                         else:
                             pass
@@ -2320,11 +2320,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # `a < b` → Type__compare(a, b): comparison reads only.
                         Vector[Operand] cmp_args = [OpMove(lhs), op_consume(ctx, &gmod, rhs, CkCallArgBorrow())]
                         int cmp_val = add_local(&ctx, I64_TYPE, None)
-                        emit(ctx, GICallExtern(cmp_val, cmp_method, cmp_args))
+                        emit(&ctx, GICallExtern(cmp_val, cmp_method, cmp_args))
                         int zero = add_local(&ctx, I64_TYPE, None)
-                        emit(ctx, GIAssign(zero, OpConstI64(0)))
+                        emit(&ctx, GIAssign(zero, OpConstI64(0)))
                         int cmp_dst = add_local(&ctx, BOOL_TYPE, None)
-                        emit(ctx, GICmp(cmp_dst, map_cmpop(op), I64_TYPE, OpCopy(cmp_val), OpCopy(zero)))
+                        emit(&ctx, GICmp(cmp_dst, map_cmpop(op), I64_TYPE, OpCopy(cmp_val), OpCopy(zero)))
                         return cmp_dst
                 # Equatable operator overload for ==/!=: `a == b` → a.eq(b) / !a.eq(b).
                 if (op == "==" or op == "!=") and gmod.type_infos.contains(lhs_cmp_name):
@@ -2333,11 +2333,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # `a == b` → Type__eq(a, b): equality reads only.
                         Vector[Operand] eq_args = [OpMove(lhs), op_consume(ctx, &gmod, rhs, CkCallArgBorrow())]
                         int eq_dst = add_local(&ctx, BOOL_TYPE, None)
-                        emit(ctx, GICallExtern(eq_dst, eq_method, eq_args))
+                        emit(&ctx, GICallExtern(eq_dst, eq_method, eq_args))
                         if op == "==":
                             return eq_dst
                         int neq_dst = add_local(&ctx, BOOL_TYPE, None)
-                        emit(ctx, GIUnOp(neq_dst, UNOP_NOT, BOOL_TYPE, OpCopy(eq_dst)))
+                        emit(&ctx, GIUnOp(neq_dst, UNOP_NOT, BOOL_TYPE, OpCopy(eq_dst)))
                         return neq_dst
                 # String ==/!=: content equality via gorget_str_eq(Str, Str).
                 # Mirrors Rust src/ir/lowering/exprs/operators.rs:87-95. Without
@@ -2351,14 +2351,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if (op == "==" or op == "!=") and (is_string_local(lhs, ctx, &gmod) or is_string_local(rhs, ctx, &gmod)):
                     int eqd = add_local(&ctx, BOOL_TYPE, None)
                     Vector[Operand] str_eq_args = [op_consume(ctx, &gmod, lhs, CkCallArgBorrow()), op_consume(ctx, &gmod, rhs, CkCallArgBorrow())]
-                    emit(ctx, GICallExtern(eqd, "gorget_str_eq", str_eq_args))
+                    emit(&ctx, GICallExtern(eqd, "gorget_str_eq", str_eq_args))
                     if op == "==":
                         return eqd
                     int nd = add_local(&ctx, BOOL_TYPE, None)
-                    emit(ctx, GIUnOp(nd, UNOP_NOT, BOOL_TYPE, OpCopy(eqd)))
+                    emit(&ctx, GIUnOp(nd, UNOP_NOT, BOOL_TYPE, OpCopy(eqd)))
                     return nd
                 int dst = add_local(&ctx, BOOL_TYPE, None)
-                emit(ctx, GICmp(dst, map_cmpop(op), I64_TYPE, op_consume(ctx, &gmod, lhs, CkBinOpArg()), op_consume(ctx, &gmod, rhs, CkBinOpArg())))
+                emit(&ctx, GICmp(dst, map_cmpop(op), I64_TYPE, op_consume(ctx, &gmod, lhs, CkBinOpArg()), op_consume(ctx, &gmod, rhs, CkBinOpArg())))
                 return dst
             # String concatenation: + on string operands → gorget_str_cat(Str, Str)
             if op == "+" and (is_string_local(lhs, ctx, &gmod) or is_string_local(rhs, ctx, &gmod)):
@@ -2369,7 +2369,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # String, reads both operands — borrow.
                 concat_args.push(op_consume(ctx, &gmod, lhs, CkCallArgBorrow()))
                 concat_args.push(op_consume(ctx, &gmod, rhs, CkCallArgBorrow()))
-                emit(ctx, GICallExtern(dst, "gorget_str_cat", concat_args))
+                emit(&ctx, GICallExtern(dst, "gorget_str_cat", concat_args))
                 # FRESH-OWNED-TEMP drop registration (#7): `gorget_str_cat`
                 # allocates a fresh `GorgetString` (LoOwned). In a NESTED
                 # concat `a + b + c`, the inner `a + b` result is borrowed by
@@ -2405,13 +2405,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # result = gorget_array_clone(&lhs)
                     int cdst = add_local(&ctx, arr_tid, None)
                     Vector[Operand] clone_args = [op_consume(ctx, &gmod, lhs, CkCallArgBorrow())]
-                    emit(ctx, GICallExtern(cdst, "gorget_array_clone", clone_args))
+                    emit(&ctx, GICallExtern(cdst, "gorget_array_clone", clone_args))
                     # gorget_array_extend(&result, &rhs) — void, no dst (-1).
                     # Self (the cloned result) is borrowed (mutated in place via
                     # the by-pointer ABI), NOT copied — OpCopy on a resource trips
                     # validate_resource_moves. rhs is read-only (CkCallArgBorrow).
                     Vector[Operand] ext_args = [OpBorrow(cdst), op_consume(ctx, &gmod, rhs, CkCallArgBorrow())]
-                    emit(ctx, GICallExtern(-1, "gorget_array_extend", ext_args))
+                    emit(&ctx, GICallExtern(-1, "gorget_array_extend", ext_args))
                     register_local_for_drop(&ctx, cdst, arr_tid, &gmod)
                     return cdst
             # Operator overload on user types: if lhs is a user struct/enum,
@@ -2443,7 +2443,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         if lhs_tid != I64_TYPE:
                             op_ret = lhs_tid
                     int op_dst = add_local(&ctx, op_ret, None)
-                    emit(ctx, GICallExtern(op_dst, method_full, op_args))
+                    emit(&ctx, GICallExtern(op_dst, method_full, op_args))
                     return op_dst
             # Result type of + - * / follows the operand type, not hardcoded
             # I64. Mirrors Rust infer_operand_type_full + bin_op
@@ -2480,11 +2480,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     elif binop_code == OP_MUL:
                         commit_code = OP_MUL_WRAP
                     int aflag = add_local(&ctx, BOOL_TYPE, None)
-                    emit(ctx, GIFaultCheck(aflag, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    emit(&ctx, GIFaultCheck(aflag, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
                     int afc_cont_bb = new_block(&ctx)
                     set_terminator(&ctx, GTBranch(OpCopy(aflag), aovf_handler, afc_cont_bb))
                     switch_to(&ctx, afc_cont_bb)
-                    emit(ctx, GIBinOp(dst, commit_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    emit(&ctx, GIBinOp(dst, commit_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
                     return dst
             # ── Div/Rem: TWO fault categories (error-model.md §11 Inc2 (C)) ──
             # A signed Div/Rem has BOTH `INT_MIN/-1` (overflow → Fault.Overflow)
@@ -2511,21 +2511,21 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         pass
                 if dovf_handler >= 0:
                     int ovf_flag = add_local(&ctx, BOOL_TYPE, None)
-                    emit(ctx, GIFaultCheck(ovf_flag, OP_DIV_OVERFLOW, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    emit(&ctx, GIFaultCheck(ovf_flag, OP_DIV_OVERFLOW, op_ty, OpCopy(lhs), OpCopy(rhs)))
                     int ovf_next_bb = new_block(&ctx)
                     set_terminator(&ctx, GTBranch(OpCopy(ovf_flag), dovf_handler, ovf_next_bb))
                     switch_to(&ctx, ovf_next_bb)
                 if ddz_handler >= 0:
                     int dz_flag = add_local(&ctx, BOOL_TYPE, None)
-                    emit(ctx, GIFaultCheck(dz_flag, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                    emit(&ctx, GIFaultCheck(dz_flag, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
                     int dz_next_bb = new_block(&ctx)
                     set_terminator(&ctx, GTBranch(OpCopy(dz_flag), ddz_handler, dz_next_bb))
                     switch_to(&ctx, dz_next_bb)
                 # The bare op: any CAUGHT fault branched away above; an UNCAUGHT
                 # one hits the C-emit (E) guard here and panics.
-                emit(ctx, GIBinOp(dst, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
+                emit(&ctx, GIBinOp(dst, binop_code, op_ty, OpCopy(lhs), OpCopy(rhs)))
                 return dst
-            emit(ctx, GIBinOp(dst, binop_code, op_ty, op_consume(ctx, &gmod, lhs, CkBinOpArg()), op_consume(ctx, &gmod, rhs, CkBinOpArg())))
+            emit(&ctx, GIBinOp(dst, binop_code, op_ty, op_consume(ctx, &gmod, lhs, CkBinOpArg()), op_consume(ctx, &gmod, rhs, CkBinOpArg())))
             return dst
         case EUnaryOp(op, inner_box):
             int inner = lower_expr(&ctx, *inner_box, &gmod)
@@ -2541,14 +2541,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         if gmod.fn_sigs.contains(neg_method):
                             neg_ret = gmod.fn_sigs.get(neg_method).unwrap()
                         int neg_dst = add_local(&ctx, neg_ret, None)
-                        emit(ctx, GICallExtern(neg_dst, neg_method, neg_args))
+                        emit(&ctx, GICallExtern(neg_dst, neg_method, neg_args))
                         return neg_dst
                     int dst = add_local(&ctx, inner_type, None)
-                    emit(ctx, GIUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
+                    emit(&ctx, GIUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))
                     return dst
                 case "not":
                     int dst = add_local(&ctx, BOOL_TYPE, None)
-                    emit(ctx, GIUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
+                    emit(&ctx, GIUnOp(dst, UNOP_NOT, BOOL_TYPE, OpCopy(inner)))
                     return dst
                 case "~":
                     # Bitwise NOT — result keeps the operand's integer type
@@ -2557,7 +2557,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # case the `~` was silently dropped (fell through to
                     # `return inner`), corrupting e.g. `cur & ~(mask)` masks.
                     int dst = add_local(&ctx, inner_type, None)
-                    emit(ctx, GIUnOp(dst, UNOP_BITNOT, inner_type, OpCopy(inner)))
+                    emit(&ctx, GIUnOp(dst, UNOP_BITNOT, inner_type, OpCopy(inner)))
                     return dst
                 else:
                     pass
@@ -2709,7 +2709,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         if not cl_ret_found and ctx.expected_type >= 0:
                             cl_ret_type = ctx.expected_type
                         int cl_dst = add_local(&ctx, cl_ret_type, None)
-                        emit(ctx, GICallExtern(cl_dst, cl_call, cl_args))
+                        emit(&ctx, GICallExtern(cl_dst, cl_call, cl_args))
                         return cl_dst
                     Vector[SpannedExpr] _lc_vals = callarg_values(args)
                     Vector[String] _lc_names = callarg_names(args)
@@ -2720,7 +2720,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     for marg in args:
                         lower_expr(&ctx, marg.value, &gmod)
                     int mdst = add_local(&ctx, UNIT_TYPE, None)
-                    emit(ctx, GIAssign(mdst, OpConstUnit()))
+                    emit(&ctx, GIAssign(mdst, OpConstUnit()))
                     return mdst
                 case EClosure(iife_params, iife_body):
                     # closure Phase 2 increment 1/7: an immediately-invoked
@@ -2781,7 +2781,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # throwaway 0 is safe here.
                     int iife_ret = compute_closure_sig(0, iife_params, iife_body, &gmod, ctx.expected_type).return_type
                     int iife_dst = add_local(&ctx, iife_ret, None)
-                    emit(ctx, GICallExtern(iife_dst, iife_call, iife_call_args))
+                    emit(&ctx, GICallExtern(iife_dst, iife_call, iife_call_args))
                     return iife_dst
                 case ENoneLiteral():
                     # `None()` call form (e.g. `Dict[String,Option[int]] d = {"b":None()}`).
@@ -3262,7 +3262,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             if _ts_redirect != "":
                                 static_name = _ts_redirect.clone()
                         int sdst = add_local(&ctx, static_ret, None)
-                        emit(ctx, GICallExtern(sdst, static_name, static_args))
+                        emit(&ctx, GICallExtern(sdst, static_name, static_args))
                         # Bug D (Core #4, sibling 4/4): this static-method / variant-
                         # ctor / trait-static path returns here BEFORE the generic
                         # method-call `register_local_for_drop` (~:4265). `sdst` is
@@ -3597,7 +3597,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         int tag = emit_tag_read(&ctx, scr_ptr, recv_tn, &gmod)
                         # tag == 0 → Some / Ok arm.
                         int cmp_dst = add_local(&ctx, BOOL_TYPE, None)
-                        emit(ctx, GICmp(cmp_dst, CMP_EQ, I64_TYPE, OpCopy(tag), OpConstI64(0)))
+                        emit(&ctx, GICmp(cmp_dst, CMP_EQ, I64_TYPE, OpCopy(tag), OpConstI64(0)))
                         int some_bb = new_block(&ctx)
                         int none_bb = new_block(&ctx)
                         int uo_merge_bb = new_block(&ctx)
@@ -3605,11 +3605,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # Some arm: read payload, store to uo_dst.
                         switch_to(&ctx, some_bb)
                         int payload = emit_payload_read(&ctx, scr_ptr, recv_tn, variant_name, 0, inner_tid, &gmod)
-                        emit(ctx, GIAssign(uo_dst, op_consume(ctx, &gmod, payload, CkAssign())))
+                        emit(&ctx, GIAssign(uo_dst, op_consume(ctx, &gmod, payload, CkAssign())))
                         set_terminator(&ctx, GTJump(uo_merge_bb))
                         # None arm: store the default.
                         switch_to(&ctx, none_bb)
-                        emit(ctx, GIAssign(uo_dst, op_consume(ctx, &gmod, default_local, CkAssign())))
+                        emit(&ctx, GIAssign(uo_dst, op_consume(ctx, &gmod, default_local, CkAssign())))
                         set_terminator(&ctx, GTJump(uo_merge_bb))
                         switch_to(&ctx, uo_merge_bb)
                         # Bug D (Core #4, sibling 1/4): this `unwrap_or` intercept
@@ -3641,7 +3641,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # self-host GIR has no GTUnreachable).
                     int uw_tag = emit_tag_read(&ctx, scr_ptr, recv_tn, &gmod)
                     int uw_cmp = add_local(&ctx, BOOL_TYPE, None)
-                    emit(ctx, GICmp(uw_cmp, CMP_EQ, I64_TYPE, OpCopy(uw_tag), OpConstI64(0)))
+                    emit(&ctx, GICmp(uw_cmp, CMP_EQ, I64_TYPE, OpCopy(uw_tag), OpConstI64(0)))
                     int uw_ok_bb = new_block(&ctx)
                     int uw_panic_bb = new_block(&ctx)
                     set_terminator(&ctx, GTBranch(OpCopy(uw_cmp), uw_ok_bb, uw_panic_bb))
@@ -3657,7 +3657,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     String uw_code = "T_UnwrapNone"
                     if uw_word == "Error":
                         uw_code = "T_UnwrapError"
-                    emit(ctx, GICallExtern(-1, "gorget_trap", [OpConstStr(uw_code), OpConstStr(uw_msg)]))
+                    emit(&ctx, GICallExtern(-1, "gorget_trap", [OpConstStr(uw_code), OpConstStr(uw_msg)]))
                     set_terminator(&ctx, GTJump(uw_ok_bb))
                     switch_to(&ctx, uw_ok_bb)
                     # Plain unwrap: emit a real field read through the
@@ -3711,7 +3711,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # `ud` (NOT `recv`) — mirror the plain-unwrap site above.
                 if inner_tid >= 0:
                     int ud = add_local_inheriting(&ctx, inner_tid, None, recv)
-                    emit(ctx, GIAssign(ud, op_consume(ctx, &gmod, recv, CkAssign())))
+                    emit(&ctx, GIAssign(ud, op_consume(ctx, &gmod, recv, CkAssign())))
                     return ud
                 return recv
             # clone() — return a copy of the receiver
@@ -3765,7 +3765,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         else:
                             pass
                 int clone_dst = add_local(&ctx, recv_tid, None)
-                emit(ctx, GIAssign(clone_dst, OpClone(recv)))
+                emit(&ctx, GIAssign(clone_dst, OpClone(recv)))
                 # Bug D (Core #4, sibling 2/4): `.clone()` returns here BEFORE the
                 # generic method-call `register_local_for_drop` (~:4265). `OpClone`
                 # deep-copies the receiver into a FRESH owned slot (LoOwned,
@@ -3802,16 +3802,16 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 String thr_join_fn = thr_recv_tn + "__" + mname
                 if mname == "id":
                     int thr_id_dst = add_local(&ctx, I64_TYPE, None)
-                    emit(ctx, GICall(thr_id_dst, thr_join_fn, [op_consume(ctx, &gmod, recv, CkCallArgBorrow())]))
+                    emit(&ctx, GICall(thr_id_dst, thr_join_fn, [op_consume(ctx, &gmod, recv, CkCallArgBorrow())]))
                     return thr_id_dst
                 # join: void payload → unit (no dst); else the payload's tid.
                 if thr_payload_tid == UNIT_TYPE:
-                    emit(ctx, GICall(-1, thr_join_fn, [op_consume(ctx, &gmod, recv, CkCallArgOwning())]))
+                    emit(&ctx, GICall(-1, thr_join_fn, [op_consume(ctx, &gmod, recv, CkCallArgOwning())]))
                     int thr_void_dst = add_local(&ctx, UNIT_TYPE, None)
-                    emit(ctx, GIAssign(thr_void_dst, OpConstUnit()))
+                    emit(&ctx, GIAssign(thr_void_dst, OpConstUnit()))
                     return thr_void_dst
                 int thr_join_dst = add_local(&ctx, thr_payload_tid, None)
-                emit(ctx, GICall(thr_join_dst, thr_join_fn, [op_consume(ctx, &gmod, recv, CkCallArgOwning())]))
+                emit(&ctx, GICall(thr_join_dst, thr_join_fn, [op_consume(ctx, &gmod, recv, CkCallArgOwning())]))
                 # Bug D (Core #4, sibling 3/4): `Thread.join()` returns here BEFORE
                 # the generic method-call `register_local_for_drop` (~:4265).
                 # `thr_join_dst` is the payload T returned BY VALUE from the joined
@@ -3943,7 +3943,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int _mod_op_ty = ctx.locals.get(recv).unwrap().type_id
                 int _mod_div = lower_expr(&ctx, margs.get(0).unwrap().value, &gmod)
                 int _mod_dst = add_local(&ctx, _mod_op_ty, None)
-                emit(ctx, GIBinOp(_mod_dst, OP_MOD, _mod_op_ty, op_consume(ctx, &gmod, recv, CkBinOpArg()), op_consume(ctx, &gmod, _mod_div, CkBinOpArg())))
+                emit(&ctx, GIBinOp(_mod_dst, OP_MOD, _mod_op_ty, op_consume(ctx, &gmod, recv, CkBinOpArg()), op_consume(ctx, &gmod, _mod_div, CkBinOpArg())))
                 return _mod_dst
             # ── Primitive `.display()` / `.debug()` → runtime to-str ──────
             # `x.display()` / `x.debug()` on a numeric/bool receiver has no
@@ -3979,7 +3979,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         _pd_fn = "gorget_float_to_str"
                     elif _pd_is_bool:
                         _pd_fn = "gorget_bool_to_str"
-                    emit(ctx, GICallExtern(_pd_dst, _pd_fn, [op_consume(ctx, &gmod, recv, CkFormatArg())]))
+                    emit(&ctx, GICallExtern(_pd_dst, _pd_fn, [op_consume(ctx, &gmod, recv, CkFormatArg())]))
                     register_local_for_drop(&ctx, _pd_dst, _pd_gs, &gmod)
                     return _pd_dst
                 # String receiver: `debug()` quotes+escapes via
@@ -4003,11 +4003,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int _sd_recv = recv
                     if is_ptr_to_string_type_id(ctx.locals.get(recv).unwrap().type_id, &gmod):
                         int _sd_v = add_local_with(&ctx, _sd_gs, None, LoBorrowed(), BoNone())
-                        emit(ctx, GIDeref(_sd_v, recv, _sd_gs))
+                        emit(&ctx, GIDeref(_sd_v, recv, _sd_gs))
                         _sd_recv = _sd_v
                     if mname == "debug":
                         int _sd_dst = add_local(&ctx, _sd_gs, None)
-                        emit(ctx, GICallExtern(_sd_dst, "gorget_string_debug", [op_consume(ctx, &gmod, _sd_recv, CkFormatArg())]))
+                        emit(&ctx, GICallExtern(_sd_dst, "gorget_string_debug", [op_consume(ctx, &gmod, _sd_recv, CkFormatArg())]))
                         register_local_for_drop(&ctx, _sd_dst, _sd_gs, &gmod)
                         return _sd_dst
                     else:
@@ -4059,11 +4059,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     if not gmod.fn_sigs.contains(_rh_ws):
                         _rh_ws = "FxHasher__write_string"
                     if _rh_is_str:
-                        emit(ctx, GICallExtern(-1, _rh_ws, [OpBorrow(_rh_arg), op_consume(ctx, &gmod, recv, CkCallArgBorrow())]))
+                        emit(&ctx, GICallExtern(-1, _rh_ws, [OpBorrow(_rh_arg), op_consume(ctx, &gmod, recv, CkCallArgBorrow())]))
                     else:
-                        emit(ctx, GICallExtern(-1, _rh_wi, [OpBorrow(_rh_arg), op_consume(ctx, &gmod, recv, CkCallArgBorrow())]))
+                        emit(&ctx, GICallExtern(-1, _rh_wi, [OpBorrow(_rh_arg), op_consume(ctx, &gmod, recv, CkCallArgBorrow())]))
                     int _rh_unit = add_local(&ctx, UNIT_TYPE, None)
-                    emit(ctx, GIAssign(_rh_unit, OpConstUnit()))
+                    emit(&ctx, GIAssign(_rh_unit, OpConstUnit()))
                     return _rh_unit
             # ── Vector higher-order-function (HOF) inline-loop intercept ──
             # `v.map/filter/fold/reduce/any/all((closure))` has no userland
@@ -4539,11 +4539,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             ret_tid = _cm_res2
             if ret_tid == UNIT_TYPE:
                 # Void-returning method — no destination
-                emit(ctx, GICallExtern(-1, full_name, call_args))
+                emit(&ctx, GICallExtern(-1, full_name, call_args))
                 if need_writeback:
                     emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
                 int void_dst = add_local(&ctx, UNIT_TYPE, None)
-                emit(ctx, GIAssign(void_dst, OpConstUnit()))
+                emit(&ctx, GIAssign(void_dst, OpConstUnit()))
                 return void_dst
             # Phase D step 2: borrowing collection getters (.get / .first /
             # .last / .safe_get) return `Option[Ref[V]]` whose payload is a
@@ -4664,7 +4664,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # once. Mirrors Rust's `call_extern_tracked` `needs_drop`.
             if not mname_is_view:
                 register_local_for_drop(&ctx, mdst, ret_tid, &gmod)
-            emit(ctx, GICallExtern(mdst, full_name, call_args))
+            emit(&ctx, GICallExtern(mdst, full_name, call_args))
             if need_writeback:
                 emit_field_write_from_local(&ctx, wb_base, wb_field, recv, &gmod)
             return mdst
@@ -4751,7 +4751,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # out of scope), but this keeps the two box-deref sites
                 # consistent so the next fixture can't hit the LoOwned hole.
                 int derefed = add_local_with(&ctx, box_inner_tid, None, LoBorrowed(), BoRuntimeView(base))
-                emit(ctx, GIDeref(derefed, base, box_inner_tid))
+                emit(&ctx, GIDeref(derefed, base, box_inner_tid))
                 base = derefed
                 base_tid = box_inner_tid
                 base_type_name = inner_name
@@ -4839,7 +4839,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     dst_type_id = register_ptr(&gmod, field_type)
                 int fdst = add_local_with(&ctx, dst_type_id, None, LoBorrowed(), BoNone())
                 set_field_borrow(&ctx, fdst, base, found_fi)
-                emit(ctx, GIFieldLoad(fdst, base, found_fi))
+                emit(&ctx, GIFieldLoad(fdst, base, found_fi))
                 return fdst
             # HARD BUG: unknown field access fell through to I64/0
             # placeholder, losing both the struct identity and the field
@@ -4849,7 +4849,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # type name and field name so the root cause is visible.
             diag_bug("EFieldAccess", "in fn '" + ctx.current_fn_name + "': unknown field '" + field_name + "' on base type '" + base_type_name + "' — returning I64(0) placeholder (WRONG)")
             int fdst = add_local(&ctx, I64_TYPE, None)
-            emit(ctx, GIAssign(fdst, OpConstI64(0)))
+            emit(&ctx, GIAssign(fdst, OpConstI64(0)))
             return fdst
         case EIndex(base_box, idx_box):
             # `base[idx]` value-READ → collection getter call. Mirrors
@@ -4896,7 +4896,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                         # fmt_basic/fmt_edge). Mirrors the method-view path at :~2264.
                                         int eix_sl_dst = add_local_with(&ctx, eix_sl_gs, None, LoView(), BoNone())
                                         Vector[Operand] eix_sl_args = [op_consume(ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(ctx, &gmod, eix_sl_start, CkBinOpArg()), op_consume(ctx, &gmod, eix_sl_end, CkBinOpArg())]
-                                        emit(ctx, GICallExtern(eix_sl_dst, "gorget_str_slice", eix_sl_args))
+                                        emit(&ctx, GICallExtern(eix_sl_dst, "gorget_str_slice", eix_sl_args))
                                         return eix_sl_dst
                                 case None:
                                     pass
@@ -4939,7 +4939,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # before the view aliases it (UAF). Mirrors :~2264.
                 int eix_str_dst = add_local_with(&ctx, eix_str_gs, None, LoView(), BoNone())
                 Vector[Operand] eix_str_args = [op_consume(ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(ctx, &gmod, eix_idx, CkBinOpArg())]
-                emit(ctx, GICallExtern(eix_str_dst, "gorget_str_index", eix_str_args))
+                emit(&ctx, GICallExtern(eix_str_dst, "gorget_str_index", eix_str_args))
                 return eix_str_dst
             String eix_getter = ""
             match resource_meta_for(&gmod, eix_base_name):
@@ -4970,13 +4970,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int eix_get_ret = gmod.fn_sigs.get(eix_get_full).unwrap()
                     int eix_get_dst = add_local(&ctx, eix_get_ret, None)
                     Vector[Operand] eix_get_args = [OpBorrow(eix_base), op_consume(ctx, &gmod, eix_idx, classify_call_arg(gmod, eix_get_full, 1))]
-                    emit(ctx, GICallExtern(eix_get_dst, eix_get_full, eix_get_args))
+                    emit(&ctx, GICallExtern(eix_get_dst, eix_get_full, eix_get_args))
                     return eix_get_dst
             if eix_getter == "":
                 # Unsupported base (Set has no index-read, unknown type):
                 # keep the legacy I64/0 placeholder rather than crash.
                 int idst = add_local(&ctx, I64_TYPE, None)
-                emit(ctx, GIAssign(idst, OpConstI64(0)))
+                emit(&ctx, GIAssign(idst, OpConstI64(0)))
                 return idst
             # Element/value type NAME — Vector/Deque via collection_element_type,
             # Dict via the value-type suffix — through the shared
@@ -4986,7 +4986,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             String eix_elem_name = index_value_type_name(eix_base_name)
             if eix_elem_name == "":
                 int idst = add_local(&ctx, I64_TYPE, None)
-                emit(ctx, GIAssign(idst, OpConstI64(0)))
+                emit(&ctx, GIAssign(idst, OpConstI64(0)))
                 return idst
             String eix_elem_norm = eix_elem_name
             if eix_elem_name == "Str":
@@ -5014,7 +5014,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # (shared by both paths; nothing faultable about an unknown elem).
             if (not eix_is_scalar) and (not eix_is_resource) and (not eix_is_struct):
                 int idst_stub = add_local(&ctx, I64_TYPE, None)
-                emit(ctx, GIAssign(idst_stub, OpConstI64(0)))
+                emit(&ctx, GIAssign(idst_stub, OpConstI64(0)))
                 return idst_stub
             # ── Fault.Bounds route (error-model.md §11 Increment 2 (A)) ──
             # Inside an active `catch Fault.Bounds` scope, an array-backed index
@@ -5052,9 +5052,9 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # handler; otherwise materialize the element in the continuation.
                 int eix_raw_ptr_tid = register_ptr(&gmod, eix_elem_tid)
                 int raw_ptr = add_local_with(&ctx, eix_raw_ptr_tid, None, LoBorrowed(), BoNone())
-                emit(ctx, GICallExtern(raw_ptr, "gorget_array_safe_get", eix_args))
+                emit(&ctx, GICallExtern(raw_ptr, "gorget_array_safe_get", eix_args))
                 int oob_flag = add_local(&ctx, BOOL_TYPE, None)
-                emit(ctx, GICmp(oob_flag, CMP_EQ, I64_TYPE, OpCopy(raw_ptr), OpConstNull()))
+                emit(&ctx, GICmp(oob_flag, CMP_EQ, I64_TYPE, OpCopy(raw_ptr), OpConstNull()))
                 int eix_cont_bb = new_block(&ctx)
                 set_terminator(&ctx, GTBranch(OpCopy(oob_flag), eix_bounds_h, eix_cont_bb))
                 switch_to(&ctx, eix_cont_bb)
@@ -5063,7 +5063,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if eix_is_scalar:
                     # Scalar: deref the void* into the bare element value.
                     int idst_sc = add_local(&ctx, eix_elem_tid, None)
-                    emit(ctx, GIDeref(idst_sc, raw_ptr, eix_elem_tid))
+                    emit(&ctx, GIDeref(idst_sc, raw_ptr, eix_elem_tid))
                     return idst_sc
                 if eix_is_struct:
                     # Plain non-resource struct element (case (c)): deref the
@@ -5074,7 +5074,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # typed marker, no name-matching. The OOB NULL path already
                     # branched to the handler above, so this only runs in-bounds.
                     int idst_st = add_local(&ctx, eix_elem_tid, None)
-                    emit(ctx, GIDeref(idst_st, raw_ptr, eix_elem_tid))
+                    emit(&ctx, GIDeref(idst_st, raw_ptr, eix_elem_tid))
                     return idst_st
                 # Resource: the result IS the borrowed pointer into the element.
                 # The enclosing fault-catch's `op_consume(CkAssign())` clones it
@@ -5091,7 +5091,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 idst = add_local_with(&ctx, eix_ptr_tid, None, LoBorrowed(), BoNone())
             else:
                 idst = add_local(&ctx, eix_elem_tid, None)
-            emit(ctx, GICallExtern(idst, eix_getter, eix_args))
+            emit(&ctx, GICallExtern(idst, eix_getter, eix_args))
             return idst
         case EIf(cond_box, then_body, else_branches):
             # If-as-EXPRESSION (`int x = if c: a else: b`). Mirrors Rust
@@ -5117,15 +5117,15 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if enum_category_of(&gmod, ctx.expected_type).category == ENUM_CAT_OPTION and option_ref_payload_of(&gmod, ctx.expected_type) < 0:
                     int ndst_nl = add_local(&ctx, ctx.expected_type, None)
                     Vector[Operand] none_args_nl = []
-                    emit(ctx, GICallExtern(ndst_nl, "None", none_args_nl))
+                    emit(&ctx, GICallExtern(ndst_nl, "None", none_args_nl))
                     return ndst_nl
             int dst = add_local(&ctx, UNIT_TYPE, None)
-            emit(ctx, GIAssign(dst, OpConstUnit()))
+            emit(&ctx, GIAssign(dst, OpConstUnit()))
             return dst
         case ECharLiteral(ch):
             int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             int dst = add_local(&ctx, gs_tid, None)
-            emit(ctx, GIAssign(dst, OpConstStr(ch)))
+            emit(&ctx, GIAssign(dst, OpConstStr(ch)))
             return dst
         case EArrayLiteral(elems):
             # Set-literal disambiguation: the parser produces EArrayLiteral for
@@ -5173,9 +5173,9 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     int set_acc = add_local(&ctx, set_acc_tid, None)
                     Vector[Operand] set_new_args = [OpConstI64(8)]
                     if eali_set_ordered:
-                        emit(ctx, GICallExtern(set_acc, "gorget_ordered_set_new", set_new_args))
+                        emit(&ctx, GICallExtern(set_acc, "gorget_ordered_set_new", set_new_args))
                     else:
-                        emit(ctx, GICallExtern(set_acc, "gorget_set_new", set_new_args))
+                        emit(&ctx, GICallExtern(set_acc, "gorget_set_new", set_new_args))
                     register_local_for_drop(&ctx, set_acc, set_acc_tid, &gmod)
                     # Lower + add each element. Elements are independently typed
                     # (clear the Set destination expected_type around each).
@@ -5189,7 +5189,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         int set_el_local = lower_expr(&ctx, set_el, &gmod)
                         ctx.expected_type = set_prev_et
                         Vector[Operand] set_add_args = [OpBorrow(set_acc), OpMove(set_el_local)]
-                        emit(ctx, GICallExtern(-1, "gorget_set_add", set_add_args))
+                        emit(&ctx, GICallExtern(-1, "gorget_set_add", set_add_args))
                     return set_acc
             # Consume element-type hint set by SVarDecl (`Vector[T] x = []`).
             # An empty hint means the declared type was not a concrete
@@ -5280,10 +5280,10 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if vec_tyname != "":
                 String magic_name = "__gorget_array_new_sized_" + vec_tyname
                 Vector[Operand] an_args_typed = []
-                emit(ctx, GICallExtern(adst, magic_name, an_args_typed))
+                emit(&ctx, GICallExtern(adst, magic_name, an_args_typed))
             else:
                 Vector[Operand] an_args = [OpConstI64(8)]
-                emit(ctx, GICallExtern(adst, "gorget_array_new", an_args))
+                emit(&ctx, GICallExtern(adst, "gorget_array_new", an_args))
             # Push each element into the just-created Vector. Without
             # this, `[!init_insts]` and similar "array literal with
             # explicit elements" produced an EMPTY array, and any
@@ -5301,7 +5301,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # The element keeps OpMove — it IS consumed into the array.
             for el in elem_locals:
                 Vector[Operand] push_args = [OpBorrow(adst), OpMove(el)]
-                emit(ctx, GICallExtern(-1, "gorget_array_push", push_args))
+                emit(&ctx, GICallExtern(-1, "gorget_array_push", push_args))
             return adst
         case ETupleLiteral(elems):
             # A tuple literal is a positional struct value. Mirror Rust
@@ -5375,7 +5375,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 tup_ctor_args.push(op_consume(ctx, &gmod, tel2, CkFieldWrite()))
             String tup_ctor_name = type_id_to_name(tup_tid, &gmod)
             int tdst = add_local(&ctx, tup_tid, None)
-            emit(ctx, GICall(tdst, tup_ctor_name, tup_ctor_args))
+            emit(&ctx, GICall(tdst, tup_ctor_name, tup_ctor_args))
             # FRESH-OWNED-TEMP drop registration: a tuple holding a resource
             # element is itself droppable (its drop recurses into the element).
             # Register it so a scope-exit drop frees the owned element exactly
@@ -5410,7 +5410,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 lower_expr(&ctx, sv, &gmod)
                 ctx.expected_type = prev_expected_sli
             int sdst = add_local(&ctx, lookup_or_register_named(&gmod, sname), None)
-            emit(ctx, GIAssign(sdst, OpConstI64(0)))
+            emit(&ctx, GIAssign(sdst, OpConstI64(0)))
             return sdst
         case EClosure(cparams, cbody):
             # closure Phase 2 Step A/B: the make-site is the SOLE closure-id
@@ -5621,7 +5621,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # Mirrors Rust `emit_borrow_mut` (closures.rs:326-332).
                         int cl_mr_ptr_ty = register_type(&gmod, GtMutPtr(cl_arg_cap.type_id))
                         int cl_mr_tmp = add_local(&ctx, cl_mr_ptr_ty, None)
-                        emit(ctx, GIAssign(cl_mr_tmp, OpBorrow(cl_arg_cap.local_id)))
+                        emit(&ctx, GIAssign(cl_mr_tmp, OpBorrow(cl_arg_cap.local_id)))
                         cl_ctor_args.push(OpCopy(cl_mr_tmp))
                     else:
                         # §4d-2 (Phase 2b): route the capture source through
@@ -5637,8 +5637,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         # INDEPENDENT snapshot, never a shared alias.
                         cl_ctor_args.push(op_consume(ctx, &gmod, cl_arg_cap.local_id, CkFieldWrite()))
                     cl_ai += 1
-                emit(ctx, GICall(cl_env_tmp, closure_name.clone(), cl_ctor_args))
-                emit(ctx, GIAssign(cdst, OpCopy(cl_env_tmp)))
+                emit(&ctx, GICall(cl_env_tmp, closure_name.clone(), cl_ctor_args))
+                emit(&ctx, GIAssign(cdst, OpCopy(cl_env_tmp)))
                 # ② closure ENV-FIELD leak fix — record the GorgetClosure value's
                 # `cdst` local -> `__Closure_N` ONLY when the heap env owns >=1
                 # RESOURCE field (a droppable SNAPSHOT — flag computed above,
@@ -5658,7 +5658,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 String make_fn = "__make_closure_" + int_to_str(cid)
                 Vector[Operand] make_args = []
                 gmod.fn_sigs.put(make_fn, closure_tid)
-                emit(ctx, GICallExtern(cdst, make_fn, make_args))
+                emit(&ctx, GICallExtern(cdst, make_fn, make_args))
             # Record the closure for the post-pass, carrying the captures so
             # the post-pass field-loads them before lowering the body.
             gmod.lifted_closures.push(LiftedClosure(cid, closure_name + "__call", cl_sig.self_ptr, cl_sig.abi_param_types, cl_sig.body_param_types, cl_sig.body_param_names, cl_sig.return_type, cbody, false, cl_lowerable, !cl_caps))
@@ -5714,7 +5714,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # target type (and downstream type inference sees the cast
                 # result correctly).
                 int eas_dst = add_local(&ctx, eas_to, None)
-                emit(ctx, GICast(eas_dst, eas_loc, eas_from, eas_to))
+                emit(&ctx, GICast(eas_dst, eas_loc, eas_from, eas_to))
                 return eas_dst
             return eas_loc
         case EMove(inner_box):
@@ -5796,7 +5796,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 # buffer). Mirrors Rust's EDeref rvalue tag AssignMode::Borrow
                 # (src/ir/lowering/exprs/mod.rs:690-700).
                 int ddst = add_local_with(&ctx, d_inner_tid, None, LoBorrowed(), BoRuntimeView(dsrc))
-                emit(ctx, GIDeref(ddst, dsrc, d_inner_tid))
+                emit(&ctx, GIDeref(ddst, dsrc, d_inner_tid))
                 return ddst
             return dsrc
         case ETry(inner_box):
@@ -5878,14 +5878,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             bool match_val = true
             if negated:
                 match_val = false
-            emit(ctx, GIAssign(isdst, OpConstBool(match_val)))
+            emit(&ctx, GIAssign(isdst, OpConstBool(match_val)))
             set_terminator(&ctx, GTJump(merge_bb))
             # No-match path.
             switch_to(&ctx, no_match_bb)
             bool no_match_val = false
             if negated:
                 no_match_val = true
-            emit(ctx, GIAssign(isdst, OpConstBool(no_match_val)))
+            emit(&ctx, GIAssign(isdst, OpConstBool(no_match_val)))
             set_terminator(&ctx, GTJump(merge_bb))
             switch_to(&ctx, merge_bb)
             return isdst
@@ -5939,11 +5939,11 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int aw_dst = 0
             if aw_ret_ty == UNIT_TYPE:
                 aw_dst = add_local(&ctx, UNIT_TYPE, None)
-                emit(ctx, GICall(-1, aw_call, aw_args))
-                emit(ctx, GIAssign(aw_dst, OpConstUnit()))
+                emit(&ctx, GICall(-1, aw_call, aw_args))
+                emit(&ctx, GIAssign(aw_dst, OpConstUnit()))
             else:
                 aw_dst = add_local(&ctx, aw_ret_ty, None)
-                emit(ctx, GICall(aw_dst, aw_call, aw_args))
+                emit(&ctx, GICall(aw_dst, aw_call, aw_args))
             # Defensive move-zero of the awaited Task binding local: the join +
             # free happens inside `__gorget_await_<fn>`, and `drop_fn_for_type`
             # returns "" for a Task runtime type (so there is no scope-exit drop
@@ -6036,7 +6036,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             if isp_ret < 0:
                                 isp_ret = compute_closure_sig(0, sp_params, sp_body, &gmod, -1).return_type
                             int isp_dst = add_local(&ctx, isp_ret, None)
-                            emit(ctx, GICallExtern(isp_dst, isp_call, isp_call_args))
+                            emit(&ctx, GICallExtern(isp_dst, isp_call, isp_call_args))
                             return isp_dst
                         case EIdentifier(spawn_named_fn):
                             # `spawn ident(args)`: the identifier is EITHER a real
@@ -6227,14 +6227,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     magic_prefix = "__gorget_dict_new_sized_"
                 String magic_dict = magic_prefix + dict_kname + "__GGSEP__" + dict_vname
                 Vector[Operand] dn_args_typed = []
-                emit(ctx, GICallExtern(ddst, magic_dict, dn_args_typed))
+                emit(&ctx, GICallExtern(ddst, magic_dict, dn_args_typed))
             else:
                 if dict_ordered:
                     Vector[Operand] dn_args_ord = [OpConstI64(8), OpConstI64(8)]
-                    emit(ctx, GICallExtern(ddst, "gorget_dict_new", dn_args_ord))
+                    emit(&ctx, GICallExtern(ddst, "gorget_dict_new", dn_args_ord))
                 else:
                     Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
-                    emit(ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
+                    emit(&ctx, GICallExtern(ddst, "gorget_map_new", dn_args))
             # Insert each lowered (key, value) pair into the freshly-built
             # map. Mirrors `lower_index_assign:7392` and Rust `insert_pair`
             # (collections.rs:380-388/398-417). Both Dict (ordered) and
@@ -6254,7 +6254,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             int dict_put_i = 0
             while dict_put_i < dict_pair_n:
                 Vector[Operand] put_args = [OpBorrow(ddst), op_consume(ctx, &gmod, dict_key_locals.get(dict_put_i).unwrap(), CkCallArgOwning()), op_consume(ctx, &gmod, dict_val_locals.get(dict_put_i).unwrap(), CkCallArgOwning())]
-                emit(ctx, GICallExtern(-1, "gorget_map_put", put_args))
+                emit(&ctx, GICallExtern(-1, "gorget_map_put", put_args))
                 dict_put_i = dict_put_i + 1
             return ddst
         case ECatch(inner_box, error_binding, recovery_box):
@@ -6283,7 +6283,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             if nl_contains(ctx, "it"):
                 return nl_get(ctx, "it")
             int it_dst = add_local(&ctx, UNIT_TYPE, None)
-            emit(ctx, GIAssign(it_dst, OpConstUnit()))
+            emit(&ctx, GIAssign(it_dst, OpConstUnit()))
             return it_dst
         case EListComp(lc_comp_box, lc_var, lc_iter_box, lc_filt_opt):
             return lower_list_comprehension(&ctx, *lc_comp_box, lc_var, *lc_iter_box, lc_filt_opt, &gmod)
@@ -6300,7 +6300,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
         else:
             # Remaining: ERange
             int fallback = add_local(&ctx, UNIT_TYPE, None)
-            emit(ctx, GIAssign(fallback, OpConstUnit()))
+            emit(&ctx, GIAssign(fallback, OpConstUnit()))
             return fallback
 
 # ── Vector higher-order-function (HOF) inline-loop lowering ──────────
@@ -6506,7 +6506,7 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
         Vector[Stmt] body = [SExpr(cbody.clone())]
         lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
         int unit_dst = add_local(&ctx, UNIT_TYPE, None)
-        emit(ctx, GIAssign(unit_dst, OpConstUnit()))
+        emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
         return unit_dst
     return -1
 
@@ -6561,9 +6561,9 @@ int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
         int acc = add_local(&ctx, acc_tid, None)
         Vector[Operand] new_args = [OpConstI64(8)]
         if is_ordered:
-            emit(ctx, GICallExtern(acc, "gorget_ordered_set_new", new_args))
+            emit(&ctx, GICallExtern(acc, "gorget_ordered_set_new", new_args))
         else:
-            emit(ctx, GICallExtern(acc, "gorget_set_new", new_args))
+            emit(&ctx, GICallExtern(acc, "gorget_set_new", new_args))
         register_local_for_drop(&ctx, acc, acc_tid, &gmod)
         String acc_name = "__set_hof_acc_" + int_to_str(acc)
         nl_put(&ctx, acc_name, acc)
@@ -6623,7 +6623,7 @@ int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
         Vector[Stmt] body = [SExpr(cbody.clone())]
         lower_for_set(&ctx, var_pat, recv, recv_type_name, is_ordered, body, no_else, &gmod, false)
         int unit_dst = add_local(&ctx, UNIT_TYPE, None)
-        emit(ctx, GIAssign(unit_dst, OpConstUnit()))
+        emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
         return unit_dst
     return -1
 
@@ -6641,7 +6641,7 @@ int lower_set_fold(LowerCtx &ctx, int recv, String recv_type_name, bool is_order
     # init), NOT a raw OpCopy — same resource-safety reasoning as the vector
     # fold seed. Register for drop when droppable so the seed AND the
     # per-iteration `acc = body` reassigns are leak/UAF-correct.
-    emit(ctx, GIAssign(acc, op_consume(ctx, &gmod, init_local, CkAssign())))
+    emit(&ctx, GIAssign(acc, op_consume(ctx, &gmod, init_local, CkAssign())))
     if is_droppable_type(acc_tid, &gmod):
         register_local_for_drop(&ctx, acc, acc_tid, &gmod)
     nl_put(&ctx, acc_param, acc)
@@ -6659,9 +6659,9 @@ int lower_set_fold(LowerCtx &ctx, int recv, String recv_type_name, bool is_order
 int lower_set_any_all(LowerCtx &ctx, int recv, String recv_type_name, bool is_ordered, String var_name, SpannedExpr cbody, bool is_all, Span span, GirModule &gmod):
     int acc = add_local(&ctx, BOOL_TYPE, None)
     if is_all:
-        emit(ctx, GIAssign(acc, OpConstBool(true)))
+        emit(&ctx, GIAssign(acc, OpConstBool(true)))
     else:
-        emit(ctx, GIAssign(acc, OpConstBool(false)))
+        emit(&ctx, GIAssign(acc, OpConstBool(false)))
     String acc_name = "__set_hof_pred_acc_" + int_to_str(acc)
     nl_put(&ctx, acc_name, acc)
     SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
@@ -6759,7 +6759,7 @@ int lower_vector_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExp
     # resource VarDecl seed. Register the acc for drop when its type is
     # droppable so the seed AND the per-iteration `acc = body` reassigns
     # (which the SAssign path drop-on-overwrites) are leak/UAF-correct.
-    emit(ctx, GIAssign(acc, op_consume(ctx, &gmod, init_local, CkAssign())))
+    emit(&ctx, GIAssign(acc, op_consume(ctx, &gmod, init_local, CkAssign())))
     if is_droppable_type(acc_tid, &gmod):
         register_local_for_drop(&ctx, acc, acc_tid, &gmod)
     nl_put(&ctx, acc_param, acc)
@@ -6787,10 +6787,10 @@ int lower_vector_reduce(LowerCtx &ctx, int recv, String recv_type_name, String a
     # the first iteration). Reduce on an empty Vector is UB in the source
     # language (Rust gg panics), matching this placeholder-leak behaviour.
     int acc = add_local(&ctx, I64_TYPE, None)
-    emit(ctx, GIAssign(acc, OpConstI64(0)))
+    emit(&ctx, GIAssign(acc, OpConstI64(0)))
     nl_put(&ctx, acc_param, acc)
     int seen = add_local(&ctx, BOOL_TYPE, None)
-    emit(ctx, GIAssign(seen, OpConstBool(false)))
+    emit(&ctx, GIAssign(seen, OpConstBool(false)))
     String seen_name = "__hof_seen_" + int_to_str(seen)
     nl_put(&ctx, seen_name, seen)
     SpannedExpr acc_lhs = SpannedExpr(EIdentifier(acc_param), span)
@@ -6815,9 +6815,9 @@ int lower_vector_reduce(LowerCtx &ctx, int recv, String recv_type_name, String a
 int lower_vector_any_all(LowerCtx &ctx, int recv, String recv_type_name, String var_name, SpannedExpr cbody, bool is_all, Span span, GirModule &gmod):
     int acc = add_local(&ctx, BOOL_TYPE, None)
     if is_all:
-        emit(ctx, GIAssign(acc, OpConstBool(true)))
+        emit(&ctx, GIAssign(acc, OpConstBool(true)))
     else:
-        emit(ctx, GIAssign(acc, OpConstBool(false)))
+        emit(&ctx, GIAssign(acc, OpConstBool(false)))
     nl_put(&ctx, "__hof_pred_acc_" + int_to_str(acc), acc)
     String acc_name = "__hof_pred_acc_" + int_to_str(acc)
     SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
@@ -6853,14 +6853,14 @@ int lower_vector_find(LowerCtx &ctx, int recv, String recv_type_name, String var
     record_enum_category(&gmod, acc_tid, ENUM_CAT_OPTION, inner_tid, -1)
     int acc = add_local(&ctx, acc_tid, None)
     Vector[Operand] none_args = []
-    emit(ctx, GICallExtern(acc, "None", none_args))
+    emit(&ctx, GICallExtern(acc, "None", none_args))
     if is_droppable_type(acc_tid, &gmod):
         register_local_for_drop(&ctx, acc, acc_tid, &gmod)
     String acc_name = "__hof_find_acc_" + int_to_str(acc)
     nl_put(&ctx, acc_name, acc)
     # 0-based match-position counter (find_index only, but harmless for find).
     int idxc = add_local(&ctx, I64_TYPE, None)
-    emit(ctx, GIAssign(idxc, OpConstI64(0)))
+    emit(&ctx, GIAssign(idxc, OpConstI64(0)))
     String idxc_name = "__hof_find_idx_" + int_to_str(idxc)
     nl_put(&ctx, idxc_name, idxc)
     SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
@@ -6949,7 +6949,7 @@ int try_lower_dict_hof(LowerCtx &ctx, int recv, String recv_type_name, String mn
         int df_acc_tid = ctx.locals.get(recv).unwrap().type_id
         int df_acc = add_local(&ctx, df_acc_tid, None)
         Vector[Operand] df_ctor_args = [OpBorrow(recv)]
-        emit(ctx, GICallExtern(df_acc, "gorget_map_new_like", df_ctor_args))
+        emit(&ctx, GICallExtern(df_acc, "gorget_map_new_like", df_ctor_args))
         # Register at birth (Core invariant #3 — no leak).
         register_local_for_drop(&ctx, df_acc, df_acc_tid, &gmod)
         String df_acc_name = "__dict_hof_acc_" + int_to_str(df_acc)
@@ -6990,7 +6990,7 @@ int lower_dict_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExpr 
     int init_local = lower_expr(&ctx, init_expr, &gmod)
     int acc_tid = ctx.locals.get(init_local).unwrap().type_id
     int acc = add_local(&ctx, acc_tid, None)
-    emit(ctx, GIAssign(acc, op_consume(ctx, &gmod, init_local, CkAssign())))
+    emit(&ctx, GIAssign(acc, op_consume(ctx, &gmod, init_local, CkAssign())))
     if is_droppable_type(acc_tid, &gmod):
         register_local_for_drop(&ctx, acc, acc_tid, &gmod)
     nl_put(&ctx, acc_param, acc)
@@ -7127,10 +7127,10 @@ int comp_make_acc(LowerCtx &ctx, int acc_tid, String elem_tyname, GirModule &gmo
     int acc_local = add_local(&ctx, acc_tid, None)
     if elem_tyname != "":
         Vector[Operand] an_args = []
-        emit(ctx, GICallExtern(acc_local, "__gorget_array_new_sized_" + elem_tyname, an_args))
+        emit(&ctx, GICallExtern(acc_local, "__gorget_array_new_sized_" + elem_tyname, an_args))
     else:
         Vector[Operand] an_args = [OpConstI64(8)]
-        emit(ctx, GICallExtern(acc_local, "gorget_array_new", an_args))
+        emit(&ctx, GICallExtern(acc_local, "gorget_array_new", an_args))
     register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
     return acc_local
 
@@ -7198,7 +7198,7 @@ int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_nam
             pass
     # Non-range base: fall back to Unit, matching Rust (collections.rs:932).
     int sfallback = add_local(&ctx, UNIT_TYPE, None)
-    emit(ctx, GIAssign(sfallback, OpConstUnit()))
+    emit(&ctx, GIAssign(sfallback, OpConstUnit()))
     return sfallback
 
 # Allocate a set comprehension accumulator. Typed as the MANGLED
@@ -7232,9 +7232,9 @@ int comp_make_set_acc(LowerCtx &ctx, GirModule &gmod):
         case None:
             pass
     if acc_ordered:
-        emit(ctx, GICallExtern(acc_local, "gorget_ordered_set_new", sn_args))
+        emit(&ctx, GICallExtern(acc_local, "gorget_ordered_set_new", sn_args))
     else:
-        emit(ctx, GICallExtern(acc_local, "gorget_set_new", sn_args))
+        emit(&ctx, GICallExtern(acc_local, "gorget_set_new", sn_args))
     register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
     return acc_local
 
@@ -7296,7 +7296,7 @@ int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr va
             pass
     # Non-range base: fall back to Unit, matching Rust (collections.rs:863).
     int dfallback = add_local(&ctx, UNIT_TYPE, None)
-    emit(ctx, GIAssign(dfallback, OpConstUnit()))
+    emit(&ctx, GIAssign(dfallback, OpConstUnit()))
     return dfallback
 
 # Allocate a dict comprehension accumulator. Typed as the MANGLED
@@ -7311,7 +7311,7 @@ int comp_make_dict_acc(LowerCtx &ctx, GirModule &gmod):
     int acc_tid = collection_accumulator_tid(&gmod, "map_ordered", "", "int64_t", "int64_t")
     int acc_local = add_local(&ctx, acc_tid, None)
     Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
-    emit(ctx, GICallExtern(acc_local, "gorget_dict_new", dn_args))
+    emit(&ctx, GICallExtern(acc_local, "gorget_dict_new", dn_args))
     register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
     return acc_local
 
@@ -7499,7 +7499,7 @@ void emit_fault_call_tag_dispatch(LowerCtx &ctx, GirModule gmod, int slot_local,
     int bounds_tag = enum_variant_index(gmod, "Fault", "Bounds") + 1
     # Load the slot tag value ONCE.
     int tag_val = add_local(&ctx, I32_TYPE, None)
-    emit(ctx, GIAssign(tag_val, OpCopy(slot_local)))
+    emit(&ctx, GIAssign(tag_val, OpCopy(slot_local)))
     # Chain `tag == TAG → dest` per category. Each splits the current block; the
     # else-side continues to the next test. An uncaught category routes to a
     # freshly synthesized re-panic block (always-present destination, no swallow).
@@ -7508,7 +7508,7 @@ void emit_fault_call_tag_dispatch(LowerCtx &ctx, GirModule gmod, int slot_local,
     # `gorget_panic` is noreturn, so the jump is never taken at runtime; mirrors
     # the assert-panic idiom, lower_stmt.gg:1287).
     int ovf_flag = add_local(&ctx, BOOL_TYPE, None)
-    emit(ctx, GICmp(ovf_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(overflow_tag)))
+    emit(&ctx, GICmp(ovf_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(overflow_tag)))
     int ovf_cont_bb = new_block(&ctx)
     int ovf_dest = ovf_handler
     if ovf_dest < 0:
@@ -7517,7 +7517,7 @@ void emit_fault_call_tag_dispatch(LowerCtx &ctx, GirModule gmod, int slot_local,
     switch_to(&ctx, ovf_cont_bb)
 
     int dz_flag = add_local(&ctx, BOOL_TYPE, None)
-    emit(ctx, GICmp(dz_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(divzero_tag)))
+    emit(&ctx, GICmp(dz_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(divzero_tag)))
     int dz_cont_bb = new_block(&ctx)
     int dz_dest = dz_handler
     if dz_dest < 0:
@@ -7526,7 +7526,7 @@ void emit_fault_call_tag_dispatch(LowerCtx &ctx, GirModule gmod, int slot_local,
     switch_to(&ctx, dz_cont_bb)
 
     int bnd_flag = add_local(&ctx, BOOL_TYPE, None)
-    emit(ctx, GICmp(bnd_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(bounds_tag)))
+    emit(&ctx, GICmp(bnd_flag, CMP_EQ, I32_TYPE, OpCopy(tag_val), OpConstI32(bounds_tag)))
     int bnd_cont_bb = new_block(&ctx)
     int bnd_dest = bnd_handler
     if bnd_dest < 0:
@@ -7548,7 +7548,7 @@ int emit_fault_repanic_block(LowerCtx &ctx, GirModule gmod, String msg, int cont
     int saved_bb = ctx.current_block
     int panic_bb = new_block(&ctx)
     switch_to(&ctx, panic_bb)
-    emit(ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(msg)]))
+    emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(msg)]))
     set_terminator(&ctx, GTJump(cont_bb))
     switch_to(&ctx, saved_bb)
     return panic_bb
@@ -7706,7 +7706,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         # byte-count into main's i32 return slot → the binary exits with the
         # byte count (3 for "hi\n") instead of 0. OpConstUnit() → IIConst(LT_I32,0).
         int unit_dst = add_local(&ctx, UNIT_TYPE, None)
-        emit(ctx, GIAssign(unit_dst, OpConstUnit()))
+        emit(&ctx, GIAssign(unit_dst, OpConstUnit()))
         result = unit_dst
         # Resolve the `terminator=` kwarg (default "\n"). Mirrors Rust gg's
         # lower_print_call (src/ir/lowering/exprs/calls.rs:1604-1618): the
@@ -7766,7 +7766,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
             # local is LoBorrowed so drop-elab won't free the aliased buffer.
             if is_ptr_to_string_type_id(val_type, &gmod):
                 int sval = add_local_with(&ctx, gs_tid, None, LoBorrowed(), BoNone())
-                emit(ctx, GIDeref(sval, val, gs_tid))
+                emit(&ctx, GIDeref(sval, val, gs_tid))
                 val = sval
                 val_type = gs_tid
             # Format SPEC only (no terminator); `term` is appended at the
@@ -7781,7 +7781,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                 # (src/lir/lower/calls.rs:50-53). Without this, print(true)
                 # emits printf("%lld\n", true) → "1".
                 int bdst = add_local(&ctx, gs_tid, None)
-                emit(ctx, GICallExtern(bdst, "gorget_bool_to_str", [op_consume(ctx, &gmod, val, CkFormatArg())]))
+                emit(&ctx, GICallExtern(bdst, "gorget_bool_to_str", [op_consume(ctx, &gmod, val, CkFormatArg())]))
                 # FRESH-OWNED-TEMP drop registration (#7-style):
                 # gorget_bool_to_str allocates a fresh `GorgetString` (LoOwned)
                 # that is only BORROWED by the printf below (CkFormatArg →
@@ -7804,7 +7804,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                 # method's presence in `fn_sigs`, not a name-shape test.
                 # `is Some(pdisp_fn)` binds the symbol once in the condition.
                 int pdisp_dst = add_local(&ctx, gs_tid, None)
-                emit(ctx, GICallExtern(pdisp_dst, pdisp_fn, [OpBorrow(val)]))
+                emit(&ctx, GICallExtern(pdisp_dst, pdisp_fn, [OpBorrow(val)]))
                 # FRESH-OWNED-TEMP drop registration (#7-style): `display`
                 # returns an OWNED GorgetString that is only BORROWED by the
                 # printf below, so register at creation. A literal-returning
@@ -7827,10 +7827,10 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                 # The C-emit skips the placeholder and emits fprintf(stderr, …);
                 # mirrors Rust gg (calls.rs:1734-1738 / 1753-1757).
                 Vector[Operand] ferr_args = [OpConstNull(), OpConstStr(fmt), op_consume(ctx, &gmod, val, CkFormatArg())]
-                emit(ctx, GICallExtern(pdst, "fprintf_stderr", ferr_args))
+                emit(&ctx, GICallExtern(pdst, "fprintf_stderr", ferr_args))
             else:
                 Vector[Operand] printf_args = [OpConstStr(fmt), op_consume(ctx, &gmod, val, CkFormatArg())]
-                emit(ctx, GICallExtern(pdst, "printf", printf_args))
+                emit(&ctx, GICallExtern(pdst, "printf", printf_args))
             # `result` is already the UNIT local set at the top of the is_print
             # arm; the printf byte-count `pdst` is intentionally discarded.
     elif fname == "panic" and args.len() == 1:
@@ -7854,7 +7854,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         # as trap[T_Panic] + exit 101. The T_Panic code is prepended as a cstr
         # literal; the message stays the borrowed arg. Mirrors Rust gg
         # src/ir/lowering/exprs/calls.rs (gorget_trap(T_Panic, msg)).
-        emit(ctx, GICallExtern(-1, "gorget_trap", [OpConstStr("T_Panic"), op_consume(ctx, &gmod, panic_msg, CkFormatArg())]))
+        emit(&ctx, GICallExtern(-1, "gorget_trap", [OpConstStr("T_Panic"), op_consume(ctx, &gmod, panic_msg, CkFormatArg())]))
         # gorget_panic is noreturn. The self-host Terminator has no
         # GTUnreachable, so jump to a fresh dead block — the faithful
         # equivalent Rust's `builder.unreachable()` (the same idiom the
@@ -7867,7 +7867,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         # the (dynamically unreachable) value-position use has a well-typed
         # placeholder, mirroring Rust's `Operand::Constant(Constant::Unit)`.
         int panic_unit = add_local(&ctx, UNIT_TYPE, None)
-        emit(ctx, GIAssign(panic_unit, OpConstUnit()))
+        emit(&ctx, GIAssign(panic_unit, OpConstUnit()))
         result = panic_unit
     elif (fname == "Str" or fname == "String" or fname == "GorgetString") and enum_variant_parent(fname, gmod) == "" and call_has_named_cap_or_alloc(arg_names):
         # NAMED-ARG MODELING — String ctor cap=/alloc= split (round-39, mirroring
@@ -7903,13 +7903,13 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         bool str_bracketed = false
         if str_alloc_idx >= 0:
             int str_alloc_val = lower_expr(&ctx, args.get(str_alloc_idx).unwrap(), &gmod)
-            emit(ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(ctx, &gmod, str_alloc_val, CkCallArgBorrow())]))
+            emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(ctx, &gmod, str_alloc_val, CkCallArgBorrow())]))
             str_bracketed = true
         int str_dst = add_local(&ctx, str_gs_tid, None)
         if str_cap_idx >= 0:
             # cap= → with_capacity(n).
             int str_cap_val = lower_expr(&ctx, args.get(str_cap_idx).unwrap(), &gmod)
-            emit(ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpCopy(str_cap_val)]))
+            emit(&ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpCopy(str_cap_val)]))
         elif str_pos_idx >= 0:
             # Positional content/capacity: int → with_capacity, String content →
             # from_str (materialise an OWNED Str in the bracketed allocator; the
@@ -7921,19 +7921,19 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                 str_pty = ctx.locals.get(str_pos_val).unwrap().type_id
             bool str_pos_is_int = str_pty == I8_TYPE or str_pty == I16_TYPE or str_pty == I32_TYPE or str_pty == I64_TYPE or str_pty == U8_TYPE or str_pty == U16_TYPE or str_pty == U32_TYPE or str_pty == U64_TYPE
             if str_pos_is_int:
-                emit(ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpCopy(str_pos_val)]))
+                emit(&ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpCopy(str_pos_val)]))
             else:
-                emit(ctx, GICallExtern(str_dst, "gorget_string_from_str", [op_consume(ctx, &gmod, str_pos_val, CkFormatArg())]))
+                emit(&ctx, GICallExtern(str_dst, "gorget_string_from_str", [op_consume(ctx, &gmod, str_pos_val, CkFormatArg())]))
         elif str_bracketed:
             # Empty + alloc= → with_capacity(0) (the runtime clamps to a 16-byte
             # minimum) so the Str records the allocator; from_str("") would
             # return the shared static empty view and NOT bind.
-            emit(ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpConstI64(0)]))
+            emit(&ctx, GICallExtern(str_dst, "gorget_string_with_capacity", [OpConstI64(0)]))
         else:
-            emit(ctx, GICallExtern(str_dst, "gorget_string_from_str", [OpConstStr("")]))
+            emit(&ctx, GICallExtern(str_dst, "gorget_string_from_str", [OpConstStr("")]))
         # alloc= → pop the allocator immediately after the ctor (one-shot).
         if str_bracketed:
-            emit(ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+            emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
         # FRESH-OWNED-TEMP drop registration (Core #3): with_capacity/from_str
         # eagerly allocate, so an unconsumed temp would leak; a move into a
         # binding self-suppresses the scope-exit drop (GIMoveZero). Same as the
@@ -7969,7 +7969,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         if sc1_is_int:
             int sc1_gs_tid = lookup_or_register_named(&gmod, "GorgetString")
             int sc1_dst = add_local(&ctx, sc1_gs_tid, None)
-            emit(ctx, GICallExtern(sc1_dst, "gorget_string_with_capacity", [OpCopy(sc1_inner)]))
+            emit(&ctx, GICallExtern(sc1_dst, "gorget_string_with_capacity", [OpCopy(sc1_inner)]))
             # FRESH-OWNED-TEMP drop registration (Core #3, sibling of the
             # generic GICall tail below): gorget_string_with_capacity
             # eagerly allocates `cap` bytes (runtime_string.c:400 →
@@ -7993,7 +7993,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         # through to the default call lowering and is typed i64.
         int sc_gs_tid = lookup_or_register_named(&gmod, "GorgetString")
         int sc_dst = add_local(&ctx, sc_gs_tid, None)
-        emit(ctx, GICallExtern(sc_dst, "gorget_string_from_str", [OpConstStr("")]))
+        emit(&ctx, GICallExtern(sc_dst, "gorget_string_from_str", [OpConstStr("")]))
         result = sc_dst
     elif fname == "format" and args.len() == 1 and enum_variant_parent(fname, gmod) == "" and arg_is_string_literal(args.get(0).unwrap()):
         # `format(x)` free-fn → identity on the already-lowered string arg,
@@ -8041,9 +8041,9 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
             if is_ptr_to_string_type_id(len_arg_ty, &gmod):
                 int gs_tid = lookup_or_register_named(&gmod, "GorgetString")
                 int len_sval = add_local_with(&ctx, gs_tid, None, LoBorrowed(), BoNone())
-                emit(ctx, GIDeref(len_sval, len_local, gs_tid))
+                emit(&ctx, GIDeref(len_sval, len_local, gs_tid))
                 len_str_val = len_sval
-            emit(ctx, GICallExtern(len_dst, "gorget_str_codepoint_count", [OpBorrow(len_str_val)]))
+            emit(&ctx, GICallExtern(len_dst, "gorget_str_codepoint_count", [OpBorrow(len_str_val)]))
         else:
             # Collection: pick the runtime fn off the RESOLVED CollectionKind.
             # Default to gorget_array_len (Vector/Deque/Heap/unknown), matching
@@ -8055,7 +8055,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                 len_fn = "gorget_map_len"
             elif collection_kind_eq(len_ck, CkOrderedSet()) or collection_kind_eq(len_ck, CkHashSet()):
                 len_fn = "gorget_set_len"
-            emit(ctx, GICallExtern(len_dst, len_fn, [OpBorrow(len_local)]))
+            emit(&ctx, GICallExtern(len_dst, len_fn, [OpBorrow(len_local)]))
         result = len_dst
     elif fname == "thread_spawn" and (args.len() == 1 or args.len() == 2):
         # thread_spawn(fn[, stack_size]) → __gorget_thread_spawn_{fn}().
@@ -8111,7 +8111,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                 record_thread_payload(&gmod, ts_thread_ty, ts_ret_type)
                 int ts_dst = add_local(&ctx, ts_thread_ty, None)
                 Vector[Operand] ts_args = []
-                emit(ctx, GICall(ts_dst, "__gorget_thread_spawn_" + spawn_fn_name, ts_args))
+                emit(&ctx, GICall(ts_dst, "__gorget_thread_spawn_" + spawn_fn_name, ts_args))
                 ts_result = ts_dst
             else:
                 pass
@@ -8155,16 +8155,16 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         if alloc_idx >= 0:
             int alloc_val = lower_expr(&ctx, args.get(alloc_idx).unwrap(), &gmod)
             Vector[Operand] push_args = [op_consume(ctx, &gmod, alloc_val, CkCallArgBorrow())]
-            emit(ctx, GICallExtern(-1, "__gorget_push_allocator", push_args))
+            emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", push_args))
         # __new() — NO user args; the LIR collection-ctor path appends elem_size.
         int coll_dst = add_local(&ctx, coll_ret, None)
         Vector[Operand] coll_new_args = []
-        emit(ctx, GICall(coll_dst, coll_mangled, coll_new_args))
+        emit(&ctx, GICall(coll_dst, coll_mangled, coll_new_args))
         register_local_for_drop(&ctx, coll_dst, coll_ret, &gmod)
         # alloc= → pop the allocator immediately after __new (one-shot, matches
         # Rust: only the allocation inside the ctor uses the arena).
         if alloc_idx >= 0:
-            emit(ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+            emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
         # cap= / positional → reserve(&arr, N). gorget_array_reserve takes the
         # array by pointer (arg 0, needs_ptr_arg) — OpBorrow(coll_dst) supplies
         # the pointer (OpCopy would FATAL validate_resource_moves on a resource
@@ -8172,7 +8172,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         if cap_idx >= 0:
             int cap_val = lower_expr(&ctx, args.get(cap_idx).unwrap(), &gmod)
             Vector[Operand] reserve_args = [OpBorrow(coll_dst), op_consume(ctx, &gmod, cap_val, CkCallArgBorrow())]
-            emit(ctx, GICallExtern(-1, "gorget_array_reserve", reserve_args))
+            emit(&ctx, GICallExtern(-1, "gorget_array_reserve", reserve_args))
         result = coll_dst
     elif allocator_constructor_runtime_name(fname) != "":
         # R9 FIDELITY — scoped-allocator constructor (`Arena(8192)`,
@@ -8234,7 +8234,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         bool alloc_bracketed = false
         if alloc_alloc_idx >= 0:
             int a_alloc_val = lower_expr(&ctx, args.get(alloc_alloc_idx).unwrap(), &gmod)
-            emit(ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(ctx, &gmod, a_alloc_val, CkCallArgBorrow())]))
+            emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(ctx, &gmod, a_alloc_val, CkCallArgBorrow())]))
             alloc_bracketed = true
         Vector[Operand] alloc_args = []
         if alloc_fixed_arity < 0:
@@ -8258,11 +8258,11 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                 api += 1
         int alloc_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
         int alloc_dst = add_local(&ctx, alloc_ptr_ty, None)
-        emit(ctx, GICallExtern(alloc_dst, alloc_new_fn, alloc_args))
+        emit(&ctx, GICallExtern(alloc_dst, alloc_new_fn, alloc_args))
         # alloc= → pop immediately after the ctor (one-shot; only the ctor's own
         # allocation uses the parent).
         if alloc_bracketed:
-            emit(ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+            emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
         result = alloc_dst
     elif (fname == "Mutex" or fname == "RWLock") and targs.len() == 1 and args.len() == 1:
         # SYNC FIDELITY — GENERIC sync-primitive ctor `Mutex[T](v)` /
@@ -8284,7 +8284,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         Vector[Operand] gen_args = [op_consume(ctx, &gmod, gen_val, CkCallArgBorrow())]
         int gen_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, gen_mangled))
         int gen_dst = add_local(&ctx, gen_ptr_ty, None)
-        emit(ctx, GICall(gen_dst, gen_new_fn, gen_args))
+        emit(&ctx, GICall(gen_dst, gen_new_fn, gen_args))
         result = gen_dst
     elif sync_constructor_runtime_name(fname) != "":
         # SYNC FIDELITY — non-generic sync-primitive constructor
@@ -8302,7 +8302,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
             sync_args.push(op_consume(ctx, &gmod, sval, CkCallArgBorrow()))
         int sync_ptr_ty = register_ptr(&gmod, lookup_or_register_named(&gmod, fname))
         int sync_dst = add_local(&ctx, sync_ptr_ty, None)
-        emit(ctx, GICallExtern(sync_dst, sync_new_fn, sync_args))
+        emit(&ctx, GICallExtern(sync_dst, sync_new_fn, sync_args))
         result = sync_dst
     elif fname == "Channel" and targs.len() == 1 and call_has_named_cap_or_alloc(arg_names):
         # NAMED-ARG MODELING — Channel[T] cap=/alloc= split (round-39, mirroring
@@ -8342,7 +8342,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         bool chan_bracketed = false
         if chan_alloc_idx >= 0:
             int chan_alloc_val = lower_expr(&ctx, args.get(chan_alloc_idx).unwrap(), &gmod)
-            emit(ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(ctx, &gmod, chan_alloc_val, CkCallArgBorrow())]))
+            emit(&ctx, GICallExtern(-1, "__gorget_push_allocator", [op_consume(ctx, &gmod, chan_alloc_val, CkCallArgBorrow())]))
             chan_bracketed = true
         # cap= / positional → the capacity scalar; omitted → 0 (rendezvous).
         Operand chan_cap_op = OpConstI64(0)
@@ -8350,9 +8350,9 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
             int chan_cap_val = lower_expr(&ctx, args.get(chan_cap_idx).unwrap(), &gmod)
             chan_cap_op = op_consume(ctx, &gmod, chan_cap_val, CkCallArgBorrow())
         int chan_dst = add_local(&ctx, chan_ret, None)
-        emit(ctx, GICall(chan_dst, chan_mangled, [chan_cap_op]))
+        emit(&ctx, GICall(chan_dst, chan_mangled, [chan_cap_op]))
         if chan_bracketed:
-            emit(ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
+            emit(&ctx, GICallExtern(-1, "__gorget_pop_allocator", []))
         result = chan_dst
     else:
         # Compute mangled name for generic calls
@@ -8749,7 +8749,7 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                             int ad_pty = register_type(&gmod, GtMutPtr(ad_sty))
                             int ad_pdst = add_local(&ctx, ad_pty, None)
                             Vector[Operand] ad_no_args = []
-                            emit(ctx, GICallExtern(ad_pdst, "__global_ref__" + ad_name, ad_no_args))
+                            emit(&ctx, GICallExtern(ad_pdst, "__global_ref__" + ad_name, ad_no_args))
                             arg_local = ad_pdst
                             ad_handled = true
                     else:
@@ -9240,20 +9240,20 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
                 # an i32 local lowers to `&slot` → int32_t*). The tag-dispatch
                 # below reads its value after the call.
                 fault_slot_local = add_local(&ctx, I32_TYPE, Some("__fault_slot"))
-                emit(ctx, GIAssign(fault_slot_local, OpConstI32(0)))
+                emit(&ctx, GIAssign(fault_slot_local, OpConstI32(0)))
                 gir_args.push(OpBorrow(fault_slot_local))
             else:
                 # Non-catching caller: pass NULL → callee panics by default.
                 gir_args.push(OpConstNull())
         if ret_type == UNIT_TYPE:
-            emit(ctx, GICall(-1, call_name, gir_args))
+            emit(&ctx, GICall(-1, call_name, gir_args))
             if fault_catching:
                 emit_fault_call_tag_dispatch(&ctx, gmod, fault_slot_local, fault_ovf_h, fault_dz_h, fault_bnd_h)
             int void_unit = add_local(&ctx, UNIT_TYPE, None)
-            emit(ctx, GIAssign(void_unit, OpConstUnit()))
+            emit(&ctx, GIAssign(void_unit, OpConstUnit()))
             return void_unit
         int dst = add_local(&ctx, ret_type, None)
-        emit(ctx, GICall(dst, call_name, gir_args))
+        emit(&ctx, GICall(dst, call_name, gir_args))
         # Branch-BEFORE-read: the tag-dispatch splits the block on a fault BEFORE
         # `dst` is consumed, so the sentinel result is never read on a fault path.
         if fault_catching:

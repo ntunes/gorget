@@ -3001,9 +3001,9 @@ int lower_clone_arg_by_ptr(Operand arg, int local_id, LirFunction &f, int bb, Ve
     int cloned_val = lower_operand(arg, &f, bb, local_to_slot, m)
     if elem_ty >= LT_STRUCT_BASE:
         int tmp_slot = lir_fn_add_slot(&f, elem_ty, "")
-        lir_push_inst(f, bb, ISlotStore(tmp_slot, cloned_val, true))
+        lir_push_inst(&f, bb, ISlotStore(tmp_slot, cloned_val, true))
         int caddr = lir_fn_next_value(&f)
-        lir_push_inst(f, bb, ISlotAddr(caddr, tmp_slot))
+        lir_push_inst(&f, bb, ISlotAddr(caddr, tmp_slot))
         return caddr
     return cloned_val
 
@@ -3022,32 +3022,32 @@ int lower_clone_arg_by_ptr(Operand arg, int local_id, LirFunction &f, int bb, Ve
 int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vector[int] lir_args, LirFunction &f, int bb, Vector[int] local_to_slot, LirModule &m, bool dst_is_borrow):
     int raw_ptr = lir_fn_next_value(&f)
     Vector[int] empty_abis = []
-    lir_push_inst(f, bb, ICallExtern(raw_ptr, emit_name, lir_args, emit_name, empty_abis))
+    lir_push_inst(&f, bb, ICallExtern(raw_ptr, emit_name, lir_args, emit_name, empty_abis))
 
     int raw_slot = lir_fn_add_slot(&f, LT_PTR, "")
-    lir_push_inst(f, bb, ISlotStore(raw_slot, raw_ptr, false))
+    lir_push_inst(&f, bb, ISlotStore(raw_slot, raw_ptr, false))
 
     int dst_slot = local_to_slot.get(dst_local).unwrap()
     int slot_addr_pre = lir_fn_next_value(&f)
     int sz_val = lir_fn_next_value(&f)
     int zero_byte = lir_fn_next_value(&f)
     int sz_bytes = lir_type_byte_size_in_mod(LT_STRUCT_BASE + opt_sid, &m, 0)
-    lir_push_inst(f, bb, ISlotAddr(slot_addr_pre, dst_slot))
-    lir_push_inst(f, bb, IIConst(sz_val, LT_I64, sz_bytes))
-    lir_push_inst(f, bb, IIConst(zero_byte, LT_I32, 0))
-    lir_push_inst(f, bb, IMemset(slot_addr_pre, zero_byte, sz_val))
+    lir_push_inst(&f, bb, ISlotAddr(slot_addr_pre, dst_slot))
+    lir_push_inst(&f, bb, IIConst(sz_val, LT_I64, sz_bytes))
+    lir_push_inst(&f, bb, IIConst(zero_byte, LT_I32, 0))
+    lir_push_inst(&f, bb, IMemset(slot_addr_pre, zero_byte, sz_val))
 
     int null_val = lir_fn_next_value(&f)
     int is_not_null = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, INullPtr(null_val))
-    lir_push_inst(f, bb, ICmp(is_not_null, CMP_NE, raw_ptr, null_val))
+    lir_push_inst(&f, bb, INullPtr(null_val))
+    lir_push_inst(&f, bb, ICmp(is_not_null, CMP_NE, raw_ptr, null_val))
 
     int some_bb = lir_fn_add_block(&f)
     int none_bb = lir_fn_add_block(&f)
     int merge_bb = lir_fn_add_block(&f)
     Vector[int] empty_args0 = []
     Vector[int] empty_args1 = []
-    lir_set_term(f, bb, TBranch(is_not_null, some_bb, empty_args0, none_bb, empty_args1))
+    lir_set_term(&f, bb, TBranch(is_not_null, some_bb, empty_args0, none_bb, empty_args1))
 
     LirStructDef opt_def = m.structs.get(opt_sid).unwrap()
     int payload_field_ty = LT_I64
@@ -3057,7 +3057,7 @@ int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vect
     bool consuming = is_consuming_collection_method(emit_name)
 
     int raw_in_some = lir_fn_next_value(&f)
-    lir_push_inst(f, some_bb, ISlotLoad(raw_in_some, raw_slot, LT_PTR))
+    lir_push_inst(&f, some_bb, ISlotLoad(raw_in_some, raw_slot, LT_PTR))
 
     int payload_val = -1
     if payload_is_ptr:
@@ -3078,33 +3078,33 @@ int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vect
             Vector[int] cargs = []
             cargs.push(raw_in_some)
             Vector[int] cabis = []
-            lir_push_inst(f, some_bb, ICallExtern(cloned, clone_fn, cargs, clone_fn, cabis))
+            lir_push_inst(&f, some_bb, ICallExtern(cloned, clone_fn, cargs, clone_fn, cabis))
             int cl_slot = lir_fn_add_slot(&f, payload_field_ty, "")
             int cl_addr = lir_fn_next_value(&f)
-            lir_push_inst(f, some_bb, ISlotStore(cl_slot, cloned, true))
-            lir_push_inst(f, some_bb, ISlotAddr(cl_addr, cl_slot))
+            lir_push_inst(&f, some_bb, ISlotStore(cl_slot, cloned, true))
+            lir_push_inst(&f, some_bb, ISlotAddr(cl_addr, cl_slot))
             payload_val = cl_addr
         else:
             payload_val = raw_in_some
     else:
         int loaded = lir_fn_next_value(&f)
-        lir_push_inst(f, some_bb, ILoad(loaded, raw_in_some, payload_field_ty))
+        lir_push_inst(&f, some_bb, ILoad(loaded, raw_in_some, payload_field_ty))
         payload_val = loaded
 
     int some_slot_addr = lir_fn_next_value(&f)
     Vector[FieldInit] some_fields = []
     some_fields.push(FieldInit(1, payload_val))
-    lir_push_inst(f, some_bb, ISlotAddr(some_slot_addr, dst_slot))
-    lir_push_inst(f, some_bb, IEnumInit(some_slot_addr, opt_sid, 0, some_fields))
+    lir_push_inst(&f, some_bb, ISlotAddr(some_slot_addr, dst_slot))
+    lir_push_inst(&f, some_bb, IEnumInit(some_slot_addr, opt_sid, 0, some_fields))
     Vector[int] empty_args_s = []
-    lir_set_term(f, some_bb, TJump(merge_bb, empty_args_s))
+    lir_set_term(&f, some_bb, TJump(merge_bb, empty_args_s))
 
     int none_slot_addr = lir_fn_next_value(&f)
     Vector[FieldInit] none_fields = []
-    lir_push_inst(f, none_bb, ISlotAddr(none_slot_addr, dst_slot))
-    lir_push_inst(f, none_bb, IEnumInit(none_slot_addr, opt_sid, 1, none_fields))
+    lir_push_inst(&f, none_bb, ISlotAddr(none_slot_addr, dst_slot))
+    lir_push_inst(&f, none_bb, IEnumInit(none_slot_addr, opt_sid, 1, none_fields))
     Vector[int] empty_args_n = []
-    lir_set_term(f, none_bb, TJump(merge_bb, empty_args_n))
+    lir_set_term(&f, none_bb, TJump(merge_bb, empty_args_n))
 
     return merge_bb
 
@@ -3120,46 +3120,46 @@ int emit_void_ptr_option_wrap(String emit_name, int dst_local, int opt_sid, Vect
 int emit_sentinel_scalar_option_wrap(String emit_name, int dst_local, int opt_sid, Vector[int] lir_args, LirFunction &f, int bb, Vector[int] local_to_slot, LirModule &m):
     int raw_val = lir_fn_next_value(&f)
     Vector[int] empty_abis = []
-    lir_push_inst(f, bb, ICallExtern(raw_val, emit_name, lir_args, emit_name, empty_abis))
+    lir_push_inst(&f, bb, ICallExtern(raw_val, emit_name, lir_args, emit_name, empty_abis))
 
     int dst_slot = local_to_slot.get(dst_local).unwrap()
     int slot_addr_pre = lir_fn_next_value(&f)
     int sz_val = lir_fn_next_value(&f)
     int zero_byte = lir_fn_next_value(&f)
     int sz_bytes = lir_type_byte_size_in_mod(LT_STRUCT_BASE + opt_sid, &m, 0)
-    lir_push_inst(f, bb, ISlotAddr(slot_addr_pre, dst_slot))
-    lir_push_inst(f, bb, IIConst(sz_val, LT_I64, sz_bytes))
-    lir_push_inst(f, bb, IIConst(zero_byte, LT_I32, 0))
-    lir_push_inst(f, bb, IMemset(slot_addr_pre, zero_byte, sz_val))
+    lir_push_inst(&f, bb, ISlotAddr(slot_addr_pre, dst_slot))
+    lir_push_inst(&f, bb, IIConst(sz_val, LT_I64, sz_bytes))
+    lir_push_inst(&f, bb, IIConst(zero_byte, LT_I32, 0))
+    lir_push_inst(&f, bb, IMemset(slot_addr_pre, zero_byte, sz_val))
 
     int const0 = lir_fn_next_value(&f)
     int is_found = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, IIConst(const0, LT_I64, 0))
-    lir_push_inst(f, bb, ICmp(is_found, CMP_GE, raw_val, const0))
+    lir_push_inst(&f, bb, IIConst(const0, LT_I64, 0))
+    lir_push_inst(&f, bb, ICmp(is_found, CMP_GE, raw_val, const0))
 
     int some_bb = lir_fn_add_block(&f)
     int none_bb = lir_fn_add_block(&f)
     int merge_bb = lir_fn_add_block(&f)
     Vector[int] empty_args0 = []
     Vector[int] empty_args1 = []
-    lir_set_term(f, bb, TBranch(is_found, some_bb, empty_args0, none_bb, empty_args1))
+    lir_set_term(&f, bb, TBranch(is_found, some_bb, empty_args0, none_bb, empty_args1))
 
     # Some arm: raw_val used DIRECTLY as the i64 payload (field 1).
     int some_slot_addr = lir_fn_next_value(&f)
     Vector[FieldInit] some_fields = []
     some_fields.push(FieldInit(1, raw_val))
-    lir_push_inst(f, some_bb, ISlotAddr(some_slot_addr, dst_slot))
-    lir_push_inst(f, some_bb, IEnumInit(some_slot_addr, opt_sid, 0, some_fields))
+    lir_push_inst(&f, some_bb, ISlotAddr(some_slot_addr, dst_slot))
+    lir_push_inst(&f, some_bb, IEnumInit(some_slot_addr, opt_sid, 0, some_fields))
     Vector[int] empty_args_s = []
-    lir_set_term(f, some_bb, TJump(merge_bb, empty_args_s))
+    lir_set_term(&f, some_bb, TJump(merge_bb, empty_args_s))
 
     # None arm.
     int none_slot_addr = lir_fn_next_value(&f)
     Vector[FieldInit] none_fields = []
-    lir_push_inst(f, none_bb, ISlotAddr(none_slot_addr, dst_slot))
-    lir_push_inst(f, none_bb, IEnumInit(none_slot_addr, opt_sid, 1, none_fields))
+    lir_push_inst(&f, none_bb, ISlotAddr(none_slot_addr, dst_slot))
+    lir_push_inst(&f, none_bb, IEnumInit(none_slot_addr, opt_sid, 1, none_fields))
     Vector[int] empty_args_n = []
-    lir_set_term(f, none_bb, TJump(merge_bb, empty_args_n))
+    lir_set_term(&f, none_bb, TJump(merge_bb, empty_args_n))
 
     return merge_bb
 
@@ -3294,8 +3294,8 @@ bool try_lower_prelude_variant(String func_name, int dst_local, Vector[Operand] 
         fields.push(FieldInit(vi.payload_field, pval))
     # Take the slot's address and emit IEnumInit writing in place.
     int target = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, ISlotAddr(target, dst_slot))
-    lir_push_inst(f, bb, IEnumInit(target, struct_id, vi.tag, fields))
+    lir_push_inst(&f, bb, ISlotAddr(target, dst_slot))
+    lir_push_inst(&f, bb, IEnumInit(target, struct_id, vi.tag, fields))
     return true
 
 # Runtime-provided struct names whose layout the compiler treats as
@@ -3361,8 +3361,8 @@ bool try_lower_user_struct_ctor(String func_name, int dst_local, Vector[Operand]
     # expansion) does per-field memcpy for struct-typed fields — the
     # specific fix for the stage-1 SpannedToken(!tok, …) miscast.
     int target = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, ISlotAddr(target, dst_slot))
-    lir_push_inst(f, bb, IStructInit(target, sid, fields))
+    lir_push_inst(&f, bb, ISlotAddr(target, dst_slot))
+    lir_push_inst(&f, bb, IStructInit(target, sid, fields))
     return true
 
 # ── Operand lowering ────────────────────────────────────────
@@ -3432,7 +3432,7 @@ void emit_box_alloc(int dst_local, Operand box_arg, LirFunction &f, int bb, Vect
     int box_inner_ty = box_inner_ty_from_operand(box_arg, f, local_to_slot)
     int box_val = lower_operand(box_arg, &f, bb, local_to_slot, m)
     int box_dst = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, IBoxAlloc(box_dst, box_inner_ty, box_val))
+    lir_push_inst(&f, bb, IBoxAlloc(box_dst, box_inner_ty, box_val))
     int box_dst_slot = local_to_slot.get(dst_local).unwrap()
     int cur_box_slot_ty = f.slots.get(box_dst_slot).unwrap().ty
     if not lir_is_aggregate(cur_box_slot_ty) and box_inner_ty >= LT_STRUCT_BASE:
@@ -3457,7 +3457,7 @@ void emit_box_alloc(int dst_local, Operand box_arg, LirFunction &f, int bb, Vect
                 m.coll_elem_type_map.put("Box__" + box_inner_name, box_inner_name.clone())
             LirSlot old_box_slot = f.slots.get(box_dst_slot).unwrap()
             f.slots.set(box_dst_slot, LirSlot(LT_STRUCT_BASE + box_sid, old_box_slot.name))
-    lir_push_inst(f, bb, ISlotStore(box_dst_slot, box_dst, false))
+    lir_push_inst(&f, bb, ISlotStore(box_dst_slot, box_dst, false))
 
 # Emit the trait-object FAT struct construction for a `Box[Trait] ← Box[Concrete]`
 # assignment. `dst_slot` is the FAT `Box__<Trait>` slot ({data, vtable}); `src_slot`
@@ -3498,33 +3498,33 @@ bool try_emit_trait_obj_construct(int dst_slot, int src_slot, LirFunction &f, in
         return false
     # data (field 0) = *src (the box value = the data pointer).
     int toc_src_addr = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, ISlotAddr(toc_src_addr, src_slot))
+    lir_push_inst(&f, bb, ISlotAddr(toc_src_addr, src_slot))
     int toc_data = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, ILoad(toc_data, toc_src_addr, LT_PTR))
+    lir_push_inst(&f, bb, ILoad(toc_data, toc_src_addr, LT_PTR))
     # vtable (field 1) = &vtable_global.
     int toc_vt_addr = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, IGlobalAddr(toc_vt_addr, toc_vt_gid))
+    lir_push_inst(&f, bb, IGlobalAddr(toc_vt_addr, toc_vt_gid))
     Vector[FieldInit] toc_fields = []
     toc_fields.push(FieldInit(0, toc_data))
     toc_fields.push(FieldInit(1, toc_vt_addr))
     int toc_target = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, ISlotAddr(toc_target, dst_slot))
-    lir_push_inst(f, bb, IStructInit(toc_target, dst_sid, toc_fields))
+    lir_push_inst(&f, bb, ISlotAddr(toc_target, dst_slot))
+    lir_push_inst(&f, bb, IStructInit(toc_target, dst_sid, toc_fields))
     return true
 
 int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] local_to_slot, LirModule m):
     match op:
         case OpConstBool(v):
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, IBoolConst(dst, v))
+            lir_push_inst(&f, bb, IBoolConst(dst, v))
             return dst
         case OpConstI32(v):
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, IIConst(dst, LT_I32, v))
+            lir_push_inst(&f, bb, IIConst(dst, LT_I32, v))
             return dst
         case OpConstI64(v):
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, IIConst(dst, LT_I64, v))
+            lir_push_inst(&f, bb, IIConst(dst, LT_I64, v))
             return dst
         case OpConstF64(v):
             int dst = lir_fn_next_value(&f)
@@ -3533,30 +3533,30 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] local_to_slot,
             # (lir_codegen.gg IFConst), so the constant round-trips exactly.
             # Mirrors Rust Constant::F64(v) → Inst::FConst{bits: v.to_bits()}
             # (src/lir/lower/operands.rs:111).
-            lir_push_inst(f, bb, IFConst(dst, LT_F64, float_to_bits(v)))
+            lir_push_inst(&f, bb, IFConst(dst, LT_F64, float_to_bits(v)))
             return dst
         case OpConstStr(s):
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, IStrLit(dst, s))
+            lir_push_inst(&f, bb, IStrLit(dst, s))
             return dst
         case OpConstNull():
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, INullPtr(dst))
+            lir_push_inst(&f, bb, INullPtr(dst))
             return dst
         case OpConstUnit():
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, IIConst(dst, LT_I32, 0))
+            lir_push_inst(&f, bb, IIConst(dst, LT_I32, 0))
             return dst
         case OpSizeOf(tid):
             int dst = lir_fn_next_value(&f)
             # TODO: compute actual size from type
-            lir_push_inst(f, bb, IIConst(dst, LT_I64, 8))
+            lir_push_inst(&f, bb, IIConst(dst, LT_I64, 8))
             return dst
         case OpCopy(local_id):
             int slot = local_to_slot.get(local_id).unwrap()
             int slot_ty = f.slots.get(slot).unwrap().ty
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, ISlotLoad(dst, slot, slot_ty))
+            lir_push_inst(&f, bb, ISlotLoad(dst, slot, slot_ty))
             return dst
         case OpMove(local_id):
             # OpMove: load value like OpCopy. The GICallExtern handler
@@ -3564,7 +3564,7 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] local_to_slot,
             int slot = local_to_slot.get(local_id).unwrap()
             int slot_ty = f.slots.get(slot).unwrap().ty
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, ISlotLoad(dst, slot, slot_ty))
+            lir_push_inst(&f, bb, ISlotLoad(dst, slot, slot_ty))
             return dst
         case OpClone(local_id):
             # Phase 2c COMMIT 2 + Phase 2.3: OpClone lowers to a real
@@ -3622,18 +3622,18 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] local_to_slot,
                     # The slot already holds a pointer-to-resource —
                     # load the pointer value and pass it directly.
                     int ptr_val = lir_fn_next_value(&f)
-                    lir_push_inst(f, bb, ISlotLoad(ptr_val, slot, slot_ty))
+                    lir_push_inst(&f, bb, ISlotLoad(ptr_val, slot, slot_ty))
                     cargs.push(ptr_val)
                 else:
                     # Value-typed slot — take its address to pass by
                     # pointer to the clone fn.
                     int addr = lir_fn_next_value(&f)
-                    lir_push_inst(f, bb, ISlotAddr(addr, slot))
+                    lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                     cargs.push(addr)
-                lir_push_inst(f, bb, ICallExtern(dst, clone_fn, cargs, clone_fn, cabis))
+                lir_push_inst(&f, bb, ICallExtern(dst, clone_fn, cargs, clone_fn, cabis))
                 return dst
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, ISlotLoad(dst, slot, slot_ty))
+            lir_push_inst(&f, bb, ISlotLoad(dst, slot, slot_ty))
             return dst
         case OpBorrow(local_id):
             # Phase D step 3: OpBorrow tagged at the GIR layer for an
@@ -3644,7 +3644,7 @@ int lower_operand(Operand op, LirFunction &f, int bb, Vector[int] local_to_slot,
             int slot = local_to_slot.get(local_id).unwrap()
             int slot_ty = f.slots.get(slot).unwrap().ty
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, ISlotLoad(dst, slot, slot_ty))
+            lir_push_inst(&f, bb, ISlotLoad(dst, slot, slot_ty))
             return dst
     return -1
 
@@ -3764,20 +3764,20 @@ bool try_closure_pack(int dst_local, Operand operand, LirFunction &f, int bb, Ve
     int env_size = lir_type_byte_size_in_mod(src_slot_ty, &m, 0)
     # Emit: size_val = const env_size.
     int size_val = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, IIConst(size_val, LT_I64, env_size))
+    lir_push_inst(&f, bb, IIConst(size_val, LT_I64, env_size))
     # Emit: heap_ptr = __gorget_closure_env_alloc(size_val). The runtime
     # provides it as a `static inline` (runtime_string.c) — no forward decl
     # or extern declaration needed.
     int heap_ptr = lir_fn_next_value(&f)
     Vector[int] alloc_args = [size_val]
     Vector[int] alloc_abis = []
-    lir_push_inst(f, bb, ICallExtern(heap_ptr, "__gorget_closure_env_alloc", alloc_args, "__gorget_closure_env_alloc", alloc_abis))
+    lir_push_inst(&f, bb, ICallExtern(heap_ptr, "__gorget_closure_env_alloc", alloc_args, "__gorget_closure_env_alloc", alloc_abis))
     # Emit: memcpy(heap_ptr, &stack_env, size_val).
     int src_addr = lir_fn_next_value(&f)
-    lir_push_inst(f, bb, ISlotAddr(src_addr, src_slot))
-    lir_push_inst(f, bb, IMemcpy(heap_ptr, src_addr, size_val))
+    lir_push_inst(&f, bb, ISlotAddr(src_addr, src_slot))
+    lir_push_inst(&f, bb, IMemcpy(heap_ptr, src_addr, size_val))
     # Emit: ClosurePack { slot: dst_slot, env_ptr: heap_ptr, call_func }.
-    lir_push_inst(f, bb, IClosurePack(dst_slot, heap_ptr, call_func, false))
+    lir_push_inst(&f, bb, IClosurePack(dst_slot, heap_ptr, call_func, false))
     return true
 
 int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] local_to_slot, Vector[GirLocal] gir_locals, Dict[String, int] func_index, GirModule &gmod, Dict[String, int] &sr, LirModule &m):
@@ -3876,12 +3876,12 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                         # address of src's storage and store it as
                         # the dst's pointer value.
                         int addr_val = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, ISlotAddr(addr_val, src_slot))
-                        lir_push_inst(f, bb, ISlotStore(slot, addr_val, false))
+                        lir_push_inst(&f, bb, ISlotAddr(addr_val, src_slot))
+                        lir_push_inst(&f, bb, ISlotStore(slot, addr_val, false))
                         handled = true
             if not handled:
                 int val = lower_operand(operand, &f, bb, local_to_slot, m)
-                lir_push_inst(f, bb, ISlotStore(slot, val, false))
+                lir_push_inst(&f, bb, ISlotStore(slot, val, false))
 
         case GIBinOp(dst_local, op, ty, lhs_op, rhs_op):
             int lhs = lower_operand(lhs_op, &f, bb, local_to_slot, m)
@@ -3889,36 +3889,36 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             int dst = lir_fn_next_value(&f)
             int lir_ty = map_gir_type(ty, &gmod, &sr)
             if op == OP_ADD:
-                lir_push_inst(f, bb, IAdd(dst, lir_ty, lhs, rhs, OVF_TRAP))
+                lir_push_inst(&f, bb, IAdd(dst, lir_ty, lhs, rhs, OVF_TRAP))
             elif op == OP_SUB:
-                lir_push_inst(f, bb, ISub(dst, lir_ty, lhs, rhs, OVF_TRAP))
+                lir_push_inst(&f, bb, ISub(dst, lir_ty, lhs, rhs, OVF_TRAP))
             elif op == OP_MUL:
-                lir_push_inst(f, bb, IMul(dst, lir_ty, lhs, rhs, OVF_TRAP))
+                lir_push_inst(&f, bb, IMul(dst, lir_ty, lhs, rhs, OVF_TRAP))
             elif op == OP_ADD_WRAP:
-                lir_push_inst(f, bb, IAdd(dst, lir_ty, lhs, rhs, OVF_WRAP))
+                lir_push_inst(&f, bb, IAdd(dst, lir_ty, lhs, rhs, OVF_WRAP))
             elif op == OP_SUB_WRAP:
-                lir_push_inst(f, bb, ISub(dst, lir_ty, lhs, rhs, OVF_WRAP))
+                lir_push_inst(&f, bb, ISub(dst, lir_ty, lhs, rhs, OVF_WRAP))
             elif op == OP_MUL_WRAP:
-                lir_push_inst(f, bb, IMul(dst, lir_ty, lhs, rhs, OVF_WRAP))
+                lir_push_inst(&f, bb, IMul(dst, lir_ty, lhs, rhs, OVF_WRAP))
             elif op == OP_BITAND:
-                lir_push_inst(f, bb, IBitAnd(dst, lir_ty, lhs, rhs))
+                lir_push_inst(&f, bb, IBitAnd(dst, lir_ty, lhs, rhs))
             elif op == OP_BITOR:
-                lir_push_inst(f, bb, IBitOr(dst, lir_ty, lhs, rhs))
+                lir_push_inst(&f, bb, IBitOr(dst, lir_ty, lhs, rhs))
             elif op == OP_BITXOR:
-                lir_push_inst(f, bb, IBitXor(dst, lir_ty, lhs, rhs))
+                lir_push_inst(&f, bb, IBitXor(dst, lir_ty, lhs, rhs))
             elif op == OP_SHL:
-                lir_push_inst(f, bb, IShl(dst, lir_ty, lhs, rhs))
+                lir_push_inst(&f, bb, IShl(dst, lir_ty, lhs, rhs))
             elif op == OP_SHR:
-                lir_push_inst(f, bb, IShr(dst, lir_ty, lhs, rhs))
+                lir_push_inst(&f, bb, IShr(dst, lir_ty, lhs, rhs))
             elif op == OP_DIV:
-                lir_push_inst(f, bb, IDiv(dst, lir_ty, lhs, rhs))
+                lir_push_inst(&f, bb, IDiv(dst, lir_ty, lhs, rhs))
             elif op == OP_REM:
-                lir_push_inst(f, bb, IRem(dst, lir_ty, lhs, rhs))
+                lir_push_inst(&f, bb, IRem(dst, lir_ty, lhs, rhs))
             elif op == OP_MOD:
-                lir_push_inst(f, bb, IMod(dst, lir_ty, lhs, rhs))
+                lir_push_inst(&f, bb, IMod(dst, lir_ty, lhs, rhs))
             # Store result
             int dst_slot = local_to_slot.get(dst_local).unwrap()
-            lir_push_inst(f, bb, ISlotStore(dst_slot, dst, false))
+            lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
 
         case GIFaultCheck(dst_local, op, ty, lhs_op, rhs_op):
             # Fault-catch checked arithmetic (error-model.md §11.2): emit the
@@ -3928,30 +3928,30 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             int fc_rhs = lower_operand(rhs_op, &f, bb, local_to_slot, m)
             int fc_dst = lir_fn_next_value(&f)
             int fc_ty = map_gir_type(ty, &gmod, &sr)
-            lir_push_inst(f, bb, IFaultCheck(fc_dst, op, fc_ty, fc_lhs, fc_rhs))
+            lir_push_inst(&f, bb, IFaultCheck(fc_dst, op, fc_ty, fc_lhs, fc_rhs))
             int fc_dst_slot = local_to_slot.get(dst_local).unwrap()
-            lir_push_inst(f, bb, ISlotStore(fc_dst_slot, fc_dst, false))
+            lir_push_inst(&f, bb, ISlotStore(fc_dst_slot, fc_dst, false))
 
         case GIUnOp(dst_local, op, ty, operand):
             int val = lower_operand(operand, &f, bb, local_to_slot, m)
             int dst = lir_fn_next_value(&f)
             int lir_ty = map_gir_type(ty, &gmod, &sr)
             if op == UNOP_NEG:
-                lir_push_inst(f, bb, INeg(dst, lir_ty, val))
+                lir_push_inst(&f, bb, INeg(dst, lir_ty, val))
             elif op == UNOP_NOT:
-                lir_push_inst(f, bb, INot(dst, val))
+                lir_push_inst(&f, bb, INot(dst, val))
             elif op == UNOP_BITNOT:
-                lir_push_inst(f, bb, IBitNot(dst, lir_ty, val))
+                lir_push_inst(&f, bb, IBitNot(dst, lir_ty, val))
             int dst_slot = local_to_slot.get(dst_local).unwrap()
-            lir_push_inst(f, bb, ISlotStore(dst_slot, dst, false))
+            lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
 
         case GICmp(dst_local, op, ty, lhs_op, rhs_op):
             int lhs = lower_operand(lhs_op, &f, bb, local_to_slot, m)
             int rhs = lower_operand(rhs_op, &f, bb, local_to_slot, m)
             int dst = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, ICmp(dst, op, lhs, rhs))
+            lir_push_inst(&f, bb, ICmp(dst, op, lhs, rhs))
             int dst_slot = local_to_slot.get(dst_local).unwrap()
-            lir_push_inst(f, bb, ISlotStore(dst_slot, dst, false))
+            lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
 
         case GICall(dst_local, func_name, args):
             # Canonical prelude variant constructors: Some/None/Ok/Error fill
@@ -4020,7 +4020,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ISlotAddr(addr, slot))
+                                lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                                 lir_args.push(addr)
                         case OpMove(local_id):
                             int slot = local_to_slot.get(local_id).unwrap()
@@ -4030,7 +4030,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ISlotAddr(addr, slot))
+                                lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                                 lir_args.push(addr)
                         case OpClone(local_id):
                             # P0 Bug B (fold the siblings): route through the
@@ -4055,7 +4055,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ISlotAddr(addr, slot))
+                                lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                                 lir_args.push(addr)
                         else:
                             int arg_val = lower_operand(arg, &f, bb, local_to_slot, m)
@@ -4071,10 +4071,10 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                 int dst = -1
                 if dst_local >= 0:
                     dst = lir_fn_next_value(&f)
-                lir_push_inst(f, bb, ICall(dst, func_id, lir_args))
+                lir_push_inst(&f, bb, ICall(dst, func_id, lir_args))
                 if dst >= 0 and dst_local >= 0:
                     int dst_slot = local_to_slot.get(dst_local).unwrap()
-                    lir_push_inst(f, bb, ISlotStore(dst_slot, dst, false))
+                    lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
             else:
                 # Extern or runtime call
                 String mapped = map_runtime_name(func_name, &m, &gmod)
@@ -4124,23 +4124,23 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                             # _str variant: only val_size
                             int val_size = type_elem_size_in_mod(val_ty, sr, &m)
                             int vs = lir_fn_next_value(&f)
-                            lir_push_inst(f, bb, IIConst(vs, LT_I64, val_size))
+                            lir_push_inst(&f, bb, IIConst(vs, LT_I64, val_size))
                             lir_args.push(vs)
                         else:
                             int key_size = type_elem_size_in_mod(key_ty, sr, &m)
                             int val_size = type_elem_size_in_mod(val_ty, sr, &m)
                             int ks = lir_fn_next_value(&f)
-                            lir_push_inst(f, bb, IIConst(ks, LT_I64, key_size))
+                            lir_push_inst(&f, bb, IIConst(ks, LT_I64, key_size))
                             lir_args.push(ks)
                             int vs = lir_fn_next_value(&f)
-                            lir_push_inst(f, bb, IIConst(vs, LT_I64, val_size))
+                            lir_push_inst(&f, bb, IIConst(vs, LT_I64, val_size))
                             lir_args.push(vs)
                     elif coll_cat2 == "GorgetSet":
                         # Set: _str variant takes 0 args, non-str takes 1 (elem_size)
                         if not is_string_keyed(func_name, m):
                             int elem_size = collection_elem_size_in_mod(func_name, sr, &m)
                             int size_val = lir_fn_next_value(&f)
-                            lir_push_inst(f, bb, IIConst(size_val, LT_I64, elem_size))
+                            lir_push_inst(&f, bb, IIConst(size_val, LT_I64, elem_size))
                             lir_args.push(size_val)
                         # else: _str variant, no args needed
                     else:
@@ -4149,7 +4149,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                         # a pointer; handled below via arg reordering.
                         int elem_size = collection_elem_size_in_mod(func_name, sr, &m)
                         int size_val = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, IIConst(size_val, LT_I64, elem_size))
+                        lir_push_inst(&f, bb, IIConst(size_val, LT_I64, elem_size))
                         lir_args.push(size_val)
                 # Concurrency ctor re-ordering: gorget_{shared,mutex,rwlock}_new(size, &val).
                 # The runtime ABI is `gorget_<kind>_new(size_t size, void* init)` —
@@ -4186,7 +4186,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                             pass
                     if src_slot >= 0:
                         int addr_val = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, ISlotAddr(addr_val, src_slot))
+                        lir_push_inst(&f, bb, ISlotAddr(addr_val, src_slot))
                         int size_val_cc = -1
                         if lir_args.len() >= 2:
                             # Size already appended (bare `Shared__T` collection-ctor path).
@@ -4196,17 +4196,17 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                             # UNMAPPED ctor name (e.g. `Mutex__int64_t__new`).
                             int cc_sz = concurrency_elem_size_in_mod(func_name, sr, &m)
                             size_val_cc = lir_fn_next_value(&f)
-                            lir_push_inst(f, bb, IIConst(size_val_cc, LT_I64, cc_sz))
+                            lir_push_inst(&f, bb, IIConst(size_val_cc, LT_I64, cc_sz))
                         Vector[int] new_args = [size_val_cc, addr_val]
                         lir_args = new_args
                 int dst = -1
                 if dst_local >= 0:
                     dst = lir_fn_next_value(&f)
                 Vector[int] empty_abis = []
-                lir_push_inst(f, bb, ICallExtern(dst, call_name, lir_args, func_name, empty_abis))
+                lir_push_inst(&f, bb, ICallExtern(dst, call_name, lir_args, func_name, empty_abis))
                 if dst >= 0 and dst_local >= 0:
                     int dst_slot = local_to_slot.get(dst_local).unwrap()
-                    lir_push_inst(f, bb, ISlotStore(dst_slot, dst, false))
+                    lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
 
         case GICallExtern(dst_local, func_name, args):
             # Canonical prelude variants (same as GICall arm).
@@ -4228,9 +4228,9 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                 if func_index.contains(fa_target):
                     int fa_fid = func_index.get(fa_target).unwrap()
                     int fa_dst = lir_fn_next_value(&f)
-                    lir_push_inst(f, bb, IFuncAddr(fa_dst, fa_fid))
+                    lir_push_inst(&f, bb, IFuncAddr(fa_dst, fa_fid))
                     int fa_dst_slot = local_to_slot.get(dst_local).unwrap()
-                    lir_push_inst(f, bb, ISlotStore(fa_dst_slot, fa_dst, false))
+                    lir_push_inst(&f, bb, ISlotStore(fa_dst_slot, fa_dst, false))
                     return bb
             # Module-level static reference: `__global_ref__<name>` —
             # emitted by `lower_static_ref_ident` when the identifier is
@@ -4255,7 +4255,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                         gr_init_kind = gr_g.init_kind
                 if gr_gid >= 0:
                     int gr_dst = lir_fn_next_value(&f)
-                    lir_push_inst(f, bb, IGlobalAddr(gr_dst, gr_gid))
+                    lir_push_inst(&f, bb, IGlobalAddr(gr_dst, gr_gid))
                     int gr_dst_slot = local_to_slot.get(dst_local).unwrap()
                     int gr_dst_slot_ty = f.slots.get(gr_dst_slot).unwrap().ty
                     # `IGlobalAddr` yields the global's ADDRESS. The reader of a
@@ -4302,10 +4302,10 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                         gr_do_load = true
                     if gr_do_load:
                         int gr_loaded = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, ILoad(gr_loaded, gr_dst, gr_load_ty))
-                        lir_push_inst(f, bb, ISlotStore(gr_dst_slot, gr_loaded, false))
+                        lir_push_inst(&f, bb, ILoad(gr_loaded, gr_dst, gr_load_ty))
+                        lir_push_inst(&f, bb, ISlotStore(gr_dst_slot, gr_loaded, false))
                     else:
-                        lir_push_inst(f, bb, ISlotStore(gr_dst_slot, gr_dst, false))
+                        lir_push_inst(&f, bb, ISlotStore(gr_dst_slot, gr_dst, false))
                     return bb
             # Canonical Box(x): emit IBoxAlloc, same as in GICall.
             if func_name == "Box" and args.len() == 1 and dst_local >= 0:
@@ -4359,7 +4359,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ISlotAddr(addr, slot))
+                                lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                                 lir_args.push(addr)
                         case OpMove(local_id):
                             int slot = local_to_slot.get(local_id).unwrap()
@@ -4369,7 +4369,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ISlotAddr(addr, slot))
+                                lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                                 lir_args.push(addr)
                         case OpClone(local_id):
                             # P0 Bug B (fold the siblings): the GICall twin now
@@ -4391,7 +4391,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                 lir_args.push(arg_val)
                             else:
                                 int addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ISlotAddr(addr, slot))
+                                lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                                 lir_args.push(addr)
                         else:
                             int arg_val = lower_operand(arg, &f, bb, local_to_slot, m)
@@ -4451,7 +4451,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             if call_name == "gorget_array_contains":
                 int es = extract_elem_size_from_name_in_mod(func_name, sr, &m)
                 int esv = lir_fn_next_value(&f)
-                lir_push_inst(f, bb, IIConst(esv, LT_I64, es))
+                lir_push_inst(&f, bb, IIConst(esv, LT_I64, es))
                 lir_args.push(esv)
             # gorget_guard_set(g, &val, size) / gorget_write_guard_set: append
             # sizeof(elem) as the 3rd arg (the runtime memcpy's `size` bytes).
@@ -4461,7 +4461,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             if call_name == "gorget_guard_set" or call_name == "gorget_write_guard_set":
                 int ges = concurrency_elem_size_in_mod(func_name, sr, &m)
                 int gesv = lir_fn_next_value(&f)
-                lir_push_inst(f, bb, IIConst(gesv, LT_I64, ges))
+                lir_push_inst(&f, bb, IIConst(gesv, LT_I64, ges))
                 lir_args.push(gesv)
             # gorget_channel_recv(ch, &out): needs output slot address as 2nd arg.
             # gorget_channel_recv_timeout(ch, &out, timeout_ms): needs output + timeout.
@@ -4469,7 +4469,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                 if dst_local >= 0:
                     int out_slot = local_to_slot.get(dst_local).unwrap()
                     int out_addr = lir_fn_next_value(&f)
-                    lir_push_inst(f, bb, ISlotAddr(out_addr, out_slot))
+                    lir_push_inst(&f, bb, ISlotAddr(out_addr, out_slot))
                     lir_args.push(out_addr)
             # Callable dispatch: emit ICallClosure with correct return type
             if call_name.starts_with("__callable_") or call_name.starts_with("__gorget_closure_call_"):
@@ -4490,10 +4490,10 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                     cli += 1
                 Vector[int] cl_abis = []
                 # kind=0 means CallableParam (void*[2] protocol)
-                lir_push_inst(f, bb, ICallClosure(cl_dst, 0, cl_closure, cl_call_args, cl_abis, cl_ret))
+                lir_push_inst(&f, bb, ICallClosure(cl_dst, 0, cl_closure, cl_call_args, cl_abis, cl_ret))
                 if cl_dst >= 0 and dst_local >= 0:
                     int cl_dst_slot = local_to_slot.get(dst_local).unwrap()
-                    lir_push_inst(f, bb, ISlotStore(cl_dst_slot, cl_dst, false))
+                    lir_push_inst(&f, bb, ISlotStore(cl_dst_slot, cl_dst, false))
             else:
                 # Tier 1 lift: collection void* → Option wrap. Mirrors
                 # src/lir/lower/lifts.rs::emit_void_ptr_option_wrap.
@@ -4584,7 +4584,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                     abi_i += 1
                 if not has_out_param:
                     call_abis = []
-                lir_push_inst(f, bb, ICallExtern(dst, call_name, lir_args, func_name, call_abis))
+                lir_push_inst(&f, bb, ICallExtern(dst, call_name, lir_args, func_name, call_abis))
                 if dst >= 0 and dst_local >= 0:
                     int dst_slot = local_to_slot.get(dst_local).unwrap()
                     int dst_slot_ty = f.slots.get(dst_slot).unwrap().ty
@@ -4616,14 +4616,14 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                     bool eindex_raw_getter = (func_name == "gorget_array_get") or (func_name == "gorget_map_get")
                     if is_ptr_ret and lir_is_scalar(dst_slot_ty) and not slot_is_ptr_kind:
                         int loaded = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, ILoad(loaded, dst, dst_slot_ty))
-                        lir_push_inst(f, bb, ISlotStore(dst_slot, loaded, false))
+                        lir_push_inst(&f, bb, ILoad(loaded, dst, dst_slot_ty))
+                        lir_push_inst(&f, bb, ISlotStore(dst_slot, loaded, false))
                     elif eindex_raw_getter and lir_is_aggregate(dst_slot_ty):
                         int agg_loaded = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, ILoad(agg_loaded, dst, dst_slot_ty))
-                        lir_push_inst(f, bb, ISlotStore(dst_slot, agg_loaded, false))
+                        lir_push_inst(&f, bb, ILoad(agg_loaded, dst, dst_slot_ty))
+                        lir_push_inst(&f, bb, ISlotStore(dst_slot, agg_loaded, false))
                     else:
-                        lir_push_inst(f, bb, ISlotStore(dst_slot, dst, false))
+                        lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
 
         case GIDrop(local_id):
             # Unconditional drop: resolve the local's type → drop fn via the
@@ -4666,13 +4666,13 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                 pass
                     int addr = lir_fn_next_value(&f)
                     if drop_loads_value:
-                        lir_push_inst(f, bb, ISlotLoad(addr, slot, LT_PTR))
+                        lir_push_inst(&f, bb, ISlotLoad(addr, slot, LT_PTR))
                     else:
-                        lir_push_inst(f, bb, ISlotAddr(addr, slot))
+                        lir_push_inst(&f, bb, ISlotAddr(addr, slot))
                     Vector[int] drop_args = []
                     drop_args.push(addr)
                     Vector[int] drop_abis = []
-                    lir_push_inst(f, bb, ICallExtern(-1, drop_fn, drop_args, drop_fn, drop_abis))
+                    lir_push_inst(&f, bb, ICallExtern(-1, drop_fn, drop_args, drop_fn, drop_abis))
 
         case GIDropIfAlive(local_id):
             # Conditional drop: wrap the same drop emission with an
@@ -4727,26 +4727,26 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                         dia_tb_drop_idx = dia_tb_fi
                             if dia_tb_drop_idx >= 0:
                                 int dia_tb_addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ISlotAddr(dia_tb_addr, dia_tb_slot))
+                                lir_push_inst(&f, bb, ISlotAddr(dia_tb_addr, dia_tb_slot))
                                 # Guard stays on `&slot` (ISlotAddr) per
                                 # drop_elab's build_val_to_slot — same rule as
                                 # the value-drop path below.
                                 int dia_tb_size = lir_type_byte_size_in_mod(dia_tb_ty, &m, 0)
-                                lir_push_inst(f, bb, IDropGuardOpen(dia_tb_size + 1, dia_tb_addr))
+                                lir_push_inst(&f, bb, IDropGuardOpen(dia_tb_size + 1, dia_tb_addr))
                                 int dia_tb_vt_addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, IFieldPtr(dia_tb_vt_addr, dia_tb_addr, dia_tb_sid, 1))
+                                lir_push_inst(&f, bb, IFieldPtr(dia_tb_vt_addr, dia_tb_addr, dia_tb_sid, 1))
                                 int dia_tb_vt = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ILoad(dia_tb_vt, dia_tb_vt_addr, LT_PTR))
+                                lir_push_inst(&f, bb, ILoad(dia_tb_vt, dia_tb_vt_addr, LT_PTR))
                                 int dia_tb_dslot_addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, IFieldPtr(dia_tb_dslot_addr, dia_tb_vt, dia_tb_vt_sid, dia_tb_drop_idx))
+                                lir_push_inst(&f, bb, IFieldPtr(dia_tb_dslot_addr, dia_tb_vt, dia_tb_vt_sid, dia_tb_drop_idx))
                                 int dia_tb_drop_fn = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, ILoad(dia_tb_drop_fn, dia_tb_dslot_addr, LT_PTR))
+                                lir_push_inst(&f, bb, ILoad(dia_tb_drop_fn, dia_tb_dslot_addr, LT_PTR))
                                 int dia_tb_data_addr = lir_fn_next_value(&f)
-                                lir_push_inst(f, bb, IFieldPtr(dia_tb_data_addr, dia_tb_addr, dia_tb_sid, 0))
+                                lir_push_inst(&f, bb, IFieldPtr(dia_tb_data_addr, dia_tb_addr, dia_tb_sid, 0))
                                 Vector[int] dia_tb_args = []
                                 dia_tb_args.push(dia_tb_data_addr)
-                                lir_push_inst(f, bb, ICallPtr(-1, dia_tb_drop_fn, dia_tb_args))
-                                lir_push_inst(f, bb, IDropGuardClose)
+                                lir_push_inst(&f, bb, ICallPtr(-1, dia_tb_drop_fn, dia_tb_args))
+                                lir_push_inst(&f, bb, IDropGuardClose)
                                 dia_tb_handled = true
                 String dia_drop_fn = drop_fn_for_type(dia_tn, gmod.resource_types, m.type_runtime_map, gmod.optionlike_resource_types, m.drop_collision_types, m.type_method_prefix_map)
                 # Mono'd Option/Result locals/scrutinees whose payload owns a
@@ -4764,7 +4764,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                     int dia_slot_ty = f.slots.get(dia_slot).unwrap().ty
                     int dia_size = lir_type_byte_size_in_mod(dia_slot_ty, &m, 0)
                     int dia_addr = lir_fn_next_value(&f)
-                    lir_push_inst(f, bb, ISlotAddr(dia_addr, dia_slot))
+                    lir_push_inst(&f, bb, ISlotAddr(dia_addr, dia_slot))
                     # kind encoding: 0=Bool guard, kind-1=byte size for NonZero.
                     # The GUARD stays on `&slot` (ISlotAddr): `drop_elab`'s
                     # `build_val_to_slot` maps ONLY ISlotAddr producers → slots,
@@ -4773,7 +4773,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                     # slot. Switching this to ISlotLoad would sever that map and
                     # reintroduce the double-free. The DROP-FN ARG below differs
                     # for owning `!`-params (see dia_drop_arg).
-                    lir_push_inst(f, bb, IDropGuardOpen(dia_size + 1, dia_addr))
+                    lir_push_inst(&f, bb, IDropGuardOpen(dia_size + 1, dia_addr))
                     # Tier E §8.1: the drop-fn arg. For a normal by-value local
                     # the slot holds the value and `T__drop(&slot)` is correct, so
                     # the arg is `dia_addr` (=&slot). But an owning `!`-MOVE
@@ -4804,7 +4804,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                         dia_owns_ptr = gir_local_is_owning_param(local_id, gir_locals)
                     if dia_owns_ptr:
                         int dia_loaded = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, ISlotLoad(dia_loaded, dia_slot, LT_PTR))
+                        lir_push_inst(&f, bb, ISlotLoad(dia_loaded, dia_slot, LT_PTR))
                         dia_drop_arg = dia_loaded
                     # Ptr-handle local (runtime=="Ptr": Channel/Mutex/Shared/…): the
                     # slot holds the HANDLE pointer by value (LT_PTR slot, NOT an
@@ -4824,7 +4824,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                             dia_is_ptr_handle = true
                     if dia_is_ptr_handle:
                         int dia_ph_loaded = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, ISlotLoad(dia_ph_loaded, dia_slot, LT_PTR))
+                        lir_push_inst(&f, bb, ISlotLoad(dia_ph_loaded, dia_slot, LT_PTR))
                         dia_drop_arg = dia_ph_loaded
                     # Box[T] local: a Box is `typedef void*` (pointer-represented)
                     # but its slot is `Box__T`-typed (aggregate). drop_fn_for_type
@@ -4858,7 +4858,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                         dia_box_inner_name = dia_box_nm.slice(5, dia_box_nm.len())
                     if dia_is_box and not dia_owns_ptr:
                         int dia_box_loaded = lir_fn_next_value(&f)
-                        lir_push_inst(f, bb, ISlotLoad(dia_box_loaded, dia_slot, LT_PTR))
+                        lir_push_inst(&f, bb, ISlotLoad(dia_box_loaded, dia_slot, LT_PTR))
                         dia_drop_arg = dia_box_loaded
                         # Box-inner-drop. The box drop_fn below resolves to
                         # `free` (runtime=="Box"), which releases ONLY the box
@@ -4905,7 +4905,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                 Vector[int] dia_in_args = []
                                 dia_in_args.push(dia_box_loaded)
                                 Vector[int] dia_in_abis = []
-                                lir_push_inst(f, bb, ICallExtern(-1, dia_inner_drop, dia_in_args, dia_inner_drop, dia_in_abis))
+                                lir_push_inst(&f, bb, ICallExtern(-1, dia_inner_drop, dia_in_args, dia_inner_drop, dia_in_abis))
                     # ② closure ENV-FIELD leak fix — for a resource/CoW-capturing
                     # `GorgetClosure` value, `gorget_closure_free` frees only the
                     # env BLOCK, leaking the captured String/Vector/struct field
@@ -4937,24 +4937,24 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                                     # closure.env is field 1 ({fn_ptr@0, env@1}).
                                     # `dia_addr` is `&slot` (the GorgetClosure*).
                                     int cevt_fptr = lir_fn_next_value(&f)
-                                    lir_push_inst(f, bb, IFieldPtr(cevt_fptr, dia_addr, gc_sid, 1))
+                                    lir_push_inst(&f, bb, IFieldPtr(cevt_fptr, dia_addr, gc_sid, 1))
                                     int cevt_env = lir_fn_next_value(&f)
-                                    lir_push_inst(f, bb, ILoad(cevt_env, cevt_fptr, LT_PTR))
+                                    lir_push_inst(&f, bb, ILoad(cevt_env, cevt_fptr, LT_PTR))
                                     Vector[int] cevt_args = []
                                     cevt_args.push(cevt_env)
                                     Vector[int] cevt_abis = []
-                                    lir_push_inst(f, bb, ICallExtern(-1, cevt_drop_fn, cevt_args, cevt_drop_fn, cevt_abis))
+                                    lir_push_inst(&f, bb, ICallExtern(-1, cevt_drop_fn, cevt_args, cevt_drop_fn, cevt_abis))
                     Vector[int] dia_args = []
                     dia_args.push(dia_drop_arg)
                     Vector[int] dia_abis = []
-                    lir_push_inst(f, bb, ICallExtern(-1, dia_drop_fn, dia_args, dia_drop_fn, dia_abis))
-                    lir_push_inst(f, bb, IDropGuardClose)
+                    lir_push_inst(&f, bb, ICallExtern(-1, dia_drop_fn, dia_args, dia_drop_fn, dia_abis))
+                    lir_push_inst(&f, bb, IDropGuardClose)
 
         case GIMoveZero(local_id):
             # Mark slot as moved — pure dataflow annotation (V6: no Memset for
             # non-projected places). MoveSlot is swept by drop elaboration.
             int slot = local_to_slot.get(local_id).unwrap()
-            lir_push_inst(f, bb, IMoveSlot(slot))
+            lir_push_inst(&f, bb, IMoveSlot(slot))
 
         case GIDeref(dst_local, src_local, inner_ty):
             # *box — load *src pointer value, memcpy sizeof(inner) into
@@ -4968,10 +4968,10 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             int src_ptr_val = lir_fn_next_value(&f)
             int dst_addr_val = lir_fn_next_value(&f)
             int size_val = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, ISlotLoad(src_ptr_val, src_slot_d, LT_PTR))
-            lir_push_inst(f, bb, ISlotAddr(dst_addr_val, dst_slot_d))
-            lir_push_inst(f, bb, IIConst(size_val, LT_I64, size_bytes))
-            lir_push_inst(f, bb, IMemcpy(dst_addr_val, src_ptr_val, size_val))
+            lir_push_inst(&f, bb, ISlotLoad(src_ptr_val, src_slot_d, LT_PTR))
+            lir_push_inst(&f, bb, ISlotAddr(dst_addr_val, dst_slot_d))
+            lir_push_inst(&f, bb, IIConst(size_val, LT_I64, size_bytes))
+            lir_push_inst(&f, bb, IMemcpy(dst_addr_val, src_ptr_val, size_val))
 
         case GICast(cast_dst_local, cast_src_local, cast_from_ty, cast_to_ty):
             # Numeric `as`-cast — load the scalar source, emit the family-
@@ -4989,20 +4989,20 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             int cast_src_slot = local_to_slot.get(cast_src_local).unwrap()
             int cast_src_slot_ty = f.slots.get(cast_src_slot).unwrap().ty
             int cast_val = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, ISlotLoad(cast_val, cast_src_slot, cast_src_slot_ty))
+            lir_push_inst(&f, bb, ISlotLoad(cast_val, cast_src_slot, cast_src_slot_ty))
             int cast_dst = lir_fn_next_value(&f)
             bool cast_src_float = lir_is_float(cast_from_lir)
             bool cast_to_float = lir_is_float(cast_to_lir)
             if cast_src_float and not cast_to_float:
-                lir_push_inst(f, bb, IFloatToInt(cast_dst, cast_val, cast_to_lir))
+                lir_push_inst(&f, bb, IFloatToInt(cast_dst, cast_val, cast_to_lir))
             elif cast_src_float and cast_to_float:
-                lir_push_inst(f, bb, IFloatCast(cast_dst, cast_val, cast_to_lir))
+                lir_push_inst(&f, bb, IFloatCast(cast_dst, cast_val, cast_to_lir))
             elif not cast_src_float and cast_to_float:
-                lir_push_inst(f, bb, IIntToFloat(cast_dst, cast_val, cast_to_lir))
+                lir_push_inst(&f, bb, IIntToFloat(cast_dst, cast_val, cast_to_lir))
             else:
-                lir_push_inst(f, bb, IIntCast(cast_dst, cast_val, cast_to_lir))
+                lir_push_inst(&f, bb, IIntCast(cast_dst, cast_val, cast_to_lir))
             int cast_dst_slot = local_to_slot.get(cast_dst_local).unwrap()
-            lir_push_inst(f, bb, ISlotStore(cast_dst_slot, cast_dst, false))
+            lir_push_inst(&f, bb, ISlotStore(cast_dst_slot, cast_dst, false))
 
         case GIDerefStore(ds_ptr_local, ds_value, ds_inner_ty):
             # *ptr = value — store `value` THROUGH the pointer held in
@@ -5021,7 +5021,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             # inst and no new C-emit arm needed: IStore already exists.
             int ds_ptr_slot = local_to_slot.get(ds_ptr_local).unwrap()
             int ds_ptr_val = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, ISlotLoad(ds_ptr_val, ds_ptr_slot, LT_PTR))
+            lir_push_inst(&f, bb, ISlotLoad(ds_ptr_val, ds_ptr_slot, LT_PTR))
             int ds_val = lower_operand(ds_value, &f, bb, local_to_slot, m)
             # Drop-on-overwrite: `*ptr = X` must free the OLD heap pointee
             # before the store, else `*b = X` (Box[String]) leaks the
@@ -5042,8 +5042,8 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                     Vector[int] ds_od_args = []
                     ds_od_args.push(ds_ptr_val)
                     Vector[int] ds_od_abis = []
-                    lir_push_inst(f, bb, ICallExtern(-1, ds_old_drop, ds_od_args, ds_old_drop, ds_od_abis))
-            lir_push_inst(f, bb, IStore(ds_ptr_val, ds_val))
+                    lir_push_inst(&f, bb, ICallExtern(-1, ds_old_drop, ds_od_args, ds_old_drop, ds_od_abis))
+            lir_push_inst(&f, bb, IStore(ds_ptr_val, ds_val))
 
         case GINop():
             pass
@@ -5084,12 +5084,12 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             # is_ptr_type bases (lower.gg line ~4382).
             bool fl_base_is_ptr = (fl_base_slot_ty == LT_PTR) or (fl_base_slot_ty >= LT_PTR_TO_BASE and fl_base_slot_ty < LT_STRUCT_BASE)
             if fl_base_is_ptr:
-                lir_push_inst(f, bb, ISlotLoad(fl_base_val, fl_base_slot, fl_base_slot_ty))
+                lir_push_inst(&f, bb, ISlotLoad(fl_base_val, fl_base_slot, fl_base_slot_ty))
             else:
-                lir_push_inst(f, bb, ISlotAddr(fl_base_val, fl_base_slot))
+                lir_push_inst(&f, bb, ISlotAddr(fl_base_val, fl_base_slot))
             # FieldPtr → field address.
             int fl_fptr = lir_fn_next_value(&f)
-            lir_push_inst(f, bb, IFieldPtr(fl_fptr, fl_base_val, fl_struct_id, fl_field))
+            lir_push_inst(&f, bb, IFieldPtr(fl_fptr, fl_base_val, fl_struct_id, fl_field))
             # Dispatch on dst's GIR type — Ptr(_) → pointer alias,
             # else → byte-copy load. The dst's GIR type is set by
             # `lower.gg`'s EFieldAccess emission: resource fields are
@@ -5145,7 +5145,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             if fl_dst_is_ptr and not fl_field_value_is_ptr:
                 # Pointer-alias: store the field address directly as
                 # the dst's pointer value. No byte-copy.
-                lir_push_inst(f, bb, ISlotStore(fl_dst_slot, fl_fptr, false))
+                lir_push_inst(&f, bb, ISlotStore(fl_dst_slot, fl_fptr, false))
             else:
                 # Byte-copy: load the field value through the field
                 # pointer, then store into the dst slot. `field_lir_ty`
@@ -5154,8 +5154,8 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                 # to the field's value type at local allocation).
                 int fl_field_lir_ty = f.slots.get(fl_dst_slot).unwrap().ty
                 int fl_loaded = lir_fn_next_value(&f)
-                lir_push_inst(f, bb, ILoad(fl_loaded, fl_fptr, fl_field_lir_ty))
-                lir_push_inst(f, bb, ISlotStore(fl_dst_slot, fl_loaded, false))
+                lir_push_inst(&f, bb, ILoad(fl_loaded, fl_fptr, fl_field_lir_ty))
+                lir_push_inst(&f, bb, ISlotStore(fl_dst_slot, fl_loaded, false))
 
     return bb
 
@@ -5260,8 +5260,8 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
             int param_val = lir_fn_next_value(&f)
             int param_lir_ty = saved_param_types.get(pci).unwrap()
             int param_slot = local_to_slot.get(pci + 1).unwrap()
-            lir_push_inst(f, 0, IParamRef(param_val, pci, param_lir_ty))
-            lir_push_inst(f, 0, ISlotStore(param_slot, param_val, false))
+            lir_push_inst(&f, 0, IParamRef(param_val, pci, param_lir_ty))
+            lir_push_inst(&f, 0, ISlotStore(param_slot, param_val, false))
             pci += 1
 
     # Lower instructions and terminators for each block.
@@ -5281,7 +5281,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
         # FieldAccess returns the actual field type instead of
         # error_id) now catches the previously-silent copy.
         LirTerm lir_term = lower_terminator(gir_blk.term, &f, lir_bb, local_to_slot, block_map, m)
-        lir_set_term(f, lir_bb, lir_term)
+        lir_set_term(&f, lir_bb, lir_term)
 
     return f
 

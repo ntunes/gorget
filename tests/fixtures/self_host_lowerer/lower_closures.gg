@@ -71,16 +71,16 @@ void fill_fault_return_block(LowerCtx &ctx, GirModule &gmod, int return_bb, int 
     switch_to(&ctx, return_bb)
     # NULL-test the slot pointer: `flag = (__fault == NULL)`.
     int null_flag = add_local(&ctx, BOOL_TYPE, None)
-    emit(ctx, GICmp(null_flag, CMP_EQ, I64_TYPE, OpCopy(slot_lid), OpConstNull()))
+    emit(&ctx, GICmp(null_flag, CMP_EQ, I64_TYPE, OpCopy(slot_lid), OpConstNull()))
     int write_bb = new_block(&ctx)
     int panic_bb = new_block(&ctx)
     set_terminator(&ctx, GTBranch(OpCopy(null_flag), panic_bb, write_bb))
 
     # Non-NULL: write the typed tag through the slot, drop frame locals, return.
     switch_to(&ctx, write_bb)
-    emit(ctx, GIDerefStore(slot_lid, OpConstI32(fault_tag), I32_TYPE))
+    emit(&ctx, GIDerefStore(slot_lid, OpConstI32(fault_tag), I32_TYPE))
     # Early-exit drops for the whole function scope (excluding the return place).
-    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
+    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
     # Return the zero-inited sentinel `_0` (branch-before-read ⇒ never consumed
     # on the fault path). Void fns return unit.
     if ret_type == UNIT_TYPE:
@@ -90,7 +90,7 @@ void fill_fault_return_block(LowerCtx &ctx, GirModule &gmod, int return_bb, int 
 
     # NULL slot: a non-catching caller — preserve panic-by-default.
     switch_to(&ctx, panic_bb)
-    emit(ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(panic_msg)]))
+    emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(panic_msg)]))
     # gorget_panic is noreturn; the self-host Terminator has no Unreachable, so
     # jump to a fresh dead block (mirrors the `panic` builtin idiom in
     # lower_call). A return terminator on a noreturn-preceded block is fine.
@@ -273,8 +273,8 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             case GTNone():
                 # Emit drops for the function scope FIRST (exclude _0
                 # since the return value is being moved out).
-                emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
-                emit(ctx, GIAssign(0, OpConstI32(0)))
+                emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
+                emit(&ctx, GIAssign(0, OpConstI32(0)))
                 set_terminator(&ctx, GTReturn(OpConstI32(0)))
             else:
                 pass
@@ -292,7 +292,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             Terminator nm_last_term = ctx.block_terms.get(ctx.current_block).unwrap()
             match nm_last_term:
                 case GTNone():
-                    emit_drops_for_early_exit(ctx, DSK_FUNCTION, Some(0))
+                    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
                     set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
                 else:
                     pass
@@ -691,7 +691,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
         # the cast pointer.
         if needs_concrete_self_alias:
             int concrete_self_lid = add_local(&ctx, concrete_self_tid_saved, Some("self"))
-            emit(ctx, GIAssign(concrete_self_lid, OpCopy(self_lid_saved)))
+            emit(&ctx, GIAssign(concrete_self_lid, OpCopy(self_lid_saved)))
             nl_put(&ctx, "self", concrete_self_lid)
 
         # CoW resource-bind forward-scan (substrate ii) — same as the
@@ -1925,7 +1925,7 @@ int record_implicit_it_closure(LowerCtx &ctx, SpannedExpr ic_body, GirModule &gm
     int ic_cdst = add_local(&ctx, ic_gc_tid, None)
     Vector[Operand] ic_make_args = []
     gmod.fn_sigs.put(ic_make_fn, ic_gc_tid)
-    emit(ctx, GICallExtern(ic_cdst, ic_make_fn, ic_make_args))
+    emit(&ctx, GICallExtern(ic_cdst, ic_make_fn, ic_make_args))
     ClosureSig ic_sig = compute_implicit_closure_sig(ic_cid, ic_body, &gmod, ctx.expected_type)
     # Lowerable guard (§4d): lower IFF the body neither GENUINELY captures nor
     # nests a closure. The capture check routes through the COLLECTOR (the same
@@ -2064,7 +2064,7 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
             set_field_borrow(&cctx, fdst, 1, ci)
         else:
             fdst = add_local(&cctx, cap.type_id, Some(cap.name.clone()))
-        emit(cctx, GIFieldLoad(fdst, 1, ci))
+        emit(&cctx, GIFieldLoad(fdst, 1, ci))
         nl_put(&cctx, cap.name, fdst)
         ci = ci + 1
 
@@ -2115,10 +2115,10 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
                 cexcl = csrc
             else:
                 pass
-        emit(cctx, GIAssign(0, cret_op))
+        emit(&cctx, GIAssign(0, cret_op))
         if cexcl != 0:
-            emit(cctx, GIMoveZero(cexcl))
-        emit_drops_for_early_exit(cctx, DSK_FUNCTION, Some(cexcl))
+            emit(&cctx, GIMoveZero(cexcl))
+        emit_drops_for_early_exit(&cctx, DSK_FUNCTION, Some(cexcl))
         set_terminator(&cctx, GTReturn(op_consume(cctx, &gmod, 0, CkReturn())))
 
     Vector[BasicBlock] cblocks = finalize_body_blocks(&cctx, &gmod, call_name)

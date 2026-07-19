@@ -18894,34 +18894,33 @@ fn self_host_clone_ceiling() {
 //   scripts/bench_stages.sh --out /tmp/stages.tsv   (the S1->2 array_clone)
 //   scripts/clone_attribution.sh                    (per-site ranked breakdown)
 //
-// RE-PINNED UP 2026-07-19 (Class-C round) — this is the ratchet doing its
-// designed job (see above: "a de-optimization that lands only in the
-// self-host's lowering rides UNDER the stage-0 ceiling and shows up only
-// here"). The read-only-`&`-param burn-down converted every read-only
-// `&`-param → bare across the self-host. On the STAGE-0 (Rust-lowered) lane
-// that elided the `&`-formation clones (527M → 12.6M). But the SELF-HOST's
-// OWN lowering clones a LIVE bare Resource arg at call sites where Rust gg
-// borrows (probe-confirmed: SH-emitted C has the clone, Rust gg emits none)
-// — a PRE-EXISTING SH-CoW gap that was MASKED while the source spelled `&`
-// (the `&`-formation cloned on BOTH lanes). Baring the source unmasked it,
-// so the stage-1 lane clones MORE: array 1,018M → 1,269,469,150 (+~24%).
-// This is NOT a regression in the round's edits (Rust-lane output is
-// byte-identical; the source is now idiomatic per the showcase rule); it is
-// the SH lowerer's bare-arg/param CoW deficiency made visible. Filed HIGH
-// (TODO: "SH-lowerer bare-arg clone gap") as the SH-CoW campaign — RE-PIN
-// THIS BACK DOWN (toward the stage-0 lane's ~12.6M) once that lands.
-// Ceiling = measured + ~1%.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_282_200_000;
+// RE-SEEDED DOWN 2026-07-19 (stage-1 empty-blocks recovery): the Class-C
+// round had re-pinned this UP to 1,282.2M (measured 1,269,469,150, +~24%)
+// when the read-only-`&` burn-down unmasked the SH bare-arg clone gap —
+// but a large share of that rise came from the 9 GENUINELY-MUTATING params
+// the then-holey NeedlessMutableBorrow had falsely flagged (lir_push_inst /
+// lir_set_term / emit / refine_local_type / run_ssa + the 4 wave-2 ctx
+// threaders). Baring those didn't just add clones — the SH DROPPED their
+// `.get()`-Ref write-through entirely (stage-1 emitted EMPTY basic blocks;
+// both bootstrap tests red). The recovery re-&'d exactly that closure (the
+// corrected lint's GG_REPORT_BARE_MUTATED oracle, 2 waves, agreement-clean):
+// measured back to 1,017,082,792 — under even the pre-Class-C 1,018M,
+// because the ~513 genuinely-read-only bares keep their Class-C savings
+// while `&` on the mutators is zero-cost write-through. The REMAINING gap
+// (read-only alias-bind bare args the SH still clones — the TODO
+// "SH-lowerer bare-arg CoW gap" HIGH) stays filed; re-pin further down as
+// the SH-CoW campaign lands. Ceiling = measured + ~1%.
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_027_300_000;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
 // direct ceiling here too.
 //
-// RE-PINNED UP 2026-07-19 (Class-C round), same cause as the array ceiling
-// above: the SH-lowerer bare-arg clone gap unmasked by the read-only-`&`
-// burn-down. string 1,894M → 2,218,112,953 (+~17%). Filed HIGH; re-pin
-// back down after the SH-CoW campaign. Ceiling = measured + ~1%.
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_240_400_000;
+// RE-SEEDED DOWN 2026-07-19 (stage-1 empty-blocks recovery), same cause as
+// the array ceiling above: re-&ing the 9 wrongly-bared mutating params
+// took string 2,218,112,953 → 1,892,026,171 — under the pre-Class-C
+// 1,894M. Ceiling = measured + ~1%.
+const STAGE1_STRING_CLONE_CEILING: u64 = 1_911_000_000;
 
 #[test]
 #[serial(self_host_lowerer_driver)]

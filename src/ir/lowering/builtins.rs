@@ -102,6 +102,21 @@ impl BuiltinMethodDecl {
     pub fn is_clone(&self) -> bool {
         self.name == "clone"
     }
+
+    /// True when this method READS an element/value out of the receiver as a
+    /// borrow VIEW (the auto-borrow-from-get protocol — the decls whose
+    /// return rule is `ret_option_ref_or_val_elem` / `ret_option_ref_or_val_val`):
+    /// the `Some` payload is a pointer into the receiver's storage, so a
+    /// mutation through the unwrapped payload write-throughs into the
+    /// receiver. Consumed by the safety pass's mutation-marking chain
+    /// resolver (`find_mut_mark_root`) to route `x.get(i).unwrap().f.push(…)`
+    /// to `x`'s root. Same single-accessor derivation as `is_clone` (the
+    /// protocol table is the single source of truth for builtin-method
+    /// semantics; a dedicated bool field would be hand-spelled `false` on
+    /// ~170 decls — the parallel-list smell Core #2 forbids).
+    pub fn is_elem_borrow_read(&self) -> bool {
+        matches!(self.name, "get" | "first" | "last")
+    }
 }
 
 /// A builtin type family (Vector, Dict, Channel, etc.).
@@ -1148,6 +1163,18 @@ pub fn is_mut_borrow_method(type_name: &str, method_name: &str) -> bool {
 pub fn is_mutating_builtin_method(method_name: &str) -> bool {
     ALL_PROTOCOLS.iter().any(|p| {
         p.methods.iter().any(|m| m.name == method_name && m.is_mutating)
+    })
+}
+
+/// Check if `method_name` is an element-borrow READ (`is_elem_borrow_read`)
+/// on any builtin type protocol — the auto-borrow-from-get family whose
+/// `Some` payload aliases the receiver's storage. Used by the safety pass's
+/// mutation-marking chain resolver to route a mutation through a
+/// `.get(i).unwrap()` view back to the collection's root binding. Mirrors
+/// `is_mutating_builtin_method`'s any-protocol shape.
+pub fn is_elem_borrow_read_builtin_method(method_name: &str) -> bool {
+    ALL_PROTOCOLS.iter().any(|p| {
+        p.methods.iter().any(|m| m.name == method_name && m.is_elem_borrow_read())
     })
 }
 

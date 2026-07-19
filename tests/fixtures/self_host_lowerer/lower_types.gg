@@ -1111,7 +1111,7 @@ int lower_float_const_ident(LowerCtx &ctx, GirModule gmod, String name):
     if not gmod.float_const_decls.contains(name):
         return -1
     int fdst = add_local(&ctx, F64_TYPE, None)
-    emit(ctx, GIAssign(fdst, OpConstF64(gmod.float_const_decls.get(name).unwrap())))
+    emit(&ctx, GIAssign(fdst, OpConstF64(gmod.float_const_decls.get(name).unwrap())))
     return fdst
 
 # Function-as-value: `filter(is_even)` / `map(double)` etc. — a bare
@@ -1133,7 +1133,7 @@ int lower_fn_addr_ident(LowerCtx &ctx, GirModule &gmod, String name):
     int gs_tid = lookup_or_register_named(&gmod, "GorgetClosure")
     int adst = add_local(&ctx, gs_tid, None)
     Vector[Operand] no_args = []
-    emit(ctx, GICallExtern(adst, "__fn_addr__" + name, no_args))
+    emit(&ctx, GICallExtern(adst, "__fn_addr__" + name, no_args))
     return adst
 
 # Module-level static reference: `stdout` / `stderr` / `stdin` etc.
@@ -1149,7 +1149,7 @@ int lower_static_ref_ident(LowerCtx &ctx, GirModule gmod, String name):
     int sty = static_lookup_type(gmod, name)
     int sdst = add_local(&ctx, sty, None)
     Vector[Operand] no_args = []
-    emit(ctx, GICallExtern(sdst, "__global_ref__" + name, no_args))
+    emit(&ctx, GICallExtern(sdst, "__global_ref__" + name, no_args))
     return sdst
 
 # Bare nullary enum-variant used as a value: `IDropGuardClose` brought
@@ -1207,7 +1207,7 @@ int lower_metaop_ident(LowerCtx &ctx, String name):
     if not name.starts_with("__metaop__"):
         return -1
     int mdst = add_local(&ctx, I64_TYPE, None)
-    emit(ctx, GIAssign(mdst, OpConstI64(0)))
+    emit(&ctx, GIAssign(mdst, OpConstI64(0)))
     return mdst
 
 # Module-level static with a runtime-call init: `public static File
@@ -2940,7 +2940,7 @@ int map_compound_binop(String op):
 # becomes a raw C `+` on `Str` and the emitted program fails to compile.
 # Every other op (and `+=` on non-String operands) is byte-identical to the
 # original `GIBinOp(dst, map_compound_binop(op), result_ty, …)` call.
-void emit_compound_arith(LowerCtx ctx, String op, int dst, int lhs_val, int rhs_val, int result_ty, GirModule &gmod):
+void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs_val, int result_ty, GirModule &gmod):
     # R42-A (Core #4 — centralize at the producer): user operator-overload
     # compound-assign (`a += b` on a struct/enum with `equip X with Add`) is
     # dispatched HERE rather than at each of the 5+ emit_compound_arith call
@@ -2964,15 +2964,15 @@ void emit_compound_arith(LowerCtx ctx, String op, int dst, int lhs_val, int rhs_
         String ov_full = ov_tn + "__" + ov_meth
         if ov_user and gmod.fn_sigs.contains(ov_full):
             Vector[Operand] ov_args = [OpMove(lhs_val), op_consume(ctx, &gmod, rhs_val, classify_call_arg(gmod, ov_full, 1))]
-            emit(ctx, GICallExtern(dst, ov_full, ov_args))
+            emit(&ctx, GICallExtern(dst, ov_full, ov_args))
             return
     if op == "+=" and (is_string_local(lhs_val, ctx, &gmod) or is_string_local(rhs_val, ctx, &gmod)):
         Vector[Operand] cat_args = []
         cat_args.push(op_consume(ctx, &gmod, lhs_val, CkCallArgBorrow()))
         cat_args.push(op_consume(ctx, &gmod, rhs_val, CkCallArgBorrow()))
-        emit(ctx, GICallExtern(dst, "gorget_str_cat", cat_args))
+        emit(&ctx, GICallExtern(dst, "gorget_str_cat", cat_args))
     else:
-        emit(ctx, GIBinOp(dst, map_compound_binop(op), result_ty, op_consume(ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(ctx, &gmod, rhs_val, CkBinOpArg())))
+        emit(&ctx, GIBinOp(dst, map_compound_binop(op), result_ty, op_consume(ctx, &gmod, lhs_val, CkBinOpArg()), op_consume(ctx, &gmod, rhs_val, CkBinOpArg())))
 
 # R42-A: compound-assign operator → the user-overload method name it dispatches
 # to (`a += b` → X__add(&a, b)). Only the arithmetic ops overload; wrap/bitwise/
