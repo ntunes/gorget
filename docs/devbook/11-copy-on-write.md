@@ -257,7 +257,14 @@ with a borrow — `VarDeclFromBorrow`/`ReturnFromBorrow` on read-only use, defen
 trending to ~0 (per-reason budgets, filed); rounds are judged against the
 hand-written ideal — not against the previous release, and not against the other
 lane (the lane ratio is a different measurement; both lanes can be above the bar
-together).
+together). **Scope (owner 2026-07-19): the charter binds BOTH production
+compilers — Rust gg and the self-host — and deliberately NOT ggdef.** ggdef
+eager-clones by design: it implements value semantics the simplest faithful way,
+which is what makes it the readable definition of WHAT a program means (the
+adjudication oracle). The production lanes must match ggdef's observable
+behavior while meeting the charter's clone placement; holding ggdef to the
+charter would grow it into another optimizing compiler, which its authority
+forbids (the succession plan: ggdef stays small).
 
 Live call-site inventory (re-derive with the grep, do not transcribe — these
 move):
