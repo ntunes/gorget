@@ -85,12 +85,12 @@ void push_drop_scope(DropElaborator &de, int kind):
 # `bootstrap_fixed_point` (stage-1==stage-2 byte-identical) is the
 # strongest regression net here: the driver self-compiles its own scopes
 # and re-converges.
-void emit_scope_drops(LowerCtx ctx, Vector[DropEntry] entries):
+void emit_scope_drops(LowerCtx &ctx, Vector[DropEntry] entries):
     # Cluster (a) probe: emit GIDropIfAlive unconditionally in LIFO order.
     int i = entries.len() - 1
     while i >= 0:
         DropEntry entry = entries.get(i).unwrap()
-        emit(ctx, GIDropIfAlive(entry.local_id))
+        emit(&ctx, GIDropIfAlive(entry.local_id))
         i = i - 1
 
 # Pop the innermost scope and emit its drops at the current block IF
@@ -111,7 +111,7 @@ void pop_drop_scope(LowerCtx &ctx):
         else:
             pass
     if fall_through:
-        emit_scope_drops(ctx, scope.entries)
+        emit_scope_drops(&ctx, scope.entries)
     ctx.drop_elab.scopes.pop()
 
 # Pop the innermost scope WITHOUT emitting drops. Used at the loop-
@@ -522,7 +522,7 @@ void union_moved(DropElaborator &de, Vector[bool] branch_snap):
 # proper move-out / drop semantics, the no-op walk below becomes a
 # one-line `emit(&ctx, GIDropIfAlive(entry.local_id))` inside the
 # skip-check.
-void emit_drops_for_early_exit(LowerCtx ctx, int target_kind, Option[int] exclude_local):
+void emit_drops_for_early_exit(LowerCtx &ctx, int target_kind, Option[int] exclude_local):
     int si = ctx.drop_elab.scopes.len() - 1
     while si >= 0:
         DropScope scope = ctx.drop_elab.scopes.get(si).unwrap()
@@ -537,7 +537,7 @@ void emit_drops_for_early_exit(LowerCtx ctx, int target_kind, Option[int] exclud
                 case None:
                     pass
             if not skip:
-                emit(ctx, GIDropIfAlive(entry.local_id))
+                emit(&ctx, GIDropIfAlive(entry.local_id))
             ei -= 1
         if scope.kind == target_kind:
             return

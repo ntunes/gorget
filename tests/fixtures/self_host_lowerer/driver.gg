@@ -476,7 +476,7 @@ void compile_main():
         _t1 = time_ms()
         if _timing: print("PHASE eliminate_dead_globals " + int_to_str(_t1 - _tp) + " ms", file=stderr)
         _tp = _t1
-        run_ssa(lir)
+        run_ssa(&lir)
         _t1 = time_ms()
         if _timing: print("PHASE run_ssa " + int_to_str(_t1 - _tp) + " ms", file=stderr)
         _tp = _t1
@@ -689,7 +689,7 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     LirModule lir = lower_gir_to_lir(&gir)
     validate_lir_after("lir-lowering", lir)
     eliminate_dead_globals(&lir)
-    run_ssa(lir)
+    run_ssa(&lir)
     validate_lir_after("ssa-construction", lir)
     elaborate_drops(&lir)
     validate_lir_after("drop-elaboration", lir)
@@ -814,7 +814,7 @@ void run_check_mode(Vector[String] cmd_args):
         exit(1)
     print("ok")
 
-void run_ssa(LirModule m):
+void run_ssa(LirModule &m):
     int fi = 0
     while fi < m.functions.len():
         construct_ssa(&m.functions.get(fi).unwrap())
