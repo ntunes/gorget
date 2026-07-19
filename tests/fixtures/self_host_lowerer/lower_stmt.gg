@@ -28,7 +28,8 @@ from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
-from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, is_mut_borrow_param_local, cow_materialize_projected_root, materialize_loop_carried_bare_params
+from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains, is_mut_borrow_param_local, cow_materialize_projected_root, materialize_loop_carried_bare_params, materialize_scope_carried_bare_params
+from lower_cow import stmts_first_pos
 from lower import expr_kind, pat_kind, stmt_kind
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
@@ -792,6 +793,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
         case SExpr(sexpr):
             lower_expr(&ctx, sexpr, &gmod)
         case SIf(cond_expr, then_body, elif_branches):
+            # Planner consumer #1 (SH mirror): SUBTREE-scoped pre-branch
+            # bare-param materialize -- exact subtree membership from the
+            # ONE-PASS scope sets (anchor = cond span start, matching the
+            # walker's SIf push). Covers the elif recursion inside lower_if
+            # too (the set spans every ElseBranch), so lower_if itself
+            # carries no hoist. See materialize_scope_carried_bare_params.
+            materialize_scope_carried_bare_params(&ctx, &gmod, cond_expr.span.start)
             lower_if(&ctx, cond_expr, then_body, elif_branches, &gmod, is_main)
         case SWhile(cond_expr, body, else_body):
             lower_while(&ctx, cond_expr, body, else_body, &gmod, is_main)
@@ -1051,13 +1059,14 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # non-generic / unevaluable, so drop (inert, like SMetaIf).
             pass
         case SMatch(scrutinee, arms):
-            # Planner consumer #1 (self-host mirror) — pre-scrutinee bare-param
-            # materialize. Match arm bodies + guards lower inside per-arm nl_snapshot
-            # /nl_restore scopes (lower_match.gg); an in-arm CoW rebind is reverted,
-            # so a bare-param mutation in an arm/guard is thrown away. Hoist HERE
-            # (dominates every arm) via the existing loop pre-header funnel; anchor
-            # = scrutinee span. SH ratchet stays 8. Mirrors Rust's SMatch dispatch-arm.
-            materialize_loop_carried_bare_params(&ctx, &gmod, scrutinee.span.start)
+            # Planner consumer #1 (SH mirror): SUBTREE-scoped pre-scrutinee
+            # bare-param materialize (scrutinee + guards + arm bodies -- the
+            # walker's SMatch arm captures the set; anchor = scrutinee span
+            # start). Match arm bodies + guards lower inside per-arm
+            # nl_snapshot/nl_restore scopes (lower_match.gg); an in-arm CoW
+            # rebind is reverted, so a bare-param mutation in an arm/guard
+            # is thrown away without this hoist. Dominates every arm.
+            materialize_scope_carried_bare_params(&ctx, &gmod, scrutinee.span.start)
             # Real SMatch lowering — delegates to lower_match_stmt for
             # the per-arm ctor / binding / guard scaffolding. Payload
             # binds of type Box[T] are consumed via EDeref → GIDeref
@@ -1429,15 +1438,13 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # then restore the name map. Mirrors Rust's `lower_named_scope`
             # (src/ir/lowering/stmts/mod.rs:2878) + the SWith block pattern.
             #
-            # Planner consumer #1 (self-host mirror) — pre-scope bare-param
-            # materialize: nl_restore below reverts an in-body CoW rebind, so a
-            # bare-param mutation in the named scope is thrown away. Hoist HERE
-            # (this block dominates the body) via the existing loop pre-header
-            # funnel. SNamedScope carries no span, so anchor=0 degenerates the
-            # scan negation to whole-fn membership (safe: idempotent per root —
-            # a param mutated only before the scope is already LoOwned, skipped).
-            # SH ratchet stays 8.
-            materialize_loop_carried_bare_params(&ctx, &gmod, 0)
+            # Planner consumer #1 (SH mirror): SUBTREE-scoped pre-scope
+            # bare-param materialize -- nl_restore below reverts an in-body
+            # CoW rebind, so a bare-param mutation in the named scope is
+            # thrown away without this hoist. SNamedScope carries no span;
+            # anchor = stmts_first_pos(body), the SAME shared helper the
+            # walker's push uses (keying cannot drift).
+            materialize_scope_carried_bare_params(&ctx, &gmod, stmts_first_pos(ns_body))
             Dict[String, int] ns_snapshot = nl_snapshot(&ctx)
             push_drop_scope(&ctx.drop_elab, DSK_BLOCK)
             lower_stmts(&ctx, ns_body, &gmod, is_main)
@@ -1846,17 +1853,10 @@ void lower_stmts(LowerCtx &ctx, Vector[Stmt] stmts, GirModule &gmod, bool is_mai
         cow_lazy_retire_stmt_temps(&ctx)
 
 void lower_if(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] then_body, Vector[ElseBranch] elif_branches, GirModule &gmod, bool is_main):
-    # Planner consumer #1 (self-host mirror) — branch pre-header bare-param
-    # materialize. The then/else branches lower inside nl_snapshot/nl_restore
-    # scopes (below); an in-branch CoW rebind is reverted by nl_restore and the
-    # post-`if` read resolves the stale pre-branch param borrow (the branch
-    # sibling of the 2G loop hole). Hoist the materialize HERE — the current block
-    # dominates every branch — reusing the EXISTING loop pre-header funnel over
-    # the whole-fn CoW scan (anchor = cond span; the elif RECURSION's inner call
-    # re-runs this as a harmless no-op — the param is already LoOwned). SH ratchet
-    # stays 8 (no new cow_materialize_* site). Mirrors Rust's dispatch-arm
-    # `materialize_scope_carried_bare_params`.
-    materialize_loop_carried_bare_params(&ctx, &gmod, cond_expr.span.start)
+    # Planner consumer #1: the pre-branch bare-param materialize runs at the
+    # SIf DISPATCH ARM (`materialize_scope_carried_bare_params`, subtree-
+    # scoped), NOT here — the dispatch-level union covers cond + elif-conds +
+    # every branch body, so the elif RECURSION below needs no re-hoist.
     # The condition is bool-typed and independent of any enclosing
     # destination — clear `expected_type` around it so a leaked Result-typed
     # expectation doesn't make the centralized auto-prop hook's capture-form

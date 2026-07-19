@@ -2936,6 +2936,27 @@ public static Vector[BuiltinMethodEntry] COLLECTION_BUILTIN_METHODS = [
 # is_mutating values (`add`/`swap` = ByValue:false + MutBorrow:true,
 # `get` = always false), the conservative choice for a name-keyed lookup
 # is the MUTATING one (the borrow-flip suppressed = safe over-clone).
+# -- RUST_PRESCAN_MUTATOR_FALLBACK (bootstrap-hotfix 2026-07-18) ---------
+# Mirror of Rust's MUTATING_METHODS hand-list (src/ir/lowering/functions.rs)
+# -- the conservative name fallback its untyped prescan layers UNDER the
+# typed builtin table for USER methods it cannot resolve. This is the
+# LANE-SYMMETRY predicate for the scope-hoist channel
+# (rust_prescan_marks_method): the branch/scope pre-header hoist must fire
+# on exactly the shapes RUST's collector marks, or the SH hoists where Rust
+# does not (measured: the typechecker's bare ScopeTable params, mutated via
+# user &self methods the SH's TYPED scan sees but Rust's prescan is blind
+# to, drew a deep clone per recursive stmt visit -- 7x runtime clones, the
+# stage-1 bootstrap blowout). The user-&self-mutator-in-scope throwaway
+# stays the SHARED filed gap on BOTH lanes
+# (known_gaps/cow_loop_bare_param_user_mutator); when the Rust prescan
+# learns typed user receivers, delete this list on both sides together.
+public static Vector[String] RUST_PRESCAN_MUTATOR_FALLBACK = [
+    "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
+    "reverse", "swap", "swap_remove", "extend", "append", "truncate",
+    "retain", "dedup", "resize", "reserve", "replace", "drain", "fill",
+    "put", "remove_key", "sort_by", "sort_by_key",
+]
+
 public static Vector[BuiltinMethodDecl] BUILTIN_METHOD_MUTATES = [
     # ── Mutating (is_mutating = true) — mirror Rust's `true` rows ──────
     BuiltinMethodDecl("push", false, [], BrkInfer(), true),
@@ -3044,6 +3065,51 @@ public static Vector[BuiltinMethodDecl] BUILTIN_METHOD_MUTATES = [
     BuiltinMethodDecl("to_lower", false, [], BrkInfer(), false),
     BuiltinMethodDecl("to_upper", false, [], BrkInfer(), false),
     BuiltinMethodDecl("strong_count", false, [], BrkInfer(), false),
+    # ── String READ surface (bootstrap-hotfix 2026-07-18) ──────────────
+    # These read-only String builtins were ABSENT from this table, so the
+    # conservative default classified them MUTATING — harmless while only
+    # the LOOP pre-header queried the scan, but the consumer-#1 BRANCH
+    # hoist queries at every if/match entry, and `name.starts_with(...)`
+    # (245 uses across the self-host lowerer's classifier helpers) marked
+    # every bare String param mutated → an entry clone per call in the
+    # stage-1 hot path (the bootstrap 600s blowout). Mirrors Rust's
+    # effective prescan truth (absent from BOTH its typed `is_mutating`
+    # table and its MUTATING_METHODS fallback ⇒ non-mutating): every row
+    # here returns a scalar or a FRESH value; none writes the receiver.
+    # ⚠ Deliberately NOT added: `replace` — it sits in Rust's
+    # MUTATING_METHODS fallback (an unresolvable USER method named
+    # `replace` is plausibly mutating), so it keeps the conservative
+    # default here, exactly like Rust's prescan.
+    BuiltinMethodDecl("starts_with", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("ends_with", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("byte_at", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("byte_len", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("split", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("splitn", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("lines", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("repeat", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("join", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("replacen", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("find_from", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("find_ext", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("pad_left", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("pad_right", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("center", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("ljust", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("rjust", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("zfill", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("to_string", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("to_str", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("format", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("eq", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_alpha", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_digit", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_alphanumeric", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_whitespace", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_upper", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_lower", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_ascii", false, [], BrkInfer(), false),
+    BuiltinMethodDecl("is_hex_digit", false, [], BrkInfer(), false),
     # Sync / channel readers (Rust `is_mutating: false` — they read, the
     # mutation is internal to the runtime resource, not the bound value).
     BuiltinMethodDecl("load", false, [], BrkInfer(), false),
