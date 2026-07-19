@@ -30771,6 +30771,28 @@ done",
     );
 }
 
+/// matcluster #1 POSITIVE (planner round 3, D6 mutation-audit gap): the BARE-param
+/// sibling of cow_amp_compound_writethrough. A bare-param COMPOUND write MUST
+/// MATERIALIZE the root so the caller is UNCHANGED (10, 10) — pre-#1 these wrote
+/// THROUGH (11, 11). The round-3 mutation audit found the compound-assign
+/// root-materialize site had only the structural
+/// `compound_assign_root_materialize_arms_count` lint and no RUNTIME pin
+/// (cow_amp_compound_writethrough is the `&` write-through control;
+/// cow_taint_compound_projected rejects at check time). Exercises BOTH arms of
+/// `materialize_assign_target_root` in the compound position: `xs[0] += 1`
+/// (identifier root) and `c.counts[0] += 1` (projected root) — verified to flip to
+/// 11 if either materialize arm is disabled. Same output on both backends.
+#[test]
+fn cow_bare_param_compound_materialize() {
+    run_gg(
+        "cow_bare_param_compound_materialize.gg",
+        "\
+10
+10
+done",
+    );
+}
+
 /// CoW G1 memory-safety gate (round-33 output-review UAF): an index-projected
 /// field-ASSIGN (`v[0].name = x`) materializes the bare-param root, then a
 /// same-collection mutation in a while- AND a for-loop. The transient
