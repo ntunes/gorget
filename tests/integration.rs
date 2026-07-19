@@ -18710,6 +18710,73 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 530_700_000;
 //   ranked breakdown of where the clones come from).
 const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 448_400_000;
 
+// ── Shared clone-ceiling machinery ─────────────────────────────────────────
+// Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
+// `self_host_clone_ceiling` (stage-0, the Rust-built instrumented driver) and
+// `self_host_stage1_clone_ceiling` (stage-1, the SH-lowered driver) — go
+// through this ONE producer + ONE parser, so a change to the instrumented
+// build flow or the [clone-stats] line shape can't drift between them.
+
+/// Build the self-host driver instrumented with `--clones=stats` to a private
+/// `exe` path (never clobbers the cached driver the other self-host tests
+/// share). Returns the path to the C the build emitted next to `exe`
+/// (`exe.with_extension("c")` — `gg build -o E` writes `E.c` under the default
+/// C backend). That C's runtime PREAMBLE carries the clone counters + the
+/// armed atexit [clone-stats] report — the mechanism that makes even
+/// SH-lowered stage binaries self-report aggregate clone counts when their C
+/// is assembled with this preamble (discovered by scripts/bench_stages.sh).
+fn build_instrumented_clone_driver(exe: &Path) -> PathBuf {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let driver_gg = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.gg");
+    // CARGO_BIN_EXE_gg (not gg_command) → the default C backend regardless of
+    // GG_BACKEND, so the emitted `.c` (with the instrumented preamble) always
+    // exists — the LLVM backend would emit only `.ll`/exe.
+    let build = run_with_deadline(
+        Command::new(env!("CARGO_BIN_EXE_gg"))
+            .arg("build")
+            .arg("--clones=stats")
+            .arg(&driver_gg)
+            .arg("-o")
+            .arg(exe),
+        "clone_ceiling_build",
+        build_timeout(),
+    );
+    assert!(
+        build.status.success(),
+        "clone-ceiling driver build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    exe.with_extension("c")
+}
+
+/// Parse the last `[clone-stats]` line on a driver's stderr into
+/// `(array_clone, string_clone)`. Fails loud when the line or a field is
+/// missing — the usual cause is a build without `--clones=stats`, or (for a
+/// stage binary) its C assembled with a non-instrumented preamble.
+fn parse_clone_stats(stderr: &str) -> (u64, u64) {
+    let stats_line = stderr
+        .lines()
+        .rev()
+        .find(|l| l.starts_with("[clone-stats]"))
+        .expect(
+            "no [clone-stats] line on driver stderr — was the build missing \
+             --clones=stats (or a stage C assembled with a non-instrumented preamble)?",
+        );
+    let array_clone: u64 = stats_line
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("array_clone="))
+        .expect("no array_clone= field in the [clone-stats] line")
+        .parse()
+        .expect("array_clone value not a u64");
+    let string_clone: u64 = stats_line
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("string_clone="))
+        .expect("no string_clone= field in the [clone-stats] line")
+        .parse()
+        .expect("string_clone value not a u64");
+    (array_clone, string_clone)
+}
+
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_clone_ceiling() {
@@ -18721,21 +18788,7 @@ fn self_host_clone_ceiling() {
     // Build the stage-0 driver with --clones=stats so its binary reports the
     // [clone-stats] line at exit. Built to a private path — never clobbers the
     // cached driver the other self-host tests share.
-    let build = run_with_deadline(
-        Command::new(env!("CARGO_BIN_EXE_gg"))
-            .arg("build")
-            .arg("--clones=stats")
-            .arg(&driver_gg)
-            .arg("-o")
-            .arg(&exe),
-        "clone_ceiling_build",
-        build_timeout(),
-    );
-    assert!(
-        build.status.success(),
-        "clone-ceiling driver build failed: {}",
-        String::from_utf8_lossy(&build.stderr)
-    );
+    let _driver_c = build_instrumented_clone_driver(&exe);
 
     // The canonical clone-pressure workload: the driver compiling its own source
     // (same as scripts/self_host_mem_baseline.sh). Stats land on stderr at exit.
@@ -18749,29 +18802,14 @@ fn self_host_clone_ceiling() {
         build_timeout(),
     );
     let _ = std::fs::remove_file(&exe);
+    let _ = std::fs::remove_file(&_driver_c);
     assert!(
         run.status.success(),
         "clone-ceiling self-compile failed: {}",
         String::from_utf8_lossy(&run.stderr).lines().last().unwrap_or("(no stderr)")
     );
     let stderr = String::from_utf8_lossy(&run.stderr);
-    let stats_line = stderr
-        .lines()
-        .rev()
-        .find(|l| l.starts_with("[clone-stats]"))
-        .expect("no [clone-stats] line on driver stderr — was the build missing --clones=stats?");
-    let measured: u64 = stats_line
-        .split_whitespace()
-        .find_map(|tok| tok.strip_prefix("array_clone="))
-        .expect("no array_clone= field in the [clone-stats] line")
-        .parse()
-        .expect("array_clone value not a u64");
-    let measured_string: u64 = stats_line
-        .split_whitespace()
-        .find_map(|tok| tok.strip_prefix("string_clone="))
-        .expect("no string_clone= field in the [clone-stats] line")
-        .parse()
-        .expect("string_clone value not a u64");
+    let (measured, measured_string) = parse_clone_stats(&stderr);
 
     // Always print the fresh numbers — round closes read them to re-seed
     // downward. Both print BEFORE either asserts, so a tripped ratchet still
@@ -18806,6 +18844,187 @@ fn self_host_clone_ceiling() {
          only if the increase is a justified semantic cost — re-pin the ceiling WITH a \
          citation in the comment above. Regenerate: re-run this test (the fresh number \
          always prints as [clone-ceiling] string_clone=…)."
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STAGE-1 CLONE-PRESSURE CEILING — the SH-LOWERED driver's own
+// self-compile array_clone count, pinned as a tighten-only ratchet
+// (owner 2026-07-19: the 600s stage deadlines are INDIRECT clone-bomb
+// detectors — a stage-1 clone bomb surfaces only as a blown bootstrap
+// deadline; this makes the stage-1 signal DIRECT, in one stage run
+// instead of a bootstrap timeout).
+//
+// `self_host_clone_ceiling` above guards STAGE 0 — the Rust-built
+// instrumented driver self-compiling. This guards STAGE 1 — the C the
+// self-host itself LOWERS, compiled and run against driver.gg. The two
+// diverge because stage-0 is Rust `gg`'s lowering and stage-1 is the
+// self-host's; a de-optimization that lands only in the self-host's
+// lowering (the war story: the v1 clone bomb, 35.2M-vs-4.96M on a probe
+// → a 1332s stage-1) rides UNDER the stage-0 ceiling and shows up only
+// here.
+//
+// Mechanism: the [clone-stats] aggregate counters + the armed atexit
+// report live in the runtime PREAMBLE, which we prepend from the
+// --clones=stats driver's emitted C — so the SH-lowered stage-1 binary
+// self-reports its own clone aggregates (scripts/bench_stages.sh's S1->2
+// row; the ceiling is directly seedable from it).
+//
+// Seeded at a276af64: 1,018,448,411 (measured FRESH this session,
+// regenerated TWICE — bit-identical, deterministic for a fixed tree like
+// the stage-0 count). That is 1.93× the stage-0 lane's 527.4M on the
+// IDENTICAL workload — the quantified alias-sever reclaim headroom (the
+// #13 read-only bind/return class); as it burns down, re-seed downward.
+// Ceiling = seed + ~1% headroom for legitimate small fluctuations from
+// unrelated driver-source edits.
+//
+// Discipline: measured ≤ CEILING, always. A deliberate increase needs a
+// cited re-pin HERE (what changed, why the clones are justified). Round
+// closes RE-SEED downward when the fresh number drops — the ratchet only
+// tightens. Regenerate / triage a trip:
+//   scripts/bench_stages.sh --out /tmp/stages.tsv   (the S1->2 array_clone)
+//   scripts/clone_attribution.sh                    (per-site ranked breakdown)
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_028_700_000;
+// STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
+// discipline as the array ceiling above. string_clone would ride under
+// the array ratchet exactly as it would at stage 0, so it gets its own
+// direct ceiling here too.
+//
+// Seeded at a276af64: 1,893,924,407 (measured FRESH this session,
+// regenerated TWICE — bit-identical). Ceiling = seed + ~1% headroom.
+const STAGE1_STRING_CLONE_CEILING: u64 = 1_912_900_000;
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_stage1_clone_ceiling() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let driver_gg = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.gg");
+    let lib_dir = manifest_dir.join("lib");
+    let tmp_dir = std::env::temp_dir();
+    let exe = tmp_dir.join(format!("gg_stage1_ceiling_{}", std::process::id()));
+
+    // (1) Build the stage-0 driver with --clones=stats (SHARED producer with
+    // self_host_clone_ceiling — Core invariant #4). Its emitted C carries the
+    // INSTRUMENTED runtime preamble (clone counters + armed atexit report).
+    let driver_c = build_instrumented_clone_driver(&exe);
+
+    // (2) Extract the runtime preamble = everything before the first user
+    // typedef in the driver's emitted C (mirror self_host_bootstrap_fixed_point).
+    // This preamble is what carries the counters into the stage-1 binary.
+    let rust_c = std::fs::read_to_string(&driver_c)
+        .expect("failed to read instrumented driver.c");
+    let preamble_end = rust_c
+        .find("\ntypedef struct __gg_")
+        .expect("driver.c has no user-type typedef boundary");
+    let runtime_preamble = &rust_c[..preamble_end];
+
+    // (3) Emit the stage-1 body C: stage-0 driver lowers driver.gg → LIR C
+    // (backend-independent, byte-identical whether or not instrumented). The
+    // emitting run ALSO prints its own [clone-stats] on stderr (the stage-0
+    // count) — we ignore it; we only want the body on stdout.
+    let body_out = run_with_deadline(
+        Command::new(&exe)
+            .arg(&driver_gg)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "stage1_clone_ceiling stage0 → stage1.c",
+        // 600s — generous vs the ~260s emit; leaves ~2× headroom under a
+        // --test-threads=4 sweep (the serial group protects the shared driver
+        // paths). Mirrors self_host_bootstrap_fixed_point's stage deadlines.
+        Duration::from_secs(600),
+    );
+    assert!(
+        body_out.status.success(),
+        "stage-0 → stage1.c emission failed: {}",
+        String::from_utf8_lossy(&body_out.stderr).lines().last().unwrap_or("(no stderr)")
+    );
+    let stage1_body = String::from_utf8_lossy(&body_out.stdout).to_string();
+
+    // (4) Assemble stage1.c = instrumented preamble + stage-1 body. Because the
+    // counters ride the preamble, the resulting stage-1 binary self-reports its
+    // OWN clone aggregates when it runs.
+    let stage1_c = tmp_dir.join(format!("gg_stage1_ceiling_{}.stage1.c", std::process::id()));
+    let stage1_bin = tmp_dir.join(format!("gg_stage1_ceiling_{}.stage1", std::process::id()));
+    std::fs::write(&stage1_c, format!("{runtime_preamble}\n{stage1_body}"))
+        .expect("failed to write stage1.c");
+
+    // (5) cc -O0 the stage-1 binary (mirror the bootstrap test's cc flags).
+    let cc_out = Command::new("cc")
+        .arg("-O0")
+        .arg("-w")
+        .arg("-o")
+        .arg(&stage1_bin)
+        .arg(&stage1_c)
+        .arg("-lm")
+        .arg("-lpthread")
+        .output()
+        .expect("failed to spawn cc");
+    assert!(
+        cc_out.status.success(),
+        "stage-1 cc failed: {}",
+        String::from_utf8_lossy(&cc_out.stderr),
+    );
+
+    // (6) Run the SH-lowered stage-1 binary on the SAME canonical clone
+    // workload (driver.gg self-compile). Its [clone-stats] line on stderr is
+    // the stage-1 self-compile clone count we guard.
+    let run = run_with_deadline(
+        Command::new(&stage1_bin)
+            .arg(&driver_gg)
+            .arg(&lib_dir)
+            .arg("--lir-c")
+            .stdout(Stdio::null()),
+        "stage1_clone_ceiling stage1 self-compile",
+        // 600s — ~2× the ~260s stage-1 self-compile, headroom under sweep load.
+        Duration::from_secs(600),
+    );
+    // Cleanup up front (before the asserts) so a tripped ratchet still cleans.
+    let _ = std::fs::remove_file(&exe);
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&stage1_c);
+    let _ = std::fs::remove_file(&stage1_bin);
+    assert!(
+        run.status.success(),
+        "stage-1 self-compile failed: {}",
+        String::from_utf8_lossy(&run.stderr).lines().last().unwrap_or("(no stderr)")
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let (measured, measured_string) = parse_clone_stats(&stderr);
+
+    // Always print the fresh numbers BEFORE either asserts — round closes read
+    // them to re-seed downward, and a tripped ratchet still shows both.
+    println!(
+        "[stage1-clone-ceiling] array_clone={} ceiling={} headroom={}",
+        measured,
+        STAGE1_ARRAY_CLONE_CEILING,
+        STAGE1_ARRAY_CLONE_CEILING.saturating_sub(measured),
+    );
+    println!(
+        "[stage1-clone-ceiling] string_clone={} ceiling={} headroom={}",
+        measured_string,
+        STAGE1_STRING_CLONE_CEILING,
+        STAGE1_STRING_CLONE_CEILING.saturating_sub(measured_string),
+    );
+    assert!(
+        measured <= STAGE1_ARRAY_CLONE_CEILING,
+        "STAGE-1 CLONE-PRESSURE RATCHET TRIPPED: stage-1 self-compile array_clone={measured} \
+         exceeds the ceiling {STAGE1_ARRAY_CLONE_CEILING}. A change made the SELF-HOST's \
+         lowering clone more (this fires even when the stage-0 ceiling holds — the classic \
+         self-host-only clone bomb). Either fix the regression (likely an over-materialize or \
+         a lost move/borrow in the self-host's own lowering), or — only if the increase is a \
+         justified semantic cost — re-pin the ceiling WITH a citation in the comment above. \
+         Triage: scripts/bench_stages.sh --out /tmp/stages.tsv (the S1->2 array_clone) + \
+         scripts/clone_attribution.sh (per-site ranked breakdown)."
+    );
+    assert!(
+        measured_string <= STAGE1_STRING_CLONE_CEILING,
+        "STAGE-1 STRING-CLONE-PRESSURE RATCHET TRIPPED: stage-1 self-compile \
+         string_clone={measured_string} exceeds the ceiling {STAGE1_STRING_CLONE_CEILING}. A \
+         change made the self-host's lowering clone more strings. Either fix the regression \
+         (likely an over-materialize or a lost move/borrow — scripts/clone_attribution.sh \
+         ranks the clone sites by reason), or — only if the increase is a justified semantic \
+         cost — re-pin the ceiling WITH a citation in the comment above. Regenerate: re-run \
+         this test (the fresh number always prints as [stage1-clone-ceiling] string_clone=…)."
     );
 }
 
