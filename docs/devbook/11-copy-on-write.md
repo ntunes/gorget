@@ -696,11 +696,18 @@ The reference-grade fix is code + diagnostic, never compiler elision:
   `GG_NEEDLESSMUT_ALL` env bypass of the imported-module gate lets the diagnostic
   see past imports for the corpus sweep (mirrors `GG_DEADWRITE_ALL`).
 - **(ii) burn it down.** Driven by the diagnostic, every read-only `&`-param
-  across the self-host → bare (declarations + call sites; the borrow checker's
-  `E_OwnershipMismatch` is the call-site net, and the read-only guarantee makes
-  each conversion sound by construction — a wrongly-bared write fails to *compile*
-  rather than miscompiling). It IS a fixpoint: baring a callee and de-`&`ing its
-  call site exposes the caller's param as newly read-only, so it iterates.
+  across the self-host → bare (declarations + call sites). The CALL-SITE net is
+  hard: passing `&v` to a now-bare param is `E_OwnershipMismatch`, so no missed
+  call site survives the build. Body-writes are NOT a compile error — a write
+  through a bare param silently materializes a private CoW copy
+  (language-design §3.2's more-tolerant-than-Rust design), so a wrongly-bared
+  genuinely-mutating param would compile and change behavior. The round's
+  soundness net against exactly that is twofold: D1-pre-A makes the warning's
+  selection trustworthy (only compiler-proven read-only params are ever bared),
+  and every batch is gated by the byte-identical emitted-C cmp (pre-batch exe vs
+  post-batch exe on the same post-batch source). It IS a fixpoint: baring a
+  callee and de-`&`ing its call site exposes the caller's param as newly
+  read-only, so it iterates.
 - **(i) compiler mutation-inference + silent elide was REJECTED** — wrong layer
   (a downstream pass overriding the declared `&`), the cornerstone double-free
   soundness risk (one missed indirect write elides a needed clone), and it hides
