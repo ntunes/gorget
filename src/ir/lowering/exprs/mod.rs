@@ -1889,6 +1889,12 @@ fn lower_struct_literal(
                 }
             }
         }
+        // SCOUT-PROTO #1b (Defect B): the fresh Shared handle owns a new
+        // control block — tag it FreshOwned at birth (Core #3). Without this
+        // the Untracked temp trips the consuming-position "clone conservatively
+        // if Untracked" branch and gets a spurious incref (a fresh temp must
+        // MOVE into its consumer, not clone).
+        ctx.set_owned_fresh(builder, dst);
         return FunctionBuilder::copy(dst);
     }
 
@@ -4423,7 +4429,13 @@ fn clone_multi_use_resource_args(
                 let local = place.local;
                 let local_type = builder.local_type(local);
 
-                if is_resource_type_local(local, builder, &ctx.type_registry) {
+                // SCOUT-PROTO #1b (Defect B): refcount handles (Shared/Weak/
+                // Channel) are NOT `is_resource_type` (thin-pointer, Trivial
+                // copy) but STILL need clone-if-live at a consuming position —
+                // their "clone" is a by-value incref. Admit them here.
+                if is_resource_type_local(local, builder, &ctx.type_registry)
+                    || ctx.type_registry.is_refcount_clone_type(local_type)
+                {
                     // Already owned (call results, cloned temps) — skip
                     if ctx.is_owned_local(builder, local) && !ctx.is_named_local(local) {
                         continue;
@@ -4471,12 +4483,22 @@ fn clone_multi_use_resource_args(
                             continue;
                         }
                         let inner_type = ctx.pointee_type(local_type).unwrap_or(local_type);
+                        // SCOUT-PROTO #1b (Defect B): a REFCOUNT handle
+                        // (Shared/Weak/Channel — thin-pointer, copy_semantics
+                        // Trivial, `{name}__clone` = a by-VALUE incref) is
+                        // cloned by passing the handle directly, NOT by taking
+                        // its address (deep-clone fns like gorget_array_clone
+                        // are by-pointer). Detect via the typed clone_fn +
+                        // Trivial-copy shape.
+                        let is_refcount_clone = ctx.pointee_type(local_type).is_none()
+                            && ctx.type_registry.is_refcount_clone_type(local_type);
                         if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner_type) {
                             if let Some(span) = ast_args.get(i).map(|a| a.span) {
                                 ctx.warn_clone_and_hit(builder, span, inner_type, crate::ir::ImplicitCloneReason::ConsumingArg);
                             }
-                            let clone_arg = if ctx.pointee_type(local_type).is_some() {
-                                // Already Ptr — use directly
+                            let clone_arg = if ctx.pointee_type(local_type).is_some() || is_refcount_clone {
+                                // Already Ptr, OR a refcount handle cloned
+                                // by-value — pass directly.
                                 FunctionBuilder::copy(local)
                             } else {
                                 let ptr_type = ctx.register_ptr_type(inner_type);
@@ -4514,7 +4536,12 @@ fn move_zero_consumed_args(
             if place.projections.is_empty() {
                 let is_resource = is_resource_type_local(place.local, builder, &ctx.type_registry);
                 let is_string = builder.local_type(place.local) == ctx.type_mapper.owned_string_type;
-                if (is_resource || is_string) && !ctx.drops.is_moved(place.local) {
+                // SCOUT-PROTO #1b (Defect B): a refcount handle transferred
+                // into the struct on the MOVE path (dead source, not cloned)
+                // must be move-zeroed too, or its scope-exit drop double-decs
+                // the control block the struct field now owns.
+                let is_refcount = ctx.type_registry.is_refcount_clone_type(builder.local_type(place.local));
+                if (is_resource || is_string || is_refcount) && !ctx.drops.is_moved(place.local) {
                     ctx.move_zero_and_mark(builder, place.local);
                 }
             }

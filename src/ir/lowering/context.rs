@@ -2508,8 +2508,14 @@ impl<'a> LoweringContext<'a> {
             return operand;
         }
 
-        // Case 2: by-value resource.
-        if !self.type_registry.is_resource_type(arg_type) {
+        // Case 2: by-value resource OR refcount handle. Refcount handles
+        // (Shared/Weak/Channel) are NOT `is_resource_type` (thin-pointer,
+        // Trivial copy) but still need clone-if-live — their `clone_fn` is a
+        // by-value incref, which the by-value `clone_fn_for_ptr` call at the
+        // tail emits correctly (SCOUT-PROTO #1b, Defect B).
+        if !self.type_registry.is_resource_type(arg_type)
+            && !self.type_registry.is_refcount_clone_type(arg_type)
+        {
             return operand;
         }
         // Determine if a clone is needed.  Two sub-cases:

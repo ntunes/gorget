@@ -1862,10 +1862,29 @@ pub(super) fn emit_monomorphized_typedefs(out: &mut String, module: &LirModule, 
     for func in &module.functions {
         for block in &func.blocks {
             for inst in &block.insts {
-                if let Inst::CallExtern { name, .. } = inst {
-                    if is_wrapper_method(name) && method_seen.insert(name.clone()) {
-                        method_calls.push(name.clone());
+                match inst {
+                    Inst::CallExtern { name, .. } => {
+                        if is_wrapper_method(name) && method_seen.insert(name.clone()) {
+                            method_calls.push(name.clone());
+                        }
                     }
+                    // A per-mono wrapper `__drop` / `__clone` referenced ONLY as
+                    // a function-POINTER value (never called by name) — the
+                    // element-drop / element-clone slot of a freshly built
+                    // collection whose element is a refcount handle, emitted by
+                    // `emit_collection_fn_ptr_stores` as `NamedFuncAddr`. The
+                    // `CallExtern` scan above misses it (it is a taken address,
+                    // not a call), so `Vector[Shared[T]] v = [Shared[T](x)]`
+                    // (the ONLY reference to `Shared__T__drop` is the array's
+                    // elem_drop slot) link-failed on the undefined symbol. Same
+                    // reference-site-completeness gap the recursive-drop-table
+                    // walk below closes for inlined drop bodies.
+                    Inst::NamedFuncAddr { name, .. } => {
+                        if is_wrapper_method(name) && method_seen.insert(name.clone()) {
+                            method_calls.push(name.clone());
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

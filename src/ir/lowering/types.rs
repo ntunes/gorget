@@ -370,15 +370,28 @@ impl TypeMapper {
                         // see the per-mono name to recognise the producer.
                         // Write it here — same site that already writes the
                         // per-mono `drop_strategy` (`{Mangled}__drop`).
-                        let clone_fn_name = match base {
-                            "Shared" | "Weak" | "Channel" | "Guard"
-                            | "ReadGuard" | "WriteGuard" => {
-                                Some(format!("{mangled}__clone"))
-                            }
-                            _ => protocol.clone_fn.map(String::from),
-                        };
                         if let Some(td) = registry.get_type_def_mut(&mangled) {
-                            td.metadata.clone_fn = clone_fn_name;
+                            match base {
+                                // Refcount family {Shared, Weak, Channel}: the
+                                // by-VALUE incref clone_fn, set through the ONE
+                                // shared writer so this annotated-type path and
+                                // the ctor-path def-mint (`ensure_*_type_def`)
+                                // stay byte-identical (Layering rule 3).
+                                "Shared" | "Weak" | "Channel" => {
+                                    td.metadata.set_refcount_clone_fn(&mangled);
+                                }
+                                // Guards spell the same `{mangled}__clone` for the
+                                // consume-site validator's producer recognition,
+                                // but are NOT refcount handles — `Resource`
+                                // copy_semantics keeps them out of
+                                // `is_refcount_clone_type`. Kept separate on
+                                // purpose (do NOT route through the refcount
+                                // setter).
+                                "Guard" | "ReadGuard" | "WriteGuard" => {
+                                    td.metadata.clone_fn = Some(format!("{mangled}__clone"));
+                                }
+                                _ => td.metadata.clone_fn = protocol.clone_fn.map(String::from),
+                            }
                             td.metadata.clone_inplace_fn = protocol.clone_inplace_fn.map(String::from);
                             td.metadata.materialize_fn = protocol.materialize_fn.map(String::from);
                             td.metadata.borrow_view_fn = protocol.borrow_view_fn.map(String::from);

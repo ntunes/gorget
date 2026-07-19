@@ -1082,6 +1082,14 @@ pub(super) fn lower_method_call(
                     "clone" => {
                         let clone_fn = format!("{stn}__clone");
                         let dst = builder.call_clone(&clone_fn, vec![recv], recv_type, crate::ir::ImplicitCloneReason::ExplicitUserClone);
+                        // Core #3 (register at birth): the by-value incref result
+                        // is a FRESH owned handle. Tag it FreshOwned so a
+                        // consuming position (ctor field-init, container literal,
+                        // push) MOVES it in rather than re-cloning it via the
+                        // Untracked-temp conservative-clone branch (that would
+                        // double-incref: `Cell(s.clone(), ..)` → strong_count 3
+                        // instead of 2). Sibling of the Shared ctor FreshOwned tag.
+                        ctx.set_owned_fresh(builder, dst);
                         return FunctionBuilder::copy(dst);
                     }
                     "get" => {
@@ -1102,6 +1110,11 @@ pub(super) fn lower_method_call(
                         let weak_type = get_or_register_type(ctx, &weak_name, Some(&|c| ensure_weak_type_def(c, &weak_name, inner_type)));
                         let downgrade_fn = format!("{stn}__downgrade");
                         let dst = builder.call(&downgrade_fn, vec![recv], weak_type);
+                        // Core #3: the downgrade result is a FRESH owned Weak
+                        // handle (weak-count incref) — tag FreshOwned so a
+                        // consuming position moves it rather than re-cloning the
+                        // Untracked temp.
+                        ctx.set_owned_fresh(builder, dst);
                         return FunctionBuilder::copy(dst);
                     }
                     // Shared[Vector[T]] element access — at/set_at/slen
@@ -1145,6 +1158,9 @@ pub(super) fn lower_method_call(
                     "clone" => {
                         let clone_fn = format!("{stn}__clone");
                         let dst = builder.call_clone(&clone_fn, vec![recv], recv_type, crate::ir::ImplicitCloneReason::ExplicitUserClone);
+                        // Core #3: fresh owned Weak handle — see the Shared clone
+                        // arm above; tag FreshOwned so consuming positions move it.
+                        ctx.set_owned_fresh(builder, dst);
                         return FunctionBuilder::copy(dst);
                     }
                     "upgrade" => {

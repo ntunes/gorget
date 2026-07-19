@@ -110,11 +110,19 @@ pub(super) fn lower_array_literal(
                 _ => AssignMode::Copy,
             }
         };
-        // Push first element
+        // Push first element.
+        // SCOUT-PROTO #1a (Defect A): route the element through the SAME
+        // consuming-position helper push/put/set/ctor use, so a LIVE named
+        // resource source is CLONED (not moved) and a dead/temp source is
+        // moved. The bespoke elem_mode below only chose Move|Copy with NO
+        // clone-if-live path — a live owned local became a Move → "read after
+        // MoveZero" panic; a live Shared became a shallow Copy → under-incref.
         let elem_local = builder.add_local(etype, None);
-        let first_mode = elem_mode(ctx, builder, &first, etype);
-        let first_clone = first.clone();
-        builder.assign_mode(first_mode, Place::local(elem_local), first);
+        let first_owned = ctx.ensure_owned_at_consuming_arg(
+            builder, first, &elems[0], crate::ir::ImplicitCloneReason::ConsumingArg);
+        let first_mode = elem_mode(ctx, builder, &first_owned, etype);
+        let first_clone = first_owned.clone();
+        builder.assign_mode(first_mode, Place::local(elem_local), first_owned);
         // Emit MoveZero + mark_moved so drop-tracking knows the source is
         // dead. Without this, registering owned temps for drop (so they don't
         // leak) turns Move-into-elem-slot into double-free: both source and
@@ -142,6 +150,10 @@ pub(super) fn lower_array_literal(
         for elem_expr in &elems[1..] {
             let elem_val = lower_expr(ctx, builder, elem_expr);
             let el = builder.add_local(etype, None);
+            // SCOUT-PROTO #1a (Defect A): clone-if-live / move-if-dead via the
+            // shared consuming-position helper (see the first-element note).
+            let elem_val = ctx.ensure_owned_at_consuming_arg(
+                builder, elem_val, elem_expr, crate::ir::ImplicitCloneReason::ConsumingArg);
             let mode = elem_mode(ctx, builder, &elem_val, etype);
             let elem_val_clone = elem_val.clone();
             builder.assign_mode(mode, Place::local(el), elem_val);
