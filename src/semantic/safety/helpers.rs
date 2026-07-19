@@ -915,6 +915,21 @@ impl<'a> BorrowChecker<'a> {
                     _ => None,
                 }
             }
+            Expr::MethodCall { .. } => {
+                // A method call IS recorded in `expr_types` (unlike field/
+                // index targets). A borrow-view call (`.get(i).unwrap()` —
+                // the auto-borrow protocol) is a valid lvalue BASE: the view
+                // aliases the collection's storage, so
+                // `x.get(i).unwrap().field = v` denotes the element's field.
+                // Peel the borrow-view `Ref` to the element's value type;
+                // non-view calls resolve to their recorded value type (the
+                // Copy test on a fresh temp's type is equally valid).
+                let tid = *self.expr_types.get(&target.span)?;
+                match self.types.get(tid) {
+                    ResolvedType::Ref(inner) => Some(*inner),
+                    _ => Some(tid),
+                }
+            }
             _ => None,
         }
     }
@@ -942,12 +957,90 @@ impl<'a> BorrowChecker<'a> {
     }
 
     /// If `expr`'s root is a `&` (MutableBorrow) parameter, mark it as mutated.
+    ///
+    /// Root resolution routes THROUGH borrow-view method calls (see
+    /// `find_mut_mark_root`): `f.blocks.get(bb).unwrap().insts.push(inst)`
+    /// marks `f`, because the `.get()`-family read returns a borrow VIEW into
+    /// the collection and writing through it write-throughs to `f` (the
+    /// ratified auto-borrow-from-get semantics). `find_root_def_id` bails on
+    /// method-call bases, which made the lint false-flag every such mutator as
+    /// "needless `&`" — the marking hole behind the Class-C stage-1 bootstrap
+    /// regression (four SH emit primitives were wrongly bared on the lint's
+    /// advice).
     pub(super) fn mark_mut_param_if_applicable(&mut self, expr: &Spanned<Expr>) {
-        if let Some(def_id) = self.find_root_def_id(expr) {
+        if let Some(def_id) = self.find_mut_mark_root(expr) {
             let def = self.scopes.get_def(def_id);
             if def.is_param && def.param_ownership == Some(Ownership::MutableBorrow) {
                 self.mut_param_mutated.insert(def_id);
             }
+        }
+    }
+
+    /// Root resolver for MUTATION MARKING: like `find_root_def_id`, but
+    /// additionally resolves through method calls that yield a borrow VIEW
+    /// into their receiver chain — the `.get()`/`.first()`/`.last()`
+    /// auto-borrow protocol and the `.unwrap()`/`.expect()` peel over it.
+    /// A mutation through such a view writes through to the underlying
+    /// collection, so the chain's root binding is what's mutated.
+    ///
+    /// Classification is TYPED — the typechecker's recorded expression type
+    /// (`expr_types`): `Ref(_)` is a borrow view; `Generic(_, args)` holding a
+    /// `Ref` arg is the pre-`.unwrap()` `Option[Ref[T]]` the get-family
+    /// returns. No method-name matching.
+    ///
+    /// Used ONLY by the lint-marking path (`mark_mut_param_if_applicable`).
+    /// The semantic gates (moves, materialize-on-write taint, borrow
+    /// invalidation) keep the strict `find_root_def_id` — an accept/reject
+    /// surface must not widen via lint plumbing. Worst case of the typed rule
+    /// over-resolving (a view borrowed from something other than the receiver
+    /// chain, e.g. a user view-returning method): a missed warning, never a
+    /// wrong rejection.
+    pub(super) fn find_mut_mark_root(&self, expr: &Spanned<Expr>) -> Option<DefId> {
+        match &expr.node {
+            Expr::Identifier(_) | Expr::SelfExpr => {
+                self.resolution_map.get(&expr.span.start).copied()
+            }
+            Expr::FieldAccess { object, .. }
+            | Expr::TupleFieldAccess { object, .. }
+            | Expr::Index { object, .. }
+            | Expr::OptionalChain { object, .. } => self.find_mut_mark_root(object),
+            Expr::MethodCall { receiver, method, .. } => {
+                // Two typed continuation cases:
+                //  * the call's recorded type is a borrow view (`Ref(_)` — the
+                //    `.unwrap()`/`.expect()` peel of an `Option[Ref[T]]`), or
+                //  * the method is an element-borrow READ per the builtin
+                //    protocol table (`get`/`first`/`last` — their `Some`
+                //    payload aliases the receiver's storage; the recorded
+                //    Option type does not spell the `Ref`, the protocol decl
+                //    is the source of truth).
+                if self.expr_yields_borrow_view(expr)
+                    || crate::ir::lowering::builtins::is_elem_borrow_read_builtin_method(
+                        method.node.as_str(),
+                    )
+                {
+                    self.find_mut_mark_root(receiver)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// TYPED test: does this expression evaluate to a borrow VIEW (a `Ref`
+    /// into some collection/aggregate), directly or wrapped in a generic
+    /// (`Option[Ref[T]]` — the get-family return before `.unwrap()` peels
+    /// it)? Reads the typechecker's recorded type; no name matching.
+    fn expr_yields_borrow_view(&self, expr: &Spanned<Expr>) -> bool {
+        let Some(&tid) = self.expr_types.get(&expr.span) else {
+            return false;
+        };
+        match self.types.get(tid) {
+            ResolvedType::Ref(_) => true,
+            ResolvedType::Generic(_, args) => args
+                .iter()
+                .any(|a| matches!(self.types.get(*a), ResolvedType::Ref(_))),
+            _ => false,
         }
     }
 

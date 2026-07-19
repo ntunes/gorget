@@ -3961,6 +3961,79 @@ void main():
         );
     }
 
+    // (h) `&`-param mutated ONLY through a `.get().unwrap()` borrow-view
+    // chain — the marking hole behind the Class-C stage-1 bootstrap
+    // regression (lir_push_inst / lir_set_term / emit / refine_local_type
+    // were wrongly bared on the lint's advice, and the SH lowerer then
+    // dropped the write-through, emitting empty basic blocks). All three
+    // shapes must mark:
+    //   * builtin mutator through the chain  (lir_push_inst shape)
+    //   * field assignment through the chain (lir_set_term shape)
+    //   * `&`-pass-through to a chain mutator (the transitive caller)
+    // The read-only chain control MUST still warn.
+    #[test]
+    fn needless_mut_get_chain_mutation_no_warn() {
+        let source = "\
+struct Block:
+    Vector[int] insts
+    int term
+
+struct Func:
+    Vector[Block] blocks
+
+void push_inst(Func &f, int bb, int inst):
+    f.blocks.get(bb).unwrap().insts.push(inst)
+
+void set_term(Func &f, int bb, int t):
+    f.blocks.get(bb).unwrap().term = t
+
+void outer(Func &f):
+    push_inst(&f, 0, 42)
+
+void main():
+    Vector[int] e = []
+    Vector[Block] blks = [Block(insts=e, term=0)]
+    Func fn = Func(blocks=blks)
+    push_inst(&fn, 0, 1)
+    set_term(&fn, 0, 2)
+    outer(&fn)
+    print(f\"{fn.blocks.get(0).unwrap().insts.len()}\")
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_warning(&warnings, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "f")),
+            "expected no NeedlessMutableBorrow for get-chain-mutating f, got: {:?}", warnings
+        );
+        // Read-only chain control: `.get().unwrap()` READ (no mutation) on a
+        // `&`-param is still needless `&` — the chain routing must not
+        // over-mark reads.
+        let control = "\
+struct Block:
+    Vector[int] insts
+
+struct Func:
+    Vector[Block] blocks
+
+void peek(Func &ro, int bb):
+    print(f\"{ro.blocks.get(bb).unwrap().insts.len()}\")
+
+void main():
+    Vector[int] e = []
+    Vector[Block] blks = [Block(insts=e)]
+    Func fn = Func(blocks=blks)
+    peek(&fn, 0)
+";
+        let cw = check_warnings(control);
+        assert!(
+            has_warning(&cw, |k| matches!(k,
+                crate::semantic::errors::SemanticWarningKind::NeedlessMutableBorrow { name }
+                if name == "ro")),
+            "expected NeedlessMutableBorrow for read-only get-chain control ro, got: {:?}", cw
+        );
+    }
+
     // ─── DeadBareParamWrite (dead write on a bare CoW param) ──
 
     fn has_deadwrite(
