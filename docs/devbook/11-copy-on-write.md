@@ -243,6 +243,20 @@ position and the apply funnel READS live ownership at apply time (`cow_before_mu
 "resolve once, write through": the prescan/site resolves WHICH root, the funnel
 writes the clone, downstream never re-derives.
 
+**The campaign's acceptance bar — the CoW charter (owner 2026-07-19).** Implicit
+clones must be as good as the best hand-written clones would have been; cloning
+more than absolutely necessary is the model missing its own charter
+(`language-design.md` §3.1). Operationally: every `ImplicitCloneReason` is either
+**charter-justified** (a real ownership boundary a hand-writing author also pays —
+a consuming position on a live source, a closure capture, a genuine write to a
+shared root) or **charter-suspect** (a clone the hand-written version would replace
+with a borrow — `VarDeclFromBorrow`/`ReturnFromBorrow` on read-only use, defensive
+`&`-formation for a read-only callee). The charter meter is charter-suspect volume
+trending to ~0 (per-reason budgets, filed); rounds are judged against the
+hand-written ideal — not against the previous release, and not against the other
+lane (the lane ratio is a different measurement; both lanes can be above the bar
+together).
+
 Live call-site inventory (re-derive with the grep, do not transcribe — these
 move):
 

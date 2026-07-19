@@ -331,6 +331,16 @@ copies instead. Everything below — parameters (§3.2), assignments
 (§3.3–3.4), fields (§3.4), collection elements, loops — is this single
 rule applied at each position.
 
+**The charter — implicit clones as good as the best hand-written.** The
+promise underneath the tolerance is a quality bar, not just a semantics:
+the clones the compiler inserts must be the ones a careful author doing
+manual ownership tracking would have written — no more. An implicit
+clone at a position where the best hand-written version would borrow is
+not an acceptable overhead of the model; it is the model missing its own
+charter. This is the acceptance bar for all materialization work: judged
+against the hand-written ideal, never merely against the previous
+release or the other compiler lane.
+
 **The cost side — when to reach for `&`.** Because a bare mutation
 *copies*, mutating through a bare binding can pay a clone (the
 copy-on-write), whereas an `&` mutation writes **in place** with no copy.
