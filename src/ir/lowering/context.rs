@@ -2594,6 +2594,20 @@ impl<'a> LoweringContext<'a> {
                 arg_type,
                 reason,
             );
+            // Deliberately NOT `drops.register_local`'d (unlike Case 1's
+            // Ptr→T materialization above). EVERY caller of this helper is a
+            // CONSUMING position — push/put/set/insert/send, container literal,
+            // ctor field-init, index-set, var-decl RHS — that immediately takes
+            // ownership of the returned value (moves/memcpys it into the
+            // collection slot / struct field / destination local, whose OWN
+            // drop then balances it). Registering this transient clone as a
+            // standalone droppable would double-drop the very allocation the
+            // consumer now owns. For a refcount handle the same holds: the
+            // clone is a by-value incref and the destination's field/elem drop
+            // provides the single matching decref (verified ASan-clean for the
+            // Shared/Weak ctor + array/dict-literal consuming shapes). Case 1
+            // registers only because a materialized Ptr→T is a fresh STANDALONE
+            // value whose `mark_moved` state `pre_call_clone_temps` tracks.
             return crate::ir::builder::FunctionBuilder::copy(cloned);
         }
         operand
