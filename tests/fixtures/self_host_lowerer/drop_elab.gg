@@ -235,7 +235,7 @@ Vector[int] compute_transfer(LirBlock blk, Vector[int] &in_state, Dict[int, int]
 # in the worklist driver, so this is O(slots/32) word-ops with no per-slot
 # branching. (0b00 = Top is the OR identity, so an absent predecessor
 # contributes nothing; the encoding makes meet == OR for every value pair.)
-Vector[int] meet_states(Vector[int] &a, Vector[int] &b, int n_slots):
+Vector[int] meet_states(Vector[int] a, Vector[int] b, int n_slots):
     Vector[int] out = []
     int nw = ss_n_words(n_slots)
     int i = 0
@@ -253,7 +253,7 @@ Vector[int] meet_states(Vector[int] &a, Vector[int] &b, int n_slots):
 # Compare two packed word-vectors for equality (mirror Rust derived `PartialEq`
 # on `SlotStates { words }`). Words are sign-agnostic for ==, so a plain
 # per-word compare is correct for signed `int`.
-bool states_equal(Vector[int] &a, Vector[int] &b):
+bool states_equal(Vector[int] a, Vector[int] b):
     if a.len() != b.len():
         return false
     int i = 0
@@ -338,7 +338,7 @@ void forward_dataflow(LirFunction &f, Dict[int, int] &val_to_slot, Vector[Vector
         # iterating `&func.blocks[bid]`.
         Vector[int] out = compute_transfer(f.blocks.get(bid).unwrap(), &in_state, &val_to_slot)
         Vector[int] prev_out = out_states.get(bid).unwrap()
-        if not states_equal(&out, &prev_out):
+        if not states_equal(out, prev_out):
             out_states.set(bid, out)
             # Re-fetch the now-updated out for successor distribution.
             Vector[int] out_distr = out_states.get(bid).unwrap()
@@ -358,14 +358,14 @@ void forward_dataflow(LirFunction &f, Dict[int, int] &val_to_slot, Vector[Vector
                         k += 1
                 else:
                     Vector[int] prev_in = in_states_out.get(succ).unwrap()
-                    new_in = meet_states(&out_distr, &prev_in, n_slots)
+                    new_in = meet_states(out_distr, prev_in, n_slots)
                 # If new_in differs from prior in, update + re-queue.
                 bool changed = false
                 if not in_states_present_out.get(succ).unwrap():
                     changed = true
                 else:
                     Vector[int] prev_in2 = in_states_out.get(succ).unwrap()
-                    if not states_equal(&new_in, &prev_in2):
+                    if not states_equal(new_in, prev_in2):
                         changed = true
                 if changed:
                     in_states_out.set(succ, new_in)

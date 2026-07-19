@@ -95,13 +95,13 @@ Vector[String] validate_resource_moves(GirModule &gmod):
     for (fi, func) in gmod.functions.enumerate():
         for (bi, blk) in func.blocks.enumerate():
             for (ii, inst) in blk.insts.enumerate():
-                check_inst_for_copy(inst, &func, &gmod, &violations, fi, bi, ii)
+                check_inst_for_copy(inst, func, &gmod, &violations, fi, bi, ii)
     return violations
 
 # Check every Operand argument in a single Instruction for OpCopy on
 # a resource-typed local. Walks each instruction shape explicitly so
 # every operand site is covered.
-void check_inst_for_copy(Instruction inst, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+void check_inst_for_copy(Instruction inst, GirFunction func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
     match inst:
         case GIAssign(_, op):
             check_operand_for_copy(op, &func, &gmod, &violations, fi, bi, ii)
@@ -164,10 +164,10 @@ Vector[String] validate_resource_field_reads(GirModule &gmod):
     for (fi, func) in gmod.functions.enumerate():
         for (bi, blk) in func.blocks.enumerate():
             for (ii, inst) in blk.insts.enumerate():
-                check_inst_for_field_read(inst, &func, &gmod, &violations, fi, bi, ii)
+                check_inst_for_field_read(inst, func, &gmod, &violations, fi, bi, ii)
     return violations
 
-void check_inst_for_field_read(Instruction inst, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+void check_inst_for_field_read(Instruction inst, GirFunction func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
     match inst:
         case GICallExtern(dst, name, _):
             if dst < 0:
@@ -230,10 +230,10 @@ Vector[String] validate_resource_call_args(GirModule &gmod):
     for (fi, func) in gmod.functions.enumerate():
         for (bi, blk) in func.blocks.enumerate():
             for (ii, inst) in blk.insts.enumerate():
-                check_inst_for_call_arg(inst, &func, &gmod, &violations, fi, bi, ii)
+                check_inst_for_call_arg(inst, func, &gmod, &violations, fi, bi, ii)
     return violations
 
-void check_inst_for_call_arg(Instruction inst, GirFunction &func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
+void check_inst_for_call_arg(Instruction inst, GirFunction func, GirModule &gmod, Vector[String] &violations, int fi, int bi, int ii):
     match inst:
         case GICall(_, callee, args):
             check_call_args(callee, args, &func, &gmod, &violations, fi, bi, ii)

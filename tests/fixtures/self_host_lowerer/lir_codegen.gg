@@ -3986,7 +3986,7 @@ int inst_dst(LirInst &inst):
 # LirInst variant is forced through here. MIND: dst-less arms still have uses
 # (IStore/IMemset/IMemcpy/IStructInit/IEnumInit/IPrintf/IBoundsCheck/…) and
 # Vector[int] arg-lists (ICall*/IPrintf/IFprintf/IClosure*).
-Vector[int] inst_uses(LirInst &inst):
+Vector[int] inst_uses(LirInst inst):
     Vector[int] result = []
     match inst:
         # Slot access — SlotStore reads `value`; SlotLoad/SlotAddr read nothing.
@@ -6519,7 +6519,7 @@ Vector[Vector[int]] coal_compute_live_blocks(LirFunction &func, Vector[bool] &v_
         int ii = 0
         while ii < blk.insts.len():
             LirInst inst = blk.insts.get(ii).unwrap()
-            Vector[int] uses = inst_uses(&inst)
+            Vector[int] uses = inst_uses(inst)
             int ui = 0
             while ui < uses.len():
                 int k = uses.get(ui).unwrap()
@@ -6631,7 +6631,7 @@ bool coal_set_eq(Dict[int, bool] &a, Dict[int, bool] &b):
     return true
 
 # Whether two ascending block-index lists are DISJOINT (share no element).
-bool coal_disjoint(Vector[int] &a, Dict[int, bool] &b_set):
+bool coal_disjoint(Vector[int] a, Dict[int, bool] b_set):
     int i = 0
     while i < a.len():
         if b_set.contains(a.get(i).unwrap()):
@@ -6751,7 +6751,7 @@ Vector[int] coalesce_assign(LirFunction &func, int max_val, Vector[bool] &v_used
             int s = 0
             while s < slot_type.len():
                 if slot_type.get(s).unwrap() == ty:
-                    if coal_disjoint(&lb, &slot_live.get(s).unwrap()):
+                    if coal_disjoint(lb, slot_live.get(s).unwrap()):
                         # Merge lb into this slot's live-set and place here.
                         int li = 0
                         while li < lb.len():
