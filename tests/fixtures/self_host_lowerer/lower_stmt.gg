@@ -1677,7 +1677,7 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
                         # setter call does — NEVER OpBorrow a ptr slot (that is a
                         # pointer-to-pointer).
                         Operand fpb_base_op = OpBorrow(fpb_base)
-                        if is_ptr_type(fpb_base_tid, &gmod):
+                        if is_ptr_type(fpb_base_tid, gmod):
                             fpb_base_op = OpCopy(fpb_base)
                         # dst = gorget_array_get(base, idx) typed GtPtr(elem) +
                         # LoBorrowed — a pointer INTO the buffer. The GtPtr dst
@@ -1767,7 +1767,7 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
     ctx.expected_type = prev_expected_fw
     String write_fn = "__field_write_" + base_type_name + "_" + field_name
     Vector[Operand] write_args = []
-    bool base_is_ptr = is_ptr_type(base_tid, &gmod)
+    bool base_is_ptr = is_ptr_type(base_tid, gmod)
     if base_is_ptr:
         write_args.push(OpCopy(base))
     else:
@@ -1824,7 +1824,7 @@ void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String fi
             pass
     String write_fn = "__field_write_" + base_type_name + "_" + field_name
     Vector[Operand] write_args = []
-    bool base_is_ptr = is_ptr_type(base_tid, &gmod)
+    bool base_is_ptr = is_ptr_type(base_tid, gmod)
     if base_is_ptr:
         write_args.push(OpCopy(base))
     else:
@@ -1990,7 +1990,7 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
         String ia_set_full = base_tname + "__set"
         if gmod.fn_sigs.contains(ia_set_full):
             Operand ia_set_self = OpBorrow(base)
-            if is_ptr_type(base_tid, &gmod):
+            if is_ptr_type(base_tid, gmod):
                 ia_set_self = OpCopy(base)
             Vector[Operand] ia_set_args = [ia_set_self, op_consume(&ctx, &gmod, idx, classify_call_arg(&gmod, ia_set_full, 1)), op_consume(&ctx, &gmod, val, classify_call_arg(&gmod, ia_set_full, 2))]
             emit(&ctx, GICallExtern(-1, ia_set_full, ia_set_args))
@@ -2009,7 +2009,7 @@ void lower_index_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedExpr idx_ex
     # live), which clones-and-discards the base and never mutates the
     # original (the d[k]=v clone-bomb: every assign mutated a throwaway).
     Operand base_op = OpBorrow(base)
-    if is_ptr_type(base_tid, &gmod):
+    if is_ptr_type(base_tid, gmod):
         base_op = OpCopy(base)
     # `base[idx] = val` → setter(base, idx, val): the collection takes
     # ownership of BOTH key/idx AND val (consuming position per CLAUDE.md).
@@ -2102,7 +2102,7 @@ void lower_index_compound_assign(LowerCtx &ctx, SpannedExpr base_expr, SpannedEx
     # never consumes the base — borrow it (Ptr base → OpCopy), exactly as
     # lower_index_assign does.
     Operand ica_base_op = OpBorrow(base)
-    if is_ptr_type(base_tid, &gmod):
+    if is_ptr_type(base_tid, gmod):
         ica_base_op = OpCopy(base)
     Vector[Operand] ica_set_args = [ica_base_op, op_consume(&ctx, &gmod, idx, CkCallArgOwning()), op_consume(&ctx, &gmod, ica_result, CkCallArgOwning())]
     emit(&ctx, GICallExtern(-1, ica_setter, ica_set_args))

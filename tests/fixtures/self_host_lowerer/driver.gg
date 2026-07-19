@@ -506,15 +506,15 @@ void compile_main():
             # matching Rust's splice boundary (the runtime precedes the body's
             # user typedefs). No external splice needed downstream.
             Dict[String, String] _embedded = build_embedded_runtime()
-            String _pre = emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit)
-            String _body = generate_c(&lir)
+            String _pre = emit_runtime_preamble(lir, runtime_dir, _embedded, runtime_dir_explicit)
+            String _body = generate_c(lir)
             _t1 = time_ms()
             if _timing: print("PHASE generate_c " + int_to_str(_t1 - _tp) + " ms", file=stderr)
             _tp = _t1
             if _timing: print("PHASE TOTAL " + int_to_str(_t1 - _t0) + " ms", file=stderr)
             print(_pre + _body)
         else:
-            String _c = generate_c(&lir)
+            String _c = generate_c(lir)
             _t1 = time_ms()
             if _timing: print("PHASE generate_c " + int_to_str(_t1 - _tp) + " ms", file=stderr)
             _tp = _t1
@@ -702,17 +702,17 @@ void run_build_mode(Vector[String] cmd_args, bool do_run):
     # the full program (preamble + body) and stop. Both skip cc/link, matching
     # the legacy path's --lir-c/--emit-c (:220-238) + Rust's dump-and-exit.
     if emit_c_body:
-        print(generate_c(&lir))
+        print(generate_c(lir))
         return
     # Inc-2: the embedded runtime table (consulted by read_runtime when no
     # explicit --runtime-dir/GG_RUNTIME_DIR forces a disk read). Built once for
     # both the --emit-c dump and the cc/link path below.
     Dict[String, String] _embedded = build_embedded_runtime()
     if emit_c_full:
-        print(emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit) + generate_c(&lir))
+        print(emit_runtime_preamble(lir, runtime_dir, _embedded, runtime_dir_explicit) + generate_c(lir))
         return
     # Emit full C (runtime preamble + body).
-    String full_c = emit_runtime_preamble(&lir, runtime_dir, &_embedded, runtime_dir_explicit) + generate_c(&lir)
+    String full_c = emit_runtime_preamble(lir, runtime_dir, _embedded, runtime_dir_explicit) + generate_c(lir)
 
     # ── Write C → temp file ──────────────────────────────────────────────────
     write_file(c_path, full_c)

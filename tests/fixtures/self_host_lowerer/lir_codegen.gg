@@ -458,7 +458,7 @@ Vector[int] topo_sort_structs(LirModule m):
 
 # ── Struct emission ────────────────────────────────────────
 
-String emit_structs(LirModule &m, Vector[String] &sn):
+String emit_structs(LirModule m, Vector[String] sn):
     StrBuf buf = sb_new()
     Vector[int] order = topo_sort_structs(m)
 
@@ -548,7 +548,7 @@ String emit_structs(LirModule &m, Vector[String] &sn):
                 if icount == 1:
                     int fidx = variant_indices.get(start).unwrap()
                     StructField f = sdef.fields.get(fidx).unwrap()
-                    String fty = field_type_str(f.ty, &sn)
+                    String fty = field_type_str(f.ty, sn)
                     sb_push(&buf, "        ")
                     sb_push(&buf, fty)
                     sb_push(&buf, " ")
@@ -564,7 +564,7 @@ String emit_structs(LirModule &m, Vector[String] &sn):
                     while ii < end:
                         int fidx = variant_indices.get(ii).unwrap()
                         StructField f = sdef.fields.get(fidx).unwrap()
-                        String fty = field_type_str(f.ty, &sn)
+                        String fty = field_type_str(f.ty, sn)
                         sb_push(&buf, "            ")
                         sb_push(&buf, fty)
                         sb_push(&buf, " ")
@@ -580,7 +580,7 @@ String emit_structs(LirModule &m, Vector[String] &sn):
             int fi = 0
             while fi < sdef.fields.len():
                 StructField f = sdef.fields.get(fi).unwrap()
-                String fty = field_type_str(f.ty, &sn)
+                String fty = field_type_str(f.ty, sn)
                 sb_push(&buf, "    ")
                 sb_push(&buf, fty)
                 sb_push(&buf, " ")
@@ -602,14 +602,14 @@ String field_variant_prefix(String fname):
     return fname
 
 # Type string for a struct field (Void → uint8_t placeholder).
-String field_type_str(int ty, Vector[String] &sn):
+String field_type_str(int ty, Vector[String] sn):
     if ty == LT_VOID:
         return "uint8_t"
     return c_type_name(ty, sn)
 
 # ── Extern declarations ────────────────────────────────────
 
-String emit_externs(LirModule &m, Vector[String] &sn):
+String emit_externs(LirModule m, Vector[String] sn):
     String out = ""
     # CoW for-element BORROW scan (no LirExtern__clone): reads ext fields only.
     for ext in m.externs:
@@ -751,7 +751,7 @@ String box_alloc_for_field_type(String ftn, Vector[String] &seen, String emit_pr
     String c_ty = box_alloc_c_type(inner)
     return "static inline void* " + emit_prefix + inner + "(" + c_ty + " val) { " + c_ty + "* p = (" + c_ty + "*)GORGET_ALLOC(sizeof(" + c_ty + ")); *p = val; return (void*)p; }\n"
 
-String emit_box_allocators_from_lir(LirModule &m):
+String emit_box_allocators_from_lir(LirModule m):
     Vector[String] seen = []
     String out = ""
     String emit_prefix = "__gorget_box_alloc_"
@@ -936,7 +936,7 @@ String emit_box_method_wrappers(LirModule m):
 # signature and returns the call (`src/bir/synth.rs:emit_trait_helper_body`,
 # `((Str(*)(void*))fnp)(data)` + `return`). The prior void-only shape returned
 # int64_t/0 for EVERY method, so a String/pointer return derefed 0 → crash.
-String emit_trait_dispatch_thunks(LirModule m, Vector[String] &sn):
+String emit_trait_dispatch_thunks(LirModule m, Vector[String] sn):
     String out = ""
     for req in m.trait_dispatch_requests:
         # `box_sym` is the symbol the CALL site names (`Box__<Trait>__<method>`);
@@ -1106,7 +1106,7 @@ String emit_shared_method_wrappers(LirModule m):
 # routing returns by name. `map`/`key`/`default` arrive by value (the call ABI
 # passes the GorgetMap struct + scalar key + scalar/Str default), so `&map` and
 # `&key` reach valid addresses for the runtime `const void*` ABI.
-String emit_dict_get_or_wrappers(LirModule &m):
+String emit_dict_get_or_wrappers(LirModule m):
     # Read the TYPED monomorphization-request registry (populated upstream at
     # the classified `coll_cat == "GorgetMap"` + get_or site in
     # map_runtime_name). NO instruction scan, NO `starts_with` routing — the
@@ -1115,7 +1115,7 @@ String emit_dict_get_or_wrappers(LirModule &m):
     # Mirrors the thread_spawned_fns / test_fns codegen read pattern.
     String out = ""
     for dgor_req in m.dict_get_or_requests:
-        out = out + dict_get_or_wrapper_for(dgor_req, &m)
+        out = out + dict_get_or_wrapper_for(dgor_req, m)
     if out != "":
         out = out + "\n"
     return out
@@ -1126,7 +1126,7 @@ String emit_dict_get_or_wrappers(LirModule &m):
 # (read from coll_key/val_type_map upstream — never parsed from the symbol).
 # Dedup happened at the write site (one request per mangled name), so every
 # request emits exactly one wrapper.
-String dict_get_or_wrapper_for(DictGetOrReq req, LirModule &m):
+String dict_get_or_wrapper_for(DictGetOrReq req, LirModule m):
     String kty = box_alloc_c_type(req.key_c)
     # For a runtime-backed value type (Vector→GorgetArray, Dict→GorgetMap,
     # Set→GorgetSet) `box_alloc_c_type` yields the WRONG `__gg_<mangled>` name
@@ -1189,7 +1189,7 @@ String dict_get_or_wrapper_for(DictGetOrReq req, LirModule &m):
 
 # ── Globals ────────────────────────────────────────────────
 
-String emit_globals(LirModule m, Vector[String] &sn):
+String emit_globals(LirModule m, Vector[String] sn):
     String out = ""
     int i = 0
     while i < m.globals.len():
@@ -1241,7 +1241,7 @@ String emit_globals(LirModule m, Vector[String] &sn):
 # cast (`emit_types.rs:656-658`), and a vtable slot is a direct fn pointer,
 # not a closure. Routing through the adapter would diverge from Rust AND
 # perturb the adapter-function path.
-String emit_deferred_globals(LirModule m, Vector[String] &sn):
+String emit_deferred_globals(LirModule m, Vector[String] sn):
     String out = ""
     int i = 0
     while i < m.globals.len():
@@ -1320,7 +1320,7 @@ Vector[String] collect_box_trait_drop_inners(LirModule m):
     sort_strings_in_place(&inners)
     return inners
 
-String emit_box_trait_drop_decls(LirModule &m):
+String emit_box_trait_drop_decls(LirModule m):
     Vector[String] inners = collect_box_trait_drop_inners(m)
     String out = ""
     for decl_inner in inners:
@@ -1329,7 +1329,7 @@ String emit_box_trait_drop_decls(LirModule &m):
         out = out + "\n"
     return out
 
-String emit_box_trait_drop_wrappers(LirModule &m):
+String emit_box_trait_drop_wrappers(LirModule m):
     Vector[String] inners = collect_box_trait_drop_inners(m)
     String out = ""
     for wrap_inner in inners:
@@ -1427,7 +1427,7 @@ String emit_string_lits(Vector[StringLitEntry] entries):
 # Compute reachable function set. Returns Vector[bool] indexed by fid.
 # `reachable[fid] == true` iff fid is reachable from a root via ICall /
 # ICallExtern (by name) / IClosurePack chains.
-Vector[bool] compute_reachable_fns(LirModule &m):
+Vector[bool] compute_reachable_fns(LirModule m):
     int n = m.functions.len()
     Vector[bool] reachable = []
     int ri = 0
@@ -1510,7 +1510,7 @@ Vector[bool] compute_reachable_fns(LirModule &m):
     # runtime name (`gorget_dict_new` etc.) so we don't accidentally seed
     # roots from method calls (`Dict__K__V__put`) which share the
     # `Dict__` prefix.
-    Vector[String] hashable_keys = collect_hashable_key_types(&m)
+    Vector[String] hashable_keys = collect_hashable_key_types(m)
     int hk_i = 0
     while hk_i < hashable_keys.len():
         String key_ty = hashable_keys.get(hk_i).unwrap()
@@ -1810,7 +1810,7 @@ String lc_coll_elem_lookup(String name, LirModule m):
         i += 1
     return ""
 
-String extract_user_hashable_key(String orig_name, LirModule &m):
+String extract_user_hashable_key(String orig_name, LirModule m):
     String key_ty = lc_coll_key_lookup(orig_name, m)
     if key_ty != "":
         if is_primitive_hashable_key(key_ty):
@@ -1854,7 +1854,7 @@ Vector[String] hashable_key_fn_names(LirModule m, String type_c):
     return result
 
 # Walk LIR and collect every user-struct key used in a Dict/Set ctor.
-Vector[String] collect_hashable_key_types(LirModule &m):
+Vector[String] collect_hashable_key_types(LirModule m):
     Vector[String] keys = []
     int fi = 0
     while fi < m.functions.len():
@@ -1877,7 +1877,7 @@ Vector[String] collect_hashable_key_types(LirModule &m):
                     else:
                         pass
                 if is_runtime_dict_or_set_ctor(mapped_name) and orig_name.len() > 0:
-                    String key_ty = extract_user_hashable_key(orig_name, &m)
+                    String key_ty = extract_user_hashable_key(orig_name, m)
                     if key_ty.len() > 0:
                         bool already = false
                         int hki = 0
@@ -1897,8 +1897,8 @@ Vector[String] collect_hashable_key_types(LirModule &m):
 # T__hash / T__eq are actually resolvable in the module — keys without
 # a Hashable+Equatable impl get omitted (the runtime falls back to
 # byte-FNV / memcmp for those, which is the only sensible default).
-String emit_hashable_key_bridges(LirModule &m):
-    Vector[String] keys = collect_hashable_key_types(&m)
+String emit_hashable_key_bridges(LirModule m):
+    Vector[String] keys = collect_hashable_key_types(m)
     String out = ""
     int ki = 0
     while ki < keys.len():
@@ -1918,12 +1918,12 @@ String emit_hashable_key_bridges(LirModule &m):
 # whether this call is a constructor at all (vs. `__put` / `__contains`
 # which share the `Dict__` prefix), and the original supplies the key
 # type after `map_mono_to_runtime` collapsed it away.
-String emit_dict_ctor_wiring(int dst, String mapped_name, String original_name, LirModule &m):
+String emit_dict_ctor_wiring(int dst, String mapped_name, String original_name, LirModule m):
     if dst < 0 or original_name.len() == 0:
         return ""
     if not is_runtime_dict_or_set_ctor(mapped_name):
         return ""
-    String key_ty = extract_user_hashable_key(original_name, &m)
+    String key_ty = extract_user_hashable_key(original_name, m)
     if key_ty.len() == 0:
         return ""
     Vector[String] names = hashable_key_fn_names(m, key_ty)
@@ -2052,7 +2052,7 @@ String lc_collection_clone_fn(String type_name, LirModule m):
 # runtime + `recursive_drop_structs/enums` + `drop_collision_types`). Returns ""
 # when the field type owns nothing droppable (plain struct/scalar) — the caller
 # then emits no drop. TYPED resolution end-to-end; no field/type name matching.
-String field_drop_fn_for_lir_type(int field_ty, LirModule &m):
+String field_drop_fn_for_lir_type(int field_ty, LirModule m):
     if field_ty < LT_STRUCT_BASE:
         return ""
     int fsid = field_ty - LT_STRUCT_BASE
@@ -2078,7 +2078,7 @@ bool is_runtime_array_ctor(String mapped_name):
 # sees NULL and never frees overwritten/freed resource elements — the
 # ~13 GB driver.gg OOM on Vector[Vector[int]] / Vector[LirFunction]
 # loop-reassignment.
-String emit_collection_elem_wiring(int dst, String mapped_name, String original_name, LirModule &m, Vector[String] &sn):
+String emit_collection_elem_wiring(int dst, String mapped_name, String original_name, LirModule m, Vector[String] sn):
     if dst < 0 or original_name.len() == 0:
         return ""
     String dv = v(dst)
@@ -2118,7 +2118,7 @@ String emit_collection_elem_wiring(int dst, String mapped_name, String original_
         int sized_sep = find_substr(sized_rest, "__GGSEP__")
         if sized_sep > 0:
             String sized_v_tok = sized_rest.slice(sized_sep + 9, sized_rest.len())
-            String sized_v_ty = resolve_sizeof_c_type(sized_v_tok, &m, &sn)
+            String sized_v_ty = resolve_sizeof_c_type(sized_v_tok, m, sn)
             String sized_vdf = lc_collection_drop_fn(sized_v_ty, m)
             String sized_vcf = lc_collection_clone_fn(sized_v_ty, m)
             if sized_vdf.len() > 0 and sized_vcf.len() > 0:
@@ -2126,8 +2126,8 @@ String emit_collection_elem_wiring(int dst, String mapped_name, String original_
                 w = w + " " + dv + ".val_clone = (__gorget_drop_fn)" + sized_vcf + ";"
     return w
 
-String emit_func_forward_decls(LirModule &m, Vector[String] &sn):
-    Vector[bool] reachable_fwd = compute_reachable_fns(&m)
+String emit_func_forward_decls(LirModule m, Vector[String] sn):
+    Vector[bool] reachable_fwd = compute_reachable_fns(m)
     StrBuf buf = sb_new()
     int i = 0
     while i < m.functions.len():
@@ -2191,7 +2191,7 @@ Dict[int, bool] collect_func_addr_targets(LirModule m):
         fi += 1
     return targets
 
-String emit_adapter_functions(LirModule m, Vector[String] &sn, Dict[int, bool] targets):
+String emit_adapter_functions(LirModule m, Vector[String] sn, Dict[int, bool] targets):
     String out = ""
     int fi = 0
     while fi < m.functions.len():
@@ -2257,7 +2257,7 @@ String emit_adapter_functions(LirModule m, Vector[String] &sn, Dict[int, bool] t
 # Rust gg's emit_thread_helpers `resolve_type` (emit_types.rs) — the SYMBOL
 # names stay on the language-level name (they must match the call sites), only
 # the field/return C TYPE is resolved.
-String thread_payload_c_type(String name, LirModule &m, Vector[String] sn):
+String thread_payload_c_type(String name, LirModule m, Vector[String] sn):
     String rt = mono_wrapper_runtime_type(name, m)
     if rt != "":
         return rt
@@ -2268,7 +2268,7 @@ String thread_payload_c_type(String name, LirModule &m, Vector[String] sn):
         tp_i += 1
     return name
 
-String emit_thread_helpers(LirModule &m, Vector[String] &sn):
+String emit_thread_helpers(LirModule m, Vector[String] sn):
     if m.thread_spawned_fns.len() == 0:
         return ""
     String out = "\n/* ── Thread[T] wrappers ── */\n"
@@ -2292,7 +2292,7 @@ String emit_thread_helpers(LirModule &m, Vector[String] &sn):
             continue
         emitted_thread_types.push(thread_name.clone())
         String ctx_type = "__GorgetThread__" + ret_name
-        String ret_c = thread_payload_c_type(ret_name, &m, sn)
+        String ret_c = thread_payload_c_type(ret_name, m, sn)
         if is_void:
             out = out + "typedef struct { pthread_t _thr; } " + ctx_type + ";\n"
         else:
@@ -2577,7 +2577,7 @@ String emit_spawn_helpers(LirModule m):
 # Emit a single variant-payload argument, coercing if the arg's value type
 # differs from the expected field type (e.g. Result aggregate at a scalar
 # int field — lossy self-host lowering).
-String emit_variant_arg(int arg_id, Vector[int] field_tys, int idx, Dict[int, int] val_types, Vector[String] &sn, LirModule m):
+String emit_variant_arg(int arg_id, Vector[int] field_tys, int idx, Dict[int, int] val_types, Vector[String] sn, LirModule m):
     int expected = -1
     if idx < field_tys.len():
         expected = field_tys.get(idx).unwrap()
@@ -2841,7 +2841,7 @@ bool runtime_takes_str_by_value(String name):
         return true
     return false
 
-int runtime_fn_return_type(String name, LirModule &m):
+int runtime_fn_return_type(String name, LirModule m):
     # Typed container allocators (`Vector[T] x = []`, `Dict[K,V] x = {}`)
     # expand at C emission to gorget_array_new(sizeof(T)) / gorget_map_new;
     # report the same return types so the caller's slot gets the right
@@ -3258,7 +3258,7 @@ String runtime_category_to_c_type(String runtime):
 #   2. Primitives / well-known C types (int64_t, double, bool, …) pass through.
 #   3. User structs registered in m.structs → their emitted C name
 #      (typically `__gg_<TypeName>`), via find_c_struct_name.
-String resolve_sizeof_c_type(String tyname, LirModule &m, Vector[String] &sn):
+String resolve_sizeof_c_type(String tyname, LirModule m, Vector[String] sn):
     if tyname == "String":
         return "GorgetString"
     # Phase A — look up runtime category from type_runtime_map; convert to C type.
@@ -3270,9 +3270,9 @@ String resolve_sizeof_c_type(String tyname, LirModule &m, Vector[String] &sn):
         if c_ty != "":
             return c_ty
     # Fall through to struct-registry lookup for user types and runtime aliases.
-    return find_c_struct_name(tyname, m, &sn)
+    return find_c_struct_name(tyname, m, sn)
 
-String find_c_struct_name(String name, LirModule m, Vector[String] &sn):
+String find_c_struct_name(String name, LirModule m, Vector[String] sn):
     # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only;
     # enumerate() preserves the index for LT_STRUCT_BASE + i.
     for (i, sdef) in m.structs.enumerate():
@@ -3325,7 +3325,7 @@ int lir_struct_field_index(int sid, String field, LirModule m):
     return -1
 
 # Infer the result type of an LIR instruction.
-int infer_inst_type_with_ret(LirInst inst, LirModule &m, Dict[int, int] val_types, int func_ret_ty):
+int infer_inst_type_with_ret(LirInst inst, LirModule m, Dict[int, int] val_types, int func_ret_ty):
     match inst:
         case ISlotLoad(_, _, ty):
             return ty
@@ -3661,12 +3661,12 @@ int infer_inst_type_with_ret(LirInst inst, LirModule &m, Dict[int, int] val_type
                         return LT_STRUCT_BASE + si
                 # Check runtime function return types (both raw and
                 # post-mapping — int64_t__char_at → gorget_str_char_at).
-                int rt_ret = runtime_fn_return_type(name, &m)
+                int rt_ret = runtime_fn_return_type(name, m)
                 if rt_ret != LT_VOID:
                     return rt_ret
                 String mapped_name = map_mono_to_runtime(name, m)
                 if mapped_name != name:
-                    int rt_ret2 = runtime_fn_return_type(mapped_name, &m)
+                    int rt_ret2 = runtime_fn_return_type(mapped_name, m)
                     if rt_ret2 != LT_VOID:
                         return rt_ret2
                 # Look up extern return type.
@@ -3751,7 +3751,7 @@ int prov_tag_of_value(int val_id, Dict[int, int] val_to_slot, LirFunction func):
             return 2
 
 # Compute value types for all values in a function.
-Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
+Dict[int, int] compute_val_types(LirFunction func, LirModule m):
     Dict[int, int] types = {}
     int bi = 0
     while bi < func.blocks.len():
@@ -3767,7 +3767,7 @@ Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
         while ii < func.blocks.get(bi).unwrap().insts.len():
             int dst = inst_dst(func.blocks.get(bi).unwrap().insts.get(ii).unwrap())
             if dst >= 0:
-                int ty = infer_inst_type_with_ret(func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), &m, types, func.return_type)
+                int ty = infer_inst_type_with_ret(func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), m, types, func.return_type)
                 types.put(dst, ty)
             ii += 1
         bi += 1
@@ -3782,7 +3782,7 @@ Dict[int, int] compute_val_types(LirFunction &func, LirModule &m):
     # struct), prefer the slot type. The slot type comes from GIR via
     # SSA construction and is authoritative for STRUCT slots; the extern
     # name carries no type info on its own.
-    apply_callextern_slotstore_override(func, &m, &types)
+    apply_callextern_slotstore_override(func, m, &types)
     return types
 
 # Find the GorgetString struct id (-1 if not registered).
@@ -3826,7 +3826,7 @@ bool lir_ty_is_str_raw(int ty, int str_sid):
 # be wrong, so leave val_types intact and let the existing
 # ISlotStore scalar-slot-receiving-aggregate-value path emit a
 # zero-init fallback (pre-existing behaviour preserved).
-void apply_callextern_slotstore_override(LirFunction func, LirModule &m, Dict[int, int] &types):
+void apply_callextern_slotstore_override(LirFunction func, LirModule m, Dict[int, int] &types):
     int str_sid = gorget_string_struct_id(m)
     int bi = 0
     while bi < func.blocks.len():
@@ -4179,7 +4179,7 @@ String s(int id): "__s" + int_to_str(id)
 # Build the C lvalue expression for `base->field` given a struct id and
 # field index. Mirrors IFieldPtr's address-of logic but returns the lvalue
 # itself (no `&`), so composable into stores.
-String field_access_lvalue(String base, int struct_id, int field, LirModule m, Vector[String] &sn):
+String field_access_lvalue(String base, int struct_id, int field, LirModule m, Vector[String] sn):
     if struct_id >= 0 and struct_id < m.structs.len():
         LirStructDef sdef = m.structs.get(struct_id).unwrap()
         String sname = c_type_name(LT_STRUCT_BASE + struct_id, sn)
@@ -4203,8 +4203,8 @@ String field_access_lvalue(String base, int struct_id, int field, LirModule m, V
 
 # Emit a single field store: `lvalue = value;` or memcpy for aggregates.
 # Used by IStructInit / IEnumInit expansion.
-String emit_field_store(String target_v, int struct_id, int field, int value, LirModule &m, Vector[String] &sn, Dict[int, int] val_types):
-    String lval = field_access_lvalue(target_v, struct_id, field, m, &sn)
+String emit_field_store(String target_v, int struct_id, int field, int value, LirModule m, Vector[String] sn, Dict[int, int] val_types):
+    String lval = field_access_lvalue(target_v, struct_id, field, m, sn)
     int vty = LT_VOID
     if val_types.contains(value):
         vty = val_types.get(value).unwrap()
@@ -4286,9 +4286,9 @@ String signed_int_min_literal(int ty):
         return "INT64_MIN"
     return ""
 
-String emit_inst(LirInst inst, LirModule &m, LirFunction &func, Vector[String] &sn,
-                 Dict[int, int] &val_types, Dict[String, int] slit_map,
-                 Dict[int, int] &val_to_slot):
+String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
+                 Dict[int, int] val_types, Dict[String, int] slit_map,
+                 Dict[int, int] val_to_slot):
     match inst:
         # ── Slot access ──
         case ISlotStore(slot, value, is_move):
@@ -4692,7 +4692,7 @@ String emit_inst(LirInst inst, LirModule &m, LirFunction &func, Vector[String] &
                 FieldInit finit = fields.get(fi).unwrap()
                 if fi > 0:
                     out = out + " "
-                out = out + emit_field_store(target_v, struct_id, finit.index, finit.value, &m, &sn, val_types)
+                out = out + emit_field_store(target_v, struct_id, finit.index, finit.value, m, sn, val_types)
                 fi += 1
             if out == "":
                 out = "/* empty struct init */;"
@@ -4701,12 +4701,12 @@ String emit_inst(LirInst inst, LirModule &m, LirFunction &func, Vector[String] &
         # Canonical enum-init: write tag at field 0, then each payload field.
         case IEnumInit(target, struct_id, variant_tag, fields):
             String target_v = v(target)
-            String tag_lval = field_access_lvalue(target_v, struct_id, 0, m, &sn)
+            String tag_lval = field_access_lvalue(target_v, struct_id, 0, m, sn)
             String out = tag_lval + " = (int32_t)" + int_to_str(variant_tag) + ";"
             int fi = 0
             while fi < fields.len():
                 FieldInit finit = fields.get(fi).unwrap()
-                out = out + " " + emit_field_store(target_v, struct_id, finit.index, finit.value, &m, &sn, val_types)
+                out = out + " " + emit_field_store(target_v, struct_id, finit.index, finit.value, m, sn, val_types)
                 fi += 1
             return out
 
@@ -4751,7 +4751,7 @@ String emit_inst(LirInst inst, LirModule &m, LirFunction &func, Vector[String] &
                 # If this is actually an enum variant constructor, route
                 # through emit_call_extern which handles inline struct init.
                 if m.enum_variant_parent.contains(m.functions.get(fid).unwrap().name):
-                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, &args, &sn, &val_types, &m, func.return_type)
+                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, args, sn, val_types, m, func.return_type)
                 # Box(x) / Box__TYPE(x) also routes through emit_call_extern.
                 # Phase A — Box type detected via type_runtime_map "Box" category.
                 bool is_box_callee = m.functions.get(fid).unwrap().name == "Box"
@@ -4759,12 +4759,12 @@ String emit_inst(LirInst inst, LirModule &m, LirFunction &func, Vector[String] &
                     if m.type_runtime_map.get(m.functions.get(fid).unwrap().name).unwrap_or("") == "Box":
                         is_box_callee = true
                 if is_box_callee:
-                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, &args, &sn, &val_types, &m, func.return_type)
+                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, args, sn, val_types, m, func.return_type)
                 # Prelude Option/Result variant constructors — pulled from
                 # user-code even if unrecognized in type_infos. The codegen
                 # uses dst type to resolve parametrization.
                 if m.functions.get(fid).unwrap().name == "Some" or m.functions.get(fid).unwrap().name == "None" or m.functions.get(fid).unwrap().name == "Ok" or m.functions.get(fid).unwrap().name == "Error":
-                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, &args, &sn, &val_types, &m, func.return_type)
+                    return emit_call_extern_with(dst, m.functions.get(fid).unwrap().name, args, sn, val_types, m, func.return_type)
                 String fname = c_func_name(m.functions.get(fid).unwrap().name)
                 int gs_ty = find_struct_type("GorgetString", m)
                 String out = ""
@@ -4821,16 +4821,16 @@ String emit_inst(LirInst inst, LirModule &m, LirFunction &func, Vector[String] &
             return "/* unknown call */;"
 
         case ICallExtern(dst, name, args, original_name, arg_abis):
-            String ce_call = emit_call_extern_with(dst, name, &args, &sn, &val_types, &m, func.return_type)
+            String ce_call = emit_call_extern_with(dst, name, args, sn, val_types, m, func.return_type)
             # Append per-call ctor wiring for `Dict[UserStruct, V]` /
             # `Set[UserStruct]` so user hash/eq are dispatched via the
             # bridge fn pointers rather than byte-FNV / memcmp. The
             # mapped `name` gates ctor-vs-method; `original_name` carries
             # the unmangled key type.
-            String ce_wiring = emit_dict_ctor_wiring(dst, name, original_name, &m)
+            String ce_wiring = emit_dict_ctor_wiring(dst, name, original_name, m)
             # Vector/array element + Dict value drop+clone fn-ptr wiring
             # (closes the elaborate_drops collection-element leak).
-            String ce_elem_wiring = emit_collection_elem_wiring(dst, name, original_name, &m, &sn)
+            String ce_elem_wiring = emit_collection_elem_wiring(dst, name, original_name, m, sn)
             return ce_call + ce_wiring + ce_elem_wiring
 
         case ICallPtr(dst, callee, args):
@@ -5057,14 +5057,14 @@ int combinator_field_lir_type(int struct_ty, int field_idx, LirModule m):
 # The C type-name for the variant payload at `field_idx` of `struct_ty`,
 # falling back to "void*" when the field type is unknown (preserves the old
 # behaviour for any combinator whose dst/src type didn't resolve).
-String combinator_field_c_type(int struct_ty, int field_idx, Vector[String] &sn, LirModule &m):
+String combinator_field_c_type(int struct_ty, int field_idx, Vector[String] sn, LirModule m):
     int fty = combinator_field_lir_type(struct_ty, field_idx, m)
     if fty == LT_VOID:
         return "void*"
     return c_type_name(fty, sn)
 
 String emit_option_result_combinator(int dst, String name, Vector[int] args,
-                                      Vector[String] &sn, Dict[int, int] val_types, LirModule &m):
+                                      Vector[String] sn, Dict[int, int] val_types, LirModule m):
     if args.len() == 0:
         return "/* bad option/result combinator */;"
     int src_id = args.get(0).unwrap()
@@ -5090,11 +5090,11 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
         dst_ty = val_types.get(dst).unwrap()
     # src payload (the closure's INPUT for map/filter/and_then; the err payload
     # for map_err/or_else on Result is field idx 2).
-    String src_pay_c = combinator_field_c_type(src_ty, 1, &sn, &m)
-    String src_err_c = combinator_field_c_type(src_ty, 2, &sn, &m)
+    String src_pay_c = combinator_field_c_type(src_ty, 1, sn, m)
+    String src_err_c = combinator_field_c_type(src_ty, 2, sn, m)
     # dst payload (the closure's OUTPUT for map; the Error payload for map_err).
-    String dst_pay_c = combinator_field_c_type(dst_ty, 1, &sn, &m)
-    String dst_err_c = combinator_field_c_type(dst_ty, 2, &sn, &m)
+    String dst_pay_c = combinator_field_c_type(dst_ty, 1, sn, m)
+    String dst_err_c = combinator_field_c_type(dst_ty, 2, sn, m)
     # dst whole-struct C name (the closure's OUTPUT for and_then/or_else).
     String dst_c = "void*"
     if dst_ty >= LT_STRUCT_BASE:
@@ -5170,7 +5170,7 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
                     if rc_sid >= 0 and rc_sid < m.structs.len():
                         LirStructDef rc_def = m.structs.get(rc_sid).unwrap()
                         if rc_def.fields.len() >= 3:
-                            String rc_efty = field_type_str(rc_def.fields.get(2).unwrap().ty, &sn)
+                            String rc_efty = field_type_str(rc_def.fields.get(2).unwrap().ty, sn)
                             if rc_efty == "Str" or rc_efty == "GorgetString":
                                 return ue_guard + v(dst) + " = gorget_string_clone_to_owned(&" + rc_cast + "->Error_0);"
                     return ue_guard + v(dst) + " = " + rc_cast + "->Error_0;"
@@ -5319,8 +5319,8 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
     # Fallback: unknown combinator, emit as regular call (will link-fail)
     return name + "(" + src + "); /* unknown combinator */"
 
-String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
-                             Vector[String] &sn, Dict[int, int] &val_types, LirModule &m,
+String emit_call_extern_with(int dst, String raw_name, Vector[int] args,
+                             Vector[String] sn, Dict[int, int] val_types, LirModule m,
                              int func_ret_ty):
     # Map monomorphized names to runtime names.
     String name = map_mono_to_runtime(raw_name, m)
@@ -5463,7 +5463,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     # Tag is int32_t at offset 0. Tag==0 means Some/Ok, tag!=0 means None/Error.
     # Payload follows at offset 4+ (accessed via struct field names).
     if name.starts_with("__option_") or name.starts_with("__result_"):
-        return emit_option_result_combinator(dst, name, args, &sn, val_types, &m)
+        return emit_option_result_combinator(dst, name, args, sn, val_types, m)
 
     # ── Closure construction: __make_closure_N() → (GorgetClosure){fn, NULL} ──
     if name.starts_with("__make_closure_"):
@@ -5517,7 +5517,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                     field_w = rest_w.slice(sep_w + 1, rest_w.len())
                     sid_w = find_struct_type(struct_name_w, m) - LT_STRUCT_BASE
             if struct_name_w != "":
-                String c_struct_w = find_c_struct_name(struct_name_w, m, &sn)
+                String c_struct_w = find_c_struct_name(struct_name_w, m, sn)
                 String c_field_w = c_field_name(field_w)
                 String lval_w = "((" + c_struct_w + "*)" + v(base_val) + ")->" + c_field_w
                 int val_ty_w = LT_VOID
@@ -5547,7 +5547,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                 # need no drop.
                 String fw_drop_pre = ""
                 if lir_is_aggregate(field_ty_w):
-                    String fw_drop_fn = field_drop_fn_for_lir_type(field_ty_w, &m)
+                    String fw_drop_fn = field_drop_fn_for_lir_type(field_ty_w, m)
                     if fw_drop_fn.len() > 0:
                         fw_drop_pre = fw_drop_fn + "(&" + lval_w + "); "
                 # Aggregate field + aggregate value → memcpy from &value.
@@ -5614,10 +5614,10 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                         found = fi
                     fi += 1
                 if found >= 0:
-                    String lval = field_access_lvalue(v(base_val), split_sid, found, m, &sn)
+                    String lval = field_access_lvalue(v(base_val), split_sid, found, m, sn)
                     return v(dst) + " = " + lval + ";"
                 # Struct found but field name doesn't match — raw arrow.
-                String c_struct = find_c_struct_name(struct_name, m, &sn)
+                String c_struct = find_c_struct_name(struct_name, m, sn)
                 String c_field = c_field_name(field)
                 return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
             # No matching struct — best-effort first-underscore split
@@ -5627,7 +5627,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             if sep > 0:
                 String fallback_struct = rest.slice(0, sep)
                 String fallback_field = rest.slice(sep + 1, rest.len())
-                String c_struct = find_c_struct_name(fallback_struct, m, &sn)
+                String c_struct = find_c_struct_name(fallback_struct, m, sn)
                 String c_field = c_field_name(fallback_field)
                 return v(dst) + " = ((" + c_struct + "*)" + v(base_val) + ")->" + c_field + ";"
         return "/* bad field read */;"
@@ -5643,7 +5643,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
     if name.starts_with("__gorget_array_new_sized_"):
         if dst >= 0:
             String arr_tyname = name.slice(25, name.len())
-            String arr_c_tname = resolve_sizeof_c_type(arr_tyname, &m, &sn)
+            String arr_c_tname = resolve_sizeof_c_type(arr_tyname, m, sn)
             String sized_out = v(dst) + " = gorget_array_new(sizeof(" + arr_c_tname + "));"
             # Wire element drop+clone so `gorget_array_set`'s `if (arr->elem_drop)`
             # guard drops the displaced old element on `v[i] = x` overwrite (and
@@ -5704,8 +5704,8 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             if sep_pos_d > 0:
                 String k_tyname_d = rest_kv_d.slice(0, sep_pos_d)
                 String v_tyname_d = rest_kv_d.slice(sep_pos_d + 9, rest_kv_d.len())
-                String k_c_tname_d = resolve_sizeof_c_type(k_tyname_d, &m, &sn)
-                String v_c_tname_d = resolve_sizeof_c_type(v_tyname_d, &m, &sn)
+                String k_c_tname_d = resolve_sizeof_c_type(k_tyname_d, m, sn)
+                String v_c_tname_d = resolve_sizeof_c_type(v_tyname_d, m, sn)
                 if k_c_tname_d == "Str" or k_c_tname_d == "GorgetString":
                     return v(dst) + " = gorget_dict_new_str(sizeof(" + v_c_tname_d + "));"
                 return v(dst) + " = gorget_dict_new(sizeof(" + k_c_tname_d + "), sizeof(" + v_c_tname_d + "));"
@@ -5717,8 +5717,8 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
             if sep_pos > 0:
                 String k_tyname = rest_kv.slice(0, sep_pos)
                 String v_tyname = rest_kv.slice(sep_pos + 9, rest_kv.len())
-                String k_c_tname = resolve_sizeof_c_type(k_tyname, &m, &sn)
-                String v_c_tname = resolve_sizeof_c_type(v_tyname, &m, &sn)
+                String k_c_tname = resolve_sizeof_c_type(k_tyname, m, sn)
+                String v_c_tname = resolve_sizeof_c_type(v_tyname, m, sn)
                 # String keys must route to `gorget_map_new_str` so the
                 # runtime wires up `__gorget_str_key_hash` /
                 # `__gorget_str_key_eq` / `key_materialize`. Without that,
@@ -5753,7 +5753,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
 
     # Struct constructor: Name(args...) → (C_Type){ .field0 = arg0, .field1 = arg1, ... }
     if is_struct_constructor(name, m):
-        String cname = find_c_struct_name(name, m, &sn)
+        String cname = find_c_struct_name(name, m, sn)
         if dst >= 0:
             String sc_out = v(dst) + " = (" + cname + "){ "
             Vector[String] field_names = get_struct_field_names(name, m)
@@ -6037,7 +6037,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                         pv_fi += 1
                     int pva = 0
                     while pva < args.len():
-                        out_pv = out_pv + ", ." + name + "_" + int_to_str(pva) + " = " + emit_variant_arg(args.get(pva).unwrap(), pv_field_tys, pva, val_types, &sn, m)
+                        out_pv = out_pv + ", ." + name + "_" + int_to_str(pva) + " = " + emit_variant_arg(args.get(pva).unwrap(), pv_field_tys, pva, val_types, sn, m)
                         pva += 1
                 out_pv = out_pv + "};"
                 return out_pv
@@ -6150,7 +6150,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                     ev_out = ev_out + ", .data = {"
                     if args.len() == 1:
                         # Single-field variant: direct union member.
-                        ev_out = ev_out + "." + ev_name + "_0 = " + emit_variant_arg(args.get(0).unwrap(), variant_field_tys, 0, val_types, &sn, m)
+                        ev_out = ev_out + "." + ev_name + "_0 = " + emit_variant_arg(args.get(0).unwrap(), variant_field_tys, 0, val_types, sn, m)
                     else:
                         # Multi-field variant: nested struct named after variant.
                         ev_out = ev_out + "." + ev_name + " = {"
@@ -6158,7 +6158,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                         while va < args.len():
                             if va > 0:
                                 ev_out = ev_out + ", "
-                            ev_out = ev_out + "." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, val_types, &sn, m)
+                            ev_out = ev_out + "." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, val_types, sn, m)
                             va += 1
                         ev_out = ev_out + "}"
                     ev_out = ev_out + "}"
@@ -6166,7 +6166,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
                     # Flat layout: payload fields are direct struct members.
                     int va = 0
                     while va < args.len():
-                        ev_out = ev_out + ", ." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, val_types, &sn, m)
+                        ev_out = ev_out + ", ." + ev_name + "_" + int_to_str(va) + " = " + emit_variant_arg(args.get(va).unwrap(), variant_field_tys, va, val_types, sn, m)
                         va += 1
             ev_out = ev_out + "};"
             return ev_out
@@ -6256,7 +6256,7 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] &args,
 
 # ── Terminator emission ───────────────────────────────────
 
-String emit_term(LirTerm term, LirFunction &func, Vector[String] &sn, Dict[int, int] &val_types, bool is_throws_main):
+String emit_term(LirTerm term, LirFunction func, Vector[String] sn, Dict[int, int] val_types, bool is_throws_main):
     match term:
         case TRet(value):
             # throws-main: the entry point keeps its `int main(...)` C signature
@@ -6301,16 +6301,16 @@ String emit_term(LirTerm term, LirFunction &func, Vector[String] &sn, Dict[int, 
             return "return;"
 
         case TJump(target, args):
-            return emit_jump_args(target, args, func, &sn, val_types) + "goto __bb" + int_to_str(target) + ";"
+            return emit_jump_args(target, args, func, sn, val_types) + "goto __bb" + int_to_str(target) + ";"
 
         case TBranch(cond, then_blk, then_args, else_blk, else_args):
             String out = "if (" + v(cond) + ") {\n"
             if then_args.len() > 0:
-                out = out + "        " + emit_jump_args(then_blk, then_args, func, &sn, val_types) + "\n"
+                out = out + "        " + emit_jump_args(then_blk, then_args, func, sn, val_types) + "\n"
             out = out + "        goto __bb" + int_to_str(then_blk) + ";\n"
             out = out + "    } else {\n"
             if else_args.len() > 0:
-                out = out + "        " + emit_jump_args(else_blk, else_args, func, &sn, val_types) + "\n"
+                out = out + "        " + emit_jump_args(else_blk, else_args, func, sn, val_types) + "\n"
             out = out + "        goto __bb" + int_to_str(else_blk) + ";\n"
             out = out + "    }"
             return out
@@ -6320,10 +6320,10 @@ String emit_term(LirTerm term, LirFunction &func, Vector[String] &sn, Dict[int, 
             int ci = 0
             while ci < cases.len():
                 SwitchCase sc = cases.get(ci).unwrap()
-                String ja = emit_jump_args(sc.target, sc.args, func, &sn, val_types)
+                String ja = emit_jump_args(sc.target, sc.args, func, sn, val_types)
                 out = out + "        case " + int_to_str(sc.value) + ": " + ja + "goto __bb" + int_to_str(sc.target) + ";\n"
                 ci += 1
-            String da = emit_jump_args(default_blk, default_args, func, &sn, val_types)
+            String da = emit_jump_args(default_blk, default_args, func, sn, val_types)
             out = out + "        default: " + da + "goto __bb" + int_to_str(default_blk) + ";\n"
             out = out + "    }"
             return out
@@ -6335,7 +6335,7 @@ String emit_term(LirTerm term, LirFunction &func, Vector[String] &sn, Dict[int, 
 # same scalar/aggregate coercion as ISlotStore when the block-param type
 # (set from the slot type at phi creation) doesn't match the incoming
 # value's inferred type — otherwise C refuses `void* = Str` etc.
-String emit_jump_args(int target, Vector[int] args, LirFunction func, Vector[String] &sn, Dict[int, int] val_types):
+String emit_jump_args(int target, Vector[int] args, LirFunction func, Vector[String] sn, Dict[int, int] val_types):
     if args.len() == 0:
         return ""
     LirBlock target_blk = func.blocks.get(target).unwrap()
@@ -6462,7 +6462,7 @@ void mark_used_value_ids(String body, Vector[bool] &v_used, Vector[bool] &s_used
 # has NO CStr/value_origins branch — this is the SIMPLER SUBSET, keyed on the
 # self-host's OWN shape (NOT Rust's). Two values coalesce only if this string is
 # identical, so they declare identically.
-String coal_decl_ctype(int vi, Dict[int, int] val_types, Vector[String] &sn):
+String coal_decl_ctype(int vi, Dict[int, int] val_types, Vector[String] sn):
     if val_types.contains(vi):
         int vty = val_types.get(vi).unwrap()
         String ts = c_type_name(vty, sn)
@@ -6722,7 +6722,7 @@ Vector[Vector[int]] coal_term_arg_lists(LirTerm term):
 # decl — see coal_addr_escaped_args). Returns an EMPTY vector when there are no
 # blocks (the caller falls back to one-local-per-value). DETERMINISTIC single
 # ascending pass (see the block comment above coal_decl_ctype).
-Vector[int] coalesce_assign(LirFunction &func, int max_val, Vector[bool] &v_used, Dict[int, int] &val_types, Vector[String] &sn):
+Vector[int] coalesce_assign(LirFunction func, int max_val, Vector[bool] v_used, Dict[int, int] val_types, Vector[String] sn):
     Vector[int] assign = []
     if func.blocks.len() == 0:
         return assign
@@ -6745,7 +6745,7 @@ Vector[int] coalesce_assign(LirFunction &func, int max_val, Vector[bool] &v_used
     int k = 0
     while k < max_val:
         if v_used.get(k).unwrap() and not escaped.contains(k):
-            String ty = coal_decl_ctype(k, val_types, &sn)
+            String ty = coal_decl_ctype(k, val_types, sn)
             Vector[int] lb = live_blocks.get(k).unwrap()
             int placed = -1
             int s = 0
@@ -6775,12 +6775,12 @@ Vector[int] coalesce_assign(LirFunction &func, int max_val, Vector[bool] &v_used
         k += 1
     return assign
 
-String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[String, int] &slit_map):
+String emit_function(LirFunction func, LirModule m, Vector[String] sn, Dict[String, int] slit_map):
     # Mirrors src/backend/c_lir/mod.rs:emit_function — accumulate into a
     # single growing buffer via in-place push instead of `out = out + ...`
     # quadratic concatenation. Each push amortizes O(1) per byte.
     StrBuf buf = sb_new()
-    Dict[int, int] val_types = compute_val_types(&func, &m)
+    Dict[int, int] val_types = compute_val_types(func, m)
     # P2 — shared value→slot back-map for provenance reads (built once).
     Dict[int, int] val_to_slot = build_slot_read_map(func)
 
@@ -6873,7 +6873,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     # function; at -O0 each costs frame bytes and lower_expr_inner's
     # frame sat within <1KB of the recursion stack cliff.
     StrBuf fnbody = sb_new()
-    emit_function_body(&fnbody, &func, &m, &sn, &slit_map, &val_types, &val_to_slot)
+    emit_function_body(&fnbody, func, m, sn, slit_map, val_types, val_to_slot)
 
     Vector[bool] v_used = []
     int vu_i = 0
@@ -6911,7 +6911,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
     # Value declarations — liveness-based slot coalescing (the frame fix; see
     # coalesce_assign above). One C local per coalesced slot + `#define __vN
     # __coalK` aliases (ZERO body rewrite); `#undef` after the function close.
-    Vector[int] coal_assign = coalesce_assign(&func, max_val, &v_used, &val_types, &sn)
+    Vector[int] coal_assign = coalesce_assign(func, max_val, v_used, val_types, sn)
     if coal_assign.len() == 0:
         # No blocks → fall back to one C local per used value.
         int vi = 0
@@ -6920,7 +6920,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
                 vi += 1
                 continue
             sb_push(&buf, "    ")
-            sb_push(&buf, coal_decl_ctype(vi, val_types, &sn))
+            sb_push(&buf, coal_decl_ctype(vi, val_types, sn))
             sb_push(&buf, " __v")
             sb_push(&buf, int_to_str(vi))
             sb_push(&buf, ";\n")
@@ -6948,7 +6948,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
         while vi2 < coal_assign.len():
             int s = coal_assign.get(vi2).unwrap()
             if s >= 0 and not slot_seen.get(s).unwrap():
-                slot_type_str.set(s, coal_decl_ctype(vi2, val_types, &sn))
+                slot_type_str.set(s, coal_decl_ctype(vi2, val_types, sn))
                 slot_seen.set(s, true)
             vi2 += 1
         int s2 = 0
@@ -6967,7 +6967,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
         while vp < max_val:
             if v_used.get(vp).unwrap() and coal_assign.get(vp).unwrap() < 0:
                 sb_push(&buf, "    ")
-                sb_push(&buf, coal_decl_ctype(vp, val_types, &sn))
+                sb_push(&buf, coal_decl_ctype(vp, val_types, sn))
                 sb_push(&buf, " __v")
                 sb_push(&buf, int_to_str(vp))
                 sb_push(&buf, ";\n")
@@ -7049,7 +7049,7 @@ String emit_function(LirFunction &func, LirModule &m, Vector[String] &sn, Dict[S
 # The per-block body emitter (block label + block-param head copies +
 # instructions + terminator), split out of emit_function so Fix A can emit
 # the body into a side buffer BEFORE the declarations are written.
-void emit_function_body(StrBuf &out, LirFunction &func, LirModule &m, Vector[String] &sn, Dict[String, int] &slit_map, Dict[int, int] &val_types, Dict[int, int] &val_to_slot):
+void emit_function_body(StrBuf &out, LirFunction func, LirModule m, Vector[String] sn, Dict[String, int] slit_map, Dict[int, int] val_types, Dict[int, int] val_to_slot):
     # throws-main detection (typed enum_kind, NOT a name-match on the C
     # struct name) — drives the Result→exit-code unwrap in emit_term's TRet.
     bool is_throws_main = false
@@ -7085,14 +7085,14 @@ void emit_function_body(StrBuf &out, LirFunction &func, LirModule &m, Vector[Str
         # Instructions
         int ii = 0
         while ii < func.blocks.get(bi).unwrap().insts.len():
-            String code = emit_inst(func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), &m, &func, &sn, &val_types, slit_map, &val_to_slot)
+            String code = emit_inst(func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), m, func, sn, val_types, slit_map, val_to_slot)
             sb_push(&out, "    ")
             sb_push(&out, code)
             sb_push(&out, "\n")
             ii += 1
 
         # Terminator
-        String tcode = emit_term(func.blocks.get(bi).unwrap().term, &func, &sn, &val_types, is_throws_main)
+        String tcode = emit_term(func.blocks.get(bi).unwrap().term, func, sn, val_types, is_throws_main)
         sb_push(&out, "    ")
         sb_push(&out, tcode)
         sb_push(&out, "\n")
@@ -7135,14 +7135,14 @@ String drop_to_clone_fn(String drop_fn):
 # then deep-clone the inner in place. Box detection is via the typed
 # `type_runtime_map` ("Box"), not a name guess; the `Box__` mangling is the
 # established runtime-symbol contract for extracting the inner type.
-String field_clone_c(String access, String ftype_name, String drop_fn_name, LirModule &m, Vector[String] &sn):
+String field_clone_c(String access, String ftype_name, String drop_fn_name, LirModule m, Vector[String] sn):
     bool is_box = false
     if m.type_runtime_map.contains(ftype_name):
         if m.type_runtime_map.get(ftype_name).unwrap_or("") == "Box":
             is_box = true
     if is_box and ftype_name.len() > 5 and ftype_name.slice(0, 5) == "Box__":
         String inner = ftype_name.slice(5, ftype_name.len())
-        String inner_c = find_c_name(inner, m, &sn)
+        String inner_c = find_c_name(inner, m, sn)
         String s = access + " = __gorget_box_alloc_" + inner + "(*(" + inner_c + "*)" + access + ");"
         # Deep-clone the inner in place when it owns resources (recursive
         # struct/enum, String, collection). lc_collection_clone_fn returns
@@ -7178,7 +7178,7 @@ String field_clone_c(String access, String ftype_name, String drop_fn_name, LirM
     return ""
 
 # Find the C struct name for a Gorget type name.
-String find_c_name(String type_name, LirModule m, Vector[String] &sn):
+String find_c_name(String type_name, LirModule m, Vector[String] sn):
     # CoW for-element BORROW scan (no LirStructDef__clone): reads sdef.name only;
     # enumerate() preserves the index for LT_STRUCT_BASE + i.
     for (i, sdef) in m.structs.enumerate():
@@ -7257,7 +7257,7 @@ void sort_strings_in_place(Vector[String] &v):
 # the inline forward-decl loops in each emit_X are too local to cover
 # that boundary. See generate_c's `body = ... emit_all_drop_clone_forward_decls`
 # call site for the rationale.
-String emit_all_drop_clone_forward_decls(LirModule &m, Vector[String] &sn):
+String emit_all_drop_clone_forward_decls(LirModule m, Vector[String] sn):
     String out = ""
     # Struct drop forward decls
     Vector[String] sd_keys = m.recursive_drop_structs.keys()
@@ -7273,7 +7273,7 @@ String emit_all_drop_clone_forward_decls(LirModule &m, Vector[String] &sn):
         if m.drop_collision_types.contains(tn):
             drop_name = "__gorget_dtor_" + tn
         if not fn_exists(drop_name, m):
-            String cname = find_c_name(tn, m, &sn)
+            String cname = find_c_name(tn, m, sn)
             out = out + "static inline void " + drop_name + "(" + cname + "* self);\n"
         i += 1
     # Struct clone forward decls
@@ -7282,7 +7282,7 @@ String emit_all_drop_clone_forward_decls(LirModule &m, Vector[String] &sn):
         String tn = sd_keys.get(j).unwrap()
         String clone_name = tn + "__clone"
         if not fn_exists(clone_name, m):
-            String cname = find_c_name(tn, m, &sn)
+            String cname = find_c_name(tn, m, sn)
             out = out + cname + " " + clone_name + "(void* __p);\n"
         j += 1
     # Enum drop forward decls (skip if also struct — structs take priority)
@@ -7308,7 +7308,7 @@ String emit_all_drop_clone_forward_decls(LirModule &m, Vector[String] &sn):
         String tn = ed_keys.get(l).unwrap()
         String clone_name = tn + "__clone"
         if not fn_exists(clone_name, m) and not m.recursive_drop_structs.contains(tn):
-            String cname = find_c_name(tn, m, &sn)
+            String cname = find_c_name(tn, m, sn)
             out = out + cname + " " + clone_name + "(void* __p);\n"
         l += 1
     if out.len() > 0:
@@ -7332,7 +7332,7 @@ bool drop_field_by_value(String field_type_name, LirModule m):
             return true
     return false
 
-String emit_struct_drops(LirModule &m, Vector[String] &sn):
+String emit_struct_drops(LirModule m, Vector[String] sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
     # Sort keys alphabetically — Dict.keys() iteration order is
@@ -7354,7 +7354,7 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
         if m.drop_collision_types.contains(type_name_f):
             drop_name_f = "__gorget_dtor_" + type_name_f
         if not fn_exists(drop_name_f, m):
-            String cname_f = find_c_name(type_name_f, m, &sn)
+            String cname_f = find_c_name(type_name_f, m, sn)
             out = out + "static inline void " + drop_name_f + "(" + cname_f + "* self);\n"
         kf += 1
     if keys.len() > 0:
@@ -7373,7 +7373,7 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
         if fn_exists(drop_name, m):
             ki += 1
             continue
-        String cname = find_c_name(type_name, m, &sn)
+        String cname = find_c_name(type_name, m, sn)
         Vector[FieldDrop] drops = m.recursive_drop_structs.get(type_name).unwrap()
         out = out + "static inline void " + drop_name + "(" + cname + "* self) {\n"
         # ③(c): a user Drop impl runs FIRST, then the per-field auto-drops
@@ -7402,7 +7402,7 @@ String emit_struct_drops(LirModule &m, Vector[String] &sn):
     return out
 
 # Emit struct clone functions from recursive_drop_structs metadata.
-String emit_struct_clones(LirModule &m, Vector[String] &sn):
+String emit_struct_clones(LirModule m, Vector[String] sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_structs.keys()
     sort_strings_in_place(&keys)
@@ -7412,7 +7412,7 @@ String emit_struct_clones(LirModule &m, Vector[String] &sn):
         String type_name_f = keys.get(kf).unwrap()
         String clone_name_f = type_name_f + "__clone"
         if not fn_exists(clone_name_f, m):
-            String cname_f = find_c_name(type_name_f, m, &sn)
+            String cname_f = find_c_name(type_name_f, m, sn)
             out = out + cname_f + " " + clone_name_f + "(void* __p);\n"
         kf += 1
     if keys.len() > 0:
@@ -7424,7 +7424,7 @@ String emit_struct_clones(LirModule &m, Vector[String] &sn):
         if fn_exists(clone_name, m):
             ki += 1
             continue
-        String cname = find_c_name(type_name, m, &sn)
+        String cname = find_c_name(type_name, m, sn)
         Vector[FieldDrop] drops = m.recursive_drop_structs.get(type_name).unwrap()
 
         # Clone function: T T__clone(void* __p)
@@ -7435,7 +7435,7 @@ String emit_struct_clones(LirModule &m, Vector[String] &sn):
         while di < drops.len():
             FieldDrop fd = drops.get(di).unwrap()
             String access = field_access(type_name, fd.field_name, m, sn, false)
-            String cstmt = field_clone_c(access, fd.field_type_name, fd.drop_fn_name, &m, &sn)
+            String cstmt = field_clone_c(access, fd.field_type_name, fd.drop_fn_name, m, sn)
             if cstmt != "":
                 out = out + "    " + cstmt + "\n"
             di += 1
@@ -7448,7 +7448,7 @@ String emit_struct_clones(LirModule &m, Vector[String] &sn):
     return out
 
 # Emit enum drop functions from recursive_drop_enums metadata.
-String emit_enum_drops(LirModule &m, Vector[String] &sn):
+String emit_enum_drops(LirModule m, Vector[String] sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_enums.keys()
     sort_strings_in_place(&keys)
@@ -7491,7 +7491,7 @@ String emit_enum_drops(LirModule &m, Vector[String] &sn):
         if m.recursive_drop_structs.contains(type_name):
             ki += 1
             continue
-        String cname = find_c_name(type_name, m, &sn)
+        String cname = find_c_name(type_name, m, sn)
         Vector[EnumVariantDrop] variants = m.recursive_drop_enums.get(type_name).unwrap()
 
         out = out + "void " + drop_name + "(void* __p) {\n"
@@ -7554,7 +7554,7 @@ String emit_enum_drops(LirModule &m, Vector[String] &sn):
     return out
 
 # Emit enum clone functions from recursive_drop_enums metadata.
-String emit_enum_clones(LirModule &m, Vector[String] &sn):
+String emit_enum_clones(LirModule m, Vector[String] sn):
     String out = ""
     Vector[String] keys = m.recursive_drop_enums.keys()
     sort_strings_in_place(&keys)
@@ -7566,7 +7566,7 @@ String emit_enum_clones(LirModule &m, Vector[String] &sn):
         String type_name_f = keys.get(kf).unwrap()
         String clone_name_f = type_name_f + "__clone"
         if not fn_exists(clone_name_f, m) and not m.recursive_drop_structs.contains(type_name_f):
-            String cname_f = find_c_name(type_name_f, m, &sn)
+            String cname_f = find_c_name(type_name_f, m, sn)
             out = out + cname_f + " " + clone_name_f + "(void* __p);\n"
         kf += 1
     if keys.len() > 0:
@@ -7581,7 +7581,7 @@ String emit_enum_clones(LirModule &m, Vector[String] &sn):
         if m.recursive_drop_structs.contains(type_name):
             ki += 1
             continue
-        String cname = find_c_name(type_name, m, &sn)
+        String cname = find_c_name(type_name, m, sn)
         Vector[EnumVariantDrop] variants = m.recursive_drop_enums.get(type_name).unwrap()
 
         out = out + cname + " " + clone_name + "(void* __p) {\n"
@@ -7606,7 +7606,7 @@ String emit_enum_clones(LirModule &m, Vector[String] &sn):
                 EnumVariantDrop evd = variants.get(vvi).unwrap()
                 if evd.variant_index == vi:
                     String access = field_access(type_name, evd.field_name, m, sn, false)
-                    String cstmt = field_clone_c(access, evd.field_type_name, evd.drop_fn_name, &m, &sn)
+                    String cstmt = field_clone_c(access, evd.field_type_name, evd.drop_fn_name, m, sn)
                     if cstmt != "":
                         has_clones = true
                         case_body = case_body + "            " + cstmt + "\n"
@@ -7627,7 +7627,7 @@ String emit_enum_clones(LirModule &m, Vector[String] &sn):
     return out
 
 # Emit unified drop/clone functions from type_drop_fns metadata.
-String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
+String emit_type_drop_fns(LirModule m, Vector[String] sn):
     String out = ""
     Vector[String] keys = m.type_drop_fns.keys()
     sort_strings_in_place(&keys)
@@ -7647,7 +7647,7 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
             ki += 1
             continue
 
-        String cname = find_c_name(type_name, m, &sn)
+        String cname = find_c_name(type_name, m, sn)
         bool is_enum = info.enum_variants.len() > 0
 
         # Drop function
@@ -7726,7 +7726,7 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
                         EnumVariantDrop evd = info.enum_variants.get(vvi2).unwrap()
                         if evd.variant_index == vi2:
                             String access = field_access(type_name, evd.field_name, m, sn, false)
-                            String cstmt = field_clone_c(access, evd.field_type_name, evd.drop_fn_name, &m, &sn)
+                            String cstmt = field_clone_c(access, evd.field_type_name, evd.drop_fn_name, m, sn)
                             if cstmt != "":
                                 has_clones = true
                                 case_body = case_body + "            " + cstmt + "\n"
@@ -7743,7 +7743,7 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
                 while di < info.field_drops.len():
                     FieldDrop fd = info.field_drops.get(di).unwrap()
                     String access = field_access(type_name, fd.field_name, m, sn, false)
-                    String cstmt = field_clone_c(access, fd.field_type_name, fd.drop_fn_name, &m, &sn)
+                    String cstmt = field_clone_c(access, fd.field_type_name, fd.drop_fn_name, m, sn)
                     if cstmt != "":
                         out = out + "    " + cstmt + "\n"
                     di += 1
@@ -7759,7 +7759,7 @@ String emit_type_drop_fns(LirModule &m, Vector[String] &sn):
 # Emit typedefs for monomorphized wrapper types.
 # These types are skipped as struct definitions (they map to runtime types)
 # but still need typedef'd so C code can reference them.
-String emit_mono_typedefs(LirModule &m):
+String emit_mono_typedefs(LirModule m):
     StrBuf buf = sb_new()
     Dict[String, bool] seen = {}
     # The Thread__{ret_name} types are defined in full by emit_thread_helpers
@@ -7976,7 +7976,7 @@ String emit_test_runner_main(Vector[LirTestFn] test_fns, bool has_setup, bool ha
     sb_push(&buf, "}\n")
     return buf.s
 
-String generate_c(LirModule &m):
+String generate_c(LirModule m):
     Vector[String] sn = build_struct_names(m)
 
     String out = ""
@@ -8014,16 +8014,16 @@ String generate_c(LirModule &m):
     # Monomorphized wrapper typedefs (Vector__T, Dict__T, Channel__T, etc.)
     # Emit FIRST so struct field types like `Box__SpannedExpr` (void*) are
     # visible when the enclosing struct body is emitted.
-    out = out + emit_mono_typedefs(&m)
+    out = out + emit_mono_typedefs(m)
 
     # Struct definitions
-    out = out + emit_structs(&m, &sn)
+    out = out + emit_structs(m, sn)
 
     # Extern declarations
-    out = out + emit_externs(&m, &sn)
+    out = out + emit_externs(m, sn)
 
     # Globals
-    out = out + emit_globals(m, &sn)
+    out = out + emit_globals(m, sn)
 
     # String literal pool
     Vector[StringLitEntry] slits = collect_string_lits(m)
@@ -8031,26 +8031,26 @@ String generate_c(LirModule &m):
     out = out + emit_string_lits(slits)
 
     # Function forward declarations
-    out = out + emit_func_forward_decls(&m, &sn)
+    out = out + emit_func_forward_decls(m, sn)
 
     # Hashable-key bridges. Must come AFTER forward decls (the bridges
     # call `T__hash` / `T__eq`) and BEFORE function bodies that
     # reference `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` via
     # ctor wiring.
-    out = out + emit_hashable_key_bridges(&m)
+    out = out + emit_hashable_key_bridges(m)
 
     # Box[Trait] vtable `__drop` wrapper FORWARD-DECLS — must precede the
     # deferred vtable globals below (their initializers take
     # `(void*)&Box__<concrete>__drop`). The definitions land in `body`
     # after emit_type_drop_fns (see the emitter's header note).
-    out = out + emit_box_trait_drop_decls(&m)
+    out = out + emit_box_trait_drop_decls(m)
 
     # Deferred globals (FuncAddr-bearing: GINIT_STRUCT vtables + scalar
     # GINIT_FUNC_ADDR). Emitted HERE — after forward-decls + hashable-key
     # bridges, before adapter functions — so the `(void*)&fn` casts
     # reference already-forward-declared functions. Mirrors Rust gg's
     # deferred-global emission in `src/backend/c_lir/mod.rs:857-864`.
-    out = out + emit_deferred_globals(m, &sn)
+    out = out + emit_deferred_globals(m, sn)
 
     # Async spawn/await helpers (Inc-1). Emitted BEFORE thread helpers to
     # match Rust gg's section order (spawn helpers precede thread helpers,
@@ -8060,11 +8060,11 @@ String generate_c(LirModule &m):
     # Thread[T] spawn/join wrappers. Emitted BEFORE adapter functions to
     # match Rust gg's section order (`src/backend/c_lir/mod.rs:882` — thread
     # helpers come after spawn helpers and before adapters).
-    out = out + emit_thread_helpers(&m, &sn)
+    out = out + emit_thread_helpers(m, sn)
 
     # Adapter functions (FuncAddr → closure protocol)
     Dict[int, bool] fa_targets = collect_func_addr_targets(m)
-    out = out + emit_adapter_functions(m, &sn, fa_targets)
+    out = out + emit_adapter_functions(m, sn, fa_targets)
 
     # Emit function bodies to a temp buffer so we can scan them for
     # __gorget_box_alloc_* occurrences (codegen rewrites Box(x) → alloc at
@@ -8077,17 +8077,17 @@ String generate_c(LirModule &m):
     # int return type and the later definition produces a "conflicting
     # types" error. Each emit_X also has its own inline forward-decl
     # loop; the duplicate declarations are harmless (C allows them).
-    body = body + emit_all_drop_clone_forward_decls(&m, &sn)
-    body = body + emit_struct_drops(&m, &sn)
-    body = body + emit_struct_clones(&m, &sn)
-    body = body + emit_enum_drops(&m, &sn)
-    body = body + emit_enum_clones(&m, &sn)
-    body = body + emit_type_drop_fns(&m, &sn)
+    body = body + emit_all_drop_clone_forward_decls(m, sn)
+    body = body + emit_struct_drops(m, sn)
+    body = body + emit_struct_clones(m, sn)
+    body = body + emit_enum_drops(m, sn)
+    body = body + emit_enum_clones(m, sn)
+    body = body + emit_type_drop_fns(m, sn)
     # Box[Trait] vtable `__drop` wrapper DEFINITIONS — after the drop/clone
     # forward-decls + definitions above so the inner `<concrete>__drop`
     # symbols the wrappers call are already declared. The matching
     # forward-decls went into `out` ahead of the deferred vtable globals.
-    body = body + emit_box_trait_drop_wrappers(&m)
+    body = body + emit_box_trait_drop_wrappers(m)
     # `d.get_or(k, default)` inline wrappers (no `gorget_map_get_or` runtime
     # symbol). Emitted HERE — AFTER the drop/clone forward declarations and the
     # struct/enum clone definitions, BEFORE the function definitions that call
@@ -8096,13 +8096,13 @@ String generate_c(LirModule &m):
     # declared (it is, just above) before the `static inline` wrapper that uses
     # it, or C implicitly types it `int` and the `__gg_<Name>` return mismatches.
     # Runtime clone symbols (gorget_array_clone, …) come from the runtime preamble.
-    body = body + emit_dict_get_or_wrappers(&m)
+    body = body + emit_dict_get_or_wrappers(m)
 
     # Use sb_push (in-place append) instead of `body = body + ...` —
     # the latter is O(N) per concat, O(N²) overall. For 600+ functions
     # producing a few MB total, the naive concat OOM-kills stage-1.
     # Mirrors src/backend/c_lir/mod.rs:`out: &mut String`.
-    Vector[bool] reachable_body = compute_reachable_fns(&m)
+    Vector[bool] reachable_body = compute_reachable_fns(m)
 
     # Test-mode detection (metadata-free): the self-host's
     # `LirModule.test_fns` / `is_test_module` are NEVER populated
@@ -8136,7 +8136,7 @@ String generate_c(LirModule &m):
         # Pass the function as a BORROW to emit_function — `LirFunction func
         # = m.functions.get(fi).unwrap()` value-binds and deep-clones the
         # whole function per emitted definition (a generate_c clone consumer).
-        sb_push(&body_buf, emit_function(&m.functions.get(fi).unwrap(), &m, &sn, &slit_map))
+        sb_push(&body_buf, emit_function(m.functions.get(fi).unwrap(), m, sn, slit_map))
         sb_push(&body_buf, "\n")
         fi += 1
 
@@ -8170,7 +8170,7 @@ String generate_c(LirModule &m):
     # but stage-1's runtime `body.slice()` / `index_of` mishandles 9MB
     # strings, leaving the box allocators undefined at link time. The
     # LIR-based scan is robust regardless.
-    out = out + emit_box_allocators_from_lir(&m)
+    out = out + emit_box_allocators_from_lir(m)
     # `b.get()`/`b.set(v)` inline wrappers (no `gorget_box_get` runtime symbol).
     out = out + emit_box_method_wrappers(m)
     # `s.get()`/`s.at(i)`/`s.set_at(i,v)`/`s.slen()` inline wrappers for explicit
@@ -8182,7 +8182,7 @@ String generate_c(LirModule &m):
     out = out + emit_str_builder_wrappers(m)
     # `Box__<Trait>__<method>` trait-object dispatch thunks (no user/runtime
     # symbol — the thunk IS the vtable-indirect-call dispatch target).
-    out = out + emit_trait_dispatch_thunks(m, &sn)
+    out = out + emit_trait_dispatch_thunks(m, sn)
 
     out = out + body
     return out
@@ -8326,7 +8326,7 @@ Vector[String] build_all_call_names(LirModule m):
 # ── String-extended block predicate (emit_types.rs:1853-1871) ──
 # Early-return-per-prefix (the Rust source is one big `||` chain; the self-host
 # lexer has no backslash line-continuation, so split into statements).
-bool needs_string_extended(Vector[String] &n):
+bool needs_string_extended(Vector[String] n):
     if cn_has_prefix(n, "gorget_str_to_upper") or cn_has_prefix(n, "gorget_str_to_lower"): return true
     if cn_has_prefix(n, "gorget_str_is_alpha") or cn_has_prefix(n, "gorget_str_is_upper"): return true
     if cn_has_prefix(n, "gorget_str_is_lower") or cn_has_prefix(n, "gorget_str_is_digit"): return true
@@ -8349,7 +8349,7 @@ bool needs_string_extended(Vector[String] &n):
     return false
 
 # ── needs_sync (emit_types.rs:2081) ──
-bool needs_sync_pred(Vector[String] &n):
+bool needs_sync_pred(Vector[String] n):
     if cn_has_prefix(n, "gorget_atomic_int_") or cn_has_prefix(n, "gorget_atomic_bool_"): return true
     if cn_has_prefix(n, "gorget_atomic_") or cn_has_prefix(n, "gorget_barrier_"): return true
     if cn_has_prefix(n, "gorget_condvar_") or cn_has_prefix(n, "gorget_rwlock_"): return true
@@ -8360,7 +8360,7 @@ bool needs_sync_pred(Vector[String] &n):
     return false
 
 # ── needs_async (emit_types.rs:2094) ──
-bool needs_async_pred(Vector[String] &n):
+bool needs_async_pred(Vector[String] n):
     if cn_has_contains(n, "channel") or cn_has_contains(n, "Channel"): return true
     if cn_has_prefix(n, "gorget_mutex_") or cn_has_prefix(n, "gorget_guard_"): return true
     if cn_has_prefix(n, "gorget_executor_") or cn_has_eq(n, "gorget_spawn"): return true
@@ -8370,7 +8370,7 @@ bool needs_async_pred(Vector[String] &n):
     return false
 
 # ── needs_spawn (emit_types.rs:2193) ──
-bool needs_spawn_pred(Vector[String] &n):
+bool needs_spawn_pred(Vector[String] n):
     if cn_has_prefix(n, "gorget_process_spawn") or cn_has_prefix(n, "gorget_process_wait"): return true
     if cn_has_prefix(n, "gorget_process_kill") or cn_has_prefix(n, "gorget_process_pid"): return true
     if cn_has_prefix(n, "gorget_process_read_") or cn_has_prefix(n, "gorget_process_write_"): return true
@@ -8420,7 +8420,7 @@ bool module_has_test_runner(LirModule m):
 # entry-module meta-const constraint holds — the meta pass only evaluates
 # `embed_file` consts in the ENTRY module, never imported ones). `explicit` =
 # the caller saw a --runtime-dir flag OR GG_RUNTIME_DIR env (→ force disk).
-String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, String] &embedded, bool explicit):
+String emit_runtime_preamble(LirModule m, String runtime_dir, Dict[String, String] embedded, bool explicit):
     String rdir = runtime_dir
     Vector[String] n = build_all_call_names(m)
     StrBuf buf = sb_new()
@@ -8446,7 +8446,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
     sb_push(&buf, read_runtime(rdir, "runtime_string.c", embedded, explicit))
 
     # Extended string methods (unicode tables, search, split/replace/trim/etc.)
-    if needs_string_extended(&n):
+    if needs_string_extended(n):
         sb_push(&buf, read_runtime(rdir, "runtime_string_extended.c", embedded, explicit))
 
     # Base string operations (Str-aware concat, append, cstr conversion)
@@ -8483,7 +8483,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
             emitted_array = true
 
     # String/Array operations (join, split, iterators — needs RUNTIME_ARRAY)
-    if pred_string_array(&n):
+    if pred_string_array(n):
         if not emitted_array:
             sb_push(&buf, read_runtime(rdir, "runtime_array.c", embedded, explicit))
             emitted_array = true
@@ -8491,7 +8491,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
 
     # Collections: Map (depends on Array)
     bool map_struct_present = recursive_drop_fn_used(m, "gorget_map_free")
-    if map_struct_present or pred_map(&n):
+    if map_struct_present or pred_map(n):
         if not emitted_array:
             sb_push(&buf, read_runtime(rdir, "runtime_array.c", embedded, explicit))
             emitted_array = true
@@ -8501,7 +8501,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
 
     # Collections: Set (depends on Map)
     bool set_struct_present = recursive_drop_fn_used(m, "gorget_set_free")
-    if set_struct_present or pred_set(&n):
+    if set_struct_present or pred_set(n):
         if not emitted_array:
             sb_push(&buf, read_runtime(rdir, "runtime_array.c", embedded, explicit))
             emitted_array = true
@@ -8511,18 +8511,18 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
         sb_push(&buf, read_runtime(rdir, "runtime_set.c", embedded, explicit))
 
     # Error handling (test/bench mode or explicit catch/throw)
-    if is_test_or_bench or pred_error(&n):
+    if is_test_or_bench or pred_error(n):
         sb_push(&buf, read_runtime(rdir, "runtime_error.c", embedded, explicit))
 
     # File I/O (depends on Array for read_file_bytes)
-    if pred_file(&n):
+    if pred_file(n):
         if not emitted_array:
             sb_push(&buf, read_runtime(rdir, "runtime_array.c", embedded, explicit))
             emitted_array = true
         sb_push(&buf, read_runtime(rdir, "runtime_file.c", embedded, explicit))
 
     # Path functions + readdir (depends on Array for readdir)
-    if pred_path(&n):
+    if pred_path(n):
         if not emitted_array:
             sb_push(&buf, read_runtime(rdir, "runtime_array.c", embedded, explicit))
             emitted_array = true
@@ -8540,26 +8540,26 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
         sb_push(&buf, read_runtime(rdir, "runtime_parse.c", embedded, explicit))
 
     # to_str conversions
-    if pred_tostr(&n):
+    if pred_tostr(n):
         sb_push(&buf, read_runtime(rdir, "runtime_tostr.c", embedded, explicit))
 
     # Environment
-    if pred_env(&n):
+    if pred_env(n):
         sb_push(&buf, read_runtime(rdir, "runtime_env.c", embedded, explicit))
 
     # Interactive I/O, time, datetime, random, line input (depends on Array)
-    if pred_io(&n):
+    if pred_io(n):
         if not emitted_array:
             sb_push(&buf, read_runtime(rdir, "runtime_array.c", embedded, explicit))
             emitted_array = true
         sb_push(&buf, read_runtime(rdir, "runtime_io.c", embedded, explicit))
 
     # Math
-    if pred_math(&n):
+    if pred_math(n):
         sb_push(&buf, read_runtime(rdir, "runtime_math.c", embedded, explicit))
 
     # Sort comparators (depends on Array)
-    if pred_sort(&n):
+    if pred_sort(n):
         if not emitted_array:
             sb_push(&buf, read_runtime(rdir, "runtime_array.c", embedded, explicit))
             emitted_array = true
@@ -8569,12 +8569,12 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
     sb_push(&buf, "\n")
 
     # Sync primitives
-    bool needs_sync = needs_sync_pred(&n)
+    bool needs_sync = needs_sync_pred(n)
     if needs_sync:
         sb_push(&buf, read_runtime(rdir, "sync_runtime.c", embedded, explicit))
 
     # Async core (compute needs_async FIRST — channel/mutex re-append it below)
-    bool needs_async = needs_async_pred(&n)
+    bool needs_async = needs_async_pred(n)
     if needs_async:
         sb_push(&buf, read_runtime(rdir, "async_runtime.c", embedded, explicit))
         sb_push(&buf, read_runtime(rdir, "task_common.c", embedded, explicit))
@@ -8600,7 +8600,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
         sb_push(&buf, read_runtime(rdir, "shared_runtime.c", embedded, explicit))
 
     # Mutex / Guard
-    if pred_mutex(&n):
+    if pred_mutex(n):
         if not needs_async:
             sb_push(&buf, read_runtime(rdir, "async_runtime.c", embedded, explicit))
         sb_push(&buf, read_runtime(rdir, "mutex_runtime.c", embedded, explicit))
@@ -8622,7 +8622,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
         sb_push(&buf, read_runtime(rdir, "bytes_runtime.c", embedded, explicit))
 
     # Crypto
-    if pred_crypto(&n):
+    if pred_crypto(n):
         sb_push(&buf, read_runtime(rdir, "crypto_runtime.c", embedded, explicit))
 
     # Socket (depends on Array)
@@ -8649,7 +8649,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
         sb_push(&buf, read_runtime(rdir, "tls_server_runtime.c", embedded, explicit))
 
     # Process spawn + signal handling
-    bool needs_spawn = needs_spawn_pred(&n)
+    bool needs_spawn = needs_spawn_pred(n)
 
     # Process — also needed when spawn is used (ExecResult typedef lives here)
     if needs_spawn or cn_has_prefix(n, "gorget_process_") or cn_has_prefix(n, "gorget_exec_") or cn_has_eq(n, "gorget_getenv") or cn_has_eq(n, "gorget_setenv"):
@@ -8673,7 +8673,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
     if cn_has_prefix(n, "sdl_") or cn_has_prefix(n, "gorget_sdl_"):
         if cn_has_eq(n, "sdl_load_texture") or cn_has_eq(n, "gorget_sdl_load_texture"):
             sb_push(&buf, "#define GORGET_USE_SDL_IMAGE\n")
-        if pred_sdl_ttf(&n):
+        if pred_sdl_ttf(n):
             sb_push(&buf, "#define GORGET_USE_SDL_TTF\n")
         sb_push(&buf, read_runtime(rdir, "sdl_runtime.c", embedded, explicit))
 
@@ -8734,7 +8734,7 @@ String emit_runtime_preamble(LirModule &m, String runtime_dir, Dict[String, Stri
         sb_push(&buf, read_runtime(rdir, "hot_reload_runtime.c", embedded, explicit))
 
     # LIR helpers (default values, comparators, hashers, char/utf8 helpers, etc.)
-    sb_push(&buf, emit_lir_helpers(&m))
+    sb_push(&buf, emit_lir_helpers(m))
 
     return buf.s
 
@@ -8795,7 +8795,7 @@ Vector[String] build_helper_call_names(LirModule m):
 # helpers, the task_group_submit macro, file_create/open wrappers). These are in
 # NEITHER any self-host .gg source NOR any runtime .c — the body CALLS them
 # (e.g. int64_t__default()), so a standalone .c must emit them or fail to link.
-String emit_lir_helpers(LirModule &m):
+String emit_lir_helpers(LirModule m):
     Vector[String] n = build_helper_call_names(m)
     StrBuf buf = sb_new()
 
@@ -8940,35 +8940,35 @@ String emit_lir_helpers(LirModule &m):
 # has no backslash line-continuation). All transcribed verbatim from the Rust
 # source string-for-string. ──
 
-bool pred_string_array(Vector[String] &n):
+bool pred_string_array(Vector[String] n):
     if cn_has_prefix(n, "gorget_str_join") or cn_has_prefix(n, "gorget_str_split"): return true
     if cn_has_prefix(n, "gorget_str_bytes") or cn_has_prefix(n, "gorget_str_codepoints"): return true
     if cn_has_prefix(n, "gorget_str_chars"): return true
     return false
 
-bool pred_map(Vector[String] &n):
+bool pred_map(Vector[String] n):
     if cn_has_prefix(n, "gorget_map_") or cn_has_prefix(n, "gorget_dict_"): return true
     if cn_has_prefix(n, "Dict__") or cn_has_prefix(n, "HashMap__"): return true
     return false
 
-bool pred_set(Vector[String] &n):
+bool pred_set(Vector[String] n):
     if cn_has_prefix(n, "gorget_set_") or cn_has_prefix(n, "Set__"): return true
     if cn_has_prefix(n, "HashSet__"): return true
     return false
 
-bool pred_error(Vector[String] &n):
+bool pred_error(Vector[String] n):
     if cn_has_prefix(n, "gorget_catch") or cn_has_prefix(n, "gorget_throw"): return true
     if cn_has_prefix(n, "gorget_cleanup_"): return true
     return false
 
-bool pred_file(Vector[String] &n):
+bool pred_file(Vector[String] n):
     if cn_has_prefix(n, "gorget_file_"): return true
     if cn_has_eq(n, "gorget_read_file") or cn_has_eq(n, "gorget_write_file"): return true
     if cn_has_eq(n, "gorget_append_file") or cn_has_eq(n, "gorget_read_file_bytes"): return true
     if cn_has_eq(n, "File__open") or cn_has_eq(n, "File__create"): return true
     return false
 
-bool pred_path(Vector[String] &n):
+bool pred_path(Vector[String] n):
     if cn_has_prefix(n, "gorget_path_") or cn_has_eq(n, "gorget_is_file") or cn_has_eq(n, "gorget_is_dir"): return true
     if cn_has_prefix(n, "gorget_mkdir") or cn_has_prefix(n, "gorget_readdir"): return true
     if cn_has_eq(n, "gorget_rename") or cn_has_eq(n, "gorget_copy_file") or cn_has_eq(n, "gorget_remove"): return true
@@ -8976,7 +8976,7 @@ bool pred_path(Vector[String] &n):
     if cn_has_eq(n, "gorget_file_mtime"): return true
     return false
 
-bool pred_tostr(Vector[String] &n):
+bool pred_tostr(Vector[String] n):
     if cn_has_prefix(n, "gorget_int_to_str") or cn_has_prefix(n, "gorget_float_to_str"): return true
     if cn_has_prefix(n, "gorget_bool_to_str") or cn_has_prefix(n, "gorget_codepoint_to_utf8"): return true
     if cn_has_prefix(n, "gorget_char_to_str") or cn_has_prefix(n, "gorget_int_to_binary"): return true
@@ -8986,12 +8986,12 @@ bool pred_tostr(Vector[String] &n):
     if cn_has_eq(n, "gorget_char_chr") or cn_has_eq(n, "gorget_assert_fail_values"): return true
     return false
 
-bool pred_env(Vector[String] &n):
+bool pred_env(Vector[String] n):
     if cn_has_eq(n, "gorget_getenv") or cn_has_eq(n, "gorget_setenv") or cn_has_eq(n, "gorget_getcwd"): return true
     if cn_has_eq(n, "gorget_platform") or cn_has_eq(n, "gorget_exit"): return true
     return false
 
-bool pred_io(Vector[String] &n):
+bool pred_io(Vector[String] n):
     if cn_has_prefix(n, "gorget_input") or cn_has_prefix(n, "gorget_rand"): return true
     if cn_has_prefix(n, "gorget_seed") or cn_has_prefix(n, "gorget_sleep_ms"): return true
     if cn_has_eq(n, "sleep_ms"): return true
@@ -9001,7 +9001,7 @@ bool pred_io(Vector[String] &n):
     if cn_has_prefix(n, "gorget_term_") or cn_has_eq(n, "gorget_is_tty"): return true
     return false
 
-bool pred_math(Vector[String] &n):
+bool pred_math(Vector[String] n):
     if cn_has_prefix(n, "gorget_sqrt") or cn_has_prefix(n, "gorget_pow"): return true
     if cn_has_prefix(n, "gorget_floor") or cn_has_prefix(n, "gorget_ceil"): return true
     if cn_has_prefix(n, "gorget_round") or cn_has_prefix(n, "gorget_abs"): return true
@@ -9015,12 +9015,12 @@ bool pred_math(Vector[String] &n):
     if cn_has_prefix(n, "GORGET_NAN"): return true
     return false
 
-bool pred_sort(Vector[String] &n):
+bool pred_sort(Vector[String] n):
     if cn_has_prefix(n, "__gorget_cmp_") or cn_has_prefix(n, "gorget_array_sort"): return true
     if cn_has_prefix(n, "gorget_array_reverse") or cn_has_prefix(n, "gorget_array_unique"): return true
     return false
 
-bool pred_mutex(Vector[String] &n):
+bool pred_mutex(Vector[String] n):
     if cn_has_prefix(n, "gorget_mutex_") or cn_has_prefix(n, "gorget_guard_"): return true
     if cn_has_prefix(n, "Mutex__") or cn_has_prefix(n, "RWLock__"): return true
     if cn_has_prefix(n, "Guard__") or cn_has_prefix(n, "ReadGuard__") or cn_has_prefix(n, "WriteGuard__"): return true
@@ -9028,7 +9028,7 @@ bool pred_mutex(Vector[String] &n):
     if cn_has_prefix(n, "gorget_write_guard_"): return true
     return false
 
-bool pred_crypto(Vector[String] &n):
+bool pred_crypto(Vector[String] n):
     # The `gorget_sha` / `gorget_hmac` prefixes are intentionally DIGIT-bearing
     # (`gorget_sha1`/`gorget_sha256`/…) — a bare `gorget_sha` prefix collides
     # with the round-16 shared-carrier runtime `gorget_shared_*` (its `get_ptr`
@@ -9043,7 +9043,7 @@ bool pred_crypto(Vector[String] &n):
     if cn_has_prefix(n, "gorget_x25519") or cn_has_prefix(n, "gorget_hkdf") or cn_has_prefix(n, "gorget_aead"): return true
     return false
 
-bool pred_sdl_ttf(Vector[String] &n):
+bool pred_sdl_ttf(Vector[String] n):
     if cn_has_eq(n, "sdl_load_font") or cn_has_eq(n, "sdl_close_font") or cn_has_eq(n, "sdl_draw_text"): return true
     if cn_has_eq(n, "sdl_render_text") or cn_has_eq(n, "sdl_text_width") or cn_has_eq(n, "sdl_text_height"): return true
     if cn_has_prefix(n, "gorget_sdl_load_font") or cn_has_prefix(n, "gorget_sdl_draw_text"): return true

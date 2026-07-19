@@ -318,7 +318,7 @@ int add_block_param(int slot, int bb, LirFunction &f, Dict[int, int] &block_para
 
 # ── Value substitution ──────────────────────────────────────
 
-void apply_value_substitutions(LirFunction &f, Dict[int, int] &value_subst):
+void apply_value_substitutions(LirFunction &f, Dict[int, int] value_subst):
     if value_subst.len() == 0:
         return
 
@@ -329,12 +329,12 @@ void apply_value_substitutions(LirFunction &f, Dict[int, int] &value_subst):
         Vector[LirInst] new_insts = []
         int ii = 0
         while ii < blk.insts.len():
-            LirInst inst = substitute_inst(blk.insts.get(ii).unwrap(), &value_subst)
+            LirInst inst = substitute_inst(blk.insts.get(ii).unwrap(), value_subst)
             new_insts.push(inst)
             ii += 1
         blk.insts = new_insts
         # Substitute in terminator
-        blk.term = substitute_term(blk.term, &value_subst)
+        blk.term = substitute_term(blk.term, value_subst)
         f.blocks.set(bi, blk)
         bi += 1
 
@@ -343,7 +343,7 @@ int sub_val(int v, Dict[int, int] subst):
         return subst.get(v).unwrap()
     return v
 
-Vector[int] sub_vals(Vector[int] vals, Dict[int, int] &subst):
+Vector[int] sub_vals(Vector[int] vals, Dict[int, int] subst):
     Vector[int] result = []
     int i = 0
     while i < vals.len():
@@ -351,7 +351,7 @@ Vector[int] sub_vals(Vector[int] vals, Dict[int, int] &subst):
         i += 1
     return result
 
-LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
+LirInst substitute_inst(LirInst inst, Dict[int, int] subst):
     match inst:
         case ISlotStore(slot, value, is_move):
             return ISlotStore(slot, sub_val(value, subst), is_move)
@@ -434,13 +434,13 @@ LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
         case IMemcpy(dp, sp, sz):
             return IMemcpy(sub_val(dp, subst), sub_val(sp, subst), sub_val(sz, subst))
         case ICall(dst, func, args):
-            return ICall(dst, func, sub_vals(args, &subst))
+            return ICall(dst, func, sub_vals(args, subst))
         case ICallExtern(dst, name, args, orig, abis):
-            return ICallExtern(dst, name, sub_vals(args, &subst), orig, abis)
+            return ICallExtern(dst, name, sub_vals(args, subst), orig, abis)
         case ICallPtr(dst, callee, args):
-            return ICallPtr(dst, sub_val(callee, subst), sub_vals(args, &subst))
+            return ICallPtr(dst, sub_val(callee, subst), sub_vals(args, subst))
         case ICallClosure(dst, kind, closure, args, abis, ret_ty):
-            return ICallClosure(dst, kind, sub_val(closure, subst), sub_vals(args, &subst), abis, ret_ty)
+            return ICallClosure(dst, kind, sub_val(closure, subst), sub_vals(args, subst), abis, ret_ty)
         case IDropGuardOpen(kind, value):
             return IDropGuardOpen(kind, sub_val(value, subst))
         # IDropGuardClose has no values to substitute — falls through to `else: return inst`
@@ -449,29 +449,29 @@ LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
         case IDivCheck(divisor):
             return IDivCheck(sub_val(divisor, subst))
         case IPrintf(fmt, args):
-            return IPrintf(fmt, sub_vals(args, &subst))
+            return IPrintf(fmt, sub_vals(args, subst))
         case IFprintf(fd, fmt, args):
-            return IFprintf(sub_val(fd, subst), fmt, sub_vals(args, &subst))
+            return IFprintf(sub_val(fd, subst), fmt, sub_vals(args, subst))
         else:
             return inst
     return inst
 
-LirTerm substitute_term(LirTerm term, Dict[int, int] &subst):
+LirTerm substitute_term(LirTerm term, Dict[int, int] subst):
     match term:
         case TRet(v):
             return TRet(sub_val(v, subst))
         case TJump(target, args):
-            return TJump(target, sub_vals(args, &subst))
+            return TJump(target, sub_vals(args, subst))
         case TBranch(cond, then_bb, then_args, else_bb, else_args):
-            return TBranch(sub_val(cond, subst), then_bb, sub_vals(then_args, &subst), else_bb, sub_vals(else_args, &subst))
+            return TBranch(sub_val(cond, subst), then_bb, sub_vals(then_args, subst), else_bb, sub_vals(else_args, subst))
         case TSwitch(val, cases, default_bb, default_args):
             Vector[SwitchCase] new_cases = []
             int ci = 0
             while ci < cases.len():
                 SwitchCase sc = cases.get(ci).unwrap()
-                new_cases.push(SwitchCase(sc.value, sc.target, sub_vals(sc.args, &subst)))
+                new_cases.push(SwitchCase(sc.value, sc.target, sub_vals(sc.args, subst)))
                 ci += 1
-            return TSwitch(sub_val(val, subst), new_cases, default_bb, sub_vals(default_args, &subst))
+            return TSwitch(sub_val(val, subst), new_cases, default_bb, sub_vals(default_args, subst))
         else:
             return term
     return term
@@ -640,7 +640,7 @@ void construct_ssa(LirFunction &f):
         rpi += 1
 
     # Phase 2: Apply value substitutions
-    apply_value_substitutions(&f, &value_subst)
+    apply_value_substitutions(&f, value_subst)
 
     # Phase 3: Patch terminators with block arguments for phis. Phi
     # params themselves are appended to each merge block's `params`

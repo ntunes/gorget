@@ -3873,7 +3873,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             GirLocal recv_loc_for_check = ctx.locals.get(recv).unwrap()
             match recv_loc_for_check.ownership:
                 case LoBorrowed():
-                    recv_is_ptr_borrow = is_ptr_type(recv_loc_for_check.type_id, &gmod)
+                    recv_is_ptr_borrow = is_ptr_type(recv_loc_for_check.type_id, gmod)
                 else:
                     pass
             bool need_writeback = false
