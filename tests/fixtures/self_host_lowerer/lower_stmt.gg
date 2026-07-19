@@ -294,7 +294,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             bool src_is_static_global = false
             match init_expr.expr:
                 case EIdentifier(gv_static_nm):
-                    if static_contains(&gmod, gv_static_nm) and not nl_contains(&ctx, gv_static_nm):
+                    if static_contains(gmod, gv_static_nm) and not nl_contains(&ctx, gv_static_nm):
                         src_is_static_global = true
                 else:
                     pass
@@ -930,7 +930,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                 # runtime no-op. Mirrors Rust's is_moved -> drop_if_alive.
                                 emit(&ctx, GIDropIfAlive(lid))
                             emit(&ctx, GIAssign(lid, rhs_op))
-                    elif static_contains(&gmod, name):
+                    elif static_contains(gmod, name):
                         # Module-level mutable-static WRITE (`STATIC = value`).
                         # A `static` is mutable storage; the destination is the
                         # global itself. `lower_place_base` returns a
@@ -940,7 +940,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         # was silently dropped (statics fell through every local
                         # arm). Mirrors Rust gg's assign into a static
                         # `Place{global,[Deref]}` (assigns.rs:389-392).
-                        int sty = static_lookup_type(&gmod, name)
+                        int sty = static_lookup_type(gmod, name)
                         int prev_expected_st = ctx.expected_type
                         if sty != I64_TYPE and sty != UNIT_TYPE:
                             ctx.expected_type = sty
@@ -1175,7 +1175,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             # other emit_compound_arith caller gets it uniformly.
                             emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
                             emit(&ctx, GIAssign(lid, op_consume(&ctx, &gmod, op_dst, CkAssign())))
-                    elif static_contains(&gmod, name):
+                    elif static_contains(gmod, name):
                         # Module-level mutable-static COMPOUND-assign
                         # (`STATIC += y` → `STATIC = STATIC <op> y`). Read the
                         # current value via `lower_expr` (routes through
@@ -1184,7 +1184,7 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                         # back THROUGH the global-address pointer that
                         # `lower_place_base` yields. Mirrors Rust gg's compound
                         # assign into a static (assigns.rs:1120-1146).
-                        int csty = static_lookup_type(&gmod, name)
+                        int csty = static_lookup_type(gmod, name)
                         int clhs_val = lower_expr(&ctx, target_expr, &gmod)
                         int crhs_val = lower_expr(&ctx, value_expr, &gmod)
                         int cop_dst = add_local(&ctx, csty, None)
@@ -1551,8 +1551,8 @@ int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
             # receiver / field-write / index base mutates the REAL static,
             # not a value copy. A GtMutPtr slot makes lir_lower store the
             # global's address directly (no load/copy).
-            if static_contains(&gmod, name):
-                int sty = static_lookup_type(&gmod, name)
+            if static_contains(gmod, name):
+                int sty = static_lookup_type(gmod, name)
                 int pty = register_type(&gmod, GtMutPtr(sty))
                 int pdst = add_local(&ctx, pty, None)
                 Vector[Operand] no_args = []

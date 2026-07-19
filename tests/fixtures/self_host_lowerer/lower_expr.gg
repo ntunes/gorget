@@ -7494,9 +7494,9 @@ bool call_has_named_cap_or_alloc(Vector[String] &arg_names):
 # `unwrap_or(panic_block)` (`exprs/calls.rs`) + the GIR→LIR tag-switch
 # (`src/lir/lower/insts.rs`).
 void emit_fault_call_tag_dispatch(LowerCtx &ctx, GirModule &gmod, int slot_local, int ovf_handler, int dz_handler, int bnd_handler):
-    int overflow_tag = enum_variant_index(&gmod, "Fault", "Overflow") + 1
-    int divzero_tag = enum_variant_index(&gmod, "Fault", "DivByZero") + 1
-    int bounds_tag = enum_variant_index(&gmod, "Fault", "Bounds") + 1
+    int overflow_tag = enum_variant_index(gmod, "Fault", "Overflow") + 1
+    int divzero_tag = enum_variant_index(gmod, "Fault", "DivByZero") + 1
+    int bounds_tag = enum_variant_index(gmod, "Fault", "Bounds") + 1
     # Load the slot tag value ONCE.
     int tag_val = add_local(&ctx, I32_TYPE, None)
     emit(&ctx, GIAssign(tag_val, OpCopy(slot_local)))
@@ -8744,8 +8744,8 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                         # param shadow falls through to the existing `lower_expr(arg)`
                         # path below, so this hot arg-lowering path is unchanged for
                         # everything that is not a module-level static.
-                        if static_contains(&gmod, ad_name) and not nl_contains(&ctx, ad_name):
-                            int ad_sty = static_lookup_type(&gmod, ad_name)
+                        if static_contains(gmod, ad_name) and not nl_contains(&ctx, ad_name):
+                            int ad_sty = static_lookup_type(gmod, ad_name)
                             int ad_pty = register_type(&gmod, GtMutPtr(ad_sty))
                             int ad_pdst = add_local(&ctx, ad_pty, None)
                             Vector[Operand] ad_no_args = []
@@ -9209,7 +9209,7 @@ int lower_call(LowerCtx &ctx, String &fname, Vector[SpannedExpr] &args, Vector[S
                 # C-emit aggregate `(Enum){.tag=N,...}` are well-typed. Without
                 # this the 100+-byte enum mis-slots into an 8-byte int temp.
                 ret_type = lookup_or_register_named(&gmod, _ev_parent)
-        bool callee_participates = participates_in_fault(&gmod, call_name)
+        bool callee_participates = participates_in_fault(gmod, call_name)
         bool fault_catching = false
         int fault_ovf_h = -1
         int fault_dz_h = -1

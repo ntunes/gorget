@@ -608,7 +608,7 @@ bool extern_ret_shape_safe_to_register(SpannedType rt):
 
 # ── Import loading ───────────────────────────────────────
 
-Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len, Dict[String, String] &lib_embedded, bool lib_explicit, Dict[String, bool] &imported_bare_names):
+Dict[String, String] load_imports(Module &m, String entry_path, String lib_dir, Dict[String, bool] &imported_fns, int entry_source_len, Dict[String, String] lib_embedded, bool lib_explicit, Dict[String, bool] &imported_bare_names):
     # Canonicalize the entry path to an absolute path BEFORE deriving
     # `base_dir`. Mirrors Rust's `ModuleLoader::load_all` (src/loader.rs:581
     # `entry.canonicalize()` → `canonical.parent()`). Without this, a

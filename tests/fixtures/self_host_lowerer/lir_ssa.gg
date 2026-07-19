@@ -18,7 +18,7 @@ from std.collections import Vector, Dict
 # ── Find promotable slots ───────────────────────────────────
 
 # A slot is promotable if it has scalar type and no SlotAddr references it.
-Dict[int, bool] find_promotable_slots(LirFunction &f):
+Dict[int, bool] find_promotable_slots(LirFunction f):
     Dict[int, bool] candidates = {}
 
     # All scalar slots are candidates.
@@ -43,7 +43,7 @@ Dict[int, bool] find_promotable_slots(LirFunction &f):
 
 # ── Compute predecessor blocks ──────────────────────────────
 
-Vector[Vector[int]] compute_predecessors(LirFunction &f):
+Vector[Vector[int]] compute_predecessors(LirFunction f):
     Vector[Vector[int]] preds = []
     int pi = 0
     while pi < f.blocks.len():
@@ -74,7 +74,7 @@ Vector[Vector[int]] compute_predecessors(LirFunction &f):
 # a higher block id than `match_bb` (the arm body where `if bind == ...`
 # reads), because lower_match_stmt creates arm_body_bb before calling
 # lower_ctor_pattern which in turn creates bind_bb.
-Vector[int] compute_rpo(LirFunction &f):
+Vector[int] compute_rpo(LirFunction f):
     Vector[int] rpo = []
     if f.blocks.len() == 0:
         return rpo
@@ -222,7 +222,7 @@ void process_block(int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int
         match inst:
             case ISlotStore(slot, value, _):
                 if promotable.contains(slot):
-                    int resolved = resolve_value(value, &value_subst)
+                    int resolved = resolve_value(value, value_subst)
                     current_def.put(ssa_key(bb, slot), resolved)
                 else:
                     new_insts.push(inst)
@@ -245,7 +245,7 @@ void process_block(int bb, LirFunction &f, Dict[int, bool] &promotable, Dict[int
     f.blocks.set(bb, final_blk)
 
 # Chase substitution chain to find canonical value.
-int resolve_value(int val, Dict[int, int] &value_subst):
+int resolve_value(int val, Dict[int, int] value_subst):
     int current = val
     int iters = 0
     while value_subst.contains(current) and iters < 100:
@@ -338,7 +338,7 @@ void apply_value_substitutions(LirFunction &f, Dict[int, int] &value_subst):
         f.blocks.set(bi, blk)
         bi += 1
 
-int sub_val(int v, Dict[int, int] &subst):
+int sub_val(int v, Dict[int, int] subst):
     if subst.contains(v):
         return subst.get(v).unwrap()
     return v
@@ -347,111 +347,111 @@ Vector[int] sub_vals(Vector[int] vals, Dict[int, int] &subst):
     Vector[int] result = []
     int i = 0
     while i < vals.len():
-        result.push(sub_val(vals.get(i).unwrap(), &subst))
+        result.push(sub_val(vals.get(i).unwrap(), subst))
         i += 1
     return result
 
 LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
     match inst:
         case ISlotStore(slot, value, is_move):
-            return ISlotStore(slot, sub_val(value, &subst), is_move)
+            return ISlotStore(slot, sub_val(value, subst), is_move)
         case IClosurePack(slot, env_ptr, call_func, adapt):
-            return IClosurePack(slot, sub_val(env_ptr, &subst), call_func, adapt)
+            return IClosurePack(slot, sub_val(env_ptr, subst), call_func, adapt)
         case IAdd(dst, ty, lhs, rhs, ovf):
-            return IAdd(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst), ovf)
+            return IAdd(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst), ovf)
         case ISub(dst, ty, lhs, rhs, ovf):
-            return ISub(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst), ovf)
+            return ISub(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst), ovf)
         case IMul(dst, ty, lhs, rhs, ovf):
-            return IMul(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst), ovf)
+            return IMul(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst), ovf)
         case IDiv(dst, ty, lhs, rhs):
-            return IDiv(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IDiv(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case IRem(dst, ty, lhs, rhs):
-            return IRem(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IRem(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case IMod(dst, ty, lhs, rhs):
-            return IMod(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IMod(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case IFaultCheck(dst, op, ty, lhs, rhs):
-            return IFaultCheck(dst, op, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IFaultCheck(dst, op, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case INeg(dst, ty, op):
-            return INeg(dst, ty, sub_val(op, &subst))
+            return INeg(dst, ty, sub_val(op, subst))
         case IBitAnd(dst, ty, lhs, rhs):
-            return IBitAnd(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IBitAnd(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case IBitOr(dst, ty, lhs, rhs):
-            return IBitOr(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IBitOr(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case IBitXor(dst, ty, lhs, rhs):
-            return IBitXor(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IBitXor(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case IBitNot(dst, ty, op):
-            return IBitNot(dst, ty, sub_val(op, &subst))
+            return IBitNot(dst, ty, sub_val(op, subst))
         case IShl(dst, ty, lhs, rhs):
-            return IShl(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IShl(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case IShr(dst, ty, lhs, rhs):
-            return IShr(dst, ty, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return IShr(dst, ty, sub_val(lhs, subst), sub_val(rhs, subst))
         case ICmp(dst, op, lhs, rhs):
-            return ICmp(dst, op, sub_val(lhs, &subst), sub_val(rhs, &subst))
+            return ICmp(dst, op, sub_val(lhs, subst), sub_val(rhs, subst))
         case INot(dst, op):
-            return INot(dst, sub_val(op, &subst))
+            return INot(dst, sub_val(op, subst))
         case IIntCast(dst, val, to):
-            return IIntCast(dst, sub_val(val, &subst), to)
+            return IIntCast(dst, sub_val(val, subst), to)
         case IFloatCast(dst, val, to):
-            return IFloatCast(dst, sub_val(val, &subst), to)
+            return IFloatCast(dst, sub_val(val, subst), to)
         case IIntToFloat(dst, val, to):
-            return IIntToFloat(dst, sub_val(val, &subst), to)
+            return IIntToFloat(dst, sub_val(val, subst), to)
         case IFloatToInt(dst, val, to):
-            return IFloatToInt(dst, sub_val(val, &subst), to)
+            return IFloatToInt(dst, sub_val(val, subst), to)
         case IPtrCast(dst, val):
-            return IPtrCast(dst, sub_val(val, &subst))
+            return IPtrCast(dst, sub_val(val, subst))
         case IBitcast(dst, val, to):
-            return IBitcast(dst, sub_val(val, &subst), to)
+            return IBitcast(dst, sub_val(val, subst), to)
         case ILoad(dst, ptr, ty):
-            return ILoad(dst, sub_val(ptr, &subst), ty)
+            return ILoad(dst, sub_val(ptr, subst), ty)
         case IStore(ptr, val):
-            return IStore(sub_val(ptr, &subst), sub_val(val, &subst))
+            return IStore(sub_val(ptr, subst), sub_val(val, subst))
         case IBoxAlloc(dst, inner_ty, val):
-            return IBoxAlloc(dst, inner_ty, sub_val(val, &subst))
+            return IBoxAlloc(dst, inner_ty, sub_val(val, subst))
         case IAddressOf(dst, val, ty):
-            return IAddressOf(dst, sub_val(val, &subst), ty)
+            return IAddressOf(dst, sub_val(val, subst), ty)
         case IStructInit(target, sid, fields):
             Vector[FieldInit] sub_fields = []
             int fii = 0
             while fii < fields.len():
                 FieldInit fi = fields.get(fii).unwrap()
-                sub_fields.push(FieldInit(fi.index, sub_val(fi.value, &subst)))
+                sub_fields.push(FieldInit(fi.index, sub_val(fi.value, subst)))
                 fii += 1
-            return IStructInit(sub_val(target, &subst), sid, sub_fields)
+            return IStructInit(sub_val(target, subst), sid, sub_fields)
         case IEnumInit(target, sid, tag, fields):
             Vector[FieldInit] sub_fields = []
             int fii = 0
             while fii < fields.len():
                 FieldInit fi = fields.get(fii).unwrap()
-                sub_fields.push(FieldInit(fi.index, sub_val(fi.value, &subst)))
+                sub_fields.push(FieldInit(fi.index, sub_val(fi.value, subst)))
                 fii += 1
-            return IEnumInit(sub_val(target, &subst), sid, tag, sub_fields)
+            return IEnumInit(sub_val(target, subst), sid, tag, sub_fields)
         case IFieldPtr(dst, base, sid, field):
-            return IFieldPtr(dst, sub_val(base, &subst), sid, field)
+            return IFieldPtr(dst, sub_val(base, subst), sid, field)
         case IElemPtr(dst, base, idx, esz):
-            return IElemPtr(dst, sub_val(base, &subst), sub_val(idx, &subst), esz)
+            return IElemPtr(dst, sub_val(base, subst), sub_val(idx, subst), esz)
         case IMemset(ptr, byte, sz):
-            return IMemset(sub_val(ptr, &subst), sub_val(byte, &subst), sub_val(sz, &subst))
+            return IMemset(sub_val(ptr, subst), sub_val(byte, subst), sub_val(sz, subst))
         case IMemcpy(dp, sp, sz):
-            return IMemcpy(sub_val(dp, &subst), sub_val(sp, &subst), sub_val(sz, &subst))
+            return IMemcpy(sub_val(dp, subst), sub_val(sp, subst), sub_val(sz, subst))
         case ICall(dst, func, args):
             return ICall(dst, func, sub_vals(args, &subst))
         case ICallExtern(dst, name, args, orig, abis):
             return ICallExtern(dst, name, sub_vals(args, &subst), orig, abis)
         case ICallPtr(dst, callee, args):
-            return ICallPtr(dst, sub_val(callee, &subst), sub_vals(args, &subst))
+            return ICallPtr(dst, sub_val(callee, subst), sub_vals(args, &subst))
         case ICallClosure(dst, kind, closure, args, abis, ret_ty):
-            return ICallClosure(dst, kind, sub_val(closure, &subst), sub_vals(args, &subst), abis, ret_ty)
+            return ICallClosure(dst, kind, sub_val(closure, subst), sub_vals(args, &subst), abis, ret_ty)
         case IDropGuardOpen(kind, value):
-            return IDropGuardOpen(kind, sub_val(value, &subst))
+            return IDropGuardOpen(kind, sub_val(value, subst))
         # IDropGuardClose has no values to substitute — falls through to `else: return inst`
         case IBoundsCheck(idx, len):
-            return IBoundsCheck(sub_val(idx, &subst), sub_val(len, &subst))
+            return IBoundsCheck(sub_val(idx, subst), sub_val(len, subst))
         case IDivCheck(divisor):
-            return IDivCheck(sub_val(divisor, &subst))
+            return IDivCheck(sub_val(divisor, subst))
         case IPrintf(fmt, args):
             return IPrintf(fmt, sub_vals(args, &subst))
         case IFprintf(fd, fmt, args):
-            return IFprintf(sub_val(fd, &subst), fmt, sub_vals(args, &subst))
+            return IFprintf(sub_val(fd, subst), fmt, sub_vals(args, &subst))
         else:
             return inst
     return inst
@@ -459,11 +459,11 @@ LirInst substitute_inst(LirInst inst, Dict[int, int] &subst):
 LirTerm substitute_term(LirTerm term, Dict[int, int] &subst):
     match term:
         case TRet(v):
-            return TRet(sub_val(v, &subst))
+            return TRet(sub_val(v, subst))
         case TJump(target, args):
             return TJump(target, sub_vals(args, &subst))
         case TBranch(cond, then_bb, then_args, else_bb, else_args):
-            return TBranch(sub_val(cond, &subst), then_bb, sub_vals(then_args, &subst), else_bb, sub_vals(else_args, &subst))
+            return TBranch(sub_val(cond, subst), then_bb, sub_vals(then_args, &subst), else_bb, sub_vals(else_args, &subst))
         case TSwitch(val, cases, default_bb, default_args):
             Vector[SwitchCase] new_cases = []
             int ci = 0
@@ -471,7 +471,7 @@ LirTerm substitute_term(LirTerm term, Dict[int, int] &subst):
                 SwitchCase sc = cases.get(ci).unwrap()
                 new_cases.push(SwitchCase(sc.value, sc.target, sub_vals(sc.args, &subst)))
                 ci += 1
-            return TSwitch(sub_val(val, &subst), new_cases, default_bb, sub_vals(default_args, &subst))
+            return TSwitch(sub_val(val, subst), new_cases, default_bb, sub_vals(default_args, &subst))
         else:
             return term
     return term
@@ -610,11 +610,11 @@ LirTerm add_args_to_term(LirTerm term, int target, Vector[int] args):
 # ── Main entry point ────────────────────────────────────────
 
 void construct_ssa(LirFunction &f):
-    Dict[int, bool] promotable = find_promotable_slots(&f)
+    Dict[int, bool] promotable = find_promotable_slots(f)
     if promotable.len() == 0:
         return
 
-    Vector[Vector[int]] preds = compute_predecessors(&f)
+    Vector[Vector[int]] preds = compute_predecessors(f)
 
     Dict[int, int] current_def = {}
     Dict[int, int] block_params = {}
@@ -632,7 +632,7 @@ void construct_ssa(LirFunction &f):
     # zero-inits the destructured binding. Under RPO, bind_bb runs first,
     # records the store in current_def, and arm_body_bb's subsequent read
     # finds it correctly.
-    Vector[int] rpo = compute_rpo(&f)
+    Vector[int] rpo = compute_rpo(f)
     int rpi = 0
     while rpi < rpo.len():
         int bi_rpo = rpo.get(rpi).unwrap()

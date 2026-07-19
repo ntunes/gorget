@@ -728,7 +728,7 @@ Vector[int] liveness_inst_operand_local_ids(Instruction inst):
 
 # Top-level entry. Compute the full per-function liveness analysis,
 # returning a `LivenessAnalysis` with `last_use_of_op` populated.
-LivenessAnalysis compute_liveness(LowerCtx &ctx):
+LivenessAnalysis compute_liveness(LowerCtx ctx):
     int nlocals = ctx.locals.len()
     Dict[int, bool] last_use = {}
     LivenessAnalysis result = LivenessAnalysis(!last_use)
@@ -770,7 +770,7 @@ LivenessAnalysis compute_liveness(LowerCtx &ctx):
 # Compute the discrepancy count. Defensive: bounded by total OpMove
 # operand-reads in the function (typically dozens, never millions).
 # We DO NOT mutate any state — purely an inspection pass.
-int liveness_instrumentation_diff(LowerCtx &ctx, LivenessAnalysis &liveness):
+int liveness_instrumentation_diff(LowerCtx ctx, LivenessAnalysis liveness):
     int n = ctx.block_insts.len()
     if n == 0:
         return 0
@@ -938,7 +938,7 @@ void wire_liveness_into_modes(LowerCtx &ctx, GirModule &gmod, LivenessAnalysis &
 # so the helper's Ptr-clone-through and OpCopy-on-primitive
 # branches are observationally unreachable from this entry point.
 # They sit dormant for Phase 2.3.a wire-ups at other call sites.
-Operand wire_one_operand(LowerCtx &ctx, GirModule &gmod, Operand op, int b, int i, int op_idx, LivenessAnalysis &liveness, Vector[int] &moved_lids):
+Operand wire_one_operand(LowerCtx &ctx, GirModule &gmod, Operand op, int b, int i, int op_idx, LivenessAnalysis liveness, Vector[int] &moved_lids):
     int lid = -1
     bool is_consuming_mode = false
     match op:
@@ -989,29 +989,29 @@ Operand wire_one_operand(LowerCtx &ctx, GirModule &gmod, Operand op, int b, int 
 Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
     match inst:
         case GIAssign(dst, op):
-            return GIAssign(dst, wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids))
+            return GIAssign(dst, wire_one_operand(&ctx, &gmod, op, b, i, 0, liveness, &moved_lids))
         case GIBinOp(dst, opc, ty, lhs, rhs):
-            Operand new_lhs = wire_one_operand(&ctx, &gmod, lhs, b, i, 0, &liveness, &moved_lids)
-            Operand new_rhs = wire_one_operand(&ctx, &gmod, rhs, b, i, 1, &liveness, &moved_lids)
+            Operand new_lhs = wire_one_operand(&ctx, &gmod, lhs, b, i, 0, liveness, &moved_lids)
+            Operand new_rhs = wire_one_operand(&ctx, &gmod, rhs, b, i, 1, liveness, &moved_lids)
             return GIBinOp(dst, opc, ty, new_lhs, new_rhs)
         case GIUnOp(dst, opc, ty, src):
-            return GIUnOp(dst, opc, ty, wire_one_operand(&ctx, &gmod, src, b, i, 0, &liveness, &moved_lids))
+            return GIUnOp(dst, opc, ty, wire_one_operand(&ctx, &gmod, src, b, i, 0, liveness, &moved_lids))
         case GICmp(dst, opc, ty, lhs, rhs):
-            Operand new_lhs = wire_one_operand(&ctx, &gmod, lhs, b, i, 0, &liveness, &moved_lids)
-            Operand new_rhs = wire_one_operand(&ctx, &gmod, rhs, b, i, 1, &liveness, &moved_lids)
+            Operand new_lhs = wire_one_operand(&ctx, &gmod, lhs, b, i, 0, liveness, &moved_lids)
+            Operand new_rhs = wire_one_operand(&ctx, &gmod, rhs, b, i, 1, liveness, &moved_lids)
             return GICmp(dst, opc, ty, new_lhs, new_rhs)
         case GICall(dst, name, args):
             Vector[Operand] new_args = []
             int ai = 0
             while ai < args.len():
-                new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
+                new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, liveness, &moved_lids))
                 ai += 1
             return GICall(dst, name, !new_args)
         case GICallExtern(dst, name, args):
             Vector[Operand] new_args = []
             int ai = 0
             while ai < args.len():
-                new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, &liveness, &moved_lids))
+                new_args.push(wire_one_operand(&ctx, &gmod, args.get(ai).unwrap(), b, i, ai, liveness, &moved_lids))
                 ai += 1
             return GICallExtern(dst, name, !new_args)
         case GIDerefStore(ptr_lid, val_op, inner_ty):
@@ -1023,7 +1023,7 @@ Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst,
             # RESOURCE `&`-writes (`String &s = s + "!"`) it returns OpClone,
             # which this promotes to OpMove at last-use so resource `&`-writes
             # move like Rust gg instead of leaving a stray clone.
-            return GIDerefStore(ptr_lid, wire_one_operand(&ctx, &gmod, val_op, b, i, 1, &liveness, &moved_lids), inner_ty)
+            return GIDerefStore(ptr_lid, wire_one_operand(&ctx, &gmod, val_op, b, i, 1, liveness, &moved_lids), inner_ty)
         else:
             # GIDeref / GIDrop / GIDropIfAlive / GIMoveZero / GINop —
             # operand-read shape is fixed (single lid / no operands).
@@ -1036,9 +1036,9 @@ Instruction rewrite_inst_modes(LowerCtx &ctx, GirModule &gmod, Instruction inst,
 Terminator rewrite_term_modes(LowerCtx &ctx, GirModule &gmod, Terminator term, int b, int i, LivenessAnalysis &liveness, Vector[int] &moved_lids):
     match term:
         case GTReturn(op):
-            return GTReturn(wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids))
+            return GTReturn(wire_one_operand(&ctx, &gmod, op, b, i, 0, liveness, &moved_lids))
         case GTBranch(op, t_bb, e_bb):
-            return GTBranch(wire_one_operand(&ctx, &gmod, op, b, i, 0, &liveness, &moved_lids), t_bb, e_bb)
+            return GTBranch(wire_one_operand(&ctx, &gmod, op, b, i, 0, liveness, &moved_lids), t_bb, e_bb)
         else:
             return term
 

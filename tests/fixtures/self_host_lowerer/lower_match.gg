@@ -82,7 +82,7 @@ int match_variant_index(String enum_name, String variant_name, GirModule &gmod):
             return 1
         return -1
     # Check the enum registry first; fall back to type_infos.
-    int reg_idx = enum_variant_index(&gmod, enum_name, variant_name)
+    int reg_idx = enum_variant_index(gmod, enum_name, variant_name)
     if reg_idx >= 0:
         return reg_idx
     if not gmod.type_infos.contains(enum_name):
@@ -596,7 +596,7 @@ void lower_ctor_pattern(LowerCtx &ctx, int scrutinee, String variant_name, Vecto
     # If still unresolved, scan the enum registry for a matching variant.
     # This mirrors Rust's `ctx.resolve_enum_variant(...)` fallback.
     if effective_enum == "":
-        String guessed = find_enum_by_variant(&gmod, effective_variant)
+        String guessed = find_enum_by_variant(gmod, effective_variant)
         if guessed.len() > 0:
             effective_enum = guessed
     # Scrutinee-type fallback: when `match_enum_type` returned empty

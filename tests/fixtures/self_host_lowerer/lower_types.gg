@@ -1144,9 +1144,9 @@ int lower_fn_addr_ident(LowerCtx &ctx, GirModule &gmod, String name):
 # on hit (>= 0); -1 on miss. Out-of-line for the same stack-frame
 # reason as `lower_float_const_ident` / `lower_fn_addr_ident`.
 int lower_static_ref_ident(LowerCtx &ctx, GirModule &gmod, String name):
-    if not static_contains(&gmod, name):
+    if not static_contains(gmod, name):
         return -1
-    int sty = static_lookup_type(&gmod, name)
+    int sty = static_lookup_type(gmod, name)
     int sdst = add_local(&ctx, sty, None)
     Vector[Operand] no_args = []
     emit(&ctx, GICallExtern(sdst, "__global_ref__" + name, no_args))

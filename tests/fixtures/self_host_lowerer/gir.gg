@@ -998,10 +998,10 @@ void record_enum_category(GirModule &gmod, int enum_tid, int category, int ok_ti
     gmod.enum_category.put(enum_tid, EnumCategory(category, ok_tid, err_tid))
 
 # Module-level static (runtime-call init) accessors.
-bool static_contains(GirModule &gmod, String name):
+bool static_contains(GirModule gmod, String name):
     return gmod.statics.contains(name)
 
-int static_lookup_type(GirModule &gmod, String name):
+int static_lookup_type(GirModule gmod, String name):
     if gmod.statics.contains(name):
         return gmod.statics.get(name).unwrap().type_id
     return -1
@@ -1028,7 +1028,7 @@ int gir_mod_add_global(GirModule &gmod, GirGlobal g):
 # lowerer when the scrutinee's type can't be resolved. Returns empty
 # string if no enum has this variant (or if multiple do — we pick the
 # first to stay deterministic).
-String find_enum_by_variant(GirModule &gmod, String variant_name):
+String find_enum_by_variant(GirModule gmod, String variant_name):
     String result = ""
     Vector[String] enum_names = gmod.enum_registry.keys()
     int i = 0
@@ -1050,11 +1050,11 @@ String find_enum_by_variant(GirModule &gmod, String variant_name):
 # must pass the trailing arg (uniform signature, D5). TYPED read of the
 # `participating_fault_fns` set — never name-derived (devbook/24 rule 2). Mirrors
 # Rust gg's `LoweringContext::participates_in_fault`.
-bool participates_in_fault(GirModule &gmod, String fname):
+bool participates_in_fault(GirModule gmod, String fname):
     return gmod.participating_fault_fns.contains(fname)
 
 # Look up the variant index (ordinal) for a given enum + variant.
-int enum_variant_index(GirModule &gmod, String enum_name, String variant_name):
+int enum_variant_index(GirModule gmod, String enum_name, String variant_name):
     if not gmod.enum_registry.contains(enum_name):
         return -1
     Vector[String] vs = gmod.enum_registry.get(enum_name).unwrap()

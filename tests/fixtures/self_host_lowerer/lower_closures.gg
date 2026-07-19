@@ -61,7 +61,7 @@ from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dic
 void fill_fault_return_block(LowerCtx &ctx, GirModule &gmod, int return_bb, int slot_lid, int ret_type, String variant, String panic_msg):
     # Tag = `Fault.<variant>` ordinal + 1 (0 reserved for "no fault"). Typed
     # lookup off the enum registry — no magic `1`/`2`/`3` (devbook/24 rule 2).
-    int fault_ord = enum_variant_index(&gmod, "Fault", variant)
+    int fault_ord = enum_variant_index(gmod, "Fault", variant)
     int fault_tag = fault_ord + 1
     if fault_ord < 0:
         # Fault enum somehow unregistered — fall back to the Phase-1 ordering
@@ -224,7 +224,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     int fault_overflow_bb = -1
     int fault_divzero_bb = -1
     int fault_bounds_bb = -1
-    if participates_in_fault(&gmod, fdef.name):
+    if participates_in_fault(gmod, fdef.name):
         # Trailing fault-slot param: `&out`-shaped `GtMutPtr(i32)`. The slot
         # holds the raw `int32_t*` the caller passed (`&slot`); a body NULL-test
         # + GIDerefStore writes the tag through it. Registered as a PLAIN
@@ -1023,7 +1023,7 @@ bool closure_ident_module_resolvable(String name, GirModule &gmod):
         return true
     if gmod.fn_sigs.contains(name):
         return true
-    if static_contains(&gmod, name):
+    if static_contains(gmod, name):
         return true
     if gmod.none_decls.contains(name):
         return true

@@ -1343,8 +1343,8 @@ Vector[BasicBlock] finalize_body_blocks(LowerCtx &ctx, GirModule &gmod, String f
     # CFG-aware operand-mode post-pass `wire_liveness_into_modes` which
     # decides OpMove vs OpClone at every consuming operand read. The
     # instrumentation diff vs the legacy linear pass is a regression net.
-    LivenessAnalysis liveness = compute_liveness(&ctx)
-    int diff = liveness_instrumentation_diff(&ctx, &liveness)
+    LivenessAnalysis liveness = compute_liveness(ctx)
+    int diff = liveness_instrumentation_diff(ctx, liveness)
     if diff > 0:
         diag_warn("gir_liveness_diff", fn_name + ": " + int_to_str(diff) + " sites")
     wire_liveness_into_modes(&ctx, &gmod, &liveness)
