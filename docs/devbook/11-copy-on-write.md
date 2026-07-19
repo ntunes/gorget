@@ -246,7 +246,9 @@ writes the clone, downstream never re-derives.
 **The campaign's acceptance bar — the CoW charter (owner 2026-07-19).** Implicit
 clones must be as good as the best hand-written clones would have been; cloning
 more than absolutely necessary is the model missing its own charter
-(`language-design.md` §3.1). Operationally: every `ImplicitCloneReason` is either
+(`language-design.md` §3.1 — and the README's public promise, "as if you'd
+written every copy by hand", which makes charter-suspect volume a gap between
+the shipped README and reality). Operationally: every `ImplicitCloneReason` is either
 **charter-justified** (a real ownership boundary a hand-writing author also pays —
 a consuming position on a live source, a closure capture, a genuine write to a
 shared root) or **charter-suspect** (a clone the hand-written version would replace
