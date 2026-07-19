@@ -13,7 +13,9 @@ use crate::ir::types::*;
 use crate::parser::ast::{self, BinaryOp, Block, Expr, Pattern, SelectOp, Stmt};
 use crate::span::Spanned;
 
-use super::context::{LoweringContext, SharedLocalInfo, SharedLocalKind};
+use super::context::{
+    LoweringContext, MaterializeDirective, MaterializePosition, SharedLocalInfo, SharedLocalKind,
+};
 use super::drops::DropScopeKind;
 use super::exprs::{lower_expr, infer_operand_type_full, maybe_auto_propagate};
 
@@ -2414,8 +2416,8 @@ fn materialize_loop_carried_bare_params(
 /// `with`, `unsafe`, named-scope, `match` arms, `select` arms) — i.e. in the
 /// PRE-SCOPE block, before the scope fn creates any block or runs its
 /// `save_locals`. For each in-scope bare (borrow) param the scope statement
-/// mutates on ANY path, eagerly materialize a private owned copy HERE via the
-/// shared `cow_before_mutation_scope_preheader` funnel (stamped
+/// mutates on ANY path, eagerly materialize a private owned copy HERE through the
+/// plan (`apply_materialize_directive` with a `BranchPreHeader` directive, stamped
 /// `BranchPreHeaderMaterialize`) and rebind the name — so every branch/arm and
 /// the post-scope merge read the persistent private copy.
 ///
@@ -2468,11 +2470,13 @@ fn materialize_scope_carried_bare_params(
         if ctx.is_bare_param(builder, local)
             && crate::ir::lowering::functions::loop_set_mutates(&mut_set, &name)
         {
-            ctx.cow_before_mutation_scope_preheader(
+            ctx.apply_materialize_directive(
                 builder,
-                local,
-                crate::ir::ImplicitCloneReason::BranchPreHeaderMaterialize,
-                span,
+                MaterializeDirective {
+                    root: local,
+                    reason: crate::ir::ImplicitCloneReason::BranchPreHeaderMaterialize,
+                    position: MaterializePosition::BranchPreHeader { anchor: span },
+                },
             );
         }
     }

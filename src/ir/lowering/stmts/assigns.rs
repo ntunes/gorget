@@ -616,28 +616,10 @@ pub(super) fn lower_field_assign(
     // ROOT (decide-at-root, Core #1/#4) so the write lands on an owned copy; a
     // no-op on `&`/owned roots keeps `&`-chain write-through. The subsequent
     // `try_resolve_field_place` re-resolves against the rebound owned local.
-    if let Expr::Identifier(obj_name) = &object.node {
-        // Direct `s.field = x`: the root IS the object.
-        if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
-            ctx.cow_before_mutation(builder, local_id, object.span);
-        }
-    } else {
-        // Projected object (`v[i].field = x`, `s.inner.field = x`): materialize
-        // the ROOT struct/collection FIRST. `cow_before_field_mutation` alone
-        // (the pre-G1 field-path shape) severs only collection refs INTO the
-        // path, never the root — so `s.inner.field = x` on a bare `s` wrote
-        // through the caller's buffer AND short-circuited the root materialize
-        // (extract_field_path_string returns Some, matching the old field-path
-        // arm before the projected-root arm). Materialize the root, THEN sever
-        // path refs (still needed on the `&`-root no-op path). No double-clone —
-        // the two touch disjoint state (the root local vs the FieldPath refs).
-        if let Some(root_local) = resolve_projection_root_local(ctx, &object.node) {
-            ctx.cow_before_mutation(builder, root_local, object.span);
-        }
-        if let Some(field_path) = extract_field_path_string(&object.node) {
-            ctx.cow_before_field_mutation(builder, &field_path, object.span);
-        }
-    }
+    // Routed through the SHARED assign-target-root prologue (planner round 3):
+    // identical dispatch to `lower_index_assign` / the compound path — one class,
+    // one helper, one plan lookup (was three open-coded copies, Core #4).
+    materialize_assign_target_root(ctx, builder, object);
 
     // CoW UAF fix (round-33, class fix): snapshot the local range spanned by the
     // WHOLE statement's lowering (object projection chain + RHS value). A
@@ -941,25 +923,11 @@ pub(super) fn lower_index_assign(
 ) {
     // CoW: an index write mutates the object. Materialize the immutable-in-context
     // ROOT (decide-at-root, Core #1/#4); a no-op on `&`/owned roots keeps
-    // `&`-chain write-through. Mirrors lower_field_assign — see the rationale
-    // there for the root-first-then-field-path-sever ordering.
-    if let Expr::Identifier(obj_name) = &object.node {
-        // Direct `d[k] = x`: the root IS the object.
-        if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
-            ctx.cow_before_mutation(builder, local_id, object.span);
-        }
-    } else {
-        // Projected object (`m[i][j] = x`, `s.inner[k] = x`): materialize the
-        // ROOT collection/struct first, then sever any collection refs INTO the
-        // field path (the latter only fires for a field-path object, and stays
-        // needed on the `&`-root no-op path).
-        if let Some(root_local) = resolve_projection_root_local(ctx, &object.node) {
-            ctx.cow_before_mutation(builder, root_local, object.span);
-        }
-        if let Some(field_path) = extract_field_path_string(&object.node) {
-            ctx.cow_before_field_mutation(builder, &field_path, object.span);
-        }
-    }
+    // `&`-chain write-through. Routed through the SHARED assign-target-root
+    // prologue (planner round 3) — identical dispatch to `lower_field_assign` /
+    // the compound path (root-first, then field-path sever). One class, one
+    // helper, one plan lookup.
+    materialize_assign_target_root(ctx, builder, object);
 
     // When the object is a struct field access (e.g. self.dict_field[key] = val),
     // resolve the field to a Place in-place to avoid copying the Dict struct.
@@ -1875,24 +1843,42 @@ fn compound_op_to_gir(op: ast::BinaryOp) -> BinOp {
     }
 }
 
-/// SCOUT-PROTO #1: shared root-materialize prologue for compound-assign target
-/// objects. Mirrors the prologue in `lower_field_assign` (604-625) and
-/// `lower_index_assign` (931-947) so that `xs[i] OP= x` / `obj.field OP= x` on
-/// an immutable-in-context (bare-param / alias / element) root materialize a
-/// private owned copy before the read-modify-write, instead of writing through
-/// to the caller. A no-op on `&`/owned roots (write-through preserved).
+/// The SHARED root-materialize prologue for EVERY assign-target object — field
+/// store (`s.field = x`), index store (`d[k] = x` / `v[i] = x`), and compound
+/// (`xs[i] OP= x` / `obj.field OP= x`). Planner campaign round 3, first at-site
+/// client: this is the ONE place the assign-target-root class materializes, and
+/// it routes through the per-function `MaterializePlan` (`plan_materialize_at_site`
+/// → the single reason-stamping funnel) instead of an open-coded
+/// `cow_before_mutation` call. `lower_field_assign` and `lower_index_assign`
+/// previously OPEN-CODED this identical prologue (Core #4 sibling-site drift —
+/// three copies of the same identifier-vs-projected dispatch); they now both
+/// call here, collapsing six `cow_before_mutation` sites to zero direct calls
+/// (the `ratchet_b_materialize_site_count` convergence meter drops 20 → 14).
+/// Mirrors the self-host lane's already-consolidated `cow_materialize_projected_root`.
+///
+/// Materialize the immutable-in-context ROOT (bare-param / alias / element) so
+/// the write lands on an owned copy; a no-op on `&`/owned roots keeps `&`-chain
+/// write-through. For a projected field-path object the field-path collection-ref
+/// sever (`cow_before_field_mutation` — a distinct primitive, NOT a materialize
+/// site) still fires on top, as before.
 fn materialize_assign_target_root(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     object: &Spanned<Expr>,
 ) {
     if let Expr::Identifier(obj_name) = &object.node {
+        // Direct `s.field = x` / `d[k] = x`: the root IS the object.
         if let Some((local_id, _)) = ctx.lookup_local(obj_name) {
-            ctx.cow_before_mutation(builder, local_id, object.span);
+            ctx.plan_materialize_at_site(builder, local_id, object.span);
         }
     } else {
+        // Projected object (`v[i].field = x`, `s.inner[k] = x`, `m[i][j] = x`):
+        // materialize the ROOT struct/collection FIRST, then sever field-path
+        // refs (the two touch disjoint state — the root local vs the FieldPath
+        // refs — so no double-clone; the sever stays needed on the `&`-root
+        // no-op path).
         if let Some(root_local) = resolve_projection_root_local(ctx, &object.node) {
-            ctx.cow_before_mutation(builder, root_local, object.span);
+            ctx.plan_materialize_at_site(builder, root_local, object.span);
         }
         if let Some(field_path) = extract_field_path_string(&object.node) {
             ctx.cow_before_field_mutation(builder, &field_path, object.span);
