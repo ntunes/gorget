@@ -206,13 +206,13 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable &t
     int i = 0
     while i < module.items.len():
         Item item = module.items.get(i).unwrap()
-        collect_item(item, &scopes, &types)
+        collect_item(item, &scopes, types)
         i = i + 1
 
     return ctx
 
 
-void collect_item(Item item, ScopeTable &scopes, TypeTable &types):
+void collect_item(Item item, ScopeTable &scopes, TypeTable types):
     match item:
         case IFunction(f):
             scopes.define(f.name, DkFunction(), Span(0, 0))
@@ -639,7 +639,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 ei = ei + 1
 
         case SItem(item):
-            collect_item(item, &scopes, &types)
+            collect_item(item, &scopes, types)
             resolve_item_body(item, &scopes, &types, &ctx)
 
         case SSnapshot(_, _, value):

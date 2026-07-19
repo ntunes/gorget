@@ -610,7 +610,7 @@ String type_to_name(SpannedType st):
 
 # Check if an expression contains the implicit `it` parameter.
 # Stops at closure boundaries (it inside a closure belongs to that closure).
-bool expr_contains_it(Expr &e):
+bool expr_contains_it(Expr e):
     # Simple tag check — "it" keyword detection doesn't need deep traversal
     # for the self-host parser's use case (only top-level check).
     match e:
@@ -1100,7 +1100,7 @@ equip Parser:
             self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), msg))
 
     # Extract a name from a token that may be an identifier or a keyword used as a name
-    String extract_name(&self, SpannedToken tok):
+    String extract_name(self, SpannedToken tok):
         String name = token_ident(tok.lex_token)
         if name != "":
             return name
@@ -1963,7 +1963,7 @@ equip Parser:
     # keyword string, or "" for a positional arg. parse_call_arg consumes the
     # `name =` tokens; this only reports the name so the parallel vector lines
     # up. Mirrors Rust gg recording `CallArg.name` (src/parser/ast.rs:758).
-    String peek_arg_name(&self):
+    String peek_arg_name(self):
         if self.check_tok(TOK_IDENT) and self.pos + 1 < self.tokens.len():
             SpannedToken next_arg = self.tokens.get(self.pos + 1).unwrap()
             if token_tag(next_arg.lex_token) == TOK_EQ:
@@ -1987,13 +1987,13 @@ equip Parser:
                 self.call_arg_depth = self.call_arg_depth + 1
                 SpannedExpr val = self.parse_expr()
                 self.call_arg_depth = self.call_arg_depth - 1
-                if self.call_arg_depth == 0 and expr_contains_it(&val.expr):
+                if self.call_arg_depth == 0 and expr_contains_it(val.expr):
                     return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
                 return val
         self.call_arg_depth = self.call_arg_depth + 1
         SpannedExpr val = self.parse_expr()
         self.call_arg_depth = self.call_arg_depth - 1
-        if self.call_arg_depth == 0 and expr_contains_it(&val.expr):
+        if self.call_arg_depth == 0 and expr_contains_it(val.expr):
             return SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)
         return val
 
