@@ -1065,8 +1065,11 @@ fn compound_assign_root_materialize_arms_count() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // One call per projected-mutation arm: FieldAccess + Index = 2.
-    const EXPECTED: usize = 2;
+    // One call per projected-mutation arm: FieldAccess + Index + TupleFieldAccess
+    // = 3 (the TupleFieldAccess arm `t.0 OP= v` was added with Target-2; a tuple
+    // field is a projected mutation exactly like a struct field, so it too must
+    // materialize the root FIRST on a bare-value-param / alias root).
+    const EXPECTED: usize = 3;
     let calls = body.matches("materialize_assign_target_root(").count();
     assert_eq!(
         calls, EXPECTED,
@@ -1159,9 +1162,9 @@ fn compound_assign_fieldaccess_fallback_present() {
          remove this branch.",
     );
 
-    // 2. A final catch-all must REJECT (panic), not silently drop, an unhandled
-    //    compound-assign target shape (Core #10 lower-or-reject). The Deref arm
-    //    (`*p OP= v`) must also be lowered, not left to the catch-all.
+    // 2. The Deref (`*p OP= v`) and TupleFieldAccess (`t.0 OP= v`) arms must be
+    //    LOWERED, not left to the catch-all (Core #10 lower-or-reject; both are
+    //    valid places that formerly silently-dropped/ICE'd).
     assert!(
         body.contains("Expr::Deref { expr: inner } = &target.node"),
         "lower_compound_assign lost its Deref arm (`*p OP= v`): plain `*p = v` \
@@ -1169,10 +1172,22 @@ fn compound_assign_fieldaccess_fallback_present() {
          the Deref arm, do NOT let it fall to the reject.",
     );
     assert!(
-        body.contains("unhandled target shape"),
-        "lower_compound_assign lost its final catch-all REJECT: an unhandled \
-         compound-assign target shape must fail LOUDLY (panic at build time), never \
-         silently drop the write (Core #10). RESTORE the trailing `}} else {{ panic!(...) }}`.",
+        body.contains("Expr::TupleFieldAccess { object, index } = &target.node"),
+        "lower_compound_assign lost its TupleFieldAccess arm (`t.0 OP= v`): a tuple \
+         field is a valid mutable place; without the arm it hits the catch-all and \
+         ICEs on check-ACCEPTED code (Core #10 lower-or-reject) — RESTORE the arm.",
+    );
+    // 3. A final catch-all must exist for non-lvalue targets (`5 += 1`), backed by
+    //    the check-time `E_InvalidAssignTarget` guard so it is genuinely
+    //    unreachable — never a silent drop, never an ICE on accepted code.
+    assert!(
+        body.contains("E_InvalidAssignTarget"),
+        "lower_compound_assign lost its final catch-all: a non-lvalue compound-assign \
+         target must be REJECTED at check time (E_InvalidAssignTarget) and the \
+         lowerer's tail must be an honest `unreachable!` citing that guard — never a \
+         silent drop, never a bare panic on accepted code (Core #10). RESTORE the \
+         trailing `}} else {{ unreachable!(...E_InvalidAssignTarget...) }}` AND its \
+         check-side guard `check_assign_target_lvalue`.",
     );
 }
 
@@ -5091,6 +5106,7 @@ fn g1_projected_materialize_sites_untrack() {
     // the projected path makes the whole fn UNTRACK_REQUIRED.
     const UNTRACK_REQUIRED: &[&str] = &[
         "lower_field_assign",
+        "lower_tuple_field_assign",
         "lower_index_assign",
         "lower_compound_assign",
         "lower_method_call",
@@ -5799,13 +5815,16 @@ fn ratchet_a_lowering_dispatch_silent_fallthrough() {
     // The CURRENT open set: each fn's target/pattern dispatch silently drops the
     // unhandled shapes. BURN-DOWN — as each is fixed (lower-or-reject), delete
     // it here; the set only shrinks without a cited re-pin.
-    //   lower_assign        — `xs.0 = v` (Expr::TupleFieldAccess target) dropped.
     //   lower_var_decl      — non-Binding/Tuple VarDecl patterns (defensive:
     //                         parser+semantic gate these today, so unreachable —
     //                         but the arm is silent, not a loud `unreachable!`).
     //   lower_for_dict      — `for (a,b,c) in dict` (Tuple arity != 2) → no
     //                         bindings, garbage output.
-    const ALLOWED: &[&str] = &["lower_assign", "lower_var_decl", "lower_for_dict"];
+    // BURNED DOWN (Target-2): `lower_assign` — its `_ =>` was the `xs.0 = v`
+    // (Expr::TupleFieldAccess) silent drop; it now lowers tuple fields and its
+    // `_ =>` is a loud `unreachable!` backed by the check-time
+    // `check_assign_target_lvalue` gate (E_InvalidAssignTarget).
+    const ALLOWED: &[&str] = &["lower_var_decl", "lower_for_dict"];
 
     let mut found: Vec<String> = Vec::new();
     for file in FILES {
@@ -5830,28 +5849,16 @@ fn ratchet_a_lowering_dispatch_silent_fallthrough() {
          delete it from ALLOWED (burn-down)."
     );
 
-    // The two OPEN offenders with NO `_ =>` to scan — pinned by marker so a fix
-    // forces this list to shrink. BURN-DOWN.
-    //   A2: lower_compound_assign is an if-let chain (Identifier / FieldAccess /
-    //       Index) with NO final `else` → `xs.0 += v` / `*p += v` fall through
-    //       to nothing. Pinned by the absence of a rejection sentinel: today the
-    //       fn ends with the Index arm's untrack call and never rejects a
-    //       tuple/deref target.
-    let assigns = fs::read_to_string("src/ir/lowering/stmts/assigns.rs").unwrap_or_default();
-    let compound = top_level_fn_bodies(&assigns)
-        .into_iter()
-        .find(|(n, _)| n == "lower_compound_assign")
-        .map(|(_, b)| b)
-        .expect("lower_compound_assign not found");
-    // Pin on the ABSENCE of a TupleFieldAccess arm: any real A2 fix (lowering
-    // the target or rejecting it) must name the variant, tripping this pin so
-    // the burn-down list shrinks WITH the fix. (A forward-declared sentinel
-    // was vacuous — nothing forced the fix to spell it.)
-    assert!(
-        !compound.contains("TupleFieldAccess"),
-        "lower_compound_assign now handles (or rejects) TupleFieldAccess targets — \
-         the A2 missing-else offender is fixed. Remove this pin (burn-down)."
-    );
+    // The remaining OPEN offender with NO `_ =>` to scan — pinned by marker so a
+    // fix forces this list to shrink. BURN-DOWN.
+    //
+    // BURNED DOWN (Target-2): A2 — `lower_compound_assign` (formerly an if-let
+    // chain with NO final `else`, so `xs.0 += v` / `*p += v` fell through to
+    // nothing) now has TupleFieldAccess + Deref arms AND a final `else` that
+    // `unreachable!`s on a non-lvalue (backed by the check-time
+    // E_InvalidAssignTarget gate). Its dedicated fallback-presence guard is
+    // `compound_assign_fieldaccess_fallback_present`.
+    //
     //   A4b: lower_for_dict's `Tuple(2)` arm binds each sub-pattern only via
     //       `if let Binding(n) .. else \"__k\"/\"__v\"` — a nested destructure
     //       (`for k,(a,b) in dict`) is silently dropped into a throwaway.

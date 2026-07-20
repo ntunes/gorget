@@ -589,6 +589,14 @@ pub enum SemanticErrorKind {
     /// rebuild-based). See language-reference §Strings.
     StringIndexAssign,
 
+    /// `5 += 1` / `foo() += 1` / `(a + b) = x` — the left side of an assignment
+    /// or compound assignment is NOT an assignable place. Valid targets are a
+    /// variable, field, tuple field, index (`v[i]`), or dereference (`*p`). The
+    /// parser accepts any expression as a target and Gorget had no lvalue gate,
+    /// so these formerly silently dropped (plain `=`) or ICE'd (compound) in the
+    /// lowerer; this rejects them at check time (Core #10 lower-or-reject).
+    InvalidAssignTarget,
+
     /// Call to a builtin name that `is_builtin` accepts but that has NO
     /// lowering (`str`, `int8`…`uint64`, `uint`, `float32`/`float64`,
     /// `byte`) — would emit a raw undefined extern call into the C.
@@ -834,6 +842,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::NoreturnBodyReturns { .. } => "E_NoreturnBodyReturns",
             SemanticErrorKind::NoreturnWithThrows { .. } => "E_NoreturnWithThrows",
             SemanticErrorKind::StringIndexAssign => "E_StringIndexAssign",
+            SemanticErrorKind::InvalidAssignTarget => "E_InvalidAssignTarget",
             SemanticErrorKind::UnloweredBuiltinCall { .. } => "E_UnloweredBuiltinCall",
             SemanticErrorKind::UnknownNamedArg { .. } => "E_UnknownNamedArg",
             SemanticErrorKind::DuplicateNamedArg { .. } => "E_DuplicateNamedArg",
@@ -1350,6 +1359,14 @@ impl std::fmt::Display for SemanticError {
                      `s.replace(...)`, slicing + concatenation)"
                 )
             }
+            SemanticErrorKind::InvalidAssignTarget => {
+                write!(
+                    f,
+                    "invalid assignment target: the left side is not an \
+                     assignable place — assign to a variable, field, tuple \
+                     field, index (`v[i]`), or dereference (`*p`)"
+                )
+            }
             SemanticErrorKind::UnloweredBuiltinCall { name } => {
                 if name == "str" {
                     write!(
@@ -1640,6 +1657,7 @@ mod code_tests {
             (SemanticErrorKind::CannotInferType, "E_CannotInferType"),
             (SemanticErrorKind::BreakOutsideLoop, "E_BreakOutsideLoop"),
             (SemanticErrorKind::StringIndexAssign, "E_StringIndexAssign"),
+            (SemanticErrorKind::InvalidAssignTarget, "E_InvalidAssignTarget"),
             (SemanticErrorKind::DoubleAwait, "E_DoubleAwait"),
             (SemanticErrorKind::NonExhaustiveMatch { missing_variants: vec![] }, "E_NonExhaustiveMatch"),
         ];

@@ -13,7 +13,8 @@ use super::super::exprs::{
     emit_shared_mutex_lock_get, emit_shared_mutex_lock_set,
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
     emit_rwlock_write_get, emit_rwlock_write_set, emit_rwlock_write_finish,
-    try_resolve_field_place, materialize_global_field_base, extract_field_path_string,
+    try_resolve_field_place, try_resolve_tuple_field_place,
+    materialize_global_field_base, extract_field_path_string,
     infer_collection_element_type, resolve_projection_root_local,
 };
 
@@ -508,6 +509,14 @@ pub(super) fn lower_assign(
         Expr::FieldAccess { object, field } => {
             lower_field_assign(ctx, builder, object, &field.node, value);
         }
+        Expr::TupleFieldAccess { object, index } => {
+            // `t.0 = v` — a tuple field is a valid mutable place (a struct field
+            // at a numeric index). Pre-fix this fell to the `_ =>` no-op below
+            // and SILENTLY DROPPED the write (`x.0 = 9` printed 1). Resolve the
+            // write-through place (Core #10 lower, don't drop) and store — the
+            // sibling of the compound `t.0 OP= v` arm (Core #4, one class).
+            lower_tuple_field_assign(ctx, builder, object, *index, value);
+        }
         Expr::Index { object, index } => {
             lower_index_assign(ctx, builder, object, index, value);
         }
@@ -572,7 +581,18 @@ pub(super) fn lower_assign(
             }
         }
         _ => {
-            // Other target types not yet supported
+            // Core #10 (lower-or-reject): the assignable PLACE forms are handled
+            // above (Identifier / FieldAccess / TupleFieldAccess / Index /
+            // Deref). A non-lvalue target (`5 = 1`, `foo() = 1`) is REJECTED at
+            // check time by `check_assign_target_lvalue` (E_InvalidAssignTarget),
+            // so accepted code never reaches here. This arm formerly SILENTLY
+            // DROPPED the write (e.g. `x.0 = 9` before the TupleFieldAccess arm
+            // above) — now unreachable, backed by the check-time guard.
+            unreachable!(
+                "lower_assign reached a non-lvalue target ({:?}) that \
+                 check_assign_target_lvalue should have rejected (E_InvalidAssignTarget)",
+                target.node,
+            );
         }
     }
 }
@@ -687,6 +707,38 @@ pub(super) fn lower_field_assign(
         PtrFieldPlace::ReadGuardSkip => {}
         // Unknown / non-place object — no store (pre-existing behavior).
         PtrFieldPlace::Unresolved => {}
+    }
+}
+
+/// Lower a tuple-field assignment: `obj.INDEX = value`. The numeric-index
+/// sibling of `lower_field_assign` — a tuple field is a struct field at a
+/// positional index, so this resolves the write-through place via
+/// `try_resolve_tuple_field_place` and stores through it, routing the RHS through
+/// the shared consuming-position ownership rule. Core #10: lower, never silently
+/// drop (pre-fix `t.0 = v` fell to `lower_assign`'s `_ =>` no-op); Core #4: one
+/// class with the compound `t.0 OP= v` arm.
+pub(super) fn lower_tuple_field_assign(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    object: &Spanned<Expr>,
+    index: usize,
+    value: &Spanned<Expr>,
+) {
+    // CoW: a tuple-field write mutates the object — materialize the
+    // immutable-in-context root so the write lands on an owned copy (no-op on
+    // `&`/owned roots, preserving write-through). Mirrors lower_field_assign.
+    materialize_assign_target_root(ctx, builder, object);
+    let stmt_locals_start = builder.locals.len();
+    if let Some((target_place, elem_type)) =
+        try_resolve_tuple_field_place(ctx, builder, object, index)
+    {
+        let prev_expected = ctx.func_state.expected_type;
+        ctx.func_state.expected_type = Some(elem_type);
+        let mut rhs = lower_expr(ctx, builder, value);
+        ctx.func_state.expected_type = prev_expected;
+        clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
+        emit_field_store_with_cleanup(ctx, builder, &target_place, elem_type, &rhs);
+        ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
     }
 }
 
@@ -2050,19 +2102,90 @@ pub(super) fn lower_compound_assign(
                 builder.assign(deref_place, FunctionBuilder::copy(result));
             }
         }
+    } else if let Expr::TupleFieldAccess { object, index } = &target.node {
+        // Compound assign on a TUPLE field: `t.INDEX OP= v`. A tuple field is a
+        // valid mutable place (a struct field at a numeric index) — pre-fix this
+        // fell to the catch-all and ICE'd on typecheck-ACCEPTED code (`x.0 += 5`
+        // passes `gg check`). Resolve the write-through place ONCE and read-
+        // modify-write through it (Core #10 lower, not reject; Core #4, one class
+        // with plain `t.0 = v` and struct `s.f OP= v`). The place is reused for
+        // the read AND the store (base evaluated once).
+        materialize_assign_target_root(ctx, builder, object);
+        let stmt_locals_start = builder.locals.len();
+        if let Some((field_place, field_type)) =
+            try_resolve_tuple_field_place(ctx, builder, object, *index)
+        {
+            // Read current field value THROUGH the resolved place.
+            let cur = builder.add_local(field_type, None);
+            builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
+
+            let rhs = lower_expr(ctx, builder, value);
+
+            // String concatenation: field += str → gorget_str_cat (mirror the
+            // FieldAccess arm's is_string sub-case).
+            let is_string = field_type == ctx.type_mapper.owned_string_type;
+            if is_string && matches!(op, ast::BinaryOp::Add) {
+                let owned_type = ctx.type_mapper.owned_string_type;
+                let tmp = builder.call_extern(
+                    "gorget_str_cat",
+                    vec![FunctionBuilder::copy(cur), rhs],
+                    owned_type,
+                );
+                emit_field_drop_if_needed(ctx, builder, &field_place, field_type);
+                builder.assign(field_place, FunctionBuilder::copy(tmp));
+            } else {
+                let overload_method = match op {
+                    ast::BinaryOp::Add => Some("add"),
+                    ast::BinaryOp::Sub => Some("sub"),
+                    ast::BinaryOp::Mul => Some("mul"),
+                    ast::BinaryOp::Div => Some("div"),
+                    ast::BinaryOp::Rem => Some("rem"),
+                    ast::BinaryOp::Mod => Some("mod"),
+                    _ => None,
+                }.and_then(|method| {
+                    if let Some(GirType::Named(type_name)) = ctx.type_registry.get(field_type).cloned() {
+                        let mangled = format!("{type_name}__{method}");
+                        let has_method = ctx.fn_sigs.contains_key(&mangled)
+                            || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
+                        if has_method {
+                            let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
+                                mangled
+                            } else {
+                                ctx.fn_sigs.keys()
+                                    .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
+                                    .cloned()
+                                    .unwrap_or(mangled)
+                            };
+                            Some(effective_name)
+                        } else { None }
+                    } else { None }
+                });
+                let result = if let Some(effective_name) = overload_method {
+                    let ptr_type = ctx.register_ptr_type(field_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow(ptr_local, Place::local(cur));
+                    builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], field_type)
+                } else {
+                    let gir_op = compound_op_to_gir(op);
+                    builder.bin_op(gir_op, field_type, FunctionBuilder::copy(cur), rhs)
+                };
+                builder.assign(field_place, FunctionBuilder::copy(result));
+            }
+        }
+        ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
     } else {
-        // Core #10 (lower-or-reject): every compound-assign target shape is
-        // either lowered above (Identifier / FieldAccess / Index / Deref) or a
-        // shape the typechecker rejects before lowering (you cannot `5 += 1`).
-        // A NEW lvalue shape reaching here would SILENTLY DROP the write — the
-        // exact miscompile class this function exists to prevent. Fail LOUDLY at
-        // build time (mirrors the Index arm's no-setter panic) so the gap is
-        // caught, never shipped as a silent no-op.
-        panic!(
-            "BUG: lower_compound_assign reached an unhandled target shape \
-             ({:?}) — typecheck accepted a compound-assign the lowering cannot \
-             dispatch. Add a lowering arm (lower-or-reject, Core #10); do NOT \
-             let the write silently drop.",
+        // Core #10 (lower-or-reject): every ASSIGNABLE compound-assign target is
+        // lowered above (Identifier / FieldAccess / TupleFieldAccess / Index /
+        // Deref). A non-lvalue target (`5 += 1`, `foo() += 1`) is REJECTED at
+        // check time by `check_assign_target_lvalue` (E_InvalidAssignTarget), so
+        // accepted code never reaches here — genuinely unreachable, backed by the
+        // check-time guard (NOT the false "typecheck rejects these" claim the
+        // original panic carried; the checker had no lvalue gate then, which is
+        // why `x.0 += 5` ICE'd). Defense-in-depth: a shape that slips the guard
+        // is a compiler bug, not user error.
+        unreachable!(
+            "lower_compound_assign reached a non-lvalue target ({:?}) that \
+             check_assign_target_lvalue should have rejected (E_InvalidAssignTarget)",
             target.node,
         );
     }

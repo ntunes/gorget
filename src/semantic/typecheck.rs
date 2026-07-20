@@ -4323,6 +4323,7 @@ impl<'a> TypeChecker<'a> {
                 if Self::expr_is_borrow_bind(&value.node) {
                     self.error(SemanticErrorKind::LocalBorrowBind, value.span);
                 }
+                self.check_assign_target_lvalue(target);
                 self.check_string_index_assign(target);
                 let target_type = self.infer_expr(target);
                 let prev_hint = self.decl_type_hint;
@@ -4342,6 +4343,7 @@ impl<'a> TypeChecker<'a> {
             }
 
             Stmt::CompoundAssign { target, value, .. } => {
+                self.check_assign_target_lvalue(target);
                 self.check_string_index_assign(target);
                 let target_type = self.infer_expr(target);
                 let prev_hint = self.decl_type_hint;
@@ -5438,6 +5440,29 @@ impl<'a> TypeChecker<'a> {
     /// here (before the normal target inference); for an index-assign
     /// target that is itself erroneous this can re-report an inner error,
     /// which is acceptable at a hard-error site.
+    /// Reject a non-lvalue assignment / compound-assignment target at CHECK time
+    /// (Core #10 lower-or-reject). The parser accepts any expression as a target,
+    /// and the lowerer only handles the assignable PLACE forms — a variable,
+    /// field, tuple field, index, or dereference. Anything else (`5 += 1`,
+    /// `foo() += 1`, `(a + b) = x`) formerly reached lowering and SILENTLY
+    /// DROPPED the write (plain `=`) or ICE'd (compound `OP=`). Rejecting here
+    /// makes the lowerer's catch-all genuinely unreachable for accepted code.
+    /// Allowlist = exactly the lvalue shapes `lower_assign` /
+    /// `lower_compound_assign` dispatch on.
+    fn check_assign_target_lvalue(&mut self, target: &Spanned<Expr>) {
+        let is_lvalue = matches!(
+            &target.node,
+            Expr::Identifier(_)
+                | Expr::FieldAccess { .. }
+                | Expr::TupleFieldAccess { .. }
+                | Expr::Index { .. }
+                | Expr::Deref { .. }
+        );
+        if !is_lvalue {
+            self.error(SemanticErrorKind::InvalidAssignTarget, target.span);
+        }
+    }
+
     fn check_string_index_assign(&mut self, target: &Spanned<Expr>) {
         if let Expr::Index { object, .. } = &target.node {
             let obj_type = self.infer_expr(object);

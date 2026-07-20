@@ -2850,6 +2850,114 @@ pub(super) fn try_resolve_field_place(
     None
 }
 
+/// Resolve `object.INDEX` (a TUPLE-field lvalue) to a write-through `Place` +
+/// element type — the numeric-index sibling of `try_resolve_field_place`. A
+/// tuple is a `TypeDefKind::Struct` with positionally-indexed fields, so the
+/// target place is `object_place` + `Projection::Field(index)` — the SAME shape
+/// a struct-field store uses, just resolved by position instead of a name lookup
+/// (mirrors the tuple-field READ path, `lower_expr`'s `Expr::TupleFieldAccess`
+/// arm which does `field_load(place, index, …)`). The object is resolved via the
+/// same recursion `try_resolve_field_place` uses (Identifier local / static base
+/// / SelfExpr / nested struct-field via `try_resolve_field_place` / nested
+/// tuple-field via this fn / `*ptr` deref), then the effective type is walked and
+/// a pointer base is deref'd — so `t.0 = v` on a local, a `&`-param, and a
+/// nested `s.tup.0 = v` / `a.0.field = v` all write THROUGH. Returns `None` for a
+/// non-place object (a fresh temp / method-call result) so the caller can fall
+/// through to a graceful reject rather than dropping the write (Core #10).
+/// Shared by plain `=` (`lower_assign`) and compound `OP=`
+/// (`lower_compound_assign`).
+pub(super) fn try_resolve_tuple_field_place(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    object: &Spanned<Expr>,
+    index: usize,
+) -> Option<(Place, TypeId)> {
+    // Resolve the object to a base place (mirror try_resolve_field_place's
+    // object arm — reuse it for struct-field objects, recurse here for
+    // tuple-field objects).
+    let obj = match &object.node {
+        Expr::Identifier(name) => {
+            if let Some((local_id, _)) = ctx.lookup_local(name) {
+                Operand::Copy(Place::local(local_id))
+            } else if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
+                global_ptr
+            } else {
+                return None;
+            }
+        }
+        Expr::SelfExpr => {
+            if let Some((local_id, _)) = ctx.lookup_local("self") {
+                Operand::Copy(Place::local(local_id))
+            } else {
+                return None;
+            }
+        }
+        Expr::FieldAccess { object: inner_obj, field } => {
+            let (inner_place, _) = try_resolve_field_place(ctx, builder, inner_obj, &field.node)?;
+            Operand::Copy(inner_place)
+        }
+        Expr::TupleFieldAccess { object: inner_obj, index: inner_index } => {
+            let (inner_place, _) = try_resolve_tuple_field_place(ctx, builder, inner_obj, *inner_index)?;
+            Operand::Copy(inner_place)
+        }
+        Expr::Deref { expr: inner } => {
+            let inner_op = lower_expr(ctx, builder, inner);
+            if let Operand::Copy(ref p) | Operand::Move(ref p) = inner_op {
+                let mut dp = p.clone();
+                dp.projections.push(Projection::Deref);
+                Operand::Copy(dp)
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+
+    let place = match obj {
+        Operand::Copy(ref p) | Operand::Move(ref p) => p.clone(),
+        _ => return None,
+    };
+    let local_idx = place.local.0 as usize;
+    if local_idx >= builder.locals.len() {
+        return None;
+    }
+    // Walk existing projections to the effective type (mirror
+    // try_resolve_field_place: Deref peels a pointer, Field descends a struct).
+    let mut current_type = builder.locals[local_idx].type_id;
+    for proj in &place.projections {
+        match proj {
+            Projection::Deref => {
+                if let Some(pointee) = ctx.deref_inner_type(current_type) {
+                    current_type = pointee;
+                }
+            }
+            Projection::Field(idx) => {
+                if let Some(tn) = ctx.type_name_for_id(current_type) {
+                    if let Some(td) = ctx.type_registry.get_type_def(tn) {
+                        if let TypeDefKind::Struct(ref s) = td.kind {
+                            if (*idx as usize) < s.fields.len() {
+                                current_type = s.fields[*idx as usize].type_id;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Deref if the effective type is a pointer (& param / Box / element Ptr).
+    let (tuple_type_id, mut base_place) = if let Some(pointee) = ctx.pointee_type(current_type) {
+        let mut dp = place.clone();
+        dp.projections.push(Projection::Deref);
+        (pointee, dp)
+    } else {
+        (current_type, place.clone())
+    };
+    let elem_type = resolve_tuple_field_type(ctx, tuple_type_id, index);
+    base_place.projections.push(Projection::Field(index as u32));
+    Some((base_place, elem_type))
+}
+
 /// Convert an index expression to a mangle fragment for generic type name construction.
 /// e.g. `SparseSet[Health].new()` → receiver is `Index { object: "SparseSet", index: "Health" }`
 /// Returns `Some("Health")` for `Identifier("Health")` or `Some("int64_t")` for `Identifier("int")`.
