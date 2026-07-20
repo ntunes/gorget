@@ -18502,7 +18502,17 @@ fn c_emit_comparison() {
     //
     // Bump-on-improvement: when Matched rises, raise the floor in the
     // same commit that lands the improvement so the gain is locked in.
-    const C_EMIT_MATCH_FLOOR: usize = 1233;
+    //
+    // TIGHTEN-ONLY re-seed 2026-07-20 (regenerated twice in THIS worktree at
+    // HEAD c0c5d59c, floor-off then floor-on, both 1283 — deterministic):
+    //   cargo test --test integration --release c_emit_comparison -- --nocapture
+    //   → Total: 1633, Matched: 1283, Mismatched: 109, Self-host crashes: 15,
+    //     Rust rejected (error fixtures): 225, Rust crashes: 0
+    // The corpus grew 1353→1633 and Rust/SH agreement rose since the 1233 seed;
+    // locking the true current value in. (The stage-1b Track-1 emit_types.rs
+    // NamedFuncAddr scan does NOT affect this count: it emits wrapper methods
+    // BEFORE the "── Function Definitions ──" marker that user_fn_count reads.)
+    const C_EMIT_MATCH_FLOOR: usize = 1283;
     if parity_floor_active("c_emit_comparison") {
         assert!(
             matched as usize >= C_EMIT_MATCH_FLOOR,
