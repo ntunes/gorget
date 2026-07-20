@@ -610,8 +610,6 @@ pub(super) fn lower_field_assign(
     field_name: &str,
     value: &Spanned<Expr>,
 ) {
-    use crate::ir::types::TypeDefKind;
-
     // CoW: a field write mutates the object. Materialize the immutable-in-context
     // ROOT (decide-at-root, Core #1/#4) so the write lands on an owned copy; a
     // no-op on `&`/owned roots keeps `&`-chain write-through. The subsequent
@@ -660,29 +658,13 @@ pub(super) fn lower_field_assign(
         return;
     }
 
-    // Fallback: lower_expr on object (may copy intermediate structs)
-    // For unique-borrow params (& or !), use the pointer local directly
-    // instead of lower_expr which would copy the deref'd value to a temp
-    let obj = if let Expr::Identifier(name) = &object.node {
-        if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.is_param_borrow_unique(builder, local_id) {
-                // Return the raw pointer local (not deref'd)
-                Operand::Copy(Place::local(local_id))
-            } else {
-                lower_expr(ctx, builder, object)
-            }
-        } else if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
-            // Bug #1: a module-level static base — materialize into an addressable
-            // MutPtr local so the field-store writes THROUGH to the global. Without
-            // this the global lowers to a GlobalRef constant, the place-guard below
-            // is skipped, and the store is silently dropped.
-            global_ptr
-        } else {
-            lower_expr(ctx, builder, object)
-        }
-    } else {
-        lower_expr(ctx, builder, object)
-    };
+    // Fallback: lower_expr on object (may copy intermediate structs).
+    // Object-operand computation + write-through place resolution are shared
+    // with the compound `OP=` fallback (`lower_compound_assign`) via
+    // `lower_field_object_operand` + `resolve_ptr_field_place` — one class, one
+    // resolver, so the two write-through fallbacks cannot drift (Core #4; the
+    // `compound_assign_fieldaccess_fallback_present` lint pins both callers).
+    let obj = lower_field_object_operand(ctx, builder, object);
     let mut rhs = lower_expr(ctx, builder, value);
     clone_ptr_rhs_if_needed(ctx, builder, &mut rhs, value);
 
@@ -697,18 +679,97 @@ pub(super) fn lower_field_assign(
     // statement is touched. Store-neutral: the store uses the Place, not the tag.
     ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
 
-    if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
+    match resolve_ptr_field_place(ctx, builder, &obj, field_name) {
+        PtrFieldPlace::Resolved(target_place, field_type) => {
+            emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
+        }
+        // ReadGuard: writes forbidden (type checker should catch in future).
+        PtrFieldPlace::ReadGuardSkip => {}
+        // Unknown / non-place object — no store (pre-existing behavior).
+        PtrFieldPlace::Unresolved => {}
+    }
+}
+
+/// Compute the object OPERAND for the field-store fallback (`obj.field = v` /
+/// `obj.field OP= v` when `try_resolve_field_place` returned `None`). Faithful
+/// mirror of the branch that used to be open-coded in `lower_field_assign`: a
+/// unique-borrow (`&`/`!`) param is returned as its RAW pointer local (not
+/// deref'd, so the store writes THROUGH the caller); a module-level static base
+/// is materialized into an addressable `MutPtr`; everything else — including a
+/// `.get().unwrap()` method chain, which lowers to a Ref per the ratified
+/// auto-borrow-from-get — goes through `lower_expr`. Shared by plain `=`
+/// (`lower_field_assign`) AND compound `OP=` (`lower_compound_assign`) so the
+/// two write-through fallbacks cannot drift (Core #4).
+fn lower_field_object_operand(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    object: &Spanned<Expr>,
+) -> Operand {
+    if let Expr::Identifier(name) = &object.node {
+        if let Some((local_id, _)) = ctx.lookup_local(name) {
+            if ctx.is_param_borrow_unique(builder, local_id) {
+                // Return the raw pointer local (not deref'd)
+                Operand::Copy(Place::local(local_id))
+            } else {
+                lower_expr(ctx, builder, object)
+            }
+        } else if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
+            // Bug #1: a module-level static base — materialize into an addressable
+            // MutPtr local so the field-store writes THROUGH to the global.
+            global_ptr
+        } else {
+            lower_expr(ctx, builder, object)
+        }
+    } else {
+        lower_expr(ctx, builder, object)
+    }
+}
+
+/// Result of resolving a field-store target reached through a POINTER operand
+/// (the `try_resolve_field_place → None` fallback: a `.get().unwrap()` Ref
+/// chain, a `&`/`!` unique-borrow param, a `Guard[T]` receiver, or a
+/// materialized global base).
+enum PtrFieldPlace {
+    /// A write-through place was resolved: read/store here.
+    Resolved(Place, TypeId),
+    /// A `ReadGuard` receiver — writes are forbidden; emit no store.
+    ReadGuardSkip,
+    /// Could not resolve the field place (non-place operand / unknown type) —
+    /// emit no store.
+    Unresolved,
+}
+
+/// Resolve the deref'd field-store PLACE for `obj.field` when `obj` lowered to a
+/// pointer operand. Faithful port of the `lower_field_assign` fallback's
+/// resolution (`Guard[T]` auto-deref + the general pointee path), but it RETURNS
+/// the place instead of emitting the store — so a read-modify-write caller
+/// (compound `OP=`) can read AND write THROUGH the SAME place, evaluating the
+/// base `.get()` exactly ONCE (no double-eval; the exact bug class filed at
+/// TODO:282/865). The ONLY instruction it emits is the `Guard` get-ptr call in
+/// the mutable-guard case — identical to the inline path — so plain `=` stays
+/// byte-identical when routed through here. Shared by plain `=` and compound
+/// `OP=` (Core #4 — one resolver, one class; the fallback-presence lint pins
+/// both callers).
+fn resolve_ptr_field_place(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    obj: &Operand,
+    field_name: &str,
+) -> PtrFieldPlace {
+    use crate::ir::types::TypeDefKind;
+    if let Operand::Copy(ref place) | Operand::Move(ref place) = *obj {
         let local_idx = place.local.0 as usize;
         if local_idx < builder.locals.len() {
             let local_type_id = builder.locals[local_idx].type_id;
 
-            // Guard[T] auto-deref for writes: guard.field = val → (*get_ptr(&guard)).field = val
+            // Guard[T] auto-deref for writes: guard.field = val →
+            // (*get_ptr(&guard)).field = val
             if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
                 let type_name = type_name.to_string();
                 if let Some((inner_suffix, is_read_only)) = guard_inner_suffix(&type_name) {
                     if is_read_only {
-                        // ReadGuard: writes are forbidden — skip (type checker should catch in future)
-                        return;
+                        // ReadGuard: writes are forbidden — skip.
+                        return PtrFieldPlace::ReadGuardSkip;
                     }
                     let (inner_ptr_local, inner_type) = emit_guard_get_ptr(
                         ctx, builder, place, local_type_id, &type_name, inner_suffix,
@@ -722,8 +783,7 @@ pub(super) fn lower_field_assign(
                         if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
                             let mut target_place = deref_place;
                             target_place.projections.push(Projection::Field(field_idx));
-                            emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
-                            return;
+                            return PtrFieldPlace::Resolved(target_place, field_type);
                         }
                         let inner_field: Option<(u32, TypeId)> = ctx.type_registry.get_type_def(&inner_type_name)
                             .and_then(|td| {
@@ -737,14 +797,17 @@ pub(super) fn lower_field_assign(
                         if let Some((field_idx, field_type)) = inner_field {
                             let mut target_place = deref_place;
                             target_place.projections.push(Projection::Field(field_idx));
-                            emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
-                            return;
+                            return PtrFieldPlace::Resolved(target_place, field_type);
                         }
                     }
+                    // Mutable Guard matched but the field is not on the inner
+                    // struct — fall through to the general pointer path below
+                    // (mirrors the inline plain-`=` fallback, which does NOT
+                    // early-return here).
                 }
             }
 
-            // If the local is a pointer, dereference to get the struct type
+            // If the local is a pointer, dereference to get the struct type.
             let (effective_type_id, base_place) =
                 if let Some(pointee) = ctx.pointee_type(local_type_id) {
                     let mut deref_place = place.clone();
@@ -759,8 +822,7 @@ pub(super) fn lower_field_assign(
                 if let Some((field_idx, field_type)) = ctx.lookup_field(&type_name, field_name) {
                     let mut target_place = base_place;
                     target_place.projections.push(Projection::Field(field_idx));
-                    emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
-                    return;
+                    return PtrFieldPlace::Resolved(target_place, field_type);
                 }
                 // Fallback: look up from TypeDef
                 let field_match: Option<(u32, TypeId)> = ctx.type_registry.get_type_def(&type_name)
@@ -775,12 +837,12 @@ pub(super) fn lower_field_assign(
                 if let Some((field_idx, field_type)) = field_match {
                     let mut target_place = base_place;
                     target_place.projections.push(Projection::Field(field_idx));
-                    emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
-                    return;
+                    return PtrFieldPlace::Resolved(target_place, field_type);
                 }
             }
         }
     }
+    PtrFieldPlace::Unresolved
 }
 
 /// Apply the 3-way ownership rule (auto-move if dead / auto-clone if live /
@@ -1463,6 +1525,87 @@ pub(super) fn lower_compound_assign(
             };
             builder.assign(field_place, FunctionBuilder::copy(result));
             ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
+        } else {
+            // None: the object is a method-call chain (`coll.get(i).unwrap()`)
+            // or another non-nameable place, so `try_resolve_field_place`
+            // couldn't resolve it. Lower it to a POINTER (auto-borrow-from-get
+            // yields a Ref), resolve the deref'd field place, and read-modify-
+            // write THROUGH it. Without this branch the write was SILENTLY
+            // DROPPED (Core #10; the T2 miscompile: `coll.get(i).unwrap().f += 1`
+            // printed the unchanged value). Mirrors the plain-`=` write-through
+            // fallback (`lower_field_assign`) — the same
+            // `lower_field_object_operand` + `resolve_ptr_field_place` shared
+            // resolver (Core #4). The place is resolved ONCE and reused for the
+            // read AND the store, so the base `.get()` is evaluated exactly once
+            // (no double-eval — TODO:282's class).
+            let obj = lower_field_object_operand(ctx, builder, object);
+            match resolve_ptr_field_place(ctx, builder, &obj, &field.node) {
+                PtrFieldPlace::Resolved(field_place, field_type) => {
+                    // Read current field value THROUGH the resolved place.
+                    let cur = builder.add_local(field_type, None);
+                    builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
+
+                    let rhs = lower_expr(ctx, builder, value);
+
+                    // String concatenation: field += str → gorget_str_cat
+                    // (mirror the Some-arm's is_string sub-case above).
+                    let is_string = field_type == ctx.type_mapper.owned_string_type;
+                    if is_string && matches!(op, ast::BinaryOp::Add) {
+                        let owned_type = ctx.type_mapper.owned_string_type;
+                        let tmp = builder.call_extern(
+                            "gorget_str_cat",
+                            vec![FunctionBuilder::copy(cur), rhs],
+                            owned_type,
+                        );
+                        emit_field_drop_if_needed(ctx, builder, &field_place, field_type);
+                        builder.assign(field_place, FunctionBuilder::copy(tmp));
+                    } else {
+                        // Operator overload on Named types, else primitive binop
+                        // (mirror the Some-arm above).
+                        let overload_method = match op {
+                            ast::BinaryOp::Add => Some("add"),
+                            ast::BinaryOp::Sub => Some("sub"),
+                            ast::BinaryOp::Mul => Some("mul"),
+                            ast::BinaryOp::Div => Some("div"),
+                            ast::BinaryOp::Rem => Some("rem"),
+                            ast::BinaryOp::Mod => Some("mod"),
+                            _ => None,
+                        }.and_then(|method| {
+                            if let Some(GirType::Named(type_name)) = ctx.type_registry.get(field_type).cloned() {
+                                let mangled = format!("{type_name}__{method}");
+                                let has_method = ctx.fn_sigs.contains_key(&mangled)
+                                    || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
+                                if has_method {
+                                    let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
+                                        mangled
+                                    } else {
+                                        ctx.fn_sigs.keys()
+                                            .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
+                                            .cloned()
+                                            .unwrap_or(mangled)
+                                    };
+                                    Some(effective_name)
+                                } else { None }
+                            } else { None }
+                        });
+                        let result = if let Some(effective_name) = overload_method {
+                            let ptr_type = ctx.register_ptr_type(field_type);
+                            let ptr_local = builder.add_local(ptr_type, None);
+                            builder.emit_borrow(ptr_local, Place::local(cur));
+                            builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], field_type)
+                        } else {
+                            let gir_op = compound_op_to_gir(op);
+                            builder.bin_op(gir_op, field_type, FunctionBuilder::copy(cur), rhs)
+                        };
+                        builder.assign(field_place, FunctionBuilder::copy(result));
+                    }
+                }
+                // ReadGuard: writes forbidden — skip.
+                PtrFieldPlace::ReadGuardSkip => {}
+                // Unknown / non-place object — no store.
+                PtrFieldPlace::Unresolved => {}
+            }
+            ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
         }
     } else if let Expr::Index { object, index } = &target.node {
         // Compound assign on index: obj[i] OP= val
@@ -1819,6 +1962,109 @@ pub(super) fn lower_compound_assign(
         // `try_resolve_field_place` `Expr::Index` arm (`m[i].field[key] OP= x`) —
         // mirrors the FieldAccess arm's end-of-stmt untrack (Core #4).
         ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
+    } else if let Expr::Deref { expr: inner } = &target.node {
+        // Compound assign THROUGH a pointer: `*p OP= v` (Box / &-ref / Ptr).
+        // Plain `*p = v` already lowers (`lower_assign`'s Expr::Deref arm); the
+        // compound path must too — NOT silently drop (Core #10 lower-or-reject;
+        // measured pre-fix: `*b += 5` on `Box[int]` left the pointee unchanged).
+        // Read the pointee THROUGH the deref place, apply the op, store back —
+        // the deref place is built ONCE and reused for the read AND the write
+        // (base `p` evaluated once). Mirrors `lower_assign`'s Deref arm for the
+        // place + pointee-type resolution.
+        let inner_op = lower_expr(ctx, builder, inner);
+        if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
+            let mut deref_place = inner_place.clone();
+            deref_place.projections.push(Projection::Deref);
+            let pointee_type = {
+                let local_idx = inner_place.local.0 as usize;
+                let mut t = if local_idx < builder.locals.len() {
+                    builder.local_type(inner_place.local)
+                } else { UNIT_TYPE };
+                for proj in &inner_place.projections {
+                    if let Projection::Deref = proj {
+                        t = ctx.deref_inner_type(t).unwrap_or(t);
+                    } else if let Projection::Field(idx) = proj {
+                        if let Some(tn) = ctx.type_name_for_id(t).map(|s| s.to_string()) {
+                            if let Some(td) = ctx.type_registry.get_type_def(&tn) {
+                                if let crate::ir::types::TypeDefKind::Struct(ref s) = td.kind {
+                                    if (*idx as usize) < s.fields.len() {
+                                        t = s.fields[*idx as usize].type_id;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                ctx.deref_inner_type(t).unwrap_or(t)
+            };
+            // Read the current pointee value.
+            let cur = builder.add_local(pointee_type, None);
+            builder.assign(Place::local(cur), Operand::Copy(deref_place.clone()));
+            let rhs = lower_expr(ctx, builder, value);
+            let is_string = pointee_type == ctx.type_mapper.owned_string_type;
+            if is_string && matches!(op, ast::BinaryOp::Add) {
+                let owned_type = ctx.type_mapper.owned_string_type;
+                let tmp = builder.call_extern(
+                    "gorget_str_cat",
+                    vec![FunctionBuilder::copy(cur), rhs],
+                    owned_type,
+                );
+                emit_field_drop_if_needed(ctx, builder, &deref_place, pointee_type);
+                builder.assign(deref_place, FunctionBuilder::copy(tmp));
+            } else {
+                let overload_method = match op {
+                    ast::BinaryOp::Add => Some("add"),
+                    ast::BinaryOp::Sub => Some("sub"),
+                    ast::BinaryOp::Mul => Some("mul"),
+                    ast::BinaryOp::Div => Some("div"),
+                    ast::BinaryOp::Rem => Some("rem"),
+                    ast::BinaryOp::Mod => Some("mod"),
+                    _ => None,
+                }.and_then(|method| {
+                    if let Some(GirType::Named(type_name)) = ctx.type_registry.get(pointee_type).cloned() {
+                        let mangled = format!("{type_name}__{method}");
+                        let has_method = ctx.fn_sigs.contains_key(&mangled)
+                            || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
+                        if has_method {
+                            let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
+                                mangled
+                            } else {
+                                ctx.fn_sigs.keys()
+                                    .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
+                                    .cloned()
+                                    .unwrap_or(mangled)
+                            };
+                            Some(effective_name)
+                        } else { None }
+                    } else { None }
+                });
+                let result = if let Some(effective_name) = overload_method {
+                    let ptr_type = ctx.register_ptr_type(pointee_type);
+                    let ptr_local = builder.add_local(ptr_type, None);
+                    builder.emit_borrow(ptr_local, Place::local(cur));
+                    builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], pointee_type)
+                } else {
+                    let gir_op = compound_op_to_gir(op);
+                    builder.bin_op(gir_op, pointee_type, FunctionBuilder::copy(cur), rhs)
+                };
+                builder.assign(deref_place, FunctionBuilder::copy(result));
+            }
+        }
+    } else {
+        // Core #10 (lower-or-reject): every compound-assign target shape is
+        // either lowered above (Identifier / FieldAccess / Index / Deref) or a
+        // shape the typechecker rejects before lowering (you cannot `5 += 1`).
+        // A NEW lvalue shape reaching here would SILENTLY DROP the write — the
+        // exact miscompile class this function exists to prevent. Fail LOUDLY at
+        // build time (mirrors the Index arm's no-setter panic) so the gap is
+        // caught, never shipped as a silent no-op.
+        panic!(
+            "BUG: lower_compound_assign reached an unhandled target shape \
+             ({:?}) — typecheck accepted a compound-assign the lowering cannot \
+             dispatch. Add a lowering arm (lower-or-reject, Core #10); do NOT \
+             let the write silently drop.",
+            target.node,
+        );
     }
 }
 

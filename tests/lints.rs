@@ -1081,6 +1081,102 @@ fn compound_assign_root_materialize_arms_count() {
 }
 
 /// Structural guard (Core #6 "convert a recurring bug class into an executable
+/// guard" + Core #10 "lower-or-reject — never silently drop user syntax"): the
+/// `lower_compound_assign` FieldAccess arm must have a WRITE-THROUGH FALLBACK
+/// for the `try_resolve_field_place → None` case, and the function must end with
+/// a final catch-all that REJECTS (not silently drops) an unhandled target shape.
+///
+/// WHY an arm-COUNT lint is the WRONG shape here (and why this is a SEPARATE
+/// guard from `compound_assign_root_materialize_arms_count` above): the
+/// arm-count guard passes even when the FieldAccess ARM EXISTS but its inner
+/// `if let Some(..try_resolve_field_place..)` has NO `else` — which is EXACTLY
+/// the Target-2 miscompile (`coll.get(i).unwrap().field += v` silently dropped
+/// the write on both backends because the `None` branch produced no store).
+/// This guard asserts the fallback is PRESENT: the FieldAccess arm resolves the
+/// None case through the shared `resolve_ptr_field_place` write-through resolver
+/// via an `else`, AND a final catch-all `panic!` exists so a NEW unhandled
+/// lvalue shape fails LOUDLY at build time instead of silently no-op'ing.
+///
+/// **If this fails:**
+///   - The FieldAccess None-fallback (`else { … resolve_ptr_field_place … }`)
+///     was removed → the `.get()`-Ref compound write-through hole re-opened;
+///     RESTORE it (mirror `lower_field_assign`'s fallback), do NOT delete the lint.
+///   - The final catch-all reject was removed → an unhandled compound target
+///     shape now silently drops the write (Core #10); RESTORE the rejecting
+///     `else` at the fn tail.
+///   - You renamed the shared resolver / panic message → update the needle here
+///     (the guard tracks PRESENCE of the fallback, not a literal string).
+#[test]
+fn compound_assign_fieldaccess_fallback_present() {
+    let src = fs::read_to_string("src/ir/lowering/stmts/assigns.rs")
+        .expect("read src/ir/lowering/stmts/assigns.rs");
+    let sig = "pub(super) fn lower_compound_assign(";
+    let start = src.find(sig).expect("locate lower_compound_assign");
+    let after_sig = start + sig.len();
+    let end = src[after_sig..]
+        .find("\nfn ")
+        .map(|i| after_sig + i)
+        .unwrap_or(src.len());
+    // Strip line comments so the guard reasons about EXECUTABLE code only — the
+    // arm comments legitimately mention `try_resolve_field_place` /
+    // `resolve_ptr_field_place` in prose.
+    let body: String = src[start..end]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Isolate the FieldAccess arm: from its match pattern up to the Index arm's.
+    let fa_start = body
+        .find("Expr::FieldAccess { object, field } = &target.node")
+        .expect("locate FieldAccess arm in lower_compound_assign");
+    let idx_start = body
+        .find("Expr::Index { object, index } = &target.node")
+        .expect("locate Index arm in lower_compound_assign");
+    assert!(
+        fa_start < idx_start,
+        "FieldAccess arm must precede the Index arm in lower_compound_assign",
+    );
+    let fa_arm = &body[fa_start..idx_start];
+
+    // 1. The Some-resolution (`try_resolve_field_place`) must be IMMEDIATELY
+    //    followed by an `else` whose body calls the shared write-through
+    //    resolver `resolve_ptr_field_place` — the None-fallback that turns the
+    //    silent drop into a read-modify-write through the `.get()`-Ref place.
+    let pos_try = fa_arm
+        .find("try_resolve_field_place(")
+        .expect("FieldAccess arm must call try_resolve_field_place");
+    let else_after = fa_arm[pos_try..].find("} else {").map(|i| pos_try + i);
+    let pos_none = fa_arm.find("resolve_ptr_field_place(");
+    assert!(
+        else_after.is_some() && pos_none.is_some() && else_after.unwrap() < pos_none.unwrap(),
+        "lower_compound_assign's FieldAccess arm lost its write-through FALLBACK: \
+         the `if let Some(..try_resolve_field_place..)` block must be followed by \
+         an `else {{ … resolve_ptr_field_place … }}` branch that read-modify-writes \
+         through the resolved `.get()`-Ref place. Without it, \
+         `coll.get(i).unwrap().field OP= v` SILENTLY DROPS the write on both backends \
+         (Target-2, Core #8/#10). Mirror `lower_field_assign`'s fallback; do NOT \
+         remove this branch.",
+    );
+
+    // 2. A final catch-all must REJECT (panic), not silently drop, an unhandled
+    //    compound-assign target shape (Core #10 lower-or-reject). The Deref arm
+    //    (`*p OP= v`) must also be lowered, not left to the catch-all.
+    assert!(
+        body.contains("Expr::Deref { expr: inner } = &target.node"),
+        "lower_compound_assign lost its Deref arm (`*p OP= v`): plain `*p = v` \
+         lowers, so the compound path must too (Core #10 lower-or-reject) — RESTORE \
+         the Deref arm, do NOT let it fall to the reject.",
+    );
+    assert!(
+        body.contains("unhandled target shape"),
+        "lower_compound_assign lost its final catch-all REJECT: an unhandled \
+         compound-assign target shape must fail LOUDLY (panic at build time), never \
+         silently drop the write (Core #10). RESTORE the trailing `}} else {{ panic!(...) }}`.",
+    );
+}
+
+/// Structural guard (Core #6 "convert a recurring bug class into an executable
 /// guard" + Core #2 "typed metadata, never name-matching"): the 2T SEMANTIC
 /// taint reject (`reject_tainted_materialize_on_write` + its formation sibling
 /// `reject_tainted_formation_arg`) must NEVER read the dead-write LINT's
