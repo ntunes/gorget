@@ -5,6 +5,13 @@
 # `get` is NOT descended: NO materialize of `b`, hence NO `<UserStruct>` clone at
 # the write site (a clone here would be a wasted-clone == charter breach).
 # The write lands on the throwaway temp, so the caller is UNCHANGED (prints 1).
+# ⚠ KNOWN DIVERGENCE (output-review 2026-07-21, filed): Rust gg SILENTLY ACCEPTS
+# this write-to-an-rvalue-place and DISCARDS it (prints 1, no warning); ggdef
+# REJECTS it ("expression is not a place"). This fixture pins Rust's CURRENT
+# behavior (Track C only guarantees NO wasted clone). The reference-grade fix =
+# Rust should reject/warn to match ggdef — SAME class as the R-LVALUE residual
+# (assign to a field of an rvalue-returned place); the recursive-lvalue-gate
+# follow-up covers it. Rust is the lagging lane here.
 # The companion `getchain_user_get_no_clone` clones-report assertion
 # (tests/integration.rs) pins "0 implicit clones".
 struct R:
