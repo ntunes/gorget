@@ -950,6 +950,142 @@ fn emit_field_store_with_cleanup(
     }
 }
 
+/// Resolve the operator-overload method for a compound-assign `OP=` on a Named
+/// type, if one is defined (the `Type__method` mangled form, or an
+/// `equip`-generated `_for_Type__method`). Factored out of the five open-coded
+/// copies (the Identifier arm + the four place-based arms) so the lookup cannot
+/// drift (Core #4 — one class, one resolver).
+fn resolve_compound_overload(
+    ctx: &LoweringContext,
+    op: ast::BinaryOp,
+    type_id: TypeId,
+) -> Option<String> {
+    let method = match op {
+        ast::BinaryOp::Add => "add",
+        ast::BinaryOp::Sub => "sub",
+        ast::BinaryOp::Mul => "mul",
+        ast::BinaryOp::Div => "div",
+        ast::BinaryOp::Rem => "rem",
+        ast::BinaryOp::Mod => "mod",
+        _ => return None,
+    };
+    let type_name = match ctx.type_registry.get(type_id) {
+        Some(GirType::Named(name)) => name.clone(),
+        _ => return None,
+    };
+    let mangled = format!("{type_name}__{method}");
+    if ctx.fn_sigs.contains_key(&mangled) {
+        return Some(mangled);
+    }
+    let suffix = format!("_for_{type_name}__{method}");
+    ctx.fn_sigs.keys().find(|k| k.ends_with(&suffix)).cloned()
+}
+
+/// Shared read-modify-write for a compound-assign (`place OP= rhs`) whose LHS
+/// resolves to a STABLE write-through place — a struct field, a tuple field, or
+/// a deref pointee. Called by all four place-based compound arms (Some /
+/// None-fallback / tuple / deref), so the read-shape decision lives in ONE spot
+/// (Core #4).
+///
+/// The R-STRING fix: a RESOURCE-typed field must NOT be read through an
+/// intermediate `assign(cur, Copy(place))` — a shallow Copy of a bare
+/// resource local trips the resource-move validator ("shallow copy of
+/// resource", `validate.rs` `assign_read_site`), an ICE on typecheck-accepted
+/// code. The result is written back through `emit_field_store_with_cleanup`,
+/// the single place that does drop-old + move-new + coerce, so the drop of the
+/// OLD value is uniform across String / overload / value fields. Docs:
+/// `docs/language-reference.md` §9.6 (compound-assign is a materialize-on-write
+/// position).
+///
+/// Read shape, chosen from the field's TYPE (typed predicates, never a name):
+///   * String `+`      → pass `Operand::Copy(place)` DIRECTLY into
+///                       `gorget_str_cat` (mirrors the Identifier arm); no
+///                       intermediate copy. `gorget_str_cat` reads the old value
+///                       BEFORE the cleanup-store drops it, and its fresh
+///                       (`returns_fresh`) result does not alias the field.
+///   * resource + `OP` overload → `emit_borrow(place)` for the `self` arg. The
+///                       overload takes `self` by borrow, so it does not consume
+///                       the old value before the cleanup-store drops it.
+///   * value type      → the plain shallow `Operand::Copy(place)` read is safe
+///                       (non-droppable); kept READ-first (byte-identical to the
+///                       pre-fix value path; the resource paths become RHS-first
+///                       — the eval-order split RV-C already tracks, TODO:285).
+fn emit_compound_place_rmw(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    field_place: &Place,
+    field_type: TypeId,
+    op: ast::BinaryOp,
+    value: &Spanned<Expr>,
+) {
+    // String concatenation: `field += str` → gorget_str_cat. Read the old value
+    // as `Operand::Copy(field_place)` DIRECTLY at the extern call (no shallow
+    // intermediate — that intermediate IS the ICE), then write the fresh result
+    // back through the cleanup-store (drops the old value).
+    let is_string = field_type == ctx.type_mapper.owned_string_type;
+    if is_string && matches!(op, ast::BinaryOp::Add) {
+        let owned_type = ctx.type_mapper.owned_string_type;
+        let rhs = lower_expr(ctx, builder, value);
+        let tmp = ctx.call_extern_tracked(
+            builder,
+            "gorget_str_cat",
+            vec![Operand::Copy(field_place.clone()), rhs],
+            owned_type,
+        );
+        emit_field_store_with_cleanup(
+            ctx, builder, field_place, field_type, &FunctionBuilder::copy(tmp),
+        );
+        return;
+    }
+
+    // A resource field (has a drop strategy / Resource copy-semantics) cannot be
+    // read via the shallow `assign(cur, Copy)`; when an operator overload exists,
+    // borrow the field place directly for `self`. Same typed predicate the
+    // Identifier arm uses for its move/copy decision (`is_resource_type ||
+    // needs_drop`, functions.rs:28) — no name-matching.
+    let is_resource = ctx.type_registry.is_resource_type(field_type)
+        || ctx.type_registry.needs_drop(field_type);
+
+    if let Some(effective_name) = resolve_compound_overload(ctx, op, field_type) {
+        let (self_ptr, rhs) = if is_resource {
+            // RHS-first: borrow the stable field place directly (no shallow copy).
+            let rhs = lower_expr(ctx, builder, value);
+            let ptr_type = ctx.register_ptr_type(field_type);
+            let ptr_local = builder.add_local(ptr_type, None);
+            builder.emit_borrow(ptr_local, field_place.clone());
+            (FunctionBuilder::copy(ptr_local), rhs)
+        } else {
+            // Value type with an overload: the shallow read is safe; keep it
+            // READ-first (borrow the read temp) to preserve the prior eval order.
+            let cur = builder.add_local(field_type, None);
+            builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
+            let rhs = lower_expr(ctx, builder, value);
+            let ptr_type = ctx.register_ptr_type(field_type);
+            let ptr_local = builder.add_local(ptr_type, None);
+            builder.emit_borrow(ptr_local, Place::local(cur));
+            (FunctionBuilder::copy(ptr_local), rhs)
+        };
+        let result = builder.call(effective_name, vec![self_ptr, rhs], field_type);
+        emit_field_store_with_cleanup(
+            ctx, builder, field_place, field_type, &FunctionBuilder::copy(result),
+        );
+        return;
+    }
+
+    // Primitive binop path — value types only. (A resource field with no `OP`
+    // overload and no String `+` is a typecheck-rejected shape; the shallow read
+    // below preserves the prior ICE for that unreachable case rather than
+    // silently miscompiling.) Kept READ-first.
+    let cur = builder.add_local(field_type, None);
+    builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
+    let rhs = lower_expr(ctx, builder, value);
+    let gir_op = compound_op_to_gir(op);
+    let result = builder.bin_op(gir_op, field_type, FunctionBuilder::copy(cur), rhs);
+    emit_field_store_with_cleanup(
+        ctx, builder, field_place, field_type, &FunctionBuilder::copy(result),
+    );
+}
+
 /// If the RHS is a bare GorgetString local being assigned to a GorgetString field,
 /// unregister it from drop tracking to prevent double-free. The field now owns the
 /// data; the temp should not be freed when it goes out of scope.
@@ -1516,66 +1652,12 @@ pub(super) fn lower_compound_assign(
         // mutation if left CoW-tracked.
         let stmt_locals_start = builder.locals.len();
         if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, object, &field.node) {
-            // Read current field value
-            let cur = builder.add_local(field_type, None);
-            builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
-
-            let rhs = lower_expr(ctx, builder, value);
-
-            // String concatenation: field += str → gorget_str_cat
-            let is_string = field_type == ctx.type_mapper.owned_string_type;
-            if is_string && matches!(op, ast::BinaryOp::Add) {
-                let owned_type = ctx.type_mapper.owned_string_type;
-                let tmp = builder.call_extern(
-                    "gorget_str_cat",
-                    vec![FunctionBuilder::copy(cur), rhs],
-                    owned_type,
-                );
-                emit_field_drop_if_needed(ctx, builder, &field_place, field_type);
-                builder.assign(field_place, FunctionBuilder::copy(tmp));
-                ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
-                return;
-            }
-
-            // Check for operator overload on Named types
-            let overload_method = match op {
-                ast::BinaryOp::Add => Some("add"),
-                ast::BinaryOp::Sub => Some("sub"),
-                ast::BinaryOp::Mul => Some("mul"),
-                ast::BinaryOp::Div => Some("div"),
-                ast::BinaryOp::Rem => Some("rem"),
-                ast::BinaryOp::Mod => Some("mod"),
-                _ => None,
-            }.and_then(|method| {
-                if let Some(GirType::Named(type_name)) = ctx.type_registry.get(field_type).cloned() {
-                    let mangled = format!("{type_name}__{method}");
-                    let has_method = ctx.fn_sigs.contains_key(&mangled)
-                        || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
-                    if has_method {
-                        let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
-                            mangled
-                        } else {
-                            ctx.fn_sigs.keys()
-                                .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
-                                .cloned()
-                                .unwrap_or(mangled)
-                        };
-                        Some(effective_name)
-                    } else { None }
-                } else { None }
-            });
-
-            let result = if let Some(effective_name) = overload_method {
-                // Borrow lhs for self parameter
-                let ptr_type = ctx.register_ptr_type(field_type);
-                let ptr_local = builder.add_local(ptr_type, None);
-                builder.emit_borrow(ptr_local, Place::local(cur));
-                builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], field_type)
-            } else {
-                let gir_op = compound_op_to_gir(op);
-                builder.bin_op(gir_op, field_type, FunctionBuilder::copy(cur), rhs)
-            };
-            builder.assign(field_place, FunctionBuilder::copy(result));
+            // R-STRING: resource-safe read-modify-write via the shared helper
+            // (String → gorget_str_cat, resource overload → borrow-read, value →
+            // shallow read; drop-old handled uniformly by the cleanup store).
+            // Replaces the open-coded shallow `assign(cur, Copy(field_place))`
+            // that ICE'd the resource-move validator on a resource field.
+            emit_compound_place_rmw(ctx, builder, &field_place, field_type, op, value);
             ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
         } else {
             // None: the object is a method-call chain (`coll.get(i).unwrap()`)
@@ -1593,64 +1675,11 @@ pub(super) fn lower_compound_assign(
             let obj = lower_field_object_operand(ctx, builder, object);
             match resolve_ptr_field_place(ctx, builder, &obj, &field.node) {
                 PtrFieldPlace::Resolved(field_place, field_type) => {
-                    // Read current field value THROUGH the resolved place.
-                    let cur = builder.add_local(field_type, None);
-                    builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
-
-                    let rhs = lower_expr(ctx, builder, value);
-
-                    // String concatenation: field += str → gorget_str_cat
-                    // (mirror the Some-arm's is_string sub-case above).
-                    let is_string = field_type == ctx.type_mapper.owned_string_type;
-                    if is_string && matches!(op, ast::BinaryOp::Add) {
-                        let owned_type = ctx.type_mapper.owned_string_type;
-                        let tmp = builder.call_extern(
-                            "gorget_str_cat",
-                            vec![FunctionBuilder::copy(cur), rhs],
-                            owned_type,
-                        );
-                        emit_field_drop_if_needed(ctx, builder, &field_place, field_type);
-                        builder.assign(field_place, FunctionBuilder::copy(tmp));
-                    } else {
-                        // Operator overload on Named types, else primitive binop
-                        // (mirror the Some-arm above).
-                        let overload_method = match op {
-                            ast::BinaryOp::Add => Some("add"),
-                            ast::BinaryOp::Sub => Some("sub"),
-                            ast::BinaryOp::Mul => Some("mul"),
-                            ast::BinaryOp::Div => Some("div"),
-                            ast::BinaryOp::Rem => Some("rem"),
-                            ast::BinaryOp::Mod => Some("mod"),
-                            _ => None,
-                        }.and_then(|method| {
-                            if let Some(GirType::Named(type_name)) = ctx.type_registry.get(field_type).cloned() {
-                                let mangled = format!("{type_name}__{method}");
-                                let has_method = ctx.fn_sigs.contains_key(&mangled)
-                                    || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
-                                if has_method {
-                                    let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
-                                        mangled
-                                    } else {
-                                        ctx.fn_sigs.keys()
-                                            .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
-                                            .cloned()
-                                            .unwrap_or(mangled)
-                                    };
-                                    Some(effective_name)
-                                } else { None }
-                            } else { None }
-                        });
-                        let result = if let Some(effective_name) = overload_method {
-                            let ptr_type = ctx.register_ptr_type(field_type);
-                            let ptr_local = builder.add_local(ptr_type, None);
-                            builder.emit_borrow(ptr_local, Place::local(cur));
-                            builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], field_type)
-                        } else {
-                            let gir_op = compound_op_to_gir(op);
-                            builder.bin_op(gir_op, field_type, FunctionBuilder::copy(cur), rhs)
-                        };
-                        builder.assign(field_place, FunctionBuilder::copy(result));
-                    }
+                    // R-STRING: resource-safe read-modify-write via the shared
+                    // helper (same String/overload/value split + cleanup-store
+                    // drop-old as the Some-arm). Reads THROUGH the resolved
+                    // write-through place; no shallow resource copy.
+                    emit_compound_place_rmw(ctx, builder, &field_place, field_type, op, value);
                 }
                 // ReadGuard: writes forbidden — skip.
                 PtrFieldPlace::ReadGuardSkip => {}
@@ -2049,58 +2078,12 @@ pub(super) fn lower_compound_assign(
                 }
                 ctx.deref_inner_type(t).unwrap_or(t)
             };
-            // Read the current pointee value.
-            let cur = builder.add_local(pointee_type, None);
-            builder.assign(Place::local(cur), Operand::Copy(deref_place.clone()));
-            let rhs = lower_expr(ctx, builder, value);
-            let is_string = pointee_type == ctx.type_mapper.owned_string_type;
-            if is_string && matches!(op, ast::BinaryOp::Add) {
-                let owned_type = ctx.type_mapper.owned_string_type;
-                let tmp = builder.call_extern(
-                    "gorget_str_cat",
-                    vec![FunctionBuilder::copy(cur), rhs],
-                    owned_type,
-                );
-                emit_field_drop_if_needed(ctx, builder, &deref_place, pointee_type);
-                builder.assign(deref_place, FunctionBuilder::copy(tmp));
-            } else {
-                let overload_method = match op {
-                    ast::BinaryOp::Add => Some("add"),
-                    ast::BinaryOp::Sub => Some("sub"),
-                    ast::BinaryOp::Mul => Some("mul"),
-                    ast::BinaryOp::Div => Some("div"),
-                    ast::BinaryOp::Rem => Some("rem"),
-                    ast::BinaryOp::Mod => Some("mod"),
-                    _ => None,
-                }.and_then(|method| {
-                    if let Some(GirType::Named(type_name)) = ctx.type_registry.get(pointee_type).cloned() {
-                        let mangled = format!("{type_name}__{method}");
-                        let has_method = ctx.fn_sigs.contains_key(&mangled)
-                            || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
-                        if has_method {
-                            let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
-                                mangled
-                            } else {
-                                ctx.fn_sigs.keys()
-                                    .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
-                                    .cloned()
-                                    .unwrap_or(mangled)
-                            };
-                            Some(effective_name)
-                        } else { None }
-                    } else { None }
-                });
-                let result = if let Some(effective_name) = overload_method {
-                    let ptr_type = ctx.register_ptr_type(pointee_type);
-                    let ptr_local = builder.add_local(ptr_type, None);
-                    builder.emit_borrow(ptr_local, Place::local(cur));
-                    builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], pointee_type)
-                } else {
-                    let gir_op = compound_op_to_gir(op);
-                    builder.bin_op(gir_op, pointee_type, FunctionBuilder::copy(cur), rhs)
-                };
-                builder.assign(deref_place, FunctionBuilder::copy(result));
-            }
+            // R-STRING: resource-safe read-modify-write via the shared helper.
+            // The deref place is a stable write-through place (Box / &-ref / Ptr
+            // pointee), so the same String/overload/value read-shape split +
+            // cleanup-store drop-old applies as for a struct field. No shallow
+            // resource copy of the pointee.
+            emit_compound_place_rmw(ctx, builder, &deref_place, pointee_type, op, value);
         }
     } else if let Expr::TupleFieldAccess { object, index } = &target.node {
         // Compound assign on a TUPLE field: `t.INDEX OP= v`. A tuple field is a
@@ -2115,62 +2098,11 @@ pub(super) fn lower_compound_assign(
         if let Some((field_place, field_type)) =
             try_resolve_tuple_field_place(ctx, builder, object, *index)
         {
-            // Read current field value THROUGH the resolved place.
-            let cur = builder.add_local(field_type, None);
-            builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
-
-            let rhs = lower_expr(ctx, builder, value);
-
-            // String concatenation: field += str → gorget_str_cat (mirror the
-            // FieldAccess arm's is_string sub-case).
-            let is_string = field_type == ctx.type_mapper.owned_string_type;
-            if is_string && matches!(op, ast::BinaryOp::Add) {
-                let owned_type = ctx.type_mapper.owned_string_type;
-                let tmp = builder.call_extern(
-                    "gorget_str_cat",
-                    vec![FunctionBuilder::copy(cur), rhs],
-                    owned_type,
-                );
-                emit_field_drop_if_needed(ctx, builder, &field_place, field_type);
-                builder.assign(field_place, FunctionBuilder::copy(tmp));
-            } else {
-                let overload_method = match op {
-                    ast::BinaryOp::Add => Some("add"),
-                    ast::BinaryOp::Sub => Some("sub"),
-                    ast::BinaryOp::Mul => Some("mul"),
-                    ast::BinaryOp::Div => Some("div"),
-                    ast::BinaryOp::Rem => Some("rem"),
-                    ast::BinaryOp::Mod => Some("mod"),
-                    _ => None,
-                }.and_then(|method| {
-                    if let Some(GirType::Named(type_name)) = ctx.type_registry.get(field_type).cloned() {
-                        let mangled = format!("{type_name}__{method}");
-                        let has_method = ctx.fn_sigs.contains_key(&mangled)
-                            || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
-                        if has_method {
-                            let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
-                                mangled
-                            } else {
-                                ctx.fn_sigs.keys()
-                                    .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
-                                    .cloned()
-                                    .unwrap_or(mangled)
-                            };
-                            Some(effective_name)
-                        } else { None }
-                    } else { None }
-                });
-                let result = if let Some(effective_name) = overload_method {
-                    let ptr_type = ctx.register_ptr_type(field_type);
-                    let ptr_local = builder.add_local(ptr_type, None);
-                    builder.emit_borrow(ptr_local, Place::local(cur));
-                    builder.call(effective_name, vec![FunctionBuilder::copy(ptr_local), rhs], field_type)
-                } else {
-                    let gir_op = compound_op_to_gir(op);
-                    builder.bin_op(gir_op, field_type, FunctionBuilder::copy(cur), rhs)
-                };
-                builder.assign(field_place, FunctionBuilder::copy(result));
-            }
+            // R-STRING: resource-safe read-modify-write via the shared helper.
+            // A tuple field is a stable write-through place, so the same
+            // String/overload/value read-shape split + cleanup-store drop-old
+            // applies as for a struct field. No shallow resource copy.
+            emit_compound_place_rmw(ctx, builder, &field_place, field_type, op, value);
         }
         ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
     } else {

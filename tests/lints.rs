@@ -1191,6 +1191,47 @@ fn compound_assign_fieldaccess_fallback_present() {
     );
 }
 
+/// Sibling-site-drift guard (Core #4 "one fix, all siblings" + the arm-count
+/// lint the playbook prescribes): every place-based compound-assign arm — struct
+/// FieldAccess (Some), the `.get()`-Ref None-fallback, TupleFieldAccess, and
+/// Deref — reads-modifies-writes through the ONE shared helper
+/// `emit_compound_place_rmw`. That helper is the single spot that avoids the
+/// resource-move ICE (a resource field must NOT be read via an intermediate
+/// `assign(cur, Copy(field_place))` — "shallow copy of resource") and routes the
+/// store through `emit_field_store_with_cleanup` (drop-old + move-new). A 5th
+/// place arm, or a regression that re-open-codes the shallow read inline, is the
+/// exact sibling-drift this pins: the reader is centralized, so the next arm is
+/// forced through it.
+///
+/// **If this fails:** a compound arm stopped calling `emit_compound_place_rmw`
+/// (re-open-coded its own read) or a new place arm was added without routing
+/// through it. Route it through the shared helper — do NOT re-introduce the
+/// per-arm shallow read.
+#[test]
+fn compound_assign_resource_read_centralized() {
+    let src = fs::read_to_string("src/ir/lowering/stmts/assigns.rs")
+        .expect("read src/ir/lowering/stmts/assigns.rs");
+    let def_count = src.matches("fn emit_compound_place_rmw(").count();
+    assert_eq!(
+        def_count, 1,
+        "emit_compound_place_rmw must be defined exactly once (the shared \
+         resource-safe compound read-modify-write); found {def_count}.",
+    );
+    // All four place-based compound arms call it with the `(ctx, builder, …)`
+    // shape; the definition uses `(\n    ctx,` so it is not counted here.
+    let call_count = src.matches("emit_compound_place_rmw(ctx, builder,").count();
+    assert_eq!(
+        call_count, 4,
+        "expected EXACTLY 4 callers of emit_compound_place_rmw (the FieldAccess \
+         Some arm, the `.get()`-Ref None-fallback, the TupleFieldAccess arm, and \
+         the Deref arm), found {call_count}. A place-based compound-assign arm \
+         must NOT re-open-code the current-value read — a resource field read via \
+         an intermediate `assign(cur, Copy(field_place))` trips the resource-move \
+         validator (\"shallow copy of resource\"), the R-STRING ICE. Route the arm \
+         through emit_compound_place_rmw (Core #4, one fix all siblings).",
+    );
+}
+
 /// Structural guard (Core #6 "convert a recurring bug class into an executable
 /// guard" + Core #2 "typed metadata, never name-matching"): the 2T SEMANTIC
 /// taint reject (`reject_tainted_materialize_on_write` + its formation sibling
