@@ -16,11 +16,11 @@ from store import TaskStore
 void main():
     # Build a task store
     TaskStore store = TaskStore(Vector[Task]())
-    store.add(Task("Write parser", 0, true))
-    store.add(Task("Implement codegen", 0, false))
-    store.add(Task("Add error messages", 1, false))
-    store.add(Task("Write docs", 2, false))
-    store.add(Task("Release v1.0", 1, true))
+    store.add(!Task("Write parser", 0, true))
+    store.add(!Task("Implement codegen", 0, false))
+    store.add(!Task("Add error messages", 1, false))
+    store.add(!Task("Write docs", 2, false))
+    store.add(!Task("Release v1.0", 1, true))
 
     # Show all tasks (uses Displayable)
     print("All tasks:")
