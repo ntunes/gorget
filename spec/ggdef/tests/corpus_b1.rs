@@ -79,6 +79,13 @@ const EXCLUDE: &[&str] = &[
     // simple bindings…"; ggdef-run-verified). Expected `101` prose-derived.
     "cow_for_enumerate_amp_recv_wrap.gg",
     "cow_comprehension_amp_source.gg",
+    // CoW-2G loop fixtures (db25f0ef) outside the phase-0 subset — `for … else:`
+    // (no else-body arm in `desugar_for`) and `.push_char()` (a B2 builtin
+    // method); both `known_gaps`-flagged in their own frontmatter, ggdef cannot
+    // elaborate them. The pin was not refreshed when they landed (leaving b1 red
+    // on the STOP-and-report), so this exclusion accompanies the D31 slice.
+    "cow_loop_bare_param_for_else.gg",
+    "cow_loop_bare_param_push_char.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -281,10 +288,12 @@ fn corpus_b1_all_match() {
         failures.join("\n")
     );
 
-    // Guard the gate's shape: the B1 non-equip surface is ~105 fixtures
-    // (+2 matcluster fixtures 2026-07-06; +2 Track 1A bare for-element fixtures
-    // `cow_for_bare_vector_control` + `cow_for_bare_resource_elem_materialize`,
-    // the two in-subset rows — the five `&`/enumerate/comprehension rows are
-    // EXCLUDEd above).
-    assert_eq!(fixtures.len(), 107, "B1 gate set drifted from 107 fixtures");
+    // Guard the gate's shape: the B1 non-equip surface is 122 fixtures. +15 net
+    // from the CoW-2G landings (2026-07-18, db25f0ef and siblings) whose pin was
+    // not refreshed at the time (leaving b1 red on the two unexcluded
+    // out-of-subset `cow_loop_bare_param_{for_else,push_char}` — now EXCLUDEd);
+    // this refresh accompanies the D31 exclusion additions. Prior 107 counted
+    // the earlier surface (+2 matcluster 2026-07-06; +2 Track 1A bare
+    // for-element rows; the `&`/enumerate/comprehension rows stay EXCLUDEd).
+    assert_eq!(fixtures.len(), 122, "B1 gate set drifted from 122 fixtures");
 }

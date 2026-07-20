@@ -76,6 +76,16 @@ const EXCLUDE: &[&str] = &[
     //   - list comprehension: `elaborate_expr` has no comprehension arm, so the
     //     `[x*2 for x in &a]` expression is "outside the phase-0 subset".
     "cow_comprehension_amp_source.gg",
+    // CoW-2G loop fixtures (added in db25f0ef) whose SHAPES are outside the
+    // phase-0 subset — the expected outputs are §3.1-prose/Rust-lane-derived
+    // (both are `known_gaps`-flagged in their own frontmatter), and ggdef cannot
+    // elaborate them, so they belong with the other out-of-subset exclusions:
+    //   - `for … else:` — `desugar_for` has no else-body arm ("`for ... else`
+    //     is outside the phase-0 subset").
+    "cow_loop_bare_param_for_else.gg",
+    //   - `.push_char()` — outside the phase-0 builtin-method set (needs
+    //     Increment B2, like the other B2-gated methods).
+    "cow_loop_bare_param_push_char.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -274,10 +284,12 @@ fn corpus_b_all_match() {
         failures.join("\n")
     );
 
-    // Guard the gate's shape: the full corpus is 135 fixtures (150 cow_*/
-    // deadwrite_* minus the 15 standing exclusions). +15 from CoW wave-2 landing 1
-    // (2026-07-17): the 9 `cow_taint_*` 2T-reject NEG fixtures, the 5 `cow_self_*`
-    // 2E-materialize POS fixtures, and `deadwrite_warn_self` (the D2-rider `&self`
-    // flavor). Was 120.
-    assert_eq!(fixtures.len(), 135, "B2 gate set drifted from 135 fixtures");
+    // Guard the gate's shape: the full corpus is 150 fixtures (167 cow_*/
+    // deadwrite_* minus the 17 standing exclusions). +15 net from the CoW-2G
+    // landings (2026-07-18, db25f0ef and siblings): the pin was NOT refreshed
+    // when those fixtures landed (leaving corpus_b red on the two unexcluded
+    // out-of-subset shapes `cow_loop_bare_param_{for_else,push_char}` — now in
+    // EXCLUDE), so this refresh accompanies the D31 exclusion additions. Prior
+    // 135 = 150 total − 15 exclusions.
+    assert_eq!(fixtures.len(), 150, "B2 gate set drifted from 150 fixtures");
 }
