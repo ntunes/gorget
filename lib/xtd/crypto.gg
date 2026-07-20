@@ -122,8 +122,12 @@ Result[Vector[uint8], String] crypto_aes_gcm_decrypt(Vector[uint8] key, Vector[u
 # ── Equip methods ────────────────────────────────────────────
 
 equip CipherContext:
-    extern Vector[uint8] encrypt(Vector[uint8] &data) = "gorget_cipher_encrypt"
-    extern Vector[uint8] decrypt(Vector[uint8] &data) = "gorget_cipher_decrypt"
+    # D31 (`&`-direction): `data` is a read-only input — the C runtime takes it
+    # as `const GorgetArray*` and returns a fresh vector (`crypto_runtime.c`).
+    # The `&` was a latent mislabel hidden by the pre-D31 method-enforcement gap;
+    # the bare (read-borrow) form is correct.
+    extern Vector[uint8] encrypt(Vector[uint8] data) = "gorget_cipher_encrypt"
+    extern Vector[uint8] decrypt(Vector[uint8] data) = "gorget_cipher_decrypt"
 
 equip Ed25519KeyPair:
     extern Vector[uint8] public_key() = "gorget_ed25519_public_key"

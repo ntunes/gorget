@@ -1201,7 +1201,7 @@ equip TomlParser:
                 # error wins over silent merge.
                 if not self.register_key_assignment(kv_key, kv_val):
                     return
-                self.add_kv(kv_key, kv_val)
+                self.add_kv(kv_key, !kv_val)
                 # Per TOML §3 there must be a newline or comment+newline
                 # after every value. "x = 1 y = 2" is invalid.
                 self.expect_eol("expected newline after value")

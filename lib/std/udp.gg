@@ -27,16 +27,22 @@ extern "C":
 # ── UdpSocket methods ────────────────────────────────────────
 
 equip UdpSocket:
-    # Result via last_error codegen
-    extern "C" Result[int, String] sendto(Vector[uint8] &data, String host, int port) = "gorget_udp_sendto"
-    extern Result[UdpPacket, String] recvfrom(int &max_bytes) = "gorget_udp_recvfrom"
-    extern "C" Result[bool, String] join_multicast(String &group_addr) = "gorget_udp_join_multicast"
+    # Result via last_error codegen.
+    # D31 (`&`-direction): these params are read-only INPUTS — the C runtime
+    # takes `data` as `const GorgetArray*` and the scalars by value
+    # (`int64_t max_bytes` / `int64_t timeout_ms` / `bool enabled`, see
+    # `udp_socket_runtime.c`). The `&` here was a latent mislabel that the
+    # pre-D31 method-call enforcement gap hid (call sites all pass bare). The
+    # bare form is the correct signature.
+    extern "C" Result[int, String] sendto(Vector[uint8] data, String host, int port) = "gorget_udp_sendto"
+    extern Result[UdpPacket, String] recvfrom(int max_bytes) = "gorget_udp_recvfrom"
+    extern "C" Result[bool, String] join_multicast(String group_addr) = "gorget_udp_join_multicast"
 
     # Direct externs
-    extern bool poll(int &timeout_ms) = "gorget_udp_poll"
-    extern void set_nonblocking(bool &enabled) = "gorget_udp_set_nonblocking"
+    extern bool poll(int timeout_ms) = "gorget_udp_poll"
+    extern void set_nonblocking(bool enabled) = "gorget_udp_set_nonblocking"
     extern "C" void leave_multicast(String group_addr) = "gorget_udp_leave_multicast"
-    extern void set_multicast_loopback(bool &enabled) = "gorget_udp_set_multicast_loopback"
+    extern void set_multicast_loopback(bool enabled) = "gorget_udp_set_multicast_loopback"
     extern UdpAddr local_addr() = "gorget_udp_local_addr"
     extern void close() = "gorget_udp_close"
 
@@ -51,8 +57,8 @@ equip UdpSocket:
 # callers; new code should prefer `send_to` / `recv_from`.
 
 equip UdpSocket:
-    Result[int, IoError] send_to(&self, Vector[uint8] &data, String host, int port):
-        Result[int, String] r = self.sendto(&data, host, port)
+    Result[int, IoError] send_to(&self, Vector[uint8] data, String host, int port):
+        Result[int, String] r = self.sendto(data, host, port)
         match r:
             case Ok(n):
                 return Ok(n)
