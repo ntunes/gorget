@@ -105,7 +105,7 @@ int resolve_with_bindings(Type ty, Vector[String] bind_names, Vector[int] bind_t
                     for arg in generic_args:
                         int aid = resolve_with_bindings(arg.ty, bind_names, bind_tids, scopes, &types)
                         resolved_args.push(aid)
-                    return types.add_type(RTGeneric(def_id, resolved_args))
+                    return types.add_type(!RTGeneric(def_id, resolved_args))
             return ast_type_to_resolved(ty, Span(0, 0), scopes, &types)
         else:
             return ast_type_to_resolved(ty, Span(0, 0), scopes, &types)

@@ -423,21 +423,21 @@ equip Lexer:
 
     void lex_emit_newline_if_needed(&self, int line_start):
         if self.lex_need_newline:
-            self.lex_emit(TkNewline(), line_start, line_start)
+            self.lex_emit(!TkNewline(), line_start, line_start)
             self.lex_need_newline = false
 
     void lex_process_indentation(&self, int spaces, int line_start):
         int current = self.lex_indent_stack.get(self.lex_indent_stack.len() - 1).unwrap()
         if spaces > current:
             self.lex_indent_stack.push(spaces)
-            self.lex_emit(TkIndent(), line_start, line_start)
+            self.lex_emit(!TkIndent(), line_start, line_start)
         elif spaces < current:
             while self.lex_indent_stack.len() > 1:
                 int top = self.lex_indent_stack.get(self.lex_indent_stack.len() - 1).unwrap()
                 if top <= spaces:
                     break
                 self.lex_indent_stack.pop()
-                self.lex_emit(TkDedent(), line_start, line_start)
+                self.lex_emit(!TkDedent(), line_start, line_start)
 
     void lex_emit_eof(&self):
         if self.lex_finished:
@@ -445,11 +445,11 @@ equip Lexer:
         self.lex_finished = true
         int pos = self.lex_source.byte_len()
         if self.lex_need_newline:
-            self.lex_emit(TkNewline(), pos, pos)
+            self.lex_emit(!TkNewline(), pos, pos)
         while self.lex_indent_stack.len() > 1:
             self.lex_indent_stack.pop()
-            self.lex_emit(TkDedent(), pos, pos)
-        self.lex_emit(TkEof(), pos, pos)
+            self.lex_emit(!TkDedent(), pos, pos)
+        self.lex_emit(!TkEof(), pos, pos)
 
     # ── Skip helpers ──────────────────────────────────────────
 
@@ -530,12 +530,12 @@ equip Lexer:
         Option[Keyword] kw = keyword_from_str(word)
         match kw:
             case Some(k):
-                self.lex_emit(TkKeyword(k), start, self.lex_pos)
+                self.lex_emit(!TkKeyword(k), start, self.lex_pos)
             else:
                 if word == "_":
-                    self.lex_emit(TkUnderscore(), start, self.lex_pos)
+                    self.lex_emit(!TkUnderscore(), start, self.lex_pos)
                 else:
-                    self.lex_emit(TkIdentifier(word), start, self.lex_pos)
+                    self.lex_emit(!TkIdentifier(word), start, self.lex_pos)
 
     # ── Number scanning ───────────────────────────────────────
 
@@ -557,7 +557,7 @@ equip Lexer:
                 String hex_body = owned_slice(self.lex_source, start + 2, self.lex_pos)
                 String clean = str_remove_char(hex_body, b'_')
                 int val = lex_parse_int_radix(clean, 16)
-                self.lex_emit(TkInt(val), start, self.lex_pos)
+                self.lex_emit(!TkInt(val), start, self.lex_pos)
                 return
             elif prefix == b'o' or prefix == b'O':
                 self.lex_pos = self.lex_pos + 2
@@ -570,7 +570,7 @@ equip Lexer:
                 String oct_body = owned_slice(self.lex_source, start + 2, self.lex_pos)
                 String clean = str_remove_char(oct_body, b'_')
                 int val = lex_parse_int_radix(clean, 8)
-                self.lex_emit(TkInt(val), start, self.lex_pos)
+                self.lex_emit(!TkInt(val), start, self.lex_pos)
                 return
             elif prefix == b'b' or prefix == b'B':
                 self.lex_pos = self.lex_pos + 2
@@ -583,7 +583,7 @@ equip Lexer:
                 String bin_body = owned_slice(self.lex_source, start + 2, self.lex_pos)
                 String clean = str_remove_char(bin_body, b'_')
                 int val = lex_parse_int_radix(clean, 2)
-                self.lex_emit(TkInt(val), start, self.lex_pos)
+                self.lex_emit(!TkInt(val), start, self.lex_pos)
                 return
 
         # Decimal digits
@@ -630,10 +630,10 @@ equip Lexer:
         String clean = str_remove_char(num_str, b'_')
         if is_float:
             float fval = parse_float(clean).unwrap_or(0.0)
-            self.lex_emit(TkFloat(fval), start, self.lex_pos)
+            self.lex_emit(!TkFloat(fval), start, self.lex_pos)
         else:
             int ival = parse_int(clean).unwrap_or(0)
-            self.lex_emit(TkInt(ival), start, self.lex_pos)
+            self.lex_emit(!TkInt(ival), start, self.lex_pos)
 
     # ── String scanning ───────────────────────────────────────
 
@@ -761,7 +761,7 @@ equip Lexer:
         elif triple:
             final_kind = SkMultiLine()
         auto slit = StringLiteral(final_kind, segments)
-        self.lex_emit(TkString(slit), start, self.lex_pos)
+        self.lex_emit(!TkString(slit), start, self.lex_pos)
 
     # ── Single-quoted literal scanning ────────────────────────
     # Single-quoted literals are just strings in Gorget (same as Rust lexer).
@@ -780,7 +780,7 @@ equip Lexer:
                         lit = lit + c
                     else:
                         self.lex_error = "unterminated char literal"
-                        self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
+                        self.lex_emit(!TkError("unterminated char"), start, self.lex_pos)
                         return
             else:
                 lit = lit + owned_slice(self.lex_source, self.lex_pos, self.lex_pos + 1)
@@ -788,7 +788,7 @@ equip Lexer:
 
         if self.lex_at_end() or self.lex_peek() == b'\n':
             self.lex_error = "unterminated char literal"
-            self.lex_emit(TkError("unterminated char"), start, self.lex_pos)
+            self.lex_emit(!TkError("unterminated char"), start, self.lex_pos)
             return
 
         self.lex_advance()  # skip closing '
@@ -796,7 +796,7 @@ equip Lexer:
         Vector[StringSegment] segs = Vector[StringSegment]()
         segs.push(SegLiteral(lit))
         auto slit = StringLiteral(SkNormal(), segs)
-        self.lex_emit(TkString(slit), start, self.lex_pos)
+        self.lex_emit(!TkString(slit), start, self.lex_pos)
 
     # ── Operator scanning ─────────────────────────────────────
 
@@ -811,27 +811,27 @@ equip Lexer:
             byte c3 = self.lex_peek_at(2)
             if c == b'.' and c2 == b'.' and c3 == b'=':
                 self.lex_pos = self.lex_pos + 3
-                self.lex_emit(TkDotDotEq(), start, self.lex_pos)
+                self.lex_emit(!TkDotDotEq(), start, self.lex_pos)
                 return
             elif c == b'<' and c2 == b'<' and c3 == b'=':
                 self.lex_pos = self.lex_pos + 3
-                self.lex_emit(TkLtLtEq(), start, self.lex_pos)
+                self.lex_emit(!TkLtLtEq(), start, self.lex_pos)
                 return
             elif c == b'>' and c2 == b'>' and c3 == b'=':
                 self.lex_pos = self.lex_pos + 3
-                self.lex_emit(TkGtGtEq(), start, self.lex_pos)
+                self.lex_emit(!TkGtGtEq(), start, self.lex_pos)
                 return
             elif c == b'+' and c2 == b'%' and c3 == b'=':
                 self.lex_pos = self.lex_pos + 3
-                self.lex_emit(TkPlusPercentEq(), start, self.lex_pos)
+                self.lex_emit(!TkPlusPercentEq(), start, self.lex_pos)
                 return
             elif c == b'-' and c2 == b'%' and c3 == b'=':
                 self.lex_pos = self.lex_pos + 3
-                self.lex_emit(TkMinusPercentEq(), start, self.lex_pos)
+                self.lex_emit(!TkMinusPercentEq(), start, self.lex_pos)
                 return
             elif c == b'*' and c2 == b'%' and c3 == b'=':
                 self.lex_pos = self.lex_pos + 3
-                self.lex_emit(TkStarPercentEq(), start, self.lex_pos)
+                self.lex_emit(!TkStarPercentEq(), start, self.lex_pos)
                 return
 
         # Two-char operators
@@ -839,150 +839,150 @@ equip Lexer:
             byte c2 = self.lex_peek_at(1)
             if c == b'.' and c2 == b'.':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkDotDot(), start, self.lex_pos)
+                self.lex_emit(!TkDotDot(), start, self.lex_pos)
                 return
             elif c == b'?' and c2 == b'.':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkQuestionDot(), start, self.lex_pos)
+                self.lex_emit(!TkQuestionDot(), start, self.lex_pos)
                 return
             elif c == b'?' and c2 == b'?':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkDoubleQuestion(), start, self.lex_pos)
+                self.lex_emit(!TkDoubleQuestion(), start, self.lex_pos)
                 return
             elif c == b'=' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkEqEq(), start, self.lex_pos)
+                self.lex_emit(!TkEqEq(), start, self.lex_pos)
                 return
             elif c == b'!' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkBangEq(), start, self.lex_pos)
+                self.lex_emit(!TkBangEq(), start, self.lex_pos)
                 return
             elif c == b'<' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkLtEq(), start, self.lex_pos)
+                self.lex_emit(!TkLtEq(), start, self.lex_pos)
                 return
             elif c == b'>' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkGtEq(), start, self.lex_pos)
+                self.lex_emit(!TkGtEq(), start, self.lex_pos)
                 return
             elif c == b'<' and c2 == b'<':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkLtLt(), start, self.lex_pos)
+                self.lex_emit(!TkLtLt(), start, self.lex_pos)
                 return
             elif c == b'>' and c2 == b'>':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkGtGt(), start, self.lex_pos)
+                self.lex_emit(!TkGtGt(), start, self.lex_pos)
                 return
             elif c == b'+' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkPlusEq(), start, self.lex_pos)
+                self.lex_emit(!TkPlusEq(), start, self.lex_pos)
                 return
             elif c == b'-' and c2 == b'>':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkArrow(), start, self.lex_pos)
+                self.lex_emit(!TkArrow(), start, self.lex_pos)
                 return
             elif c == b'-' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkMinusEq(), start, self.lex_pos)
+                self.lex_emit(!TkMinusEq(), start, self.lex_pos)
                 return
             elif c == b'*' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkStarEq(), start, self.lex_pos)
+                self.lex_emit(!TkStarEq(), start, self.lex_pos)
                 return
             elif c == b'/' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkSlashEq(), start, self.lex_pos)
+                self.lex_emit(!TkSlashEq(), start, self.lex_pos)
                 return
             elif c == b'%' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkPercentEq(), start, self.lex_pos)
+                self.lex_emit(!TkPercentEq(), start, self.lex_pos)
                 return
             elif c == b'+' and c2 == b'%':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkPlusPercent(), start, self.lex_pos)
+                self.lex_emit(!TkPlusPercent(), start, self.lex_pos)
                 return
             elif c == b'-' and c2 == b'%':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkMinusPercent(), start, self.lex_pos)
+                self.lex_emit(!TkMinusPercent(), start, self.lex_pos)
                 return
             elif c == b'*' and c2 == b'%':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkStarPercent(), start, self.lex_pos)
+                self.lex_emit(!TkStarPercent(), start, self.lex_pos)
                 return
             elif c == b'&' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkAmpEq(), start, self.lex_pos)
+                self.lex_emit(!TkAmpEq(), start, self.lex_pos)
                 return
             elif c == b'|' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkPipeEq(), start, self.lex_pos)
+                self.lex_emit(!TkPipeEq(), start, self.lex_pos)
                 return
             elif c == b'^' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
-                self.lex_emit(TkCaretEq(), start, self.lex_pos)
+                self.lex_emit(!TkCaretEq(), start, self.lex_pos)
                 return
 
         # Single-char operators and delimiters
         self.lex_advance()
         if c == b'+':
-            self.lex_emit(TkPlus(), start, self.lex_pos)
+            self.lex_emit(!TkPlus(), start, self.lex_pos)
         elif c == b'-':
-            self.lex_emit(TkMinus(), start, self.lex_pos)
+            self.lex_emit(!TkMinus(), start, self.lex_pos)
         elif c == b'*':
-            self.lex_emit(TkStar(), start, self.lex_pos)
+            self.lex_emit(!TkStar(), start, self.lex_pos)
         elif c == b'/':
-            self.lex_emit(TkSlash(), start, self.lex_pos)
+            self.lex_emit(!TkSlash(), start, self.lex_pos)
         elif c == b'%':
-            self.lex_emit(TkPercent(), start, self.lex_pos)
+            self.lex_emit(!TkPercent(), start, self.lex_pos)
         elif c == b'=':
-            self.lex_emit(TkEq(), start, self.lex_pos)
+            self.lex_emit(!TkEq(), start, self.lex_pos)
         elif c == b'<':
-            self.lex_emit(TkLt(), start, self.lex_pos)
+            self.lex_emit(!TkLt(), start, self.lex_pos)
         elif c == b'>':
-            self.lex_emit(TkGt(), start, self.lex_pos)
+            self.lex_emit(!TkGt(), start, self.lex_pos)
         elif c == b'!':
-            self.lex_emit(TkBang(), start, self.lex_pos)
+            self.lex_emit(!TkBang(), start, self.lex_pos)
         elif c == b'&':
-            self.lex_emit(TkAmpersand(), start, self.lex_pos)
+            self.lex_emit(!TkAmpersand(), start, self.lex_pos)
         elif c == b'|':
-            self.lex_emit(TkPipe(), start, self.lex_pos)
+            self.lex_emit(!TkPipe(), start, self.lex_pos)
         elif c == b'^':
-            self.lex_emit(TkCaret(), start, self.lex_pos)
+            self.lex_emit(!TkCaret(), start, self.lex_pos)
         elif c == b'~':
-            self.lex_emit(TkTilde(), start, self.lex_pos)
+            self.lex_emit(!TkTilde(), start, self.lex_pos)
         elif c == b'.':
-            self.lex_emit(TkDot(), start, self.lex_pos)
+            self.lex_emit(!TkDot(), start, self.lex_pos)
         elif c == b'?':
-            self.lex_emit(TkQuestion(), start, self.lex_pos)
+            self.lex_emit(!TkQuestion(), start, self.lex_pos)
         elif c == b'@':
-            self.lex_emit(TkAt(), start, self.lex_pos)
+            self.lex_emit(!TkAt(), start, self.lex_pos)
         elif c == b'(':
             self.lex_bracket_depth = self.lex_bracket_depth + 1
-            self.lex_emit(TkLParen(), start, self.lex_pos)
+            self.lex_emit(!TkLParen(), start, self.lex_pos)
         elif c == b')':
             if self.lex_bracket_depth > 0:
                 self.lex_bracket_depth = self.lex_bracket_depth - 1
-            self.lex_emit(TkRParen(), start, self.lex_pos)
+            self.lex_emit(!TkRParen(), start, self.lex_pos)
         elif c == b'[':
             self.lex_bracket_depth = self.lex_bracket_depth + 1
-            self.lex_emit(TkLBracket(), start, self.lex_pos)
+            self.lex_emit(!TkLBracket(), start, self.lex_pos)
         elif c == b']':
             if self.lex_bracket_depth > 0:
                 self.lex_bracket_depth = self.lex_bracket_depth - 1
-            self.lex_emit(TkRBracket(), start, self.lex_pos)
+            self.lex_emit(!TkRBracket(), start, self.lex_pos)
         elif c == b'{':
             self.lex_bracket_depth = self.lex_bracket_depth + 1
-            self.lex_emit(TkLBrace(), start, self.lex_pos)
+            self.lex_emit(!TkLBrace(), start, self.lex_pos)
         elif c == b'}':
             if self.lex_bracket_depth > 0:
                 self.lex_bracket_depth = self.lex_bracket_depth - 1
-            self.lex_emit(TkRBrace(), start, self.lex_pos)
+            self.lex_emit(!TkRBrace(), start, self.lex_pos)
         elif c == b':':
-            self.lex_emit(TkColon(), start, self.lex_pos)
+            self.lex_emit(!TkColon(), start, self.lex_pos)
         elif c == b',':
-            self.lex_emit(TkComma(), start, self.lex_pos)
+            self.lex_emit(!TkComma(), start, self.lex_pos)
         else:
-            self.lex_emit(TkError("unexpected character"), start, self.lex_pos)
+            self.lex_emit(!TkError("unexpected character"), start, self.lex_pos)
 
     # ── Comment scanning ──────────────────────────────────────
 
@@ -999,7 +999,7 @@ equip Lexer:
             int content_start = self.lex_pos
             self.lex_skip_to_eol()
             String content = owned_slice(self.lex_source, content_start, self.lex_pos)
-            self.lex_emit(TkDocComment(content), start, self.lex_pos)
+            self.lex_emit(!TkDocComment(content), start, self.lex_pos)
             return
 
         # Regular comment: skip leading space
@@ -1008,7 +1008,7 @@ equip Lexer:
         int content_start = self.lex_pos
         self.lex_skip_to_eol()
         String content = owned_slice(self.lex_source, content_start, self.lex_pos)
-        self.lex_emit(TkComment(content), start, self.lex_pos)
+        self.lex_emit(!TkComment(content), start, self.lex_pos)
 
     # ── Tokenize one line's content ───────────────────────────
 

@@ -1203,9 +1203,9 @@ equip Parser:
         if self.check_kw(KW_PUBLIC):
             self.advance()
         if self.check_kw(KW_STRUCT):
-            body.push(self.parse_struct_item(Vector[String]()))
+            body.push(self.parse_struct_item(!Vector[String]()))
         elif self.check_kw(KW_ENUM):
-            body.push(self.parse_enum_item(Vector[String]()))
+            body.push(self.parse_enum_item(!Vector[String]()))
         elif self.check_kw(KW_TRAIT):
             body.push(self.parse_trait_item())
         elif self.check_kw(KW_EQUIP):
@@ -1336,22 +1336,22 @@ equip Parser:
                     self.advance()
                     match kw:
                         case KwSelfUpper:
-                            return self.mk_type(TSelf(), start)
+                            return self.mk_type(!TSelf(), start)
                         case KwAuto:
-                            return self.mk_type(TInferred(), start)
+                            return self.mk_type(!TInferred(), start)
                         else:
                             pass
                     # Check for function type: RetType(ParamTypes...)
                     if self.check_tok(TOK_LPAREN):
                         int saved = self.pos
-                        SpannedType ret_ty = self.mk_type(TPrimitive(name), start)
+                        SpannedType ret_ty = self.mk_type(!TPrimitive(name), start)
                         SpannedType fn_ty = self.parse_function_type(ret_ty, start)
                         # Accept if followed by a name, closing bracket, comma, newline, colon, or EOF (in type context)
                         if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
                             return fn_ty
                         self.pos = saved
-                        return self.mk_type(TPrimitive(name), start)
-                    return self.mk_type(TPrimitive(name), start)
+                        return self.mk_type(!TPrimitive(name), start)
+                    return self.mk_type(!TPrimitive(name), start)
             else:
                 pass
 
@@ -1380,8 +1380,8 @@ equip Parser:
                     wrapper_name = "RwLock"
             if self.check_tok(TOK_LBRACKET):
                 Vector[SpannedType] args = self.parse_type_args()
-                return self.mk_type(TNamed(wrapper_name, args), start)
-            return self.mk_type(TNamed(wrapper_name, Vector[SpannedType]()), start)
+                return self.mk_type(!TNamed(wrapper_name, args), start)
+            return self.mk_type(!TNamed(wrapper_name, Vector[SpannedType]()), start)
 
         # Option, Result, Vector, Dict, HashMap — named types that are keywords
         # Actually these are identifiers, not keywords. Let's handle identifier case.
@@ -1395,7 +1395,7 @@ equip Parser:
                 while self.match_tok(TOK_COMMA):
                     elems.push(self.parse_type())
             self.expect_tok(TOK_RPAREN, "expected ')' in tuple type")
-            return self.mk_type(TTuple(elems), start)
+            return self.mk_type(!TTuple(elems), start)
 
         # Array/slice type: [T; N] or [T]
         if self.check_tok(TOK_LBRACKET):
@@ -1406,7 +1406,7 @@ equip Parser:
                 # Actually in Gorget, arrays are Type[N] or [T] for slices. Let me handle [T]
                 pass
             self.expect_tok(TOK_RBRACKET, "expected ']' in array/slice type")
-            return self.mk_type(TSlice(Box(elem)), start)
+            return self.mk_type(!TSlice(Box(elem)), start)
 
         # Named type (identifier possibly with generic args)
         if self.check_tok(TOK_IDENT):
@@ -1414,7 +1414,7 @@ equip Parser:
             String name = token_ident(name_tok.lex_token)
             if self.check_tok(TOK_LBRACKET):
                 Vector[SpannedType] args = self.parse_type_args()
-                SpannedType named_ty = self.mk_type(TNamed(name, args), start)
+                SpannedType named_ty = self.mk_type(!TNamed(name, args), start)
                 # Check for function type: NamedType[T](params)
                 if self.check_tok(TOK_LPAREN):
                     int saved = self.pos
@@ -1438,7 +1438,7 @@ equip Parser:
             # Check for function type: Name(params) — only in contexts where followed by ) ] , or name
             if self.check_tok(TOK_LPAREN):
                 int saved = self.pos
-                SpannedType named_ty = self.mk_type(TNamed(name, Vector[SpannedType]()), start)
+                SpannedType named_ty = self.mk_type(!TNamed(name, Vector[SpannedType]()), start)
                 SpannedType fn_ty = self.parse_function_type(named_ty, start)
                 # Accept if followed by name (var/param name) or closing context
                 if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
@@ -1447,12 +1447,12 @@ equip Parser:
             # Postfix `*` — see comment above on the bracketed branch.
             if self.check_tok(TOK_STAR):
                 self.advance()
-            return self.mk_type(TNamed(name, Vector[SpannedType]()), start)
+            return self.mk_type(!TNamed(name, Vector[SpannedType]()), start)
 
         # Fallback: error
         self.errors.push("expected type")
         self.advance()
-        return self.mk_type(TPrimitive("void"), start)
+        return self.mk_type(!TPrimitive("void"), start)
 
     SpannedType parse_function_type(&self, SpannedType ret_ty, int start):
         # Function type: RetType(Param1, Param2, ...)
@@ -1469,7 +1469,7 @@ equip Parser:
                 param_types.push(self.parse_type())
                 ownerships.push(OWN_BORROW)
         self.expect_tok(TOK_RPAREN, "expected ')' for function type")
-        return self.mk_type(TFunction(Box(ret_ty), param_types, ownerships), start)
+        return self.mk_type(!TFunction(Box(ret_ty), param_types, ownerships), start)
 
     Vector[SpannedType] parse_type_args(&self):
         Vector[SpannedType] args = Vector[SpannedType]()
@@ -1542,7 +1542,7 @@ equip Parser:
         alts.push(first)
         while self.match_tok(TOK_PIPE):
             alts.push(self.parse_pattern_atom())
-        return self.mk_pat(POr(alts), start)
+        return self.mk_pat(!POr(alts), start)
 
     SpannedPattern parse_pattern_atom(&self):
         int start = self.peek().lex_start
@@ -1550,41 +1550,41 @@ equip Parser:
         # Wildcard: _
         if self.check_tok(TOK_UNDERSCORE):
             self.advance()
-            return self.mk_pat(PWildcard(), start)
+            return self.mk_pat(!PWildcard(), start)
 
         # Rest: ..
         if self.check_tok(TOK_DOTDOT):
             self.advance()
-            return self.mk_pat(PRest(), start)
+            return self.mk_pat(!PRest(), start)
 
         # Literals: int, float, string, bool, None
         if self.check_tok(TOK_INT):
             SpannedToken t = self.advance()
             int val = token_int_val(t.lex_token)
             SpannedExpr lit = SpannedExpr(EIntLiteral(val), Span(t.lex_start, t.lex_end))
-            return self.mk_pat(PLiteral(lit), start)
+            return self.mk_pat(!PLiteral(lit), start)
 
         if self.check_tok(TOK_FLOAT):
             SpannedToken t = self.advance()
             float val = token_float_val(t.lex_token)
             SpannedExpr lit = SpannedExpr(EFloatLiteral(val), Span(t.lex_start, t.lex_end))
-            return self.mk_pat(PLiteral(lit), start)
+            return self.mk_pat(!PLiteral(lit), start)
 
         if self.check_tok(TOK_STRING):
             SpannedToken t = self.advance()
             String val = token_string_val(t.lex_token)
             SpannedExpr lit = SpannedExpr(EStringLiteral(val, token_has_interpolation(t.lex_token)), Span(t.lex_start, t.lex_end))
-            return self.mk_pat(PLiteral(lit), start)
+            return self.mk_pat(!PLiteral(lit), start)
 
         if self.check_kw(KW_TRUE):
             SpannedToken t = self.advance()
             SpannedExpr lit = SpannedExpr(EBoolLiteral(true), Span(t.lex_start, t.lex_end))
-            return self.mk_pat(PLiteral(lit), start)
+            return self.mk_pat(!PLiteral(lit), start)
 
         if self.check_kw(KW_FALSE):
             SpannedToken t = self.advance()
             SpannedExpr lit = SpannedExpr(EBoolLiteral(false), Span(t.lex_start, t.lex_end))
-            return self.mk_pat(PLiteral(lit), start)
+            return self.mk_pat(!PLiteral(lit), start)
 
         if self.check_kw(KW_NONE):
             SpannedToken t = self.advance()
@@ -1593,7 +1593,7 @@ equip Parser:
                 self.advance()
                 self.expect_tok(TOK_RPAREN, "expected ')' after None()")
             SpannedExpr lit = SpannedExpr(ENoneLiteral(), Span(t.lex_start, t.lex_end))
-            return self.mk_pat(PLiteral(lit), start)
+            return self.mk_pat(!PLiteral(lit), start)
 
         # Negative int literal: -42
         if self.check_tok(TOK_MINUS):
@@ -1602,7 +1602,7 @@ equip Parser:
                 SpannedToken t = self.advance()
                 int val = 0 - token_int_val(t.lex_token)
                 SpannedExpr lit = SpannedExpr(EIntLiteral(val), Span(m.lex_start, t.lex_end))
-                return self.mk_pat(PLiteral(lit), start)
+                return self.mk_pat(!PLiteral(lit), start)
 
         # Tuple pattern: (p1, p2, ...)
         if self.check_tok(TOK_LPAREN):
@@ -1613,7 +1613,7 @@ equip Parser:
                 while self.match_tok(TOK_COMMA):
                     elems.push(self.parse_pattern())
             self.expect_tok(TOK_RPAREN, "expected ')' in tuple pattern")
-            return self.mk_pat(PTuple(elems), start)
+            return self.mk_pat(!PTuple(elems), start)
 
         # Dot-shorthand pattern: .Variant() or .Variant(args) or .Variant
         if self.check_tok(TOK_DOT):
@@ -1628,8 +1628,8 @@ equip Parser:
                     while self.match_tok(TOK_COMMA):
                         args.push(self.parse_pattern())
                 self.expect_tok(TOK_RPAREN, "expected ')' in dot-shorthand pattern")
-                return self.mk_pat(PDotShorthand(vname, args), start)
-            return self.mk_pat(PDotShorthand(vname, Vector[SpannedPattern]()), start)
+                return self.mk_pat(!PDotShorthand(vname, args), start)
+            return self.mk_pat(!PDotShorthand(vname, Vector[SpannedPattern]()), start)
 
         # Constructor or binding: Name(p1, p2) or name
         # Constructors start with uppercase; bindings are lowercase identifiers
@@ -1650,8 +1650,8 @@ equip Parser:
                         while self.match_tok(TOK_COMMA):
                             args.push(self.parse_pattern())
                     self.expect_tok(TOK_RPAREN, "expected ')' in qualified constructor pattern")
-                    return self.mk_pat(PConstructor(qual_name, args), start)
-                return self.mk_pat(PConstructor(qual_name, Vector[SpannedPattern]()), start)
+                    return self.mk_pat(!PConstructor(qual_name, args), start)
+                return self.mk_pat(!PConstructor(qual_name, Vector[SpannedPattern]()), start)
             if self.check_tok(TOK_LPAREN):
                 self.advance()
                 Vector[SpannedPattern] args = Vector[SpannedPattern]()
@@ -1660,8 +1660,8 @@ equip Parser:
                     while self.match_tok(TOK_COMMA):
                         args.push(self.parse_pattern())
                 self.expect_tok(TOK_RPAREN, "expected ')' in constructor pattern")
-                return self.mk_pat(PConstructor(name, args), start)
-            return self.mk_pat(PBinding(name), start)
+                return self.mk_pat(!PConstructor(name, args), start)
+            return self.mk_pat(!PBinding(name), start)
 
         # Keywords that can be constructors: Some, Ok, Error, None
         if self.check_kw(KW_SOME) or self.check_kw(KW_OK) or self.check_kw(KW_ERROR) or self.check_kw(KW_NONE):
@@ -1684,9 +1684,9 @@ equip Parser:
                     while self.match_tok(TOK_COMMA):
                         args.push(self.parse_pattern())
                 self.expect_tok(TOK_RPAREN, "expected ')' in constructor pattern")
-                return self.mk_pat(PConstructor(name, args), start)
+                return self.mk_pat(!PConstructor(name, args), start)
             # Bare keyword without parens: treated as binding (matches Rust parser)
-            return self.mk_pat(PBinding(name), start)
+            return self.mk_pat(!PBinding(name), start)
 
         # Type-keyword tokens (`int`, `byte`, `float`, …) and other
         # keywords with source spellings (`for`, `match`, `as`, …) are
@@ -1703,17 +1703,17 @@ equip Parser:
                 String tk_name = type_keyword_name(kw)
                 if tk_name != "":
                     self.advance()
-                    return self.mk_pat(PBinding(tk_name), start)
+                    return self.mk_pat(!PBinding(tk_name), start)
                 String ntk_name = non_type_keyword_name(kw)
                 if ntk_name != "":
                     self.advance()
-                    return self.mk_pat(PBinding(ntk_name), start)
+                    return self.mk_pat(!PBinding(ntk_name), start)
             else:
                 pass
 
         self.errors.push("expected pattern")
         self.advance()
-        return self.mk_pat(PWildcard(), start)
+        return self.mk_pat(!PWildcard(), start)
 
     # ── Expression parsing (Pratt) ───────────────────────────
 
@@ -1721,7 +1721,7 @@ equip Parser:
         return self.parse_expr_bp(0)
 
     SpannedExpr parse_expr_with_lhs(&self, SpannedExpr !lhs):
-        return self.parse_expr_bp_with_lhs(0, lhs)
+        return self.parse_expr_bp_with_lhs(0, !lhs)
 
     SpannedExpr parse_expr_bp(&self, int min_bp):
         # Recursion-depth guard: every nested level (`(((…)))`, `-(-(-…))`)
@@ -1735,7 +1735,7 @@ equip Parser:
             SpannedToken dtok = self.advance()
             return SpannedExpr(EIntLiteral(0), Span(dtok.lex_start, dtok.lex_end))
         SpannedExpr lhs = self.parse_prefix()
-        SpannedExpr bp_result = self.parse_expr_bp_with_lhs(min_bp, lhs)
+        SpannedExpr bp_result = self.parse_expr_bp_with_lhs(min_bp, !lhs)
         self.expr_depth = self.expr_depth - 1
         return bp_result
 
@@ -1755,7 +1755,7 @@ equip Parser:
 
             # Dot: field access or method call
             if ptag == TOK_DOT:
-                lhs = self.parse_dot_expr(lhs)
+                lhs = self.parse_dot_expr(!lhs)
                 continue
 
             # Index or generic constructor: expr[...]
@@ -2939,7 +2939,7 @@ equip Parser:
                 int ret_start = self.peek().lex_start
                 self.advance()
                 SpannedExpr ret_ident = SpannedExpr(EIdentifier("__return__"), Span(ret_start, ret_start + 6))
-                SpannedExpr cond = self.parse_expr_with_lhs(ret_ident)
+                SpannedExpr cond = self.parse_expr_with_lhs(!ret_ident)
                 Option[String] msg = None
                 if self.match_tok(TOK_COMMA):
                     if self.check_tok(TOK_STRING):
@@ -3024,9 +3024,9 @@ equip Parser:
 
         # Items: struct, enum, trait, equip, import, from, directive, const, type, newtype, extern, test
         if self.check_kw(KW_STRUCT):
-            return SItem(self.parse_struct_item(Vector[String]()))
+            return SItem(self.parse_struct_item(!Vector[String]()))
         if self.check_kw(KW_ENUM):
-            return SItem(self.parse_enum_item(Vector[String]()))
+            return SItem(self.parse_enum_item(!Vector[String]()))
         if self.check_kw(KW_TRAIT):
             return SItem(self.parse_trait_item())
         if self.check_kw(KW_EQUIP):
@@ -4484,9 +4484,9 @@ equip Parser:
 
             # Try to detect an item
             if self.check_kw(KW_STRUCT):
-                items.push(self.parse_struct_item(pending_derives))
+                items.push(self.parse_struct_item(!pending_derives))
             elif self.check_kw(KW_ENUM):
-                items.push(self.parse_enum_item(pending_derives))
+                items.push(self.parse_enum_item(!pending_derives))
             elif self.check_kw(KW_TRAIT):
                 items.push(self.parse_trait_item())
             elif self.check_kw(KW_EQUIP):

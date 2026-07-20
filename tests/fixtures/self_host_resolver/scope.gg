@@ -150,13 +150,13 @@ equip ScopeTable:
         return s.parent
 
     int define(&self, String name, DefKind kind, Span !span):
-        return self.define_with_mutability(name, kind, span, false)
+        return self.define_with_mutability(name, kind, !span, false)
 
     int define_with_mutability(&self, String name, DefKind kind, Span !span, bool is_mutable):
         # Check for existing definition in current scope using name table
         int ni = self.find_name_entry(self.current, name.clone())
         if ni >= 0:
-            return self.define_replace_or_fail(ni, name, kind, span, is_mutable)
+            return self.define_replace_or_fail(ni, name, kind, !span, is_mutable)
         int def_id = self.definitions.len()
         DefInfo info = DefInfo(name.clone(), kind, span, self.current, NO_DEF, is_mutable, false)
         self.definitions.push(info)

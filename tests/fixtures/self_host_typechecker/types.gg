@@ -266,7 +266,7 @@ equip TypeTable:
     int fresh_var(&self):
         int var_id = self.next_type_var
         self.next_type_var = var_id + 1
-        return self.add_type(RTVar(var_id))
+        return self.add_type(!RTVar(var_id))
 
     # Allocate a fresh RTVar AND tag it as a generic-param-binding
     # demotion. The formatter renders these as "<error>" (matching
@@ -275,12 +275,12 @@ equip TypeTable:
         int var_id = self.next_type_var
         self.next_type_var = var_id + 1
         self.generic_var_ids.put(var_id, true)
-        return self.add_type(RTVar(var_id))
+        return self.add_type(!RTVar(var_id))
 
     int defined_id(&self, int def_id):
         if self.defined_cache.contains(def_id):
             return self.defined_cache.get(def_id).unwrap()
-        int tid = self.add_type(RTDefined(def_id))
+        int tid = self.add_type(!RTDefined(def_id))
         self.defined_cache.put(def_id, tid)
         return tid
 
@@ -310,7 +310,7 @@ equip TypeTable:
                         return i
                 else:
                     pass
-        return self.add_type(RTPrimitive(prim_name))
+        return self.add_type(!RTPrimitive(prim_name))
 
 # ── AST Type → TypeId conversion ────────────────────────────
 
@@ -337,10 +337,10 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                             pass
                     if is_fn:
                         if name == "Callable":
-                            return types.add_type(RTCallableTrait(inner))
+                            return types.add_type(!RTCallableTrait(inner))
                         if name == "MutCallable":
-                            return types.add_type(RTMutCallableTrait(inner))
-                        return types.add_type(RTConsumeCallableTrait(inner))
+                            return types.add_type(!RTMutCallableTrait(inner))
+                        return types.add_type(!RTConsumeCallableTrait(inner))
                     return types.error_id
 
             if scopes.lookup(name) is Some(def_id):
@@ -388,16 +388,16 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                                     else:
                                         pass
                                 if is_trait:
-                                    return types.add_type(RTTraitObject(inner_def_id))
+                                    return types.add_type(!RTTraitObject(inner_def_id))
                             case RTCallableTrait(func_id):
-                                return types.add_type(RTBoxedCallable("Callable", func_id))
+                                return types.add_type(!RTBoxedCallable("Callable", func_id))
                             case RTMutCallableTrait(func_id):
-                                return types.add_type(RTBoxedCallable("MutCallable", func_id))
+                                return types.add_type(!RTBoxedCallable("MutCallable", func_id))
                             case RTConsumeCallableTrait(func_id):
-                                return types.add_type(RTBoxedCallable("ConsumeCallable", func_id))
+                                return types.add_type(!RTBoxedCallable("ConsumeCallable", func_id))
                             else:
                                 pass
-                    return types.add_type(RTGeneric(def_id, resolved_args))
+                    return types.add_type(!RTGeneric(def_id, resolved_args))
                 # Not a type
                 return types.error_id
             # Check meta type aliases before giving up
@@ -416,31 +416,31 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                     for arg in generic_args:
                         int arg_id = ast_type_to_resolved(arg.ty, arg.span, scopes, &types)
                         resolved_args.push(arg_id)
-                    return types.add_type(RTGeneric(alias_def, resolved_args))
+                    return types.add_type(!RTGeneric(alias_def, resolved_args))
                 return types.error_id
             # Unknown type
             return types.error_id
 
         case TArray(element, size):
             int elem_id = ast_type_to_resolved((*element).ty, (*element).span, scopes, &types)
-            return types.add_type(RTArray(elem_id, size))
+            return types.add_type(!RTArray(elem_id, size))
 
         case TSlice(element):
             int elem_id = ast_type_to_resolved((*element).ty, (*element).span, scopes, &types)
-            return types.add_type(RTSlice(elem_id))
+            return types.add_type(!RTSlice(elem_id))
 
         case TTuple(elements):
             Vector[int] elem_ids = Vector[int]()
             for elem in elements:
                 elem_ids.push(ast_type_to_resolved(elem.ty, elem.span, scopes, &types))
-            return types.add_type(RTTuple(elem_ids))
+            return types.add_type(!RTTuple(elem_ids))
 
         case TFunction(return_type, params, param_ownerships):
             int ret_id = ast_type_to_resolved((*return_type).ty, (*return_type).span, scopes, &types)
             Vector[int] param_ids = Vector[int]()
             for p in params:
                 param_ids.push(ast_type_to_resolved(p.ty, p.span, scopes, &types))
-            return types.add_type(RTFunction(param_ids, param_ownerships, ret_id))
+            return types.add_type(!RTFunction(param_ids, param_ownerships, ret_id))
 
         case TSelf():
             if types.self_type_id >= 0:

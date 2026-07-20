@@ -185,7 +185,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             for ta in targs:
                                 int ta_id = ast_type_to_resolved(ta.ty, ta.span, scopes, &types)
                                 targ_ids.push(ta_id)
-                            return types.add_type(RTGeneric(def_id, targ_ids))
+                            return types.add_type(!RTGeneric(def_id, targ_ids))
                         return callee_type
                     case RTGeneric(def_id, type_args):
                         # Generic constructor — return the generic type
@@ -218,7 +218,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 for ta in targs:
                                     int ta_id = ast_type_to_resolved(ta.ty, ta.span, scopes, &types)
                                     targ_ids.push(ta_id)
-                                return types.add_type(RTGeneric(def_id, targ_ids))
+                                return types.add_type(!RTGeneric(def_id, targ_ids))
                             return types.defined_id(def_id)
                 else:
                     pass
@@ -576,7 +576,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 if scopes.lookup("Vector") is Some(vec_def):
                     Vector[int] vec_args = Vector[int]()
                     vec_args.push(types.string_id)
-                    return types.add_type(RTGeneric(vec_def, vec_args))
+                    return types.add_type(!RTGeneric(vec_def, vec_args))
             # Set-op predicates return bool (mirrors Rust typecheck.rs:5665 —
             # `is_subset`/`is_superset` on Set/HashSet). Sibling of the
             # is_empty/contains arm. Without this the result slot defaults to
@@ -668,17 +668,17 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 if type_args.len() >= 1:
                                     # Returns Option[T &]
                                     if scopes.lookup("Option") is Some(option_def):
-                                        int ref_tid = types.add_type(RTRef(get_int_at(type_args, 0)))
+                                        int ref_tid = types.add_type(!RTRef(get_int_at(type_args, 0)))
                                         Vector[int] opt_args = Vector[int]()
                                         opt_args.push(ref_tid)
-                                        return types.add_type(RTGeneric(option_def, opt_args))
+                                        return types.add_type(!RTGeneric(option_def, opt_args))
                             if d.name == "Dict" or d.name == "HashMap":
                                 if type_args.len() >= 2:
                                     if scopes.lookup("Option") is Some(option_def):
-                                        int ref_tid = types.add_type(RTRef(get_int_at(type_args, 1)))
+                                        int ref_tid = types.add_type(!RTRef(get_int_at(type_args, 1)))
                                         Vector[int] opt_args = Vector[int]()
                                         opt_args.push(ref_tid)
-                                        return types.add_type(RTGeneric(option_def, opt_args))
+                                        return types.add_type(!RTGeneric(option_def, opt_args))
                         else:
                             pass
             # .get_or(k, default) on Dict[K,V] → V (the OWNED value type, not a
@@ -708,7 +708,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 if scopes.lookup("Vector") is Some(vec_def):
                                     Vector[int] vec_args = Vector[int]()
                                     vec_args.push(get_int_at(type_args, 0))
-                                    return types.add_type(RTGeneric(vec_def, vec_args))
+                                    return types.add_type(!RTGeneric(vec_def, vec_args))
                         else:
                             pass
             if method_name == "values":
@@ -722,7 +722,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 if scopes.lookup("Vector") is Some(vec_def):
                                     Vector[int] vec_args = Vector[int]()
                                     vec_args.push(get_int_at(type_args, 1))
-                                    return types.add_type(RTGeneric(vec_def, vec_args))
+                                    return types.add_type(!RTGeneric(vec_def, vec_args))
                         else:
                             pass
             # .items() on Dict → Vector[(K,V)]
@@ -737,11 +737,11 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 Vector[int] tuple_elems = Vector[int]()
                                 tuple_elems.push(get_int_at(type_args, 0))
                                 tuple_elems.push(get_int_at(type_args, 1))
-                                int tuple_type = types.add_type(RTTuple(tuple_elems))
+                                int tuple_type = types.add_type(!RTTuple(tuple_elems))
                                 if scopes.lookup("Vector") is Some(vec_def):
                                     Vector[int] vec_args = Vector[int]()
                                     vec_args.push(tuple_type)
-                                    return types.add_type(RTGeneric(vec_def, vec_args))
+                                    return types.add_type(!RTGeneric(vec_def, vec_args))
                         else:
                             pass
             # .clone() / .copy() / .sorted() / .reversed() returns the same type
@@ -765,7 +765,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             if scopes.lookup("Option") is Some(option_def):
                                 Vector[int] opt_args = Vector[int]()
                                 opt_args.push(prim_id)
-                                int parse_ret = types.add_type(RTGeneric(option_def, opt_args))
+                                int parse_ret = types.add_type(!RTGeneric(option_def, opt_args))
                                 # Mirror Rust typecheck.rs:4481 — record the
                                 # Option[T] return type for the static
                                 # `<prim>.parse(...)` call at its outer span.
@@ -787,12 +787,12 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                                 if scopes.lookup("Option") is Some(option_def):
                                     Vector[int] opt_args = Vector[int]()
                                     opt_args.push(get_int_at(type_args, 0))
-                                    return types.add_type(RTGeneric(option_def, opt_args))
+                                    return types.add_type(!RTGeneric(option_def, opt_args))
                             if method_name == "remove" and (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
                                 if scopes.lookup("Option") is Some(dict_option_def):
                                     Vector[int] dict_opt_args = Vector[int]()
                                     dict_opt_args.push(get_int_at(type_args, 1))
-                                    return types.add_type(RTGeneric(dict_option_def, dict_opt_args))
+                                    return types.add_type(!RTGeneric(dict_option_def, dict_opt_args))
                             # Set/HashSet.remove(k) → bool (runtime
                             # `gorget_set_remove` returns whether the element was
                             # present). Mirrors Rust gg builtins.rs:459 (Set.remove
@@ -839,7 +839,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 SpannedExpr first = elements.get(0).unwrap()
                 int elem_type = infer_expr_type(first, scopes, &types, &ctx)
                 if elem_type >= 0:
-                    return types.add_type(RTArray(elem_type, elements.len()))
+                    return types.add_type(!RTArray(elem_type, elements.len()))
             return NO_TYPE
 
         case ETupleLiteral(elements):
@@ -847,7 +847,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             for elem in elements:
                 int et = infer_expr_type(elem, scopes, &types, &ctx)
                 elem_ids.push(et)
-            return types.add_type(RTTuple(elem_ids))
+            return types.add_type(!RTTuple(elem_ids))
 
         case EDictLiteral(keys, values):
             # Infer Dict[K, V] from first key-value pair
@@ -862,7 +862,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         Vector[int] type_args = Vector[int]()
                         type_args.push(key_type)
                         type_args.push(val_type)
-                        return types.add_type(RTGeneric(dict_def, type_args))
+                        return types.add_type(!RTGeneric(dict_def, type_args))
             return NO_TYPE
 
         case EClosure(params, body):
@@ -883,7 +883,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 int inferred_ret = infer_closure_return_type(last, param_types, scopes, &types, &ctx)
                 if inferred_ret >= 0:
                     ret_id = inferred_ret
-            return types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
+            return types.add_type(!RTFunction(param_type_ids, param_ownerships, ret_id))
 
         case EPropagate(inner):
             # D29: `expr!` types as its inner expression (the mark is identity
@@ -1012,7 +1012,7 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 if scopes.lookup("Task") is Some(task_def):
                     Vector[int] task_args = Vector[int]()
                     task_args.push(sp_inner_type)
-                    return types.add_type(RTGeneric(task_def, task_args))
+                    return types.add_type(!RTGeneric(task_def, task_args))
             return NO_TYPE
 
         case EDefaultOp(left, right):

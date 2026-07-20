@@ -221,7 +221,7 @@ int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types
                     any_changed = true
                 new_args.push(new_arg_tid)
             if any_changed:
-                return types.add_type(RTGeneric(gen_def_id, new_args))
+                return types.add_type(!RTGeneric(gen_def_id, new_args))
             return type_id
         case RTTuple(elems):
             Vector[int] new_elems = Vector[int]()
@@ -232,42 +232,42 @@ int demote_generic_param_to_var(int type_id, ScopeTable scopes, TypeTable &types
                     any_changed = true
                 new_elems.push(new_elem_tid)
             if any_changed:
-                return types.add_type(RTTuple(new_elems))
+                return types.add_type(!RTTuple(new_elems))
             return type_id
         case RTArray(elem_tid, size):
             int new_elem_tid = demote_generic_param_to_var(elem_tid, scopes, &types)
             if new_elem_tid != elem_tid:
-                return types.add_type(RTArray(new_elem_tid, size))
+                return types.add_type(!RTArray(new_elem_tid, size))
             return type_id
         case RTSlice(elem_tid):
             int new_elem_tid = demote_generic_param_to_var(elem_tid, scopes, &types)
             if new_elem_tid != elem_tid:
-                return types.add_type(RTSlice(new_elem_tid))
+                return types.add_type(!RTSlice(new_elem_tid))
             return type_id
         case RTRef(inner_tid):
             int new_inner_tid = demote_generic_param_to_var(inner_tid, scopes, &types)
             if new_inner_tid != inner_tid:
-                return types.add_type(RTRef(new_inner_tid))
+                return types.add_type(!RTRef(new_inner_tid))
             return type_id
         case RTCallableTrait(func_id):
             int new_func_id = demote_through_function_type(func_id, scopes, &types)
             if new_func_id != func_id:
-                return types.add_type(RTCallableTrait(new_func_id))
+                return types.add_type(!RTCallableTrait(new_func_id))
             return type_id
         case RTMutCallableTrait(func_id):
             int new_func_id = demote_through_function_type(func_id, scopes, &types)
             if new_func_id != func_id:
-                return types.add_type(RTMutCallableTrait(new_func_id))
+                return types.add_type(!RTMutCallableTrait(new_func_id))
             return type_id
         case RTConsumeCallableTrait(func_id):
             int new_func_id = demote_through_function_type(func_id, scopes, &types)
             if new_func_id != func_id:
-                return types.add_type(RTConsumeCallableTrait(new_func_id))
+                return types.add_type(!RTConsumeCallableTrait(new_func_id))
             return type_id
         case RTBoxedCallable(kind_name, func_id):
             int new_func_id = demote_through_function_type(func_id, scopes, &types)
             if new_func_id != func_id:
-                return types.add_type(RTBoxedCallable(kind_name, new_func_id))
+                return types.add_type(!RTBoxedCallable(kind_name, new_func_id))
             return type_id
         else:
             return type_id
@@ -294,7 +294,7 @@ int demote_through_function_type(int type_id, ScopeTable scopes, TypeTable &type
             if new_ret_id != ret_id:
                 any_changed = true
             if any_changed:
-                return types.add_type(RTFunction(new_params, ownerships, new_ret_id))
+                return types.add_type(!RTFunction(new_params, ownerships, new_ret_id))
             return type_id
         else:
             return type_id
@@ -353,7 +353,7 @@ void register_function_signature(FunctionDef func, int parent_scope, ScopeTable 
                         scopes.set_def_param_ownership(param_def, p.ownership)
     if is_generic and has_body_scope:
         scopes.set_current(saved_scope)
-    int fn_type_id = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
+    int fn_type_id = types.add_type(!RTFunction(param_type_ids, param_ownerships, ret_id))
     Option[int] fn_def_opt = None()
     if def_scope >= 0:
         fn_def_opt = scopes.lookup_in_scope(def_scope, func.name)
@@ -3002,14 +3002,14 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                         ptypes.push(elem_type)
                         Vector[int] owns = Vector[int]()
                         owns.push(0)
-                        expected = types.add_type(RTFunction(ptypes, owns, types.bool_id))
+                        expected = types.add_type(!RTFunction(ptypes, owns, types.bool_id))
                     elif method_name == "map" and ai == 0:
                         # (T) -> ?
                         Vector[int] ptypes = Vector[int]()
                         ptypes.push(elem_type)
                         Vector[int] owns = Vector[int]()
                         owns.push(0)
-                        expected = types.add_type(RTFunction(ptypes, owns, -1))
+                        expected = types.add_type(!RTFunction(ptypes, owns, -1))
                     elif (method_name == "fold" or method_name == "reduce") and ai == 1:
                         # (U, T) -> U
                         int init_type = infer_expr_type(args.get(0).unwrap().value, scopes, &types, &ctx)
@@ -3019,7 +3019,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                         Vector[int] owns = Vector[int]()
                         owns.push(0)
                         owns.push(0)
-                        expected = types.add_type(RTFunction(ptypes, owns, init_type))
+                        expected = types.add_type(!RTFunction(ptypes, owns, init_type))
                 # Fallback: use method signature's param type for this arg index.
                 # Enables closure params to be typed when the method expects a
                 # Callable/function-type argument (e.g. router.get(path, (r): ...)).
@@ -3137,7 +3137,7 @@ void rebuild_closure_var_type(String var_name, Vector[Param] cl_params, Vector[S
         if inferred_ret >= 0:
             ret_id = inferred_ret
     # Build the new function type and update the variable
-    int fn_type = types.add_type(RTFunction(param_type_ids, param_ownerships, ret_id))
+    int fn_type = types.add_type(!RTFunction(param_type_ids, param_ownerships, ret_id))
     if scopes.lookup_in_subtree(scope_id, var_name) is Some(var_def):
         scopes.set_def_type(var_def, fn_type)
 
@@ -3242,7 +3242,7 @@ void resolve_call_in_expr(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, T
                                                 # and update it to the concrete type
                                                 resolve_param_type_var(old_ptid, np_tid, scope_id, &scopes, types)
                                         # Update function type
-                                        int new_fn_type = types.add_type(RTFunction(!new_params, ownerships, new_ret))
+                                        int new_fn_type = types.add_type(!RTFunction(!new_params, ownerships, new_ret))
                                         scopes.set_def_type(callee_def, new_fn_type)
                                 else:
                                     pass
@@ -3570,7 +3570,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                             Vector[int] tuple_elems = Vector[int]()
                             tuple_elems.push(types.int_id)
                             tuple_elems.push(elem_type)
-                            int tuple_type = types.add_type(RTTuple(tuple_elems))
+                            int tuple_type = types.add_type(!RTTuple(tuple_elems))
                             assign_pattern_types(pat, tuple_type, scope_id, &scopes, &types, &ctx)
                 else:
                     pass
@@ -3777,7 +3777,7 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
             if ordered_field_ids.len() == 1:
                 types.variant_field_types.put(sdef.name, get_int_at(ordered_field_ids, 0))
             elif ordered_field_ids.len() > 1:
-                int struct_tuple_tid = types.add_type(RTTuple(ordered_field_ids))
+                int struct_tuple_tid = types.add_type(!RTTuple(ordered_field_ids))
                 types.variant_field_types.put(sdef.name, struct_tuple_tid)
 
         case IEnum(edef):
@@ -3794,7 +3794,7 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                         for ft in var.fields:
                             int ftid = ast_type_to_resolved(ft.ty, ft.span, scopes, &types)
                             field_ids.push(ftid)
-                        int tuple_tid = types.add_type(RTTuple(field_ids))
+                        int tuple_tid = types.add_type(!RTTuple(field_ids))
                         types.variant_field_types.put(var.name, tuple_tid)
 
         case IEquip(eqblk):

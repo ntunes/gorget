@@ -84,7 +84,7 @@ equip TypeTable:
     int defined_id(&self, int def_id):
         if self.defined_cache.contains(def_id):
             return self.defined_cache.get(def_id).unwrap()
-        int tid = self.add_type(RTDefined(def_id))
+        int tid = self.add_type(!RTDefined(def_id))
         self.defined_cache.put(def_id, tid)
         return tid
 
@@ -117,7 +117,7 @@ equip TypeTable:
                 else:
                     pass
             i = i + 1
-        return self.add_type(RTPrimitive(prim_name))
+        return self.add_type(!RTPrimitive(prim_name))
 
 # ── AST Type → TypeId conversion ────────────────────────────
 
@@ -141,10 +141,10 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                             pass
                     if is_fn:
                         if name == "Callable":
-                            return types.add_type(RTCallableTrait(inner))
+                            return types.add_type(!RTCallableTrait(inner))
                         if name == "MutCallable":
-                            return types.add_type(RTMutCallableTrait(inner))
-                        return types.add_type(RTConsumeCallableTrait(inner))
+                            return types.add_type(!RTMutCallableTrait(inner))
+                        return types.add_type(!RTConsumeCallableTrait(inner))
                     return types.error_id
 
             int def_id = scopes.lookup(name)
@@ -192,16 +192,16 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                                     else:
                                         pass
                                 if is_trait:
-                                    return types.add_type(RTTraitObject(inner_def_id))
+                                    return types.add_type(!RTTraitObject(inner_def_id))
                             case RTCallableTrait(func_id):
-                                return types.add_type(RTCallableTrait(func_id))
+                                return types.add_type(!RTCallableTrait(func_id))
                             case RTMutCallableTrait(func_id):
-                                return types.add_type(RTMutCallableTrait(func_id))
+                                return types.add_type(!RTMutCallableTrait(func_id))
                             case RTConsumeCallableTrait(func_id):
-                                return types.add_type(RTConsumeCallableTrait(func_id))
+                                return types.add_type(!RTConsumeCallableTrait(func_id))
                             else:
                                 pass
-                    return types.add_type(RTGeneric(def_id, resolved_args))
+                    return types.add_type(!RTGeneric(def_id, resolved_args))
                 # Not a type
                 return types.error_id
             # Unknown type
@@ -209,11 +209,11 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
 
         case TArray(element, size):
             int elem_id = ast_type_to_resolved((*element).ty, (*element).span, scopes, &types)
-            return types.add_type(RTArray(elem_id, size))
+            return types.add_type(!RTArray(elem_id, size))
 
         case TSlice(element):
             int elem_id = ast_type_to_resolved((*element).ty, (*element).span, scopes, &types)
-            return types.add_type(RTSlice(elem_id))
+            return types.add_type(!RTSlice(elem_id))
 
         case TTuple(elements):
             Vector[int] elem_ids = Vector[int]()
@@ -222,7 +222,7 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                 SpannedType elem = get_stype_at(elements, i)
                 elem_ids.push(ast_type_to_resolved(elem.ty, elem.span, scopes, &types))
                 i = i + 1
-            return types.add_type(RTTuple(elem_ids))
+            return types.add_type(!RTTuple(elem_ids))
 
         case TFunction(return_type, params, param_ownerships):
             int ret_id = ast_type_to_resolved((*return_type).ty, (*return_type).span, scopes, &types)
@@ -232,7 +232,7 @@ int ast_type_to_resolved(Type ast_ty, Span span, ScopeTable scopes, TypeTable &t
                 SpannedType p = get_stype_at(params, i)
                 param_ids.push(ast_type_to_resolved(p.ty, p.span, scopes, &types))
                 i = i + 1
-            return types.add_type(RTFunction(param_ids, param_ownerships, ret_id))
+            return types.add_type(!RTFunction(param_ids, param_ownerships, ret_id))
 
         case TSelf():
             return types.error_id

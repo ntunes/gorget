@@ -152,11 +152,11 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
     int ti = 0
     while ti < trait_names.len():
         String tname = get_str_at(trait_names, ti)
-        scopes.define(tname, DkTrait(), Span(0, 0))
+        scopes.define(tname, DkTrait(), !Span(0, 0))
         ti = ti + 1
 
     # Register String constructor as built-in function
-    scopes.define("String", DkFunction(), Span(0, 0))
+    scopes.define("String", DkFunction(), !Span(0, 0))
 
     # Register built-in collection types as Import placeholders
     Vector[String] col_names = Vector[String]()
@@ -178,29 +178,29 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
     int ci = 0
     while ci < col_names.len():
         String cname = get_str_at(col_names, ci)
-        scopes.define(cname, DkImport(), Span(0, 0))
+        scopes.define(cname, DkImport(), !Span(0, 0))
         ci = ci + 1
 
     # Register Option[T] and Result[T,E] enum types with variants
-    int opt_def = scopes.define("Option", DkEnum(), Span(0, 0))
+    int opt_def = scopes.define("Option", DkEnum(), !Span(0, 0))
     if opt_def >= 0:
-        scopes.define("Some", DkVariant(), Span(0, 0))
-        scopes.define("None", DkVariant(), Span(0, 0))
+        scopes.define("Some", DkVariant(), !Span(0, 0))
+        scopes.define("None", DkVariant(), !Span(0, 0))
 
-    int res_def = scopes.define("Result", DkEnum(), Span(0, 0))
+    int res_def = scopes.define("Result", DkEnum(), !Span(0, 0))
     if res_def >= 0:
-        scopes.define("Ok", DkVariant(), Span(0, 0))
-        scopes.define("Error", DkVariant(), Span(0, 0))
+        scopes.define("Ok", DkVariant(), !Span(0, 0))
+        scopes.define("Error", DkVariant(), !Span(0, 0))
 
     # Register the compiler-internal `Fault` enum (error-model.md §11). Its
     # variants are QUALIFIED (`Fault.Overflow`) so they register via
     # `alloc_def` (no bare-name scope insertion), mirroring the non-generic
     # user-enum path + Rust gg resolve.rs:175-183.
-    int fault_def = scopes.define("Fault", DkEnum(), Span(0, 0))
+    int fault_def = scopes.define("Fault", DkEnum(), !Span(0, 0))
     if fault_def >= 0:
-        scopes.alloc_def("Overflow", DkVariant(), Span(0, 0))
-        scopes.alloc_def("DivByZero", DkVariant(), Span(0, 0))
-        scopes.alloc_def("Bounds", DkVariant(), Span(0, 0))
+        scopes.alloc_def("Overflow", DkVariant(), !Span(0, 0))
+        scopes.alloc_def("DivByZero", DkVariant(), !Span(0, 0))
+        scopes.alloc_def("Bounds", DkVariant(), !Span(0, 0))
 
     # Collect all top-level items
     int i = 0
@@ -215,34 +215,34 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
 void collect_item(Item item, ScopeTable &scopes, TypeTable types):
     match item:
         case IFunction(f):
-            scopes.define(f.name, DkFunction(), Span(0, 0))
+            scopes.define(f.name, DkFunction(), !Span(0, 0))
 
         case IStruct(s):
-            scopes.define(s.name, DkStruct(), Span(0, 0))
+            scopes.define(s.name, DkStruct(), !Span(0, 0))
 
         case IEnum(e):
-            scopes.define(e.name, DkEnum(), Span(0, 0))
+            scopes.define(e.name, DkEnum(), !Span(0, 0))
             bool is_generic = e.type_params.len() > 0
             int vi = 0
             while vi < e.variants.len():
                 EnumVariant v = get_variant_at(e.variants, vi)
                 if is_generic:
                     # Generic enum: keep variant in scope (bare name works)
-                    scopes.define(v.name, DkVariant(), Span(0, 0))
+                    scopes.define(v.name, DkVariant(), !Span(0, 0))
                 else:
                     # Non-generic enum: allocate without scope insertion
-                    scopes.alloc_def(v.name, DkVariant(), Span(0, 0))
+                    scopes.alloc_def(v.name, DkVariant(), !Span(0, 0))
                 vi = vi + 1
 
         case ITrait(t):
-            scopes.define(t.name, DkTrait(), Span(0, 0))
+            scopes.define(t.name, DkTrait(), !Span(0, 0))
 
         case IEquip(eq):
             scopes.push_scope(SkEquipBlock())
             int mi = 0
             while mi < eq.methods.len():
                 FunctionDef m = get_fndef_at(eq.methods, mi)
-                scopes.define(m.name, DkFunction(), Span(0, 0))
+                scopes.define(m.name, DkFunction(), !Span(0, 0))
                 mi = mi + 1
             scopes.pop_scope()
 
@@ -253,13 +253,13 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable types):
             pass
 
         case ITypeAlias(name, _, _):
-            scopes.define(name, DkTypeAlias(), Span(0, 0))
+            scopes.define(name, DkTypeAlias(), !Span(0, 0))
 
         case INewtype(name, _):
-            scopes.define(name, DkNewtype(), Span(0, 0))
+            scopes.define(name, DkNewtype(), !Span(0, 0))
 
         case IConstDecl(_, name, _):
-            scopes.define(name, DkConst(), Span(0, 0))
+            scopes.define(name, DkConst(), !Span(0, 0))
 
         case IMetaConst(_, _, _):
             pass
@@ -275,13 +275,13 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable types):
             pass
 
         case IStaticDecl(_, name, _):
-            scopes.define(name, DkStatic(), Span(0, 0))
+            scopes.define(name, DkStatic(), !Span(0, 0))
 
         case IExternBlock(fns):
             int fi = 0
             while fi < fns.len():
                 FunctionDef f = get_fndef_at(fns, fi)
-                scopes.define(f.name, DkFunction(), Span(0, 0))
+                scopes.define(f.name, DkFunction(), !Span(0, 0))
                 fi = fi + 1
 
         case ITest(_, _, _, _):
@@ -309,9 +309,9 @@ void collect_import(ImportStmt imp, ScopeTable &scopes):
             pi = pi + 1
         if dot_pos >= 0:
             String last = path.byte_slice(dot_pos + 1, path.byte_len())
-            scopes.define(last, DkImport(), Span(0, 0))
+            scopes.define(last, DkImport(), !Span(0, 0))
         else:
-            scopes.define(path, DkImport(), Span(0, 0))
+            scopes.define(path, DkImport(), !Span(0, 0))
         return
     # Register each imported name under its LOCALLY-VISIBLE spelling: the
     # `as`-alias when present (`from X import sin as msin` → register `msin`),
@@ -324,7 +324,7 @@ void collect_import(ImportStmt imp, ScopeTable &scopes):
             String alias = get_str_at(imp.aliases, i)
             if alias != "":
                 local_name = alias
-        scopes.define(local_name, DkImport(), Span(0, 0))
+        scopes.define(local_name, DkImport(), !Span(0, 0))
         i = i + 1
 
 # ═══════════════════════════════════════════════════════════
@@ -374,7 +374,7 @@ void resolve_item_body(Item item, ScopeTable &scopes, TypeTable &types, ResolveC
                 resolve_expr(wexpr, &scopes, &ctx)
                 String wname = with_names.get(wi).unwrap()
                 if wname != "_":
-                    scopes.define(wname, DkVariable(), Span(0, 0))
+                    scopes.define(wname, DkVariable(), !Span(0, 0))
                 wi = wi + 1
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
@@ -408,14 +408,14 @@ void resolve_function(FunctionDef f, ScopeTable &scopes, TypeTable &types, Resol
     int gi = 0
     while gi < f.type_params.len():
         String gp = get_str_at(f.type_params, gi)
-        scopes.define(gp, DkGenericParam(), Span(0, 0))
+        scopes.define(gp, DkGenericParam(), !Span(0, 0))
         gi = gi + 1
 
     # Define parameters (always mutable — can reassign params in body)
     int pi = 0
     while pi < f.params.len():
         Param p = get_param_at(f.params, pi)
-        int def_id = scopes.define_with_mutability(p.param_name, DkVariable(), Span(0, 0), true)
+        int def_id = scopes.define_with_mutability(p.param_name, DkVariable(), !Span(0, 0), true)
         if def_id >= 0:
             scopes.set_def_param(def_id, true)
         pi = pi + 1
@@ -433,7 +433,7 @@ void resolve_equip_block(EquipBlock eq, ScopeTable &scopes, TypeTable &types, Re
     int gi = 0
     while gi < eq.type_params.len():
         String gp = get_str_at(eq.type_params, gi)
-        scopes.define(gp, DkGenericParam(), Span(0, 0))
+        scopes.define(gp, DkGenericParam(), !Span(0, 0))
         gi = gi + 1
 
     # Resolve each method
@@ -467,10 +467,10 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 while pi < parts.len():
                     String part = parts.get(pi).unwrap()
                     if part != "_":
-                        def_id = scopes.define(part, DkVariable(), Span(0, 0))
+                        def_id = scopes.define(part, DkVariable(), !Span(0, 0))
                     pi = pi + 1
             else:
-                def_id = scopes.define(name, DkVariable(), Span(0, 0))
+                def_id = scopes.define(name, DkVariable(), !Span(0, 0))
             # Emit RES entry for bindings that captured their name span
             # (shared vars and select recv vars)
             if def_id >= 0 and name_span >= 0:
@@ -566,7 +566,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
         case SWith(expr, name, body):
             scopes.push_scope(SkBlock())
             resolve_expr(expr, &scopes, &ctx)
-            scopes.define(name, DkVariable(), Span(0, 0))
+            scopes.define(name, DkVariable(), !Span(0, 0))
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
 
@@ -583,7 +583,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
                 match arm.op:
                     case SORecv(name, name_span, channel):
                         resolve_expr(channel, &scopes, &ctx)
-                        int def_id = scopes.define(name, DkVariable(), Span(0, 0))
+                        int def_id = scopes.define(name, DkVariable(), !Span(0, 0))
                         if def_id >= 0 and name_span >= 0:
                             ctx.resolution_map.put(name_span, def_id)
                     case SOSend(channel, value):
@@ -613,7 +613,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             # materializes per-mono at lowering; the value expr is a meta
             # builtin call (enum_ordinal/...) with no runtime meaning, so we
             # register the name without resolving the value against scope.
-            scopes.define(mc_name, DkVariable(), Span(0, 0))
+            scopes.define(mc_name, DkVariable(), !Span(0, 0))
 
         case SMetaFor(mf_vars, mf_iter, body):
             # PROTOTYPE slice #4: bind the meta-for loop vars in the body
@@ -622,7 +622,7 @@ void resolve_stmt(Stmt stmt, ScopeTable &scopes, TypeTable &types, ResolveContex
             # false-miss).
             scopes.push_scope(SkBlock())
             for mfv in mf_vars:
-                scopes.define(mfv, DkVariable(), Span(0, 0))
+                scopes.define(mfv, DkVariable(), !Span(0, 0))
             resolve_block(body, &scopes, &types, &ctx)
             scopes.pop_scope()
 
@@ -796,7 +796,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             resolve_expr(*expr, &scopes, &ctx)
             if eopt is Some(ename):
                 scopes.push_scope(SkBlock())
-                scopes.define(ename, DkVariable(), Span(0, 0))
+                scopes.define(ename, DkVariable(), !Span(0, 0))
                 resolve_expr(*transform, &scopes, &ctx)
                 scopes.pop_scope()
             else:
@@ -805,7 +805,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case ECatch(expr, ename, recovery):
             resolve_expr(*expr, &scopes, &ctx)
             scopes.push_scope(SkBlock())
-            scopes.define(ename, DkVariable(), Span(0, 0))
+            scopes.define(ename, DkVariable(), !Span(0, 0))
             resolve_expr(*recovery, &scopes, &ctx)
             scopes.pop_scope()
 
@@ -818,7 +818,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             scopes.push_scope(SkBlock())
             match fc_pattern:
                 case FcpBinding(fc_name):
-                    scopes.define(fc_name, DkVariable(), Span(0, 0))
+                    scopes.define(fc_name, DkVariable(), !Span(0, 0))
                 case FcpVariant(_, _):
                     pass
             resolve_expr(*fc_handler, &scopes, &ctx)
@@ -829,7 +829,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             int pi = 0
             while pi < params.len():
                 Param p = get_param_at(params, pi)
-                scopes.define(p.param_name, DkVariable(), Span(0, 0))
+                scopes.define(p.param_name, DkVariable(), !Span(0, 0))
                 pi = pi + 1
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
@@ -839,14 +839,14 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
 
         case EImplicitClosure(inner):
             scopes.push_scope(SkFunction())
-            scopes.define("it", DkVariable(), Span(0, 0))
+            scopes.define("it", DkVariable(), !Span(0, 0))
             resolve_expr(*inner, &scopes, &ctx)
             scopes.pop_scope()
 
         case EListComp(comp_expr, var_name, iterable, opt_cond):
             resolve_expr(*iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
-            scopes.define(var_name, DkVariable(), Span(0, 0))
+            scopes.define(var_name, DkVariable(), !Span(0, 0))
             resolve_expr(*comp_expr, &scopes, &ctx)
             if opt_cond is Some(b):
                 resolve_expr(*b, &scopes, &ctx)
@@ -855,7 +855,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case ESetComp(comp_expr, var_name, iterable, opt_cond):
             resolve_expr(*iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
-            scopes.define(var_name, DkVariable(), Span(0, 0))
+            scopes.define(var_name, DkVariable(), !Span(0, 0))
             resolve_expr(*comp_expr, &scopes, &ctx)
             if opt_cond is Some(b):
                 resolve_expr(*b, &scopes, &ctx)
@@ -864,7 +864,7 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
         case EDictComp(key, value, var_name, iterable, opt_cond):
             resolve_expr(*iterable, &scopes, &ctx)
             scopes.push_scope(SkForLoop())
-            scopes.define(var_name, DkVariable(), Span(0, 0))
+            scopes.define(var_name, DkVariable(), !Span(0, 0))
             resolve_expr(*key, &scopes, &ctx)
             resolve_expr(*value, &scopes, &ctx)
             if opt_cond is Some(b):
@@ -936,10 +936,10 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                 while pi < parts.len():
                     String part = parts.get(pi).unwrap()
                     if part != "_":
-                        def_id = scopes.define(part, DkVariable(), Span(0, 0))
+                        def_id = scopes.define(part, DkVariable(), !Span(0, 0))
                     pi = pi + 1
             else:
-                def_id = scopes.define(name, DkVariable(), Span(0, 0))
+                def_id = scopes.define(name, DkVariable(), !Span(0, 0))
             if sk > 0 and def_id >= 0 and name_span >= 0:
                 ctx.resolution_map.put(name_span, def_id)
 
@@ -1023,7 +1023,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
         case SWith(expr, name, body):
             scopes.push_scope(SkBlock())
             resolve_expr(expr, &scopes, &ctx)
-            scopes.define(name, DkVariable(), Span(0, 0))
+            scopes.define(name, DkVariable(), !Span(0, 0))
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
 
@@ -1040,7 +1040,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
                 match arm.op:
                     case SORecv(name, name_span, channel):
                         resolve_expr(channel, &scopes, &ctx)
-                        int def_id = scopes.define(name, DkVariable(), Span(0, 0))
+                        int def_id = scopes.define(name, DkVariable(), !Span(0, 0))
                         if def_id >= 0 and name_span >= 0:
                             ctx.resolution_map.put(name_span, def_id)
                     case SOSend(channel, value):
@@ -1068,12 +1068,12 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
             # lowering; the value expr is a meta builtin call with no runtime
             # meaning, so register the name without resolving the value.
             # Mirrors the SMetaFor binding arm below.
-            scopes.define(mc_name, DkVariable(), Span(0, 0))
+            scopes.define(mc_name, DkVariable(), !Span(0, 0))
 
         case SMetaFor(mf_vars, mf_iter, body):
             scopes.push_scope(SkBlock())
             for mfv in mf_vars:
-                scopes.define(mfv, DkVariable(), Span(0, 0))
+                scopes.define(mfv, DkVariable(), !Span(0, 0))
             resolve_block_expr(body, &scopes, &ctx)
             scopes.pop_scope()
 
@@ -1101,7 +1101,7 @@ void resolve_stmt_expr(Stmt stmt, ScopeTable &scopes, ResolveContext &ctx):
 void define_pattern_bindings(SpannedPattern pattern, ScopeTable &scopes):
     match pattern.pat:
         case PBinding(name):
-            scopes.define(name, DkVariable(), Span(0, 0))
+            scopes.define(name, DkVariable(), !Span(0, 0))
 
         case PConstructor(_, fields):
             int i = 0
