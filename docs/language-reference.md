@@ -2306,6 +2306,12 @@ Gorget enforces memory safety through compile-time ownership and borrowing rules
     `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the sanctioned multi-owner escape
     hatch and are **not** drop-tainted by their payload.
 
+The rules above are about **binds** (`Type b = !a` / `a.clone()`) and use sites.
+A borrow or move that crosses a **call** is a distinct position: the sigil is
+spelled on the *argument* and checked against the *parameter* declaration — see
+§9.3 (a `!` parameter requires `!`, a `&` parameter requires `&`, at every call
+site, free-fn or method, named place or temporary).
+
 ### 9.2 Borrowing Rules
 
 At any given point in a program, for a given value, you may have **either**:
@@ -2317,15 +2323,60 @@ Never both simultaneously. This is enforced at compile time.
 
 ### 9.3 Call-Site Ownership Validation
 
-The ownership annotation on a call argument **must match** the parameter declaration:
+Where consumption is part of the API contract, it is always spelled at the call
+site. The ownership annotation on a call argument **must match** the parameter
+declaration — **bare** = the callee borrows, **`&`** = the callee writes
+through, **`!`** = the callee consumes:
 
 | Parameter declares                 | Call site must use                 | Meaning |
 |------------------------------------|-----------------------------------|---------|
 | `String s`                         | `f(s)`                            | Immutable borrow |
-| `String &s`                        | `f(&s)`                           | Mutable borrow |
-| `String !s`                        | `f(!s)`                           | Move |
+| `String &s`                        | `f(&s)`                           | Mutable borrow (write-through) |
+| `String !s`                        | `f(!s)`                           | Move (consume) |
 
-Mismatches produce an **OwnershipMismatch** error.
+Mismatches produce an **OwnershipMismatch** error. The rule is **uniform at
+every call site** — free function and method, and whether the argument is a
+**named place or a fresh temporary**:
+
+```gorget
+void send(Message !msg):             # `msg` is consumed
+    ...
+
+Message m = build()
+send(!m)                # ✓  the move is spelled
+send(!build())          # ✓  a temporary is spelled `!` too — the contract is
+                        #     the same regardless of what is passed
+send(build())           # ✗  error[E_OwnershipMismatch]: this call consumes the
+                        #     value — add `!`
+send(m)                 # ✗  same error — a `!` param needs `!`, named or not
+```
+
+This is deliberate: the spelling stays invariant when you refactor a temporary
+into a named local (or back), and the call site alone declares the contract —
+`f(!x)` vs `g(x)` distinguishes a consuming API from a borrowing one **without
+opening the callee's signature**.
+
+Method calls are validated **identically** — the rule closed a former asymmetry
+where method arguments (unlike free-function arguments) were not checked
+(D31, 2026-07-19; full-strict per the 2026-07-20 ADDENDUM-2):
+
+```gorget
+equip Collector:
+    void add_all(&self, Vector[int] &vals):  # `vals` is written through
+        vals.push(100)
+
+c.add_all(&v)   # ✓  the `&` marks the write-through
+c.add_all(v)    # ✗  error[E_OwnershipMismatch] — a `&` param needs `&`
+```
+
+The receiver itself is **not** sigil-marked at the call site (`c.add_all(...)`,
+not `&c.add_all(...)`); the receiver's own borrow is a separate axis (§9.1).
+
+**Contractual consumption only.** This rule governs `!`/`&` **parameters**. A
+bare value flowing into a *non-`!`* consuming position — a collection `push`, a
+constructor field, a `return`, a closure capture — is **not** sigil-marked: the
+compiler still moves it when it is dead (copy-on-write, §9.6), but that is an
+invisible optimization, not part of any API contract, so no `!` appears.
 
 ### 9.4 Same-Call Aliasing
 
