@@ -222,6 +222,15 @@ pub struct FunctionState {
     /// CoW: variable names that are reassigned in the current function body.
     /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
     pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
+    /// Names that are the target of an assignment textually INSIDE a loop body
+    /// (`for`/`while`/`loop`, recursively). Pre-scanned before lowering. Read by
+    /// the owning-`!`-param call-arg fast-path (`lower_call_arg`): a loop-carried
+    /// accumulator (`x = f(!x)`) must NOT take the pointer-forward + whole-slot
+    /// MoveZero fast-path — that marks the reused pointer slot dead and the
+    /// back-edge reassignment `_x.* = …` then reads it, tripping the GIR
+    /// "read after MoveZero" validator. Such moves fall through to the
+    /// temp-materialize path (correct for the reassigned shape).
+    pub loop_reassigned_names: rustc_hash::FxHashSet<String>,
     /// Flow-sensitive CoW: for each statement span.start, the set of names
     /// reassigned or !-moved on any forward path from that point.
     ///

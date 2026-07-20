@@ -301,6 +301,92 @@ fn prescan_cow_unsafe_names(body: &[Spanned<Stmt>]) -> rustc_hash::FxHashSet<Str
     unsafe_names
 }
 
+/// Pre-scan a function body for identifier names that are the TARGET of an
+/// assignment (`x = …` / `x += …`) textually INSIDE a loop body (`for`/`while`/
+/// `loop`, recursively — including nested scopes within a loop). Populates
+/// `FunctionState::loop_reassigned_names`, read by `lower_call_arg`'s owning-`!`-
+/// param fast-path to detect a loop-carried accumulator (`x = f(!x)`) and route
+/// it through the temp-materialize path instead of the pointer-forward + whole-
+/// slot MoveZero (which would trip the GIR "read after MoveZero" validator on the
+/// back-edge reassignment). Bare param names only — projected targets (`p.f = …`,
+/// `xs[i] = …`) don't rebind the slot the fast-path zeroes, so they're irrelevant.
+fn prescan_loop_reassigned_names(body: &[Spanned<Stmt>]) -> rustc_hash::FxHashSet<String> {
+    let mut names: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+    collect_loop_reassigned(body, false, &mut names);
+    names
+}
+
+fn collect_loop_reassigned(
+    stmts: &[Spanned<Stmt>],
+    in_loop: bool,
+    names: &mut rustc_hash::FxHashSet<String>,
+) {
+    for stmt in stmts {
+        match &stmt.node {
+            Stmt::Assign { target, .. } | Stmt::CompoundAssign { target, .. } => {
+                if in_loop {
+                    if let Expr::Identifier(name) = &target.node {
+                        names.insert(name.clone());
+                    }
+                }
+            }
+            // Loop forms: everything nested becomes loop-carried.
+            Stmt::While { body, else_body, .. } => {
+                collect_loop_reassigned(&body.stmts, true, names);
+                if let Some(eb) = else_body {
+                    collect_loop_reassigned(&eb.stmts, in_loop, names);
+                }
+            }
+            Stmt::For { body, else_body, .. } => {
+                collect_loop_reassigned(&body.stmts, true, names);
+                if let Some(eb) = else_body {
+                    collect_loop_reassigned(&eb.stmts, in_loop, names);
+                }
+            }
+            Stmt::Loop { body } => {
+                collect_loop_reassigned(&body.stmts, true, names);
+            }
+            // Non-loop scope forms: propagate the current `in_loop` flag inward.
+            Stmt::If { then_body, elif_branches, else_body, .. } => {
+                collect_loop_reassigned(&then_body.stmts, in_loop, names);
+                for (_, b) in elif_branches {
+                    collect_loop_reassigned(&b.stmts, in_loop, names);
+                }
+                if let Some(eb) = else_body {
+                    collect_loop_reassigned(&eb.stmts, in_loop, names);
+                }
+            }
+            Stmt::With { body, .. }
+            | Stmt::Unsafe { body }
+            | Stmt::NamedScope { body, .. }
+            | Stmt::OnError { body } => {
+                collect_loop_reassigned(&body.stmts, in_loop, names);
+            }
+            Stmt::Match { arms, else_arm, .. } => {
+                for item in arms {
+                    if let Some(arm) = item.arm() {
+                        if let Expr::Do { body } = &arm.body.node {
+                            collect_loop_reassigned(&body.stmts, in_loop, names);
+                        }
+                    }
+                }
+                if let Some(eb) = else_arm {
+                    collect_loop_reassigned(&eb.stmts, in_loop, names);
+                }
+            }
+            Stmt::Select { arms, else_arm } => {
+                for arm in arms {
+                    collect_loop_reassigned(&arm.body.stmts, in_loop, names);
+                }
+                if let Some(eb) = else_arm {
+                    collect_loop_reassigned(&eb.stmts, in_loop, names);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn prescan_block(
     stmts: &[Spanned<Stmt>],
     declared: &mut rustc_hash::FxHashSet<String>,
@@ -1211,6 +1297,7 @@ pub fn lower_function(
     if let FunctionBody::Block(block) = &func.body {
         let __t = std::time::Instant::now();
         ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        ctx.func_state.loop_reassigned_names = prescan_loop_reassigned_names(&block.stmts);
         *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_unsafe").or_default() += __t.elapsed();
         let __t = std::time::Instant::now();
         ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts, &ctx.fn_param_ownerships);
@@ -1598,6 +1685,7 @@ pub fn lower_equip_method(
     // Pre-scan: find variables unsafe for CoW + count name uses + liveness for auto-move.
     if let FunctionBody::Block(block) = &method.body {
         ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
+        ctx.func_state.loop_reassigned_names = prescan_loop_reassigned_names(&block.stmts);
         ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts, &ctx.fn_param_ownerships);
         ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
         ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
