@@ -305,6 +305,11 @@ pub enum SemanticErrorKind {
     /// Used as a type but isn't one.
     NotAType { name: String },
 
+    /// A type-defining name (struct / enum / trait / type alias) used in a
+    /// value position (`match Direction:`, `Point p = Point`). A type is not a
+    /// value; without this reject the program type-checks then SIGSEGVs.
+    TypeInValuePosition { name: String, kind: String },
+
     /// Struct literal for something that isn't a struct.
     NotAStruct { name: String },
 
@@ -769,6 +774,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::WrongArgCount { .. } => "E_WrongArgCount",
             SemanticErrorKind::NotAFunction { .. } => "E_NotAFunction",
             SemanticErrorKind::NotAType { .. } => "E_NotAType",
+            SemanticErrorKind::TypeInValuePosition { .. } => "E_TypeInValuePosition",
             SemanticErrorKind::NotAStruct { .. } => "E_NotAStruct",
             SemanticErrorKind::MissingTraitMethod { .. } => "E_MissingTraitMethod",
             SemanticErrorKind::NoMethodFound { .. } => "E_NoMethodFound",
@@ -892,6 +898,19 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::NotAType { name } => {
                 write!(f, "`{name}` is not a type")
+            }
+            SemanticErrorKind::TypeInValuePosition { name, kind } => {
+                let hint = match kind.as_str() {
+                    "enum" => format!(" — did you mean a variant, e.g. `{name}.<Variant>(...)`?"),
+                    "struct" | "type" => {
+                        format!(" — did you mean to construct one, e.g. `{name}(...)`?")
+                    }
+                    _ => String::new(),
+                };
+                write!(
+                    f,
+                    "`{name}` names a type ({kind}) and cannot be used as a value here{hint}"
+                )
             }
             SemanticErrorKind::NotAStruct { name } => {
                 write!(f, "`{name}` is not a struct")

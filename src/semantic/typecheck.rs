@@ -581,6 +581,13 @@ struct TypeChecker<'a> {
     /// entry, so it is seen only at the immediately-enclosed producer, not at a
     /// nested sub-expression.
     fallible_call_marked: bool,
+    /// stage-1b #2 one-shot: set by the `Expr::Call` / `Expr::MethodCall` arms
+    /// just before inferring the callee / static receiver, so the `Expr::Identifier`
+    /// arm permits a bare type name THERE (a constructor callee / static-method
+    /// receiver) while rejecting it in every genuine value position (`match
+    /// Direction:`, `Point p = Point`). Consumed (reset) at the next `infer_expr`
+    /// entry so it never leaks to nested sub-expressions.
+    type_name_position_ok: bool,
     /// D29 R3 (lying marks): set by the fallible-call produce sites
     /// (`resolve_throws_call_type` / `resolve_kind2_call_type`) when they see a
     /// marked call — proof the `!` was CONSUMED by a genuine fallible call. The
@@ -675,6 +682,7 @@ impl<'a> TypeChecker<'a> {
             decl_type_hint: None,
             suppress_auto_prop: false,
             fallible_call_marked: false,
+            type_name_position_ok: false,
             fallible_mark_consumed: false,
             tail_value_dropped: false,
             function_body_scopes,
@@ -1242,6 +1250,11 @@ impl<'a> TypeChecker<'a> {
         // D29 one-shot: same discipline for the `!` mark — captured here, read
         // at the fallible-call produce site, reset so nested args don't inherit.
         let fallible_call_marked = std::mem::replace(&mut self.fallible_call_marked, false);
+        // stage-1b #2 one-shot: whether THIS expr sits in a position where a bare
+        // type name is legitimate (a call callee / static-method receiver). Set by
+        // the Call/MethodCall arms just before inferring the callee/receiver;
+        // consumed here so it never leaks to nested sub-expressions.
+        let type_name_position_ok = std::mem::replace(&mut self.type_name_position_ok, false);
         match &expr.node {
             Expr::IntLiteral(n) => {
                 if let Some(hint_id) = self.decl_type_hint {
@@ -1384,6 +1397,41 @@ impl<'a> TypeChecker<'a> {
             Expr::Identifier(name) => {
                 if let Some(def_id) = self.resolve_name(expr.span.start, name) {
                     let def = self.scopes.get_def(def_id);
+                    // stage-1b #2: a type-defining name used as a VALUE (not as a
+                    // constructor callee / static-method receiver — those set
+                    // `type_name_position_ok`) is rejected. `match Direction:`,
+                    // `Point p = Point` type-checked clean then SIGSEGV'd at
+                    // runtime (a type name is not a value). Struct ctors are
+                    // rewritten to StructLiteral pre-typecheck so they never
+                    // reach here; Variant is EXCLUDED because a bare variant is
+                    // a legitimate first-class constructor value (`xs.map(Some)`).
+                    if !type_name_position_ok
+                        && matches!(
+                            def.kind,
+                            DefKind::Struct
+                                | DefKind::Enum
+                                | DefKind::Newtype
+                                | DefKind::Trait
+                                | DefKind::TypeAlias
+                        )
+                    {
+                        let kind_word = match def.kind {
+                            DefKind::Struct => "struct",
+                            DefKind::Enum => "enum",
+                            DefKind::Newtype => "type",
+                            DefKind::Trait => "trait",
+                            DefKind::TypeAlias => "type alias",
+                            _ => "type",
+                        };
+                        self.error(
+                            SemanticErrorKind::TypeInValuePosition {
+                                name: name.clone(),
+                                kind: kind_word.to_string(),
+                            },
+                            expr.span,
+                        );
+                        return self.types.error_id;
+                    }
                     if let Some(type_id) = def.type_id {
                         type_id
                     } else {
@@ -1565,6 +1613,11 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::Call { callee, generic_args, args, .. } => {
+                // A bare type-name callee (variant ctor `Some(x)`, or a static-
+                // method receiver resolved elsewhere) is a legitimate type name
+                // in expression position — suppress the value-position reject for
+                // this immediate callee infer (one-shot, consumed at infer entry).
+                self.type_name_position_ok = true;
                 let callee_type = self.infer_expr(callee);
                 let resolved = self.resolve_type(callee_type);
 
@@ -2379,6 +2432,11 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
 
+                // A static-method receiver spelled as a bare type name
+                // (`Point.origin()`, `int.parse(...)`) is a legitimate type name
+                // in expression position — suppress the value-position reject for
+                // this immediate receiver infer (one-shot, consumed at infer entry).
+                self.type_name_position_ok = true;
                 let receiver_type = self.infer_expr(receiver);
                 let resolved_receiver = self.resolve_type(receiver_type);
 
@@ -2771,6 +2829,11 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::FieldAccess { object, field } => {
+                // `Type.member` is a legitimate type reference: a bare qualified
+                // enum-variant value (`E.A`, `Color.Red`) or a static member.
+                // Propagate the type-name-OK position to the object (left spine)
+                // so the value-position reject does not fire on the type name.
+                self.type_name_position_ok = true;
                 let object_type = self.infer_expr(object);
                 let mut resolved = self.resolve_type(object_type);
                 // Peel `Ref` wrappers: collection reads (`v.get(i)`, `v[i]`)
@@ -3033,7 +3096,15 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::Index { object, index } => {
+                // A generic type application in a type-ref chain
+                // (`SparseSet[Health].new()` — the Index is the receiver of a
+                // static method call) must let BOTH its object AND its type-arg
+                // ("index" slot) be type names. Propagate ONLY when THIS Index is
+                // itself in a type-name-OK position; a standalone `Type[args]` in
+                // value position still rejects.
+                self.type_name_position_ok = type_name_position_ok;
                 let object_type = self.infer_expr(object);
+                self.type_name_position_ok = type_name_position_ok;
                 let index_type = self.infer_expr(index);
                 let resolved_obj = self.resolve_type(object_type);
                 // Snag #49 family: a `throws`-fn call returning `Result[K, E]`

@@ -1,0 +1,10 @@
+# NEG (stage-1b #2): a bare TYPE NAME bound as a value (`Point p = Point`) is a
+# check-time reject (E_TypeInValuePosition). Before the reject this was
+# silently accepted (the typecheck Identifier arm returned the def's type_id
+# without checking def.kind) and produced garbage at runtime.
+struct Point:
+    int x
+
+void main():
+    Point p = Point
+    print(p.x)

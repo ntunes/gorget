@@ -1,0 +1,13 @@
+# A bare prelude VARIANT as a first-class function value (`xs.map(Some)`)
+# CHECKS clean but CC-FAILs at build (the map lowering passes the variant as a
+# value where the C signature wants a ctor call — `expected
+# '__gg_Option__int64_t' but argument is of type 'void *'`). Pre-existing at
+# base (verified 2026-07-20, pristine binary CC-FAILs identically); surfaced by
+# the E_TypeInValuePosition scout, which EXCLUDES Variant from the reject so
+# this shape keeps CHECKING (a variant ctor IS a value; pinned by the live
+# check_gg_ok test). Filed in TODO.md: decide lower-or-reject (Core #10) — the
+# intended output below assumes the LOWER ruling.
+void main():
+    Vector[int] xs = [1, 2, 3]
+    Vector[Option[int]] ys = xs.map(Some)
+    print(ys.len())

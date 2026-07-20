@@ -8728,6 +8728,65 @@ fn primitive_bogus_method_fstring_errors() {
     );
 }
 
+// stage-1b #2 (2026-07-20): a type-defining name (struct/enum/newtype/trait/
+// type alias) in a VALUE position is a check-time reject
+// (E_TypeInValuePosition). `match Direction:` used to type-check CLEAN and
+// SIGSEGV at runtime with no output (book-audit #1's projected give-up point);
+// `Point p = Point` was silently accepted (the typecheck Identifier arm
+// returned def.type_id without checking def.kind). ggdef already rejected both
+// ("unresolved local") — the fix aligns production with the definition.
+// Variant is EXCLUDED from the reject (a bare variant is a legitimate
+// first-class ctor value — `xs.map(Some)`; pinned by
+// variant_as_hof_value_check_ok below). The exact-code pin follows the D23
+// precedent (contiguous in raw stderr).
+#[test]
+fn typename_value_position_match_errors() {
+    check_gg_fails(
+        "typename_value_position_match.gg",
+        "error[E_TypeInValuePosition]",
+    );
+}
+
+#[test]
+fn typename_value_position_bind_errors() {
+    check_gg_fails(
+        "typename_value_position_bind.gg",
+        "error[E_TypeInValuePosition]",
+    );
+}
+
+// POS regression pin for the reject's left-spine propagation: every legitimate
+// bare-type-name-in-expression position (ctor callee, static receiver, bare
+// qualified variant `Color.Red`, generic static `Wrap[int].new()`, generic
+// type-ARG `Wrap[Item].new()`) keeps compiling AND running. The v1 prototype
+// falsely rejected 16 corpus fixtures across exactly these shapes — this
+// fixture makes a propagation regression loud.
+#[test]
+fn typename_type_ref_positions() {
+    run_gg("typename_type_ref_positions.gg", "5\n0\n1\n0\n0");
+}
+
+// The Variant EXCLUSION pin: a bare prelude variant as a first-class function
+// value (`xs.map(Some)`) must keep CHECKING (it did before the reject). Its
+// RUNTIME is blocked by a pre-existing, unrelated lowering gap (CC-FAIL:
+// the variant arrives as `void*` where the C signature wants the payload
+// struct — verified pre-existing on the pristine binary 2026-07-20, filed in
+// TODO.md as a lower-or-reject decision). Per "Don't redesign around compiler
+// gaps": the live test pins CHECK acceptance; the `#[ignore]`d run asserts the
+// intended output under the LOWER ruling.
+#[test]
+fn variant_as_hof_value_check_ok() {
+    check_gg_ok("known_gaps/variant_as_hof_value.gg");
+}
+
+#[test]
+#[ignore = "KNOWN GAP: variant-as-HOF-value CC-FAILs at build (pre-existing; \
+TODO.md lower-or-reject decision). The fixture lives in tests/fixtures/known_gaps/ \
+so it stays OUT of the runtime-diff corpus. Un-ignore when the lowering lands."]
+fn variant_as_hof_value() {
+    run_gg("known_gaps/variant_as_hof_value.gg", "3");
+}
+
 // round-32: the positional 1-arg `String(x)` ctor accepts only an integer
 // capacity (any int width) or String content (string/char literals,
 // f-strings, identity). Anything else (bool/float/struct/…) used to fall

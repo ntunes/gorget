@@ -1,0 +1,48 @@
+# POS regression pin for the E_TypeInValuePosition reject (stage-1b #2): every
+# LEGITIMATE bare-type-name-in-expression position must keep compiling and
+# running. The reject's one-shot flag propagates down the LEFT SPINE
+# (Call.callee, MethodCall.receiver, FieldAccess.object, Index.object + the
+# generic-arg "index" slot) — each line below pins one exemption class that a
+# propagation regression would break (the v1 prototype falsely rejected 16
+# corpus fixtures across exactly these shapes):
+#   * `Point(5)`            — struct ctor callee (Pass-2.5 StructLiteral rewrite)
+#   * `Point.origin()`      — static method receiver (type name)
+#   * `Color.Red`           — bare qualified variant value (FieldAccess object)
+#   * `Wrap[int].new()`     — static method on a GENERIC type (Index object)
+#   * `Wrap[Item].new()`    — generic type-ARG is itself a type name (Index arg)
+struct Point:
+    int x
+
+equip Point:
+    Point origin():
+        return Point(0)
+
+enum Color:
+    Red()
+    Green()
+
+struct Item:
+    int v
+
+struct Wrap[T]:
+    Vector[T] items
+
+equip [T] Wrap[T]:
+    Wrap[T] new():
+        return Wrap[T](Vector[T]())
+
+void main():
+    Point p = Point(5)
+    print(p.x)
+    Point o = Point.origin()
+    print(o.x)
+    Color c = Color.Red
+    match c:
+        case Color.Red():
+            print(1)
+        else:
+            print(2)
+    Wrap[int] w = Wrap[int].new()
+    print(w.items.len())
+    Wrap[Item] wi = Wrap[Item].new()
+    print(wi.items.len())
