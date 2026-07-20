@@ -480,6 +480,76 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Like `find_root_def_id`, but ALSO descends a builtin-collection
+    /// element-getter chain (`c.get(i).unwrap()`, `c.first()`, `c.last()`) to
+    /// name the collection's root binding.
+    ///
+    /// Used ONLY by the DEAD-WRITE LINT (`check_stmt` Assign / CompoundAssign) —
+    /// NOT the 14 strict `find_root_def_id` accept/reject callers, and (for now)
+    /// NOT the 2T materialize-on-write taint REJECT gate. A write through such a
+    /// getter chain (`f.blocks.get(0).unwrap().term = v`) materializes the SAME
+    /// root the lowering materializes (`resolve_projection_root_local`,
+    /// `exprs/mod.rs`), so its private-copy write is dead — the lint's warning
+    /// fires for it exactly as for the sibling `c[i].f = x` store. (The 2T
+    /// tainted-materialize REJECT for get-chains is a filed CROSS-LANE follow-up:
+    /// ggdef's own `root_local_name` has the identical get-chain descent gap, so
+    /// rejecting only in Rust would be a silent lane divergence — the fix must
+    /// land in BOTH compilers at all four materialize sites. Kept PRECISE here
+    /// so that follow-up can promote it to the reject gate unchanged.)
+    ///
+    /// Gated on the RECEIVER's collection-KIND ∈ {Array, OrderedMap}
+    /// (`collection_kind_of_expr`, which resolves via `lvalue_value_type` — NOT
+    /// the sparse `expr_types`, which lacks a `f.blocks` FieldAccess receiver)
+    /// so a USER `get`/`first`/`last` (owned temp, root = the temp not the
+    /// receiver) is NOT descended — mirroring lowering's precision: no
+    /// spurious warning and (once promoted) no over-reject / no over-clone. This
+    /// is a TYPED-GUARDED get-chain resolver, NOT the lint's name-based
+    /// `find_mut_mark_root` superset and NOT a widened `find_root_def_id`.
+    pub(super) fn find_get_chain_taint_root(&self, expr: &Spanned<Expr>) -> Option<DefId> {
+        match &expr.node {
+            Expr::Identifier(_) | Expr::SelfExpr => {
+                self.resolution_map.get(&expr.span.start).copied()
+            }
+            Expr::FieldAccess { object, .. }
+            | Expr::TupleFieldAccess { object, .. }
+            | Expr::Index { object, .. }
+            | Expr::OptionalChain { object, .. } => self.find_get_chain_taint_root(object),
+            Expr::MethodCall { receiver, method, .. } => {
+                let descend = match method.node.as_str() {
+                    // `c.get(i)`/`.first()`/`.last()` — receiver IS the collection.
+                    "get" | "first" | "last" => self.is_field_addressable_collection(receiver),
+                    // `c.get(i).unwrap()` — receiver is the getter over a collection.
+                    "unwrap" | "expect" => matches!(
+                        &receiver.node,
+                        Expr::MethodCall { receiver: inner, method: inner_m, .. }
+                            if matches!(inner_m.node.as_str(), "get" | "first" | "last")
+                                && self.is_field_addressable_collection(inner)
+                    ),
+                    _ => false,
+                };
+                if descend {
+                    self.find_get_chain_taint_root(receiver)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// True if `recv`'s value type is a builtin Array (Vector/Deque) or
+    /// OrderedMap (Dict) — the field-write-addressable builtin collection kinds.
+    /// The safety-pass mirror of `exprs::is_field_addressable_collection`;
+    /// resolves the receiver via `collection_kind_of_expr`→`lvalue_value_type`
+    /// (structural, works even where `expr_types` is sparse).
+    fn is_field_addressable_collection(&self, recv: &Spanned<Expr>) -> bool {
+        matches!(
+            self.collection_kind_of_expr(recv),
+            Some(crate::ir::types::CollectionKind::Array)
+                | Some(crate::ir::types::CollectionKind::OrderedMap)
+        )
+    }
+
     /// Like `find_root_def_id` but also returns the field path traversed
     /// from the root to the expression. Used by the CoW-borrow checker
     /// to track field-level disjointness: borrows from `gpu.shader_cache`
@@ -1006,12 +1076,16 @@ impl<'a> BorrowChecker<'a> {
     /// returns. No method-name matching.
     ///
     /// Used ONLY by the lint-marking path (`mark_mut_param_if_applicable`).
-    /// The semantic gates (moves, materialize-on-write taint, borrow
-    /// invalidation) keep the strict `find_root_def_id` — an accept/reject
-    /// surface must not widen via lint plumbing. Worst case of the typed rule
-    /// over-resolving (a view borrowed from something other than the receiver
-    /// chain, e.g. a user view-returning method): a missed warning, never a
-    /// wrong rejection.
+    /// The semantic accept/reject gates keep the strict `find_root_def_id` — an
+    /// accept/reject surface must not widen via lint plumbing. The dead-write
+    /// LINT (a warning) additionally sees a builtin-collection getter chain's
+    /// root via the SEPARATE TYPED-GUARDED `find_get_chain_taint_root` (kind ∈
+    /// {Array, OrderedMap} via `collection_kind_of_expr`) so it warns on a
+    /// materializing `c.get(i).unwrap().f = v` store — PRECISE, unlike this
+    /// name-based superset, and NOT this `find_mut_mark_root`. Worst case of
+    /// THIS typed rule over-resolving (a view borrowed from something other than
+    /// the receiver chain, e.g. a user view-returning method): a missed warning,
+    /// never a wrong rejection.
     pub(super) fn find_mut_mark_root(&self, expr: &Spanned<Expr>) -> Option<DefId> {
         match &expr.node {
             Expr::Identifier(_) | Expr::SelfExpr => {

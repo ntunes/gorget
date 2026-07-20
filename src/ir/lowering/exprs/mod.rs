@@ -2457,7 +2457,7 @@ pub(in crate::ir::lowering) fn deref_ptr_collection_iterable(
 /// result, `self`, a static). Used at projected-mutation sites to find the
 /// immutable-in-context root that must materialize before the write.
 pub(super) fn resolve_projection_root_local(
-    ctx: &LoweringContext,
+    ctx: &mut LoweringContext,
     expr: &Expr,
 ) -> Option<crate::ir::types::LocalId> {
     match expr {
@@ -2472,8 +2472,67 @@ pub(super) fn resolve_projection_root_local(
         | Expr::TupleFieldAccess { object, .. } => {
             resolve_projection_root_local(ctx, &object.node)
         }
+        // Descend a builtin-collection element-getter chain to the collection's
+        // root. `c.get(i)`/`.first()`/`.last()` return an in-place element BORROW
+        // (auto-borrow-from-get, e0d5a554); `.unwrap()`/`.expect()` peel the
+        // `Option` over it. A mutation projected through the returned handle
+        // (`f.blocks.get(0).unwrap().term = 99`) therefore reaches the collection
+        // root, which — for a bare/owned root — must materialize a private copy
+        // (the ratified rule, ledger 783c9817): the caller stays unchanged, like
+        // the sibling `f.blocks[i].term = x` / `f.blocks.push(..)` stores.
+        //
+        // Gated on the RECEIVER's collection-KIND ∈ {Array (Vector/Deque),
+        // OrderedMap (Dict)} — exactly the field-write-addressable builtin kinds
+        // (the `try_resolve_field_place` set; EXCLUDE Set/HashMap, not
+        // field-write-addressable). A USER `get`/`first`/`last` (non-collection
+        // receiver) returns an OWNED temp whose root is the temp, NOT the
+        // receiver — descending it would materialize a struct the write never
+        // touches, a wasted clone == CoW-charter breach. The safety pass's
+        // dead-write lint mirrors this precise descent
+        // (`find_get_chain_taint_root`, safety/helpers.rs) so the "write is dead"
+        // warning fires exactly for these materializing stores. (The 2T tainted-
+        // materialize REJECT for get-chains is a filed cross-lane follow-up —
+        // ggdef has the same descent gap; see TODO.md.)
+        Expr::MethodCall { receiver, method, .. } => {
+            let descend = match method.node.as_str() {
+                // `c.get(i)`/`.first()`/`.last()` — the receiver IS the collection.
+                "get" | "first" | "last" => is_field_addressable_collection(ctx, receiver),
+                // `c.get(i).unwrap()` — the receiver is the getter; its receiver
+                // is the collection. A plain `Option.unwrap()` (Identifier
+                // receiver) or a USER-get `.unwrap()` is NOT descended.
+                "unwrap" | "expect" => match &receiver.node {
+                    Expr::MethodCall { receiver: inner, method: inner_m, .. }
+                        if matches!(inner_m.node.as_str(), "get" | "first" | "last") =>
+                    {
+                        is_field_addressable_collection(ctx, inner)
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            if descend {
+                resolve_projection_root_local(ctx, &receiver.node)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
+}
+
+/// True if `recv`'s resolved type is a builtin Array (Vector/Deque) or
+/// OrderedMap (Dict) — the field-write-addressable builtin collection kinds
+/// whose `.get()`/`.first()`/`.last()` return an in-place element borrow
+/// (Set/HashMap excluded: their elements aren't field-write-addressable).
+/// Resolved TYPE-ONLY (no lowering), the exact mechanism the `Expr::Index`
+/// write-through pre-check uses (`index_base_kind_type_only`) so the getter
+/// chain and the sibling index store classify a receiver identically.
+fn is_field_addressable_collection(ctx: &mut LoweringContext, recv: &Spanned<Expr>) -> bool {
+    matches!(
+        index_base_kind_type_only(ctx, recv),
+        Some(crate::ir::types::CollectionKind::Array)
+            | Some(crate::ir::types::CollectionKind::OrderedMap)
+    )
 }
 
 /// True if a projection chain contains an `Expr::Index` anywhere on its spine
