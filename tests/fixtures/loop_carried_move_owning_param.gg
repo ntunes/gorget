@@ -1,0 +1,33 @@
+# Regression: a loop-carried `!`-move that reassigns the owning `!` param.
+#
+# `run` takes `Acc !x` (an owning `!`-param, passed by-pointer because Acc is a
+# resource type). The loop does `x = bump(!x)` — an explicit `!`-move of the
+# param whose result is stored BACK into the same param on every turn. The old
+# value is dead at the move (immediately reassigned), so `!x` is valid and
+# `gg check` approves it.
+#
+# The `lower_call_arg` owning-`!`-param fast-path used to forward the raw pointer
+# and schedule a whole-slot `move_zero _x` unconditionally. For a param reused
+# across the back-edge that marks the still-needed pointer slot dead, so the
+# reassignment `_x.* = ...` reads `_x` after the MoveZero and the GIR validator
+# panicked `local _N read after MoveZero`. The fast-path now gates on a genuine
+# single last use (sibling of `maybe_move_owning_param_ctor_temp`); the reused
+# param falls through to the temp-materialize path, matching the bare auto-move.
+
+struct Acc:
+    String tag
+
+Acc bump(Acc !a):
+    return Acc(a.tag + "x")
+
+Acc run(Acc !x):
+    int i = 0
+    while i < 3:
+        x = bump(!x)
+        i = i + 1
+    return x
+
+void main():
+    Acc a = Acc("hi")
+    Acc r = run(!a)
+    print(r.tag)

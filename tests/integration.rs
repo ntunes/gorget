@@ -2667,6 +2667,15 @@ done",
 }
 
 #[test]
+fn loop_carried_move_owning_param() {
+    // A loop-carried `!`-move that reassigns the owning `!` param
+    // (`x = bump(!x)`). Regression for the `lower_call_arg` owning-param
+    // fast-path scheduling a whole-slot `move_zero` on a reused pointer slot,
+    // which tripped the GIR "read after MoveZero" validator. "hi" + "x" ×3.
+    run_gg("loop_carried_move_owning_param.gg", "hixxx");
+}
+
+#[test]
 fn drop_nested_struct_move() {
     run_gg(
         "drop_nested_struct_move.gg",

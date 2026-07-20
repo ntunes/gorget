@@ -99,7 +99,26 @@ pub(super) fn lower_call_arg(
             if let Some((local_id, _)) = ctx.lookup_local(name) {
                 let is_owning_param = (local_id.0 as usize) < builder.locals.len()
                     && builder.locals[local_id.0 as usize].is_owning_param;
-                if is_owning_param {
+                // Guard: a loop-carried accumulator (`x = f(!x)`) must NOT take the
+                // pointer-forward + whole-slot MoveZero fast-path. The `move_zero _p`
+                // here marks the reused pointer slot dead, then the back-edge
+                // reassignment `_p.* = ...` reads _p and trips the GIR
+                // "read after MoveZero" validator. (`move_zero` on a bare pointer
+                // slot lowers to a MoveSlot annotation, so the emitted code is
+                // runtime-benign, but the GIR is genuinely inconsistent — it claims
+                // _p dead then uses it — and validate.rs correctly rejects it.) The
+                // detection: we are lowering inside a loop AND `name` is the target
+                // of an assignment somewhere in a loop body (`loop_reassigned_names`,
+                // pre-scanned). Such moves fall through to the temp-materialize path
+                // (identical to the CoW auto-move of a bare arg), which is correct
+                // for the reassigned shape. The fast-path is KEPT for every non-loop
+                // onward-move (`consume(!r)`, `out.push(!item)`) — those need the
+                // pointer-forward + MoveSlot to suppress the exit-drop double-free
+                // that the temp-materialize path would cause with no reassignment.
+                // Sibling of `maybe_move_owning_param_ctor_temp`'s guard (Core #4).
+                let loop_carried_reassign = ctx.current_loop().is_some()
+                    && ctx.func_state.loop_reassigned_names.contains(name.as_str());
+                if is_owning_param && !loop_carried_reassign {
                     // Sever any CoW aliases of the source slot before transfer.
                     ctx.cow_before_mutation(builder, local_id, arg.span);
                     // Forward the pointer (the local holds a MutPtr already).
