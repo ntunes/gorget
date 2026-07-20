@@ -284,12 +284,11 @@ fn corpus_b_all_match() {
         failures.join("\n")
     );
 
-    // Guard the gate's shape: the full corpus is 150 fixtures (167 cow_*/
-    // deadwrite_* minus the 17 standing exclusions). +15 net from the CoW-2G
-    // landings (2026-07-18, db25f0ef and siblings): the pin was NOT refreshed
-    // when those fixtures landed (leaving corpus_b red on the two unexcluded
-    // out-of-subset shapes `cow_loop_bare_param_{for_else,push_char}` — now in
-    // EXCLUDE), so this refresh accompanies the D31 exclusion additions. Prior
-    // 135 = 150 total − 15 exclusions.
-    assert_eq!(fixtures.len(), 150, "B2 gate set drifted from 150 fixtures");
+    // Guard the gate's shape (a silent-drift tripwire, not a match check). +2
+    // (2026-07-21, SH-CoW Face-A round): `cow_compound_getref_writethrough`
+    // (promoted known_gaps→top-level) + `cow_getref_writethrough_resource` both
+    // landed as top-level cow_* fixtures and both MATCH ggdef (in phase-0 subset),
+    // so the pin refreshes 150→152 to accompany them. History: +15 net from the
+    // CoW-2G landings (2026-07-18) refreshed with the D31 exclusion additions.
+    assert_eq!(fixtures.len(), 152, "B2 gate set drifted from 152 fixtures");
 }
