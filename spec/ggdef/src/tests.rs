@@ -162,6 +162,49 @@ void main():
 }
 
 #[test]
+fn compound_assign_through_get_writes_through() {
+    // Target-2 definition pin (Core #9 truth axis): a compound-assign (`OP=`)
+    // whose LHS resolves through a `.get(i).unwrap()` borrow-view chain is a
+    // direct place mutation → it WRITES THROUGH to the owner, exactly like plain
+    // `=` through the same chain and like the index-rooted `coll[i].field OP= v`
+    // (§9.6: `.get().unwrap()` used as an lvalue is a place, modelled as
+    // `coll[i]`). The shipping compiler dropped this write pre-fix (both C and
+    // LLVM); ggdef defines it correctly — this pins the INTENDED final state so
+    // the definition can't silently regress with the impl. A `&`-param root and
+    // a bare local root, `+= -= *=`, plus a plain-`=` control.
+    let src = r#"
+struct Blk:
+    int term
+struct Func:
+    Vector[Blk] blocks
+void bump(Func &f, int bb):
+    f.blocks.get(bb).unwrap().term += 1
+void scale(Func &f, int bb, int by):
+    f.blocks.get(bb).unwrap().term *= by
+void main():
+    Func f = Func([Blk(20)])
+    bump(&f, 0)
+    bump(&f, 0)
+    scale(&f, 0, 3)
+    print(f.blocks.get(0).unwrap().term)
+    Vector[Blk] blocks = [Blk(10)]
+    blocks.get(0).unwrap().term += 5
+    blocks.get(0).unwrap().term -= 2
+    blocks.get(0).unwrap().term = 99
+    print(blocks.get(0).unwrap().term)
+"#;
+    // Owner sees the write: (((20+1)+1)*3)=66, then plain-`=` control = 99.
+    assert_eq!(out(src), "66\n99");
+    // NOTE (TODO:282, extended): ggdef DOUBLE-EVALUATES a SIDE-EFFECTING `.get()`
+    // index on a compound-assign (`coll.get(sidefx()).unwrap().f += v` runs the
+    // index expr twice — measured `log.len()`==2 vs the once-only production
+    // semantics). This pin deliberately uses a NON-side-effecting index (`bb`/`0`)
+    // so the write-through is adjudicated cleanly and the double-eval is NOT
+    // silently blessed. The once-only fix is filed at TODO:282 (the FieldAccess-
+    // through-`.get()` extension of the already-filed Index compound double-eval).
+}
+
+#[test]
 fn amp_bind_local_alias_is_rejected() {
     // D10(a) (decisions.md, ratified 2026-07-06): a WriteThrough alias reaches
     // the owner at a CALL argument (the test above), but binding one to a LOCAL
