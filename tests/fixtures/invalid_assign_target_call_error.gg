@@ -1,0 +1,6 @@
+# A call result is not an assignable place — `foo() = 1` must be REJECTED at
+# check time (E_InvalidAssignTarget), not silently dropped in lowering.
+int foo():
+    return 3
+void main():
+    foo() = 1

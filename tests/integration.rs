@@ -1380,6 +1380,28 @@ fn string_index_compound_assign_error() {
     );
 }
 
+// Target-2 catch-all guard (Core #10 lower-or-reject): a NON-lvalue assignment
+// target is rejected at CHECK time (E_InvalidAssignTarget), not ICE'd in
+// lowering (pre-fix `5 += 1` passed check then PANICKED in
+// lower_compound_assign's catch-all) nor silently dropped (plain `=`). The
+// check-side `check_assign_target_lvalue` gate makes the lowerer's catch-all
+// genuinely unreachable.
+#[test]
+fn invalid_compound_assign_target_error() {
+    check_gg_fails(
+        "invalid_compound_assign_target_error.gg",
+        "not an assignable place",
+    );
+}
+
+#[test]
+fn invalid_assign_target_call_error() {
+    check_gg_fails(
+        "invalid_assign_target_call_error.gg",
+        "not an assignable place",
+    );
+}
+
 // Planner round 3, the 2D close: the method-call-ROOTED sibling of
 // string_index_assign_error — `base.slice(0, 3)[0] = "H"` where the index root is
 // a String view-returning method call (the 2D untracked-alias-chain shape
@@ -31232,6 +31254,31 @@ fn deref_compound_assign() {
 30
 34
 99
+done",
+    );
+}
+
+/// Target-2 sibling (Core #10 lower-or-reject; the `xs.0 = v` class named in
+/// CLAUDE.md Core #10): tuple-field mutation `t.INDEX = v` / `t.INDEX OP= v`. A
+/// tuple is a struct with positional fields, so a tuple field is a valid mutable
+/// place. Pre-fix plain `x.0 = 9` SILENTLY DROPPED (lower_assign `_ =>` no-op,
+/// printed 1) and `x.0 += 5` ICE'd (lower_compound_assign catch-all) on
+/// typecheck-ACCEPTED code. Now both lower via a TupleFieldAccess arm (place +
+/// `Projection::Field(index)`); non-lvalue targets (`5 += 1`) reject at check
+/// (E_InvalidAssignTarget). Direct/`&`-param/nested/plain, C + LLVM. Self-host
+/// lane LAGS (SH SAssign/SCompoundAssign have no tuple-field arm — `lower_fail`);
+/// in `known_gaps/`, an EXPLICIT cited lagging lane (Core #9, TODO:262).
+#[test]
+fn tuple_field_assign() {
+    run_gg(
+        "known_gaps/tuple_field_assign.gg",
+        "\
+6
+6
+16
+5
+101
+9
 done",
     );
 }

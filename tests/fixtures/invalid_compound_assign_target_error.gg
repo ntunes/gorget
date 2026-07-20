@@ -1,0 +1,5 @@
+# A non-lvalue compound-assign target must be REJECTED at check time
+# (E_InvalidAssignTarget), not ICE in lowering. Pre-fix `5 += 1` passed `gg check`
+# then PANICKED in lower_compound_assign's catch-all (ICE on accepted code).
+void main():
+    5 += 1
