@@ -24,6 +24,19 @@ at compile time during lowering — no reference counting, no runtime ownership
 checks (the runtime's only CoW participation is the cheap `cap==0` view check
 described in [§ The view discriminator](#the-view-discriminator-cap0)).
 
+Where the write *lands* is the other half of the model: a mutation travels
+toward the owner and materializes a private copy at the **closest immutable
+context** it meets. A bare parameter or binding *is* such a context, so the
+write stops there and the caller's value is unchanged (**materialize**);
+`&`/`&self` is explicitly *not* a context, so the write passes through to the
+owner (**write-through**); an owned local already *is* the owner, so it mutates
+in place. Materialize and write-through are therefore not two rules but one —
+"stop at the closest immutable context" — with `&` the operator that *removes*
+the context. This is why `f.blocks[i].term = v` and
+`f.blocks.get(i).unwrap().term = v` resolve identically for any given root (the
+bare-param `.get()`-chain case was owner-ratified 2026-07-21: mutation through a
+bare param materializes at every projection path, `&` required to write through).
+
 ## Two layers, one model
 
 CoW is enforced at two layers that must not be conflated:
