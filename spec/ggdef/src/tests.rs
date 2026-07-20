@@ -2186,11 +2186,11 @@ void main():
     assert_eq!(out(src), "7");
 }
 
-// ── the free-fn/method call-site sigil ASYMMETRY (mirrors production) ────────
+// ── the call-site `&`-direction sigil rule (D31 — free-fn AND method) ────────
 
 #[test]
 fn free_fn_bare_place_into_amp_param_rejects() {
-    // Production's `check_call_ownership` runs on `Expr::Call` ONLY
+    // Production's `check_call_ownership` runs on `Expr::Call`
     // (check_expr.rs:315): at a FREE-FN call site the arg sigil must match the
     // declared param mode — a bare place into a `&` param is E_OwnershipMismatch,
     // never a silent write-through (probes p2/p3/p10/p11, all production-rejected).
@@ -2212,11 +2212,11 @@ void main():
 }
 
 #[test]
-fn method_bare_place_into_amp_param_writes_through() {
-    // The METHOD face of the asymmetry: production never reaches the ownership
-    // check on `Expr::MethodCall`, so a bare place arg into a `&` param binds
-    // the alias and WRITES THROUGH (the ratified `method_mut_borrow_arg`
-    // family; probes pm_vec/pm_int/pm_str, all production-run).
+fn method_bare_place_into_amp_param_rejects() {
+    // D31 (`&`-direction): the METHOD face now enforces the SAME rule — a bare
+    // place arg into a `&` param is E_OwnershipMismatch, closing the former
+    // asymmetry (`check_method_call_ownership`, safety/helpers.rs). The
+    // ratified `method_mut_borrow_arg` fixture respells `c.add_all(&v)`.
     let src = r#"
 struct C:
     int total
@@ -2227,6 +2227,78 @@ void main():
     Vector[int] v = [1]
     C c = C(0)
     c.add_all(v)
+    print(v.len())
+"#;
+    match run_source(src, FUEL) {
+        Err(e) => assert!(
+            e.to_string().contains("E_OwnershipMismatch"),
+            "expected the method sigil-mismatch reject, got: {e}"
+        ),
+        Ok(run) => panic!("method bare-into-& must statically reject, ran to {:?}", run.outcome),
+    }
+}
+
+#[test]
+fn method_bare_temp_into_move_param_rejects() {
+    // D31 ADDENDUM-2 (FULL STRICT): a `!` param consumes — the move is spelled
+    // at the call site even for a temporary, free-fn AND method. A bare temp
+    // into a method `!` param rejects (production E_OwnershipMismatch).
+    let src = r#"
+struct Tok:
+    int v
+struct Sink:
+    int n
+equip Sink:
+    void take(&self, Tok !t):
+        self.n = t.v
+void main():
+    Sink s = Sink(0)
+    s.take(Tok(7))
+    print(s.n)
+"#;
+    match run_source(src, FUEL) {
+        Err(e) => assert!(
+            e.to_string().contains("E_OwnershipMismatch"),
+            "expected the method move-mark reject, got: {e}"
+        ),
+        Ok(run) => panic!("bare temp into a `!` method param must reject, ran to {:?}", run.outcome),
+    }
+}
+
+#[test]
+fn method_move_temp_into_move_param_accepts() {
+    // The accepting spelling: `!Tok(7)` marks the consume at the call site.
+    let src = r#"
+struct Tok:
+    int v
+struct Sink:
+    int n
+equip Sink:
+    void take(&self, Tok !t):
+        self.n = t.v
+void main():
+    Sink s = Sink(0)
+    s.take(!Tok(7))
+    print(s.n)
+"#;
+    assert_eq!(out(src), "7");
+}
+
+#[test]
+fn method_amp_place_into_amp_param_writes_through() {
+    // The accepting spelling: an explicit `&v` into a `&` param binds the alias
+    // and WRITES THROUGH — the callee's `push` reaches the caller's vector.
+    // Mirrors the respelled `method_mut_borrow_arg` fixture (output preserved).
+    let src = r#"
+struct C:
+    int total
+equip C:
+    void add_all(&self, Vector[int] &vals):
+        vals.push(7)
+void main():
+    Vector[int] v = [1]
+    C c = C(0)
+    c.add_all(&v)
     print(v.len())
 "#;
     assert_eq!(out(src), "2");

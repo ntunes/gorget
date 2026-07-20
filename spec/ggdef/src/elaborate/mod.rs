@@ -1208,7 +1208,7 @@ impl Elaborator {
     /// Copy branch.
     fn bind_source(&mut self, value: &Spanned<ast::Expr>) -> ElabResult<Source> {
         match &value.node {
-            ast::Expr::Move { expr } => Ok(Source::Move(self.elaborate_expr(expr)?)),
+            ast::Expr::Move { expr } => self.move_source(expr),
             ast::Expr::MutableBorrow { expr } => Ok(Source::WriteThrough(self.elaborate_expr(expr)?)),
             _ if is_clone_call(&value.node) => Ok(Source::Value(self.elaborate_expr(value)?)),
             _ if ast_is_place(&value.node) => {
@@ -1225,7 +1225,7 @@ impl Elaborator {
     /// D4 positions 2/3 (ctor-init / collection-put) live on the Copy branch.
     fn owning_source_from_expr(&mut self, value: &Spanned<ast::Expr>) -> ElabResult<Source> {
         match &value.node {
-            ast::Expr::Move { expr } => Ok(Source::Move(self.elaborate_expr(expr)?)),
+            ast::Expr::Move { expr } => self.move_source(expr),
             ast::Expr::MutableBorrow { .. } => {
                 Err(ElabError::new("`&`-alias in an owning position is not valid", value.span))
             }
@@ -1243,7 +1243,7 @@ impl Elaborator {
     /// live on the Copy branch.
     fn owning_source_from_arg(&mut self, arg: &ast::CallArg) -> ElabResult<Source> {
         match arg.ownership {
-            ast::Ownership::Move => Ok(Source::Move(self.elaborate_expr(&arg.value)?)),
+            ast::Ownership::Move => self.move_source(&arg.value),
             ast::Ownership::MutableBorrow => {
                 Err(ElabError::new("`&`-alias into an owning position is not valid", arg.value.span))
             }
@@ -1361,9 +1361,25 @@ impl Elaborator {
         Ok(())
     }
 
-    fn call_arg_source(&mut self, arg: &ast::CallArg, param_mode: Option<Mode>) -> ElabResult<Source> {
+    /// Classify a `!expr` move source. `!place` moves OUT of the place (eval
+    /// kills the slot). `!temp` (a fresh ctor / call / literal — not a place) is
+    /// already an owned rvalue: the `!` marks the already-happening consume, so
+    /// there is no place to kill — elaborate it as a plain owned `Value`. D31
+    /// ADDENDUM-2 (full strict) requires the `!` at the call site even for a
+    /// temporary (`f(!Tok(1))`); production treats it identically (a value move,
+    /// not a place move). Without this, eval's `Source::Move` would `eval_place`
+    /// the temp and `IllFormed` ("expression is not a place").
+    fn move_source(&mut self, value: &Spanned<ast::Expr>) -> ElabResult<Source> {
+        if ast_is_place(&value.node) {
+            Ok(Source::Move(self.elaborate_expr(value)?))
+        } else {
+            Ok(Source::Value(self.elaborate_expr(value)?))
+        }
+    }
+
+    fn call_arg_source(&mut self, arg: &ast::CallArg, _param_mode: Option<Mode>) -> ElabResult<Source> {
         match arg.ownership {
-            ast::Ownership::Move => Ok(Source::Move(self.elaborate_expr(&arg.value)?)),
+            ast::Ownership::Move => self.move_source(&arg.value),
             ast::Ownership::MutableBorrow => {
                 // 2T FORMATION position (materialize-on-write, wave-2): a
                 // `&`-arg whose ROOT is a bare BORROW binding of a tainted type
@@ -1384,21 +1400,13 @@ impl Elaborator {
                 Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?))
             }
             ast::Ownership::Borrow => {
-                // The "unbroken `&`-chain" (§3.1), METHOD-CALL PATH ONLY
-                // (`param_mode` is Some solely via `CallForm::Method` — see
-                // `free_fn_sigil_check`; free-fn sites loud-reject the mismatch
-                // instead, mirroring production's asymmetric check): a bare
-                // place arg passed to a `&` (WriteThrough) param aliases the
-                // caller's place — writes in the callee reach it, no call-site
-                // sigil (`c.add_all(v)` into `&vals`). Same tainted-Borrow-root
-                // formation guard as the explicit-`&` arm (a hidden clone of a
-                // drop-tainted root double-closes).
-                if param_mode == Some(Mode::WriteThrough) && ast_is_place(&arg.value.node) {
-                    if !matches!(&arg.value.node, ast::Expr::Deref { .. }) {
-                        self.reject_materialize_on_write(&arg.value.node, arg.value.span)?;
-                    }
-                    return Ok(Source::WriteThrough(self.elaborate_expr(&arg.value)?));
-                }
+                // D31 (`&`-direction): the former "unbroken `&`-chain" leniency
+                // — a bare place arg into a `&` (WriteThrough) param writing
+                // through silently — is RETIRED. `free_fn_sigil_check` now
+                // rejects that bare-into-`&` mismatch at BOTH free-fn and method
+                // sites before this point, so a bare arg here is always a read
+                // borrow (never a `&`-param write-through). A genuine `&` arg
+                // carries the sigil and takes the `MutableBorrow` arm above.
                 if ast_is_place(&arg.value.node) {
                     // D10(b) Copy-snapshot: a bare read of a COPY-typed place is
                     // a VALUE SNAPSHOT evaluated eagerly at the call site into an
@@ -2074,13 +2082,16 @@ impl Elaborator {
         Ok(out)
     }
 
-    /// Production's free-fn call-site sigil rule (`check_call_ownership`,
-    /// `src/semantic/safety/helpers.rs:1258`, wired to `Expr::Call` ONLY):
-    /// the arg's sigil must equal the declared param mode, else
-    /// `E_OwnershipMismatch`. Returns the EFFECTIVE param mode to hand
-    /// `call_arg_source`: at a METHOD call the declared mode drives the
-    /// bare-place write-through; at a matched free-fn call the explicit-sigil
-    /// arms already classify correctly, so `None`.
+    /// Production's call-site sigil rule (`check_call_ownership` +
+    /// `check_method_call_ownership`, `src/semantic/safety/helpers.rs`): the
+    /// arg's sigil must EQUAL the declared param mode, else `E_OwnershipMismatch`.
+    /// D31 ADDENDUM-2 (2026-07-20) is FULL STRICT — the rule is identical for
+    /// free-fn and method calls, named place or temporary (bare = borrow,
+    /// `&` = write-through, `!` = consume). `CallForm` no longer distinguishes
+    /// behavior (the former "unbroken `&`-chain" method write-through leniency
+    /// is retired); it is retained only to key the diagnostic wording. Returns
+    /// `None` — the explicit-sigil arms of `call_arg_source` classify every
+    /// accepted arg, so no effective mode needs threading.
     fn free_fn_sigil_check(
         &self,
         func_name: &str,
@@ -2089,39 +2100,41 @@ impl Elaborator {
         arg: &Spanned<ast::CallArg>,
         form: CallForm,
     ) -> ElabResult<Option<Mode>> {
-        match form {
-            CallForm::Method => Ok(pmode),
-            CallForm::FreeFn => {
-                if let Some(pm) = pmode {
-                    let found = mode_of(arg.node.ownership);
-                    if found != pm {
-                        let pname = self
-                            .fn_param_names
-                            .get(func_name)
-                            .and_then(|v| v.get(param_idx))
-                            .cloned()
-                            .unwrap_or_else(|| format!("#{param_idx}"));
-                        let render = |m: Mode| match m {
-                            Mode::Borrow => "borrow (bare)",
-                            Mode::WriteThrough => "mutable borrow (&)",
-                            Mode::Move => "consume (!)",
-                        };
-                        return Err(ElabError::new(
-                            format!(
-                                "argument for parameter `{pname}` of `{func_name}` expects \
-                                 {}, found {} — the call-site sigil must match the declared \
-                                 param at a function call (production E_OwnershipMismatch; \
-                                 method calls are exempt)",
-                                render(pm),
-                                render(found)
-                            ),
-                            arg.span,
-                        ));
-                    }
-                }
-                Ok(None)
+        let render = |m: Mode| match m {
+            Mode::Borrow => "borrow (bare)",
+            Mode::WriteThrough => "mutable borrow (&)",
+            Mode::Move => "consume (!)",
+        };
+        let pname = || {
+            self.fn_param_names
+                .get(func_name)
+                .and_then(|v| v.get(param_idx))
+                .cloned()
+                .unwrap_or_else(|| format!("#{param_idx}"))
+        };
+        // FULL STRICT (both forms). `form` only tunes the message tail.
+        let site = match form {
+            CallForm::Method => "the call-site sigil must match the declared param at every \
+                                 call site, method calls included",
+            CallForm::FreeFn => "the call-site sigil must match the declared param at a \
+                                 function call",
+        };
+        if let Some(pm) = pmode {
+            let found = mode_of(arg.node.ownership);
+            if found != pm {
+                return Err(ElabError::new(
+                    format!(
+                        "argument for parameter `{}` of `{func_name}` expects {}, found {} \
+                         — {site} (production E_OwnershipMismatch)",
+                        pname(),
+                        render(pm),
+                        render(found)
+                    ),
+                    arg.span,
+                ));
             }
         }
+        Ok(None)
     }
 
     /// The enum a user-declared variant belongs to (for bare-spelled ctors).
