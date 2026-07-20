@@ -1,0 +1,34 @@
+# R-STRING regression: a compound-assign (`+=`) whose LHS field holds a String
+# (a resource) previously ICE'd the resource-move validator ("shallow copy of
+# resource") on typecheck-ACCEPTED code. Exercises all four place-based
+# compound arms. Each current value is HEAP-allocated via `heap()` so the
+# drop-of-the-old-value is a genuine LSan/ASan leak check (a `.rodata` literal
+# would be leak-clean even with the drop omitted — no teeth).
+
+struct S:
+    String name
+
+# Force a fresh heap allocation (a bare literal is a cap=0 .rodata view).
+String heap(String s):
+    return s + ""
+
+void main():
+    # site 1: struct field (Some arm — try_resolve_field_place resolved)
+    S a = S(heap("aaa"))
+    a.name += "X"
+    print(a.name)
+
+    # site 2: get-chain (None-fallback — resolve_ptr_field_place)
+    Vector[S] v = [S(heap("bbb"))]
+    v.get(0).unwrap().name += "Y"
+    print(v.get(0).unwrap().name)
+
+    # site 3: tuple field
+    (String, int) t = (heap("ccc"), 1)
+    t.0 += "Z"
+    print(t.0)
+
+    # site 4: deref (Box[String] pointee)
+    Box[String] b = Box(heap("ddd"))
+    *b += "W"
+    print(*b)

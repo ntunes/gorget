@@ -1,0 +1,56 @@
+# R-STRING generalization: the shallow-read ICE is NOT String-specific — a
+# resource struct with an `Add` overload (`Money`, a String-payload field)
+# compound-assigned into a field ICE'd identically ("shallow copy of resource
+# _K : Money"). Exercises the struct-field / get-chain / tuple compound arms
+# with a resource non-String field.
+#
+# RMW-same-slot (R4): each `w.m += r` reads `w.m` for `self` (by borrow, inside
+# the overload) AND stores back into the SAME slot `w.m` — so the drop of the
+# old value runs against a slot the overload just read. The fix borrows the
+# field for `self`, computes the fresh result, THEN drops-old + stores, so the
+# read completes before the drop (no use-after-free / double-free).
+#
+# Named rhs local (R2): `Money r = Money(heap(..)); w.m += r` — an INLINE
+# `w.m += Money(heap(..))` would trip a PRE-EXISTING overload-rhs-temp leak in
+# operators.rs (filed separately), out of this fix's zone. Each old value is
+# HEAP-allocated so the drop-old is a genuine LSan check (all sites verified
+# LSan-clean under `--sanitize` + `ASAN_OPTIONS=detect_leaks=1`).
+#
+# The Box[Money] deref site (`*bx += r`) lowers + runs correctly on both
+# backends but is NOT included here: dropping a `Box[Money]` (a Box of a
+# resource-struct) leaks the inner struct on BOTH backends — a PRE-EXISTING
+# drop-glue gap unrelated to compound-assign (a bare `Box[Money]` construct +
+# drop leaks identically). Filed in TODO. The String deref arm is covered
+# LSan-clean by `compound_assign_resource_string.gg`.
+
+struct Money:
+    String label
+
+equip Money with Add[Money]:
+    Money add(self, Money rhs):
+        return Money(self.label + rhs.label)
+
+struct Wallet:
+    Money m
+
+String heap(String s):
+    return s + ""
+
+void main():
+    # site 1: struct field (Some arm)
+    Money ra = Money(heap("A"))
+    Wallet wa = Wallet(Money(heap("aaa")))
+    wa.m += ra
+    print(wa.m.label)
+
+    # site 2: get-chain (None-fallback)
+    Money rb = Money(heap("B"))
+    Vector[Wallet] v = [Wallet(Money(heap("bbb")))]
+    v.get(0).unwrap().m += rb
+    print(v.get(0).unwrap().m.label)
+
+    # site 3: tuple field
+    Money rc = Money(heap("C"))
+    (Money, int) t = (Money(heap("ccc")), 1)
+    t.0 += rc
+    print(t.0.label)

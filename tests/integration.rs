@@ -30233,6 +30233,42 @@ fn compound_assignment_all() {
     );
 }
 
+// R-STRING: a compound-assign (`+=`) whose LHS field holds a RESOURCE (String,
+// or a resource field with an `Add` overload) previously tripped the
+// resource-move validator ("shallow copy of resource"), an ICE on
+// typecheck-ACCEPTED code, at all four place-based compound arms (struct field
+// / get-chain / tuple / deref). The fix reads without a shallow resource copy
+// and writes back through `emit_field_store_with_cleanup` (drop-old + move-new).
+// These fixtures build each current value on the HEAP so the drop-of-old is a
+// genuine leak check under `--sanitize` (verified LSan-clean, C backend).
+// They live in tests/fixtures/known_gaps/ so they stay OUT of the self-host
+// runtime-diff/comparison corpus: the SELF-HOST lane LAGS on resource-typed
+// compound-assign (emits type-broken C for the String struct-field/tuple +
+// Money sites, miscompiles the Box[String] deref — filed Core #9). The Rust
+// fix is exercised on BOTH backends here regardless.
+#[test]
+fn compound_assign_resource_string() {
+    run_gg(
+        "known_gaps/compound_assign_resource_string.gg",
+        "\
+aaaX
+bbbY
+cccZ
+dddW",
+    );
+}
+
+#[test]
+fn compound_assign_resource_overload() {
+    run_gg(
+        "known_gaps/compound_assign_resource_overload.gg",
+        "\
+aaaA
+bbbB
+cccC",
+    );
+}
+
 #[test]
 fn const_declarations() {
     run_gg(
