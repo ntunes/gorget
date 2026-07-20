@@ -1286,25 +1286,77 @@ impl<'a> BorrowChecker<'a> {
 
             if expected != found {
                 let param_name = info.param_names[i].clone();
-                let expected_str = match expected {
-                    Ownership::Borrow => "borrow (bare)",
-                    Ownership::MutableBorrow => "mutable borrow (&)",
-                    Ownership::Move => "consume (!)",
-                };
-                let found_str = match found {
-                    Ownership::Borrow => "borrow (bare)",
-                    Ownership::MutableBorrow => "mutable borrow (&)",
-                    Ownership::Move => "consume (!)",
-                };
                 self.error(
                     SemanticErrorKind::OwnershipMismatch {
                         param_name,
-                        expected: expected_str.to_string(),
-                        found: found_str.to_string(),
+                        expected,
+                        found,
+                        arg_is_temp: !expr_is_place(&arg.node.value.node),
                     },
                     arg.span,
                 );
             }
+        }
+    }
+
+    /// D31 (`decisions.md` 2026-07-19 + the 2026-07-20 ADDENDUM-2, FULL STRICT):
+    /// a METHOD call's arg sigils must match the declared param modes EXACTLY,
+    /// the same rule as free functions (`check_call_ownership`). Contractual
+    /// consumption is always spelled at the call site: a `!` param requires `!`,
+    /// a `&` param requires `&`, a bare param is borrowed — at every call site,
+    /// named place or temporary. This closes the free-fn/method asymmetry:
+    /// `check_call_ownership` is invoked only from the free-call arm
+    /// (`check_expr.rs`), so before D31 a method silently accepted the mismatch
+    /// (`c.add_all(v)` into a `&vals` param) that the free-call face rejected.
+    /// The README's call-site-visibility promise is the design authority; the
+    /// method leniency was an enforcement gap.
+    ///
+    /// The receiver `self` is `param_ownerships[0]` ONLY when the signature
+    /// lists it (instance methods do; some extern/self-less method decls do
+    /// not), so the self offset is detected by NAME — a fixed `+1` produced 209
+    /// false positives on extern methods whose param list omits `self`. The
+    /// `&self` receiver's own call-site implicitness (`c.add_all(&v)` does not
+    /// mark that `c` mutates) is a SEPARATE deferred question (the ledger's
+    /// D31 SCOPE NOTE), not touched here — only the ARGS are checked.
+    pub(super) fn check_method_call_ownership(
+        &mut self,
+        method: &Spanned<String>,
+        args: &[Spanned<CallArg>],
+    ) {
+        let Some(&def_id) = self.method_resolutions.get(&method.span.start) else {
+            return;
+        };
+        // Skip constructors (structs, enum variants) — no FunctionInfo.
+        let kind = self.scopes.get_def(def_id).kind;
+        if matches!(kind, DefKind::Struct | DefKind::Variant) {
+            return;
+        }
+        let info = match self.function_info.get(&def_id) {
+            Some(info) => info,
+            None => return, // builtins, extern without info — out of D31 scope
+        };
+        let self_offset =
+            if info.param_names.first().map_or(false, |n| n == "self") { 1 } else { 0 };
+        for (i, arg) in args.iter().enumerate() {
+            let pidx = i + self_offset;
+            if pidx >= info.param_ownerships.len() {
+                break; // varargs / mismatched count (caught by the type checker)
+            }
+            let expected = info.param_ownerships[pidx];
+            let found = arg.node.ownership;
+            if expected == found {
+                continue;
+            }
+            let param_name = info.param_names.get(pidx).cloned().unwrap_or_default();
+            self.error(
+                SemanticErrorKind::OwnershipMismatch {
+                    param_name,
+                    expected,
+                    found,
+                    arg_is_temp: !expr_is_place(&arg.node.value.node),
+                },
+                arg.span,
+            );
         }
     }
 

@@ -563,11 +563,18 @@ pub enum SemanticErrorKind {
     /// Non-printable type used in string interpolation.
     NonPrintableInterpolation { var_name: String, type_name: String },
 
-    /// Call-site ownership annotation doesn't match parameter declaration.
+    /// Call-site ownership annotation doesn't match parameter declaration
+    /// (D31 full-strict, `decisions.md` 2026-07-20 ADDENDUM-2): a `!` param
+    /// requires `!` at the call site, a `&` param requires `&`, a bare param is
+    /// borrowed — at every call site, free-fn and method, named place or
+    /// temporary. Carries the RAW modes (not pre-rendered strings) so the
+    /// message is kind-aware, and `arg_is_temp` so the DX rider's bare-temp
+    /// case ("this call consumes the value — add `!`") is tailored.
     OwnershipMismatch {
         param_name: String,
-        expected: String,
-        found: String,
+        expected: crate::parser::ast::Ownership,
+        found: crate::parser::ast::Ownership,
+        arg_is_temp: bool,
     },
 
     /// Generic type argument does not satisfy a `where` clause trait bound.
@@ -1238,11 +1245,58 @@ impl std::fmt::Display for SemanticError {
                 param_name,
                 expected,
                 found,
+                arg_is_temp,
             } => {
-                write!(
-                    f,
-                    "ownership mismatch for `{param_name}`: expected `{expected}`, found `{found}`"
-                )
+                use crate::parser::ast::Ownership::*;
+                // Kind-aware explanation + an auto-fixable `help:` (the D31
+                // ADDENDUM-2 DX rider). The explanation names the API CONTRACT
+                // the call site must spell; the help gives the exact edit.
+                let (expl, help): (String, String) = match (expected, found) {
+                    (Move, Borrow) => (
+                        if *arg_is_temp {
+                            "this call consumes the value — the parameter takes ownership (`!`), \
+                             so the move is spelled at the call site even for a temporary"
+                                .to_string()
+                        } else {
+                            "this call consumes the argument — the parameter takes ownership (`!`), \
+                             so the move is spelled at the call site"
+                                .to_string()
+                        },
+                        "mark the argument with `!` (e.g. `f(!x)` or `f(!Ctor(...))`)".to_string(),
+                    ),
+                    (MutableBorrow, Borrow) => (
+                        "this call mutates the argument through the parameter (`&`, write-through), \
+                         so the mutable borrow is spelled at the call site"
+                            .to_string(),
+                        "mark the argument with `&` (e.g. `f(&x)`)".to_string(),
+                    ),
+                    (Borrow, Move) => (
+                        "the parameter only borrows — it does not consume the argument".to_string(),
+                        "remove the `!` (the value is not moved into this call)".to_string(),
+                    ),
+                    (Borrow, MutableBorrow) => (
+                        "the parameter only borrows immutably — it is not a write-through (`&`) param"
+                            .to_string(),
+                        "remove the `&` (the callee does not mutate through this argument)"
+                            .to_string(),
+                    ),
+                    (Move, MutableBorrow) => (
+                        "this call consumes the argument (`!`), not a mutable borrow".to_string(),
+                        "write `!` instead of `&`".to_string(),
+                    ),
+                    (MutableBorrow, Move) => (
+                        "this call mutates the argument through a write-through (`&`) param, \
+                         not a move"
+                            .to_string(),
+                        "write `&` instead of `!`".to_string(),
+                    ),
+                    // Equal modes never construct this error; render defensively.
+                    _ => (
+                        "the call-site sigil does not match the parameter declaration".to_string(),
+                        "match the parameter's ownership at the call site".to_string(),
+                    ),
+                };
+                write!(f, "ownership mismatch for `{param_name}`: {expl}; help: {help}")
             }
             SemanticErrorKind::UnsatisfiedTraitBound {
                 type_name,

@@ -429,6 +429,12 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(receiver);
                 self.deadwrite_write_root = deadwrite_prev_root;
                 self.check_call_aliasing(args);
+                // D31 (`&`-direction slice): a method call into a `&` param must
+                // spell `&` at the call site, closing the free-fn/method
+                // asymmetry (`check_call_ownership` runs only on the free-call
+                // arm). Receiver is excluded via the self-offset; the
+                // `!`-direction is deferred.
+                self.check_method_call_ownership(method, args);
 
                 // Track `&` param mutation via a mutating method call. Consult
                 // the unified `receiver_is_mutating` classification computed

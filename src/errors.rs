@@ -301,6 +301,20 @@ impl ErrorReporter {
             _ => {}
         }
 
+        // D31 ADDENDUM-2 DX rider: put the exact edit on the argument span so the
+        // fix is auto-actionable (the primary label points AT the arg).
+        if let SemanticErrorKind::OwnershipMismatch { expected, found, .. } = &err.kind {
+            use crate::parser::ast::Ownership::*;
+            let hint = match (expected, found) {
+                (Move, _) => "add `!` here",
+                (MutableBorrow, _) => "add `&` here",
+                (Borrow, Move) => "remove the `!`",
+                (Borrow, MutableBorrow) => "remove the `&`",
+                _ => "fix the call-site sigil",
+            };
+            labels[0] = self.primary_label(err.span).with_message(hint);
+        }
+
         let diag = diagnostic::Diagnostic::error()
             .with_code(err.kind.code())
             .with_message(err.to_string())
