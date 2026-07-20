@@ -1582,9 +1582,109 @@ int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
             pass
     return lower_expr(&ctx, base_expr, &gmod)
 
+# Shared write-through element-pointer producer for a Vector/Deque INDEX
+# element — the common core of the `v[i].field = x` (EIndex) and
+# `v.get(i).unwrap().field = x` (`.get()`-chain) field-write place bases. Both
+# must resolve the element to a `gorget_array_get(coll, idx)` pointer typed
+# `GtPtr(elem) + LoBorrowed` (an alias INTO the collection's heap buffer), else
+# the store lands on a throwaway VALUE COPY and is silently LOST (SH-CoW Face
+# A). Returns the element-ptr local on success, or -1 to signal "not a
+# pointer-eligible index element" (scalar element, unregistered element, or a
+# collection whose kind has no addressable element slot) so the caller falls
+# through to the shared `lower_place_base`. `allow_map` gates the CkDict →
+# `gorget_map_get` VALUE-slot getter: the EIndex arm (`d[k].field`) sets it
+# true; the `.get()`-chain arm keeps it false (Dict `.get(k)` write-through is
+# a deferred follow-on — known_gaps/). Mirrors Rust gg's `try_resolve_field_place`
+# Index arm (src/ir/lowering/exprs/mod.rs).
+int lower_index_element_ptr_place(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_expr, bool allow_map, GirModule &gmod):
+    # Lower the collection base via the SHARED `lower_place_base` (a static
+    # resolves to a `GtMutPtr` through `__global_ref__`, a `&self`/`&param` to
+    # its `GtPtr`), then consume it with the is_ptr_type→OpCopy idiom below —
+    # NEVER `lower_expr` (a static through `lower_expr` yields a value slot
+    # whose address is a pointer-to-pointer).
+    int fpb_base = lower_place_base(&ctx, coll_expr, &gmod)
+    int fpb_base_tid = ctx.locals.get(fpb_base).unwrap().type_id
+    String fpb_base_name = type_id_to_name(fpb_base_tid, &gmod)
+    # Unwrap a Ptr/MutPtr base (param / static via __global_ref__ /
+    # self.field) to the collection name.
+    if fpb_base_tid >= 0 and fpb_base_tid < gmod.type_table.len():
+        GirType fpb_bt = gmod.type_table.get(fpb_base_tid).unwrap()
+        match fpb_bt:
+            case GtPtr(fpb_inner):
+                fpb_base_name = type_id_to_name(fpb_inner, &gmod)
+            case GtMutPtr(fpb_inner2):
+                fpb_base_name = type_id_to_name(fpb_inner2, &gmod)
+            else:
+                pass
+    # Collection-kind gate → the element/value pointer-getter. CkVector/
+    # CkDeque resolve the element via `gorget_array_get`; CkDict resolves the
+    # VALUE slot via `gorget_map_get` (only when `allow_map`). Set / user-Index
+    # fall through to the shared resolver unchanged. Dispatch via the typed
+    # `collection_kind`, never a name match — a `gorget_array_get` on a Map
+    # base would be UB.
+    String fpb_getter = ""
+    match resource_meta_for(&gmod, fpb_base_name):
+        case Some(fpb_rmeta):
+            match fpb_rmeta.collection_kind:
+                case CkVector():
+                    fpb_getter = "gorget_array_get"
+                case CkDeque():
+                    fpb_getter = "gorget_array_get"
+                case CkDict():
+                    if allow_map:
+                        fpb_getter = "gorget_map_get"
+                else:
+                    pass
+        case None:
+            pass
+    if fpb_getter != "":
+        # Element type NAME → id via the SAME `index_value_type_name` helper
+        # the read/compound arms use (one source of truth).
+        String fpb_elem_name = index_value_type_name(fpb_base_name)
+        if fpb_elem_name != "":
+            String fpb_elem_norm = fpb_elem_name
+            if fpb_elem_name == "Str":
+                fpb_elem_norm = "GorgetString"
+            int fpb_elem_tid = resolve_field_gir_type(fpb_elem_norm, &gmod)
+            # Only struct/resource elements (>= PRIM_COUNT) get the pointer — a
+            # field store needs a struct-ish element. Scalar (< PRIM_COUNT) and
+            # unregistered (< 0) fall through (a scalar has no field to write
+            # through).
+            if fpb_elem_tid >= PRIM_COUNT:
+                # Index is independently typed — clear any leaked
+                # expected_type (mirror the read / index-assign arms).
+                int fpb_saved_expected = ctx.expected_type
+                ctx.expected_type = -1
+                int fpb_idx = lower_expr(&ctx, idx_expr, &gmod)
+                ctx.expected_type = fpb_saved_expected
+                fpb_idx = maybe_auto_propagate(&ctx, fpb_idx, &gmod)
+                # Consume the base with the ptr-or-borrow idiom (static →
+                # GtMutPtr → OpCopy the pointer value; value slot → OpBorrow
+                # its address), exactly as lower_index_assign's setter call
+                # does — NEVER OpBorrow a ptr slot (a pointer-to-pointer).
+                Operand fpb_base_op = OpBorrow(fpb_base)
+                if is_ptr_type(fpb_base_tid, gmod):
+                    fpb_base_op = OpCopy(fpb_base)
+                # dst = gorget_array_get(base, idx) typed GtPtr(elem) +
+                # LoBorrowed — a pointer INTO the buffer. The GtPtr dst makes
+                # lir_lower emit a plain ISlotStore of the raw pointer (NOT the
+                # bare-aggregate `*(StructT*)` copy-out that is gap B).
+                # LoBorrowed keeps the element ptr out of drop-tracking (a
+                # LoOwned dst would drop-register the buffer element →
+                # double-free). idx is OpBorrow (the read never consumes;
+                # matches the read/compound arms).
+                int fpb_ptr_tid = register_ptr(&gmod, fpb_elem_tid)
+                int fpb_dst = add_local_with(&ctx, fpb_ptr_tid, None, LoBorrowed(), BoNone())
+                Vector[Operand] fpb_args = [fpb_base_op, OpBorrow(fpb_idx)]
+                emit(&ctx, GICallExtern(fpb_dst, fpb_getter, fpb_args))
+                return fpb_dst
+    return -1
+
 # Field-WRITE place base — the write-only extension of `lower_place_base`.
-# A field store whose object is a Vector INDEX element (`v[i].field = x`,
-# `PTS[i].field += n`) must resolve the ELEMENT to a WRITE-THROUGH pointer (an
+# A field store whose object is a Vector INDEX element — spelled either
+# `v[i].field = x` / `PTS[i].field += n` (EIndex) or `v.get(i).unwrap().field
+# = x` (the auto-borrow-from-get `.get()`-chain, EMethodCall) — must resolve
+# the ELEMENT to a WRITE-THROUGH pointer (an
 # alias INTO the collection's heap buffer), else the store lands on a throwaway
 # VALUE COPY (`gorget_array_get` typed as the bare element) and is silently LOST
 # (wave-0 gap B). Mirrors Rust gg's `try_resolve_field_place` Index arm
@@ -1607,92 +1707,43 @@ int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
 int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
     match base_expr.expr:
         case EIndex(fpb_base_box, fpb_idx_box):
-            # Lower the collection base via the SHARED `lower_place_base` (a
-            # static resolves to a `GtMutPtr` through `__global_ref__`, a
-            # `&self`/`&param` to its `GtPtr`), then consume it with the
-            # is_ptr_type→OpCopy idiom below — NEVER `lower_expr` (a static
-            # through `lower_expr` yields a value slot whose address is a
-            # pointer-to-pointer).
-            int fpb_base = lower_place_base(&ctx, *fpb_base_box, &gmod)
-            int fpb_base_tid = ctx.locals.get(fpb_base).unwrap().type_id
-            String fpb_base_name = type_id_to_name(fpb_base_tid, &gmod)
-            # Unwrap a Ptr/MutPtr base (param / static via __global_ref__ /
-            # self.field) to the collection name.
-            if fpb_base_tid >= 0 and fpb_base_tid < gmod.type_table.len():
-                GirType fpb_bt = gmod.type_table.get(fpb_base_tid).unwrap()
-                match fpb_bt:
-                    case GtPtr(fpb_inner):
-                        fpb_base_name = type_id_to_name(fpb_inner, &gmod)
-                    case GtMutPtr(fpb_inner2):
-                        fpb_base_name = type_id_to_name(fpb_inner2, &gmod)
+            # `v[i].field = x` — resolve the element to a write-through pointer
+            # via the shared producer (Vector/Deque/Dict; allow_map=true). On a
+            # non-pointer-eligible element (scalar / unregistered / Set) it
+            # returns -1 and we fall through to `lower_place_base` unchanged.
+            int fpb_ix = lower_index_element_ptr_place(&ctx, *fpb_base_box, *fpb_idx_box, true, &gmod)
+            if fpb_ix >= 0:
+                return fpb_ix
+        case EMethodCall(fpb_recv_box, fpb_mname, fpb_margs, _):
+            # `coll.get(i).unwrap().field = x` — the ratified auto-borrow-from-get
+            # chain (docs/language-design §3, docs/language-reference §9.6,
+            # docs/devbook/11-copy-on-write). `.unwrap()` on the
+            # `Option[Ref[elem]]` that `.get(i)` yields must resolve the ELEMENT
+            # to the SAME write-through `gorget_array_get` pointer the
+            # `v[i].field` (EIndex) arm produces — else the field store lands on
+            # the value-copy `.unwrap()` mints and is silently LOST (SH-CoW Face
+            # A). Mirrors Rust gg's `.get().unwrap().field` None-fallback
+            # (assigns.rs lower_field_object_operand / resolve_ptr_field_place)
+            # and the SH's own EIndex arm above. Vector/Deque ONLY
+            # (allow_map=false) — a Dict `.get(k)` base keeps the shared
+            # `lower_place_base` fall-through (deferred follow-on, known_gaps/).
+            #
+            # Core #10 (lower-or-reject): this `case EMethodCall` captures EVERY
+            # method-call base. Only `unwrap`-of-`get(1-arg)` on a Vector/Deque
+            # is handled here; every OTHER method-receiver shape (a different
+            # method, a `.get()` with ≠1 arg, or a non-Vector collection) leaves
+            # `fpb_ch < 0` / never enters the inner arm and FALLS THROUGH to
+            # `lower_place_base` below — no silent drop of a write.
+            if fpb_mname == "unwrap" and fpb_margs.len() == 0:
+                match (*fpb_recv_box).expr:
+                    case EMethodCall(fpb_get_recv_box, fpb_get_mname, fpb_get_args, _):
+                        if fpb_get_mname == "get" and fpb_get_args.len() == 1:
+                            SpannedExpr fpb_get_idx = fpb_get_args.get(0).unwrap().value
+                            int fpb_ch = lower_index_element_ptr_place(&ctx, *fpb_get_recv_box, fpb_get_idx, false, &gmod)
+                            if fpb_ch >= 0:
+                                return fpb_ch
                     else:
                         pass
-            # Collection-kind gate → the element/value pointer-getter. CkVector/
-            # CkDeque resolve the element via `gorget_array_get`; CkDict resolves
-            # the VALUE slot via `gorget_map_get` (Track 1C — a pointer INTO the
-            # map's value buffer, exactly the write-through target the array arm
-            # gets from `gorget_array_get`). Set / user-Index fall through to the
-            # shared resolver unchanged (a set's element IS its key — no
-            # addressable value slot; `gorget_map_get` returns a sentinel in
-            # set-mode). Dispatch via the typed `collection_kind`, never a name
-            # match — a `gorget_array_get` on a Map base would be UB.
-            String fpb_getter = ""
-            match resource_meta_for(&gmod, fpb_base_name):
-                case Some(fpb_rmeta):
-                    match fpb_rmeta.collection_kind:
-                        case CkVector():
-                            fpb_getter = "gorget_array_get"
-                        case CkDeque():
-                            fpb_getter = "gorget_array_get"
-                        case CkDict():
-                            fpb_getter = "gorget_map_get"
-                        else:
-                            pass
-                case None:
-                    pass
-            if fpb_getter != "":
-                # Element type NAME → id via the SAME `index_value_type_name`
-                # helper the read/compound arms use (one source of truth).
-                String fpb_elem_name = index_value_type_name(fpb_base_name)
-                if fpb_elem_name != "":
-                    String fpb_elem_norm = fpb_elem_name
-                    if fpb_elem_name == "Str":
-                        fpb_elem_norm = "GorgetString"
-                    int fpb_elem_tid = resolve_field_gir_type(fpb_elem_norm, &gmod)
-                    # Only struct/resource elements (>= PRIM_COUNT) get the
-                    # pointer — a field store needs a struct-ish element. Scalar
-                    # (< PRIM_COUNT) and unregistered (< 0) fall through (a scalar
-                    # has no field to write through).
-                    if fpb_elem_tid >= PRIM_COUNT:
-                        # Index is independently typed — clear any leaked
-                        # expected_type (mirror the read / index-assign arms).
-                        int fpb_saved_expected = ctx.expected_type
-                        ctx.expected_type = -1
-                        int fpb_idx = lower_expr(&ctx, *fpb_idx_box, &gmod)
-                        ctx.expected_type = fpb_saved_expected
-                        fpb_idx = maybe_auto_propagate(&ctx, fpb_idx, &gmod)
-                        # Consume the base with the ptr-or-borrow idiom (static →
-                        # GtMutPtr → OpCopy the pointer value; value slot →
-                        # OpBorrow its address), exactly as lower_index_assign's
-                        # setter call does — NEVER OpBorrow a ptr slot (that is a
-                        # pointer-to-pointer).
-                        Operand fpb_base_op = OpBorrow(fpb_base)
-                        if is_ptr_type(fpb_base_tid, gmod):
-                            fpb_base_op = OpCopy(fpb_base)
-                        # dst = gorget_array_get(base, idx) typed GtPtr(elem) +
-                        # LoBorrowed — a pointer INTO the buffer. The GtPtr dst
-                        # makes lir_lower emit a plain ISlotStore of the raw
-                        # pointer (NOT the bare-aggregate `*(StructT*)` copy-out
-                        # that is gap B). LoBorrowed keeps the element ptr out of
-                        # drop-tracking (a LoOwned dst would drop-register the
-                        # buffer element → double-free — this is the ASan gate's
-                        # #1 risk). idx is OpBorrow (the read never consumes;
-                        # matches the read/compound arms).
-                        int fpb_ptr_tid = register_ptr(&gmod, fpb_elem_tid)
-                        int fpb_dst = add_local_with(&ctx, fpb_ptr_tid, None, LoBorrowed(), BoNone())
-                        Vector[Operand] fpb_args = [fpb_base_op, OpBorrow(fpb_idx)]
-                        emit(&ctx, GICallExtern(fpb_dst, fpb_getter, fpb_args))
-                        return fpb_dst
         else:
             pass
     return lower_place_base(&ctx, base_expr, &gmod)

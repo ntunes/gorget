@@ -15,14 +15,15 @@
 #   - a bare local root (`main`'s `blocks`)
 # and confirms plain `=` through the identical chain still writes through.
 #
-# Same output on both C and LLVM. Core #9 lagging lane: the self-host lowerer
-# still drops this write-through (BOTH plain AND compound through a `.get()`
-# chain — SH `SAssign`/`SCompoundAssign` EFieldAccess resolves the `.get()` chain
-# to a COPY, not a write-through Ptr). The SH-CoW campaign owns it (TODO:262), so
-# this fixture lives in `known_gaps/` to stay OUT of the self-host runtime-diff
-# corpus (which auto-scans top-level `tests/fixtures/*.gg` only) — an EXPLICIT
-# cited lagging lane, never a silent new parity WRONG. Promote to top-level when
-# TODO:262 lands. Wired C+LLVM via `run_gg` (which never invokes the self-host).
+# Same output on ALL THREE lanes (Rust gg C, Rust gg LLVM, and the self-host).
+# ggdef adjudicates the write-through as correct; a clean 3-way ADJ-MATCH. The
+# self-host lowerer now resolves the `.get(i).unwrap()` chain base to a
+# write-through element pointer (`lower_field_place_base`'s EMethodCall arm →
+# `gorget_array_get` typed `GtPtr(elem) + LoBorrowed`, mirroring its own EIndex
+# arm) — so this fixture is TOP-LEVEL (in the self-host runtime-diff corpus),
+# not a `known_gaps/` lagging lane. Bare-param roots still MATERIALIZE (the
+# projected-root privatize fires before the place path); this fixture uses only
+# owner-reachable roots (`&`-param + owned local), which write through.
 
 struct Blk:
     int term

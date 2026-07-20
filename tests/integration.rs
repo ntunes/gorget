@@ -31210,17 +31210,16 @@ done",
 /// None` case, so `f.blocks.get(bb).unwrap().term += 1` SILENTLY DROPPED the
 /// write on BOTH backends (printed the unchanged 20). Exercises a `&`-param root
 /// (write reaches the caller) AND a bare local root, with `+= -= *=` and a plain
-/// `=` control. Value-typed element (§9.6 "lower, don't reject"). Same output on
-/// C + LLVM (run_gg builds via Rust gg only — never the self-host). Self-host
-/// lane LAGS (SH `SCompoundAssign`/`SAssign` EFieldAccess resolves the `.get()`
-/// chain to a COPY, dropping both plain AND compound writes — TODO:262, the
-/// SH-CoW campaign); the fixture therefore lives in `known_gaps/` to stay OUT of
-/// the self-host runtime-diff corpus — an EXPLICIT cited lagging lane (Core #9),
-/// not a silent new parity WRONG. Promote to top-level when TODO:262 lands.
+/// `=` control. Value-typed element (§9.6 "lower, don't reject"). PROMOTED to
+/// top-level (SH-CoW Face-A landed): the self-host lowerer now resolves the
+/// `.get(i).unwrap()` chain base to a write-through element pointer
+/// (`lower_field_place_base`'s EMethodCall arm), so all THREE lanes — Rust gg C,
+/// Rust gg LLVM, AND the self-host — agree, and the fixture is in the self-host
+/// runtime-diff corpus (a clean 3-way ADJ-MATCH, ggdef already write-throughs).
 #[test]
 fn cow_compound_getref_writethrough() {
     run_gg(
-        "known_gaps/cow_compound_getref_writethrough.gg",
+        "cow_compound_getref_writethrough.gg",
         "\
 20
 21
@@ -31229,6 +31228,53 @@ fn cow_compound_getref_writethrough() {
 15
 13
 99
+done",
+    );
+}
+
+/// SH-CoW Face-A companion: a RESOURCE-field (`Vector[int]`) write-through
+/// through a `.get(i).unwrap()` chain, read-modify-writing the SAME element slot
+/// (`f.blocks.get(bb).unwrap().args = add_arg(f.blocks.get(bb).unwrap().args, v)`
+/// — the exact shape of the self-host's own `lir_ssa.gg:562`). The write-through
+/// element pointer overwrites a live heap buffer, so drop-on-overwrite must free
+/// the OLD `Vector[int]` EXACTLY once (codegen `fw_drop_pre`, NOT a duplicate GIR
+/// drop) and the RHS re-read leg must be CoW-cloned so the new value never
+/// aliases the freed buffer. This test pins stdout (C + LLVM); the
+/// `_asan` sibling pins leak-freedom + double-free-freedom.
+#[test]
+fn cow_getref_writethrough_resource() {
+    run_gg(
+        "cow_getref_writethrough_resource.gg",
+        "\
+1
+2
+3
+10
+20
+100
+5
+done",
+    );
+}
+
+/// ASan gate for the resource-field Face-A write-through (RMW-same-slot): the
+/// drop-on-overwrite of the OLD `Vector[int]` buffer must fire exactly once with
+/// no leak and no double-free. A scalar-field write-through never exercises the
+/// drop path, so this resource-field RMW shape is the load-bearing sanitizer
+/// case. Guards against a duplicate GIR-level drop (double-free) OR a missing
+/// drop (leak) sneaking in with the new `.get().unwrap().field` place producer.
+#[test]
+fn cow_getref_writethrough_resource_asan() {
+    assert_gg_sanitize_clean(
+        "cow_getref_writethrough_resource",
+        "\
+1
+2
+3
+10
+20
+100
+5
 done",
     );
 }
@@ -31279,6 +31325,40 @@ fn tuple_field_assign() {
 5
 101
 9
+done",
+    );
+}
+
+/// SH-CoW Face-A DEFERRED follow-on: Dict `.get(k).unwrap().field = v`. Rust gg
+/// (C + LLVM) write-throughs to the map value slot (correct = 99). The self-host
+/// Face-A place arm is scoped Vector/Deque-only (`allow_map=false`), so a Dict
+/// base keeps the value-copy fall-through and DROPS the write (SH = 10). Kept in
+/// `known_gaps/` (out of the runtime-diff corpus) — an EXPLICIT cited lagging
+/// lane (Core #9), the deferred Dict follow-on of the SH-CoW Face-A increment.
+#[test]
+fn cow_getref_dict_writethrough() {
+    run_gg(
+        "known_gaps/cow_getref_dict_writethrough.gg",
+        "\
+99
+done",
+    );
+}
+
+/// SH-CoW Face-A NESTED shape: `grid.get(i).unwrap().get(j).unwrap().field = v`
+/// (Vector-of-Vector). ALL THREE lanes already write-through correctly (99,
+/// ASan-clean on the self-host) — but via the INCIDENTAL inner-Vector-handle
+/// shared-buffer aliasing (the inner chain is lowered as a value-copy that
+/// happens to share the buffer), not the principled write-through-Ptr place
+/// resolution. Parked in `known_gaps/` (out of the corpus) so the incidental
+/// pass is not mistaken for the principled guarantee; the robust deep-chain
+/// place producer is the deferred follow-on.
+#[test]
+fn cow_getref_nested_writethrough() {
+    run_gg(
+        "known_gaps/cow_getref_nested_writethrough.gg",
+        "\
+99
 done",
     );
 }

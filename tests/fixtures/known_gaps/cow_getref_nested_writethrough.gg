@@ -1,0 +1,27 @@
+# SH-CoW Face-A NESTED shape: `grid.get(i).unwrap().get(j).unwrap().field = v`
+# through a Vector-of-Vector. The self-host place arm matches the OUTER
+# `.get(j).unwrap()` chain and lowers the INNER `grid.get(i).unwrap()` as the
+# collection via `lower_place_base → lower_expr` — i.e. a VALUE COPY of the inner
+# `Vector[Blk]` HANDLE. Because a Vector handle shares its heap buffer, the outer
+# `gorget_array_get` still points INTO the real element buffer, so the write
+# reaches the owner and this ALREADY write-throughs correctly on the self-host
+# (measured SH = 99, ASan-clean) — the same incidental shared-buffer aliasing
+# that makes the Face-B method-receiver path work.
+#
+# CORRECT output is the write-through 99 (Rust gg C + LLVM AND the self-host all
+# agree). It is parked in `known_gaps/` NOT because it produces a wrong answer,
+# but because the mechanism is INCIDENTAL (the inner chain is a value-copy that
+# happens to share the buffer), not the principled write-through-Ptr place
+# resolution — a robust deep-chain place producer (resolving the inner
+# `.get().unwrap()` to a Ptr too, so a non-buffer-sharing inner element would
+# also write through) is the deferred follow-on. Kept out of the runtime-diff
+# corpus so the incidental pass is not mistaken for the principled guarantee.
+
+struct Blk:
+    int term
+
+void main():
+    Vector[Vector[Blk]] grid = [[Blk(10)]]
+    grid.get(0).unwrap().get(0).unwrap().term = 99
+    print(grid.get(0).unwrap().get(0).unwrap().term)   # 99 (write-through)
+    print("done")

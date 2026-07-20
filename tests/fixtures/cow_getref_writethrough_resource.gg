@@ -1,0 +1,49 @@
+# SH-CoW Face A — RESOURCE-field write-through through a `.get(i).unwrap()`
+# chain, read-modify-writing the SAME element slot. Mirrors the self-host's own
+# `lir_ssa.gg:562` — `f.blocks.get(pred).unwrap().term = add_args_to_term(
+# f.blocks.get(pred).unwrap().term, …)` — where the RHS RE-READS the resource
+# field the field-store is about to OVERWRITE. Two invariants ride on this
+# shape: drop-on-overwrite must free the OLD `Vector[int]` buffer EXACTLY ONCE
+# (the codegen `fw_drop_pre` on `__field_write_*`, NOT a duplicate GIR drop),
+# AND the RHS read-leg must be CoW-cloned so the freshly-built value never
+# aliases the freed buffer (else a double-free). Both are stdout-INVISIBLE — a
+# plain run prints the right numbers whether or not the old buffer leaks or is
+# freed twice; only ASan (`gg build --sanitize`) sees it. C == LLVM.
+#
+# Exercises `&`-param root (write reaches the caller) + owned-local root through
+# the identical `.get().unwrap().field = …` chain.
+
+struct Blk:
+    Vector[int] args
+
+struct Func:
+    Vector[Blk] blocks
+
+# Reads the OLD arg-list (borrowed), builds a fresh one — the re-read leg that
+# must NOT alias the buffer drop-on-overwrite is about to free.
+Vector[int] add_arg(Vector[int] old, int v):
+    Vector[int] out = old.clone()
+    out.push(v)
+    return out
+
+# &-param root: RMW the SAME element's resource field, write-through to caller.
+void push_arg(Func &f, int bb, int v):
+    f.blocks.get(bb).unwrap().args = add_arg(f.blocks.get(bb).unwrap().args, v)
+
+void main():
+    Func f = Func([Blk([1]), Blk([10])])
+    push_arg(&f, 0, 2)
+    push_arg(&f, 0, 3)
+    push_arg(&f, 1, 20)
+    print(f.blocks.get(0).unwrap().args.get(0).unwrap())   # 1
+    print(f.blocks.get(0).unwrap().args.get(1).unwrap())   # 2
+    print(f.blocks.get(0).unwrap().args.get(2).unwrap())   # 3
+    print(f.blocks.get(1).unwrap().args.get(0).unwrap())   # 10
+    print(f.blocks.get(1).unwrap().args.get(1).unwrap())   # 20
+
+    # owned-local root through the identical chain
+    Vector[Blk] bs = [Blk([100])]
+    bs.get(0).unwrap().args = add_arg(bs.get(0).unwrap().args, 5)
+    print(bs.get(0).unwrap().args.get(0).unwrap())          # 100
+    print(bs.get(0).unwrap().args.get(1).unwrap())          # 5
+    print("done")
