@@ -33802,6 +33802,113 @@ fn move_owning_param_into_ctor_zero_clones() {
     let _ = std::fs::remove_dir(&work_dir);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// Bare-param `.get()`-chain store → MATERIALIZE (ratified rule, ledger
+// 783c9817). A bare (non-`&`) param mutated through a builtin-collection getter
+// chain (`f.blocks.get(0).unwrap().term = v`) privatises a copy — the caller is
+// UNCHANGED, exactly as the sibling `f.blocks[i].term = v` / `.push()` stores.
+// Aligns Rust gg (which write-through'd) to ggdef (verified: `ggdef run` → 20)
+// and the self-host; a `&`-param still writes THROUGH. The projection-root
+// descent is gated on the receiver's builtin collection-KIND ∈ {Array,
+// OrderedMap} (`resolve_projection_root_local`, exprs/mod.rs), so a USER `get`
+// (owned temp) is NOT descended — no wasted clone (CoW charter).
+//
+// NOTE (cross-lane, Core #9): the 2T *tainted*-materialize REJECT for get-chains
+// is a filed follow-up (TODO.md) — ggdef's `root_local_name` has the identical
+// get-chain descent gap, so it too silently materializes a tainted get-chain;
+// the reject must land in BOTH compilers at all four materialize sites. Rust and
+// ggdef AGREE today (both materialize, neither rejects) — no divergence.
+// ──────────────────────────────────────────────────────────────────────────
+#[test]
+fn getchain_materialize_vector() {
+    run_gg(
+        "getchain_materialize_vector.gg",
+        "20\n20\n20\n20\n1\n5\n99",
+    );
+}
+
+#[test]
+fn getchain_materialize_dict() {
+    // The OrderedMap arm of the {Array, OrderedMap} kind gate — load-bearing for
+    // the kind set (the Vector / first / last fixtures never exercise it).
+    run_gg("getchain_materialize_dict.gg", "20\n99");
+}
+
+#[test]
+fn getchain_materialize_firstlast() {
+    run_gg("getchain_materialize_firstlast.gg", "20\n30");
+}
+
+#[test]
+fn getchain_user_get_no_clone_runs() {
+    // A user `get` (owned temp) is NOT a builtin collection → not descended →
+    // the write hits a throwaway temp → caller `a` UNCHANGED (prints 1).
+    run_gg("getchain_user_get_no_clone.gg", "1");
+}
+
+// CoW-charter precision guard (feedback-cow-charter-optimal-clones) + the
+// cross-pass materialize-set precision (brief Design flag 1, adapted): the
+// projection-root descent materializes EXACTLY the builtin-collection getter
+// chains, never a USER `get`. Asserted directly on the `--clones=sites` Clone
+// Report: the USER-get fixture emits 0 implicit clones (no wasted clone at the
+// write site == no charter breach), while the BUILTIN Vector getter-chain store
+// emits its one CoW materialization. Backend-independent (GIR-layer diagnostic).
+// Copies each fixture to a uniquely-named temp dir so `--clones=sites` cannot
+// race artifact paths under `--test-threads=4`.
+#[test]
+fn getchain_user_get_no_clone_zero_clones() {
+    fn clone_report_count(fixture_basename: &str, tag: &str) -> usize {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture_path = manifest_dir.join("tests/fixtures").join(fixture_basename);
+        assert!(fixture_path.exists(), "fixture not found: {}", fixture_path.display());
+        let work_dir = std::env::temp_dir()
+            .join(format!("gg_getchain_{}_{}", tag, std::process::id()));
+        std::fs::create_dir_all(&work_dir).unwrap();
+        let gg_path = work_dir.join(fixture_basename);
+        std::fs::copy(&fixture_path, &gg_path).unwrap();
+        let out = build_with_timeout(
+            gg_command("build").arg(&gg_path).arg("--clones=sites"),
+            fixture_basename,
+        );
+        assert!(
+            out.status.success(),
+            "build failed for {fixture_basename}:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let n: usize = stderr
+            .split("Clone Report (")
+            .nth(1)
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let stem = gg_path.file_stem().unwrap().to_str().unwrap();
+        let _ = std::fs::remove_file(&gg_path);
+        let _ = std::fs::remove_file(work_dir.join(format!("{stem}.c")));
+        let _ = std::fs::remove_file(work_dir.join(stem));
+        let _ = std::fs::remove_dir(&work_dir);
+        n
+    }
+    // USER `get` → NOT descended → NO materialize of the receiver → 0 clones.
+    let user = clone_report_count("getchain_user_get_no_clone.gg", "user");
+    assert_eq!(
+        user, 0,
+        "CoW-charter breach: a USER `get` chain (`b.get(0).id = 9`) must NOT \
+         materialize the bare receiver `b` — the getter returns an owned temp \
+         whose root is the temp, so a clone of `b` here is a wasted clone. \
+         Got {user} implicit clone(s)."
+    );
+    // BUILTIN Vector getter chain → descended → materialize of the root → >=1.
+    let builtin = clone_report_count("getchain_materialize_vector.gg", "builtin");
+    assert!(
+        builtin >= 1,
+        "materialize regressed: a bare-param BUILTIN Vector getter-chain store \
+         (`f.blocks.get(0).unwrap().term = v`) must materialize the root so the \
+         caller is unchanged (>=1 CoW materialization clone). Got {builtin}."
+    );
+}
+
 // Clone-count lock-in (the property stdout tests can't see): in
 // witness_never's emitted C, `main` must (a) bind via
 // gorget_string_borrow_view and (b) contain EXACTLY ONE

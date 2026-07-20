@@ -1,0 +1,26 @@
+# CoW-charter precision (feedback-cow-charter-optimal-clones): a USER `get`
+# (a method on a user struct, NOT a builtin collection) returns an OWNED temp —
+# its root is the temp, not the receiver. The projection-root descent is gated
+# on the receiver's builtin collection-KIND ∈ {Array, OrderedMap}, so a user
+# `get` is NOT descended: NO materialize of `b`, hence NO `<UserStruct>` clone at
+# the write site (a clone here would be a wasted-clone == charter breach).
+# The write lands on the throwaway temp, so the caller is UNCHANGED (prints 1).
+# The companion `getchain_user_get_no_clone` clones-report assertion
+# (tests/integration.rs) pins "0 implicit clones".
+struct R:
+    int id
+
+struct Bag:
+    Vector[R] backing
+
+equip Bag:
+    R get(self, int i):
+        return R(self.backing.get(i).unwrap().id)
+
+void poke(Bag b):
+    b.get(0).id = 9
+
+void main():
+    Bag a = Bag([R(1)])
+    poke(a)
+    print(a.backing.get(0).unwrap().id)   # 1 (write hit a temp, not `a`)

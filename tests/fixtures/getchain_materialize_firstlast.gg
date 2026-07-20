@@ -1,0 +1,25 @@
+# Bare-param `.first()` / `.last()` getter-chain store MATERIALIZES (ledger
+# 783c9817) — the `first`/`last` members of the {get, first, last} builtin
+# getter set, gated on the receiver's collection-KIND. Caller UNCHANGED. Both
+# backends. (`.first()` is outside the ggdef phase-0 subset — Rust-lane fixture;
+# subset gap filed in TODO.md.)
+struct Blk:
+    int term
+
+struct Func:
+    Vector[Blk] blocks
+
+void poke_first(Func f):
+    f.blocks.first().unwrap().term = 99
+
+void poke_last(Func f):
+    f.blocks.last().unwrap().term = 88
+
+void main():
+    Func a = Func([Blk(20), Blk(30)])
+    poke_first(a)
+    print(a.blocks.first().unwrap().term)   # 20 (materialize)
+
+    Func b = Func([Blk(20), Blk(30)])
+    poke_last(b)
+    print(b.blocks.last().unwrap().term)    # 30 (materialize)

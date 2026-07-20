@@ -1,0 +1,64 @@
+# Bare-param `.get()`-chain store MATERIALIZES (ratified rule, ledger 783c9817):
+# a bare (non-`&`) param mutated through a builtin-collection getter chain
+# (`f.blocks.get(0).unwrap().term = v`) privatises a copy, so the caller is
+# UNCHANGED — exactly like the sibling `f.blocks[i].term = v` / `f.blocks.push`
+# stores. Aligns Rust gg to ggdef (verified: `ggdef run` → 20) and the self-host.
+# A `&`-param still writes THROUGH. Both backends (C + LLVM).
+struct Blk:
+    int term
+
+struct Func:
+    Vector[Blk] blocks
+    int n
+
+void poke_get(Func f):
+    f.blocks.get(0).unwrap().term = 99
+
+void poke_get_compound(Func f):
+    f.blocks.get(0).unwrap().term += 5
+
+# siblings (already materialized) — regression anchors
+void poke_idx(Func f):
+    f.blocks[0].term = 99
+
+void poke_idxelem(Func f):
+    f.blocks[0] = Blk(88)
+
+void poke_push(Func f):
+    f.blocks.push(Blk(77))
+
+void poke_n(Func f):
+    f.n = 99
+
+# `&`-param control: writes THROUGH (caller sees 99)
+void poke_get_amp(Func &f):
+    f.blocks.get(0).unwrap().term = 99
+
+void main():
+    Func a = Func([Blk(20)], 1)
+    poke_get(a)
+    print(a.blocks.get(0).unwrap().term)   # 20 (materialize)
+
+    Func g = Func([Blk(20)], 1)
+    poke_get_compound(g)
+    print(g.blocks.get(0).unwrap().term)   # 20 (materialize)
+
+    Func b = Func([Blk(20)], 1)
+    poke_idx(b)
+    print(b.blocks.get(0).unwrap().term)   # 20 (sibling)
+
+    Func e = Func([Blk(20)], 1)
+    poke_idxelem(e)
+    print(e.blocks.get(0).unwrap().term)   # 20 (sibling)
+
+    Func d = Func([Blk(20)], 1)
+    poke_push(d)
+    print(d.blocks.len())                  # 1 (sibling)
+
+    Func c = Func([Blk(20)], 5)
+    poke_n(c)
+    print(c.n)                             # 5 (sibling)
+
+    Func h = Func([Blk(20)], 1)
+    poke_get_amp(&h)
+    print(h.blocks.get(0).unwrap().term)   # 99 (& writes through)

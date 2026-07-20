@@ -1,0 +1,26 @@
+# Bare-param Dict `.get(k).unwrap()`-chain store MATERIALIZES (ledger 783c9817).
+# The OrderedMap arm of the receiver-collection-KIND gate — the Vector /
+# first / last probes never exercise it, so this fixture is load-bearing for the
+# {Array, OrderedMap} kind set. A `&`-param still writes THROUGH. Both backends.
+# (Dict get-chains are outside the ggdef phase-0 subset — Rust-lane fixture;
+# subset gap filed in TODO.md.)
+struct Blk:
+    int term
+
+struct Func:
+    Dict[String, Blk] blocks
+
+void poke_get(Func f):
+    f.blocks.get("a").unwrap().term = 99
+
+void poke_get_amp(Func &f):
+    f.blocks.get("a").unwrap().term = 99
+
+void main():
+    Func a = Func({"a": Blk(20)})
+    poke_get(a)
+    print(a.blocks.get("a").unwrap().term)   # 20 (materialize)
+
+    Func b = Func({"a": Blk(20)})
+    poke_get_amp(&b)
+    print(b.blocks.get("a").unwrap().term)   # 99 (& writes through)
