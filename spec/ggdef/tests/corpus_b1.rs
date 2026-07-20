@@ -288,12 +288,10 @@ fn corpus_b1_all_match() {
         failures.join("\n")
     );
 
-    // Guard the gate's shape: the B1 non-equip surface is 122 fixtures. +15 net
-    // from the CoW-2G landings (2026-07-18, db25f0ef and siblings) whose pin was
-    // not refreshed at the time (leaving b1 red on the two unexcluded
-    // out-of-subset `cow_loop_bare_param_{for_else,push_char}` — now EXCLUDEd);
-    // this refresh accompanies the D31 exclusion additions. Prior 107 counted
-    // the earlier surface (+2 matcluster 2026-07-06; +2 Track 1A bare
-    // for-element rows; the `&`/enumerate/comprehension rows stay EXCLUDEd).
-    assert_eq!(fixtures.len(), 122, "B1 gate set drifted from 122 fixtures");
+    // Guard the gate's shape: the B1 non-equip surface. +2 (2026-07-21, SH-CoW
+    // Face-A round): `cow_compound_getref_writethrough` + `cow_getref_writethrough_resource`
+    // both landed top-level and match (in-subset), refreshing 122→124. History:
+    // +15 net from the CoW-2G landings (2026-07-18) refreshed with the D31
+    // exclusion additions; prior 107 counted the earlier surface.
+    assert_eq!(fixtures.len(), 124, "B1 gate set drifted from 124 fixtures");
 }
