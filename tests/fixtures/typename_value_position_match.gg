@@ -1,0 +1,15 @@
+# NEG (stage-1b #2): a bare TYPE NAME as a match scrutinee is a check-time
+# reject (E_TypeInValuePosition). Before the reject this type-checked CLEAN and
+# SIGSEGV'd at runtime with no output — worse, the diagnostic chain for
+# `match direction:` (undefined name) suggested the type name, LEADING users
+# here (book-audit #1's projected give-up point). A type is not a value.
+enum Direction:
+    North()
+    South()
+
+void main():
+    match Direction:
+        case Direction.North():
+            print(1)
+        else:
+            print(2)
