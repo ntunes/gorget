@@ -31180,6 +31180,62 @@ done",
     );
 }
 
+/// Target-2 (Core #8 both-wrong silent lost write): a compound-assign (`OP=`)
+/// whose LHS resolves through a `.get(i).unwrap()` borrow-view chain MUST write
+/// through to the owner — like plain `=` through the identical chain, and like
+/// index-rooted `coll[i].field OP= v`, already do. Pre-fix the FieldAccess
+/// compound arm had no write-through fallback for the `try_resolve_field_place →
+/// None` case, so `f.blocks.get(bb).unwrap().term += 1` SILENTLY DROPPED the
+/// write on BOTH backends (printed the unchanged 20). Exercises a `&`-param root
+/// (write reaches the caller) AND a bare local root, with `+= -= *=` and a plain
+/// `=` control. Value-typed element (§9.6 "lower, don't reject"). Same output on
+/// C + LLVM (run_gg builds via Rust gg only — never the self-host). Self-host
+/// lane LAGS (SH `SCompoundAssign`/`SAssign` EFieldAccess resolves the `.get()`
+/// chain to a COPY, dropping both plain AND compound writes — TODO:262, the
+/// SH-CoW campaign); the fixture therefore lives in `known_gaps/` to stay OUT of
+/// the self-host runtime-diff corpus — an EXPLICIT cited lagging lane (Core #9),
+/// not a silent new parity WRONG. Promote to top-level when TODO:262 lands.
+#[test]
+fn cow_compound_getref_writethrough() {
+    run_gg(
+        "known_gaps/cow_compound_getref_writethrough.gg",
+        "\
+20
+21
+22
+66
+15
+13
+99
+done",
+    );
+}
+
+/// Target-2 sibling (Core #10 lower-or-reject): a compound-assign THROUGH a
+/// pointer, `*p OP= v`. Plain `*p = v` already lowered (`lower_assign`'s
+/// `Expr::Deref` arm); the compound path had NO arm and NO catch-all, so
+/// `*b += 5` on a `Box[int]` silently DROPPED the write on both backends
+/// (measured pre-fix: 10, 10, 99). `lower_compound_assign` now has a Deref arm
+/// (read pointee → op → store back). Also exercises `*b OP= v` through a
+/// `&`-borrowed Box param. Same output on C + LLVM. Self-host lane LAGS (SH
+/// `SCompoundAssign` `lower_fail`s EDeref — no `*p OP= v` arm yet); the fixture
+/// lives in `known_gaps/` (out of the self-host runtime-diff corpus), an EXPLICIT
+/// cited lagging lane (Core #9), filed with TODO:262. Promote when the SH
+/// compound-assign grows an EDeref arm.
+#[test]
+fn deref_compound_assign() {
+    run_gg(
+        "known_gaps/deref_compound_assign.gg",
+        "\
+10
+15
+30
+34
+99
+done",
+    );
+}
+
 /// CoW G1 memory-safety gate (round-33 output-review UAF): an index-projected
 /// field-ASSIGN (`v[0].name = x`) materializes the bare-param root, then a
 /// same-collection mutation in a while- AND a for-loop. The transient

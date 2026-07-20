@@ -1,0 +1,31 @@
+# Compound-assign THROUGH a pointer: `*p OP= v` (Box / &-ref). Plain `*p = v`
+# already lowered (lower_assign's Expr::Deref arm, Snag #26); the compound path
+# had NO arm and NO catch-all, so `*b += 5` silently DROPPED the write on both
+# backends (measured pre-fix: `10, 10, 99`). lower_compound_assign now has a
+# Deref arm that reads the pointee THROUGH the deref place, applies the op, and
+# stores back (lower-or-reject, Core #10). Same output on both C and LLVM.
+#
+# Core #9 lagging lane: the self-host `SCompoundAssign` lowerer handles only
+# EIdentifier/EFieldAccess/EIndex and `lower_fail`s everything else, so `*p += v`
+# (EDeref) is NOT yet lowered there (SH plain `*p = v` lowers; SH compound does
+# not — the same asymmetry the Rust arm just closed). Lives in `known_gaps/` to
+# stay OUT of the self-host runtime-diff corpus (an EXPLICIT cited lagging lane,
+# not a silent CC-FAIL); the SH `EDeref` compound arm is filed with TODO:262.
+# Promote to top-level when the SH compound-assign grows an EDeref arm. Wired
+# C+LLVM via `run_gg` (which never invokes the self-host).
+
+void bump(Box[int] &b, int by):
+    *b += by
+
+void main():
+    Box[int] b = Box(10)
+    print(*b)        # 10
+    *b += 5
+    print(*b)        # 15
+    *b *= 2
+    print(*b)        # 30
+    bump(&b, 4)      # *b += 4 through a &-borrowed Box
+    print(*b)        # 34
+    *b = 99          # plain-= through deref (control, unchanged behavior)
+    print(*b)        # 99
+    print("done")

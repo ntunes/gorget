@@ -1,0 +1,58 @@
+# Target-2 write-through: a compound-assign (`OP=`) whose LHS resolves through a
+# `.get(i).unwrap()` borrow-view chain MUST write through to the owner — exactly
+# like plain `=` already does, and like the index-rooted `coll[i].field OP= v`
+# already does. Pre-fix this SILENTLY DROPPED the write on BOTH backends (the
+# FieldAccess compound arm had no write-through fallback for the
+# `try_resolve_field_place → None` case): `f.blocks.get(bb).unwrap().term += 1`
+# printed the unchanged value. See lower_compound_assign's FieldAccess None-arm.
+#
+# Element type is a VALUE type (int) on purpose (§9.6 "lower, don't reject" for
+# value types; a drop-tainted element would REJECT at the materialize-on-write
+# position via E_MoveWithoutOperator, a different path).
+#
+# Exercises BOTH roots the scout found silently no-op:
+#   - a `&`-param root  (`bump`/`bumps` — write reaches the caller's collection)
+#   - a bare local root (`main`'s `blocks`)
+# and confirms plain `=` through the identical chain still writes through.
+#
+# Same output on both C and LLVM. Core #9 lagging lane: the self-host lowerer
+# still drops this write-through (BOTH plain AND compound through a `.get()`
+# chain — SH `SAssign`/`SCompoundAssign` EFieldAccess resolves the `.get()` chain
+# to a COPY, not a write-through Ptr). The SH-CoW campaign owns it (TODO:262), so
+# this fixture lives in `known_gaps/` to stay OUT of the self-host runtime-diff
+# corpus (which auto-scans top-level `tests/fixtures/*.gg` only) — an EXPLICIT
+# cited lagging lane, never a silent new parity WRONG. Promote to top-level when
+# TODO:262 lands. Wired C+LLVM via `run_gg` (which never invokes the self-host).
+
+struct Blk:
+    int term
+
+struct Func:
+    Vector[Blk] blocks
+
+void bump(Func &f, int bb):
+    f.blocks.get(bb).unwrap().term += 1
+
+void scale(Func &f, int bb, int by):
+    f.blocks.get(bb).unwrap().term *= by
+
+void main():
+    # --- &-param root: compound write-through reaches the caller ---
+    Func f = Func([Blk(20)])
+    print(f.blocks.get(0).unwrap().term)   # 20
+    bump(&f, 0)
+    print(f.blocks.get(0).unwrap().term)   # 21
+    bump(&f, 0)
+    print(f.blocks.get(0).unwrap().term)   # 22
+    scale(&f, 0, 3)
+    print(f.blocks.get(0).unwrap().term)   # 66
+
+    # --- bare local root: compound + plain through the same chain ---
+    Vector[Blk] blocks = [Blk(10)]
+    blocks.get(0).unwrap().term += 5
+    print(blocks.get(0).unwrap().term)     # 15
+    blocks.get(0).unwrap().term -= 2
+    print(blocks.get(0).unwrap().term)     # 13
+    blocks.get(0).unwrap().term = 99
+    print(blocks.get(0).unwrap().term)     # 99 (plain-= control, unchanged behavior)
+    print("done")
