@@ -16,6 +16,6 @@ equip Q:
 
 void main():
     Q q = Q([])
-    q.push(Ev.Named("aa"))              # snag #2: temp must MOVE at the call site, not clone
-    q.emit(Ev.Named("bbb"))             # control: temp moves
+    q.push(!Ev.Named("aa"))              # snag #2: temp must MOVE at the call site, not clone
+    q.emit(!Ev.Named("bbb"))             # control: temp moves
     print(q.sizes.len())

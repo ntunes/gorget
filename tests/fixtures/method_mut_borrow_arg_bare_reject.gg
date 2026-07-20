@@ -1,0 +1,20 @@
+# D31 (`&`-direction): a METHOD call into a `&` param must spell `&` at the call
+# site, exactly as for free functions. Before D31, `check_call_ownership` ran
+# only on the free-call arm, so this bare `c.add_all(v)` was silently accepted
+# while the identical free-fn contract (`add_all(v)`) rejected. This NEG fixture
+# pins the closed asymmetry: bare-into-`&` at a method site now
+# E_OwnershipMismatch. The accepting spelling (`c.add_all(&v)`) is the POS
+# fixture `method_mut_borrow_arg.gg`.
+struct Collector:
+    int total
+
+equip Collector:
+    void add_all(&self, Vector[int] &vals):
+        vals.push(100)
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(10)
+    Collector c = Collector(0)
+    c.add_all(v)
+    print(c.total)

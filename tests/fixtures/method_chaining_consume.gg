@@ -20,5 +20,5 @@ equip Builder:
 
 void main():
     Builder b = Builder(0, 0, "")
-    String result = b.with_width(800).with_height(600).with_title("Window").build()
+    String result = b.with_width(800).with_height(600).with_title(!"Window").build()
     print(result)

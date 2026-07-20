@@ -29,8 +29,8 @@ void main():
     Config c = default_config()
     c.describe()
 
-    Config c2 = default_config().with_width(1920).with_height(1080).with_title("game").with_fullscreen(true)
+    Config c2 = default_config().with_width(1920).with_height(1080).with_title(!"game").with_fullscreen(true)
     c2.describe()
 
-    Config c3 = default_config().with_title("editor")
+    Config c3 = default_config().with_title(!"editor")
     c3.describe()

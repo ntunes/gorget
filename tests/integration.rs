@@ -25663,8 +25663,20 @@ fn spawn_vector_await() {
 
 #[test]
 fn method_mut_borrow_arg() {
-    // MutableBorrow non-self param in equip method — callee can mutate the original.
+    // MutableBorrow non-self param in equip method — callee can mutate the
+    // original. D31 (`&`-direction): the call site now spells `&v` (a method
+    // call into a `&` param must mark `&`, exactly as a free-fn call).
     run_gg("method_mut_borrow_arg.gg", "60\n6");
+}
+
+#[test]
+fn method_mut_borrow_arg_bare_reject() {
+    // D31 (`&`-direction): the CLOSED free-fn/method asymmetry. A bare method
+    // arg into a `&` param — `c.add_all(v)` — now rejects at check time, just
+    // as the free-fn form `add_all(v)` always did. Before D31,
+    // `check_call_ownership` ran only on the free-call arm, so this was silently
+    // accepted at method sites. POS counterpart: `method_mut_borrow_arg`.
+    check_gg_fails("method_mut_borrow_arg_bare_reject.gg", "ownership mismatch");
 }
 
 // ── Concurrency stress tests ────────────────────────────────────────────
