@@ -1007,6 +1007,12 @@ pub(super) fn lower_call(
                             ctx.drops.mark_moved(place.local);
                         }
                     }
+                    // SCOUT-PROTO #1b (Defect B): tag the fresh Shared handle
+                    // FreshOwned at birth (Core #3) so it MOVES into its
+                    // consumer rather than tripping the "clone-if-Untracked"
+                    // consuming-position branch. Sibling of the StructLiteral
+                    // Shared ctor in exprs/mod.rs (Core #4, one fix all sites).
+                    ctx.set_owned_fresh(builder, dst);
                     return FunctionBuilder::copy(dst);
                 }
             }

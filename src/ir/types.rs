@@ -251,6 +251,27 @@ pub struct TypeMetadata {
     pub is_box: bool,
 }
 
+impl TypeMetadata {
+    /// Refcount-handle family {Shared, Weak, Channel}: set the by-VALUE incref
+    /// `clone_fn = {mangled}__clone`. This is the SINGLE writer for the
+    /// refcount-clone axis (Layering rule 3: one source of truth, resolve once
+    /// / write through). EVERY def-mint path routes here — the annotated-type
+    /// path (`map_ast_type_mut`'s Shared/Weak/Channel arm) and the ctor-path
+    /// def-mint (`ensure_shared/weak/channel_type_def`) — so a handle minted
+    /// either way carries byte-identical metadata and
+    /// `TypeRegistry::is_refcount_clone_type` returns the same answer
+    /// regardless of which path minted it.
+    ///
+    /// Guards are deliberately NOT routed here: they keep `Resource`
+    /// copy_semantics (which excludes them from `is_refcount_clone_type`) and
+    /// spell their own `{mangled}__clone` for the consume-site validator's
+    /// producer recognition, a separate axis. `refcount_clone_arm_symmetry`
+    /// (tests/lints.rs) locks every mint path to this writer.
+    pub fn set_refcount_clone_fn(&mut self, mangled: &str) {
+        self.clone_fn = Some(format!("{mangled}__clone"));
+    }
+}
+
 impl Default for TypeMetadata {
     fn default() -> Self {
         Self {
@@ -697,6 +718,40 @@ impl TypeRegistry {
         } else {
             false
         }
+    }
+
+    /// Is this a REFCOUNT handle — a thin-pointer wrapper (Shared / Weak /
+    /// Channel) whose `clone` is a by-VALUE incref rather than a deep copy?
+    ///
+    /// This is the ONE canonical accessor for refcount-family membership at
+    /// **consuming positions** (ctor field-init, container literal, push/put/
+    /// set/insert/send, return, capture). Every consuming-position gate that
+    /// today keys off `is_resource_type` must ALSO admit these handles — they
+    /// are NOT `is_resource_type` (thin-pointer, `copy_semantics == Trivial`)
+    /// yet still need clone-if-live / move-if-dead so a live source is
+    /// incref'd (`{Mangled}__clone`, passed BY VALUE) instead of shallow-
+    /// aliased (the double-free / under-incref class).
+    ///
+    /// Discriminated by typed metadata, never a name: `copy_semantics ==
+    /// Trivial` (deep-clone resources are `Resource`) AND a registered
+    /// `clone_fn`. That is exactly {Shared, Weak, Channel}: the guards keep
+    /// `Resource` copy_semantics (excluded), and Mutex/RWLock keep
+    /// `clone_fn = None` (single-owner, excluded). The clone_fn on all mint
+    /// paths is set through the single writer `TypeMetadata::set_refcount_clone_fn`.
+    ///
+    /// SIBLING to unify during the Track-2 sigil redesign: `needs_param_drop`
+    /// carries a THIRD clause (`drop_strategy != None`) that excludes Channel
+    /// (`DropStrategy::None`); the two predicates are NOT interchangeable and
+    /// are deliberately kept separate until that redesign.
+    pub fn is_refcount_clone_type(&self, type_id: TypeId) -> bool {
+        if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
+        if let Some(GirType::Named(name)) = self.get(type_id) {
+            if let Some(td) = self.get_type_def(name) {
+                return td.metadata.copy_semantics == CopySemantics::Trivial
+                    && td.metadata.clone_fn.is_some();
+            }
+        }
+        false
     }
 
     /// Check if a type is a direct collection type (Vector, Dict, Set, etc.).

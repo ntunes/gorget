@@ -1,0 +1,8 @@
+# Defect A+B: a LIVE Shared source in an array literal must be CLONED (by-value
+# incref), not shallow-copied. ggdef subset: OUT (refcount handle).
+void main():
+    Shared[int] s = Shared[int](42)
+    Vector[Shared[int]] v = [s]
+    print(v.len())
+    print(s.strong_count())
+    print("done")

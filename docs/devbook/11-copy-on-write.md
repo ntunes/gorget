@@ -311,6 +311,40 @@ doc is gone (it was unified 2026-05-05 per the comment at `assigns.rs:623`).
 on later mutation — the internals doc's "point 1 (assignment)" is the CoW
 default-borrow path now, not a clone site.
 
+### Refcount handles are clone-eligible by-value at consuming positions
+
+The refcount family — `Shared[T]`, `Weak[T]`, `Channel[T]` — is a thin-pointer
+handle with `copy_semantics == Trivial`, so `is_resource_type` returns **false**
+for it (there is no owned buffer to deep-copy). But at a consuming position a
+*live* refcount source still needs clone-if-live / move-if-dead, because its
+"clone" is a by-VALUE **incref** (`{Mangled}__clone` → `gorget_shared_clone` /
+`gorget_weak_clone` / `gorget_channel_retain`), not a deep copy. Passing a live
+handle to a ctor field-init / container literal / push without the incref
+shallow-aliases the control block → the scope-exit drops decrement it below its
+true reference count → double-free / use-after-free (Shared/Weak) or a leak
+(Channel, which is `DropStrategy::None`).
+
+So every consuming-position gate that keys off `is_resource_type` **also** admits
+the refcount family through the single accessor
+`TypeRegistry::is_refcount_clone_type` (`copy_semantics == Trivial` **and** a
+registered `clone_fn` — exactly {Shared, Weak, Channel}; the guards are excluded
+by their `Resource` copy_semantics, Mutex/RWLock by `clone_fn == None`). The one
+difference from a deep resource is the ABI: a refcount clone is emitted **by
+value** (`clone(handle)`), never by taking the handle's address
+(`clone(&handle)`) the way `gorget_array_clone` and friends are. The `clone_fn`
+metadata is written on every def-mint path through the single setter
+`TypeMetadata::set_refcount_clone_fn`, and `refcount_clone_arm_symmetry`
+(`tests/lints.rs`) locks the family membership across the accessor, the setter,
+and the emit-boundary `refcount_field_retain_fn`.
+
+`needs_param_drop` is the sibling predicate on the PARAM side, but it is **not**
+interchangeable: it carries a third clause (`drop_strategy != None`) that excludes
+Channel (`DropStrategy::None`). The param / return / capture boundary
+(`ensure_owned_at_boundary`) is a **separate, sigil-unaware** axis that a live
+refcount source still traverses without an incref — a known gap tracked as the
+Track-2 refcount-param model (it cannot yet tell a bare borrow `Shared s` from an
+owned `Shared !s`).
+
 ## For-loop elements: borrow the element, don't clone it
 
 `for x in vec:` is a collection read, so by the CoW default the loop variable

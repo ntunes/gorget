@@ -6110,4 +6110,49 @@ fn refcount_clone_arm_symmetry() {
         "self-host `field_clone_c` no longer guards on `== \"gorget_shared_drop\"` \
          — the Shared field-clone arm's detection is gone."
     );
+
+    // ---- One-writer / one-accessor lock for the CONSUMING-POSITION axis ----
+    // Family membership {Shared, Weak, Channel} at consuming positions is read
+    // through the single accessor `TypeRegistry::is_refcount_clone_type` and
+    // written through the single setter `TypeMetadata::set_refcount_clone_fn`.
+    // Both live in src/ir/types.rs. If either disappears the axis has drifted.
+    let ir_types = fs::read_to_string("src/ir/types.rs").expect("ir/types.rs readable");
+    assert!(
+        ir_types.contains("fn set_refcount_clone_fn"),
+        "the SINGLE refcount-clone writer `TypeMetadata::set_refcount_clone_fn` is gone. \
+         Every def-mint path must route the {{Shared,Weak,Channel}} clone_fn through it \
+         (Layering rule 3) so a handle minted via the ctor path and via the annotated-type \
+         path carry byte-identical metadata."
+    );
+    assert!(
+        ir_types.contains("fn is_refcount_clone_type"),
+        "the SINGLE consuming-position accessor `TypeRegistry::is_refcount_clone_type` is gone. \
+         The consuming-position gates (ensure_owned_at_consuming_arg, clone_multi_use_resource_args, \
+         move_zero_consumed_args) read family membership through it; without it they revert to \
+         shallow-aliasing refcount handles -> the double-free / under-incref class."
+    );
+    // EVERY def-mint path routes its clone_fn through the single writer, so a
+    // mint path can't silently drift a family member out of the accessor.
+    let type_reg = fs::read_to_string("src/ir/lowering/exprs/type_reg.rs")
+        .expect("type_reg.rs readable");
+    for f in ["ensure_shared_type_def", "ensure_weak_type_def", "ensure_channel_type_def"] {
+        let body = rust_fn_body(&type_reg, f);
+        assert!(!body.is_empty(), "ctor-path def-mint `{f}` not found in type_reg.rs");
+        assert!(
+            body.contains("set_refcount_clone_fn"),
+            "refcount ctor-path def-mint `{f}` no longer routes its clone_fn through the \
+             single writer `set_refcount_clone_fn`. A refcount handle minted via the ctor \
+             path would then carry different clone_fn metadata than the annotated-type path \
+             (map_ast_type_mut) -> is_refcount_clone_type answers inconsistently -> the \
+             consuming-position auto-clone silently reverts to shallow-alias (UAF)."
+        );
+    }
+    let low_types = fs::read_to_string("src/ir/lowering/types.rs")
+        .expect("lowering/types.rs readable");
+    assert!(
+        low_types.contains("set_refcount_clone_fn"),
+        "the annotated-type def-mint path (map_ast_type_mut, src/ir/lowering/types.rs) no longer \
+         routes the Shared/Weak/Channel clone_fn through `set_refcount_clone_fn` -> mint-path \
+         drift vs the ctor-path ensure_*_type_def writers."
+    );
 }

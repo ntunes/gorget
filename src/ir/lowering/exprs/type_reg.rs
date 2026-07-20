@@ -148,9 +148,17 @@ pub fn ensure_shared_type_def(ctx: &mut LoweringContext, shared_type_name: &str,
     use crate::ir::types::{CopySemantics, DropStrategy};
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(shared_type_name).is_some() { return; }
-    ctx.type_registry.add_type_def(
-        make_wrapper_type_def(shared_type_name, inner_type, CopySemantics::Trivial, DropStrategy::Trivial(format!("{shared_type_name}__drop")))
-    );
+    // Shared is a REFCOUNTED handle — its "clone" is a by-VALUE incref
+    // (`{name}__clone` → gorget_shared_clone), not a deep copy. Registering the
+    // clone_fn here lets `clone_fn_for_ptr` return the retain so consuming
+    // positions (ctor field-init, container literal, push, return, capture)
+    // auto-incref a LIVE source instead of shallow-aliasing it (the double-free
+    // / under-incref class). Routed through the SINGLE writer so this ctor-path
+    // def-mint stays byte-identical to the annotated-type path (map_ast_type_mut).
+    // Single-owner wrappers (Mutex/RWLock/Guard) keep clone_fn=None.
+    let mut td = make_wrapper_type_def(shared_type_name, inner_type, CopySemantics::Trivial, DropStrategy::Trivial(format!("{shared_type_name}__drop")));
+    td.metadata.set_refcount_clone_fn(shared_type_name);
+    ctx.type_registry.add_type_def(td);
 }
 
 /// Ensure a Weak[T] type has a TypeDef in the registry (Copy pointer, drop decrements weak count).
@@ -158,9 +166,14 @@ pub fn ensure_weak_type_def(ctx: &mut LoweringContext, weak_type_name: &str, inn
     use crate::ir::types::{CopySemantics, DropStrategy};
     use super::super::types::make_wrapper_type_def;
     if ctx.type_registry.get_type_def(weak_type_name).is_some() { return; }
-    ctx.type_registry.add_type_def(
-        make_wrapper_type_def(weak_type_name, inner_type, CopySemantics::Trivial, DropStrategy::Trivial(format!("{weak_type_name}__drop")))
-    );
+    // Weak is a REFCOUNT handle — its "clone" (`{name}__clone` →
+    // gorget_weak_clone) is a by-VALUE weak-count incref. Routed through the
+    // SINGLE writer so this ctor-path def-mint carries the same clone_fn the
+    // annotated-type path (map_ast_type_mut) sets, and the consuming-position
+    // gates auto-incref a LIVE Weak source instead of shallow-aliasing it.
+    let mut td = make_wrapper_type_def(weak_type_name, inner_type, CopySemantics::Trivial, DropStrategy::Trivial(format!("{weak_type_name}__drop")));
+    td.metadata.set_refcount_clone_fn(weak_type_name);
+    ctx.type_registry.add_type_def(td);
 }
 
 /// Ensure a Mutex[T] type has a TypeDef in the registry (Copy pointer, single-owner
@@ -223,9 +236,16 @@ pub fn ensure_channel_type_def(ctx: &mut LoweringContext, channel_type_name: &st
     use crate::ir::types::{CopySemantics, DropStrategy};
     use super::super::types::make_opaque_type_def;
     if ctx.type_registry.get_type_def(channel_type_name).is_some() { return; }
-    ctx.type_registry.add_type_def(
-        make_opaque_type_def(channel_type_name, CopySemantics::Trivial, DropStrategy::None)
-    );
+    // Channel is a REFCOUNT handle — its "clone" (`{name}__clone` →
+    // gorget_channel_retain) is a by-VALUE refcount incref. Routed through the
+    // SINGLE writer so this ctor-path def-mint matches the annotated-type path
+    // (map_ast_type_mut) and consuming positions auto-retain a LIVE Channel
+    // source. NOTE Channel is `DropStrategy::None`, so `needs_param_drop` stays
+    // false for it (that predicate's third clause excludes it) — only the
+    // consuming-position axis (`is_refcount_clone_type`) admits Channel.
+    let mut td = make_opaque_type_def(channel_type_name, CopySemantics::Trivial, DropStrategy::None);
+    td.metadata.set_refcount_clone_fn(channel_type_name);
+    ctx.type_registry.add_type_def(td);
 }
 
 /// Ensure TaskGroup has a TypeDef in the registry (Move pointer, drop waits for all children).
