@@ -24017,18 +24017,20 @@ fn rust_named_recv_user_mutator_caller_untouched() {
     );
 }
 
-/// RUST reference-miscompile regression (Core #8, R39-T1): a field-store whose
-/// object is an INDEX into a Vector of a VALUE-type element (a struct of scalars)
-/// must WRITE THROUGH to the collection's heap buffer. Before the fix,
-/// `v[0].x = 99` — and the `static`, compound (`PTS[1].x += 100`), nested
-/// (`ns[0].inner.val = 99`), and value-field-method-receiver (`hs[0].c.bump()`)
-/// variants — landed on a STACK COPY of the element and were silently dropped, so
-/// Rust gg printed the STALE value on BOTH the C and LLVM backends. This was a
-/// Core #8 reference miscompile: a RESOURCE-typed element field already wrote
-/// through (the old `lower_index_access` returned a `Ptr` handle only for
-/// resource elements), which pinned the value-vs-resource asymmetry as the root.
-/// Fixed by the new `Expr::Index` arm in `try_resolve_field_place` (forces the
-/// element `Ptr(T)` for value elements too) + the hoisted round-33 CoW untrack.
+/// RUST reference-miscompile regression (Core #8, R39-T1 + solid-ground R1): a
+/// field-store / mut-method whose object is an INDEX into a Vector of a VALUE-type
+/// element (a struct of scalars) must WRITE THROUGH to the collection's heap
+/// buffer. Before the fix, `v[0].x = 99` — and the `static`, compound
+/// (`PTS[1].x += 100`), nested (`ns[0].inner.val = 99`), value-field-method-receiver
+/// (`hs[0].c.bump()`), and bare Index method-receiver (`cs[0].bump()`) variants —
+/// landed on a STACK COPY of the element and were silently dropped, so Rust gg
+/// printed the STALE value on BOTH the C and LLVM backends. This was a Core #8
+/// reference miscompile: a RESOURCE-typed element field already wrote through
+/// (the old `lower_index_access` returned a `Ptr` handle only for resource
+/// elements), which pinned the value-vs-resource asymmetry as the root. Fixed by
+/// the `Expr::Index` arm in `try_resolve_field_place` (field path) and the shared
+/// `try_resolve_index_element_ptr` producer used by bare Index mut method receivers
+/// (forces `Ptr(T)` for value elements too) + the hoisted round-33 CoW untrack.
 ///
 /// Corpus split (CoW Track 1B): the SINGLE-LEVEL shapes — plain + compound
 /// value-element field stores on a LOCAL and a STATIC Vector (`v[0].x = 88`,
@@ -24036,13 +24038,13 @@ fn rust_named_recv_user_mutator_caller_untouched() {
 /// self-host too (the write-only `lower_field_place_base` producer forces the
 /// element `Ptr(T)` for the field-store base) and promoted to the corpus fixture
 /// `cow_value_index_field_writethrough.gg`. This inline test is KEPT because it
-/// uniquely guards the RESIDUAL shapes that route through a chained EFieldAccess
-/// place base — NOT the EIndex arm — and are therefore still self-host-broken
-/// (nested-place / Track 2F's class): the NESTED store `ns[0].inner.val = 99`
-/// and the value-field-METHOD-receiver `hs[0].c.bump()`. Promoting the full body
-/// would count a permanent WRONG in `self_host_runtime_diff` for those two, so
-/// they stay Rust-only here (asserting BOTH backends — the pre-fix miscompile
-/// reproduced on both) until Track 2F lands the nested-place mirror.
+/// uniquely guards residual / R1 shapes that are still self-host-broken (nested-
+/// place / Track 2F's class + bare Index method receiver until the SH twin lands):
+/// the NESTED store `ns[0].inner.val = 99`, the value-field-METHOD-receiver
+/// `hs[0].c.bump()`, and the bare Index METHOD-receiver `cs[i].bump()` (const and
+/// non-const index). Promoting the full body would count a permanent WRONG in
+/// `self_host_runtime_diff`, so they stay Rust-only here (asserting BOTH backends
+/// — the pre-fix miscompile reproduced on both).
 #[test]
 fn rust_value_index_element_field_writethrough() {
     let gg_exe: PathBuf = gg_binary().to_path_buf();
@@ -24106,12 +24108,24 @@ fn rust_value_index_element_field_writethrough() {
             "    hs[0].c.bump()\n",
             "    print(hs[0].c.n)\n",        // 2  (write-through)
             "    print(hs[1].c.n)\n",        // 5  (untouched)
+            // R1: bare Index mut method receiver — value-type element, NOT a
+            // field-of-index. Pre-fix lowered via lower_index_access → value
+            // COPY, so bump wrote a throwaway and printed 0.
+            "    Vector[Counter] cs = [Counter(0), Counter(10)]\n",
+            "    cs[0].bump()\n",
+            "    cs[0].bump()\n",
+            "    print(cs[0].n)\n",          // 2  (write-through)
+            "    print(cs[1].n)\n",          // 10 (untouched sibling)
+            // Non-const index — same write-through class (const-fold cannot elide).
+            "    int i = 0\n",
+            "    cs[i].bump()\n",
+            "    print(cs[0].n)\n",          // 3
             "    print(\"done\")\n",
         ),
     )
     .expect("failed to write value_index_field_writethrough.gg");
 
-    let expected = "99\n3\n88\n30\n103\n45\n99\n2\n2\n5\ndone";
+    let expected = "99\n3\n88\n30\n103\n45\n99\n2\n2\n5\n2\n10\n3\ndone";
 
     // Both backends must agree AND be correct — the pre-fix miscompile
     // reproduced identically on C and LLVM (this fix is in shared GIR lowering,
@@ -24133,9 +24147,10 @@ fn rust_value_index_element_field_writethrough() {
         assert_eq!(
             String::from_utf8_lossy(&run.stdout).trim_end(),
             expected,
-            "value-type Vector index-element field-store (plain / static / compound / nested / \
-             value-field-method-receiver) must WRITE THROUGH on backend {label} (Core #8 reference \
-             miscompile: pre-fix Rust printed the stale value on BOTH backends).",
+            "value-type Vector index-element field-store / bare Index mut method \
+             (plain / static / compound / nested / value-field-method-receiver / \
+             bare-index-method / non-const-index) must WRITE THROUGH on backend {label} \
+             (Core #8 reference miscompile: pre-fix Rust printed the stale value on BOTH backends).",
         );
     }
     let _ = std::fs::remove_dir_all(&tmp_root);

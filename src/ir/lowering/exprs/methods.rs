@@ -10,7 +10,8 @@ use super::super::context::{LoweringContext, CollectionId, ParamABI};
 use super::{lower_expr, lower_call_arg, maybe_auto_propagate, infer_operand_type_full, register_tuple_type,
             is_resource_type_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
-            index_expr_to_mangle_fragment, try_resolve_field_place, extract_field_path_string,
+            index_expr_to_mangle_fragment, try_resolve_field_place, try_resolve_index_element_ptr,
+            extract_field_path_string,
             resolve_projection_root_local, expr_projection_contains_index};
 
 fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
@@ -2051,6 +2052,32 @@ pub(super) fn lower_method_call(
             None
         };
 
+        // Sibling of `field_place_info` (Core #4): bare Index receiver with a
+        // mutating method (`v[i].bump()`). Computed AFTER the CoW G1 rebind /
+        // re-lower blocks so the index_load re-resolves against any rebound
+        // root. `lower_index_access` returns a value COPY for VALUE-type
+        // elements — borrowing that throwaway and calling a mut method would
+        // silently drop the write (the field-of-index shape `hs[0].c.bump()`
+        // already wrote through via `try_resolve_field_place`). Shared producer
+        // `try_resolve_index_element_ptr` forces `Ptr(elem)` for value AND
+        // resource elements. Read-only `v[i].get_n()` stays on the value-read
+        // path (clone elision / 1B lesson). Arm `did_g1_materialize` so the
+        // end-of-stmt untrack clears any transient element handle the producer
+        // minted (multilevel base; single-level bare-local is a no-op untrack).
+        let index_elem_place_info = if field_place_info.is_none() && needs_mut {
+            if let Expr::Index { object: coll, index } = &receiver.node {
+                let info = try_resolve_index_element_ptr(ctx, builder, coll, index);
+                if info.is_some() {
+                    did_g1_materialize = true;
+                }
+                info
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // If receiver is a field access, borrow the field in-place instead of
         // borrowing a copy (which would mutate the copy, not the original).
         // Exception: if the field's type is already `Ptr(T)` / `MutPtr(T)` —
@@ -2059,13 +2086,23 @@ pub(super) fn lower_method_call(
         // produce `**T`, which the method's `*T self` ABI rejects. Fall
         // through to the `recv` (Copy/Move) path which already handles the
         // existing `is_ptr` check correctly.
+        //
+        // Bare Index mut receiver (`v[i].bump()`): borrow `*elem_ptr` in place
+        // so the method writes through into the collection buffer.
         let field_is_borrow_ptr = field_place_info.as_ref()
             .map(|(_, fty)| matches!(
                 ctx.type_registry.get(*fty),
                 Some(GirType::Ptr(_) | GirType::MutPtr(_))
             ))
             .unwrap_or(false);
-        if let Some((field_place, field_type_id)) = field_place_info.clone()
+        if let Some((elem_ptr_place, elem_type_id)) = index_elem_place_info {
+            let mut elem_place = elem_ptr_place;
+            elem_place.projections.push(Projection::Deref);
+            let pt = ctx.register_mut_ptr_type(elem_type_id);
+            let pl = builder.add_local(pt, None);
+            builder.emit_borrow_mut(pl, elem_place);
+            call_args.push(FunctionBuilder::copy(pl));
+        } else if let Some((field_place, field_type_id)) = field_place_info.clone()
             .filter(|_| !field_is_borrow_ptr)
         {
             if needs_mut {
