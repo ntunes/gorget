@@ -61,6 +61,7 @@ enum DiagKind:
     DkValueOutOfRange      # integer literal out of the target type's range (E_ValueOutOfRange)
     DkStringIndexAssign    # `s[i] = x` on a read-only string view (E_StringIndexAssign)
     DkUnsupportedOperator  # op not defined for operand type (E_UnsupportedOperator) — non-Add on String/Money, etc.
+    DkInvalidAssignTarget  # non-lvalue assign/compound target (E_InvalidAssignTarget) — `foo() = 1`, `5 += 1`
     # Split out of the former coarse DkControlFlow — each 1:1 with its registry code:
     DkBreakOutsideLoop           # `break` outside a loop (E_BreakOutsideLoop)
     DkContinueOutsideLoop        # `continue` outside a loop (E_ContinueOutsideLoop)
@@ -148,6 +149,8 @@ String diag_kind_str(DiagKind kind):
             return "string-index-assign"
         case DkUnsupportedOperator():
             return "unsupported-operator"
+        case DkInvalidAssignTarget():
+            return "invalid-assign-target"
         case DkBreakOutsideLoop():
             return "break-outside-loop"
         case DkContinueOutsideLoop():
@@ -234,6 +237,8 @@ String diag_kind_code(DiagKind kind):
             return "E_StringIndexAssign"
         case DkUnsupportedOperator():
             return "E_UnsupportedOperator"
+        case DkInvalidAssignTarget():
+            return "E_InvalidAssignTarget"
         case DkBreakOutsideLoop():
             return "E_BreakOutsideLoop"
         case DkContinueOutsideLoop():

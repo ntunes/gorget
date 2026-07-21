@@ -36,7 +36,7 @@ from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from std.conv import int_to_str
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -3826,6 +3826,31 @@ void check_operator_supported(int ty, String op, bool compound, Span span, Scope
         type_name = "<error>"
     ctx.diagnostics.push(Diagnostic.error(span, DkUnsupportedOperator(), unsupported_operator_message(op, type_name)))
 
+# ── Assign-target lvalue gate (E_InvalidAssignTarget) ───────
+# Mirrors Rust's check_assign_target_lvalue (typecheck.rs:5472–5483), called
+# from Stmt::Assign / Stmt::CompoundAssign (typecheck.rs:4342 / 4362). Allowlist
+# is exactly the place forms the lowerer dispatches on: variable, field, index,
+# or dereference. SH has no ETupleFieldAccess — digit tuple fields are
+# EFieldAccess (Face-D normalize on write), so they share that arm. Anything
+# else (`foo() = 1`, `5 += 1`, `(a + b) = x`) must be REJECTED at check time,
+# not silently dropped (plain `=`) or ICE'd (compound `OP=`) in lowering.
+bool is_assign_target_lvalue(SpannedExpr target):
+    match target.expr:
+        case EIdentifier(_):
+            return true
+        case EFieldAccess(_, _):
+            return true
+        case EIndex(_, _):
+            return true
+        case EDeref(_):
+            return true
+        else:
+            return false
+
+void check_assign_target_lvalue(SpannedExpr target, ResolveContext &ctx):
+    if not is_assign_target_lvalue(target):
+        ctx.diagnostics.push(Diagnostic.error(target.span, DkInvalidAssignTarget(), "invalid assignment target: the left side is not an assignable place — assign to a variable, field, tuple field, index (`v[i]`), or dereference (`*p`)"))
+
 # ── String index-assign reject (StringIndexAssign) ──────────
 # Mirrors Rust's check_string_index_assign in src/semantic/typecheck.rs:4174
 # (kind SemanticErrorKind::StringIndexAssign, message at errors.rs:773),
@@ -4005,6 +4030,10 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
 
         case SAssign(target, value):
+            # E_InvalidAssignTarget: non-lvalue targets (`foo() = 1`) reject at
+            # check time (Rust typecheck.rs:4342), matching lower_assign's place
+            # forms. Continues into string-index / closure walk like Rust.
+            check_assign_target_lvalue(target, &ctx)
             # StringIndexAssign: reject `s[i] = x` when `s` is a String, matching
             # Rust gg (typecheck.rs:3324). The receiver is resolved (not name-
             # matched) so Vector/Dict/array index-assigns stay accepted.
@@ -4012,6 +4041,9 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             walk_expr_closures(value, scope_id, &scopes, &types, &ctx)
 
         case SCompoundAssign(target, op, value):
+            # E_InvalidAssignTarget sibling: `5 += 1` must reject at check
+            # (Rust typecheck.rs:4362), not ICE in lower_compound_assign.
+            check_assign_target_lvalue(target, &ctx)
             # StringIndexAssign sibling: reject `s[i] += x` when `s` is a String,
             # matching Rust gg (typecheck.rs:3343). Before this, SCompoundAssign
             # fell into the `else: pass` arm and the String write-back compiled

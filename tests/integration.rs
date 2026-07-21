@@ -21807,6 +21807,82 @@ fn sh_nonadd_operator_reject() {
     );
 }
 
+/// SELF-HOST parity (Core #9): SH typechecker rejects a non-lvalue plain assign
+/// target (`foo() = 1`) with `E_InvalidAssignTarget`, matching Rust gg
+/// (`invalid_assign_target_call_error`). Pins `is_assign_target_lvalue` +
+/// `check_assign_target_lvalue` on the SAssign arm (typecheck.gg) +
+/// `DkInvalidAssignTarget` (diagnostic.gg).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_invalid_assign_target_call_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/invalid_assign_target_call_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_invalid_assign_target_call_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "self-host `gg check` on `foo() = 1` SHOULD exit nonzero \
+         (E_InvalidAssignTarget — intended, matching Rust gg).\n\
+         exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_InvalidAssignTarget") || stderr.contains("not an assignable place"),
+        "self-host reject must surface E_InvalidAssignTarget (or equivalent).\n\
+         stderr:\n{stderr}",
+    );
+}
+
+/// SELF-HOST parity (Core #9): SH typechecker rejects a non-lvalue compound
+/// assign target (`5 += 1`) with `E_InvalidAssignTarget`, matching Rust gg
+/// (`invalid_compound_assign_target_error`). Same gate as the plain-assign
+/// sibling; pins the SCompoundAssign call site so the lowerer catch-all stays
+/// unreachable for accepted programs.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_invalid_compound_assign_target_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/invalid_compound_assign_target_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_invalid_compound_assign_target_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "self-host `gg check` on `5 += 1` SHOULD exit nonzero \
+         (E_InvalidAssignTarget — intended, matching Rust gg).\n\
+         exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_InvalidAssignTarget") || stderr.contains("not an assignable place"),
+        "self-host reject must surface E_InvalidAssignTarget (or equivalent).\n\
+         stderr:\n{stderr}",
+    );
+}
+
 // Planner round 3, the 2D close (SH lane): the method-call-ROOTED sibling of
 // self_host_driver_rejects_string_index_assign. The self-host must ALSO reject
 // `base.slice(0, 3)[0] = "H"` (E_StringIndexAssign), matching Rust gg
