@@ -3954,7 +3954,16 @@ pub(super) fn infer_type_name_from_operand_full(
             Constant::Bool(_) => return Some("bool".to_string()),
             Constant::I64(_) => return Some("int64_t".to_string()),
             Constant::F64(_) => return Some("double".to_string()),
-            Constant::GlobalRef(name) => return ctx.global_type_names.get(name).cloned(),
+            // Defense (snag #56): normalize user/legacy String type names so
+            // method mangle hits `GorgetString__*` in the runtime map. Primary
+            // fix is registering static StringType as "GorgetString" at the
+            // write site in mod.rs; this catches any residual "str"/"String".
+            Constant::GlobalRef(name) => {
+                return ctx.global_type_names.get(name).map(|tn| match tn.as_str() {
+                    "str" | "String" => "GorgetString".to_string(),
+                    _ => tn.clone(),
+                });
+            }
             _ => return None,
         },
     };

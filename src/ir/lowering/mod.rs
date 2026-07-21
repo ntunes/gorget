@@ -1319,7 +1319,10 @@ pub fn lower_module(
                     ast::PrimitiveType::Int | ast::PrimitiveType::Int64 => "int",
                     ast::PrimitiveType::Float | ast::PrimitiveType::Float64 => "float",
                     ast::PrimitiveType::Bool => "bool",
-                    ast::PrimitiveType::StringType => "str",
+                    // Match literal receivers (`Constant::Str` → "GorgetString")
+                    // so method dispatch mangles to `GorgetString__contains` (runtime
+                    // map), not the missing `str__contains` (snag #56).
+                    ast::PrimitiveType::StringType => "GorgetString",
                     ast::PrimitiveType::Int8 => "i8",
                     ast::PrimitiveType::Int16 => "i16",
                     ast::PrimitiveType::Int32 => "i32",

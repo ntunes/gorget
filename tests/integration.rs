@@ -4209,11 +4209,10 @@ fn snag55_dict_get_or_in_callee() {
 }
 
 #[test]
-#[ignore = "gorget-sheets snag #56: `.contains()` on module-level `String` \
-constant CC-FAILs (`str__contains` arg types). Un-ignore when module-level \
-String receivers lower like literals."]
 fn snag56_module_string_contains() {
-    run_gg("known_gaps/snag56_module_string_contains.gg", "true\ntrue");
+    // Snag #56: module-level String statics register as "GorgetString" so
+    // `.contains` mangles to the runtime map (same as string literals).
+    run_gg("snag56_module_string_contains.gg", "true\ntrue");
 }
 
 #[test]
