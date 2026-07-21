@@ -24497,10 +24497,10 @@ fn self_host_runtime_diff() {
     // Reseed: rm tests/fixtures/self_host_lowerer/driver{,.c}; GG_RUNTIME_DIFF=1
     // GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release
     // self_host_runtime_diff -- --nocapture (default GG_TEST_TIMEOUT_SECS).
-    // Reseeded 2026-07-21 (SH 2T round close, force-rebuild): ADJ-MATCH 368 (of
-    // MATCH 1213 = ADJ 368 + UNADJ 835 + BOTH-WRONG 10). Prior floor 365 (three-
-    // track `.get()`-Ref close). Floor = measured count (no ADJ jitter margin).
-    const GGDEF_ADJUDICATED_FLOOR: usize = 368;
+    // Reseeded 2026-07-21 (lag-close 10-track, force-rebuild): ADJ-MATCH 371 (of
+    // MATCH 1223 = ADJ 371 + UNADJ 842 + BOTH-WRONG 10). Prior floor 368 (SH 2T
+    // close). Floor = measured count (no ADJ jitter margin).
+    const GGDEF_ADJUDICATED_FLOOR: usize = 371;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -24632,10 +24632,11 @@ fn self_host_runtime_diff() {
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter. Floors ratchet — never lower.
     //
-    // Reseeded 2026-07-21 (SH 2T round close): force-rebuild run reported
-    // MATCH 1213 / 1287 = 94.3% (WRONG 14, CC-FAIL 51, CRASH 8, DRIVER-FAIL 1;
-    // ADJ 368 / UNADJ 835 / BOTH-WRONG 10) in ~117s. Floor = 1213 − 5 jitter = 1208.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1208;
+    // Reseeded 2026-07-21 (lag-close 10-track): force-rebuild run reported
+    // MATCH 1223 / 1299 = 94.1% (WRONG 13, CC-FAIL 53, CRASH 9, DRIVER-FAIL 1;
+    // ADJ 371 / UNADJ 842 / BOTH-WRONG 10) in ~119s. Floor = 1223 − 5 jitter = 1218.
+    // Denom grew 1287→1299 (new Wave fixtures in corpus); MATCH +10 vs prior 1213.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1218;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

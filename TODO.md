@@ -2,11 +2,15 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🟢 ROUND OPEN 2026-07-21 — lag-close 10-track.** Waves 1+2 **LANDED** on tip `7537823f`. Combined W2 gates: lib 1125/0 · targeted 21/0. **NEXT = round-close:** full C (`GG_TEST_TIMEOUT_SECS=120`) + full LLVM + force-rebuild parity (`rm driver{,.c}` first).
+**🟢 ROUND CLOSED 2026-07-21 — lag-close 10-track.** Waves 1+2 + round-close gate GREEN (DONE.md). Tip floors reseeded after force-rebuild parity.
 
-**✅ WAVE 1+2 LANDED (DONE.md).** W1: SH non-Add · Vector `+=` · Face-D · plain-self trait · snag #56. W2: SH lvalue · Dict.get Face-A · SH Vector `+=` · String `+=` drop-old · snag #54/#55 get_or. Five **per-track** output-reviews SIGN OFF (no pack). Residual: optional ggdef non-Add static · R39-T1 nested · Identifier overload drop-old sibling (T9 note).
+**Round-close (commands not stale numbers):** full C 1816/0/20 · full LLVM 1816/0/22 · force-rebuild parity MATCH 1223/1299 = 94.1% · ADJ 371 · floors MATCH 1218 / ADJ 371. Logs: `/tmp/c-round-close-13941.log` · `/tmp/llvm-round-close-20902.log` · `/tmp/parity-force-rebuild-21413.log`.
 
-**DEFER (not this round):** full SH bare-arg CoW · D6 refcount · D30+C1 · Class-C alias-sever.
+**NEXT HEADLINE (pick from hot-list; owner GO or autonomous next-round):** HIGH correctness first — **`Vector[String] +/+=` shallow-extend double-free** (filed CoW; int-only fixtures hid it) · then #13 alias-sever / DEEP-1 clone reclaim (opt pass owed on provisional ceilings) · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef.
+
+**✅ WAVE 1+2 (DONE.md).** W1: SH non-Add · Vector `+=` · Face-D · plain-self trait · snag #56. W2: SH lvalue · Dict.get Face-A · SH Vector `+=` · String `+=` drop-old · snag #54/#55 get_or. Residuals: optional ggdef non-Add static · Identifier overload drop-old sibling · provisional clone ceilings (opt pass).
+
+**DEFER:** full SH bare-arg CoW · D6 refcount · D30+C1 · Class-C / #13 alias-sever (own consumer round).
 
 **✅ Prior same-day closes:** Tainted-reject 2T Rust+ggdef `b98635de` · Curation/drain `2e2465c2` · Three-track `.get()`-Ref `c03185d1`.
 
@@ -37,8 +41,7 @@ Then the 📐 RATIFIED post-2G sequence below (guards slice → planner campaign
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
 
-- **🔒 LOCKED NEXT (on GO):** Wave 1 #1–5 then Wave 2 #6–10 — see handover queue above (lag-close + SH write-place + snag #54/#56 + trait plain-self + Vector `+=` + String `+=` leak).
-- After that queue: SH bare-arg CoW / wrong-code headline · residual SH-CoW (resource-compound 3/4) · D30+C1 · Class-C alias-sever · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first).
+- **🔒 NEXT (after lag-close):** `Vector[String] +/+=` double-free (HIGH correctness) · #13 / DEEP-1 clone reclaim (provisional ceilings) · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first).
 
 ## Operating invariants (load-bearing — process/reference context, not filed work)
 
