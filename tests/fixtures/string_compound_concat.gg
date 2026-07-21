@@ -1,0 +1,21 @@
+# Identifier String `+=` is concat rebind (same as `s = s + t`).
+# Both sides are HEAP-owned (cap > 0, from `+`) so the pre-fix missing
+# drop-old leaked the old buffer — stdout-invisible; LSan-gated via
+# assert_gg_sanitize_clean. Static-literal `greeting += " there"` cannot
+# catch it (cap=0, non-owning).
+
+void main():
+    # Identifier compound concat — heap LHS, heap RHS
+    String a = "hello, "
+    String b = "world"
+    String s = a + b          # heap-owned buffer, cap > 0
+    String t = "!" + "!"      # heap RHS
+    s += t                    # drop-old + Move of concat result
+    print(s)
+    print(t)
+
+    # Second rebind so the new value is also overwritten (and must drop)
+    String u = "?" + "?"
+    s += u
+    print(s)
+    print(u)

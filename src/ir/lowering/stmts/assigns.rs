@@ -1517,7 +1517,12 @@ pub(super) fn lower_compound_assign(
             let rhs = lower_expr(ctx, builder, value);
             let is_string = value_type == ctx.type_mapper.owned_string_type;
 
-            // String concatenation via += → gorget_str_cat (returns GorgetString)
+            // String concatenation via += → gorget_str_cat (returns GorgetString).
+            // Drop the old owned buffer AFTER computing the concat, BEFORE
+            // rebinding — otherwise the prior heap string leaks (stdout-
+            // invisible; mirror Array-kind compound += drop-old below, and
+            // plain-assign Identifier drop-old). Field/place RMW already
+            // routes through emit_field_store_with_cleanup which drops.
             if is_string && matches!(op, ast::BinaryOp::Add) {
                 let owned_type = ctx.type_mapper.owned_string_type;
                 let tmp = ctx.call_extern_tracked(builder, "gorget_str_cat", vec![cur_val, rhs], owned_type);
@@ -1526,6 +1531,17 @@ pub(super) fn lower_compound_assign(
                 } else {
                     Place::local(local_id)
                 };
+                // Drop old AFTER cat (cur_val is a Copy of the handle used by
+                // the call), BEFORE Move of the fresh result.
+                if ctx.type_registry.needs_drop(value_type) {
+                    if is_mut_capture {
+                        builder.drop(dst.clone());
+                    } else if ctx.drops.is_moved(local_id) {
+                        builder.drop_if_alive(Place::local(local_id));
+                    } else {
+                        builder.drop(Place::local(local_id));
+                    }
+                }
                 // Phase C: tmp is fresh from gorget_str_cat, dead after this
                 // single assign — Move transfers ownership.
                 builder.assign_mode(
@@ -1536,16 +1552,16 @@ pub(super) fn lower_compound_assign(
                 // Mark the temp as moved so the drop elaborator doesn't free it
                 // (the destination variable now owns the GorgetString)
                 ctx.move_zero_and_mark(builder, tmp);
-            // Lazy loop-carried CoW (W4 write-site clearing): compound assign
-            // writes the local wholesale — same clearing as `lower_assign`'s
-            // Identifier arm (which see), AFTER the RHS ran. This is the
-            // string-concat fast path's sibling clear: the path RETURNS
-            // EARLY, so the generic-tail clear below never runs for it.
-            if ctx.func_state.cow_lazy_mat_flag.remove(&local_id).is_some()
-                && ctx.collection_ref_source(builder, local_id).is_some()
-            {
-                ctx.unset_ownership(builder, local_id);
-            }
+                // Lazy loop-carried CoW (W4 write-site clearing): compound assign
+                // writes the local wholesale — same clearing as `lower_assign`'s
+                // Identifier arm (which see), AFTER the RHS ran. This is the
+                // string-concat fast path's sibling clear: the path RETURNS
+                // EARLY, so the generic-tail clear below never runs for it.
+                if ctx.func_state.cow_lazy_mat_flag.remove(&local_id).is_some()
+                    && ctx.collection_ref_source(builder, local_id).is_some()
+                {
+                    ctx.unset_ownership(builder, local_id);
+                }
                 return;
             }
 

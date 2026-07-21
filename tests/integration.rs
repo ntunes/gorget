@@ -11083,6 +11083,37 @@ fn vector_compound_concat() {
     );
 }
 
+/// Identifier String `+=` is concat rebind (same as `s = s + t`). Both
+/// sides heap-owned so the missing drop-old would leak the prior buffer
+/// (stdout-invisible). Functional stdout pin; LSan gate is the sibling
+/// `string_compound_concat_asan`.
+#[test]
+fn string_compound_concat() {
+    run_gg(
+        "string_compound_concat.gg",
+        "\
+hello, world!!
+!!
+hello, world!!??
+??",
+    );
+}
+
+/// LSan gate for Identifier String `+=` drop-old. Pre-fix the old heap
+/// buffer leaked (gorget_str_cat result Moved over it with no drop);
+/// post-fix ASan/LSan-clean under `detect_leaks=1`.
+#[test]
+fn string_compound_concat_asan() {
+    assert_gg_sanitize_clean(
+        "string_compound_concat",
+        "\
+hello, world!!
+!!
+hello, world!!??
+??",
+    );
+}
+
 /// Deque compound `+=` is Array-kind sibling of Vector concat rebind.
 #[test]
 fn deque_compound_concat() {
