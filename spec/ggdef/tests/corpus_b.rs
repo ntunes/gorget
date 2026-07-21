@@ -86,6 +86,17 @@ const EXCLUDE: &[&str] = &[
     //   - `.push_char()` — outside the phase-0 builtin-method set (needs
     //     Increment B2, like the other B2-gated methods).
     "cow_loop_bare_param_push_char.gg",
+    // 2T get-chain PRECISION guard: the write target is a USER-method-call
+    // rvalue's field (`h.coll.get(0).name = v`). ggdef's frontend correctly
+    // ACCEPTS it (no over-reject — the get-chain descent is Vector-kind-gated, so
+    // a user `get` returning an owned temp is not descended; pinned by the unit
+    // test `d4_position_6_user_get_chain_not_over_rejected`), but eval's
+    // `navigate_write`/`ast_place` treats a MethodCall rvalue as "not a place" →
+    // `IllFormed` — writing to a method-call temp's field is outside the phase-0
+    // write-place subset (same class as the Dict/for-element exclusions). The
+    // fixture's RUN role is the Rust-lane precision guard; ggdef precision is the
+    // unit test above, not this run-diff.
+    "cow_taint_getchain_user_get_ok.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -290,5 +301,9 @@ fn corpus_b_all_match() {
     // landed as top-level cow_* fixtures and both MATCH ggdef (in phase-0 subset),
     // so the pin refreshes 150→152 to accompany them. History: +15 net from the
     // CoW-2G landings (2026-07-18) refreshed with the D31 exclusion additions.
-    assert_eq!(fixtures.len(), 152, "B2 gate set drifted from 152 fixtures");
+    // +5 (2026-07-21, tainted-reject 2T get-chain round): the five NEG get-chain
+    // fixtures `cow_taint_getchain_{vector,firstlast,compound,receiver,formation}`
+    // all MATCH ggdef as `check_fails` rejections (the ggdef both-lane pin); the
+    // POS `cow_taint_getchain_user_get_ok` is EXCLUDEd (out-of-subset write-place).
+    assert_eq!(fixtures.len(), 157, "B2 gate set drifted from 157 fixtures");
 }

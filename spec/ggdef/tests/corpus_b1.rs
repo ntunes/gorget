@@ -86,6 +86,9 @@ const EXCLUDE: &[&str] = &[
     // on the STOP-and-report), so this exclusion accompanies the D31 slice.
     "cow_loop_bare_param_for_else.gg",
     "cow_loop_bare_param_push_char.gg",
+    // NOTE: the 2T get-chain fixtures (`cow_taint_getchain_*`) all carry `equip R
+    // with Drop`, so `gate_fixtures`'s `equip ` filter already routes them to B2
+    // (corpus_b) — they are NOT in the B1 gate set and need no B1 exclusion.
 ];
 
 fn ws_root() -> PathBuf {

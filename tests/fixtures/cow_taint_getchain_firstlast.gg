@@ -1,0 +1,19 @@
+# 2T get-chain materialize via `.first()` (site 1): `.first()`/`.last()` descend
+# the same builtin-collection getter chain as `.get(i)`. On a bare drop-tainted
+# param `h.items.first().unwrap().name = v` materialises a private copy of `h`
+# (confirmed pre-fix: it double-dropped R). Now REJECTED. Fix: `&h`.
+from std.collections import Vector
+struct R:
+    String name
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+struct H:
+    Vector[R] items
+    int tag
+void f_firstlast(H h):
+    h.items.first().unwrap().name = "changed"
+void main():
+    H h = H([R("a")], 1)
+    f_firstlast(h)
+    print("done")

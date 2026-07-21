@@ -1512,6 +1512,153 @@ void main():
 bye 9");
 }
 
+// ── D4 position 6 (get-chain materialize): a write through a builtin-collection
+//    element-getter chain (`h.items.get(0).unwrap().f = v`) materialises the
+//    SAME tainted root a direct `h.f = v` store does — so the reject extends to
+//    the get-chain position, gated on the receiver being a Vector (never Set).
+//    Mirrors production's four gates fed by the get-chain-descending resolver. ──
+
+#[test]
+fn d4_position_6_get_chain_assign_on_tainted_borrow_rejected() {
+    // `h.items.get(0).unwrap().name = v` on a bare drop-tainted param privatises
+    // a copy of `h` (a single-owner value) → R's `Drop` would fire twice. Pre-fix
+    // ggdef ran this (printed "done"); the get-chain descent in
+    // `reject_materialize_on_write` now rejects it, like the direct store.
+    let src = r#"
+struct R:
+    String name
+
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+
+struct H:
+    Vector[R] items
+    int tag
+
+void f_chain(H h):
+    h.items.get(0).unwrap().name = "changed"
+
+void main():
+    H h = H([R("a")], 1)
+    f_chain(h)
+    print("done")
+"#;
+    match run_source(src, FUEL) {
+        Err(e) => assert!(
+            e.to_string().contains("E_MoveWithoutOperator"),
+            "get-chain materialize on a tainted bare param must reject, got: {e}"
+        ),
+        Ok(r) => panic!("get-chain store on a tainted bare param must reject (D4 pos 6), got {:?}", r.outcome),
+    }
+}
+
+#[test]
+fn d4_position_6_get_chain_firstlast_on_tainted_borrow_rejected() {
+    // `.first()`/`.last()` descend the same builtin-collection getter chain as
+    // `.get(i)` (all three are kind-gated on a Vector receiver) → same reject.
+    let src = r#"
+struct R:
+    String name
+
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+
+struct H:
+    Vector[R] items
+
+void f_chain(H h):
+    h.items.first().unwrap().name = "changed"
+
+void main():
+    H h = H([R("a")])
+    f_chain(h)
+    print("done")
+"#;
+    match run_source(src, FUEL) {
+        Err(e) => assert!(
+            e.to_string().contains("E_MoveWithoutOperator"),
+            "get-chain `.first()` materialize on a tainted bare param must reject, got: {e}"
+        ),
+        Ok(r) => panic!("`.first()` get-chain store must reject (D4 pos 6), got {:?}", r.outcome),
+    }
+}
+
+#[test]
+fn d4_position_6_get_chain_compound_on_tainted_borrow_rejected() {
+    // Sibling site (CompoundAssign): `…get(0).unwrap().n += 1` materialises the
+    // same root as the plain-assign chain → rejects identically.
+    let src = r#"
+struct R:
+    int n
+
+equip R with Drop:
+    void drop(!self):
+        print("bye")
+
+struct H:
+    Vector[R] items
+
+void f_chain(H h):
+    h.items.get(0).unwrap().n += 1
+
+void main():
+    H h = H([R(1)])
+    f_chain(h)
+    print("done")
+"#;
+    match run_source(src, FUEL) {
+        Err(e) => assert!(
+            e.to_string().contains("E_MoveWithoutOperator"),
+            "get-chain compound-assign on a tainted bare param must reject, got: {e}"
+        ),
+        Ok(r) => panic!("get-chain compound store must reject (D4 pos 6), got {:?}", r.outcome),
+    }
+}
+
+#[test]
+fn d4_position_6_user_get_chain_not_over_rejected() {
+    // Precision guard (reject ⊆ materialize): a USER `get` returns an OWNED temp
+    // (its receiver `h.coll` is a `Named` struct, NOT a builtin Vector), so the
+    // get-chain descent does NOT fire — the write lands on the temp, no
+    // materialize of `h`, correctly ACCEPTED. The two `drop R` lines are the
+    // explicit-`.clone()` temp and the original — two distinct R's, not a
+    // single-owner double-drop.
+    let src = r#"
+struct R:
+    String name
+
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+
+struct MyColl:
+    R only
+
+equip MyColl:
+    R get(self, int i):
+        return self.only.clone()
+
+struct H:
+    MyColl coll
+    int tag
+
+void f_userget(H h):
+    h.coll.get(0).name = "changed"
+
+void main():
+    H h = H(MyColl(R("a")), 1)
+    f_userget(h)
+    print("done")
+"#;
+    // Must NOT be a frontend reject.
+    match run_source(src, FUEL) {
+        Ok(_) => {}
+        Err(e) => panic!("user-`get` chain must NOT over-reject (owned temp, no materialize), got: {e}"),
+    }
+}
+
 // ── D4 taint parity extensions (A2-R1): prelude-enum payloads, closure-tail,
 //    field-place (REJECTION-ONLY) — each closes a production/ggdef divergence ──
 

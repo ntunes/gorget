@@ -1,0 +1,19 @@
+# 2T get-chain materialize (site 4, `&`-formation arg): `&`-forming a get-chain
+# projection — `bump(&h.items.get(0).unwrap().n)` — on a bare drop-tainted param
+# materialises a private copy of `h` at the `&`-formation → REJECTED. Fix: `&h`.
+from std.collections import Vector
+struct R:
+    int n
+equip R with Drop:
+    void drop(!self):
+        print("bye")
+struct H:
+    Vector[R] items
+void bump(int &x):
+    x = x + 1
+void f_formation(H h):
+    bump(&h.items.get(0).unwrap().n)
+void main():
+    H h = H([R(1)])
+    f_formation(h)
+    print("done")

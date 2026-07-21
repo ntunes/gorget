@@ -482,20 +482,24 @@ impl<'a> BorrowChecker<'a> {
 
     /// Like `find_root_def_id`, but ALSO descends a builtin-collection
     /// element-getter chain (`c.get(i).unwrap()`, `c.first()`, `c.last()`) to
-    /// name the collection's root binding.
+    /// name the collection's root binding. A strict SUPERSET of
+    /// `find_root_def_id` (identical base + projection arms, plus the
+    /// `MethodCall` get-chain arm), so the two compose as
+    /// `find_root_def_id(t).or_else(|| find_get_chain_taint_root(t))` — the
+    /// strict resolver returning the SAME root wherever it is defined, the
+    /// superset extending coverage to the get-chain position.
     ///
-    /// Used ONLY by the DEAD-WRITE LINT (`check_stmt` Assign / CompoundAssign) —
-    /// NOT the 14 strict `find_root_def_id` accept/reject callers, and (for now)
-    /// NOT the 2T materialize-on-write taint REJECT gate. A write through such a
-    /// getter chain (`f.blocks.get(0).unwrap().term = v`) materializes the SAME
-    /// root the lowering materializes (`resolve_projection_root_local`,
-    /// `exprs/mod.rs`), so its private-copy write is dead — the lint's warning
-    /// fires for it exactly as for the sibling `c[i].f = x` store. (The 2T
-    /// tainted-materialize REJECT for get-chains is a filed CROSS-LANE follow-up:
-    /// ggdef's own `root_local_name` has the identical get-chain descent gap, so
-    /// rejecting only in Rust would be a silent lane divergence — the fix must
-    /// land in BOTH compilers at all four materialize sites. Kept PRECISE here
-    /// so that follow-up can promote it to the reject gate unchanged.)
+    /// Used by the DEAD-WRITE LINT (`check_stmt` Assign / CompoundAssign) AND —
+    /// promoted here — the 2T materialize-on-write taint REJECT gates (all four:
+    /// Assign, CompoundAssign, mutating-method receiver, `&`-formation arg). A
+    /// write through such a getter chain (`f.blocks.get(0).unwrap().term = v`)
+    /// materializes the SAME root the lowering materializes
+    /// (`resolve_projection_root_local`, `exprs/mod.rs`), so a DROP-TAINTED bare
+    /// borrow-param root is an implicit single-owner copy → `E_MoveWithoutOperator`,
+    /// exactly like the direct `h.field = v` store; the lint's warning still
+    /// fires for the non-tainted case. ggdef's `reject_materialize_on_write`
+    /// carries the mirror get-chain descent, so the reject lands in BOTH
+    /// compilers at all materialize sites (Core #9 — no silent lane divergence).
     ///
     /// Gated on the RECEIVER's collection-KIND ∈ {Array, OrderedMap}
     /// (`collection_kind_of_expr`, which resolves via `lvalue_value_type` — NOT
@@ -1198,7 +1202,10 @@ impl<'a> BorrowChecker<'a> {
         if arg.node.ownership == Ownership::MutableBorrow
             && !matches!(&arg.node.value.node, Expr::Deref { .. })
         {
-            if let Some(root) = self.find_root_def_id(&arg.node.value) {
+            if let Some(root) = self
+                .find_root_def_id(&arg.node.value)
+                .or_else(|| self.find_get_chain_taint_root(&arg.node.value))
+            {
                 self.reject_tainted_materialize_on_write(root, arg.node.value.span);
             }
         }

@@ -1,0 +1,19 @@
+# 2T get-chain materialize (site 3, mutating-method receiver): a mutating builtin
+# on a getter-chain receiver — `h.items.get(0).unwrap().tags.push(5)` — on a bare
+# drop-tainted param materialises a private copy of `h`. Pre-fix this RAN and
+# dropped R twice (`drop R a` twice, runtime-observable). Now REJECTED. Fix: `&h`.
+from std.collections import Vector
+struct R:
+    String name
+    Vector[int] tags
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+struct H:
+    Vector[R] items
+void f_receiver(H h):
+    h.items.get(0).unwrap().tags.push(5)
+void main():
+    H h = H([R("a", [])])
+    f_receiver(h)
+    print("done")

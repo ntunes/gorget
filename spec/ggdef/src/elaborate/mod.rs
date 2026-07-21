@@ -764,15 +764,75 @@ impl Elaborator {
 
     /// D4 position 6 (materialize-on-write): a write whose target roots at a
     /// BORROW-mode binding of a tainted type would privatise (copy) that value.
-    /// Routes through the ONE helper on the root-local place.
+    /// Routes through the ONE helper on the root-local place. The root resolves
+    /// via the free strict `root_local_name` FIRST (a direct `h.field = v`
+    /// store), then falls back to the get-chain-descending `get_chain_root_local`
+    /// (a builtin-collection getter-chain store `h.items.get(0).unwrap().f = v`,
+    /// which materialises the SAME root) — extending the 2T reject to the
+    /// get-chain materialize position. Mirrors production's four reject gates,
+    /// each fed by `find_root_def_id(t).or_else(|| find_get_chain_taint_root(t))`
+    /// (Core #9 — both lanes reject the get-chain shape).
     fn reject_materialize_on_write(&self, target: &ast::Expr, span: Span) -> ElabResult<()> {
-        if let Some(root) = root_local_name(target) {
+        if let Some(root) = root_local_name(target).or_else(|| self.get_chain_root_local(target)) {
             if self.local_mode.get(root) == Some(&BindMode::Borrow) {
                 let root_expr = ast::Expr::Identifier(root.to_string());
                 return self.reject_if_tainted_live_place(&root_expr, span, "materialize-on-write");
             }
         }
         Ok(())
+    }
+
+    /// Like the free `root_local_name`, but ALSO descends a builtin-collection
+    /// element-getter chain (`c.get(i).unwrap()`, `c.first()`, `c.last()`) to
+    /// the collection's root local — so the 2T materialize-on-write reject sees
+    /// that a get-chain store privatises the SAME tainted root the lowering
+    /// materialises. `&self` (unlike the free `root_local_name`) because the
+    /// KIND gate needs the type env; the free fn stays STRICT for its
+    /// return-position caller. Kind-gated on the receiver's inferred type being a
+    /// builtin Vector (or Dict — belt-and-suspenders; Dict is out of ggdef's
+    /// phase-0 subset) — NEVER Set, mirroring production's
+    /// `is_field_addressable_collection` = {Array, OrderedMap}: a Set element is
+    /// not field-addressable, and descending it would reject a shape that does
+    /// not materialize (reject ⊄ materialize). A USER `get` returning an owned
+    /// temp is not descended (its receiver type is a `Named` struct, not Vector).
+    fn get_chain_root_local<'a>(&self, e: &'a ast::Expr) -> Option<&'a str> {
+        match e {
+            ast::Expr::Identifier(n) => Some(n),
+            ast::Expr::SelfExpr => Some("self"),
+            ast::Expr::FieldAccess { object, .. }
+            | ast::Expr::TupleFieldAccess { object, .. }
+            | ast::Expr::Index { object, .. } => self.get_chain_root_local(&object.node),
+            ast::Expr::MethodCall { receiver, method, .. } => {
+                let descend = match method.node.as_str() {
+                    // `c.get(i)`/`.first()`/`.last()` — receiver IS the collection.
+                    "get" | "first" | "last" => {
+                        self.is_field_addressable_collection_ty(&receiver.node)
+                    }
+                    // `c.get(i).unwrap()` — receiver is the getter over a collection.
+                    "unwrap" | "expect" => matches!(
+                        &receiver.node,
+                        ast::Expr::MethodCall { receiver: inner, method: inner_m, .. }
+                            if matches!(inner_m.node.as_str(), "get" | "first" | "last")
+                                && self.is_field_addressable_collection_ty(&inner.node)
+                    ),
+                    _ => false,
+                };
+                if descend {
+                    self.get_chain_root_local(&receiver.node)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// True if `recv`'s inferred type is a builtin Vector (or Dict) — the
+    /// field-write-addressable builtin collection kinds. The ggdef mirror of
+    /// production's `is_field_addressable_collection`; NEVER Set (a Set element
+    /// is not field-addressable, so a Set get-chain does not materialize).
+    fn is_field_addressable_collection_ty(&self, recv: &ast::Expr) -> bool {
+        matches!(self.infer_ast_ty(recv), Ty::Vector(_) | Ty::Dict(_, _))
     }
 
     fn elaborate_block(&mut self, block: &ast::Block) -> ElabResult<Vec<Stmt>> {

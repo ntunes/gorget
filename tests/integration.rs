@@ -22627,6 +22627,57 @@ fn self_host_check_rejects_illtyped() {
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
+/// SELF-HOST parity gap (FILED, not landed — Core #9): the self-host typechecker
+/// implements the 2T materialize-on-write reject but MISSES the get-chain descent
+/// position the Rust gg + ggdef lanes just closed. It REJECTS the direct
+/// `h.tag = v` store on a bare drop-tainted param, but ACCEPTS the get-chain
+/// store `h.items.get(0).unwrap().name = v` — silently privatising a copy of the
+/// single-owner `h` (R's `Drop` fires twice). INTENDED behavior: reject
+/// `E_MoveWithoutOperator`, like Rust gg + ggdef. This test runs the self-host
+/// `check` driver on the known_gaps fixture and asserts a nonzero exit; it is
+/// `#[ignore]`d because the SH accepts today (a `gg check` sanity CANNOT detect a
+/// MISSING reject — an accept passes — so this is a wired executable record, not
+/// a comment). The three land requirements (a types-aware kind-gated helper
+/// wired into BOTH `reject_if_tainted_materialize_root` AND `reject_amp_self_
+/// mutator`; a narrow Vector/Deque/Dict kind-gate, NOT the broad
+/// `is_collection_receiver`; a LOCAL reconcile of the `EMethodCall` early-return
+/// inside `reject_materialize_on_write`, NOT a global widen of `expr_is_place`)
+/// are in TODO.md `## Self-host parity`. Flips green + un-ignore when the SH lands
+/// the get-chain reject.
+#[test]
+#[ignore = "self-host typechecker misses the 2T get-chain materialize reject \
+            (accepts h.items.get(0).unwrap().f = v on a tainted bare param); \
+            Rust gg + ggdef reject it. Flips green when the SH lands the descent \
+            — see TODO.md `## Self-host parity`."]
+#[serial(self_host_lowerer_driver)]
+fn sh_cow_taint_getchain_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests")
+        .join("fixtures")
+        .join("known_gaps")
+        .join("sh_cow_taint_getchain_reject.gg");
+
+    let check = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg("check")
+            .arg(&fixture)
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "check sh_cow_taint_getchain_reject.gg",
+    );
+    assert!(
+        !check.status.success(),
+        "self-host `gg check` on a get-chain materialize of a tainted bare param \
+         SHOULD exit nonzero (E_MoveWithoutOperator — intended, matching Rust gg + \
+         ggdef). If this now fails, the SH get-chain descent landed — un-ignore \
+         and retire the `## Self-host parity` TODO.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr),
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Chain 2 gate: the self-host emits a FULL, standalone program.
 //
@@ -31093,6 +31144,84 @@ fn cow_taint_whole_amp_param() {
 fn cow_taint_whole_amp_self() {
     check_gg_fails(
         "cow_taint_whole_amp_self.gg",
+        "error[E_MoveWithoutOperator]",
+    );
+}
+
+// ── 2T get-chain materialize REJECT (the builtin-collection element-getter
+// chain position the direct-store gates missed). `h.items.get(0).unwrap().f = v`
+// on a bare drop-tainted param privatises a copy of the single-owner `h` — the
+// same double-drop the DIRECT `h.f = v` store already rejects. The
+// get-chain-descending resolver (`find_get_chain_taint_root`, kind-gated to
+// {Array, OrderedMap}) now feeds all four reject gates (Assign, CompoundAssign,
+// mutating-method receiver, `&`-formation arg) via
+// `find_root_def_id(t).or_else(|| find_get_chain_taint_root(t))`. Each shape was
+// RUN pre-fix and observed to materialize + double-drop (reject ⊆ materialize).
+// ggdef mirrors the descent in `reject_materialize_on_write` (both lanes, Core
+// #9); ggdef's Vector reject is pinned in spec/ggdef/src/tests.rs.
+
+/// 2T get-chain (site 1, Assign): `h.items.get(0).unwrap().name = v` on a bare
+/// drop-tainted param materialises a private copy of `h` → REJECT with `&h`.
+#[test]
+fn cow_taint_getchain_vector() {
+    check_gg_fails("cow_taint_getchain_vector.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T get-chain via `.first()` (site 1): `.first()`/`.last()` descend the same
+/// getter chain as `.get(i)` — confirmed pre-fix to materialize + double-drop →
+/// REJECT.
+#[test]
+fn cow_taint_getchain_firstlast() {
+    check_gg_fails("cow_taint_getchain_firstlast.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T get-chain (site 2, CompoundAssign): `…get(0).unwrap().n += 1` materialises
+/// the same root the plain-assign chain does → REJECT.
+#[test]
+fn cow_taint_getchain_compound() {
+    check_gg_fails("cow_taint_getchain_compound.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T get-chain (site 3, mutating-method receiver): `…unwrap().tags.push(5)` — the
+/// runtime-observable shape (RAN + double-dropped `drop R a` twice pre-fix) →
+/// REJECT.
+#[test]
+fn cow_taint_getchain_receiver() {
+    check_gg_fails("cow_taint_getchain_receiver.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T get-chain (site 4, `&`-formation arg): `bump(&h.items.get(0).unwrap().n)`
+/// materialises a private copy of `h` at the `&`-formation → REJECT.
+#[test]
+fn cow_taint_getchain_formation() {
+    check_gg_fails("cow_taint_getchain_formation.gg", "error[E_MoveWithoutOperator]");
+}
+
+/// 2T get-chain PRECISION guard (reject ⊆ materialize): a USER `get` returns an
+/// OWNED temp (receiver is a `Named` struct, not a builtin Vector), so the
+/// descent does NOT fire — the write lands on the temp, no materialize of `h`,
+/// ACCEPTED. Runs: the two `drop R` lines are the explicit-`.clone()` temp and
+/// the original, two distinct R's (not a single-owner double-drop).
+#[test]
+fn cow_taint_getchain_user_get_ok() {
+    run_gg(
+        "cow_taint_getchain_user_get_ok.gg",
+        "\
+drop R changed
+done
+drop R a",
+    );
+}
+
+/// 2T get-chain Dict/OrderedMap twin (site 1): Rust gg REJECTS (Dict's
+/// `CollectionKind::OrderedMap` is field-addressable like Array). In known_gaps/
+/// (out of the runtime-diff corpus) because ggdef's Dict construction +
+/// write-projection are outside phase-0 subset, so the ggdef lane cannot
+/// adjudicate the Dict shape yet — an EXPLICIT cited out-of-subset lane (Core #9).
+#[test]
+fn cow_taint_getchain_dict() {
+    check_gg_fails(
+        "known_gaps/cow_taint_getchain_dict.gg",
         "error[E_MoveWithoutOperator]",
     );
 }

@@ -1,0 +1,21 @@
+# 2T get-chain materialize (site 1, Assign): a store through a builtin-collection
+# element-getter chain on a bare drop-tainted param —
+# `h.items.get(0).unwrap().name = v` — materialises a private copy of the
+# single-owner `h` (R has a custom `Drop`, so `H` is drop-tainted). Pre-fix this
+# was ACCEPTED and the copy's `R` was dropped a SECOND time (double-drop). Now
+# REJECTED, exactly like the direct `h.tag = v` store. Fix: `&h` write-through.
+from std.collections import Vector
+struct R:
+    String name
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+struct H:
+    Vector[R] items
+    int tag
+void f_chain(H h):
+    h.items.get(0).unwrap().name = "changed"
+void main():
+    H h = H([R("a")], 1)
+    f_chain(h)
+    print("done")

@@ -1,0 +1,35 @@
+# SELF-HOST parity gap (FILED, not landed — Core #9): the self-host typechecker
+# (`void reject_materialize_on_write(...)`, tests/fixtures/self_host_typechecker/
+# typecheck.gg:1319) implements the SAME 2T materialize-on-write reject as Rust gg
+# and ggdef, but with the IDENTICAL get-chain descent gap the Rust/ggdef lanes
+# just closed: it REJECTS the DIRECT `h.tag = v` store on a bare drop-tainted
+# param, but ACCEPTS the get-chain store below — silently materialising a private
+# copy of the single-owner `h` → R's `Drop` fires TWICE (double-drop).
+#
+# INTENDED self-host behavior: REJECT `error[E_MoveWithoutOperator]` on ALL these
+# get-chain shapes (assign / compound / builtin-mutating-receiver /
+# user-`&self`-mutator-receiver), exactly like Rust gg. The `#[ignore]`d test
+# `sh_cow_taint_getchain_reject` runs the self-host `check` driver on this fixture
+# and asserts a nonzero exit; it flips GREEN when the SH lands the reject.
+#
+# WHY FILED not landed (an SH land is its own scout→brief→gauntlet): the SH root
+# resolvers `place_root_def_spanned` (:1070) and `place_root_name` (:925) have NO
+# `EMethodCall` arm, and `expr_is_place` (:889) is false for a MethodCall so
+# `reject_materialize_on_write` early-returns (:1322); the builtin-mutating-
+# receiver reject `reject_if_tainted_materialize_root` (:1299 / :2194) never
+# reaches it. The three land requirements are in TODO.md `## Self-host parity`.
+from std.collections import Vector
+struct R:
+    String name
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+struct H:
+    Vector[R] items
+    int tag
+void f_chain(H h):
+    h.items.get(0).unwrap().name = "changed"
+void main():
+    H h = H([R("a")], 1)
+    f_chain(h)
+    print("done")

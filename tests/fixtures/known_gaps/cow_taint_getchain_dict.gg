@@ -1,0 +1,26 @@
+# 2T get-chain materialize — Dict/OrderedMap twin (site 1). A store through a
+# Dict getter chain on a bare drop-tainted param —
+# `h.items.get(0).unwrap().name = v` — materialises a private copy of `h`
+# (double-drop of R) exactly like the Vector twin, and Rust gg REJECTS it (Dict's
+# CollectionKind::OrderedMap is field-addressable, same as Array). Lives in
+# known_gaps/ because ggdef's Dict construction + write-projection are outside
+# phase-0 subset, so the ggdef lane cannot adjudicate the Dict shape yet; the
+# Rust-gg reject stands, the ggdef Dict reject arm is belt-and-suspenders. This
+# test asserts the Rust-gg reject.
+from std.collections import Dict
+struct R:
+    String name
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+struct H:
+    Dict[int, R] items
+    int tag
+void f_dict(H h):
+    h.items.get(0).unwrap().name = "changed"
+void main():
+    Dict[int, R] d = Dict[int, R]()
+    d.set(0, R("a"))
+    H h = H(!d, 1)
+    f_dict(h)
+    print("done")

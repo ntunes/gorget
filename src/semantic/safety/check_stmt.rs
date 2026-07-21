@@ -635,18 +635,21 @@ impl<'a> BorrowChecker<'a> {
                         self.mark_mut_param_if_applicable(target);
                         // 2T: the SEMANTIC taint gate fires on the UNFILTERED
                         // root (incl. `self` / `_`-named params) — never on
-                        // the lint's tracking subset. NOTE: this stays on the
-                        // strict `find_root_def_id` (no get-chain descent): a
-                        // bare-param builtin-collection getter-chain store
-                        // (`f.blocks.get(0).unwrap().term = v`) DOES materialize
-                        // (lowering), so per 2T a tainted one should reject — but
-                        // ggdef (the truth axis) does NOT reject it either (the
-                        // identical get-chain descent gap in its `root_local_name`),
-                        // so rejecting here would be a silent lane divergence
-                        // (Core #9). The reference-grade fix — reject in BOTH
-                        // compilers at all materialize sites — is filed as a
-                        // cross-lane follow-up (TODO.md), not slipped in here.
-                        if let Some(root) = self.find_root_def_id(target) {
+                        // the lint's tracking subset. The root resolves via the
+                        // strict `find_root_def_id` FIRST (a direct `h.field = v`
+                        // store), then falls back to the get-chain-descending
+                        // `find_get_chain_taint_root` (a builtin-collection
+                        // getter-chain store `f.blocks.get(0).unwrap().term = v`
+                        // that materialises the SAME root the lowering does).
+                        // `find_get_chain_taint_root` is a strict SUPERSET, so
+                        // the pair emits EXACTLY ONCE on the direct case and
+                        // extends the 2T reject to the get-chain materialize
+                        // position. ggdef mirrors this in
+                        // `reject_materialize_on_write` (both lanes, Core #9).
+                        if let Some(root) = self
+                            .find_root_def_id(target)
+                            .or_else(|| self.find_get_chain_taint_root(target))
+                        {
                             self.reject_tainted_materialize_on_write(root, target.span);
                         }
                         // Dead-write lint: the target walk is a
@@ -818,10 +821,15 @@ impl<'a> BorrowChecker<'a> {
                     }
                 }
                 // 2T: unfiltered-root taint gate (sibling of the Assign site).
-                // Stays on strict `find_root_def_id` (no get-chain descent) to
-                // match ggdef — see the Assign-site note; the cross-lane reject
-                // fix is a filed follow-up.
-                if let Some(root) = self.find_root_def_id(target) {
+                // Strict `find_root_def_id` FIRST, then the get-chain-descending
+                // `find_get_chain_taint_root` fallback (a superset) — a tainted
+                // `…get(0).unwrap().n += 1` materialises the root just like the
+                // plain-assign chain, so it rejects identically. Emits once on
+                // the direct case; see the Assign-site note.
+                if let Some(root) = self
+                    .find_root_def_id(target)
+                    .or_else(|| self.find_get_chain_taint_root(target))
+                {
                     self.reject_tainted_materialize_on_write(root, target.span);
                 }
                 // Dead-write lint: compound assign mutates through

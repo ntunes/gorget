@@ -1,0 +1,24 @@
+# 2T PRECISION guard (reject ⊆ materialize): a USER `get` method returns an OWNED
+# temp (its receiver `h.coll` is a `Named` struct, NOT a builtin Vector), so the
+# get-chain descent does NOT fire — the write lands on the temp, no materialize of
+# `h`, correctly ACCEPTED. The two `drop R` lines are the explicit-`.clone()` temp
+# and the original — two distinct R's, not a single-owner double-drop.
+struct R:
+    String name
+equip R with Drop:
+    void drop(!self):
+        print(f"drop R {self.name}")
+struct MyColl:
+    R only
+equip MyColl:
+    R get(self, int i):
+        return self.only.clone()
+struct H:
+    MyColl coll
+    int tag
+void f_userget(H h):
+    h.coll.get(0).name = "changed"
+void main():
+    H h = H(MyColl(R("a")), 1)
+    f_userget(h)
+    print("done")

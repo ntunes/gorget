@@ -405,9 +405,16 @@ impl<'a> BorrowChecker<'a> {
                 };
                 // 2T: the SEMANTIC taint gate fires on the UNFILTERED root
                 // (incl. `self` / `_`-named params, value OR statement
-                // position) — never on the lint's tracking subset.
+                // position) — never on the lint's tracking subset. Strict
+                // `find_root_def_id` FIRST, then the get-chain-descending
+                // superset fallback so a mutating builtin on a getter-chain
+                // receiver (`h.items.get(0).unwrap().tags.push(5)`) rejects the
+                // same tainted root the lowering would materialise. Emits once.
                 if receiver_is_mutating {
-                    if let Some(root) = self.find_root_def_id(receiver) {
+                    if let Some(root) = self
+                        .find_root_def_id(receiver)
+                        .or_else(|| self.find_get_chain_taint_root(receiver))
+                    {
                         self.reject_tainted_materialize_on_write(root, receiver.span);
                     }
                 }
