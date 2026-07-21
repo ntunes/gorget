@@ -11077,6 +11077,51 @@ fn vector_concat() {
     );
 }
 
+/// Vector[String] `+` / `+=` currently double-frees (shallow `gorget_array_extend`).
+/// Intended stdout once `extend` deep-clones resource elements. See TODO HIGH
+/// "Vector[String] + / += double-free". Un-ignore + promote fixture when ASan-clean.
+#[test]
+#[ignore = "KNOWN GAP: Vector[String] concat double-frees — shallow gorget_array_extend \
+after deep clone; TODO.md HIGH 'Vector[String] + / += double-free'. Un-ignore when \
+extend clones/materializes elem_clone elements (ASan-clean)."]
+fn vector_string_concat() {
+    run_gg(
+        "known_gaps/vector_string_concat.gg",
+        "\
+3
+aa
+bb
+cc
+2
+1
+3
+aa
+bb
+cc
+1",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP: same root as vector_string_concat (shallow extend)."]
+fn vector_string_concat_asan() {
+    assert_gg_sanitize_clean(
+        "known_gaps/vector_string_concat",
+        "\
+3
+aa
+bb
+cc
+2
+1
+3
+aa
+bb
+cc
+1",
+    );
+}
+
 /// Vector compound `+=` is concat rebind (same as `a = a + b`). Covers
 /// Identifier arm (drop-old + Move), field place-RMW, and self-concat `a += a`.
 #[test]

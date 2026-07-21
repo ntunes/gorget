@@ -1,0 +1,25 @@
+# Vector[String] binary `+` and compound `+=` currently DOUBLE-FREE
+# (shallow `gorget_array_extend` after deep `gorget_array_clone`).
+# Intended: deep-copy elements on extend when elem_clone is set — same
+# ownership as `.clone()` then append owned elements; a and b unchanged,
+# result owns independent strings. See TODO.md HIGH "Vector[String] + / +=
+# double-free". Kept in known_gaps/ until the runtime extend fix lands;
+# un-ignore + promote when ASan-clean. Vector[int] concat is already green
+# at top-level (vector_concat / vector_compound_concat).
+
+from std.collections import Vector
+
+void main():
+    Vector[String] a = ["aa", "bb"]
+    Vector[String] b = ["cc"]
+    Vector[String] c = a + b
+    print(c.len())
+    for s in c:
+        print(s)
+    print(a.len())
+    print(b.len())
+    a += b
+    print(a.len())
+    for s in a:
+        print(s)
+    print(b.len())
