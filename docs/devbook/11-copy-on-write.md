@@ -626,6 +626,17 @@ set** of positions, and the campaign to make every one reference-grade on
 increment by increment. This subsection is the durable map of what is settled
 and what remains; live status stays in `TODO.md` (the "CoW WAVE 2" queue).
 
+**The remaining *perf* increment — return-view reclaim.** Beyond the correctness
+write-through work, the dominant self-compile clone cost is the
+`ReturnFromBorrow`/`VarDeclFromBorrow` class: a projection of a receiver/param
+materialised at the function-return boundary (`peek(): return
+self.tokens.get(i).unwrap()`). Reclaiming it extends lazy CoW *across* the return
+boundary via **static view-return provenance** — the ruling (static provenance,
+never a runtime refcount; materialise-when-unsure, never reject) and its
+sequencing on the `SlotProvenance`/D6 layer live in
+`docs/internals/unified-resource-model.md` (§6, the SlotProvenance decision).
+Tracked as DEEP-1 / #13 in `TODO.md`.
+
 **Settled (wave 1 — the place write-through class).** The three write-through
 gaps that silently dropped element stores are closed on both lanes, each pinned
 by cross-lane fixtures whose expected output is **ggdef-adjudicated when the
