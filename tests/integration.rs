@@ -24129,14 +24129,10 @@ fn self_host_runtime_diff() {
     // Reseed: rm tests/fixtures/self_host_lowerer/driver{,.c}; GG_RUNTIME_DIFF=1
     // GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release
     // self_host_runtime_diff -- --nocapture (default GG_TEST_TIMEOUT_SECS).
-    // Reseeded 2026-07-19 (burn-down stage 1a): the 3 class-A ggdef oracle fixes
-    // flipped their fixtures BOTH-WRONG→ADJ-MATCH (+3) and additionally unblocked
-    // 5 previously-UNADJ fixtures whose `.get().unwrap()` chains / set iteration
-    // ggdef could not run before (+5). Fresh full run measured ADJ-MATCH 362 (of
-    // MATCH 1203 = ADJ 362 + UNADJ 831 + BOTH-WRONG 10); floor = the measured
-    // count (the prior seed tracked the measured value exactly; a downward-jitter
-    // margin can be subtracted here if a MATCH-set timeout ever trips it).
-    const GGDEF_ADJUDICATED_FLOOR: usize = 365;
+    // Reseeded 2026-07-21 (SH 2T round close, force-rebuild): ADJ-MATCH 368 (of
+    // MATCH 1213 = ADJ 368 + UNADJ 835 + BOTH-WRONG 10). Prior floor 365 (three-
+    // track `.get()`-Ref close). Floor = measured count (no ADJ jitter margin).
+    const GGDEF_ADJUDICATED_FLOOR: usize = 368;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -24267,7 +24263,11 @@ fn self_host_runtime_diff() {
     // Bump-on-improvement: when MATCH rises, raise the floor in the same
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter. Floors ratchet — never lower.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1207;
+    //
+    // Reseeded 2026-07-21 (SH 2T round close): force-rebuild run reported
+    // MATCH 1213 / 1287 = 94.3% (WRONG 14, CC-FAIL 51, CRASH 8, DRIVER-FAIL 1;
+    // ADJ 368 / UNADJ 835 / BOTH-WRONG 10) in ~117s. Floor = 1213 − 5 jitter = 1208.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1208;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

@@ -4,7 +4,7 @@
 
 **⛔ STOP — do NOT start a new round until explicit owner GO (owner 2026-07-21).** The SH 2T + parallel tracks round below is CLOSED (full C+LLVM+parity green); wait for GO before opening the next burn-down round.
 
-**✅ SH 2T + PARALLEL TRACKS ROUND CLOSED 2026-07-21 (record: DONE.md).** Three tracks on `gorget-2`: (A) SH 2T get-chain materialize REJECT (`29e5f96a` → clone-safe `176b7912` → receiver coverage `fadb5e8a`) — Core #9 SH lane close of `b98635de`; (B) Non-Add `OP=`/`OP` typecheck REJECT Rust (`8853e0c1`) + SH/ggdef lag filed; (C) SH Face-C EDeref compound `*p OP=` (`96bd8959`) fixture promoted. Vector `+=` residual filed (`ff0b7cdd`). **Round-close gate GREEN:** full C 1797/0/24 · full LLVM 1797/0/24 · parity MATCH 1213/1287 = 94.3% (re-run: `GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff -- --nocapture`). Tip `fadb5e8a`. Owner STOP until GO for next round.
+**✅ SH 2T + PARALLEL TRACKS ROUND CLOSED 2026-07-21 (record: DONE.md).** Three tracks on `gorget-2`: (A) SH 2T get-chain materialize REJECT (`29e5f96a` → clone-safe `176b7912` → receiver coverage `fadb5e8a`) — Core #9 SH lane close of `b98635de`; (B) Non-Add `OP=`/`OP` typecheck REJECT Rust (`8853e0c1`) + SH/ggdef lag filed; (C) SH Face-C EDeref compound `*p OP=` (`96bd8959`) fixture promoted. Vector `+=` residual filed (`ff0b7cdd`). **Round-close gate GREEN:** full C 1797/0/24 · full LLVM 1797/0/24 · parity (force-rebuild) MATCH 1213/1287 = 94.3% · ADJ 368 · floors reseeded 1208 / 368. Tip `fadb5e8a` + floor reseed. Owner STOP until GO for next round.
 
 **✅ TAINTED-REJECT 2T (Rust+ggdef) CLOSED 2026-07-21** `b98635de` — SH lane closed same day in the round above.
 
@@ -49,11 +49,16 @@ Then the 📐 RATIFIED post-2G sequence below (guards slice → planner campaign
 
 ## Operating invariants (load-bearing — process/reference context, not filed work)
 
-**NORTH STAR = RUNTIME PARITY: self-host-compiled binary produces SAME output as Rust gg.** RE-MEASURE (never trust a dated number — `*_comparison`/`runtime_diff` are diagnostic-always-pass; force-rebuild the driver first):
+**NORTH STAR = RUNTIME PARITY: self-host-compiled binary produces SAME output as Rust gg.** RE-MEASURE (never trust a dated number — `*_comparison`/`runtime_diff` are diagnostic-always-pass). **Round-close procedure (the three gotchas):**
 ```
-GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release self_host_runtime_diff -- --nocapture
+# 1. FORCE-REBUILD the cached self-host driver (THE load-bearing step)
+rm tests/fixtures/self_host_lowerer/driver{,.c}
+# 2. Regen — GG_BUILD_TIMEOUT_SECS=600 only; leave GG_TEST_TIMEOUT_SECS at default
+#    (setting test timeout to 600 changes zero counts but stalls hang-class fixtures ~20×)
+GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 \
+  cargo test --test integration --release self_host_runtime_diff -- --nocapture
 ```
-Read the `PARITY = MATCH/(...)` line (~130s). The non-MATCH set IS the backlog (CC-FAIL / WRONG-OUTPUT / CRASH).
+Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MATCH · UNADJ · BOTH-WRONG). Diagnostic-always-pass — only the printed count means anything. Floors `RUNTIME_DIFF_MATCH_FLOOR` + `GGDEF_ADJUDICATED_FLOOR` ratchet **up only**; if MATCH/ADJ rose, reseed the const in `tests/integration.rs` same commit (never lower).
 
 **OPERATING INVARIANTS (load-bearing):**
 - **Branch reality check (2026-07-07):** the gorget-1/2/3 worktree paths in git metadata are macOS-host paths that do NOT exist in this Linux container; in `/workspace/gorget` the working branch IS `main` (environment: "Main branch: main") and the 2026-07-06/07 session landed ~40 merges/commits on it with the owner present throughout. The older "never advance main, land on gorget-1" rule applied to the host environment — in THIS container, land on `main` via reviewed worktree merges as this session did. If an environment change reintroduces gorget-1, re-verify before assuming either way.
