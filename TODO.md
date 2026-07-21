@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**⛔ STOP — do NOT launch executors until explicit owner GO (owner 2026-07-21).** Queue below is **LOCKED** (owner approved selection). On GO: Wave 1 (5 parallel) → integrate + targeted gates → Wave 2 (5) → integrate → full C+LLVM + force-rebuild parity close. No full suite between waves unless clone ceilings / bootstrap go red.
+**🟢 ROUND OPEN 2026-07-21 (owner GO) — lag-close + SH write-place + both-lane pins.** Queue below is **IN FLIGHT**. Wave 1 (5 parallel) → integrate + targeted gates → Wave 2 (5) → integrate → full C+LLVM + force-rebuild parity close. No full suite between waves unless clone ceilings / bootstrap go red.
 
 **✅ SH 2T + PARALLEL TRACKS ROUND CLOSED 2026-07-21 (record: DONE.md).** Tip `a91479c7` (floor reseed) over `fadb5e8a`. Full C/LLVM 1797/0/24 · parity force-rebuild MATCH 1213/1287 = 94.3% · ADJ 368.
 
