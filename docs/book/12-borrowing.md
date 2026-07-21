@@ -117,29 +117,34 @@ You don't write `(&c).increment()` — the compiler inserts the borrow.
 
 ## Lifetimes
 
-A borrow must not outlive the value it borrows from. Gorget infers lifetimes
-automatically in most cases.
+A borrow must not outlive the value it borrows from. Gorget never asks
+you for lifetime annotations; the compiler tracks origins internally.
 
 ### Automatic Inference
 
-The compiler tracks where borrows come from and ensures they're valid:
-
 ```gorget
 String get_greeting():
-    return "hello"         # string literal — always valid
+    return "hello"         # static / literal — always valid
 
 String identity(String s):
-    return s               # returns input — lifetime follows parameter
+    return s               # today: move or clone at the return boundary
 
 String forward(String s):
-    String local = s       # alias — same lifetime
-    return local
+    String local = s       # in-body alias (CoW borrow)
+    return local           # today: move/clone into the caller's owned result
 ```
 
-These all work without annotations. The compiler sees that:
+These all work without annotations. What the compiler does **today**:
 - `"hello"` is a static literal — always valid
-- `identity` returns its parameter — the result lives as long as the input
-- `forward` assigns to a local then returns — same lifetime chain
+- `identity` / `forward` give the caller an **owned** `String` (move if
+  the source is dead, clone if it is still live) — not a user-visible
+  borrow of the parameter
+
+**Not yet implemented:** keeping a compiler-internal **view** across a
+function return when static provenance proves the result is a short-lived
+projection of a live parameter/receiver (**return-view lazy
+materialization**). That path is design-ruled (still zero annotations in
+source) but not shipped — see `docs/language-design.md` §3.6.
 
 ---
 

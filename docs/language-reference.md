@@ -643,7 +643,13 @@ of its body or execute a `return`, and cannot declare a `throws` clause.
 | `!self`                    | Consuming (move)  |
 | *(no self)*                | Static method     |
 
-Return value lifetime safety is handled automatically by the ownership system. Return values are always owned — functions transfer ownership of their return values to the caller. The compiler infers which parameters' data flows into a function's return value without any annotation (see [section 9.7](#97-return-value-inference)).
+Return value lifetime safety is handled automatically by the ownership system.
+There is **no** user-visible borrowed-return type and no lifetime syntax.
+**Today:** resource / value-aggregate returns are owned at the boundary (move
+if the source is dead, clone if it is a live borrow — `ReturnFromBorrow`).
+**Planned (not shipped):** return-view lazy materialization may keep a
+compiler-internal view across a return when static provenance proves it is
+safe; still no annotations — see §9.7 and `docs/language-design.md` §3.6.
 
 ### 5.2 Structs
 
@@ -2543,17 +2549,35 @@ for item in items:
 
 ### 9.7 Return Value Inference
 
-The compiler automatically infers which parameters' data flows into a function's return value. No annotations are needed — the ownership system ensures return values are always owned, so there is no possibility of returning a dangling reference.
+No lifetime annotations are needed. The surface type of a return is always the
+ordinary type the user wrote (`String`, `SpannedToken`, …) — never a
+borrowed-return form.
 
-Internally, the compiler traces return expressions through function bodies to determine which parameters contribute to the return value. This covers:
+**Today (implemented):** at a resource return boundary the compiler materializes
+ownership when the source is a live borrow (`ensure_owned_at_boundary` /
+`ReturnFromBorrow`), or moves when the source is dead and owned. That guarantees
+the caller cannot observe a dangling borrow of a dead frame. Returning a
+function-local that dies with the frame is rejected or forced to own.
 
-- **Single reference parameter** — the compiler assumes the return derives from that parameter.
-- **`self` methods** — the return is assumed to derive from `self`.
-- **Multiple parameters** — the compiler traces which parameters appear in return positions.
-- **Transitive calls** — the compiler uses callee metadata to determine which arguments flow through.
+**Planned (not shipped — return-view lazy materialization, DEEP-1 / #13):** when
+static provenance proves the result is a short-lived projection of a live
+parameter or receiver, the compiler may keep an internal view across the call
+and materialize only if a conflicting mutation of the source is reachable while
+the view is live. Materialize-when-unsure, never reject; no runtime refcount.
+Ruled in `docs/internals/unified-resource-model.md` §6; user-facing contract
+unchanged (still zero annotations). **Do not assume this is live** — `peek()`
+and similar still clone today.
+
+Internally (today and as the planned path grows), the compiler may trace which
+parameters contribute to a return for diagnostics and provenance:
+
+- **Single reference parameter** — the return may derive from that parameter.
+- **`self` methods** — the return may derive from `self`.
+- **Multiple parameters** — which parameters appear in return positions.
+- **Transitive calls** — callee metadata (when present) for arguments that flow through.
 - **Local variable aliases** — assignments from parameters to locals are traced.
 
-This inference is fully automatic and requires no programmer-visible annotations.
+This analysis is fully automatic and requires no programmer-visible annotations.
 
 ---
 

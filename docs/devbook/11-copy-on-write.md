@@ -626,16 +626,24 @@ set** of positions, and the campaign to make every one reference-grade on
 increment by increment. This subsection is the durable map of what is settled
 and what remains; live status stays in `TODO.md` (the "CoW WAVE 2" queue).
 
-**The remaining *perf* increment — return-view reclaim.** Beyond the correctness
-write-through work, the dominant self-compile clone cost is the
-`ReturnFromBorrow`/`VarDeclFromBorrow` class: a projection of a receiver/param
-materialised at the function-return boundary (`peek(): return
-self.tokens.get(i).unwrap()`). Reclaiming it extends lazy CoW *across* the return
-boundary via **static view-return provenance** — the ruling (static provenance,
-never a runtime refcount; materialise-when-unsure, never reject) and its
-sequencing on the `SlotProvenance`/D6 layer live in
-`docs/internals/unified-resource-model.md` (§6, the SlotProvenance decision).
-Tracked as DEEP-1 / #13 in `TODO.md`.
+**The remaining *perf* increment — return-view lazy materialization
+(DEEP-1 / #13). Not shipped.** Beyond the correctness write-through work, the
+dominant self-compile clone cost is the `ReturnFromBorrow` /
+`VarDeclFromBorrow` class: a projection of a receiver/param materialised at
+the function-return boundary (`peek(): return self.tokens.get(i).unwrap()`)
+via today's `ensure_owned_at_boundary`. **Current behaviour:** those returns
+and many typed binds clone. **Ruled reclaim (aspirational):** extend lazy CoW
+*across* the return boundary via **static view-return provenance** — static
+provenance only (no runtime refcount); materialise-when-unsure, never reject;
+sequenced on `SlotProvenance`/D6. Full ruling:
+`docs/internals/unified-resource-model.md` §6. User-facing docs
+(`language-design.md` §3.6, book ch.11–12) state the same split: owned surface
+type forever; fewer clones only when proven. **Do not call this "alias-sever"
+anymore** — that was the pre-ruling campaign nickname; the design name is
+**return-view lazy materialization**. Tracked as DEEP-1 / #13 in `TODO.md`.
+Risk split: SH-excess `VarDeclFromBorrow` (SH clones where Rust already
+borrow-aliases) needs no new machinery — grab first; measure leaf reclaim
+end-to-end before cross-return work.
 
 **Settled (wave 1 — the place write-through class).** The three write-through
 gaps that silently dropped element stores are closed on both lanes, each pinned

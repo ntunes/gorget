@@ -19322,8 +19322,9 @@ fn self_host_clone_ceiling() {
 // Seeded at a276af64: 1,018,448,411 (measured FRESH this session,
 // regenerated TWICE — bit-identical, deterministic for a fixed tree like
 // the stage-0 count). That is 1.93× the stage-0 lane's 527.4M on the
-// IDENTICAL workload — the quantified alias-sever reclaim headroom (the
-// #13 read-only bind/return class); as it burns down, re-seed downward.
+// IDENTICAL workload — the quantified #13 return-view / bind-return reclaim
+// headroom (ReturnFromBorrow+VarDeclFromBorrow; return-view lazy materialization
+// is design-ruled, not shipped); as it burns down, re-seed downward.
 // Ceiling = seed + ~1% headroom for legitimate small fluctuations from
 // unrelated driver-source edits.
 //

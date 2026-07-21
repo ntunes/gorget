@@ -599,23 +599,31 @@ Never both simultaneously. Enforced at compile time. This prevents data races an
 
 **Gorget requires zero lifetime annotations.** The compiler's borrow checker internally tracks the *origin* of every borrowed value — which parameter, local, or field a reference derives from — to catch use-after-move and dangling-return errors at compile time. This analysis is fully automatic; programmers never annotate lifetimes.
 
-This is possible because Gorget's ownership model draws a hard line at function boundaries: **resource types (`String`, `Vector[T]`, structs with resource fields, etc.) always transfer ownership when returned or stored.** There is no user-visible borrowed-view type that can escape a function. Borrowed parameters (bare and `&`) are only valid within the callee's frame, and a function's return value is always an independent owned value. Within a function body, bare-identifier assignment of resource-typed locals (`Spanned b = a`) follows copy-on-write — see §3.4 — but the cross-function-boundary contract is unchanged. This structural guarantee eliminates the class of bugs that Rust's lifetime annotations exist to prevent.
+**User-facing contract (stable):** there is **no** user-visible borrowed-return type and **no** lifetime syntax on signatures. Callers never write `'a` or `Ref[T]` to receive a function result. Borrowed *parameters* (bare and `&`) are only valid within the callee's frame. Within a function body, bare-identifier assignment of resource-typed locals (`Spanned b = a`) follows copy-on-write — see §3.4. Storing into a field / collection always demands ownership at that boundary (clone if live, move if dead).
+
+**Returns — today vs intended (do not collapse these):**
+
+| | **Today (implemented)** | **Intended reclaim (ruled, not shipped)** |
+|--|-------------------------|-------------------------------------------|
+| Resource / value-aggregate return from a borrow | Materializes at the return boundary (`ensure_owned_at_boundary` → `ReturnFromBorrow` clone) so the caller always receives an independent owned value | When static view-return provenance proves the result is a short-lived projection of a live parameter/receiver, the compiler may keep a **view** across the call and materialize **lazily** only if a conflicting mutation of the source is reachable while the view is live |
+| If analysis cannot prove safety | N/A (always clones) | **Materialize** (today's clone) — never reject the program |
+| Runtime refcount / shared-buffer CoW | Not used | **Rejected** — taxes every mutation; breaks the hand-optimal pillar |
+| User syntax change | None | None — still zero lifetime annotations |
+
+The intended path is **return-view lazy materialization** (DEEP-1 / #13): extend lazy CoW *across* the function-return boundary via compile-time provenance (`BorrowOrigin` / `returns_view` on signatures, including user functions), sequenced on the `SlotProvenance`/D6 layer. Full ruling: `docs/internals/unified-resource-model.md` §6. **It is not implemented yet** — shipping it is a high-risk consumer round (UAF-prone; measure leaf clone reclaim end-to-end first; SH-excess `VarDeclFromBorrow` catch-up needs no new machinery and comes first). Builtin string views (`trim` / slice with `returns_view`) already use a narrower in-body view path; that does **not** mean user `peek(): return self.tokens.get(i).unwrap()` is free today — it still clones.
 
 ```gorget
-# The compiler tracks that x and y are borrowed parameters.
-# Returning one is safe because it transfers ownership (Move).
+# Today: returning a live borrow clones (or moves a dead owned local).
+# Intended later: may keep a view when provenance proves it — still no 'a.
 String longer(String x, String y):
     if x.len() > y.len():
         return x
     return y
 
-# Trait methods need no annotation either — the compiler knows
-# the return value is a freshly constructed or moved value.
+# Trait methods need no lifetime annotation either.
 trait Container:
     String get(Container self, int index)
 
-# Mutable borrow — the compiler tracks that data is mutated
-# and that first() returns a value derived from data.
 String process(String &data):
     data.sort()
     return data.first()
@@ -623,10 +631,10 @@ String process(String &data):
 
 **What the compiler checks automatically:**
 - **Use-after-move** — accessing a variable after it has been moved (`!`) is a compile error
-- **Dangling returns** — returning a reference to a local variable is rejected
+- **Dangling returns of locals** — returning a reference to a function-local that dies with the frame is rejected (or forced to own)
 - **Borrow/move conflicts** — using a borrowed reference after the source has been moved
-- **Transitive tracking** — when the return calls another function, the compiler uses the callee's already-computed origin metadata
 - **Local aliases** — assignments from parameters to locals are traced through
+- **(Planned)** **Transitive view-return provenance** — when a return is a projection of a parameter/receiver, the caller sees the origin so lazy materialize can fire — **not yet the general user-function path**
 
 ---
 
@@ -636,17 +644,17 @@ Gorget provides the same memory safety guarantees as Rust but requires **zero li
 
 | Aspect | Rust | Gorget |
 |--------|------|--------|
-| Lifetime annotations | Required on signatures (`'a`, `'b`) | None — fully inferred |
+| Lifetime annotations | Required on signatures (`'a`, `'b`) | None — never written by the user |
 | Inference source | Signature-only elision rules | Ownership model + body analysis |
-| Borrowed return values | Allowed — annotated with `'a` | Not applicable — Move types transfer ownership on return |
+| Borrowed return values | Allowed — annotated with `'a` | **No user-visible borrowed-return type.** **Today:** resource returns are owned at the boundary (move or clone). **Intended (not shipped):** compiler-internal view-return when static provenance proves it; still no `'a` in source |
 | Use-after-move | Checked | Checked |
-| Dangling references | Prevented by lifetime bounds | Prevented structurally — borrows cannot escape their scope |
+| Dangling references | Prevented by lifetime bounds | Prevented by ownership + origin tracking (reject or force own; planned: prove-or-materialize for return views) |
 | User-facing syntax | `'a`, `'b`, `'static`, `where 'a: 'b` | No lifetime syntax — the compiler handles everything internally |
 
-**Why no annotations are needed:** Rust needs lifetime annotations because it allows functions to return borrowed references — the caller must know *which* input the return value borrows from. Gorget sidesteps this entirely: Move types always transfer ownership when returned. There is no user-visible borrowed-view type that can escape a function boundary. The compiler's internal origin tracking catches safety violations without exposing any of this machinery to the programmer.
+**Why no annotations are needed:** Rust needs lifetime annotations because it exposes borrowed return types in the surface language — the caller must know *which* input the return value borrows from. Gorget never exposes that type: the user always writes ordinary return types (`String`, `SpannedToken`, …). **Today** the implementation keeps that contract by materializing ownership at the return boundary when the source is a live borrow. **Intended later** is the same surface contract with fewer clones when provenance can prove a view is safe — still without any lifetime syntax. Provenance is internal (`BorrowOrigin`); see §3.6's today/intended table and the return-view ruling in `docs/internals/unified-resource-model.md` §6.
 
 ```gorget
-# Gorget: no annotation needed — return transfers ownership
+# Gorget: no annotation — surface type is String either way
 String longer(String x, String y):
     if x.len() > y.len():
         return x
@@ -660,7 +668,7 @@ fn longer<'a>(x: &'a str, y: &'a str) -> &'a str {
 }
 ```
 
-**Trade-off:** Gorget's annotation-free approach means there is no explicit lifetime contract in the signature. Rust's annotations serve as documentation and a stability guarantee — changing which input a return borrows from requires a signature change. In Gorget, the ownership model makes this moot: returned values are always owned, so there is no borrowing relationship to document.
+**Trade-off:** Gorget's annotation-free approach means there is no explicit lifetime contract in the signature for documentation or API stability the way Rust's `'a` provides. The stability guarantee is the **owned surface type** plus CoW value semantics, not a borrow graph in the signature. When return-view reclaim lands, changing *whether* a particular return is a proven view vs a clone remains an implementation detail — not a user-visible signature change.
 
 ---
 
