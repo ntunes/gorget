@@ -31611,13 +31611,14 @@ done",
 /// printed 1) and `x.0 += 5` ICE'd (lower_compound_assign catch-all) on
 /// typecheck-ACCEPTED code. Now both lower via a TupleFieldAccess arm (place +
 /// `Projection::Field(index)`); non-lvalue targets (`5 += 1`) reject at check
-/// (E_InvalidAssignTarget). Direct/`&`-param/nested/plain, C + LLVM. Self-host
-/// lane LAGS (SH SAssign/SCompoundAssign have no tuple-field arm — `lower_fail`);
-/// in `known_gaps/`, an EXPLICIT cited lagging lane (Core #9, TODO:262).
+/// (E_InvalidAssignTarget). Direct/`&`-param/nested/plain, C + LLVM.
+/// SH: parser emits `EFieldAccess(base, "0")`; write paths digit-normalize
+/// `"0"` → `"_0"` in `lower_field_write` / `emit_field_write_from_local`
+/// (read path already did). Promoted out of `known_gaps/`.
 #[test]
 fn tuple_field_assign() {
     run_gg(
-        "known_gaps/tuple_field_assign.gg",
+        "tuple_field_assign.gg",
         "\
 6
 6

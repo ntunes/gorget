@@ -1800,9 +1800,27 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
             pass
     return lower_place_base(&ctx, base_expr, &gmod)
 
+# Tuple-index reconciliation for field WRITES. Parser emits bare-digit field
+# names for `t.0` (`EFieldAccess(base, "0")`); tuple structs register fields
+# only as `_N`. Read path already digit-normalizes (lower_expr EFieldAccess);
+# write paths must do the same or `__field_write_*_0` misses and the store is
+# a silent drop. All-ASCII-digit + non-empty → `"_" + name`; else unchanged.
+String normalize_tuple_digit_field(String field_name):
+    if field_name.byte_len() == 0:
+        return field_name
+    int di = 0
+    while di < field_name.byte_len():
+        int b = field_name.byte_at(di)
+        if b < 0x30 or b > 0x39:
+            return field_name
+        di += 1
+    return "_" + field_name
+
 # Lower `base.field = value_expr`. Emits GICallExtern for the codegen-side
 # __field_write_TYPE_FIELD helper which expands to `((T*)base)->field = value`.
 void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, SpannedExpr value_expr, GirModule &gmod):
+    # Digit-normalize first so tuple `t.0 = v` hits `_0` (see helper above).
+    field_name = normalize_tuple_digit_field(field_name)
     # Field WRITE: an Index-element base (`v[i].f = x`) resolves to a
     # write-through element pointer (Track 1B) — see lower_field_place_base.
     int base = lower_field_place_base(&ctx, base_expr, &gmod)
@@ -1891,6 +1909,9 @@ void lower_field_write(LowerCtx &ctx, SpannedExpr base_expr, String field_name, 
 # Variant of lower_field_write that takes a pre-lowered local id for the
 # value rather than re-lowering an expression.
 void emit_field_write_from_local(LowerCtx &ctx, SpannedExpr base_expr, String field_name, int value_local, GirModule &gmod):
+    # Digit-normalize first so tuple `t.0 OP= v` hits `_0` (sibling of
+    # lower_field_write — same helper, same silent-drop class if skipped).
+    field_name = normalize_tuple_digit_field(field_name)
     # Field WRITE-BACK (compound `v[i].f += n`, pre-lowered value): same
     # write-through element pointer as lower_field_write (Track 1B).
     int base = lower_field_place_base(&ctx, base_expr, &gmod)

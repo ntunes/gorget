@@ -10,12 +10,10 @@
 # Exercises: direct compound (`x.0 += 5`, `x.1 *= 3`), `&`-param write-through
 # (`bump`), nested tuple-field on a struct field (`h.pair.0 += 1`), and plain-`=`.
 #
-# Core #9 lagging lane: the self-host `SAssign` / `SCompoundAssign` lowerers have
-# NO tuple-field (nor, for compound, EDeref) arm — they `lower_fail` it
-# (lower_stmt.gg:1013 / :1228). So this lives in `known_gaps/` (out of the
-# self-host runtime-diff corpus), an EXPLICIT cited lagging lane (Core #9), filed
-# with TODO:262. Promote to top-level when the SH grows tuple-field assign arms.
-# run_gg only ever builds via Rust gg (C/LLVM) — never the self-host.
+# SH lane: parser emits `EFieldAccess(base, "0")` (no ETupleFieldAccess). Read
+# path digit-normalizes `"0"` → `"_0"`; write paths (`lower_field_write` /
+# `emit_field_write_from_local`) must do the same so `__field_write_*__0` hits.
+# Without that normalize, the store is a silent drop (Core #10).
 
 void bump((int, int) &t):
     t.0 += 10
