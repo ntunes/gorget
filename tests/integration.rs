@@ -31446,15 +31446,13 @@ done",
 /// `*b += 5` on a `Box[int]` silently DROPPED the write on both backends
 /// (measured pre-fix: 10, 10, 99). `lower_compound_assign` now has a Deref arm
 /// (read pointee → op → store back). Also exercises `*b OP= v` through a
-/// `&`-borrowed Box param. Same output on C + LLVM. Self-host lane LAGS (SH
-/// `SCompoundAssign` `lower_fail`s EDeref — no `*p OP= v` arm yet); the fixture
-/// lives in `known_gaps/` (out of the self-host runtime-diff corpus), an EXPLICIT
-/// cited lagging lane (Core #9), filed with TODO:262. Promote when the SH
-/// compound-assign grows an EDeref arm.
+/// `&`-borrowed Box param. Same output on C + LLVM. Self-host lane closed
+/// (Face-C): SH `SCompoundAssign` has a matching EDeref arm; fixture is
+/// top-level so it enters the SH runtime-diff corpus (Core #9).
 #[test]
 fn deref_compound_assign() {
     run_gg(
-        "known_gaps/deref_compound_assign.gg",
+        "deref_compound_assign.gg",
         "\
 10
 15

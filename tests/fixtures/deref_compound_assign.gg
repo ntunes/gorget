@@ -5,14 +5,11 @@
 # Deref arm that reads the pointee THROUGH the deref place, applies the op, and
 # stores back (lower-or-reject, Core #10). Same output on both C and LLVM.
 #
-# Core #9 lagging lane: the self-host `SCompoundAssign` lowerer handles only
-# EIdentifier/EFieldAccess/EIndex and `lower_fail`s everything else, so `*p += v`
-# (EDeref) is NOT yet lowered there (SH plain `*p = v` lowers; SH compound does
-# not — the same asymmetry the Rust arm just closed). Lives in `known_gaps/` to
-# stay OUT of the self-host runtime-diff corpus (an EXPLICIT cited lagging lane,
-# not a silent CC-FAIL); the SH `EDeref` compound arm is filed with TODO:262.
-# Promote to top-level when the SH compound-assign grows an EDeref arm. Wired
-# C+LLVM via `run_gg` (which never invokes the self-host).
+# Self-host lane: `SCompoundAssign` has a matching EDeref arm (Face-C) that
+# RMW-s through the Box place (base once, LoBorrowed read, emit_compound_arith,
+# GIDerefStore). Covers owned Box locals AND `&Box` params (SH MutPtr(Box) ABI
+# holds Box heap-pointer bits; type_id_to_name peels MutPtr for the Box name).
+# Top-level so it enters the SH runtime-diff corpus (Core #9 close proven).
 
 void bump(Box[int] &b, int by):
     *b += by

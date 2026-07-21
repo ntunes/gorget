@@ -1224,8 +1224,60 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     # `&`/owned root is skipped by the helper.
                     cow_materialize_projected_root(&ctx, &gmod, target_expr)
                     lower_index_compound_assign(&ctx, *base_box, *idx_box, op, value_expr, &gmod)
+                case EDeref(inner_box):
+                    # `*p OP= v` — RMW through a Box deref place (Face-C /
+                    # Core #9 / Core #10). Plain `*p = v` already lowers
+                    # (SAssign EDeref :972-1011); compound must too, not
+                    # silent lower_fail. Mirrors:
+                    #   - SAssign EDeref plain store
+                    #   - &-param compound RMW (:1157-1164)
+                    #   - Rust lower_compound_assign Expr::Deref
+                    #     (assigns.rs:2052-2093 → emit_compound_place_rmw)
+                    # Base evaluated ONCE; place reused for read + write.
+                    #
+                    # `&Box` params: lower_expr of the param returns a
+                    # GtMutPtr(Box) local WITHOUT auto-deref (resource-ptr
+                    # rule). type_id_to_name peels MutPtr so
+                    # box_deref_inner_name still sees the Box and yields
+                    # the pointee. Critically the SH ABI for MutPtr(Box)
+                    # already holds the Box heap pointer bits in the slot
+                    # (Box is `typedef void*`; OpBorrow of a Box passes
+                    # those bits as void*, matching the owned-Box slot
+                    # representation) — so GIDeref/GIDerefStore at the
+                    # pointee level work on the MutPtr-typed local without
+                    # an extra peel. A GIDeref peel of MutPtr→Box would
+                    # treat the slot as Box* and load the *pointee int*
+                    # into the Box temp (double-deref → SEGV on fixture
+                    # `bump`). Hard pin: fixture line `34` from bump.
+                    int dbox = lower_expr(&ctx, *inner_box, &gmod)
+                    int dbox_tid = ctx.locals.get(dbox).unwrap().type_id
+                    String dbox_tname = type_id_to_name(dbox_tid, &gmod)
+                    match box_deref_inner_name(dbox_tname, &gmod):
+                        case Some(dbox_inner_name):
+                            int dbox_inner_tid = resolve_field_gir_type(dbox_inner_name, &gmod)
+                            # Read pointee as LoBorrowed view into box heap
+                            # (mirror EDeref rvalue lower_expr.gg:5798) so a
+                            # resource consume clones, not moves. Do NOT use
+                            # LoOwned add_local for the read temp (&-param
+                            # arm's LoOwned is wrong for resource pointees).
+                            int cmp_cur = add_local_with(&ctx, dbox_inner_tid, None,
+                                LoBorrowed(), BoRuntimeView(dbox))
+                            emit(&ctx, GIDeref(cmp_cur, dbox, dbox_inner_tid))
+                            int cmp_rhs = lower_expr(&ctx, value_expr, &gmod)
+                            int cmp_dst = add_local(&ctx, dbox_inner_tid, None)
+                            emit_compound_arith(&ctx, op, cmp_dst, cmp_cur, cmp_rhs,
+                                dbox_inner_tid, &gmod)
+                            # Write-back: GIDerefStore already drop-on-
+                            # overwrites resource pointees
+                            # (lir_lower.gg:5026-5046). op_consume at assign
+                            # owns the RMW result.
+                            emit(&ctx, GIDerefStore(dbox,
+                                op_consume(ctx, &gmod, cmp_dst, CkAssign()), dbox_inner_tid))
+                        case None:
+                            lower_fail("SCompoundAssign *deref target is not a Box (got: "
+                                + dbox_tname + ")")
                 else:
-                    lower_fail("SCompoundAssign target is neither EIdentifier, EFieldAccess, nor EIndex (got: " + expr_kind(target_expr.expr) + ")")
+                    lower_fail("SCompoundAssign target is neither EIdentifier, EFieldAccess, EIndex, nor EDeref (got: " + expr_kind(target_expr.expr) + ")")
         case SFor(pat, iter_expr, body, _own, else_body):
             lower_for(&ctx, pat, iter_expr, body, else_body, &gmod, is_main)
         case SThrow(throw_expr):
