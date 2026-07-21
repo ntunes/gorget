@@ -19078,7 +19078,14 @@ fn self_host_bootstrap() {
 // (every read-only `&`-param → bare across the self-host) elided the
 // `&`-formation write-through clones on the Rust-lane self-compile.
 // array_clone 527,384,100 → 12,588,676 (−97.6%). Ceiling = measured + ~1%.
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_720_000;
+//
+// Re-pinned UP 2026-07-21 (lag-close Wave 2 SH Core #9 lands): Dict.get
+// Face-A allow_map write-through + Vector/Deque compound `+=` clone+extend
+// + SH typecheck surface growth raised stage-0 self-compile array_clone
+// 12,651k-class → measured 12,766,424 (this session, twice-consistent under
+// load). Justified semantic cost of SH write-place/op parity, not a bomb.
+// Ceiling = measured + ~1%.
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_895_000;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -19102,7 +19109,10 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_720_000;
 // Re-seeded 2026-07-19 (Class-C round): the read-only-`&`-param burn-down
 // elided the `&`-formation clones on the Rust-lane self-compile.
 // string_clone 443,952,149 → 29,097,964 (−93.4%). Ceiling = measured + ~1%.
-const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 29_400_000;
+//
+// Re-pinned UP 2026-07-21 (lag-close Wave 2, same citation as array ceiling):
+// measured string_clone=30,385,755. Ceiling = measured + ~1%.
+const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 30_690_000;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -19295,7 +19305,10 @@ fn self_host_clone_ceiling() {
 // (read-only alias-bind bare args the SH still clones — the TODO
 // "SH-lowerer bare-arg CoW gap" HIGH) stays filed; re-pin further down as
 // the SH-CoW campaign lands. Ceiling = measured + ~1%.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_027_300_000;
+//
+// Re-pinned UP 2026-07-21 (lag-close Wave 2 SH Core #9 lands — same citation
+// as stage-0): measured stage-1 array_clone=1,034,938,322. Ceiling = measured + ~1%.
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_045_300_000;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -19305,7 +19318,10 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_027_300_000;
 // the array ceiling above: re-&ing the 9 wrongly-bared mutating params
 // took string 2,218,112,953 → 1,892,026,171 — under the pre-Class-C
 // 1,894M. Ceiling = measured + ~1%.
-const STAGE1_STRING_CLONE_CEILING: u64 = 1_911_000_000;
+//
+// Re-pinned UP 2026-07-21 (lag-close Wave 2, same citation as stage-1 array):
+// measured string_clone=1,926,672,347. Ceiling = measured + ~1%.
+const STAGE1_STRING_CLONE_CEILING: u64 = 1_945_950_000;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
