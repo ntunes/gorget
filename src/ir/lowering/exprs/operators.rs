@@ -7,7 +7,9 @@ use crate::parser::ast;
 use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
-use super::{lower_expr, infer_operand_type_full, resolve_none_tag};
+use super::{
+    emit_operator_overload_call, lower_expr, infer_operand_type_full, resolve_none_tag,
+};
 
 /// If an operand is a by-ref alias, emit a LoadRef to dereference it to the
 /// underlying value. Two cases:
@@ -145,10 +147,8 @@ pub(super) fn lower_binary_op(
                         } else {
                             lhs
                         };
-                        let dst = builder.call(
-                            eq_method,
-                            vec![self_ptr, rhs],
-                            BOOL_TYPE,
+                        let dst = emit_operator_overload_call(
+                            ctx, builder, eq_method, vec![self_ptr, rhs], BOOL_TYPE,
                         );
                         if op == AstOp::Neq {
                             let neg = builder.un_op(UnOp::Not, BOOL_TYPE, FunctionBuilder::copy(dst));
@@ -182,7 +182,9 @@ pub(super) fn lower_binary_op(
                         } else {
                             lhs.clone()
                         };
-                        let cmp_result = builder.call(effective_name, vec![self_ptr, rhs], I64_TYPE);
+                        let cmp_result = emit_operator_overload_call(
+                            ctx, builder, effective_name, vec![self_ptr, rhs], I64_TYPE,
+                        );
                         let cmp_op = match op {
                             AstOp::Lt => CmpOp::Lt,
                             AstOp::Gt => CmpOp::Gt,
@@ -299,7 +301,9 @@ pub(super) fn lower_binary_op(
                         } else {
                             lhs.clone()
                         };
-                        let dst = builder.call(effective_name, vec![self_ptr, rhs], operand_type);
+                        let dst = emit_operator_overload_call(
+                            ctx, builder, effective_name, vec![self_ptr, rhs], operand_type,
+                        );
                         return FunctionBuilder::copy(dst);
                     }
                 }
@@ -491,7 +495,9 @@ pub(super) fn lower_unary_op(
                 } else {
                     val.clone()
                 };
-                let dst = builder.call(effective_name, vec![self_ptr], operand_type);
+                let dst = emit_operator_overload_call(
+                    ctx, builder, effective_name, vec![self_ptr], operand_type,
+                );
                 return FunctionBuilder::copy(dst);
             }
         }

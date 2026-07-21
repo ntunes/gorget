@@ -11203,6 +11203,131 @@ hello!!??
     );
 }
 
+// ── R2+R3 operator-overload call ownership (temps + Identifier drop-old) ──
+// Bare `builder.call` on user overloads left inline-ctor resource temps
+// unregistered (LSan leak) and Identifier overload `+=` Move-rebound without
+// drop-old. Shared `emit_operator_overload_call` + Identifier drop-old + Index
+// move_zero_and_mark of the set result. F1–F4: binary / Identifier / Index
+// inline-ctor + named live RHS. LSan siblings gate leak/double-free freedom.
+
+#[test]
+fn overload_arg_temp_binary() {
+    run_gg(
+        "overload_arg_temp_binary.gg",
+        "\
+drop Acc 5
+sum 6
+drop Acc 6
+drop Acc 1",
+    );
+}
+
+#[test]
+fn overload_arg_temp_binary_asan() {
+    assert_gg_sanitize_clean(
+        "overload_arg_temp_binary",
+        "\
+drop Acc 5
+sum 6
+drop Acc 6
+drop Acc 1",
+    );
+}
+
+#[test]
+fn overload_arg_temp_identifier() {
+    run_gg(
+        "overload_arg_temp_identifier.gg",
+        "\
+drop Acc 5
+drop Acc 1
+id 6
+drop Acc 6",
+    );
+}
+
+#[test]
+fn overload_arg_temp_identifier_asan() {
+    assert_gg_sanitize_clean(
+        "overload_arg_temp_identifier",
+        "\
+drop Acc 5
+drop Acc 1
+id 6
+drop Acc 6",
+    );
+}
+
+#[test]
+fn overload_arg_temp_index() {
+    run_gg(
+        "overload_arg_temp_index.gg",
+        "\
+drop Acc 5
+drop Acc 1
+vec 6
+untouched 2
+drop Acc 6
+drop Acc 2",
+    );
+}
+
+#[test]
+fn overload_arg_temp_index_asan() {
+    assert_gg_sanitize_clean(
+        "overload_arg_temp_index",
+        "\
+drop Acc 5
+drop Acc 1
+vec 6
+untouched 2
+drop Acc 6
+drop Acc 2",
+    );
+}
+
+#[test]
+fn overload_arg_temp_named_rhs() {
+    run_gg(
+        "overload_arg_temp_named_rhs.gg",
+        "\
+bin 6
+b after bin 5
+drop Acc 10
+id 15
+b after id 5
+drop Acc 2
+idx 7
+b after idx 5
+drop Acc 7
+drop Acc 15
+drop Acc 6
+drop Acc 5
+drop Acc 1",
+    );
+}
+
+#[test]
+fn overload_arg_temp_named_rhs_asan() {
+    assert_gg_sanitize_clean(
+        "overload_arg_temp_named_rhs",
+        "\
+bin 6
+b after bin 5
+drop Acc 10
+id 15
+b after id 5
+drop Acc 2
+idx 7
+b after idx 5
+drop Acc 7
+drop Acc 15
+drop Acc 6
+drop Acc 5
+drop Acc 1",
+    );
+}
+
 /// Deque compound `+=` is Array-kind sibling of Vector concat rebind.
 #[test]
 fn deque_compound_concat() {

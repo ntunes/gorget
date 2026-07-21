@@ -1,0 +1,25 @@
+# R2+R3 F2: Identifier `a += Acc(...)` with INLINE resource-ctor RHS.
+# R2: overload call drops the inline-ctor temp after the call.
+# R3: drop-old of the named local BEFORE Move rebind of the result
+#     (sibling of String Identifier += / Array-kind +=).
+# Drop prints + LSan gate the full lifecycle.
+from std.collections import Vector
+
+struct Acc:
+    int total
+    Vector[int] buf
+
+equip Acc with Drop:
+    void drop(!self):
+        print(f"drop Acc {self.total}")
+
+equip Acc with Add[Acc]:
+    Acc add(self, Acc other):
+        Vector[int] b = []
+        b.push(self.total + other.total)
+        return Acc(self.total + other.total, b)
+
+void main():
+    Acc a = Acc(1, [1])
+    a += Acc(5, [5])
+    print(f"id {a.total}")

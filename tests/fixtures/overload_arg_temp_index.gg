@@ -1,0 +1,26 @@
+# R2 F3: Index `v[i] += Acc(...)` with INLINE resource-ctor RHS.
+# The A2-R2 M1 fixture `compound_index_resource_taint.gg` deliberately uses
+# call-shaped `mk(n)` RHS so the ICE fix is ASan-clean WITHOUT fixing this
+# class. This fixture is the inline-ctor costume — must be LSan-clean after
+# emit_operator_overload_call + move_zero_and_mark of the set result.
+from std.collections import Vector
+
+struct Acc:
+    int total
+    Vector[int] buf
+
+equip Acc with Drop:
+    void drop(!self):
+        print(f"drop Acc {self.total}")
+
+equip Acc with Add[Acc]:
+    Acc add(self, Acc other):
+        Vector[int] b = []
+        b.push(self.total + other.total)
+        return Acc(self.total + other.total, b)
+
+void main():
+    Vector[Acc] v = [Acc(1, [1]), Acc(2, [2])]
+    v[0] += Acc(5, [5])
+    print(f"vec {v[0].total}")
+    print(f"untouched {v[1].total}")

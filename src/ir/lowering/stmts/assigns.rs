@@ -9,6 +9,7 @@ use crate::span::Spanned;
 use super::super::context::{LoweringContext, SharedLocalKind};
 use super::super::exprs::{
     lower_expr, infer_operand_type_full, maybe_auto_propagate,
+    emit_operator_overload_call,
     guard_inner_suffix, emit_guard_get_ptr,
     emit_shared_mutex_lock_get, emit_shared_mutex_lock_set,
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
@@ -1090,7 +1091,10 @@ fn emit_compound_place_rmw(
             builder.emit_borrow(ptr_local, Place::local(cur));
             (FunctionBuilder::copy(ptr_local), rhs)
         };
-        let result = builder.call(effective_name, vec![self_ptr, rhs], field_type);
+        let result = emit_operator_overload_call(
+            ctx, builder, effective_name, vec![self_ptr, rhs], field_type,
+        );
+        // emit_field_store_with_cleanup drops-old + move_zeros the registered result.
         emit_field_store_with_cleanup(
             ctx, builder, field_place, field_type, &FunctionBuilder::copy(result),
         );
@@ -1604,36 +1608,13 @@ pub(super) fn lower_compound_assign(
                 return;
             }
 
-            // Check for operator overload on Named types
-            let overload_method = match op {
-                ast::BinaryOp::Add => Some("add"),
-                ast::BinaryOp::Sub => Some("sub"),
-                ast::BinaryOp::Mul => Some("mul"),
-                ast::BinaryOp::Div => Some("div"),
-                ast::BinaryOp::Rem => Some("rem"),
-                ast::BinaryOp::Mod => Some("mod"),
-                _ => None,
-            }.and_then(|method| {
-                if let Some(GirType::Named(type_name)) = ctx.type_registry.get(value_type).cloned() {
-                    let mangled = format!("{type_name}__{method}");
-                    let has_method = ctx.fn_sigs.contains_key(&mangled)
-                        || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{type_name}__{method}")));
-                    if has_method {
-                        let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
-                            mangled
-                        } else {
-                            ctx.fn_sigs.keys()
-                                .find(|k| k.ends_with(&format!("_for_{type_name}__{method}")))
-                                .cloned()
-                                .unwrap_or(mangled)
-                        };
-                        Some(effective_name)
-                    } else { None }
-                } else { None }
-            });
-
-            let tmp = if let Some(effective_name) = overload_method {
-                // Borrow lhs for self parameter
+            // Operator overload on Named types — shared resolver (Core #4).
+            // R2: route through emit_operator_overload_call (resource RHS temp
+            // lifetime + result drop-reg). R3: drop-old named local BEFORE Move
+            // rebind, then move_zero_and_mark the tracked result (mirror String
+            // Identifier += ~1536–1554). Without drop-old the prior value leaks;
+            // without move_zero_and_mark the call_tracked result double-frees.
+            if let Some(effective_name) = resolve_compound_overload(ctx, op, value_type) {
                 let self_ptr = if let Operand::Copy(ref place) | Operand::Move(ref place) = cur_val {
                     let ptr_type = ctx.register_ptr_type(value_type);
                     let ptr_local = builder.add_local(ptr_type, None);
@@ -1642,39 +1623,66 @@ pub(super) fn lower_compound_assign(
                 } else {
                     cur_val
                 };
-                builder.call(effective_name, vec![self_ptr, rhs], value_type)
-            } else {
-                let gir_op = match op {
-                    ast::BinaryOp::Add => BinOp::Add,
-                    ast::BinaryOp::Sub => BinOp::Sub,
-                    ast::BinaryOp::Mul => BinOp::Mul,
-                    ast::BinaryOp::Div => BinOp::Div,
-                    ast::BinaryOp::Rem => BinOp::Rem,
-                    ast::BinaryOp::Mod => BinOp::Mod,
-                    ast::BinaryOp::AddWrap => BinOp::AddWrap,
-                    ast::BinaryOp::SubWrap => BinOp::SubWrap,
-                    ast::BinaryOp::MulWrap => BinOp::MulWrap,
-                    ast::BinaryOp::BitAnd => BinOp::BitAnd,
-                    ast::BinaryOp::BitOr => BinOp::BitOr,
-                    ast::BinaryOp::BitXor => BinOp::BitXor,
-                    ast::BinaryOp::Shl => BinOp::Shl,
-                    ast::BinaryOp::Shr => BinOp::Shr,
-                    _ => BinOp::Add, // fallback
+                let tmp = emit_operator_overload_call(
+                    ctx, builder, effective_name, vec![self_ptr, rhs], value_type,
+                );
+                let dst = if is_mut_capture {
+                    Place { local: local_id, projections: vec![Projection::Deref] }
+                } else {
+                    Place::local(local_id)
                 };
-                builder.bin_op(gir_op, value_type, cur_val, rhs)
+                // Drop old AFTER the overload (self was borrowed for the call),
+                // BEFORE Move of the fresh result.
+                if ctx.type_registry.needs_drop(value_type) {
+                    if is_mut_capture {
+                        builder.drop(dst.clone());
+                    } else if ctx.drops.is_moved(local_id) {
+                        builder.drop_if_alive(Place::local(local_id));
+                    } else {
+                        builder.drop(Place::local(local_id));
+                    }
+                }
+                builder.assign_mode(
+                    crate::ir::instructions::AssignMode::Move,
+                    dst,
+                    FunctionBuilder::copy(tmp),
+                );
+                ctx.move_zero_and_mark(builder, tmp);
+                if ctx.func_state.cow_lazy_mat_flag.remove(&local_id).is_some()
+                    && ctx.collection_ref_source(builder, local_id).is_some()
+                {
+                    ctx.unset_ownership(builder, local_id);
+                }
+                return;
+            }
+
+            let gir_op = match op {
+                ast::BinaryOp::Add => BinOp::Add,
+                ast::BinaryOp::Sub => BinOp::Sub,
+                ast::BinaryOp::Mul => BinOp::Mul,
+                ast::BinaryOp::Div => BinOp::Div,
+                ast::BinaryOp::Rem => BinOp::Rem,
+                ast::BinaryOp::Mod => BinOp::Mod,
+                ast::BinaryOp::AddWrap => BinOp::AddWrap,
+                ast::BinaryOp::SubWrap => BinOp::SubWrap,
+                ast::BinaryOp::MulWrap => BinOp::MulWrap,
+                ast::BinaryOp::BitAnd => BinOp::BitAnd,
+                ast::BinaryOp::BitOr => BinOp::BitOr,
+                ast::BinaryOp::BitXor => BinOp::BitXor,
+                ast::BinaryOp::Shl => BinOp::Shl,
+                ast::BinaryOp::Shr => BinOp::Shr,
+                _ => BinOp::Add, // fallback
             };
+            let tmp = builder.bin_op(gir_op, value_type, cur_val, rhs);
             let dst = if is_mut_capture {
                 Place { local: local_id, projections: vec![Projection::Deref] }
             } else {
                 Place::local(local_id)
             };
-            // Phase C: tmp is fresh op-result (binop or overload call), dead
-            // after this assign. Move for resource types, Copy for primitives.
-            // Cluster 5 probe (2026-05-10): the disjunction
-            // `is_resource_type || needs_drop` is NOT redundant. See
-            // `lowering/functions.rs:28` for the full reasoning
-            // (upgrade-scan-dependent `needs_drop` vs upgrade-scan-independent
-            // transitive `is_resource_type`).
+            // Phase C: tmp is fresh binop result, dead after this assign. Move
+            // for resource types, Copy for primitives. Cluster 5 probe
+            // (2026-05-10): the disjunction `is_resource_type || needs_drop`
+            // is NOT redundant. See `lowering/functions.rs:28`.
             let cmp_mode = if ctx.type_registry.is_resource_type(value_type)
                 || ctx.type_registry.needs_drop(value_type)
             {
@@ -2012,35 +2020,9 @@ pub(super) fn lower_compound_assign(
                 }
                 FunctionBuilder::copy(tmp)
             } else {
-                // Check for operator overload on Named types
-                let overload_method = match op {
-                    ast::BinaryOp::Add => Some("add"),
-                    ast::BinaryOp::Sub => Some("sub"),
-                    ast::BinaryOp::Mul => Some("mul"),
-                    ast::BinaryOp::Div => Some("div"),
-                    ast::BinaryOp::Rem => Some("rem"),
-                    ast::BinaryOp::Mod => Some("mod"),
-                    _ => None,
-                }.and_then(|method| {
-                    if let Some(GirType::Named(tn)) = ctx.type_registry.get(elem_type).cloned() {
-                        let mangled = format!("{tn}__{method}");
-                        let has_method = ctx.fn_sigs.contains_key(&mangled)
-                            || ctx.fn_sigs.keys().any(|k| k.ends_with(&format!("_for_{tn}__{method}")));
-                        if has_method {
-                            let effective_name = if ctx.fn_sigs.contains_key(&mangled) {
-                                mangled
-                            } else {
-                                ctx.fn_sigs.keys()
-                                    .find(|k| k.ends_with(&format!("_for_{tn}__{method}")))
-                                    .cloned()
-                                    .unwrap_or(mangled)
-                            };
-                            Some(effective_name)
-                        } else { None }
-                    } else { None }
-                });
-
-                if let Some(effective_name) = overload_method {
+                // Operator overload — shared resolver (Core #4) + tracked call
+                // (R2: inline-ctor RHS temp drop + result drop-reg).
+                if let Some(effective_name) = resolve_compound_overload(ctx, op, elem_type) {
                     let self_ptr = if cur_is_borrow {
                         // `cur_val` already borrows the element in place (a Ptr
                         // from index_load_borrow) — pass it straight as the
@@ -2057,7 +2039,9 @@ pub(super) fn lower_compound_assign(
                         builder.emit_borrow(ptr_local, Place::local(cur_local));
                         FunctionBuilder::copy(ptr_local)
                     };
-                    let dst = builder.call(effective_name, vec![self_ptr, rhs], elem_type);
+                    let dst = emit_operator_overload_call(
+                        ctx, builder, effective_name, vec![self_ptr, rhs], elem_type,
+                    );
                     FunctionBuilder::copy(dst)
                 } else {
                     let gir_op = compound_op_to_gir(op);
@@ -2074,7 +2058,7 @@ pub(super) fn lower_compound_assign(
                 let mangled = format!("{type_name}__set");
                 builder.call_void(
                     mangled,
-                    vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result],
+                    vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result.clone()],
                 );
             } else if is_dict {
                 let ptr_type = ctx.register_mut_ptr_type(obj_type);
@@ -2083,7 +2067,7 @@ pub(super) fn lower_compound_assign(
                 let mangled = format!("{type_name}__put");
                 builder.call_void(
                     mangled,
-                    vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result],
+                    vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result.clone()],
                 );
             } else {
                 // Custom type: try Type__set / IndexMut_for_Type__set
@@ -2100,7 +2084,7 @@ pub(super) fn lower_compound_assign(
                         builder.emit_borrow_mut(ptr_local, place.clone());
                         builder.call_void(
                             set_name.clone(),
-                            vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result],
+                            vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local), result.clone()],
                         );
                         dispatched = true;
                         break;
@@ -2118,6 +2102,16 @@ pub(super) fn lower_compound_assign(
                          accepted an index-assign the lowering cannot \
                          dispatch"
                     );
+                }
+            }
+            // After __set/__put consumes the overload result, mark it moved so
+            // call_tracked's drop registration does not double-free (R2 Index).
+            if let Operand::Copy(ref p) | Operand::Move(ref p) = result {
+                if p.projections.is_empty()
+                    && ctx.drops.is_registered(p.local)
+                    && !ctx.drops.is_moved(p.local)
+                {
+                    ctx.move_zero_and_mark(builder, p.local);
                 }
             }
         }

@@ -17,7 +17,9 @@ use super::context::{
     LoweringContext, MaterializeDirective, MaterializePosition, SharedLocalInfo, SharedLocalKind,
 };
 use super::drops::DropScopeKind;
-use super::exprs::{lower_expr, infer_operand_type_full, maybe_auto_propagate};
+use super::exprs::{
+    lower_expr, infer_operand_type_full, maybe_auto_propagate, emit_operator_overload_call,
+};
 
 /// If `operand` is `Constant::GlobalRef(name)` referencing a module-level
 /// global whose type needs drop (`String`, collections, …), emit a clone
@@ -2821,7 +2823,9 @@ fn emit_assert_comparison(
         );
     }
 
-    // Named types: dispatch to Type__eq / Type__compare if available
+    // Named types: dispatch to Type__eq / Type__compare if available.
+    // Route through emit_operator_overload_call (Core #4 — same ByPtr prep
+    // + result tracking as binary/compound overload sites).
     if let Some(GirType::Named(ref type_name)) = ctx.type_registry.get(lhs_type).cloned() {
         if matches!(op, BinaryOp::Eq | BinaryOp::Neq) {
             let eq_method = format!("{type_name}__eq");
@@ -2829,7 +2833,9 @@ fn emit_assert_comparison(
                 let self_ptr_type = ctx.register_ptr_type(lhs_type);
                 let self_ptr = builder.add_local(self_ptr_type, None);
                 builder.emit_borrow(self_ptr, Place::local(lhs_local));
-                let result = builder.call(
+                let result = emit_operator_overload_call(
+                    ctx,
+                    builder,
                     eq_method,
                     vec![FunctionBuilder::copy(self_ptr), FunctionBuilder::copy(rhs_local)],
                     BOOL_TYPE,
@@ -2856,7 +2862,9 @@ fn emit_assert_comparison(
                 let self_ptr_type = ctx.register_ptr_type(lhs_type);
                 let self_ptr = builder.add_local(self_ptr_type, None);
                 builder.emit_borrow(self_ptr, Place::local(lhs_local));
-                let cmp_result = builder.call(
+                let cmp_result = emit_operator_overload_call(
+                    ctx,
+                    builder,
                     effective_name,
                     vec![FunctionBuilder::copy(self_ptr), FunctionBuilder::copy(rhs_local)],
                     I64_TYPE,

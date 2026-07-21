@@ -1,0 +1,35 @@
+# R2 F4: named live RHS must NOT be dropped after the overload call
+# (borrow-only). Binary + Identifier + Index shapes with named Acc.
+# LSan-clean; named `b` still usable after each site.
+from std.collections import Vector
+
+struct Acc:
+    int total
+    Vector[int] buf
+
+equip Acc with Drop:
+    void drop(!self):
+        print(f"drop Acc {self.total}")
+
+equip Acc with Add[Acc]:
+    Acc add(self, Acc other):
+        Vector[int] b = []
+        b.push(self.total + other.total)
+        return Acc(self.total + other.total, b)
+
+void main():
+    Acc a = Acc(1, [1])
+    Acc b = Acc(5, [5])
+    Acc c = a + b
+    print(f"bin {c.total}")
+    print(f"b after bin {b.total}")
+
+    Acc d = Acc(10, [10])
+    d += b
+    print(f"id {d.total}")
+    print(f"b after id {b.total}")
+
+    Vector[Acc] v = [Acc(2, [2])]
+    v[0] += b
+    print(f"idx {v[0].total}")
+    print(f"b after idx {b.total}")

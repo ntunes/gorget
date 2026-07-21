@@ -2507,3 +2507,237 @@ fn widen_int(builder: &mut FunctionBuilder, type_id: TypeId, operand: Operand) -
         operand
     }
 }
+
+/// Emit a user operator-overload call (`Type__add` / equip `_for_Type__add` /
+/// `Type__eq` / `Type__compare` / `Type__neg`, …) with free-call-equivalent
+/// resource-arg lifetime + result drop-registration.
+///
+/// **Inputs are already-lowered `Operand`s.** Call sites lower `lhs`/`rhs` (or
+/// compound RHS / self-borrow) first, then hand the operands here. Re-running
+/// `lower_call_arg` on the original `Spanned` exprs would double-eval.
+///
+/// Order mirrors free-call lowering (`lower_call` arg loop + post-call drain):
+/// 1. Snapshot `move_zero_baseline` / `temp_drop_baseline` **FIRST**
+/// 2. For each resource ByPtr arg, apply the same predicates as
+///    `lower_call_arg` ~254–323 (named/live/registered → borrow; unregistered
+///    owning temp → re-home Move + `pending_temp_drops`; already-Ptr → forward)
+/// 3. `ctx.call_tracked(...)` so a resource result is drop-registered
+/// 4. Drain **this call’s** `pending_temp_drops` (unconditional drop) +
+///    `pending_move_zeros`
+///
+/// Core #4: every bare user-overload call routes here (binary/unary ops,
+/// Identifier/Index compound, place RMW, assert Type__eq/compare). Atomic
+/// `__add` / runtime symbols stay on their own paths.
+pub(in crate::ir::lowering) fn emit_operator_overload_call(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    func_name: impl Into<String>,
+    args: Vec<Operand>,
+    return_type: TypeId,
+) -> LocalId {
+    let func_name = func_name.into();
+
+    // 1. Baselines FIRST — only drain entries this call adds.
+    let move_zero_baseline = ctx.func_state.pending_move_zeros.len();
+    let temp_drop_baseline = ctx.func_state.pending_temp_drops.len();
+
+    // 2. ByPtr prep per arg (Operand-level mirror of lower_call_arg Borrow|ByPtr).
+    let mut call_args = Vec::with_capacity(args.len());
+    for (i, arg) in args.into_iter().enumerate() {
+        call_args.push(prep_overload_call_arg(ctx, builder, arg, &func_name, i));
+    }
+
+    // 3. Tracked call — resource results land in the drop set.
+    let dst = ctx.call_tracked(builder, &func_name, call_args, return_type);
+
+    // 4. Drain THIS call's pending move-zeros + temp drops.
+    let pending: Vec<LocalId> = ctx
+        .func_state
+        .pending_move_zeros
+        .drain(move_zero_baseline..)
+        .collect();
+    for local in pending {
+        builder.move_zero(Place::local(local));
+        ctx.drops.mark_moved(local);
+    }
+    let temp_drops: Vec<LocalId> = ctx
+        .func_state
+        .pending_temp_drops
+        .drain(temp_drop_baseline..)
+        .collect();
+    for local in temp_drops {
+        // Unconditional: bare-borrow callees never move the temp (same as
+        // free-call drain). DropIfAlive would be stripped — temp isn't in the
+        // drop-elab flag set.
+        builder.drop(Place::local(local));
+    }
+
+    dst
+}
+
+/// Operand-level ByPtr preparation for one overload-call argument.
+///
+/// Mirrors `lower_call_arg`'s `Ownership::Borrow if callee_passes_by_ptr` arm
+/// (calls.rs ~254–323) without re-lowering the source expression. Non-ByPtr
+/// args (value primitives) pass through unchanged.
+fn prep_overload_call_arg(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    val: Operand,
+    callee_name: &str,
+    arg_idx: usize,
+) -> Operand {
+    let abi = ctx
+        .fn_param_abis
+        .get(callee_name)
+        .and_then(|abis| abis.get(arg_idx))
+        .copied();
+
+    let callee_is_move_param = match abi {
+        Some(a) => matches!(a, ParamABI::ByPtr | ParamABI::ByMutPtr),
+        None => {
+            // Fallback when ParamABI isn't recorded: derive from the callee's
+            // declared param type, else from the operand's local type.
+            let param_ty = ctx
+                .fn_sigs
+                .get(callee_name)
+                .and_then(|(params, _)| params.get(arg_idx).copied());
+            if let Some(pt) = param_ty {
+                ctx.type_registry.is_resource_type(pt)
+            } else if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+                if place.projections.is_empty() {
+                    let lt = builder.local_type(place.local);
+                    ctx.type_registry.is_resource_type(lt)
+                        || ctx.type_registry.needs_drop(lt)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+    };
+
+    let callee_passes_by_ptr = match abi {
+        Some(a) => a != ParamABI::ByValue,
+        None => {
+            let callee_param_ownership = ctx
+                .fn_param_ownerships
+                .get(callee_name)
+                .and_then(|ownerships| ownerships.get(arg_idx))
+                .copied();
+            let callee_param_is_mut_borrow = callee_param_ownership
+                .map(|o| matches!(o, Ownership::MutableBorrow))
+                .unwrap_or(false);
+            callee_is_move_param || callee_param_is_mut_borrow
+        }
+    };
+
+    if !callee_passes_by_ptr {
+        return val;
+    }
+
+    let callee_param_ownership = ctx
+        .fn_param_ownerships
+        .get(callee_name)
+        .and_then(|ownerships| ownerships.get(arg_idx))
+        .copied();
+    let use_mut_ptr = matches!(callee_param_ownership, Some(Ownership::Move));
+
+    // GlobalRef → GlobalRefPtr: emit &global_name directly.
+    if let Operand::Constant(Constant::GlobalRef(name)) = &val {
+        return Operand::Constant(Constant::GlobalRefPtr(name.clone()));
+    }
+
+    if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
+        if place.projections.is_empty() {
+            let local_type = builder.local_type(place.local);
+            // Already a Ptr/MutPtr (self-borrow, index_load_borrow, bare param) —
+            // forward; don't wrap another layer.
+            if matches!(
+                ctx.type_registry.get(local_type),
+                Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+            ) {
+                return FunctionBuilder::copy(place.local);
+            }
+            if use_mut_ptr {
+                let ptr_type = ctx.register_mut_ptr_type(local_type);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(dst, place.clone());
+                ctx.drops.mark_moved(place.local);
+                ctx.func_state.pending_move_zeros.push(place.local);
+                return FunctionBuilder::copy(dst);
+            } else if !ctx.is_named_local(place.local)
+                && ctx.is_owned_local(builder, place.local)
+                && ctx.type_registry.needs_drop(local_type)
+                && !ctx.drops.is_registered(place.local)
+                && !ctx.drops.is_moved(place.local)
+            {
+                // Owning temporary (e.g. inline `Acc(...)` ctor) built for this
+                // argument. Callee borrows (const Ptr) and does NOT drop it, so
+                // the caller must free it once the call completes. Re-home into
+                // a fresh whole-slot store (LIR drop-flag Initialized) then
+                // schedule a post-call drop — same as free-call path.
+                let owned = builder.add_local(local_type, None);
+                builder.assign_mode(
+                    crate::ir::instructions::AssignMode::Move,
+                    Place::local(owned),
+                    FunctionBuilder::mov(place.local),
+                );
+                ctx.set_owned(builder, owned);
+                let ptr_type = ctx.register_ptr_type(local_type);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow(dst, Place::local(owned));
+                ctx.func_state.pending_temp_drops.push(owned);
+                return FunctionBuilder::copy(dst);
+            } else {
+                // Named / live / registered (call_tracked result) → borrow in place.
+                let ptr_type = ctx.register_ptr_type(local_type);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow(dst, place.clone());
+                return FunctionBuilder::copy(dst);
+            }
+        }
+    }
+
+    // Materialize non-place values (constants) into a temp, then borrow.
+    let param_ty = ctx
+        .fn_sigs
+        .get(callee_name)
+        .and_then(|(params, _)| params.get(arg_idx).copied());
+    if let Some(pt) = param_ty {
+        let mat_type = if matches!(val, Operand::Constant(Constant::Str(_)))
+            && ctx
+                .pointee_type(pt)
+                .map_or(false, |inner| ctx.type_mapper.is_string_type(inner))
+        {
+            ctx.pointee_type(pt).unwrap_or(pt)
+        } else {
+            // Prefer the non-pointer declared type when the ABI is ByPtr of T.
+            ctx.pointee_type(pt).unwrap_or(pt)
+        };
+        let tmp = builder.add_local(mat_type, None);
+        builder.assign(Place::local(tmp), val);
+        if use_mut_ptr {
+            let ptr_type = ctx.register_mut_ptr_type(mat_type);
+            let dst = builder.add_local(ptr_type, None);
+            builder.emit_borrow_mut(dst, Place::local(tmp));
+            return FunctionBuilder::copy(dst);
+        } else {
+            let ptr_type = ctx.register_ptr_type(mat_type);
+            let dst = builder.add_local(ptr_type, None);
+            builder.emit_borrow(dst, Place::local(tmp));
+            return FunctionBuilder::copy(dst);
+        }
+    }
+    if let Operand::Constant(Constant::Str(_)) = &val {
+        let sv_type = ctx.type_mapper.owned_string_type;
+        let tmp = builder.add_local(sv_type, None);
+        builder.assign(Place::local(tmp), val);
+        let ptr_type = ctx.register_ptr_type(sv_type);
+        let dst = builder.add_local(ptr_type, None);
+        builder.emit_borrow(dst, Place::local(tmp));
+        return FunctionBuilder::copy(dst);
+    }
+    val
+}
