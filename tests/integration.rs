@@ -21700,22 +21700,14 @@ fn self_host_driver_rejects_string_index_compound_assign() {
     );
 }
 
-/// SELF-HOST parity gap (FILED, not landed — Core #9): Rust gg now rejects
-/// non-Add resource/binary operators at check (`E_UnsupportedOperator` —
-/// Track B / `nonadd_*_error` fixtures). The self-host typechecker still only
-/// gates string-index-assign on `SCompoundAssign` and does not validate that
-/// the compound/binary op is defined for the operand type, so
-/// `s.name -= "x"` / `s - "x"` still check-pass under SH. INTENDED: reject
-/// with `E_UnsupportedOperator` matching Rust. This test is `#[ignore]`d
-/// because a missing reject cannot be detected by a green check (accept
-/// passes). Un-ignore when SH mirrors `operator_supported_for_type` in
-/// typecheck.gg (~3640 SCompoundAssign + BinaryOp walk) + diagnostic.gg.
-/// Zone note: Track A owns the 2T get-chain region of typecheck.gg this
-/// round — SH mirror deliberately lagged to avoid collision.
+/// SELF-HOST parity (Core #9): SH typechecker rejects non-Add resource/binary
+/// operators at check with `E_UnsupportedOperator`, matching Rust gg
+/// (`nonadd_*_error` fixtures). Mirrors `operator_supported_for_type` in
+/// typecheck.gg (SCompoundAssign compound=true + check_safety EBinaryOp
+/// compound=false) + `DkUnsupportedOperator` in diagnostic.gg.
+/// Note: Vector compound `+=` still rejects on SH until Track 2 lands the
+/// Rust-side allow (intentional SH lag).
 #[test]
-#[ignore = "self-host typechecker does not yet reject non-Add OP=/binary ops \
-            (E_UnsupportedOperator); Rust gg does. Flips green when SH mirrors \
-            operator_supported_for_type — see TODO.md `## Self-host parity`."]
 #[serial(self_host_lowerer_driver)]
 fn sh_nonadd_operator_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");

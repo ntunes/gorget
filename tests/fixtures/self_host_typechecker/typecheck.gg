@@ -34,9 +34,9 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
-from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name
+from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from std.conv import int_to_str
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -2300,6 +2300,13 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             check_safety_expr(*right, scope_id, &state, &scopes, &types, &ctx)
             if op == "??":
                 check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, scopes, &types, &ctx)
+            # E_UnsupportedOperator for arith / bitwise binary ops (Rust
+            # BinaryOp arm, compound=false). Non-arith ops (`==`, `and`, `in`,
+            # `??`) fall through operator_supported_for_type as supported.
+            String bin_base = arith_base_op(op)
+            if op_trait_name(bin_base) != "" or is_integer_only_op(bin_base):
+                int left_ty = infer_expr_type(SpannedExpr((*left).expr, (*left).span), scopes, &types, &ctx)
+                check_operator_supported(left_ty, op, false, expr.span, scopes, &types, &ctx)
         case EUnaryOp(_op, operand):
             check_safety_expr(*operand, scope_id, &state, &scopes, &types, &ctx)
         case ECall(callee, args, _targs):
@@ -3628,6 +3635,197 @@ void check_sized_int_literal_range(SpannedExpr init_expr, int var_type_id, TypeT
     if value < range_min or value > range_max:
         ctx.diagnostics.push(Diagnostic.error(init_expr.span, DkValueOutOfRange(), f"value {value} is out of range for type {prim_name} (valid range: {range_min}..={range_max})"))
 
+# ── Unsupported operator reject (E_UnsupportedOperator) ─────
+# Mirrors Rust `operator_supported_for_type` / `check_operator_supported`
+# (src/semantic/typecheck.rs). Gates compound assign (type_check_stmt
+# SCompoundAssign, compound=true) and binary arith/bitwise (check_safety
+# EBinaryOp, compound=false) so accepted programs never reach the
+# resource-moves ICE or broken C for non-Add ops on String/Money/etc.
+#
+# Type keys come from resolved types (primitive / def name / Array) — never
+# from identifier strings. Trait satisfaction uses the typed EquipInfo
+# registry + primitive intrinsic helpers (primitive_satisfies_trait).
+
+# Trait-registry key for `ty`. Empty string = don't gate (Error/Never/Var).
+String type_key_for_trait_lookup(int type_id, ScopeTable scopes, TypeTable types):
+    if type_id < 0 or type_id >= types.types.len():
+        return ""
+    int tid = type_id
+    # Peel one Ref layer (borrowed Money still keys as Money).
+    ResolvedType peel = get_rtype_at(types.types, tid)
+    match peel:
+        case RTRef(inner):
+            if inner >= 0 and inner < types.types.len():
+                tid = inner
+        else:
+            pass
+    ResolvedType rt = get_rtype_at(types.types, tid)
+    match rt:
+        case RTPrimitive(name):
+            # Rust describe_primitive maps StringType → "String"; SH splits
+            # str/String primitives — both key as String for concat/trait lookup.
+            if name == "str" or name == "String":
+                return "String"
+            return name
+        case RTDefined(def_id):
+            DefInfo d = scopes.get_def(def_id)
+            return d.name
+        case RTGeneric(def_id, _):
+            DefInfo d = scopes.get_def(def_id)
+            return d.name
+        case RTArray(_, _):
+            return "Array"
+        case RTError():
+            return ""
+        case RTNever():
+            return ""
+        case RTVar(_):
+            return ""
+        else:
+            return ""
+
+# Integer-only primitives (wrap / bitwise / shifts). No float.
+bool is_integer_primitive_key(String key):
+    if key == "int" or key == "int8" or key == "int16" or key == "int32" or key == "int64":
+        return true
+    if key == "uint" or key == "uint8" or key == "uint16" or key == "uint32" or key == "uint64":
+        return true
+    return false
+
+# Normalize compound op spelling to the binary base (`-=` → `-`).
+String arith_base_op(String op):
+    if op == "+=":
+        return "+"
+    if op == "-=":
+        return "-"
+    if op == "*=":
+        return "*"
+    if op == "/=":
+        return "/"
+    if op == "%=":
+        return "%"
+    if op == "+%=":
+        return "+%"
+    if op == "-%=":
+        return "-%"
+    if op == "*%=":
+        return "*%"
+    if op == "&=":
+        return "&"
+    if op == "|=":
+        return "|"
+    if op == "^=":
+        return "^"
+    if op == "<<=":
+        return "<<"
+    if op == ">>=":
+        return ">>"
+    return op
+
+bool is_integer_only_op(String base):
+    if base == "+%" or base == "-%" or base == "*%":
+        return true
+    if base == "&" or base == "|" or base == "^" or base == "<<" or base == ">>":
+        return true
+    return false
+
+# Trait name for an overloadable arithmetic op, or "" if none.
+String op_trait_name(String base):
+    if base == "+":
+        return "Add"
+    if base == "-":
+        return "Sub"
+    if base == "*":
+        return "Mul"
+    if base == "/":
+        return "Div"
+    if base == "%":
+        return "Rem"
+    if base == "mod":
+        return "Mod"
+    return ""
+
+String op_method_name(String base):
+    if base == "+":
+        return "add"
+    if base == "-":
+        return "sub"
+    if base == "*":
+        return "mul"
+    if base == "/":
+        return "div"
+    if base == "%":
+        return "rem"
+    if base == "mod":
+        return "mod"
+    return ""
+
+# Typed registry + intrinsic: does `type_key` implement `trait_name`?
+bool has_trait_impl_by_name(TypeTable types, String type_key, String trait_name):
+    for impl_info in types.trait_registry.impls:
+        if impl_info.self_type_name == type_key and impl_info.trait_name == trait_name:
+            return true
+    if primitive_satisfies_trait(type_key, trait_name):
+        return true
+    return false
+
+# Inherent / equip method without requiring the trait name match.
+bool has_method_for_type_name(TypeTable types, String type_key, String method):
+    for impl_info in types.trait_registry.impls:
+        if impl_info.self_type_name == type_key:
+            for m in impl_info.method_names:
+                if m == method:
+                    return true
+    return false
+
+# Whether `op` (binary or compound spelling) is supported on `ty`.
+# `compound=true` rejects Vector/Deque/Array `+=` (no place-arm path yet —
+# Track 2 lands the Rust allow; SH compound Vector += stays reject).
+bool operator_supported_for_type(int ty, String op, bool compound, ScopeTable scopes, TypeTable types):
+    String type_key = type_key_for_trait_lookup(ty, scopes, types)
+    if type_key == "":
+        # Error/Never/Var — don't cascade.
+        return true
+    String base = arith_base_op(op)
+    if is_integer_only_op(base):
+        return is_integer_primitive_key(type_key)
+    String trait_name = op_trait_name(base)
+    if trait_name != "":
+        if has_trait_impl_by_name(types, type_key, trait_name):
+            return true
+        String method = op_method_name(base)
+        if method != "" and has_method_for_type_name(types, type_key, method):
+            return true
+        # Builtin String concatenation — only `+` / `+=`.
+        if base == "+" and type_key == "String":
+            return true
+        # Builtin Vector/Array binary `+` concat. Place-arm compound `v += w`
+        # is NOT supported on SH yet (Track 2 Rust allow; SH lag by design).
+        if base == "+" and not compound:
+            if type_key == "Vector" or type_key == "Deque" or type_key == "Array":
+                return true
+        return false
+    # Non-arithmetic ops gated elsewhere (comparisons / logicals / `in`).
+    return true
+
+String unsupported_operator_message(String op, String type_name):
+    if type_name == "String":
+        return "operator `" + op + "` is not defined for type `String` — String supports `+`/`+=` (concatenation) only"
+    String base = arith_base_op(op)
+    String trait_name = op_trait_name(base)
+    String method = op_method_name(base)
+    if trait_name == "":
+        return "operator `" + op + "` is not defined for type `" + type_name + "` — only integer numeric types support this operator"
+    return "operator `" + op + "` is not defined for type `" + type_name + "` — equip with `" + trait_name + "[" + type_name + "]` (or implement `" + method + "`) to use `" + op + "`"
+
+void check_operator_supported(int ty, String op, bool compound, Span span, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    if operator_supported_for_type(ty, op, compound, scopes, types):
+        return
+    String type_name = type_key_for_trait_lookup(ty, scopes, types)
+    if type_name == "":
+        type_name = "<error>"
+    ctx.diagnostics.push(Diagnostic.error(span, DkUnsupportedOperator(), unsupported_operator_message(op, type_name)))
+
 # ── String index-assign reject (StringIndexAssign) ──────────
 # Mirrors Rust's check_string_index_assign in src/semantic/typecheck.rs:4174
 # (kind SemanticErrorKind::StringIndexAssign, message at errors.rs:773),
@@ -3813,13 +4011,18 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             check_string_index_assign(target, scope_id, scopes, &types, &ctx)
             walk_expr_closures(value, scope_id, &scopes, &types, &ctx)
 
-        case SCompoundAssign(target, _, value):
+        case SCompoundAssign(target, op, value):
             # StringIndexAssign sibling: reject `s[i] += x` when `s` is a String,
             # matching Rust gg (typecheck.rs:3343). Before this, SCompoundAssign
             # fell into the `else: pass` arm and the String write-back compiled
             # as a SILENT NO-OP. The value sub-expression is still walked for
             # closures, mirroring the SAssign arm.
             check_string_index_assign(target, scope_id, scopes, &types, &ctx)
+            # E_UnsupportedOperator: reject non-Add compound ops on String /
+            # Money / etc. (Rust typecheck.rs CompoundAssign arm, compound=true).
+            # Vector `+=` stays reject on SH until Track 2 lands the allow.
+            int ca_target_ty = infer_expr_type(target, scopes, &types, &ctx)
+            check_operator_supported(ca_target_ty, op, true, target.span, scopes, &types, &ctx)
             walk_expr_closures(value, scope_id, &scopes, &types, &ctx)
 
         case SReturn(opt_expr):
