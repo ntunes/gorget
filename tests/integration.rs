@@ -22714,23 +22714,14 @@ fn self_host_check_rejects_illtyped() {
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
-/// SELF-HOST parity gap (FILED, not landed — Core #9): the self-host typechecker
-/// implements the 2T materialize-on-write reject but MISSES the get-chain descent
-/// position the Rust gg + ggdef lanes just closed. It REJECTS the direct
-/// `h.tag = v` store on a bare drop-tainted param, but ACCEPTS the get-chain
-/// store `h.items.get(0).unwrap().name = v` — silently privatising a copy of the
-/// single-owner `h` (R's `Drop` fires twice). INTENDED behavior: reject
-/// `E_MoveWithoutOperator`, like Rust gg + ggdef. This test runs the self-host
-/// `check` driver on the known_gaps fixture and asserts a nonzero exit; it is
-/// `#[ignore]`d because the SH accepts today (a `gg check` sanity CANNOT detect a
-/// MISSING reject — an accept passes — so this is a wired executable record, not
-/// Self-host 2T get-chain materialize reject (Core #9 close of the SH lane):
+/// Self-host 2T get-chain materialize reject (Core #9 SH lane close): a store
 /// `h.items.get(0).unwrap().f = v` on a bare drop-tainted param must REJECT
-/// with E_MoveWithoutOperator, matching Rust gg + ggdef. Helpers:
+/// `E_MoveWithoutOperator`, matching Rust gg + ggdef. Helpers:
 /// `is_field_addressable_collection` + `get_chain_root_def_spanned` /
 /// `get_chain_root_name`, wired into `reject_if_tainted_materialize_root` and
 /// `reject_amp_self_mutator`, with a LOCAL place-or-get-chain gate in
-/// `reject_materialize_on_write` (shared `expr_is_place` stays strict).
+/// `reject_materialize_on_write` (shared `expr_is_place` stays strict). Runs the
+/// self-host `check` driver on the known_gaps fixture; asserts nonzero exit.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn sh_cow_taint_getchain_reject() {
@@ -22753,9 +22744,8 @@ fn sh_cow_taint_getchain_reject() {
     assert!(
         !check.status.success(),
         "self-host `gg check` on a get-chain materialize of a tainted bare param \
-         SHOULD exit nonzero (E_MoveWithoutOperator — intended, matching Rust gg + \
-         ggdef). If this now fails, the SH get-chain descent landed — un-ignore \
-         and retire the `## Self-host parity` TODO.\nstdout: {}\nstderr: {}",
+         MUST exit nonzero (E_MoveWithoutOperator — matching Rust gg + ggdef). \
+         A green exit is a 2T get-chain reject regression.\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr),
     );

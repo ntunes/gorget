@@ -1073,15 +1073,11 @@ fn emit_compound_place_rmw(
     }
 
     // Primitive binop path — value types only. Kept READ-first.
-    // NOTE (output-review 2026-07-20): a resource field with NO matching overload
-    // and no String `+` (e.g. `s.name -= "x"`, `w.m -= Money(..)`) is NOT
-    // typecheck-rejected — it passes `gg check` then ICEs here on the shallow
-    // `Copy` of a resource (`[resource-moves] shallow copy of resource`). That is
-    // PRE-EXISTING (the old code did the shallow read unconditionally) and out of
-    // this fix's `+`/`Add`-only scope; it fails LOUDLY (ICE, not a silent
-    // miscompile — safe per Core #10). The reference-grade fix is to typecheck-
-    // REJECT a resource-field `OP=` with no matching overload/builtin — filed in
-    // TODO (non-Add-operator resource compound-assign reject).
+    // NOTE: non-Add resource/String OP= is now typecheck-rejected
+    // (`E_UnsupportedOperator`, Track B 2026-07-21). Reaching this shallow
+    // `Copy` of a resource for an unsupported op is a typecheck bug — not an
+    // expected path. String `+=` / Add overload route above via overload resolve
+    // or the String-Add special case in this helper.
     let cur = builder.add_local(field_type, None);
     builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
     let rhs = lower_expr(ctx, builder, value);
