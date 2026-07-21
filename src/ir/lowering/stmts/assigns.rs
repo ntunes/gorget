@@ -1003,6 +1003,10 @@ fn resolve_compound_overload(
 ///                       intermediate copy. `gorget_str_cat` reads the old value
 ///                       BEFORE the cleanup-store drops it, and its fresh
 ///                       (`returns_fresh`) result does not alias the field.
+///   * Array-kind `+`  → pass `Operand::Copy(place)` DIRECTLY into `bin_op`
+///                       Add (LIR CollectionKind::Array → clone+extend); no
+///                       intermediate shallow Copy. Cleanup-store drops the
+///                       old buffer when writing the fresh concat result.
 ///   * resource + `OP` overload → `emit_borrow(place)` for the `self` arg. The
 ///                       overload takes `self` by borrow, so it does not consume
 ///                       the old value before the cleanup-store drops it.
@@ -1034,6 +1038,27 @@ fn emit_compound_place_rmw(
         );
         emit_field_store_with_cleanup(
             ctx, builder, field_place, field_type, &FunctionBuilder::copy(tmp),
+        );
+        return;
+    }
+
+    // Array-kind (Vector/Deque/GorgetArray) concat: `field += other` → bin_op
+    // Add (LIR clone+extend). Pass the field place DIRECTLY into bin_op — no
+    // intermediate shallow Copy (that intermediate IS the resource ICE). The
+    // cleanup-store drops the old buffer when writing the fresh concat result.
+    // Typed `collection_kind` — never name-match.
+    let is_array_kind = ctx.type_registry.collection_kind(field_type)
+        == Some(CollectionKind::Array);
+    if is_array_kind && matches!(op, ast::BinaryOp::Add) {
+        let rhs = lower_expr(ctx, builder, value);
+        let result = builder.bin_op(
+            BinOp::Add,
+            field_type,
+            Operand::Copy(field_place.clone()),
+            rhs,
+        );
+        emit_field_store_with_cleanup(
+            ctx, builder, field_place, field_type, &FunctionBuilder::copy(result),
         );
         return;
     }
@@ -1073,11 +1098,11 @@ fn emit_compound_place_rmw(
     }
 
     // Primitive binop path — value types only. Kept READ-first.
-    // NOTE: non-Add resource/String OP= is now typecheck-rejected
-    // (`E_UnsupportedOperator`, Track B 2026-07-21). Reaching this shallow
-    // `Copy` of a resource for an unsupported op is a typecheck bug — not an
-    // expected path. String `+=` / Add overload route above via overload resolve
-    // or the String-Add special case in this helper.
+    // NOTE: non-Add resource/String OP= is typecheck-rejected
+    // (`E_UnsupportedOperator`). Array-kind `+=` and String `+=` / Add overload
+    // route above (String-Add special case, Array-kind bin_op, overload resolve).
+    // Reaching this shallow `Copy` of a resource is a typecheck bug — not an
+    // expected path.
     let cur = builder.add_local(field_type, None);
     builder.assign(Place::local(cur), Operand::Copy(field_place.clone()));
     let rhs = lower_expr(ctx, builder, value);
@@ -1521,6 +1546,45 @@ pub(super) fn lower_compound_assign(
             {
                 ctx.unset_ownership(builder, local_id);
             }
+                return;
+            }
+
+            // Array-kind (Vector/Deque/GorgetArray) concat via += → bin_op Add
+            // (LIR clone+extend). Same semantics as `a = a + b`. Drop the old
+            // owned value BEFORE rebinding so the prior buffer doesn't leak
+            // (mirror plain-assign drop-old). Typed `collection_kind` — never
+            // name-match. Non-Add Array ops stay typecheck-rejected.
+            let is_array_kind = ctx.type_registry.collection_kind(value_type)
+                == Some(CollectionKind::Array);
+            if is_array_kind && matches!(op, ast::BinaryOp::Add) {
+                let tmp = builder.bin_op(BinOp::Add, value_type, cur_val, rhs);
+                // Drop old AFTER computing new, BEFORE assign (plain assign
+                // mirror at lower_assign Identifier arm). Mut-capture writes
+                // through the pointee place.
+                let dst = if is_mut_capture {
+                    Place { local: local_id, projections: vec![Projection::Deref] }
+                } else {
+                    Place::local(local_id)
+                };
+                if ctx.type_registry.needs_drop(value_type) {
+                    if is_mut_capture {
+                        builder.drop(dst.clone());
+                    } else if ctx.drops.is_moved(local_id) {
+                        builder.drop_if_alive(Place::local(local_id));
+                    } else {
+                        builder.drop(Place::local(local_id));
+                    }
+                }
+                builder.assign_mode(
+                    crate::ir::instructions::AssignMode::Move,
+                    dst,
+                    FunctionBuilder::copy(tmp),
+                );
+                if ctx.func_state.cow_lazy_mat_flag.remove(&local_id).is_some()
+                    && ctx.collection_ref_source(builder, local_id).is_some()
+                {
+                    ctx.unset_ownership(builder, local_id);
+                }
                 return;
             }
 

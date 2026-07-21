@@ -919,8 +919,9 @@ pub(super) fn emit_collection_constructor(
 
     // Tier 2: name-parse fallback (legacy path; retire incrementally
     // as more lowering sites emit typed Resource operands).
-    if name.starts_with("Vector__") || name.starts_with("GorgetArray__") {
+    if name.starts_with("Vector__") || name.starts_with("Deque__") || name.starts_with("GorgetArray__") {
         let elem_type = name.strip_prefix("Vector__")
+            .or_else(|| name.strip_prefix("Deque__"))
             .or_else(|| name.strip_prefix("GorgetArray__"))
             .unwrap_or("int64_t");
         if args.is_empty() {

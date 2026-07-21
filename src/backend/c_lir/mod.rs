@@ -357,7 +357,7 @@ fn is_monomorphized_wrapper_type(name: &str) -> bool {
     name.starts_with("Channel__")
         || name.starts_with("Shared__")
         || name.starts_with("Weak__")
-        || name.starts_with("Vector__")
+        || name.starts_with("Vector__") || name.starts_with("Deque__")
         || name.starts_with("Dict__")
         || name.starts_with("Set__")
         || name.starts_with("HashMap__")

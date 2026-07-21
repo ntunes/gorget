@@ -1,0 +1,19 @@
+# Deque compound `+=` is concat rebind (Array-kind sibling of Vector).
+# Deque shares Vector's runtime (gorget_array_*); no literal sugar for Deque.
+
+from std.collections import Deque
+
+void main():
+    Deque[int] a = Deque[int]()
+    a.push(1)
+    a.push(2)
+    a.push(3)
+    Deque[int] b = Deque[int]()
+    b.push(4)
+    b.push(5)
+    a += b
+    print(f"{a.len()}")
+    for x in a:
+        print(f"{x}")
+    # RHS unchanged
+    print(f"{b.len()}")

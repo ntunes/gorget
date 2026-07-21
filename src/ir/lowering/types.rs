@@ -735,7 +735,7 @@ pub fn ensure_generic_field_type_registered(
             }
             // Collection types: all resolve to GorgetArray/GorgetMap/etc. but need
             // a registered TypeId so fields referencing them don't get UNIT_TYPE.
-            "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box" => {
+            "Vector" | "Deque" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box" => {
                 register_collection_alias(mapper, registry, &name.node, generic_args, &mangled);
                 return;
             }

@@ -423,7 +423,7 @@ impl GenericCollector {
                     self.register_instance(base, generic_args, TemplateKind::Struct);
                 } else if self.enum_templates.contains_key(base) {
                     self.register_instance(base, generic_args, TemplateKind::Enum);
-                } else if matches!(base.as_str(), "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
+                } else if matches!(base.as_str(), "Vector" | "Deque" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box") {
                     // Runtime collection types — register as Struct so the type name is
                     // available for method call mangling (no struct template to monomorphize)
                     self.register_instance(base, generic_args, TemplateKind::Struct);
@@ -1718,7 +1718,7 @@ impl GenericCollector {
             // this guard).
             let is_runtime_collection = matches!(
                 base_name.as_str(),
-                "Vector" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box"
+                "Vector" | "Deque" | "Dict" | "HashMap" | "Set" | "HashSet" | "Box"
                     | "Channel" | "RWLock" | "Shared" | "Weak" | "Heap"
                     | "Mutex" | "Guard" | "ReadGuard" | "WriteGuard"
             );

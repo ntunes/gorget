@@ -100,11 +100,10 @@ public static Vector[ResourceEntry] RESOURCES = [
             CsResource(), CkVector(), BkNotBox(),
             false, Some("gorget_array"), None, true)),
 
-    # Deque__T — Prefix; CkDeque (distinct kind, same runtime).
-    # NOTE: method_prefix left None — map_monomorphized_to_runtime does NOT
-    # have a Deque__ arm today (Deque method dispatch goes through different
-    # paths, e.g. insts.rs's strip_prefix). Routing Deque__ through the
-    # array-family arm would change observable behaviour; out of scope here.
+    # Deque__T — Prefix; CkDeque (distinct kind, same runtime as Vector).
+    # method_prefix="gorget_array" routes Deque__T__method → gorget_array_method
+    # (same family arm as Vector__/GorgetArray__). User-facing Deque[T]()
+    # constructors and methods share the array runtime.
     ResourceEntry(
         [MkPrefix("Deque__")],
         ResourceMetadata(
@@ -113,7 +112,7 @@ public static Vector[ResourceEntry] RESOURCES = [
             Some("gorget_array_clone"),
             None,
             CsResource(), CkDeque(), BkNotBox(),
-            false, None, None, true)),
+            false, Some("gorget_array"), None, true)),
 
     # Heap__T — Prefix; CkHeap; typed_constructor=false (factory shape, Heap.new()).
     # method_prefix="gorget_heap" routes Heap__T__method → gorget_heap_method.

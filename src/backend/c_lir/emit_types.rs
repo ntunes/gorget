@@ -2197,7 +2197,7 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
             s.elem_drop_fn.as_deref() == Some("gorget_array_free"))
         || recursive_drop_fn_used("gorget_array_free");
     if vector_struct_present
-        || has(&|n| n.starts_with("gorget_array_") || n.starts_with("Vector__"))
+        || has(&|n| n.starts_with("gorget_array_") || n.starts_with("Vector__") || n.starts_with("Deque__"))
     {
         ensure_array!(out, emitted_array);
     }

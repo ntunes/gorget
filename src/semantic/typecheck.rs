@@ -5595,10 +5595,15 @@ impl<'a> TypeChecker<'a> {
     }
 
     /// Whether `op` is supported on `ty` (numeric / String concat / Vector
-    /// binary concat / trait equip / inherent method). `compound` distinguishes
-    /// binary Vector `+` (supported) from place-arm `v += w` (NOT supported —
-    /// no compound path today; reject rather than invent).
+    /// binary+compound concat / trait equip / inherent method). `compound`
+    /// is reserved for future op-specific distinctions; Array-family `+` /
+    /// `+=` share the same support (book desugar: `+=` ≡ `x = x + rhs`).
     fn operator_supported_for_type(&self, ty: TypeId, op: BinaryOp, compound: bool) -> bool {
+        // `compound` currently unused for the Array-family path (binary and
+        // compound Add are both allowed). Kept on the signature so call sites
+        // stay uniform and future op-specific gates can re-use it without a
+        // signature churn. Silence unused-param warning without renaming.
+        let _ = compound;
         let Some(type_key) = self.type_key_for_trait_lookup(ty) else {
             // Error/Never/Var — don't cascade.
             return true;
@@ -5640,10 +5645,13 @@ impl<'a> TypeChecker<'a> {
             if matches!(op, BinaryOp::Add) && type_key == "String" {
                 return true;
             }
-            // Builtin Vector/Array binary `+` concat (LIR CollectionKind::Array).
-            // Place-arm compound `v += w` is NOT a supported path — reject.
+            // Builtin Vector/Deque/Array `+` / `+=` concat (LIR
+            // CollectionKind::Array — clone lhs then extend with rhs).
+            // Compound `v += w` desugars to the same bin_op rebind as
+            // `v = v + w` (see assigns.rs Identifier + place-RMW arms).
+            // Non-Add ops (Sub/Mul/…) stay rejected — no Array-family
+            // overload for those.
             if matches!(op, BinaryOp::Add)
-                && !compound
                 && matches!(type_key.as_str(), "Vector" | "Deque" | "Array")
             {
                 return true;

@@ -1194,8 +1194,9 @@ pub(super) fn lower_call(
             return FunctionBuilder::copy(dst);
         }
 
-        // Collection constructors: Dict[K,V](), HashMap[K,V](), Set[K](), HashSet[K](), Vector[T]()
-        if matches!(name.as_str(), "Dict" | "HashMap" | "Set" | "HashSet" | "Vector") {
+        // Collection constructors: Dict[K,V](), HashMap[K,V](), Set[K](), HashSet[K](),
+        // Vector[T](), Deque[T]() — Array-kind Deque shares Vector's runtime.
+        if matches!(name.as_str(), "Dict" | "HashMap" | "Set" | "HashSet" | "Vector" | "Deque") {
             if let Some(type_args) = generic_args {
                 if !type_args.is_empty() {
                     let mangled = super::super::types::mangle_generic_name(name, type_args);

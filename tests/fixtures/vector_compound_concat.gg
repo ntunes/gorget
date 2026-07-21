@@ -1,0 +1,27 @@
+# Vector compound `+=` is concat rebind (same as `a = a + b`).
+# Covers Identifier arm (drop-old + Move) and field place-RMW arm.
+
+from std.collections import Vector
+
+struct Holder:
+    Vector[int] items
+
+void main():
+    # Identifier compound concat
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+    a += b
+    print(f"{a.len()}")
+    for x in a:
+        print(f"{x}")
+    # RHS unchanged
+    print(f"{b.len()}")
+
+    # Field compound concat (place RMW path)
+    Holder h = Holder([10, 20])
+    Vector[int] extra = [30]
+    h.items += extra
+    print(f"{h.items.len()}")
+    for x in h.items:
+        print(f"{x}")
+    print(f"{extra.len()}")

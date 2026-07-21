@@ -3,6 +3,9 @@
 struct Vector[T]:
     pass
 
+struct Deque[T]:
+    pass
+
 struct Dict[K, V]:
     pass
 

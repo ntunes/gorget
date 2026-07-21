@@ -858,7 +858,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
     // Skip collection types — they have special C constructors (gorget_array_new,
     // GorgetDict__new, etc.) that don't use compound literal syntax.
     const COLLECTION_TYPES: &[&str] = &[
-        "Vector", "Dict", "HashMap", "Set", "HashSet", "Box", "Channel", "Arena", "TrackingAllocator", "PoolAllocator", "TlsfAllocator",
+        "Vector", "Deque", "Dict", "HashMap", "Set", "HashSet", "Box", "Channel", "Arena", "TrackingAllocator", "PoolAllocator", "TlsfAllocator",
         "FixedBufferAllocator", "FallbackAllocator",
     ];
     if let Expr::Call { callee, .. } = &expr.node {

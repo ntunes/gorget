@@ -4423,7 +4423,7 @@ fn register_collection_method_sigs(
         }
 
         // Register sentinel-to-Option wrapping for find/index_of on collections
-        if matches!(base_name, "Vector" | "Dict" | "HashMap" | "Set" | "HashSet") {
+        if matches!(base_name, "Vector" | "Deque" | "Dict" | "HashMap" | "Set" | "HashSet") {
             ctx.sentinel_to_option_methods.insert(format!("{mangled_name}__find"));
             ctx.sentinel_to_option_methods.insert(format!("{mangled_name}__index_of"));
         }

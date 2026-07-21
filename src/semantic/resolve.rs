@@ -17,7 +17,7 @@ pub use crate::parser::ast::Ownership;
 /// redundant `from std.sync import Channel` (where `Channel` is a builtin, not a
 /// std.sync export) is not flagged.
 const BUILTIN_GENERIC_TYPES: &[&str] = &[
-    "Vector", "Dict", "HashMap", "Set", "HashSet", "Box", "Future", "Task",
+    "Vector", "Deque", "Dict", "HashMap", "Set", "HashSet", "Box", "Future", "Task",
     "Channel", "Shared", "Weak", "Mutex", "Guard", "TaskGroup", "FxHasher",
 ];
 

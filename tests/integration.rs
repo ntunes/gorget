@@ -11061,6 +11061,44 @@ fn vector_concat() {
     );
 }
 
+/// Vector compound `+=` is concat rebind (same as `a = a + b`). Covers
+/// Identifier arm (drop-old + Move) and field place-RMW arm.
+#[test]
+fn vector_compound_concat() {
+    run_gg(
+        "vector_compound_concat.gg",
+        "\
+5
+1
+2
+3
+4
+5
+2
+3
+10
+20
+30
+1",
+    );
+}
+
+/// Deque compound `+=` is Array-kind sibling of Vector concat rebind.
+#[test]
+fn deque_compound_concat() {
+    run_gg(
+        "deque_compound_concat.gg",
+        "\
+5
+1
+2
+3
+4
+5
+2",
+    );
+}
+
 #[test]
 fn dict_keys_values() {
     run_gg(
