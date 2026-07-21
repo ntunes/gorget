@@ -1,0 +1,15 @@
+# 2E (D2): a write through plain `self` on an EXPLICIT TRAIT equip method
+# materialises a private copy — same as inherent equip / bare param. Callee
+# sees the mutation; the caller's value is UNCHANGED. No trait carve-out.
+trait Poker:
+    void poke(self)
+struct Counter:
+    int n
+equip Counter with Poker:
+    void poke(self):
+        self.n = self.n + 1
+        print(f"callee {self.n}")
+void main():
+    Counter c = Counter(1)
+    c.poke()
+    print(f"caller {c.n}")

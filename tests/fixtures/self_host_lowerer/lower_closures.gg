@@ -606,6 +606,9 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
         bool needs_concrete_self_alias = false
         int concrete_self_tid_saved = UNIT_TYPE
         int self_lid_saved = -1
+        # Saved for the deferred concrete-self alias: plain non-scalar self
+        # must be LoParam so cow_materialize_root_by_name fires (D2 / 2E-SH).
+        int self_ownership_saved = 0
         if has_self:
             # _1 = self — determine pointer type from ownership
             # self (bare) → *T, &self → *mut T, !self → *mut T
@@ -613,6 +616,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
             int self_ownership = 0
             Param sp = mdef.params.get(0).unwrap()
             self_ownership = sp.ownership
+            self_ownership_saved = self_ownership
             # OWN_MUTABLE=1 (&self), OWN_MOVE=2 (!self) → *mut T
             if self_ownership == 1 or self_ownership == 2:
                 self_tid = register_type(&gmod, GtMutPtr(target_tid))
@@ -689,8 +693,19 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
         # The alias's GIAssign goes into the entry block before any
         # body statements, so `self.field` accesses in the body see
         # the cast pointer.
+        #
+        # D2 / 2E-SH: plain non-scalar `self` is a bare BORROW of the
+        # caller's value — tag the concrete alias LoParam (not default
+        # LoOwned) so `cow_materialize_root_by_name` privatises it on a
+        # genuine self-write. `&self`/`!self` keep LoOwned write-through
+        # / consume (is_mut_borrow_param_local skips mut-borrow roots
+        # regardless, but LoOwned also fails the LoParam gate).
         if needs_concrete_self_alias:
-            int concrete_self_lid = add_local(&ctx, concrete_self_tid_saved, Some("self"))
+            int concrete_self_lid = -1
+            if self_ownership_saved == 0 and not target_is_scalar:
+                concrete_self_lid = add_local_with(&ctx, concrete_self_tid_saved, Some("self"), LoParam(), BoParam(-1))
+            else:
+                concrete_self_lid = add_local(&ctx, concrete_self_tid_saved, Some("self"))
             emit(&ctx, GIAssign(concrete_self_lid, OpCopy(self_lid_saved)))
             nl_put(&ctx, "self", concrete_self_lid)
 

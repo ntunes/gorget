@@ -1,0 +1,16 @@
+# 2E (D2 twin): a write through `&self` on an EXPLICIT TRAIT equip method
+# WRITES THROUGH to the caller — `&self` is a mutable borrow, not a bare
+# param. Callee and caller both see 2. Contrasts with the plain-self
+# materialize fixture (caller stays 1).
+trait Poker:
+    void poke(&self)
+struct Counter:
+    int n
+equip Counter with Poker:
+    void poke(&self):
+        self.n = self.n + 1
+        print(f"callee {self.n}")
+void main():
+    Counter c = Counter(1)
+    c.poke()
+    print(f"caller {c.n}")

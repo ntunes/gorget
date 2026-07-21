@@ -31366,6 +31366,26 @@ fn cow_self_value_push_materialize() {
     run_gg("cow_self_value_push_materialize.gg", "callee 2\ncaller 1");
 }
 
+/// 2E (D2, explicit-trait sibling): plain `self` on a trait equip method also
+/// materialises — no trait carve-out. Callee 2, caller 1.
+#[test]
+fn cow_trait_plain_self_field_materialize() {
+    run_gg(
+        "cow_trait_plain_self_field_materialize.gg",
+        "callee 2\ncaller 1",
+    );
+}
+
+/// 2E (D2 twin): `&self` on a trait equip method writes through — callee 2,
+/// caller 2. Contrasts with the plain-self materialize fixture.
+#[test]
+fn cow_trait_amp_self_field_writethrough() {
+    run_gg(
+        "cow_trait_amp_self_field_writethrough.gg",
+        "callee 2\ncaller 2",
+    );
+}
+
 /// 2E (D2, generic-equip sibling): a plain-`self` write in a GENERIC equip method
 /// materialises too — callee 9, caller UNCHANGED (1).
 #[test]

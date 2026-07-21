@@ -881,8 +881,16 @@ fn lower_trait_method_body(
     };
     let self_cast = builder
         .ptr_cast(cast_type, FunctionBuilder::copy(LocalId(1)));
+    // Name the cast local `"self"` so `cow_materialize_alias` can rebind the
+    // name-hint to the private copy after materialize. Without this, the
+    // cast temp is anonymous: ownership is BareParam (materialize runs) but
+    // the name map still points at the void* alias → write-through to caller
+    // (D2 / plain-self trait equip). Mirrors equip-inherent LocalId(1) which
+    // already carries the param name_hint from FunctionBuilder::new.
+    builder.set_local_name(self_cast, "self");
     ctx.register_local("self", self_cast, cast_type);
-    // Mark immutable self as BareParam so CoW materializes on mutation.
+    // Mark immutable (plain) self as BareParam so CoW materializes on mutation.
+    // Mutable `&self`/`!self` keep write-through / consume semantics.
     if !vtable_method.self_is_mutable {
         ctx.set_bare_param(&mut builder, self_cast);
     }
