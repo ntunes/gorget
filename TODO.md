@@ -2,17 +2,35 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**⛔ STOP — do NOT start a new round until explicit owner GO (owner 2026-07-21).** The SH 2T + parallel tracks round below is CLOSED (full C+LLVM+parity green); wait for GO before opening the next burn-down round.
+**⛔ STOP — do NOT launch executors until explicit owner GO (owner 2026-07-21).** Queue below is **LOCKED** (owner approved selection). On GO: Wave 1 (5 parallel) → integrate + targeted gates → Wave 2 (5) → integrate → full C+LLVM + force-rebuild parity close. No full suite between waves unless clone ceilings / bootstrap go red.
 
-**✅ SH 2T + PARALLEL TRACKS ROUND CLOSED 2026-07-21 (record: DONE.md).** Three tracks on `gorget-2`: (A) SH 2T get-chain materialize REJECT (`29e5f96a` → clone-safe `176b7912` → receiver coverage `fadb5e8a`) — Core #9 SH lane close of `b98635de`; (B) Non-Add `OP=`/`OP` typecheck REJECT Rust (`8853e0c1`) + SH/ggdef lag filed; (C) SH Face-C EDeref compound `*p OP=` (`96bd8959`) fixture promoted. Vector `+=` residual filed (`ff0b7cdd`). **Round-close gate GREEN:** full C 1797/0/24 · full LLVM 1797/0/24 · parity (force-rebuild) MATCH 1213/1287 = 94.3% · ADJ 368 · floors reseeded 1208 / 368. Tip `fadb5e8a` + floor reseed. Owner STOP until GO for next round.
+**✅ SH 2T + PARALLEL TRACKS ROUND CLOSED 2026-07-21 (record: DONE.md).** Tip `a91479c7` (floor reseed) over `fadb5e8a`. Full C/LLVM 1797/0/24 · parity force-rebuild MATCH 1213/1287 = 94.3% · ADJ 368.
 
-**✅ TAINTED-REJECT 2T (Rust+ggdef) CLOSED 2026-07-21** `b98635de` — SH lane closed same day in the round above.
+**⏭ NEXT ROUND QUEUE LOCKED (owner 2026-07-21) — "Lag-close + SH write-place residuals + two both-lane pins".** Amortize one close sweep over 10 tracks in two waves of 5.
 
-**✅ CURATION / DRAIN + REGROUP ROUND CLOSED 2026-07-21 (record: DONE.md).** Base `2e2465c2`.
+**WAVE 1 — 5 parallel (disjoint zones; launch together on GO):**
+| # | Track | Zone (approx) | Size |
+|---|--------|---------------|------|
+| 1 | **SH non-Add `OP=`/`OP` reject** — mirror Rust `E_UnsupportedOperator`; flip `sh_nonadd_operator_reject` green (Core #9 lag) | `self_host_typechecker/typecheck.gg` + diag | S |
+| 2 | **Vector/Deque `+=` as concat** — allow compound `+=` where binary `+` already works (owner residual) | Rust typecheck `operator_supported` + compound lower | S–M |
+| 3 | **SH Face-D tuple field assign** — `t.0 =` / `t.0 OP=`; promote `known_gaps/tuple_field_assign.gg` | `lower_stmt.gg` ETupleFieldAccess arms | S–M |
+| 4 | **Explicit-trait plain-self mutator materialize (both lanes)** — Core #8 both write-through, should materialize | Rust + SH `needs_concrete_self_alias` / trait self alias | M |
+| 5 | **Snag #56 module-level `String.contains`** — both-backend CC-FAIL on module const receiver | String method lower/emit both lanes | S |
 
-**✅ THREE-TRACK `.get()`-Ref/CoW ROUND CLOSED 2026-07-21 (record: DONE.md).** `c03185d1`.
+**WAVE 2 — 5 after Wave-1 integrate (may touch Wave-1 files; re-brief against tip):**
+| # | Track | Zone (approx) | Size |
+|---|--------|---------------|------|
+| 6 | **SH lvalue gate** — reject `5 += 1` / `foo() = 1` with `E_InvalidAssignTarget` (after #1 owns typecheck) | `typecheck.gg` lvalue allowlist | S |
+| 7 | **SH Dict `.get(k)` Face-A** — write-through place for Dict get-chain (sibling of Vector Face-A) | `lower_stmt.gg` | S–M |
+| 8 | **R39-T1 SH mirror** — `v[i].field = x` value-element field write-through | SH index→field place | M |
+| 9 | **Identifier-arm `s += heap` leak** — drop old String on compound (LSan) | `assigns.rs` Identifier compound | S |
+| 10 | **Snag #54 Result branch-assign return** — wrong variant on `return out` after branch assign (both lanes) | Result phi / exit merge both lanes | M |
 
-**⏭ NEXT ROUND (WAIT FOR OWNER GO) = burn-down on the 10-bucket queue.** Candidates: SH non-Add op-reject lag · SH-CoW remainder (Dict `.get(k)` · Face D tuple + SH lvalue gate · bare-arg clone/wrong-code · resource-compound 3/4) · R-LVALUE tuple residuals · D30+C1 · class-A/B ggdef · guards. Parallel tracks WELCOME.
+**Orchestration:** scout any stale premises first (read-only, parallel OK) → brief → ≥3 sequential brief-reviews per track → Wave-1 executors (`isolation: worktree`) → output-review → integrate → `cargo test --lib` + track fixtures (clone ceilings if SH-CoW) → Wave-2 same → **CLOSE:** full C (`GG_TEST_TIMEOUT_SECS=120`) + full LLVM + `rm driver{,.c}` + force-rebuild parity → reseed floors if up. Mid-wave red ceilings/bootstrap ⇒ fix before Wave-2.
+
+**DEFER (not this round):** full SH bare-arg CoW headline · D6 refcount param design · D30+C1 overflow · Class-C 65% alias-sever · optional ggdef non-Add static ElabError (only if free after #1).
+
+**✅ Prior same-day closes:** Tainted-reject 2T Rust+ggdef `b98635de` · Curation/drain `2e2465c2` · Three-track `.get()`-Ref `c03185d1`.
 
 **Prior rounds for context: ✅ TARGET-2 (compound `.get()`-Ref writethrough + tuple-field lowering) + D31 FULL-STRICT, both CLOSED 2026-07-20 (DONE.md).**
 
@@ -41,11 +59,8 @@ Then the 📐 RATIFIED post-2G sequence below (guards slice → planner campaign
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
 
-- SH non-Add `OP=`/`OP` reject lag (`sh_nonadd_operator_reject` `#[ignore]`) + optional ggdef static ElabError → **Self-host parity** / **ggdef**
-- The SH-CoW campaign remainder (Dict `.get(k)` · Face D tuple + SH lvalue gate · bare-arg clone/wrong-code · SH resource-compound 3/4) — Face-C EDeref compound ✅ this round → **Self-host parity** / **CoW / ownership**
-- D30 impl (narrow-type overflow traps uniformly) + C1 operators → **ggdef / define-gorget**
-- Reference-grade wrong-code residuals (rvalue-place tuple silent-drop Core #10 refined; RV-C/RV-E/RV-H + R6 realloc UAF) → **Semantics / reference-grade rejection**
-- The 3 class-A ggdef oracle-hygiene defects + the class-B silent-mis-model→loud-ElabError conversions → **ggdef / define-gorget**
+- **🔒 LOCKED NEXT (on GO):** Wave 1 #1–5 then Wave 2 #6–10 — see handover queue above (lag-close + SH write-place + snag #54/#56 + trait plain-self + Vector `+=` + String `+=` leak).
+- After that queue: SH bare-arg CoW / wrong-code headline · residual SH-CoW (resource-compound 3/4) · D30+C1 · Class-C alias-sever · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first).
 
 ## Operating invariants (load-bearing — process/reference context, not filed work)
 
