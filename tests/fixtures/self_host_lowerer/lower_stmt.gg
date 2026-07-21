@@ -1634,20 +1634,22 @@ int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
             pass
     return lower_expr(&ctx, base_expr, &gmod)
 
-# Shared write-through element-pointer producer for a Vector/Deque INDEX
-# element — the common core of the `v[i].field = x` (EIndex) and
-# `v.get(i).unwrap().field = x` (`.get()`-chain) field-write place bases. Both
-# must resolve the element to a `gorget_array_get(coll, idx)` pointer typed
-# `GtPtr(elem) + LoBorrowed` (an alias INTO the collection's heap buffer), else
-# the store lands on a throwaway VALUE COPY and is silently LOST (SH-CoW Face
-# A). Returns the element-ptr local on success, or -1 to signal "not a
+# Shared write-through element/value-pointer producer for a Vector/Deque INDEX
+# element or a Dict VALUE slot — the common core of the `v[i].field = x` /
+# `d[k].field = x` (EIndex) and `coll.get(…).unwrap().field = x` (`.get()`-
+# chain) field-write place bases. Both must resolve the element/value to a
+# pointer typed `GtPtr(elem) + LoBorrowed` (an alias INTO the collection's
+# heap buffer — `gorget_array_get` for Vector/Deque, `gorget_map_get` for Dict),
+# else the store lands on a throwaway VALUE COPY and is silently LOST (SH-CoW
+# Face A). Returns the element-ptr local on success, or -1 to signal "not a
 # pointer-eligible index element" (scalar element, unregistered element, or a
 # collection whose kind has no addressable element slot) so the caller falls
 # through to the shared `lower_place_base`. `allow_map` gates the CkDict →
-# `gorget_map_get` VALUE-slot getter: the EIndex arm (`d[k].field`) sets it
-# true; the `.get()`-chain arm keeps it false (Dict `.get(k)` write-through is
-# a deferred follow-on — known_gaps/). Mirrors Rust gg's `try_resolve_field_place`
-# Index arm (src/ir/lowering/exprs/mod.rs).
+# `gorget_map_get` VALUE-slot getter: both the EIndex arm (`d[k].field`) and
+# the `.get()`-chain arm (`d.get(k).unwrap().field`) set it true so a Dict
+# base resolves the map VALUE slot (write-through), matching Vector/Deque.
+# Mirrors Rust gg's `try_resolve_field_place` Index arm
+# (src/ir/lowering/exprs/mod.rs).
 int lower_index_element_ptr_place(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_expr, bool allow_map, GirModule &gmod):
     # Lower the collection base via the SHARED `lower_place_base` (a static
     # resolves to a `GtMutPtr` through `__global_ref__`, a `&self`/`&param` to
@@ -1754,8 +1756,8 @@ int lower_index_element_ptr_place(LowerCtx &ctx, SpannedExpr coll_expr, SpannedE
 # is correct (non-mutating), and the compound-store read leg reads the current
 # value while only the write-back needs the pointer. So the pointer is minted
 # ONLY at the two field-write call sites (`lower_field_write` /
-# `emit_field_write_from_local`). Track 1C (Dict/Set) and 2F (nested `&`) extend
-# THIS producer.
+# `emit_field_write_from_local`). Dict `.get(k)` write-through is in (both
+# arms pass allow_map=true); 2F (nested `&`) extends THIS producer further.
 int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
     match base_expr.expr:
         case EIndex(fpb_base_box, fpb_idx_box):
@@ -1770,28 +1772,31 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
             # `coll.get(i).unwrap().field = x` — the ratified auto-borrow-from-get
             # chain (docs/language-design §3, docs/language-reference §9.6,
             # docs/devbook/11-copy-on-write). `.unwrap()` on the
-            # `Option[Ref[elem]]` that `.get(i)` yields must resolve the ELEMENT
-            # to the SAME write-through `gorget_array_get` pointer the
-            # `v[i].field` (EIndex) arm produces — else the field store lands on
-            # the value-copy `.unwrap()` mints and is silently LOST (SH-CoW Face
-            # A). Mirrors Rust gg's `.get().unwrap().field` None-fallback
-            # (assigns.rs lower_field_object_operand / resolve_ptr_field_place)
-            # and the SH's own EIndex arm above. Vector/Deque ONLY
-            # (allow_map=false) — a Dict `.get(k)` base keeps the shared
-            # `lower_place_base` fall-through (deferred follow-on, known_gaps/).
+            # `Option[Ref[elem]]` that `.get(i)` / `.get(k)` yields must resolve
+            # the ELEMENT (or Dict VALUE slot) to the SAME write-through
+            # pointer the `coll[i].field` (EIndex) arm produces — else the
+            # field store lands on the value-copy `.unwrap()` mints and is
+            # silently LOST (SH-CoW Face A). Mirrors Rust gg's
+            # `.get().unwrap().field` None-fallback (assigns.rs
+            # lower_field_object_operand / resolve_ptr_field_place) and the
+            # SH's own EIndex arm above. Vector/Deque/Dict all pass
+            # allow_map=true so a Dict `.get(k)` base routes through
+            # `gorget_map_get` exactly like `d[k].field`.
             #
             # Core #10 (lower-or-reject): this `case EMethodCall` captures EVERY
-            # method-call base. Only `unwrap`-of-`get(1-arg)` on a Vector/Deque
-            # is handled here; every OTHER method-receiver shape (a different
-            # method, a `.get()` with ≠1 arg, or a non-Vector collection) leaves
-            # `fpb_ch < 0` / never enters the inner arm and FALLS THROUGH to
-            # `lower_place_base` below — no silent drop of a write.
+            # method-call base. Only `unwrap`-of-`get(1-arg)` on a collection
+            # with an addressable element/value slot (Vector/Deque/Dict) is
+            # handled here; every OTHER method-receiver shape (a different
+            # method, a `.get()` with ≠1 arg, or a non-addressable collection
+            # such as Set) leaves `fpb_ch < 0` / never enters the inner arm and
+            # FALLS THROUGH to `lower_place_base` below — no silent drop of a
+            # write.
             if fpb_mname == "unwrap" and fpb_margs.len() == 0:
                 match (*fpb_recv_box).expr:
                     case EMethodCall(fpb_get_recv_box, fpb_get_mname, fpb_get_args, _):
                         if fpb_get_mname == "get" and fpb_get_args.len() == 1:
                             SpannedExpr fpb_get_idx = fpb_get_args.get(0).unwrap().value
-                            int fpb_ch = lower_index_element_ptr_place(&ctx, *fpb_get_recv_box, fpb_get_idx, false, &gmod)
+                            int fpb_ch = lower_index_element_ptr_place(&ctx, *fpb_get_recv_box, fpb_get_idx, true, &gmod)
                             if fpb_ch >= 0:
                                 return fpb_ch
                     else:

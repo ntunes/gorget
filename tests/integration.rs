@@ -31772,16 +31772,14 @@ done",
     );
 }
 
-/// SH-CoW Face-A DEFERRED follow-on: Dict `.get(k).unwrap().field = v`. Rust gg
-/// (C + LLVM) write-throughs to the map value slot (correct = 99). The self-host
-/// Face-A place arm is scoped Vector/Deque-only (`allow_map=false`), so a Dict
-/// base keeps the value-copy fall-through and DROPS the write (SH = 10). Kept in
-/// `known_gaps/` (out of the runtime-diff corpus) — an EXPLICIT cited lagging
-/// lane (Core #9), the deferred Dict follow-on of the SH-CoW Face-A increment.
+/// SH-CoW Face-A: Dict `.get(k).unwrap().field = v`. The self-host place arm
+/// threads `allow_map=true` so CkDict resolves the map VALUE slot via
+/// `gorget_map_get` (same as the EIndex `d[k].field` arm). Correct write-
+/// through = 99 on C + LLVM + SH (promoted from known_gaps/).
 #[test]
 fn cow_getref_dict_writethrough() {
     run_gg(
-        "known_gaps/cow_getref_dict_writethrough.gg",
+        "cow_getref_dict_writethrough.gg",
         "\
 99
 done",

@@ -1,0 +1,17 @@
+# SH-CoW Face-A: Dict `.get(k).unwrap().field = v`. A `Dict[K, V].get(k)`
+# returns `Option[Ref[V]]` per the same auto-borrow-from-get ruling as
+# `Vector.get(i)`, so the field store MUST write through to the map's value
+# slot (`gorget_map_get`), exactly as `d[k].field = v` (the EIndex arm already
+# routes CkDict through `gorget_map_get`). The self-host `.get()`-chain place
+# arm threads `allow_map=true` so CkDict resolves the VALUE slot; correct
+# output is the write-through 99 (Rust gg C + LLVM + SH).
+
+struct Blk:
+    int term
+
+void main():
+    Dict[String, Blk] m = {}
+    m.set("a", Blk(10))
+    m.get("a").unwrap().term = 99
+    print(m.get("a").unwrap().term)   # 99 (write-through)
+    print("done")
