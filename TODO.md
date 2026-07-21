@@ -2,20 +2,11 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🟢 ROUND OPEN 2026-07-21 — lag-close + SH write-place + both-lane pins.** **Wave 1 LANDED** (tip `7408fe86`; combined gates 16/0 targeted + lib 1125/0). **Wave 2 IN FLIGHT** next. Close: full C+LLVM + force-rebuild parity after Wave 2.
+**🟢 ROUND OPEN 2026-07-21 — lag-close 10-track.** Waves 1+2 **LANDED** on tip `7537823f`. Combined W2 gates: lib 1125/0 · targeted 21/0. **NEXT = round-close:** full C (`GG_TEST_TIMEOUT_SECS=120`) + full LLVM + force-rebuild parity (`rm driver{,.c}` first).
 
-**✅ WAVE 1 LANDED (record: DONE.md).** T1 SH non-Add reject · T2 Vector/Deque `+=` concat (+ Deque enable) · T3 SH Face-D digit-normalize · T4 plain-self trait materialize both lanes · T5 snag #56 GorgetString. Residual: **SH Vector `+=` lag** (Core #9; SH still rejects compound Vector concat while Rust allows) · optional ggdef non-Add static ElabError.
+**✅ WAVE 1+2 LANDED (DONE.md).** W1: SH non-Add · Vector `+=` · Face-D · plain-self trait · snag #56. W2: SH lvalue · Dict.get Face-A · SH Vector `+=` · String `+=` drop-old · snag #54/#55 get_or. Five **per-track** output-reviews SIGN OFF (no pack). Residual: optional ggdef non-Add static · R39-T1 nested · Identifier overload drop-old sibling (T9 note).
 
-**WAVE 2 — IN FLIGHT (3 sequential brief passes SIGN OFF; executors launched):**
-| # | Track | Zone |
-|---|--------|------|
-| 6 | SH lvalue gate `E_InvalidAssignTarget` | typecheck.gg lvalue + diagnostic.gg |
-| 7 | SH Dict `.get` Face-A `allow_map` | lower_stmt.gg get-chain only |
-| 8 | **SH Vector/Deque `+=` concat** (rescoped from stale R39-T1; T2 recursive Core #9) | typecheck operator_supported + lower compound |
-| 9 | Identifier String `+=` drop-old leak | assigns.rs |
-| 10 | Snag #54/#55 get_or already-ptr key | **LANDED this worktree** — integrate |
-
-**DEFER (not this round):** full SH bare-arg CoW · D6 refcount · D30+C1 · Class-C alias-sever · R39-T1 nested residual (single-level already landed).
+**DEFER (not this round):** full SH bare-arg CoW · D6 refcount · D30+C1 · Class-C alias-sever.
 
 **✅ Prior same-day closes:** Tainted-reject 2T Rust+ggdef `b98635de` · Curation/drain `2e2465c2` · Three-track `.get()`-Ref `c03185d1`.
 
@@ -83,7 +74,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 #### 🆕 R-STRING / SH-CoW ROUND RESIDUALS (filed 2026-07-21 at A+B integration; round-close DONE entries pending Track C)
 - **[MED — ggdef lag Core #9] Non-Add resource/binary OP static ElabError.** Rust + SH reject `E_UnsupportedOperator` (Wave 1 T1). ggdef still eval-`IllFormed`s unsupported ops as defense-in-depth; optional cheap static ElabError for in-subset String non-Add.
-- **[MED — SH Core #9 lag after Wave 1 T2] SH Vector/Deque compound `+=` still rejects** while Rust now allows concat rebind (`vector_compound_concat` / `deque_compound_concat`). Mirror T1's SH `operator_supported` allow for Array-family compound Add + ensure SH lower path reuses concat.
+- **[MED — T9 output-review residual] Identifier *overload* resource compound rebind** may still Move-without-drop-old (generic tail in `assigns.rs` after String/Array special cases). String `+=` path fixed Wave 2 T9; overload path is the sibling class.
 - **✅ [HIGH — round-close clone ceiling — FIXED 2026-07-21] SH 2T get-chain kind-gate clone bomb.** Root: first SH land used `infer_expr_type` + by-value `TypeTable`/`ScopeTable`/`ResolveContext` on recursive get-chain helpers (SH CoW weaker than Rust — a shape that is 0-clone on Rust can bomb on SH). Fix: structural `lvalue_value_type` (mirror Rust `helpers.rs:957`, never re-infer) + bare table params (= borrow) + no `get_def_at(by-value Vector)`. Re-seed command: `cargo test --test integration self_host_clone_ceiling self_host_stage1_clone_ceiling -- --nocapture` (ceilings in `tests/integration.rs`). Bisect: A-only was the bomb (C not required). Full C with `GG_TEST_TIMEOUT_SECS=120` cleared the mid-round `lowerer_comparison` load timeouts (`closure_float_ret`/`dataframe_agg`/`http_patch` at 30s under contention only).
 - **[MED — pre-existing, R-STRING output-review R5] Identifier arm `s += <heap String>` leaks the old value** (LSan-confirmed 5B; `assigns.rs:~1358-1375` Move-assigns the concat result + move_zeros the temp without dropping the old local). Same compound-old-value-drop class; the R-STRING field-arm fix (via `emit_field_store_with_cleanup`) doesn't reach the Identifier arm's Move-to-bare-local shape.
 - **[MED — pre-existing, R-STRING output-review] `Box[<resource struct>]` drop-glue leak.** A bare `Box(Money(heap()))` construct+drop leaks (drop-glue doesn't recurse into the boxed struct's String field) — NO compound-assign needed. `Box[String]`/`Box[int]`/plain `Money` are clean. Distinct from the R-STRING fix (which correctly drops the old value on `*bx += r`).
