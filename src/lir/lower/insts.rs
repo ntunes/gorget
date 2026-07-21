@@ -3028,8 +3028,9 @@ impl<'a> FuncLowering<'a> {
     /// so the result is independently owned. `__get_or_put` also
     /// inserts the default into the map on miss via `gorget_map_put`.
     ///
-    /// Keys are spilled via `Inst::AddressOf` so the key arg can be
-    /// a scalar or aggregate indifferently.
+    /// Keys become a `*key` for `gorget_map_get`: already-pointer keys
+    /// (borrowed String/aggregate params) pass through; scalars and
+    /// by-value aggregates spill via `Inst::AddressOf`.
     fn try_emit_dict_get_or(
         &mut self,
         original_name: &str,
@@ -3111,15 +3112,40 @@ impl<'a> FuncLowering<'a> {
             self.ensure_extern(clone_fn, &[LirType::Ptr], &val_ty);
         }
 
-        // key_addr = &key. Handles scalar and aggregate keys uniformly
-        // via AddressOf (spills to a slot if the source isn't already
-        // slot-backed).
-        let key_addr = self.lir_func.next_value();
-        self.push_inst(bb, Inst::AddressOf {
-            dst: key_addr,
-            value: key_arg,
-            ty: key_ty,
-        });
+        // key_addr for gorget_map_get: a *key pointer.
+        //
+        // When the key operand is already a pointer (borrowed String /
+        // aggregate param, or any Ptr/MutPtr local), use it directly —
+        // AddressOf would produce **key and MapGet would hash/compare
+        // the wrong memory (snag #54 / #55: `get_or` in a callee with a
+        // String key param always missed and returned the default).
+        // Scalars and by-value aggregates still go through AddressOf so
+        // the map receives &key (mirrors Dict index / `.get` lowering,
+        // and the trait-call ABI coercion above).
+        let key_already_ptr = match &args[1] {
+            Operand::Copy(p) | Operand::Move(p) => {
+                self.gir_func.locals.get(p.local.0 as usize).map_or(false, |l| {
+                    matches!(
+                        self.gir_types.get(l.type_id),
+                        Some(ir::types::GirType::Ptr(_))
+                            | Some(ir::types::GirType::MutPtr(_))
+                    )
+                })
+            }
+            // Constant::Str and other constants materialize as values.
+            _ => false,
+        };
+        let key_addr = if key_already_ptr {
+            key_arg
+        } else {
+            let addr = self.lir_func.next_value();
+            self.push_inst(bb, Inst::AddressOf {
+                dst: addr,
+                value: key_arg,
+                ty: key_ty,
+            });
+            addr
+        };
 
         // default_addr = &default, as a BORROW. We need a pointer to the
         // default to feed the by-value clone fns. `Inst::AddressOf` can't be

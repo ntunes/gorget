@@ -1,7 +1,9 @@
-# Snag #54: assigning a `Result` to a local `out` in if/elif branches then `return out`
-# can silently return the wrong variant. gorget-sheets `sheet_get_value` returned Ok(0)
-# for literal cells while direct `return parse_float(...)` worked. Workaround: early
-# `return` per branch.
+# Snag #54: `Result` assigned in if/elif branches then `return out` — originally
+# misdiagnosed as an exit-phi bug. Root cause was `Dict.get_or` with a String
+# key already-typed as Ptr (callee param): `try_emit_dict_get_or` always
+# AddressOf'd the key, producing **String for MapGet so the lookup missed and
+# `if text.is_empty(): out = Ok(0.0)` fired. Fix: pass already-pointer keys
+# through (same as Dict index / `.get`).
 
 from std.conv import parse_float
 

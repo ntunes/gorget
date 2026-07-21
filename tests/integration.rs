@@ -4193,19 +4193,16 @@ fn snag53_nested_struct_field_mut() {
 }
 
 #[test]
-#[ignore = "gorget-sheets snag #54: `Result` local assigned in branches then \
-`return out` returns wrong variant (got 0, expect 3). Un-ignore when exit \
-phi/merge preserves the branch-assigned Result."]
 fn snag54_result_out_fallthrough() {
-    run_gg("known_gaps/snag54_result_out_fallthrough.gg", "3");
+    // Snag #54: Result branch-assign + return shape; root was get_or on a
+    // already-pointer String key in the callee (see try_emit_dict_get_or).
+    run_gg("snag54_result_out_fallthrough.gg", "3.000000");
 }
 
 #[test]
-#[ignore = "gorget-sheets snag #55: `Dict.get_or` inside a callee mis-reads \
-(got `3` + `empty`, expect `3` + `3`). Un-ignore when callee `get_or` matches \
-caller behavior; pairs with D14 get_or view ruling."]
 fn snag55_dict_get_or_in_callee() {
-    run_gg("known_gaps/snag55_dict_get_or_in_callee.gg", "3\n3");
+    // Snag #55: get_or with String key param in callee — same root as #54.
+    run_gg("snag55_dict_get_or_in_callee.gg", "3\n3.000000");
 }
 
 #[test]

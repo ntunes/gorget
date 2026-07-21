@@ -1,7 +1,9 @@
-# Snag #55: `Dict.get_or` inside a callee mis-reads or mis-lowers (callee sees empty).
+# Snag #55: `Dict.get_or` inside a callee with a String key param mis-reads
+# (always returned the default). Same root as snag #54 — `try_emit_dict_get_or`
+# AddressOf'd an already-pointer key. Caller-side get_or and callee `.get` /
+# index were fine.
+
 from std.conv import parse_float
-# gorget-sheets `sheet_cell_display` with `sh.raw.get_or(addr, "")` returned "" while
-# the same `get_or` in `main` printed the stored value. Workaround: `Option.get` + unwrap.
 
 Result[float, String] cell_value(Dict[String, String] raw, String addr):
     String text = raw.get_or(addr, "")
