@@ -1289,43 +1289,134 @@ void check_call_aliasing(Vector[CallArg] args, ScopeTable scopes, TypeTable &typ
 # Field-write-addressable builtin collection kinds only
 # (CollectionKind::Array | OrderedMap ≡ Vector/Deque/GorgetArray + Dict).
 # NARROWER than `is_collection_receiver` — Set/Heap/HashSet/HashMap/Queue/
-# Channel must NOT gate get-chain descent (reject ⊆ materialize; a USER
-# `get` on a Named type is handled by the kind miss). Mirror of Rust
-# `is_field_addressable_collection` (helpers.rs) and ggdef
-# `is_field_addressable_collection_ty`.
-bool is_field_addressable_collection(SpannedExpr recv, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
-    int rt = infer_expr_type(recv, scopes, &types, &ctx)
-    if rt < 0 or rt >= types.types.len():
+# Channel must NOT gate get-chain descent (reject ⊆ materialize).
+#
+# ── SH CoW trap (round-close 2026-07-21) ──
+# Rust's get-chain kind gate is structural + BORROWING:
+#   collection_kind_of_expr → lvalue_value_type (&self, no re-infer)
+# The first SH land used `infer_expr_type` AND threaded ScopeTable /
+# TypeTable / ResolveContext BY VALUE into recursive helpers. On the SH
+# (weaker CoW: by-value big-table params still-live past a sibling call
+# clone), that is a stage-0 clone bomb (12.6M → 121M array_clone). Fix:
+# (1) structural lvalue_value_type only — NEVER infer_expr_type;
+# (2) hot helpers use bare ScopeTable/TypeTable/ResolveContext params
+#     (= CoW borrow, like place_root_def_spanned) — NOT TypeTable-by-value
+#     recursion that clones the type table at every FieldAccess step, and
+#     NOT `&` write-through (kind gate is read-only);
+# (3) get_def_at(scopes.definitions, id) over scopes.get_def(self, …).
+bool type_id_is_field_addressable_collection(int type_id, ScopeTable scopes, TypeTable types):
+    if type_id < 0 or type_id >= types.types.len():
         return false
-    ResolvedType t = get_rtype_at(types.types, rt)
+    ResolvedType t = get_rtype_at(types.types, type_id)
     match t:
         case RTGeneric(def_id, _args):
-            String n = scopes.get_def(def_id).name
+            # .get on the defs vector — NOT get_def_at(by-value Vector) which
+            # would array_clone the entire definitions table per call.
+            String n = scopes.definitions.get(def_id).unwrap().name
+            return n == "Vector" or n == "Deque" or n == "Dict" or n == "GorgetArray"
+        case RTDefined(def_id):
+            String n = scopes.definitions.get(def_id).unwrap().name
             return n == "Vector" or n == "Deque" or n == "Dict" or n == "GorgetArray"
         else:
             return false
 
-# Shared descend predicate for get-chain MethodCall arms (def + name twins).
-# `get`/`first`/`last` on a field-addressable collection, or `unwrap`/`expect`
-# whose receiver is that getter — mirrors Rust `find_get_chain_taint_root`.
-bool get_chain_method_descends(SpannedExpr recv, String mname, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+# Structural lvalue type — mirror of Rust `SafetyChecker::lvalue_value_type`
+# (helpers.rs:957). NO full expression inference. Bare table params = borrow.
+int lvalue_value_type(SpannedExpr target, ScopeTable scopes, TypeTable types, ResolveContext ctx):
+    match target.expr:
+        case EIdentifier(_):
+            if ctx.resolution_map.contains(target.span.start):
+                return scopes.definitions.get(ctx.resolution_map.get(target.span.start).unwrap()).unwrap().type_id
+            return -1
+        case ESelfExpr():
+            return types.self_type_id
+        case EFieldAccess(obj, field_name):
+            int obj_tid = lvalue_value_type(*obj, scopes, types, ctx)
+            if obj_tid < 0 or obj_tid >= types.types.len():
+                return -1
+            ResolvedType ort = get_rtype_at(types.types, obj_tid)
+            match ort:
+                case RTDefined(def_id):
+                    String sname = scopes.definitions.get(def_id).unwrap().name
+                    String key = sname + "." + field_name
+                    if types.variant_field_types.contains(key):
+                        return types.variant_field_types.get(key).unwrap()
+                    return -1
+                case RTGeneric(def_id, _args):
+                    String sname = scopes.definitions.get(def_id).unwrap().name
+                    String key = sname + "." + field_name
+                    if types.variant_field_types.contains(key):
+                        return types.variant_field_types.get(key).unwrap()
+                    return -1
+                else:
+                    return -1
+        case EIndex(obj, _index):
+            int obj_tid = lvalue_value_type(*obj, scopes, types, ctx)
+            if obj_tid < 0 or obj_tid >= types.types.len():
+                return -1
+            ResolvedType ort = get_rtype_at(types.types, obj_tid)
+            match ort:
+                case RTGeneric(_def_id, args):
+                    if args.len() > 0:
+                        return get_int_at(args, args.len() - 1)
+                    return -1
+                case RTArray(elem, _n):
+                    return elem
+                case RTSlice(elem):
+                    return elem
+                else:
+                    return -1
+        case EMethodCall(_recv, _m, _a, _t):
+            # Rust: recorded expr_types only (peel Ref). Miss → -1, no re-infer.
+            if types.expr_types.contains(target.span.start):
+                int tid = types.expr_types.get(target.span.start).unwrap()
+                if tid < 0 or tid >= types.types.len():
+                    return -1
+                ResolvedType rt = get_rtype_at(types.types, tid)
+                match rt:
+                    case RTRef(inner):
+                        return inner
+                    else:
+                        return tid
+            return -1
+        else:
+            return -1
+
+bool is_field_addressable_collection(SpannedExpr recv, ScopeTable scopes, TypeTable types, ResolveContext ctx):
+    int tid = lvalue_value_type(recv, scopes, types, ctx)
+    return type_id_is_field_addressable_collection(tid, scopes, types)
+
+# Pure syntactic: getter MethodCall in the place chain? Cheap non-get reject.
+bool place_chain_has_getter_method(Expr e):
+    match e:
+        case EFieldAccess(obj, _fname):
+            return place_chain_has_getter_method((*obj).expr)
+        case EIndex(obj, _index):
+            return place_chain_has_getter_method((*obj).expr)
+        case EMethodCall(recv, mname, _a, _t):
+            if mname == "get" or mname == "first" or mname == "last" or mname == "unwrap" or mname == "expect":
+                return true
+            return place_chain_has_getter_method((*recv).expr)
+        else:
+            return false
+
+# Shared descend predicate — mirrors Rust find_get_chain_taint_root MethodCall arm.
+bool get_chain_method_descends(SpannedExpr recv, String mname, ScopeTable scopes, TypeTable types, ResolveContext ctx):
     if mname == "get" or mname == "first" or mname == "last":
-        return is_field_addressable_collection(recv, scopes, &types, &ctx)
+        return is_field_addressable_collection(recv, scopes, types, ctx)
     if mname == "unwrap" or mname == "expect":
         match recv.expr:
             case EMethodCall(inner, im, _a, _t):
                 if im == "get" or im == "first" or im == "last":
-                    return is_field_addressable_collection(*inner, scopes, &types, &ctx)
+                    return is_field_addressable_collection(*inner, scopes, types, ctx)
                 return false
             else:
                 return false
     return false
 
-# Strict SUPERSET of `place_root_def_spanned` + MethodCall get-chain arm.
-# Types-aware (kind-gated) so USER `get` is NOT descended. Leave
-# `place_root_def_spanned` strict (no MethodCall) — free-fn twin of Rust
-# `find_root_def_id`. Mirror of Rust `find_get_chain_taint_root`.
-Option[int] get_chain_root_def_spanned(SpannedExpr e, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+# Strict SUPERSET of place_root_def_spanned + MethodCall get-chain arm.
+# Bare table params (= borrow). Precondition: place_chain_has_getter_method when hot.
+Option[int] get_chain_root_def_spanned(SpannedExpr e, ScopeTable scopes, TypeTable types, ResolveContext ctx):
     match e.expr:
         case EIdentifier(_name):
             if ctx.resolution_map.contains(e.span.start):
@@ -1336,88 +1427,68 @@ Option[int] get_chain_root_def_spanned(SpannedExpr e, ScopeTable scopes, TypeTab
                 return Some(ctx.resolution_map.get(e.span.start).unwrap())
             return None()
         case EFieldAccess(obj, _fname):
-            return get_chain_root_def_spanned(*obj, scopes, &types, ctx)
+            return get_chain_root_def_spanned(*obj, scopes, types, ctx)
         case EIndex(obj, _index):
-            return get_chain_root_def_spanned(*obj, scopes, &types, ctx)
+            return get_chain_root_def_spanned(*obj, scopes, types, ctx)
         case EMethodCall(recv, mname, _args, _targs):
-            if get_chain_method_descends(*recv, mname, scopes, &types, &ctx):
-                return get_chain_root_def_spanned(*recv, scopes, &types, ctx)
+            # Kind-gate FIRST (last-use of tables on miss → no clone for the
+            # recursive call). On hit, tables are re-borrowed into the recurse.
+            if get_chain_method_descends(*recv, mname, scopes, types, ctx):
+                return get_chain_root_def_spanned(*recv, scopes, types, ctx)
             return None()
         else:
             return None()
 
-# Name twin of `get_chain_root_def_spanned` for ROOT RESOLUTION (plain-`self`
-# get-chains and diagnostic text). Not messages-only: self-rooted chains need
-# the name path because ESelfExpr often has no DefId in the resolution map.
-String get_chain_root_name(SpannedExpr e, ScopeTable scopes, TypeTable &types, ResolveContext ctx):
+# Name twin for self-root resolution (ESelfExpr often has no DefId).
+String get_chain_root_name(SpannedExpr e, ScopeTable scopes, TypeTable types, ResolveContext ctx):
     match e.expr:
         case EIdentifier(name):
             return name.clone()
         case ESelfExpr():
             return "self"
         case EFieldAccess(obj, _fname):
-            return get_chain_root_name(*obj, scopes, &types, ctx)
+            return get_chain_root_name(*obj, scopes, types, ctx)
         case EIndex(obj, _index):
-            return get_chain_root_name(*obj, scopes, &types, ctx)
+            return get_chain_root_name(*obj, scopes, types, ctx)
         case EMethodCall(recv, mname, _args, _targs):
-            if get_chain_method_descends(*recv, mname, scopes, &types, &ctx):
-                return get_chain_root_name(*recv, scopes, &types, ctx)
+            if get_chain_method_descends(*recv, mname, scopes, types, ctx):
+                return get_chain_root_name(*recv, scopes, types, ctx)
             return "<place>"
         else:
             return "<place>"
 
-# 2T core (materialize-on-write): a write whose ROOT materialises a private
-# copy — a bare BORROW param (OWN_BORROW), OR a plain-`self` method's `self`
-# (also a bare Borrow view under D2) — of a drop-tainted type is REJECTED.
-# `self` has NO DefId (ESelfExpr is unresolved), so `place_root_def_spanned`
-# misses it; the self root is matched by NAME + the current method's self-mode
-# (`ctx.self_mode == OWN_BORROW`) + the equipped type (`types.self_type_id`),
-# mirroring Rust's `find_root_def_id(SelfExpr)` → self param DefId. Get-chain
-# roots use the types-aware `get_chain_root_*` superset (strict `.or_else`
-# shape, Core #4). Returns true if it rejected (so a caller can avoid a
-# double-report). Shared by the assign target, the mutating-receiver, and the
-# `&`-formation arg positions — one gate, every site (Core #4). Mirrors Rust
-# `reject_tainted_materialize_on_write`.
+# 2T core (materialize-on-write): bare BORROW param / plain-self of a
+# drop-tainted type REJECTED. Get-chain roots via get_chain_root_* superset
+# (strict or_else shape, Core #4). Mirrors Rust reject_tainted_materialize_on_write.
 bool reject_if_tainted_materialize_root(SpannedExpr place, ScopeTable scopes, TypeTable types, ResolveContext &ctx):
+    bool maybe_get = place_chain_has_getter_method(place.expr)
     # --- self by name (strict OR get-chain) ---
     String rname = place_root_name(place.expr)
-    if rname == "<place>":
-        rname = get_chain_root_name(place, scopes, &types, ctx)
+    if rname == "<place>" and maybe_get:
+        rname = get_chain_root_name(place, scopes, types, ctx)
     if rname == "self":
         if ctx.self_mode == 0 and is_drop_tainted_type(types.self_type_id, scopes, types):
             ctx.diagnostics.push(Diagnostic.error(place.span, DkMoveWithoutOperator(), drop_taint_message("self", 0)))
             return true
         return false
-    # --- def root: strict FIRST, then get-chain superset (Rust or_else shape) ---
+    # --- def root: strict FIRST, then get-chain superset ---
     Option[int] root_opt = place_root_def_spanned(place, scopes, ctx)
-    if root_opt is None:
-        root_opt = get_chain_root_def_spanned(place, scopes, &types, ctx)
+    if root_opt is None and maybe_get:
+        root_opt = get_chain_root_def_spanned(place, scopes, types, ctx)
     if root_opt is Some(def_id):
-        DefInfo d = scopes.get_def(def_id)
-        # bare BORROW param (OWN_BORROW == 0) of a drop-tainted type.
+        DefInfo d = scopes.definitions.get(def_id).unwrap()
         if d.is_param and d.param_ownership == 0 and is_drop_tainted_type(d.type_id, scopes, types):
             ctx.diagnostics.push(Diagnostic.error(place.span, DkMoveWithoutOperator(), drop_taint_message(d.name, 0)))
             return true
     return false
 
-# D12 position 6 (materialize-on-write) — the ASSIGN/COMPOUND target position.
-# Fires on a FIELD/INDEX write target (`s.id = 9`, `s[0] = x`, and their compound
-# forms), a plain-`self.field` write whose ROOT materialises, OR a get-chain
-# field store (`h.items.get(0).unwrap().f = v`) whose root materialises.
-# A whole-identifier rebind (`s = x`) does not materialize, so it is skipped
-# (the receiver and formation positions do NOT skip whole — a whole `r.push()`
-# / `&r` DOES materialize). LOCAL place-or-get-chain gate only — shared
-# `expr_is_place` stays strict (no MethodCall) so `reject_tainted_place`
-# keeps treating `.clone()` / method results as non-places. Mirrors Rust
-# `mark_bare_param_write_def`/the assign-site gate.
+# D12 position 6 — LOCAL place-or-get-chain gate only (expr_is_place stays strict).
 void reject_materialize_on_write(SpannedExpr target, ScopeTable scopes, TypeTable types, ResolveContext &ctx):
     if place_is_whole(target.expr):
         return
-    # Admit places OR field-addressable get-chains OR self-rooted get-chains.
     if not expr_is_place(target.expr):
-        if get_chain_root_def_spanned(target, scopes, &types, ctx) is None:
-            if get_chain_root_name(target, scopes, &types, ctx) != "self":
-                return
+        if not place_chain_has_getter_method(target.expr):
+            return
     bool _r = reject_if_tainted_materialize_root(target, scopes, types, &ctx)
 
 # Element-ingesting mutating builtin methods (mirror Rust's protocol
@@ -1459,24 +1530,20 @@ bool is_collection_receiver(SpannedExpr receiver, ScopeTable scopes, TypeTable &
 # D12 position 6 (user `&self` mutator on a tainted borrow-rooted receiver):
 # calling a `&self` mutator on a bare BORROW param of a drop-tainted type
 # would materialize an implicit copy. Mirrors Rust's pos-6 `is_user_mut`
-# branch (a method whose self-ownership is MutableBorrow / `&self`).
-# Root resolution: strict place root OR get-chain superset (Core #4 two-site).
+# branch. Root: strict place root OR get-chain superset (Core #4 two-site).
 void reject_amp_self_mutator(SpannedExpr receiver, String method_name, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     Option[int] root_opt = place_root_def_spanned(receiver, scopes, ctx)
-    if root_opt is None:
-        root_opt = get_chain_root_def_spanned(receiver, scopes, &types, ctx)
+    if root_opt is None and place_chain_has_getter_method(receiver.expr):
+        root_opt = get_chain_root_def_spanned(receiver, scopes, types, ctx)
     if root_opt is Some(def_id):
-        DefInfo d = scopes.get_def(def_id)
+        DefInfo d = scopes.definitions.get(def_id).unwrap()
         if d.is_param and d.param_ownership == 0 and is_drop_tainted_type(d.type_id, scopes, types):
-            # Method resolution stays on the IMMEDIATE receiver (element), not root.
             int recv_type = infer_expr_type(receiver, scopes, &types, &ctx)
             MethodResolution mr = resolve_method_full(recv_type, method_name, scopes, &types)
-            # self_ownership == 1 is OWN_MUTABLE (`&self`) — the materialising
-            # mutator. `self` (0) and `!self` (2) do not privatise a borrow.
             if mr.found and mr.sig.self_ownership == 1:
                 String rname = place_root_name(receiver.expr)
-                if rname == "<place>":
-                    rname = get_chain_root_name(receiver, scopes, &types, ctx)
+                if rname == "<place>" and place_chain_has_getter_method(receiver.expr):
+                    rname = get_chain_root_name(receiver, scopes, types, ctx)
                 ctx.diagnostics.push(Diagnostic.error(receiver.span, DkMoveWithoutOperator(), drop_taint_message(rname, 0)))
 
 # Is `anc` the same scope as `node` or an ancestor of it? Used by the
