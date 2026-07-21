@@ -2,11 +2,13 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🟢 ROUND CLOSED 2026-07-21 — lag-close 10-track.** Waves 1+2 + round-close gate GREEN (DONE.md). Tip floors reseeded after force-rebuild parity.
+**🟢 ROUND OPEN 2026-07-21 — solid-ground Rust CoW (NOT #13). Three tracks; T1 landed.**
+1. **T1 ✅** `gorget_array_extend` resource-elem double-free — `f2197e1b` on tip (runtime_array + fixtures + ASan). Output-review pending.
+2. **R1** `v[i].bump()` silent lost write — brief `/tmp/brief_r1_index_method_receiver.md` (pass-2 SIGN OFF; pass-3 in flight). Zone `methods.rs`.
+3. **R2R3** operator-overload ownership (temps + Identifier drop-old) — brief `/tmp/brief_r2r3_overload_ownership.md` (folding pass-2; not launched). Zone `operators.rs`+`assigns.rs`.
 
-**Round-close (commands not stale numbers):** full C 1816/0/20 · full LLVM 1816/0/22 · force-rebuild parity MATCH 1223/1299 = 94.1% · ADJ 371 · floors MATCH 1218 / ADJ 371. Logs: `/tmp/c-round-close-13941.log` · `/tmp/llvm-round-close-20902.log` · `/tmp/parity-force-rebuild-21413.log`.
+**Out of scope:** #13 · SH bare-arg campaign · D30. **One** round-close after R1+R2R3 land.
 
-**NEXT HEADLINE (pick from hot-list; owner GO or autonomous next-round):** **#13 return-view lazy materialization** / DEEP-1 clone reclaim (**ruled, not shipped** — opt pass owed on provisional ceilings) · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef.
 
 **✅ WAVE 1+2 (DONE.md).** W1: SH non-Add · Vector `+=` · Face-D · plain-self trait · snag #56. W2: SH lvalue · Dict.get Face-A · SH Vector `+=` · String `+=` drop-old · snag #54/#55 get_or. Residuals: optional ggdef non-Add static · Identifier overload drop-old sibling · provisional clone ceilings (opt pass).
 
