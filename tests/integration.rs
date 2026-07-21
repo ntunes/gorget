@@ -22637,18 +22637,14 @@ fn self_host_check_rejects_illtyped() {
 /// `check` driver on the known_gaps fixture and asserts a nonzero exit; it is
 /// `#[ignore]`d because the SH accepts today (a `gg check` sanity CANNOT detect a
 /// MISSING reject — an accept passes — so this is a wired executable record, not
-/// a comment). The three land requirements (a types-aware kind-gated helper
-/// wired into BOTH `reject_if_tainted_materialize_root` AND `reject_amp_self_
-/// mutator`; a narrow Vector/Deque/Dict kind-gate, NOT the broad
-/// `is_collection_receiver`; a LOCAL reconcile of the `EMethodCall` early-return
-/// inside `reject_materialize_on_write`, NOT a global widen of `expr_is_place`)
-/// are in TODO.md `## Self-host parity`. Flips green + un-ignore when the SH lands
-/// the get-chain reject.
+/// Self-host 2T get-chain materialize reject (Core #9 close of the SH lane):
+/// `h.items.get(0).unwrap().f = v` on a bare drop-tainted param must REJECT
+/// with E_MoveWithoutOperator, matching Rust gg + ggdef. Helpers:
+/// `is_field_addressable_collection` + `get_chain_root_def_spanned` /
+/// `get_chain_root_name`, wired into `reject_if_tainted_materialize_root` and
+/// `reject_amp_self_mutator`, with a LOCAL place-or-get-chain gate in
+/// `reject_materialize_on_write` (shared `expr_is_place` stays strict).
 #[test]
-#[ignore = "self-host typechecker misses the 2T get-chain materialize reject \
-            (accepts h.items.get(0).unwrap().f = v on a tainted bare param); \
-            Rust gg + ggdef reject it. Flips green when the SH lands the descent \
-            — see TODO.md `## Self-host parity`."]
 #[serial(self_host_lowerer_driver)]
 fn sh_cow_taint_getchain_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
