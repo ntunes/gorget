@@ -1,0 +1,17 @@
+# Field place-RMW String `+=` (emit_field_store_with_cleanup path) with
+# heap-owned LHS and RHS. Sibling of Identifier `string_compound_concat.gg`
+# (that one is the drop-old hole site; this pins the field arm stays clean).
+
+struct S:
+    String name
+
+void main():
+    S s = S("he" + "llo")
+    String t = "!" + "!"
+    s.name += t
+    print(s.name)
+    print(t)
+    String u = "?" + "?"
+    s.name += u
+    print(s.name)
+    print(u)

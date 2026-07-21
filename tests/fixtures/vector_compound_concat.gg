@@ -1,5 +1,6 @@
 # Vector compound `+=` is concat rebind (same as `a = a + b`).
-# Covers Identifier arm (drop-old + Move) and field place-RMW arm.
+# Covers Identifier arm (drop-old + Move), field place-RMW, and self-concat
+# `a += a` (clone lhs before extend so both halves survive).
 
 from std.collections import Vector
 
@@ -25,3 +26,10 @@ void main():
     for x in h.items:
         print(f"{x}")
     print(f"{extra.len()}")
+
+    # Self-concat: clone-before-extend must not double-free or truncate
+    Vector[int] s = [7, 8]
+    s += s
+    print(f"{s.len()}")
+    for x in s:
+        print(f"{x}")

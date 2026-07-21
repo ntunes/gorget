@@ -1,0 +1,19 @@
+# 2E (D2) resource-field sibling: plain-self mutator pushes into a Vector
+# field — materialises, so caller's collection length is UNCHANGED.
+from std.collections import Vector
+
+trait Pusher:
+    void poke(self)
+
+struct Bag:
+    Vector[int] xs
+
+equip Bag with Pusher:
+    void poke(self):
+        self.xs.push(9)
+        print(f"callee {self.xs.len()}")
+
+void main():
+    Bag b = Bag([1, 2])
+    b.poke()
+    print(f"caller {b.xs.len()}")

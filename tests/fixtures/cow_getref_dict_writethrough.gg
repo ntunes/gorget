@@ -1,10 +1,6 @@
-# SH-CoW Face-A: Dict `.get(k).unwrap().field = v`. A `Dict[K, V].get(k)`
-# returns `Option[Ref[V]]` per the same auto-borrow-from-get ruling as
-# `Vector.get(i)`, so the field store MUST write through to the map's value
-# slot (`gorget_map_get`), exactly as `d[k].field = v` (the EIndex arm already
-# routes CkDict through `gorget_map_get`). The self-host `.get()`-chain place
-# arm threads `allow_map=true` so CkDict resolves the VALUE slot; correct
-# output is the write-through 99 (Rust gg C + LLVM + SH).
+# SH-CoW Face-A: Dict `.get(k).unwrap().field` plain assign AND compound.
+# Both arms route through the get-chain place producer with allow_map=true
+# → gorget_map_get write-through (same class as `d[k].field`).
 
 struct Blk:
     int term
@@ -12,6 +8,14 @@ struct Blk:
 void main():
     Dict[String, Blk] m = {}
     m.set("a", Blk(10))
+    m.set("b", Blk(100))
+    # Plain field store through get-chain
     m.get("a").unwrap().term = 99
-    print(m.get("a").unwrap().term)   # 99 (write-through)
+    print(m.get("a").unwrap().term)   # 99
+    # Compound field store through the same place producer
+    m.get("b").unwrap().term += 5
+    print(m.get("b").unwrap().term)   # 105
+    # Index sibling still write-throughs (control)
+    m["a"].term += 1
+    print(m.get("a").unwrap().term)   # 100
     print("done")

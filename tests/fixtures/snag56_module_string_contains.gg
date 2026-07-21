@@ -1,8 +1,10 @@
-# Snag #56: calling `.contains()` on a module-level `String` constant mis-lowers
-# (C compile: wrong `str__contains` arg types). Literal receiver works.
-# gorget-sheets: `SHEET_WS.contains(ch)` failed; `" \t".contains(ch)` or `ch == " "` works.
+# Snag #56: mangled methods on a module-level `String` static must use
+# `GorgetString__*` → `gorget_str_*` (not `str__contains` etc.). Class pin:
+# several runtime-mapped String methods on the SAME module static, plus a
+# literal-receiver control that always worked.
 
 String SHEET_WS = " \t"
+String GREET = "hello"
 
 bool is_space_module(String ch):
     return SHEET_WS.contains(ch)
@@ -11,5 +13,13 @@ bool is_space_literal(String ch):
     return " \t".contains(ch)
 
 void main():
+    # Control: literal receiver
     print(is_space_literal(" "))
+    # Module static `.contains` (the original snag)
     print(is_space_module(" "))
+    # Class siblings — same GlobalRef type-name path
+    print(SHEET_WS.starts_with(" "))
+    print(SHEET_WS.ends_with("\t"))
+    print(SHEET_WS.is_empty())
+    print(GREET.starts_with("he"))
+    print(GREET.contains("ll"))

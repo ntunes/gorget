@@ -1440,6 +1440,14 @@ fn invalid_assign_target_call_error() {
     );
 }
 
+#[test]
+fn invalid_assign_target_literal_error() {
+    check_gg_fails(
+        "invalid_assign_target_literal_error.gg",
+        "not an assignable place",
+    );
+}
+
 // Planner round 3, the 2D close: the method-call-ROOTED sibling of
 // string_index_assign_error — `base.slice(0, 3)[0] = "H"` where the index root is
 // a String view-returning method call (the 2D untracked-alias-chain shape
@@ -4208,8 +4216,19 @@ fn snag55_dict_get_or_in_callee() {
 #[test]
 fn snag56_module_string_contains() {
     // Snag #56: module-level String statics register as "GorgetString" so
-    // `.contains` mangles to the runtime map (same as string literals).
-    run_gg("snag56_module_string_contains.gg", "true\ntrue");
+    // mangled methods hit the runtime map. Wide class pin: contains /
+    // starts_with / ends_with / is_empty on module statics + literal control.
+    run_gg(
+        "snag56_module_string_contains.gg",
+        "\
+true
+true
+true
+true
+false
+true
+true",
+    );
 }
 
 #[test]
@@ -11059,7 +11078,7 @@ fn vector_concat() {
 }
 
 /// Vector compound `+=` is concat rebind (same as `a = a + b`). Covers
-/// Identifier arm (drop-old + Move) and field place-RMW arm.
+/// Identifier arm (drop-old + Move), field place-RMW, and self-concat `a += a`.
 #[test]
 fn vector_compound_concat() {
     run_gg(
@@ -11076,7 +11095,12 @@ fn vector_compound_concat() {
 10
 20
 30
-1",
+1
+4
+7
+8
+7
+8",
     );
 }
 
@@ -11107,6 +11131,33 @@ fn string_compound_concat_asan() {
 hello, world!!
 !!
 hello, world!!??
+??",
+    );
+}
+
+/// Field place-RMW String `+=` (heap LHS/RHS) — sibling of Identifier
+/// `string_compound_concat` (the drop-old hole was Identifier-only; this pins
+/// the field arm stays clean under heap rebind).
+#[test]
+fn string_field_compound_concat() {
+    run_gg(
+        "string_field_compound_concat.gg",
+        "\
+hello!!
+!!
+hello!!??
+??",
+    );
+}
+
+#[test]
+fn string_field_compound_concat_asan() {
+    assert_gg_sanitize_clean(
+        "string_field_compound_concat",
+        "\
+hello!!
+!!
+hello!!??
 ??",
     );
 }
@@ -11160,7 +11211,12 @@ fn sh_vector_compound_concat() {
 10
 20
 30
-1",
+1
+4
+7
+8
+7
+8",
             "SH Vector compound += must match Rust vector_compound_concat stdout"
         ),
         Err(outcome) => panic!(
@@ -21857,32 +21913,39 @@ fn sh_nonadd_operator_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir
-        .join("tests/fixtures/nonadd_string_field_compound_sub_error.gg");
-    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    // Wide class pin: every Rust NEG non-Add shape must also reject on SH.
+    let fixtures = [
+        "nonadd_string_field_compound_sub_error.gg",
+        "nonadd_string_ident_compound_sub_error.gg",
+        "nonadd_string_binary_sub_error.gg",
+        "nonadd_money_field_compound_sub_error.gg",
+    ];
+    for name in fixtures {
+        let fixture = manifest_dir.join("tests/fixtures").join(name);
+        assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
 
-    let out = run_with_timeout(
-        Command::new(&driver_exe)
-            .arg(&fixture)
-            .arg(&lib_dir)
-            .arg("--lir-c"),
-        "sh_nonadd_operator_reject",
-    );
+        let out = run_with_timeout(
+            Command::new(&driver_exe)
+                .arg(&fixture)
+                .arg(&lib_dir)
+                .arg("--lir-c"),
+            &format!("sh_nonadd_operator_reject:{name}"),
+        );
 
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !out.status.success(),
-        "self-host `gg check` on `s.name -= \"x\"` SHOULD exit nonzero \
-         (E_UnsupportedOperator — intended, matching Rust gg). If this now \
-         fails the assert, the SH reject landed — un-ignore and pin the \
-         diagnostic message.\nexit={:?}\nstderr:\n{stderr}",
-        out.status.code(),
-    );
-    assert!(
-        stderr.contains("E_UnsupportedOperator") || stderr.contains("not defined for type"),
-        "self-host reject must surface E_UnsupportedOperator (or equivalent).\n\
-         stderr:\n{stderr}",
-    );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !out.status.success(),
+            "self-host `gg check` on {name} SHOULD exit nonzero \
+             (E_UnsupportedOperator — intended, matching Rust gg).\n\
+             exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains("E_UnsupportedOperator") || stderr.contains("not defined for type"),
+            "self-host reject on {name} must surface E_UnsupportedOperator \
+             (or equivalent).\nstderr:\n{stderr}",
+        );
+    }
 }
 
 /// SELF-HOST parity (Core #9): SH typechecker rejects a non-lvalue plain assign
@@ -21952,6 +22015,39 @@ fn sh_invalid_compound_assign_target_reject() {
         "self-host `gg check` on `5 += 1` SHOULD exit nonzero \
          (E_InvalidAssignTarget — intended, matching Rust gg).\n\
          exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_InvalidAssignTarget") || stderr.contains("not an assignable place"),
+        "self-host reject must surface E_InvalidAssignTarget (or equivalent).\n\
+         stderr:\n{stderr}",
+    );
+}
+
+/// SELF-HOST parity: literal non-lvalue assign (`1 = 2`) also rejects.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_invalid_assign_target_literal_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/invalid_assign_target_literal_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_invalid_assign_target_literal_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "self-host `gg check` on `1 = 2` SHOULD exit nonzero \
+         (E_InvalidAssignTarget).\nexit={:?}\nstderr:\n{stderr}",
         out.status.code(),
     );
     assert!(
@@ -31598,6 +31694,16 @@ fn cow_trait_amp_self_field_writethrough() {
     );
 }
 
+/// 2E resource-field sibling: plain-self trait method pushes into a Vector
+/// field — materialises (caller length unchanged).
+#[test]
+fn cow_trait_plain_self_collection_materialize() {
+    run_gg(
+        "cow_trait_plain_self_collection_materialize.gg",
+        "callee 3\ncaller 2",
+    );
+}
+
 /// 2E (D2, generic-equip sibling): a plain-`self` write in a GENERIC equip method
 /// materialises too — callee 9, caller UNCHANGED (1).
 #[test]
@@ -31860,6 +31966,8 @@ fn cow_getref_dict_writethrough() {
         "cow_getref_dict_writethrough.gg",
         "\
 99
+105
+100
 done",
     );
 }

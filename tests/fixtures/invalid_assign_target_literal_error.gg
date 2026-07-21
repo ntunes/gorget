@@ -1,0 +1,4 @@
+# Literal is not an assignable place — `1 = 2` must reject at CHECK with
+# E_InvalidAssignTarget (sibling of call-result / compound-literal pins).
+void main():
+    1 = 2
