@@ -11127,6 +11127,84 @@ fn deque_compound_concat() {
     );
 }
 
+/// SELF-HOST parity (Core #9 / W2 T8): SH lowers Vector compound `+=` as
+/// clone+extend rebind (typecheck allow + emit_compound_arith Array arm),
+/// matching Rust `vector_compound_concat` stdout.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_vector_compound_concat() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/vector_compound_concat.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_vector_compound_concat_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout,
+            "\
+5
+1
+2
+3
+4
+5
+2
+3
+10
+20
+30
+1",
+            "SH Vector compound += must match Rust vector_compound_concat stdout"
+        ),
+        Err(outcome) => panic!(
+            "SH vector_compound_concat emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
+/// SELF-HOST parity (Core #9 / W2 T8): SH Deque compound `+=` sibling of
+/// `sh_vector_compound_concat` (typed Array-kind, not name match).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_deque_compound_concat() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/deque_compound_concat.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_deque_compound_concat_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout,
+            "\
+5
+1
+2
+3
+4
+5
+2",
+            "SH Deque compound += must match Rust deque_compound_concat stdout"
+        ),
+        Err(outcome) => panic!(
+            "SH deque_compound_concat emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
 #[test]
 fn dict_keys_values() {
     run_gg(
@@ -21771,8 +21849,8 @@ fn self_host_driver_rejects_string_index_compound_assign() {
 /// (`nonadd_*_error` fixtures). Mirrors `operator_supported_for_type` in
 /// typecheck.gg (SCompoundAssign compound=true + check_safety EBinaryOp
 /// compound=false) + `DkUnsupportedOperator` in diagnostic.gg.
-/// Note: Vector compound `+=` still rejects on SH until Track 2 lands the
-/// Rust-side allow (intentional SH lag).
+/// Array-family compound `+=` is allowed (concat rebind; see
+/// `sh_vector_compound_concat` / `sh_deque_compound_concat`).
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn sh_nonadd_operator_reject() {

@@ -1173,7 +1173,25 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             # is dispatched INSIDE emit_compound_arith (Core #4
                             # "centralize at the producer"), so this and every
                             # other emit_compound_arith caller gets it uniformly.
+                            # Array-kind `+=` also lands here (clone+extend).
                             emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
+                            # Drop-old before rebind (mirror SAssign :874-931 and
+                            # Rust Array compound drop-before-Move). Fresh concat
+                            # / overload / str_cat results must not leak the
+                            # prior buffer. Two sites can hold it:
+                            #   (1) `lid` if the cur-read was OpClone / OpCopy
+                            #   (2) `lhs_val` if the cur-read was OpMove'd from lid
+                            # GIDropIfAlive is memcmp-gated (zeroed / never-
+                            # owned slots are no-ops).
+                            if is_droppable_type(lhs_type, &gmod):
+                                match ctx.locals.get(lid).unwrap().ownership:
+                                    case LoBorrowed():
+                                        pass
+                                    case LoView():
+                                        pass
+                                    else:
+                                        emit(&ctx, GIDropIfAlive(lid))
+                                emit(&ctx, GIDropIfAlive(lhs_val))
                             emit(&ctx, GIAssign(lid, op_consume(ctx, &gmod, op_dst, CkAssign())))
                     elif static_contains(gmod, name):
                         # Module-level mutable-static COMPOUND-assign
@@ -1206,9 +1224,25 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                     cow_materialize_projected_root(&ctx, &gmod, target_expr)
                     int lhs_val = lower_expr(&ctx, target_expr, &gmod)
                     int lhs_type = ctx.locals.get(lhs_val).unwrap().type_id
+                    # Resource fields load as Ptr(T) (A.2 / lower_expr
+                    # EFieldAccess). Compound arith produces a VALUE (clone+
+                    # extend / str_cat / binop) that field-write stores back —
+                    # so op_dst must be the peeled T, not the Ptr alias.
+                    # Without this peel, Array `+=` clones into a Ptr-typed
+                    # slot and OpBorrow loads the value (cc: "incompatible
+                    # type for argument 1 of 'gorget_array_extend'").
+                    int arith_ty = lhs_type
+                    if lhs_type >= PRIM_COUNT and lhs_type < gmod.type_table.len():
+                        match gmod.type_table.get(lhs_type).unwrap():
+                            case GtPtr(af_inner):
+                                arith_ty = af_inner
+                            case GtMutPtr(af_inner):
+                                arith_ty = af_inner
+                            else:
+                                pass
                     int rhs_val = lower_expr(&ctx, value_expr, &gmod)
-                    int op_dst = add_local(&ctx, lhs_type, None)
-                    emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
+                    int op_dst = add_local(&ctx, arith_ty, None)
+                    emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, arith_ty, &gmod)
                     # Wrap op_dst in a synthetic SpannedExpr to feed the
                     # same field-write path used above.
                     emit_field_write_from_local(&ctx, *base_box, field_name, op_dst, &gmod)

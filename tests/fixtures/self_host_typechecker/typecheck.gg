@@ -3779,9 +3779,12 @@ bool has_method_for_type_name(TypeTable types, String type_key, String method):
     return false
 
 # Whether `op` (binary or compound spelling) is supported on `ty`.
-# `compound=true` rejects Vector/Deque/Array `+=` (no place-arm path yet —
-# Track 2 lands the Rust allow; SH compound Vector += stays reject).
+# Array-family `+` / `+=` is concat rebind (same as Rust
+# `operator_supported_for_type` — compound unrestricted for Vector/Deque/Array).
 bool operator_supported_for_type(int ty, String op, bool compound, ScopeTable scopes, TypeTable types):
+    # `compound` reserved for future op-specific distinctions (Rust mirrors
+    # with `let _ = compound`). Array-family `+`/`+=` share the same support.
+    bool _compound_reserved = compound
     String type_key = type_key_for_trait_lookup(ty, scopes, types)
     if type_key == "":
         # Error/Never/Var — don't cascade.
@@ -3799,9 +3802,10 @@ bool operator_supported_for_type(int ty, String op, bool compound, ScopeTable sc
         # Builtin String concatenation — only `+` / `+=`.
         if base == "+" and type_key == "String":
             return true
-        # Builtin Vector/Array binary `+` concat. Place-arm compound `v += w`
-        # is NOT supported on SH yet (Track 2 Rust allow; SH lag by design).
-        if base == "+" and not compound:
+        # Builtin Vector/Deque/Array concat — binary `+` and compound `+=`
+        # (lowered as clone+extend rebind; see emit_compound_arith).
+        # `compound` is intentionally unused here (mirrors Rust).
+        if base == "+":
             if type_key == "Vector" or type_key == "Deque" or type_key == "Array":
                 return true
         return false
@@ -4052,7 +4056,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             check_string_index_assign(target, scope_id, scopes, &types, &ctx)
             # E_UnsupportedOperator: reject non-Add compound ops on String /
             # Money / etc. (Rust typecheck.rs CompoundAssign arm, compound=true).
-            # Vector `+=` stays reject on SH until Track 2 lands the allow.
+            # Array-family `+=` is allowed (concat rebind; Core #9 with Rust T2).
             int ca_target_ty = infer_expr_type(target, scopes, &types, &ctx)
             check_operator_supported(ca_target_ty, op, true, target.span, scopes, &types, &ctx)
             walk_expr_closures(value, scope_id, &scopes, &types, &ctx)

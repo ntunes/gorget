@@ -32,6 +32,8 @@ from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_pu
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains
 from lower import is_builtin_collection_base
 from lower import classify_call_arg
+from lower import op_consume
+from lower_drops import is_droppable_type, register_local_for_drop
 
 # ── Type mapping ─────────────────────────────────────────
 
@@ -2936,11 +2938,30 @@ int map_compound_binop(String op):
 # Emit a compound-assign arithmetic step (`x = x <op> y`). For `+=` with a
 # String operand, route to `gorget_str_cat(lhs, rhs)` (allocates a new
 # String, reads both operands → both borrow) — same form as the EBinaryOp
-# `+` String-concat path (lower.gg:~4781-4789). Without this, String `+=`
-# becomes a raw C `+` on `Str` and the emitted program fails to compile.
-# Every other op (and `+=` on non-String operands) is byte-identical to the
-# original `GIBinOp(dst, map_compound_binop(op), result_ty, …)` call.
+# `+` String-concat path (lower.gg:~4781-4789). For `+=` on Array-kind
+# (Vector/Deque — typed `collection_kind`, never a name match), emit the
+# same clone+extend as binary `+` (lower_expr EBinaryOp). Without these,
+# String/Array `+=` become a raw C `+` and fail to compile or miscompile.
+# Every other op is the raw `GIBinOp(dst, map_compound_binop(op), …)` path.
 void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs_val, int result_ty, GirModule &gmod):
+    # Array-kind compound concat FIRST (before user-overload arm): Vector/
+    # Deque live in `type_infos` and would otherwise be routed to a
+    # non-existent `Vector__T__add` user method. Mirrors binary `+`
+    # (lower_expr.gg) and Rust Array compound (assigns.rs). Typed kind.
+    if op == "+=":
+        String arr_tn = local_type_name(lhs_val, ctx, &gmod)
+        CollectionKind arr_ck = collection_kind_of(&gmod, arr_tn)
+        if collection_kind_eq(arr_ck, CkVector()) or collection_kind_eq(arr_ck, CkDeque()):
+            # dst = gorget_array_clone(&lhs); gorget_array_extend(&dst, &rhs)
+            Vector[Operand] clone_args = [op_consume(ctx, &gmod, lhs_val, CkCallArgBorrow())]
+            emit(&ctx, GICallExtern(dst, "gorget_array_clone", clone_args))
+            # Self (the cloned result) is borrowed (mutated in place via the
+            # by-pointer ABI), NOT copied — OpCopy on a resource trips
+            # validate_resource_moves. rhs is read-only (CkCallArgBorrow).
+            Vector[Operand] ext_args = [OpBorrow(dst), op_consume(ctx, &gmod, rhs_val, CkCallArgBorrow())]
+            emit(&ctx, GICallExtern(-1, "gorget_array_extend", ext_args))
+            register_local_for_drop(&ctx, dst, result_ty, &gmod)
+            return
     # R42-A (Core #4 — centralize at the producer): user operator-overload
     # compound-assign (`a += b` on a struct/enum with `equip X with Add`) is
     # dispatched HERE rather than at each of the 5+ emit_compound_arith call
