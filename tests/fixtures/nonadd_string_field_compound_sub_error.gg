@@ -1,0 +1,10 @@
+# NEG: resource-field non-Add compound (`s.name -=`) must fail at CHECK with
+# E_UnsupportedOperator. Pre-fix: check accepted, then `gg build` ICE'd
+# `[resource-moves] shallow copy of resource` (place-arm primitive RMW path).
+
+struct S:
+    String name
+
+void main():
+    S s = S("a")
+    s.name -= "x"

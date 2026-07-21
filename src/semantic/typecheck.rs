@@ -1602,12 +1602,28 @@ impl<'a> TypeChecker<'a> {
                     // Arithmetic operators — result is same type
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem
                     | BinaryOp::Mod | BinaryOp::AddWrap | BinaryOp::SubWrap | BinaryOp::MulWrap => {
-                        self.unify(left_type, right_type, expr.span)
+                        let result = self.unify(left_type, right_type, expr.span);
+                        // Same support gate as CompoundAssign — closes
+                        // `s - "x"` / `m - r` accept-then-broken-C hole.
+                        self.check_operator_supported(
+                            left_type,
+                            *op,
+                            /*compound=*/ false,
+                            expr.span,
+                        );
+                        result
                     }
-                    // Bitwise operators — result is same type
+                    // Bitwise operators — result is same type (integer only)
                     BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
                     | BinaryOp::Shl | BinaryOp::Shr => {
-                        self.unify(left_type, right_type, expr.span)
+                        let result = self.unify(left_type, right_type, expr.span);
+                        self.check_operator_supported(
+                            left_type,
+                            *op,
+                            /*compound=*/ false,
+                            expr.span,
+                        );
+                        result
                     }
                 }
             }
@@ -4342,7 +4358,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Stmt::CompoundAssign { target, value, .. } => {
+            Stmt::CompoundAssign { target, value, op } => {
                 self.check_assign_target_lvalue(target);
                 self.check_string_index_assign(target);
                 let target_type = self.infer_expr(target);
@@ -4351,6 +4367,10 @@ impl<'a> TypeChecker<'a> {
                 let value_type = self.infer_expr(value);
                 self.decl_type_hint = prev_hint;
                 self.unify(target_type, value_type, value.span);
+                // Reject ops with no builtin/overload for the LHS type so
+                // accepted programs never reach the resource-moves ICE
+                // (`s.name -= "x"`) or broken C (identifier/binary forms).
+                self.check_operator_supported(target_type, *op, /*compound=*/ true, stmt.span);
             }
 
             Stmt::Return(expr) => {
@@ -5474,6 +5494,215 @@ impl<'a> TypeChecker<'a> {
                 self.error(SemanticErrorKind::StringIndexAssign, target.span);
             }
         }
+    }
+
+    /// Bare def / primitive name used by the trait registry's
+    /// `impls_by_name` / `has_trait_impl_by_name` keys. Peels Ref/Owned so a
+    /// borrowed `Money` still resolves to `"Money"`. Uses the def name alone
+    /// for generics (`Vector`, not `Vector[int]`) — full describe strings
+    /// miss the registry and would false-reject every overloaded generic.
+    fn type_key_for_trait_lookup(&self, type_id: TypeId) -> Option<String> {
+        let type_id = self.resolve_type(type_id);
+        let type_id = match self.types.get(type_id) {
+            ResolvedType::Ref(inner) | ResolvedType::Owned(inner) => self.resolve_type(*inner),
+            _ => type_id,
+        };
+        match self.types.get(type_id) {
+            ResolvedType::Primitive(p) => Some(describe_primitive(p)),
+            ResolvedType::Defined(def_id) | ResolvedType::Generic(def_id, _) => {
+                Some(self.scopes.get_def(*def_id).name.clone())
+            }
+            // Fixed-size arrays participate in binary `+` concat (LIR
+            // CollectionKind::Array) — key them as a synthetic "Array" so the
+            // binary-Add special case below can match without a full describe.
+            ResolvedType::Array(_, _) => Some("Array".to_string()),
+            // Error / Never / unbound Vars: don't gate (cascade / inference).
+            ResolvedType::Error | ResolvedType::Never | ResolvedType::Var(_) => None,
+            _ => Some(self.describe_resolved_type(type_id)),
+        }
+    }
+
+    /// Trait name + method name for an overloadable arithmetic op, if any.
+    /// Wrap / bitwise ops have no trait equip path (integer-only builtins).
+    fn op_trait_and_method(op: BinaryOp) -> Option<(&'static str, &'static str)> {
+        match op {
+            BinaryOp::Add => Some(("Add", "add")),
+            BinaryOp::Sub => Some(("Sub", "sub")),
+            BinaryOp::Mul => Some(("Mul", "mul")),
+            BinaryOp::Div => Some(("Div", "div")),
+            BinaryOp::Rem => Some(("Rem", "rem")),
+            BinaryOp::Mod => Some(("Mod", "mod")),
+            _ => None,
+        }
+    }
+
+    /// Spelling of `op` for diagnostics — compound forms use `+=` etc.
+    fn op_display(op: BinaryOp, compound: bool) -> &'static str {
+        if compound {
+            match op {
+                BinaryOp::Add => "+=",
+                BinaryOp::Sub => "-=",
+                BinaryOp::Mul => "*=",
+                BinaryOp::Div => "/=",
+                BinaryOp::Rem => "%=",
+                BinaryOp::AddWrap => "+%=",
+                BinaryOp::SubWrap => "-%=",
+                BinaryOp::MulWrap => "*%=",
+                BinaryOp::BitAnd => "&=",
+                BinaryOp::BitOr => "|=",
+                BinaryOp::BitXor => "^=",
+                BinaryOp::Shl => "<<=",
+                BinaryOp::Shr => ">>=",
+                // No compound form for Mod / comparisons / logicals.
+                BinaryOp::Mod => "mod=",
+                BinaryOp::Eq => "==",
+                BinaryOp::Neq => "!=",
+                BinaryOp::Lt => "<",
+                BinaryOp::Gt => ">",
+                BinaryOp::LtEq => "<=",
+                BinaryOp::GtEq => ">=",
+                BinaryOp::And => "and",
+                BinaryOp::Or => "or",
+                BinaryOp::In => "in",
+            }
+        } else {
+            match op {
+                BinaryOp::Add => "+",
+                BinaryOp::Sub => "-",
+                BinaryOp::Mul => "*",
+                BinaryOp::Div => "/",
+                BinaryOp::Rem => "%",
+                BinaryOp::Mod => "mod",
+                BinaryOp::AddWrap => "+%",
+                BinaryOp::SubWrap => "-%",
+                BinaryOp::MulWrap => "*%",
+                BinaryOp::BitAnd => "&",
+                BinaryOp::BitOr => "|",
+                BinaryOp::BitXor => "^",
+                BinaryOp::Shl => "<<",
+                BinaryOp::Shr => ">>",
+                BinaryOp::Eq => "==",
+                BinaryOp::Neq => "!=",
+                BinaryOp::Lt => "<",
+                BinaryOp::Gt => ">",
+                BinaryOp::LtEq => "<=",
+                BinaryOp::GtEq => ">=",
+                BinaryOp::And => "and",
+                BinaryOp::Or => "or",
+                BinaryOp::In => "in",
+            }
+        }
+    }
+
+    /// Whether `op` is supported on `ty` (numeric / String concat / Vector
+    /// binary concat / trait equip / inherent method). `compound` distinguishes
+    /// binary Vector `+` (supported) from place-arm `v += w` (NOT supported —
+    /// no compound path today; reject rather than invent).
+    fn operator_supported_for_type(&self, ty: TypeId, op: BinaryOp, compound: bool) -> bool {
+        let Some(type_key) = self.type_key_for_trait_lookup(ty) else {
+            // Error/Never/Var — don't cascade.
+            return true;
+        };
+
+        // Wrap / bitwise / shifts: integer numeric only (not float, not traits).
+        let integer_only = matches!(
+            op,
+            BinaryOp::AddWrap
+                | BinaryOp::SubWrap
+                | BinaryOp::MulWrap
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        );
+        if integer_only {
+            return matches!(
+                type_key.as_str(),
+                "int" | "int8" | "int16" | "int32" | "int64"
+                    | "uint" | "uint8" | "uint16" | "uint32" | "uint64"
+            );
+        }
+
+        // Arithmetic family.
+        if let Some((trait_name, method)) = Self::op_trait_and_method(op) {
+            // Numeric primitives intrinsically satisfy Add/Sub/… via the
+            // trait registry (has_trait_impl_by_name numeric intrinsic).
+            if self.traits.has_trait_impl_by_name(&type_key, trait_name) {
+                return true;
+            }
+            // Inherent equip method without the trait (rare but allowed).
+            if self.traits.has_method_for_type(&type_key, method) {
+                return true;
+            }
+            // Builtin String concatenation — only `+` / `+=`. String is NOT
+            // intrinsically Add (concat is a special-case, not a trait equip).
+            if matches!(op, BinaryOp::Add) && type_key == "String" {
+                return true;
+            }
+            // Builtin Vector/Array binary `+` concat (LIR CollectionKind::Array).
+            // Place-arm compound `v += w` is NOT a supported path — reject.
+            if matches!(op, BinaryOp::Add)
+                && !compound
+                && matches!(type_key.as_str(), "Vector" | "Deque" | "Array")
+            {
+                return true;
+            }
+            return false;
+        }
+
+        // Non-arithmetic ops gated elsewhere (comparisons / logicals / `in`).
+        true
+    }
+
+    /// Emit `E_UnsupportedOperator` when `op` is not defined for `ty`.
+    fn check_operator_supported(
+        &mut self,
+        ty: TypeId,
+        op: BinaryOp,
+        compound: bool,
+        span: Span,
+    ) {
+        if self.operator_supported_for_type(ty, op, compound) {
+            return;
+        }
+        let type_name = self
+            .type_key_for_trait_lookup(ty)
+            .unwrap_or_else(|| self.describe_resolved_type(ty));
+        // Prefer the human-facing describe for non-generic display when the
+        // bare key is a primitive/user def (same string); for Vector keep
+        // the bare key so the message says `Vector` not `Vector[int]`.
+        let display_name = match self.types.get(self.resolve_type(ty)) {
+            ResolvedType::Generic(_, _) if type_name == "Vector" || type_name == "Deque" => {
+                type_name.clone()
+            }
+            ResolvedType::Primitive(_) | ResolvedType::Defined(_) | ResolvedType::Generic(_, _) => {
+                // describe_resolved_type for Defined/Primitive matches the key;
+                // for other generics (e.g. user `Box[T]`) show full form.
+                if matches!(type_name.as_str(), "Vector" | "Deque" | "Array") {
+                    type_name.clone()
+                } else {
+                    // For user generics like Maybe[int], show full describe;
+                    // bare key is still what trait lookup used.
+                    let full = self.describe_resolved_type(ty);
+                    if full.starts_with(&type_name) {
+                        // Prefer bare def for equip guidance (`Money`, not a
+                        // longer form). Full form only when it differs usefully.
+                        type_name.clone()
+                    } else {
+                        type_name.clone()
+                    }
+                }
+            }
+            _ => type_name.clone(),
+        };
+        self.error(
+            SemanticErrorKind::UnsupportedOperator {
+                op: Self::op_display(op, compound).to_string(),
+                type_name: display_name,
+            },
+            span,
+        );
     }
 
     fn is_collection_assignment(&self, declared: TypeId, value: TypeId) -> bool {

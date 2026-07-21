@@ -1380,6 +1380,44 @@ fn string_index_compound_assign_error() {
     );
 }
 
+// Non-Add resource/binary OP= / OP reject (Track B): typecheck must reject
+// operators with no builtin/overload so accepted programs never hit the
+// place-arm resource-moves ICE (`s.name -=`) or broken-C binary forms.
+// Class coverage: field compound, identifier compound, binary expr, Money-
+// only-Add field compound. POS siblings stay green via compound_assign_resource_*
+// / operator_overload / string_concat / vector_concat / compound_assignment_*.
+#[test]
+fn nonadd_string_field_compound_sub_error() {
+    check_gg_fails(
+        "nonadd_string_field_compound_sub_error.gg",
+        "E_UnsupportedOperator",
+    );
+}
+
+#[test]
+fn nonadd_string_ident_compound_sub_error() {
+    check_gg_fails(
+        "nonadd_string_ident_compound_sub_error.gg",
+        "E_UnsupportedOperator",
+    );
+}
+
+#[test]
+fn nonadd_string_binary_sub_error() {
+    check_gg_fails(
+        "nonadd_string_binary_sub_error.gg",
+        "E_UnsupportedOperator",
+    );
+}
+
+#[test]
+fn nonadd_money_field_compound_sub_error() {
+    check_gg_fails(
+        "nonadd_money_field_compound_sub_error.gg",
+        "E_UnsupportedOperator",
+    );
+}
+
 // Target-2 catch-all guard (Core #10 lower-or-reject): a NON-lvalue assignment
 // target is rejected at CHECK time (E_InvalidAssignTarget), not ICE'd in
 // lowering (pre-fix `5 += 1` passed check then PANICKED in
@@ -21660,6 +21698,55 @@ fn self_host_driver_rejects_string_index_compound_assign() {
          halt BEFORE lowering. stdout bytes={}\nstdout head:\n{}",
         stdout.len(),
         &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+/// SELF-HOST parity gap (FILED, not landed — Core #9): Rust gg now rejects
+/// non-Add resource/binary operators at check (`E_UnsupportedOperator` —
+/// Track B / `nonadd_*_error` fixtures). The self-host typechecker still only
+/// gates string-index-assign on `SCompoundAssign` and does not validate that
+/// the compound/binary op is defined for the operand type, so
+/// `s.name -= "x"` / `s - "x"` still check-pass under SH. INTENDED: reject
+/// with `E_UnsupportedOperator` matching Rust. This test is `#[ignore]`d
+/// because a missing reject cannot be detected by a green check (accept
+/// passes). Un-ignore when SH mirrors `operator_supported_for_type` in
+/// typecheck.gg (~3640 SCompoundAssign + BinaryOp walk) + diagnostic.gg.
+/// Zone note: Track A owns the 2T get-chain region of typecheck.gg this
+/// round — SH mirror deliberately lagged to avoid collision.
+#[test]
+#[ignore = "self-host typechecker does not yet reject non-Add OP=/binary ops \
+            (E_UnsupportedOperator); Rust gg does. Flips green when SH mirrors \
+            operator_supported_for_type — see TODO.md `## Self-host parity`."]
+#[serial(self_host_lowerer_driver)]
+fn sh_nonadd_operator_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/nonadd_string_field_compound_sub_error.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_nonadd_operator_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "self-host `gg check` on `s.name -= \"x\"` SHOULD exit nonzero \
+         (E_UnsupportedOperator — intended, matching Rust gg). If this now \
+         fails the assert, the SH reject landed — un-ignore and pin the \
+         diagnostic message.\nexit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_UnsupportedOperator") || stderr.contains("not defined for type"),
+        "self-host reject must surface E_UnsupportedOperator (or equivalent).\n\
+         stderr:\n{stderr}",
     );
 }
 

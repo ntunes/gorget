@@ -1,0 +1,7 @@
+# NEG: binary non-Add (`s - "x"`) must fail at CHECK with E_UnsupportedOperator.
+# Covers the Expr::BinaryOp arithmetic arm of the same class as compound assign.
+
+void main():
+    String s = "a"
+    String t = s - "x"
+    print(t)

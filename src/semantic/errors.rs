@@ -589,6 +589,14 @@ pub enum SemanticErrorKind {
     /// rebuild-based). See language-reference §Strings.
     StringIndexAssign,
 
+    /// Binary or compound operator applied to a type that does not support it
+    /// (e.g. `s.name -= "x"`, `s - "x"`, `m -= r` where `Money` equips only
+    /// `Add`). Arithmetic needs a numeric primitive or a matching operator
+    /// trait equip; String supports only `+`/`+=` (concatenation). Without
+    /// this gate, typecheck accepted then lowering ICE'd (resource-moves) or
+    /// emitted broken C. See language-reference §operators / §Strings.
+    UnsupportedOperator { op: String, type_name: String },
+
     /// `5 += 1` / `foo() += 1` / `(a + b) = x` — the left side of an assignment
     /// or compound assignment is NOT an assignable place. Valid targets are a
     /// variable, field, tuple field, index (`v[i]`), or dereference (`*p`). The
@@ -842,6 +850,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::NoreturnBodyReturns { .. } => "E_NoreturnBodyReturns",
             SemanticErrorKind::NoreturnWithThrows { .. } => "E_NoreturnWithThrows",
             SemanticErrorKind::StringIndexAssign => "E_StringIndexAssign",
+            SemanticErrorKind::UnsupportedOperator { .. } => "E_UnsupportedOperator",
             SemanticErrorKind::InvalidAssignTarget => "E_InvalidAssignTarget",
             SemanticErrorKind::UnloweredBuiltinCall { .. } => "E_UnloweredBuiltinCall",
             SemanticErrorKind::UnknownNamedArg { .. } => "E_UnknownNamedArg",
@@ -1359,6 +1368,40 @@ impl std::fmt::Display for SemanticError {
                      `s.replace(...)`, slicing + concatenation)"
                 )
             }
+            SemanticErrorKind::UnsupportedOperator { op, type_name } => {
+                // Teaching messages: String only has concat; user types need equip.
+                if type_name == "String" {
+                    write!(
+                        f,
+                        "operator `{op}` is not defined for type `String` — \
+                         String supports `+`/`+=` (concatenation) only"
+                    )
+                } else {
+                    let (trait_name, method) = match op.as_str() {
+                        "+" | "+=" => ("Add", "add"),
+                        "-" | "-=" => ("Sub", "sub"),
+                        "*" | "*=" => ("Mul", "mul"),
+                        "/" | "/=" => ("Div", "div"),
+                        "%" | "%=" => ("Rem", "rem"),
+                        "mod" => ("Mod", "mod"),
+                        _ => ("the matching operator trait", "the operator method"),
+                    };
+                    if trait_name.starts_with("the ") {
+                        write!(
+                            f,
+                            "operator `{op}` is not defined for type `{type_name}` \
+                             — only integer numeric types support this operator"
+                        )
+                    } else {
+                        write!(
+                            f,
+                            "operator `{op}` is not defined for type `{type_name}` — \
+                             equip with `{trait_name}[{type_name}]` (or implement \
+                             `{method}`) to use `{op}`"
+                        )
+                    }
+                }
+            }
             SemanticErrorKind::InvalidAssignTarget => {
                 write!(
                     f,
@@ -1657,6 +1700,13 @@ mod code_tests {
             (SemanticErrorKind::CannotInferType, "E_CannotInferType"),
             (SemanticErrorKind::BreakOutsideLoop, "E_BreakOutsideLoop"),
             (SemanticErrorKind::StringIndexAssign, "E_StringIndexAssign"),
+            (
+                SemanticErrorKind::UnsupportedOperator {
+                    op: "-=".into(),
+                    type_name: "String".into(),
+                },
+                "E_UnsupportedOperator",
+            ),
             (SemanticErrorKind::InvalidAssignTarget, "E_InvalidAssignTarget"),
             (SemanticErrorKind::DoubleAwait, "E_DoubleAwait"),
             (SemanticErrorKind::NonExhaustiveMatch { missing_variants: vec![] }, "E_NonExhaustiveMatch"),

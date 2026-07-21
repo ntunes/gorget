@@ -1,0 +1,8 @@
+# NEG: identifier non-Add compound (`s -=`) must fail at CHECK with
+# E_UnsupportedOperator. Sibling of the field-arm ICE shape — same missing-op
+# class, different target shape (identifier arm did not ICE the same way but
+# still wrong-accepted and lowered broken C).
+
+void main():
+    String s = "a"
+    s -= "x"

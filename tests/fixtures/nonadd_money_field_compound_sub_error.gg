@@ -1,0 +1,18 @@
+# NEG: user type with only Add equip — field compound Sub (`w.m -=`) must fail
+# at CHECK with E_UnsupportedOperator. Pre-fix: check accepted, then build
+# ICE'd resource-moves on the place-arm primitive path (no Sub overload).
+
+struct Money:
+    String label
+
+equip Money with Add[Money]:
+    Money add(self, Money rhs):
+        return Money(self.label + rhs.label)
+
+struct W:
+    Money m
+
+void main():
+    W w = W(Money("a"))
+    Money r = Money("b")
+    w.m -= r
