@@ -2,33 +2,20 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🟢 ROUND OPEN 2026-07-21 (owner GO) — lag-close + SH write-place + both-lane pins.** Queue below is **IN FLIGHT**. Wave 1 (5 parallel) → integrate + targeted gates → Wave 2 (5) → integrate → full C+LLVM + force-rebuild parity close. No full suite between waves unless clone ceilings / bootstrap go red.
+**🟢 ROUND OPEN 2026-07-21 — lag-close + SH write-place + both-lane pins.** **Wave 1 LANDED** (tip `7408fe86`; combined gates 16/0 targeted + lib 1125/0). **Wave 2 IN FLIGHT** next. Close: full C+LLVM + force-rebuild parity after Wave 2.
 
-**✅ SH 2T + PARALLEL TRACKS ROUND CLOSED 2026-07-21 (record: DONE.md).** Tip `a91479c7` (floor reseed) over `fadb5e8a`. Full C/LLVM 1797/0/24 · parity force-rebuild MATCH 1213/1287 = 94.3% · ADJ 368.
+**✅ WAVE 1 LANDED (record: DONE.md).** T1 SH non-Add reject · T2 Vector/Deque `+=` concat (+ Deque enable) · T3 SH Face-D digit-normalize · T4 plain-self trait materialize both lanes · T5 snag #56 GorgetString. Residual: **SH Vector `+=` lag** (Core #9; SH still rejects compound Vector concat while Rust allows) · optional ggdef non-Add static ElabError.
 
-**⏭ NEXT ROUND QUEUE LOCKED (owner 2026-07-21) — "Lag-close + SH write-place residuals + two both-lane pins".** Amortize one close sweep over 10 tracks in two waves of 5.
-
-**WAVE 1 — 5 parallel (disjoint zones; launch together on GO):**
+**WAVE 2 — 5 tracks (re-brief against tip `7408fe86`):**
 | # | Track | Zone (approx) | Size |
 |---|--------|---------------|------|
-| 1 | **SH non-Add `OP=`/`OP` reject** — mirror Rust `E_UnsupportedOperator`; flip `sh_nonadd_operator_reject` green (Core #9 lag) | `self_host_typechecker/typecheck.gg` + diag | S |
-| 2 | **Vector/Deque `+=` as concat** — allow compound `+=` where binary `+` already works (owner residual) | Rust typecheck `operator_supported` + compound lower | S–M |
-| 3 | **SH Face-D tuple field assign** — `t.0 =` / `t.0 OP=`; promote `known_gaps/tuple_field_assign.gg` | `lower_stmt.gg` ETupleFieldAccess arms | S–M |
-| 4 | **Explicit-trait plain-self mutator materialize (both lanes)** — Core #8 both write-through, should materialize | Rust + SH `needs_concrete_self_alias` / trait self alias | M |
-| 5 | **Snag #56 module-level `String.contains`** — both-backend CC-FAIL on module const receiver | String method lower/emit both lanes | S |
-
-**WAVE 2 — 5 after Wave-1 integrate (may touch Wave-1 files; re-brief against tip):**
-| # | Track | Zone (approx) | Size |
-|---|--------|---------------|------|
-| 6 | **SH lvalue gate** — reject `5 += 1` / `foo() = 1` with `E_InvalidAssignTarget` (after #1 owns typecheck) | `typecheck.gg` lvalue allowlist | S |
-| 7 | **SH Dict `.get(k)` Face-A** — write-through place for Dict get-chain (sibling of Vector Face-A) | `lower_stmt.gg` | S–M |
+| 6 | **SH lvalue gate** — reject `5 += 1` / `foo() = 1` with `E_InvalidAssignTarget` | `typecheck.gg` lvalue allowlist | S |
+| 7 | **SH Dict `.get(k)` Face-A** — write-through place for Dict get-chain | `lower_stmt.gg` | S–M |
 | 8 | **R39-T1 SH mirror** — `v[i].field = x` value-element field write-through | SH index→field place | M |
 | 9 | **Identifier-arm `s += heap` leak** — drop old String on compound (LSan) | `assigns.rs` Identifier compound | S |
-| 10 | **Snag #54 Result branch-assign return** — wrong variant on `return out` after branch assign (both lanes) | Result phi / exit merge both lanes | M |
+| 10 | **Snag #54 Result branch-assign return** — wrong variant on `return out` after branch assign | Result phi / exit merge both lanes | M |
 
-**Orchestration:** scout any stale premises first (read-only, parallel OK) → brief → ≥3 sequential brief-reviews per track → Wave-1 executors (`isolation: worktree`) → output-review → integrate → `cargo test --lib` + track fixtures (clone ceilings if SH-CoW) → Wave-2 same → **CLOSE:** full C (`GG_TEST_TIMEOUT_SECS=120`) + full LLVM + `rm driver{,.c}` + force-rebuild parity → reseed floors if up. Mid-wave red ceilings/bootstrap ⇒ fix before Wave-2.
-
-**DEFER (not this round):** full SH bare-arg CoW headline · D6 refcount param design · D30+C1 overflow · Class-C 65% alias-sever · optional ggdef non-Add static ElabError (only if free after #1).
+**DEFER:** full SH bare-arg CoW headline · D6 refcount · D30+C1 · Class-C alias-sever · SH Vector `+=` allow (follow-up of T2).
 
 **✅ Prior same-day closes:** Tainted-reject 2T Rust+ggdef `b98635de` · Curation/drain `2e2465c2` · Three-track `.get()`-Ref `c03185d1`.
 
@@ -95,8 +82,8 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 ### High
 
 #### 🆕 R-STRING / SH-CoW ROUND RESIDUALS (filed 2026-07-21 at A+B integration; round-close DONE entries pending Track C)
-- **[HIGH — Rust LANDED Track B; SH + ggdef lag FILED Core #9] Non-Add resource/binary `OP=` / `OP` typecheck reject.** Rust gg now rejects `s.name -= "x"`, `s -= "x"`, `s - "x"`, Money-only-Add `w.m -= r` at check with `E_UnsupportedOperator` (helper `operator_supported_for_type` on CompoundAssign + BinaryOp arith/bitwise; NEG fixtures `nonadd_*_error.gg`). Remaining lane work: (1) **SH** — mirror in `self_host_typechecker/typecheck.gg` SCompoundAssign + BinaryOp walk + `diagnostic.gg` kind; pin `#[ignore] sh_nonadd_operator_reject` flips green. Deliberately lagged this round (Track A owns typecheck.gg 2T region). (2) **ggdef** — static ElabError for in-subset String non-Add not landed; eval still `IllFormed`s unsupported ops as defense-in-depth (`eval.rs` Str only Add). Explicit subset-gap until a cheap static reject lands.
-- **🆕🐛 [MED — Track B residual 2026-07-21, owner-noted] Vector (Array/Deque) compound `+=` rejected while binary `+` works — asymmetric.** Track B's `operator_supported_for_type` allows Vector/Deque/Array **binary** `+` (matches LIR `is_vector_add` / `vector_concat.gg`) but deliberately does **not** allow compound `v += w` ("reject rather than invent" — place-arm compound had no concat path). Consequence: `Vector[int] c = a + b` and `a = a + b` check+run green, but `a += b` errors `E_UnsupportedOperator` ("equip with `Add[Vector]`…") — a teaching-false reject (the language *does* define concat, just not on the compound arm). **Intended fix:** support Vector/Deque/Array compound `+=` as concat (typecheck allow + lowering that reuses binary concat / `v = v + w` desugar or a dedicated compound concat emit — not invent a trait equip). Pin with POS fixtures (`a += b` for Vector and Deque at minimum) and keep String `+=` / numeric compounds green. Own scout→brief; sibling of the non-Add reject land, not a re-open of String non-Add.
+- **[MED — ggdef lag Core #9] Non-Add resource/binary OP static ElabError.** Rust + SH reject `E_UnsupportedOperator` (Wave 1 T1). ggdef still eval-`IllFormed`s unsupported ops as defense-in-depth; optional cheap static ElabError for in-subset String non-Add.
+- **[MED — SH Core #9 lag after Wave 1 T2] SH Vector/Deque compound `+=` still rejects** while Rust now allows concat rebind (`vector_compound_concat` / `deque_compound_concat`). Mirror T1's SH `operator_supported` allow for Array-family compound Add + ensure SH lower path reuses concat.
 - **✅ [HIGH — round-close clone ceiling — FIXED 2026-07-21] SH 2T get-chain kind-gate clone bomb.** Root: first SH land used `infer_expr_type` + by-value `TypeTable`/`ScopeTable`/`ResolveContext` on recursive get-chain helpers (SH CoW weaker than Rust — a shape that is 0-clone on Rust can bomb on SH). Fix: structural `lvalue_value_type` (mirror Rust `helpers.rs:957`, never re-infer) + bare table params (= borrow) + no `get_def_at(by-value Vector)`. Re-seed command: `cargo test --test integration self_host_clone_ceiling self_host_stage1_clone_ceiling -- --nocapture` (ceilings in `tests/integration.rs`). Bisect: A-only was the bomb (C not required). Full C with `GG_TEST_TIMEOUT_SECS=120` cleared the mid-round `lowerer_comparison` load timeouts (`closure_float_ret`/`dataframe_agg`/`http_patch` at 30s under contention only).
 - **[MED — pre-existing, R-STRING output-review R5] Identifier arm `s += <heap String>` leaks the old value** (LSan-confirmed 5B; `assigns.rs:~1358-1375` Move-assigns the concat result + move_zeros the temp without dropping the old local). Same compound-old-value-drop class; the R-STRING field-arm fix (via `emit_field_store_with_cleanup`) doesn't reach the Identifier arm's Move-to-bare-local shape.
 - **[MED — pre-existing, R-STRING output-review] `Box[<resource struct>]` drop-glue leak.** A bare `Box(Money(heap()))` construct+drop leaks (drop-glue doesn't recurse into the boxed struct's String field) — NO compound-assign needed. `Box[String]`/`Box[int]`/plain `Money` are clean. Distinct from the R-STRING fix (which correctly drops the old value on `*bx += r`).
@@ -123,7 +110,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - **🐛 [gorget-sheets snag #55 — BOTH BACKENDS, 2026-07-07] `Dict.get_or` inside a callee mis-reads while caller `get_or` works.** Same `raw.get_or(addr, "")` in `main` prints the value; inside `cell_value(raw, addr)` sees empty. `Option.get` + `unwrap` in callee works. Repro: `known_gaps/snag55_dict_get_or_in_callee.gg` (got `3`+`empty`, expect `3`+`3`). `#[ignore]` test `snag55_dict_get_or_in_callee`. Pairs with D14 `get_or` view ruling. Own scout→brief→reviews.
 
 - **[CoW WAVE-2 landing-1 follow-ups — filed 2026-07-17]**
-  - **[HIGH — Core #8, BOTH LANES, pre-existing — surfaced by the 2E-SH review 2026-07-18] 🐛 Explicit-trait plain-self mutator WRITES THROUGH (should materialize).** `trait Poker: void poke(self)` + `equip Cnt with Poker: void poke(self): self.n = self.n + 1` → Rust gg AND self-host driver BOTH print `caller 2` where D2/2E (`docs/devbook/11-copy-on-write.md:509`, no trait carve-out) requires `caller 1`. ≥2 bugs (both compilers wrong vs the definition). INVISIBLE to the parity harness (lanes agree). Self-host mechanism: `needs_concrete_self_alias` (`lower_closures.gg:696-699`) rebinds `"self"` to a plain `add_local` (LoOwned) concrete-cast alias — the UNRETAGGED sibling of the site the 2E-SH landing fixed, same function → materialize bails at the LoParam check. Fix BOTH lanes (Rust: the explicit-trait self alias; self-host: retag the concrete-alias self LoParam too) in a follow-up; land an intended-output fixture under the `known_gaps`/`#[ignore]` pattern. Do NOT grow the 2E-SH patch.
+  - **✅ [HIGH — Core #8 — CLOSED Wave 1 T4] Explicit-trait plain-self mutator materializes.** Rust `set_local_name` + SH LoParam concrete alias; fixtures `cow_trait_plain_self_field_materialize` / amp twin. See DONE.md.
   - **[HIGH — pre-existing, MEMORY-UNSAFE] 🐛 Closure-body `&`-of-self/param FORMATION cc-fails (int→pointer miscompile).** `bump(&self.fh)` / `f(&p.fh)` inside a CLOSURE body emits `bump(__v1)` passing int32 where `void*` is expected — cc type error on base AND patched. Blocks a closure-formation acceptance test (the 2T closure boundary uses a compilable `self.field = …` block-body shape instead). Own scout→gauntlet; measures both lanes.
   - **[MED] self-host typing hole: `int n = r.vals.pop()` (no unwrap) type-CHECKS + runs printing 0.** Production rejects `E_TypeMismatch` (pop → `Option[int]`). infer.gg's method-return typing for `pop`/`remove` doesn't wrap in Option. Needs a self-host negative fixture. (Discovered building the p12 fixture; unrelated to 2T.)
   - **[MED — owner's call] D2-rider `W_` → `E_` promotion.** The dead-bare-param-write diagnostic shipped on-by-default `W_`; corpus is at 1 true-positive post-migration (`generic_equip_method`→`&self`). Promote to `E_` (Core-#6 ratchet) after it rides one round, OR now — owner decides. Registry row reserved.
