@@ -6,16 +6,16 @@
 
 **✅ WAVE 1 LANDED (record: DONE.md).** T1 SH non-Add reject · T2 Vector/Deque `+=` concat (+ Deque enable) · T3 SH Face-D digit-normalize · T4 plain-self trait materialize both lanes · T5 snag #56 GorgetString. Residual: **SH Vector `+=` lag** (Core #9; SH still rejects compound Vector concat while Rust allows) · optional ggdef non-Add static ElabError.
 
-**WAVE 2 — 5 tracks (re-brief against tip `7408fe86`):**
-| # | Track | Zone (approx) | Size |
-|---|--------|---------------|------|
-| 6 | **SH lvalue gate** — reject `5 += 1` / `foo() = 1` with `E_InvalidAssignTarget` | `typecheck.gg` lvalue allowlist | S |
-| 7 | **SH Dict `.get(k)` Face-A** — write-through place for Dict get-chain | `lower_stmt.gg` | S–M |
-| 8 | **R39-T1 SH mirror** — `v[i].field = x` value-element field write-through | SH index→field place | M |
-| 9 | **Identifier-arm `s += heap` leak** — drop old String on compound (LSan) | `assigns.rs` Identifier compound | S |
-| 10 | **Snag #54 Result branch-assign return** — wrong variant on `return out` after branch assign | Result phi / exit merge both lanes | M |
+**WAVE 2 — IN FLIGHT (3 sequential brief passes SIGN OFF; executors launched):**
+| # | Track | Zone |
+|---|--------|------|
+| 6 | SH lvalue gate `E_InvalidAssignTarget` | typecheck.gg lvalue + diagnostic.gg |
+| 7 | SH Dict `.get` Face-A `allow_map` | lower_stmt.gg get-chain only |
+| 8 | **SH Vector/Deque `+=` concat** (rescoped from stale R39-T1; T2 recursive Core #9) | typecheck operator_supported + lower compound |
+| 9 | Identifier String `+=` drop-old leak | assigns.rs |
+| 10 | Snag #54 Result branch return | dump-first both lanes |
 
-**DEFER:** full SH bare-arg CoW headline · D6 refcount · D30+C1 · Class-C alias-sever · SH Vector `+=` allow (follow-up of T2).
+**DEFER (not this round):** full SH bare-arg CoW · D6 refcount · D30+C1 · Class-C alias-sever · R39-T1 nested residual (single-level already landed).
 
 **✅ Prior same-day closes:** Tainted-reject 2T Rust+ggdef `b98635de` · Curation/drain `2e2465c2` · Three-track `.get()`-Ref `c03185d1`.
 
