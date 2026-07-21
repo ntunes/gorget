@@ -19082,9 +19082,9 @@ fn self_host_bootstrap() {
 // Re-pinned UP 2026-07-21 (lag-close Wave 2 SH Core #9 lands): Dict.get
 // Face-A allow_map write-through + Vector/Deque compound `+=` clone+extend
 // + SH typecheck surface growth raised stage-0 self-compile array_clone
-// 12,651k-class → measured 12,766,424 (this session, twice-consistent under
-// load). Justified semantic cost of SH write-place/op parity, not a bomb.
-// Ceiling = measured + ~1%.
+// → measured 12,766,424. PROVISIONAL — not attribution-proven; charter is
+// hand-optimal clone count (TODO.md Perf HIGH). Optimization pass must
+// reclaim and re-seed DOWN. Ceiling = measured + ~1%.
 const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_895_000;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
