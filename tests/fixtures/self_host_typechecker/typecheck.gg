@@ -2359,12 +2359,16 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # 2T (defect C — mutating BUILTIN receiver): a mutating builtin
             # (`push`/`put`/…) on a collection receiver materialises the receiver
             # ROOT — reject a plain-self / bare-Borrow-param root of a drop-tainted
-            # type (mirror Rust's `is_builtin_mut` receiver reject). Covers BOTH
-            # statement AND value position (this walk visits every method call),
-            # and — unlike the assign target — does NOT skip a WHOLE receiver
-            # (`r.push()` on a whole tainted param still materialises r).
-            if is_mutating_builtin_method(method_name) and is_collection_receiver(*receiver, scopes, &types, &ctx):
-                bool _rc = reject_if_tainted_materialize_root(*receiver, scopes, types, &ctx)
+            # type (mirror Rust's `is_builtin_mut` receiver reject + get-chain
+            # `find_get_chain_taint_root` fallback, check_expr.rs:405-419).
+            # Gate: typed collection OR a getter-shaped place chain. Relying only
+            # on `is_collection_receiver` (full infer) misses
+            # `h.items.get(0).unwrap().tags.push(5)` when infer doesn't surface
+            # Vector on the field — Rust still rejects via get-chain root.
+            # `reject_if_tainted` + kind-gated get-chain keep USER get precise.
+            if is_mutating_builtin_method(method_name):
+                if is_collection_receiver(*receiver, scopes, &types, &ctx) or place_chain_has_getter_method((*receiver).expr):
+                    bool _rc = reject_if_tainted_materialize_root(*receiver, scopes, types, &ctx)
             # PART B: a `!self`-consuming method consumes the receiver root. Only a
             # bare-place receiver participates (a temp method-chain receiver has no
             # trackable root). Mirrors Rust check_expr.rs:387-403.

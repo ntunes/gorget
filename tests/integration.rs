@@ -22714,40 +22714,93 @@ fn self_host_check_rejects_illtyped() {
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
-/// Self-host 2T get-chain materialize reject (Core #9 SH lane close): a store
-/// `h.items.get(0).unwrap().f = v` on a bare drop-tainted param must REJECT
-/// `E_MoveWithoutOperator`, matching Rust gg + ggdef. Helpers:
-/// `is_field_addressable_collection` + `get_chain_root_def_spanned` /
-/// `get_chain_root_name`, wired into `reject_if_tainted_materialize_root` and
-/// `reject_amp_self_mutator`, with a LOCAL place-or-get-chain gate in
-/// `reject_materialize_on_write` (shared `expr_is_place` stays strict). Runs the
-/// self-host `check` driver on the known_gaps fixture; asserts nonzero exit.
+/// Self-host 2T get-chain materialize reject (Core #9 SH lane close).
+///
+/// Per-shape assertions matching the Rust/ggdef NEG set — not a single
+/// "nonzero exit" pin (a partial under-reject after a resolver swap, e.g.
+/// `.first()`/`.last()` stop descending, would still pass a weak gate).
+/// Helpers: structural `lvalue_value_type` kind gate + `get_chain_root_*`,
+/// wired into `reject_if_tainted_materialize_root` and `reject_amp_self_mutator`,
+/// LOCAL place-or-get-chain gate in `reject_materialize_on_write`.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn sh_cow_taint_getchain_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir
-        .join("tests")
-        .join("fixtures")
-        .join("known_gaps")
-        .join("sh_cow_taint_getchain_reject.gg");
+    let fixtures = manifest_dir.join("tests").join("fixtures");
 
-    let check = run_with_timeout(
+    // NEG shapes — each must REJECT with the exact diagnostic code.
+    // Uses the same fixtures as the Rust `check_gg_fails` suite so a
+    // SH-only under-reject on one arm is visible immediately.
+    let reject_shapes: &[(&str, &str)] = &[
+        (
+            "known_gaps/sh_cow_taint_getchain_reject.gg",
+            "assign: h.items.get(0).unwrap().name = v",
+        ),
+        (
+            "cow_taint_getchain_vector.gg",
+            "assign (top-level twin): h.items.get(0).unwrap().name = v",
+        ),
+        (
+            "cow_taint_getchain_firstlast.gg",
+            "first/last: h.items.first().unwrap().name = v",
+        ),
+        (
+            "cow_taint_getchain_compound.gg",
+            "compound: h.items.get(0).unwrap().n += 1",
+        ),
+        (
+            "cow_taint_getchain_receiver.gg",
+            "mutating-builtin receiver: …unwrap().tags.push(5)",
+        ),
+        (
+            "cow_taint_getchain_formation.gg",
+            "&-formation: bump(&h.items.get(0).unwrap().n)",
+        ),
+    ];
+
+    for (rel, shape) in reject_shapes {
+        let fixture = fixtures.join(rel);
+        let check = run_with_timeout(
+            Command::new(&driver_exe)
+                .arg("check")
+                .arg(&fixture)
+                .arg(format!("--lib-dir={}", lib_dir.display())),
+            &format!("SH check {rel}"),
+        );
+        let stdout = String::from_utf8_lossy(&check.stdout);
+        let stderr = String::from_utf8_lossy(&check.stderr);
+        let combined = format!("{stdout}{stderr}");
+        assert!(
+            !check.status.success(),
+            "self-host must REJECT get-chain 2T shape [{shape}] ({rel}) \
+             with nonzero exit (matching Rust gg + ggdef).\nstdout: {stdout}\nstderr: {stderr}",
+        );
+        assert!(
+            combined.contains("E_MoveWithoutOperator")
+                || combined.contains("error[E_MoveWithoutOperator]"),
+            "self-host must reject get-chain 2T shape [{shape}] ({rel}) with \
+             E_MoveWithoutOperator (not some other error — a wrong diagnostic \
+             or silent accept-then-later-fail is a regression).\nstdout: {stdout}\nstderr: {stderr}",
+        );
+    }
+
+    // POS precision: USER `get` must stay ACCEPTED (reject ⊆ materialize).
+    let user_get = fixtures.join("cow_taint_getchain_user_get_ok.gg");
+    let pos = run_with_timeout(
         Command::new(&driver_exe)
             .arg("check")
-            .arg(&fixture)
+            .arg(&user_get)
             .arg(format!("--lib-dir={}", lib_dir.display())),
-        "check sh_cow_taint_getchain_reject.gg",
+        "SH check cow_taint_getchain_user_get_ok.gg",
     );
     assert!(
-        !check.status.success(),
-        "self-host `gg check` on a get-chain materialize of a tainted bare param \
-         MUST exit nonzero (E_MoveWithoutOperator — matching Rust gg + ggdef). \
-         A green exit is a 2T get-chain reject regression.\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&check.stdout),
-        String::from_utf8_lossy(&check.stderr),
+        pos.status.success(),
+        "self-host must ACCEPT USER-get chain (reject ⊆ materialize) — \
+         cow_taint_getchain_user_get_ok.gg.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&pos.stdout),
+        String::from_utf8_lossy(&pos.stderr),
     );
 }
 
