@@ -407,7 +407,8 @@ static inline void gorget_array_insert(GorgetArray* arr, size_t index, const voi
 
 static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src) {
     if (src->len == 0) return;
-    size_t needed = dst->len + src->len;
+    size_t old_len = dst->len;
+    size_t needed = old_len + src->len;
     if (needed > dst->cap) {
         size_t old_cap = dst->cap;
         size_t new_cap = old_cap == 0 ? 8 : old_cap;
@@ -415,8 +416,16 @@ static inline void gorget_array_extend(GorgetArray* dst, const GorgetArray* src)
         dst->data = dst->alloc->realloc(dst->alloc->ctx, dst->data, old_cap * dst->elem_size, new_cap * dst->elem_size);
         dst->cap = new_cap;
     }
-    memcpy((char*)dst->data + dst->len * dst->elem_size, src->data, src->len * src->elem_size);
+    memcpy((char*)dst->data + old_len * dst->elem_size, src->data, src->len * src->elem_size);
     dst->len = needed;
+    // Deep-clone resource-type elements in the newly extended range so the
+    // append is independent of `src` (mirror gorget_array_clone / slice).
+    // Trivial elements leave elem_clone NULL and stay memcpy-only.
+    if (dst->elem_clone) {
+        for (size_t i = old_len; i < needed; i++) {
+            dst->elem_clone((char*)dst->data + i * dst->elem_size);
+        }
+    }
 }
 
 static inline GorgetArray gorget_array_clone(const GorgetArray* src) {

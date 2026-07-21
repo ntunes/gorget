@@ -1,0 +1,21 @@
+# Vector[String] binary `+` and compound `+=` deep-clone resource elements
+# on extend (elem_clone range after memcpy). Result owns independent
+# strings; a and b remain valid. Vector[int] concat is covered by
+# vector_concat / vector_compound_concat.
+
+from std.collections import Vector
+
+void main():
+    Vector[String] a = ["aa", "bb"]
+    Vector[String] b = ["cc"]
+    Vector[String] c = a + b
+    print(c.len())
+    for s in c:
+        print(s)
+    print(a.len())
+    print(b.len())
+    a += b
+    print(a.len())
+    for s in a:
+        print(s)
+    print(b.len())

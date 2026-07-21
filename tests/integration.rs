@@ -11077,16 +11077,13 @@ fn vector_concat() {
     );
 }
 
-/// Vector[String] `+` / `+=` currently double-frees (shallow `gorget_array_extend`).
-/// Intended stdout once `extend` deep-clones resource elements. See TODO HIGH
-/// "Vector[String] + / += double-free". Un-ignore + promote fixture when ASan-clean.
+/// Vector[String] `+` / `+=` deep-clones resource elements on extend
+/// (`gorget_array_extend` elem_clone loop on the new range). Pins the
+/// former double-free (result and rhs sharing String heap buffers).
 #[test]
-#[ignore = "KNOWN GAP: Vector[String] concat double-frees — shallow gorget_array_extend \
-after deep clone; TODO.md HIGH 'Vector[String] + / += double-free'. Un-ignore when \
-extend clones/materializes elem_clone elements (ASan-clean)."]
 fn vector_string_concat() {
     run_gg(
-        "known_gaps/vector_string_concat.gg",
+        "vector_string_concat.gg",
         "\
 3
 aa
@@ -11103,10 +11100,9 @@ cc
 }
 
 #[test]
-#[ignore = "KNOWN GAP: same root as vector_string_concat (shallow extend)."]
 fn vector_string_concat_asan() {
     assert_gg_sanitize_clean(
-        "known_gaps/vector_string_concat",
+        "vector_string_concat",
         "\
 3
 aa
