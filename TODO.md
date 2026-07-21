@@ -2,12 +2,12 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🟢 ROUND OPEN 2026-07-21 — solid-ground Rust CoW (NOT #13). Three tracks; T1 landed.**
-1. **T1 ✅** `gorget_array_extend` resource-elem double-free — `f2197e1b` on tip (runtime_array + fixtures + ASan). Output-review pending.
-2. **R1** `v[i].bump()` Rust land pending integrate — SH twin residual refiled HIGH (Core #9 lag). Zone `methods.rs`+`exprs/mod.rs`.
-3. **R2R3** operator-overload ownership — executor in worktree `agent-r2r3-overload-ownership` (temps + Identifier drop-old + Index mark). Parent integrates + output-reviews.
+**🟢 ROUND CLOSE IN PROGRESS 2026-07-21 — solid-ground Rust CoW excellence (NOT #13).** All three tracks on tip:
+1. **T1** `gorget_array_extend` resource-elem deep-clone — `5f244f8d` (output-review SIGN OFF).
+2. **R1** bare `v[i].bump()` write-through — `f5d5a95f` (SIGN OFF; SH lag filed Core #9).
+3. **R2R3** overload call drop-reg + Identifier drop-old — `5b8aa6da` (SIGN OFF).
 
-**Out of scope:** #13 · SH bare-arg campaign · D30. **One** round-close after R1+R2R3 land.
+**NEXT:** full C + LLVM integration close + force-rebuild parity; prune agent worktrees. **Still out of scope:** #13 return-view · full SH bare-arg campaign · D30.
 
 
 **✅ WAVE 1+2 (DONE.md).** W1: SH non-Add · Vector `+=` · Face-D · plain-self trait · snag #56. W2: SH lvalue · Dict.get Face-A · SH Vector `+=` · String `+=` drop-old · snag #54/#55 get_or. Residuals: optional ggdef non-Add static · provisional clone ceilings (opt pass).
