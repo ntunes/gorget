@@ -1232,6 +1232,62 @@ fn compound_assign_resource_read_centralized() {
     );
 }
 
+/// Sibling-site-drift guard (Core #4): every bare user operator-overload call
+/// routes through `emit_operator_overload_call` (ByPtr prep + call_tracked +
+/// drain of THIS call's pending_temp_drops / pending_move_zeros). A 10th site
+/// that re-open-codes bare `builder.call` for a user `__add` / `__eq` / …
+/// reintroduces the resource-RHS temp leak / missing drop-old class R2R3
+/// closed. Atomic `__add` / runtime symbols and custom Index `__get` stay on
+/// their own paths (not counted).
+///
+/// Call sites pinned (9):
+///   operators.rs ×4 — binary / unary / eq / compare overloads
+///   assigns.rs ×3 — Identifier compound, Index compound, place RMW
+///   stmts/mod.rs ×2 — assert Type__eq / Type__compare
+///
+/// **If this fails:** a new overload-call site was added without the helper,
+/// or a site lost the route. Route through `emit_operator_overload_call`; bump
+/// EXPECTED only with a justification naming the new arm.
+#[test]
+fn operator_overload_call_centralized() {
+    let def_src = fs::read_to_string("src/ir/lowering/exprs/calls.rs")
+        .expect("read src/ir/lowering/exprs/calls.rs");
+    assert_eq!(
+        def_src.matches("fn emit_operator_overload_call(").count(),
+        1,
+        "emit_operator_overload_call must be defined exactly once; found a \
+         different count in exprs/calls.rs.",
+    );
+
+    const EXPECTED_CALLS: usize = 9;
+    let files = [
+        "src/ir/lowering/exprs/operators.rs",
+        "src/ir/lowering/stmts/assigns.rs",
+        "src/ir/lowering/stmts/mod.rs",
+    ];
+    let mut call_count = 0usize;
+    for path in files {
+        let src = fs::read_to_string(path).unwrap_or_else(|_| panic!("read {path}"));
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") {
+                continue;
+            }
+            if t.contains("emit_operator_overload_call(") {
+                call_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        call_count, EXPECTED_CALLS,
+        "expected EXACTLY {EXPECTED_CALLS} callers of emit_operator_overload_call \
+         (operators×4 + assigns×3 + stmts assert×2), found {call_count}. A new \
+         user-overload call site must route through the shared helper (ByPtr prep \
+         + call_tracked + pending-temp drain) — bare builder.call reopens the \
+         resource-RHS leak / missing drop-old class (Core #4, solid-ground R2R3).",
+    );
+}
+
 /// Structural guard (Core #6 "convert a recurring bug class into an executable
 /// guard" + Core #2 "typed metadata, never name-matching"): the 2T SEMANTIC
 /// taint reject (`reject_tainted_materialize_on_write` + its formation sibling

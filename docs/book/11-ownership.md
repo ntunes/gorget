@@ -335,8 +335,8 @@ String x = obj.name.clone()    # x is an independent owned copy
 A few positions need an **owned** value rather than a borrow: a
 collection put (`push`, `put`, `insert`), a struct or enum field at
 construction (`S(name)`, `Some(name)`), a value `return`ed from a
-function (**today** — see note below), and a closure capture. At every
-one of these the rule is the same:
+function, and a closure capture. At every one of these the rule is the
+same:
 
 - If the source is **still used afterward** (live), the compiler
   **clones** it — the boundary gets its own independent copy and your
@@ -353,20 +353,11 @@ Option[String] tag = Some(make_tag())   # the temp is dead → moved, no clone
 ```
 
 There is no special case for puts and constructors: a `push`, a
-`Some(...)`, and a struct literal all behave identically. You never
-write `.clone()` to make a constructor work — borrow-by-default and
-clone-when-needed is one mental model across the whole language.
-
-**Returns today vs later.** Returning a resource that is still borrowed
-(for example `return self.tokens.get(i).unwrap()`) **clones today** so
-the caller always gets an independent value — you still never write a
-lifetime. A planned optimization (**return-view lazy materialization**,
-not shipped) may keep a compiler-internal view across that boundary
-when static analysis proves it is safe, and only clone if a conflicting
-mutation is reachable. That reclaim is design-ruled but **not
-implemented**; see `docs/language-design.md` §3.6 and
-`docs/internals/unified-resource-model.md` §6. Until it lands, treat
-`return` as an ownership boundary like `push` / field init.
+`Some(...)`, a `return`, and a struct literal all behave identically.
+You never write `.clone()` to make a constructor work — borrow-by-default
+and clone-when-needed is one mental model across the whole language.
+The caller of a function always receives an independent owned value
+(never a borrow of the callee's locals) and never writes a lifetime.
 
 ### When does Gorget copy?
 

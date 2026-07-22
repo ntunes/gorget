@@ -2722,11 +2722,23 @@ fn prep_overload_call_arg(
             let ptr_type = ctx.register_mut_ptr_type(mat_type);
             let dst = builder.add_local(ptr_type, None);
             builder.emit_borrow_mut(dst, Place::local(tmp));
+            // Move ownership into the callee (MutPtr of a Move param) — do
+            // NOT schedule a post-call drop on `tmp`.
             return FunctionBuilder::copy(dst);
         } else {
             let ptr_type = ctx.register_ptr_type(mat_type);
             let dst = builder.add_local(ptr_type, None);
             builder.emit_borrow(dst, Place::local(tmp));
+            // Constant / non-place materialize: callee borrows (const Ptr)
+            // and does not drop. If the materialized temp needs drop,
+            // schedule it for post-call drain (same class as the owning-
+            // ctor-temp arm above). Free-call `lower_call_arg` still has
+            // the sibling gap for non-overload ByPtr constants — file that
+            // separately if a leak shows up there.
+            if ctx.type_registry.needs_drop(mat_type) {
+                ctx.set_owned(builder, tmp);
+                ctx.func_state.pending_temp_drops.push(tmp);
+            }
             return FunctionBuilder::copy(dst);
         }
     }
@@ -2737,6 +2749,10 @@ fn prep_overload_call_arg(
         let ptr_type = ctx.register_ptr_type(sv_type);
         let dst = builder.add_local(ptr_type, None);
         builder.emit_borrow(dst, Place::local(tmp));
+        if ctx.type_registry.needs_drop(sv_type) {
+            ctx.set_owned(builder, tmp);
+            ctx.func_state.pending_temp_drops.push(tmp);
+        }
         return FunctionBuilder::copy(dst);
     }
     val

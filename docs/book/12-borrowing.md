@@ -127,24 +127,18 @@ String get_greeting():
     return "hello"         # static / literal — always valid
 
 String identity(String s):
-    return s               # today: move or clone at the return boundary
+    return s               # move or clone at the return boundary
 
 String forward(String s):
     String local = s       # in-body alias (CoW borrow)
-    return local           # today: move/clone into the caller's owned result
+    return local           # move/clone into the caller's owned result
 ```
 
-These all work without annotations. What the compiler does **today**:
+These all work without annotations:
 - `"hello"` is a static literal — always valid
 - `identity` / `forward` give the caller an **owned** `String` (move if
   the source is dead, clone if it is still live) — not a user-visible
-  borrow of the parameter
-
-**Not yet implemented:** keeping a compiler-internal **view** across a
-function return when static provenance proves the result is a short-lived
-projection of a live parameter/receiver (**return-view lazy
-materialization**). That path is design-ruled (still zero annotations in
-source) but not shipped — see `docs/language-design.md` §3.6.
+  borrow of the parameter. You never write a lifetime.
 
 ---
 
