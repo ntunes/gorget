@@ -4191,11 +4191,11 @@ fn equip_on_primitive_scalar_variants() {
 
 // ── gorget-sheets snags (filed 2026-07-07) — see the gorget-sheets snag report (git history) ──
 
+// snag #53 FIXED (verified 2026-07-22: nested `&outer.inner` write-through now
+// aliases the live sub-object; prints `=1+2`). Kept in known_gaps/ (out of the
+// runtime-diff corpus) as a Rust-gg C+LLVM guard; full corpus promotion pends
+// self-host-lane verification (needs a SH build — deferred to the CoW-`&` round).
 #[test]
-#[ignore = "gorget-sheets snag #53: nested struct field mutation through \
-`&outer.inner` is a silent no-op (got empty, expect `=1+2`). Fixture in \
-known_gaps/ so it stays OUT of the runtime-diff corpus. Un-ignore when \
-nested `&field` write-through aliases the live sub-object."]
 fn snag53_nested_struct_field_mut() {
     run_gg("known_gaps/snag53_nested_struct_field_mut.gg", "=1+2");
 }
