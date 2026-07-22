@@ -92,6 +92,18 @@ therefore needs no lifetime — is a restriction on **where the type may appear*
 > `Ref[T]` is allowed in **return and parameter** position and **forbidden in
 > binding, field, capture, and collection-element** position.
 
+**This must be transitive** (Grok review, 2026-07-22): the restriction applies to
+any type *containing* `Ref` at any depth, or "unstorable" leaks through
+higher-kinded wrappers. `Vector[Ref[Cell]]` would be a *stored collection of
+borrows*; binding `Option[Ref[Cell]] x = v.get(i)` would store a `Ref` inside a
+resting local. So a type that mentions `Ref` anywhere is a **transit-only kind** —
+legal in return/param/transient-expression position, illegal in any resting
+position — and it materializes (the inner `Ref`s become owned) the moment it
+crosses a storage boundary. `Cell c = v.get(i)` is fine (`c` is owned `Cell`; the
+`Option[Ref]` never rests); `Option[Ref[Cell]] c = v.get(i)` is not. **Open audit:
+does binding `Option[Ref[T]]` occur in the current tree today?** If so, the
+unstorable rule is a behavior change that needs a migration.
+
 It describes a value **in transit** — flowing out of a function, into one — but
 the type system refuses to let it come to **rest**. The instant you try to store
 it, you hit an ownership boundary and it materializes to owned `T`:
@@ -169,18 +181,21 @@ visible, stable view contract is worth stating.
 Tempting (less ceremony): make every projection-of-self return a view by default,
 since a bind materializes anyway. But apply the legality test:
 
-- **Perf gained: none.** #13 (below) already makes an owned `T` return borrow —
-  not clone — for read-only use, and binds materialize either way. A `Ref[T]`
-  default and a `T` default are physically identical for reads and for binds.
-- **The only thing it changes is mutate-through** — it makes `g.at(0).n = v`
-  write through *by default* for any projection return. That is precisely an
-  **accept/reject change**, and a body-dependent one: whether `grid.at(x,y).mark()`
-  mutates the grid or a dead copy would hinge on whether `at`'s body returns a
-  projection or an owned value, invisible to the caller.
+- **The decisive objection is legality.** `Ref[T]`-default makes `g.at(0).n = v`
+  write through *by default* for any projection-of-self return. That is precisely
+  an **accept/reject change**, and a body-dependent one: whether
+  `grid.at(x,y).mark()` mutates the grid or a dead copy would hinge on whether
+  `at`'s body returns a projection or an owned value — invisible to the caller.
+  This stands on its own, independent of any perf claim.
+- **Perf gained: post-#13, none; pre-#13, a read-clone (corrected 2026-07-22).**
+  The original draft argued "Ref-default buys no perf because #13 makes owned `T`
+  reads free." That leaned on #13 being shipped — which it is **not** (its yield is
+  unproven, ~3.5% of leaf clones). Pre-#13 an owned `T` return **clones on read**,
+  so Ref-default *would* save that clone. The perf argument is therefore
+  contingent; the **legality** argument above is the standalone reason.
 
 So `Ref[T]`-as-default moves a legality-affecting fact into the invisible-default
-zone — the wrong side of the "a change must not affect legality" line — while
-buying nothing on perf. It also inverts Gorget's value-semantics ethos (reading/
+zone — the wrong side of the "a change must not affect legality" line. It also inverts Gorget's value-semantics ethos (reading/
 owning is the common case; mutation-through is the deliberate exception; you
 should not default to the exception). **Keep `T` as the default**; the
 less-ceremony win is delivered by #13 (invisible, legality-safe), not by the
@@ -211,11 +226,13 @@ Cell c = g.view_at(0)      # owned copy; the Ref evaporates
 Cell d = g.copy_at(0)      # owned copy
 ```
 
-Reading the columns: **#13 makes `T` and `Ref[T]` returns physically identical
-for read-only use; binds materialize for both; the only observable difference the
-annotation buys is the mutate-through line.** `Ref[T]` is "owned semantics that
-#13 already makes cheap to read, **plus** permission to mutate the transient
-through to the source."
+Reading the columns: **once #13 ships**, `T` and `Ref[T]` returns are physically
+identical for read-only use; binds materialize for both; the only observable
+difference the annotation buys is the mutate-through line. `Ref[T]` is "owned
+semantics that #13 makes cheap to read, **plus** permission to mutate the
+transient through to the source." ⚠ **This read-parity is #13's goal, not a
+current fact** — pre-#13 the owned `T` return still clones on read. The soundness
+and annotate decisions do **not** depend on it (see the corrections section).
 
 ### #13 is not a stored borrow (and needs no borrow checker)
 
@@ -272,17 +289,75 @@ GIR→LIR, and view-return provenance carries it across the call boundary. Sound
 (total resolver) and perf (#13 reclaim) fall out of one mechanism. Build order:
 soundness rules (Rule 1 + Rule 2 typed flag) → planner table + D6 → #13 elision.
 
+## Critical review & corrections (2026-07-22)
+
+Two independent critical passes (orchestrator self-review + an external "Grok"
+review) converged: **good north star, wrong as a big-bang ship.** The corrections
+they produced:
+
+- **"Total resolver" is scoped to the method-call costume.** View-of-self typing
+  makes the *method-chain* resolution total; it does **not** address the other
+  silent-lost-write costumes — scalar `&c.fd` formation (TODO L112), nested
+  `&outer.inner` (snag #53), closure-body `&`-formation (L106). Those are
+  `&`-*formation* bugs (the root IS nameable), fixed by their own tracks, not by
+  this model. This model fixes one costume, not the whole lost-write class.
+
+- **Soundness ≠ the feature.** The soundness win is Rule 1 (place-gate + reject
+  genuinely-unresolvable) plus typing the *builtin* view-chains (the Core #2
+  whitelist replacement — behavior-preserving). That is small, cheap, and needs
+  **no** §3.7 concession. User-declared `Ref[T]` mutable accessors are a separable
+  **language feature** — that is where the borrowed-return-type concession lives.
+
+- **The unexamined fork: closure mutators.** `grid.update(x, y, (Cell &c): c.mark())`
+  — a transient, scoped, already-legal `&`-param closure — covers the user
+  mutate-through use case (chaining via block closure, returning a value,
+  encapsulation) with **zero new type surface and no §3.7 concession**. This makes
+  user-visible `Ref[T]` largely *call-site sugar*. Phase B below is therefore
+  **contestable, possibly never** — not "inevitable, later." Decide surface-`Ref`
+  vs closure-mutators on ergonomics before building it.
+
+- **Migration is narrower than "half the cost."** Turning owned-return mutate-
+  through from silent-no-op into a reject is cheap and good (surfaces latent bugs;
+  no correct program depended on a discarded write). The real cost is **not
+  regressing currently-working `.get()` chains** when the whitelist is replaced by
+  type-driven descent: in phase A, prove the type-driven descent covers every
+  chain the whitelist did (corpus audit) *before* arming the Rule-1 reject.
+
+- **Do not sell this as "the #13 round."** #13's read-clone reclaim is unshipped
+  and unproven-yield; the soundness slice must stand without it (it does).
+
+**Phasing (both reviews agree):**
+- **A — soundness slice (near-term-eligible):** typed view-of-self flag (builtins
+  first, replacing the name whitelist, coverage-proven) + Rule 1 place-gate reject
+  for owned-return mutate-through. Kills the method-chain lost-write costume. No
+  surface `Ref[T]`, no §3.7 concession.
+- **B — user surface (contestable):** user-writable `Ref[T]` returns + view-of-self
+  for user methods. Gated on the closure-mutator decision. This is a language-
+  design pivot, not a CoW increment — treat the §3.7 concession as a real cost.
+- **C — #13 reclaim (measurement-gated):** the read-clone elision, behind leaf-
+  yield measurement + memory gates.
+
+**Not the next round.** The near-term excellence moves remain the both-lane
+soundness bugs this model does NOT cover (scalar `&`-formation, snag #53, closure
+`&`-formation) + the SH Core #9 lag pack + #13's SH-excess/leaf measurement. This
+note is the architecture that eventually unifies the lost-write class and #13 —
+not a free win tomorrow.
+
 ## Status ledger
 
 - **RULED (owner 2026-07-22):** no stored borrows; `a = &f()` shelved. Transient
   views only.
-- **LEANING (orchestrator, owner-aligned):** view-ness **annotated** as `Ref[T]`
-  return type (not inferred); `T` stays the default (not `Ref[T]`-default); the
-  place-lvalue gate rejects mutate-through of owned returns.
-- **OPEN:** exact surface spelling of the view return (`Ref[T]` vs a keyword);
-  whether a conservative *inference-to-reject* assist is worthwhile (unsure ⇒
-  owned ⇒ reject, never a silent lost write) on top of annotation; migration for
-  programs that currently silent-no-op a mutate-through-owned.
+- **LEANING (orchestrator, owner-aligned):** the **soundness slice** (Rule 1
+  place-gate + typed view-of-self for *builtins*, replacing the whitelist);
+  legality **annotated** not inferred; `T` stays the default (not `Ref[T]`-default).
+- **CONTESTABLE (not leaning — decide before building):** user-visible `Ref[T]`
+  mutable accessors (phase B) vs **closure mutators** (`grid.update(x,y,(Cell &c):
+  c.mark())`), which cover the case with no new type surface and no §3.7
+  concession. Surface `Ref[T]` may be unnecessary sugar.
+- **OPEN:** exact surface spelling if phase B proceeds (`Ref[T]` vs a keyword);
+  the transitive-unstorable audit (does binding `Option[Ref[T]]` occur today?);
+  whether a conservative *inference-to-reject* assist is worthwhile; migration =
+  prove type-driven descent covers current `.get()` chains before arming Rule 1.
 - **NOT IMPLEMENTED.** No code exists for user-writable `Ref[T]` returns,
   view-of-self for user methods, or the place-lvalue gate beyond the landed
   `E_InvalidAssignTarget`.
