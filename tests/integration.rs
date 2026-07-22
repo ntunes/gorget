@@ -24634,9 +24634,9 @@ fn self_host_runtime_diff() {
     // Reseed: rm tests/fixtures/self_host_lowerer/driver{,.c}; GG_RUNTIME_DIFF=1
     // GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration --release
     // self_host_runtime_diff -- --nocapture (default GG_TEST_TIMEOUT_SECS).
-    // Reseeded 2026-07-21 (lag-close 10-track, force-rebuild): ADJ-MATCH 371 (of
-    // MATCH 1223 = ADJ 371 + UNADJ 842 + BOTH-WRONG 10). Prior floor 368 (SH 2T
-    // close). Floor = measured count (no ADJ jitter margin).
+    // Reseeded 2026-07-22 (solid-ground Rust CoW close, force-rebuild): ADJ-MATCH 371
+    // (of MATCH 1224 = ADJ 371 + UNADJ 843 + BOTH-WRONG 10). Prior floor 371
+    // (lag-close). Floor = measured count (no ADJ jitter margin); ADJ held.
     const GGDEF_ADJUDICATED_FLOOR: usize = 371;
     if cfg!(debug_assertions) {
         eprintln!(
@@ -24769,11 +24769,13 @@ fn self_host_runtime_diff() {
     // commit that lands the improvement so the gain is locked in. Do NOT
     // pad the floor beyond measured jitter. Floors ratchet — never lower.
     //
-    // Reseeded 2026-07-21 (lag-close 10-track): force-rebuild run reported
-    // MATCH 1223 / 1299 = 94.1% (WRONG 13, CC-FAIL 53, CRASH 9, DRIVER-FAIL 1;
-    // ADJ 371 / UNADJ 842 / BOTH-WRONG 10) in ~119s. Floor = 1223 − 5 jitter = 1218.
-    // Denom grew 1287→1299 (new Wave fixtures in corpus); MATCH +10 vs prior 1213.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1218;
+    // Reseeded 2026-07-22 (solid-ground Rust CoW close): force-rebuild run reported
+    // MATCH 1224 / 1304 = 93.9% (WRONG 17, CC-FAIL 53, CRASH 9, DRIVER-FAIL 1;
+    // ADJ 371 / UNADJ 843 / BOTH-WRONG 10). Floor = 1224 − 5 jitter = 1219.
+    // Denom 1299→1304 from new overload_arg_temp_* + vector_string_concat fixtures;
+    // MATCH +1 vs lag-close 1223 (Rust CoW correct; SH WRONG on the four overload
+    // pins + residual R1 index lag — Core #9, not a MATCH regression).
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1219;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
