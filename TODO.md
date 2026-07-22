@@ -8,7 +8,7 @@
 
 **Close gate (regenerated this session):** C **1826/0/20** · LLVM **1826/0/20** · force-rebuild parity **MATCH 1224 / 1304 = 93.9%** (WRONG 17 · CC 53 · CRASH 9 · DRIVER 1 · ADJ 371 · UNADJ 843 · BOTH-WRONG 10). MATCH +1 vs lag-close; % down from new SH-WRONG overload pins (Core #9, not Rust regression).
 
-**NEXT HEADLINE (owner pick):** #13 return-view lazy materialization (design ruled, not shipped) · OR SH Core #9 lag pack (R1 `v[i].bump` + R2R3 `overload_arg_temp_*` ×4) · OR full SH bare-arg CoW campaign. **DEFER:** D6 refcount · D30+C1. Clone ceilings remain provisional (attribution still #13 class ~71%).
+**NEXT HEADLINE — CoW `&`-WRITE-THROUGH SOUNDNESS + SH Core #9 lag (owner-designated 2026-07-22).** The both-lane silent-lost-write class the new CoW view-model does NOT cover (all filed HIGH below; re-verify each live symptom FIRST — several predate 4 CoW rounds, Core #5): scalar-field `&`-arg write-through silently lost (~L112, Core #8, `bumpint(&c.fd)` → 10 vs ggdef 11) · nested `&outer.inner` mutation no-op (snag #53, ~L100) · closure-body `&`-of-self/param FORMATION int→ptr miscompile (mem-unsafe, ~L106 — **doubly-motivated: closures are the sanctioned user mutate-through path per the view-model, so closure/`&` must be solid**). ∥ SH Core #9 lag pack: `v[i].bump()` write-through (~L97) + `overload_arg_temp_*` ×4 drop-reg (~L98) — flipping SH-WRONG→MATCH. Each track own scout→gauntlet, BOTH lanes, POS/NEG per root. **DEFER (architecture captured, NOT this round):** the resolver-totality soundness slice — design RULED + noted `docs/internals/cow-transient-view-model.md` (internal builtin views only, NO user-visible `Ref[T]`, closures for user mutate-through, §3.7 preserved, transitive-unstorable = internal guard); the place-gate + typed-builtin-views fix is a FUTURE round gated on a migration coverage audit (type-driven builtin descent must cover every current `.get()`-chain before arming the Rule-1 reject); #13 perf reclaim stays measurement-gated (leaf yield unproven ~3.5%). Also DEFER: D6 refcount · D30+C1. Clone ceilings remain provisional.
 
 **✅ WAVE 1+2 + lag-close (DONE.md).** Residuals: optional ggdef non-Add static · provisional clone ceilings (opt pass).
 
@@ -41,7 +41,8 @@ Then the 📐 RATIFIED post-2G sequence below (guards slice → planner campaign
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
 
-- **🔒 NEXT (after lag-close):** #13 return-view lazy materialization / DEEP-1 (ruled not shipped; SH-excess VarDecl first) · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first).
+- **🔒 NEXT (owner-designated 2026-07-22):** CoW `&`-write-through soundness class — scalar `&`-arg (~L112) · snag#53 nested `&field` (~L100) · closure `&`-formation (~L106), all both-lane Core #8 ∥ SH Core #9 lag pack — `v[i].bump` (~L97) + `overload_arg_temp_*` ×4 (~L98).
+- **THEN:** resolver-totality soundness slice (design note `docs/internals/cow-transient-view-model.md`; internal views only, no user `Ref[T]`; gated on the `.get()`-chain coverage audit) · #13 perf reclaim (measurement-gated; SH-excess VarDecl first) · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first).
 
 ## Operating invariants (load-bearing — process/reference context, not filed work)
 
