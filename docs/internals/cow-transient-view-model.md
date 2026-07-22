@@ -8,6 +8,36 @@
 > of the design so far. Pairs with the return-view (#13) ruling in
 > [`unified-resource-model.md`](unified-resource-model.md) §6.
 
+## Resolved direction (owner-ruled 2026-07-22) — internal views only, no user `Ref[T]`
+
+The model below is written up with a *user-visible* `Ref[T]` return type. **The
+owner has ruled that path out.** The chosen direction is the strictly simpler
+subset:
+
+- **Views are internal to builtins only.** The `returns_view` flag on
+  `BuiltinMethodDecl` replaces the name whitelist (Core #2); `Ref` never appears
+  in user source. **§3.7's "no user-visible borrowed-return type" stays true** —
+  the concession the critique flagged simply evaporates.
+- **User methods return owned.** Mutating through a user method's result is
+  rejected as a non-place (Rule 1) — today it silently loses the write, so this is
+  a strict soundness improvement, not a regression. `grid.at(x,y).mark()` on a
+  user `at` → honest error.
+- **Closures are the sanctioned way to mutate an encapsulated element**
+  (`grid.update(x,y,(Cell &c): c.mark())`) — legal today, writes through. "One
+  correct way" (Pythonic), chosen over adding a borrow-type concept for call-site
+  sugar.
+- **Transitive-unstorable becomes an internal compiler invariant + guard** (no LIR
+  storage slot holds a `Ref`-containing type — a stored `Ref` is a UAF), not a
+  user-facing type rule, since `Ref` is never user-spellable.
+
+So the live design is: **place-gate (Rule 1) + typed builtin views (Rule 2,
+internal) + transient/unstorable as an internal guard (Rule 3) + closures for user
+mutate-through.** The user-`Ref[T]` material below (annotate-vs-infer, the §3.7
+concession, phase B) is **retained only as rejected-alternative context** — it is
+NOT the chosen path. A "place alias" (a pure-projection method that expands to a
+place, no `Ref` type) is shelved next to `&f()` unless call-site readability later
+earns exactly one small concept.
+
 ## The problem this solves
 
 Gorget's CoW model promises that an unbroken borrow chain writes through to the
@@ -346,18 +376,17 @@ not a free win tomorrow.
 ## Status ledger
 
 - **RULED (owner 2026-07-22):** no stored borrows; `a = &f()` shelved. Transient
-  views only.
-- **LEANING (orchestrator, owner-aligned):** the **soundness slice** (Rule 1
-  place-gate + typed view-of-self for *builtins*, replacing the whitelist);
-  legality **annotated** not inferred; `T` stays the default (not `Ref[T]`-default).
-- **CONTESTABLE (not leaning — decide before building):** user-visible `Ref[T]`
-  mutable accessors (phase B) vs **closure mutators** (`grid.update(x,y,(Cell &c):
-  c.mark())`), which cover the case with no new type surface and no §3.7
-  concession. Surface `Ref[T]` may be unnecessary sugar.
-- **OPEN:** exact surface spelling if phase B proceeds (`Ref[T]` vs a keyword);
-  the transitive-unstorable audit (does binding `Option[Ref[T]]` occur today?);
-  whether a conservative *inference-to-reject* assist is worthwhile; migration =
-  prove type-driven descent covers current `.get()` chains before arming Rule 1.
+  views only. **No user-visible `Ref[T]`** — views internal to builtins only;
+  user-method mutate-through is rejected; **closures are the sanctioned user
+  mutate-through path** ("one correct way"). §3.7 stays true. Phase B (user Ref)
+  and the "place alias" are shelved.
+- **CHOSEN DESIGN:** Rule 1 place-gate + typed builtin `returns_view` (replacing
+  the whitelist) + transitive-unstorable as an internal compiler guard (no storage
+  slot holds a `Ref`-containing type) + closures for user mutation.
+- **OPEN:** migration = prove type-driven builtin descent covers every current
+  `.get()`-chain before arming the Rule-1 reject (corpus audit); the internal
+  transitive-unstorable audit (does any current path bind/store an
+  `Option[Ref[T]]`?); whether a conservative *inference-to-reject* assist helps.
 - **NOT IMPLEMENTED.** No code exists for user-writable `Ref[T]` returns,
   view-of-self for user methods, or the place-lvalue gate beyond the landed
   `E_InvalidAssignTarget`.
