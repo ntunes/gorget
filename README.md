@@ -121,6 +121,8 @@ That's the whole model: **bare borrows and copies-on-write, `&` writes through, 
 
 For comparison, Swift gives copy-on-write only to its **standard-library** collections (`Array`, `Dictionary`, `Set`, `String`) — your own types don't get it unless you implement `isKnownUniquelyReferenced` by hand. C++ copies eagerly via copy constructors; avoiding the copy is **manual** (`std::move`, references). Gorget's CoW is automatic, lazy, and applies to every resource type — user structs included.
 
+**Value semantics vs. immutability.** Both approaches exist to kill the same class of bug — a value changing under you through an alias. Immutability (Haskell, Clojure, persistent data structures) gets there by forbidding mutation; Gorget instead makes every value independent and leans on lazy CoW to keep the copies cheap. So you don't have to choose: a value you never mutate is *physically shared* (immutability's zero-copy win) and one you do mutate stays in-place (value semantics' ergonomics) — with **no garbage collector, no reference count** (unlike Swift's CoW), and **no lifetime annotations** (unlike Rust). The full positioning — including where immutability still wins — is in [`docs/language-design.md`](docs/language-design.md).
+
 ### Error handling
 
 Errors propagate automatically — you only write code where you want control:

@@ -8,6 +8,27 @@ A systems-capable language that reads like pseudocode but compiles to safe, effi
 
 ---
 
+## Where Gorget sits: value semantics vs immutability
+
+Most of the bugs that memory-safe languages exist to prevent trace back to one thing: **shared mutable state** — a value changing under you because something else holds an alias to it (mutation through an alias, data races, spooky action at a distance). There are two clean ways to eliminate that class, and they delete opposite halves of "shared mutable":
+
+- **Immutability** (Haskell, Clojure, persistent data structures) deletes *mutation*. Nothing ever changes, so an alias can't hurt you. You gain referential transparency — equational reasoning, free memoization, free sharing across threads — but you "change" a structure by rebuilding it (structural sharing, HAMTs), which costs allocation and pointer-chasing and fits in-place imperative algorithms awkwardly.
+- **Value semantics** deletes *sharing*. You mutate freely, but every variable is a logically independent value — no two names ever alias the same mutable storage — so a callee can never change your value behind your back. You keep imperative ergonomics and local reasoning; the cost is that naive copying is expensive, so the design lives or dies on how cheaply those copies are avoided.
+
+**Gorget is squarely in the value-semantics camp**, and its distinguishing bet is on *how* the copies are avoided. The three best-known implementations each pay somewhere:
+
+- **Swift** — copy-on-write with a **runtime reference count**: every mutation asks "am I uniquely referenced?" at run time, and the shared buffer stays pinned until the answer is yes.
+- **Val / Hylo** — mutable value semantics with **no first-class references at all**: efficient by construction, but you cannot store a reference, so reference-shaped data (graphs) is modeled with indices.
+- **Rust** — a **borrow checker**: sharing XOR mutation, enforced statically, paid for with lifetimes in the surface language.
+
+Gorget takes a fourth path: **lazy copy-on-write with compile-time provenance.** A bare binding or a bare argument is a zero-cost borrow-alias; the "am I shared?" question Swift answers at run time, Gorget answers at compile time — it tracks where each value was borrowed from — and the private copy is materialized *at the write that demands it, never speculatively*. So there is **no runtime reference count** (the per-mutation tax is gone), **no lifetime annotations** (the sharing analysis is entirely internal), and borrowing stays a zero-cost default rather than something the language forbids to remain efficient.
+
+This makes the value-semantics-vs-immutability choice, at the implementation layer, **partly a false dichotomy.** A Gorget value that is never mutated is *physically shared* — zero copies, exactly the sharing profile the immutability camp gets from structural sharing — and it becomes a private copy *only at the first write*. You write ordinary imperative, mutating code with value semantics, and the compiler gives that code the sharing profile of immutable data right up until a write forces divergence. You don't choose between "cheap to share" and "cheap to mutate in place" — lazy CoW delivers both from one mechanism.
+
+What Gorget does **not** claim is what immutability genuinely wins: referential transparency (an `&`-parameter mutation is still a side effect, so Gorget gives *local* reasoning, not *equational* reasoning), free sharing of mutable-capable values across threads, and cheap persistent/versioned history. Those remain immutability's territory. Gorget's target is the large space of imperative, allocation-conscious code that wants safety and value semantics **without** a garbage collector, a reference count, or lifetime annotations — and the wager is that static-provenance lazy CoW is the most honest way to serve it.
+
+---
+
 ## Design Direction
 
 Long-term objectives grouped by pillar. These targets and anti-targets guide every design decision — from syntax choices to runtime semantics. Each row captures both what Gorget aims for and what it deliberately avoids.
