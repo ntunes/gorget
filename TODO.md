@@ -180,8 +180,6 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 ### High
 
-- **🐛 SH non-Add `OP=` / binary op REJECT (FILED Track B 2026-07-21 — Rust gg lands `E_UnsupportedOperator`; SH lags, Core #9).** Rust rejects `s.name -= "x"` / `s - "x"` / Money-only-Add `w.m -= r` at check; SH typechecker still only gates string-index-assign on `SCompoundAssign` and has no op-support matrix (`typecheck.gg` ~3640). Land: mirror `operator_supported_for_type` at SCompoundAssign + BinaryOp + `DkUnsupportedOperator` in `diagnostic.gg`. Pin: `#[ignore] sh_nonadd_operator_reject` + fixtures `nonadd_*_error.gg`. Own scout.
-
 - **⭐ PENDING PARITY BACKLOG (RE-MEASURE via the command at the top of this file before acting; the non-MATCH set = the backlog).** Remaining known clusters, each needing its OWN scout:
   - **🐛 Self-host `Json` accessors (`is_object`/`get`/`has`) leak `gorget_map_clone` per call (`deserializable`/`serialize_collections` leak ~4× Rust; 77,628B measured round-32) — PRE-EXISTING Json/Dict-clone lifetime gap. Orthogonal to the landed Box[Trait] drop glue.**
   - **🐛 `apply_callextern_slotstore_override` (`lir_codegen.gg`) is aggregate-only, but Rust applies it to EVERY non-Ptr/Void slot (`src/lir/types.rs:666`) — would truncate a scalar-non-i64 `ICallExtern`→`SlotStore` result (latent parity gap).**
