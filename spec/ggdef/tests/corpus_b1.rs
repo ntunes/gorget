@@ -59,6 +59,14 @@ const EXCLUDE: &[&str] = &[
     "cow_value_index_field_writethrough.gg",
     "cow_dict_index_field_writethrough.gg",
     "cow_dict_index_field_single_eval.gg",
+    // Dict get-chain write-place (`.get(k).unwrap().field`), the sibling of the
+    // two rows above; landed with the Face-A fix (0f12b5cc) without refreshing
+    // either gate. Two ggdef-run-verified phase-0 gates: the `{}` empty-Dict
+    // literal has no `elaborate_expr` arm (catch-all, elaborate/mod.rs:1659), and
+    // past that the get-chain write place is Vector-only by design ("a Dict
+    // entry-by-key is not expressible as a `Proj`", eval.rs:805-812) so `as_index`
+    // IllFormeds on the String key (eval.rs:818). See corpus_b.rs for the long form.
+    "cow_getref_dict_writethrough.gg",
     "cow_for_amp_vector_field_writethrough.gg",
     "cow_for_amp_vector_alias_root.gg",
     "cow_for_amp_resource_elem_writethrough.gg",

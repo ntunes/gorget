@@ -53,6 +53,26 @@ const EXCLUDE: &[&str] = &[
     // producer) — the CoW-1C double-eval regression fixture is likewise outside
     // the phase-0 subset; it pins EVAL-ORDER on the real compilers, not ggdef.
     "cow_dict_index_field_single_eval.gg",
+    // Dict get-chain write-place, the `.get(k).unwrap().field` sibling of the two
+    // rows above (landed with the Face-A fix, 0f12b5cc). TWO phase-0 gates fire,
+    // both ggdef-run-verified: (1) the `{}` empty-Dict literal is
+    // `Expr::DictLiteral` (src/parser/expr.rs:1784) and `elaborate_expr` has no
+    // arm for it → the catch-all "expression `unsupported`" (elaborate/mod.rs:1659);
+    // (2) past that (rewriting `{}` to `Dict[String, Blk]()`), the get-chain write
+    // place producer is Vector-only BY DESIGN — "a Dict entry-by-key is not
+    // expressible as a `Proj`" (eval.rs:805-812) — so `as_index` on the String key
+    // IllFormeds with "index must be int, got String" (eval.rs:818). The fixture's
+    // expected output is the Rust/self-host lane's, not ggdef-adjudicated.
+    "cow_getref_dict_writethrough.gg",
+    // The three D2 plain-self/`&`-self trait-equip fixtures (landed 63cf298f +
+    // 835f8875 on 2026-07-21, same round as the row above, likewise without a
+    // gate refresh). `elaborate` has no `Item::Trait` arm → "item kind trait is
+    // outside the phase-0 subset" (elaborate/mod.rs:126); trait dispatch is a
+    // later increment, the same class as the `static` exclusion above. Their
+    // expected outputs are the Rust + self-host lanes', not ggdef-adjudicated.
+    "cow_trait_amp_self_field_writethrough.gg",
+    "cow_trait_plain_self_collection_materialize.gg",
+    "cow_trait_plain_self_field_materialize.gg",
     // Track 1A (+ remediations): the out-of-phase-0-subset for-element fixtures
     // (the same rows EXCLUDEd from corpus_b1 — both gates share the phase-0
     // elaboration; each citation is ggdef-run-verified).
