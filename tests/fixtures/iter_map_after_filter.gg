@@ -20,7 +20,8 @@ struct Boxed:
 int main():
     Vector[int] big = [0, 1, 7, 8, 14, 21]
 
-    # 1. map-after-filter, results > 255. Was 0 / 88 / 176 / 24 (truncated).
+    # 1. map-after-filter, results > 255. Was 0 / 88 / 176 / 8 (truncated:
+    #    7000 & 0xFF = 88, 14000 & 0xFF = 176, 21000 & 0xFF = 8).
     Vector[int] a = big.iter().filter((int x): x % 7 == 0).map((int x): x * 1000).collect()
     for v in a:
         print(v)

@@ -5,7 +5,7 @@
 
 mod substitute;
 
-pub use substitute::{substitute_type_pub, substitute_function_body_pub, builtin_fault_enum};
+pub use substitute::{substitute_type_pub, substitute_function_body_pub, builtin_fault_enum, merge_method_subs};
 use substitute::{substitute_type, substitute_function_body, inject_builtin_enums};
 
 use rustc_hash::FxHashMap;
@@ -1283,28 +1283,14 @@ impl GenericCollector {
                 chosen_equip = Some(equip);
             }
         }
-        if let Some(ref gp) = method_def_for_scan.generic_params {
-            for (param, arg) in gp.node.params.iter().zip(method_targs.iter()) {
-                let name = match &param.node {
-                    GenericParam::Type { name: s, .. } => s.node.clone(),
-                    GenericParam::Const { name, .. } => name.node.clone(),
-                };
-                // Method-level generics are the innermost scope and must
-                // SHADOW an equip-level param of the same name. Without this,
-                // a struct+method sharing a param letter collides: e.g.
-                // `equip [Iter, T, F] FilterIter[...]`'s predicate `F` (a
-                // `bool(T)` closure) and the trait-default `map[U, F]`'s map
-                // closure `F` (a `U(T)` closure) both land in the flat sub
-                // list, equip-first. `substitute_type` takes the first match,
-                // so the equip `F` (bool) wrongly overrode the method `F`,
-                // typing the map result `bool` and byte-truncating the real
-                // `int64_t` value at the `Some_0` store. The equipped-type
-                // substitution above is already computed from the equip-only
-                // subs, so removing the shadowed entry here is safe.
-                merged_subs.retain(|(n, _)| n != &name);
-                merged_subs.push((name, arg.node.clone()));
-            }
-        }
+        // Method-level generics shadow equip-level params of the same name
+        // (see `merge_method_subs`). The equipped-type / `Self` substitution
+        // above is already computed from the equip-only subs, so this is safe.
+        substitute::merge_method_subs(
+            &mut merged_subs,
+            method_def_for_scan.generic_params.as_ref(),
+            method_targs,
+        );
         // Bind the trait's own generic params (trait-scope T etc.) first
         // so trait-body refs win over any collision with impl-scope names.
         let mut trait_subs: Vec<(String, Type)> = Vec::new();
@@ -1577,15 +1563,16 @@ impl GenericCollector {
                             continue;
                         }
                         let mut subs = build_equip_type_substitutions(equip, &args);
-                        if let (Some(gp), Some(targs)) = (m.node.generic_params.as_ref(), generic_args.as_ref()) {
-                            for (param, arg) in gp.node.params.iter().zip(targs.iter()) {
-                                let name = match &param.node {
-                                    GenericParam::Type { name: s, .. } => s.node.clone(),
-                                    GenericParam::Const { name, .. } => name.node.clone(),
-                                };
-                                subs.push((name, arg.node.clone()));
-                            }
-                        }
+                        // Method-level generics shadow equip-level params of
+                        // the same name (see `merge_method_subs`). Inert today
+                        // (this reads element/base-name, never `F`), but routed
+                        // through the shared path so the collision stays fixed
+                        // by construction if a consumer ever reads `F` here.
+                        substitute::merge_method_subs(
+                            &mut subs,
+                            m.node.generic_params.as_ref(),
+                            generic_args.as_deref().unwrap_or(&[]),
+                        );
                         return Some(substitute::substitute_type_pub(&m.node.return_type.node, &subs));
                     }
                 }
@@ -1612,16 +1599,21 @@ impl GenericCollector {
                     chosen?
                 };
                 let mut subs = eq_subs;
-                if let (Some(gp), Some(targs)) = (default_m.generic_params.as_ref(), generic_args.as_ref()) {
-                    for (param, arg) in gp.node.params.iter().zip(targs.iter()) {
-                        let name = match &param.node {
-                            GenericParam::Type { name: s, .. } => s.node.clone(),
-                            GenericParam::Const { name, .. } => name.node.clone(),
-                        };
-                        subs.push((name, arg.node.clone()));
-                    }
-                }
+                // Equipped type / `Self` uses ONLY the equip-level subs (the
+                // receiver struct's own params); compute it BEFORE merging the
+                // method-level params so method-scope shadowing can't rewrite
+                // the receiver's own closure param. Mirrors the fixed sites in
+                // `try_register_method_instance` / `lower_method_instance`.
                 let substituted_equipped = substitute::substitute_type_pub(&equip_ty, &subs);
+                // Method-level generics shadow equip-level params of the same
+                // name (see `merge_method_subs`). Inert today (this reads the
+                // element type, never `F`), but routed through the shared path
+                // for correctness by construction.
+                substitute::merge_method_subs(
+                    &mut subs,
+                    default_m.generic_params.as_ref(),
+                    generic_args.as_deref().unwrap_or(&[]),
+                );
                 subs.push(("Self".to_string(), substituted_equipped));
                 Some(substitute::substitute_type_pub(&default_m.return_type.node, &subs))
             }
@@ -2176,21 +2168,10 @@ impl GenericCollector {
             // subs (before the method-param merge below) so method-scope
             // shadowing can't rewrite the receiver's own closure param.
             let substituted_equipped = substitute::substitute_type_pub(&equip.type_.node, &subs);
-            if let Some(ref gp) = method.generic_params {
-                for (param, arg) in gp.node.params.iter().zip(mi.method_type_args.iter()) {
-                    let name = match &param.node {
-                        GenericParam::Type { name: s, .. } => s.node.clone(),
-                        GenericParam::Const { name, .. } => name.node.clone(),
-                    };
-                    // Method-level generics shadow equip-level params of the
-                    // same name (innermost scope wins). See the matching note
-                    // in `try_register_method_instance` — a shared `F` between
-                    // the receiver struct's closure and the method's closure
-                    // otherwise resolves to the wrong signature.
-                    subs.retain(|(n, _)| n != &name);
-                    subs.push((name, arg.node.clone()));
-                }
-            }
+            // Method-level generics shadow equip-level params of the same name
+            // (see `merge_method_subs`). `substituted_equipped` above is
+            // computed from the equip-only subs, so shadowing is safe here.
+            substitute::merge_method_subs(&mut subs, method.generic_params.as_ref(), &mi.method_type_args);
             // Also bind the trait's own generic params to their
             // substituted concrete values (e.g. impl's `Iterator[int]`
             // binds trait's `T → int`). Pushed BEFORE Self + impl subs

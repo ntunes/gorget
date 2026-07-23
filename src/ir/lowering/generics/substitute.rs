@@ -10,6 +10,42 @@ pub fn substitute_type_pub(ty: &Type, subs: &[(String, Type)]) -> Type {
     substitute_type(ty, subs)
 }
 
+/// Merge a generic method's type-parameter bindings into an existing
+/// substitution list so the METHOD-level bindings SHADOW any equip-level
+/// (receiver-struct) binding of the same name.
+///
+/// Both an adapter struct and a trait-default method can name their closure
+/// generic `F` (e.g. `equip [Iter, T, F] FilterIter[...]`'s predicate `F` — a
+/// `bool(T)` closure — and the trait-default `map[U, F]`'s map closure `F` — a
+/// `U(T)` closure). Because `substitute_type` takes the FIRST match in the flat
+/// list, a naive append (equip-scope entries first) lets the outer `F` win,
+/// mis-typing the inner one — which typed a map result `bool` and byte-
+/// truncated the real `int64_t` at the `Some_0` store. This helper removes any
+/// colliding equip-scope entry before pushing each method-scope binding, so the
+/// innermost scope wins (correct lexical shadowing).
+///
+/// One shared path for every equip+method sub-merge so a new call site can't
+/// reappear un-shadowed (the retain is a no-op unless a name collides). Call it
+/// AFTER computing any equipped-type / `Self` substitution from the equip-only
+/// subs, so the receiver's own closure param is preserved.
+pub fn merge_method_subs(
+    subs: &mut Vec<(String, Type)>,
+    method_generic_params: Option<&Spanned<ast::GenericParams>>,
+    method_type_args: &[Spanned<Type>],
+) {
+    let Some(gp) = method_generic_params else {
+        return;
+    };
+    for (param, arg) in gp.node.params.iter().zip(method_type_args.iter()) {
+        let name = match &param.node {
+            ast::GenericParam::Type { name: s, .. } => s.node.clone(),
+            ast::GenericParam::Const { name, .. } => name.node.clone(),
+        };
+        subs.retain(|(n, _)| n != &name);
+        subs.push((name, arg.node.clone()));
+    }
+}
+
 /// Public entry point for whole-function-body substitution.
 ///
 /// Used by the default-trait-method lowering path (functions.rs) so a body
