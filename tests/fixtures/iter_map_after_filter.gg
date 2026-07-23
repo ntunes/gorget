@@ -1,0 +1,63 @@
+# Regression: a MapIter wrapping a FilterIter must NOT collapse the map
+# closure's return type `U` onto the FilterIter predicate's `bool`.
+#
+# Both the adapter struct (`FilterIter[Iter, T, F]`, predicate `F`) and the
+# trait-default `map[U, F]` (map closure `F`) name their closure generic `F`.
+# When the two substitutions were merged into one flat list, equip-scope
+# first, `substitute_type`'s first-match picked the predicate's `bool(int)`
+# for the map closure — so the map result was typed `bool` and the int64 was
+# byte-truncated at the `Some_0` store (7000 & 0xFF = 88, 14000 & 0xFF = 176).
+#
+# Every mapped value here exceeds 255 so any one-byte truncation is visible.
+
+from std.collections import Vector
+from std.iter import VectorIter, MapIter, FilterIter
+from std.conv import int_to_str
+
+struct Boxed:
+    int val
+
+int main():
+    Vector[int] big = [0, 1, 7, 8, 14, 21]
+
+    # 1. map-after-filter, results > 255. Was 0 / 88 / 176 / 24 (truncated).
+    Vector[int] a = big.iter().filter((int x): x % 7 == 0).map((int x): x * 1000).collect()
+    for v in a:
+        print(v)
+
+    print("--")
+
+    # 2. map-after-filter-after-take — a deeper adapter nest (TakeIter over
+    #    MapIter over FilterIter); the map result must survive both wrappers.
+    Vector[int] b = big.iter().filter((int x): x % 7 == 0).map((int x): x * 1000).take(2).collect()
+    for v in b:
+        print(v)
+
+    print("--")
+
+    # 3. map-ALONE regression: no filter upstream. `.map()` alone was always
+    #    correct; it must stay correct after the fix.
+    Vector[int] c = big.iter().map((int x): x * 1000).collect()
+    for v in c:
+        print(v)
+
+    print("--")
+
+    # 4. filter (predicate → bool) then map to a DIFFERENT type (String) — the
+    #    collision surface where predicate F = bool(int) and map F = String(int)
+    #    are maximally distinct. If the map F resolved to the predicate's bool,
+    #    the String result would be mis-sized rather than merely truncated.
+    Vector[String] d = big.iter().filter((int x): x % 7 == 0).map((int x): int_to_str(x * 1000)).collect()
+    for s in d:
+        print(s)
+
+    print("--")
+
+    # 5. filter then map to a STRUCT (`Boxed`) — a compound, larger-than-scalar
+    #    map result. A collapse to `bool` here would mis-size the struct store,
+    #    not merely truncate; the field read must still see the full int64.
+    Vector[Boxed] e = big.iter().filter((int x): x % 7 == 0).map((int x): Boxed(x * 1000)).collect()
+    for b in e:
+        print(b.val)
+
+    return 0

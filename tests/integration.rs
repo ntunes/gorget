@@ -3877,6 +3877,22 @@ fn iter_map_filter_method_sugar() {
 }
 
 #[test]
+fn iter_map_after_filter() {
+    // Regression: a MapIter wrapping a FilterIter shared the closure generic
+    // letter `F` between the FilterIter predicate (`bool(int)`) and the
+    // trait-default `map[U, F]` closure. The merged substitution list put the
+    // equip-scope `F` first, so `substitute_type`'s first-match typed the map
+    // result `bool` and byte-truncated the int64 at the `Some_0` store
+    // (7000 & 0xFF = 88). Every mapped value here exceeds 255 so truncation is
+    // visible. Covers: map-after-filter, map-after-filter-after-take, map-alone
+    // (must stay correct), map to a DIFFERENT type (String), map to a struct.
+    run_gg(
+        "iter_map_after_filter.gg",
+        "0\n7000\n14000\n21000\n--\n0\n7000\n--\n0\n1000\n7000\n8000\n14000\n21000\n--\n0\n7000\n14000\n21000\n--\n0\n7000\n14000\n21000",
+    );
+}
+
+#[test]
 fn iter_chain_past_one_step() {
     run_gg(
         "iter_chain_past_one_step.gg",

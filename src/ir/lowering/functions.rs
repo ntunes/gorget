@@ -2503,18 +2503,27 @@ pub fn lower_method_instance(
 ) {
     // Equip-level subs (T → concrete from receiver).
     let mut subs = build_equip_subs(equip, equip_type_args);
-    // Method-level subs (U, F → concrete from call-site targs).
+    // Equipped type uses ONLY equip-level params (the receiver struct's
+    // own params, e.g. FilterIter's `Iter, T, F`); compute it before the
+    // method-level params are merged so method-scope shadowing (below)
+    // can't rewrite the receiver's own closure param `F`.
+    let substituted_equipped_type = generics::substitute_type_pub(&equip.type_.node, &subs);
+    // Method-level subs (U, F → concrete from call-site targs). Method-level
+    // generics are the innermost scope and SHADOW an equip-level param of the
+    // same name — otherwise a struct+method sharing a param letter (e.g.
+    // FilterIter's predicate `F` and the trait-default `map[U, F]`'s map
+    // closure `F`) collides and `substitute_type`'s first-match picks the
+    // wrong (equip) binding, mis-typing the map result.
     if let Some(ref gp) = method.generic_params {
         for (param, arg) in gp.node.params.iter().zip(method_type_args.iter()) {
             let name = match &param.node {
                 GenericParam::Type { name: s, .. } => s.node.clone(),
                 GenericParam::Const { name, .. } => name.node.clone(),
             };
+            subs.retain(|(n, _)| n != &name);
             subs.push((name, arg.node.clone()));
         }
     }
-
-    let substituted_equipped_type = generics::substitute_type_pub(&equip.type_.node, &subs);
 
     // Bind trait's own generic params first so trait-scope references
     // in the default body (e.g. `Vector[T]` / `Option[T]` where `T` is

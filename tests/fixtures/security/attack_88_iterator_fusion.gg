@@ -1,6 +1,11 @@
 # Probe: iterator adapter chain must produce correct count — lazy
 # fusion semantics. filter → map → take(3) → collect should stop
 # after 3 elements even though the underlying vector has many more.
+#
+# The map closure multiplies by 1000 so the results (7000, 14000) exceed
+# 255: a MapIter-over-FilterIter whose map-closure return type collapses
+# to the predicate's `bool` truncates the int64 to one byte, which a
+# byte-sized `x * 2` fixture would silently pass.
 
 void main():
     Vector[int] big = []
@@ -8,7 +13,7 @@ void main():
     while i < 100:
         big.push(i)
         i += 1
-    Vector[int] result = big.iter().filter((int x): x % 7 == 0).map((int x): x * 2).take(3).collect()
+    Vector[int] result = big.iter().filter((int x): x % 7 == 0).map((int x): x * 1000).take(3).collect()
     print(result.len())
     int j = 0
     while j < result.len():

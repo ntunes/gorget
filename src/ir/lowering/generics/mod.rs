@@ -1289,6 +1289,19 @@ impl GenericCollector {
                     GenericParam::Type { name: s, .. } => s.node.clone(),
                     GenericParam::Const { name, .. } => name.node.clone(),
                 };
+                // Method-level generics are the innermost scope and must
+                // SHADOW an equip-level param of the same name. Without this,
+                // a struct+method sharing a param letter collides: e.g.
+                // `equip [Iter, T, F] FilterIter[...]`'s predicate `F` (a
+                // `bool(T)` closure) and the trait-default `map[U, F]`'s map
+                // closure `F` (a `U(T)` closure) both land in the flat sub
+                // list, equip-first. `substitute_type` takes the first match,
+                // so the equip `F` (bool) wrongly overrode the method `F`,
+                // typing the map result `bool` and byte-truncating the real
+                // `int64_t` value at the `Some_0` store. The equipped-type
+                // substitution above is already computed from the equip-only
+                // subs, so removing the shadowed entry here is safe.
+                merged_subs.retain(|(n, _)| n != &name);
                 merged_subs.push((name, arg.node.clone()));
             }
         }
@@ -2152,15 +2165,6 @@ impl GenericCollector {
 
             // Merged subs: equip-level (T → from receiver) + method-level (U, F → from call-site).
             let mut subs = build_equip_type_substitutions(equip, &mi.equip_type_args);
-            if let Some(ref gp) = method.generic_params {
-                for (param, arg) in gp.node.params.iter().zip(mi.method_type_args.iter()) {
-                    let name = match &param.node {
-                        GenericParam::Type { name: s, .. } => s.node.clone(),
-                        GenericParam::Const { name, .. } => name.node.clone(),
-                    };
-                    subs.push((name, arg.node.clone()));
-                }
-            }
             // Bind `Self` so trait-default sigs like
             // `MapIter[Self, T, U, F] map[U, F](self, F f)` resolve to
             // the equipping iterator's concrete type in the registered
@@ -2168,8 +2172,25 @@ impl GenericCollector {
             // `MapIter__unknown__...` while the body lowering (which
             // also binds Self, see lower_method_instance) emits
             // `MapIter__VectorIter__int64_t__...`, producing a sig/body
-            // type mismatch at the call site.
+            // type mismatch at the call site. Computed from equip-only
+            // subs (before the method-param merge below) so method-scope
+            // shadowing can't rewrite the receiver's own closure param.
             let substituted_equipped = substitute::substitute_type_pub(&equip.type_.node, &subs);
+            if let Some(ref gp) = method.generic_params {
+                for (param, arg) in gp.node.params.iter().zip(mi.method_type_args.iter()) {
+                    let name = match &param.node {
+                        GenericParam::Type { name: s, .. } => s.node.clone(),
+                        GenericParam::Const { name, .. } => name.node.clone(),
+                    };
+                    // Method-level generics shadow equip-level params of the
+                    // same name (innermost scope wins). See the matching note
+                    // in `try_register_method_instance` — a shared `F` between
+                    // the receiver struct's closure and the method's closure
+                    // otherwise resolves to the wrong signature.
+                    subs.retain(|(n, _)| n != &name);
+                    subs.push((name, arg.node.clone()));
+                }
+            }
             // Also bind the trait's own generic params to their
             // substituted concrete values (e.g. impl's `Iterator[int]`
             // binds trait's `T → int`). Pushed BEFORE Self + impl subs

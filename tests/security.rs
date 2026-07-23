@@ -1163,7 +1163,7 @@ fn sec_87_atomic_counter_four_spawners() {
 fn sec_88_iterator_fusion_take_after_filter_map() {
     // filter(x%7==0).map(*2).take(3) → [0, 14, 28]. Lazy — stops
     // early instead of materializing all 100 elements.
-    security_safe("attack_88_iterator_fusion", "3\n0\n14\n28");
+    security_safe("attack_88_iterator_fusion", "3\n0\n7000\n14000");
 }
 
 #[test]
