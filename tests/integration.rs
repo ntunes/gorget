@@ -19552,10 +19552,11 @@ fn self_host_stage1_clone_ceiling() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "stage1_clone_ceiling stage0 → stage1.c",
-        // 600s — generous vs the ~260s emit; leaves ~2× headroom under a
+        // Default 600s — generous vs the ~260s emit; leaves ~2× headroom under a
         // --test-threads=4 sweep (the serial group protects the shared driver
-        // paths). Mirrors self_host_bootstrap_fixed_point's stage deadlines.
-        Duration::from_secs(600),
+        // paths). Honors GG_STAGE1_TIMEOUT_SECS (CI overrides higher) like every other
+        // stage self-compile — same ~262s-user / 4-8×-wall driver.gg workload.
+        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
     );
     assert!(
         body_out.status.success(),
@@ -19599,8 +19600,9 @@ fn self_host_stage1_clone_ceiling() {
             .arg("--lir-c")
             .stdout(Stdio::null()),
         "stage1_clone_ceiling stage1 self-compile",
-        // 600s — ~2× the ~260s stage-1 self-compile, headroom under sweep load.
-        Duration::from_secs(600),
+        // Default 600s — ~2× the ~260s stage-1 self-compile, headroom under sweep
+        // load. Honors GG_STAGE1_TIMEOUT_SECS (CI overrides higher) like every other stage.
+        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
     );
     // Cleanup up front (before the asserts) so a tripped ratchet still cleans.
     let _ = std::fs::remove_file(&exe);
@@ -19668,9 +19670,10 @@ fn self_host_bootstrap_fixed_point() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap_fixed_point stage0 → stage1.c",
-        // 600s deadline — bumped from 300s for parallel-load resilience
-        // (see self_host_bootstrap above for the full rationale).
-        Duration::from_secs(600),
+        // Default 600s — bumped from 300s for parallel-load resilience (see
+        // self_host_bootstrap above for the full rationale). Honors
+        // GG_STAGE1_TIMEOUT_SECS (CI overrides higher) like every other stage self-compile.
+        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
     );
     assert!(body_out.status.success(), "stage-0 driver failed");
     let stage1_body = String::from_utf8_lossy(&body_out.stdout).to_string();
@@ -19736,8 +19739,9 @@ fn self_host_bootstrap_fixed_point() {
             .arg(&lib_dir)
             .arg("--lir-c"),
         "self_host_bootstrap_fixed_point stage1 → stage2.c",
-        // 600s deadline — bumped from 300s for parallel-load resilience.
-        Duration::from_secs(600),
+        // Default 600s — bumped from 300s for parallel-load resilience. Honors
+        // GG_STAGE1_TIMEOUT_SECS (CI overrides higher) like every other stage self-compile.
+        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
     );
     assert!(
         stage2_out.status.success(),
@@ -19818,7 +19822,9 @@ fn self_host_bootstrap_fixed_point() {
                 gn - 1,
                 gn,
             ),
-            Duration::from_secs(600),
+            // Honors GG_STAGE1_TIMEOUT_SECS (CI overrides higher); default 600 — same
+            // driver.gg self-compile workload as every other stage.
+            Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
         );
         assert!(
             next_out.status.success(),
@@ -35275,7 +35281,9 @@ fn stack_guard_self_host_driver_deep_lowering() {
             .arg(&driver_gg)
             .arg(&lib_dir),
         "self-host driver self-compiling its own source (pinned 8MB)",
-        Duration::from_secs(600),
+        // Honors GG_STAGE1_TIMEOUT_SECS (CI overrides higher); default 600 — same
+        // ~262s driver.gg self-compile workload as the stage deadlines.
+        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
     );
     assert!(
         emit.status.success(),

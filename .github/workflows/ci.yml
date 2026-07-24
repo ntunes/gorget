@@ -48,11 +48,15 @@ jobs:
         env:
           GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
-          # self_host_bootstrap's stage-1 run has its own knob (default 120s),
-          # separate from the build/test timeouts. The stage-1 self-host
-          # compile of driver.gg legitimately takes 100-500s on the slow
-          # x86_64 runner, so the 120s default trips on CI. (See TODO.md.)
-          GG_STAGE1_TIMEOUT_SECS: 900
+          # Every stage self-compile deadline (the fixed-point + clone-ceiling
+          # tests, plus the pinned-8MB self-compile) honors this knob (default
+          # 600s in-code). The stage-1 self-host compile of driver.gg legitimately
+          # takes 100-500s user / 4-8x wall on the slow debug --test-threads=1
+          # x86_64 runner, so a 600s wall deadline flakes (bootstrap_fixed_point +
+          # stage1_clone_ceiling timed out at 600s, 2026-07-24). 1200s gives real
+          # headroom without extending healthy runs (deadline only bites on a
+          # genuine hang — the clone-ratchet asserts still catch a real clone bomb).
+          GG_STAGE1_TIMEOUT_SECS: 1200
 
       - name: Spec conformance (ggdef)
         run: cargo test -p ggdef -- --test-threads=4
