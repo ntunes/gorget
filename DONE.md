@@ -7,8 +7,13 @@
   bench-runner comment; closed the A17 OPEN-queue index line in decisions.md (D21 LOG record kept as history).
   Salvage scan: nothing worth porting (UB detection superseded by ASan/UBSan on emitted C;
   leak counts by --clones=stats; races = phase-3 ggdef-interleaving+TSan pin). decisions.md D21 record + ref_async_shared_sim
-  memory kept as history. See DONE for the round-close gate results.
-  (gate: pending parent sweep)
+  memory kept as history. Gauntlet: scout (salvage verdict + green prototype) → brief → **5 sequential fresh brief-reviews**
+  (opus first/last; converged clean at pass 5, tail was the stale bare-word-`sim`-in-comments completeness class, now swept
+  by a definitive `\bsim\b` guard) → executor `fcc8f3ad` → fresh opus output-review (SIGN OFF; diff⊆brief, breadcrumb-clean)
+  → ff-merge. Round-close battery GREEN both backends: lib 1125/0 · ggdef green · spec_conformance 3/0 · security(ASan)
+  106/0/2ign · integration **C 1828/0/20ign + LLVM 1828/0/20ign** (self-host timeout flakes cleared under GG_TEST_TIMEOUT_SECS=300).
+  Filed as LOW follow-ups: `regex` crate is now test-only (move `[dependencies]`→`[dev-dependencies]`); sim's type-agnostic
+  `UninitializedRead` has no exact successor (ASan/UBSan lack MSan) — plausibly unreachable from valid source, noted not silenced.
 
 - [2026-07-24] **🐛💥 fix(drops): `Box[resource struct/enum]` local leaked the payload — CLOSED (both backends).** `Box(Money(heap()))` leaked the inner heap String (22B, LSan) — the box LOCAL's scope-exit drop emitted only the shell-free, never the inner drop. ROOT: `src/lir/lower/drops.rs` `_ => None` wildcard swallowed `DropStrategy::Recursive` (struct/enum with a droppable field, upgraded None→Recursive at `mod.rs:4046`). FIX: **exhaustive match** over DropStrategy (Core #6 guard — a new variant now fails to compile here) + a `Recursive` arm resolving the payload drop the same way `box_inner_drop_fn` does (single source of truth); `Trivial=>None` deliberately preserves nested `Box[Box[R]]` behavior (routing it trips the filed `Box__R__drop` collision). Shared LIR → both backends. Fixtures `box_resource_{struct,enum}_leak` (heap-forced, verified fail-pre/pass-post). Gauntlet: scout-executor (`f8b86dac`) → fresh output-review (SIGN OFF on the fix; surfaced R1 + corrected the R2 commit-msg overclaim) → cherry-pick `e9cf2101`. Round-close battery GREEN both backends: lib 1125/0 · ggdef green · spec_conformance 3/0 · security 106/0/2ign · integration C+LLVM **1828/0**/20ign · bootstrap fixed-point ok 807s (double-free canary); `lowerer_comparison` clean with `GG_TEST_TIMEOUT_SECS=600`. **3 pre-existing box bugs FILED with durable `known_gaps` repros + `#[ignore]` tests (the new file-with-repro rule, applied): R1 `!`-param Box move BAD-FREES a stack address (MEMORY-SAFETY, both lanes — more severe than the leak); sibling #1 `Vector[Box[R]]` `Box__R__drop` compile collision; sibling #2 `Box[user-Drop-struct]` field leak.** Fix commit `e9cf2101` (fold of executor `f8b86dac`); filings `d8026368`.
 
