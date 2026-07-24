@@ -1,8 +1,0 @@
-void main():
-    int x = 10
-    int y = x * 2 + 5
-    bool flag = y > 20
-    if flag:
-        print(f"big: {y}")
-    else:
-        print(f"small: {y}")

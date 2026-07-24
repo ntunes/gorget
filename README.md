@@ -67,7 +67,7 @@ We think safe languages shouldn't have to be verbose. Here's what that means in 
 - **Contracts** — `assert return` lets you write postconditions directly in function bodies. Active by default, strippable for release.
 - **Rich static analysis** — warns on unchecked `.unwrap()`, variables that could be `const`, unnecessarily mutable borrows, unused imports, unreachable code, and suggests corrections for typos.
 - **Batteries included** — HTTP, JSON, CSV, XML, YAML, TOML, SQLite, regex, crypto, and more ship in the standard library.
-- **One toolchain** — `gg build`, `gg test`, `gg fmt`, `gg sim`, `gg add`. No external build system, no formatter choice, no test framework decision.
+- **One toolchain** — `gg build`, `gg test`, `gg fmt`, `gg add`. No external build system, no formatter choice, no test framework decision.
 - **Two backends** — C (default) and LLVM IR (`gg build --backend=llvm`). Both pass the same integration suite and produce equivalent runtime behavior; pick LLVM when you want LLVM-native tooling (LTO, IR-level analysis, integration with other LLVM-IR pipelines).
 
 ## A Taste of the Language
@@ -323,7 +323,6 @@ gg run hello.gg
 | `gg test <file>` | Run tests |
 | `gg check <file>` | Semantic analysis only (fast feedback for editors) |
 | `gg fmt <file>` | Format source code |
-| `gg sim <file>` | Interpret / simulate (runtime checking, no compile) |
 | `gg lex <file>` | Tokenize and print tokens |
 | `gg parse <file>` | Parse and print AST |
 | `gg report <trace>` | Generate HTML report from trace file |
@@ -408,7 +407,6 @@ Integration tests live in `tests/fixtures/*.gg` — each is a self-contained pro
 | LLVM backend | `src/backend/llvm/` | LIR to LLVM IR (`.ll`) generation |
 | C runtime | `src/backend/c/` | Hand-written C runtime header (allocator, strings, collections, async, FFI) — linked by both backends |
 | Formatter | `src/formatter/` | Source formatter (`gg fmt`) |
-| Simulator | `src/sim/` | Interpreter with runtime safety checks (`gg sim`) |
 
 ## Documentation
 

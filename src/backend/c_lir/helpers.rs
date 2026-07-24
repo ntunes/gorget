@@ -1336,8 +1336,8 @@ pub(super) fn emit_test_runner_main(out: &mut String, module: &LirModule) {
     writeln!(out, "}}").unwrap();
 }
 
-/// Emit a bench runner `main()` that calls each benchmark function.
-/// Mirrors the interpreter bench runner: warmup, auto-calibrate, timing.
+/// Emit a bench runner `main()` that calls each benchmark function,
+/// with warmup, auto-calibration, and timing.
 pub(super) fn emit_bench_runner_main(out: &mut String, module: &LirModule) {
     writeln!(out, "int main(int argc, char** argv) {{").unwrap();
     writeln!(out, "    gorget_init_args(argc, argv);").unwrap();

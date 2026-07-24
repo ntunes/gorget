@@ -1,8 +1,0 @@
-from std.collections import Box
-
-extern void gorget_early_exit(int code) = "exit"
-
-void main():
-    Box[int] b = Box(42)
-    print("allocated")
-    gorget_early_exit(0)

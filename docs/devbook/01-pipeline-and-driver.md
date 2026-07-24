@@ -143,7 +143,7 @@ Dispatch is a hand-rolled `match` on `args[1]` in `main()` (`src/main.rs:2267`).
 There is no clap/argparse layer — flags are scanned out of `args` with helpers
 like `parse_features`, `parse_scheduler`, `parse_clone_modes`
 (`src/main.rs:332`, `:313`, `:367`). Positional filename detection skips
-flag-with-value pairs and `sim`'s `test` sub-subcommand (`src/main.rs:2536`).
+flag-with-value pairs (`src/main.rs:2536`).
 
 Three early shorthands run before the `match`:
 - **No args** → interactive TUI (`run_tui`, `src/main.rs:2271`).
@@ -153,7 +153,7 @@ Three early shorthands run before the `match`:
 
 Package and report commands are handled before the main `match` as well: `report`
 (`src/main.rs:2383`), `init` (`:2429`), `new` (`:2435`), `add` (`:2446`),
-`remove` (`:2457`), and the `gg sim` REPL (`:2467`). The remaining commands go
+`remove` (`:2457`). The remaining commands go
 through the `match command.as_str()` at `src/main.rs:2711`.
 
 ### `lex`
@@ -211,15 +211,6 @@ Format source via `gorget::formatter::format_source` (`src/main.rs:3279`).
 Default prints to stdout; `--in-place`/`-i` rewrites the file; `--check`/`-c`
 exits non-zero if the file isn't already formatted (no write).
 
-### `sim`
-The GIR interpreter (`src/main.rs:3297`). Runs lex → parse → `load_imports` →
-`analyze` → `lower_module`, then `gorget::sim::interpret` on the GIR — **no C
-compilation**. `gg sim test <file>` activates test mode (and enables UB checks by
-default, `src/main.rs:3387`); `--bench` runs benchmarks; `--filter`/`--tag`/
-`--exclude-tag` select. With *no file argument* (`gg sim`) it launches the
-interpreter REPL (`run_sim_tui`, dispatched at `src/main.rs:2467`). See
-Chapter 21.
-
 ### `profile`
 `gg profile <file>` runs the full pipeline with per-phase `Instant` timers and
 emits structured JSON to stdout: per-phase `duration_ms`, semantic/GIR-lower
@@ -265,10 +256,6 @@ commands: `/run`, `/check`, `/show`, `/reset`, `/help`, `/quit`|`/exit`
 (`src/main.rs:1810`+). Multi-line blocks are read by detecting a trailing `:`
 and consuming indented continuation lines until a blank or dedented line.
 
-`run_sim_tui` (`src/main.rs:1951`) is the same accumulator UI but `/run`
-interprets the GIR via `gorget::sim::interpret` instead of compiling
-(`sim_tui_run`, `src/main.rs:2047`).
-
 The line editor itself is `src/tui.rs` — a small raw-mode reader built on
 `crossterm`. `read_line(prompt, show_menu)` (`src/tui.rs:310`) drives a
 `LineEditor` with cursor movement, a slash-command completion menu rendered in a
@@ -293,5 +280,4 @@ if raw mode can't be enabled it falls back to a cooked-mode `stdin().read_line`
 - The lowering chain: [12 (GIR)](12-gir-lowering.md),
   [14 (LIR/SSA)](14-lir-ssa.md), [16 (BIR)](16-bir.md),
   [17 (C backend)](17-c-backend.md), [19 (LLVM backend)](19-llvm-backend.md).
-- The non-codegen consumers: [21 (simulator)](21-simulator.md),
-  [22 (modules & packages)](22-modules-packages.md).
+- The non-codegen consumers: [22 (modules & packages)](22-modules-packages.md).

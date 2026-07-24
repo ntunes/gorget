@@ -447,9 +447,9 @@ fn is_clone_diagnostic(warn: &gorget::semantic::errors::SemanticWarning) -> bool
 /// Display the non-fatal semantic warnings, filtering out the clone diagnostics
 /// (see [`is_clone_diagnostic`]) unless `show_clones` requested them. The clone
 /// diagnostics are folded into the dedicated clone report on the build path; on
-/// `check`/`sim` (no lowering, no clone report) they are surfaced here through
+/// `check` (no lowering, no clone report) they are surfaced here through
 /// the normal warning reporter when `show_clones` is set, and suppressed
-/// otherwise. Keeps a plain `gg build`/`gg check`/`gg sim` clone-silent.
+/// otherwise. Keeps a plain `gg build`/`gg check` clone-silent.
 fn report_semantic_warnings_filtered(
     reporter: &ErrorReporter,
     warnings: &[gorget::semantic::errors::SemanticWarning],
@@ -2100,141 +2100,6 @@ fn run_tui() {
     let _ = fs::remove_dir_all(&tmp_dir);
 }
 
-/// Interpreter-backed REPL (`gg sim` with no file argument).
-/// Same interface as run_tui but uses the GIR interpreter instead of compiling.
-fn run_sim_tui() {
-    let version = env!("CARGO_PKG_VERSION");
-    println!("Gorget {version} (interpreter)");
-    println!("Type code, then /run to execute. /help for commands.\n");
-
-    let mut definitions: Vec<String> = Vec::new();
-    let mut statements: Vec<String> = Vec::new();
-
-    loop {
-        let line = match tui::read_line(">>> ", true) {
-            tui::ReadLineResult::Line(l) => l,
-            tui::ReadLineResult::Eof => { println!(); break; }
-        };
-
-        let trimmed = line.trim();
-
-        if trimmed == "/quit" || trimmed == "/exit" { break; }
-        if trimmed == "/reset" {
-            definitions.clear();
-            statements.clear();
-            println!("State cleared.");
-            continue;
-        }
-        if trimmed == "/show" {
-            if !definitions.is_empty() {
-                println!("--- definitions ---");
-                for d in &definitions { println!("{d}"); }
-            }
-            if !statements.is_empty() {
-                println!("--- statements ---");
-                for s in &statements { println!("{s}"); }
-            }
-            if definitions.is_empty() && statements.is_empty() {
-                println!("(empty)");
-            }
-            continue;
-        }
-        if trimmed == "/run" {
-            if definitions.is_empty() && statements.is_empty() {
-                println!("(nothing to run)");
-                continue;
-            }
-            let source = generate_tui_source(&definitions, &statements);
-            sim_tui_run(&source);
-            continue;
-        }
-        if trimmed == "/check" {
-            if definitions.is_empty() && statements.is_empty() {
-                println!("(nothing to check)");
-                continue;
-            }
-            let source = generate_tui_source(&definitions, &statements);
-            sim_tui_check(&source);
-            continue;
-        }
-        if trimmed == "/help" {
-            println!("/run    — interpret the accumulated code (no compilation)");
-            println!("/check  — type-check and show any errors");
-            println!("/show   — show accumulated code");
-            println!("/reset  — clear accumulated code");
-            println!("/quit   — exit (also Ctrl+D)");
-            println!("/help   — show this help");
-            println!();
-            println!("Type definitions and statements, then /run to execute.");
-            println!("Lines ending with ':' start indented blocks (blank line ends block).");
-            continue;
-        }
-
-        if trimmed.is_empty() { continue; }
-
-        let mut block_lines: Vec<String> = vec![trimmed.to_string()];
-        if trimmed.ends_with(':') {
-            loop {
-                let cont_line = match tui::read_line("... ", false) {
-                    tui::ReadLineResult::Line(l) => l,
-                    tui::ReadLineResult::Eof => break,
-                };
-                let cont = cont_line.trim_end();
-                if cont.is_empty() { break; }
-                if !cont.starts_with(' ') && !cont.starts_with('\t') {
-                    block_lines.push(cont.to_string());
-                    break;
-                }
-                block_lines.push(cont.to_string());
-            }
-        }
-
-        let entry = block_lines.join("\n");
-        if is_definition_line(&block_lines[0]) {
-            definitions.push(entry);
-        } else {
-            statements.push(entry);
-        }
-    }
-}
-
-fn sim_tui_run(source: &str) {
-    let mut parser = gorget::parser::Parser::new(source);
-    let mut module = parser.parse_module();
-    if !parser.errors.is_empty() {
-        let reporter = gorget::errors::ErrorReporter::new("<repl>".to_string(), source.to_string());
-        for err in &parser.errors { reporter.report_parse_error(err); }
-        return;
-    }
-    let result = gorget::semantic::analyze(&mut module, &[]);
-    if !result.errors.is_empty() {
-        let reporter = gorget::errors::ErrorReporter::new("<repl>".to_string(), source.to_string());
-        for err in &result.errors { reporter.report_semantic_error(err); }
-        return;
-    }
-    let opts = gorget::ir::lowering::LoweringOptions::default();
-    let gir_module = gorget::ir::lowering::lower_module(&module, &result, &opts);
-    let config = gorget::sim::SimConfig::default();
-    gorget::sim::interpret(&gir_module, "<repl>", &config);
-}
-
-fn sim_tui_check(source: &str) {
-    let mut parser = gorget::parser::Parser::new(source);
-    let mut module = parser.parse_module();
-    if !parser.errors.is_empty() {
-        let reporter = gorget::errors::ErrorReporter::new("<repl>".to_string(), source.to_string());
-        for err in &parser.errors { reporter.report_parse_error(err); }
-        return;
-    }
-    let result = gorget::semantic::analyze(&mut module, &[]);
-    if !result.errors.is_empty() {
-        let reporter = gorget::errors::ErrorReporter::new("<repl>".to_string(), source.to_string());
-        for err in &result.errors { reporter.report_semantic_error(err); }
-    } else {
-        println!("OK: no errors");
-    }
-}
-
 // ══════════════════════════════════════════════════════════════
 // Package management commands
 // ══════════════════════════════════════════════════════════════
@@ -2460,7 +2325,7 @@ fn real_main() {
         println!("       gg                         Interactive TUI");
         println!("       gg --version               Print version");
         println!();
-        println!("Compiler commands: lex, parse, check, build, run, sim, fmt, test, report, profile");
+        println!("Compiler commands: lex, parse, check, build, run, fmt, test, report, profile");
         println!("Package commands:  init, new, add, remove");
         println!();
         println!("Build flags:");
@@ -2490,12 +2355,6 @@ fn real_main() {
         println!("  --target freestanding           Bare-metal UEFI application (auto-detects host arch)");
         println!("  --target freestanding-x86_64    UEFI application for x86_64 (BOOTX64.EFI)");
         println!("  --target freestanding-aarch64   UEFI application for aarch64 (BOOTAA64.EFI)");
-        println!();
-        println!("Interpreter:");
-        println!("  gg sim                         Interactive REPL (interpreted, no compilation)");
-        println!("  gg sim <file.gg>               Interpret via GIR (no C compilation)");
-        println!("  gg sim test <file.gg>          Run tests via interpreter (fast, no compile step)");
-        println!("  gg sim test <file.gg> --bench  Run benchmarks via interpreter");
         println!();
         println!("Profile:");
         println!("  gg profile <file.gg>                           Profile compilation phases (JSON to stdout)");
@@ -2639,20 +2498,12 @@ fn real_main() {
         return;
     }
 
-    // `gg sim` with no file → interpreter REPL (handled before the < 3 args check)
-    if args.len() >= 2 && args[1] == "sim"
-        && !args.iter().skip(2).any(|a| !a.starts_with("--") && a != "test")
-    {
-        run_sim_tui();
-        return;
-    }
-
     if args.len() < 3 {
         eprintln!("Usage: gg <file.gg>              Run a script");
         eprintln!("       gg <command> <file.gg>     Run a compiler command");
         eprintln!("       gg                         Interactive REPL");
         eprintln!("       gg --version               Print version");
-        eprintln!("Compiler commands: lex, parse, check, build, run, sim, fmt, test, report, profile");
+        eprintln!("Compiler commands: lex, parse, check, build, run, fmt, test, report, profile");
         eprintln!("Package commands:  init, new, add, remove");
         process::exit(1);
     }
@@ -2727,11 +2578,8 @@ fn real_main() {
         path
     };
     // Find positional filename, skipping values of known flag pairs.
-    // For `gg sim test <file>`, "test" is a subcommand not the filename.
     let filename = {
         let flags_with_values = ["--tag", "--exclude-tag", "--filter", "--report", "--output", "-o", "--feature", "--backend", "--target"];
-        // Subcommand words that appear after the command and are NOT filenames.
-        let sim_subcommands: &[&str] = if command == "sim" { &["test"] } else { &[] };
         let mut skip_next = false;
         let mut found = None;
         for arg in args.iter().skip(2) {
@@ -2744,9 +2592,6 @@ fn real_main() {
                 continue;
             }
             if arg.starts_with("--") {
-                continue;
-            }
-            if sim_subcommands.contains(&arg.as_str()) {
                 continue;
             }
             found = Some(arg);
@@ -3479,103 +3324,9 @@ fn real_main() {
                 print!("{formatted}");
             }
         }
-        "sim" => {
-            // GIR interpreter: lex → parse → semantic analysis → GIR lowering → interpret
-            // Sub-subcommand: `gg sim test <file>` activates test mode.
-            let is_test_mode = args.iter().skip(2).any(|a| a == "test");
-            let is_bench_mode = args.iter().any(|a| a == "--bench");
-
-            let mut parser = gorget::parser::Parser::new(&source);
-            let module = parser.parse_module();
-
-            if !parser.errors.is_empty() {
-                let reporter = gorget::errors::ErrorReporter::new(filename.clone(), source.clone());
-                for err in &parser.errors {
-                    reporter.report_parse_error(err);
-                }
-                eprintln!("\n{} parse error(s) found", parser.errors.len());
-                process::exit(1);
-            }
-
-            let dep_paths = resolve_deps_for_file(filename);
-            let (mut module, file_infos) = load_imports(filename, &source, module, dep_paths);
-            let concat_source: String = file_infos.iter().map(|(_, src, _)| src.as_str()).collect::<Vec<_>>().join("\n");
-
-            let source_dir = std::path::Path::new(&filename).parent().map(|p| p.to_path_buf());
-            let result = gorget::semantic::analyze_with_source_dir(&mut module, &features, source_dir, false);
-
-            if !result.errors.is_empty() {
-                let reporter = gorget::errors::ErrorReporter::new_multi(file_infos);
-                for err in &result.errors {
-                    reporter.report_semantic_error(err);
-                }
-                eprintln!("\n{} semantic error(s) found", result.errors.len());
-                process::exit(1);
-            }
-
-            if !result.warnings.is_empty() {
-                let reporter = gorget::errors::ErrorReporter::new_multi(file_infos.clone());
-                report_semantic_warnings_filtered(&reporter, &result.warnings, show_clones);
-            }
-
-            // Parse test-mode flags (--filter, --tag, --exclude-tag).
-            let mut test_tags: Vec<String> = Vec::new();
-            let mut test_exclude_tags: Vec<String> = Vec::new();
-            let mut test_name_filter: Option<String> = None;
-            if is_test_mode {
-                let mut i = 0;
-                while i < args.len() {
-                    if args[i] == "--tag" && i + 1 < args.len() {
-                        test_tags.push(args[i + 1].clone());
-                        i += 2;
-                    } else if args[i].starts_with("--tag=") {
-                        test_tags.push(args[i]["--tag=".len()..].to_string());
-                        i += 1;
-                    } else if args[i] == "--exclude-tag" && i + 1 < args.len() {
-                        test_exclude_tags.push(args[i + 1].clone());
-                        i += 2;
-                    } else if args[i].starts_with("--exclude-tag=") {
-                        test_exclude_tags.push(args[i]["--exclude-tag=".len()..].to_string());
-                        i += 1;
-                    } else if args[i] == "--filter" && i + 1 < args.len() {
-                        test_name_filter = Some(args[i + 1].clone());
-                        i += 2;
-                    } else if args[i].starts_with("--filter=") {
-                        test_name_filter = Some(args[i]["--filter=".len()..].to_string());
-                        i += 1;
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-
-            let lowering_opts = gorget::ir::lowering::LoweringOptions {
-                test_mode: is_test_mode,
-                bench_mode: is_bench_mode,
-                test_tags,
-                test_exclude_tags,
-                test_name_filter,
-                scheduler_mode: parse_scheduler(&args),
-                ..Default::default()
-            };
-
-            let mut sim_config = gorget::sim::SimConfig::from_args(&args);
-            // When running tests via `gg sim test`, enable UB checks by default
-            // unless the user explicitly passed --ub-checks (already handled) or
-            // --no-ub-checks (not yet a flag, so just enable unconditionally here).
-            if is_test_mode {
-                sim_config.ub_checks = true;
-            }
-
-            let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &lowering_opts);
-            gir_module.source_filename = Some(filename.to_string());
-            gir_module.source_code = Some(concat_source.clone());
-            let exit_code = gorget::sim::interpret(&gir_module, filename, &sim_config);
-            process::exit(exit_code);
-        }
         _ => {
             eprintln!("Unknown command: {command}");
-            eprintln!("Compiler commands: lex, parse, check, build, run, sim, test, fmt, report");
+            eprintln!("Compiler commands: lex, parse, check, build, run, test, fmt, report");
             eprintln!("Package commands:  init, new, add, remove");
             process::exit(1);
         }

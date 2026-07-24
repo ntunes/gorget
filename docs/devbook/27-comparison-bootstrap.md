@@ -94,7 +94,7 @@ This chapter *is* the self-host test machinery — it's how the self-host fronte
 - Each comparison test has its own driver directory. The parser/lexer/AST source files are **independent copies** across most directories, *except* `self_host_lowerer`, whose `parser.gg` and `ast.gg` are symlinks into `self_host_typechecker` (`ls -la tests/fixtures/self_host_lowerer/` shows `parser.gg -> ../self_host_typechecker/parser.gg`, `ast.gg -> ../self_host_typechecker/ast.gg`). When you change a parser/AST primitive you must update every relevant copy — the symlinks cover the lowerer↔typechecker pair for free, the others don't.
 - The Rust-side canonical formatters in `tests/integration.rs` are the **shared contract** both implementations target. If you change a self-host pass's output format you must update the corresponding `*_canonical_rust` / `format_*_canonical` function (or the comparison will report spurious mismatches), and vice versa.
 
-There is no comparison coverage for the backends below LIR emission, nor for the simulator, package loader internals, or codegen byte-output (only the coarse `c_emit` count). The `parallel_map_fixtures` docstring (`:202`) lists "fmt" among the comparison tests, but **no `fmt_comparison` test exists** in the current tree — that's a stale aspiration in the comment, not a live test.
+There is no comparison coverage for the backends below LIR emission, package loader internals, or codegen byte-output (only the coarse `c_emit` count). The `parallel_map_fixtures` docstring (`:202`) lists "fmt" among the comparison tests, but **no `fmt_comparison` test exists** in the current tree — that's a stale aspiration in the comment, not a live test.
 
 ## The bootstrap fixed point
 

@@ -217,7 +217,7 @@ pub enum Instruction {
     /// producing a flag, terminate with `Term::Branch { flag → handler,
     /// !flag → continuation }`, then compute `dst = lhs op rhs` in the
     /// continuation. A SEPARATE variant (not a field on `BinOp`) so every
-    /// existing BinOp site — optimizer, sim, liveness — is untouched and the
+    /// existing BinOp site — optimizer, liveness — is untouched and the
     /// fault op is forced through the one shared lowering arm.
     FaultableBinOp {
         dst: LocalId,
@@ -243,7 +243,7 @@ pub enum Instruction {
     /// → continuation }`, then materializes the element in the continuation by
     /// SHARING the `IndexLoad` clone/move-zero/str-ptr logic (NULL is never
     /// deref'd — branch-before-deref, unwind-free). A SEPARATE variant (not a
-    /// field on `IndexLoad`) so every existing IndexLoad site — optimizer, sim,
+    /// field on `IndexLoad`) so every existing IndexLoad site — optimizer,
     /// liveness, validate — is untouched and the fault read is forced through
     /// the one shared lowering arm. Array element reads only (the sole path
     /// with a runtime bounds check); dict/string/range index OUT.
@@ -374,7 +374,7 @@ pub enum Instruction {
     /// the scope's panic block, so an uncaught-by-this-scope category re-panics
     /// automatically — uniform across both backends, no LIR-level conditional).
     /// A SEPARATE variant (not a field on `Call`) so every existing `Call` site —
-    /// optimizer, sim, liveness, validate — is untouched and the fault routing is
+    /// optimizer, liveness, validate — is untouched and the fault routing is
     /// forced through the one shared lowering arm. (Bounds adds a third
     /// `bounds_handler` category in 2.1d.)
     FaultableCall {

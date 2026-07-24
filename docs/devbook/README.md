@@ -58,7 +58,6 @@ This book is for *compiler developers*, not application programmers. It assumes 
 20. [Extern, interop & GPU backends](20-extern-gpu.md)
 
 ### Part VII — Other consumers & tooling
-21. [The simulator / interpreter (`gg sim`)](21-simulator.md)
 22. [Modules, loading & package management](22-modules-packages.md)
 23. [The standard library narrow waist](23-stdlib.md)
 

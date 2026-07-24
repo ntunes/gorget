@@ -409,7 +409,7 @@ is real, refactor in a third commit.
    the args came from the user or from Pass 4.5 inference. The
    borrow checker (`semantic/safety/*`) and resolver
    (`semantic/resolve.rs`) discard the field via `..` so they're
-   invisible to the mutation. Sim, LIR, BIR, and backend never
+   invisible to the mutation. LIR, BIR, and backend never
    touch it. Pre-typecheck consumers (`semantic/meta.rs`,
    `semantic/derive.rs`, `semantic/rewrite.rs`,
    `semantic/traits.rs`, parser, loader, formatter) run before

@@ -59,7 +59,7 @@ pub struct BenchFnInfo {
 ///
 /// Separated from `Module` to keep the core IR struct focused on
 /// types, functions, globals, and externs.  Everything here is
-/// populated during lowering and consumed by the C backend / sim.
+/// populated during lowering and consumed by the C backend.
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeFeatures {
     // ── Concurrency ────────────────────────────────────────────────

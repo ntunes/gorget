@@ -74,7 +74,6 @@ Backends should be at parity; a regression on one but not the other usually mean
 - `src/backend/llvm/` — LLVM IR backend (`--backend=llvm`)
 - `src/backend/c/` — C runtime library and SQLite amalgamation
 - `src/formatter/` — Source formatter (`gg fmt`)
-- `src/sim/` — Interpreter / simulation runtime
 - `src/loader.rs`, `src/lockfile.rs`, `src/manifest.rs` — Package management
 - `src/report.rs` — Test report generation
 - `tests/fixtures/*.gg` — Integration test programs with deterministic stdout

@@ -34,7 +34,6 @@ file is called out. "Pipeline stage" follows the order above. Files marked
 | `src/lir/` | ~22,000 | LIR | SSA-form low-level IR and the GIR→LIR lowering pass. Sole production lowering target. |
 | `src/bir/` | ~6,300 | BIR | Backend IR — a typed newtype over `LirModule` guaranteeing canonical high-level ops are expanded to primitives before a backend sees them. |
 | `src/backend/` | ~17,200 (Rust) | Codegen | C and LLVM backends. The C runtime is no longer embedded as a Rust string — it lives in ~62 external `.c` files under `c/runtime/` (~14,670 LOC, pulled in via `include_str!`) and is counted separately, as are the vendored C amalgamations (~282k lines; see below). |
-| `src/sim/` | ~10,400 | Interpreter | GIR interpreter (`gg sim`) — executes GIR directly without C compilation. Reference oracle / fast-iteration path. |
 | `src/formatter/` | ~3,200 | Tooling | Source formatter (`gg fmt`), Wadler-style pretty-printer. |
 
 ## Top-level files
@@ -208,20 +207,6 @@ Codegen. The GIR→C backend was retired; all compilation goes through LIR
 Rust LOC: `sqlite3/sqlite3.c` (~260k), `sqlite3/sqlite3.h` (~13.6k),
 `stb_image.h` (~8k), `sqlite3/gorget_sqlite.c` (~150). These ship inside the
 binary alongside the generated runtime.
-
-## Inside `src/sim/`
-
-The GIR interpreter (`gg sim`) — Gorget's analogue of Rust's miri, an oracle and
-fast-iteration path that executes GIR without invoking a C compiler
-(`src/sim/mod.rs:1`).
-
-| File | LOC | Responsibility |
-|------|-----|----------------|
-| `dispatch.rs` | ~6,245 | Instruction/expression dispatch — the interpreter core. |
-| `runtime.rs` | ~2,358 | Builtin/runtime-fn implementations for the interpreter. |
-| `value.rs` | ~567 | Runtime `Value` representation. |
-| `mod.rs` | ~535 | Interpreter entry point and phase docs. |
-| `crypto.rs`, `source_loc.rs`, `error.rs`, `config.rs` | ~655 total | Crypto builtins; source-location mapping; interpreter errors; config. |
 
 ## Inside `src/lexer/`, `src/parser/`, `src/formatter/`
 

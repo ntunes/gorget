@@ -252,7 +252,7 @@ language-design/book examples showing float output.
 - A13 `Break(Some(e))` binding; A14 op-overload compound-assign on resource elements;
   A15 bare `return` in `int throws E`; A16 error-model §9 residuals (fast knob, meta-overflow,
   `Never` spelling, Result reconciliation, fault set)
-- A17 `gg sim` disposition (owner-decision entry already in TODO)
+- A17 → CLOSED 2026-07-06 as D21 (see LOG): `gg sim` disposition — RETIRED.
 - A18–A28 "ratify the rejection" batch (one-compiler-only or obvious-reject items) — gated by
   the owner's phase rule (TODO C12: bounded rejections now, general enforcement pass after
   parity)
