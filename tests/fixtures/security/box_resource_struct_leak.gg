@@ -1,0 +1,22 @@
+# Box[T] where T is a resource STRUCT (a droppable `String` field): the Box
+# LOCAL's scope-exit drop must run the recursive `Money__drop` before freeing
+# the box allocation. Pre-fix, `drops.rs`'s Box-inner-drop match had no
+# `DropStrategy::Recursive` arm (only `Custom` / `Trivial`-non-"free"), so a
+# `struct-with-a-resource-field` payload fell through `_ => None` and the box
+# local's drop emitted only `__gorget_box_free_Money` — leaking the inner heap
+# String.
+#
+# The String MUST be heap-forced (concat → cap>0): a string LITERAL is static /
+# non-owning (cap=0) and would NOT leak, giving a false negative. Two boxes so a
+# partial regression (fixing only the first drop) still trips LeakSanitizer.
+
+struct Money:
+    String label
+
+String heaped():
+    return "aaa" + "bbb" + "ccc-heap-forced"
+
+void main():
+    Box[Money] bx = Box(Money(heaped()))
+    Box[Money] by = Box(Money(heaped()))
+    print("box-struct-ok")

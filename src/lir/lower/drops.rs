@@ -275,10 +275,55 @@ impl<'a> FuncLowering<'a> {
                         let inner_drop = self.gir_types.get_type_def(inner)
                             .map(|td| td.metadata.drop_strategy.clone())
                             .unwrap_or(DS::None);
+                        // Resolve the payload's drop fn. This MUST agree with
+                        // `box_inner_drop_fn` (src/backend/c_lir/emit_types.rs),
+                        // which the `Box__<inner>__drop` wrapper body uses — the
+                        // two compute the same fact (how a Box's payload drops)
+                        // for the scope-exit local vs the wrapped (Vector/Option/
+                        // field) contexts, so they must not diverge. EXHAUSTIVE
+                        // over DropStrategy on purpose: the old `_ => None`
+                        // wildcard silently dropped `Recursive` (struct/enum with
+                        // a resource field) and the nested `Box[Box[R]]`
+                        // `Trivial("free")` case on the floor, leaking the payload
+                        // at scope exit (Core #6 — the wildcard was the leak).
                         let inner_drop_fn = match &inner_drop {
-                            DS::Custom(fn_name) => Some(fn_name.clone()),
+                            DS::None => None,
+                            // String / collection / opaque-handle payloads: their
+                            // own single free fn (e.g. `gorget_string_free`).
                             DS::Trivial(fn_name) if fn_name != "free" => Some(fn_name.clone()),
-                            _ => None,
+                            // `Trivial("free")` recurses no further here. A
+                            // nested `Box[Box[R]]` (inner Box is `Trivial("free")`
+                            // but still owns a payload) SHOULD route through its
+                            // inner wrapper, but doing so trips a separate,
+                            // pre-existing C-emit name collision — `helpers.rs`
+                            // emits `static inline Box__R__drop(Box__R self)`
+                            // (bare free) which clashes with the recursive
+                            // `void Box__R__drop(void* slot)` wrapper the moment
+                            // both are referenced. That leak + collision is
+                            // tracked in TODO.md; keep pre-fix behavior (None)
+                            // until the collision is resolved so we don't emit
+                            // uncompilable C.
+                            DS::Trivial(_) => None,
+                            // struct/enum with droppable fields: the same unified
+                            // `<inner>__drop` a plain local of this type and the
+                            // Box wrapper use (mirrors `box_inner_drop_fn`).
+                            DS::Recursive => Some(
+                                if self.recursive_drop_structs.contains_key(inner)
+                                    || self.recursive_drop_enums.contains_key(inner)
+                                {
+                                    format!("{inner}__drop")
+                                } else if let Some(info) = self.type_drop_fns.get(inner) {
+                                    info.drop_fn_name.clone()
+                                } else {
+                                    format!("{inner}__drop")
+                                },
+                            ),
+                            // User `Drop` impl. NOTE: `fn_name` is the USER fn
+                            // only (`<inner>__drop`), which skips field drops for
+                            // a user-drop struct that ALSO owns resource fields —
+                            // a pre-existing leak shared with `box_inner_drop_fn`,
+                            // tracked in TODO.md (needs the wrapper-side fix too).
+                            DS::Custom(fn_name) => Some(fn_name.clone()),
                         };
                         if let Some(drop_fn) = inner_drop_fn {
                             // Call inner drop: drop_fn(box_ptr)

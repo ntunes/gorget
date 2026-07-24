@@ -1,0 +1,22 @@
+# Box[T] where T is an ENUM with a resource-typed variant payload — same
+# `DropStrategy::Recursive` hole as the struct case (`box_resource_struct_leak`).
+# `Msg.Text(heaped())` owns a heap String; the Box LOCAL's scope-exit drop must
+# run `Msg__drop` (the enum-tag dispatch that frees the payload) before freeing
+# the box allocation. Pre-fix the recursive inner drop was skipped → the heap
+# String leaked.
+#
+# The String MUST be heap-forced (concat → cap>0), not a literal (false
+# negative). Includes a no-payload variant (`Msg.Ping()`) so the enum-dispatch
+# path with a non-resource arm is exercised alongside the resource arm.
+
+enum Msg:
+    Text(String)
+    Ping()
+
+String heaped():
+    return "aaa" + "bbb" + "ccc-heap-forced"
+
+void main():
+    Box[Msg] a = Box(Msg.Text(heaped()))
+    Box[Msg] b = Box(Msg.Ping())
+    print("box-enum-ok")

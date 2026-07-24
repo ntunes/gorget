@@ -1275,3 +1275,20 @@ fn cow_bareassign_alias_chain_no_leak() {
         "chain-owned-tail\nchain-owned-tail\nchain-owned-tail\nchain-owned-tail",
     );
 }
+
+#[test]
+fn box_resource_struct_no_leak() {
+    // `Box[Money]` local, Money owning a heap `String` (Recursive drop). The
+    // box local's scope-exit drop must run `Money__drop` before the box free.
+    // Baseline leaked the inner heap String (22 bytes/box) — `drops.rs`'s
+    // Box-inner-drop match had no `DropStrategy::Recursive` arm.
+    security_safe_no_leak("box_resource_struct_leak", "box-struct-ok");
+}
+
+#[test]
+fn box_resource_enum_no_leak() {
+    // `Box[Msg]` local, Msg an enum with a resource-typed variant payload
+    // (Recursive drop). Same Box-inner-drop hole as the struct case; the box
+    // local's scope-exit drop must run the enum-dispatch `Msg__drop`.
+    security_safe_no_leak("box_resource_enum_leak", "box-enum-ok");
+}
