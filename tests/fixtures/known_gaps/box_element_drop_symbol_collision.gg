@@ -1,0 +1,13 @@
+# KNOWN GAP (TODO: box sibling #1): Box as a collection element redefines Box__<R>__drop
+# — the trivial free-helper (helpers.rs) clashes with the recursive wrapper.
+# Vector[Box[R]] / nested Box[Box[R]] fail to COMPILE (redefinition). Un-ignore
+# + promote when the symbol collision is resolved; must build + print "done".
+struct Money:
+    String label
+String heaped():
+    return "aaa" + "bbb" + "ccc-heap-forced"
+void main():
+    Vector[Box[Money]] v = []
+    v.push(Box(Money(heaped())))
+    v.push(Box(Money(heaped())))
+    print("done")

@@ -1,0 +1,17 @@
+# KNOWN GAP (TODO: box sibling #2): Box[struct with a USER Drop impl AND a
+# droppable field] leaks the FIELD — the user drop runs ("dropping" prints) but
+# the field frees (in __gorget_dtor) are skipped. Heap-forced String. Un-ignore
+# the security_safe_no_leak test when fixed.
+struct Money:
+    String label
+
+equip Money with Drop:
+    void drop(!self):
+        print("dropping")
+
+String heaped():
+    return "aaa" + "bbb" + "ccc-heap-forced"
+
+void main():
+    Box[Money] bx = Box(Money(heaped()))
+    print("done")

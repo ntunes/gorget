@@ -4216,6 +4216,18 @@ fn snag53_nested_struct_field_mut() {
     run_gg("known_gaps/snag53_nested_struct_field_mut.gg", "=1+2");
 }
 
+// KNOWN GAP — box sibling #1 (filed 2026-07-24): a `Box` used as a collection
+// ELEMENT redefines `Box__<R>__drop` — `helpers.rs` emits a trivial free-helper
+// that clashes with the recursive wrapper, so `Vector[Box[R]]` fails to COMPILE
+// (redefinition of `Box__Money__drop`, both backends). Un-ignore + promote out of
+// known_gaps/ when the symbol collision is resolved (one owner of the symbol).
+#[test]
+#[ignore = "KNOWN GAP box sibling #1: Vector[Box[resource-struct]] fails to compile — \
+Box__R__drop symbol collision (free-helper vs recursive wrapper); TODO.md."]
+fn box_element_drop_symbol_collision() {
+    run_gg("known_gaps/box_element_drop_symbol_collision.gg", "done");
+}
+
 #[test]
 fn snag54_result_out_fallthrough() {
     // Snag #54: Result branch-assign + return shape; root was get_or on a

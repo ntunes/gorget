@@ -1292,3 +1292,26 @@ fn box_resource_enum_no_leak() {
     // local's scope-exit drop must run the enum-dispatch `Msg__drop`.
     security_safe_no_leak("box_resource_enum_leak", "box-enum-ok");
 }
+
+// KNOWN GAP — box sibling #2 (filed 2026-07-24): `Box[user-Drop struct with a
+// droppable field]` leaks the field. The user `drop` runs ("dropping") but the
+// field frees (in `__gorget_dtor`) are skipped — a wrong-fn-selection shared
+// with `box_inner_drop_fn`. Un-ignore + promote when the CLASS is fixed.
+#[test]
+#[ignore = "KNOWN GAP box sibling #2: Box[user-Drop-struct-with-field] leaks the field; \
+TODO.md. Un-ignore when box_inner_drop_fn/inline both target __gorget_dtor_R."]
+fn box_user_drop_struct_field_no_leak() {
+    security_safe_no_leak("box_user_drop_struct_field_leak", "done\ndropping");
+}
+
+// KNOWN GAP — R1 (filed 2026-07-24, MEMORY-SAFETY): moving a `Box[T]` via `!bx`
+// into a consuming `!`-param fn BAD-FREES a stack address on ALL Box[T] (accepted
+// by `gg check`; ASan "attempting free on address which was not malloc()-ed",
+// both backends). The `!`-param Box-consumption ABI passes `&slot` and the callee
+// frees it. Un-ignore when the consumption ABI is fixed. See TODO.md.
+#[test]
+#[ignore = "KNOWN GAP R1: !-param Box move bad-frees a stack address (accepted \
+program, ASan abort, both backends); TODO.md. Un-ignore when the !-Box consume ABI is fixed."]
+fn box_move_param_bad_free_safe() {
+    security_safe("box_move_param_bad_free", "consumed\ndone");
+}

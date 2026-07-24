@@ -1,0 +1,10 @@
+# KNOWN GAP (TODO: R1): moving a Box via !bx into a consuming !-param fn
+# BAD-FREES a stack address on ALL Box[T] (accepted by gg check, aborts under
+# ASan: 'attempting free on address which was not malloc()-ed'). Both backends.
+# Un-ignore the security_safe test when the !-param Box consumption ABI is fixed.
+void consume(Box[int] !b):
+    print("consumed")
+void main():
+    Box[int] bx = Box(42)
+    consume(!bx)
+    print("done")
