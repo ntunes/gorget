@@ -1,0 +1,43 @@
+# DURABLE REPRO — D10 exclusivity hole A9: the nested-writer conflict inside an
+# INDEX-STORE (`dst[0] = pick(v[0], mutate(&v))`).
+#
+# Sibling of `sound_excl_nested_writer_call.gg`. An index store lowers to a
+# `__set`/`__put`-shaped call whose value operand is a whole expression tree; if
+# that tree is not walked for participants, every conflict inside it escapes.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in
+# `gorget_string_clone_to_owned` (reported inside `pick`).
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict`.
+#
+# The 4096-push loop FORCES a real reallocation; `dst` is a separate collection
+# so the only overlap in the program is the intended one.
+#
+#
+# ORACLE (ggdef, measured this session): ACCEPTS this program and prints the
+# pre-mutation value. ggdef is a definitional INTERPRETER with value semantics,
+# so a reallocation cannot invalidate anything and this UAF class is
+# structurally unobservable in that lane — it is NOT the authority here. The
+# intended REJECT comes from the ratified D10 exclusivity ruling, which ggdef
+# owes as part of the same landing (Core #9). Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry (nested-writer costume, index-store sibling).
+int mutate(Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+    return v.len()
+
+String pick(String s, int n):
+    return s
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    Vector[String] dst = Vector[String]()
+    dst.push("placeholder-destination-payload")
+    dst[0] = pick(v[0], mutate(&v))
+    print(dst[0])

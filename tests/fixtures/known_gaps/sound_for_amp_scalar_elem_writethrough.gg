@@ -1,0 +1,30 @@
+# DURABLE REPRO — B4: `for x in &v: x = ...` over a SCALAR-element collection
+# silently loses the write.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend): prints
+#     1 / 2 / 3
+# The loop body runs, the assignment is accepted, and nothing reaches the
+# collection. `gg check` is clean — silent-wrong-output.
+#
+# INTENDED (asserted below): 11 / 12 / 13. `for x in &v` binds each element as a
+# mutable borrow, which is the whole point of the sigil (D31 full-strict: `&`
+# means the write goes through). The resource-element twins of this shape
+# already write through — `cow_for_amp_resource_elem_writethrough.gg` — so this
+# is the by-value half of the same rule, matching the by-value `&`-arg class in
+# `sound_amp_byvalue_place_writethrough.gg`.
+#
+# ORACLE: out of ggdef's phase-0 subset ("`for &`/`for !` iteration is
+# Increment B2"), so this row is pinned against the RULE, not against a third
+# implementation. Noted here rather than left implicit — an out-of-subset shape
+# owes an explicit note (Core #9).
+#
+# The written value depends on the element read (`x + 10`), so a const-fold
+# cannot elide it, and the three distinct results prove every iteration landed
+# rather than one write being smeared.
+void main():
+    Vector[int] v = [1, 2, 3]
+    for x in &v:
+        x = x + 10
+    print(v[0])
+    print(v[1])
+    print(v[2])

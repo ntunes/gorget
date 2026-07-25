@@ -1,0 +1,47 @@
+# DURABLE REPRO — B2: the by-value `&`-projection write-through bug with a
+# BARE-PARAM root. This is the row a naive fix breaks.
+#
+# `via_bare` takes `Holder h` BARE, which under CoW-default-borrow is a BORROW.
+# The write `bump_int(&h.i)` therefore MATERIALIZES a private copy at the
+# closest immutable context: the callee observes its own write, and the CALLER'S
+# object is UNCHANGED.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend): prints
+#     10 / 10
+# The caller's 10 is right by accident — the write is lost everywhere, including
+# inside the callee, which is the same defect as
+# `sound_amp_byvalue_place_writethrough.gg`.
+#
+# ORACLE: ggdef prints 11 / 10 — the materialized copy is written, the caller is
+# untouched.
+#
+# INTENDED (asserted below): 11 / 10.
+#
+# ⚠ THIS IS THE ROW MOST LIKELY TO REGRESS SILENTLY. A fix that makes the
+# `&`-projection write THROUGH to the root looks correct on every other fixture
+# in the batch and is WRONG here — it would print 11 / 11, turning a borrow into
+# a mutable alias and breaking CoW's central guarantee. Whoever fixes the class
+# must land this fixture green at 11 / 10, not merely make the caller's 10 stay
+# 10 (which it already does today, for the wrong reason).
+#
+# The seed is computed, not a literal.
+#
+# Cited from TODO.md (CoW / ownership / High): "By-value-field `&`-arg
+# write-through is SILENTLY LOST" (bare-param-root row).
+struct Holder:
+    int i
+
+int seed():
+    return 10
+
+void bump_int(int &n):
+    n = n + 1
+
+void via_bare(Holder h):
+    bump_int(&h.i)
+    print(h.i)
+
+void main():
+    Holder h = Holder(seed())
+    via_bare(h)
+    print(h.i)

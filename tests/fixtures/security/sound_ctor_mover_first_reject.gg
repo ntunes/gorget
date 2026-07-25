@@ -1,0 +1,33 @@
+# ANTI-REGRESSION POSITIVE — C3, an AXIS pin. Ratified by D10(b) ADDENDUM 3
+# (`docs/define-gorget/decisions.md`, end of the LOG).
+#
+# `Pair(!v, v[0])` moves `v` at arg 0 and then reads a sub-place of it at arg 1.
+# Left-to-right evaluation makes that a use-after-MOVE, and the reference-grade
+# diagnostic is the LIVENESS one:
+#
+#     error[E_UseAfterMove]: use of moved value `v`
+#
+# NOT `E_BorrowConflict`. The distinction is load-bearing: the aggregate-init
+# mover exemption (see `sound_ctor_mover_sibling_accept.gg`) is safe precisely
+# BECAUSE the genuinely hazardous ordering is already caught on the liveness
+# axis. If a chokepoint rebuild makes this fail with the aliasing error instead,
+# the move-tracker silently lost a case and the exemption's justification
+# evaporates with it — this fixture is what catches that.
+#
+# CORRECT TODAY (measured at HEAD, Rust gg): rejects with `E_UseAfterMove`.
+#
+# ORACLE (ggdef, measured this session): ggdef also rejects, but on the OTHER
+# axis — `error[E_BorrowConflict]: cannot pass `!v` and `v` in the same call`.
+# Both lanes refuse the program, so there is no soundness divergence, but the
+# CODES disagree and the ledger is explicit that the liveness code is the
+# correct one. Filed as a lane-alignment note rather than pinned here: this
+# fixture asserts production's `E_UseAfterMove`, which is the ratified answer.
+struct Pair:
+    Vector[String] rest
+    String s
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    Pair p = Pair(!v, v[0])
+    print(p.s)

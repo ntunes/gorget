@@ -1444,3 +1444,247 @@ fn retborrow_valuepos_amp_return_throws_known_unsafe() {
          either the reject or the throws-leg materialize lands",
     );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// CoW aliasing-soundness durable repros (filed 2026-07-25).
+//
+// Every fixture below was measured at HEAD BEFORE being committed, and the
+// observed pre-fix failure is recorded in its `.gg` header (Core #12: a fixture
+// is not coverage until it has been seen to FAIL). Each `#[ignore]` reason names
+// exactly what un-ignores it.
+//
+// The intent polarity is deliberate throughout: these assert the INTENDED state,
+// never today's behaviour, so none of them can make a defect canonical.
+// `security_known_unsafe` is NOT used here for that reason — it pins the bug as
+// present, which is the opposite of what a durable repro for an unfixed defect
+// should encode when the intended state is already known.
+//
+// LIVE (not ignored) members of the batch are the anti-regression CONTROLS: they
+// are green today and go RED if a fix over-reaches. They are the other half of
+// Core #12 — the axis is only covered when both the broken and the
+// accidentally-working cells are pinned.
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── A1: Callable-typed local bound to an `&`-param function ─────────────────
+
+/// Measured at HEAD: `gg check` clean, build clean, binary exits 139 (SIGSEGV);
+/// under ASan, `SEGV on unknown address 0x29 ... in bumpint`.
+#[test]
+#[ignore = "KNOWN GAP A1: a Callable-typed local bound to an &-param fn SEGFAULTS on call \
+(gg check clean, exit 139); TODO.md. Un-ignore when the indirect-call &-param ABI is fixed."]
+fn sound_callable_amp_param_indirect_call_safe() {
+    security_safe("sound_callable_amp_param_indirect_call", "42");
+}
+
+// ── D10 exclusivity holes: accepted programs that heap-use-after-free ────────
+//
+// All eleven assert the INTENDED REJECT (`E_BorrowConflict`). Measured at HEAD:
+// every one of them passes `gg check` and then trips AddressSanitizer with a
+// heap-use-after-free — the per-fixture stack frame is recorded in each header.
+// ggdef ACCEPTS these (it is a value-semantics interpreter, so the class is
+// unobservable in that lane) — see the oracle note in
+// `sound_excl_getchain_local.gg`; the intended reject is the ratified owner
+// ruling, not ggdef's verdict.
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity hole #1, get-chain view arg): accepted program, ASan \
+heap-use-after-free in gorget_string_copy_cow. Asserts the INTENDED E_BorrowConflict reject; \
+TODO.md. Un-ignore when the semantic place-overlap chokepoint lands."]
+fn sound_excl_getchain_local_rejected() {
+    security_rejected("sound_excl_getchain_local", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity hole #3, Static root): accepted program, ASan \
+heap-use-after-free; the byte-identical LOCAL spelling already rejects. Asserts the INTENDED \
+E_BorrowConflict reject; TODO.md. Un-ignore when the chokepoint admits Static roots."]
+fn sound_excl_getchain_static_rejected() {
+    security_rejected("sound_excl_getchain_static", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity hole #1, field-path costume): accepted program, ASan \
+heap-use-after-free. Asserts the INTENDED E_BorrowConflict reject; TODO.md. Un-ignore when the \
+chokepoint's place resolver descends field paths through view chains."]
+fn sound_excl_getchain_fieldpath_rejected() {
+    security_rejected("sound_excl_getchain_fieldpath", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity, alias-provenance costume): accepted program, ASan \
+heap-use-after-free. Asserts the INTENDED E_BorrowConflict reject; TODO.md. Un-ignore when the \
+chokepoint resolves a CoW bind alias to its root."]
+fn sound_excl_getchain_alias_provenance_rejected() {
+    security_rejected("sound_excl_getchain_alias_provenance", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity hole #2, method receiver): accepted program, ASan \
+heap-use-after-free. Asserts the INTENDED E_BorrowConflict reject; TODO.md. Un-ignore when the \
+receiver becomes a participant (&self = writer, bare self = reader)."]
+fn sound_excl_receiver_writer_rejected() {
+    security_rejected("sound_excl_receiver_writer", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity hole #4, for-body &-arg writer): accepted program, ASan \
+heap-use-after-free in gorget_string_borrow; the direct `v.push` spelling already rejects. \
+Asserts the INTENDED E_BorrowConflict reject; TODO.md. Un-ignore when the iterable guard sees \
+through a call boundary."]
+fn sound_excl_forbody_amp_writer_rejected() {
+    security_rejected("sound_excl_forbody_amp_writer", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity, nested writer one call deep): accepted program, ASan \
+heap-use-after-free. Asserts the INTENDED E_BorrowConflict reject; TODO.md. Un-ignore when a \
+writer inside a sibling arg's expression tree becomes a participant."]
+fn sound_excl_nested_writer_call_rejected() {
+    security_rejected("sound_excl_nested_writer_call", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity, nested writer at a CLOSURE call): accepted program, \
+ASan heap-use-after-free in __Closure_0__call. Asserts the INTENDED E_BorrowConflict reject; \
+TODO.md. Un-ignore when closure calls route through the chokepoint."]
+fn sound_excl_nested_writer_closure_rejected() {
+    security_rejected("sound_excl_nested_writer_closure", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity, nested writer in an INDEX STORE): accepted program, \
+ASan heap-use-after-free. Asserts the INTENDED E_BorrowConflict reject; TODO.md. Un-ignore when \
+index-store value operands route through the chokepoint."]
+fn sound_excl_nested_writer_index_store_rejected() {
+    security_rejected("sound_excl_nested_writer_index_store", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10(b) ADDENDUM 3 amendment, ctor arg vs sibling WRITER): accepted \
+program, ASan heap-use-after-free in gorget_string_clone_to_owned — the boundary clone is \
+emitted AFTER sibling evaluation. Asserts the INTENDED E_BorrowConflict reject; TODO.md + \
+decisions.md. Un-ignore when aggregate init participates on the writer axis."]
+fn sound_excl_nested_writer_ctor_rejected() {
+    security_rejected("sound_excl_nested_writer_ctor", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10(b) ADDENDUM 3 amendment, TUPLE twin of the ctor row): accepted \
+program, ASan heap-use-after-free. Asserts the INTENDED E_BorrowConflict reject; TODO.md + \
+decisions.md. Un-ignore when tuple_init participates on the writer axis."]
+fn sound_excl_nested_writer_tuple_rejected() {
+    security_rejected("sound_excl_nested_writer_tuple", "E_BorrowConflict");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity, operator overload + bind alias): accepted program, ASan \
+heap-use-after-free in Acc__add. NOTE `a + a` runs clean and is false confidence — the ALIAS \
+twin is the real shape. Asserts the INTENDED E_BorrowConflict reject; TODO.md. Un-ignore when \
+operator-overload calls route through the chokepoint with receiver participation."]
+fn sound_excl_overload_alias_twin_rejected() {
+    security_rejected("sound_excl_overload_alias_twin", "E_BorrowConflict");
+}
+
+// ── D10 hole #5: the one with the OPPOSITE polarity ─────────────────────────
+
+/// Owner-ruled MATERIALIZE, not reject (TODO.md): the mutation site is visible,
+/// so the clone is placed lazily at the binding. Measured at HEAD: `gg check`
+/// clean, ASan heap-use-after-free in `gorget_string_copy_cow`.
+#[test]
+#[ignore = "KNOWN GAP (D10 exclusivity hole #5, match-scrutinee element): accepted program, \
+ASan heap-use-after-free. Owner-ruled MATERIALIZE (NOT reject) — asserts the INTENDED \
+pre-mutation value; TODO.md. Un-ignore when the match-binding materialize lands. A fix that \
+REJECTS this program has implemented the wrong ruling."]
+fn sound_match_scrutinee_elem_materialize_safe() {
+    security_safe("sound_match_scrutinee_elem_materialize", "alpha-heap-forced-payload");
+}
+
+// ── The `&`-in-an-owning-position class: the DROP facet ─────────────────────
+
+/// Measured at HEAD, BOTH backends: `1 / close 9 / close 9` — the owner's user
+/// `Drop` runs TWICE. ggdef REJECTS the literal form. The intended state is the
+/// reject; this fixture additionally pins that if it were ever accepted, the
+/// drop must run exactly ONCE (a single-owner `Drop` violation is not an
+/// acceptable outcome under any reading).
+#[test]
+#[ignore = "KNOWN GAP (&-in-an-owning-position, DROP facet): `[&p.fd]` duplicates the owner's \
+user Drop on C AND LLVM; ggdef rejects. Asserts the INTENDED single drop; TODO.md. Un-ignore \
+when the owning-position reject (or the drop-taint gate at container-literal element positions) \
+lands."]
+fn sound_amp_array_literal_duplicate_drop_safe() {
+    security_safe("sound_amp_array_literal_duplicate_drop", "1\nclose 9");
+}
+
+/// LIVE CONTROL — the unsigilled twin. Green today; goes RED if a fix changes
+/// how a bare container-literal element takes ownership.
+#[test]
+fn sound_amp_array_literal_duplicate_drop_control_safe() {
+    security_safe("sound_amp_array_literal_duplicate_drop_control", "1\nclose 9");
+}
+
+// ── B5: the Option/Result combinator skips the payload's user Drop ──────────
+
+/// Measured at HEAD under `--sanitize` + `detect_leaks=1`:
+/// `512 / control-end / dropping / 512 / map-end` — the trailing `dropping` is
+/// MISSING — plus `LeakSanitizer: 8192 bytes in 2 allocations`. The `is Some`
+/// control leg in the same program is clean, which is what makes the map leg's
+/// silence a defect rather than a design choice.
+#[test]
+#[ignore = "KNOWN GAP (combinator adapter): Option.map skips the payload's user Drop and leaks \
+8192B; the `if o is Some` spelling of the same program is clean. Asserts the INTENDED \
+drop-runs/no-leak state; TODO.md. Un-ignore when the combinator adapter owns its payload."]
+fn sound_option_map_user_drop_no_leak() {
+    security_safe_no_leak(
+        "sound_option_map_user_drop_leak",
+        "512\ncontrol-end\ndropping\n512\nmap-end\ndropping",
+    );
+}
+
+// ── Anti-regression CONTROLS for the aggregate-init mover exemption ─────────
+
+/// LIVE — D10(b) ADDENDUM 3's mover exemption. Green today; goes RED if the
+/// chokepoint rebuild blanket-rejects aggregate init (a new over-rejection).
+#[test]
+fn sound_ctor_mover_sibling_accept_safe() {
+    security_safe(
+        "sound_ctor_mover_sibling_accept",
+        "alpha-heap-forced-payload\nbeta-heap-forced-payload\ngamma-heap-forced-payload",
+    );
+}
+
+/// The one row of the batch whose intended state is MORE permissive than
+/// today's. Measured at HEAD: `gg check` REJECTS with `E_BorrowConflict` while
+/// the struct and tuple spellings of the identical program accept.
+#[test]
+#[ignore = "KNOWN GAP (over-rejection): enum-variant construction routes through the \
+CALL-shaped aliasing check, so `E.Two(v[0], !v)` rejects while `Pair(v[0], !v)` accepts. \
+D10(b) ADDENDUM 3 ratifies the WIDENING; asserts the INTENDED accept. Un-ignore when enum \
+ctors use the aggregate-init predicate."]
+fn sound_enum_ctor_mover_sibling_accept_safe() {
+    security_safe("sound_enum_ctor_mover_sibling_accept", "alpha-heap-forced-payload");
+}
+
+/// LIVE AXIS PIN — the mover-FIRST ordering must reject on the LIVENESS axis
+/// (`E_UseAfterMove`), not the aliasing axis. The mover exemption above is only
+/// sound because this case is already caught here; if a refactor makes this
+/// fail with `E_BorrowConflict` instead, the move-tracker silently lost a case.
+#[test]
+fn sound_ctor_mover_first_rejected() {
+    security_rejected("sound_ctor_mover_first_reject", "E_UseAfterMove");
+}
+
+/// LIVE — the intra-function sever. Green today; goes RED if a chokepoint
+/// rejects on "a view of `v` exists in scope" instead of "a view of `v` is live
+/// at this call".
+#[test]
+fn sound_getchain_sever_accept_safe() {
+    security_safe("sound_getchain_sever_accept", "alpha-heap-forced-payload");
+}
+
+/// LIVE — the thin-pointer half of the `&`-of-field write-through axis, i.e.
+/// the two cells that work by accident (Core #12's type case). Green today;
+/// goes RED if the by-value fix "unifies" the halves by breaking this one.
+#[test]
+fn sound_amp_field_thinptr_control_safe() {
+    security_safe("sound_amp_field_thinptr_control", "base-grown\n2\n99");
+}

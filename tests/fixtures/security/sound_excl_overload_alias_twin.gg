@@ -1,0 +1,50 @@
+# DURABLE REPRO — D10 exclusivity hole A11: an OPERATOR OVERLOAD whose receiver
+# is a writer (`&self`) and whose right operand is a CoW bind ALIAS of that same
+# receiver.
+#
+# `Acc b = a` is a bare-identifier assignment — a zero-cost Ptr alias under
+# CoW-default-borrow — so `a + b` lowers to `Acc__add(&a, a)`: one exclusive
+# writer and one live reader of the SAME place, spelled as a binary operator.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in
+# `gorget_string_clone_to_owned`, reported inside `Acc__add`.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict`. An operator-overload
+# call is a call; its receiver's implicit `&self` sigil makes it a writer
+# participant, and the alias bind must resolve to the same root.
+#
+# ⚠ DO NOT rewrite this on `a + a`. That spelling runs CLEAN today and is
+# FALSE CONFIDENCE — it would pass whether or not the hole is closed. The alias
+# twin is the shape that actually exercises provenance resolution.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): OUT OF SUBSET — "operator Add on
+# struct and struct". Pinned against the ratified D10 exclusivity ruling;
+# recorded explicitly per Core #9. Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry (operator-overload costume).
+from std.collections import Vector
+
+struct Acc:
+    Vector[String] items
+
+equip Acc with Add[Acc]:
+    Acc add(&self, Acc rhs):
+        int i = 0
+        while i < 4096:
+            self.items.push("filler-padding-to-force-a-real-reallocation")
+            i = i + 1
+        Vector[String] out = Vector[String]()
+        out.push(rhs.items.get(0).unwrap())
+        return Acc(out)
+
+void main():
+    Acc a = Acc(Vector[String]())
+    a.items.push("alpha-heap-forced-payload")
+    Acc b = a
+    Acc c = a + b
+    print(c.items.get(0).unwrap())

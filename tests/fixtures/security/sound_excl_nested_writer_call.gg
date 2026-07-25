@@ -1,0 +1,42 @@
+# DURABLE REPRO — D10 exclusivity hole A7: the WRITER is nested ONE CALL DEEP
+# inside a sibling argument.
+#
+# `f(v[0], mutate(&v))` — arg 0 is a live element borrow, arg 1 is an
+# expression that *contains* `&v`. The overlap check only looks at the top-level
+# shape of each argument, so a writer one syntactic level down is invisible.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in `gorget_string_copy_cow`.
+# Left-to-right evaluation reads `v[0]` into a borrow, `mutate(&v)` reallocs,
+# and the callee then copies from the dangling element.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict`. A writer anywhere
+# inside a sibling argument's expression tree is a participant.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): ACCEPTS this program and prints the
+# pre-mutation value. ggdef is a definitional INTERPRETER with value semantics,
+# so a reallocation cannot invalidate anything and this UAF class is
+# structurally unobservable in that lane — it is NOT the authority here. The
+# intended REJECT comes from the ratified D10 exclusivity ruling, which ggdef
+# owes as part of the same landing (Core #9). Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry (nested-writer costume).
+int mutate(Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+    return v.len()
+
+void f(String s, int n):
+    print(s)
+    print(n)
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    f(v[0], mutate(&v))

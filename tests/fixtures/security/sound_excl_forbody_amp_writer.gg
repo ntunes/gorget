@@ -1,0 +1,50 @@
+# DURABLE REPRO — D10 exclusivity hole #4: a for-loop body mutates the ITERABLE
+# through a `&`-arg free call.
+#
+# The iterable guard (`check_expr.rs`'s for-loop arm) catches a DIRECT `v.push`
+# in the body, but a mutation that happens behind a call boundary — `grow(&v)` —
+# is opaque to it. The loop then walks a reallocated backing store.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then
+#   AddressSanitizer: heap-use-after-free ... READ of size 32 ...
+#   in gorget_string_borrow
+# reported at the loop's element read.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict`, exactly as the
+# direct `v.push(...)` spelling in the same position already is. The `&` sigil
+# is not a way to launder a mutation past the iterable guard.
+#
+# ⚠ SHAPE PRECISION, recorded because the obvious minimal shape is a FALSE
+# NEGATIVE: with a SINGLE-element collection the program runs clean (measured).
+# The loop must survive PAST the reallocation to touch freed memory, so the
+# collection needs ≥2 elements and the mutation must happen before the last
+# iteration's element read. That is why this fixture seeds three elements and
+# puts `grow(&v)` after the print.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): ACCEPTS this program and prints the
+# pre-mutation value. ggdef is a definitional INTERPRETER with value semantics,
+# so a reallocation cannot invalidate anything and this UAF class is
+# structurally unobservable in that lane — it is NOT the authority here. The
+# intended REJECT comes from the ratified D10 exclusivity ruling, which ggdef
+# owes as part of the same landing (Core #9). Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry, hole #4.
+void grow(Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    v.push("beta-heap-forced-payload")
+    v.push("gamma-heap-forced-payload")
+    for x in v:
+        print(x)
+        grow(&v)

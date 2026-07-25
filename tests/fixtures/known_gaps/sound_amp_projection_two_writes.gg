@@ -1,0 +1,35 @@
+# DURABLE REPRO — B3: TWO SEQUENTIAL writes through the same `&`-projection.
+# Both must land.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend): prints 10 — both writes
+# are lost, same root as `sound_amp_byvalue_place_writethrough.gg`.
+#
+# ORACLE: ggdef prints 12.
+#
+# INTENDED (asserted below): 12.
+#
+# ⚠ WHY THIS IS A SEPARATE FIXTURE FROM THE SINGLE-WRITE ROW. A partial fix that
+# write-throughs the FIRST projection and then re-reads a stale value (or
+# materializes a fresh temp per call site) passes every single-write pin in this
+# batch and prints 11 here. Only a second write to the same place catches it.
+# The two calls are identical, so any per-site memoization of the projection is
+# exercised.
+#
+# The seed is computed, not a literal.
+#
+# Cited from TODO.md (CoW / ownership / High): "By-value-field `&`-arg
+# write-through is SILENTLY LOST" (repeated-write row).
+struct Holder:
+    int i
+
+int seed():
+    return 10
+
+void bump_int(int &n):
+    n = n + 1
+
+void main():
+    Holder h = Holder(seed())
+    bump_int(&h.i)
+    bump_int(&h.i)
+    print(h.i)

@@ -1,0 +1,39 @@
+# DURABLE REPRO — D10 exclusivity hole A5: the read goes through a CoW BIND
+# ALIAS of the collection, the writer through the original name.
+#
+# `Vector[String] a = w` is a bare-identifier assignment, which under
+# CoW-default-borrow is a zero-cost Ptr alias — `a` and `w` denote the SAME
+# place. So `f(a.get(0).unwrap(), &w)` is `f(w[0], &w)` wearing a different name.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in `gorget_string_copy_cow`.
+# The place resolver stops at the bind and never follows the alias to its root,
+# so the two args look rooted in different variables.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict` — alias provenance is
+# part of resolving a place, not an optional refinement.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): ACCEPTS this program and prints the
+# pre-mutation value. ggdef is a definitional INTERPRETER with value semantics,
+# so a reallocation cannot invalidate anything and this UAF class is
+# structurally unobservable in that lane — it is NOT the authority here. The
+# intended REJECT comes from the ratified D10 exclusivity ruling, which ggdef
+# owes as part of the same landing (Core #9). Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry (provenance costume).
+void f(String s, Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+    print(s)
+
+void main():
+    Vector[String] w = Vector[String]()
+    w.push("alpha-heap-forced-payload")
+    Vector[String] a = w
+    f(a.get(0).unwrap(), &w)

@@ -1,0 +1,43 @@
+# DURABLE REPRO — C2, an OVER-REJECTION. Ratified as a defect by D10(b)
+# ADDENDUM 3 (`docs/define-gorget/decisions.md`, end of the LOG); the fix is a
+# WIDENING, not a narrowing.
+#
+# WRONG TODAY (measured at HEAD, Rust gg): `gg check` REJECTS with
+#   error[E_BorrowConflict]: borrow conflict on `v`: cannot pass `v` and `!v`
+#   in the same call — their places overlap
+# because an enum-variant construction routes through the CALL-shaped aliasing
+# check (where a bare arg is a BORROW) even though it is an aggregate-init
+# BOUNDARY position (where a bare arg is CONSUMED). The struct and tuple
+# spellings of the identical program already accept — see
+# `sound_ctor_mover_sibling_accept.gg`.
+#
+# ORACLE (ggdef, measured this session): ggdef REJECTS this too, with the same
+# `E_BorrowConflict`. That is a KNOWN, EXPECTED lag — ggdef has not implemented
+# ADDENDUM 3's mover exemption for ANY aggregate-init spelling, so it also
+# rejects the STRUCT and TUPLE forms that production already accepts (see
+# `sound_ctor_mover_sibling_accept.gg`). The round that lands the widening owes
+# it on the ggdef lane too (Core #9). ggdef is therefore NOT the authority for
+# this row; the ratified ruling is.
+#
+# INTENDED: ACCEPT, run ASan-clean, and print the PRE-MOVE element value
+# ("alpha-heap-forced-payload"). The addendum is explicit that one structural
+# chokepoint means ONE predicate for aggregate construction — it cannot treat
+# struct/tuple one way and enum another — so the enum widening falls out of the
+# ratified boundary model.
+#
+# ⚠ This is the one row of the batch whose intended state is MORE permissive
+# than today's. Wiring today's reject as "expected" would make an over-rejection
+# canonical, which is why the assertion below is the accept.
+enum E:
+    One(String)
+    Two(String, Vector[String])
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    E e = E.Two(v[0], !v)
+    match e:
+        case One(s):
+            print(s)
+        case Two(s, rest):
+            print(s)

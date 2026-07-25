@@ -1,0 +1,48 @@
+# DURABLE REPRO — the `&`-in-an-owning-position class, DROP facet: a `&`-alias
+# in an ARRAY LITERAL element position duplicates the owner's user `Drop`.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, BOTH backends — C and LLVM agree):
+#     1
+#     close 9
+#     close 9        <- the SAME FileHandle's user `drop` runs TWICE
+# The control spelling `[p.fd]` (no sigil) prints `close 9` exactly once, so the
+# `&` alone is what duplicates the owner. `ggdef` REJECTS the literal form
+# ("`&`-alias in an owning position is not valid"), i.e. the definition lane is
+# right and both production backends agree on the wrong answer (Core #8: that is
+# two bugs, not a wash).
+#
+# ROOT (recorded from the filing, verify before acting): the drop-taint reject
+# `reject_tainted_formation_arg` is wired only at the two `CallArg` positions
+# (`src/semantic/safety/check_expr.rs:116` and `:757`), so a container-literal
+# ELEMENT position escapes it entirely.
+#
+# INTENDED: REJECTED at `gg check`. `Vector[int]` is an owning position and a
+# constructor cannot write through, so the `&` is meaningless there — see D10(b)
+# ADDENDUM 3 (aggregate construction is an ownership boundary) and D31
+# full-strict (`&` means "the callee writes through"). If the program were
+# instead accepted with the sigil honoured as a no-op, `close 9` must still
+# print exactly ONCE — a single-owner `Drop` violation (D4/D12) is not an
+# acceptable outcome under any reading.
+#
+# The `fd` seed is computed, not a literal, so nothing here const-folds. The
+# root is a BARE param (`FH p`), which is what makes the extra owner appear.
+#
+# Cited from TODO.md (CoW / ownership / High): the `&`-in-an-owning-position
+# entry.
+struct FH:
+    int fd
+
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+
+int seed():
+    return 9
+
+void pokep(FH p):
+    Vector[int] v = [&p.fd]
+    print(v.len())
+
+void main():
+    FH f = FH(seed())
+    pokep(f)

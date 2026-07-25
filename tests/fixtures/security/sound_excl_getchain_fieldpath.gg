@@ -1,0 +1,39 @@
+# DURABLE REPRO — D10 exclusivity hole A4: the read descends a FIELD PATH
+# (`obj.data.get(0).unwrap()`) while the writer takes the whole owner (`&obj`).
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in `gorget_string_copy_cow`.
+# The read's place is `obj.data[0]`, a strict sub-place of the writer's `obj`,
+# so a place-overlap test on the resolved places catches it — but the syntactic
+# check never resolves through the `.get()` view, so the two args look disjoint.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict`. (The prefix relation
+# is the same one `d10b_place_overlap/writer_subfield_reject.gg` already pins
+# for the non-view spelling.)
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): ACCEPTS this program and prints the
+# pre-mutation value. ggdef is a definitional INTERPRETER with value semantics,
+# so a reallocation cannot invalidate anything and this UAF class is
+# structurally unobservable in that lane — it is NOT the authority here. The
+# intended REJECT comes from the ratified D10 exclusivity ruling, which ggdef
+# owes as part of the same landing (Core #9). Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry, hole #1 (field-path costume).
+struct Bag:
+    Vector[String] data
+
+void f(String s, Bag &b):
+    int i = 0
+    while i < 4096:
+        b.data.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+    print(s)
+
+void main():
+    Bag obj = Bag(Vector[String]())
+    obj.data.push("alpha-heap-forced-payload")
+    f(obj.data.get(0).unwrap(), &obj)

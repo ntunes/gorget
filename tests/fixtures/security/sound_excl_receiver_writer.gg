@@ -1,0 +1,43 @@
+# DURABLE REPRO — D10 exclusivity hole A6: the WRITER is the method RECEIVER,
+# and the reader is an element view of that same receiver.
+#
+# `b.grow_from(b.items.get(0).unwrap())` calls an `&self` method — a writer of
+# `b` — while passing a live borrow of `b.items[0]` as its argument.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in `gorget_string_copy_cow`
+# inside `Bag__grow_from`. `check_call_aliasing` is handed only the ARGS; the
+# receiver is walked separately and never enters the participant set, so the
+# one place that is definitely being written is invisible to the overlap test.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict`. The receiver's
+# implicit sigil is part of the participant model: `&self` is a writer, bare
+# `self` a reader.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): ACCEPTS this program and prints the
+# pre-mutation value. ggdef is a definitional INTERPRETER with value semantics,
+# so a reallocation cannot invalidate anything and this UAF class is
+# structurally unobservable in that lane — it is NOT the authority here. The
+# intended REJECT comes from the ratified D10 exclusivity ruling, which ggdef
+# owes as part of the same landing (Core #9). Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry, hole #2.
+struct Bag:
+    Vector[String] items
+
+equip Bag:
+    void grow_from(&self, String seed):
+        int i = 0
+        while i < 4096:
+            self.items.push("filler-padding-to-force-a-real-reallocation")
+            i = i + 1
+        print(seed)
+
+void main():
+    Bag b = Bag(Vector[String]())
+    b.items.push("alpha-heap-forced-payload")
+    b.grow_from(b.items.get(0).unwrap())

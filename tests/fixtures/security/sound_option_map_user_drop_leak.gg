@@ -1,0 +1,69 @@
+# DURABLE REPRO — B5: the Option/Result COMBINATOR adapter silently SKIPS the
+# payload's user `Drop` and LEAKS.
+#
+# Two spellings of the same program, back to back:
+#   * `control_leg` uses `if o is Some(m)`      — CORRECT today
+#   * `map_leg`     uses `o.map((Money m): ..)` — DEFECTIVE today
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`
+# `detect_leaks=1`):
+#     512 / control-end / dropping / 512 / map-end        <- final `dropping` MISSING
+#     LeakSanitizer: 8192 bytes in 2 allocations
+#     (Money__clone via Option__Money__clone in map_leg, plus the payload itself)
+#
+# INTENDED: the two spellings are observationally equivalent — the `map` leg
+# runs `Money`'s user `drop` exactly as the `is Some` leg does, and nothing
+# leaks. Expected stdout adds the trailing `dropping`.
+#
+# The payload is a 512-element heap `Vector[int]` built in a loop, so the leak is
+# a real 4 KB buffer LeakSanitizer can see; a literal-only payload is a false
+# negative. `size_of` reads through the payload so it cannot be optimized out.
+#
+# ⚠ AMBIGUITY, recorded honestly: the expected stdout asserts ONE `dropping` per
+# leg — i.e. that the `map` path drops as many times as the `is Some` path. That
+# is the CoW-charter answer (an implicit `Option__Money__clone` at a combinator
+# is itself excess implicit cloning). A fix that keeps the clone and drops BOTH
+# copies would print `dropping` twice in the map leg and fail here — which is the
+# intended signal, not a false red: it would mean the leak was closed by adding a
+# drop rather than by removing the clone.
+#
+#
+# ORACLE (ggdef, measured this session): OUT OF SUBSET — "expression
+# `unsupported` is outside the phase-0 subset" (the combinator). Pinned
+# against the control leg in the same program instead; recorded per Core #9.
+# Cited from TODO.md (Self-host parity / Medium): "[closure 4e-2 — NO LONGER
+# LATENT] Option/Result combinator adapter SKIPS the payload's user `Drop` and
+# LEAKS".
+struct Money:
+    Vector[int] cents
+
+equip Money with Drop:
+    void drop(!self):
+        print("dropping")
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents():
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < 512:
+        c.push(i)
+        i = i + 1
+    return c
+
+void control_leg():
+    Option[Money] o = Some(Money(heap_cents()))
+    if o is Some(m):
+        print(size_of(m))
+    print("control-end")
+
+void map_leg():
+    Option[Money] o = Some(Money(heap_cents()))
+    Option[int] r = o.map((Money m): size_of(m))
+    print(r.unwrap_or(0))
+    print("map-end")
+
+void main():
+    control_leg()
+    map_leg()

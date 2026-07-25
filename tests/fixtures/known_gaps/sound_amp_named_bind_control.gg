@@ -1,0 +1,29 @@
+# ANTI-REGRESSION POSITIVE — the control for the `&`-in-an-OWNING-POSITION
+# class. A named `&`-BIND (`int y = &c.fd`) already rejects, correctly:
+#
+#     error[E_LocalBorrowBind]: cannot bind a mutable borrow (`&`) to a name —
+#     a place has one exclusive writer, and a named `&`-binding would alias a
+#     second writable path to it.
+#
+# CORRECT TODAY (measured at HEAD, Rust gg, C and LLVM both refuse to build);
+# `ggdef` rejects it too.
+#
+# It is the same `&c.fd` operand as the seven defective costumes
+# (`sound_amp_owning_position_*.gg`), landing in an owning position — and this
+# is the one position where production already does the right thing. Keeping it
+# live means the class fix cannot be "reject `&` of a by-value field
+# everywhere" in a way that changes THIS diagnostic: a user who writes the bind
+# should keep getting the specific, actionable `E_LocalBorrowBind` message with
+# its two suggested fixes, not a generic owning-position error.
+#
+# The `fd` seed is COMPUTED, not a literal, matching its siblings.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    int y = &c.fd
+    print(y)

@@ -1,0 +1,26 @@
+# DURABLE REPRO — the `&`-in-an-OWNING-POSITION class, costume 3 of 7:
+# an ENUM-VARIANT PAYLOAD (`Some(&c.fd)`).
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C and LLVM): `gg check` clean, sigil
+# silently DROPPED, prints 10. `ggdef` REJECTS ("`&`-alias into an owning
+# position is not valid").
+#
+# INTENDED: REJECTED at `gg check`. Enum field init is an ownership boundary
+# exactly as struct field init is — D10(b) ADDENDUM 3 is explicit that one
+# predicate covers aggregate construction and "cannot treat struct/tuple one way
+# and enum another".
+#
+# The `fd` seed is COMPUTED, not a literal.
+#
+# See `sound_amp_owning_position_ctor.gg` for the full sibling list and the
+# ruling this class rests on.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Option[int] o = Some(&c.fd)
+    print(o.unwrap_or(0))

@@ -1,0 +1,31 @@
+# DURABLE REPRO — the `&`-in-an-OWNING-POSITION class, costume 6 of 7:
+# a TUPLE-LITERAL ELEMENT (`(&c.fd, 5)`).
+#
+# ⚠ LIKE THE ARRAY-LITERAL COSTUME, THIS IS A GARBAGE-VALUE MISCOMPILE, not a
+# dropped sigil.
+#
+# WRONG TODAY (measured at HEAD, Rust gg): `gg check` clean, both backends
+# accept, and a RAW STACK ADDRESS lands in the `int` slot:
+#     C    -> 281474930661888
+#     LLVM -> 281474478852616
+# (digits are ASLR-dependent; the stable fact is that it is a pointer, not 10).
+# `ggdef` REJECTS ("`&`-alias into an owning position is not valid").
+#
+# INTENDED: REJECTED at `gg check`. Tuple field init is an ownership boundary
+# (devbook/11 lists tuple/struct field init together as "unconditional
+# leave-behinds" cloned via `ensure_owned_at_boundary`).
+#
+# The `fd` seed is COMPUTED, not a literal.
+#
+# See `sound_amp_owning_position_ctor.gg` for the full sibling list and the
+# ruling this class rests on.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    (int, int) t = (&c.fd, 5)
+    print(t.0)

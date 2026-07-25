@@ -1,0 +1,49 @@
+# ANTI-REGRESSION POSITIVE — C5, the accidentally-correct half of the by-value
+# `&`-projection write-through bug.
+#
+# A `&`-arg naming a field whose type is a THIN POINTER (`String`, `Vector[int]`,
+# and the other resource aggregates) already writes through correctly, because
+# `field_load` types the result as a pointer and the callee therefore mutates
+# the caller's object in place.
+#
+# CORRECT TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): prints
+#     base-grown
+#     2
+#     99
+# ORACLE (ggdef, measured this session): identical — the lanes agree here, which
+# is what makes these the trustworthy half of the axis.
+#
+# These are the controls for the BY-VALUE half
+# (`known_gaps/sound_amp_byvalue_place_writethrough.gg`), where `int` / `float` /
+# `bool` / plain-struct / tuple / Dict-value / Vector-element projections
+# silently LOSE the write. The fix for that must not "unify" the two halves by
+# breaking this one — e.g. by materializing a copy for every `&`-projection.
+#
+# The seed values are computed, not literals, so nothing here is const-folded.
+struct Holder:
+    String s
+    Vector[int] vec
+
+String base_name():
+    return "base"
+
+int seed():
+    return 1
+
+void grow_string(String &t):
+    t = t + "-grown"
+
+void grow_vector(Vector[int] &v):
+    v.push(99)
+
+void main():
+    Vector[int] vv = Vector[int]()
+    vv.push(seed())
+    Holder h = Holder(base_name(), vv)
+
+    grow_string(&h.s)
+    print(h.s)
+
+    grow_vector(&h.vec)
+    print(h.vec.len())
+    print(h.vec[1])
