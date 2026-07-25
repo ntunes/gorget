@@ -651,6 +651,72 @@ fn build_gg_expect_warning(fixture: &str, warning_substr: &str) {
     let _ = std::fs::remove_file(&exe_path);
 }
 
+/// The negative twin of `build_gg_expect_warning`: `gg build` must SUCCEED and
+/// its stderr must NOT contain `forbidden_substr`.
+///
+/// Needed because some diagnostics fire only on `gg build`, never on
+/// `gg check` — for those, a `check_gg_silent_for` assertion passes trivially
+/// and is fake coverage (Core #12).
+fn build_gg_expect_no_warning(fixture: &str, forbidden_substr: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let c_path = dir.join(format!("{stem}.c"));
+    let exe_path = dir.join(stem);
+
+    let build = build_with_timeout(gg_command("build").arg(&fixture_path), fixture);
+    let build_stdout = String::from_utf8_lossy(&build.stdout);
+    let build_stderr = String::from_utf8_lossy(&build.stderr);
+
+    assert!(
+        build.status.success(),
+        "Build failed for {fixture}:\nstdout: {build_stdout}\nstderr: {build_stderr}",
+    );
+
+    assert!(
+        !build_stderr.contains(forbidden_substr),
+        "Build stderr must NOT contain '{forbidden_substr}' for {fixture}:\nstderr: {build_stderr}",
+    );
+
+    let _ = std::fs::remove_file(&c_path);
+    let _ = std::fs::remove_file(&exe_path);
+}
+
+/// KNOWN GAP — the "zero-cost move" suggestion advises code the compiler
+/// REJECTS, in 100% of the cases it can fire.
+///
+/// Build the fixture and the compiler says `pass as `!v` for zero-cost move`.
+/// Take that advice and it errors at the same span with `E_OwnershipMismatch
+/// ... help: remove the `!``.
+///
+/// It is total, not a corner case — single-writer chain: `move_suggestions` is
+/// pushed only at `exprs/calls.rs:1574`, gated on `fn_consumed_params`, which
+/// is written only at `context.rs:1196` inside `record_param_cloned`, which
+/// early-returns unless `is_bare_param` (`context.rs:1192`). So every
+/// suggestion names a bare param, and under ratified D31 full-strict `!` on a
+/// bare param is always `E_OwnershipMismatch`.
+///
+/// ⚠ Fires on `gg build`, NOT on `gg check` — a check-based assertion would be
+/// a false negative, which is why this uses the build-based helper.
+#[test]
+#[ignore = "KNOWN GAP: the `zero-cost move` suggestion advises `!v`, which the compiler then \
+rejects with `help: remove the !`. Asserts the INTENDED absence of the suggestion; TODO.md. \
+Un-ignore when the suggestion stops firing for borrow-only params."]
+fn sound_move_suggestion_advises_rejected_code() {
+    build_gg_expect_no_warning(
+        "known_gaps/sound_move_suggestion_advises_rejected_code.gg",
+        "zero-cost move",
+    );
+}
+
 #[test]
 fn hello() {
     run_gg("hello.gg", "Hello, World!");
