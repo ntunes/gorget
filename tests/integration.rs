@@ -35821,6 +35821,29 @@ fn sound_tuple_getchain_writethrough() {
     );
 }
 
+/// KNOWN GAP — `.or_else()` shares the `.map()`/`.filter()` receiver-emptying
+/// defect. Third costume of that mode; committed so the sibling census is
+/// executable rather than prose (Core #4). Prints 0, want 11.
+#[test]
+#[ignore = "KNOWN GAP: `.or_else()` empties its receiver's payload like `.map()`/`.filter()`; \
+resource-payload-specific, ggdef out of subset. Asserts the INTENDED read-back; TODO.md."]
+fn sound_option_combinator_or_else_receiver() {
+    run_gg("known_gaps/sound_option_combinator_or_else_receiver.gg", "11");
+}
+
+/// KNOWN GAP — `.unwrap_or_else()` with a resource payload PANICS the compiler:
+/// `gg check` reports "OK: no semantic errors", then `gg build` dies on a Tier
+/// 2a consume-site violation (`AssignIntoOwnedSlot(dst: Money) — untracked
+/// source consumed`). The validator catching a real ownership hole is the
+/// system working; surfacing it as a PANIC rather than a diagnostic, and having
+/// `gg check` not see what the lowering validator sees, is the defect.
+#[test]
+#[ignore = "KNOWN GAP: `.unwrap_or_else()` over a resource payload passes `gg check` then panics \
+`gg build` (Tier 2a consume-site violation). Asserts the INTENDED build-and-run; TODO.md."]
+fn sound_option_unwrap_or_else_ice() {
+    run_gg("known_gaps/sound_option_unwrap_or_else_ice.gg", "11");
+}
+
 /// KNOWN GAP — `Option[<resource>].and_then` / `.flat_map` is a TYPE CONFUSION:
 /// `gg check` accepts, C emits a SEGFAULTING binary, and LLVM refuses to
 /// compile its own IR (`'%v28' defined with type 'i64' but expected 'ptr'` in a
