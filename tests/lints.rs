@@ -5830,6 +5830,31 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
     );
 }
 
+/// AGENTS.md size ratchet (Core #6 applied to the instructions file itself).
+/// The header's split rule: a new lesson lands in AGENTS.md as a compact rule;
+/// the evidence/war-story goes to docs/devbook/29 (engineering) or
+/// docs/devbook/30 (excellence system). Compacted 2026-07-25 from 64.6KB.
+/// The ceiling only ever ratchets DOWN (a further compaction re-seeds it);
+/// raising it requires owner sign-off.
+#[test]
+fn agents_md_size_ratchet() {
+    // The evidence home the header and this message promise must actually exist.
+    assert!(
+        Path::new("docs/devbook/30-excellence-system.md").exists(),
+        "docs/devbook/30-excellence-system.md is missing — AGENTS.md's header and this \
+         lint both route evidence there; the split rule is unenforceable without it."
+    );
+    let bytes = fs::metadata("AGENTS.md").expect("AGENTS.md metadata").len();
+    const CEILING: u64 = 58_000;
+    assert!(
+        bytes <= CEILING,
+        "AGENTS.md is {bytes} bytes > {CEILING}. Move the new lesson's war-story/evidence \
+         to docs/devbook/29 (engineering) or docs/devbook/30 (excellence system) and keep \
+         only the compact rule here (see the split rule in the file header). Lowering this \
+         ceiling after a further compaction is fine; raising it requires owner sign-off."
+    );
+}
+
 // ===========================================================================
 // Guards-slice ratchets (Core #6 + #10, owner 2026-07-18): A = silent-fallthrough
 // allowlist (lowering arms must lower or reject, never silently drop); B =

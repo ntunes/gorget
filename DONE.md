@@ -1,5 +1,18 @@
 # DONE
 
+- [2026-07-25] AGENTS.md compaction round (owner-directed): 64,608 → 56,332 B (−12.8%) with ZERO rules lost. Evidence/war-stories
+  relocated to NEW `docs/devbook/30-excellence-system.md` (extended excellence system: round/battery origins, gauntlet + model-allocation
+  measurements, Core #12–#15 receipts, the six-questions saves, the disk-fill, the known_gaps origin, post-succession leaning marked NOT
+  ratified); duplicate restatements deduped to canonical statements + cites; devbook/29's 8 `AGENTS.md:<line>` cites (ALL already stale
+  at HEAD) → durable section-name cites; README TOC + ch. 30. Nine declared write-through deltas (nested-fork isolation → orchestration
+  rule 1; per-track ggdef suite → Core #9; `--test lints` + `--lib` complete step 4's battery, whose "covers every CI target" claim was
+  false without `--lib`; not-ratified-thinking routing in the split rule). NEW GUARD `agents_md_size_ratchet` (tests/lints.rs, CEILING
+  58_000, ratchets DOWN only; also asserts devbook/30 exists) — RED-demonstrated in-harness against the pre-compaction file
+  ("64608 bytes > 58000") before going green. Gauntlet: 9 sequential fresh opus review passes to convergence (7 blocking total; 4 were
+  the orchestrator's own unsourced ch.30 narration, refuted by grep/measure — incl. pass 3 finding the "evaporated" audit scratch alive
+  in /tmp and reconciling 0-in-12 / 11-of-12 exactly; rule-preservation swept clean from pass 1 on, driven by a total-enumeration
+  disposition manifest per Core #15(b)). Gates: `--test lints` 67/1 (sole red = PRE-EXISTING `no_growth_in_phase_d_proxy_reads`
+  93>85, untouched per handover), `--lib` 1129/0.
 - [2026-07-24] D21: retired `gg sim` (GIR interpreter). Deleted src/sim/ (~10.4K LOC, 8 files), tests/sim_ub/,
   test_sim.py, test_sim_ub.py, docs/devbook/21-simulator.md; removed the sim subcommand/REPL/help from src/main.rs +
   `pub mod sim` from lib.rs; scrubbed doc mentions (README, book/appendix-cli, devbook/01, devbook/27,

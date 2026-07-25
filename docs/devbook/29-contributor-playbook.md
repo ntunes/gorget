@@ -8,7 +8,9 @@ you how to *work on it without breaking it* — the hard-won rules in
 them, with worked examples from real bugs in this tree. If you read one chapter
 before touching the compiler, read this one and [Chapter 24
 (layering discipline)](24-layering-discipline.md) together: 24 states the law,
-this chapter is the how-to.
+this chapter is the how-to. The *process* side — rounds, the review gauntlet,
+orchestration — has its own extended chapter, [Chapter 30 (the excellence
+system)](30-excellence-system.md).
 
 The single most useful instinct to internalize is this:
 
@@ -29,7 +31,7 @@ are one-line oversights at a *write* site one layer up (`AGENTS.md` →
 "Debugging heuristic"). The complexity you are feeling is the symptom resisting
 you, not the disease.
 
-The procedure (`AGENTS.md:154-161`):
+The procedure (`AGENTS.md` § "Debugging heuristic"):
 
 1. **Trace the data the buggy site reads. Where was it last written?**
 2. **Look at the writer. Did it respect every typed fact available to it?** Or
@@ -81,7 +83,7 @@ consumed; the field that records this is `self_by_ptr`, set from `self_conv` at
 `context.rs:647`). With the writer corrected, the bogus materialization never
 fires, and the 50-line "rebind across merges" fix is **never-taken code** — it
 was patching a symptom of a value that should never have been materialized
-(`AGENTS.md:164`).
+(`AGENTS.md` § "Debugging heuristic").
 
 The lesson is the heuristic verbatim: the read site (`cow_materialize_alias`)
 *looked* buggy because it was being handed input it should never have received.
@@ -170,7 +172,7 @@ responses, and forbids a tempting third:
 production code — to *avoid* the gap. Even a commented workaround does harm,
 because the wired-in expected output (or the surviving workaround idiom) becomes
 the load-bearing artifact, and a "passing" test then locks buggy behavior in as
-canonical (`AGENTS.md:174,183`).
+canonical (`AGENTS.md` § "Don't redesign around compiler gaps").
 
 This tree has been burned by exactly this. The `Dict.len()` workaround
 (`scores.keys().len()`) outlived the bug it dodged by ~8 weeks, documented only
@@ -178,13 +180,13 @@ in a fixture comment, so the redesign quietly became the recommended idiom. A
 `!`-param drop-at-exit leak got hidden for a day because a canonical fixture was
 rewritten to use locals instead of `!` params — and when the bug was finally
 fixed, three masked-leak tests needed their expected output updated
-(`AGENTS.md:177-178`). The inverse failure mode is the same rule read
+(`AGENTS.md` § "Don't redesign around compiler gaps"). The inverse failure mode is the same rule read
 backwards: a stale `TODO.md` entry (the Phase A `collection_runtime_type`
 migration) once described work that foundation commits had *already* completed —
 and refusing to *manufacture* migration work to fit the stale premise is itself
 an instance of this rule (verify the gap still exists before acting on it).
 
-**The litmus test** (`AGENTS.md:181`): if a fixture uses a more complex shape
+**The litmus test** (`AGENTS.md` § "Don't redesign around compiler gaps", litmus): if a fixture uses a more complex shape
 than seems necessary, or a comment cites a bug as the reason for a workaround,
 *ask why* — and **re-verify the bug still exists** before treating the
 workaround as canonical. Which is the next rule.
@@ -211,7 +213,7 @@ Dict-ordering bug it dodged was fixed; a `type_info_keys_safe` wrapper whose
 *entire purpose* was to dodge a state-loss bug that no longer exists; and
 `# parallel storage to dodge Dict[String, _] state-loss` comments scattered
 across `lower.gg`, each naming a Dict-ordering/state-loss bug long since fixed
-(`AGENTS.md:191-194`).
+(`AGENTS.md` § "Self-host as the elegance showcase").
 
 The operating rules:
 
@@ -235,7 +237,7 @@ not *creating* new dodges; this one is about *retiring old ones*.
 ## Re-verify a premise against current source before acting
 
 Diagnoses, plans, dated comparison scores, and `TODO.md`/`MEMORY.md` notes go
-**stale the moment they are written** (`AGENTS.md:129`). Before you act on a
+**stale the moment they are written** (`AGENTS.md` § "Solution Quality"). Before you act on a
 load-bearing fact, confirm it still holds against *current* source and tests —
 re-run the `*_comparison` test for a score, re-read the cited source for a
 claimed "bug," check the actual code shape rather than a remembered one.
@@ -243,7 +245,7 @@ claimed "bug," check the actual code shape rather than a remembered one.
 This tree has repeatedly burned cycles on stale premises: a "resolver at 57%"
 that was actually 96% by the time someone acted on it; an "unshipped f-string
 port" that had already shipped; a "live function-type bug" already fixed; a
-"cleanup target" whose fossils were already retired (`AGENTS.md:129`). Do not
+"cleanup target" whose fossils were already retired (`AGENTS.md` § "Solution Quality"). Do not
 trust a dated figure or an agent's unverified conclusion — cross-check first.
 The book itself lives by this rule: every chapter's `file:line`s are re-derived
 at authoring time and stamped "verified against `<commit>`"

@@ -76,6 +76,7 @@ This book is for *compiler developers*, not application programmers. It assumes 
 ### Part X — Walkthroughs
 - [Follow the value: a construct from source to machine code](28-follow-the-value.md) — one collection literal traced through every pipeline stage, with the handler at each hop
 - [Working on the compiler: a contributor's playbook](29-contributor-playbook.md) — the debugging heuristic, the layering litmus, and the comparison/fixed-point gates, via worked snags
+- [The excellence system: how delegated rounds run](30-excellence-system.md) — rounds, the review gauntlet, orchestration, and the measured incidents behind the AGENTS.md process rules
 
 ---
 
