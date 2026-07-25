@@ -1,0 +1,44 @@
+# DURABLE REPRO — the TUPLE-FIELD GET-CHAIN, BOTH FACES.
+#
+# This is the class that survives EVERY `&`-of-projection fix, and it is the
+# reason the struct get-chain fallback was DESCOPED from Track C: closing the
+# struct chain does NOT close this one, so the "one fallback retires the class"
+# argument is false.
+#
+# The root is an asymmetry ONE LEVEL UP from the resolvers: a get-chain
+# fallback wires into the `FieldAccess` arm only. `TupleFieldAccess` gets
+# nothing, and `try_resolve_tuple_field_place` has no method-chain arm either.
+# ⚠ NOT a 2-line mirror: `resolve_ptr_field_place` (stmts/assigns.rs:838) is
+# struct-field-specific (it takes a `field_name: &str`), so this needs a
+# tuple-index analogue or a genuine chain arm.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C and LLVM identical):
+#   `&` face      `bumpi(&vt.get(0).unwrap().0)`  -> prints 10   (want 11)
+#   assign face   `wt.get(0).unwrap().0 = 42`     -> prints 10   (want 42)
+# `ggdef` is CORRECT on BOTH faces (11 and 42) — it adjudicates AGAINST us,
+# which makes this a textbook Core #8 (a silent wrong-output both backends
+# agree on) rather than a mere gap.
+#
+# INTENDED (what this fixture asserts): 11 then 42.
+#
+# The seeds are COMPUTED, not literals, so const-folding cannot elide the
+# store on the real path (Core #11).
+#
+# Sibling faces that ALREADY write through, for contrast — a fix must not
+# regress them: `v[i].a = x` (struct field of an element) and the struct
+# get-chain `b.get(0).unwrap().fd = 11`.
+
+int seed():
+    return 10
+
+void bumpi(int &x):
+    x = x + 1
+
+void main():
+    Vector[(int, int)] vt = [(seed(), 5)]
+    bumpi(&vt.get(0).unwrap().0)
+    print(vt.get(0).unwrap().0)
+
+    Vector[(int, int)] wt = [(seed(), 5)]
+    wt.get(0).unwrap().0 = 42
+    print(wt.get(0).unwrap().0)

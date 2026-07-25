@@ -35785,6 +35785,34 @@ true
     );
 }
 
+/// KNOWN GAP — the TUPLE-FIELD GET-CHAIN, BOTH FACES. This is the class that
+/// survives every `&`-of-projection fix, and the reason the struct get-chain
+/// fallback was descoped from that work: closing the struct chain leaves this
+/// one broken, so "one fallback retires the class" is false.
+///
+/// RED-verified at HEAD, all three lanes measured fresh: C prints `10 / 10`,
+/// LLVM prints `10 / 10`, and ggdef prints `11 / 42` — the oracle adjudicates
+/// AGAINST production on BOTH faces, which makes this a Core #8 silent
+/// wrong-output rather than a mere gap.
+///
+/// Root: a get-chain fallback wires into the `FieldAccess` arm only;
+/// `TupleFieldAccess` gets nothing, and `try_resolve_tuple_field_place` has no
+/// method-chain arm. NOT a 2-line mirror — `resolve_ptr_field_place` is
+/// struct-field-specific (`field_name: &str`), so this needs a tuple-index
+/// analogue or a real chain arm.
+#[test]
+#[ignore = "KNOWN GAP: the tuple-field get-chain drops the write on BOTH faces (`&`-arg and \
+plain assign), on C and LLVM alike, while ggdef is correct on both. Asserts the INTENDED \
+write-through; TODO.md. Un-ignore when the tuple-field place resolver grows a method-chain arm."]
+fn sound_tuple_getchain_writethrough() {
+    run_gg(
+        "known_gaps/sound_tuple_getchain_writethrough.gg",
+        "\
+11
+42",
+    );
+}
+
 /// LIVE CONTROL — the only by-value shape that currently works: `&` of a whole
 /// bare local scalar. Green today (11, matching ggdef); it pins the defect's
 /// boundary and goes RED if the class fix regresses the working cell.
