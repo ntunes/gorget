@@ -1,0 +1,33 @@
+# KNOWN GAP (filed 2026-07-25, found by the Track-B1 output-review).
+#
+# Re-assigning THROUGH a `&`-param never drops the param slot's OLD pointee, so
+# the caller's original buffer leaks:
+#
+#     void f(Vector[int] &v):
+#         v = build(2)          # the 4-element buffer `v` pointed at is never freed
+#
+# PRE-EXISTING — reproduces identically before and after Track B1. It was MASKED
+# in the combined costume (`local = v; v = build(2); return local`), where the
+# bind's double-free happened to cancel the missing drop. B1 fixed the bind
+# correctly, which unmasks the leak.
+#
+# INTENDED: no leak. The write-through re-assign must drop the old pointee before
+# storing the new one. Values are already correct (4 then 2); only the drop is missing.
+from std.collections import Vector
+
+Vector[int] build(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i)
+        i = i + 1
+    return out
+
+void f(Vector[int] &v):
+    v = build(2)
+
+void main():
+    Vector[int] xs = build(4)
+    print(xs.len())          # 4
+    f(&xs)
+    print(xs.len())          # 2  — write-through is correct; the old buffer leaks

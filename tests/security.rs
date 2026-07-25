@@ -1412,6 +1412,26 @@ fn retborrow_valuepos_amp_return_known_unsafe() {
     );
 }
 
+/// KNOWN GAP (filed 2026-07-25 by the Track-B1 output-review). Re-assigning
+/// THROUGH a `&`-param never drops the param slot's OLD pointee, so the caller's
+/// original buffer leaks 64 bytes.
+///
+/// PRE-EXISTING and independent of the return boundary — it reproduces
+/// identically before and after Track B1. It was MASKED in the combined costume
+/// (`local = v; v = build(2); return local`), where the bind's double-free
+/// happened to cancel the missing drop; fixing the bind correctly unmasks it.
+///
+/// The write-through VALUES are already correct (4 then 2) — only the drop of the
+/// old value is missing, which is why this asserts the INTENDED no-leak state and
+/// is `#[ignore]`d rather than pinning today's behaviour. `security_known_unsafe`
+/// is the wrong harness here: it runs with `detect_leaks=0`, so a pure leak does
+/// not trip it. UN-IGNORE when the write-through re-assign drops the old pointee.
+#[test]
+#[ignore = "known gap: write-through re-assign leaks the old pointee; asserts the INTENDED no-leak state"]
+fn reassign_amp_param_leaks_old_value() {
+    security_safe_no_leak("reassign_amp_param_leaks_old_value", "4\n2\n");
+}
+
 #[test]
 fn retborrow_valuepos_amp_return_throws_known_unsafe() {
     security_known_unsafe(
