@@ -534,12 +534,39 @@ impl FunctionBuilder {
     ) -> LocalId {
         let type_name = type_name.into();
         let variant = variant.into();
-        self.emit_with_temp(type_id, |dst| Instruction::EnumInit {
+        let is_nullary = fields.is_empty();
+        let dst = self.emit_with_temp(type_id, |dst| Instruction::EnumInit {
             dst,
             type_name,
             variant,
             fields,
-        })
+        });
+        // Register ownership at the value's BIRTH (CLAUDE.md Core #3) for the
+        // one shape where it is unconditionally sound: a NULLARY variant
+        // (`None()`, `Color.Red()`) has no payload, so the fresh aggregate
+        // cannot alias anything — it owns its slot by construction.
+        //
+        // This is deliberately the producer, not the ~25 `builder.enum_init`
+        // call sites (Core #4 — fix the class). It is deliberately NOT extended
+        // to variants WITH fields: those carry payload operands that the bare
+        // call sites do not run through `clone_resource_args_for_init`, so
+        // tagging them `Owned` could hide a genuine payload aliasing bug at an
+        // ownership boundary. `emit_enum_init_owned` is the chokepoint that
+        // clones the args and then `set_owned`s the aggregate for that case.
+        //
+        // Without this, a fresh `return None` was `Untracked`, and the return
+        // boundary's `is_untracked_resource` arm cloned the whole Option
+        // defensively — measured as +23 static `ReturnFromBorrow` sites on the
+        // self-host self-compile, every one of them a `return None`.
+        if is_nullary {
+            let idx = dst.0 as usize;
+            if idx < self.locals.len()
+                && matches!(self.locals[idx].ownership, LocalOwnership::Untracked)
+            {
+                self.locals[idx].ownership = LocalOwnership::Owned;
+            }
+        }
+        dst
     }
 
     pub fn tuple_init(&mut self, elements: Vec<Operand>, type_id: TypeId) -> LocalId {

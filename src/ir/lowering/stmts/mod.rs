@@ -2001,7 +2001,20 @@ fn lower_return(
                 // the by-value borrow/untracked-resource predicate, so it
                 // subsumes the resource-clone leg below (Core #4: retire the
                 // sibling, don't patch it).
-                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                //
+                // ⚠ The OWNING `!`-param return stays IN FRONT of this
+                // chokepoint. `return v` for a `!`-param is a transfer, not a
+                // borrow: the caller already gave the callee ownership, and the
+                // trailing `move_zero(owning_param_returned)` below hands it
+                // onward. The chokepoint cannot see that — its `!`-param escape
+                // (`maybe_move_owning_param_ctor_temp`) additionally requires
+                // `is_single_use`, so a `!` param that is reassigned in a loop
+                // and then returned would pick up a wasteful clone. Memory-safe,
+                // charter-breaking; measured as 2 new `ReturnFromBorrow` sites
+                // on the self-host self-compile before this guard.
+                if owning_param_returned.is_none()
+                    && !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_)))
+                {
                     let src_before = match &operand {
                         Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
                         _ => None,
