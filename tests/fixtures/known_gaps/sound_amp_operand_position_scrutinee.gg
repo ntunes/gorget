@@ -7,9 +7,21 @@
 #
 # WRONG TODAY (measured at HEAD, `gg check` clean for every row):
 #   match scrutinee   `match &c.fd: case 10:`   -> C prints **0**, correct is 1
-#   binary operand    `int y = &c.fd + 1`       -> C: cc error "invalid operands
-#                                                   to binary + (void */void *)";
-#                                                   LLVM: `add ptr` in the IR
+#   binary operand    -- ⚠ OPERAND ORDER IS ITS OWN AXIS AND THE OTHER VALUE IS
+#                        WORSE. Measured, both `gg check`-clean:
+#                        `int y = &c.fd + 1` -> C build FAILS ("invalid operands
+#                            to binary + (void */void *)"); LLVM llc error.
+#                        `int y = 1 + &c.fd` -> C **BUILDS AND PRINTS A RAW
+#                            ADDRESS** (silent wrong output); LLVM llc error.
+#                        `x = x + &c.fd` and `x += &c.fd` likewise BUILD and
+#                            print garbage.
+#                        So the benign-looking compile error is the LUCKY
+#                        spelling; the mirror spelling is a Core #8 silent
+#                        miscompile with a hard LLVM divergence.
+#                        ⛔ DECLARED OMISSION: those spellings are NOT asserted
+#                        here because the printed address is nondeterministic
+#                        (ASLR), so no stable stdout pin exists. They are
+#                        recorded, not covered.
 #   comparison        `if &c.fd > 5:`           -> compares the ADDRESS, not 10
 #   index expr        `v[&c.fd]`                -> trap[T_Bounds], index is a
 #                                                   raw address

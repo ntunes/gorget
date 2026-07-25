@@ -13,13 +13,24 @@
 # child's signal status. Reproduce by BUILDING and running the binary directly,
 # or the failure looks like an ordinary build error.
 #
-# ROOT (measured, not inferred): there are THREE indirect-call argument loops,
-# not one. `calls.rs:1395-1399` (`__Closure_N__call`) routes through
-# `lower_call_arg` and therefore honours `arg.node.ownership`; but
-# `calls.rs:1455` and `calls.rs:1880` (FnPtr / `__gorget_closure_call_N`) call
-# `lower_expr(&arg.node.value)` DIRECTLY and ignore the sigil entirely. The SEGV
-# takes one of the two non-routing paths — so this is a MISSING SIGIL CHECK, not
-# an ABI or codegen defect.
+# ROOT (measured by instrumenting each loop and building THIS fixture — an
+# earlier version of this header named the wrong site; do not re-derive it from
+# that): the SEGV takes **`calls.rs:1431`**, the Callable-PARAMETER loop
+# (`if local_type_id == UNIT_TYPE` -> `__callable_N`), which calls
+# `lower_expr(&arg.node.value)` DIRECTLY and discards `ownership=MutableBorrow`.
+# Confirmed by emit: the generated C contains `__callable_` and no
+# `__gorget_closure_call_`.
+#
+# FULL HEAD CENSUS of the indirect-call arg loops in `exprs/calls.rs`:
+#   routing (via `lower_call_arg`, honours the sigil):  :1399  :1502  :1822
+#   NON-routing (bare `lower_expr`, drops the sigil):   :1332  :1368  :1431
+#                                                       :1455  :1880
+# So there are THREE non-routing loops in the indirect family, not two. This is
+# a MISSING SIGIL CHECK, not an ABI or codegen defect.
+#
+# ⚠ A guard wired only at `:1455`/`:1880` LEAVES THIS CELL LIVE — that was the
+# earlier (wrong) census, and acting on it would be a Core #4 instance-fix with
+# the actual instance omitted.
 #
 # INTENDED: the indirect call is an ordinary write-through call, so `bumpret`
 # increments the caller's `c.fd` and the program prints 11 then 11 and exits 0.
