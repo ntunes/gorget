@@ -35813,6 +35813,44 @@ fn sound_tuple_getchain_writethrough() {
     );
 }
 
+/// KNOWN GAP — `.map()` DESTROYS its receiver's payload for bare-param and
+/// field-access receivers. An ownership defect, not a combinator bug: the
+/// receiver is a BORROW at those positions and the adapter consumes it anyway.
+///
+/// RED-verified at HEAD, C and LLVM byte-identical: `10 / 0` (bare param) and
+/// `11 / 0` (field access), where a control program without the `.map()` call
+/// prints `10 / 10` and `11 / 11`. The third row — a plain-LOCAL receiver — is
+/// CORRECT today and is a live control; it is also why this went unnoticed,
+/// since it is the shape existing fixtures happened to use.
+///
+/// ⚠ ggdef cannot adjudicate: `.map()` is outside the phase-0 subset. So the
+/// two backends agreeing here is necessary, not sufficient (Core #8).
+///
+/// Mechanism: the receiver-clone path is gated on `p.projections.is_empty()`,
+/// so a field-access PLACE is not recognised as a place and falls to the branch
+/// commented "Non-place operand (constants, etc.) — Copy is safe" — false for a
+/// field place, and a Core #14 comment with no enforcing guard.
+#[test]
+#[ignore = "KNOWN GAP: `.map()` empties its receiver's payload for bare-param and field-access \
+receivers on both backends (plain-local receivers are correct); ggdef is out of subset. Asserts \
+the INTENDED read-back; TODO.md. Un-ignore when the combinator receiver borrows instead of \
+consuming."]
+fn sound_option_map_receiver_emptied() {
+    run_gg(
+        "known_gaps/sound_option_map_receiver_emptied.gg",
+        "\
+10
+10
+param-end
+11
+11
+field-end
+39
+13
+loop-end",
+    );
+}
+
 /// KNOWN GAP — the STRUCT get-chain, `&`-FACE ONLY. The other cell that
 /// survives the `&`-of-projection fix, and narrower than the tuple get-chain
 /// above: here the assign face ALREADY WORKS.
