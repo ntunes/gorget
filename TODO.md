@@ -4,7 +4,14 @@
 
 **🔄 ROUND IN FLIGHT — CoW ALIASING SOUNDNESS (2026-07-25). Resume from here.**
 
-**LANDED + INTEGRATED:** Track **B1** (return/bind/assign materialize consolidation) — 4 memory defects closed (3 double-frees + a leak), `ConsumeSiteClass::AssignIntoReturnSlot` + **RATCHET C** (pinned **23**), dead `Case 2b` deleted. Durable repros committed under the `sound_*` / `retborrow_*` / `reassign_*` families — count them with `find tests/fixtures -name 'sound_*.gg' -o -name 'retborrow_*.gg' -o -name 'reassign_*.gg' | wc -l` and cross-check the wiring with `grep -cE "^fn (sound_|retborrow_|reassign_)" tests/integration.rs tests/security.rs` (the two should agree; a mismatch means a fixture landed unwired, which is not coverage). ⚠ An earlier handover asserted "55" here; the regenerated figure was lower — do not re-introduce a literal count. Merge commit + follow-ups on this branch.
+**LANDED + INTEGRATED:** Track **B1** (return/bind/assign materialize consolidation) — 4 memory defects closed (3 double-frees + a leak), `ConsumeSiteClass::AssignIntoReturnSlot` + **RATCHET C** (pinned **23**), dead `Case 2b` deleted. Durable repros committed under the `sound_*` / `retborrow_*` / `reassign_*` families — count them with `find tests/fixtures -name 'sound_*.gg' -o -name 'retborrow_*.gg' -o -name 'reassign_*.gg' | wc -l` and cross-check the wiring by set-difference, NOT by comparing two counts (⚠ counting test `fn`s matches only by coincidence, and `security.rs` references fixtures by BARE name while `integration.rs` uses the `known_gaps/…​.gg` path — a naive grep reports ~34 false orphans):
+```
+find tests/fixtures \( -name 'sound_*.gg' -o -name 'retborrow_*.gg' -o -name 'reassign_*.gg' \) | sed 's|.*/||; s|\.gg$||' | sort -u > /tmp/fx
+grep -hoE '"(known_gaps/|security/)?(sound_|retborrow_|reassign_)[a-z0-9_]+(\.gg)?"' tests/integration.rs tests/security.rs | tr -d '"' | sed 's|.*/||; s|\.gg$||' | sort -u > /tmp/wired
+comm -23 /tmp/fx /tmp/wired   # fixtures with no test = dead coverage
+comm -13 /tmp/fx /tmp/wired   # references with no fixture = broken path
+```
+Both must be EMPTY (verified empty 2026-07-25). ⚠ An earlier handover asserted "55" here; the regenerated figure was lower — do not re-introduce a literal count. Merge commit + follow-ups on this branch.
 
 **RATIFIED THIS ROUND (all in `docs/define-gorget/decisions.md`, end of LOG):** the **D10 CANONICAL STATEMENT** (borrow-until-mutated-or-consumed · conflict = overlapping storage × intersecting live ranges × one can write · reject unless a READER can be materialized lazily) · **ADDENDUM 3** (aggregate construction is an ownership BOUNDARY) **+ its same-day AMENDMENT** (exempt on the MOVER axis only — the boundary clone is emitted AFTER sibling evaluation) · the **ability-to-write RIDER** (conflicts on ability-to-write, not on sigil) · the **plain-`=` RIDER** (`=` does NOT join `op=`; no conflict, so accept). `language-design.md` §3.5 rewritten — it had been stating **Rust's** rule, which Gorget does not implement.
 
