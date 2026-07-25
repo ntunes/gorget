@@ -27,7 +27,7 @@ Both must be EMPTY (verified empty 2026-07-25). ⚠ An earlier handover asserted
 ### NEXT ROUND (filed, do not start mid-round)
 **Track A** (the D10 structural chokepoint — now the largest single change; brief `/tmp/brief_trackA_v3_extend_reach.md` v3, 1 pass done, **extend the reach, do NOT replace the check**) · **Track C-SH** (self-host mirror) · **Track C-GUARD** (two-limb routing+consumption guard; its census is filed above) · the **Core-#12 coverage-audit findings**.
 
-**ROUND-CLOSE GATE:** full C **and** LLVM `--test integration` · `-p ggdef` · `--test spec_conformance` · `--test security` · `--test lints` (⚠ `no_growth_in_phase_d_proxy_reads` is **pre-existing RED at 93 > 85** — do NOT bump) · **`self_host_bootstrap_fixed_point` SERIALLY** (it uses fixed `/tmp/self_host_stage*` paths and collides between concurrent agents) · parity re-measure. Then capture-then-prune ~29 agent worktrees.
+**ROUND-CLOSE GATE:** full C **and** LLVM `--test integration` · **`cargo test --lib`** · `-p ggdef` · `--test spec_conformance` · `--test security` · `--test lints` (⚠ `no_growth_in_phase_d_proxy_reads` is **pre-existing RED**, filed below — do NOT bump; regenerate the count/budget from the failure message rather than quoting one) · **`self_host_bootstrap_fixed_point` SERIALLY** (it uses fixed `/tmp/self_host_stage*` paths and collides between concurrent agents) · parity re-measure. This is CLAUDE.md's full local battery — it must cover **every** target CI runs, so no defect hides in an unrun sibling; local-green IS the sign-off. Then capture-then-prune the round's agent worktrees (`git worktree list | grep -c 'agent-'` for the current count; capture uncommitted diffs BEFORE removing).
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
 
