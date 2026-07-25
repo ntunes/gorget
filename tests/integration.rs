@@ -35757,10 +35757,18 @@ fn release_flag_optimizes_at_o2() {
 /// its subset, so the definition lane is right and both production backends are
 /// wrong (Core #8).
 ///
-/// AXIS-COMPLETE (Core #12): the fixture covers every value of the field-type
-/// axis — `int` · `float` · `bool` · plain struct · tuple · Dict value · Vector
-/// element — plus two rows with NO struct at all (`&vv[0]`, `&dd["k"]` on plain
-/// locals), which is a widening of the filed "by-value FIELD" framing. The
+/// PARTIAL along the field-type axis (Core #12) — do NOT read this as complete.
+/// Covered: `int` · `float` · `bool` · plain struct · tuple · Dict value ·
+/// Vector element, plus two rows with NO struct at all (`&vv[0]`, `&dd["k"]` on
+/// plain locals), which is a widening of the filed "by-value FIELD" framing.
+/// NOT covered, each measured RED at HEAD and green under the prototype, so
+/// each is a genuine uncovered cell rather than a hypothetical: **user enum**
+/// (prints `RED`, want `BLUE`) · **`Option[int]` field** · **generic struct
+/// field** (`Cell[int].val`) · **nested collection** (`&outer[0][1]`) ·
+/// **generic function** (`bumpg(&c.fd)`) · **match/`is`-binding root**.
+/// (This comment previously claimed "every value of the field-type axis". It
+/// was false in exactly the way Core #12 warns about — an axis claim that reads
+/// as coverage on the dashboard while six cells go untested.) The
 /// thin-pointer cells of the same axis (`String`, `Vector[int]` fields — the two
 /// that work by accident) are the live control
 /// `security.rs::sound_amp_field_thinptr_control_safe`, and the whole-bare-local
