@@ -608,13 +608,38 @@ Vector[int] copy = p.scores.clone() # owned copy up front (explicit)
 
 Both `auto` and an explicit type give the fast path (borrow). The clone is deferred to a later mutation through the alias, or inserted at an ownership boundary; an explicit `.clone()` makes it eager. The compiler never inserts a clone silently on a typed read.
 
-### 3.5 The Borrow Rules (same as Rust)
+### 3.5 The Borrow Rule — one rule, with a lazy escape
 
-At any given time, for a given piece of data, you can have **either**:
-- Any number of immutable borrows (`String s`), OR
-- Exactly one mutable borrow (`String &s`)
+Gorget is often described as having Rust's borrow rules. That is **not accurate**, and the difference is
+the whole design. Rust rejects a shared borrow that overlaps a mutable one. Gorget *copies* instead —
+whenever it can do so lazily. The rule, in full:
 
-Never both simultaneously. Enforced at compile time. This prevents data races and aliasing bugs.
+> **Every resource value is a borrow until it is mutated or consumed.**
+>
+> **Two access paths conflict when their storage overlaps, their live ranges intersect, and at least
+> one of them can *write* that storage during the intersection.**
+>
+> **A conflict is rejected — unless the conflicting path is a *reader* and the compiler can place its
+> clone lazily, at a visible mutation point, in which case it materializes instead.**
+
+Three things follow, and each is load-bearing:
+
+- **Overlap is about storage, not spelling.** `f(&m.a, &m.b)` is two mutable borrows and is perfectly
+  legal — the sub-places are disjoint.
+- **The test is *ability to write*, not the sigil.** A move transfers a pointer without touching the
+  buffer, so `Pair(v[0], !v)` is fine: nothing runs between the two argument evaluations that could
+  disturb the read. The *same* `!v` at a call — `f(v[0], !v)` — is rejected, because the callee owns the
+  moved-in value and may mutate or drop it while the read is still live. Same sigil, opposite verdicts,
+  from one question.
+- **The lazy escape is what makes Gorget more tolerant than Rust.** `String s = v.get(0).unwrap()`
+  followed by `grow(&v)` is the same conflict as the rejected call above — but here the mutation is a
+  visible statement, so the compiler inserts a guarded copy and the program is accepted. It costs one
+  clone if that path runs and **zero** if it does not. A reader can be rescued this way; a *writer*
+  never can, because copying a writer would silently discard its writes.
+
+So the cases Gorget rejects are exactly the ones where the copy would have to be **speculative** —
+paid unconditionally, on every call, to guard against a mutation the compiler cannot see. That is the
+line: **accept when the clone can be lazy; reject when the only rescue is a guess.**
 
 ### 3.6 Borrow Origin Tracking
 
