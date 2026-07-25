@@ -1,0 +1,67 @@
+# DURABLE REPRO — `Option[<resource>].and_then` / `.flat_map` is a TYPE
+# CONFUSION: `gg check` accepts, the C backend emits a SEGFAULTING binary, and
+# the LLVM backend refuses to compile its own IR.
+#
+# Found while enumerating the siblings of the `.map()` receiver-emptying defect
+# (Core #4, one fix all siblings). It is NOT the same bug: `.map()`/`.filter()`
+# lose the write only for bare-param and field-access receivers and still run,
+# whereas this one fails for a PLAIN LOCAL receiver too and is memory-unsafe.
+#
+# WRONG TODAY (measured at HEAD):
+#   `gg check`  -> "OK: no semantic errors"          (accepts)
+#   C backend   -> builds, binary exits **139 (SIGSEGV)**
+#   LLVM backend-> **fails to compile**:
+#                  llc: '%v28' defined with type 'i64' but expected 'ptr'
+#                       %v60 = phi ptr [ %v28, %bb1 ], [ %v30, %bb2 ]
+#
+# That phi is the whole story: the two incoming edges disagree on whether the
+# value is an integer or a pointer. LLVM's verifier catches the confusion; the
+# C backend emits it silently and the result dereferences an integer as a
+# pointer. The LLVM lane failing to build is therefore NOT a separate LLVM bug
+# — it is the same defect, caught by a stricter instrument (Core #13: pick an
+# instrument that can SEE the failure class).
+#
+# ⚠ RESOURCE-PAYLOAD-SPECIFIC. The identical program with an `int` payload
+# (`Some(21).and_then((int x): Some(twice(x)))`) prints 42 and exits 0. So a
+# fixture over a trivial payload is a FALSE NEGATIVE for this class — the
+# payload must be a real heap resource, which is why `Money` wraps a BUILT
+# `Vector[int]` rather than a literal.
+#
+# ⚠ `gg run` MASKS the C failure as exit 1 with no output (it does not
+# propagate the child's signal status — filed separately). Build the binary and
+# run it directly, or this looks like a build error.
+#
+# INTENDED (what this fixture asserts): both legs print their element count,
+# `11` then `12`, and exit 0.
+#
+# ORACLE: ggdef is OUT OF SUBSET — "`.and_then()` is outside the phase-0
+# subset". So this class has NO definitional adjudication (Core #9 note); the
+# subset gap is filed with the `.map()` entry.
+
+struct Money:
+    Vector[int] cents
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Option[Money] make_opt(int n):
+    return Some(Money(heap_cents(n)))
+
+void main():
+    Option[Money] a = make_opt(11)
+    Option[int] ra = a.and_then((Money m): Some(size_of(m)))
+    if ra is Some(v):
+        print(v)
+
+    Option[Money] b = make_opt(12)
+    Option[int] rb = b.flat_map((Money m): Some(size_of(m)))
+    if rb is Some(v):
+        print(v)

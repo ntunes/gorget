@@ -35821,6 +35821,34 @@ fn sound_tuple_getchain_writethrough() {
     );
 }
 
+/// KNOWN GAP — `Option[<resource>].and_then` / `.flat_map` is a TYPE CONFUSION:
+/// `gg check` accepts, C emits a SEGFAULTING binary, and LLVM refuses to
+/// compile its own IR (`'%v28' defined with type 'i64' but expected 'ptr'` in a
+/// phi). The LLVM verifier is catching what the C backend emits silently, so
+/// the LLVM build failure is the SAME defect seen by a stricter instrument, not
+/// a separate lane bug.
+///
+/// Found enumerating the siblings of the `.map()` receiver-emptying defect
+/// (Core #4). It is a DIFFERENT bug: `.map()`/`.filter()` only lose the write
+/// for bare-param and field receivers and still run; this one fails for a plain
+/// LOCAL receiver and is memory-unsafe.
+///
+/// ⚠ RESOURCE-PAYLOAD-SPECIFIC — the same program over an `int` payload prints
+/// 42 and exits 0, so a trivial-payload fixture is a false negative here.
+/// ggdef is out of subset, so this class has no definitional adjudication.
+#[test]
+#[ignore = "KNOWN GAP: Option[<resource>].and_then/.flat_map type-confuses — gg check accepts, C \
+segfaults, LLVM won't compile the emitted IR. Asserts the INTENDED output; TODO.md. Un-ignore when \
+the combinator lowering stops mixing integer and pointer payloads at the phi."]
+fn sound_option_and_then_resource_typeconfusion() {
+    run_gg(
+        "known_gaps/sound_option_and_then_resource_typeconfusion.gg",
+        "\
+11
+12",
+    );
+}
+
 /// KNOWN GAP — `.map()` DESTROYS its receiver's payload for bare-param and
 /// field-access receivers. An ownership defect, not a combinator bug: the
 /// receiver is a BORROW at those positions and the adapter consumes it anyway.
