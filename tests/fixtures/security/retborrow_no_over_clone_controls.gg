@@ -1,0 +1,58 @@
+# ANTI-OVER-CLONE controls. A materialize consolidation that collapses the
+# chokepoint's decisions into "clone to be safe" trades a correctness bug for a
+# charter breach — these are the shapes that must NOT gain a clone.
+#
+#   * `return out` of a fresh OWNED local  → moves, no clone.
+#   * `return v`   of a BARE (non-`&`) param → the caller keeps ownership, so
+#                                             exactly ONE clone (not zero — a
+#                                             parameter binds a borrow).
+#   * `return !v`  of an OWNING `!` param  → the caller already transferred
+#                                             ownership: moves, no clone.
+#   * bind-then-READ-ONLY of a `&`-param   → a typed binding defaults to
+#                                             borrow: ZERO clones.
+#
+# The counts themselves are gated by `--clones=sites` / the clone-attribution
+# join; this fixture pins the OBSERVABLE behaviour so a regression that changes
+# the answer is caught even without the instruments.
+Vector[int] build_at_runtime(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+Vector[int] owned_local_return(int n):
+    Vector[int] out = build_at_runtime(n)
+    return out
+
+Vector[int] bare_param_return(Vector[int] v):
+    return v
+
+Vector[int] owning_param_return(Vector[int] !v):
+    return !v
+
+int bind_read_only(Vector[int] &v):
+    Vector[int] local = v
+    int total = 0
+    int i = 0
+    while i < local.len():
+        total = total + local.get(i).unwrap()
+        i = i + 1
+    return total
+
+void main():
+    Vector[int] a = owned_local_return(4)
+    print(a.len())
+
+    Vector[int] xs = build_at_runtime(4)
+    Vector[int] b = bare_param_return(xs)
+    print(b.len())
+    print(xs.len())
+
+    Vector[int] ys = build_at_runtime(3)
+    Vector[int] c = owning_param_return(!ys)
+    print(c.len())
+
+    print(bind_read_only(&xs))
+    print(xs.len())

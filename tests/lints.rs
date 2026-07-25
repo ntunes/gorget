@@ -6066,6 +6066,83 @@ fn ratchet_b_materialize_site_count() {
     );
 }
 
+/// RATCHET C — hand-rolled materialize-BYPASS meter (Core #4 / Core #6).
+///
+/// Rust gg decides "make this owned at this boundary" through six shared
+/// chokepoints, all of which live in `src/ir/lowering/context.rs`:
+/// `ensure_owned_at_boundary` · `ensure_owned_at_consuming_arg` ·
+/// `emit_enum_init_owned` · `clone_ptr_rhs_if_needed` · `auto_clone_if_ptr` ·
+/// `materialize_lazy_source_if_needed`. The self-host does all of it in ONE
+/// function (`op_consume`, `lower.gg`). The gap between those two numbers is a
+/// bug class, not an aesthetic: the return-borrow double-free family existed
+/// because the statement `return` had its OWN hand-rolled `GirType::Ptr`-only
+/// clone that the chokepoint's `pointee_type` test would have handled.
+///
+/// THE COUNTED PREDICATE (named explicitly, per Core #4's "a ratchet needs a
+/// countable predicate"): occurrences of `emit_clone(` or `call_clone(` in
+/// `src/ir/lowering/**` EXCLUDING `context.rs`. Every such occurrence is a
+/// lowering arm that resolves a clone fn and emits the clone ITSELF instead of
+/// delegating the decision to a chokepoint — i.e. exactly the hand-rolled
+/// bypass set. `context.rs` is excluded because it is the chokepoints' home:
+/// clones emitted there ARE the converged path. Definition lines are skipped
+/// (` fn `), as are comment lines.
+///
+/// THE CONVERSION RULE: when a bypass migrates onto a chokepoint, its textual
+/// call disappears from this census, so the count only ever DECREASES.
+/// A genuinely-new hand-rolled materialize must justify itself with a cited
+/// re-pin (raise `BYPASS_CEILING` + name the site and why it cannot route
+/// through a chokepoint).
+///
+/// THE COUNTED SET at the pin (23), by enclosing function:
+///   stmts/mod.rs (7): `clone_resource_global_ref` · `lower_var_decl`'s
+///     Ptr(T)→T · `lower_var_decl_assign_mode`'s `emit_clone_to_owned`
+///     (branches B/D/E) · `lower_return`'s THROWS Ptr(T) leg · `lower_return`'s
+///     THROWS by-value `needs_drop` leg · `lower_return`'s bespoke String
+///     clone · `try_lift_option_ref`.
+///   stmts/assigns.rs (5): bare-VALUE Ptr-param full rebind · field-borrow
+///     Ptr(T)→T materialize · non-fresh String rebind · `lower_assign`
+///     cross-type Branch-B · `lower_assign` named-not-last-use.
+///   exprs/methods.rs (5): TWO `ExplicitUserClone` sites (user-written
+///     `.clone()` — NOT a materialize decision; a permanent floor of 2) ·
+///     mutating-receiver materialize · consuming-arg pre-call clone ·
+///     `try_lower_option_result_combinator`.
+///   exprs/mod.rs (3): deref CoW materialize · compound-assign LHS CoW
+///     materialize · `clone_multi_use_resource_args`.
+///   exprs/calls.rs (2): move-param-from-borrow arg · borrowed-extern-return.
+///   stmts/patterns.rs (1): `emit_pattern_bindings` resource-field extract.
+///
+/// Track B1 took this from 24 → 23 by retiring the statement `return`'s
+/// resource-clone leg in favour of `ensure_owned_at_boundary`.
+#[test]
+fn ratchet_c_handrolled_materialize_bypass_count() {
+    const BYPASS_CEILING: usize = 23;
+    let mut sites = 0usize;
+    let mut per_file: Vec<(String, usize)> = Vec::new();
+    for entry in walk_files("src/ir/lowering", "rs") {
+        if entry.ends_with("context.rs") { continue; }
+        let content = fs::read_to_string(&entry).unwrap_or_default();
+        let mut n = 0;
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") { continue; }
+            // A call, not a `fn emit_clone(` / `fn call_clone(` definition.
+            if t.contains(" fn ") { continue; }
+            n += line.matches("emit_clone(").count();
+            n += line.matches("call_clone(").count();
+        }
+        if n > 0 { per_file.push((entry, n)); }
+        sites += n;
+    }
+    assert!(
+        sites <= BYPASS_CEILING,
+        "hand-rolled materialize bypasses grew to {sites} (ceiling {BYPASS_CEILING}). \
+         This is a CONVERGENCE meter — the Axis-B chain migrates these onto the \
+         six shared chokepoints in context.rs, so the count only DECREASES. If a \
+         new hand-rolled materialize is genuinely unavoidable, raise \
+         BYPASS_CEILING with a cited re-pin naming the site. Per-file: {per_file:?}"
+    );
+}
+
 /// Arm-count lint (Core #4 "one fix, all siblings" / Core #6 "class-retiring
 /// guard"): the planner consumer #1 scope pre-header materialize must be hoisted
 /// at the `lower_stmt` DISPATCH ARM of EVERY non-loop scope form — one shared

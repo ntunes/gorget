@@ -1,0 +1,22 @@
+# ARM 6 — `return s` where `s` is a `String &`-param. Was a LEAK (LSan), and a
+# charter breach: TWO clones where a hand-writer pays one. A Copy-mode store of
+# a String read through a pointer is `gorget_string_copy_cow` at both backends —
+# already an independently droppable value — but the temp was tagged `Untracked`,
+# so the bespoke String return path cloned it AGAIN and orphaned the first
+# buffer. The temp is now drop-registered + FreshOwned: one clone, no leak.
+String build_str(int n):
+    String s = ""
+    int i = 0
+    while i < n:
+        s = s + "x"
+        i = i + 1
+    return s
+
+String pass_str(String &s):
+    return s
+
+void main():
+    String xs = build_str(5)
+    String r = pass_str(&xs)
+    print(r.len())
+    print(xs.len())

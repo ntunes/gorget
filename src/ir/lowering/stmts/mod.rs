@@ -1284,6 +1284,70 @@ fn lower_var_decl_assign_mode(
     let same_type_string =
         rhs_type == owned_string && actual_var_type == owned_string;
 
+    // Branch P — the `&`-param deref temp. `Vector[int] local = v` over a
+    // `Vector[int] &v` lowers its RHS to an unnamed temp holding a SHALLOW
+    // copy of `*v` (`exprs/mod.rs`, the auto-deref site), which now carries
+    // `Borrowed { Param(v) }`. A typed binding defaults to BORROW
+    // (docs/devbook/11 — "`var_decl` is deliberately not in either list …
+    // clones only on later mutation"), so bind the destination as a CoW Ptr
+    // alias of the PARAM rather than of the dying temp.
+    //
+    // Aliasing the param (not the temp) is what makes this safe: the temp is
+    // an unnamed stack slot that dies at end-of-statement — the documented
+    // "50+ fixtures SIGSEGV" class Branch C's own comment records — whereas
+    // `v` outlives the frame. And the emitted instruction is a pointer COPY,
+    // not an `emit_borrow`: `v` ALREADY holds the caller's pointer, so
+    // `borrow_mut v` would produce `Ptr(MutPtr(T))` and `cow_materialize_alias`
+    // would then clone the POINTER instead of the buffer.
+    //
+    // Without the Ptr retype the `Alias` tag is inert: a later `local.push(…)`
+    // reaches `cow_before_mutation` Case 1, which `unset_ownership`s the alias
+    // and then early-returns from `cow_materialize_alias` because `pointee_type`
+    // is `None` on a non-Ptr local — destroying the tag and emitting NO clone,
+    // silently writing through into the caller's buffer.
+    let deref_of_borrowed_param: Option<LocalId> = match &source_own {
+        Some(LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::Param(p),
+            ..
+        }) if *p != source_place.local => Some(*p),
+        _ => None,
+    };
+    if let Some(param) = deref_of_borrowed_param {
+        if ctx.type_registry.is_resource_type(rhs_type)
+            && actual_var_type == rhs_type
+            && !ctx.is_cow_unsafe_at(name, stmt_span.start)
+        {
+            let ptr_type = ctx.register_ptr_type(rhs_type);
+            builder.locals[local_id.0 as usize].type_id = ptr_type;
+            // Pointer COPY of the param slot — see the comment above.
+            builder.assign_mode(
+                AssignMode::Borrow,
+                Place::local(local_id),
+                FunctionBuilder::copy(param),
+            );
+            // The dst tag must be `Alias(param)`, NOT `Borrowed { Param(param) }`:
+            // `cow_before_mutation` dispatches on five shapes and a non-self
+            // `Param(p)` matches NONE of them, so a later `local.push(…)` would
+            // find nothing to materialize and write through the Ptr into the
+            // caller's buffer — trading a double-free for a silent aliasing
+            // miscompile. `Alias(p)` is what Branch C uses and what makes
+            // `cow_materialize_alias` fire.
+            ctx.cow_register_alias(builder, local_id, param);
+            // A Ptr doesn't own data — don't register it for drop.
+            ctx.drops.unregister(local_id);
+            if let Some(hint) = builder.local_name(local_id).map(|s| s.to_string()) {
+                ctx.register_local(&hint, local_id, ptr_type);
+            }
+            // Borrow (not Copy) so the Branch-G safety net stays inert: G flips
+            // `Copy && target_resource` to Move, which here would be a Move of
+            // the temp into a Ptr-typed slot.
+            // `branch_c_bound` suppresses the caller's trailing value-into-Ptr
+            // store, which the LIR enum payload-extract path mis-classifies.
+            *branch_c_bound = true;
+            return AssignMode::Borrow;
+        }
+    }
+
     // Branch A (REMOVED, round-30 Fix C) — the old Owned + live
     // GorgetString same-type arm (value-aliasing `String b = a`)
     // emitted `set_shared_heap` + `Borrow` + `drops.unregister(source)`.
@@ -1923,10 +1987,65 @@ fn lower_return(
                 }
             }
             if !did_clone_return {
-                // Ptr(T) → T auto-clone/deref for return values: if the operand
-                // is Ptr(T) but the return type is T, resolve the borrow:
-                //   - resource T → clone to owned T
-                //   - non-resource T (primitives, value structs) → deref the pointer
+                // ── The return boundary's ONE materialize decision ──────────
+                // A `return` is an unconditional leave-behind ownership
+                // boundary, so it routes through the SHARED chokepoint
+                // (`ensure_owned_at_boundary`) — byte-for-byte the same guard
+                // the EXPRESSION-BODY return already uses
+                // (`functions.rs:1453,1764,2045,2456`). That is why `f(&v): v`
+                // was always clean while `f(&v): return v` double-freed: the
+                // statement return had a hand-rolled `GirType::Ptr`-only
+                // sibling that is blind to the `MutPtr` an `&`-param actually
+                // is, and blind to a by-value borrow temp entirely.
+                // The chokepoint keys on `pointee_type` (Ptr AND MutPtr) plus
+                // the by-value borrow/untracked-resource predicate, so it
+                // subsumes the resource-clone leg below (Core #4: retire the
+                // sibling, don't patch it).
+                //
+                // ⚠ The OWNING `!`-param return stays IN FRONT of this
+                // chokepoint. `return v` for a `!`-param is a transfer, not a
+                // borrow: the caller already gave the callee ownership, and the
+                // trailing `move_zero(owning_param_returned)` below hands it
+                // onward. The chokepoint cannot see that — its `!`-param escape
+                // (`maybe_move_owning_param_ctor_temp`) additionally requires
+                // `is_single_use`, so a `!` param that is reassigned in a loop
+                // and then returned would pick up a wasteful clone. Memory-safe,
+                // charter-breaking; measured as 2 new `ReturnFromBorrow` sites
+                // on the self-host self-compile before this guard.
+                if owning_param_returned.is_none()
+                    && !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_)))
+                {
+                    let src_before = match &operand {
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                        _ => None,
+                    };
+                    operand = ctx.ensure_owned_at_boundary(
+                        builder,
+                        operand,
+                        expr.span,
+                        crate::ir::ImplicitCloneReason::ReturnFromBorrow,
+                    );
+                    let src_after = match &operand {
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                        _ => None,
+                    };
+                    if src_after != src_before {
+                        // The chokepoint materialized: the fresh owned local is
+                        // what leaves the frame. The old source was a borrow (or
+                        // an untracked alias) — it never owned the buffer, so it
+                        // is deliberately NOT move-zeroed here; the trailing
+                        // move-zero block below now targets the clone.
+                        returned_local = src_after;
+                    }
+                }
+                // Ptr(T) → T auto-deref for return values: if the operand
+                // is Ptr(T) but the return type is T and the pointee is a
+                // non-resource (primitives, value structs), deref the pointer.
+                // The resource-clone leg that used to live here is retired —
+                // the chokepoint above owns that decision now. The Ptr-
+                // propagation fallback (resource pointee with no clone fn)
+                // stays: it retypes `_0` and `set_ref`s it, which no
+                // chokepoint models.
                 if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     if p.projections.is_empty() {
                         let src_idx = p.local.0 as usize;
@@ -1934,11 +2053,7 @@ fn lower_return(
                             let src_type = builder.locals[src_idx].type_id;
                             if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                                 if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                        ctx.record_param_cloned(builder, p.local);
-                                        let cloned = ctx.emit_clone(builder, &clone_fn, vec![operand.clone()], expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-                                        operand = FunctionBuilder::copy(cloned);
-                                    } else if !ctx.type_registry.is_resource_type(inner) {
+                                    if !ctx.type_registry.is_resource_type(inner) {
                                         // Non-resource pointee — deref to load the value.
                                         let tmp = builder.add_local(inner, None);
                                         builder.assign(

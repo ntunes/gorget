@@ -133,7 +133,7 @@ All clone-at-boundary logic funnels through **two** methods on `LoweringContext`
 emission; per the layering doctrine, the decision lives in one place and the
 diagnostic (`warn_implicit_clone`) fires from the same chokepoint.
 
-### `ensure_owned_at_boundary` (`context.rs:1792`)
+### `ensure_owned_at_boundary` (`context.rs:2309`)
 
 Unconditional "clone if this is any kind of borrow." Used at boundaries that
 have **no concept of last-use** — the function body is leaving the value behind
@@ -143,44 +143,53 @@ regardless. Its decision tree:
   through `GlobalRefPtr` (the LIR `GlobalAddr+Load` is a shallow struct copy
   that aliases the global's heap buffer). Skipped for
   `string_literal_view_globals` — those are immortal `.rodata` `cap==0` views,
-  so the consumer's drop is a no-op (`context.rs:1823`).
-- **`Ptr(T)`** → clone the pointee via `clone_fn_for_ptr(T)`. Cannot move
-  through a `Ptr` (the callee can't know whether the caller still needs it); the
-  param is recorded via `record_param_cloned` so the caller can later suggest
-  `!` at last-use sites (`context.rs:1868`).
+  so the consumer's drop is a no-op (`context.rs:2340`).
+- **`Ptr(T)` / `MutPtr(T)`** → clone the pointee via `clone_fn_for_ptr(T)`. The
+  test is `pointee_type`, so a `&`-param's `MutPtr` resolves here exactly like a
+  bare param's `Ptr`. Cannot move through a pointer (the callee can't know
+  whether the caller still needs it); the param is recorded via
+  `record_param_cloned` so the caller can later suggest `!` at last-use sites
+  (`context.rs:2372`).
 - **By-value resource that is a borrow** (`is_ref_local || is_bare_param ||
   is_cow_borrow`, or an `Untracked` resource) → clone via `clone_fn_for_ptr`
-  (`context.rs:1901`). One carve-out: a *last-use* bare-param borrow that is
-  drop-tracked moves instead of cloning (`context.rs:1915`).
+  (`context.rs:2420`). The one escape is the `!`-param deref-temp, which MOVES
+  via `maybe_move_owning_param_ctor_temp` — an owning param already transferred
+  ownership to the callee, so there is nothing to clone.
 - **Owned drop-tracked locals and non-resource locals** → pass through unchanged.
 
-### `ensure_owned_at_consuming_arg` (`context.rs:1963`)
+A *bare* param has no such escape, by design: a parameter binds a **borrow**, so
+the caller keeps ownership and the boundary owes exactly **one** clone. That one
+clone is the hand-written count — driving it to zero would hand the caller's own
+buffer across the boundary and double-free it.
+
+### `ensure_owned_at_consuming_arg` (`context.rs:2488`)
 
 Last-use-*aware* "clone if borrow OR not last-use." Used at consuming positions
 where the caller *might* still use the local after the call, so the helper takes
 the AST argument expression to call `is_last_use_at(name, span)`
-(`context.rs:1043`) on named-local identifiers. Its rule:
+(`context.rs:1381`) on named-local identifiers. Its rule:
 
-1. `Ptr(T)` borrow → clone through the pointer (`context.rs:1977`) — **except an
+1. `Ptr(T)` borrow → clone through the pointer (`context.rs:2503`) — **except an
    *owning* `!` resource param** (recorded via `is_owning_param` / `set_owning_param`,
    the caller transferred ownership) at its **last use**, non-string, single-use:
    that **MOVES** — `set_owned` + `move_zero_and_mark` on the param pointer slot
-   (`context.rs:~2217`, gorget-arena snag #1). This restores the `!`=move=zero-cost
+   (`maybe_move_owning_param_ctor_temp`, `context.rs:2279`, gorget-arena snag #1).
+   This restores the `!`=move=zero-cost
    contract: a `!` param is owned, so putting it into a collection / returning it /
    passing it to another consuming position transfers rather than copies. (The
    explicit-`!` push `out.push(!item)` routes through `consuming_clone_temps`
-   `methods.rs:~2681`, guarded identically by `is_owning_param_ptr`.) The `is_single_use`
+   `methods.rs:2766`, guarded identically by `is_owning_param_ptr`.) The `is_single_use`
    gate is conservative — a param reassigned in a loop (`lhs = f(!lhs)`) must NOT move.
 2. By-value resource:
    - non-identifier expression (a temp, owning by construction) → no clone, the
-     caller will `MoveZero` after the call (`context.rs:2029`);
+     caller will `MoveZero` after the call;
    - named local that is a borrow (**bare** param / ref-state / cow-borrow) → clone
      (a bare param is a *borrow*; the caller keeps ownership, so an owning
      destination must be handed a copy — contrast the owning `!` param in rule 1);
    - named local **not** at its last use → clone (source still live);
    - last-use, drop-tracked, owned named local → no clone (caller `MoveZero`s).
 
-Both helpers emit the clone via `clone_fn_for_ptr(T)` (`context.rs:1687`), which
+Both helpers emit the clone via `clone_fn_for_ptr(T)` (`context.rs:2166`), which
 reads the type's clone-fn name off its `TypeDef`
 (`clone_fn_name_for_def`) — resolving to `gorget_string_clone_to_owned`,
 `gorget_array_clone`, `gorget_map_clone`, `gorget_set_clone`, or a
@@ -292,37 +301,73 @@ move):
 
 | Site | Boundary |
 |------|----------|
-| `functions.rs:824,1099,1374,1767` | `return` value (`Ptr→T` auto-clone) |
-| `exprs/mod.rs:480` | tuple-literal field init (`Expr::TupleLiteral` in `lower_expr_inner`) |
-| `exprs/mod.rs:1950` | struct field init (`lower_struct_literal`) |
-| `exprs/mod.rs:2538` | match-arm value escaping an arm |
+| `functions.rs:1453,1764,2045,2456` | **expression-body** `return` value |
+| `stmts/mod.rs:1937` | **statement** `return` value (non-throws) |
+| `exprs/mod.rs:608` | tuple-literal field init (`Expr::TupleLiteral` in `lower_expr_inner`) |
+| `exprs/mod.rs:2141` | struct field init (`lower_struct_literal`) |
+| `exprs/mod.rs:3207` | match-arm value escaping an arm |
+| `exprs/mod.rs:4152` | fault-catch result escaping the catch |
 | `closures.rs:319,559` | closure capture |
+
+Both `return` forms go through the SAME helper on purpose. The statement return
+used to hand-roll its own `GirType::Ptr(inner)`-only clone, which was blind to
+the `MutPtr` a `&` parameter actually is — so `f(&v): v` cloned correctly while
+`f(&v): return v` handed the caller's own buffer back and double-freed it. The
+helper's test is `pointee_type`, which covers both pointer forms. Two legs the
+helper does not model stay at the return site, after it: the non-resource
+pointee deref (`Ref[T] → T`), and the no-clone-fn fallback that retypes `_0`
+into a Ptr and marks it borrowed. One shape stays in FRONT of it: a `return v`
+whose `v` is an owning `!` parameter is a TRANSFER, not a borrow — the caller
+already gave ownership away, so the return move-zeroes the parameter slot
+instead of cloning.
 
 Enum-variant init is **not** in this table: enum constructors route their
 borrow-clone through a dedicated helper, `emit_enum_init_owned` (called at
-`exprs/mod.rs:1409,1420,1478,1510,1536`), rather than `ensure_owned_at_boundary`.
+`exprs/mod.rs:1623,1638,1699,1731,…`), rather than `ensure_owned_at_boundary`.
+That helper clones the resource ARGS and then tags the aggregate `Owned`. A
+FIELD-LESS variant (`None()`, `Color.Red()`) needs neither: it has no payload to
+alias, so `FunctionBuilder::enum_init` tags it owned at construction — without
+that, a fresh `return None` looked `Untracked` to the boundary helper and got
+cloned defensively.
 
 `ensure_owned_at_consuming_arg` (last-use-aware consuming positions):
 
 | Site | Boundary |
 |------|----------|
-| `exprs/methods.rs:1915` | `push`/`put`/`set`/`add`/`extend`/`send`/`insert`/`push_back`/`push_front` |
-| `exprs/methods.rs:116` | `Box.new(value)` / `Box(value)` |
-| `stmts/assigns.rs:822,837,839` | `v[i]=x` / `d[k]=v` index-assign sugar |
-| `stmts/assigns.rs:636` | **field store** `self.field = x` (`clone_ptr_rhs_if_needed`) |
-| `exprs/calls.rs:612` | bare-name `Box(value)` constructor consuming value arg (sibling of the `Box.new(value)` site at `exprs/methods.rs:116`) |
+| `exprs/methods.rs:2431` | `push`/`put`/`set`/`add`/`extend`/`send`/`insert`/`push_back`/`push_front` |
+| `exprs/methods.rs:248` | `Box.new(value)` / `Box(value)` |
+| `stmts/assigns.rs:1358,1371,1373` | `v[i]=x` / `d[k]=v` index-assign sugar |
+| `stmts/assigns.rs:950` | **field store** `self.field = x` (`clone_ptr_rhs_if_needed`, called from `assigns.rs:611,706,722,772`) |
+| `stmts/assigns.rs:487` | store into a module-level static |
+| `exprs/collections.rs:121,155,491` | collection-literal element init |
+| `exprs/calls.rs:690` | bare-name `Box(value)` constructor consuming value arg (sibling of the `Box.new(value)` site at `exprs/methods.rs:248`) |
 
 Note one specific drift from the internals doc: it claims field store (its
 "point 7") is handled by a bespoke `Ptr`-detect-and-clone inside
 `lower_field_assign`. In current source the field-store RHS routes through the
-**shared** `ensure_owned_at_consuming_arg` helper
-(`clone_ptr_rhs_if_needed`, `assigns.rs:629`); the bespoke path described in the
-doc is gone (it was unified 2026-05-05 per the comment at `assigns.rs:623`).
+**shared** `ensure_owned_at_consuming_arg` helper (`clone_ptr_rhs_if_needed`,
+`assigns.rs:943`); the bespoke path described in the doc is gone.
 
 `var_decl` is deliberately *not* in either list: a typed binding
 (`String x = expr`) defaults to **borrow** like everything else and clones only
 on later mutation — the internals doc's "point 1 (assignment)" is the CoW
 default-borrow path now, not a clone site.
+
+That default holds for a `&` parameter too. `Vector[int] local = v` over a
+`Vector[int] &v` binds `local` as a **CoW `Ptr` alias of the parameter** —
+zero clones — and the first mutation of `local` materialises a private copy
+through `cow_before_mutation`, leaving the caller's value untouched. Two details
+make it work: the alias points at the PARAMETER, not at the unnamed auto-deref
+temp (which dies at end-of-statement — the dangling-alias class Branch C's own
+comment records), and the destination is re-typed to `Ptr`, without which the
+`Alias` tag is inert and the mutation would write straight through into the
+caller's buffer.
+
+**Re-assignment is different.** `local = v` targets an EXISTING owned value
+slot, and a value slot cannot be rebound to a borrow — earlier stores already
+wrote a value into it. So the re-assign is an ownership boundary like any other:
+the destination must own, and the source routes through
+`ensure_owned_at_boundary`.
 
 ### Refcount handles are clone-eligible by-value at consuming positions
 

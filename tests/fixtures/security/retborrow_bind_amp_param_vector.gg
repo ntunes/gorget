@@ -1,0 +1,22 @@
+# ARM 4 — bind a `Vector[int] &`-param to a local, then return the local.
+# Was a DOUBLE-FREE: the auto-deref temp was minted `Untracked`, so the var-decl
+# chain read it as dead-and-owned and MOVEd it into an Owned destination.
+# The bind is now a CoW Ptr alias of the PARAM (zero clones); the return
+# boundary pays the one clone.
+Vector[int] build_at_runtime(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+Vector[int] alias_ret(Vector[int] &v):
+    Vector[int] local = v
+    return local
+
+void main():
+    Vector[int] xs = build_at_runtime(4)
+    Vector[int] r = alias_ret(&xs)
+    print(r.len())
+    print(xs.len())

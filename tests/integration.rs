@@ -4228,6 +4228,58 @@ fn box_element_drop_symbol_collision() {
     run_gg("known_gaps/box_element_drop_symbol_collision.gg", "done");
 }
 
+// KNOWN GAP — `equip` expression-body return of an OWNING `!` param
+// USE-AFTER-FREES (filed 2026-07-25, MEMORY-SAFETY). The statement-return path
+// move-zeroes a returned `!` param (`owning_param_returned`); the four
+// expression-body return sites in `functions.rs` do not, so the callee's exit
+// `drop_if_alive *p` frees the buffer the returned value aliases. Live shape:
+// `equip Row with FromRow: Row from_row(Row !row): row` in `lib/xtd/db.gg`.
+// Found by the new `AssignIntoReturnSlot` consume-site predicate — it is the
+// ONE violation across the 1676-fixture corpus, and burning it down is the
+// precondition for promoting that class to fatal. Un-ignore + promote out of
+// known_gaps/ when the expression-body return owning-param move-zero lands.
+#[test]
+#[ignore = "KNOWN GAP: equip expression-body return of an owning `!` param \
+use-after-frees (the param slot is never move-zeroed, so the callee's exit drop \
+frees the returned buffer); TODO.md."]
+fn equip_exprbody_owning_param_return_uaf() {
+    run_gg("known_gaps/equip_exprbody_owning_param_return_uaf.gg", "5\n28");
+}
+
+// A `&`-param is a BORROW: crossing an ownership boundary owes exactly ONE
+// clone, a typed binding owes ZERO (borrow now, materialize on mutation), and
+// mutating the param ITSELF must still write through. All four in-scope arms
+// (return / bind / re-assign / String), two extra receiver shapes (a struct
+// with a resource field, a Dict), bind-then-mutate on two shapes, and the
+// write-through control. Every operand is built at runtime so const-folding
+// cannot elide the decision. At the pre-fix baseline this fixture aborts with
+// `free(): double free detected in tcache 2`.
+#[test]
+fn retborrow_amp_param_boundaries() {
+    run_gg(
+        "retborrow_amp_param_boundaries.gg",
+        "\
+4
+4
+4
+4
+4
+4
+5
+5
+3
+3
+tag
+2
+2
+5
+4
+4
+3
+5",
+    );
+}
+
 #[test]
 fn snag54_result_out_fallthrough() {
     // Snag #54: Result branch-assign + return shape; root was get_or on a

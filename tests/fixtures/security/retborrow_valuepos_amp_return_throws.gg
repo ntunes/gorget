@@ -1,0 +1,27 @@
+# DESCOPED ARM 3 — `return &v` inside a `throws` function.
+#
+# ⚖ Same owner ruling as `retborrow_valuepos_amp_return.gg`: a value-position
+# `&` must be REJECTED at check time. This is a LIVE `security_known_unsafe` pin.
+#
+# Unlike the non-throws sibling, this one is STILL memory-unsafe: the throws
+# return keeps its own hand-rolled `GirType::Ptr(inner)`-only clone, which is
+# blind to the `MutPtr` an `&`-param actually is, so the caller's buffer is
+# forwarded raw and freed twice. The pin asserts the sanitizer still trips —
+# when either the reject or a materialize fix lands, it fails and must be
+# reclassified.
+Vector[int] build_at_runtime(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+Vector[int] leak_it(Vector[int] &v) throws String:
+    return &v
+
+void main():
+    Vector[int] xs = build_at_runtime(4)
+    Vector[int] r = leak_it(&xs)! catch (e): []
+    print(r.len())
+    print(xs.len())

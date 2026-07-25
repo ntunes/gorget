@@ -272,6 +272,38 @@ pub(super) fn lower_assign(
                     let _source_live = ctx.source_live_past(&operand, value.span, builder);
                     let _source_own = ctx.source_ownership(&operand, builder);
 
+                    // The `&`-param deref temp (`local = v` over a `T &v`) is a
+                    // SHALLOW copy of the caller's buffer, tagged
+                    // `Borrowed { Param(v) }` at the auto-deref writer. Unlike a
+                    // fresh `var_decl` binding, the destination here is an
+                    // EXISTING owned value slot — retyping it to a Ptr alias
+                    // would retroactively change the slot type for stores that
+                    // already ran (`Vector[int] local = []` writes a 64-byte
+                    // struct into it), so the destination must OWN: route the
+                    // source through the shared boundary chokepoint. Without
+                    // this the branch chain below fell through to its
+                    // resource-typed safety net and Move'd the borrow into the
+                    // owned slot — a double-free of the caller's buffer at
+                    // `return local`.
+                    if let Some(crate::ir::LocalOwnership::Borrowed {
+                        origin: crate::ir::BorrowOrigin::Param(p),
+                        ..
+                    }) = _source_own
+                    {
+                        let src_local = match &operand {
+                            Operand::Copy(pl) | Operand::Move(pl) if pl.projections.is_empty() => Some(pl.local),
+                            _ => None,
+                        };
+                        if src_local.is_some_and(|s| s != p) {
+                            operand = ctx.ensure_owned_at_boundary(
+                                builder,
+                                operand,
+                                value.span,
+                                crate::ir::ImplicitCloneReason::NamedToNamed,
+                            );
+                        }
+                    }
+
                     if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
                         if place.projections.is_empty() && place.local != local_id {
                             let rhs_type = builder.local_type(place.local);

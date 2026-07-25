@@ -2431,22 +2431,21 @@ impl<'a> LoweringContext<'a> {
             return operand;
         }
 
-        // Case 2b: last-use bare-param borrow → move instead of clone.
-        // Only safe for bare params (not ref-locals or CoW borrows, which
-        // may genuinely alias another live variable).
-        if self.is_bare_param(builder, local)
-            && !self.is_ref_local(builder, local)
-            && !self.is_cow_borrow(builder, local)
-            && self.drops.is_registered(local)
-        {
-            let param_name = builder.local_name(local).map(|s| s.to_string());
-            let is_last = param_name.as_ref()
-                .map_or(false, |n| self.is_last_use_at(n, span));
-            if is_last {
-                self.drops.unregister(local);
-                return operand;
-            }
-        }
+        // (A former "Case 2b" sat here: a *last-use* bare-param borrow was
+        // supposed to MOVE instead of cloning. It was DEAD CODE — its guard
+        // `is_bare_param(l) && !is_ref_local(l)` is unsatisfiable, because
+        // `is_bare_param` matches `Borrowed { Param(self), Shared }` and
+        // `is_ref_local` is `ownership.is_ref()`, which is true for EVERY
+        // `Borrowed` variant. Deleted rather than repaired: had it ever fired
+        // it would have `drops.unregister`'d the param and handed the caller's
+        // own buffer back across the boundary — manufacturing exactly the
+        // return-borrow double-free class this chokepoint exists to prevent.
+        // It also contradicted the ratified contract: the move-eligible shapes
+        // are `!arg`, expression temps, and named locals at last use — "not
+        // from `.get()`, a view-returning method, or a parameter — those bind
+        // borrows" (CLAUDE.md, "Ownership at Consuming Positions"). A bare
+        // param binds a borrow; the caller keeps ownership, so ONE clone here
+        // is the hand-written count, not a charter breach.)
 
         // T-A: owning `!` resource param deref-temp at its single-use last use
         // MOVES into the struct/enum ctor field instead of the defensive clone

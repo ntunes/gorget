@@ -1,0 +1,45 @@
+# KNOWN GAP — use-after-free: an `equip` (trait-impl) method whose body is an
+# EXPRESSION-BODY return of its own OWNING `!` param never move-zeroes the param
+# slot, so the callee's exit `drop_if_alive *row` frees the buffer the returned
+# value aliases.
+#
+# Found by the `AssignIntoReturnSlot` consume-site predicate (Track B1 §5) — it
+# was the ONE violation across the 1676-fixture corpus, and it is a real bug.
+# The live shape is `equip Row with FromRow: Row from_row(Row !row): row` in
+# `lib/xtd/db.gg`.
+#
+# Emitted GIR (Rust gg, at the time of filing):
+#     _2 = copy _1.*        # shallow copy of the pointee
+#     [Mv] _0 = copy _2     # into the return place
+#     drop_if_alive _1.*    # <-- frees the buffer `_0` aliases
+#     return copy _0
+#
+# The statement-return path handles this (`owning_param_returned` →
+# `move_zero_and_mark`); the expression-body path in `functions.rs` does not.
+#
+# EXPECTED (intended) OUTPUT — a `!` param transfers ownership to the callee,
+# which transfers it onward through the return, so nothing is freed twice:
+#     4
+#     28
+struct Row:
+    Vector[int] cells
+
+trait FromRow:
+    Self from_row(Row !row)
+
+equip Row with FromRow:
+    Row from_row(Row !row): row
+
+Vector[int] build_at_runtime(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+void main():
+    Row a = Row(build_at_runtime(5))
+    Row b = Row.from_row(!a)
+    print(b.cells.len())
+    print(b.cells.get(4).unwrap())
