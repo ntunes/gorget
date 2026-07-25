@@ -192,6 +192,26 @@ fn lower_expr_inner(
                         if value_type == ctx.type_mapper.owned_string_type {
                             ctx.drops.register_local(tmp, value_type, &ctx.type_registry);
                             ctx.set_owned_fresh(builder, tmp);
+                        } else if ctx.type_registry.is_resource_type(value_type)
+                            && !builder.locals[local_id.0 as usize].is_owning_param
+                        {
+                            // Every OTHER resource type IS a shallow `memcpy` here,
+                            // so the temp's heap data is the CALLER's. Carry the
+                            // borrow provenance (`Param(p)` with `p != tmp`, so
+                            // `is_bare_param` / `is_param_borrow_unique` — both of
+                            // which discriminate on `p == local` — stay false and
+                            // this temp is never re-auto-deref'd). Minting it
+                            // `Untracked` was the lie behind the whole
+                            // return-borrow double-free family: an unnamed
+                            // untracked resource looks dead-and-owned to every
+                            // downstream decision, so a bind/re-assign happily
+                            // Move'd it into an Owned destination that then
+                            // double-freed the caller's buffer.
+                            builder.locals[tmp.0 as usize].ownership =
+                                crate::ir::LocalOwnership::Borrowed {
+                                    origin: crate::ir::BorrowOrigin::Param(local_id),
+                                    mutability: crate::ir::Mutability::Unique,
+                                };
                         }
                     }
                     // T-A (snag #1 ctor extension): if this is an owning `!` resource

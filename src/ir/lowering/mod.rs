@@ -2028,8 +2028,25 @@ pub fn lower_module(
         // held AssignIntoOwnedSlot back as non-fatal pending migration
         // is gone; every consume class halts the build on first
         // violation.
-        let fatal_warnings: Vec<_> = warnings.iter().cloned().collect();
-        let assign_warnings: Vec<crate::ir::validate::ConsumeSiteWarning> = Vec::new();
+        // `AssignIntoReturnSlot` is the newest class (the return place `_0`
+        // predicate that made the return-borrow double-free family visible at
+        // all). A new class is FATAL the instant it lands — there is no
+        // env-gate runway on this validator — so it enters through the
+        // non-fatal `assign_warnings` list exactly the way `AssignIntoOwnedSlot`
+        // did before its burn-down, and `GG_RETURN_SLOT_GUARD=fatal` promotes
+        // it for burn-down runs. Joining `fatal_warnings` unconditionally is
+        // gated on the corpus count reaching ZERO (Core #6: env-gate → burn
+        // down → fatal).
+        let return_slot_fatal = std::env::var("GG_RETURN_SLOT_GUARD")
+            .map(|v| v == "fatal")
+            .unwrap_or(false);
+        let is_return_slot = |w: &crate::ir::validate::ConsumeSiteWarning| {
+            matches!(w.class, crate::ir::validate::ConsumeSiteClass::AssignIntoReturnSlot { .. })
+        };
+        let (fatal_warnings, assign_warnings): (Vec<_>, Vec<_>) = warnings
+            .iter()
+            .cloned()
+            .partition(|w| return_slot_fatal || !is_return_slot(w));
         if !fatal_warnings.is_empty() || !assign_warnings.is_empty() {
             use std::io::Write;
             use rustc_hash::FxHashMap;
@@ -2053,6 +2070,8 @@ pub fn lower_module(
                         => "CallExternByValueArg".to_string(),
                     crate::ir::validate::ConsumeSiteClass::AssignIntoOwnedSlot { .. }
                         => "AssignIntoOwnedSlot".to_string(),
+                    crate::ir::validate::ConsumeSiteClass::AssignIntoReturnSlot { .. }
+                        => "AssignIntoReturnSlot".to_string(),
                 };
                 *by_class.entry(class_key.clone()).or_insert(0) += 1;
                 *by_class_violation

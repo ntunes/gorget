@@ -2324,6 +2324,29 @@ pub enum ConsumeSiteClass {
     /// they require source's TYPE to be resource (which Ptr<T> isn't),
     /// missing exactly the Snag #28 shape.
     AssignIntoOwnedSlot { dst_type: String },
+    /// `Inst::Assign { dst: _0, value }` — a store into the FUNCTION
+    /// RETURN PLACE. Structurally identical to `AssignIntoOwnedSlot`
+    /// (a resource-typed slot that the CALLER will drop), but invisible
+    /// to that class because `_0` is minted `Untracked`
+    /// (`builder.rs`, the `_0 = return place` slot) and the
+    /// `AssignIntoOwnedSlot` gate skips every non-`Owned` dst. That gap
+    /// is why the whole `return`-borrow double-free family — `return v`
+    /// / `T local = v; return local` / `local = v; return local` over a
+    /// `T &v` param — walked past an always-fatal validator unseen.
+    ///
+    /// `_0`-is-the-return-place is a STRUCTURAL IR invariant, so the
+    /// predicate belongs here rather than in a writer that tags `_0`:
+    /// tagging `_0` `Owned` at construction would silently no-op the
+    /// `set_ref(LocalId(0))` on the return path's no-clone-fn
+    /// Ptr-propagation leg (`set_ref` only writes into `Untracked`),
+    /// leaving `_0` `Owned` while it holds a borrowed pointer — a NEW
+    /// double-free injected by the guard itself.
+    ///
+    /// RUNWAY: this class is emitted NON-FATALLY (routed to the
+    /// `assign_warnings` list in `lowering/mod.rs`) until its corpus
+    /// count is burned down to zero; `GG_RETURN_SLOT_GUARD=fatal`
+    /// promotes it for burn-down runs. See `docs/devbook/25`.
+    AssignIntoReturnSlot { dst_type: String },
 }
 
 /// A single consume-site finding. The Phase 1 sweep emits these as
@@ -2399,6 +2422,8 @@ impl std::fmt::Display for ConsumeSiteClass {
                 write!(f, "CallExternByValueArg({}, arg #{})", callee, arg_index),
             Self::AssignIntoOwnedSlot { dst_type } =>
                 write!(f, "AssignIntoOwnedSlot(dst: {})", dst_type),
+            Self::AssignIntoReturnSlot { dst_type } =>
+                write!(f, "AssignIntoReturnSlot(dst: {})", dst_type),
         }
     }
 }
@@ -2416,8 +2441,18 @@ impl std::fmt::Display for ConsumeSiteWarning {
 /// Returns a flat `Vec<ConsumeSiteWarning>`. Caller groups by
 /// `class` + `violation` to plan Phase 2 migrations.
 ///
-/// Phase 1 is purely additive — no migration is performed. The
-/// `GG_VALIDATE_CONSUME_SITES` env gate is the only consumer today.
+/// ⚠ This validator is **NOT** env-gated and **NOT** warn-only. It runs
+/// UNCONDITIONALLY from `lowering/mod.rs` and PANICS on the first fatal
+/// violation. `GG_VALIDATE_CONSUME_SITES=<path>` only opens an optional
+/// structured LOG alongside the panic — it neither enables nor suppresses
+/// the check. (The former "the env gate is the only consumer today" note
+/// here was a Phase-1 fossil that outlived Phase 3's promotion and has
+/// misled readers into believing a new class could land warn-only.)
+///
+/// A NEW class is therefore fatal the instant it is emitted. The runway
+/// for one is the non-fatal `assign_warnings` partition in
+/// `lowering/mod.rs` plus its own opt-in promotion gate — see
+/// [`ConsumeSiteClass::AssignIntoReturnSlot`].
 ///
 /// Builds the module-wide clone-fn name set once via
 /// [`TypeRegistry::clone_fn_names_set`] (Phase 2E migration); the
@@ -2775,7 +2810,25 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                     //     discipline elsewhere; flagging Assign into it
                     //     would duplicate that.
                     use LocalOwnership::*;
-                    if !matches!(dst_local.ownership, Owned | FreshOwned) {
+                    // `_0` is the FUNCTION RETURN PLACE (a structural IR
+                    // invariant of `FunctionBuilder::new`). It is minted
+                    // `Untracked` and therefore invisible to the
+                    // `Owned | FreshOwned` gate below — which is precisely why
+                    // the whole return-borrow double-free family walked past
+                    // this always-fatal validator. The caller WILL drop the
+                    // returned value, so a store into `_0` is an owned-required
+                    // consume site exactly like any other. It is reported under
+                    // its own class so the caller can keep it NON-FATAL during
+                    // burn-down (see `AssignIntoReturnSlot`).
+                    let is_return_place = dst.local == LocalId(0);
+                    if !is_return_place && !matches!(dst_local.ownership, Owned | FreshOwned) {
+                        continue;
+                    }
+                    // A `_0` explicitly tagged as a borrow is the Ptr-propagation
+                    // return (`set_ref(LocalId(0))` on the no-clone-fn leg): the
+                    // caller receives a borrow by contract, so it is not a
+                    // consume.
+                    if is_return_place && dst_local.ownership.is_ref() {
                         continue;
                     }
                     // Trivial-copy types (Shared/Weak/Channel/Guard) are
@@ -2795,7 +2848,11 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                     }
                     let dst_type = registry.type_name(dst_local.type_id)
                         .unwrap_or_else(|| format!("ty{}", dst_local.type_id.0));
-                    let class = ConsumeSiteClass::AssignIntoOwnedSlot { dst_type };
+                    let class = if is_return_place {
+                        ConsumeSiteClass::AssignIntoReturnSlot { dst_type }
+                    } else {
+                        ConsumeSiteClass::AssignIntoOwnedSlot { dst_type }
+                    };
                     if let Some(w) = validate_assign_consume(
                         func, registry, liveness, clone_fns, value, &bb.instructions, b, i,
                         class,
@@ -3867,6 +3924,127 @@ mod tests {
         assert!(
             warnings.iter().all(|w| w.type_name != "Closure_env_42"),
             "closure-env struct should NOT be flagged. Warnings: {:?}", warnings
+        );
+    }
+
+    // ── The return-place predicate (Track B1 §5) ──────────────────────
+    // POSITIVE CONTROL for the retargeted guard. Before this predicate the
+    // `Instruction::Assign` walker VISITED the return-slot store and then
+    // dropped it on the floor, because `_0` is minted `Untracked` and the
+    // `AssignIntoOwnedSlot` gate accepts only `Owned | FreshOwned`. Every
+    // arm of the return-borrow double-free family therefore walked past an
+    // always-fatal validator unseen. A new class alone would NOT have fixed
+    // that — the gate is what dropped them.
+
+    /// Build `fn f(*mut Buf) -> Buf { _2 = copy _1.*; _0 = copy _2; ret }`
+    /// with `_2` tagged as a borrow of the param — the exact shape
+    /// `return v` over a `Buf &v` lowers to.
+    fn return_borrow_module(tag_source_as_borrow: bool) -> Module {
+        let mut module = Module::new();
+        module.type_registry.add_type_def(TypeDef {
+            name: "Buf".into(),
+            kind: TypeDefKind::Struct(StructDef { fields: vec![] }),
+            metadata: TypeMetadata {
+                drop_strategy: DropStrategy::Trivial("buf_free".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let buf_id = module.type_registry.insert(GirType::Named("Buf".into()));
+        let ptr_id = module.type_registry.insert(GirType::MutPtr(buf_id));
+
+        let mut b = FunctionBuilder::new("f", buf_id, &[(ptr_id, Some("v"))]);
+        // `_1` is the `&`-param.
+        b.locals[1].ownership = LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::Param(LocalId(1)),
+            mutability: crate::ir::Mutability::Unique,
+        };
+        // `_2 = copy _1.*` — the auto-deref temp.
+        let tmp = b.add_local(buf_id, None);
+        b.assign(
+            Place::local(tmp),
+            Operand::Copy(Place { local: LocalId(1), projections: vec![Projection::Deref] }),
+        );
+        if tag_source_as_borrow {
+            b.locals[tmp.0 as usize].ownership = LocalOwnership::Borrowed {
+                origin: crate::ir::BorrowOrigin::Param(LocalId(1)),
+                mutability: crate::ir::Mutability::Unique,
+            };
+        }
+        // `[Mv] _0 = copy _2` — the return-slot store.
+        b.assign_mode(
+            crate::ir::instructions::AssignMode::Move,
+            Place::local(LocalId(0)),
+            FunctionBuilder::copy(tmp),
+        );
+        b.ret(FunctionBuilder::copy(LocalId(0)));
+        module.functions.push(b.build());
+        module
+    }
+
+    #[test]
+    fn return_slot_predicate_fires_on_borrowed_source() {
+        let module = return_borrow_module(true);
+        let warnings = validate_consume_sites(&module);
+        assert!(
+            warnings.iter().any(|w| matches!(
+                w.class,
+                ConsumeSiteClass::AssignIntoReturnSlot { .. }
+            ) && w.violation == ConsumeSiteViolation::BorrowedSourceConsumed),
+            "the return-place predicate must flag a borrowed source stored into `_0` \
+             — this is the whole `return`-borrow double-free family. Got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn return_slot_predicate_fires_on_untracked_source() {
+        // The pre-(a) shape: the deref temp left `Untracked`. Also visible,
+        // and it is what caught the live `equip … : row` use-after-free.
+        let module = return_borrow_module(false);
+        let warnings = validate_consume_sites(&module);
+        assert!(
+            warnings.iter().any(|w| matches!(
+                w.class,
+                ConsumeSiteClass::AssignIntoReturnSlot { .. }
+            ) && w.violation == ConsumeSiteViolation::UntrackedSourceConsumed),
+            "an Untracked resource source stored into `_0` must be flagged too. \
+             Got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn return_slot_predicate_silent_on_owned_dead_source() {
+        // The CORRECT shape: the return-slot store consumes a fresh owned
+        // local that is dead afterwards. Must NOT fire — otherwise the guard
+        // is noise, not a guard.
+        let mut module = return_borrow_module(false);
+        let f = &mut module.functions[0];
+        let tmp = f.locals.len() - 1;
+        f.locals[tmp].ownership = LocalOwnership::Owned;
+        let warnings = validate_consume_sites(&module);
+        assert!(
+            warnings.is_empty(),
+            "owned-and-dead source into the return slot is the sound transfer; \
+             flagging it would make the guard noise. Got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn return_slot_predicate_silent_on_ptr_propagation_return() {
+        // The no-clone-fn Ptr-propagation return retypes `_0` and `set_ref`s
+        // it: the caller receives a BORROW by contract, so the store is not a
+        // consume. Tagging `_0` `Owned` at construction (the rejected
+        // alternative) would have silently broken exactly this leg.
+        let mut module = return_borrow_module(true);
+        let f = &mut module.functions[0];
+        f.locals[0].ownership = LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::Alias(LocalId(0)),
+            mutability: crate::ir::Mutability::Shared,
+        };
+        let warnings = validate_consume_sites(&module);
+        assert!(
+            warnings.is_empty(),
+            "a borrow-contract return slot must not be flagged. Got: {warnings:?}"
         );
     }
 }

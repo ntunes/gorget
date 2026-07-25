@@ -1284,6 +1284,70 @@ fn lower_var_decl_assign_mode(
     let same_type_string =
         rhs_type == owned_string && actual_var_type == owned_string;
 
+    // Branch P — the `&`-param deref temp. `Vector[int] local = v` over a
+    // `Vector[int] &v` lowers its RHS to an unnamed temp holding a SHALLOW
+    // copy of `*v` (`exprs/mod.rs`, the auto-deref site), which now carries
+    // `Borrowed { Param(v) }`. A typed binding defaults to BORROW
+    // (docs/devbook/11 — "`var_decl` is deliberately not in either list …
+    // clones only on later mutation"), so bind the destination as a CoW Ptr
+    // alias of the PARAM rather than of the dying temp.
+    //
+    // Aliasing the param (not the temp) is what makes this safe: the temp is
+    // an unnamed stack slot that dies at end-of-statement — the documented
+    // "50+ fixtures SIGSEGV" class Branch C's own comment records — whereas
+    // `v` outlives the frame. And the emitted instruction is a pointer COPY,
+    // not an `emit_borrow`: `v` ALREADY holds the caller's pointer, so
+    // `borrow_mut v` would produce `Ptr(MutPtr(T))` and `cow_materialize_alias`
+    // would then clone the POINTER instead of the buffer.
+    //
+    // Without the Ptr retype the `Alias` tag is inert: a later `local.push(…)`
+    // reaches `cow_before_mutation` Case 1, which `unset_ownership`s the alias
+    // and then early-returns from `cow_materialize_alias` because `pointee_type`
+    // is `None` on a non-Ptr local — destroying the tag and emitting NO clone,
+    // silently writing through into the caller's buffer.
+    let deref_of_borrowed_param: Option<LocalId> = match &source_own {
+        Some(LocalOwnership::Borrowed {
+            origin: crate::ir::BorrowOrigin::Param(p),
+            ..
+        }) if *p != source_place.local => Some(*p),
+        _ => None,
+    };
+    if let Some(param) = deref_of_borrowed_param {
+        if ctx.type_registry.is_resource_type(rhs_type)
+            && actual_var_type == rhs_type
+            && !ctx.is_cow_unsafe_at(name, stmt_span.start)
+        {
+            let ptr_type = ctx.register_ptr_type(rhs_type);
+            builder.locals[local_id.0 as usize].type_id = ptr_type;
+            // Pointer COPY of the param slot — see the comment above.
+            builder.assign_mode(
+                AssignMode::Borrow,
+                Place::local(local_id),
+                FunctionBuilder::copy(param),
+            );
+            // The dst tag must be `Alias(param)`, NOT `Borrowed { Param(param) }`:
+            // `cow_before_mutation` dispatches on five shapes and a non-self
+            // `Param(p)` matches NONE of them, so a later `local.push(…)` would
+            // find nothing to materialize and write through the Ptr into the
+            // caller's buffer — trading a double-free for a silent aliasing
+            // miscompile. `Alias(p)` is what Branch C uses and what makes
+            // `cow_materialize_alias` fire.
+            ctx.cow_register_alias(builder, local_id, param);
+            // A Ptr doesn't own data — don't register it for drop.
+            ctx.drops.unregister(local_id);
+            if let Some(hint) = builder.local_name(local_id).map(|s| s.to_string()) {
+                ctx.register_local(&hint, local_id, ptr_type);
+            }
+            // Borrow (not Copy) so the Branch-G safety net stays inert: G flips
+            // `Copy && target_resource` to Move, which here would be a Move of
+            // the temp into a Ptr-typed slot.
+            // `branch_c_bound` suppresses the caller's trailing value-into-Ptr
+            // store, which the LIR enum payload-extract path mis-classifies.
+            *branch_c_bound = true;
+            return AssignMode::Borrow;
+        }
+    }
+
     // Branch A (REMOVED, round-30 Fix C) — the old Owned + live
     // GorgetString same-type arm (value-aliasing `String b = a`)
     // emitted `set_shared_heap` + `Borrow` + `drops.unregister(source)`.
