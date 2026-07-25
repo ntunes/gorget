@@ -1,0 +1,34 @@
+# DESCOPED ARM 1 — `return &v`, a VALUE-POSITION `&`.
+#
+# ⚖ The owner ruled that a value-position `&` must be REJECTED at check time,
+# uniform with the call-site error and the landed `E_LocalBorrowBind` — and the
+# ruling explicitly covers `return &v`. This program must therefore NOT compile.
+# It currently does, so this fixture is a LIVE `security_known_unsafe` pin on
+# "the compiler still ACCEPTS a program the ruling says to reject", and it will
+# fail loudly the moment the reject lands (forcing reclassification to
+# `security_rejected`).
+#
+# ⚠ It is deliberately NOT a `security_safe*` fixture: a green accept-polarity
+# fixture would wire the WRONG answer into a committed artifact for a program
+# ruled illegal ("Don't redesign around compiler gaps", rule 2).
+#
+# The DOUBLE-FREE this shape used to produce is gone as a side effect of routing
+# the statement return through the shared boundary chokepoint (whose `pointee_type`
+# test covers the `MutPtr` an `&`-param is), so the remaining defect is the
+# accept/reject polarity, not memory unsafety.
+Vector[int] build_at_runtime(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+Vector[int] leak_it(Vector[int] &v):
+    return &v
+
+void main():
+    Vector[int] xs = build_at_runtime(4)
+    Vector[int] r = leak_it(&xs)
+    print(r.len())
+    print(xs.len())

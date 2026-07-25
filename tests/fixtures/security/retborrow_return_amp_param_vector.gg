@@ -1,0 +1,21 @@
+# ARM 2 — `return v` where `v` is a whole `Vector[int] &`-param, non-throws.
+# Was a DOUBLE-FREE: the statement return hand-rolled a `GirType::Ptr`-only
+# clone that is blind to the `MutPtr` an `&`-param is, and blind to the by-value
+# borrow temp the auto-deref mints — so the caller's buffer was returned raw and
+# freed twice. A `return` is an ownership boundary: it owes exactly ONE clone.
+Vector[int] build_at_runtime(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+Vector[int] pass_through(Vector[int] &v):
+    return v
+
+void main():
+    Vector[int] xs = build_at_runtime(4)
+    Vector[int] r = pass_through(&xs)
+    print(r.len())
+    print(xs.len())

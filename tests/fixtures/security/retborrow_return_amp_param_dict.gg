@@ -1,0 +1,22 @@
+# Receiver-shape width for arm 2: a Dict with heap-allocated (non-literal) keys.
+Dict[String, int] build_dict(int n):
+    Dict[String, int] d = Dict[String, int]()
+    int i = 0
+    while i < n:
+        String k = ""
+        int j = 0
+        while j <= i:
+            k = k + "k"
+            j = j + 1
+        d.put(k, i * 3)
+        i = i + 1
+    return d
+
+Dict[String, int] pass_dict(Dict[String, int] &d):
+    return d
+
+void main():
+    Dict[String, int] src = build_dict(3)
+    Dict[String, int] r = pass_dict(&src)
+    print(r.len())
+    print(src.len())

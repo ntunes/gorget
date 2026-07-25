@@ -1,0 +1,24 @@
+# ARM 5 — RE-ASSIGN a `Vector[int] &`-param into an already-owned local, then
+# return it. `lower_assign` is a separate decision tree from `lower_var_decl`;
+# it likewise never consulted the temp's ownership and fell through to its
+# resource-typed safety net, MOVEing the borrow into the owned slot.
+# The destination here is an existing OWNED value slot, so it must own: the
+# source routes through the shared boundary chokepoint.
+Vector[int] build_at_runtime(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+Vector[int] reassign_ret(Vector[int] &v):
+    Vector[int] local = []
+    local = v
+    return local
+
+void main():
+    Vector[int] xs = build_at_runtime(4)
+    Vector[int] r = reassign_ret(&xs)
+    print(r.len())
+    print(xs.len())

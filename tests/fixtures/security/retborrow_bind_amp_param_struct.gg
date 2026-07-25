@@ -1,0 +1,26 @@
+# Receiver-shape width for arm 4: a USER STRUCT with a resource field.
+# Same bind-then-return shape as retborrow_bind_amp_param_vector, different
+# receiver — a partial regression that only covered the collection primitives
+# would trip here.
+struct Holder:
+    Vector[int] items
+    String tag
+
+Vector[int] build_at_runtime(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+Holder bind_and_return(Holder &h):
+    Holder local = h
+    return local
+
+void main():
+    Holder h = Holder(build_at_runtime(4), "tag")
+    Holder r = bind_and_return(&h)
+    print(r.items.len())
+    print(h.items.len())
+    print(r.tag)

@@ -1315,3 +1315,112 @@ program, ASan abort, both backends); TODO.md. Un-ignore when the !-Box consume A
 fn box_move_param_bad_free_safe() {
     security_safe("box_move_param_bad_free", "consumed\ndone");
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// `&`-param at an ownership boundary — return / bind / re-assign
+// ════════════════════════════════════════════════════════════════════════════
+//
+// A `&`-param is a BORROW: the caller keeps ownership. Crossing an ownership
+// boundary owes exactly ONE clone; a typed binding owes ZERO (borrow now,
+// materialize on mutation). Every fixture below reported a double-free (or, for
+// the String arm, an LSan leak) before the statement `return` was routed through
+// the shared materialize chokepoint and the auto-deref temp started carrying its
+// borrow provenance. The bug class is stdout-INVISIBLE, so these run under
+// LeakSanitizer via `security_safe_no_leak`, not a plain stdout check.
+
+#[test]
+fn retborrow_return_amp_param_vector_no_leak() {
+    // Arm 2: `return v` of a whole `Vector[int] &`-param, non-throws.
+    security_safe_no_leak("retborrow_return_amp_param_vector", "4\n4");
+}
+
+#[test]
+fn retborrow_bind_amp_param_vector_no_leak() {
+    // Arm 4: bind then return. The bind is a CoW Ptr alias of the param.
+    security_safe_no_leak("retborrow_bind_amp_param_vector", "4\n4");
+}
+
+#[test]
+fn retborrow_reassign_amp_param_vector_no_leak() {
+    // Arm 5: re-assign into an existing owned slot, then return.
+    security_safe_no_leak("retborrow_reassign_amp_param_vector", "4\n4");
+}
+
+#[test]
+fn retborrow_return_amp_param_string_no_leak() {
+    // Arm 6: the String `&`-param return — two clones and an orphaned buffer.
+    security_safe_no_leak("retborrow_return_amp_param_string", "5\n5");
+}
+
+#[test]
+fn retborrow_bind_amp_param_struct_no_leak() {
+    // Receiver-shape width: a user struct with a resource field.
+    security_safe_no_leak("retborrow_bind_amp_param_struct", "4\n4\ntag");
+}
+
+#[test]
+fn retborrow_return_amp_param_dict_no_leak() {
+    // Receiver-shape width: a Dict with heap-allocated keys.
+    security_safe_no_leak("retborrow_return_amp_param_dict", "3\n3");
+}
+
+#[test]
+fn retborrow_bind_then_mutate_no_leak() {
+    // The alias-at-bind's correctness obligation: materialize on mutation, so
+    // the CALLER's value is unchanged. Two receiver shapes.
+    security_safe_no_leak("retborrow_bind_then_mutate", "5\n4\n4\n4\n3\n3");
+}
+
+#[test]
+fn retborrow_mutate_through_control_no_leak() {
+    // CONTROL: mutating the `&`-param itself must still WRITE THROUGH — so the
+    // aliasing fix cannot degenerate into "always clone".
+    security_safe_no_leak("retborrow_mutate_through_control", "5\n999");
+}
+
+#[test]
+fn retborrow_throws_bare_return_no_leak() {
+    // CONTROL: the throws bare-`return v` leg was already clean and must stay so.
+    security_safe_no_leak("retborrow_throws_bare_return", "4\n4");
+}
+
+#[test]
+fn retborrow_no_over_clone_controls_no_leak() {
+    // ANTI-OVER-CLONE controls: owned-local return · bare-param return ·
+    // `!`-param return · bind-then-read-only.
+    security_safe_no_leak("retborrow_no_over_clone_controls", "4\n4\n4\n3\n42\n4");
+}
+
+// ── DESCOPED arms: `return &v` is a VALUE-POSITION `&` ──────────────────────
+// ⚖ Owner ruling: a value-position `&` must be REJECTED at check time, and the
+// ruling explicitly covers `return &v`. Both fixtures below are therefore
+// `security_known_unsafe` pins on a program the compiler should not accept —
+// NOT accept-polarity fixtures, which would wire the wrong answer into a
+// committed artifact. They fail loudly when the reject lands.
+
+#[test]
+fn retborrow_valuepos_amp_return_known_unsafe() {
+    security_known_unsafe(
+        "retborrow_valuepos_amp_return",
+        KnownBug::SilentlyProduces("4\n4"),
+        "a value-position `&` (`return &v`) is ruled to be REJECTED at check time, \
+         but the compiler still accepts it and runs it to completion. The DOUBLE-FREE \
+         it used to produce is closed (the return now routes through the boundary \
+         chokepoint, whose pointee test covers MutPtr); the remaining defect is the \
+         accept/reject polarity. Reclassify to `security_rejected` when the \
+         value-position-`&` reject lands",
+    );
+}
+
+#[test]
+fn retborrow_valuepos_amp_return_throws_known_unsafe() {
+    security_known_unsafe(
+        "retborrow_valuepos_amp_return_throws",
+        KnownBug::SanitizerTrips,
+        "`return &v` in a THROWS fn is ruled to be REJECTED, and is additionally \
+         still memory-unsafe: the throws return keeps its own hand-rolled \
+         `GirType::Ptr(inner)`-only clone, blind to the MutPtr an `&`-param is, so \
+         the caller's buffer is forwarded raw and double-freed. Reclassify when \
+         either the reject or the throws-leg materialize lands",
+    );
+}

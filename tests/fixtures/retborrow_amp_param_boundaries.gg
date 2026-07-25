@@ -1,0 +1,121 @@
+# Return/bind/re-assign of a `&`-param at an ownership boundary.
+#
+# A `&`-param is a BORROW: the caller keeps ownership. Crossing an ownership
+# boundary (a `return`) therefore owes exactly ONE clone, and a plain typed
+# binding owes ZERO (it is a borrow that materializes only on mutation).
+#
+# Every operand here is built at runtime so const-folding cannot elide the
+# clone decision, and every callee's result is compared against the caller's
+# still-live original — the double-free these shapes used to produce is
+# invisible to stdout, so the shapes are ALSO pinned under ASan in
+# tests/fixtures/security/retborrow_*.gg.
+
+Vector[int] build_vec(int n):
+    Vector[int] out = []
+    int i = 0
+    while i < n:
+        out.push(i * 7)
+        i = i + 1
+    return out
+
+String build_str(int n):
+    String s = ""
+    int i = 0
+    while i < n:
+        s = s + "x"
+        i = i + 1
+    return s
+
+struct Holder:
+    Vector[int] items
+    String tag
+
+# ── the four in-scope arms ────────────────────────────────────────────
+
+# whole `&`-param returned bare
+Vector[int] arm_return(Vector[int] &v):
+    return v
+
+# `&`-param bound to a local, then returned
+Vector[int] arm_bind(Vector[int] &v):
+    Vector[int] local = v
+    return local
+
+# `&`-param RE-ASSIGNED into an already-owned local, then returned
+Vector[int] arm_reassign(Vector[int] &v):
+    Vector[int] local = []
+    local = v
+    return local
+
+# String `&`-param returned bare (the bespoke String return path)
+String arm_return_string(String &s):
+    return s
+
+# a struct with a resource field — receiver-shape width
+Holder arm_bind_struct(Holder &h):
+    Holder local = h
+    return local
+
+# a Dict — receiver-shape width
+Dict[String, int] arm_return_dict(Dict[String, int] &d):
+    return d
+
+# ── bind-then-MUTATE: the bind is a CoW alias, so mutating it must
+#    materialize a private copy and leave the caller's value untouched ──
+
+int mutate_bind(Vector[int] &v):
+    Vector[int] local = v
+    local.push(999)
+    return local.len()
+
+int mutate_bind_struct(Holder &h):
+    Holder local = h
+    local.items.push(999)
+    return local.items.len()
+
+# ── control: mutating the `&`-param ITSELF must still WRITE THROUGH.
+#    (Without this, "fix" the aliasing by always cloning and nobody notices.)
+void mutate_through(Vector[int] &v):
+    v.push(999)
+
+void main():
+    Vector[int] xs = build_vec(4)
+    Vector[int] a = arm_return(&xs)
+    print(a.len())
+    print(xs.len())
+
+    Vector[int] b = arm_bind(&xs)
+    print(b.len())
+    print(xs.len())
+
+    Vector[int] c = arm_reassign(&xs)
+    print(c.len())
+    print(xs.len())
+
+    String s = build_str(5)
+    String t = arm_return_string(&s)
+    print(t.len())
+    print(s.len())
+
+    Holder h = Holder(build_vec(3), "tag")
+    Holder h2 = arm_bind_struct(&h)
+    print(h2.items.len())
+    print(h.items.len())
+    print(h2.tag)
+
+    Dict[String, int] d = Dict[String, int]()
+    d.put(build_str(1), 11)
+    d.put(build_str(2), 22)
+    Dict[String, int] d2 = arm_return_dict(&d)
+    print(d2.len())
+    print(d.len())
+
+    # bind-then-mutate: callee sees 5, caller must still be 4
+    print(mutate_bind(&xs))
+    print(xs.len())
+    print(mutate_bind_struct(&h))
+    print(h.items.len())
+
+    # write-through control: the caller MUST see the push
+    mutate_through(&xs)
+    print(xs.len())
