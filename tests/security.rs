@@ -1476,6 +1476,21 @@ fn sound_callable_amp_param_indirect_call_safe() {
     security_safe("sound_callable_amp_param_indirect_call", "42");
 }
 
+/// KNOWN GAP — `&`-of-a-projection in an OPERAND position DUPLICATES the user
+/// `Drop`. Measured at HEAD: prints `1 / close 9 / close 9`, while the control
+/// with the sigil removed prints `1 / close 9`. `&` alone is the cause.
+///
+/// Same root as the array-literal costume: `reject_tainted_formation_arg` is
+/// wired only at `check_expr.rs:116` and `:757`, both `CallArg` positions — so
+/// the documented characterisation "literal-element positions escape 2T"
+/// undercounts it. EVERY non-`CallArg` position escapes, operands included.
+#[test]
+#[ignore = "KNOWN GAP: `&`-of-a-place in an operand position runs the owner's Drop twice \
+(control runs it once). Asserts the INTENDED single drop; TODO.md."]
+fn sound_amp_operand_position_duplicate_drop_safe() {
+    security_safe("sound_amp_operand_position_duplicate_drop", "1\nclose 9");
+}
+
 /// A2 — the SIBLING costume: the Callable arrives as a PARAM and the `&`-arg is
 /// a PROJECTION (`&c.fd`), not a whole local. Measured at HEAD: `gg check`
 /// clean, `gg build` clean, binary exits 139 (SIGSEGV); reproduces at base AND

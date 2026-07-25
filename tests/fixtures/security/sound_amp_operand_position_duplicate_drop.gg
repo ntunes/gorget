@@ -1,0 +1,52 @@
+# DURABLE REPRO — `&`-of-a-projection in an OPERAND position DUPLICATES the
+# user `Drop`. Same D4/D12 single-owner violation the array-literal costume has,
+# in a position no filed census has a subject for.
+#
+# WRONG TODAY (measured at HEAD, C backend): the program prints
+#     1
+#     close 9
+#     close 9        <- the owner's `drop` runs TWICE
+# while the CONTROL — the identical program with the sigil removed
+# (`if p.fd > 5:`) — correctly prints `1` then a single `close 9`.
+#
+# So `&` ALONE is the cause. Nothing else differs between the two programs.
+#
+# ROOT (shared with the already-documented array-literal costume):
+# `reject_tainted_formation_arg` is wired at only TWO call sites,
+# `src/semantic/safety/check_expr.rs:116` and `:757`, and BOTH are `CallArg`
+# positions. So the 2T reject never sees a non-arg formation — and the
+# characterisation "literal-element positions escape 2T" UNDERCOUNTS it:
+# **every non-`CallArg` position escapes**, including every operand position.
+#
+# INTENDED: the owner's `drop` runs exactly ONCE — `1` then a single `close 9`
+# — or the program is REJECTED at `gg check` (the likely reference-grade answer:
+# an operand is a read, so a `&` there is meaningless). Running a user's
+# destructor twice is not a defensible third option; it is the double-free class
+# in user-visible form.
+#
+# ⚠ `fd` is deliberately an `int` so the duplication is OBSERVABLE as two prints
+# rather than only as a heap error. A heap payload would additionally trip ASan;
+# the print form is what makes this assertable in the normal suite.
+#
+# ⚠ ggdef cannot adjudicate the operand family (out of phase-0 subset), so
+# C/LLVM agreement is necessary-not-sufficient here (Core #8).
+#
+# Cited from TODO.md: the operand-position `&`-formation family.
+
+struct FH:
+    int fd
+
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+
+int seed():
+    return 9
+
+void pokep(FH p):
+    if &p.fd > 5:
+        print(1)
+
+void main():
+    FH h = FH(seed())
+    pokep(h)

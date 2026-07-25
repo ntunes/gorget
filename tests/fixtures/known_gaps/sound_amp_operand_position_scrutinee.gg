@@ -1,0 +1,52 @@
+# DURABLE REPRO — `&`-of-a-projection in an OPERAND position: silently wrong.
+#
+# A costume family with NO home in either filed census. It is neither an
+# OWNING position (ctor arg / enum payload / collection put / literal element /
+# return / capture) nor a value/RESTING position — it is an operand, and the
+# rules written for the other two families have no subject that covers it.
+#
+# WRONG TODAY (measured at HEAD, `gg check` clean for every row):
+#   match scrutinee   `match &c.fd: case 10:`   -> C prints **0**, correct is 1
+#   binary operand    `int y = &c.fd + 1`       -> C: cc error "invalid operands
+#                                                   to binary + (void */void *)";
+#                                                   LLVM: `add ptr` in the IR
+#   comparison        `if &c.fd > 5:`           -> compares the ADDRESS, not 10
+#   index expr        `v[&c.fd]`                -> trap[T_Bounds], index is a
+#                                                   raw address
+#   f-string          `f"{&c.fd}"`              -> prints the deref'd 10 (benign
+#                                                   today, same lowering)
+#   closure body      `(): &c.fd`               -> garbage address
+#
+# This fixture pins the MATCH-SCRUTINEE row, which is the cleanest silent
+# wrong-output of the family: the scrutinee is an address, so `case 10` never
+# matches and the `else` arm runs.
+#
+# INTENDED: `1`. Either the language REJECTS `&`-of-a-place in an operand
+# position (the likely reference-grade answer — an operand is a read, so the
+# sigil is meaningless there), or it means "the place's value" and matches 10.
+# Silently comparing an address is not a defensible third option.
+#
+# ⚠ ggdef CANNOT adjudicate this family — measured: "expression 'unsupported'
+# is outside the phase-0 subset" for the match/binop/index/f-string rows, while
+# it DOES give a verdict on the array-literal owning position. The subset gap is
+# filed, and until it closes, C-and-LLVM agreement means nothing here (Core #8).
+#
+# ⚠ The tainted twin is MEMORY-RELEVANT, not merely wrong: see
+# `security/sound_amp_operand_position_duplicate_drop.gg`, where the same
+# operand position runs a user `Drop` TWICE.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide it.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    match &c.fd:
+        case 10:
+            print(1)
+        else:
+            print(0)

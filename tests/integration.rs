@@ -35887,6 +35887,28 @@ fn sound_tuple_getchain_writethrough() {
     );
 }
 
+/// KNOWN GAP — `&`-of-a-projection in an OPERAND position is silently wrong.
+/// A costume family with no home in either filed census: not an OWNING position
+/// and not a value/RESTING position, so the rules written for those two have no
+/// subject covering it (Core #15e-Q4 — a case with no subject).
+///
+/// Measured at HEAD, `gg check` clean for every row: match scrutinee prints 0
+/// (correct 1) · binary operand fails the C compile with `void*`+`void*` and
+/// emits `add ptr` on LLVM · comparison compares the address · index expression
+/// traps out-of-bounds on a raw address · closure body yields garbage.
+/// This pins the match-scrutinee row, the cleanest silent wrong-output.
+///
+/// ⚠ ggdef CANNOT adjudicate this family (outside the phase-0 subset), so
+/// C/LLVM agreement means nothing here. The tainted twin duplicates a user
+/// `Drop` — `security/sound_amp_operand_position_duplicate_drop.gg`.
+#[test]
+#[ignore = "KNOWN GAP: `&`-of-a-place in an operand position lowers the address, so a match \
+scrutinee compares a pointer and never matches. Asserts the INTENDED value semantics (or a \
+check-time reject); TODO.md."]
+fn sound_amp_operand_position_scrutinee() {
+    run_gg("known_gaps/sound_amp_operand_position_scrutinee.gg", "1");
+}
+
 /// KNOWN GAP — `.or_else()` shares the `.map()`/`.filter()` receiver-emptying
 /// defect. Third costume of that mode; committed so the sibling census is
 /// executable rather than prose (Core #4). Prints 0, want 11.
