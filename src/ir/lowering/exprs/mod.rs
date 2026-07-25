@@ -160,7 +160,7 @@ fn lower_expr_inner(
                     };
                     let tmp = builder.add_local(value_type, None);
                     // ! params (owned): use Move to transfer ownership (memcpy, no clone).
-                    // & params (mutable borrow): use Copy (clone to prevent aliasing).
+                    // & params (mutable borrow): Copy through the pointer.
                     let is_move_param = ctx.is_owned_local(builder, local_id);
                     if is_move_param {
                         builder.assign_mode(
@@ -171,6 +171,28 @@ fn lower_expr_inner(
                         ctx.set_owned(builder, tmp);
                     } else {
                         builder.assign(Place::local(tmp), Operand::Copy(deref_place));
+                        // Tag what the backend ACTUALLY produced (Core #1 — the
+                        // ownership tag was lying about the emitted code).
+                        //
+                        // A Copy-mode store of a String-family value read through a
+                        // pointer is NOT a shallow struct copy: both backends lower it
+                        // to `gorget_string_copy_cow` (`backend/c_lir/mod.rs`,
+                        // `backend/llvm/mod.rs`), which yields an INDEPENDENTLY
+                        // DROPPABLE value — `cap>0` deep-copies into a fresh
+                        // allocation, `cap==0` struct-copies a view whose
+                        // `gorget_string_free` is a no-op
+                        // (`backend/c/runtime/runtime_string.c`). Every OTHER resource
+                        // type gets a plain shallow `memcpy` and stays a borrow.
+                        //
+                        // Leaving the String temp `Untracked` made downstream
+                        // boundaries clone it a SECOND time and orphan this buffer:
+                        // `String f(String &s): return s` leaked the copy_cow result
+                        // (LSan), and every String `&`-param crossing an ownership
+                        // boundary paid two clones where a hand-writer pays one.
+                        if value_type == ctx.type_mapper.owned_string_type {
+                            ctx.drops.register_local(tmp, value_type, &ctx.type_registry);
+                            ctx.set_owned_fresh(builder, tmp);
+                        }
                     }
                     // T-A (snag #1 ctor extension): if this is an owning `!` resource
                     // param, record the deref-temp → param provenance (typed field on

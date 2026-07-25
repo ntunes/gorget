@@ -1923,10 +1923,52 @@ fn lower_return(
                 }
             }
             if !did_clone_return {
-                // Ptr(T) → T auto-clone/deref for return values: if the operand
-                // is Ptr(T) but the return type is T, resolve the borrow:
-                //   - resource T → clone to owned T
-                //   - non-resource T (primitives, value structs) → deref the pointer
+                // ── The return boundary's ONE materialize decision ──────────
+                // A `return` is an unconditional leave-behind ownership
+                // boundary, so it routes through the SHARED chokepoint
+                // (`ensure_owned_at_boundary`) — byte-for-byte the same guard
+                // the EXPRESSION-BODY return already uses
+                // (`functions.rs:1453,1764,2045,2456`). That is why `f(&v): v`
+                // was always clean while `f(&v): return v` double-freed: the
+                // statement return had a hand-rolled `GirType::Ptr`-only
+                // sibling that is blind to the `MutPtr` an `&`-param actually
+                // is, and blind to a by-value borrow temp entirely.
+                // The chokepoint keys on `pointee_type` (Ptr AND MutPtr) plus
+                // the by-value borrow/untracked-resource predicate, so it
+                // subsumes the resource-clone leg below (Core #4: retire the
+                // sibling, don't patch it).
+                if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
+                    let src_before = match &operand {
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                        _ => None,
+                    };
+                    operand = ctx.ensure_owned_at_boundary(
+                        builder,
+                        operand,
+                        expr.span,
+                        crate::ir::ImplicitCloneReason::ReturnFromBorrow,
+                    );
+                    let src_after = match &operand {
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.local),
+                        _ => None,
+                    };
+                    if src_after != src_before {
+                        // The chokepoint materialized: the fresh owned local is
+                        // what leaves the frame. The old source was a borrow (or
+                        // an untracked alias) — it never owned the buffer, so it
+                        // is deliberately NOT move-zeroed here; the trailing
+                        // move-zero block below now targets the clone.
+                        returned_local = src_after;
+                    }
+                }
+                // Ptr(T) → T auto-deref for return values: if the operand
+                // is Ptr(T) but the return type is T and the pointee is a
+                // non-resource (primitives, value structs), deref the pointer.
+                // The resource-clone leg that used to live here is retired —
+                // the chokepoint above owns that decision now. The Ptr-
+                // propagation fallback (resource pointee with no clone fn)
+                // stays: it retypes `_0` and `set_ref`s it, which no
+                // chokepoint models.
                 if let Operand::Copy(ref p) | Operand::Move(ref p) = operand {
                     if p.projections.is_empty() {
                         let src_idx = p.local.0 as usize;
@@ -1934,11 +1976,7 @@ fn lower_return(
                             let src_type = builder.locals[src_idx].type_id;
                             if let Some(GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                                 if !matches!(ctx.type_registry.get(ret_type), Some(GirType::Ptr(_))) {
-                                    if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                        ctx.record_param_cloned(builder, p.local);
-                                        let cloned = ctx.emit_clone(builder, &clone_fn, vec![operand.clone()], expr.span, inner, crate::ir::ImplicitCloneReason::ReturnFromBorrow);
-                                        operand = FunctionBuilder::copy(cloned);
-                                    } else if !ctx.type_registry.is_resource_type(inner) {
+                                    if !ctx.type_registry.is_resource_type(inner) {
                                         // Non-resource pointee — deref to load the value.
                                         let tmp = builder.add_local(inner, None);
                                         builder.assign(
