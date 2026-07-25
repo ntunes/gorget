@@ -1476,6 +1476,25 @@ fn sound_callable_amp_param_indirect_call_safe() {
     security_safe("sound_callable_amp_param_indirect_call", "42");
 }
 
+/// LIVE CONTROLS — the CALLEE-DISPOSITION axis. Green today and must stay so.
+///
+/// They guard a measured hazard: routing `exprs/calls.rs:371` through
+/// `ensure_owned_at_consuming_arg` (whose Case 1 registers the clone for drops)
+/// adds a caller-side drop with no compensating `MoveZero`. Under ASan that is
+/// a double-free — but ONLY when the callee moves its `!` param ONWARD, because
+/// `drop_if_alive` is self-nulling and makes the extra drop a no-op when the
+/// callee merely drops it. That is why the pre-existing fixture over this site
+/// stayed green under the same change, and why this axis needed its own net.
+#[test]
+fn consume_callee_moves_on_return_safe() {
+    security_safe("consume_callee_moves_on_return", "4\ndone");
+}
+
+#[test]
+fn consume_callee_moves_on_stash_safe() {
+    security_safe("consume_callee_moves_on_stash", "1\n3\ndone");
+}
+
 /// KNOWN GAP — `&`-of-a-projection in an OPERAND position DUPLICATES the user
 /// `Drop`. Measured at HEAD: prints `1 / close 9 / close 9`, while the control
 /// with the sigil removed prints `1 / close 9`. `&` alone is the cause.

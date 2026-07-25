@@ -1,0 +1,38 @@
+# LIVE CONTROL — the CALLEE-DISPOSITION axis: the callee MOVES ITS `!` PARAM
+# ONWARD (here, pushes it into a container that outlives the call).
+#
+# Green at HEAD and must STAY green. This is a guard against a specific,
+# measured hazard rather than a repro of a live bug.
+#
+# THE HAZARD IT GUARDS. `lower_call_arg`'s clone for a `MoveParamFromBorrow`
+# arg does NOT register the clone for drops. Routing that site through
+# `ensure_owned_at_consuming_arg` — whose Case 1 DOES `register_local` — adds a
+# caller-side drop with no compensating `MoveZero`/mark. Measured under ASan:
+# with that routing simulated, this program aborts with
+# `AddressSanitizer: attempting double-free`; at HEAD it prints `1 / 3 / done`.
+#
+# ⚠ WHY THIS SHAPE AND NOT AN EASIER ONE. `drop_if_alive` is self-nulling, so
+# when the callee simply DROPS its `!` param the caller's extra drop is a
+# harmless no-op — which is why the one pre-existing fixture over this site
+# stayed green under the same change. The bug is only observable when the
+# callee moves the value ONWARD, so the callee-disposition axis (callee drops ·
+# callee returns it · callee stashes it in a longer-lived container) is the
+# axis that matters, and it had NO coverage before these two fixtures.
+#
+# Run under `--sanitize`; a plain run would not catch it.
+
+from std.collections import Vector
+
+void stash(Vector[Vector[int]] &out, Vector[int] !v):
+    out.push(!v)
+
+void main():
+    Vector[Vector[int]] matrix = Vector[Vector[int]]()
+    Vector[int] row1 = [1, 2, 3]
+    matrix.push(!row1)
+    Vector[Vector[int]] sink = Vector[Vector[int]]()
+    auto ref_row = matrix[0]
+    stash(&sink, !ref_row)
+    print(sink.len())
+    print(sink[0].len())
+    print("done")
