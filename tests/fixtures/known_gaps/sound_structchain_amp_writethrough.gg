@@ -1,0 +1,47 @@
+# DURABLE REPRO — the STRUCT get-chain, `&`-FACE ONLY.
+#
+# This is the OTHER cell that survives the `&`-of-projection fix (the tuple
+# get-chain, both faces, is `sound_tuple_getchain_writethrough.gg`). It is
+# narrower than that one: here ONLY the `&` face is broken.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C and LLVM alike):
+#   `&` face      `bumpi(&vb.get(0).unwrap().fd)`  -> prints 10   (want 11)
+#   assign face   `wb.get(0).unwrap().fd = 42`     -> prints 42   ✅ ALREADY CORRECT
+# `ggdef` prints 11 / 42 — correct on both, so it adjudicates AGAINST production
+# on the `&` face. That makes this a Core #8 silent wrong-output.
+#
+# ⚠ THE ASSIGN ROW IS A LIVE CONTROL, NOT A GAP. It passes today and must KEEP
+# passing: it is the row that proves the two faces take different paths. The
+# assign face works because it falls back to `resolve_ptr_field_place`
+# (stmts/assigns.rs), whose own comment documents the `.get().unwrap()` chain;
+# the `&`-formation path has no such fallback, and
+# `try_resolve_field_place`'s object arms (Identifier / SelfExpr / FieldAccess /
+# Deref / Index) include no method-chain arm.
+#
+# INTENDED (what this fixture asserts): 11 then 42.
+#
+# ⚠ A fix that closes this must NOT be assumed to close the tuple get-chain —
+# measured, it does not: `resolve_ptr_field_place` is struct-field-specific
+# (it takes a `field_name: &str`), so the tuple case needs a tuple-index
+# analogue. That measurement is why the get-chain fallback was descoped from
+# the `&`-projection track rather than folded into it.
+#
+# The seeds are COMPUTED, not literals, so const-folding cannot elide the store.
+
+struct B:
+    int fd
+
+int seed():
+    return 10
+
+void bumpi(int &x):
+    x = x + 1
+
+void main():
+    Vector[B] vb = [B(seed())]
+    bumpi(&vb.get(0).unwrap().fd)
+    print(vb.get(0).unwrap().fd)
+
+    Vector[B] wb = [B(seed())]
+    wb.get(0).unwrap().fd = 42
+    print(wb.get(0).unwrap().fd)

@@ -1,0 +1,56 @@
+# DURABLE REPRO — A2: a PROJECTION arg passed through a `Callable`-PARAM
+# SEGFAULTS. Sibling of A1 (`sound_callable_amp_param_indirect_call.gg`), and a
+# DISTINCT costume: A1 is a Callable-typed LOCAL bound to an `&`-param function;
+# here the Callable arrives as a PARAMETER and the `&`-arg is a PROJECTION
+# (`&c.fd`) rather than a whole local.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend): `gg check` reports "OK: no
+# semantic errors", `gg build` succeeds, and the binary exits **139 (SIGSEGV)**.
+# Reproduces at base AND under the `&`-of-projection prototype, so the
+# projection fix does not close it.
+#
+# ⚠ `gg run` MASKS this as exit 1 with no output — it does not propagate the
+# child's signal status. Reproduce by BUILDING and running the binary directly,
+# or the failure looks like an ordinary build error.
+#
+# ROOT (measured, not inferred): there are THREE indirect-call argument loops,
+# not one. `calls.rs:1395-1399` (`__Closure_N__call`) routes through
+# `lower_call_arg` and therefore honours `arg.node.ownership`; but
+# `calls.rs:1455` and `calls.rs:1880` (FnPtr / `__gorget_closure_call_N`) call
+# `lower_expr(&arg.node.value)` DIRECTLY and ignore the sigil entirely. The SEGV
+# takes one of the two non-routing paths — so this is a MISSING SIGIL CHECK, not
+# an ABI or codegen defect.
+#
+# INTENDED: the indirect call is an ordinary write-through call, so `bumpret`
+# increments the caller's `c.fd` and the program prints 11 then 11 and exits 0.
+# (If the language instead decides an `&`-param function may not be reified into
+# a `Callable` value, the reference-grade answer is a CHECK-TIME rejection —
+# never an accepted program that segfaults. Either way today's behaviour is a
+# defect; this fixture asserts the accept-and-run reading, matching its A1
+# sibling and the `Callable[int(&int)]` annotation the compiler already accepts.)
+#
+# ORACLE (ggdef): OUT OF SUBSET — ggdef does not reify a named function into a
+# `Callable` value ("unresolved local"). Recorded explicitly per Core #9.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the call.
+#
+# Cited from TODO.md (CoW / ownership / High): "A PROJECTION arg through a
+# `Callable`-PARAM segfaults".
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+int bumpret(int &n):
+    n = n + 1
+    return n
+
+int with_it(Callable[int(&int)] f, Counter &c):
+    return f(&c.fd)
+
+void main():
+    Counter c = Counter(seed())
+    print(with_it(bumpret, &c))
+    print(c.fd)

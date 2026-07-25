@@ -35813,6 +35813,30 @@ fn sound_tuple_getchain_writethrough() {
     );
 }
 
+/// KNOWN GAP — the STRUCT get-chain, `&`-FACE ONLY. The other cell that
+/// survives the `&`-of-projection fix, and narrower than the tuple get-chain
+/// above: here the assign face ALREADY WORKS.
+///
+/// RED-verified at HEAD: C `10 / 42`, LLVM `10 / 42`, ggdef `11 / 42`. The
+/// second row is a LIVE CONTROL that passes today and must keep passing — it is
+/// what proves the two faces take different paths (assign falls back to
+/// `resolve_ptr_field_place`; `&`-formation has no method-chain arm).
+///
+/// ⚠ Closing this does NOT close the tuple get-chain — measured, it does not:
+/// `resolve_ptr_field_place` is struct-field-specific (`field_name: &str`).
+#[test]
+#[ignore = "KNOWN GAP: `&`-of-a-get-chain field drops the write on C and LLVM while ggdef is \
+correct; the assign face already works. Asserts the INTENDED write-through; TODO.md. Un-ignore \
+when the field place resolver grows a method-chain arm."]
+fn sound_structchain_amp_writethrough() {
+    run_gg(
+        "known_gaps/sound_structchain_amp_writethrough.gg",
+        "\
+11
+42",
+    );
+}
+
 /// LIVE CONTROL — the only by-value shape that currently works: `&` of a whole
 /// bare local scalar. Green today (11, matching ggdef); it pins the defect's
 /// boundary and goes RED if the class fix regresses the working cell.

@@ -1476,6 +1476,22 @@ fn sound_callable_amp_param_indirect_call_safe() {
     security_safe("sound_callable_amp_param_indirect_call", "42");
 }
 
+/// A2 — the SIBLING costume: the Callable arrives as a PARAM and the `&`-arg is
+/// a PROJECTION (`&c.fd`), not a whole local. Measured at HEAD: `gg check`
+/// clean, `gg build` clean, binary exits 139 (SIGSEGV); reproduces at base AND
+/// under the `&`-of-projection prototype, so that fix does not close it.
+/// ⚠ `gg run` masks this as exit 1 with no output — it does not propagate the
+/// child's signal status; build and run the binary directly to see the SEGV.
+/// Root: of the THREE indirect-call arg loops, `calls.rs:1455` and `:1880` call
+/// `lower_expr` directly and ignore `arg.node.ownership` — a missing sigil
+/// check, not an ABI defect.
+#[test]
+#[ignore = "KNOWN GAP A2: a projection arg through a Callable-PARAM SEGFAULTS (gg check clean, \
+exit 139); TODO.md. Un-ignore when the non-routing indirect-call arg loops honour the sigil."]
+fn sound_callable_amp_param_projection_safe() {
+    security_safe("sound_callable_amp_param_projection", "11\n11");
+}
+
 // ── D10 exclusivity holes: accepted programs that heap-use-after-free ────────
 //
 // All eleven assert the INTENDED REJECT (`E_BorrowConflict`). Measured at HEAD:
