@@ -8,7 +8,7 @@
   rule 1; per-track ggdef suite → Core #9; `--test lints` + `--lib` complete step 4's battery, whose "covers every CI target" claim was
   false without `--lib`; not-ratified-thinking routing in the split rule). NEW GUARD `agents_md_size_ratchet` (tests/lints.rs, CEILING
   58_000, ratchets DOWN only; also asserts devbook/30 exists) — RED-demonstrated in-harness against the pre-compaction file
-  ("64608 bytes > 58000") before going green. Gauntlet: 9 sequential fresh opus review passes to convergence (7 blocking total; 4 were
+  ("64608 bytes > 58000") before going green. Gauntlet: 9 sequential fresh opus review passes to convergence (8 blocking total — 3+1+2+1+1 across passes 1-4 and 8; 5 were
   the orchestrator's own unsourced ch.30 narration, refuted by grep/measure — incl. pass 3 finding the "evaporated" audit scratch alive
   in /tmp and reconciling 0-in-12 / 11-of-12 exactly; rule-preservation swept clean from pass 1 on, driven by a total-enumeration
   disposition manifest per Core #15(b)). Gates: `--test lints` 67/1 (sole red = PRE-EXISTING `no_growth_in_phase_d_proxy_reads`
