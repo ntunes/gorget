@@ -508,7 +508,18 @@ The ByMutRef reclassify (lower_expr.gg:~3186) emits a `MutPtr(&outer_slot)` env 
 #### [bug, tangential — from 4d scout] self-host f-string codegen SIGSEGV on multi-interpolation + struct-field access
 The 4d scout hit a self-host driver SIGSEGV when a debug `print(f"DBG ... {field}")` had MULTIPLE f-string interpolations + a struct-field access in the interpolation. Plain string-concat printing worked fine. Tangential to the closure work (only surfaced during probing). Repro: an f-string with ≥2 `{}` where one is `obj.field`. Likely an f-string codegen / arg-threading bug in the self-host. Needs its own scout to isolate + a minimal repro. Low priority (debug-only path), but a real codegen bug.
 
-#### [closure 4e-2 — LATENT, deferred, no corpus fixture] resource-returning combinator double-free
+#### [closure 4e-2 — ⚠ NO LONGER "LATENT": MEASURED LIVE, Core #8 silent-wrong-output] Option/Result combinator adapter SKIPS the payload's user `Drop` and LEAKS
+**⚠ PREMISE CORRECTED 2026-07-25 by the Track-B2 scout — the "Rust handles it" claim below is REFUTED.**
+Measured at HEAD, C backend: `Option[Money].map(...)` with `equip Money with Drop` prints the value but
+**NEVER prints "dropping"** — the user `Drop` is silently skipped. That is **silent-wrong-output**
+(Core #8), not merely a latent leak. LSan on a 2000-iteration `Option[Vector[int]].map` probe:
+**176,000 B in 4,000 allocations**. It is combinator-SPECIFIC — the same program written
+`if o is Some(v)` is clean. **D-2T also fails to reject a drop-tainted value at this materialize
+position**, so the drop-purity gate does not cover it either. Reproduces at baseline AND under the B2
+prototype, i.e. pre-existing and independent of the consume-position migration. Per Core #8 a
+pre-existing known defect is NOT a licence to ship past it: it needs a fix or a durable
+`known_gaps`/ASan repro asserting the INTENDED behaviour (the `Drop` runs, nothing leaks).
+**ORIGINAL FILING BELOW — its "LATENT / Rust handles it" framing is superseded:**
 The (B) ownership/double-free tail of 4e is LATENT: the whole corpus returns only STATIC-LITERAL Strings (cap=0, .rodata) from map/map_err/unwrap_or_else closures → no heap double-free. It only surfaces with a HEAP String return (e.g. `.map((x): f"{x}")` or `.map((s): s.to_upper())`). Rust handles it (clone-receiver + Move-mode + scrut-zero, methods.rs:2924-2970/:3083-3109). To pursue: (1) ADD a heap-return combinator fixture, (2) port Rust's ownership adapter into the inline-C template/dispatch, (3) ASan-gate (a wrong fix trades the absence-of-crash for a silent double-free — worse). DEFERRED: no corpus fixture currently fails on it, so it's +0 parity until a fixture exists; do it when a heap-return combinator program is added or surfaces. The combinator sub-track (4a/4b/4c/4e-1/4d + R2-class) is otherwise COMPLETE.
 
 #### [closure Increment 6 = DROPPED] nested closures — no corpus gap
