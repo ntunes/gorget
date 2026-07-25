@@ -1,0 +1,26 @@
+# DURABLE REPRO — the `&`-in-an-OWNING-POSITION class, costume 2 of 7:
+# a COLLECTION PUT (`v.push(&c.fd)`).
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C and LLVM): `gg check` clean, sigil
+# silently DROPPED, prints 10. `ggdef` REJECTS ("`&`-alias into an owning
+# position is not valid").
+#
+# INTENDED: REJECTED at `gg check`. A collection put is the canonical consuming
+# position (CLAUDE.md "Ownership at Consuming Positions") — the collection must
+# own, so there is nothing for the callee to write through to.
+#
+# The `fd` seed is COMPUTED, not a literal.
+#
+# See `sound_amp_owning_position_ctor.gg` for the full sibling list and the
+# ruling this class rests on.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Vector[int] v = Vector[int]()
+    v.push(&c.fd)
+    print(v[0])

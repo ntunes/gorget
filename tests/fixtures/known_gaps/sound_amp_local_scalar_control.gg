@@ -1,0 +1,23 @@
+# ANTI-REGRESSION POSITIVE — the narrowest control for the by-value
+# `&`-projection write-through bug: a `&` of a WHOLE BARE LOCAL scalar.
+#
+# CORRECT TODAY (measured at HEAD, Rust gg, C backend): prints 11.
+# ORACLE (ggdef, measured this session): also 11 — the lanes agree here.
+#
+# This is the only by-value shape that currently works, which is what pins the
+# defect's boundary: it is not "`&` of an `int` is broken", it is "`&` of an
+# `int` PLACE reached through any projection is broken" — see
+# `sound_amp_byvalue_place_writethrough.gg`. A fix must move all nine rows there
+# to 11 without disturbing this one.
+#
+# The seed is computed, not a literal, so the write cannot be const-folded away.
+int seed():
+    return 10
+
+void bump_int(int &n):
+    n = n + 1
+
+void main():
+    int loc = seed()
+    bump_int(&loc)
+    print(loc)

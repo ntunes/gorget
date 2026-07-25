@@ -1,0 +1,46 @@
+# DURABLE REPRO — D10 exclusivity hole #5: a MATCH-SCRUTINEE element binding
+# read across a mutation of its collection inside the arm.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then
+#   AddressSanitizer: heap-use-after-free ... in gorget_string_copy_cow
+# The `case Some(x)` binding aliases the element in place, and the arm's pushes
+# realloc the backing store out from under it.
+#
+# INTENDED: ACCEPT, run ASan-clean, and print the PRE-MUTATION value
+# ("alpha-heap-forced-payload").
+#
+# ⚠ NOTE THE POLARITY — this hole's answer is NOT a reject, unlike its siblings.
+# Owner-ruled (recorded in TODO.md): this is the TEMPORAL axis — a
+# `CowBorrowMutation` MATERIALIZE, the same axis as the intra-function CoW sever
+# pinned by `sound_getchain_sever_accept.gg` — and NOT the call-arg D10(b)
+# place-overlap reject axis. The mutation site is VISIBLE here, so the clone can
+# be placed lazily at the binding; the reject axis exists only where the
+# mutation hides behind a call boundary and the sole rescue would be a
+# speculative unconditional clone. The ruling is explicit that this must be kept
+# OUT of the place-overlap chokepoint.
+#
+# So a chokepoint rebuild that "fixes" this fixture by rejecting the program has
+# implemented the wrong ruling, and this fixture will still be red — correctly.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): OUT OF SUBSET — "method `.first()` is
+# outside the phase-0 subset (may need Increment B2)". Pinned against the
+# owner ruling quoted above; recorded explicitly per Core #9.
+# Cited from TODO.md (CoW / ownership / Medium): "Match-scrutinee element
+# binding across a mutating arm = MATERIALIZE, not reject" — NOT YET
+# IMPLEMENTED.
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    match v.first():
+        case Some(x):
+            int i = 0
+            while i < 4096:
+                v.push("filler-padding-to-force-a-real-reallocation")
+                i = i + 1
+            print(x)
+        else:
+            print("none")

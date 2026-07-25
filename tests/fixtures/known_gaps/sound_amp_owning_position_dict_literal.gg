@@ -1,0 +1,28 @@
+# DURABLE REPRO — the `&`-in-an-OWNING-POSITION class, costume 4 of 7:
+# a DICT-LITERAL VALUE (`{1: &c.fd}`).
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C and LLVM): `gg check` clean, sigil
+# silently DROPPED, prints 10.
+#
+# ORACLE: this shape is outside ggdef's phase-0 subset, so it is pinned against
+# the RULE rather than against a third implementation. Recorded explicitly
+# rather than left implicit (Core #9). Its in-subset siblings — ctor, push, enum
+# — all reject in ggdef, and a dict-literal value is the same kind of position.
+#
+# INTENDED: REJECTED at `gg check`. A container-literal value position is an
+# ownership boundary; the map must own its value.
+#
+# The `fd` seed is COMPUTED, not a literal.
+#
+# See `sound_amp_owning_position_ctor.gg` for the full sibling list and the
+# ruling this class rests on.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Dict[int, int] d = {1: &c.fd}
+    print(d[1])

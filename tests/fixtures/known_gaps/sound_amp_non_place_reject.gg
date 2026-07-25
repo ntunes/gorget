@@ -1,0 +1,36 @@
+# DURABLE REPRO — B7: `&` applied to a NON-PLACE.
+#
+# `&make().fd` takes a mutable borrow of a field of a temporary that dies at the
+# end of the statement. There is nothing for the callee to write through TO.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C and LLVM): `gg check` is clean, the
+# program builds and runs, and the write goes into the doomed temporary — a dead
+# write the user asked to be visible. `ggdef` REJECTS: "expression is not a
+# place".
+#
+# INTENDED: REJECTED at `gg check`. D31 full-strict defines `&` as "the callee
+# writes through", which presupposes a place to write through to; `make()` is a
+# value. This is the same predicate as the `E_LocalBorrowBind` control
+# (`sound_amp_named_bind_control.gg`) applied one step earlier — the operand,
+# not the destination.
+#
+# The `fd` seed is COMPUTED, not a literal, so the dead write is a real store
+# rather than something const-folding can erase.
+#
+# Cited from TODO.md (CoW / ownership / High): the `&`-of-a-non-place row of the
+# `&`-in-an-owning-position filing.
+struct Cell:
+    int fd
+
+int seed():
+    return 7
+
+Cell make():
+    return Cell(seed())
+
+void bumpint(int &n):
+    n = n + 1
+
+void main():
+    bumpint(&make().fd)
+    print("survived")

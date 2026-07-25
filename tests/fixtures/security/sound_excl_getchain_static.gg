@@ -1,0 +1,35 @@
+# DURABLE REPRO — D10 exclusivity hole A3: the same `.get()`-chain read + `&`
+# writer conflict, but rooted in a module-level `static` instead of a local.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in `gorget_string_copy_cow`.
+# `check_call_aliasing`'s participant filter admits only `DefKind::Variable`
+# roots, and module globals resolve as `Static` — so a byte-identical program
+# rejects when the collection is a local and is silently accepted when it is a
+# global. That asymmetry is the tell: the check is spelled over syntax, not
+# over places.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict`, exactly as the local
+# spelling already is.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): OUT OF SUBSET — "item kind static is
+# outside the phase-0 subset". Pinned against the ratified D10 exclusivity
+# ruling rather than against a third implementation; recorded explicitly per
+# Core #9. Full oracle note in `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry, hole #3.
+static Vector[String] G = Vector[String]()
+
+void f(String s, Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+    print(s)
+
+void main():
+    G.push("alpha-heap-forced-payload")
+    f(G.get(0).unwrap(), &G)

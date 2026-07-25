@@ -1,0 +1,109 @@
+# DURABLE REPRO — B1: a `&`-arg naming a BY-VALUE place silently LOSES the
+# write.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend — identical on LLVM):
+#     10 / 10.000000 / false / 10 / 10 / 10 / 10 / 10 / 10
+# i.e. EVERY row below drops the callee's write on the floor. `gg check` is
+# clean and the program runs to completion, so this is silent-wrong-output —
+# the most insidious class.
+#
+# ORACLE: ggdef prints 11 / 11 / true / 11 / 11 for the rows it covers (the
+# `Dict[String, _]` index rows are outside its phase-0 subset). The definition
+# lane is right and both production backends are wrong — Core #8.
+#
+# INTENDED (asserted below): the write reaches the caller on every row.
+#     11 / 11.000000 / true / 11 / 11 / 11 / 11 / 11 / 11
+#
+# ⚠ THE FILED "by-value FIELD" FRAMING UNDERCOUNTS THE CLASS. Rows 8 and 9 have
+# NO struct anywhere: `&vv[0]` and `&dd["k"]` on a PLAIN LOCAL collection lose
+# the write too. The discriminator is not "is it a field" but "how is the
+# projection's result TYPED" — a by-value place is lowered to a value temp and
+# the borrow is taken of the temp. Only a whole bare local scalar (`&loc`,
+# pinned in `sound_amp_local_scalar_control.gg`) survives, along with the
+# thin-pointer field types pinned in
+# `security/sound_amp_field_thinptr_control.gg`.
+#
+# Every seed is COMPUTED, never a literal, so no const-fold can elide a write.
+#
+# Cited from TODO.md (CoW / ownership / High): "By-value-field `&`-arg
+# write-through is SILENTLY LOST".
+struct Inner:
+    int a
+    int b
+
+struct Holder:
+    int i
+    float f
+    bool z
+    Inner st
+    (int, int) tup
+    Dict[String, int] d
+    Vector[int] vec
+
+int seed():
+    return 10
+
+float fseed():
+    return 10.0
+
+void bump_int(int &n):
+    n = n + 1
+
+void bump_float(float &x):
+    x = x + 1.0
+
+void flip_bool(bool &b):
+    b = true
+
+void bump_struct(Inner &s):
+    s.a = s.a + 1
+
+void bump_tuple((int, int) &t):
+    t.0 = t.0 + 1
+
+void main():
+    Dict[String, int] dd = Dict[String, int]()
+    dd.put("k", seed())
+    Vector[int] vv = Vector[int]()
+    vv.push(seed())
+    Holder h = Holder(seed(), fseed(), false, Inner(seed(), 0), (seed(), 0), dd, vv)
+
+    # 1. scalar int field
+    bump_int(&h.i)
+    print(h.i)
+
+    # 2. float field
+    bump_float(&h.f)
+    print(h.f)
+
+    # 3. bool field
+    flip_bool(&h.z)
+    print(h.z)
+
+    # 4. plain (by-value) struct field
+    bump_struct(&h.st)
+    print(h.st.a)
+
+    # 5. tuple field
+    bump_tuple(&h.tup)
+    print(h.tup.0)
+
+    # 6. Dict value under a field
+    bump_int(&h.d["k"])
+    print(h.d["k"])
+
+    # 7. Vector element under a field
+    bump_int(&h.vec[0])
+    print(h.vec[0])
+
+    # 8. Vector element of a PLAIN LOCAL — no struct involved
+    Vector[int] loose_vec = Vector[int]()
+    loose_vec.push(seed())
+    bump_int(&loose_vec[0])
+    print(loose_vec[0])
+
+    # 9. Dict value of a PLAIN LOCAL — no struct involved
+    Dict[String, int] loose_dict = Dict[String, int]()
+    loose_dict.put("k", seed())
+    bump_int(&loose_dict["k"])
+    print(loose_dict["k"])

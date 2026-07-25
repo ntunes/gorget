@@ -1,0 +1,50 @@
+# ANTI-REGRESSION POSITIVE — C1. Ratified by D10(b) ADDENDUM 3 + its same-day
+# amendment (`docs/define-gorget/decisions.md`, end of the LOG).
+#
+# At an aggregate-init OWNED-FIELD position, a bare read is exempt from the
+# place-overlap rule ON THE MOVER AXIS: a move transfers a pointer and cannot
+# invalidate a sibling read, so `Pair(v[0], !v)` is sound. All three spellings
+# below must ACCEPT, run ASan-clean, and print the PRE-MOVE element value.
+#
+#   1. struct ctor with an index read      Pair(v[0], !v)
+#   2. tuple literal twin                  (w[0], !w)
+#   3. get-chain view read                 Pair(u.get(0).unwrap(), !u)
+#
+# CORRECT TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): all three
+# accept and print their payloads with no sanitizer report. This fixture exists
+# so the D10 structural-chokepoint rebuild cannot "fix" the writer-axis holes by
+# blanket-rejecting aggregate init — that would ship a new OVER-rejection, which
+# is precisely what brief-review pass 1 caught in the Track-A brief v1.
+#
+# ⚠ ORACLE LANE LAG (ggdef, measured this session): ggdef REJECTS this program —
+#   error[E_BorrowConflict]: cannot pass `v` and `!v` in the same call
+# ggdef still routes aggregate init through the CALL-shaped check and has not
+# yet implemented ADDENDUM 3's mover exemption, which was ratified the same day
+# these fixtures were written. So this is a KNOWN, EXPECTED ggdef lag on a
+# ratified widening (Core #9), not evidence against the ruling — ggdef must be
+# brought to ACCEPT in the round that lands the chokepoint. The intended state
+# asserted here is the RULING's, which production already implements.
+#
+# Contrast:
+#   * `sound_excl_nested_writer_ctor.gg` — sibling WRITER, must REJECT.
+#   * `sound_ctor_mover_first_reject.gg` — mover FIRST, must reject on the
+#     LIVENESS axis (`E_UseAfterMove`), not the aliasing axis.
+struct Pair:
+    String s
+    Vector[String] rest
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    Pair p = Pair(v[0], !v)
+    print(p.s)
+
+    Vector[String] w = Vector[String]()
+    w.push("beta-heap-forced-payload")
+    (String, Vector[String]) t = (w[0], !w)
+    print(t.0)
+
+    Vector[String] u = Vector[String]()
+    u.push("gamma-heap-forced-payload")
+    Pair q = Pair(u.get(0).unwrap(), !u)
+    print(q.s)

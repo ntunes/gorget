@@ -1,0 +1,31 @@
+# ANTI-REGRESSION POSITIVE — the control for
+# `sound_amp_array_literal_duplicate_drop.gg`.
+#
+# Byte-identical to that fixture except the array-literal element is `p.fd`
+# instead of `&p.fd`. The owner's user `Drop` must run exactly ONCE.
+#
+# CORRECT TODAY (measured at HEAD, Rust gg, C and LLVM):
+#     1
+#     close 9
+# ORACLE (ggdef, measured this session): identical — `1` then one `close 9`.
+#
+# It is the sigil, and only the sigil, that duplicates the owner in the
+# defective twin. Keeping this control live means a fix cannot "balance the
+# drops" by changing how a bare container-literal element takes ownership.
+struct FH:
+    int fd
+
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+
+int seed():
+    return 9
+
+void pokep(FH p):
+    Vector[int] v = [p.fd]
+    print(v.len())
+
+void main():
+    FH f = FH(seed())
+    pokep(f)

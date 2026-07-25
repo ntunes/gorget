@@ -1,0 +1,47 @@
+# DURABLE REPRO — the `&`-in-an-OWNING-POSITION class, costume 7 of 7:
+# a RETURN VALUE (`return &c.fd` from an `int` function).
+#
+# ⚠ THIS COSTUME DIVERGES BETWEEN THE TWO PRODUCTION BACKENDS — the only row of
+# the class that does.
+#
+# WRONG TODAY (measured at HEAD, Rust gg):
+#   * `gg check` is CLEAN on both backends.
+#   * C:    accepts (with a cc pointer-to-integer warning) and prints a RAW
+#           STACK ADDRESS — 281474879431680 (ASLR-dependent; the stable fact is
+#           that it is a pointer, not 10).
+#   * LLVM: HARD BUILD FAILURE in `llc` —
+#             error: '%v4' defined with type 'ptr' but expected 'i64'
+#             ret i64 %v4
+#           i.e. no binary is produced at all.
+# A `gg check`-clean program that miscompiles on one backend and fails to
+# assemble on the other is the sharpest possible statement that the rejection
+# belongs at check time.
+#
+# ORACLE (ggdef, measured this session): OUT OF SUBSET — "expression
+# `unsupported` is outside the phase-0 subset". Its in-subset siblings (ctor,
+# push, enum, array literal, tuple literal) all REJECT in ggdef, so this row is
+# pinned against the class rule rather than a third implementation; recorded
+# explicitly per Core #9.
+#
+# INTENDED: REJECTED at `gg check`. A `return` is an ownership boundary (the
+# value escapes the frame), and the standing owner ruling on value-position `&`
+# — recorded at `security.rs::retborrow_valuepos_amp_return_known_unsafe` —
+# already says a value-position `&` must be rejected at check time and covers
+# `return &v` explicitly. This is that ruling's by-value-projection sibling.
+#
+# The `fd` seed is COMPUTED, not a literal.
+#
+# See `sound_amp_owning_position_ctor.gg` for the full sibling list and the
+# ruling this class rests on.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+int leak_field(Counter c):
+    return &c.fd
+
+void main():
+    Counter c = Counter(seed())
+    print(leak_field(c))

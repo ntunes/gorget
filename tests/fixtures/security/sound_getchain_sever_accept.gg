@@ -1,0 +1,35 @@
+# ANTI-REGRESSION POSITIVE — C4, the intra-function SEVER.
+#
+# A `.get()`-chain view bound to a local, then the collection mutated, then the
+# local read. The bind SEVERS the view from the collection — `s` holds the
+# pre-mutation value and stays valid across the realloc:
+#
+#     String s = v.get(0).unwrap()
+#     grow(&v)                       # reallocs the backing store
+#     print(s)                       # must print the PRE-MUTATION value
+#
+# CORRECT TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): accepts,
+# ASan-clean, prints "alpha-heap-forced-payload".
+# ORACLE (ggdef, measured this session): identical — accepts, same output.
+#
+# This is the over-rejection guard for the whole `sound_excl_*` family. Those
+# fixtures demand a REJECT when an element view and a writer of its collection
+# are LIVE AT THE SAME CALL. Here they are in SEPARATE statements with an
+# ownership transfer in between, which is legal and must stay legal — a
+# chokepoint that rejects on "a view of `v` exists anywhere in scope" instead of
+# "a view of `v` is live at this call" would break this program.
+#
+# The 4096-push loop FORCES a real reallocation, so a regression that turned the
+# bind back into a borrow would surface as a sanitizer trip, not a silent pass.
+void grow(Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    String s = v.get(0).unwrap()
+    grow(&v)
+    print(s)

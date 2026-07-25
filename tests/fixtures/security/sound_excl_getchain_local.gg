@@ -1,0 +1,51 @@
+# DURABLE REPRO — D10 exclusivity hole A2: a `.get()`-chain element VIEW passed
+# alongside an `&` writer of the SAME collection.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `gg build --sanitize`):
+# `gg check` says "OK: no semantic errors" and the binary dies with
+#   AddressSanitizer: heap-use-after-free ... in gorget_string_copy_cow
+# The `.get(0).unwrap()` view is not a participant in `check_call_aliasing`
+# (no MethodCall arm in `find_root_def_id_with_path`), so the writer `&v` is
+# free to realloc the backing store out from under a live borrow of an element.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict` — the read and the
+# writer name overlapping places, which is exactly the D10 "one exclusive
+# writer" rule. (The byte-identical shape spelled `f(v[0], &v)` over a plain
+# local ALREADY rejects; this is the same program in a costume the syntactic
+# check does not recognize.)
+#
+# ⚠⚠ ORACLE NOTE FOR THE WHOLE `sound_excl_*` FAMILY — ggdef is NOT the
+# authority here, and it is worth knowing why before anyone reaches for it.
+# Measured this session: ggdef ACCEPTS every in-subset fixture of this family
+# (`..._getchain_local`, `..._getchain_fieldpath`, `..._getchain_alias_
+# provenance`, `..._receiver_writer`, `..._nested_writer_{call,closure,ctor,
+# tuple,index_store}`, `..._forbody_amp_writer`) and prints the pre-mutation
+# value cleanly. That is not a verdict that the programs are sound — ggdef is a
+# definitional INTERPRETER with value semantics, so no reallocation can
+# invalidate anything and the UAF is structurally unobservable in that lane.
+# The intended REJECT comes from the ratified owner ruling on the D10
+# exclusivity holes ("(b) STRUCTURAL … neg fixture per hole", 2026-07-22), and
+# ggdef owes the same reject as part of that landing (Core #9).
+# The remaining fixtures of the family are outside ggdef's phase-0 subset:
+#   ..._getchain_static          -> "item kind static is outside the phase-0 subset"
+#   ..._overload_alias_twin      -> "operator Add on struct and struct"
+#   ..._match_scrutinee_...      -> "method `.first()` is outside the phase-0 subset"
+# Contrast the `sound_amp_owning_position_*` class, where ggdef DOES reject and
+# IS the oracle.
+#
+# The 4096-push loop FORCES a real reallocation — a smaller/constant-capacity
+# shape is a false negative.
+#
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry, hole #1.
+void f(String s, Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+    print(s)
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    f(v.get(0).unwrap(), &v)

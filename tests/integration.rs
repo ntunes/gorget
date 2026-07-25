@@ -35733,3 +35733,208 @@ fn release_flag_optimizes_at_o2() {
         );
     }
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// CoW `&`-write-through / owning-position durable repros (filed 2026-07-25).
+//
+// Every fixture below was measured at HEAD BEFORE being committed and the
+// observed pre-fix behaviour is recorded in its `.gg` header (Core #12: a
+// fixture is not coverage until it has been seen to FAIL). All of them assert
+// the INTENDED state, never today's — an `#[ignore]`d test that pinned today's
+// wrong output would make the defect canonical, which is worse than no fixture.
+//
+// They live in `tests/fixtures/known_gaps/` so they stay OUT of the runtime-diff
+// corpus and the ggdef `cow_*`/`deadwrite_*` auto-discovery, and they use a
+// `sound_` prefix so they cannot drift into either.
+//
+// The ggdef verdict for each shape is recorded in its header (Core #13): ggdef
+// is the oracle for this whole family and was right on every row it covers.
+// ════════════════════════════════════════════════════════════════════════════
+
+/// KNOWN GAP — B1: a `&`-arg naming a BY-VALUE place silently loses the write.
+/// Measured at HEAD on C (identical on LLVM): every one of the nine rows prints
+/// the UNCHANGED seed. ggdef prints the incremented value for the five rows in
+/// its subset, so the definition lane is right and both production backends are
+/// wrong (Core #8).
+///
+/// AXIS-COMPLETE (Core #12): the fixture covers every value of the field-type
+/// axis — `int` · `float` · `bool` · plain struct · tuple · Dict value · Vector
+/// element — plus two rows with NO struct at all (`&vv[0]`, `&dd["k"]` on plain
+/// locals), which is a widening of the filed "by-value FIELD" framing. The
+/// thin-pointer cells of the same axis (`String`, `Vector[int]` fields — the two
+/// that work by accident) are the live control
+/// `security.rs::sound_amp_field_thinptr_control_safe`, and the whole-bare-local
+/// cell is `sound_amp_local_scalar_control` below.
+#[test]
+#[ignore = "KNOWN GAP: `&`-arg of a by-value place silently drops the write on both backends \
+(ggdef is correct). Asserts the INTENDED write-through; TODO.md. Un-ignore when `&`-of-a-place \
+resolves to the place instead of a value temp."]
+fn sound_amp_byvalue_place_writethrough() {
+    run_gg(
+        "known_gaps/sound_amp_byvalue_place_writethrough.gg",
+        "\
+11
+11.000000
+true
+11
+11
+11
+11
+11
+11",
+    );
+}
+
+/// LIVE CONTROL — the only by-value shape that currently works: `&` of a whole
+/// bare local scalar. Green today (11, matching ggdef); it pins the defect's
+/// boundary and goes RED if the class fix regresses the working cell.
+#[test]
+fn sound_amp_local_scalar_control() {
+    run_gg("known_gaps/sound_amp_local_scalar_control.gg", "11");
+}
+
+/// KNOWN GAP — B2, and the row a naive fix breaks. A BARE-param root is a
+/// BORROW, so the write must MATERIALIZE: the callee sees 11, the CALLER stays
+/// 10. Measured at HEAD: `10 / 10` (the caller's 10 is right by accident — the
+/// write is lost inside the callee too). ggdef: `11 / 10`.
+///
+/// A fix that write-throughs to the root looks correct on every other fixture in
+/// this batch and is WRONG here — it would print `11 / 11`, turning a borrow
+/// into a mutable alias and breaking CoW's central guarantee.
+#[test]
+#[ignore = "KNOWN GAP: `&`-projection off a BARE-param root must MATERIALIZE (callee 11, caller \
+10); today both print 10. Asserts the INTENDED materialize; TODO.md. Un-ignore when the \
+by-value `&`-projection class is fixed — and check it prints 11/10, not 11/11."]
+fn sound_amp_bareparam_root_materialize() {
+    run_gg(
+        "known_gaps/sound_amp_bareparam_root_materialize.gg",
+        "\
+11
+10",
+    );
+}
+
+/// KNOWN GAP — B3: TWO sequential writes through the same `&`-projection.
+/// Measured at HEAD: 10 (both lost). ggdef: 12. A partial fix that write-throughs
+/// the first projection and then re-reads a stale value prints 11 here and
+/// passes every single-write pin in the batch.
+#[test]
+#[ignore = "KNOWN GAP: two sequential writes through the same `&`-projection both vanish \
+(ggdef prints 12). Asserts the INTENDED 12; TODO.md. Un-ignore when the by-value `&`-projection \
+class is fixed — a partial fix prints 11."]
+fn sound_amp_projection_two_writes() {
+    run_gg("known_gaps/sound_amp_projection_two_writes.gg", "12");
+}
+
+/// KNOWN GAP — B4: `for x in &v: x = ...` over a SCALAR-element collection.
+/// Measured at HEAD: `1 / 2 / 3` — every write lost, `gg check` clean. The
+/// resource-element twin (`cow_for_amp_resource_elem_writethrough`) already
+/// writes through, so this is the by-value half of the same rule.
+/// ORACLE: out of ggdef's phase-0 subset (`for &` is Increment B2) — pinned
+/// against the rule, noted explicitly per Core #9.
+#[test]
+#[ignore = "KNOWN GAP: `for x in &v` over a scalar-element collection drops every write. \
+Asserts the INTENDED 11/12/13; TODO.md. Un-ignore when the by-value for-element write-through \
+lands."]
+fn sound_for_amp_scalar_elem_writethrough() {
+    run_gg(
+        "known_gaps/sound_for_amp_scalar_elem_writethrough.gg",
+        "\
+11
+12
+13",
+    );
+}
+
+// ── The `&`-in-an-OWNING-POSITION class ─────────────────────────────────────
+//
+// Seven costumes, each its own fixture (Core #4: fix the class, not the
+// instance; Core #12: axis-complete, not axis-sampled). All seven are `gg
+// check`-clean at HEAD. Four silently DROP the sigil; three are worse —
+// `[&c.fd]`, `(&c.fd, 5)` and `return &c.fd` store a RAW STACK ADDRESS into an
+// `int` slot on both backends, and the `return` costume additionally makes LLVM
+// fail hard in `llc`. ggdef REJECTS every row it covers.
+//
+// INTENDED for all seven: REJECT at `gg check`. D10(b) ADDENDUM 3 makes these
+// consuming ownership-BOUNDARY positions and D31 full-strict defines `&` as
+// "the callee writes through" — which an owning position cannot do.
+
+#[test]
+#[ignore = "KNOWN GAP (&-in-an-owning-position 1/7, struct ctor arg): sigil silently dropped on \
+C and LLVM; ggdef rejects. Asserts the INTENDED reject; TODO.md. Un-ignore when the \
+owning-position reject lands."]
+fn sound_amp_owning_position_ctor_rejected() {
+    check_gg_fails("known_gaps/sound_amp_owning_position_ctor.gg", "error[E_");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (&-in-an-owning-position 2/7, collection put): sigil silently dropped on \
+C and LLVM; ggdef rejects. Asserts the INTENDED reject; TODO.md. Un-ignore when the \
+owning-position reject lands."]
+fn sound_amp_owning_position_push_rejected() {
+    check_gg_fails("known_gaps/sound_amp_owning_position_push.gg", "error[E_");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (&-in-an-owning-position 3/7, enum payload): sigil silently dropped on C \
+and LLVM; ggdef rejects. Asserts the INTENDED reject; TODO.md. Un-ignore when the \
+owning-position reject lands."]
+fn sound_amp_owning_position_enum_rejected() {
+    check_gg_fails("known_gaps/sound_amp_owning_position_enum.gg", "error[E_");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (&-in-an-owning-position 4/7, dict-literal value): sigil silently dropped \
+on C and LLVM; out of ggdef's subset, pinned against the class rule. Asserts the INTENDED \
+reject; TODO.md. Un-ignore when the owning-position reject lands."]
+fn sound_amp_owning_position_dict_literal_rejected() {
+    check_gg_fails("known_gaps/sound_amp_owning_position_dict_literal.gg", "error[E_");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (&-in-an-owning-position 5/7, array literal) — GARBAGE-VALUE MISCOMPILE: \
+a raw stack address lands in an `int` slot on BOTH backends; ggdef rejects. Asserts the INTENDED \
+reject; TODO.md. Un-ignore when the owning-position reject lands."]
+fn sound_amp_owning_position_array_literal_rejected() {
+    check_gg_fails("known_gaps/sound_amp_owning_position_array_literal.gg", "error[E_");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (&-in-an-owning-position 6/7, tuple literal) — GARBAGE-VALUE MISCOMPILE: \
+a raw stack address lands in an `int` slot on BOTH backends; ggdef rejects. Asserts the INTENDED \
+reject; TODO.md. Un-ignore when the owning-position reject lands."]
+fn sound_amp_owning_position_tuple_literal_rejected() {
+    check_gg_fails("known_gaps/sound_amp_owning_position_tuple_literal.gg", "error[E_");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (&-in-an-owning-position 7/7, return value) — BACKEND DIVERGENCE: C \
+accepts and prints a raw stack address, LLVM hard-fails in llc ('%v4 defined with type ptr but \
+expected i64'). Asserts the INTENDED reject; TODO.md. Un-ignore when the value-position-& reject \
+lands."]
+fn sound_amp_owning_position_return_rejected() {
+    check_gg_fails("known_gaps/sound_amp_owning_position_return.gg", "error[E_");
+}
+
+/// LIVE CONTROL — the eighth position of the same axis, and the one production
+/// already gets right: a named `&`-bind rejects with the specific, actionable
+/// `E_LocalBorrowBind`. ggdef rejects it too. Keeping it live means the class
+/// fix cannot replace this diagnostic with a generic owning-position error.
+#[test]
+fn sound_amp_named_bind_control_rejected() {
+    check_gg_fails(
+        "known_gaps/sound_amp_named_bind_control.gg",
+        "error[E_LocalBorrowBind]",
+    );
+}
+
+/// KNOWN GAP — B7: `&` of a NON-PLACE (`&make().fd`). Measured at HEAD: accepted
+/// on C and LLVM, the write lands in a temporary that dies at end of statement.
+/// ggdef: "expression is not a place".
+#[test]
+#[ignore = "KNOWN GAP: `&` of a non-place (`&make().fd`) is accepted and the write is dead; \
+ggdef rejects with 'expression is not a place'. Asserts the INTENDED reject; TODO.md. Un-ignore \
+when the `&`-operand place gate lands."]
+fn sound_amp_non_place_rejected() {
+    check_gg_fails("known_gaps/sound_amp_non_place_reject.gg", "error[E_");
+}

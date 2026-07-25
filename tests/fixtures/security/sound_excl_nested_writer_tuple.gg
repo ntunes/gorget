@@ -1,0 +1,41 @@
+# DURABLE REPRO — D10 exclusivity hole A10 (tuple twin): the nested-writer
+# conflict at a TUPLE-LITERAL position (`(v[0], mutate(&v))`).
+#
+# The tuple twin of `sound_excl_nested_writer_ctor.gg`. It is a separate fixture
+# because D10(b) ADDENDUM 3's own reasoning is that one structural chokepoint
+# means ONE predicate for aggregate construction — it "cannot treat struct/tuple
+# one way and enum another". A fix that lands on `struct_init` and forgets
+# `tuple_init` is exactly the sibling-site drift Core #4 is about, and only a
+# per-sibling fixture catches it.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in
+# `gorget_string_clone_to_owned`.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict` (writer axis); the
+# mover spelling `(v[0], !v)` stays ACCEPTED.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): ACCEPTS this program and prints the
+# pre-mutation value. ggdef is a definitional INTERPRETER with value semantics,
+# so a reallocation cannot invalidate anything and this UAF class is
+# structurally unobservable in that lane — it is NOT the authority here. The
+# intended REJECT comes from the ratified D10 exclusivity ruling, which ggdef
+# owes as part of the same landing (Core #9). Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry (nested-writer costume, tuple sibling).
+int mutate(Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+    return v.len()
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    (String, int) t = (v[0], mutate(&v))
+    print(t.0)

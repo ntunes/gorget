@@ -1,0 +1,41 @@
+# DURABLE REPRO — the `&`-in-an-OWNING-POSITION class, costume 1 of 7:
+# a STRUCT-CONSTRUCTOR argument.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C and LLVM): `gg check` is clean, the
+# program runs, and the sigil is silently DROPPED — it prints 10, the same as
+# the unsigilled spelling. `ggdef` REJECTS: "`&`-alias into an owning position
+# is not valid". Both production backends agree on the wrong answer; per Core #8
+# that is two bugs, not a wash.
+#
+# INTENDED: REJECTED at `gg check`. D10(b) ADDENDUM 3 ratifies aggregate
+# construction as an OWNERSHIP BOUNDARY (the field must own), and D31
+# full-strict defines `&` as "the callee writes through" — which a constructor,
+# having taken ownership, cannot do. A sigil with no meaning at a position is
+# not a no-op to be quietly accepted; it is a Core #10 silent drop of user
+# syntax.
+#
+# The `fd` seed is COMPUTED, not a literal, so nothing const-folds.
+#
+# SIBLINGS — the whole class, each with its own fixture because Core #4 says fix
+# the class, not the instance:
+#   ..._ctor.gg (this)  ..._push.gg  ..._enum.gg  ..._dict_literal.gg
+#   ..._array_literal.gg  ..._tuple_literal.gg  ..._return.gg
+# plus the POSITIVE control `sound_amp_named_bind_control.gg` (already rejects
+# correctly, must stay rejecting) and the DROP facet
+# `security/sound_amp_array_literal_duplicate_drop.gg`.
+#
+# Cited from TODO.md (CoW / ownership / High): the `&`-at-a-constructor-position
+# entry, widened to the full class.
+struct Counter:
+    int fd
+
+struct Wrap:
+    int held
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Wrap w = Wrap(&c.fd)
+    print(w.held)

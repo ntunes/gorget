@@ -1,0 +1,54 @@
+# DURABLE REPRO — D10 exclusivity hole A10: the nested-writer conflict at a
+# STRUCT-CONSTRUCTOR position (`Pair(v[0], mutate(&v))`).
+#
+# This is the exact shape that forced the SAME-DAY AMENDMENT to D10(b)
+# ADDENDUM 3 (`docs/define-gorget/decisions.md`, end of the LOG). The addendum
+# first exempted owned-field ctor args from the overlap rule on the reasoning
+# that "this position already clones, so the arg is a value, not a live alias".
+# The GIR refutes it: the boundary clone is emitted at the `struct_init`, i.e.
+# AFTER every sibling arg has been evaluated —
+#   _8  = index_load _1, 0          (raw ptr into `v`)
+#   _11 = borrow_mut _1
+#   _12 = call @mutate(_11)         <- reallocs `v`; _8 now dangles
+#   _13 = call @gorget_string_clone_to_owned(_8)   <- reads FREED memory
+#   _14 = struct_init Pair { _13, _12 }
+# So an owned-field ctor arg IS a live alias across sibling evaluation.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend, `--sanitize`): `gg check`
+# clean, then AddressSanitizer heap-use-after-free in
+# `gorget_string_clone_to_owned`.
+#
+# INTENDED: REJECTED at `gg check` with `E_BorrowConflict`. Per the corrected
+# rule, an aggregate-init owned-field position is exempt on the MOVER axis only
+# (`Pair(v[0], !v)` stays ACCEPTED — see
+# `sound_ctor_mover_sibling_accept.gg`), and STILL PARTICIPATES against a
+# sibling WRITER, because a writer can realloc before the boundary clone runs.
+#
+# The 4096-push loop FORCES a real reallocation.
+#
+#
+# ORACLE (ggdef, measured this session): ACCEPTS this program and prints the
+# pre-mutation value. ggdef is a definitional INTERPRETER with value semantics,
+# so a reallocation cannot invalidate anything and this UAF class is
+# structurally unobservable in that lane — it is NOT the authority here. The
+# intended REJECT comes from the ratified D10 exclusivity ruling, which ggdef
+# owes as part of the same landing (Core #9). Full note in
+# `sound_excl_getchain_local.gg`.
+# Cited from TODO.md (CoW / ownership / High): the D10 "one exclusive writer"
+# structural-chokepoint entry (nested-writer costume, constructor sibling).
+struct Pair:
+    String s
+    int n
+
+int mutate(Vector[String] &v):
+    int i = 0
+    while i < 4096:
+        v.push("filler-padding-to-force-a-real-reallocation")
+        i = i + 1
+    return v.len()
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("alpha-heap-forced-payload")
+    Pair p = Pair(v[0], mutate(&v))
+    print(p.s)
