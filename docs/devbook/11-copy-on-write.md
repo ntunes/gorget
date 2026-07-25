@@ -301,37 +301,73 @@ move):
 
 | Site | Boundary |
 |------|----------|
-| `functions.rs:824,1099,1374,1767` | `return` value (`Ptr→T` auto-clone) |
-| `exprs/mod.rs:480` | tuple-literal field init (`Expr::TupleLiteral` in `lower_expr_inner`) |
-| `exprs/mod.rs:1950` | struct field init (`lower_struct_literal`) |
-| `exprs/mod.rs:2538` | match-arm value escaping an arm |
+| `functions.rs:1453,1764,2045,2456` | **expression-body** `return` value |
+| `stmts/mod.rs:1937` | **statement** `return` value (non-throws) |
+| `exprs/mod.rs:608` | tuple-literal field init (`Expr::TupleLiteral` in `lower_expr_inner`) |
+| `exprs/mod.rs:2141` | struct field init (`lower_struct_literal`) |
+| `exprs/mod.rs:3207` | match-arm value escaping an arm |
+| `exprs/mod.rs:4152` | fault-catch result escaping the catch |
 | `closures.rs:319,559` | closure capture |
+
+Both `return` forms go through the SAME helper on purpose. The statement return
+used to hand-roll its own `GirType::Ptr(inner)`-only clone, which was blind to
+the `MutPtr` a `&` parameter actually is — so `f(&v): v` cloned correctly while
+`f(&v): return v` handed the caller's own buffer back and double-freed it. The
+helper's test is `pointee_type`, which covers both pointer forms. Two legs the
+helper does not model stay at the return site, after it: the non-resource
+pointee deref (`Ref[T] → T`), and the no-clone-fn fallback that retypes `_0`
+into a Ptr and marks it borrowed. One shape stays in FRONT of it: a `return v`
+whose `v` is an owning `!` parameter is a TRANSFER, not a borrow — the caller
+already gave ownership away, so the return move-zeroes the parameter slot
+instead of cloning.
 
 Enum-variant init is **not** in this table: enum constructors route their
 borrow-clone through a dedicated helper, `emit_enum_init_owned` (called at
-`exprs/mod.rs:1409,1420,1478,1510,1536`), rather than `ensure_owned_at_boundary`.
+`exprs/mod.rs:1623,1638,1699,1731,…`), rather than `ensure_owned_at_boundary`.
+That helper clones the resource ARGS and then tags the aggregate `Owned`. A
+FIELD-LESS variant (`None()`, `Color.Red()`) needs neither: it has no payload to
+alias, so `FunctionBuilder::enum_init` tags it owned at construction — without
+that, a fresh `return None` looked `Untracked` to the boundary helper and got
+cloned defensively.
 
 `ensure_owned_at_consuming_arg` (last-use-aware consuming positions):
 
 | Site | Boundary |
 |------|----------|
-| `exprs/methods.rs:1915` | `push`/`put`/`set`/`add`/`extend`/`send`/`insert`/`push_back`/`push_front` |
-| `exprs/methods.rs:116` | `Box.new(value)` / `Box(value)` |
-| `stmts/assigns.rs:822,837,839` | `v[i]=x` / `d[k]=v` index-assign sugar |
-| `stmts/assigns.rs:636` | **field store** `self.field = x` (`clone_ptr_rhs_if_needed`) |
-| `exprs/calls.rs:612` | bare-name `Box(value)` constructor consuming value arg (sibling of the `Box.new(value)` site at `exprs/methods.rs:116`) |
+| `exprs/methods.rs:2431` | `push`/`put`/`set`/`add`/`extend`/`send`/`insert`/`push_back`/`push_front` |
+| `exprs/methods.rs:248` | `Box.new(value)` / `Box(value)` |
+| `stmts/assigns.rs:1358,1371,1373` | `v[i]=x` / `d[k]=v` index-assign sugar |
+| `stmts/assigns.rs:950` | **field store** `self.field = x` (`clone_ptr_rhs_if_needed`, called from `assigns.rs:611,706,722,772`) |
+| `stmts/assigns.rs:487` | store into a module-level static |
+| `exprs/collections.rs:121,155,491` | collection-literal element init |
+| `exprs/calls.rs:690` | bare-name `Box(value)` constructor consuming value arg (sibling of the `Box.new(value)` site at `exprs/methods.rs:248`) |
 
 Note one specific drift from the internals doc: it claims field store (its
 "point 7") is handled by a bespoke `Ptr`-detect-and-clone inside
 `lower_field_assign`. In current source the field-store RHS routes through the
-**shared** `ensure_owned_at_consuming_arg` helper
-(`clone_ptr_rhs_if_needed`, `assigns.rs:629`); the bespoke path described in the
-doc is gone (it was unified 2026-05-05 per the comment at `assigns.rs:623`).
+**shared** `ensure_owned_at_consuming_arg` helper (`clone_ptr_rhs_if_needed`,
+`assigns.rs:943`); the bespoke path described in the doc is gone.
 
 `var_decl` is deliberately *not* in either list: a typed binding
 (`String x = expr`) defaults to **borrow** like everything else and clones only
 on later mutation — the internals doc's "point 1 (assignment)" is the CoW
 default-borrow path now, not a clone site.
+
+That default holds for a `&` parameter too. `Vector[int] local = v` over a
+`Vector[int] &v` binds `local` as a **CoW `Ptr` alias of the parameter** —
+zero clones — and the first mutation of `local` materialises a private copy
+through `cow_before_mutation`, leaving the caller's value untouched. Two details
+make it work: the alias points at the PARAMETER, not at the unnamed auto-deref
+temp (which dies at end-of-statement — the dangling-alias class Branch C's own
+comment records), and the destination is re-typed to `Ptr`, without which the
+`Alias` tag is inert and the mutation would write straight through into the
+caller's buffer.
+
+**Re-assignment is different.** `local = v` targets an EXISTING owned value
+slot, and a value slot cannot be rebound to a borrow — earlier stores already
+wrote a value into it. So the re-assign is an ownership boundary like any other:
+the destination must own, and the source routes through
+`ensure_owned_at_boundary`.
 
 ### Refcount handles are clone-eligible by-value at consuming positions
 
