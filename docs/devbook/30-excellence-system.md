@@ -308,6 +308,37 @@ for living in the wrong place.
 **The health metric:** the honest signal that the process has thinned is
 reviews that only find compression errors and never a design defect.
 
+### Folding is where the defects come from
+
+A gauntlet catches defects in an artifact. It also *creates* them, and on one
+campaign the creation rate was high enough to dominate: three consecutive
+review passes each opened with a blocking finding that the previous fold had
+introduced.
+
+The mechanism is always the same. A reviewer reports that one clause in a
+paragraph is false. The fold replaces the **paragraph**, because that reads as
+the tidy edit — and the true material sitting beside the false clause goes with
+it. In one case a list of rejecting positions lost the word "returning", and the
+rule then licensed returning a borrow. In another, the paragraph carrying "this
+requirement does not apply to the move sigil" was replaced while the
+neighbouring sentence was strengthened into a universal, so the section rejected
+a form that the same section, a hundred lines further down, described as
+mandatory.
+
+Neither survived contact with the next reviewer, which is the system working.
+But each cost a full pass, and a pass is not cheap. The lesson is narrower than
+"be careful": **fold at the granularity of the defect.** If one clause is wrong,
+edit that clause. When a paragraph genuinely must be rewritten, diff the old
+against the new and account for every sentence that disappeared — the question
+is not "is the new text correct" but "what did the old text say that the new
+text no longer says".
+
+The same campaign gives the counter-example that makes the point precise. The
+one artifact that never regressed across four passes was a three-row table, and
+it never regressed because nobody ever needed to rewrite it — corrections landed
+in the prose around it. Small, self-contained, load-bearing statements survive
+folding. Long explanatory paragraphs do not.
+
 ## 7. Orchestration: how work actually gets lost
 
 Chapter 29's "Worktree discipline" section carries the full war stories for
