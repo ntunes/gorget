@@ -6530,3 +6530,93 @@ fn every_test_target_runs_in_ci() {
          rather than silent.)"
     );
 }
+
+/// Tier 3b ratchet: every RATIFIED decision must be traceable into the spec.
+///
+/// The define-gorget ledger (`docs/define-gorget/decisions.md`) is normative,
+/// but it is a decision RECORD — dated, adversarial, carrying rejected
+/// alternatives — while `language-reference.md` / `language-design.md` /
+/// `docs/book/` are timeless present-tense specification. The split is
+/// deliberate and enforced by `docs_plans_removed_and_define_gorget_is_ledger_only`.
+///
+/// The cost of the split is DRIFT, and it is this tree's most repeated
+/// documentation defect: a decision gets ratified, written through to one
+/// document, and its sibling goes on stating the superseded rule. Measured
+/// examples, all found by the 2026-07-26 sigil-prose gauntlet — `language-
+/// design.md` §3.5 was rewritten away from Rust's borrow rule while
+/// `language-reference.md` §9.2 still taught it (and §9.4 pointed the reader
+/// AT §9.2); D34's capture rule reached the book and not the reference; the
+/// escape-time and loop-element claims each landed in one place only.
+///
+/// A prose write-through with no `D<N>` citation is invisible to review: you
+/// cannot tell whether the text reflects the decision or predates it. So this
+/// lint requires the citation — every ratified D-number appears in at least
+/// one spec document. It does NOT check that the prose is CORRECT; it checks
+/// that someone claimed the write-through, which is the precondition for a
+/// reviewer being able to verify it.
+///
+/// Baseline 2026-07-26: 16 of 24 ratified decisions uncited; immediately burned
+/// to 14 by citing D32 (the legal-position whitelist) and D33 (the iterable-side
+/// sigil) in the sections they govern. Burn this down; lower BUDGET as decisions
+/// are written through. New decisions must cite.
+#[test]
+fn ratified_decisions_are_cited_in_the_spec() {
+    let ledger = fs::read_to_string("docs/define-gorget/decisions.md")
+        .expect("decisions.md readable");
+
+    let dnum = regex::Regex::new(r"\bD(\d{1,2})\b").unwrap();
+
+    // Ratified decisions: the LOG's `— **D<N> ...` entry headers.
+    let header = regex::Regex::new(r"—\s*\*\*D(\d{1,2})\b").unwrap();
+    let mut ratified: Vec<u32> = header
+        .captures_iter(&ledger)
+        .filter_map(|c| c[1].parse().ok())
+        .collect();
+    ratified.sort_unstable();
+    ratified.dedup();
+    assert!(
+        !ratified.is_empty(),
+        "no ratified decisions parsed from decisions.md — the LOG entry format \
+         (`- <date> — **D<N> ...`) changed and this lint reads nothing."
+    );
+
+    // Everything the SPEC cites, across the reference, the design doc, and the book.
+    let mut spec = String::new();
+    for p in ["docs/language-reference.md", "docs/language-design.md"] {
+        spec.push_str(&fs::read_to_string(p).unwrap_or_default());
+    }
+    if let Ok(entries) = fs::read_dir("docs/book") {
+        for e in entries.filter_map(|e| e.ok()) {
+            if e.path().extension().map_or(false, |x| x == "md") {
+                spec.push_str(&fs::read_to_string(e.path()).unwrap_or_default());
+            }
+        }
+    }
+    let cited: std::collections::HashSet<u32> = dnum
+        .captures_iter(&spec)
+        .filter_map(|c| c[1].parse().ok())
+        .collect();
+
+    let uncited: Vec<String> = ratified
+        .iter()
+        .filter(|d| !cited.contains(d))
+        .map(|d| format!("D{d}"))
+        .collect();
+
+    const BUDGET: usize = 14;
+    assert!(
+        uncited.len() <= BUDGET,
+        "ratified decisions with no citation in any spec document: {} (budget {}).\n\n\
+         Uncited: {}\n\n\
+         A ratified decision that names no spec section has no verifiable \
+         write-through — this tree's most repeated doc defect is a decision that \
+         reached one document and left its sibling stating the superseded rule.\n\n\
+         Either cite the D-number in the prose it governs, or (if the decision is \
+         genuinely internal and governs no user-visible surface) say so in its \
+         ledger entry and add it to this lint's exemption list.\n\n\
+         If the count went DOWN, lower BUDGET here to lock the new floor.",
+        uncited.len(),
+        BUDGET,
+        uncited.join(", ")
+    );
+}

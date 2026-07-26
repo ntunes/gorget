@@ -1316,3 +1316,32 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **⚠ NOT A BEHAVIOUR CHANGE TODAY. Capture-time materialisation STANDS**; the docs describe it as current and must not describe escape-time as though it were live. **COST: escape analysis** — not lifetimes. ⚠ SEE THE COST CORRECTION ABOVE: this clause originally read "a real analysis that does not exist", which measurement refuted — it exists and is correct at the return position. **INTERACTION: this lands directly on the open `return !f` question** — under escape-time semantics, returning a closure IS the escape that forces materialisation, which either gives `return !f` a well-defined meaning or identifies it as the thing to reject. Decide them together.
 
   **⚖ SEPARABLE AND ADOPTED NOW (owner, same exchange): a by-value SNAPSHOT is spelled as a closure PARAMETER, not as a capture.** If a closure needs a value fixed at a moment, pass it: `(String snap): ...`. Explicit, no inference, no analysis, and it is what parameters are for. This is the reliable spelling under *either* boundary rule, and the docs did not mention it.
+
+- 2026-07-26 — **D35 RATIFIED (owner): AN UNNAMED PARAMETER'S SIGIL GOES AFTER THE TYPE — `Callable[void(int &)]`, NOT `Callable[void(&int)]`.** Raised by the owner as a preference ("a bit like C prototypes"); measurement turned it into a correction, because the current spelling contradicts the language's own stated rule.
+
+  **THE INCONSISTENCY, stated twice in the same document twelve lines apart.** `AGENTS.md:113` and the reference both say the sigil goes **immediately before the argument NAME, not before the type** — `void modify(Message &msg)` ✓, `void modify(&Message msg)` ✗. Then `language-reference.md` says of the unnamed form: *"the sigil sits before the type"*, and requires `Callable[void(&int)]` — **precisely the shape the named rule rejects**. So the rule "the sigil marks the BINDING, not the type" was true for named parameters and inverted for unnamed ones, and no reader had cause to notice because the two statements never appear together.
+
+  **THE RULE, now uniform.** The sigil occupies the NAME's position. When there is a name it precedes it (`int &x`); when there is none it stays in that slot with nothing after it (`int &`). Nothing about the sigil attaches to the type in either case. C's `void f(int *)` has the same shape, which is where the owner's intuition came from, but the argument here is internal consistency, not analogy.
+
+  **MEASURED AT HEAD (2026-07-26), before the change — both sigils behave identically, so the change is symmetric:**
+  | spelling | today |
+  |---|---|
+  | `Callable[void(&int)]` / `Callable[void(& int)]` | accepted |
+  | `Callable[void(int &)]` / `Callable[void(int&)]` | **parse error** |
+  | `Callable[void(!String)]` | accepted |
+  | `Callable[void(String !)]` / `Callable[void(String!)]` | **parse error** |
+
+  **RATIFIED SHAPE.** `Type &` and `Type !` are the ONLY unnamed-parameter forms. **`&Type` / `!Type` are RETIRED, not co-accepted** — two spellings for one concept is worse than either, and D32's thesis is closing the enumeration by construction rather than accumulating accepted forms. Whitespace-insensitive: `int &` and `int&` both parse, as `&int`/`& int` both do today.
+
+  **RIDES D32.** This is a boundary-modifier position, so the parse must route through `parse_ownership_modifier` — the same mechanism D32 uses to define the legal-position whitelist by construction. Landing it as a separate special case would fight that design and re-open the position-by-position enumeration D32 exists to close.
+
+  **⚠⚠ BUNDLED WITH THE `Callable`-FUNCTION-TYPE SEGFAULT, BY OWNER DECISION — the construct being re-spelled DOES NOT WORK.** Measured (gauntlet pass 13, parent-reproduced): `void g(Callable[void(&int)] cb): int a = 1; cb(&a); print(a)` → `gg check` OK, **exit 139 on C AND LLVM**, no output; the `Callable[void(int)]` control runs clean. This is the reference's only `&`-in-a-function-type example — the §9.1 position table's row and the spelling note's sole unnamed-parameter example — so the canonical legal spelling crashes. A syntax change whose only test shape segfaults cannot be validated on its own, so the fix and the re-spelling land in ONE round with one fixture set. Filed on the `Callable`-costume census in `TODO.md`; the axis there is the callable's PROVENANCE (a whole-identifier `&` arg is green through a Callable LOCAL and fatal through a Callable PARAMETER), not the argument shape.
+
+  **LANE CENSUS (Core #9) — accept/reject surface, so all three lanes plus the formatter:**
+  1. **Rust gg** — parser: accept `Type &`/`Type !` in a function-type parameter list via `parse_ownership_modifier`; reject `&Type`/`!Type` with a diagnostic that names the replacement.
+  2. **ggdef** — same accept/reject within its subset; out-of-subset shapes noted explicitly.
+  3. **Self-host** — the THIRD reject lane (the 2026-07-21 lesson: an accept/reject change's lane census must include it, not just Rust+ggdef).
+  4. **`gg fmt`** — a round-trip fixture. The formatter rewrites sigil spellings, so a fmt that emits the retired form against a parser that rejects it is exactly what `assert_fmt_round_trips` exists to catch, and no existing fmt test covers an unnamed-parameter sigil.
+  5. **Migration** — every in-tree `&Type`/`!Type` occurrence in a function type (`lib/`, `tests/fixtures/`, self-host sources, docs) moves in the same commit; the retirement is a hard break, disclosed, per the robust-API-over-compat ruling.
+
+  **DOCS.** `language-reference.md`'s spelling note and §9.1 position table, `language-design.md`, and `AGENTS.md`'s quick-reference all state the named-vs-unnamed pair; the prose is folded to the ratified spelling immediately (this entry's own round), marked as specification until the parser lands.

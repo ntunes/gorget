@@ -2327,7 +2327,7 @@ for x in &xs:       # write through to the collection
 for x in !xs:       # consume the collection
 ```
 
-**Where `&` may appear.** A value must **cross from one scope into another**,
+**Where `&` may appear** (D32). A value must **cross from one scope into another**,
 and the sigil marks that crossing at **either end** — on the *declaration* of
 the side that will act, or on the *grant* at the crossing that permits it. A legal
 position is one of those two ends; where nothing crosses, there is nothing to
@@ -2336,7 +2336,7 @@ declare and nothing to grant, and the sigil is rejected:
 | | end | who acts |
 |---|---|---|
 | `f(&x)` | grant | the callee writes |
-| `for x in &xs` | grant | the loop body writes |
+| `for x in &xs` | grant | the loop body writes (D33: the sigil sits on the iterable) |
 | `[e for x in &xs]` | grant | the element expression writes |
 | `void f(int &x)` | declaration | the function writes into the caller's value |
 | `void f(&self)` | declaration | the method writes into the receiver |
@@ -2467,15 +2467,26 @@ A move capture is never inferred; it is requested with `!`.
 > resource. Avoiding `&` does not avoid it.
 
 **One spelling note.** The sigil precedes the *parameter*, and a parameter is
-spelled `&x` when it has a name and `&int` when it does not:
+spelled `&x` when it has a name and `int &` when it does not. The sigil always
+occupies the **name's** position — before the name when there is one, and in
+that same slot with nothing after it when there is not. It never attaches to
+the type:
 
 ```gorget
-void f(int &x)                    # named: the sigil sits before the name
-void g(Callable[void(&int)] cb)   # unnamed: the sigil sits before the type
+void f(int &x)                    # named:   the sigil sits before the name
+void g(Callable[void(int &)] cb)  # unnamed: the sigil sits where the name would
 ```
 
-Those are the only two forms; `&int x` and `Callable[void(int&)]` are both
-rejected.
+Those are the only two forms. `&int x` is rejected, and so is `&int` — putting
+the sigil before the type is the same mistake in both, with and without a name.
+
+> **Status against the current compiler (D35).** This is the ratified spelling
+> and is not implemented: today the parser accepts only the retired `&int` form
+> and rejects `int &`. The `!` twin behaves identically (`String !` is the
+> ratified form, `!String` the retired one). D35 also records that the shape
+> this note describes — a `Callable` parameter whose type declares a sigil —
+> **segfaults on both backends when called**, so the re-spelling and that fix
+> land together.
 
 Underneath the sigils, the ownership model itself is these ten rules:
 
