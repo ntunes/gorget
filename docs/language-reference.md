@@ -2329,6 +2329,21 @@ to grant and the sigil is rejected:
 `&a + 1` and `!a + 1` are both rejected for the same reason: `+` reads its
 operands and hands nothing to anyone.
 
+**At a resting position the two sigils differ, and that is deliberate.** Binding
+a name is a nothing-crosses position, so `&` has nothing to mark there and is
+rejected — but `!` is legal, and for single-owner types it is **required**:
+
+```gorget
+String w = !v      # legal — the value moves; it is simply `w`'s now
+String w = &v      # rejected
+Box[int] c = !b    # required — see the single-owner types below
+```
+
+The difference is what each sigil produces. A move hands over **the value
+itself**, which can then live wherever a value lives. A borrow would be a
+**route back** to a value someone else still owns — and that is a different
+question, answered below rather than by the crossing rule.
+
 **The sigil binds to the argument, directly.** `f(&x)` grants; `f((&x))` does
 not — parenthesising makes the sigil part of an inner expression rather than a
 mark on the argument, and the call is rejected.
@@ -2347,8 +2362,11 @@ by the sigil vocabulary:
 
 - a borrow may not be returned (`return &v`) or stored in a field, because it
   would outlive what it points at;
-- a local `&`-binding is rejected, because a place has exactly one writer and a
-  named borrow would be a second writable path to it;
+- a local `&`-binding is rejected twice over: the crossing rule says there is
+  nothing there for the sigil to mark, and independently a place has exactly one
+  writer, so a named borrow would be a second writable path to it. The first
+  says why you cannot *spell* it; the second says why it would be *unsound* if
+  you could;
 - a closure that captures by reference holds that capture exclusively for as
   long as the closure is live.
 
@@ -2377,7 +2395,7 @@ is the point of writing one.
 > element write-through through a loop or comprehension iterable; `&` through a
 > `Callable`-typed local segfaults; a sigil on a receiver (`&c.add(1)`) is
 > accepted and inert; and these remain accepted though ratified as rejects —
-> `return &v`, the operand positions, `&` at constructor/enum/`push` arguments,
+> `return &v`, the operand positions, `&` at constructor and enum-variant arguments, and at **builtin collection-method arguments as a class** (measured: `push`, `insert`, `set`, `put`, `add` are all unchecked, while user-declared functions and methods reject correctly),
 > container-literal elements, the retired `[e for x & in xs]` spelling, and
 > doubled `for x in & &a`.
 

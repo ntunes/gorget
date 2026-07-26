@@ -329,6 +329,12 @@ rather than in the body. Where nothing crosses there is no boundary, and a sigil
 is rejected: `&a + 1` produces a new value right here, `case Some(&p)` names part
 of a value already in hand, `String w = &v` binds in the same scope.
 
+At a resting position the two sigils part company, deliberately. `String w = !v`
+is legal — and for single-owner types required — because a move hands over the
+**value itself**, which can then live wherever a value lives. A borrow would be a
+**route back** to something someone else still owns, which is a different
+question from where a sigil may be written.
+
 A method's receiver is a **separate axis**, read from the signature rather than
 the call site. `void bump(&self)` writes through and `Vector[int] into_items(!self)`
 consumes, so a call that looks bare can still change or even take its receiver:

@@ -165,18 +165,31 @@ The last expression is the return value (no `return` keyword needed).
 
 ### Capturing Variables
 
-Closures capture by reference by default. They can read and mutate captured
-variables:
+Closures capture by **value** by default — the same rule as a bare parameter.
+A closure that only reads a captured variable gets its own copy, and the
+original is untouched.
+
+To write *through* to the outer variable, the capture is marked with `&`, the
+same sigil you would use at a call:
 
 ```gorget
 int count = 0
-auto increment = ():
+auto increment = (&count)():
     count += 1
 increment()
 increment()
 increment()
-print(f"{count}")    # 3
+print(count)    # 3
 ```
+
+A `&`-capture is exclusive while the closure is alive: the closure holds the
+only writable path to `count`, so you cannot read `count` from outside until
+the closure is done with it.
+
+> The capture-list syntax above is not implemented yet. Today the compiler
+> infers the mode from what the closure body does — a closure that assigns to a
+> captured variable captures it mutably — and a `&` written inside the body has
+> no effect.
 
 ### Move Closures
 
