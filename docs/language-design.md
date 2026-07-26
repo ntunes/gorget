@@ -311,6 +311,34 @@ The heart of the language. Three modes of passing data, with visual "loudness" m
 | Mutable borrow | `String &s` | `f(&name)` | Read+write access, caller keeps ownership |
 | Move (ownership) | `String !s` | `f(!name)` | Full ownership transfer, caller loses access |
 
+The "Meaning" column is the whole rule, and it generalises past calls. A sigil
+says what the **other side of a boundary** may do with a value you hand it, and
+therefore what you still have afterwards. A boundary is where a value **crosses
+from one scope into another**, and the sigil is written at the crossing — which
+is what makes every position decidable without a list:
+
+```gorget
+for x in xs:        # read each element
+for x in &xs:       # the loop body may write through to the collection
+for x in !xs:       # the loop consumes the collection
+```
+
+A loop is a boundary exactly as a call is: the body is the other side. A
+comprehension crosses into its element expression. A closure crosses at the
+**capture**, which is why the sigil goes in the capture list (`(&count)(): ...`)
+and not in the body.
+
+Where nothing crosses, there is no boundary and a sigil is rejected: `a + 1`
+produces a new value right here, `case Some(p)` names part of a value already in
+hand, `String w = v` binds in the same scope.
+
+The one asymmetry follows from the table rather than sitting beside it. A value
+you gave away can rest anywhere (`String w = !v`), because it is now someone
+else's to keep. A borrow cannot (`String w = &v` is rejected): keeping it would
+mean holding a window onto a value you do not own, with nothing to say how long
+it stays open — which is what lifetimes are for, and Gorget deliberately has
+none.
+
 ```gorget
 # Immutable borrow (default - no symbol, safest)
 void print_len(String s):
@@ -1242,42 +1270,6 @@ else:
 ```
 
 ### 5.7 Loops
-
-**What the sigils mean, everywhere.** A sigil says what the other side of a
-boundary may do with a value you hand it, and therefore what you still have
-afterwards: bare means they **read** it and you keep it unchanged; `&` means
-they **write** to it and you keep it with their changes; `!` means they **take**
-it and you no longer have it. A loop is a boundary exactly as a call is — the
-body is the other side — which is why the same three words read the same in
-both.
-
-What counts as a boundary is decidable rather than listed: a value **crosses
-from one scope into another**, and the sigil is written at the crossing. A call
-crosses into the callee, a loop into its body, a comprehension into its element
-expression, and a declaration names what arrives. Where nothing crosses —
-`a + 1` produces a new value right here, `case Some(p)` names part of a value
-already in hand, `String w = v` binds in the same scope — there is no boundary,
-and a sigil there is rejected.
-
-Closures cross as well, and they show the rule holding where it would be easiest
-to make an exception. The body is another scope, so a captured value crosses into
-it — and the crossing is the capture, which is exactly where the sigil goes:
-`(&count)(): ...` says the closure may write to `count`, `(!name)(): ...` says it
-takes it. A bare name in a capture list is rejected, because the sigil is the
-whole point of writing one. A `&`-capture is exclusive while the closure is live,
-so the value cannot be read from outside until the closure's last use.
-
-That the sigil belongs at the capture rather than in the body is not a special
-case bolted on for closures — it is the same sentence as everywhere else, applied
-to where the value actually crosses.
-
-The one asymmetry follows from that reading rather than sitting beside it. A
-value you gave away can rest anywhere (`String w = !v`), because it is now
-someone else's to keep. A borrow cannot (`String w = &v` is rejected): keeping
-it would mean holding a window onto a value you do not own, with nothing to say
-how long it stays open — which is what lifetimes are for, and Gorget
-deliberately has none.
-
 
 ```gorget
 # For loop (iterating - immutable borrow by default)

@@ -1764,100 +1764,9 @@ Creates a mutable borrow of a value. The original variable remains valid but can
 modify(&data)
 ```
 
-A mutable borrow is formed **at a boundary only** — never as an operand.
-
-**The three sigils, and what each says about your value.** When you hand a value
-across a boundary — into a call, into a loop, into a comprehension — the sigil
-says what the other side may do with it, and therefore what you still have
-afterwards:
-
-| you write | the other side may | afterwards you have |
-|---|---|---|
-| `f(x)` | read it | it, unchanged |
-| `f(&x)` | write to it | it, **with their changes** |
-| `f(!x)` | take it | **nothing — it is gone** |
-
-The same three read identically at every boundary:
-
-```gorget
-for x in xs:        # read each element
-for x in &xs:       # write through to the collection
-for x in !xs:       # consume the collection
-```
-
-A declaration marks the same boundary from the far end: `void f(int &x)` says
-*this function writes to whatever you pass it*, and `void f(int !x)` says *this
-function takes it*. The sigil at the call and the sigil on the declaration
-describe one boundary from two sides.
-
-**What counts as a boundary.** A boundary is where a value **crosses from one
-scope into another**, and the sigil is written at the crossing. That is the
-whole test, and it decides every position without a list:
-
-| | crosses into | |
-|---|---|---|
-| `f(&x)` | the callee's scope | ✓ a boundary |
-| `for x in &xs` | the loop body's scope | ✓ |
-| `[e for x in &xs]` | the element expression's scope | ✓ |
-| `void f(int &x)` | declares what arrives in this scope | ✓ |
-| `case Some(&p)` | nothing crosses — `p` names part of a value already here | ✗ rejected |
-| `String w = &v` | nothing crosses — you are naming `v` in this scope | ✗ rejected |
-| `&a + 1` | nothing crosses — `+` produces a new value here | ✗ rejected |
-
-This is also why the resting positions reject: it is not that a borrow is
-forbidden in a name, it is that **nothing crossed**, so there is no boundary for
-a sigil to mark.
-
-**Closures cross too, and the sigil goes in the capture list.** A closure body
-is another scope, so a captured value crosses into it — and the crossing is the
-capture. That is where the sigil is written, per variable:
-
-```gorget
-auto tally = (&count)():        # the closure may write to `count`
-    count = count + 1
-
-auto own = (!name, &total)(x):  # takes `name`, writes to `total`
-    ...
-```
-
-A bare name in a capture list is rejected — the sigil is how you say what the
-closure may do. `!()` is sugar for moving everything captured.
-
-A `&`-capture is exclusive for as long as the closure is live: the borrow ends
-at the closure's last use, and until then the value cannot be read from outside.
-
-Because the crossing is the capture, a sigil written *inside* the body is on the
-wrong side of it — the value arrived already, and nothing there can change how.
-
-**The sigil binds to the argument, directly.** `f(&x)` grants; `f((&x))` does
-not — parenthesising it makes the sigil part of an inner expression rather than
-a mark on the argument, and the call is rejected. The sigil is written where the
-value is handed over, with nothing between.
-
-**Where there is no other side, there is nothing to say.** `a + 1` reads `a` and
-produces a new value; nobody is being handed anything. So `&a + 1` and `!a + 1`
-are both rejected, as is a sigil on a match scrutinee, an index expression, or
-string interpolation.
-
-> This section describes the language as intended. Some of it is not yet
-> enforced or not yet correct in the current compiler — element write-through
-> through a loop or comprehension iterable, and `&` through a `Callable`
-> parameter, are known gaps, and the operand-position rejections above are
-> ratified but not yet implemented. Where the compiler and this section
-> disagree, this section is the specification and the compiler has a bug.
-
-**One asymmetry, and it follows from the table.** A value you gave away can rest
-anywhere, because it is now someone else's to keep:
-
-```gorget
-String w = !v      # legal — you handed it over; it lives in `w` now
-String w = &v      # rejected
-```
-
-A borrow cannot rest. Keeping `&v` in a name would mean holding a window onto a
-value you do not own, with nothing to say how long it stays open. That is what
-lifetimes are for, and Gorget deliberately has none — so a borrow lives only as
-long as the boundary it was granted across.
+A mutable borrow is formed **at a boundary only** — never as an operand. The
+rule that decides which positions are boundaries, and what each sigil means
+there, is in [§9.1 Ownership Rules](#91-ownership-rules).
 
 
 An iterable sigil grants a permission and does nothing by itself. In
@@ -2381,6 +2290,111 @@ Matches remaining fields in a constructor pattern (partial destructuring).
 Gorget enforces memory safety through compile-time ownership and borrowing rules, similar to Rust.
 
 ### 9.1 Ownership Rules
+
+**The three sigils, and what each says about your value.** When you hand a value
+across a boundary — into a call, into a loop, into a comprehension — the sigil
+says what the other side may do with it, and therefore what you still have
+afterwards:
+
+| you write | the other side may | afterwards you have |
+|---|---|---|
+| `f(x)` | read it | it, unchanged |
+| `f(&x)` | write to it | it, **with their changes** |
+| `f(!x)` | take it | **nothing — it is gone** |
+
+The same three read identically at every boundary:
+
+```gorget
+for x in xs:        # read each element
+for x in &xs:       # write through to the collection
+for x in !xs:       # consume the collection
+```
+
+A declaration marks the same boundary from the far end: `void f(int &x)` says
+*this function writes to whatever you pass it*, and `void f(int !x)` says *this
+function takes it*. The sigil at the call and the sigil on the declaration
+describe one boundary from two sides.
+
+**What counts as a boundary.** A boundary is where a value **crosses from one
+scope into another**, and the sigil is written at the crossing. That is the
+whole test, and it decides every position without a list:
+
+| | crosses into | |
+|---|---|---|
+| `f(&x)` | the callee's scope | ✓ a boundary |
+| `for x in &xs` | the loop body's scope | ✓ |
+| `[e for x in &xs]` | the element expression's scope | ✓ |
+| `void f(int &x)` | declares what arrives in this scope | ✓ |
+| `case Some(&p)` | nothing crosses — `p` names part of a value already here | ✗ rejected |
+| `String w = &v` | nothing crosses — you are naming `v` in this scope | ✗ rejected |
+| `&a + 1` | nothing crosses — `+` produces a new value here | ✗ rejected |
+
+This is also why the resting positions reject: it is not that a borrow is
+forbidden in a name, it is that **nothing crossed**, so there is no boundary for
+a sigil to mark.
+
+**Closures cross too, and the sigil goes in the capture list.** A closure body
+is another scope, so a captured value crosses into it — and the crossing is the
+capture. That is where the sigil is written, per variable:
+
+```gorget
+auto tally = (&count)():        # the closure may write to `count`
+    count = count + 1
+
+auto own = (!name, &total)(x):  # takes `name`, writes to `total`
+    ...
+```
+
+A bare name in a capture list is rejected — the sigil is how you say what the
+closure may do. `!()` is sugar for moving everything captured.
+
+A `&`-capture is exclusive for as long as the closure is live: the borrow ends
+at the closure's last use, and until then the value cannot be read from outside.
+
+Because the crossing is the capture, a sigil written *inside* the body is on the
+wrong side of it — the value arrived already, and nothing there can change how.
+
+**The sigil binds to the argument, directly.** `f(&x)` grants; `f((&x))` does
+not — parenthesising it makes the sigil part of an inner expression rather than
+a mark on the argument, and the call is rejected. The sigil is written where the
+value is handed over, with nothing between.
+
+**Where there is no other side, there is nothing to say.** `a + 1` reads `a` and
+produces a new value; nobody is being handed anything. So `&a + 1` and `!a + 1`
+are both rejected, as is a sigil on a match scrutinee, an index expression, or
+string interpolation.
+
+> This section describes the language as intended. Some of it is not yet
+> enforced or not yet correct in the current compiler — element write-through
+> through a loop or comprehension iterable, and `&` through a `Callable`
+> parameter, are known gaps, and the operand-position rejections above are
+> ratified but not yet implemented. Where the compiler and this section
+> disagree, this section is the specification and the compiler has a bug.
+
+**One asymmetry, and it follows from the table.** A value you gave away can rest
+anywhere, because it is now someone else's to keep:
+
+```gorget
+String w = !v      # legal — you handed it over; it lives in `w` now
+String w = &v      # rejected
+```
+
+A borrow cannot rest. Keeping `&v` in a name would mean holding a window onto a
+value you do not own, with nothing to say how long it stays open. That is what
+lifetimes are for, and Gorget deliberately has none — so a borrow lives only as
+long as the boundary it was granted across.
+
+**One spelling note.** The sigil precedes the *parameter*, and a parameter is
+spelled `&x` when it has a name and `&int` when it does not:
+
+```gorget
+void f(int &x)              # named: the sigil sits before the name
+Callable[void(&int)] g      # unnamed: the sigil sits before the type
+```
+
+Those are the only two forms; `&int x` and `Callable[void(int&)]` are both
+rejected.
+
 
 1. Every value has exactly one **owner** (the variable that holds it).
 2. When the owner goes out of scope, the value is dropped (freed).
