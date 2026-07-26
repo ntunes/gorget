@@ -59,10 +59,8 @@ jobs:
       # `cargo test` because the other steps need per-target thread counts and
       # env. The `every_test_target_runs_in_ci` lint asserts this list stays
       # complete — all three were red or unrun when it was written.
-      - name: Runtime targets
-        run: |
-          cargo test --test runtime_compile
-          cargo test --test str_runtime
+      - name: C runtime (direct-C tests)
+        run: cargo test --test c_runtime
 
       - name: Integration tests
         run: cargo test --test integration -- --test-threads=1
