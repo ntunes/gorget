@@ -10,12 +10,25 @@
 //! `strptime` unconditionally, so the bug is x86_64-Linux-specific and invisible
 //! to a macOS-only test pass.
 //!
-//! Why this is invisible to the normal test suite. The LLVM-backend build path
-//! compiles the runtime `.c` in isolation with `-w` (`src/main.rs`), which
-//! suppresses *all* warnings — including implicit-function-declaration — so a
-//! missing feature-test macro never surfaces. `-w` (verified, gcc 12.2.0)
-//! defeats BOTH `-Werror=implicit-function-declaration` AND `#pragma GCC
-//! diagnostic error`, in either order, so the guard MUST compile with NO `-w`.
+//! What this guard is for NOW — the original rationale has been fixed at the
+//! writer site and no longer applies. It was written because the build paths
+//! compiled the runtime `.c` with a blanket `-w`, which suppresses *all*
+//! warnings including implicit-function-declaration (verified, gcc 12.2.0:
+//! `-w` defeats BOTH `-Werror=implicit-function-declaration` AND `#pragma GCC
+//! diagnostic error`, in either order). That `-w` is **gone from `src/`
+//! entirely**, and both C-compile sites now carry the flag themselves:
+//! `src/main.rs:1141` (C backend) and `:1443` (the LLVM path's separate
+//! runtime compile). So an ordinary `gg build` now catches this class —
+//! measured by disabling `_XOPEN_SOURCE` in the preamble, which reds the
+//! `time_format` integration tests, not just this guard.
+//!
+//! This guard therefore survives as DEFENSE IN DEPTH, and that is a narrower
+//! claim than it once made: it applies
+//! `-Werror=implicit-function-declaration` *itself*, independently of
+//! `main.rs`, so it still fires if either cc site ever drops the flag — the
+//! regression that would silently return the whole class to invisibility. If
+//! that argument ever stops being worth a test target, delete this file rather
+//! than letting the comment drift again.
 //!
 //! What this guard does (per the executable-guard style in
 //! `docs/devbook/25-structural-guards.md`): it emits the full self-contained C
