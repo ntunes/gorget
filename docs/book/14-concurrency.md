@@ -489,18 +489,19 @@ void parent():
     spawn ((): print(msg))()  # the closure captures `msg` from the enclosing scope
 ```
 
-Closures that capture a `shared` directly (use `shared.get()` inside the closure
-body instead) are also intended to be rejected. A mutable (`&`-bound) capture is
-not rejected — under D34 it is materialised at the escape like any other, so the
-mutation lands on the closure's own state. Reading a Copy value (int, bool,
-etc.) by capture is always safe.
+Capturing a `shared` directly is a separate rule and is intended to be rejected:
+the point of `shared` is that access goes through its lock, so a closure must
+call `shared.get()` in its body rather than close over the variable. Ordinary
+locals are not rejected — under D34 a captured local is materialised at the
+escape, so a mutating capture lands on the closure's own state. Reading a Copy
+value (int, bool, etc.) by capture is always safe.
 
 > **Status against the current compiler.** No spawn-capture check fires on the
 > shape above — it compiles, so `spawn unchecked` opts out of nothing here.
-> Under D34 the intended response to an escaping capture is materialising it at
-> the escape rather than rejecting the program — which makes the capture check
-> unnecessary rather than smarter. The rejection framing above is therefore
-> superseded for captures: the specification is materialisation at the escape.
+> Under D34 the intended response to an escaping capture of a LOCAL is
+> materialising it at the escape rather than rejecting the program, which makes
+> that check unnecessary rather than smarter. The `shared`-capture rejection is
+> untouched by D34 — it is lock discipline, not escape safety — and stands.
 
 ### Escape Hatch — `spawn unchecked`
 

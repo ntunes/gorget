@@ -1,0 +1,64 @@
+# DURABLE REPRO — a `Callable`-typed `&`-PARAMETER ICEs the compiler.
+#
+# WRONG TODAY (measured at HEAD, Rust gg): `gg check` reports "OK: no semantic
+# errors", then `gg build` PANICS:
+#
+#   GIR validation errors:
+#     function @with_it, bb0: call to undefined function @cb
+#   thread 'gg-main' panicked at src/ir/lowering/mod.rs:1737:13:
+#   GIR module failed validation (1 errors)
+#
+# So the indirect-call lowering does not recognise `cb` as a CALLABLE LOCAL when
+# it arrives as a `Callable[..] &` parameter — it lowers `cb(&v)` as a direct
+# call to a function literally named `cb`, which does not exist. An accepted
+# program that crashes the compiler is a defect regardless of what the language
+# eventually decides about this shape.
+#
+# ⚠ DISTINCT FROM THE THREE FILED `Callable` SIBLINGS, and the distinguishing
+# axis is the SIGIL ON THE PARAMETER, not the argument:
+#   A1  `sound_callable_amp_param_indirect_call.gg`  — Callable LOCAL bound to
+#       an `&`-param function; `&`-ARG is a whole local        -> SEGFAULT
+#   A2  `security/sound_callable_amp_param_projection.gg`      -> SEGFAULT
+#       — Callable arrives as a bare PARAM; `&`-ARG is `&c.fd`
+#   THIS — the Callable parameter is itself `&`-SIGILLED
+#       (`Callable[int(&int)] &cb`)                            -> ICE
+# The first two reach the backend and crash at RUNTIME; this one never gets
+# there. Do not assume a fix for the segfault family covers this cell.
+#
+# INTENDED: one of two, and the round that closes this must pick.
+#   (a) The shape is meaningful — a `&`-param Callable is an ordinary
+#       write-through parameter — so `cb(&v)` lowers as an INDIRECT call and
+#       the program prints 11 then 11.
+#   (b) A `Callable` may not take the `&` sigil at all (it is a single-owner
+#       carve-out type and is simply BORROWED at a call, per AGENTS.md's
+#       "Ownership at Consuming Positions"), in which case the reference-grade
+#       answer is a CHECK-TIME rejection.
+# Either way the ICE is wrong: `gg check` must not pass a program the lowering
+# then panics on (Core #10, lower-or-reject).
+#
+# ⚠ This fixture asserts reading (a). If the round rules (b), REPLACE the
+# assertion with the reject rather than deleting the fixture — the ICE is the
+# defect under both readings.
+#
+# ORACLE (ggdef): OUT OF SUBSET — ggdef does not reify a named function into a
+# `Callable` value ("unresolved local"), the same gap recorded for A2.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the call.
+#
+# Cited from TODO.md (CoW / ownership / High).
+
+int seed():
+    return 10
+
+int bumpret(int &n):
+    n = n + 1
+    return n
+
+int with_it(Callable[int(&int)] &cb, int &v):
+    return cb(&v)
+
+void main():
+    int x = seed()
+    Callable[int(&int)] f = bumpret
+    print(with_it(&f, &x))
+    print(x)

@@ -36306,3 +36306,30 @@ fn test_traced_runs_all_tests() {
         true,
     );
 }
+
+/// KNOWN GAP — a `Callable`-typed `&`-PARAMETER ICEs the compiler. `gg check`
+/// passes, then `gg build` panics with "GIR validation errors: function
+/// @with_it, bb0: call to undefined function @cb" at
+/// `src/ir/lowering/mod.rs:1737` — the indirect-call lowering does not
+/// recognise `cb` as a callable local when it arrives as a `Callable[..] &`
+/// parameter, so it emits a direct call to a function named `cb`.
+///
+/// DISTINCT from the two filed `Callable` siblings, on the sigil-on-the-PARAM
+/// axis: `sound_callable_amp_param_indirect_call.gg` and
+/// `security/sound_callable_amp_param_projection.gg` both reach the backend and
+/// SEGFAULT at runtime; this one never gets there. A fix for the segfault
+/// family does not necessarily cover this cell.
+///
+/// Asserts reading (a) — the shape is meaningful and lowers as an indirect
+/// call. If the round instead rules that `Callable` may not take `&` at all
+/// (it is a single-owner carve-out, borrowed at calls), REPLACE this with the
+/// reject rather than deleting it: the ICE is the defect under both readings,
+/// because `gg check` must not pass a program the lowering panics on.
+#[test]
+#[ignore = "KNOWN GAP: a `Callable`-typed `&`-parameter passes gg check then ICEs in GIR \
+validation ('call to undefined function @cb'). Asserts the INTENDED accept-and-run; TODO.md. \
+Un-ignore when the indirect-call lowering handles a `&`-sigilled Callable param, or REPLACE \
+with the reject if the language rules `&` illegal on Callable."]
+fn sound_callable_amp_param_ices() {
+    run_gg("known_gaps/sound_callable_amp_param_ices.gg", "11\n11");
+}

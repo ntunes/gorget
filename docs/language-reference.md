@@ -2125,7 +2125,7 @@ spawn obj.method()       # ERROR — method calls not supported
 spawn get_fn()(x)        # ERROR — indirect call
 ```
 
-**Closures can be spawned if their captures are safe** (owned or Copy types). The compiler tracks each closure's capture set and is specified to reject closures that capture borrowed references:
+**Closures can be spawned if their captures are safe** (owned or Copy types). The compiler tracks each closure's capture set. A `spawn` is an **escape**, so under D34 a capture that crosses it is *materialised at the escape* rather than rejected — the closure gets its own value and cannot dangle:
 
 ```gorget
 int x = 42
@@ -2136,8 +2136,8 @@ auto c = (): print(x)
 spawn c()                       # OK — closure variable with Copy capture
 
 String name = get_name()
-spawn ((): print(name))()       # specified as an error; ACCEPTED today
-                                # (see docs/book/14-concurrency.md §3.10)
+spawn ((): print(name))()       # OK — the capture materialises at the escape
+                                # (D34; see docs/book/14-concurrency.md §3.10)
 
 Shared[int] counter = Shared[int](0)
 spawn ((): print(counter.get()))()  # OK — Shared[T] is Copy
@@ -2150,11 +2150,19 @@ async void worker(String name):
     print(name)
 
 void launch(String name):
-    # ERROR: name is a borrowed String — thread may outlive launch()
+    # specified as an error: name is a borrowed String, and the thread may
+    # outlive launch(); ACCEPTED today — see the status note below
     auto t = spawn worker(name)
     # FIX: pass an owned String instead
     auto t2 = spawn worker(String(name))   # or redesign worker to take String
 ```
+
+> **Status against the current compiler.** The rule above is the specification.
+> `E_SpawnWithBorrowedRef` exists but no ordinary borrow shape has been observed
+> to trip it — including the example above, which the compiler accepts. Whether
+> the guard is live and the reachable shape simply has not been found, or
+> escape-safety subsumes it entirely, is an open question; the repro is
+> `tests/fixtures/known_gaps/sound_spawn_borrowed_ref_never_rejected.gg`.
 
 **`spawn` is not a suspension point.** The current function continues immediately after `spawn`, so non-borrowed values remain valid:
 
@@ -2432,7 +2440,7 @@ void g(Callable[void(&int)] cb)   # unnamed: the sigil sits before the type
 Those are the only two forms; `&int x` and `Callable[void(int&)]` are both
 rejected.
 
-Underneath the sigils, the ownership model itself is five rules:
+Underneath the sigils, the ownership model itself is a handful of rules:
 
 1. Every value has exactly one **owner** (the variable that holds it).
 2. When the owner goes out of scope, the value is dropped (freed).
