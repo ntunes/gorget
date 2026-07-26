@@ -1243,20 +1243,24 @@ else:
 
 ### 5.7 Loops
 
-**What the sigils mean, everywhere.** `&` and `!` are not operators. They
-describe what the *other side* of a boundary may do to a value — bare means
-**read it**, `&` means **write to it**, `!` means **consume it** — and they mark
-a position rather than an expression. A loop is a boundary like a call is: the
-body is the other side. That is why the same three-way vocabulary reads the same
-in both, and why a sigil in an operand position — `&a + 1` or `!a + 1` alike —
-is rejected: `+` only reads its operands, so there is no other side to grant
-anything to.
+**What the sigils mean, everywhere.** A sigil says what the other side of a
+boundary may do with a value you hand it, and therefore what you still have
+afterwards: bare means they **read** it and you keep it unchanged; `&` means
+they **write** to it and you keep it with their changes; `!` means they **take**
+it and you no longer have it. A loop is a boundary exactly as a call is — the
+body is the other side — which is why the same three words read the same in
+both.
 
-The two sigils part company at a *resting* position. `String w = !v` is legal
-and `String w = &v` is not, because a move yields an **owned value** that can
-live in `w`, while a borrow yields an **alias** that would need a lifetime to
-bound it — and Gorget deliberately has no lifetimes. One rule, two kinds of
-result.
+Where there is no other side, there is nothing to say: `a + 1` reads `a` and
+produces a new value, so `&a + 1` and `!a + 1` are both rejected.
+
+The one asymmetry follows from that reading rather than sitting beside it. A
+value you gave away can rest anywhere (`String w = !v`), because it is now
+someone else's to keep. A borrow cannot (`String w = &v` is rejected): keeping
+it would mean holding a window onto a value you do not own, with nothing to say
+how long it stays open — which is what lifetimes are for, and Gorget
+deliberately has none.
+
 
 ```gorget
 # For loop (iterating - immutable borrow by default)

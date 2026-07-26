@@ -1518,10 +1518,11 @@ From lowest to highest precedence:
 | 15         | `as`                         | Left          |
 | 16         | Unary prefix `-` `not` `~` `*`, `spawn` | Right |
 
-> **`&` and `!` are NOT in this table.** They are not operators — they are
-> boundary markers, and they may appear only at the positions listed in
-> [§9.3](#93-call-site-ownership-validation). A `&` in an operand position is
-> rejected.
+> **Looking for `&` or `!`?** They are not in this table. They do not combine
+> values the way an operator does — they say what the other side of a boundary
+> may do with a value you hand it. See
+> [§9.3](#93-call-site-ownership-validation). A sigil where there is no boundary
+> (`&a + 1`, `!a + 1`) is rejected.
 | 17         | Postfix `.` `?.` `()` `[]` `.0` `.1`        | Left          |
 | 18         | Atoms (literals, identifiers, grouped expressions) | — |
 
@@ -1765,41 +1766,48 @@ modify(&data)
 
 A mutable borrow is formed **at a boundary only** — never as an operand.
 
-**The rule, in one sentence.** The sigils describe what the *other side* of a
-boundary may do to a value: **bare** = read it, **`&`** = write to it, **`!`** =
-consume it. They mark a *position*, not an expression, and they appear at both
-ends of a boundary — on the declaration that will act, and on the argument that
-grants it:
+**The three sigils, and what each says about your value.** When you hand a value
+across a boundary — into a call, into a loop, into a comprehension — the sigil
+says what the other side may do with it, and therefore what you still have
+afterwards:
 
-| position | end | who acts |
+| you write | the other side may | afterwards you have |
 |---|---|---|
-| `void f(int &x)` | declaration | the function writes into the caller's value |
-| `f(&x)` | grant | the callee writes |
-| `equip T: void m(&self)` | declaration | the method writes into the receiver |
-| `for x in &xs` | grant | the loop body writes |
-| `[e for x in &xs]` | grant | the element expression writes |
-| `Callable[void(&int)]` | declaration (type) | a function of this type writes |
+| `f(x)` | read it | it, unchanged |
+| `f(&x)` | write to it | it, **with their changes** |
+| `f(!x)` | take it | **nothing — it is gone** |
 
-**Where there is no boundary, a sigil grants nothing and is rejected — and this
-holds for `&` and `!` alike.** An operator only *reads* its operands: `+` takes
-two values and produces a third, leaving both intact. So neither "write to it"
-nor "consume it" has anyone to grant anything to. `int y = &a + 1` and
-`int y = !a + 1` are both rejected, as are a sigil on a match scrutinee, an
-index expression, or string interpolation.
-
-**Where the two sigils differ is at a resting position** — binding a name,
-returning, storing in a field:
+The same three read identically at every boundary:
 
 ```gorget
-String w = !v      # legal: the value MOVES, and lives in `w`
-String w = &v      # rejected: a borrow has nowhere to live
+for x in xs:        # read each element
+for x in &xs:       # write through to the collection
+for x in !xs:       # consume the collection
 ```
 
-A move produces an **owned value**, so it can rest anywhere a value can. A
-borrow produces an **alias**, which would need a lifetime to say how long it
-stays valid — and Gorget has no lifetimes, by design. That is the whole of the
-asymmetry: it is not two rules, it is one rule meeting two different kinds of
-result.
+A declaration marks the same boundary from the far end: `void f(int &x)` says
+*this function writes to whatever you pass it*, and `void f(int !x)` says *this
+function takes it*. The sigil at the call and the sigil on the declaration
+describe one boundary from two sides.
+
+**Where there is no other side, there is nothing to say.** `a + 1` reads `a` and
+produces a new value; nobody is being handed anything. So `&a + 1` and `!a + 1`
+are both rejected, as is a sigil on a match scrutinee, an index expression, or
+string interpolation.
+
+**One asymmetry, and it follows from the table.** A value you gave away can rest
+anywhere, because it is now someone else's to keep:
+
+```gorget
+String w = !v      # legal — you handed it over; it lives in `w` now
+String w = &v      # rejected
+```
+
+A borrow cannot rest. Keeping `&v` in a name would mean holding a window onto a
+value you do not own, with nothing to say how long it stays open. That is what
+lifetimes are for, and Gorget deliberately has none — so a borrow lives only as
+long as the boundary it was granted across.
+
 
 An iterable sigil grants a permission and does nothing by itself. In
 `[bump(&x) for x in &xs]` the outer `&xs` opens the collection, and the inner
