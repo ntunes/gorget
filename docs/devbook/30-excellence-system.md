@@ -136,6 +136,45 @@ must use a scalars-only struct, or it is fake coverage inside an
 otherwise-correct enumeration. This is Core #15's question 6 showing up inside
 Core #12.
 
+### Green on arrival: the five-month regression
+
+The clause that binds RED-verification to *every* new fixture, not just
+bug-fix ones, was bought by a single bisect.
+
+A write-through as plain as `inc(&c.fd)` — a local, a struct field with an
+`int` in it, the sigil at an ordinary call argument — silently discarded the
+callee's write. The definitional oracle disagreed with both production
+backends. Bisected, the break was five months old, and it arrived inside a
+commit whose subject was about compile-time builtins: the diff also carried a
+few hundred lines of C-backend and lowering changes, which is the shape of
+commit a regression rides in on unnoticed.
+
+The commit's own message recorded that the whole integration suite passed. That
+was true, and it is the uncomfortable part: at that revision **no fixture in
+the corpus passed an `&`-of-a-projection to a call at all**. The suite was not
+negligent, the shape was simply absent, and an absent shape cannot regress.
+
+Coverage did arrive — four months later. Two fixtures landed whose names
+promised exactly this feature. Both used a `Vector[int]` field, and a
+thin-pointer field is one of the two cells that happen to work: the read path
+already yields a pointer, so the sigil forwards it and the write lands. The
+fixtures went green the day they were written and stayed green, and their names
+told every subsequent reader that the ground was covered. Nothing measured the
+type axis for another three weeks, and when something finally did, the feature
+scored two working cells against eighteen broken ones.
+
+Three failures stacked, and only the middle one is really about testing: the
+defect was invisible when it landed; the net that eventually arrived sampled
+the working cell; and no one asked which cell it sampled, because the filename
+answered a question it had not actually been asked.
+
+Hence the two clauses. A fixture that has never been observed to fail is a
+claim, not a net — and when there is no pre-fix compiler to run against,
+breaking the guarded mechanism on purpose is the only way to observe the red.
+And a fixture's name is read far more often than its body, which makes the name
+a scope claim in its own right: either it is true, or it is narrowed until it
+is.
+
 ## 4. Verify the verifier: instruments and their scopes
 
 **A gate never seen to fail is not evidence.** A scout once changed one lane's
