@@ -1248,8 +1248,15 @@ describe what the *other side* of a boundary may do to a value — bare means
 **read it**, `&` means **write to it**, `!` means **consume it** — and they mark
 a position rather than an expression. A loop is a boundary like a call is: the
 body is the other side. That is why the same three-way vocabulary reads the same
-in both, and why a sigil in an operand position (`&a + 1`) is rejected: `+` only
-reads, so there is no other side to grant anything to.
+in both, and why a sigil in an operand position — `&a + 1` or `!a + 1` alike —
+is rejected: `+` only reads its operands, so there is no other side to grant
+anything to.
+
+The two sigils part company at a *resting* position. `String w = !v` is legal
+and `String w = &v` is not, because a move yields an **owned value** that can
+live in `w`, while a borrow yields an **alias** that would need a lifetime to
+bound it — and Gorget deliberately has no lifetimes. One rule, two kinds of
+result.
 
 ```gorget
 # For loop (iterating - immutable borrow by default)

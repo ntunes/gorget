@@ -1780,10 +1780,26 @@ grants it:
 | `[e for x in &xs]` | grant | the element expression writes |
 | `Callable[void(&int)]` | declaration (type) | a function of this type writes |
 
-Where there is no boundary, a sigil grants nothing and is **rejected**:
-`int y = &a + 1` is rejected because `+` only reads its operands — there is no
-other side that could write. The same holds for a match scrutinee, an index
-expression, and string interpolation.
+**Where there is no boundary, a sigil grants nothing and is rejected — and this
+holds for `&` and `!` alike.** An operator only *reads* its operands: `+` takes
+two values and produces a third, leaving both intact. So neither "write to it"
+nor "consume it" has anyone to grant anything to. `int y = &a + 1` and
+`int y = !a + 1` are both rejected, as are a sigil on a match scrutinee, an
+index expression, or string interpolation.
+
+**Where the two sigils differ is at a resting position** — binding a name,
+returning, storing in a field:
+
+```gorget
+String w = !v      # legal: the value MOVES, and lives in `w`
+String w = &v      # rejected: a borrow has nowhere to live
+```
+
+A move produces an **owned value**, so it can rest anywhere a value can. A
+borrow produces an **alias**, which would need a lifetime to say how long it
+stays valid — and Gorget has no lifetimes, by design. That is the whole of the
+asymmetry: it is not two rules, it is one rule meeting two different kinds of
+result.
 
 An iterable sigil grants a permission and does nothing by itself. In
 `[bump(&x) for x in &xs]` the outer `&xs` opens the collection, and the inner
