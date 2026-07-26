@@ -2384,9 +2384,16 @@ value crosses into it, and the sigil belongs in a per-variable capture list —
 sugar for moving everything. A bare name in a capture list is rejected: the sigil
 is the point of writing one.
 
-A capture is an ownership boundary, so a bare capture takes a value — the
-closure may outlive what it captured. To fix a value at a particular moment
-without capturing it, pass it as a closure **parameter** instead.
+A bare capture is an **immutable borrow**, the same as a bare parameter: the
+closure reads the variable and does not own it. A closure that **escapes** its
+defining scope materialises its captures at the escape, because at that point
+the destination must own — the same boundary rule as a `return`.
+
+A move capture is never inferred; it is requested with `!`.
+
+> Today the compiler materialises captures at the *capture* rather than at the
+> escape, so a bare capture behaves as a snapshot taken when the closure is
+> created. The borrow-until-escape rule above is the specification.
 
 > **Status against the current compiler.** This section is the specification;
 > where the compiler disagrees it has a bug. Known divergences:
@@ -2397,7 +2404,7 @@ without capturing it, pass it as a closure **parameter** instead.
 > **an escaping closure that captured a local by reference reads freed stack on
 > both backends**; write-through of a by-value field (`f(&c.fd)`) is lost, as is
 > element write-through through a loop or comprehension iterable; `&` through a
-> `Callable`-typed local segfaults; a sigil on a receiver (`&c.add(1)`) is
+> `Callable`-typed value segfaults, whether it is a local or a parameter; a sigil on a receiver (`&c.add(1)`) is
 > accepted and inert; and these remain accepted though ratified as rejects —
 > `return &v`, the operand positions, `&` at constructor and enum-variant arguments, and at **any compiler-builtin call argument — free function or method** (`print(&a)`, `len(&xs)`, `s.contains(&t)`, `v.push(&a)` are all accepted). The mechanism is that the sigil gate only runs where the callee has a resolved signature, so **user-declared functions and methods, and `extern` functions with a signature, all reject correctly**,
 > container-literal elements, the retired `[e for x & in xs]` spelling, and
@@ -2516,7 +2523,7 @@ not `&c.add_all(...)`); the receiver's own borrow is a separate axis (§9.1).
 
 **Contractual consumption only.** This rule governs `!`/`&` **parameters**. A
 bare value flowing into a *non-`!`* consuming position — a collection `push`, a
-constructor field, a `return`, a closure capture — is **not** sigil-marked: the
+constructor field, a `return` — is **not** sigil-marked: the
 compiler still moves it when it is dead (copy-on-write, §9.6), but that is an
 invisible optimization, not part of any API contract, so no `!` appears.
 
@@ -2634,7 +2641,7 @@ the same; only the cost differs.)
 8. **Match-arm extraction that escapes** — a resource-type value bound out of a `case` pattern and used past the match arm
 9. **Channel send** — sending a borrowed value across a channel (`ch.send(x)`)
 10. **Spawn / task capture** — capturing a borrowed value into a spawned task
-11. **Escaping-closure capture** — a closure that outlives the capture's source closing over a borrowed value
+11. **Escaping-closure capture** — a closure that outlives the capture's source closing over a borrowed value. *(Specification: the compiler currently materialises at the capture instead, so a bare capture behaves as a snapshot — see §9.1.)*
 12. **Borrowed-extern return** — the result of an `extern borrowed T f(...)` call (the FFI returned a non-owning alias, cloned so the caller's slot survives later FFI mutations)
 13. **Comprehension into an owned collection** — a comprehension whose elements are collected into an owned collection
 

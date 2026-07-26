@@ -165,9 +165,9 @@ The last expression is the return value (no `return` keyword needed).
 
 ### Capturing Variables
 
-Closures capture by **value** by default — the same rule as a bare parameter.
-A closure that only reads a captured variable gets its own copy, and the
-original is untouched.
+Closures capture by **immutable borrow** by default — the same rule as a bare
+parameter. A closure that only reads a captured variable does not own it, and
+the original is untouched.
 
 To write *through* to the outer variable, the capture is marked with `&`, the
 same sigil you would use at a call:
@@ -186,10 +186,11 @@ A `&`-capture is exclusive while the closure is alive: the closure holds the
 only writable path to `count`, so you cannot read `count` from outside until
 the closure is done with it.
 
-> The capture-list syntax above is not implemented yet. Today the compiler
-> infers the mode from what the closure body does — a closure that assigns to a
-> captured variable captures it mutably — and a `&` written inside the body has
-> no effect.
+> Two things above are specification rather than today's compiler. The
+> capture-list syntax is not implemented — the mode is currently inferred from
+> what the closure body does, and a `&` written *inside* the body has no effect.
+> And a bare capture currently behaves as a snapshot taken when the closure is
+> created, rather than as a borrow.
 
 ### Move Closures
 

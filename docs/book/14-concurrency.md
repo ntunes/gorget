@@ -473,15 +473,19 @@ void parent():
 Fix: wrap the value in `shared Config`, pass by value (if Copy), move ownership with
 `!cfg`, or use a channel to communicate.
 
-### §3.10 — Closure captures a borrow
+> **Status against the current compiler.** The rule above is the specification.
+> `E_SpawnWithBorrowedRef` exists but no ordinary borrow shape has been observed
+> to trip it — including the example above, which the compiler accepts today.
 
-A closure passed to `spawn` captures a local by value, like any other closure. Same risk as §3.9 — the capture
-could outlive the caller.
+### §3.10 — Closure captures a local
+
+A closure passed to `spawn` escapes into the child task, so its captures must be
+materialised at that boundary — the closure may outlive the local it read. Same risk as §3.9.
 
 ```gorget
 void parent():
     String msg = "hello"
-    spawn ((): print(msg))()  # ERROR: captures msg by borrow (String is a resource)
+    spawn ((): print(msg))()  # the closure captures `msg` from the enclosing scope
 ```
 
 The compiler likewise rejects closures that capture a `shared` directly (use `shared.get()`

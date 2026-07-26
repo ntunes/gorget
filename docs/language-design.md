@@ -1581,11 +1581,13 @@ void() do_nothing = (): pass
 
 Closures support three user-facing capture modes:
 
-- **By value** (default) — the closure gets its own copy, taken when the closure is created. The outer binding stays valid and is unaffected by anything the closure does; equally, later changes to the outer binding are not seen by the closure.
+- **Immutable borrow** (default) — the closure reads the variable without owning it, exactly as a bare parameter does. The outer binding stays valid.
 
-  This is the ownership rule doing its usual job, not a special case for closures. A capture is an **ownership boundary** — the same list as a collection put, a field initialiser, or a return — and at a boundary the destination must own. A closure may outlive the variable it captured, so it takes a value rather than a route back to one. Under copy-on-write that costs nothing until something is mutated: capturing a large collection copies no elements.
+  This is the ownership rule doing its usual job, not a special case for closures — bare means borrow at a capture exactly as it does at a call. What is special about a closure is only that it may **outlive** what it captured, and that is handled where it happens: a closure that escapes its defining scope materialises its captures **at the escape**, which is an ownership boundary like a return. A closure that stays local never needs to own anything. Under copy-on-write none of this costs a copy until something is mutated: capturing a large collection copies no elements.
 
-  When you want a value fixed at a particular moment rather than captured, pass it as a **closure parameter** instead — `(String snapshot): ...` — and supply it at the call. That is explicit, needs no inference, and is what parameters are for.
+  Today the compiler materialises at the capture instead, so a bare capture currently behaves as a snapshot taken when the closure is created.
+
+  When you want a value fixed at a particular moment rather than captured, pass it as a **closure parameter** instead — `(String snap): ...` — and supply it at the call. That is explicit, needs no inference, and is what parameters are for.
 - **Mutable borrow** — spelled `(&name)(): ...` in the capture list (§3.1). The compiler *currently* infers this by detecting that the closure mutates the variable and capturing a pointer to the outer slot automatically; the ratified capture-list syntax replaces that inference with an explicit sigil.
 - **Move** — the closure takes ownership of the captured value. Use `!` before the parameter list to force ALL captures into move mode.
 
