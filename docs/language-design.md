@@ -329,8 +329,11 @@ rather than in the body. (That grammar is not implemented yet; see §7.4.) Where
 is rejected: `&a + 1` produces a new value right here, `case Some(&p)` names part
 of a value already in hand, `String w = &v` binds in the same scope. (These
 rejections are the ratified specification. `case Some(&p)` and `String w = &v`
-are rejected today; the **operand** positions such as `&a + 1` are still
-accepted and then miscompile — see `language-reference.md` §9.1's status note.)
+are rejected today. The **operand** positions are still accepted by `gg check`
+and then fail downstream in costume-dependent ways: `&a + 1` fails the C build
+("invalid operands to binary +") and hard-fails `llc`, while `xs[&a - 9]`
+builds and miscompiles, using the pointer as an index. See
+`language-reference.md` §9.1's status note.)
 
 At a resting position the two sigils part company, deliberately. `String w = !v`
 is legal — and for single-owner types required — because a move hands over the
@@ -1618,9 +1621,7 @@ print(name)     # OK — the closure never owned it
                 #  "Hello Alice" — see the status note above.)
 
 # Move ALL captures with !()
-auto handle = thread.spawn(!():
-    print(f"Hello from thread: {name}")
-)
+auto shout = !(): print(f"Hello {name}")
 # name is moved into the closure, invalid here
 
 # Returning closures (must own captures to outlive the function)

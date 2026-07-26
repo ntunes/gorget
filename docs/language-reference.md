@@ -2125,7 +2125,7 @@ spawn obj.method()       # ERROR — method calls not supported
 spawn get_fn()(x)        # ERROR — indirect call
 ```
 
-**Closures can be spawned if their captures are safe** (owned or Copy types). The compiler tracks each closure's capture set and rejects closures that capture borrowed references:
+**Closures can be spawned if their captures are safe** (owned or Copy types). The compiler tracks each closure's capture set and is specified to reject closures that capture borrowed references:
 
 ```gorget
 int x = 42
@@ -2136,7 +2136,8 @@ auto c = (): print(x)
 spawn c()                       # OK — closure variable with Copy capture
 
 String name = get_name()
-spawn ((): print(name))()       # ERROR — name has borrowed origin
+spawn ((): print(name))()       # specified as an error; ACCEPTED today
+                                # (see docs/book/14-concurrency.md §3.10)
 
 Shared[int] counter = Shared[int](0)
 spawn ((): print(counter.get()))()  # OK — Shared[T] is Copy
@@ -2377,8 +2378,8 @@ it lives — and that constraint is not derivable from the table.
 **In a comprehension, the iterable sigil grants a permission and does nothing
 by itself.** In `[bump(&x) for x in &xs]` the outer `&xs` opens the collection,
 and the inner `&x` is a second, nested boundary that uses that permission. A
-for-loop body has no such nested boundary — there `for x in &xs: x += 1` writes
-through on the iterable sigil alone.
+for-loop body needs no such nested boundary — there `for x in &xs: x += 1`
+writes through on the iterable sigil alone (a nested `bump(&x)` is legal too).
 
 **Closures cross at the capture.** A closure body is another scope, so a captured
 value crosses into it, and the sigil belongs in a per-variable capture list —
@@ -2431,6 +2432,7 @@ void g(Callable[void(&int)] cb)   # unnamed: the sigil sits before the type
 Those are the only two forms; `&int x` and `Callable[void(int&)]` are both
 rejected.
 
+Underneath the sigils, the ownership model itself is five rules:
 
 1. Every value has exactly one **owner** (the variable that holds it).
 2. When the owner goes out of scope, the value is dropped (freed).
@@ -2473,12 +2475,36 @@ site, free-fn or method, named place or temporary).
 
 ### 9.2 Borrowing Rules
 
-At any given point in a program, for a given value, you may have **either**:
+Gorget does **not** use Rust's rule. The ratified rule is one sentence about
+conflict, plus one escape:
 
-- **Any number of immutable borrows** (bare `Type name`), OR
-- **Exactly one mutable borrow** (`Type &name`)
+> Two access paths **conflict** when their storage overlaps, their live ranges
+> intersect, and at least one of them can *write* that storage during the
+> intersection.
+>
+> A conflict is **rejected** — unless the conflicting path is a *reader* and the
+> compiler can place its clone lazily, at a visible mutation point, in which
+> case it **materializes** instead.
 
-Never both simultaneously. This is enforced at compile time.
+Three consequences, each load-bearing:
+
+- **Overlap is about storage, not spelling.** `f(&m.a, &m.b)` is two mutable
+  borrows and is legal — the sub-places are disjoint.
+- **The test is the ability to write, not the sigil.** `Pair(v[0], !v)` is
+  accepted and `f(v[0], !v)` is rejected: a move transfers a pointer without
+  touching the buffer, but an opaque callee owns the moved-in value and may
+  mutate it while the read is live.
+- **The lazy escape is what makes Gorget more tolerant than Rust.**
+  `String s = v.get(0).unwrap()` followed by `grow(&v)` is exactly the overlap
+  Rust rejects; here the mutation is a visible statement, so the compiler
+  inserts a guarded copy and the program is accepted — one clone if that path
+  runs, zero if it does not. A reader can be rescued this way; a *writer* never
+  can, because copying a writer would silently discard its writes.
+
+A mutable borrow is spelled at a **call site** (`f(&name)`) or by mutating the
+place directly (`name.push(..)`); there is no `Type &name` local binding, which
+would be a second writable path to one place. Full rationale and the worked
+cases: `language-design.md` §3.5; the same-call aliasing table is §9.4.
 
 ### 9.3 Call-Site Ownership Validation
 
@@ -2694,7 +2720,7 @@ Entry entry2 = v.get(i).unwrap()  # also a borrow
 Entry owned = v.get(i).unwrap().clone()  # Entry — owned copy (explicit)
 ```
 
-**For-loop iteration creates a read-only borrow.** Mutating the collection during iteration is a compile error:
+**Bare for-loop iteration creates a read-only borrow** (`for x in &coll` grants write-through to the elements — see §9.1). Mutating the collection *structurally* during iteration is a compile error under either spelling:
 
 ```gorget
 for item in items:

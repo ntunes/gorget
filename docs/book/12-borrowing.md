@@ -8,12 +8,23 @@ than giving it away.
 
 ## The Borrowing Rules
 
-At any given point, for a given value, you may have either:
+If you know Rust's rule — any number of shared borrows, or one mutable borrow,
+never both — Gorget's is deliberately more forgiving. Two paths to the same
+value are a problem only when their live ranges actually overlap and one of them
+can write. Even then, if the conflicting path is only *reading*, the compiler
+copies for it at the moment of the write rather than rejecting your program:
 
-- **Any number of immutable borrows**, OR
-- **Exactly one mutable borrow**
+```gorget
+Vector[String] v = ["a", "b"]
+String s = v.get(0).unwrap()   # a reader
+v.push("c")                    # a write, while `s` is still live
+print(s)                       # fine — prints "a"
+```
 
-Never both. This is checked at compile time.
+Rust rejects that. Gorget accepts it, and pays for one copy only if the write
+actually happens. A *writer* can never be rescued this way — copying a writer
+would throw its writes away — so two paths that both write the same storage are
+still an error.
 
 ---
 
