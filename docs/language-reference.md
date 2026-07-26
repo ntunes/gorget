@@ -2327,7 +2327,7 @@ for x in &xs:       # write through to the collection
 for x in !xs:       # consume the collection
 ```
 
-**Where a sigil may appear.** A value must **cross from one scope into another**,
+**Where `&` may appear.** A value must **cross from one scope into another**,
 and the sigil is written at the crossing. Where nothing crosses, there is nothing
 to grant and the sigil is rejected:
 
@@ -2423,7 +2423,7 @@ A move capture is never inferred; it is requested with `!`.
 > mutation through a method call); `&`-capture exclusivity is scope-based rather
 > than ending at the closure's last use, and it misses reads inside an f-string;
 > **an escaping closure that captured a local by reference reads freed stack on
-> both backends**; write-through of a by-value field (`f(&c.fd)`) is lost, as is
+> both backends**; write-through of a by-value field (`f(&c.fd)` — a field whose type is not a thin-pointer heap type, so `int`, `float`, `bool`, a plain struct, a tuple) is lost, as is
 > element write-through through a **comprehension** iterable; through a
 > **for-loop** iterable the outcome depends on the ELEMENT TYPE — an `int`
 > element's write is lost, while a struct- or `Vector`-typed element writes

@@ -202,16 +202,20 @@ marks one. To move *every* capture, put `!` before the parameter list instead:
 
 ```gorget
 String msg = "hello"
-
 auto one = (!msg)(): print(f"got: {msg}")   # move just this capture
-auto all = !(): print(f"got: {msg}")        # move all captures
 ```
 
-After either, `msg` has been given away and is no longer usable in the
-enclosing scope.
+```gorget
+String note = "hi"
+auto all = !(): print(f"got: {note}")       # move every capture
+```
 
-> As with `&`, the per-variable form is specification: `(!msg)()` is not
-> implemented yet. The move-all `!()` prefix works today.
+In each case the captured name has been given away and is no longer usable in
+the enclosing scope.
+
+> Both forms are specification. `(!msg)()` does not parse yet, and the
+> move-all `!()` prefix parses but does not yet enforce the move — after it the
+> source stays live and is even still movable.
 
 ### No-Argument Closures
 

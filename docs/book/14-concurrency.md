@@ -489,9 +489,10 @@ void parent():
     spawn ((): print(msg))()  # the closure captures `msg` from the enclosing scope
 ```
 
-Capturing a `shared` directly is a separate rule and is intended to be rejected:
-the point of `shared` is that access goes through its lock, so a closure must
-call `shared.get()` in its body rather than close over the variable.
+Capturing a `shared` directly is a separate rule and **is rejected today**
+(`E_SpawnClosureCaptureShared`): the point of `shared` is that access goes
+through its lock, so pass it as a direct `spawn` argument — `spawn worker(n)` —
+rather than closing over the variable.
 
 A closure that **mutates** a captured local is rejected too
 (`E_SpawnClosureCaptureMutable`) — a mutating capture holds a pointer into the
