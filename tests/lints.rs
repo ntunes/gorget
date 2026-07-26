@@ -6478,3 +6478,53 @@ fn refcount_clone_arm_symmetry() {
          drift vs the ctor-path ensure_*_type_def writers."
     );
 }
+
+/// Tier 3b ratchet: every `tests/*.rs` target must actually RUN in CI.
+///
+/// A test target CI never invokes is not a guard — it is a file that compiles.
+/// Measured 2026-07-26: `--test lints` had NEVER been in CI, so every
+/// structural-guard ratchet in this file (the executable form of Core #6) was
+/// enforced only by someone remembering to run it locally. That memory failed
+/// — `no_growth_in_phase_d_proxy_reads` went red at `5b8aa6da` and stayed red
+/// for five days across round closes that reported the full battery green.
+///
+/// The same audit found `lir_ab`, `runtime_compile` and `str_runtime` absent
+/// too. `lir_ab` had an orphaned test for a fixture deleted with the
+/// `live`/`outlives` keywords, plus a `cargo run` build-lock flake;
+/// `str_runtime` had been failing since the C runtime was split into units,
+/// assembling a `Str`-less translation unit. Nothing anywhere would have
+/// caught any of it.
+///
+/// So the enumeration is closed by construction: add a `tests/<name>.rs` and
+/// this lint fails until `ci.yml` runs it.
+#[test]
+fn every_test_target_runs_in_ci() {
+    let ci = fs::read_to_string(".github/workflows/ci.yml").expect("ci.yml readable");
+
+    let mut missing = Vec::new();
+    for entry in fs::read_dir("tests").expect("tests/ readable") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().map_or(true, |e| e != "rs") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        // `--test <stem>` is how CI names an integration-test target.
+        if !ci.contains(&format!("--test {stem}")) {
+            missing.push(stem);
+        }
+    }
+    missing.sort();
+
+    assert!(
+        missing.is_empty(),
+        "test target(s) present in tests/ but never run by .github/workflows/ci.yml: {missing:?}\n\n\
+         A target CI does not run is not a guard. Either add a `cargo test --test <name>` \
+         step to ci.yml, or delete the target if it is dead.\n\n\
+         (If a target is deliberately local-only — too slow or too flaky for CI — say so \
+         HERE with an explicit allowlist entry and the reason, so the exemption is visible \
+         rather than silent.)"
+    );
+}

@@ -3,6 +3,13 @@
 //!
 //! Only tests fixtures known to produce matching output through both pipelines.
 //! As the LIR backend matures, more fixtures are added to this list.
+//!
+//! Both builders invoke the PRE-BUILT `gg` via `CARGO_BIN_EXE_gg`, never
+//! `cargo run`. `cargo run` serialises every one of these ~700 tests on the
+//! cargo build lock, which under `--test-threads=4` surfaced as a build that
+//! "failed" for no reason the fixture could explain (`lir_ab_coroutine_struct
+//! _methods`, which passes in isolation and builds fine by hand). This is the
+//! same fix `integration.rs` already carries — see its `CARGO_BIN_EXE_gg` note.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -17,8 +24,8 @@ fn run_gir(fixture_path: &std::path::Path) -> Option<String> {
     let exe_path = dir.join(format!("{stem}_gir"));
     let c_path = dir.join(format!("{stem}_gir.c"));
 
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build", "-o"])
+    let build = Command::new(env!("CARGO_BIN_EXE_gg"))
+        .args(["build", "-o"])
         .arg(&exe_path)
         .arg(fixture_path)
         .output()
@@ -76,8 +83,8 @@ fn run_lir(fixture_path: &std::path::Path) -> Option<String> {
     let exe_path = dir.join(format!("{stem}_lir"));
     let c_path = dir.join(format!("{stem}_lir.c"));
 
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build", "--backend=lir", "-o"])
+    let build = Command::new(env!("CARGO_BIN_EXE_gg"))
+        .args(["build", "--backend=lir", "-o"])
         .arg(&exe_path)
         .arg(fixture_path)
         .output()
@@ -102,8 +109,8 @@ fn run_gir_with_args(fixture_path: &std::path::Path, args: &[&str]) -> Option<St
     let exe_path = dir.join(format!("{stem}_gir"));
     let c_path = dir.join(format!("{stem}_gir.c"));
 
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build", "-o"])
+    let build = Command::new(env!("CARGO_BIN_EXE_gg"))
+        .args(["build", "-o"])
         .arg(&exe_path)
         .arg(fixture_path)
         .output()
@@ -134,8 +141,8 @@ fn run_lir_with_args(fixture_path: &std::path::Path, args: &[&str]) -> Option<St
     let exe_path = dir.join(format!("{stem}_lir"));
     let c_path = dir.join(format!("{stem}_lir.c"));
 
-    let build = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--", "build", "--backend=lir", "-o"])
+    let build = Command::new(env!("CARGO_BIN_EXE_gg"))
+        .args(["build", "--backend=lir", "-o"])
         .arg(&exe_path)
         .arg(fixture_path)
         .output()
@@ -355,7 +362,6 @@ fn ab_test_build_only(fixture: &str) {
 #[test] fn lir_ab_rethrow_bare() { ab_test("rethrow_bare.gg"); }
 #[test] fn lir_ab_rethrow_basic() { ab_test("rethrow_basic.gg"); }
 #[test] fn lir_ab_string_format() { ab_test("string_format.gg"); }
-#[test] fn lir_ab_lifetime_groups() { ab_test("lifetime_groups.gg"); }
 #[test] fn lir_ab_lifetime_reassign() { ab_test("lifetime_reassign.gg"); }
 #[test] fn lir_ab_ownership_calls() { ab_test("ownership_calls.gg"); }
 #[test] fn lir_ab_ownership_keywords() { ab_test("ownership_keywords.gg"); }

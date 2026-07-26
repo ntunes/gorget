@@ -1,7 +1,9 @@
 use std::fs;
 use std::process::Command;
 
-use gorget::backend::c::c_runtime::{PANIC_NORMAL, RUNTIME_PREAMBLE};
+use gorget::backend::c::c_runtime::{
+    PANIC_NORMAL, RUNTIME_PREAMBLE, RUNTIME_STRING, RUNTIME_STRING_BASE_OPS,
+};
 
 /// Compile and run a C program that exercises the Str fat pointer runtime
 /// functions directly, without going through the Gorget language pipeline.
@@ -14,13 +16,22 @@ fn str_fat_ptr_runtime() {
     let c_path = tmp_dir.join("str_test.c");
     let exe_path = tmp_dir.join("str_test");
 
-    // Build C source: runtime preamble + panic handler + test main
+    // Build C source in the SAME unit order the real emitter uses
+    // (`c_lir/emit_types.rs`: preamble → RUNTIME_STRING → … →
+    // RUNTIME_STRING_BASE_OPS). `Str` and most of the functions under test are
+    // defined in RUNTIME_STRING; `gorget_str_to_cstr` / `gorget_str_has_null`
+    // live in RUNTIME_STRING_BASE_OPS. Assembling only the preamble compiles a
+    // C file with no `Str` at all.
     let c_source = format!(
         r#"{RUNTIME_PREAMBLE}
+{RUNTIME_STRING}
+{RUNTIME_STRING_BASE_OPS}
 {PANIC_NORMAL}
 {TEST_MAIN}
 "#,
         RUNTIME_PREAMBLE = RUNTIME_PREAMBLE,
+        RUNTIME_STRING = RUNTIME_STRING,
+        RUNTIME_STRING_BASE_OPS = RUNTIME_STRING_BASE_OPS,
         PANIC_NORMAL = PANIC_NORMAL,
         TEST_MAIN = TEST_MAIN,
     );
@@ -34,6 +45,12 @@ fn str_fat_ptr_runtime() {
             "-Wall",
             "-Wextra",
             "-Wno-unused-function",
+            // A real emitted program uses the preamble's stats counters
+            // (`__gorget_map_clone_count` and friends); this synthetic
+            // single-TU harness links the preamble without them, so the
+            // same accommodation `-Wno-unused-function` already makes for
+            // functions is owed to the variables.
+            "-Wno-unused-variable",
             "-Werror",
             "-o",
         ])
@@ -95,8 +112,12 @@ int main(void) {
     Str s2 = gorget_str_from_cstr("hello");
     printf("from_cstr: data=%s len=%zu\n", s2.data, s2.len);
 
+    // A NULL cstr yields the CANONICAL EMPTY Str (GORGET_EMPTY_STR), not a
+    // null-data Str: every Str has a dereferenceable `.data`, so no consumer
+    // needs a null check. Assert that invariant, not merely the len.
     Str s3 = gorget_str_from_cstr(NULL);
-    printf("from_cstr_null: data=%s len=%zu\n", s3.data == NULL ? "NULL" : "?", s3.len);
+    printf("from_cstr_null: data=%s len=%zu\n",
+           s3.data == NULL ? "NULL" : (s3.data[0] == '\0' ? "EMPTY" : "?"), s3.len);
 
     Str s4 = gorget_str_empty();
     printf("empty: data_is_empty=%d len=%zu\n", s4.data[0] == '\0', s4.len);
@@ -290,7 +311,7 @@ int main(void) {
 const EXPECTED_OUTPUT: &str = "\
 from_literal: data=hello len=5
 from_cstr: data=hello len=5
-from_cstr_null: data=NULL len=0
+from_cstr_null: data=EMPTY len=0
 empty: data_is_empty=1 len=0
 byte_len: 5
 is_empty_hello: 0
