@@ -2384,6 +2384,10 @@ value crosses into it, and the sigil belongs in a per-variable capture list —
 sugar for moving everything. A bare name in a capture list is rejected: the sigil
 is the point of writing one.
 
+A capture is an ownership boundary, so a bare capture takes a value — the
+closure may outlive what it captured. To fix a value at a particular moment
+without capturing it, pass it as a closure **parameter** instead.
+
 > **Status against the current compiler.** This section is the specification;
 > where the compiler disagrees it has a bug. Known divergences:
 > capture-list syntax is not implemented (the mode is inferred from the closure
