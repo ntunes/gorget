@@ -1,0 +1,43 @@
+# DURABLE REPRO — an escaping closure that captured a local by reference reads
+# a DROPPED STACK SLOT. `gg check` accepts it; both backends print garbage.
+#
+# WRONG TODAY (measured at HEAD, `gg check` -> "OK: no semantic errors"):
+#     C     -> 281474467546264 / 281474467546264
+#     LLVM  -> 281474641983928 / 281474641983928
+# (ASLR-dependent digits; the stable fact is a raw address where 1 then 2 belong)
+#
+# `make()` returns a closure that captured `n` by pointer. `n` dies when `make`
+# returns, so every later call reads freed stack.
+#
+# ⚠ THE DISCRIMINATOR, and the reason this slips through: the dangling-return
+# check DOES fire when the closure RETURNS the captured value —
+#     Callable[int()] make(): int n = 0; auto f = (): n = n + 1; return n
+#     ...                    return !f          -> error[E_DanglingReturn]
+# but NOT when the closure merely READS it (printing, here). So the check
+# appears keyed on the closure's own return value rather than on what it
+# captures. A closure that captures a dying local is unsound regardless of what
+# it returns.
+#
+# INTENDED: `1` then `2` — the capture is by value, or the escape is REJECTED at
+# check time with the same `E_DanglingReturn` its sibling already gets. Never an
+# accepted program that reads freed stack.
+#
+# ⚠ THIS IS THE CASE THAT REFUTES THE "OWNER OUTLIVES" FRAMING. A closure can
+# outlive the scope that made it, so a `&`-capture is precisely the boundary
+# where the owner does NOT outlive the far side. Note also that EXCLUSIVITY
+# cannot explain it: here there is exactly ONE writable path (the owner is gone),
+# so the one-writer rule is satisfied and the program still dangles.
+#
+# ORACLE: ggdef cannot adjudicate — closures are outside the phase-0 subset.
+
+void() make():
+    int n = 0
+    void() f = ():
+        n = n + 1
+        print(n)
+    return !f
+
+void main():
+    void() c = make()
+    c()
+    c()

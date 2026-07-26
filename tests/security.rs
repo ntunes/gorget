@@ -1476,6 +1476,21 @@ fn sound_callable_amp_param_indirect_call_safe() {
     security_safe("sound_callable_amp_param_indirect_call", "42");
 }
 
+/// KNOWN GAP — MEMORY-UNSAFE. An escaping closure that captured a local by
+/// reference reads a dropped stack slot. `gg check` accepts; both backends
+/// print a raw address where 1 then 2 belong.
+///
+/// The discriminator is why it slips through: `E_DanglingReturn` DOES fire when
+/// the closure returns the captured value, but not when it merely reads it — so
+/// the check appears keyed on the closure's return value rather than on what it
+/// captures.
+#[test]
+#[ignore = "KNOWN GAP: an escaping closure reads its captured local from freed stack on both \
+backends while `gg check` accepts. Asserts the INTENDED 1/2 (or a check-time reject); TODO.md."]
+fn sound_closure_escaping_capture_dangles_safe() {
+    security_safe("sound_closure_escaping_capture_dangles", "1\n2");
+}
+
 /// LIVE CONTROLS — the CALLEE-DISPOSITION axis. Green today and must stay so.
 ///
 /// They guard a measured hazard: routing `exprs/calls.rs:371` through
