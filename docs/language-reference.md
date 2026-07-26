@@ -2395,7 +2395,7 @@ is the point of writing one.
 > element write-through through a loop or comprehension iterable; `&` through a
 > `Callable`-typed local segfaults; a sigil on a receiver (`&c.add(1)`) is
 > accepted and inert; and these remain accepted though ratified as rejects —
-> `return &v`, the operand positions, `&` at constructor and enum-variant arguments, and at **builtin collection-method arguments as a class** (measured: `push`, `insert`, `set`, `put`, `add` are all unchecked, while user-declared functions and methods reject correctly),
+> `return &v`, the operand positions, `&` at constructor and enum-variant arguments, and at **any compiler-builtin call argument — free function or method** (`print(&a)`, `len(&xs)`, `s.contains(&t)`, `v.push(&a)` are all accepted). The mechanism is that the sigil gate only runs where the callee has a resolved signature, so **user-declared functions and methods, and `extern` functions with a signature, all reject correctly**,
 > container-literal elements, the retired `[e for x & in xs]` spelling, and
 > doubled `for x in & &a`.
 

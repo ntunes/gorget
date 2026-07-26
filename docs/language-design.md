@@ -325,7 +325,7 @@ for x in !xs:       # the loop consumes the collection
 A loop is a boundary exactly as a call is: the body is the other side. A
 comprehension crosses into its element expression. A closure crosses at the
 **capture**, which is why the sigil goes in a capture list (`(&count)(): ...`)
-rather than in the body. Where nothing crosses there is no boundary, and a sigil
+rather than in the body. (That grammar is not implemented yet; see §7.4.) Where nothing crosses there is no boundary, and a sigil
 is rejected: `&a + 1` produces a new value right here, `case Some(&p)` names part
 of a value already in hand, `String w = &v` binds in the same scope.
 
@@ -343,8 +343,9 @@ consumes, so a call that looks bare can still change or even take its receiver:
 **Escape-safety is a separate concern.** The sigils say what may happen to a
 value across one boundary; they say nothing about how long a borrow stays valid
 once it has crossed. That is governed by its own rules — a borrow may not be
-returned or stored in a field, a local `&`-binding is rejected because a place
-has one writer, and a closure holds a reference capture exclusively while it is
+returned or stored in a field, a local `&`-binding is rejected twice over — nothing crosses there for
+the sigil to mark, and a place has one writer so a named borrow would be a
+second writable path, and a closure holds a reference capture exclusively while it is
 live. Gorget has no lifetimes by design, so it constrains where a borrow may
 travel instead of tracking how long it lives, and that constraint does not fall
 out of the table.
@@ -1580,19 +1581,21 @@ void() do_nothing = (): pass
 
 Closures support three user-facing capture modes:
 
-- **Immutable borrow** (default) — the variable is read but not mutated inside the closure; the outer binding stays valid.
+- **By value** (default) — the closure gets its own copy, taken when the closure is created. The outer binding stays valid and is unaffected by anything the closure does; equally, later changes to the outer binding are not seen by the closure.
 - **Mutable borrow** — spelled `(&name)(): ...` in the capture list (§3.1). The compiler *currently* infers this by detecting that the closure mutates the variable and capturing a pointer to the outer slot automatically; the ratified capture-list syntax replaces that inference with an explicit sigil.
 - **Move** — the closure takes ownership of the captured value. Use `!` before the parameter list to force ALL captures into move mode.
 
-The compiler infers immutable-borrow vs. mutable-borrow automatically from the closure body. Move capture is never inferred — it must be requested explicitly with `!`. Internally, immutable-borrow and move captures are both stored by value in the closure struct (the difference is whether the outer binding survives); mutable-borrow captures store a pointer to the outer variable.
+Each captured name carries its mode in the capture list. (Today the compiler infers the mode from the closure body instead, since the capture-list grammar is not implemented — see §7.4.)
 
 Use `!` before the parameter list to force-move ALL captures:
 
 ```gorget
-# Default: auto-infer (immutable borrow captures)
+# Default: captured by value, at the moment the closure is created
 String name = "Alice"
 auto greet = (): print(f"Hello {name}")
-print(name)     # OK — name was only borrowed
+name = "Bob"
+greet()         # prints "Hello Alice" — the closure has its own copy
+print(name)     # OK — the outer binding is untouched
 
 # Move ALL captures with !()
 auto handle = thread.spawn(!():

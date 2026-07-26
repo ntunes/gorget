@@ -475,7 +475,7 @@ Fix: wrap the value in `shared Config`, pass by value (if Copy), move ownership 
 
 ### §3.10 — Closure captures a borrow
 
-A closure passed to `spawn` captures a local by borrow. Same risk as §3.9 — the capture
+A closure passed to `spawn` captures a local by value, like any other closure. Same risk as §3.9 — the capture
 could outlive the caller.
 
 ```gorget

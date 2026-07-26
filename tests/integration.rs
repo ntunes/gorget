@@ -35931,6 +35931,18 @@ fn sound_closure_amp_capture_liveness() {
     run_gg("known_gaps/sound_closure_amp_capture_liveness.gg", "11");
 }
 
+/// KNOWN GAP — moving out of a `&`-parameter passes `gg check` and then PANICS
+/// the compiler with a Tier-2a consume-site violation. Two defects: a validator
+/// panic where a diagnostic belongs, and a FALSE warning ("parameter `&v` is
+/// never mutated — consider removing `&`") on a body that CONSUMES the
+/// parameter, advising the opposite of the fix.
+#[test]
+#[ignore = "KNOWN GAP: `Vector[int] w = !v` inside `void f(Vector[int] &v)` passes check with a \
+false warning, then panics the compiler. Asserts the INTENDED check-time reject; TODO.md."]
+fn sound_move_out_of_amp_param_ices() {
+    check_gg_fails("known_gaps/sound_move_out_of_amp_param_ices.gg", "error[E_");
+}
+
 /// KNOWN GAP — a `&` sigil written INSIDE a closure body is silently INERT, on
 /// both the projection row and the whole-bare-local row. RED-verified at HEAD:
 /// C `10 / 10`, LLVM `10 / 10`, while the IDENTICAL `bumpi(&loc)` at top level

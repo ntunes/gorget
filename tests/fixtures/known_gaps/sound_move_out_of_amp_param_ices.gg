@@ -1,0 +1,42 @@
+# DURABLE REPRO — moving out of a `&`-parameter passes `gg check` (with a FALSE
+# warning) and then PANICS the compiler.
+#
+# WRONG TODAY (measured at HEAD):
+#   `gg check` -> warning: parameter `&v` is never mutated — consider removing `&`
+#                 OK: no semantic errors
+#   `gg build` -> PANIC:
+#       Tier 2a consume-site violation: fn @steal bb0 i1 —
+#       AssignIntoOwnedSlot(dst: Vector__int64_t)
+#       — borrowed source consumed at consuming position
+#       at src/ir/lowering/mod.rs:2127
+#
+# TWO defects in one program, and the warning is the more embarrassing:
+#
+# 1. `Vector[int] w = !v` MOVES OUT OF A BORROW. `v` is borrowed from the
+#    caller, so the callee cannot give it away. That is a check-time error, and
+#    the lowering validator is right to refuse it — but a validator panic is not
+#    a diagnostic. The user gets a compiler crash for a type error.
+#
+# 2. THE WARNING IS FALSE, AND IT ADVISES THE OPPOSITE OF THE FIX. It says `&v`
+#    is "never mutated — consider removing `&`", when the body CONSUMES `v`.
+#    Taking that advice (dropping the `&`) does not help; the move is still
+#    out of a borrowed bare param. The mutation check evidently does not count
+#    `!v` as a use of the parameter.
+#
+# INTENDED: a check-time rejection naming the real problem — a `&`-parameter is
+# borrowed and cannot be moved out of — and no warning claiming the parameter is
+# unused. Never a panic, and never advice that points away from the fix.
+#
+# ⚠ The Tier-2a ICE class is filed elsewhere; this TRIGGER (move out of an
+# `&`-param) and the false warning are not.
+#
+# The vector is built, not a literal, so nothing here is const-folded away.
+
+void steal(Vector[int] &v):
+    Vector[int] w = !v
+    print(w.len())
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    a.push(4)
+    steal(&a)
