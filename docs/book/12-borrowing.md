@@ -98,8 +98,11 @@ f(x, &x)          # immutable + mutable borrow of same value
 f(&x, !x)         # mutable borrow + move of same value
 ```
 
-The rule is simple: you can read from many places or write from one place, but
-never both at the same time.
+What these three share is that the conflicting path can be reached *inside the
+call*, where the compiler cannot see when the write happens — so there is no
+visible mutation point to place a lazy copy at, and the only rescue would be a
+speculative copy on every call. That is the line: a conflict is accepted when
+the clone can be lazy, and rejected when the only rescue is a guess.
 
 ---
 
@@ -220,21 +223,27 @@ To get an owned copy, use `.clone()`:
 Player owned = players.get(0).unwrap().clone()  # deep clone
 ```
 
-### MutationWhileBorrowed
+### Mutating a collection while a borrow is live
 
-You cannot mutate a collection while a borrow into it exists:
+The push below might reallocate the buffer and invalidate `entry`, so something
+has to give. This is the lazy escape from the top of the chapter, and `entry` is
+a reader, so the compiler rescues it — it copies for `entry` at the push and the
+program is accepted:
 
 ```gorget
 auto entry = v.get(0).unwrap()  # borrows from v
-v.push(42)                       # ERROR: cannot mutate v while entry borrows it
+v.push(42)                       # entry is copied here, not rejected
+print(entry)                     # the pre-push value
 ```
 
-The push might reallocate the buffer, invalidating the borrow. The compiler catches
-this at compile time.
+The copy is placed at the mutation, so it costs nothing on paths where the push
+never runs. What the compiler *does* reject is the case it cannot place a copy
+for — see the next section.
 
 ### For-Loop Iteration
 
-A for-loop creates an implicit read-only borrow of the collection:
+A for-loop borrows the collection for the whole loop, and the compiler cannot
+place a copy mid-iteration, so *structural* mutation is rejected:
 
 ```gorget
 for item in items:
@@ -242,7 +251,10 @@ for item in items:
     items.push(new_item)   # ERROR: cannot mutate during iteration
 ```
 
-This applies to all mutating methods — push, pop, remove, clear, etc.
+This applies to all mutating methods — push, pop, remove, clear, etc. — and to
+`for item in &items` as well: the `&` grants write-through to the *elements*
+(`item.field = ...`), not permission to resize the collection underneath the
+loop.
 
 ---
 
@@ -273,4 +285,4 @@ code.
 | Mutable borrow | `f(&x)` | Write access, exclusive |
 | Mutable parameter | `void f(Type &x)` | Declares mutable borrow |
 | Auto-borrowing | `x.method()` | Compiler inserts borrow for `self`/`&self` |
-| Borrow rule | — | Many readers OR one writer, never both |
+| Borrow rule | — | Conflicting paths are rejected — unless the conflicting one only reads, and the copy can be placed at a visible write |
