@@ -35916,6 +35916,21 @@ fn set_index_returns_garbage_rejected() {
     check_gg_fails("known_gaps/set_index_returns_garbage.gg", "error[E_");
 }
 
+/// KNOWN GAP — `&`-capture exclusivity is SCOPE-based in production, while the
+/// ratified rule is LIVENESS-based: the borrow ends at the closure's LAST USE.
+/// Measured at HEAD: reading the captured value after `f()` is rejected with
+/// `E_ReadWhileMutCaptured`, though the closure is dead by then.
+///
+/// An OVER-rejection, not a miscompile — a correct program fails to compile.
+/// Uses the inferred spelling because the ratified capture-list syntax
+/// (`(&a)(): ...`) is not implemented; re-spell when that grammar lands.
+#[test]
+#[ignore = "KNOWN GAP: `&`-capture exclusivity is scope-based, not liveness-based, so a read after \
+the closure's last use is rejected. Asserts the INTENDED accept; TODO.md."]
+fn sound_closure_amp_capture_liveness() {
+    run_gg("known_gaps/sound_closure_amp_capture_liveness.gg", "11");
+}
+
 /// KNOWN GAP — a `&` sigil written INSIDE a closure body is silently INERT, on
 /// both the projection row and the whole-bare-local row. RED-verified at HEAD:
 /// C `10 / 10`, LLVM `10 / 10`, while the IDENTICAL `bumpi(&loc)` at top level

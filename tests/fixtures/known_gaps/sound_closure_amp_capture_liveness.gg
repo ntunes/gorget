@@ -1,0 +1,37 @@
+# DURABLE REPRO — `&`-capture exclusivity is SCOPE-based in production, but the
+# ratified rule is LIVENESS-based: the borrow ends at the closure's LAST USE.
+#
+# WRONG TODAY (measured at HEAD): reading the captured value AFTER the closure's
+# last use is rejected —
+#     error[E_ReadWhileMutCaptured]: cannot read `a` while it is mutably
+#     captured by closure `f`
+# pointing at the `print(a)`, which comes after `f()`.
+#
+# INTENDED (what this fixture asserts): `11`. The closure's last use is `f()`;
+# the `&`-capture's exclusivity ends there, so the read that follows is legal.
+# Production instead holds the borrow for the whole enclosing SCOPE, which
+# over-rejects a sound program.
+#
+# ⚠ NOTE ON THE SPELLING. The ratified syntax puts the sigil in a per-variable
+# CAPTURE LIST — `(&a)(): ...` — and that syntax is not implemented yet
+# (`(&a)():` is a parse error at HEAD), so this fixture uses the inferred form:
+# a closure that assigns to a captured local is classified as a mutable capture.
+# When the capture-list grammar lands, this fixture should be re-spelled with
+# the explicit sigil; the exclusivity question it pins is the same either way.
+#
+# ⚠ This is an OVER-rejection, not a miscompile: nothing is unsound today. The
+# cost is that a correct program does not compile.
+#
+# ORACLE: ggdef cannot adjudicate — closures are outside the phase-0 subset.
+#
+# The seed is COMPUTED, not a literal, so nothing here is const-folded away.
+
+int seed():
+    return 10
+
+void main():
+    int a = seed()
+    auto f = ():
+        a = a + 1
+    f()
+    print(a)
