@@ -370,8 +370,9 @@ void push_exclaim(String &s):
     s.push('!')
 
 # Ownership transfer (! between type and name)
-void consume(String !s):
-    self.data = s              # can store permanently
+equip Archive:
+    void consume(&self, String !s):
+        self.data = s          # can store permanently
     # s is freed when no longer needed
 ```
 
@@ -1599,7 +1600,7 @@ Closures support three user-facing capture modes:
 
   When you want a value fixed at a particular moment rather than captured, pass it as a **closure parameter** instead — `(String snap): ...` — and supply it at the call. That is explicit, needs no inference, and is what parameters are for.
 - **Mutable borrow** — spelled `(&name)(): ...` in the capture list (§3.1). The compiler *currently* infers this by detecting that the closure mutates the variable and capturing a pointer to the outer slot automatically — but the inference misses mutation through a method call; the ratified capture-list syntax replaces that inference with an explicit sigil.
-- **Move** — the closure takes ownership of the captured value. Spelled `(!name)(): ...` per variable, with `!()` before the parameter list as sugar forcing ALL captures into move mode.
+- **Move** — the closure takes ownership of the captured value. Spelled `(!name)(): ...` per variable, with `!` before the parameter list (`!():`, `!(x):`) as sugar forcing ALL captures into move mode.
 
 Every name that *appears* in the capture list carries a sigil — a bare name
 there is rejected. A name captured with the default mode is simply **not

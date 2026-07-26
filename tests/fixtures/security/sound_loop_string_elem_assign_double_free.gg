@@ -23,6 +23,14 @@
 # documented as benign) on top of a Core #12 one (a whole typed axis
 # generalised from one cell).
 #
+# PROVENANCE — BISECTED 2026-07-26. A REGRESSION ~6.5 weeks old, introduced by
+# a LEAK FIX: first bad commit `a367f2c3` (2026-06-11), "register print/format
+# String temps for drop at their birth — the print-temp leak class". Parent
+# `43a58519` prints `x` (write LOST but memory-SAFE); `a367f2c3` double-frees.
+# So the shape was never correct — the write has always been dropped — but it
+# degraded from wrong-output to memory-unsafe there. A fix must not simply
+# revert that commit or the print-temp leak class returns.
+#
 # LIKELY MECHANISM (not chased to the writer site — do not treat as
 # established): the loop element binding is a borrow into the collection's
 # storage; assigning a freshly-built `String` into it appears to store the new

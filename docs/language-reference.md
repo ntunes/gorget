@@ -2444,9 +2444,11 @@ A move capture is never inferred; it is requested with `!`.
 > **user-declared functions, methods, and `extern` declarations all reject
 > correctly** — the other five items have no callee at all, so that mechanism
 > does not explain them. ⚠ Independently of the sigil gate, **wrapping any call
-> in an f-string suppresses the rejection**: `print(abs(&a))` is rejected while
-> `print(f"{abs(&a)}")` is accepted and then miscompiles, because f-string
-> interpolation discards typecheck errors wholesale.
+> in an f-string suppresses the rejection**. For a user-declared
+> `String tag(String s)`, `print(tag(&a))` is rejected with
+> `E_OwnershipMismatch` while `print(f"{tag(&a)}")` is accepted and then
+> miscompiles, because f-string interpolation discards typecheck errors
+> wholesale.
 
 **One spelling note.** The sigil precedes the *parameter*, and a parameter is
 spelled `&x` when it has a name and `&int` when it does not:
