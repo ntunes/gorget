@@ -1,0 +1,53 @@
+# DURABLE REPRO — a comprehension over a NESTED `Vector` SEGFAULTS, with no
+# sigil anywhere in the program.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend): `gg check` reports "OK: no
+# semantic errors", `gg build` succeeds, and the binary exits **139 (SIGSEGV)**
+# with no output.
+#
+# ⚠ `gg run` MASKS this as exit 1 with no output — reproduce by BUILDING and
+# running the binary directly, or it looks like an ordinary build error.
+#
+# ⚠ NOT SIGIL-RELATED, and that is the whole point of this fixture. It was
+# first surfaced while probing `&`-iterable element write-through, where the
+# sigil spellings crashed and the natural conclusion was that `&` caused it.
+# Measured across all four spellings, every one `gg check`-clean:
+#
+#   [x.len() for x in a]          -> SIGSEGV 139   <- THIS FIXTURE, no sigils
+#   [x.len() for x in &a]         -> SIGSEGV 139
+#   [grow(&x) for x in a]         -> SIGSEGV 139
+#   [grow(&x) for x in &a]        -> SIGSEGV 139
+#
+# The ALL-BARE form crashing is what proves the sigil is incidental: this is a
+# pre-existing comprehension-over-nested-`Vector` defect. Do not fold it into
+# the `&`-write-through family; a fix there will not touch it.
+#
+# ⚠ It is also a triage-hazard case study. An earlier probe of a DIFFERENT
+# comprehension shape (`[bumpv(&e) for e in &a]` with a `void` element
+# function) exited 0 with the write merely lost, so the crash looked
+# unreproducible; the two shapes differ in whether the element expression
+# produces a value. When a crash claim does not reproduce, vary the shape
+# before concluding it was wrong.
+#
+# INTENDED: the comprehension evaluates `x.len()` per element and the program
+# prints `1`.
+#
+# ORACLE (ggdef): the element expression is a builtin method call on a nested
+# collection — record the verdict when the shape enters the subset. A
+# value-semantics interpreter cannot observe the memory fault either way
+# (Core #13); ASan on the real backends is the instrument.
+#
+# The vector is built from computed elements, not a static literal, so no
+# const-fold path can elide the allocation.
+#
+# Cited from TODO.md (Backend / codegen).
+
+int seed():
+    return 1
+
+void main():
+    Vector[int] inner0 = [seed()]
+    Vector[int] inner1 = [seed() + 1]
+    Vector[Vector[int]] a = [inner0, inner1]
+    Vector[int] r = [x.len() for x in a]
+    print(r.get(0).unwrap())

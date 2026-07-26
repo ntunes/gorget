@@ -36395,3 +36395,25 @@ fn sound_fstring_suppresses_sigil_reject() {
         "error[E_OwnershipMismatch]",
     );
 }
+
+/// KNOWN GAP — a comprehension over a NESTED `Vector` SEGFAULTS, with no sigil
+/// anywhere. `gg check` passes, `gg build` succeeds, the binary exits 139.
+///
+/// NOT sigil-related, which is the point: it surfaced while probing
+/// `&`-iterable element write-through, where the sigil spellings crashed and
+/// the natural conclusion was that `&` caused it. All four spellings crash —
+/// `[x.len() for x in a]`, `[x.len() for x in &a]`, `[grow(&x) for x in a]`,
+/// `[grow(&x) for x in &a]` — and the ALL-BARE form crashing is what proves the
+/// sigil incidental. A fix in the `&`-write-through family will not touch it.
+///
+/// Also a triage-hazard case study: an earlier probe of a DIFFERENT
+/// comprehension shape (`void` element function) exited 0 with the write merely
+/// lost, so the crash looked unreproducible. The shapes differ in whether the
+/// element expression produces a value.
+#[test]
+#[ignore = "KNOWN GAP: a comprehension over a nested Vector segfaults (exit 139) though gg check \
+passes and no sigil is involved. gg run masks it as exit 1. Asserts the INTENDED output; TODO.md. \
+Un-ignore when the nested-collection comprehension lowering is fixed."]
+fn sound_comprehension_nested_vector_segv() {
+    run_gg("known_gaps/sound_comprehension_nested_vector_segv.gg", "1");
+}

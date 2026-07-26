@@ -370,10 +370,9 @@ void push_exclaim(String &s):
     s.push('!')
 
 # Ownership transfer (! between type and name)
-equip Archive:
-    void consume(&self, String !s):
-        self.data = s          # can store permanently
-    # s is freed when no longer needed
+void consume(String !s):
+    print(s)               # `s` belongs to consume now
+    # s is freed here, at the end of consume — not in the caller
 ```
 
 At call sites, symbols mirror declarations:

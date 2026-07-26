@@ -2328,20 +2328,22 @@ for x in !xs:       # consume the collection
 ```
 
 **Where `&` may appear.** A value must **cross from one scope into another**,
-and the sigil is written at the crossing. Where nothing crosses, there is nothing
-to grant and the sigil is rejected:
+and the sigil marks that crossing at **either end** — on the *declaration* of
+the side that will act, or on the *grant* at the call that permits it. A legal
+position is one of those two ends; where nothing crosses, there is nothing to
+declare and nothing to grant, and the sigil is rejected:
 
-| | crosses into | |
+| | end | who acts |
 |---|---|---|
-| `f(&x)` | the callee's scope | ✓ |
-| `for x in &xs` | the loop body's scope | ✓ |
-| `[e for x in &xs]` | the element expression's scope | ✓ |
-| `void f(int &x)` | declares what arrives in this scope | ✓ |
-| `void f(&self)` | declares what arrives as the receiver | ✓ |
-| `Callable[void(&int)]` | declares what the call will pass | ✓ |
-| `case Some(&p)` | nothing crosses — `p` names part of a value already here | ✗ |
-| `String w = &v` | nothing crosses — you are naming `v` in this scope | ✗ |
-| `&a + 1` | nothing crosses — `+` produces a new value here | ✗ |
+| `f(&x)` | grant | the callee writes |
+| `for x in &xs` | grant | the loop body writes |
+| `[e for x in &xs]` | grant | the element expression writes |
+| `void f(int &x)` | declaration | the function writes into the caller's value |
+| `void f(&self)` | declaration | the method writes into the receiver |
+| `Callable[void(&int)]` | declaration (type) | a function of this type writes |
+| `case Some(&p)` | ✗ neither | `p` names part of a value already here |
+| `String w = &v` | ✗ neither | you are naming `v` in this scope |
+| `&a + 1` | ✗ neither | `+` produces a new value here |
 
 `&a + 1` and `!a + 1` are both rejected for the same reason: `+` reads its
 operands and hands nothing to anyone.
@@ -2430,8 +2432,8 @@ A move capture is never inferred; it is requested with `!`.
 > through correctly, and ⚠ a `String` element assigned in the loop body
 > (`for e in &a: e = e + "!"`) is not merely lost but **double-frees at
 > runtime**; `&` through a
-> `Callable`-typed value segfaults, whether it is a local or a parameter, and a
-> `&`-declared `Callable` *parameter* ICEs the compiler when called; a
+> `Callable`-typed LOCAL segfaults, and a `&`-declared `Callable` *parameter*
+> ICEs the compiler when called; a
 > sigil on a receiver (`&c.add(1)`) is accepted and inert; and these remain
 > accepted though ratified as rejects —
 > `return &v`, the operand positions, `&` at constructor and enum-variant
@@ -2446,9 +2448,12 @@ A move capture is never inferred; it is requested with `!`.
 > does not explain them. ⚠ Independently of the sigil gate, **wrapping any call
 > in an f-string suppresses the rejection**. For a user-declared
 > `String tag(String s)`, `print(tag(&a))` is rejected with
-> `E_OwnershipMismatch` while `print(f"{tag(&a)}")` is accepted and then
-> miscompiles, because f-string interpolation discards typecheck errors
-> wholesale.
+> `E_OwnershipMismatch` while `print(f"{tag(&a)}")` is accepted, because
+> f-string interpolation discards typecheck errors wholesale. A spurious `&`
+> onto a read-only callee happens to be harmless; the suppression is not, since
+> it equally hides a MISSING sigil — `print(f"{bump(a)}")` into an
+> `int bump(int &n)` is accepted and then writes through to `a`, which the bare
+> spelling contractually forbids.
 
 **One spelling note.** The sigil precedes the *parameter*, and a parameter is
 spelled `&x` when it has a name and `&int` when it does not:
@@ -2520,7 +2525,7 @@ Three consequences, each load-bearing:
 - **Overlap is about storage, not spelling.** `f(&m.a, &m.b)` is two mutable
   borrows and is legal — the sub-places are disjoint.
 - **The test is the ability to write, not the sigil.** `Pair(v[0], !v)` is
-  accepted and `f(v[0], !v)` is rejected: a move transfers a pointer without
+  accepted and `f(v[0], !v)` is rejected for a RESOURCE element type (a Copy element is a value snapshot and conflicts with nothing — §9.4): a move transfers a pointer without
   touching the buffer, but an opaque callee owns the moved-in value and may
   mutate it while the read is live.
 - **The lazy escape is what makes Gorget more tolerant than Rust.**
@@ -2672,8 +2677,8 @@ The merge is a flow-sensitive union taken only over the branches that actually r
 
 Resource types use **copy-on-write** (CoW): bare-identifier assignment
 (`Spanned b = a`), function parameter passing, match scrutinees, closure
-captures, and collection element reads all produce pointers (borrows) to
-the source data — no clone happens. The first mutation through one of
+captures (see §9.1's status note), and collection element reads all produce
+pointers (borrows) to the source data — no clone happens. The first mutation through one of
 the aliases triggers a clone, giving the mutator its own copy.
 
 A bare binding or parameter is therefore **read-only**: a mutation
@@ -2683,8 +2688,9 @@ leaving the borrowed-from value untouched. Write-through to the source is
 the job of the `&` sigil (and `for x in &coll`): a change made through an
 `&` borrow reaches the original. Gorget is deliberately more tolerant than
 Rust here — Rust rejects a mutation through an immutable borrow; Gorget
-copies instead. (See §9.1's status note: element write-through through a
-loop or comprehension iterable is currently lost.)
+copies instead. (See §9.1's status note: element write-through is currently
+lost through a comprehension iterable, and through a for-loop iterable it
+depends on the element type.)
 
 The compiler also optimises last-use: if the source isn't live past the
 assign, the IR-lowering picks Move instead of Borrow (still no clone,
