@@ -35887,6 +35887,35 @@ fn sound_tuple_getchain_writethrough() {
     );
 }
 
+/// KNOWN GAP — a struct field UNDER A TUPLE (`t.0.fd`) loses the write on BOTH
+/// faces. The MIRROR of the `&v[i].0` cell: the two place resolvers are a
+/// mutually-recursive pair differing by exactly two arms — the tuple resolver
+/// lacks `Expr::Index`, the field resolver lacks `Expr::TupleFieldAccess`.
+/// Fixing one without the other is the instance-fix Core #4 forbids.
+///
+/// RED-verified at HEAD: C `10 / 10`, LLVM identical, ggdef `11 / 42`.
+/// The assign face is a silent write-drop (Core #10) that `E_InvalidAssignTarget`
+/// does not catch — it is a well-formed lvalue, merely an unlowered one.
+/// Struct-under-struct and tuple-under-tuple are both already correct.
+#[test]
+#[ignore = "KNOWN GAP: a struct field under a tuple drops the write on both the `&` and assign \
+faces while ggdef is correct on both. Asserts the INTENDED write-through; TODO.md. Un-ignore when \
+the field resolver grows its `Expr::TupleFieldAccess` arm."]
+fn sound_tupstruct_field_writethrough() {
+    run_gg("known_gaps/sound_tupstruct_field_writethrough.gg", "11\n42");
+}
+
+/// KNOWN GAP — indexing a `Set[T]` emits a raw ADDRESS. No `&` involved.
+/// `gg check` clean, builds, prints a pointer where an element was asked for.
+/// Asserts the intended CHECK-TIME REJECT: a Set has no positional index, so
+/// there is no defensible element to return.
+#[test]
+#[ignore = "KNOWN GAP: `s[0]` on a Set passes `gg check` and prints a raw address. Asserts the \
+INTENDED rejection; TODO.md."]
+fn set_index_returns_garbage_rejected() {
+    check_gg_fails("known_gaps/set_index_returns_garbage.gg", "error[E_");
+}
+
 /// KNOWN GAP — `&`-of-a-projection in an OPERAND position is silently wrong.
 /// A costume family with no home in either filed census: not an OWNING position
 /// and not a value/RESTING position, so the rules written for those two have no

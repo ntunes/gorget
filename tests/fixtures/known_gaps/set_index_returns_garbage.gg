@@ -1,0 +1,30 @@
+# DURABLE REPRO — indexing a `Set[T]` returns a RAW ADDRESS. No `&` anywhere;
+# this is not a sigil bug.
+#
+# WRONG TODAY (measured at HEAD, C backend): `gg check` reports "OK: no semantic
+# errors", the program builds, and `print(s[0])` emits something like
+# `187651201204896` — a pointer, printed as an int. The digits are
+# ASLR-dependent; the stable fact is that it is an address, not the element.
+#
+# Found while censusing the CollectionKind axis for the `&`-of-projection work:
+# `try_resolve_index_element_ptr` admits only `Array` and `OrderedMap`, so `Set`
+# / `OrderedSet` / `Map` fall outside every place-resolution path. That is the
+# *lowering* half; this fixture pins the more basic question of what `s[0]` on a
+# Set is supposed to MEAN at all.
+#
+# INTENDED: a check-time REJECTION. A `Set` has no positional index — there is
+# no defensible element to return for `s[0]`, so the reference-grade answer is
+# `gg check` refusing the program, not a silently-emitted address. (If indexing a
+# Set is ever given a meaning, this fixture becomes the pin for that meaning.)
+# The fixture therefore asserts the REJECT, not a value.
+#
+# ⚠ Out of scope for the `&`-of-projection track — filed separately so it does
+# not ride on a fix that cannot reach it.
+
+int seed():
+    return 10
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(seed())
+    print(s[0])
