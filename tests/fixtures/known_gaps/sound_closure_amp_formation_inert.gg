@@ -1,0 +1,59 @@
+# DURABLE REPRO — a `&` sigil written INSIDE a closure body is silently INERT,
+# on BOTH the projection row and the whole-bare-local row.
+#
+# WRONG TODAY (measured at HEAD, `gg check` clean for every row):
+#   projection   `bumpi(&b.fd)` in a closure -> prints 10   (want 11)
+#   whole local  `bumpi(&loc)`  in a closure -> prints 10   (want 11)
+#   ⚠ the IDENTICAL `bumpi(&loc)` at top level prints 11 — so it is the closure
+#     body, not the shape, that loses the write.
+#
+# ⚠ TWO SPELLINGS OF ONE INTENT DISAGREE, which is what makes this a defect
+# rather than a limitation: an ASSIGNMENT to a capture (`a.fd = 11`) IS
+# classified `BorrowCaptureMode::Mutable`, and the outer read then correctly
+# rejects with `error[E_ReadWhileMutCaptured]`. The `&`-through-a-call spelling
+# is not classified at all, so `gg check` passes and the write vanishes.
+#
+# ROOT: `CapturedMutationCollector` (`src/semantic/safety/return_borrows.rs`,
+# ~`:243-286`) recognises exactly THREE closure-body mutation forms —
+# `Stmt::Assign`, `Stmt::CompoundAssign`, and an `&self` method receiver — and
+# has NO arm for `Ownership::MutableBorrow` call args. Its own doc-comment
+# states the closed list, which makes this a Core #4 sibling-site hole in an
+# enumerated set.
+#
+# WHY IT IS ON THE WRONG SIDE (the ratified boundary model): a boundary is where
+# a value CROSSES FROM ONE SCOPE INTO ANOTHER, and the sigil is written AT the
+# crossing. For a closure the crossing is at CAPTURE — and Gorget has no
+# capture-list syntax, so it INFERS the mode from the body. An in-body sigil
+# therefore sits AFTER the crossing, which is why it can never take effect.
+#
+# INTENDED (what this fixture asserts): 11 then 11. Under D31 full-strict, `&`
+# at a call site IS contractually a write, so the closure must capture mutably
+# and the writes must land. (If the language instead decides an in-body sigil is
+# unspellable, the reference-grade answer is a CHECK-TIME REJECT — never an
+# accepted program whose write silently vanishes.)
+#
+# ORACLE: ggdef cannot adjudicate — closures are outside the phase-0 subset.
+#
+# The seeds are COMPUTED, not literals, so const-folding cannot elide the store.
+
+struct B:
+    int fd
+
+int seed():
+    return 10
+
+void bumpi(int &x):
+    x = x + 1
+
+void main():
+    B b = B(seed())
+    auto f1 = ():
+        bumpi(&b.fd)
+    f1()
+    print(b.fd)
+
+    int loc = seed()
+    auto f2 = ():
+        bumpi(&loc)
+    f2()
+    print(loc)

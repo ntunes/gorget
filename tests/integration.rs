@@ -35916,6 +35916,32 @@ fn set_index_returns_garbage_rejected() {
     check_gg_fails("known_gaps/set_index_returns_garbage.gg", "error[E_");
 }
 
+/// KNOWN GAP — a `&` sigil written INSIDE a closure body is silently INERT, on
+/// both the projection row and the whole-bare-local row. RED-verified at HEAD:
+/// C `10 / 10`, LLVM `10 / 10`, while the IDENTICAL `bumpi(&loc)` at top level
+/// prints 11 — so it is the closure body, not the shape.
+///
+/// Two spellings of one intent disagree, which is what makes it a defect: an
+/// ASSIGNMENT to a capture is classified `BorrowCaptureMode::Mutable` and the
+/// outer read then rejects with `E_ReadWhileMutCaptured`, while the
+/// `&`-through-a-call spelling is not classified at all.
+///
+/// Root: `CapturedMutationCollector` (`semantic/safety/return_borrows.rs`)
+/// recognises exactly three closure-body mutation forms and has no arm for
+/// `Ownership::MutableBorrow` call args — a Core #4 hole in an enumerated set
+/// whose own doc-comment states the closed list. Under the ratified boundary
+/// model the crossing is at CAPTURE, and with no capture-list syntax the mode
+/// is inferred there, so an in-body sigil sits after the crossing.
+///
+/// ggdef cannot adjudicate: closures are outside the phase-0 subset.
+#[test]
+#[ignore = "KNOWN GAP: a `&` sigil inside a closure body is silently inert on both backends, while \
+the same shape at top level writes through and the assignment spelling captures mutably. Asserts \
+the INTENDED write-through; TODO.md."]
+fn sound_closure_amp_formation_inert() {
+    run_gg("known_gaps/sound_closure_amp_formation_inert.gg", "11\n11");
+}
+
 /// KNOWN GAP — `&`-of-a-projection in an OPERAND position is silently wrong.
 /// A costume family with no home in either filed census: not an OWNING position
 /// and not a value/RESTING position, so the rules written for those two have no
