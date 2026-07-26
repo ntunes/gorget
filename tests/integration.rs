@@ -40,13 +40,17 @@ fn env_or_load_adjusted_secs(var: &str, base: u64) -> u64 {
 }
 /// Timeout for compiled test binaries. Override with GG_TEST_TIMEOUT_SECS env var
 /// for slower environments (e.g. CI).
+///
+/// Load-adjusted, like `build_timeout` and the stage-1 timeout above. The 30s
+/// base is a HANG DETECTOR and is deliberately tight — raising it globally
+/// would blunt that for all ~1800 tests — but it has to survive a loaded box.
+/// Three `lowerer_comparison` fixtures (`http_patch`, `dataframe_agg`,
+/// `closure_float_ret`) tripped it during a sweep run alongside two agent
+/// worktrees each building their own compiler; the binaries were fine, the box
+/// was busy. On an idle box `load/cpus` clamps to 1.0, so the base is unchanged
+/// and a genuine hang still trips at 30s — the adjustment cannot mask one.
 fn test_binary_timeout() -> Duration {
-    Duration::from_secs(
-        std::env::var("GG_TEST_TIMEOUT_SECS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(30),
-    )
+    Duration::from_secs(env_or_load_adjusted_secs("GG_TEST_TIMEOUT_SECS", 30))
 }
 
 /// Backend selected for this test run. `GG_BACKEND=llvm` forces every fixture
