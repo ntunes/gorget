@@ -43,6 +43,18 @@ jobs:
       - name: Unit tests
         run: cargo test --lib
 
+      # The structural-guard ratchets (docs/devbook/25-structural-guards.md) —
+      # the executable form of Core #6, "convert a recurring bug class into a
+      # guard". Cheap (~4s, pure source analysis) and placed early so a broken
+      # ratchet fails before the 20-minute suites run.
+      # This step was MISSING until 2026-07-26, which meant every ratchet in
+      # tests/lints.rs was enforced only by someone remembering to run it
+      # locally. That memory failed: no_growth_in_phase_d_proxy_reads went red
+      # at 5b8aa6da (2026-07-21) and stayed red for five days across round
+      # closes that reported green. A guard CI does not run is not a guard.
+      - name: Structural guard ratchets
+        run: cargo test --test lints
+
       - name: Integration tests
         run: cargo test --test integration -- --test-threads=1
         env:
