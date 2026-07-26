@@ -1243,6 +1243,14 @@ else:
 
 ### 5.7 Loops
 
+**What the sigils mean, everywhere.** `&` and `!` are not operators. They
+describe what the *other side* of a boundary may do to a value — bare means
+**read it**, `&` means **write to it**, `!` means **consume it** — and they mark
+a position rather than an expression. A loop is a boundary like a call is: the
+body is the other side. That is why the same three-way vocabulary reads the same
+in both, and why a sigil in an operand position (`&a + 1`) is rejected: `+` only
+reads, so there is no other side to grant anything to.
+
 ```gorget
 # For loop (iterating - immutable borrow by default)
 for item in collection:

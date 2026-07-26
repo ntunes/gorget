@@ -1516,7 +1516,12 @@ From lowest to highest precedence:
 | 13         | `+` `-` `+%` `-%`            | Left          |
 | 14         | `*` `/` `%` `*%`             | Left          |
 | 15         | `as`                         | Left          |
-| 16         | Unary prefix `-` `not` `~` `*`, `!` (move), `&` (borrow), `spawn` | Right |
+| 16         | Unary prefix `-` `not` `~` `*`, `spawn` | Right |
+
+> **`&` and `!` are NOT in this table.** They are not operators — they are
+> boundary markers, and they may appear only at the positions listed in
+> [§9.3](#93-call-site-ownership-validation). A `&` in an operand position is
+> rejected.
 | 17         | Postfix `.` `?.` `()` `[]` `.0` `.1`        | Left          |
 | 18         | Atoms (literals, identifiers, grouped expressions) | — |
 
@@ -1758,8 +1763,31 @@ Creates a mutable borrow of a value. The original variable remains valid but can
 modify(&data)
 ```
 
-A mutable borrow is formed **at a call boundary only** — as an argument to a
-parameter declared `&` (see [§9.1 Ownership](#91-ownership-rules)).
+A mutable borrow is formed **at a boundary only** — never as an operand.
+
+**The rule, in one sentence.** The sigils describe what the *other side* of a
+boundary may do to a value: **bare** = read it, **`&`** = write to it, **`!`** =
+consume it. They mark a *position*, not an expression, and they appear at both
+ends of a boundary — on the declaration that will act, and on the argument that
+grants it:
+
+| position | end | who acts |
+|---|---|---|
+| `void f(int &x)` | declaration | the function writes into the caller's value |
+| `f(&x)` | grant | the callee writes |
+| `equip T: void m(&self)` | declaration | the method writes into the receiver |
+| `for x in &xs` | grant | the loop body writes |
+| `[e for x in &xs]` | grant | the element expression writes |
+| `Callable[void(&int)]` | declaration (type) | a function of this type writes |
+
+Where there is no boundary, a sigil grants nothing and is **rejected**:
+`int y = &a + 1` is rejected because `+` only reads its operands — there is no
+other side that could write. The same holds for a match scrutinee, an index
+expression, and string interpolation.
+
+An iterable sigil grants a permission and does nothing by itself. In
+`[bump(&x) for x in &xs]` the outer `&xs` opens the collection, and the inner
+`&x` is a second, nested boundary that uses that permission.
 **Local `&`-bindings are illegal** (D10, 2026-07-06): binding a borrow to a
 name — either form — is rejected, because a place has exactly one exclusive
 writer and a named `&`-binding would alias a second writable path to it for

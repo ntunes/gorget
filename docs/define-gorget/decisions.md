@@ -1234,6 +1234,24 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   2. **Its sigil sits on the OPPOSITE SIDE from the for-loop.** `[e for x & in xs]` puts the `&` in the ownership field (pre-`in`, binding-side); **`[e for x in &xs]` — the spelling that mirrors the ratified `for x in &b` — produces a NODE instead.** So the comprehension is the language's only live `for &a in b` precedent, and it points the other way from D33.
   **This must be settled before D32 lands**, because D32 decides whether `[e for x in &xs]`'s node is legal or rejected — and answering that silently would settle the placement question D33 just ruled on. Options: (a) align comprehensions to D33 (iterable-side `in &xs`, retire the pre-`in` spelling), (b) keep both spellings and make the field actually mean something, (c) reject `&` in comprehensions entirely until the semantics are defined. **Recommendation: (a)** — one axis, one side, consistent with D33's `!`-sibling argument; and the no-op field is a bug to close either way.
 
+  **⚖ THE UNIVERSAL STATEMENT (owner-requested 2026-07-26) — the prose D32 needs, because a LIST cannot generate an answer for a position nobody enumerated.** Every failure in this campaign came from reasoning position-by-position: the value-position ruling listed five and missed the operand family; the D32 whitelist listed four and missed two; the node-deletion has hit FOUR separate meaning-deriving paths. The fix is a rule that GENERATES the whitelist:
+
+  > **The sigils describe what the OTHER SIDE of a boundary may do to a value: bare = READ it · `&` = WRITE to it · `!` = CONSUME it. They are not operators. They mark a POSITION, and they appear at BOTH ENDS of a boundary — on the declaration that will act, and on the argument that grants it.**
+  >
+  > | position | end | who acts |
+  > |---|---|---|
+  > | `void f(int &x)` | declaration | the function writes into the caller's value |
+  > | `f(&x)` | grant | the callee writes |
+  > | `equip T: void m(&self)` | declaration | the method writes into the receiver |
+  > | `for x in &xs` | grant | the loop body writes |
+  > | `[e for x in &xs]` | grant | the element expression writes |
+  > | `Callable[void(&int)]` | declaration (type) | a function of this type writes |
+  >
+  > **Where there is no boundary — no callee, no loop body, no caller — a sigil grants nothing and is REJECTED.** `int y = &a + 1` is rejected because `+` only READS its operands: there is no other side that could write.
+
+  **WHY THIS IS THE RIGHT SHAPE:** it derives every legal position from one question (*"is there another side, and may it write?"*), so a position nobody has enumerated still gets the right answer — match scrutinee, index expression, f-string interpolation all reject without needing a row. It also explains the comprehension exactly as ratified: `&xs` grants the permission and does nothing by itself; the inner `&x` in `[bump(&x) for x in &xs]` is a SECOND, NESTED boundary that uses it.
+  ⚠ **SCOPED DELIBERATELY: the REJECT rule above is ratified for `&` only (D32).** The shared frame describes `!` because the vocabulary is genuinely uniform (D33's `!`-sibling argument turns on it), **but whether `!` in an operand position should likewise reject is NOT ratified and NOT measured.** Do not extend it silently; file it if the question arises.
+
   **SCOPE:** accept/reject surface change ⇒ full gauntlet, all three lanes (Rust gg C+LLVM · ggdef · self-host), NEG fixture per rejected position, doc write-through (`language-reference.md` §9.3, `language-design.md`). Own scout → brief → ≥3 fresh reviews → executor → output-review.
 
 - 2026-07-26 — **D33 RATIFIED (owner): THE FOR-LOOP SIGIL STAYS ON THE ITERABLE (`for a in &b`). Question raised, researched, and CLOSED the same day.** Raised while ratifying D32 (*"whether `&` should live at the iterator or the iteratee"* — `for &a in b` · `for a in &b` · `for &a in &b`), deferred, then resolved once the design record was actually consulted. Owner: *"keep the for-loop syntax as is."*
