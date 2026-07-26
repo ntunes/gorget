@@ -2426,15 +2426,18 @@ A move capture is never inferred; it is requested with `!`.
 > than ending at the closure's last use, and it misses reads inside an f-string;
 > **an escaping closure that captured a local by reference reads freed stack on
 > both backends**; write-through of a by-value field (`f(&c.fd)` — a field whose type is not a thin-pointer heap type, so `int`, `float`, `bool`, a plain struct, a tuple) is lost, as is
-> element write-through through a **comprehension** iterable, where with a
-> resource element type (`String`, a nested `Vector`) the program additionally
-> ⚠ **SIGSEGVs at teardown on both backends**. Through a **for-loop** iterable
-> the outcome depends on the ELEMENT TYPE: an `int` element's write is lost,
-> a struct- or `Vector`-typed element writes through correctly, and ⚠ a
-> `String` element assigned in the loop body (`for e in &a: e = e + "!"`) is
-> not merely lost but **double-frees at runtime**. Continuing the divergences: `&` through a
-> `Callable`-typed LOCAL segfaults, and a `&`-declared `Callable` *parameter*
-> ICEs the compiler when called; a
+> element write-through through a **comprehension** iterable. Through a
+> **for-loop** iterable the outcome depends on TWO axes — the element type and
+> the form of the write. A mutation **through** the element (`e.field = …`,
+> `e.push(…)`) writes through correctly for a struct or `Vector` element;
+> **rebinding** the element (`e = …`) is silently lost for every element type
+> measured (`int`, plain struct, `Vector`); a `String` element loses even a
+> mutation-through (`e.push('!')`), and ⚠ **double-frees at runtime** when
+> rebound (`e = e + "!"`). Continuing the divergences: `&` through a
+> `Callable`-typed **value** — a local, or a parameter whose type declares the
+> sigil (`Callable[void(&int)] cb`) — segfaults on both backends when called,
+> and a `&`-declared `Callable` parameter (`Callable[…] &cb`) ICEs the compiler
+> when called; a
 > sigil on a receiver (`&c.add(1)`) is accepted and inert; and these remain
 > accepted though ratified as rejects —
 > `return &v`, the operand positions, `&` at constructor and enum-variant
@@ -2455,6 +2458,13 @@ A move capture is never inferred; it is requested with `!`.
 > it equally hides a MISSING sigil — `print(f"{bump(a)}")` into an
 > `int bump(int &n)` is accepted and then writes through to `a`, which the bare
 > spelling contractually forbids.
+
+> ⚠ **Independently of any sigil**, a comprehension over a **resource**-element
+> collection is broken on both backends, in two modes: it **SIGSEGVs at
+> teardown** when the element expression yields a non-resource value
+> (`Vector[int] r = [1 for s in a]` over a `Vector[String]`), and **ICEs the
+> compiler** (`shallow copy of resource … : GorgetString`) when it yields the
+> resource. Avoiding `&` does not avoid it.
 
 **One spelling note.** The sigil precedes the *parameter*, and a parameter is
 spelled `&x` when it has a name and `&int` when it does not:
@@ -2582,8 +2592,9 @@ where method arguments (unlike free-function arguments) were not checked
 
 ```gorget
 equip Collector:
-    void add_all(&self, Vector[int] &vals):  # `vals` is written through
+    void add_all(&self, Vector[int] &vals):  # both are written through
         vals.push(100)
+        self.total = self.total + 1
 
 c.add_all(&v)   # ✓  the `&` marks the write-through
 c.add_all(v)    # ✗  error[E_OwnershipMismatch] — a `&` param needs `&`

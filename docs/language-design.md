@@ -330,7 +330,9 @@ is rejected: `&a + 1` produces a new value right here, `case Some(&p)` names par
 of a value already in hand, `String w = &v` binds in the same scope. (These
 rejections are the ratified specification. `case Some(&p)` and `String w = &v`
 are rejected today. The **`&` operand** positions are still accepted by
-`gg check` and then fail downstream in costume-dependent ways: `&a + 1` fails the C build
+`gg check` and then fail downstream in costume-dependent ways (`!` in an
+operand position is likewise accepted today, but is simply inert rather than
+downstream-breaking): `&a + 1` fails the C build
 ("invalid operands to binary +") and hard-fails `llc`, while `xs[&a - 9]`
 builds and miscompiles, using the pointer as an index. See
 `language-reference.md` §9.1's status note.)
@@ -1607,7 +1609,7 @@ that depart from the default, and a closure that just reads needs no list at
 all. (Today the compiler infers the mode from the closure body instead, since
 the capture-list grammar is not implemented — see §7.4.)
 
-Use `!` before the parameter list to force-move ALL captures:
+Capture modes in practice:
 
 ```gorget
 # Default: immutable borrow — the closure reads the current value
