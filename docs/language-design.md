@@ -329,8 +329,8 @@ rather than in the body. (That grammar is not implemented yet; see §7.4.) Where
 is rejected: `&a + 1` produces a new value right here, `case Some(&p)` names part
 of a value already in hand, `String w = &v` binds in the same scope. (These
 rejections are the ratified specification. `case Some(&p)` and `String w = &v`
-are rejected today. The **operand** positions are still accepted by `gg check`
-and then fail downstream in costume-dependent ways: `&a + 1` fails the C build
+are rejected today. The **`&` operand** positions are still accepted by
+`gg check` and then fail downstream in costume-dependent ways: `&a + 1` fails the C build
 ("invalid operands to binary +") and hard-fails `llc`, while `xs[&a - 9]`
 builds and miscompiles, using the pointer as an index. See
 `language-reference.md` §9.1's status note.)
@@ -1563,9 +1563,8 @@ void(String) callback = print
 String(int) formatter = (n): f"Value: {n}"
 
 # As parameter types
-void apply(Vector[int] &data, int(int) transform):
-    for item in &data:
-        item = transform(item)
+Vector[int] apply(Vector[int] data, int(int) transform):
+    return [transform(item) for item in data]
 
 # As return type (higher-order functions)
 int(int) make_multiplier(int factor):

@@ -191,9 +191,9 @@ the closure is done with it.
 > what the closure body does, and a `&` written *inside* the body has no effect.
 > A bare capture currently behaves as a snapshot taken when the closure is
 > created, rather than as a borrow. And exclusivity is enforced for the whole
-> *scope* rather than for the closure's live range: in the equivalent
-> inferred-capture program (`auto increment = (): count += 1`), the
-> `print(count)` is rejected with `E_ReadWhileMutCaptured` even though the
+> *scope* rather than for the closure's live range: write the same closure
+> without the capture list — drop the `(&count)`, keep the two-line body — and
+> the `print(count)` is rejected with `E_ReadWhileMutCaptured` even though the
 > closure is finished with `count` by then.
 
 ### Move Closures

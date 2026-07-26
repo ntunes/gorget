@@ -499,7 +499,7 @@ A closure that **mutates** a captured local is rejected too
 parent's stack frame, which the child task may outlive. Under D34 that check
 becomes unnecessary rather than smarter: materialising the capture at the escape
 turns the pointer into an owned value, and the mutation lands on the closure's
-own state. Reading a Copy value (int, bool, etc.) by capture is always safe.
+own state. A read-only capture is always safe, whatever its type.
 
 > **Status against the current compiler.** The READ-ONLY shape above compiles —
 > no check fires on it. A **mutating** capture is rejected today with

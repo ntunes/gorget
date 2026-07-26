@@ -2329,7 +2329,7 @@ for x in !xs:       # consume the collection
 
 **Where `&` may appear.** A value must **cross from one scope into another**,
 and the sigil marks that crossing at **either end** — on the *declaration* of
-the side that will act, or on the *grant* at the call that permits it. A legal
+the side that will act, or on the *grant* at the crossing that permits it. A legal
 position is one of those two ends; where nothing crosses, there is nothing to
 declare and nothing to grant, and the sigil is rejected:
 
@@ -2426,12 +2426,13 @@ A move capture is never inferred; it is requested with `!`.
 > than ending at the closure's last use, and it misses reads inside an f-string;
 > **an escaping closure that captured a local by reference reads freed stack on
 > both backends**; write-through of a by-value field (`f(&c.fd)` — a field whose type is not a thin-pointer heap type, so `int`, `float`, `bool`, a plain struct, a tuple) is lost, as is
-> element write-through through a **comprehension** iterable; through a
-> **for-loop** iterable the outcome depends on the ELEMENT TYPE — an `int`
-> element's write is lost, while a struct- or `Vector`-typed element writes
-> through correctly, and ⚠ a `String` element assigned in the loop body
-> (`for e in &a: e = e + "!"`) is not merely lost but **double-frees at
-> runtime**; `&` through a
+> element write-through through a **comprehension** iterable, where with a
+> resource element type (`String`, a nested `Vector`) the program additionally
+> ⚠ **SIGSEGVs at teardown on both backends**. Through a **for-loop** iterable
+> the outcome depends on the ELEMENT TYPE: an `int` element's write is lost,
+> a struct- or `Vector`-typed element writes through correctly, and ⚠ a
+> `String` element assigned in the loop body (`for e in &a: e = e + "!"`) is
+> not merely lost but **double-frees at runtime**. Continuing the divergences: `&` through a
 > `Callable`-typed LOCAL segfaults, and a `&`-declared `Callable` *parameter*
 > ICEs the compiler when called; a
 > sigil on a receiver (`&c.add(1)`) is accepted and inert; and these remain

@@ -18,9 +18,27 @@
 #   [grow(&x) for x in a]         -> SIGSEGV 139
 #   [grow(&x) for x in &a]        -> SIGSEGV 139
 #
-# The ALL-BARE form crashing is what proves the sigil is incidental: this is a
-# pre-existing comprehension-over-nested-`Vector` defect. Do not fold it into
-# the `&`-write-through family; a fix there will not touch it.
+# The ALL-BARE form crashing is what proves the sigil is incidental. Do not fold
+# it into the `&`-write-through family; a fix there will not touch it.
+#
+# ⚠⚠ THE REAL AXIS IS THE ELEMENT TYPE — a nested `Vector` is one cell of it.
+# Measured, all `gg check`-clean, no sigil anywhere:
+#
+#   Vector[int]      [1 for s in a]        -> correct, exit 0     (COPY: fine)
+#   Vector[String]   [1 for s in a]        -> CORRECT OUTPUT then
+#                                             SIGSEGV AT TEARDOWN (C and LLVM)
+#   Vector[String]   [s + "!" for s in a]  -> ICE, "shallow copy of
+#                                             resource _19 : GorgetString"
+#   Vector[Vector[int]]                    -> SIGSEGV (this fixture)
+#
+# So a comprehension over any RESOURCE-element collection is broken, in two
+# modes depending on whether the element expression produces a value. A fix
+# must cover both; this fixture pins only the nested-`Vector` cell.
+#
+# ⚠ `stdbuf -o0` IS REQUIRED TO SEE THIS CORRECTLY. stdout is buffered, so the
+# pre-crash output is discarded and a program that computes the RIGHT answer
+# and then dies at teardown reads as "crashed with no output". That artifact
+# made four correct programs look instantly broken during triage.
 #
 # ⚠ It is also a triage-hazard case study. An earlier probe of a DIFFERENT
 # comprehension shape (`[bumpv(&e) for e in &a]` with a `void` element
