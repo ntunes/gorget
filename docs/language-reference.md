@@ -2374,15 +2374,19 @@ These are distinct rules with distinct reasons. Gorget has no lifetimes by
 design, so it constrains where a borrow may travel rather than tracking how long
 it lives — and that constraint is not derivable from the table.
 
-**An iterable sigil grants a permission and does nothing by itself.** In
-`[bump(&x) for x in &xs]` the outer `&xs` opens the collection, and the inner
-`&x` is a second, nested boundary that uses that permission.
+**In a comprehension, the iterable sigil grants a permission and does nothing
+by itself.** In `[bump(&x) for x in &xs]` the outer `&xs` opens the collection,
+and the inner `&x` is a second, nested boundary that uses that permission. A
+for-loop body has no such nested boundary — there `for x in &xs: x += 1` writes
+through on the iterable sigil alone.
 
 **Closures cross at the capture.** A closure body is another scope, so a captured
 value crosses into it, and the sigil belongs in a per-variable capture list —
 `(&count)(): ...` to write through, `(!name)(): ...` to take it, with `!()` as
 sugar for moving everything. A bare name in a capture list is rejected: the sigil
-is the point of writing one.
+is the point of writing one. A name captured with the default mode is therefore
+**not listed at all** — omission is how a bare capture is spelled, and a closure
+that only reads needs no capture list.
 
 A bare capture is an **immutable borrow**, the same as a bare parameter: the
 closure reads the variable and does not own it. A closure that **escapes** its
@@ -2404,11 +2408,17 @@ A move capture is never inferred; it is requested with `!`.
 > **an escaping closure that captured a local by reference reads freed stack on
 > both backends**; write-through of a by-value field (`f(&c.fd)`) is lost, as is
 > element write-through through a loop or comprehension iterable; `&` through a
-> `Callable`-typed value segfaults, whether it is a local or a parameter; a sigil on a receiver (`&c.add(1)`) is
-> accepted and inert; and these remain accepted though ratified as rejects —
-> `return &v`, the operand positions, `&` at constructor and enum-variant arguments, and at **any compiler-builtin call argument — free function or method** (`print(&a)`, `len(&xs)`, `s.contains(&t)`, `v.push(&a)` are all accepted). The mechanism is that the sigil gate only runs where the callee has a resolved signature, so **user-declared functions and methods, and `extern` functions with a signature, all reject correctly**,
+> `Callable`-typed value segfaults, whether it is a local or a parameter; a
+> sigil on a receiver (`&c.add(1)`) is accepted and inert; and these remain
+> accepted though ratified as rejects —
+> `return &v`, the operand positions, `&` at constructor and enum-variant
+> arguments, at **any compiler-builtin call argument — free function or method**
+> (`print(&a)`, `len(&xs)`, `s.contains(&t)`, `v.push(&a)` are all accepted),
 > container-literal elements, the retired `[e for x & in xs]` spelling, and
-> doubled `for x in & &a`.
+> doubled `for x in & &a`. The mechanism behind that last group is that the
+> sigil gate only runs where the callee has a resolved signature, so
+> **user-declared functions and methods, and `extern` functions with a
+> signature, all reject correctly**.
 
 **One spelling note.** The sigil precedes the *parameter*, and a parameter is
 spelled `&x` when it has a name and `&int` when it does not:
@@ -2616,7 +2626,8 @@ through it does not fail and does not reach the source — it
 **materializes** a private copy at the binding and the write lands there,
 leaving the borrowed-from value untouched. Write-through to the source is
 the job of the `&` sigil (and `for x in &coll`): a change made through an
-`&` borrow reaches the original. (Gorget is deliberately more tolerant
+`&` borrow reaches the original. (See §9.1's status note — element
+write-through through a loop or comprehension iterable is currently lost.) (Gorget is deliberately more tolerant
 than Rust here — Rust rejects a mutation through an immutable borrow;
 Gorget copies instead.)
 

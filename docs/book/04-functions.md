@@ -186,11 +186,14 @@ A `&`-capture is exclusive while the closure is alive: the closure holds the
 only writable path to `count`, so you cannot read `count` from outside until
 the closure is done with it.
 
-> Two things above are specification rather than today's compiler. The
+> Three things above are specification rather than today's compiler. The
 > capture-list syntax is not implemented — the mode is currently inferred from
 > what the closure body does, and a `&` written *inside* the body has no effect.
-> And a bare capture currently behaves as a snapshot taken when the closure is
-> created, rather than as a borrow.
+> A bare capture currently behaves as a snapshot taken when the closure is
+> created, rather than as a borrow. And exclusivity is enforced for the whole
+> *scope* rather than for the closure's live range, so the `print(count)` above
+> is currently rejected with `E_ReadWhileMutCaptured` even though the closure is
+> finished with `count` by then.
 
 ### Move Closures
 

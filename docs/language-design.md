@@ -327,7 +327,10 @@ comprehension crosses into its element expression. A closure crosses at the
 **capture**, which is why the sigil goes in a capture list (`(&count)(): ...`)
 rather than in the body. (That grammar is not implemented yet; see §7.4.) Where nothing crosses there is no boundary, and a sigil
 is rejected: `&a + 1` produces a new value right here, `case Some(&p)` names part
-of a value already in hand, `String w = &v` binds in the same scope.
+of a value already in hand, `String w = &v` binds in the same scope. (These
+rejections are the ratified specification. `case Some(&p)` and `String w = &v`
+are rejected today; the **operand** positions such as `&a + 1` are still
+accepted and then miscompile — see `language-reference.md` §9.1's status note.)
 
 At a resting position the two sigils part company, deliberately. `String w = !v`
 is legal — and for single-owner types required — because a move hands over the
@@ -342,11 +345,15 @@ consumes, so a call that looks bare can still change or even take its receiver:
 
 **Escape-safety is a separate concern.** The sigils say what may happen to a
 value across one boundary; they say nothing about how long a borrow stays valid
-once it has crossed. That is governed by its own rules — a borrow may not be
-returned or stored in a field, a local `&`-binding is rejected twice over — nothing crosses there for
-the sigil to mark, and a place has one writer so a named borrow would be a
-second writable path, and a closure holds a reference capture exclusively while it is
-live. Gorget has no lifetimes by design, so it constrains where a borrow may
+once it has crossed. That is governed by its own rules:
+
+- A borrow may not be returned or stored in a field.
+- A local `&`-binding is rejected twice over: nothing crosses there for the
+  sigil to mark, and a place has one writer, so a named borrow would be a
+  second writable path.
+- A closure holds a reference capture exclusively while it is live.
+
+Gorget has no lifetimes by design, so it constrains where a borrow may
 travel instead of tracking how long it lives, and that constraint does not fall
 out of the table.
 
@@ -478,7 +485,7 @@ for x in matrix[0]:
 
 **Bare-assign borrows — `auto` and explicit type are identical:**
 
-Reading an indexed element (`matrix[0]`) returns a borrow (`Ptr(T)`). Binding it with a bare assignment borrows whether you write `auto` or an explicit type — the type annotation is only a check on the RHS, not a clone signal. The borrow CoW-severs on the first mutation; for an independent owned copy up front, call `.clone()`. A clone is inserted only at a genuine ownership boundary (return, struct/enum field init, collection store, closure capture, a move of a borrow):
+Reading an indexed element (`matrix[0]`) returns a borrow (`Ptr(T)`). Binding it with a bare assignment borrows whether you write `auto` or an explicit type — the type annotation is only a check on the RHS, not a clone signal. The borrow CoW-severs on the first mutation; for an independent owned copy up front, call `.clone()`. A clone is inserted only at a genuine ownership boundary (return, struct/enum field init, collection store, escaping-closure capture, a move of a borrow):
 
 ```gorget
 # auto → borrow, zero cost
@@ -1589,19 +1596,26 @@ Closures support three user-facing capture modes:
 
   When you want a value fixed at a particular moment rather than captured, pass it as a **closure parameter** instead — `(String snap): ...` — and supply it at the call. That is explicit, needs no inference, and is what parameters are for.
 - **Mutable borrow** — spelled `(&name)(): ...` in the capture list (§3.1). The compiler *currently* infers this by detecting that the closure mutates the variable and capturing a pointer to the outer slot automatically; the ratified capture-list syntax replaces that inference with an explicit sigil.
-- **Move** — the closure takes ownership of the captured value. Use `!` before the parameter list to force ALL captures into move mode.
+- **Move** — the closure takes ownership of the captured value. Spelled `(!name)(): ...` per variable, with `!()` before the parameter list as sugar forcing ALL captures into move mode.
 
-Each captured name carries its mode in the capture list. (Today the compiler infers the mode from the closure body instead, since the capture-list grammar is not implemented — see §7.4.)
+Every name that *appears* in the capture list carries a sigil — a bare name
+there is rejected. A name captured with the default mode is simply **not
+listed**: omission is the immutable borrow. So the list marks only the captures
+that depart from the default, and a closure that just reads needs no list at
+all. (Today the compiler infers the mode from the closure body instead, since
+the capture-list grammar is not implemented — see §7.4.)
 
 Use `!` before the parameter list to force-move ALL captures:
 
 ```gorget
-# Default: captured by value, at the moment the closure is created
+# Default: immutable borrow — the closure reads the current value
 String name = "Alice"
 auto greet = (): print(f"Hello {name}")
 name = "Bob"
-greet()         # prints "Hello Alice" — the closure has its own copy
-print(name)     # OK — the outer binding is untouched
+greet()         # prints "Hello Bob" — the capture is a borrow, not a copy
+print(name)     # OK — the closure never owned it
+                # (Today the compiler snapshots at the capture and prints
+                #  "Hello Alice" — see the status note above.)
 
 # Move ALL captures with !()
 auto handle = thread.spawn(!():

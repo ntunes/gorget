@@ -375,8 +375,9 @@ only long enough to copy what you need, then work with the copies**.
 ## What the Compiler Catches
 
 Gorget's borrow checker actively warns about the most common ways these patterns go wrong.
-These are not errors — the program compiles — but each warning points to a real race
-condition.
+§3.4–§3.8 are warnings — the program compiles — but each points to a real race
+condition. §3.9 and §3.10 are specified as errors; see their status notes for
+what the compiler actually enforces today.
 
 ### §3.4 — Stale condition
 
@@ -488,9 +489,15 @@ void parent():
     spawn ((): print(msg))()  # the closure captures `msg` from the enclosing scope
 ```
 
-The compiler likewise rejects closures that capture a `shared` directly (use `shared.get()`
-inside the closure body instead) or capture mutably (`&`-bound). Reading a Copy value
-(int, bool, etc.) by capture is always safe.
+Closures that capture a `shared` directly (use `shared.get()` inside the closure
+body instead) or capture mutably (`&`-bound) are also intended to be rejected.
+Reading a Copy value (int, bool, etc.) by capture is always safe.
+
+> **Status against the current compiler.** No spawn-capture check fires on the
+> shape above — it compiles, so `spawn unchecked` opts out of nothing here.
+> Under D34 the intended response to an escaping capture is materialising it at
+> the escape rather than rejecting the program; the rejections named in this
+> section are the specification.
 
 ### Escape Hatch — `spawn unchecked`
 
