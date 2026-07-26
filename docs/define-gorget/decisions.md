@@ -1252,7 +1252,7 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   > | `equip T: void m(&self)` | declaration | the method writes into the receiver |
   > | `for x in &xs` | grant | the loop body writes |
   > | `[e for x in &xs]` | grant | the element expression writes |
-  > | `Callable[void(&int)]` | declaration (type) | a function of this type writes |
+  > | `Callable[void(int &)]` | declaration (type) | a function of this type writes | *(spelling superseded by D35; this entry predates it)* |
   >
   > **Where there is no boundary — no callee, no loop body, no caller — a sigil grants nothing and is REJECTED.** `int y = &a + 1` is rejected because `+` only READS its operands: there is no other side that could write.
 
@@ -1335,7 +1335,7 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 
   **RIDES D32.** This is a boundary-modifier position, so the parse must route through `parse_ownership_modifier` — the same mechanism D32 uses to define the legal-position whitelist by construction. Landing it as a separate special case would fight that design and re-open the position-by-position enumeration D32 exists to close.
 
-  **⚠⚠ BUNDLED WITH THE `Callable`-FUNCTION-TYPE SEGFAULT, BY OWNER DECISION — the construct being re-spelled DOES NOT WORK.** Measured (gauntlet pass 13, parent-reproduced): `void g(Callable[void(&int)] cb): int a = 1; cb(&a); print(a)` → `gg check` OK, **exit 139 on C AND LLVM**, no output; the `Callable[void(int)]` control runs clean. This is the reference's only `&`-in-a-function-type example — the §9.1 position table's row and the spelling note's sole unnamed-parameter example — so the canonical legal spelling crashes. A syntax change whose only test shape segfaults cannot be validated on its own, so the fix and the re-spelling land in ONE round with one fixture set. Filed on the `Callable`-costume census in `TODO.md`; the axis there is the callable's PROVENANCE (a whole-identifier `&` arg is green through a Callable LOCAL and fatal through a Callable PARAMETER), not the argument shape.
+  **⚠⚠ BUNDLED WITH THE `Callable`-FUNCTION-TYPE SEGFAULT, BY OWNER DECISION — the construct being re-spelled DOES NOT WORK.** Measured (gauntlet pass 13, parent-reproduced): `void g(Callable[void(&int)] cb): int a = 1; cb(&a); print(a)` → `gg check` OK, **exit 139 on C AND LLVM**, no output; the `Callable[void(int)]` control runs clean. This is the reference's only `&`-in-a-function-type example — the §9.1 position table's row and the spelling note's sole unnamed-parameter example — so the canonical legal spelling crashes. A syntax change whose only test shape segfaults cannot be validated on its own, so the fix and the re-spelling land in ONE round with one fixture set. Filed on the `Callable`-costume census in `TODO.md`; ⚠ CORRECTED 2026-07-26 (gauntlet pass 15): an earlier draft of this clause claimed the axis is the callable's PROVENANCE — "green through a Callable LOCAL, fatal through a Callable PARAMETER". That is FALSE and was mis-derived from a filing about a plain FUNCTION reference. Measured: `Callable[void(&int)] cb = bump; cb(&a)` through a LOCAL also exits 139 on both backends. Both provenances segfault; there is no green cell here.
 
   **LANE CENSUS (Core #9) — accept/reject surface, so all three lanes plus the formatter:**
   1. **Rust gg** — parser: accept `Type &`/`Type !` in a function-type parameter list via `parse_ownership_modifier`; reject `&Type`/`!Type` with a diagnostic that names the replacement.

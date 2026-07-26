@@ -2333,14 +2333,14 @@ the side that will act, or on the *grant* at the crossing that permits it. A leg
 position is one of those two ends; where nothing crosses, there is nothing to
 declare and nothing to grant, and the sigil is rejected:
 
-| | end | who acts |
+| position | end | who acts |
 |---|---|---|
 | `f(&x)` | grant | the callee writes |
 | `for x in &xs` | grant | the loop body writes (D33: the sigil sits on the iterable) |
 | `[e for x in &xs]` | grant | the element expression writes |
 | `void f(int &x)` | declaration | the function writes into the caller's value |
 | `void f(&self)` | declaration | the method writes into the receiver |
-| `Callable[void(&int)]` | declaration (type) | a function of this type writes |
+| `Callable[void(int &)]` | declaration (type) | a function of this type writes |
 | `case Some(&p)` | ✗ neither | `p` names part of a value already here |
 | `String w = &v` | ✗ neither | you are naming `v` in this scope |
 | `&a + 1` | ✗ neither | `+` produces a new value here |
@@ -2429,8 +2429,18 @@ A move capture is never inferred; it is requested with `!`.
 > mutation through a method call); `&`-capture exclusivity is scope-based rather
 > than ending at the closure's last use, and it misses reads inside an f-string;
 > **an escaping closure that captured a local by reference reads freed stack on
-> both backends**; write-through of a by-value place reached through a **projection** (`f(&c.fd)`, `f(&vv[0])`, `f(&dd["k"])` — any such place whose type is not a thin-pointer heap type: `int`, `float`, `bool`, a plain struct, a tuple, a Dict value, a Vector element; a whole bare local, `f(&n)`, still writes through) is lost, as is
-> element write-through through a **comprehension** iterable. Through a
+> both backends**.
+>
+> **Write-through of a `&` ARGUMENT is lost when the argument is a
+> PROJECTION** — `f(&c.fd)`, `f(&vv[0])`, `f(&dd["k"])` — **and the projected
+> place's type is not a thin-pointer heap type** (`int`, `float`, `bool`, a
+> plain struct, a tuple). A thin-pointer type at the same place writes through:
+> `f(&dd["k"])` on a `Dict[String, String]` and `f(&vv[0])` on a
+> `Vector[String]` both work. A whole bare local, `f(&n)`, always writes
+> through.
+>
+> Element write-through through a **comprehension** iterable is lost for every
+> element type. Through a
 > **for-loop** iterable the outcome depends on TWO axes — the element type and
 > the form of the write. A mutation **through** the element (`e.field = …`,
 > `e.push(…)`) writes through correctly for a struct or `Vector` element;

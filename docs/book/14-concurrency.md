@@ -476,7 +476,10 @@ Fix: wrap the value in `shared Config`, pass by value (if Copy), move ownership 
 
 > **Status against the current compiler.** The rule above is the specification.
 > `E_SpawnWithBorrowedRef` exists but no ordinary borrow shape has been observed
-> to trip it — including the example above, which the compiler accepts today.
+> to trip it — including the example above, which `gg check` accepts. That
+> program does not build, though: the C backend then fails with an
+> `incompatible type for argument` error, so the borrow is neither rejected nor
+> compiled.
 
 ### §3.10 — Closure captures a local
 
