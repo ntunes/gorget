@@ -2424,7 +2424,12 @@ A move capture is never inferred; it is requested with `!`.
 > than ending at the closure's last use, and it misses reads inside an f-string;
 > **an escaping closure that captured a local by reference reads freed stack on
 > both backends**; write-through of a by-value field (`f(&c.fd)`) is lost, as is
-> element write-through through a loop or comprehension iterable; `&` through a
+> element write-through through a **comprehension** iterable; through a
+> **for-loop** iterable the outcome depends on the ELEMENT TYPE — an `int`
+> element's write is lost, while a struct- or `Vector`-typed element writes
+> through correctly, and ⚠ a `String` element assigned in the loop body
+> (`for e in &a: e = e + "!"`) is not merely lost but **double-frees at
+> runtime**; `&` through a
 > `Callable`-typed value segfaults, whether it is a local or a parameter, and a
 > `&`-declared `Callable` *parameter* ICEs the compiler when called; a
 > sigil on a receiver (`&c.add(1)`) is accepted and inert; and these remain

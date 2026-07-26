@@ -1753,3 +1753,27 @@ fn sound_getchain_sever_accept_safe() {
 fn sound_amp_field_thinptr_control_safe() {
     security_safe("sound_amp_field_thinptr_control", "base-grown\n2\n99");
 }
+
+/// KNOWN GAP — assigning to a `String` element inside `for … in &coll`
+/// DOUBLE-FREES. `gg check` passes, `gg build` succeeds, the binary aborts with
+/// "free(): double free detected in tcache 2".
+///
+/// The memory-unsafe cell of a type axis that is otherwise merely wrong or
+/// correct, measured on the same loop shape: `int` element -> write LOST;
+/// struct and `Vector[int]` elements -> write through CORRECTLY; `String`
+/// element -> double free. So the reference's former blanket claim that
+/// "element write-through through a loop iterable is lost" was wrong twice —
+/// false for struct/Vector, and understating heap corruption as a lost write
+/// for String (Core #8 on top of Core #12).
+///
+/// Asserts the INTENDED write-through (`x!`) running clean under ASan. If the
+/// language instead rules whole-element assignment under `&`-iteration
+/// inexpressible, replace this with the check-time reject — an accepted
+/// program that double-frees is wrong under either reading.
+#[test]
+#[ignore = "KNOWN GAP: assigning a String element inside `for e in &coll` double-frees \
+(gg check passes, binary aborts). Asserts the INTENDED write-through under ASan; TODO.md. \
+Un-ignore when the element-assign releases the old buffer, or replace with the reject."]
+fn sound_loop_string_elem_assign_double_free() {
+    security_safe("sound_loop_string_elem_assign_double_free", "x!");
+}

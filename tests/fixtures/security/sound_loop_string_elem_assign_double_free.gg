@@ -1,0 +1,64 @@
+# DURABLE REPRO — assigning to a `String` element inside a `for … in &coll`
+# loop DOUBLE-FREES at runtime.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend): `gg check` reports "OK: no
+# semantic errors", `gg build` succeeds, and the binary aborts with
+#
+#   free(): double free detected in tcache 2
+#
+# ⚠ THIS IS THE MEMORY-UNSAFE CELL OF A TYPE AXIS THAT IS OTHERWISE MERELY
+# WRONG OR CORRECT. Measured across element types, same loop shape, all four
+# `gg check`-clean:
+#
+#   element type   mutation                 outcome
+#   int            e = e + 100              write LOST (prints 1, want 101)
+#   struct         e.v = e.v + 100          WRITES THROUGH correctly (101)
+#   Vector[int]    e.push(9)                WRITES THROUGH correctly (len 2)
+#   String         e = e + "!"              **DOUBLE FREE** (this fixture)
+#
+# So "element write-through through a loop iterable is lost" — which is what
+# the reference said before this fixture landed — is wrong twice over: it is
+# false for struct and Vector elements, and for String it understates a
+# memory-safety defect as a lost write. That is a Core #8 event (a known defect
+# documented as benign) on top of a Core #12 one (a whole typed axis
+# generalised from one cell).
+#
+# LIKELY MECHANISM (not chased to the writer site — do not treat as
+# established): the loop element binding is a borrow into the collection's
+# storage; assigning a freshly-built `String` into it appears to store the new
+# buffer without releasing ownership of the old one from the element slot, so
+# both the element slot and the temporary end up owning the same allocation.
+# The struct/Vector cells work because their mutations are in-place through the
+# borrow rather than a whole-slot assignment.
+#
+# INTENDED: the loop writes through — the program prints `x!` — and runs clean
+# under ASan. If the language instead decides a whole-element assignment under
+# `&`-iteration is not expressible, the reference-grade answer is a CHECK-TIME
+# rejection; an accepted program that double-frees is wrong under either
+# reading (Core #10, lower-or-reject).
+#
+# ⚠ RELATED BUT DISTINCT, already filed: (a) the `int`-element write loss
+# (D33's second open item — the Family-1 projected-TYPE bug); (b) the
+# COMPREHENSION form's int-to-pointer conversion warning. Neither is this:
+# those are lost writes, this is heap corruption.
+#
+# ORACLE (ggdef): a value-semantics interpreter cannot observe this class at
+# all — Core #13 says ASan on the real backends is the adjudicating instrument
+# here, not ggdef.
+#
+# The seed is COMPUTED and the strings are heap-forced (built by
+# concatenation, not literals) so no const-fold or static-storage path can
+# elide the allocation — a literal here would be a false negative.
+#
+# Cited from TODO.md (CoW / ownership / High).
+
+String seed():
+    return "x"
+
+void main():
+    String s0 = seed()
+    String s1 = seed() + "y"
+    Vector[String] a = [s0, s1]
+    for e in &a:
+        e = e + "!"
+    print(a.get(0).unwrap())
