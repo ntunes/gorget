@@ -1251,8 +1251,20 @@ it and you no longer have it. A loop is a boundary exactly as a call is — the
 body is the other side — which is why the same three words read the same in
 both.
 
-Where there is no other side, there is nothing to say: `a + 1` reads `a` and
-produces a new value, so `&a + 1` and `!a + 1` are both rejected.
+What counts as a boundary is decidable rather than listed: a value **crosses
+from one scope into another**, and the sigil is written at the crossing. A call
+crosses into the callee, a loop into its body, a comprehension into its element
+expression, and a declaration names what arrives. Where nothing crosses —
+`a + 1` produces a new value right here, `case Some(p)` names part of a value
+already in hand, `String w = v` binds in the same scope — there is no boundary,
+and a sigil there is rejected.
+
+Closures cross as well, and are the interesting case: the body is another scope,
+so a captured value crosses into it, but Gorget **infers** the mode from what
+the body does rather than asking for a sigil. A closure that writes to a capture
+holds it exclusively, and the value cannot be read from outside while it does.
+There is no capture list to write a sigil in — which is also why a sigil placed
+inside the body is in the wrong place: the crossing already happened.
 
 The one asymmetry follows from that reading rather than sitting beside it. A
 value you gave away can rest anywhere (`String w = !v`), because it is now

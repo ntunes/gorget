@@ -1790,6 +1790,32 @@ A declaration marks the same boundary from the far end: `void f(int &x)` says
 function takes it*. The sigil at the call and the sigil on the declaration
 describe one boundary from two sides.
 
+**What counts as a boundary.** A boundary is where a value **crosses from one
+scope into another**, and the sigil is written at the crossing. That is the
+whole test, and it decides every position without a list:
+
+| | crosses into | |
+|---|---|---|
+| `f(&x)` | the callee's scope | ✓ a boundary |
+| `for x in &xs` | the loop body's scope | ✓ |
+| `[e for x in &xs]` | the element expression's scope | ✓ |
+| `void f(int &x)` | declares what arrives in this scope | ✓ |
+| `case Some(&p)` | nothing crosses — `p` names part of a value already here | ✗ rejected |
+| `String w = &v` | nothing crosses — you are naming `v` in this scope | ✗ rejected |
+| `&a + 1` | nothing crosses — `+` produces a new value here | ✗ rejected |
+
+This is also why the resting positions reject: it is not that a borrow is
+forbidden in a name, it is that **nothing crossed**, so there is no boundary for
+a sigil to mark.
+
+**Closures cross too — but the mode is inferred, not spelled.** A closure body
+is another scope, so a captured value crosses into it. Gorget works out the mode
+from what the body does: a closure that assigns to a captured value captures it
+*mutably*, and while it holds that capture the value cannot be read from
+outside. There is no capture list, so there is nowhere to write a sigil at that
+crossing — and a sigil written *inside* the body is on the wrong side of it,
+after the crossing has already happened.
+
 **The sigil binds to the argument, directly.** `f(&x)` grants; `f((&x))` does
 not — parenthesising it makes the sigil part of an inner expression rather than
 a mark on the argument, and the call is rejected. The sigil is written where the
