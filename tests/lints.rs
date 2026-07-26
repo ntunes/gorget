@@ -538,7 +538,27 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// side-discipline class as the 64→…→84 bumps — `move_zero_and_mark` is
     /// non-idempotent (asserts) and `is_moved` is drop-accountant state with no
     /// `LocalOwnership` accessor. Locking in the floor.
-    const BUDGET: usize = 85;
+    /// Bumped 85 → 93 (2026-07-26): seven new proxy-read LINES (eight counted
+    /// occurrences) from `5b8aa6da` ("overload call drop-reg and Identifier
+    /// drop-old"), which landed 2026-07-21 and left this ratchet RED for five
+    /// days — see the process note in `docs/devbook/30-excellence-system.md` §4;
+    /// the code is sound, the *gate* was not being run at round close.
+    /// Four in `exprs/calls.rs` are one more instance of the SAME four-part
+    /// guard the 78→82 bump documented — `!is_named_local && is_owned_local &&
+    /// !drops.is_registered && !drops.is_moved`, here re-homing an owning
+    /// temporary (an inline `Acc(...)` ctor arg) that the callee borrows but
+    /// does not drop, so the caller must free it after the call.
+    /// Three in `stmts/assigns.rs` are drop-accountant idempotence guards of
+    /// the same class as the 83→84 and 84→85 bumps: the `is_moved`/
+    /// `is_registered` pair gating `move_zero_and_mark` on a field-assign RHS,
+    /// and the `is_moved` → `drop_if_alive` choice on the String-`+=` rebind
+    /// (dropping the old buffer unconditionally would double-free a local
+    /// already move-zeroed on another path).
+    /// SAME write-side-discipline class as the 64→…→85 bumps — `is_moved` and
+    /// `is_registered` are DROP-ACCOUNTANT state, not `LocalOwnership`, and
+    /// remain unmigratable until the drop accountant is queryable off `Local`.
+    /// Locking in the floor.
+    const BUDGET: usize = 93;
 
     let count = count_phase_d_proxy_reads();
     assert!(

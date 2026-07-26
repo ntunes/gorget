@@ -333,6 +333,25 @@ against the new and account for every sentence that disappeared — the question
 is not "is the new text correct" but "what did the old text say that the new
 text no longer says".
 
+Narrow editing alone is not enough, because the false clause usually has
+accomplices. Twice in the same campaign a fold corrected exactly the sentence a
+reviewer had cited, and the next pass opened by quoting its neighbours: a
+section heading three lines above still named the retired behaviour, and a
+`# ERROR:` comment inside the example six lines below still asserted a
+rejection that the corrected prose no longer claimed — both surviving the fix
+sitting between them. A claim is rarely made once. It is made in the heading,
+in the topic sentence, in the example, and in the comment on the example, and
+correcting one instance leaves a section that contradicts itself more visibly
+than before the fix.
+
+So the discipline has two halves that pull in opposite directions and are both
+required: **edit at the granularity of the defect, verify at the granularity of
+the section.** After the narrow edit, re-read the whole enclosing section —
+heading, both neighbouring paragraphs, and the comments inside its code
+examples. The grep in rule (c) catches a surviving contradiction elsewhere in
+the file; this catches the one three lines away, which is the likelier of the
+two and the one a reader is guaranteed to see.
+
 The same campaign gives the counter-example that makes the point precise. The
 one artifact that never regressed across four passes was a three-row table, and
 it never regressed because nobody ever needed to rewrite it — corrections landed
