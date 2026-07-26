@@ -1808,13 +1808,26 @@ This is also why the resting positions reject: it is not that a borrow is
 forbidden in a name, it is that **nothing crossed**, so there is no boundary for
 a sigil to mark.
 
-**Closures cross too — but the mode is inferred, not spelled.** A closure body
-is another scope, so a captured value crosses into it. Gorget works out the mode
-from what the body does: a closure that assigns to a captured value captures it
-*mutably*, and while it holds that capture the value cannot be read from
-outside. There is no capture list, so there is nowhere to write a sigil at that
-crossing — and a sigil written *inside* the body is on the wrong side of it,
-after the crossing has already happened.
+**Closures cross too, and the sigil goes in the capture list.** A closure body
+is another scope, so a captured value crosses into it — and the crossing is the
+capture. That is where the sigil is written, per variable:
+
+```gorget
+auto tally = (&count)():        # the closure may write to `count`
+    count = count + 1
+
+auto own = (!name, &total)(x):  # takes `name`, writes to `total`
+    ...
+```
+
+A bare name in a capture list is rejected — the sigil is how you say what the
+closure may do. `!()` is sugar for moving everything captured.
+
+A `&`-capture is exclusive for as long as the closure is live: the borrow ends
+at the closure's last use, and until then the value cannot be read from outside.
+
+Because the crossing is the capture, a sigil written *inside* the body is on the
+wrong side of it — the value arrived already, and nothing there can change how.
 
 **The sigil binds to the argument, directly.** `f(&x)` grants; `f((&x))` does
 not — parenthesising it makes the sigil part of an inner expression rather than

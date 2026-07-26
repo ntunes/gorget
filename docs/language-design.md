@@ -1259,12 +1259,17 @@ expression, and a declaration names what arrives. Where nothing crosses —
 already in hand, `String w = v` binds in the same scope — there is no boundary,
 and a sigil there is rejected.
 
-Closures cross as well, and are the interesting case: the body is another scope,
-so a captured value crosses into it, but Gorget **infers** the mode from what
-the body does rather than asking for a sigil. A closure that writes to a capture
-holds it exclusively, and the value cannot be read from outside while it does.
-There is no capture list to write a sigil in — which is also why a sigil placed
-inside the body is in the wrong place: the crossing already happened.
+Closures cross as well, and they show the rule holding where it would be easiest
+to make an exception. The body is another scope, so a captured value crosses into
+it — and the crossing is the capture, which is exactly where the sigil goes:
+`(&count)(): ...` says the closure may write to `count`, `(!name)(): ...` says it
+takes it. A bare name in a capture list is rejected, because the sigil is the
+whole point of writing one. A `&`-capture is exclusive while the closure is live,
+so the value cannot be read from outside until the closure's last use.
+
+That the sigil belongs at the capture rather than in the body is not a special
+case bolted on for closures — it is the same sentence as everywhere else, applied
+to where the value actually crosses.
 
 The one asymmetry follows from that reading rather than sitting beside it. A
 value you gave away can rest anywhere (`String w = !v`), because it is now
