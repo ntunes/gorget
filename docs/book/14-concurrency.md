@@ -491,17 +491,21 @@ void parent():
 
 Capturing a `shared` directly is a separate rule and is intended to be rejected:
 the point of `shared` is that access goes through its lock, so a closure must
-call `shared.get()` in its body rather than close over the variable. Ordinary
-locals are not rejected — under D34 a captured local is materialised at the
-escape, so a mutating capture lands on the closure's own state. Reading a Copy
-value (int, bool, etc.) by capture is always safe.
+call `shared.get()` in its body rather than close over the variable.
 
-> **Status against the current compiler.** No spawn-capture check fires on the
-> shape above — it compiles, so `spawn unchecked` opts out of nothing here.
-> Under D34 the intended response to an escaping capture of a LOCAL is
-> materialising it at the escape rather than rejecting the program, which makes
-> that check unnecessary rather than smarter. The `shared`-capture rejection is
-> untouched by D34 — it is lock discipline, not escape safety — and stands.
+A closure that **mutates** a captured local is rejected too
+(`E_SpawnClosureCaptureMutable`) — a mutating capture holds a pointer into the
+parent's stack frame, which the child task may outlive. Under D34 that check
+becomes unnecessary rather than smarter: materialising the capture at the escape
+turns the pointer into an owned value, and the mutation lands on the closure's
+own state. Reading a Copy value (int, bool, etc.) by capture is always safe.
+
+> **Status against the current compiler.** The READ-ONLY shape above compiles —
+> no check fires on it. A **mutating** capture is rejected today with
+> `E_SpawnClosureCaptureMutable`, and that is what `spawn unchecked` opts out
+> of. D34 would retire that rejection in favour of materialising at the escape,
+> but it is not implemented. The `shared`-capture rejection is untouched by D34
+> either way — it is lock discipline, not escape safety — and stands.
 
 ### Escape Hatch — `spawn unchecked`
 

@@ -438,7 +438,7 @@ The distinction is about **what the type owns**, not how large it is. A `Point` 
 |-------------|-------------|-------------------------------|---------------|
 | `Vector[int] v` | `const T*` (read-only) | materializes a private copy (copy-on-write); the caller is untouched | No |
 | `Vector[int] &v` | `T*` (mutable) | writes through to the caller's value | No |
-| `Vector[int] !v` | `T*` (mutable) | writes through; the callee owns and drops it | Yes |
+| `Vector[int] !v` | `T*` (mutable) | mutates the callee's own value — the caller has given it up, so nothing is written *through* to; the callee drops it | Yes |
 
 A bare Resource param is a **read-only borrow** of the caller's data: the callee reads it freely but cannot change what the caller sees through it — the incoming pointer is `const`. A mutation *attempt* is **not** a compile error, though: it **materializes** a private copy (copy-on-write) and the write lands on that copy, leaving the caller untouched. (This is where Gorget is **more tolerant than Rust** — Rust rejects a mutation through an immutable borrow outright; Gorget copies instead.) So `void sneaky(Vector[Res] v): v[0].name = "x"` compiles and runs — it just mutates `sneaky`'s own private copy, never the caller's vector. The `&` sigil is the opt-in for **write-through** (a change made through an `&` param reaches the caller's value), and `!` transfers ownership. **Resource types are never copied by value (memcpy) at the boundary** — the only copy that ever happens is the copy-on-write clone at a mutation. A freshly owned resource value comes from construction, `.clone()`, `!move`, or that implicit copy-on-write clone.
 
@@ -1563,7 +1563,7 @@ void(String) callback = print
 String(int) formatter = (n): f"Value: {n}"
 
 # As parameter types
-void apply(Vector[int] data, int(int) transform):
+void apply(Vector[int] &data, int(int) transform):
     for item in &data:
         item = transform(item)
 
@@ -1598,7 +1598,7 @@ Closures support three user-facing capture modes:
   Today the compiler materialises at the capture instead, so a bare capture currently behaves as a snapshot taken when the closure is created.
 
   When you want a value fixed at a particular moment rather than captured, pass it as a **closure parameter** instead — `(String snap): ...` — and supply it at the call. That is explicit, needs no inference, and is what parameters are for.
-- **Mutable borrow** — spelled `(&name)(): ...` in the capture list (§3.1). The compiler *currently* infers this by detecting that the closure mutates the variable and capturing a pointer to the outer slot automatically; the ratified capture-list syntax replaces that inference with an explicit sigil.
+- **Mutable borrow** — spelled `(&name)(): ...` in the capture list (§3.1). The compiler *currently* infers this by detecting that the closure mutates the variable and capturing a pointer to the outer slot automatically — but the inference misses mutation through a method call; the ratified capture-list syntax replaces that inference with an explicit sigil.
 - **Move** — the closure takes ownership of the captured value. Spelled `(!name)(): ...` per variable, with `!()` before the parameter list as sugar forcing ALL captures into move mode.
 
 Every name that *appears* in the capture list carries a sigil — a bare name
@@ -1622,7 +1622,8 @@ print(name)     # OK — the closure never owned it
 
 # Move ALL captures with !()
 auto shout = !(): print(f"Hello {name}")
-# name is moved into the closure, invalid here
+# name is moved into the closure and is invalid here — specification;
+# today the source stays live and is even still movable (see the notes above)
 
 # Returning closures (must own captures to outlive the function)
 int(int) make_adder(int n):

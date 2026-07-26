@@ -36333,3 +36333,61 @@ with the reject if the language rules `&` illegal on Callable."]
 fn sound_callable_amp_param_ices() {
     run_gg("known_gaps/sound_callable_amp_param_ices.gg", "11\n11");
 }
+
+/// KNOWN GAP — `E_BorrowAcrossAwait` has NO POSITIVE CONTROL and appears dead,
+/// and it is the SECOND of a propping-each-other-up pair.
+/// `docs/language-reference.md` §7.24 documents a borrow held across an `await`
+/// as an error; at HEAD this program is accepted. Every reference to the
+/// variant in `src/semantic/safety/tests.rs` is a NEGATIVE assertion.
+///
+/// One raise site (`safety/origins.rs:81`), gated on `await_invalidated`, whose
+/// single insert (`safety/check_expr.rs:853`) needs a borrow whose origin
+/// contains a local — shapes the StringView removal appears to have eliminated.
+/// The filter gating that insert is justified by a comment naming the SPAWN
+/// enforcement as what makes it sound — and that guard
+/// (`sound_spawn_borrowed_ref_never_rejected`) has no positive control either.
+/// Investigate the two together: fixing or deleting one changes the argument
+/// for the other.
+///
+/// Asserts the INTENDED reject. Same fork as the spawn sibling: either the rule
+/// is live and the shape was missed (keep this, add a positive control), or the
+/// borrow model changed under it (delete the raise site, the variant, and
+/// `await_invalidated`, and rewrite §7.24).
+#[test]
+#[ignore = "KNOWN GAP: E_BorrowAcrossAwait never fires on any probed shape, though \
+language-reference.md §7.24 documents the rejection; no positive control exists, and its \
+soundness comment leans on the equally-unfiring spawn guard. Asserts the INTENDED reject; \
+TODO.md. Un-ignore when proven live, or DELETE with the guard if the borrow model retired it."]
+fn sound_borrow_across_await_never_rejected() {
+    check_gg_fails(
+        "known_gaps/sound_borrow_across_await_never_rejected.gg",
+        "error[E_BorrowAcrossAwait]",
+    );
+}
+
+/// KNOWN GAP — an f-string SUPPRESSES the call-site sigil rejection. The same
+/// call, two spellings: `print(abs(&a))` is rejected with
+/// `E_OwnershipMismatch`; `print(f"{abs(&a)}")` passes `gg check`, then the C
+/// backend prints a raw pointer and `llc` hard-fails. Core #8.
+///
+/// Root is the already-filed f-string blanket suppression
+/// (`typecheck.rs:1182-1186` truncates `self.errors` around an interpolated
+/// expression) — but filed NARROWER than the truth. The existing entry
+/// describes carrier-op and operator-on-wrong-type errors; this proves it
+/// swallows OWNERSHIP/sigil-gate errors too, making an f-string a universal
+/// `gg check` bypass.
+///
+/// It is also a triage hazard: a probe that wraps its call in an f-string
+/// reports "accepted" for a shape the compiler rejects. That happened live —
+/// a gauntlet pass concluded `extern` declarations do not reject the `&`
+/// sigil, when they do; only the f-string spelling was accepted.
+#[test]
+#[ignore = "KNOWN GAP: an f-string suppresses the call-site sigil rejection — print(abs(&a)) is \
+rejected but print(f\"{abs(&a)}\") is accepted and miscompiles. Asserts the INTENDED reject for \
+both spellings; TODO.md. Un-ignore when f-string interpolation stops discarding typecheck errors."]
+fn sound_fstring_suppresses_sigil_reject() {
+    check_gg_fails(
+        "known_gaps/sound_fstring_suppresses_sigil_reject.gg",
+        "error[E_OwnershipMismatch]",
+    );
+}

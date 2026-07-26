@@ -2109,13 +2109,19 @@ async void process_local():
     some_task().await()
     print(s)               # fine: String owns its data across the suspension
 
-# ERROR: an explicit reference to a local cannot cross await
-async void process_ref():
-    Point p = Point(1, 2)
-    Point &r = p
+# ERROR: a borrow of a local cannot cross await
+async void process_ref(Point &p):
     some_task().await()
-    print(r.x)             # error: `r` borrows local `p` across the suspension
+    print(p.x)             # `p` borrows the caller's Point across the suspension
 ```
+
+> **Status against the current compiler.** The rule above is the specification.
+> `E_BorrowAcrossAwait` exists but no shape has been observed to trip it,
+> including this one — the state that drives it is only populated for a borrow
+> whose origin contains a local, and the comment gating that
+> (`safety/check_expr.rs:838`) rests on the spawn enforcement that itself has no
+> positive control. Repro:
+> `tests/fixtures/known_gaps/sound_borrow_across_await_never_rejected.gg`.
 
 **`spawn` supports direct function calls and closures.** The compiler checks that all captured variables and arguments are safe to send across threads:
 
@@ -2125,7 +2131,7 @@ spawn obj.method()       # ERROR — method calls not supported
 spawn get_fn()(x)        # ERROR — indirect call
 ```
 
-**Closures can be spawned if their captures are safe** (owned or Copy types). The compiler tracks each closure's capture set. A `spawn` is an **escape**, so under D34 a capture that crosses it is *materialised at the escape* rather than rejected — the closure gets its own value and cannot dangle:
+**Closures can be spawned if their captures are safe** (owned or Copy types). The compiler tracks each closure's capture set: a read-only capture is taken by value at the capture and is safe to spawn, while a **mutating** capture holds a pointer into the parent frame and is rejected (`E_SpawnClosureCaptureMutable`). (D34 would retire that rejection by materialising captures at the escape instead; it is not implemented — see §9.1's status note.)
 
 ```gorget
 int x = 42
@@ -2136,8 +2142,8 @@ auto c = (): print(x)
 spawn c()                       # OK — closure variable with Copy capture
 
 String name = get_name()
-spawn ((): print(name))()       # OK — the capture materialises at the escape
-                                # (D34; see docs/book/14-concurrency.md §3.10)
+spawn ((): print(name))()       # OK — read-only capture, taken by value
+                                # (see docs/book/14-concurrency.md §3.10)
 
 Shared[int] counter = Shared[int](0)
 spawn ((): print(counter.get()))()  # OK — Shared[T] is Copy
@@ -2331,6 +2337,8 @@ to grant and the sigil is rejected:
 | `for x in &xs` | the loop body's scope | ✓ |
 | `[e for x in &xs]` | the element expression's scope | ✓ |
 | `void f(int &x)` | declares what arrives in this scope | ✓ |
+| `void f(&self)` | declares what arrives as the receiver | ✓ |
+| `Callable[void(&int)]` | declares what the call will pass | ✓ |
 | `case Some(&p)` | nothing crosses — `p` names part of a value already here | ✗ |
 | `String w = &v` | nothing crosses — you are naming `v` in this scope | ✗ |
 | `&a + 1` | nothing crosses — `+` produces a new value here | ✗ |
@@ -2417,17 +2425,23 @@ A move capture is never inferred; it is requested with `!`.
 > **an escaping closure that captured a local by reference reads freed stack on
 > both backends**; write-through of a by-value field (`f(&c.fd)`) is lost, as is
 > element write-through through a loop or comprehension iterable; `&` through a
-> `Callable`-typed value segfaults, whether it is a local or a parameter; a
+> `Callable`-typed value segfaults, whether it is a local or a parameter, and a
+> `&`-declared `Callable` *parameter* ICEs the compiler when called; a
 > sigil on a receiver (`&c.add(1)`) is accepted and inert; and these remain
 > accepted though ratified as rejects —
 > `return &v`, the operand positions, `&` at constructor and enum-variant
 > arguments, at **any compiler-builtin call argument — free function or method**
 > (`print(&a)`, `len(&xs)`, `s.contains(&t)`, `v.push(&a)` are all accepted),
 > container-literal elements, the retired `[e for x & in xs]` spelling, and
-> doubled `for x in & &a`. The mechanism behind that last group is that the
+> doubled `for x in & &a`. For the two CALL-ARGUMENT items in that list
+> (constructor/enum-variant and compiler-builtin) the mechanism is that the
 > sigil gate only runs where the callee has a resolved signature, so
-> **user-declared functions and methods, and `extern` functions with a
-> signature, all reject correctly**.
+> **user-declared functions, methods, and `extern` declarations all reject
+> correctly** — the other five items have no callee at all, so that mechanism
+> does not explain them. ⚠ Independently of the sigil gate, **wrapping any call
+> in an f-string suppresses the rejection**: `print(abs(&a))` is rejected while
+> `print(f"{abs(&a)}")` is accepted and then miscompiles, because f-string
+> interpolation discards typecheck errors wholesale.
 
 **One spelling note.** The sigil precedes the *parameter*, and a parameter is
 spelled `&x` when it has a name and `&int` when it does not:
@@ -2440,7 +2454,7 @@ void g(Callable[void(&int)] cb)   # unnamed: the sigil sits before the type
 Those are the only two forms; `&int x` and `Callable[void(int&)]` are both
 rejected.
 
-Underneath the sigils, the ownership model itself is a handful of rules:
+Underneath the sigils, the ownership model itself is these ten rules:
 
 1. Every value has exactly one **owner** (the variable that holds it).
 2. When the owner goes out of scope, the value is dropped (freed).

@@ -1,0 +1,56 @@
+# DURABLE REPRO — an f-string SUPPRESSES the call-site sigil rejection, and the
+# accepted program then miscompiles.
+#
+# WRONG TODAY (measured at HEAD, Rust gg). The SAME call, two spellings:
+#   print(abs(&a))          -> REJECTED, error[E_OwnershipMismatch]   (correct)
+#   print(f"{abs(&a)}")     -> "OK: no semantic errors"               (wrong)
+# and the accepted spelling then:
+#   C backend    -> BUILDS, prints a raw pointer (e.g. 281474152536312)
+#   LLVM backend -> llc HARD-FAILS:
+#                     "'%v2' defined with type 'ptr' but expected 'i64'"
+#
+# So this is a Core #8 event — silent wrong output on one backend, hard build
+# failure on the other, from a program `gg check` accepts — and the ONLY
+# difference from the correctly-rejected spelling is the f-string wrapper.
+#
+# ROOT (already filed, but filed NARROWER than the truth): the f-string
+# interpolation typecheck does `self.errors.truncate(saved_err_len)`
+# (`typecheck.rs:1182-1186`), discarding every error raised while checking an
+# interpolated expression. The existing TODO entry describes this as swallowing
+# CARRIER-OP and operator-on-wrong-type errors (`f"{int ?? 5}"`,
+# `f"{int.unwrap()}"`). **This fixture proves the blast radius is wider: it
+# swallows OWNERSHIP/sigil-gate errors too.** Any diagnostic raised inside an
+# interpolation is lost, so an f-string is a universal `gg check` bypass.
+#
+# ⚠ THIS IS WHY IT MATTERS FOR TRIAGE, not just for users: a probe that wraps
+# its call in an f-string will report "accepted" for a shape the compiler
+# actually rejects. That happened live — a gauntlet review concluded `extern`
+# declarations do not reject the `&` sigil, when in fact they DO and only the
+# f-string spelling was accepted. Never probe accept/reject through an
+# f-string.
+#
+# INTENDED: both spellings REJECT with `E_OwnershipMismatch`. The f-string must
+# not change whether a program is accepted.
+#
+# ⚠ The `extern` here is incidental — it is simply a callee with a resolved
+# by-value signature. The same suppression applies to a user-declared function;
+# `extern` is used so the fixture doubles as a pin that the extern path DOES
+# reject when not wrapped.
+#
+# ORACLE (ggdef): OUT OF SUBSET — ggdef has no `extern` blocks. Recorded per
+# Core #9.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the call.
+#
+# Cited from TODO.md (Semantics / reference-grade rejection — appended to the
+# ROUND-16 T3 f-string blanket-suppression entry).
+
+extern "C":
+    int abs(int n)
+
+int seed():
+    return -5
+
+void main():
+    int a = seed()
+    print(f"{abs(&a)}")

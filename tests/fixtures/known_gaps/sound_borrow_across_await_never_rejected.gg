@@ -1,0 +1,73 @@
+# DURABLE REPRO — `E_BorrowAcrossAwait` appears to be a DEAD GUARD, and it is
+# the SECOND of a propping-each-other-up PAIR.
+#
+# `docs/language-reference.md` §7.24 documents a borrow held across an `await`
+# as an error. At HEAD this program is ACCEPTED: `gg check` reports "OK: no
+# semantic errors".
+#
+# WRONG TODAY (measured at HEAD, Rust gg). Shapes probed, all accepted:
+#   `&`-param held across await   (this fixture)
+#   collection-element view held across await
+#     (`auto r = v.get(0).unwrap()` ... `await` ... `print(r.x)`)
+#
+# ⚠ NO POSITIVE CONTROL (Core #13). Every reference to
+# `SemanticErrorKind::BorrowAcrossAwait` in `src/semantic/safety/tests.rs` is a
+# NEGATIVE assertion (`!has_error`) — not one test asserts it FIRES.
+#
+# MECHANISM. There is exactly ONE raise site (`safety/origins.rs:81`), gated on
+# `self.await_invalidated.contains(&def_id)`. That set has exactly ONE insert
+# (`safety/check_expr.rs:853`), reached only for a variable whose
+# `BorrowOrigin::contains_local()` holds. Since the StringView removal made
+# String params and locals OWNED rather than borrowed, the shapes that used to
+# populate it appear to have stopped existing.
+#
+# ⚠⚠ THE PAIR. The filter that gates that insert carries this comment
+# (`check_expr.rs:838-840`):
+#     "This is sound because Change 1 (Spawn enforcement) prevents
+#      borrowed refs from reaching fire-and-forget spawns."
+# That spawn enforcement is `E_SpawnWithBorrowedRef`, which has ALSO been
+# measured to have no positive control and no reachable shape — see the sibling
+# repro `sound_spawn_borrowed_ref_never_rejected.gg`. So the async-borrow guard
+# justifies its narrowness by pointing at the spawn guard, and neither one has
+# been demonstrated to fire. Investigate them TOGETHER; a fix or a deletion of
+# either changes the argument for the other. This is a Core #14 case squared —
+# an invariant-asserting comment whose named enforcer is itself unenforced.
+#
+# INTENDED: one of two, and the round that closes this must pick — the SAME
+# fork as the spawn sibling.
+#   (a) The rule is live and the reachable shape was not found → this fixture
+#       graduates to a NEG asserting the rejection, plus a positive-control
+#       unit test.
+#   (b) The rule is obsolete because the borrow model changed under it → DELETE
+#       the raise site, the variant, and `await_invalidated`, and rewrite §7.24
+#       to describe what actually protects a value across a suspension.
+# A rule documented in the reference with nothing enforcing it is a Core #14
+# defect either way.
+#
+# ⚠ THIS FIXTURE ASSERTS NEITHER OUTCOME. It records that the documented
+# rejection does not happen. Do not read its acceptance as a pin on the accept
+# side.
+#
+# ORACLE (ggdef): OUT OF SUBSET — ggdef has no `async`/`await`. Recorded per
+# Core #9.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide it.
+#
+# Cited from TODO.md (safety / async / Medium).
+
+struct Point:
+    int x
+
+int seed():
+    return 7
+
+async int some_task():
+    return 1
+
+async void process_ref(Point &p):
+    some_task().await()
+    print(p.x)
+
+async void main():
+    Point p = Point(seed())
+    await process_ref(&p)
