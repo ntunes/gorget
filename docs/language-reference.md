@@ -2396,8 +2396,11 @@ it lives — and that constraint is not derivable from the table.
 **In a comprehension, the iterable sigil grants a permission and does nothing
 by itself.** In `[bump(&x) for x in &xs]` the outer `&xs` opens the collection,
 and the inner `&x` is a second, nested boundary that uses that permission. A
-for-loop body needs no such nested boundary — there `for x in &xs: x += 1`
-writes through on the iterable sigil alone (a nested `bump(&x)` is legal too).
+for-loop body needs no such nested boundary — there `for e in &pts: e.x = 1`
+writes through on the iterable sigil alone (a nested `bump(&e.x)` is legal
+too). ⚠ For a *scalar* element no write form reaches the source today —
+`x += 1`, `x = …` and a nested `f(&x)` are all silently lost; see §9.1's
+status note.
 
 **Closures cross at the capture.** A closure body is another scope, so a captured
 value crosses into it, and the sigil belongs in a per-variable capture list —
@@ -2425,7 +2428,7 @@ A move capture is never inferred; it is requested with `!`.
 > mutation through a method call); `&`-capture exclusivity is scope-based rather
 > than ending at the closure's last use, and it misses reads inside an f-string;
 > **an escaping closure that captured a local by reference reads freed stack on
-> both backends**; write-through of a by-value field (`f(&c.fd)` — a field whose type is not a thin-pointer heap type, so `int`, `float`, `bool`, a plain struct, a tuple) is lost, as is
+> both backends**; write-through of a by-value place reached through a **projection** (`f(&c.fd)`, `f(&vv[0])`, `f(&dd["k"])` — any such place whose type is not a thin-pointer heap type: `int`, `float`, `bool`, a plain struct, a tuple, a Dict value, a Vector element; a whole bare local, `f(&n)`, still writes through) is lost, as is
 > element write-through through a **comprehension** iterable. Through a
 > **for-loop** iterable the outcome depends on TWO axes — the element type and
 > the form of the write. A mutation **through** the element (`e.field = …`,
@@ -2513,8 +2516,9 @@ Underneath the sigils, the ownership model itself is these ten rules:
       `.clone()`, while a **field/index place** (`s.field`, `v[i]`) of a tainted
       type must use `.clone()` (`!s.field` would be a partial move).
     - **By-design single-owner types:** `Box[T]`, `Task`, `TaskGroup`, `Guard`,
-      `Owned[T]`, and closure/`Callable` values (their drops are pure; they are
-      unique by construction).
+      and closure/`Callable` values (their drops are pure; they are unique by
+      construction). (`Owned[T]` exists internally but has no user spelling
+      yet — `Owned[Item] a = …` is `E_UndefinedName`.)
 
     For all of these, a bare `T b = a` of a live source is a
     **`MoveWithoutOperator`** error; write `T b = !a` or `T b = a.clone()`. A
@@ -2713,7 +2717,7 @@ the job of the `&` sigil (and `for x in &coll`): a change made through an
 Rust here — Rust rejects a mutation through an immutable borrow; Gorget
 copies instead. (See §9.1's status note: element write-through is currently
 lost through a comprehension iterable, and through a for-loop iterable it
-depends on the element type.)
+depends on the element type *and* on the form of the write.)
 
 The compiler also optimises last-use: if the source isn't live past the
 assign, the IR-lowering picks Move instead of Borrow (still no clone,
@@ -2770,7 +2774,7 @@ a closed inventory.
 
 **`.clone()` works on all types.** Explicit `.clone()` calls route to the correct clone function: collections use `gorget_array_clone`/`gorget_map_clone`/etc., user structs use generated `{Name}__clone`, copy types return the value unchanged.
 
-**Collection `.get()` returns a read-only borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read. Mutating the bound value materializes a private copy (the collection is untouched); to change the element in the collection, use a mutable borrow (`&`, `for x in &coll`) or a direct place mutation (`v[i] = x`, `v[i].m()`):
+**Collection `.get()` returns a read-only borrow.** Both `auto` and typed bindings produce borrows — there is no implicit clone on read. Mutating the bound value materializes a private copy (the collection is untouched); to change the element in the collection, use a mutable borrow (`&`, `for x in &coll`) or a direct place mutation (`v[i] = x`, `v[i].m()`) — ⚠ for a by-value element type both `&` forms are currently lost (see §9.1's status note); the direct place mutation is the reliable spelling today:
 
 ```gorget
 auto entry = v.get(i).unwrap()    # read-only borrow into v's storage

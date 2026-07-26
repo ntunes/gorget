@@ -331,8 +331,9 @@ of a value already in hand, `String w = &v` binds in the same scope. (These
 rejections are the ratified specification. `case Some(&p)` and `String w = &v`
 are rejected today. The **`&` operand** positions are still accepted by
 `gg check` and then fail downstream in costume-dependent ways (`!` in an
-operand position is likewise accepted today, but is simply inert rather than
-downstream-breaking): `&a + 1` fails the C build
+operand position is likewise accepted today; it does not change the operator's
+result, but it is **not** inert — it still marks the source moved, so
+`String r = !s + "b"` followed by `print(s)` is `E_UseAfterMove`): `&a + 1` fails the C build
 ("invalid operands to binary +") and hard-fails `llc`, while `xs[&a - 9]`
 builds and miscompiles, using the pointer as an index. See
 `language-reference.md` §9.1's status note.)

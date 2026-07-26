@@ -463,8 +463,8 @@ A `spawn` argument is a plain borrow (not wrapped in a `shared T` container). Th
 task could outlive the borrow's owner, leaving a dangling reference.
 
 ```gorget
-void child(Config &cfg):    # takes a borrow
-    use(cfg)
+void child(Config &cfg):    # takes a borrow it writes through
+    cfg.retries = cfg.retries + 1
 
 void parent():
     Config cfg = Config.default()
@@ -494,7 +494,7 @@ Capturing a `shared` directly is a separate rule and **is rejected today**
 through its lock, so pass it as a direct `spawn` argument — `spawn worker(n)` —
 rather than closing over the variable.
 
-A closure that **mutates** a captured local is rejected too
+A closure that **assigns** to a captured local is rejected too
 (`E_SpawnClosureCaptureMutable`) — a mutating capture holds a pointer into the
 parent's stack frame, which the child task may outlive. Under D34 that check
 becomes unnecessary rather than smarter: materialising the capture at the escape
@@ -502,9 +502,12 @@ turns the pointer into an owned value, and the mutation lands on the closure's
 own state. A read-only capture is always safe, whatever its type.
 
 > **Status against the current compiler.** The READ-ONLY shape above compiles —
-> no check fires on it. A **mutating** capture is rejected today with
+> no check fires on it. A capture the compiler infers as mutating — the closure
+> **assigns** the captured name — is rejected today with
 > `E_SpawnClosureCaptureMutable`, and that is what `spawn unchecked` opts out
-> of. D34 would retire that rejection in favour of materialising at the escape,
+> of. Mutation through a **method call** (`spawn ((): s.push('!'))()`) is not
+> detected: it is accepted and the mutation is silently lost, the same
+> capture-mode inference gap §9.1's status note records. D34 would retire that rejection in favour of materialising at the escape,
 > but it is not implemented. The `shared`-capture rejection is untouched by D34
 > either way — it is lock discipline, not escape safety — and stands.
 
