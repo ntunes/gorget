@@ -36285,3 +36285,24 @@ fn sound_spawn_borrowed_ref_never_rejected() {
         "error[E_SpawnWithBorrowedRef]",
     );
 }
+
+// Migrated from the retired `lir_ab` A/B harness. That harness compared the
+// GIR->C and LIR->C backends; the migration to LIR->C completed, both flags
+// now resolve to `CLirBackend`, and it had been comparing the backend against
+// itself. 698 of its 700 fixtures were already asserted here — these are the
+// two that were not, and they now carry real stdout pins rather than a
+// self-comparison.
+#[test]
+fn dict_box_callable() {
+    run_gg("dict_box_callable.gg", "10\n12\n17");
+}
+
+#[test]
+#[serial(test_basic_gg)]
+fn test_traced_runs_all_tests() {
+    run_gg_test(
+        "test_traced.gg",
+        &["5 passed, 0 failed", "factorial computes correctly ... PASS"],
+        true,
+    );
+}

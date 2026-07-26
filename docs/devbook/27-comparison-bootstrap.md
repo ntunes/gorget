@@ -1,6 +1,6 @@
 # 27 — Comparison, bootstrap & report generation
 
-This chapter covers the test machinery that measures the self-host frontend against the Rust `gg` reference (the `*_comparison` tests), the self-recompilation loop that proves the self-host is a usable compiler (`self_host_bootstrap` and `self_host_bootstrap_fixed_point`), and the HTML report generator (`src/report.rs`). It also documents the auxiliary harnesses that share this file family: the backend A/B equivalence guard (`tests/lir_ab.rs`), the layering-discipline ratchets (`tests/lints.rs`), the adversarial memory-safety suite (`tests/security.rs`), and the standalone runtime test (`tests/str_runtime.rs`). Everything except `report.rs` lives in `tests/`; the comparison and bootstrap tests are all in `tests/integration.rs`.
+This chapter covers the test machinery that measures the self-host frontend against the Rust `gg` reference (the `*_comparison` tests), the self-recompilation loop that proves the self-host is a usable compiler (`self_host_bootstrap` and `self_host_bootstrap_fixed_point`), and the HTML report generator (`src/report.rs`). It also documents the auxiliary harnesses that share this file family: the layering-discipline ratchets (`tests/lints.rs`), the adversarial memory-safety suite (`tests/security.rs`), and the standalone runtime test (`tests/str_runtime.rs`). Everything except `report.rs` lives in `tests/`; the comparison and bootstrap tests are all in `tests/integration.rs`.
 
 The single most important fact in this chapter: **the `*_comparison` tests are diagnostic-always-pass.** A green `cargo test` says *nothing* about self-host parity. Only the matched-counts printed to stderr carry the signal, and you only see them with `--nocapture`. This is by design and is explained below.
 
@@ -166,10 +166,6 @@ The pipeline is: parse → `build_tree` (`:240`) → `build_report` (`:364`) →
 ## Auxiliary test harnesses
 
 These share the `tests/` directory family and are worth knowing, though they sit outside the parity story.
-
-### tests/lir_ab.rs — backend A/B (now effectively A/A)
-
-`lir_ab.rs` was written to diff stdout between the GIR C backend and the LIR→C backend over a curated fixture list (704 `#[test]` entries; `ab_test` opens at `:181` and asserts the two stdouts equal at `:191`). It builds one side with the default flags (`run_gir`, `:14`) and the other with `--backend=lir` (`run_lir` at `:73`, the `--backend=lir` arg at `:80`). **But the GIR backend was retired** (`MEMORY.md` "LIR is sole backend"): in `main.rs` the backend selector defaults to `c-lir` and only `"llvm"` diverges — every other value, including `lir` and the absent flag, falls into the `_ =>` arm that yields `CLirBackend` (`src/main.rs:2502`, `:730`–`:732`). So both sides now run through the *same* C-LIR backend, making this an A/A equivalence smoke test (it does still catch nondeterminism and gross build breakage). The test file's "GIR" naming is historical.
 
 ### tests/lints.rs — layering-discipline ratchets
 

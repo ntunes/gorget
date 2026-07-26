@@ -6489,11 +6489,12 @@ fn refcount_clone_arm_symmetry() {
 /// for five days across round closes that reported the full battery green.
 ///
 /// The same audit found `lir_ab`, `runtime_compile` and `str_runtime` absent
-/// too. `lir_ab` had an orphaned test for a fixture deleted with the
-/// `live`/`outlives` keywords, plus a `cargo run` build-lock flake;
-/// `str_runtime` had been failing since the C runtime was split into units,
-/// assembling a `Str`-less translation unit. Nothing anywhere would have
-/// caught any of it.
+/// too. `str_runtime` had been failing since the C runtime was split into
+/// units, assembling a `Str`-less translation unit. `lir_ab` turned out to be
+/// comparing the LIR->C backend against ITSELF — the GIR->C backend it was
+/// written to A/B against is gone, both flags resolve to `CLirBackend`, and
+/// the emitted C was byte-identical — so it was retired rather than wired up.
+/// Nothing anywhere would have caught any of it.
 ///
 /// So the enumeration is closed by construction: add a `tests/<name>.rs` and
 /// this lint fails until `ci.yml` runs it.
