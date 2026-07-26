@@ -197,12 +197,21 @@ the closure is done with it.
 
 ### Move Closures
 
-To force a closure to take ownership of captured variables, prefix with `!`:
+A single capture is moved by marking it in the capture list, the same way `&`
+marks one. To move *every* capture, put `!` before the parameter list instead:
 
 ```gorget
-auto handler = !(msg):
-    print(f"got: {msg}")
+String msg = "hello"
+
+auto one = (!msg)(): print(f"got: {msg}")   # move just this capture
+auto all = !(): print(f"got: {msg}")        # move all captures
 ```
+
+After either, `msg` has been given away and is no longer usable in the
+enclosing scope.
+
+> As with `&`, the per-variable form is specification: `(!msg)()` is not
+> implemented yet. The move-all `!()` prefix works today.
 
 ### No-Argument Closures
 
@@ -255,5 +264,5 @@ void main():
 | Void function | `void name(params): body` | `void greet(String s): print(s)` |
 | Multiple returns | `T1, T2 name(params):` | `String, int parse(String s):` |
 | Closure | `(params): expr` | `(x): x * 2` |
-| Move closure | `!(params): expr` | `!(x): process(x)` |
+| Move-all captures | `!(params): expr` | `!(): print(msg)` |
 | Function type | `RetType(ParamTypes)` | `int(int, int)` |

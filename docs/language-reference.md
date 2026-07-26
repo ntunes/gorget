@@ -2527,7 +2527,7 @@ through, **`!`** = the callee consumes:
 | `String &s`                        | `f(&s)`                           | Mutable borrow (write-through) |
 | `String !s`                        | `f(!s)`                           | Move (consume) |
 
-Mismatches produce an **OwnershipMismatch** error. The rule is **uniform at
+Mismatches produce an **`E_OwnershipMismatch`** error. The rule is **uniform at
 every call site** — free function and method, and whether the argument is a
 **named place or a fresh temporary**:
 
@@ -2660,10 +2660,10 @@ through it does not fail and does not reach the source — it
 **materializes** a private copy at the binding and the write lands there,
 leaving the borrowed-from value untouched. Write-through to the source is
 the job of the `&` sigil (and `for x in &coll`): a change made through an
-`&` borrow reaches the original. (See §9.1's status note — element
-write-through through a loop or comprehension iterable is currently lost.) (Gorget is deliberately more tolerant
-than Rust here — Rust rejects a mutation through an immutable borrow;
-Gorget copies instead.)
+`&` borrow reaches the original. Gorget is deliberately more tolerant than
+Rust here — Rust rejects a mutation through an immutable borrow; Gorget
+copies instead. (See §9.1's status note: element write-through through a
+loop or comprehension iterable is currently lost.)
 
 The compiler also optimises last-use: if the source isn't live past the
 assign, the IR-lowering picks Move instead of Borrow (still no clone,
@@ -2686,7 +2686,7 @@ the same; only the cost differs.)
 8. **Match-arm extraction that escapes** — a resource-type value bound out of a `case` pattern and used past the match arm
 9. **Channel send** — sending a borrowed value across a channel (`ch.send(x)`)
 10. **Spawn / task capture** — capturing a borrowed value into a spawned task
-11. **Escaping-closure capture** — a closure that outlives the capture's source closing over a borrowed value. *(Specification: the compiler currently materialises at the capture instead, so a bare capture behaves as a snapshot — see §9.1.)*
+11. **Escaping-closure capture** — a closure that outlives the capture's source closing over a borrowed value. *(This escape-time boundary is the specification; today the compiler materialises earlier, at the capture itself, so a bare capture behaves as a snapshot — see §9.1.)*
 12. **Borrowed-extern return** — the result of an `extern borrowed T f(...)` call (the FFI returned a non-owning alias, cloned so the caller's slot survives later FFI mutations)
 13. **Comprehension into an owned collection** — a comprehension whose elements are collected into an owned collection
 

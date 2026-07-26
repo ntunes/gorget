@@ -2272,8 +2272,8 @@ Comprehensions produce **owned** collections. The iterator yields owned or clone
 # Default: immutable borrow (people still valid after)
 Vector[String] names = [p.name for p in people]
 
-# Consuming: takes ownership of each person (people is gone after)
-Vector[String] names = [!p.name for p in !people]
+# Consuming: takes ownership of the collection (people is gone after)
+Vector[String] names = [p.name for p in !people]
 
 # Clone to get owned copies while keeping the original
 Vector[String] names = [p.name.clone() for p in people]
