@@ -325,25 +325,23 @@ for x in !xs:       # the loop consumes the collection
 A loop is a boundary exactly as a call is: the body is the other side. A
 comprehension crosses into its element expression. A closure crosses at the
 **capture**, which is why the sigil goes in a capture list (`(&count)(): ...`)
-rather than in the body. A method's receiver is a separate axis — never
-sigil-marked at the call site, so `a.push(4)` modifies `a` with no sigil in
-sight; what a method does to its receiver is read from its signature.
+rather than in the body. Where nothing crosses there is no boundary, and a sigil
+is rejected: `&a + 1` produces a new value right here, `case Some(&p)` names part
+of a value already in hand, `String w = &v` binds in the same scope.
 
-Where nothing crosses there is no boundary, and a sigil is rejected: `&a + 1`
-produces a new value right here, `case Some(&p)` names part of a value already
-in hand, `String w = &v` binds in the same scope.
+A method's receiver is a **separate axis**, read from the signature rather than
+the call site. `void bump(&self)` writes through and `Vector[int] into_items(!self)`
+consumes, so a call that looks bare can still change or even take its receiver:
+`a.push(4)` modifies `a`. The table governs arguments.
 
-`&` carries one requirement beyond that, and it is where the two sigils part
-company: the scope it crosses into must be one the **owner outlives**. A callee,
-a loop body and a comprehension all finish first, so a borrow granted to them
-cannot outlive what it points at. A `return` runs the other way, so `return &v`
-would hand back a borrow of something already gone — rejected, as is storing a
-borrow in a field. Underneath it is the exclusivity rule: a place has exactly one
-writer, and an escaping borrow would be a second writable path to it.
-
-`!` has no such requirement, because a move transfers the value itself rather
-than a route to it. `String w = !v` is legal — the value is simply `w`'s now.
-none.
+**Escape-safety is a separate concern.** The sigils say what may happen to a
+value across one boundary; they say nothing about how long a borrow stays valid
+once it has crossed. That is governed by its own rules — a borrow may not be
+returned or stored in a field, a local `&`-binding is rejected because a place
+has one writer, and a closure holds a reference capture exclusively while it is
+live. Gorget has no lifetimes by design, so it constrains where a borrow may
+travel instead of tracking how long it lives, and that constraint does not fall
+out of the table.
 
 ```gorget
 # Immutable borrow (default - no symbol, safest)

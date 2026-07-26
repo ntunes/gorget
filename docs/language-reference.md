@@ -2312,15 +2312,9 @@ for x in &xs:       # write through to the collection
 for x in !xs:       # consume the collection
 ```
 
-**The receiver is a separate axis.** A method's receiver is never sigil-marked
-at the call site — you write `c.add_all(...)`, never `&c.add_all(...)`. The
-sigil lives on the declaration alone (`void bump(&self)`), so a bare-looking
-call can still modify its receiver: `a.push(4)` changes `a`. The table above
-governs *arguments*; what a method does to its receiver is read from its
-signature.
-
 **Where a sigil may appear.** A value must **cross from one scope into another**,
-and the sigil is written at the crossing:
+and the sigil is written at the crossing. Where nothing crosses, there is nothing
+to grant and the sigil is rejected:
 
 | | crosses into | |
 |---|---|---|
@@ -2332,30 +2326,35 @@ and the sigil is written at the crossing:
 | `String w = &v` | nothing crosses — you are naming `v` in this scope | ✗ |
 | `&a + 1` | nothing crosses — `+` produces a new value here | ✗ |
 
-**`&` carries a second requirement: the scope it crosses into must be one the
-owner outlives.** A callee, a loop body and a comprehension all finish before the
-owner does, so a borrow granted to them cannot outlive what it points at. A
-`return` runs the other way — the caller outlives the callee — so `return &v`
-would hand back a borrow of something already gone, and is rejected. Storing a
-borrow in a field is rejected for the same reason. This is also the exclusivity
-rule at work: a place has exactly one writer, and a borrow that escapes its
-boundary would create a second writable path to it.
-
-**`!` has no such requirement**, because a move transfers the value itself rather
-than a route to it. A moved value can rest anywhere a value can:
-
-```gorget
-String w = !v      # legal — the value is now `w`'s
-String w = &v      # rejected — a borrow has nowhere to live here
-```
-
-That is the whole difference between them, and it is why the two sigils agree at
-operand positions — `&a + 1` and `!a + 1` are both rejected, because `+` reads
-its operands and hands nothing to anyone — and part company at rest.
+`&a + 1` and `!a + 1` are both rejected for the same reason: `+` reads its
+operands and hands nothing to anyone.
 
 **The sigil binds to the argument, directly.** `f(&x)` grants; `f((&x))` does
 not — parenthesising makes the sigil part of an inner expression rather than a
 mark on the argument, and the call is rejected.
+
+**The receiver is a separate axis, and it is read from the signature.** A
+method's mode lives on its declaration, not at the call site: `void bump(&self)`
+writes through, `Vector[int] into_items(!self)` consumes. So a call that looks
+bare can still change or even consume its receiver — `a.push(4)` modifies `a`,
+and `b.into_items()` leaves `b` moved-from. **The table above governs arguments
+only.** To know what a method does to its receiver, read its signature.
+
+**Escape-safety is a separate concern, enforced by its own rules.** The sigils
+say what may happen to a value across one boundary. They say nothing about how
+long a borrow stays valid once it has crossed, and that question is not answered
+by the sigil vocabulary:
+
+- a borrow may not be returned (`return &v`) or stored in a field, because it
+  would outlive what it points at;
+- a local `&`-binding is rejected, because a place has exactly one writer and a
+  named borrow would be a second writable path to it;
+- a closure that captures by reference holds that capture exclusively for as
+  long as the closure is live.
+
+These are distinct rules with distinct reasons. Gorget has no lifetimes by
+design, so it constrains where a borrow may travel rather than tracking how long
+it lives — and that constraint is not derivable from the table.
 
 **An iterable sigil grants a permission and does nothing by itself.** In
 `[bump(&x) for x in &xs]` the outer `&xs` opens the collection, and the inner
@@ -2365,19 +2364,22 @@ mark on the argument, and the call is rejected.
 value crosses into it, and the sigil belongs in a per-variable capture list —
 `(&count)(): ...` to write through, `(!name)(): ...` to take it, with `!()` as
 sugar for moving everything. A bare name in a capture list is rejected: the sigil
-is the point of writing one. A closure can outlive the scope that made it, which
-is why a `&`-capture is exclusive for as long as the closure is live.
+is the point of writing one.
 
 > **Status against the current compiler.** This section is the specification;
-> where the compiler disagrees it has a bug. Known divergences, in full:
-> capture-list syntax is not implemented (the mode is currently inferred from
-> the closure body, and a sigil written inside the body is silently inert);
-> `&`-capture exclusivity is currently scope-based rather than ending at the
-> closure's last use; write-through of a by-value field (`f(&c.fd)`) is lost on
-> both backends; element write-through through a loop or comprehension iterable
-> is lost; `&` through a `Callable`-typed **local** segfaults on both backends;
-> `return &v` and the operand-position rejections are ratified but not yet
-> enforced.
+> where the compiler disagrees it has a bug. Known divergences:
+> capture-list syntax is not implemented (the mode is inferred from the closure
+> body, a sigil inside the body is silently inert, and the inference misses
+> mutation through a method call); `&`-capture exclusivity is scope-based rather
+> than ending at the closure's last use, and it misses reads inside an f-string;
+> **an escaping closure that captured a local by reference reads freed stack on
+> both backends**; write-through of a by-value field (`f(&c.fd)`) is lost, as is
+> element write-through through a loop or comprehension iterable; `&` through a
+> `Callable`-typed local segfaults; a sigil on a receiver (`&c.add(1)`) is
+> accepted and inert; and these remain accepted though ratified as rejects —
+> `return &v`, the operand positions, `&` at constructor/enum/`push` arguments,
+> container-literal elements, the retired `[e for x & in xs]` spelling, and
+> doubled `for x in & &a`.
 
 **One spelling note.** The sigil precedes the *parameter*, and a parameter is
 spelled `&x` when it has a name and `&int` when it does not:
