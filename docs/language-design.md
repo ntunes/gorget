@@ -311,11 +311,10 @@ The heart of the language. Three modes of passing data, with visual "loudness" m
 | Mutable borrow | `String &s` | `f(&name)` | Read+write access, caller keeps ownership |
 | Move (ownership) | `String !s` | `f(!name)` | Full ownership transfer, caller loses access |
 
-The "Meaning" column is the whole rule, and it generalises past calls. A sigil
-says what the **other side of a boundary** may do with a value you hand it, and
-therefore what you still have afterwards. A boundary is where a value **crosses
-from one scope into another**, and the sigil is written at the crossing — which
-is what makes every position decidable without a list:
+The "Meaning" column generalises past calls. A sigil says what the **other side
+of a boundary** may do with a value you hand it, and therefore what you still
+have afterwards. A boundary is where a value **crosses from one scope into
+another**, and the sigil is written at the crossing:
 
 ```gorget
 for x in xs:        # read each element
@@ -325,18 +324,25 @@ for x in !xs:       # the loop consumes the collection
 
 A loop is a boundary exactly as a call is: the body is the other side. A
 comprehension crosses into its element expression. A closure crosses at the
-**capture**, which is why the sigil goes in the capture list (`(&count)(): ...`)
-and not in the body.
+**capture**, which is why the sigil goes in a capture list (`(&count)(): ...`)
+rather than in the body. A method's receiver is a separate axis — never
+sigil-marked at the call site, so `a.push(4)` modifies `a` with no sigil in
+sight; what a method does to its receiver is read from its signature.
 
-Where nothing crosses, there is no boundary and a sigil is rejected: `a + 1`
-produces a new value right here, `case Some(p)` names part of a value already in
-hand, `String w = v` binds in the same scope.
+Where nothing crosses there is no boundary, and a sigil is rejected: `&a + 1`
+produces a new value right here, `case Some(&p)` names part of a value already
+in hand, `String w = &v` binds in the same scope.
 
-The one asymmetry follows from the table rather than sitting beside it. A value
-you gave away can rest anywhere (`String w = !v`), because it is now someone
-else's to keep. A borrow cannot (`String w = &v` is rejected): keeping it would
-mean holding a window onto a value you do not own, with nothing to say how long
-it stays open — which is what lifetimes are for, and Gorget deliberately has
+`&` carries one requirement beyond that, and it is where the two sigils part
+company: the scope it crosses into must be one the **owner outlives**. A callee,
+a loop body and a comprehension all finish first, so a borrow granted to them
+cannot outlive what it points at. A `return` runs the other way, so `return &v`
+would hand back a borrow of something already gone — rejected, as is storing a
+borrow in a field. Underneath it is the exclusivity rule: a place has exactly one
+writer, and an escaping borrow would be a second writable path to it.
+
+`!` has no such requirement, because a move transfers the value itself rather
+than a route to it. `String w = !v` is legal — the value is simply `w`'s now.
 none.
 
 ```gorget
@@ -1571,7 +1577,7 @@ void() do_nothing = (): pass
 Closures support three user-facing capture modes:
 
 - **Immutable borrow** (default) — the variable is read but not mutated inside the closure; the outer binding stays valid.
-- **Mutable borrow** — the compiler detects that the closure mutates the variable and captures a pointer to the outer slot automatically.
+- **Mutable borrow** — spelled `(&name)(): ...` in the capture list (§3.1). The compiler *currently* infers this by detecting that the closure mutates the variable and capturing a pointer to the outer slot automatically; the ratified capture-list syntax replaces that inference with an explicit sigil.
 - **Move** — the closure takes ownership of the captured value. Use `!` before the parameter list to force ALL captures into move mode.
 
 The compiler infers immutable-borrow vs. mutable-borrow automatically from the closure body. Move capture is never inferred — it must be requested explicitly with `!`. Internally, immutable-borrow and move captures are both stored by value in the closure struct (the difference is whether the outer binding survives); mutable-borrow captures store a pointer to the outer variable.
@@ -1603,13 +1609,17 @@ auto processor = !(data):
 
 ### 7.4 V2 Feature: Per-Variable Capture Control
 
-*Deferred to V2.* Will allow fine-grained capture modes per variable using `(captures)(params)` syntax:
+Per-variable capture lists are **ratified** (§3.1); the grammar is not
+implemented yet, so the syntax below does not parse today.
 
 ```gorget
-# V2: Per-variable capture — captures first, params second
-# (!name, count)(x): x + count + name.len()
-# !name = move, count = borrow, x = parameter
+# (!name, &total)(x): ...     # !name = move, &total = write through
+# !(): ...                    # sugar: move everything captured
 ```
+
+Every captured name carries a sigil. A **bare name in a capture list is
+rejected** — the sigil is the point of writing one, and a bare name would be
+ambiguous with a parameter.
 
 ### 7.5 Untyped Parameters & Contextual Inference
 

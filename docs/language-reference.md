@@ -1742,7 +1742,7 @@ This replaces the need for any special keyword — the compiler infers from the 
 ### 7.14 Move Expression
 
 ```ebnf
-move_expr = "!" expr ;
+move_expr = "!" expr ;   (* at a boundary only — never as an operand; see §9.1 *)
 ```
 
 Transfers ownership of a value. The source variable becomes invalid after the move.
@@ -1769,9 +1769,7 @@ rule that decides which positions are boundaries, and what each sigil means
 there, is in [§9.1 Ownership Rules](#91-ownership-rules).
 
 
-An iterable sigil grants a permission and does nothing by itself. In
-`[bump(&x) for x in &xs]` the outer `&xs` opens the collection, and the inner
-`&x` is a second, nested boundary that uses that permission.
+
 **Local `&`-bindings are illegal** (D10, 2026-07-06): binding a borrow to a
 name — either form — is rejected, because a place has exactly one exclusive
 writer and a named `&`-binding would alias a second writable path to it for
@@ -2291,7 +2289,11 @@ Gorget enforces memory safety through compile-time ownership and borrowing rules
 
 ### 9.1 Ownership Rules
 
-**The three sigils, and what each says about your value.** When you hand a value
+> Throughout this section, `&` means the **prefix sigil**. Infix `&` is a
+> different thing entirely — bitwise AND, and the conjunction in a trait bound
+> (`[Displayable & Cloneable T]`). Neither is governed by anything below.
+
+**The three sigils, and what each says about an argument.** When you hand a value
 across a boundary — into a call, into a loop, into a comprehension — the sigil
 says what the other side may do with it, and therefore what you still have
 afterwards:
@@ -2310,86 +2312,79 @@ for x in &xs:       # write through to the collection
 for x in !xs:       # consume the collection
 ```
 
-A declaration marks the same boundary from the far end: `void f(int &x)` says
-*this function writes to whatever you pass it*, and `void f(int !x)` says *this
-function takes it*. The sigil at the call and the sigil on the declaration
-describe one boundary from two sides.
+**The receiver is a separate axis.** A method's receiver is never sigil-marked
+at the call site — you write `c.add_all(...)`, never `&c.add_all(...)`. The
+sigil lives on the declaration alone (`void bump(&self)`), so a bare-looking
+call can still modify its receiver: `a.push(4)` changes `a`. The table above
+governs *arguments*; what a method does to its receiver is read from its
+signature.
 
-**What counts as a boundary.** A boundary is where a value **crosses from one
-scope into another**, and the sigil is written at the crossing. That is the
-whole test, and it decides every position without a list:
+**Where a sigil may appear.** A value must **cross from one scope into another**,
+and the sigil is written at the crossing:
 
 | | crosses into | |
 |---|---|---|
-| `f(&x)` | the callee's scope | ✓ a boundary |
+| `f(&x)` | the callee's scope | ✓ |
 | `for x in &xs` | the loop body's scope | ✓ |
 | `[e for x in &xs]` | the element expression's scope | ✓ |
 | `void f(int &x)` | declares what arrives in this scope | ✓ |
-| `case Some(&p)` | nothing crosses — `p` names part of a value already here | ✗ rejected |
-| `String w = &v` | nothing crosses — you are naming `v` in this scope | ✗ rejected |
-| `&a + 1` | nothing crosses — `+` produces a new value here | ✗ rejected |
+| `case Some(&p)` | nothing crosses — `p` names part of a value already here | ✗ |
+| `String w = &v` | nothing crosses — you are naming `v` in this scope | ✗ |
+| `&a + 1` | nothing crosses — `+` produces a new value here | ✗ |
 
-This is also why the resting positions reject: it is not that a borrow is
-forbidden in a name, it is that **nothing crossed**, so there is no boundary for
-a sigil to mark.
+**`&` carries a second requirement: the scope it crosses into must be one the
+owner outlives.** A callee, a loop body and a comprehension all finish before the
+owner does, so a borrow granted to them cannot outlive what it points at. A
+`return` runs the other way — the caller outlives the callee — so `return &v`
+would hand back a borrow of something already gone, and is rejected. Storing a
+borrow in a field is rejected for the same reason. This is also the exclusivity
+rule at work: a place has exactly one writer, and a borrow that escapes its
+boundary would create a second writable path to it.
 
-**Closures cross too, and the sigil goes in the capture list.** A closure body
-is another scope, so a captured value crosses into it — and the crossing is the
-capture. That is where the sigil is written, per variable:
+**`!` has no such requirement**, because a move transfers the value itself rather
+than a route to it. A moved value can rest anywhere a value can:
 
 ```gorget
-auto tally = (&count)():        # the closure may write to `count`
-    count = count + 1
-
-auto own = (!name, &total)(x):  # takes `name`, writes to `total`
-    ...
+String w = !v      # legal — the value is now `w`'s
+String w = &v      # rejected — a borrow has nowhere to live here
 ```
 
-A bare name in a capture list is rejected — the sigil is how you say what the
-closure may do. `!()` is sugar for moving everything captured.
-
-A `&`-capture is exclusive for as long as the closure is live: the borrow ends
-at the closure's last use, and until then the value cannot be read from outside.
-
-Because the crossing is the capture, a sigil written *inside* the body is on the
-wrong side of it — the value arrived already, and nothing there can change how.
+That is the whole difference between them, and it is why the two sigils agree at
+operand positions — `&a + 1` and `!a + 1` are both rejected, because `+` reads
+its operands and hands nothing to anyone — and part company at rest.
 
 **The sigil binds to the argument, directly.** `f(&x)` grants; `f((&x))` does
-not — parenthesising it makes the sigil part of an inner expression rather than
-a mark on the argument, and the call is rejected. The sigil is written where the
-value is handed over, with nothing between.
+not — parenthesising makes the sigil part of an inner expression rather than a
+mark on the argument, and the call is rejected.
 
-**Where there is no other side, there is nothing to say.** `a + 1` reads `a` and
-produces a new value; nobody is being handed anything. So `&a + 1` and `!a + 1`
-are both rejected, as is a sigil on a match scrutinee, an index expression, or
-string interpolation.
+**An iterable sigil grants a permission and does nothing by itself.** In
+`[bump(&x) for x in &xs]` the outer `&xs` opens the collection, and the inner
+`&x` is a second, nested boundary that uses that permission.
 
-> This section describes the language as intended. Some of it is not yet
-> enforced or not yet correct in the current compiler — element write-through
-> through a loop or comprehension iterable, and `&` through a `Callable`
-> parameter, are known gaps, and the operand-position rejections above are
-> ratified but not yet implemented. Where the compiler and this section
-> disagree, this section is the specification and the compiler has a bug.
+**Closures cross at the capture.** A closure body is another scope, so a captured
+value crosses into it, and the sigil belongs in a per-variable capture list —
+`(&count)(): ...` to write through, `(!name)(): ...` to take it, with `!()` as
+sugar for moving everything. A bare name in a capture list is rejected: the sigil
+is the point of writing one. A closure can outlive the scope that made it, which
+is why a `&`-capture is exclusive for as long as the closure is live.
 
-**One asymmetry, and it follows from the table.** A value you gave away can rest
-anywhere, because it is now someone else's to keep:
-
-```gorget
-String w = !v      # legal — you handed it over; it lives in `w` now
-String w = &v      # rejected
-```
-
-A borrow cannot rest. Keeping `&v` in a name would mean holding a window onto a
-value you do not own, with nothing to say how long it stays open. That is what
-lifetimes are for, and Gorget deliberately has none — so a borrow lives only as
-long as the boundary it was granted across.
+> **Status against the current compiler.** This section is the specification;
+> where the compiler disagrees it has a bug. Known divergences, in full:
+> capture-list syntax is not implemented (the mode is currently inferred from
+> the closure body, and a sigil written inside the body is silently inert);
+> `&`-capture exclusivity is currently scope-based rather than ending at the
+> closure's last use; write-through of a by-value field (`f(&c.fd)`) is lost on
+> both backends; element write-through through a loop or comprehension iterable
+> is lost; `&` through a `Callable`-typed **local** segfaults on both backends;
+> `return &v` and the operand-position rejections are ratified but not yet
+> enforced.
 
 **One spelling note.** The sigil precedes the *parameter*, and a parameter is
 spelled `&x` when it has a name and `&int` when it does not:
 
 ```gorget
-void f(int &x)              # named: the sigil sits before the name
-Callable[void(&int)] g      # unnamed: the sigil sits before the type
+void f(int &x)                    # named: the sigil sits before the name
+void g(Callable[void(&int)] cb)   # unnamed: the sigil sits before the type
 ```
 
 Those are the only two forms; `&int x` and `Callable[void(int&)]` are both
