@@ -1983,8 +1983,11 @@ String wrapper():
     #[test]
     fn param_str_across_await_ok() {
         // str param used after await → now OK: caller is blocked, param stays alive.
-        // Sound because spawn enforcement (SpawnWithBorrowedRef) prevents borrowed refs
-        // from escaping into fire-and-forget spawns.
+        // The soundness argument USED to lean on spawn enforcement
+        // (SpawnWithBorrowedRef) keeping borrowed refs out of fire-and-forget
+        // spawns. That guard has no positive control — no test asserts it FIRES
+        // and no ordinary borrow shape has been observed to trip it — so do not
+        // rely on it here. Filed in TODO.md (safety / spawn).
         let source = "\
 async int do_work():
     return 1
@@ -2162,7 +2165,7 @@ async void process(String name):
     // ─── Spawn-site borrow enforcement ──────────────────────
 
     #[test]
-    fn spawn_with_borrowed_str_rejected() {
+    fn spawn_with_owned_string_param_accepted() {
         // With StringView removed, String params are owned, not borrowed.
         // Passing an owned String to a spawned task is fine.
         let source = "\
@@ -2197,7 +2200,7 @@ void launch():
     }
 
     #[test]
-    fn spawn_with_call_returning_borrowed_str_rejected() {
+    fn spawn_with_call_returning_owned_str_accepted() {
         // User-defined functions always return owned strings (IR clones on return),
         // so the value is independent — no dangling.
         let source = "\

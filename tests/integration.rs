@@ -36257,3 +36257,31 @@ when the `&`-operand place gate lands."]
 fn sound_amp_non_place_rejected() {
     check_gg_fails("known_gaps/sound_amp_non_place_reject.gg", "error[E_");
 }
+
+/// KNOWN GAP — `E_SpawnWithBorrowedRef` has NO POSITIVE CONTROL and may be a
+/// DEAD GUARD. `docs/book/14-concurrency.md` §3.9 documents this exact program
+/// as rejected; at HEAD it is accepted. Four borrow shapes were probed and all
+/// four are accepted (see the fixture header). Every reference to the error
+/// variant in `src/semantic/safety/tests.rs` is a NEGATIVE assertion — not one
+/// test asserts it FIRES — and two were named `..._rejected` while asserting
+/// acceptance (renamed to `..._accepted` alongside this test). The raise sites
+/// still exist (`helpers.rs:1695`, `check_expr.rs:933`), so this is "no
+/// reachable shape found", not "the code was deleted".
+///
+/// This test asserts the INTENDED reject. The round that closes it must first
+/// decide WHICH answer is right: (a) the guard is live and the shape was not
+/// found — keep this test and add a positive-control unit test; or (b) escape
+/// safety now belongs to the closure capture/escape analysis (D34) — delete the
+/// raise sites and the variant, and rewrite §3.9. A safety rule documented in
+/// the book with nothing enforcing it is a Core #14 defect either way.
+#[test]
+#[ignore = "KNOWN GAP: E_SpawnWithBorrowedRef never fires on any probed borrow shape, though \
+docs/book/14-concurrency.md §3.9 documents the rejection; the guard has no positive control. \
+Asserts the INTENDED reject; TODO.md. Un-ignore when the guard is proven live, or DELETE this \
+test with the guard if escape-safety subsumes it."]
+fn sound_spawn_borrowed_ref_never_rejected() {
+    check_gg_fails(
+        "known_gaps/sound_spawn_borrowed_ref_never_rejected.gg",
+        "error[E_SpawnWithBorrowedRef]",
+    );
+}

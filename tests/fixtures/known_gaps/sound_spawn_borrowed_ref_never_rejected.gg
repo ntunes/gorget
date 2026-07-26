@@ -1,0 +1,64 @@
+# DURABLE REPRO — `E_SpawnWithBorrowedRef` appears to be a DEAD GUARD.
+#
+# `docs/book/14-concurrency.md` §3.9 documents this program as rejected
+# ("ERROR: borrowed reference crossing spawn boundary"). At HEAD it is
+# ACCEPTED: `gg check` reports "OK: no semantic errors".
+#
+# WRONG TODAY (measured at HEAD, Rust gg). Four shapes probed, all accepted:
+#   `&`-of-a-local        `spawn child(&cfg)`        (this fixture)
+#   `&`-of-a-`&`-param    parent(Config &cfg) -> `spawn child(&cfg)`
+#   owned String param    `spawn worker(data)`
+#   `&`-param collection  launch(Vector[int] &data) -> `spawn worker(data)`
+#
+# ⚠ THE GUARD HAS NO POSITIVE CONTROL (Core #13). Every reference to
+# `SemanticErrorKind::SpawnWithBorrowedRef` in `src/semantic/safety/tests.rs`
+# is a NEGATIVE assertion (`!has_error`) — not one test asserts it FIRES. Two
+# of them were even NAMED `..._rejected` while asserting acceptance; their
+# bodies explain why ("With StringView removed, String params are owned, not
+# borrowed"). So when StringView was removed the borrow-origin shapes this
+# check was written for stopped existing, the assertions were flipped, and the
+# names were left behind. Renamed to `..._accepted` at the same commit as this
+# fixture.
+#
+# The raise sites still exist — `helpers.rs:1695` (args) and
+# `check_expr.rs:933` (method receiver) — so this is "no reachable shape
+# found", NOT "the code was deleted". Establishing which of the two it is
+# is the work; that is why this is filed rather than fixed inline.
+#
+# INTENDED: one of two answers, and the round that closes this must pick.
+#   (a) The guard is LIVE and the reachable shape simply was not found — then
+#       this fixture graduates to a NEG fixture asserting the rejection, and a
+#       positive-control unit test lands beside it.
+#   (b) The guard is DEAD because escape-safety now belongs to the closure
+#       capture/escape analysis (D34) — then the raise sites and the error
+#       variant are DELETED, and §3.9 is rewritten to describe whatever
+#       actually protects the spawn boundary. A safety rule documented in the
+#       book with nothing enforcing it is a Core #14 defect either way.
+#
+# ⚠ THIS FIXTURE ASSERTS NEITHER OUTCOME. It is a probe: it records that the
+# documented rejection does not happen. Do not read its acceptance as a pin on
+# the accept side.
+#
+# ORACLE (ggdef): OUT OF SUBSET — ggdef has no `spawn`/`Task`. Recorded per
+# Core #9.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the call.
+#
+# Cited from TODO.md (safety / spawn / Medium).
+
+struct Config:
+    int n
+
+int seed():
+    return 1
+
+void child(Config &cfg):
+    cfg.n = cfg.n + 1
+
+void parent():
+    Config cfg = Config(seed())
+    spawn child(&cfg)
+
+void main():
+    parent()
+    print(0)
