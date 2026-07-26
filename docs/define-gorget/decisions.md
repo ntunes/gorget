@@ -1290,6 +1290,17 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 
   **THE INTENDED MECHANISM:** a closure that stays local **borrows its captures** — zero cost, and it observes current values rather than a snapshot. A closure that **escapes** (returned, stored, spawned) **materialises its captures at the escape**, which is an ownership boundary exactly like a return. That is CoW applied precisely instead of pessimistically, and it removes the one position where the model approximates.
 
+  **⚠⚠ COST CORRECTION (2026-07-26, measured after ratification — the entry below overstated it).** This entry said the cost is *"escape analysis — not lifetimes, but a real analysis that does not exist"*. **That is FALSE: it exists and is correct at the return position.** `check_expr_for_escaping_closures` (`src/semantic/safety/helpers.rs:1766-1795`) walks the returned expression, finds closures with captures, tests whether the captured def is a **local Variable and not a param**, and emits `E_ClosureEscapesScope` — *"cannot return closure `f`: captures local variable `n` which will be dropped"*. **What is missing is not the analysis; it is the RESPONSE.**
+  **AND THE PRESENT BEHAVIOUR IS WRONG IN BOTH DIRECTIONS — measured, same program, only the capture body differs:**
+
+  | | `return f` | `return !f` |
+  |---|---|---|
+  | **read-only** capture | **REJECTED** `E_ClosureEscapesScope` | runs, prints `42` — **safe** |
+  | **mutating** capture | rejected | **ACCEPTED → garbage address** |
+
+  So the check **over-rejects** an escape that is provably safe (a read-only capture is by value, so the closure is self-contained — the `!` spelling demonstrates it), and **`!` bypasses it** for the mutating escape that genuinely dangles. `!` is being read as *"I know what I'm doing"*, but moving a closure does not move a POINTER capture; the pointer still aims at the dead frame.
+  **D34 RESOLVES BOTH, and makes the check unnecessary rather than smarter:** materialise the captures **at the escape**. A read-only capture is already a value, so it is allowed. A mutating capture becomes a value, so it is allowed too — and the mutation lands on the closure's own state, which is correct because the scope it pointed into is gone. **The work is a MATERIALIZE at the escape point, not a new analysis.**
+
   **⚠ NOT A BEHAVIOUR CHANGE TODAY. Capture-time materialisation STANDS**; the docs describe it as current and must not describe escape-time as though it were live. **COST: escape analysis** — not lifetimes, but a real analysis that does not exist. **INTERACTION: this lands directly on the open `return !f` question** — under escape-time semantics, returning a closure IS the escape that forces materialisation, which either gives `return !f` a well-defined meaning or identifies it as the thing to reject. Decide them together.
 
   **⚖ SEPARABLE AND ADOPTED NOW (owner, same exchange): a by-value SNAPSHOT is spelled as a closure PARAMETER, not as a capture.** If a closure needs a value fixed at a moment, pass it: `(String snapshot): ...`. Explicit, no inference, no analysis, and it is what parameters are for. This is the reliable spelling under *either* boundary rule, and the docs did not mention it.
