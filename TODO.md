@@ -2,7 +2,16 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🔄 ROUND IN FLIGHT — CoW ALIASING SOUNDNESS (2026-07-25). Resume from here.**
+**🔄 ROUND IN FLIGHT — CoW ALIASING SOUNDNESS (2026-07-25/26). Resume from here.**
+
+**⏱ WHERE THE ROUND ACTUALLY IS (2026-07-26).** The headline work is now a DOCS+DESIGN campaign that grew out of the CoW round, not the original two code tracks. Live state:
+- **Sigil prose (the crux material: bare / `&` / `!`)** — landed in `docs/language-reference.md` **§9.1** and `docs/language-design.md` **§3.1**; **gauntlet pass 1 FOLDED (`54795f9d`), pass 2 RUNNING.** Pass 1 produced THREE counterexamples, one of them a regression the orchestrator introduced while restructuring. **⚠ The two clauses that fixed them are NEW and were unreviewed when pass 2 launched: (a) `&` requires the scope it crosses into to be one the OWNER OUTLIVES (this is what rejects `return &v` and field-storage); (b) the METHOD RECEIVER is a SEPARATE AXIS — `a.push(4)` mutates with no call-site sigil, so the table governs ARGUMENTS only.** Do not treat either as settled until a pass comes back clean.
+- **D32** (`&` is a boundary modifier; `Expr::MutableBorrow` leaves the AST) — brief at `/tmp/brief_d32_v3.md`, **3 review passes done, NOT launched.** ⚠ Its blocking theme: **deleting the node removes capability on FOUR distinct meaning-deriving paths** (Rust comprehension · SH for-loop write-through · SH CoW analysis · the enumerate-receiver arm). Census what DERIVES MEANING from a node, never what constructs it.
+- **Track C** — re-scoped into TWO families on different axes (the `&`-face is type-driven and lives in `lower_call_arg`, NOT the resolvers; the assign-face IS the resolver matrix). Scout report `/tmp/resolver_matrix_scout.md`, prototype `/tmp/recover_resolver_arms_proto.patch`.
+- **Track B2** — DISSOLVED; successors filed below.
+**⚠ ALL BRIEFS AND SCOUT REPORTS ARE `/tmp` AND EVAPORATE.** Everything durable is in the ledger, this file, or a committed fixture.
+
+
 
 **LANDED + INTEGRATED:** Track **B1** (return/bind/assign materialize consolidation) — 4 memory defects closed (3 double-frees + a leak), `ConsumeSiteClass::AssignIntoReturnSlot` + **RATCHET C** (pinned **23**), dead `Case 2b` deleted. Durable repros committed under the `sound_*` / `retborrow_*` / `reassign_*` families — count them with `find tests/fixtures -name 'sound_*.gg' -o -name 'retborrow_*.gg' -o -name 'reassign_*.gg' | wc -l` and cross-check the wiring by set-difference, NOT by comparing two counts (⚠ counting test `fn`s matches only by coincidence, and `security.rs` references fixtures by BARE name while `integration.rs` uses the `known_gaps/…​.gg` path — a naive grep reports ~34 false orphans):
 ```
