@@ -1517,14 +1517,14 @@ From lowest to highest precedence:
 | 14         | `*` `/` `%` `*%`             | Left          |
 | 15         | `as`                         | Left          |
 | 16         | Unary prefix `-` `not` `~` `*`, `spawn` | Right |
-
-> **Looking for `&` or `!`?** They are not in this table. They do not combine
-> values the way an operator does — they say what the other side of a boundary
-> may do with a value you hand it. See
-> [§9.3](#93-call-site-ownership-validation). A sigil where there is no boundary
-> (`&a + 1`, `!a + 1`) is rejected.
 | 17         | Postfix `.` `?.` `()` `[]` `.0` `.1`        | Left          |
 | 18         | Atoms (literals, identifiers, grouped expressions) | — |
+
+> **Looking for the `&` or `!` sigils?** The `&` in this table is **bitwise AND**
+> (row 10); `&` also joins trait bounds (`A & B`). The *prefix* sigils are a
+> different thing and are not operators of any precedence — they say what the
+> other side of a boundary may do with a value you hand it. See
+> [§9.1](#91-ownership-rules).
 
 ### 7.2 Literals
 
@@ -1790,10 +1790,22 @@ A declaration marks the same boundary from the far end: `void f(int &x)` says
 function takes it*. The sigil at the call and the sigil on the declaration
 describe one boundary from two sides.
 
+**The sigil binds to the argument, directly.** `f(&x)` grants; `f((&x))` does
+not — parenthesising it makes the sigil part of an inner expression rather than
+a mark on the argument, and the call is rejected. The sigil is written where the
+value is handed over, with nothing between.
+
 **Where there is no other side, there is nothing to say.** `a + 1` reads `a` and
 produces a new value; nobody is being handed anything. So `&a + 1` and `!a + 1`
 are both rejected, as is a sigil on a match scrutinee, an index expression, or
 string interpolation.
+
+> This section describes the language as intended. Some of it is not yet
+> enforced or not yet correct in the current compiler — element write-through
+> through a loop or comprehension iterable, and `&` through a `Callable`
+> parameter, are known gaps, and the operand-position rejections above are
+> ratified but not yet implemented. Where the compiler and this section
+> disagree, this section is the specification and the compiler has a bug.
 
 **One asymmetry, and it follows from the table.** A value you gave away can rest
 anywhere, because it is now someone else's to keep:
