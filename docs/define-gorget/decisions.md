@@ -123,6 +123,13 @@ spectests become writable. Docs write-through: language-design §3.3/§3.4.1/§9
 (carve-out section) + ch.16, devbook 10/11/15.
 
 ### D5. Closure captures: bare = by-value, write-through requires an explicit sigil
+> **⚠ SUPERSEDED IN PART BY D34 (owner 2026-07-26).** D5's *capture-by-value / "value as-of closure
+> creation"* default is **replaced** by borrow-by-default: a closure that stays local **borrows** its
+> captures and observes **current** values; an **escaping** closure materialises them at the escape.
+> D5's other clauses **STAND**: write-through requires an explicit sigil, body-driven inference of
+> mutable capture is retired, and bare names in a capture list are rejected. ⚠ D5's consequence
+> *"docs stop calling by-value captures 'immutable borrows'"* is **void** — under D34 a bare capture
+> IS an immutable borrow, and the docs should say so.
 Bare captures are ALWAYS capture-by-value (per D1: value as-of closure creation; CoW machinery
 free to defer the physical copy). Write-through (aliasing the outer slot) requires an explicit
 marker — exact syntax designed in the RFC (V2's per-variable capture list reserves the space;
@@ -1289,6 +1296,11 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **BUT THE INSTINCT SURVIVES ONE LEVEL DOWN, AND THAT IS THE RULING.** Ask why each of those is a boundary and the answer is identical: *the destination may outlive the source*. For a capture, **"may" is doing all the work**. Everywhere else CoW draws the boundary **precisely** — `clone-if-the-source-is-live, move-if-it-is-dead` is a LIVENESS test. For captures alone it draws it **conservatively, at capture time**, because it cannot see whether the closure escapes. **A closure that never escapes has no reason to own anything.**
 
   **THE INTENDED MECHANISM:** a closure that stays local **borrows its captures** — zero cost, and it observes current values rather than a snapshot. A closure that **escapes** (returned, stored, spawned) **materialises its captures at the escape**, which is an ownership boundary exactly like a return. That is CoW applied precisely instead of pessimistically, and it removes the one position where the model approximates.
+
+  **⚖ D34 SUPERSEDES D5's BY-VALUE DEFAULT (owner 2026-07-26, on being shown the conflict).** Owner: *"I value a simple mental model and would expect closure captures to honor the same sigils as everyone else."* So a bare capture is an **immutable borrow**, exactly as at every other position — bare reads, `&` writes through, `!` takes — and the capture stops being the one place with its own rule.
+  ⚠ **PROCESS FAILURE, recorded because it is the recurring one:** D34 was drafted **without grepping for the existing ratified capture rule**, so it silently contradicted D5 (*"value as-of closure creation"*) and the conflict was found by the owner reading a week of git log, not by the drafter. "Consult history before proposing a design" exists for exactly this, and was skipped on a design decision.
+  **THE ARGUMENT THE RULING DID NOT NEED BUT HAS:** the standard objection to borrow-capture is the Python/JS loop-variable trap — `for i in xs: handlers.push((): print(i))` printing the last `i` from every closure. **Under D34 that trap cannot form**, because pushing the closure into `handlers` IS an escape, so its captures materialise at that moment, per iteration. The escape rule does not merely make borrow-capture sound; it makes it correct in the case usually cited against it.
+  **WHAT CHANGES OBSERVABLY:** a non-escaping closure now sees current values — `int n = 1; auto f = (): print(n); n = 2; f()` prints **2** under D34 and **1** under D5. Docs must be updated **from** the by-value description (which correctly described D5 and the current compiler) **to** borrow-by-default with the gap to the implementation filed.
 
   **⚠⚠ COST CORRECTION (2026-07-26, measured after ratification — the entry below overstated it).** This entry said the cost is *"escape analysis — not lifetimes, but a real analysis that does not exist"*. **That is FALSE: it exists and is correct at the return position.** `check_expr_for_escaping_closures` (`src/semantic/safety/helpers.rs:1766-1795`) walks the returned expression, finds closures with captures, tests whether the captured def is a **local Variable and not a param**, and emits `E_ClosureEscapesScope` — *"cannot return closure `f`: captures local variable `n` which will be dropped"*. **What is missing is not the analysis; it is the RESPONSE.**
   **AND THE PRESENT BEHAVIOUR IS WRONG IN BOTH DIRECTIONS — measured, same program, only the capture body differs:**
