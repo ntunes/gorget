@@ -13,6 +13,14 @@
 #   tuple  : (int, int)    / (String, int)
 #   scalar : int           / String
 #
+# AXIS + CELL (Core #12): the PROJECTED-TYPE axis, sampled at BOTH cells of the
+# resource/value split in each of three type kinds (struct · tuple · scalar) —
+# six cells, no omissions within those kinds. The kinds NOT sampled here are enum
+# (`cow_amp_projection_type_axis.gg`, which covers `EVal`/`ERes`), collection
+# elements (same fixture, rows 8-9), and the already-a-pointer field cell
+# (`cow_amp_ref_field_forward.gg`); this fixture trades that breadth for being
+# inside ggdef's subset, which none of those are.
+#
 # ⚠ CONSEQUENCE FOR ANYONE ADDING COVERAGE HERE: an "enum field" or "struct
 # field" fixture built on a RESOURCE payload proves NOTHING about its value-typed
 # twin. That is the Core #12 trap that hid this class for ~5 months behind a
