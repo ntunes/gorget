@@ -2274,13 +2274,13 @@ fn lower_field_access(
         if local_idx < builder.locals.len() {
             let local_type_id = builder.locals[local_idx].type_id;
 
-            // Guard[T] auto-deref: guard.field → (*get_ptr(&guard)).field
-            if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
-                let type_name = type_name.to_string();
-                if let Some((inner_suffix, _is_read_only)) = guard_inner_suffix(&type_name) {
-                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(
-                        ctx, builder, place, local_type_id, &type_name, inner_suffix,
-                    );
+            // Guard[T] auto-deref: guard.field → (*get_ptr(&guard)).field.
+            // `guard_of` peels Ptr/MutPtr, so a guard reached through a `&`/`!`
+            // param takes this same branch (READS are legal through every guard
+            // kind, ReadGuard included — only WRITES discriminate).
+            {
+                if let Some(info) = guard_of(ctx, local_type_id) {
+                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(ctx, builder, place, &info);
                     let deref_place = Place {
                         local: inner_ptr_local,
                         projections: vec![Projection::Deref],
@@ -2756,12 +2756,11 @@ pub(in crate::ir::lowering) fn place_expr_type_only(
             // including the `ReadGuard` early-out: a read-only guard resolves no
             // WRITE place there, so typing one here would send `&rg.f` down the
             // chokepoint for a place the producer will refuse.
-            let (inner_suffix, is_read_only) = guard_inner_suffix(&name)?;
-            if is_read_only {
+            let info = guard_of(ctx, resolved)?;
+            if info.is_read_only() {
                 return None;
             }
-            let inner_type = c_suffix_to_type_id(inner_suffix, ctx);
-            let inner_name = ctx.type_name_for_id(inner_type)?.to_string();
+            let inner_name = ctx.type_name_for_id(info.inner_type)?.to_string();
             ctx.lookup_field(&inner_name, &field.node).map(|(_, ft)| ft)
         }
         // ⚠ THIS ARM IS LOAD-BEARING FOR CORRECTNESS, not just for coverage.
@@ -3210,28 +3209,31 @@ pub(super) fn try_resolve_field_place(
             // helper as the read path (`lower_field_access`) and the plain-assign
             // path (`lower_field_assign`, stmts/assigns.rs).
             //
-            // ⚠ DETECTION IS NAME-MATCHING, NOT TYPED METADATA. `guard_inner_suffix`
-            // is a `strip_prefix("Guard__"/"ReadGuard__"/"WriteGuard__")` test on the
-            // MANGLED type name (exprs/shared.rs). The typed flag that should drive
-            // this — `DefInfo.deref_wrapper_kind`, seeded at registration in
-            // `semantic/scope.rs` — never reaches GIR. This is a standing layering
-            // rule-2 violation with a live consequence: a USER generic named
-            // `Guard[T]` mangles to `Guard__…` and is treated as the builtin
-            // (`known_gaps/fieldaccess_user_generic_guard_collision.gg`). Filed in
-            // TODO.md; the fix is to carry the typed flag down, not to widen the
-            // prefix list.
-            if let Some(guard_type_name) = ctx.type_name_for_id(current_type) {
-                let guard_type_name = guard_type_name.to_string();
-                if let Some((inner_suffix, is_read_only)) = guard_inner_suffix(&guard_type_name) {
-                    if is_read_only {
+            // Detection is the TYPED `TypeMapper::guard_types` channel via
+            // `guard_of` (which also peels `Ptr`/`MutPtr`, so a guard behind a
+            // `&`/`!` param resolves here too — the axis three of the four read
+            // sites silently ignored while the guard branch was gated on a
+            // name-prefix test on the OUTER TypeId's name). Layering rule 2
+            // discharged: the channel is written at the ONE `register_named`
+            // funnel and read via `guard_of`; the same `emit_guard_get_ptr`
+            // helper drives the read path (`lower_field_access`) and the
+            // plain-assign path (`resolve_ptr_field_place`, stmts/assigns.rs).
+            //
+            // RESIDUAL — user-generic `Guard[T]` collision: a USER generic
+            // named `Guard[T]` still mangles to `Guard__…` and is treated as
+            // the builtin (`known_gaps/fieldaccess_user_generic_guard_collision.gg`,
+            // filed in TODO.md). The unblocker is module-qualifying
+            // `GenericCollector::struct_templates` (bare-name-keyed), NOT
+            // widening the funnel's prefix list.
+            {
+                if let Some(info) = guard_of(ctx, current_type) {
+                    if info.is_read_only() {
                         // ReadGuard: writes are forbidden — don't resolve a write
                         // place (type checker should reject in future). Returning
                         // None matches the plain-assign guard arm's early-out.
                         return None;
                     }
-                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(
-                        ctx, builder, place, current_type, &guard_type_name, inner_suffix,
-                    );
+                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(ctx, builder, place, &info);
                     let deref_place = Place {
                         local: inner_ptr_local,
                         projections: vec![Projection::Deref],

@@ -798,7 +798,7 @@ impl<'a> LoweringContext<'a> {
         // Collect (mangled_name, type_id, protocol) for all builtin types.
         // We collect first to avoid borrow conflicts on self.
         let mut entries: Vec<(String, TypeId, &'static builtins::BuiltinTypeProtocol)> = Vec::new();
-        for (mangled_name, &type_id) in &self.type_mapper.named_types {
+        for (mangled_name, &type_id) in self.type_mapper.iter_named() {
             if let Some(protocol) = builtins::protocol_for_mangled_name(mangled_name) {
                 entries.push((mangled_name.clone(), type_id, protocol));
             }
@@ -891,7 +891,7 @@ impl<'a> LoweringContext<'a> {
     pub fn register_builtin_runtime_callees(&mut self) {
         use crate::ir::lowering::builtins::{self, SelfConvention};
 
-        for (mangled_name, &_type_id) in &self.type_mapper.named_types.clone() {
+        for (mangled_name, &_type_id) in &self.type_mapper.named_snapshot() {
             if let Some(protocol) = builtins::protocol_for_mangled_name(mangled_name) {
                 for method in protocol.methods {
                     if let Some(callee) = method.runtime_callee {
@@ -1353,7 +1353,7 @@ impl<'a> LoweringContext<'a> {
                 }
                 let mangled = super::types::mangle_generic_name(&name.node, generic_args);
                 let resolved = self.resolve_type_name(&mangled);
-                if let Some(&id) = self.type_mapper.named_types.get(&resolved) {
+                if let Some(id) = self.type_mapper.lookup_named(&resolved) {
                     return id;
                 }
             }
@@ -1982,7 +1982,7 @@ impl<'a> LoweringContext<'a> {
                     }
                     // Check if it's an enum variant constructor
                     if let Some((enum_name, _)) = self.enum_variants.get(name.as_str()) {
-                        if let Some(&type_id) = self.type_mapper.named_types.get(enum_name.as_str()) {
+                        if let Some(type_id) = self.type_mapper.lookup_named(enum_name.as_str()) {
                             return type_id;
                         }
                     }
@@ -1996,7 +1996,7 @@ impl<'a> LoweringContext<'a> {
                 I64_TYPE // fallback
             }
             Expr::StructLiteral { name, .. } => {
-                if let Some(&type_id) = self.type_mapper.named_types.get(name.node.as_str()) {
+                if let Some(type_id) = self.type_mapper.lookup_named(name.node.as_str()) {
                     return type_id;
                 }
                 UNIT_TYPE
@@ -4113,7 +4113,7 @@ impl<'a> LoweringContext<'a> {
 
     /// Get the type name for a GIR TypeId from the named_types cache.
     pub fn type_name_for_id(&self, type_id: TypeId) -> Option<&str> {
-        self.type_mapper.named_types.iter()
+        self.type_mapper.iter_named()
             .find_map(|(name, &id)| if id == type_id { Some(name.as_str()) } else { None })
     }
 

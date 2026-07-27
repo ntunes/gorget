@@ -1739,7 +1739,7 @@ impl GenericCollector {
                         }
                     } else if is_runtime_collection {
                         // Runtime collection types — no template to monomorphize, register alias
-                        if !mapper.named_types.contains_key(mangled_name) {
+                        if !mapper.contains_named(mangled_name) {
                             super::types::register_collection_alias(mapper, registry, base_name, type_args, mangled_name);
                         }
                     }
@@ -2342,7 +2342,7 @@ fn monomorphize_struct(
     registry: &mut TypeRegistry,
 ) {
     // Already registered?
-    if mapper.named_types.contains_key(mangled_name) {
+    if mapper.contains_named(mangled_name) {
         return;
     }
 
@@ -2472,7 +2472,7 @@ fn monomorphize_struct(
 
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
-    mapper.named_types.insert(mangled_name.to_string(), type_id);
+    mapper.register_named(mangled_name.to_string(), type_id);
 
     // Thread[T]: record the typed payload channel at THIS mint site too.
     // `Thread` is declared as a `struct Thread[T]: pass` template in
@@ -2496,7 +2496,7 @@ fn monomorphize_enum(
     mapper: &mut TypeMapper,
     registry: &mut TypeRegistry,
 ) {
-    if mapper.named_types.contains_key(mangled_name) {
+    if mapper.contains_named(mangled_name) {
         return;
     }
 
@@ -2573,7 +2573,7 @@ fn monomorphize_enum(
 
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
-    mapper.named_types.insert(mangled_name.to_string(), type_id);
+    mapper.register_named(mangled_name.to_string(), type_id);
 }
 
 /// Re-monomorphize a generic struct's fields after all user-generic names

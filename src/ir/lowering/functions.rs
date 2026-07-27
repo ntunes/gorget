@@ -267,7 +267,7 @@ fn all_return_nominals_registered(ctx: &LoweringContext, ty: &Type) -> bool {
                 return true;
             }
             // Mangled name for this instance — has to exist in
-            // type_mapper.named_types.
+            // type_mapper.named_types_PRIV.
             let mangled = super::types::mangle_generic_name(&name.node, generic_args);
             if ctx.type_mapper.lookup_named(&mangled).is_none() {
                 return false;

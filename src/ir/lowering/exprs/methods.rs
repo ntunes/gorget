@@ -4031,7 +4031,7 @@ pub(super) fn infer_type_name_from_operand_full(
     if effective_tid == BOOL_TYPE { return Some("bool".to_string()); }
     // Check named types (match both the original type_id and the dereferenced effective_tid,
     // since opaque pointer types like PoolAllocator are registered as Ptr(Named(...)))
-    ctx.type_mapper.named_types.iter()
+    ctx.type_mapper.iter_named()
         .find_map(|(name, &id)| if id == effective_tid || id == type_id { Some(name.clone()) } else { None })
 }
 

@@ -181,21 +181,21 @@ pub fn lower_module(
         match &item.node {
             Item::Struct(s) if s.generic_params.is_none() => {
                 let name = &s.name.node;
-                if !type_mapper.named_types.contains_key(name.as_str()) {
+                if !type_mapper.contains_named(name.as_str()) {
                     let tid = module.type_registry.insert(GirType::Named(name.clone()));
                     type_mapper.register_named(name.clone(), tid);
                 }
             }
             Item::Enum(e) if e.generic_params.is_none() => {
                 let name = &e.name.node;
-                if !type_mapper.named_types.contains_key(name.as_str()) {
+                if !type_mapper.contains_named(name.as_str()) {
                     let tid = module.type_registry.insert(GirType::Named(name.clone()));
                     type_mapper.register_named(name.clone(), tid);
                 }
             }
             Item::Newtype(nt) => {
                 let name = &nt.name.node;
-                if !type_mapper.named_types.contains_key(name.as_str()) {
+                if !type_mapper.contains_named(name.as_str()) {
                     let tid = module.type_registry.insert(GirType::Named(name.clone()));
                     type_mapper.register_named(name.clone(), tid);
                 }
@@ -424,7 +424,7 @@ pub fn lower_module(
         // single source of truth via the protocol table.
         if let Some(protocol) = builtins::lookup_protocol(base_name.as_str()) {
             if protocol.collection_kind.is_some()
-                && !type_mapper.named_types.contains_key(mangled_name)
+                && !type_mapper.contains_named(mangled_name)
             {
                 let drop_strat = match protocol.drop_fn {
                     Some(f) => DropStrategy::Trivial(f.to_string()),
@@ -471,7 +471,7 @@ pub fn lower_module(
             ("Vector__uint8_t", "Vector__uint8_t"),
             ("Vector__int64_t", "Vector__int64_t"),
         ] {
-            if !type_mapper.named_types.contains_key(*name) {
+            if !type_mapper.contains_named(*name) {
                 if !module.type_registry.has_type_def(gir_name) {
                     module.type_registry.add_type_def(TypeDef {
                         name: gir_name.to_string(),
@@ -2261,7 +2261,7 @@ pub fn lower_module(
 /// Register runtime built-in method signatures for Str, uint8_t, and primitive static methods.
 fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     let owned_string_type = ctx.type_mapper.owned_string_type;
-    let array_type = ctx.type_mapper.named_types.get("GorgetArray").copied()
+    let array_type = ctx.type_mapper.lookup_named("GorgetArray")
         .unwrap_or(UNIT_TYPE);
 
     // Str methods taking (self) returning various types
@@ -2272,9 +2272,9 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     // Ensure Vector__GorgetString is registered early so split() etc. return
     // the correct type. Phase A: protocol-derived metadata.
     let vec_str_type = ctx.ensure_collection_type("Vector__GorgetString");
-    let vec_u8_type = ctx.type_mapper.named_types.get("Vector__uint8_t").copied()
+    let vec_u8_type = ctx.type_mapper.lookup_named("Vector__uint8_t")
         .unwrap_or(array_type);
-    let vec_i64_type = ctx.type_mapper.named_types.get("Vector__int64_t").copied()
+    let vec_i64_type = ctx.type_mapper.lookup_named("Vector__int64_t")
         .unwrap_or(array_type);
     ctx.fn_sigs.insert("GorgetString__bytes".to_string(), (str_self.clone(), vec_u8_type));
     ctx.fn_sigs.insert("GorgetString__codepoints".to_string(), (str_self.clone(), vec_i64_type));
@@ -2336,13 +2336,13 @@ fn register_runtime_method_sigs(ctx: &mut LoweringContext) {
     // *duplicate* entry that diverges from the TypeId used by collection method
     // return-type inference (e.g. Vector.get → Option[int]), causing type mismatches
     // in downstream codegen.
-    let opt_int_type = ctx.type_mapper.named_types.get("Option__int64_t").copied()
+    let opt_int_type = ctx.type_mapper.lookup_named("Option__int64_t")
         .or_else(|| ctx.lookup_type_by_name("Option__int64_t"))
         .unwrap_or(I64_TYPE);
-    let opt_float_type = ctx.type_mapper.named_types.get("Option__double").copied()
+    let opt_float_type = ctx.type_mapper.lookup_named("Option__double")
         .or_else(|| ctx.lookup_type_by_name("Option__double"))
         .unwrap_or(F64_TYPE);
-    let opt_bool_type = ctx.type_mapper.named_types.get("Option__bool").copied()
+    let opt_bool_type = ctx.type_mapper.lookup_named("Option__bool")
         .or_else(|| ctx.lookup_type_by_name("Option__bool"))
         .unwrap_or(BOOL_TYPE);
     ctx.fn_sigs.insert("int64_t__parse".to_string(), (vec![owned_string_type], opt_int_type));
@@ -4355,7 +4355,7 @@ fn register_collection_method_sigs(
 ) {
     use crate::ir::types::TypeDefKind;
 
-    let array_type = ctx.type_mapper.named_types.get("GorgetArray").copied()
+    let array_type = ctx.type_mapper.lookup_named("GorgetArray")
         .unwrap_or(UNIT_TYPE);
 
     for (base_name, mangled_name) in collector.type_instances() {
