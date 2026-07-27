@@ -1882,19 +1882,22 @@ void inherit_borrow_from(LowerCtx &ctx, int dst, int src):
 
 # ── BorrowOrigin tracking helpers (C.1, 2026-05-22) ─────────
 #
-# Dead-code scaffolding to mirror Rust's borrow/return-corruption
-# machinery (`src/ir/lowering/context.rs:2255-2410`). Subsequent
-# commits wire callers:
-#   • A.2: `EFieldAccess` writes `set_field_borrow` at GIFieldLoad
-#     emission so the dst local carries its parent struct's identity.
-#   • B.1: bare-identifier rebinds in SVarDecl call `cow_register_alias`
-#     so the dst inherits the source's origin transitively.
-#   • E.1: return-path validator reads back via `field_borrow_origin`
-#     to flag "returning a borrow into a local stack frame".
-#
-# C.1 itself adds the enum payloads + these helpers but no caller is
-# wired — validation gate is build/lib/lowerer_comparison stays green
-# precisely because nothing reads/writes the new state.
+# Borrow/return-corruption machinery mirroring Rust's
+# (`src/ir/lowering/context.rs`). Wiring status re-censused 2026-07-27
+# (the earlier "dead-code scaffolding, no caller is wired" note was
+# stale — do not re-read it as current):
+#   • `set_field_borrow` — WIRED. Five callers write real `(base, field)`
+#     pairs: lower_expr.gg (EFieldAccess x2), lower_match.gg (payload
+#     bind), lower_loops.gg (tuple destructure), lower_closures.gg
+#     (capture read).
+#   • `cow_register_alias` — WIRED. lower_stmt.gg's SVarDecl rebind path
+#     writes `BoAlias(source)` through it.
+#   • `field_borrow_origin` — STILL UNREAD. No caller anywhere; the
+#     return-path validator that would consume it does not exist yet.
+#     This is the one genuinely dead helper of the three.
+# Census command:
+#   grep -rn 'set_field_borrow\|cow_register_alias\|field_borrow_origin' \
+#     tests/fixtures/self_host_lowerer/*.gg
 
 # Small helper struct for `field_borrow_origin` return — Gorget doesn't
 # have a generic `Pair` and inlining the two ints into separate Option
@@ -1923,7 +1926,8 @@ struct FieldDerefResult:
 # field borrow. `base` is the parent aggregate local; `field` is the
 # 0-based index into the struct/variant payload.
 #
-# Dead code at C.1: no caller wired. A.2 wires the EFieldAccess path.
+# LIVE: five callers (see the wiring census above this file's
+# FieldBorrowPair struct). Not dead code.
 void set_field_borrow(LowerCtx &ctx, int dst, int base, int field):
     if dst < 0 or dst >= ctx.locals.len():
         return
@@ -1935,8 +1939,12 @@ void set_field_borrow(LowerCtx &ctx, int dst, int base, int field):
 # Returns None when the local isn't a BoField borrow. Mirrors Rust's
 # `field_borrow_origin` (`src/ir/lowering/context.rs:2268`).
 #
-# Dead code at C.1: no caller reads. E.1 wires the return-path
-# validator that pattern-matches on this.
+# GENUINELY UNREAD (re-censused 2026-07-27): no caller anywhere. Unlike
+# its two neighbours in this section, whose "dead code" notes had gone
+# stale, this one is still true — the return-path validator that would
+# consume it does not exist. Verify with
+#   grep -rn 'field_borrow_origin' tests/fixtures/self_host_lowerer/*.gg
+# (only this definition and the section comment should match).
 Option[FieldBorrowPair] field_borrow_origin(LowerCtx ctx, int local):
     if local < 0 or local >= ctx.locals.len():
         return None
@@ -1957,11 +1965,11 @@ Option[FieldBorrowPair] field_borrow_origin(LowerCtx ctx, int local):
 # The self-host helper stores the immediate source — chain-walk is
 # the reader's job, mirroring how `add_local_inheriting` propagates
 # origins one step at a time. The two strategies are observationally
-# equivalent as long as the reader walks; B.1 will pick the strategy
-# (probably chase-on-write, matching Rust) when it wires callers.
+# equivalent as long as the reader walks. The chase-on-write strategy
+# (matching Rust) is still NOT adopted; the immediate source is stored.
 #
-# Dead code at C.1: no caller wired. B.1 wires the bare-rebind path
-# in SVarDecl / decide_operand_at_consuming_arg.
+# LIVE: called from lower_stmt.gg's SVarDecl bare-rebind path. Not dead
+# code.
 void cow_register_alias(LowerCtx &ctx, int alias, int source):
     if alias < 0 or alias >= ctx.locals.len():
         return

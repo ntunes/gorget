@@ -1,0 +1,56 @@
+# DURABLE REPRO — calling a `Callable`-typed STRUCT FIELD (`h.f(...)`) is
+# lowered as a USER METHOD CALL on the struct, not as an indirect call through
+# the field, so the program fails to LINK.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend):
+#   `gg check` -> "OK: no semantic errors"
+#   `gg build` -> /usr/bin/ld: undefined reference to `Holder__f'
+# The emitted C declares and calls a static method symbol that no one defines:
+#   void Holder__f(void*, void*);
+#   Holder__f(__v5, __v6);
+# — note the TWO parameters: a `self` pointer plus the argument, which is the
+# method-call ABI. `h.f` was never read as a field.
+#
+# ⚠ THE PARSE IS THE ROOT, NOT THE ABI: `h.f(&a)` parses as a MethodCall rather
+# than an `Expr::Call` whose callee is a field access, so the whole indirect-call
+# family (`__callable_N` / `__gorget_closure_call_N` dispatch, and every
+# argument-ownership check that hangs off it) is bypassed. The safety pass sees
+# a method call with no resolvable `DefId` and checks nothing.
+#
+# ⚠ SECOND, SEPARABLE DEFECT VISIBLE IN THE SAME SHAPE: the field's declared
+# function type is not checked against what is stored in it. Declaring the field
+# `Callable[void(int)]` (a BARE `int` parameter) and initialising it with
+# `bump`, whose signature is `void(&int)`, is accepted silently — while the
+# identical mismatch at a LOCAL binding is correctly rejected:
+#     Callable[void(int)] f = bump
+#     -> error[E_TypeMismatch]: expected `void(int)`, found `void(&int)`
+# This fixture declares the field with the MATCHING `void(&int)` type so that
+# the link failure is isolated; the mismatch cell is recorded here, not asserted.
+#
+# SCOPE — one cell: a `Callable` field on a plain struct, called with a `&`
+# argument, on the C backend. Not sampled here: the LLVM lane, a bare argument,
+# a field reached through a nested path, or a `Callable` field on an enum
+# payload.
+#
+# INTENDED (asserted below): `h.f(&a)` calls the stored callable indirectly and
+# writes through the `&` argument, so the program prints `11`.
+#
+# ⚠ THIS FIXTURE CANNOT RUN UNTIL FIXED: the link step produces no binary.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the call.
+#
+# Cited from TODO.md (the `Callable` indirect-call costume census).
+struct Holder:
+    Callable[void(&int)] f
+
+int seed():
+    return 10
+
+void bump(int &n):
+    n = n + 1
+
+void main():
+    Holder h = Holder(bump)
+    int a = seed()
+    h.f(&a)
+    print(a)

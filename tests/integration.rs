@@ -36914,3 +36914,147 @@ Un-ignore when the nested-collection comprehension lowering is fixed."]
 fn sound_comprehension_nested_vector_segv() {
     run_gg("known_gaps/sound_comprehension_nested_vector_segv.gg", "1");
 }
+
+// ── Guard/wrapper aggregate + boundary gaps (filed 2026-07-27) ───────────────
+//
+// Three cells where a `Guard[T]` leaves the local/parameter positions the guard
+// lowering knows about. All three are `gg check`-CLEAN and produce NO BINARY on
+// EITHER backend, so each asserts the intended value rather than a diff.
+
+/// KNOWN GAP — a `Guard[T]` in a STRUCT FIELD does not compile: the emitted C
+/// declares `Guard__Inner g;` inside the struct with no typedef behind it
+/// (`error: unknown type name 'Guard__Inner'`). The LLVM lane emits the SAME
+/// error in its runtime `.c`, so the gap is in shared type emission.
+///
+/// RED-VERIFIED 2026-07-27: both lanes fail to produce a binary at HEAD.
+/// Sibling of `sound_guard_closure_capture_cc_fail` (the closure environment is
+/// a struct, hence the identical diagnostic).
+#[test]
+#[ignore = "KNOWN GAP: a `Guard[T]` struct FIELD fails the C build with `unknown type name \
+'Guard__Inner'` on both backends, though gg check accepts it. Asserts the INTENDED read \
+through the guard's auto-deref; TODO.md. Un-ignore when guard wrapper typedefs are emitted \
+for aggregate-field positions."]
+fn sound_guard_struct_field_cc_fail() {
+    run_gg("known_gaps/sound_guard_struct_field_cc_fail.gg", "10");
+}
+
+/// KNOWN GAP — a `Guard[T]` CAPTURED BY A CLOSURE does not compile, with the
+/// same missing `Guard__Inner` typedef (a closure environment is lowered as a
+/// struct).
+///
+/// RED-VERIFIED 2026-07-27 on C and LLVM. ⚠ The CAPTURE is the discriminator:
+/// the same closure WITHOUT the capture builds and runs (measured `7` / `10`).
+#[test]
+#[ignore = "KNOWN GAP: a closure capturing a `Guard[T]` fails the C build with `unknown type \
+name 'Guard__Inner'` on both backends; the same closure without the capture builds fine. \
+Asserts the INTENDED value; TODO.md. Un-ignore when guard wrapper typedefs are emitted for \
+closure-environment positions."]
+fn sound_guard_closure_capture_cc_fail() {
+    run_gg("known_gaps/sound_guard_closure_capture_cc_fail.gg", "10");
+}
+
+/// KNOWN GAP — RETURNING a `Guard[T]` emits a call to `gorget_guard_clone`, a
+/// runtime symbol that does not exist: C fails with `implicit declaration of
+/// function 'gorget_guard_clone'`, LLVM fails at LINK with `undefined reference
+/// to gorget_guard_clone`.
+///
+/// ⚠ DISTINCT from the guard field-access family: it reproduces with NO field
+/// access inside the returning function, so the clone is demanded by the RETURN
+/// boundary alone. A guard is single-owner and has no clone path by design, so
+/// the fix is to MOVE at that boundary, not to add the runtime symbol.
+///
+/// RED-VERIFIED 2026-07-27 on both lanes.
+#[test]
+#[ignore = "KNOWN GAP: returning a `Guard[T]` calls the nonexistent `gorget_guard_clone` \
+(C: implicit declaration; LLVM: undefined reference at link), though gg check accepts it. \
+Reproduces with no field access at all. Asserts the INTENDED value; TODO.md. Un-ignore when \
+the return boundary moves the guard instead of cloning it."]
+fn sound_guard_return_position_cc_fail() {
+    run_gg("known_gaps/sound_guard_return_position_cc_fail.gg", "10");
+}
+
+/// KNOWN GAP — a `&` written AFTER a named argument's `=` is silently discarded,
+/// so `f(b = &x)` is ACCEPTED where the positional twin `f(&x)` correctly
+/// REJECTS `E_OwnershipMismatch`. The legal spelling is sigil-BEFORE-the-name
+/// (`f(&b = x)`), which parses into the typed `CallArg.ownership` field and
+/// works.
+///
+/// ⚠ It costs a real soundness reject on the SELF-HOST lane: measured on
+/// `cow_taint_formation_param.gg`, the self-host rejects `bumpint(&p.fd)` with
+/// `E_MoveWithoutOperator` and ACCEPTS the named re-spelling `bumpint(x = &p.fd)`.
+///
+/// RED-VERIFIED 2026-07-27: `gg check` on this fixture exits 0 at HEAD.
+/// Asserts the INTENDED reject, pinned to the code the positional twin emits.
+#[test]
+#[ignore = "KNOWN GAP: a `&` after a named argument's `=` is silently dropped — `f(b = &x)` is \
+ACCEPTED while the positional `f(&x)` rejects E_OwnershipMismatch, and the self-host loses a \
+drop-taint reject the same way. Asserts the INTENDED reject; TODO.md. Un-ignore when the named \
+form agrees with the positional form."]
+fn sound_named_arg_sigil_dropped() {
+    check_gg_fails(
+        "known_gaps/sound_named_arg_sigil_dropped.gg",
+        "error[E_OwnershipMismatch]",
+    );
+}
+
+/// KNOWN GAP — calling a `Callable`-typed STRUCT FIELD (`h.f(&a)`) is lowered as
+/// a USER METHOD CALL (`Holder__f(self, arg)`), so it fails to LINK with
+/// `undefined reference to 'Holder__f'` while `gg check` is clean.
+///
+/// The parse is the root: `h.f(...)` becomes a MethodCall rather than an
+/// `Expr::Call` over a field access, so the whole indirect-call family — and
+/// every argument-ownership check hanging off it — is bypassed.
+///
+/// RED-VERIFIED 2026-07-27 (C backend link failure at HEAD).
+#[test]
+#[ignore = "KNOWN GAP: `h.f(&a)` on a `Callable` struct FIELD lowers as a method call and fails \
+to link (`undefined reference to 'Holder__f'`) though gg check is clean. Asserts the INTENDED \
+indirect call with write-through; TODO.md. Un-ignore when a call whose callee is a Callable-typed \
+field lowers as an indirect call."]
+fn sound_callable_struct_field_call_link_fail() {
+    run_gg("known_gaps/sound_callable_struct_field_call_link_fail.gg", "11");
+}
+
+/// KNOWN GAP — a USER struct named `Guard` collides with the builtin guard
+/// wrapper as soon as it is GENERIC, because the collision is on the MANGLED
+/// name (`Guard__int64_t`): the emitted C typedefs it to `gorget_guard_t` and
+/// rewrites its field access to the runtime guard's `owner` member.
+///
+/// ⚠ This is the cell the live, green `fieldaccess_user_guard_field_ok.gg` does
+/// NOT sample — that fixture's user `Guard` is NON-generic, so its mangled name
+/// is bare `Guard` with no `__` suffix and never reaches the prefix table.
+/// Genericity is the axis.
+///
+/// RED-VERIFIED 2026-07-27 (C build fails at HEAD; gg check is clean).
+#[test]
+#[ignore = "KNOWN GAP: a user GENERIC struct named `Guard[T]` is typedef'd to the runtime \
+`gorget_guard_t` (mangled-name collision) and fails the C build, though gg check accepts it. \
+The non-generic cell is green and pinned by `fieldaccess_user_guard_field_ok`. Asserts the \
+INTENDED value; TODO.md. Un-ignore when the wrapper decision reads the typed \
+`DefInfo.deref_wrapper_kind` instead of the mangled name."]
+fn fieldaccess_user_generic_guard_collision() {
+    run_gg("known_gaps/fieldaccess_user_generic_guard_collision.gg", "3");
+}
+
+/// KNOWN GAP — every WRITE face through a `ReadGuard[T]` field place is silently
+/// discarded instead of rejected (Core #10). Measured at HEAD on a guard LOCAL,
+/// all three `gg check`-clean and all printing the unchanged `10`:
+/// `inc(&rg.fd)` · `rg.fd = 99` · `rg.fd += 5`. The `WriteGuard` control prints
+/// `11`, so the guard machinery itself works.
+///
+/// The intended behaviour is already written in the producer: the read-only-guard
+/// arm of `try_resolve_field_place` returns `None` with the comment "type checker
+/// should reject in future". The fix is that check-time rejection.
+///
+/// RED-VERIFIED 2026-07-27: `gg check` exits 0 at HEAD.
+#[test]
+#[ignore = "KNOWN GAP: writes through a `ReadGuard[T]` field place are SILENTLY DROPPED at all \
+three faces (`&`-arg, assign, compound) instead of rejected; the WriteGuard control is correct. \
+Asserts the INTENDED check-time reject; TODO.md. Un-ignore when a write through a read-only \
+guard is a type error (tighten the code pin to whatever is minted)."]
+fn sound_readguard_write_faces_dropped() {
+    check_gg_fails(
+        "known_gaps/sound_readguard_write_faces_dropped.gg",
+        "error[E_",
+    );
+}

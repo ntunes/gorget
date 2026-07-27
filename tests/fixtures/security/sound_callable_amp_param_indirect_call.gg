@@ -1,6 +1,12 @@
 # DURABLE REPRO — A1: calling a `Callable`-typed LOCAL bound to an `&`-param
 # function SEGFAULTS.
 #
+# ⚠ READ THE FILENAME CAREFULLY. `_amp_param_` names the CALLEE's `&`-parameter
+# signature (`void bumpint(int &n)`), NOT how the callable is bound: the
+# callable here is a **LOCAL** (`:34`, inside `main`). Its sibling
+# `sound_callable_amp_param_projection.gg` is the one where the callable arrives
+# as a PARAMETER. The two filenames read as a matched pair and are not one.
+#
 # WRONG TODAY (measured at HEAD, Rust gg, C backend): `gg check` reports "OK: no
 # semantic errors", `gg build` succeeds, and the binary exits **139 (SIGSEGV)**.
 # Bare `f(x)` crashes the same way; a plain-arg `Callable[void(int)]` works, and

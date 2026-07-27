@@ -25,14 +25,37 @@ pub enum DefKind {
 /// RV-A field-access disposition for a BUILTIN smart-pointer / guard wrapper
 /// type. Seeded ONCE at registration onto `DefInfo.deref_wrapper_kind`
 /// (`None` = not a wrapper) and read via the typed flag at the field-access
-/// reject site — never re-derived from a name downstream (layering rule 2).
+/// reject site.
 /// The three variants key the 3-way diagnostic table in the RV-A brief
 /// (`the RV-A fieldaccess brief (git history)`).
+///
+/// ⚠ THIS FLAG IS THE TYPED SOURCE OF TRUTH ONLY IN SEMANTIC ANALYSIS. Lowering
+/// does NOT read it — it RE-DERIVES "is this a guard wrapper?" from the mangled
+/// type NAME, via `guard_inner_suffix` (`src/ir/lowering/exprs/shared.rs`, a
+/// `strip_prefix("Guard__"/"ReadGuard__"/"WriteGuard__")` test) at four call
+/// sites: `ir/lowering/stmts/assigns.rs` (plain field assign) and three in
+/// `ir/lowering/exprs/mod.rs` (field read, the shared `&`-place typing arm, and
+/// the write-place producer). That is a standing violation of layering rule 2,
+/// not a description of current design: it is why a USER generic named
+/// `Guard[T]` collides with the builtin (see
+/// `tests/fixtures/known_gaps/fieldaccess_user_generic_guard_collision.gg`).
+/// The reference-grade shape is to carry this flag into GIR and read it there.
+/// Filed in TODO.md; do not restate "never re-derived from a name downstream"
+/// until that lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DerefWrapperKind {
     /// Guard / ReadGuard / WriteGuard — a lock/borrow guard whose `.field`
-    /// auto-derefs to the inner value and WORKS today (green fixtures):
-    /// present field → ACCEPT, absent field → `E_NoFieldFound`.
+    /// auto-derefs to the inner value: present field → ACCEPT, absent field →
+    /// `E_NoFieldFound`.
+    ///
+    /// ⚠ "ACCEPT" IS THIS PASS'S DISPOSITION, NOT A CLAIM THAT THE ACCESS IS
+    /// CORRECT. Do not read the old "WORKS today (green fixtures)" wording back
+    /// into it — measured at HEAD: a write through a `ReadGuard` field place is
+    /// silently DROPPED at all three faces, and a `Guard` field reached through
+    /// a PARAMETER is memory-unsafe. Both are filed with `known_gaps` repros
+    /// (`sound_readguard_write_faces_dropped`, `sound_guard_param_field_unsafe`).
+    /// Accepting here is still right — these are not the deref-coercion class —
+    /// but the acceptance is not evidence of correctness downstream.
     GuardAccept,
     /// Box — the SOLE §9.4 deref-coercion target (design-doc :1707-1712).
     /// A field present on the inner is `E_DerefCoercionUnimplemented` (the

@@ -1,0 +1,60 @@
+# DURABLE REPRO — a `&` written AFTER a named argument's `=` is SILENTLY
+# DISCARDED, so the named form and its positional twin disagree on accept/reject.
+#
+# WRONG TODAY (measured at HEAD on BOTH reject lanes):
+#
+#   | spelling                        | Rust gg `gg check`        | self-host `check` |
+#   |---------------------------------|---------------------------|-------------------|
+#   | `takes_bare(1, &x)` (positional)| REJECT E_OwnershipMismatch| —                 |
+#   | `takes_bare(1, b = &x)` (named) | **ACCEPT**                | **ACCEPT**        |
+#   | `bump(1, &b = x)`  (sigil first)| ACCEPT, and it WORKS (11) | —                 |
+#
+# The sigil-BEFORE-the-name spelling `f(&b = x)` is the one the parser records
+# as a typed `CallArg.ownership`; a sigil after the `=` lands inside the VALUE
+# expression and no ownership check ever sees it.
+#
+# ⚠ IT COSTS A REAL SOUNDNESS REJECT ON THE SELF-HOST LANE. Measured on the
+# in-tree NEG fixture `cow_taint_formation_param.gg` and its named re-spelling:
+#     `bumpint(&p.fd)`      -> self-host REJECTS E_MoveWithoutOperator
+#     `bumpint(x = &p.fd)`  -> self-host **ACCEPTS**
+# (Rust gg still rejects the named form, but for an unrelated reason — see the
+# next paragraph — so the drop is MASKED there and naked on the self-host.)
+#
+# ⚠ SECOND FACE, SAME ROOT — an UNFOLLOWABLE diagnostic. Against a `&`
+# parameter, `bump(1, b = &x)` rejects with
+#     error[E_OwnershipMismatch]: ... help: mark the argument with `&`
+#     9 |     bump(1, b = &x)
+#       |             ^^^^^^ add `&` here
+# i.e. it tells the user to add a `&` while underlining text that already has
+# one. The check reads `CallArg.ownership` (Borrow, because the sigil was
+# dropped) and never looks at the value expression it is pointing at.
+#
+# SCOPE — this fixture samples exactly ONE cell: the `&` sigil, after `=`, in a
+# free-function call, against a BARE parameter. Not sampled here: `!` after `=`
+# (same parse shape, expected to behave the same, unmeasured); named args on
+# METHOD calls; named args on constructors; the `&`-param face and the
+# self-host soundness face, both described above but not asserted by this file.
+#
+# INTENDED (asserted below): the named form agrees with the positional form —
+# `takes_bare(1, b = &x)` is REJECTED, since `b` is a bare parameter that only
+# borrows immutably. This fixture pins the REJECT, with the same
+# `E_OwnershipMismatch` code the positional twin already emits.
+# ⚠ There is a second reference-grade reading: a sigil after `=` is simply not a
+# sigil POSITION at all (the sigil marks the BINDING, which is the ratified
+# rationale behind D35's `Type &` spelling), so `f(name = &x)` should be a PARSE
+# error naming `f(&name = x)` as the replacement. If the round rules that way,
+# REPLACE this assertion with the parse-error pin rather than deleting the
+# fixture — the silent drop is the defect under BOTH readings.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the call.
+#
+# Cited from TODO.md (the D32/D33/D34 sigil-position sweep).
+int seed():
+    return 10
+
+void takes_bare(int a, int b):
+    print(a + b)
+
+void main():
+    int x = seed()
+    takes_bare(1, b = &x)

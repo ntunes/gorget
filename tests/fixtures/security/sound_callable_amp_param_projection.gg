@@ -13,24 +13,38 @@
 # child's signal status. Reproduce by BUILDING and running the binary directly,
 # or the failure looks like an ordinary build error.
 #
-# ROOT (measured by instrumenting each loop and building THIS fixture — an
-# earlier version of this header named the wrong site; do not re-derive it from
-# that): the SEGV takes **`calls.rs:1431`**, the Callable-PARAMETER loop
-# (`if local_type_id == UNIT_TYPE` -> `__callable_N`), which calls
-# `lower_expr(&arg.node.value)` DIRECTLY and discards `ownership=MutableBorrow`.
-# Confirmed by emit: the generated C contains `__callable_` and no
-# `__gorget_closure_call_`.
+# ROOT (re-measured 2026-07-27 — two earlier versions of this header named the
+# wrong site, and the version after that pinned it by LINE NUMBER, which has
+# since rotted; cite the BRANCH, not the line): the SEGV takes the
+# Callable-PARAMETER arm in `src/ir/lowering/exprs/calls.rs` — the
+# `if local_type_id == UNIT_TYPE` branch that emits `__callable_N` — NOT the
+# `GirType::FnPtr` / `__gorget_closure_call_N` arm.
+# Verification command:
+#     gg build --emit-gir tests/fixtures/security/sound_callable_amp_param_projection.gg
+# prints `fn @with_it(unit, *mut Counter)` with `_1: unit ; f`,
+# `_3 = field_load _2.*, 0`, `_4 = call @__callable_1(copy _1, copy _3)` — i.e.
+# `&c.fd` was lowered as a VALUE copy of the int and handed to a callee that
+# expects a pointer.
 #
-# FULL HEAD CENSUS of the indirect-call arg loops in `exprs/calls.rs`:
-#   routing (via `lower_call_arg`, honours the sigil):  :1399  :1502  :1822
-#   NON-routing (bare `lower_expr`, drops the sigil):   :1332  :1368  :1431
-#                                                       :1455  :1880
-# So there are THREE non-routing loops in the indirect family, not two. This is
-# a MISSING SIGIL CHECK, not an ABI or codegen defect.
+# ⚠ "IT DISCARDS `arg.node.ownership`" UNDERSTATES IT. That arm actively decides
+# pointer-vs-value from the ARGUMENT LOCAL's provenance (`is_param_borrow_unique`
+# — forward the pointer only if the argument is itself a borrow parameter),
+# rather than from the call-site sigil plus the callee's declared function-type
+# parameter. The green cells show the axis (all measured at HEAD, all
+# `gg check`-clean):
+#   `Callable[void(&int)]` PARAM, `cb(a)` where `a` is an `int &` param -> OK
+#   `Callable[int(&Counter)]` PARAM, `f(&c)` where `c` is a `Counter &` param -> OK
+#     (that second one is the LIVE, GREEN in-tree `tests/fixtures/callable_ref_param.gg`
+#      — it must stay green through any fix)
+#   `Callable[void(&int)]` LOCAL or PARAM, `cb(&a)` where `a` is a plain local -> SEGV
+# So the axis is whether the ARGUMENT's root is already a pointer.
 #
-# ⚠ A guard wired only at `:1455`/`:1880` LEAVES THIS CELL LIVE — that was the
-# earlier (wrong) census, and acting on it would be a Core #4 instance-fix with
-# the actual instance omitted.
+# ⚠ A guard wired only at the FnPtr / `__gorget_closure_call_N` arm LEAVES THIS
+# CELL LIVE — that was the first (wrong) reading, and acting on it would be a
+# Core #4 instance-fix with the actual instance omitted. Re-derive the arg-loop
+# census before wiring anything:
+#     grep -n 'lower_call_arg\|lower_expr(ctx, builder, &arg.node.value)' \
+#       src/ir/lowering/exprs/calls.rs
 #
 # INTENDED: the indirect call is an ordinary write-through call, so `bumpret`
 # increments the caller's `c.fd` and the program prints 11 then 11 and exits 0.

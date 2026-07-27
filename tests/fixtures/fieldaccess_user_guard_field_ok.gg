@@ -1,7 +1,20 @@
-# POSITIVE (RV-A over-rejection guard): a USER struct named `Guard` with a
-# REAL field must typecheck and run normally — the typed wrapper flag lives on
-# the builtin DefIds only, so sharing a builtin wrapper's name costs the user
-# nothing on valid accesses.
+# POSITIVE (RV-A over-rejection guard): a NON-GENERIC user struct named `Guard`
+# with a REAL field must typecheck and run normally — in SEMANTIC ANALYSIS the
+# wrapper flag is a typed field on the builtin DefIds only, so sharing the name
+# does not trip the field-access reject.
+#
+# ⚠ SCOPE — ONE CELL, AND THE OTHER CELL ON THIS AXIS IS BROKEN. This samples
+# only the NON-GENERIC spelling, whose mangled type name is bare `Guard` with no
+# `__` suffix; that is the entire reason it passes. LOWERING does not read the
+# typed flag — it decides "is this a guard?" by `strip_prefix("Guard__")` on the
+# MANGLED name — so the GENERIC spelling `struct Guard[T]` mangles to
+# `Guard__int64_t`, is typedef'd to the runtime `gorget_guard_t`, and fails the
+# C build. That cell is pinned by the `#[ignore]`d
+# `known_gaps/fieldaccess_user_generic_guard_collision.gg`.
+#
+# So this fixture does NOT show that "sharing a builtin wrapper's name costs the
+# user nothing" — it shows that the non-generic spelling is free. Do not widen
+# the claim without adding the generic cell.
 struct Guard:
     int x
 

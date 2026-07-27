@@ -1,0 +1,59 @@
+# DURABLE REPRO — every WRITE face through a `ReadGuard[T]` field place is
+# SILENTLY DISCARDED instead of rejected (Core #10, lower-or-reject).
+#
+# WRONG TODAY (measured at HEAD, Rust gg, all three faces `gg check`-CLEAN and
+# all three building cleanly, on a guard LOCAL — no parameter indirection):
+#
+#   | face                | written        | prints today | intended  |
+#   |---------------------|----------------|--------------|-----------|
+#   | `&`-arg write-through | `inc(&rg.fd)` | 10           | REJECT    |
+#   | plain assign          | `rg.fd = 99`  | 10           | REJECT    |
+#   | compound assign       | `rg.fd += 5`  | 10           | REJECT    |
+#
+#   CONTROL (measured, same program shape): the `WriteGuard` twin
+#   `inc(&wg.fd)` prints **11** — correct. So the guard machinery works; it is
+#   the READ-ONLY guard that swallows writes.
+#
+# ⚠ SYMMETRIC ACROSS THE FACES, so this is NOT the served-at-one-face asymmetry
+# of the `Guard[T]`-through-a-parameter family. It is a plain lower-or-reject
+# violation: the write passes the type checker and is dropped at lowering.
+#
+# THE INTENDED BEHAVIOUR IS ALREADY WRITTEN DOWN IN THE PRODUCER.
+# `try_resolve_field_place`'s guard branch (`src/ir/lowering/exprs/mod.rs`,
+# the `guard_inner_suffix` arm) early-outs with `return None` for a read-only
+# guard, carrying the comment "ReadGuard: writes are forbidden — don't resolve a
+# write place (type checker should reject in future)". The reference-grade fix
+# is that check-time rejection, NOT a lowering change: a `ReadGuard[T]` place is
+# read-only by construction, so writing through one is a type error.
+#
+# SCOPE — this fixture asserts the FIRST face only (`inc(&rg.fd)`); the assign
+# and compound faces are recorded in the table above and are pinned by the same
+# TODO entry. Root shape sampled: a guard LOCAL obtained from `RWLock.read()`.
+# Not sampled: a `ReadGuard` reached through a parameter, a resource-typed
+# guarded field, or the LLVM lane.
+#
+# INTENDED (asserted below): `gg check` REJECTS the write with a diagnostic
+# naming the read-only guard. This fixture is `#[ignore]`d and pins the reject;
+# it asserts the error CODE loosely (`error[E_`) because the code for
+# "write through a read-only place" is not yet minted — tighten it to the exact
+# code the closing round chooses.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the write.
+#
+# Cited from TODO.md ("`ReadGuard[T]` field writes are silently DISCARDED").
+from std.sync import RWLock
+
+struct Config:
+    int fd
+
+int seed():
+    return 10
+
+void inc(int &n):
+    n = n + 1
+
+void main():
+    RWLock[Config] lock = RWLock[Config](Config(seed()))
+    ReadGuard[Config] rg = lock.read()
+    inc(&rg.fd)
+    print(rg.fd)

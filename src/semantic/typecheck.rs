@@ -2979,8 +2979,11 @@ impl<'a> TypeChecker<'a> {
                 // seeded at registration — never a name-match here:
                 //   • NonDerefContainer (Shared/Weak/Mutex/RWLock): accessed
                 //     via an explicit method, never deref → always NoFieldFound.
-                //   • GuardAccept (Guard/ReadGuard/WriteGuard): auto-deref that
-                //     WORKS today → present-on-inner ACCEPTS, absent rejects.
+                //   • GuardAccept (Guard/ReadGuard/WriteGuard): auto-deref →
+                //     present-on-inner ACCEPTS, absent rejects. ⚠ "ACCEPTS" is
+                //     this pass's disposition only — the old "auto-deref that
+                //     WORKS today" wording was measured false at the WRITE faces
+                //     (see the note on `DerefWrapperKind::GuardAccept`).
                 //   • DerefTarget (Box, §9.4's sole target): present-on-inner is
                 //     E_DerefCoercionUnimplemented (backend not built); absent /
                 //     primitive inner is NoFieldFound (the §9.4 message would lie).

@@ -3200,13 +3200,22 @@ pub(super) fn try_resolve_field_place(
             // The guard wraps a pointer to the guarded value; field access goes
             // THROUGH the inner pointer (docs/devbook/11-copy-on-write.md, Guard
             // single-owner carve-out). Centralized here so EVERY field-place
-            // consumer — plain assign (lower_assign:613), compound assign
-            // (lower_compound_assign:1284), and index-base resolution — projects
-            // through the guard identically. Typed detection via guard_inner_suffix
-            // (reads the typed Guard__/ReadGuard__/WriteGuard__ wrapper name), not
-            // name-matching of meaning; the SAME emit_guard_get_ptr helper the
-            // read path (lower_field_access:2113) and the plain-assign fallback
-            // (lower_assign:666) use.
+            // consumer — `lower_assign`, `lower_compound_assign`, and index-base
+            // resolution (all in stmts/assigns.rs) — projects
+            // through the guard identically. Uses the SAME emit_guard_get_ptr
+            // helper as the read path (`lower_field_access`) and the plain-assign
+            // path (`lower_field_assign`, stmts/assigns.rs).
+            //
+            // ⚠ DETECTION IS NAME-MATCHING, NOT TYPED METADATA. `guard_inner_suffix`
+            // is a `strip_prefix("Guard__"/"ReadGuard__"/"WriteGuard__")` test on the
+            // MANGLED type name (exprs/shared.rs). The typed flag that should drive
+            // this — `DefInfo.deref_wrapper_kind`, seeded at registration in
+            // `semantic/scope.rs` — never reaches GIR. This is a standing layering
+            // rule-2 violation with a live consequence: a USER generic named
+            // `Guard[T]` mangles to `Guard__…` and is treated as the builtin
+            // (`known_gaps/fieldaccess_user_generic_guard_collision.gg`). Filed in
+            // TODO.md; the fix is to carry the typed flag down, not to widen the
+            // prefix list.
             if let Some(guard_type_name) = ctx.type_name_for_id(current_type) {
                 let guard_type_name = guard_type_name.to_string();
                 if let Some((inner_suffix, is_read_only)) = guard_inner_suffix(&guard_type_name) {

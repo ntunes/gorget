@@ -103,11 +103,27 @@ impl TypeMapper {
     ///   `Callable__GorgetClosure` is reserved for in-collection positions
     ///   (where the runtime needs typed elem_size / elem_drop / elem_clone).
     ///
-    /// - `Type::Function`: returns `None`. At local positions, callers fall
-    ///   back to `map_ast_type_mut` → `FnPtr`. At param/return positions,
-    ///   the resulting `UNIT_TYPE` activates the `void* __callable_N` ABI,
-    ///   which is the intentional design (closure values are passed as 16-byte
-    ///   `GorgetClosure` structs but spelled as `void*` at the C ABI).
+    /// - `Type::Function`: returns `None`. The resulting `UNIT_TYPE` activates
+    ///   the `void* __callable_N` ABI, which is the intentional design (closure
+    ///   values are passed as 16-byte `GorgetClosure` structs but spelled as
+    ///   `void*` at the C ABI).
+    ///
+    ///   ⚠ THAT INCLUDES LOCAL POSITIONS — there is NO `FnPtr` fallback for the
+    ///   bare function-type spelling. `lower_var_decl`'s `UNIT_TYPE` recovery
+    ///   (`stmts/mod.rs`) has arms only for `ast::Type::Named` with non-empty
+    ///   generic args and for a non-empty `ast::Type::Tuple`; an
+    ///   `ast::Type::Function` declaration falls through the `_` arm and the
+    ///   local KEEPS `UNIT_TYPE`. Verification command:
+    ///   `gg build --emit-gir` on `int(int) f = dbl` prints `_1: unit`, while
+    ///   the `Callable[int(int)]` spelling of the same binding prints
+    ///   `_1: fn(i64) -> i64` (it takes the `Named` arm above).
+    ///   So only the `Callable`/`MutCallable`/`ConsumeCallable` family reaches
+    ///   `map_ast_type_mut` → `FnPtr`, and only at LOCAL positions: a
+    ///   `Callable[..]` PARAMETER is `unit`, and a `Callable[..] &` PARAMETER is
+    ///   `*mut unit` — which is why neither the `UNIT_TYPE` nor the `FnPtr`
+    ///   dispatch arm in `exprs/calls.rs` fires for the latter, and the call
+    ///   falls through to a direct call on the parameter's NAME (the filed
+    ///   `Callable`-costume ICE; see TODO.md).
     ///
     /// - `Type::Ref` (ownership-suffix variant `T &` from generic args /
     ///   return positions; NOT `Param.ownership = MutableBorrow` which
@@ -124,9 +140,11 @@ impl TypeMapper {
     /// other type (Box, Shared, Weak, Mutex, Channel, Vector, Dict, Set, …)
     /// has this asymmetry — they all flow through `lookup_protocol(base)` →
     /// `get_or_register(&mangled, …)` which caches in `named_types`
-    /// uniformly. `map_type_with_subs` (`context.rs:780`) honors the Callable
-    /// invariant explicitly; `Type::Function` and `Type::Ref` inherit it via
-    /// the immutable-path fallthrough at line 818.
+    /// uniformly. `map_type_with_subs` (`context.rs`) honors the Callable
+    /// invariant explicitly at its `matches!(base, "Callable" | …)` early
+    /// return; `Type::Function` and `Type::Ref` inherit it via that function's
+    /// trailing `self.type_mapper.map_ast_type(ty)` fallthrough. (Both were
+    /// cited by line number and both had rotted; cite by symbol.)
     pub fn try_map_ast_type(&self, ty: &Type) -> Option<TypeId> {
         match ty {
             Type::Primitive(prim) => Some(self.map_primitive(prim)),

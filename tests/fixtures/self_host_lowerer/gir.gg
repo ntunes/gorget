@@ -251,14 +251,24 @@ enum ConsumeKind:
 #   • BoCowBorrowPending: placeholder for deferred source resolution
 #     (set_cow_borrow without source; upgraded by set_cow_borrow_source)
 #
-# C.1 status: payloads on the four existing variants are present but
-# UNUSED — current callers pass sentinel `-1` because no upstream pass
-# writes the real source id yet. A.2 / B.1 / E.1 will wire actual values
-# at the writer sites and start reading them through the new tracking
-# helpers in `lower.gg` (set_field_borrow, field_borrow_origin,
-# cow_register_alias). The four new variants are also dead code at C.1
-# — added so subsequent commits can construct them without re-touching
-# this enum.
+# WIRING STATUS (re-censused 2026-07-27; the earlier "payloads are
+# present but UNUSED, callers pass sentinel -1" note was stale):
+#   • BoField        — WIRED with real ids at five writer sites
+#     (lower_expr.gg set_field_borrow x2, lower_match.gg, lower_loops.gg,
+#     lower_closures.gg), all via `set_field_borrow` in lower.gg.
+#   • BoCollectionElement — WIRED with a real collection local by the
+#     for-loop lowering (lower_loops.gg); the general `.get()` path
+#     deliberately passes `-1` as "no trackable collection", and
+#     lir_lower.gg reads the pair back and keys on the non-negative case.
+#   • BoRuntimeView  — WIRED with a real source local (lower_expr.gg
+#     box/deref reads, lower_stmt.gg view bindings).
+#   • BoAlias        — WIRED with a real source local (lower.gg
+#     cow_register_alias, lower_stmt.gg rebind path).
+#   • BoParam        — payload still a sentinel `-1` everywhere.
+#   • BoFieldPath / BoTupleElement / BoCowBorrowPending — genuinely
+#     never constructed; still scaffolding.
+# Census command:
+#   grep -rn 'Bo[A-Za-z]*(' tests/fixtures/self_host_lowerer/*.gg
 enum BorrowOrigin:
     BoNone()                    # not a borrow
     BoParam(int)                # param-local id (self-referential)

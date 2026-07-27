@@ -1,0 +1,55 @@
+# DURABLE REPRO — a USER struct named `Guard` COLLIDES with the builtin guard
+# wrapper as soon as it is GENERIC, because the collision happens on the MANGLED
+# name (`Guard__int64_t`), not on the source name.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, C backend):
+#   `gg check` -> "OK: no semantic errors"
+#   `gg build` -> error: unknown type name 'gorget_guard_t'
+#                   typedef gorget_guard_t Guard__int64_t;
+#                 error: request for member 'owner' in something not a
+#                        structure or union
+#                   __v16 = (void*)&((Guard__int64_t *)(__v1))->owner;
+# So the user's `Guard[int]` is typedef'd to the RUNTIME guard struct and its
+# field access is rewritten to the runtime guard's `owner` member.
+#
+# ⚠ THIS IS THE CELL `fieldaccess_user_guard_field_ok.gg` DOES NOT SAMPLE. That
+# fixture is a live, green POSITIVE for a NON-GENERIC user `Guard` — its mangled
+# name is bare `Guard`, with no `__` suffix, so it never reaches the resource
+# prefix table and the claim it makes ("sharing a builtin wrapper's name costs
+# the user nothing") holds only for that one cell. Genericity is the axis.
+#
+# ⚠ Same shape as the other name-derived guard decisions: `guard_inner_suffix`
+# (`src/ir/lowering/exprs/shared.rs:208`) decides "this is a guard" by
+# `strip_prefix("Guard__")` on the mangled type name, so ANY user generic named
+# `Guard`/`ReadGuard`/`WriteGuard` is indistinguishable from the builtin. The
+# reference-grade fix is the typed-metadata one (Layering rule 2): the wrapper
+# flag already exists on the builtin DefIds as `DefInfo.deref_wrapper_kind` —
+# read it instead of the name.
+#
+# SCOPE — one cell: a user GENERIC struct named `Guard`, one type argument
+# (`int`), read-only field access, C backend. Not sampled here: `ReadGuard` /
+# `WriteGuard` user structs (same prefix table, expected to behave the same,
+# unmeasured), a resource type argument, the LLVM lane, or write faces.
+#
+# INTENDED (asserted below): user type names live in the user's namespace. A
+# user generic `Guard[T]` is an ordinary struct, so this prints `3`.
+# ⚠ The alternative reference-grade reading is to RESERVE the wrapper names and
+# emit a check-time rejection; a silent miscompile is wrong under both. If the
+# round rules that way, REPLACE this assertion with the reject rather than
+# deleting the fixture.
+#
+# ⚠ THIS FIXTURE CANNOT RUN UNTIL FIXED: the C compile produces no binary.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the access.
+#
+# Cited from TODO.md (guard/wrapper subsystem).
+struct Guard[T]:
+    T x
+
+int seed():
+    return 3
+
+int main():
+    Guard[int] g = Guard[int](seed())
+    print(g.x)
+    return 0

@@ -1,0 +1,56 @@
+# DURABLE REPRO — RETURNING a `Guard[T]` from a function does not compile: the
+# return-position ownership boundary emits a call to `gorget_guard_clone`, a
+# runtime symbol that does not exist.
+#
+# WRONG TODAY (measured at HEAD, Rust gg):
+#   `gg check`                -> "OK: no semantic errors"
+#   `gg build`                -> C, in the emitted `take`:
+#        error: implicit declaration of function 'gorget_guard_clone';
+#               did you mean 'gorget_map_clone'?
+#        error: incompatible types when assigning to type 'Guard__Inner'
+#               {aka 'gorget_guard_t'} from type 'int'
+#      (the second error is a CONSEQUENCE of the first — C gives an implicitly
+#      declared function an `int` return type.)
+#   `gg build --backend=llvm` -> builds the IR, then the LINK fails:
+#        undefined reference to `gorget_guard_clone'
+#      ⚠ MIND THE PROBE: the LLVM lane needs the LINK step to see this — an
+#      IR-only check reads as clean.
+#
+# ⚠ NO FIELD ACCESS IS INVOLVED. This fixture never reads `.fd` inside `take`,
+# and the shape still fails, which is what makes it a DISTINCT defect from the
+# guard field-access family (`known_gaps/sound_guard_param_field_unsafe.gg`,
+# whose bare-param row also surfaces `gorget_guard_clone` but only when a
+# MUTATING field access forces a CoW materialize). Here the clone is demanded by
+# the RETURN boundary alone.
+#
+# SCOPE — one cell: `Guard[T]` at a RETURN position, out of a bare-parameter
+# `Mutex[T]`. Not sampled here: `!`/`&` parameter spellings, `ReadGuard`,
+# `WriteGuard`, and returning a guard out of a method rather than a free
+# function.
+#
+# INTENDED (asserted below): a guard is a single-owner value; returning one
+# MOVES it to the caller (no clone is required or meaningful — a guard has no
+# clone path by design, per the single-owner carve-out in AGENTS.md's
+# "Ownership at Consuming Positions"). The program prints `10`.
+# ⚠ So the reference-grade fix is almost certainly NOT to add a
+# `gorget_guard_clone` runtime function — it is to stop demanding a clone at a
+# boundary a move satisfies.
+#
+# ⚠ THIS FIXTURE CANNOT RUN UNTIL FIXED: no binary is produced on either lane.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the guard.
+#
+# Cited from TODO.md (guard/wrapper subsystem).
+struct Inner:
+    int fd
+
+int seed():
+    return 10
+
+Guard[Inner] take(Mutex[Inner] m):
+    return m.lock()
+
+void main():
+    Mutex[Inner] m = Mutex[Inner](Inner(seed()))
+    Guard[Inner] g = take(m)
+    print(g.fd)

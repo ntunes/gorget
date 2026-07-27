@@ -1531,9 +1531,30 @@ fn sound_amp_operand_position_duplicate_drop_safe() {
 /// under the `&`-of-projection prototype, so that fix does not close it.
 /// ⚠ `gg run` masks this as exit 1 with no output — it does not propagate the
 /// child's signal status; build and run the binary directly to see the SEGV.
-/// Root: of the THREE indirect-call arg loops, `calls.rs:1455` and `:1880` call
-/// `lower_expr` directly and ignore `arg.node.ownership` — a missing sigil
-/// check, not an ABI defect.
+/// ROOT (re-measured 2026-07-27; SUPERSEDES the earlier "`calls.rs:1455` and
+/// `:1880`, the FnPtr / `__gorget_closure_call_N` loops" reading, which was
+/// wrong about WHICH loop and whose line numbers have since rotted): the SEGV
+/// takes the **Callable-PARAMETER** loop in `src/ir/lowering/exprs/calls.rs` —
+/// the `if local_type_id == UNIT_TYPE` branch that emits `__callable_N`.
+/// Verification command: `gg build --emit-gir` on this fixture prints
+/// `fn @with_it(unit, *mut Counter)` with `_1: unit ; f` and
+/// `_4 = call @__callable_1(copy _1, copy _3)`, where `_3 = field_load _2.*, 0`
+/// — i.e. the `&c.fd` argument was lowered as a VALUE copy of the int and
+/// handed to a callee expecting a pointer.
+///
+/// ⚠ The loop is not simply "ignoring `arg.node.ownership`": it decides
+/// pointer-vs-value from the ARGUMENT LOCAL's provenance
+/// (`is_param_borrow_unique`, which forwards the pointer only when the arg is
+/// itself a borrow parameter) instead of from the sigil plus the callee's
+/// declared function-type parameter. That is why the neighbouring cells split
+/// the way they do — measured 2026-07-27, all four `gg check`-clean:
+///   `Callable[void(&int)]` LOCAL   + `cb(&a)`, `a` a plain local -> SEGV
+///   `Callable[void(&int)]` PARAM   + `cb(&a)`, `a` a plain local -> SEGV
+///   `Callable[void(&int)]` PARAM   + `cb(a)`,  `a` an `int &` param -> 11/11 OK
+///   `Callable[int(&Counter)]` PARAM + `f(&c)`, `c` a `Counter &` param -> OK
+/// (the last is the live, green in-tree fixture `callable_ref_param.gg`).
+/// So the discriminator is whether the argument's ROOT is already a pointer,
+/// not the callable's provenance.
 #[test]
 #[ignore = "KNOWN GAP A2: a projection arg through a Callable-PARAM SEGFAULTS (gg check clean, \
 exit 139); TODO.md. Un-ignore when the non-routing indirect-call arg loops honour the sigil."]

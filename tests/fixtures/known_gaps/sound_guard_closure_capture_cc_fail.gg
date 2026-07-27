@@ -1,0 +1,41 @@
+# DURABLE REPRO — a `Guard[T]` CAPTURED BY A CLOSURE does not compile: the
+# closure environment is lowered as a struct, and the C backend emits
+# `Guard__Inner g;` inside it without ever emitting the `Guard__Inner` typedef.
+#
+# WRONG TODAY (measured at HEAD, Rust gg):
+#   `gg check`                -> "OK: no semantic errors"
+#   `gg build`                -> C: error: unknown type name 'Guard__Inner'
+#   `gg build --backend=llvm` -> the SAME C error in the emitted runtime .c
+#
+# ⚠ THE CAPTURE IS THE DISCRIMINATOR. The byte-identical program with the
+# capture removed (`int() f = (): 7` plus a separate `print(g.fd)`) BUILDS AND
+# RUNS CORRECTLY, printing `7` then `10` — measured at HEAD. So neither the
+# guard local, nor the closure, nor the guard's field read is the defect; it is
+# specifically a guard-typed value crossing into a closure environment.
+#
+# SCOPE — this fixture samples exactly ONE cell: `Guard[T]` at a CLOSURE-CAPTURE
+# position. Its sibling `sound_guard_struct_field_cc_fail` samples the ordinary
+# STRUCT-FIELD position and fails with the same diagnostic, which is what
+# identifies the two as one class (the closure environment IS a struct).
+# DISTINCT from `sound_guard_return_position_cc_fail` — that one emits the type
+# fine and fails on a missing runtime symbol instead.
+#
+# INTENDED (asserted below): a closure may capture a guard like any other value,
+# and reading the guarded field through it prints `10`.
+#
+# ⚠ THIS FIXTURE CANNOT RUN UNTIL FIXED: no binary is produced on either lane.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the guard.
+#
+# Cited from TODO.md (guard/wrapper subsystem).
+struct Inner:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Mutex[Inner] m = Mutex[Inner](Inner(seed()))
+    Guard[Inner] g = m.lock()
+    int() f = (): g.fd
+    print(f())

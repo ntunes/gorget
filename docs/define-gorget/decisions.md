@@ -579,9 +579,23 @@ P1-infra reviewers' recommendation.
   Enforcement: the RV-A track.
   **SCOPE CLARIFICATION (2026-07-16, recorded after RV-A passes 1-2 measured ALL EIGHT
   wrappers; supersedes any broader reading):** the reject partition is
-  **GUARDS-vs-CONTAINERS**. Guard/ReadGuard/WriteGuard field access WORKS today (green
-  run fixtures, correct output) — the ruling's rationale (no blessed silent-wrong-output)
-  does not reach them; they stay ACCEPTED. Box/Shared/Weak/Mutex/RWLock DIRECT field access
+  **GUARDS-vs-CONTAINERS**. Guard/ReadGuard/WriteGuard field access stays ACCEPTED.
+  ⚠ **PREMISE CORRECTED 2026-07-27 — the original wording, "Guard/ReadGuard/WriteGuard
+  field access WORKS today (green run fixtures, correct output)", is FALSE at the WRITE
+  faces, and false even at a guard LOCAL root (no parameter indirection).** Measured at
+  HEAD, all `gg check`-clean and all building cleanly: on a `ReadGuard[Config]` LOCAL from
+  `RWLock.read()`, `inc(&rg.fd)` prints **10** (write silently dropped), `rg.fd = 99`
+  prints **10**, and `rg.fd += 5` prints **10**; the `WriteGuard` control `inc(&wg.fd)`
+  prints **11** and is correct. So the accurate scope of the ruling's exemption is
+  **guard field READS, plus WriteGuard writes** — a ReadGuard write is silently swallowed,
+  which is exactly the blessed-silent-wrong-output shape the ruling exists to refuse, and
+  the intended answer there is a check-time REJECT (the producer's own read-only-guard arm
+  already carries the comment "type checker should reject in future"). Repro:
+  `known_gaps/sound_readguard_write_faces_dropped.gg`. A separate, filed defect makes the
+  same reads wrong through a PARAMETER (`known_gaps/sound_guard_param_field_unsafe.gg`).
+  The exemption itself stands — these are not the wrapper-deref-coercion class — but it
+  must not be cited as evidence that guard field access is correct.
+  Box/Shared/Weak/Mutex/RWLock DIRECT field access
   all print silent garbage-0 (measured) — they REJECT, with a 3-way diagnostic split:
   field-present-on-inner AND the wrapper is a documented deref-coercion target — **§9.4
   names ONLY Box** (design-doc :1707-1712, sole example) → E_DerefCoercionUnimplemented;
@@ -1335,7 +1349,7 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 
   **RIDES D32.** This is a boundary-modifier position, so the parse must route through `parse_ownership_modifier` — the same mechanism D32 uses to define the legal-position whitelist by construction. Landing it as a separate special case would fight that design and re-open the position-by-position enumeration D32 exists to close.
 
-  **⚠⚠ BUNDLED WITH THE `Callable`-FUNCTION-TYPE SEGFAULT, BY OWNER DECISION — the construct being re-spelled DOES NOT WORK.** Measured (gauntlet pass 13, parent-reproduced): `void g(Callable[void(&int)] cb): int a = 1; cb(&a); print(a)` → `gg check` OK, **exit 139 on C AND LLVM**, no output; the `Callable[void(int)]` control runs clean. This is the reference's only `&`-in-a-function-type example — the §9.1 position table's row and the spelling note's sole unnamed-parameter example — so the canonical legal spelling crashes. A syntax change whose only test shape segfaults cannot be validated on its own, so the fix and the re-spelling land in ONE round with one fixture set. Filed on the `Callable`-costume census in `TODO.md`; ⚠ CORRECTED 2026-07-26 (gauntlet pass 15): an earlier draft of this clause claimed the axis is the callable's PROVENANCE — "green through a Callable LOCAL, fatal through a Callable PARAMETER". That is FALSE and was mis-derived from a filing about a plain FUNCTION reference. Measured: `Callable[void(&int)] cb = bump; cb(&a)` through a LOCAL also exits 139 on both backends. Both provenances segfault; there is no green cell here.
+  **⚠⚠ BUNDLED WITH THE `Callable`-FUNCTION-TYPE SEGFAULT, BY OWNER DECISION — the construct being re-spelled DOES NOT WORK.** Measured (gauntlet pass 13, parent-reproduced): `void g(Callable[void(&int)] cb): int a = 1; cb(&a); print(a)` → `gg check` OK, **exit 139 on C AND LLVM**, no output; the `Callable[void(int)]` control runs clean. This is the reference's only `&`-in-a-function-type example — the §9.1 position table's row and the spelling note's sole unnamed-parameter example — so the canonical legal spelling crashes. A syntax change whose only test shape segfaults cannot be validated on its own, so the fix and the re-spelling land in ONE round with one fixture set. Filed on the `Callable`-costume census in `TODO.md`; ⚠ CORRECTED 2026-07-26 (gauntlet pass 15): an earlier draft of this clause claimed the axis is the callable's PROVENANCE — "green through a Callable LOCAL, fatal through a Callable PARAMETER". That is FALSE and was mis-derived from a filing about a plain FUNCTION reference. Measured: `Callable[void(&int)] cb = bump; cb(&a)` through a LOCAL also exits 139 on both backends. Both provenances segfault, so PROVENANCE is not the axis. ⚠ CORRECTED AGAIN 2026-07-27: the same clause's follow-on *"there is no green cell here"* is ALSO false, and the green cells identify the real axis. Measured at HEAD, all `gg check`-clean: `Callable[void(&int)]` PARAM called `cb(a)` where `a` is an `int &` parameter → **11/11, correct**; `Callable[int(&Counter)]` PARAM called `f(&c)` where `c` is a `Counter &` parameter → **correct** — and the latter is the LIVE, GREEN in-tree fixture `tests/fixtures/callable_ref_param.gg`, which has been passing all along. **The axis is whether the ARGUMENT's root is already a pointer.** The `__callable_N` arg loop in `src/ir/lowering/exprs/calls.rs` forwards a pointer only when `is_param_borrow_unique` holds of the argument local (i.e. the argument is itself a borrow parameter); for any other root it lowers the argument by value and hands an `int` to a callee expecting `int*`. So the fix is to drive that choice from the call-site sigil plus the callee's declared function-type parameter, and `callable_ref_param.gg` is the regression pin that must stay green through it.
 
   **LANE CENSUS (Core #9) — accept/reject surface, so all three lanes plus the formatter:**
   1. **Rust gg** — parser: accept `Type &`/`Type !` in a function-type parameter list via `parse_ownership_modifier`; reject `&Type`/`!Type` with a diagnostic that names the replacement.

@@ -1,0 +1,52 @@
+# DURABLE REPRO — a `Guard[T]` stored in a STRUCT FIELD does not compile: the
+# C backend emits `Guard__Inner g;` inside the struct without ever emitting the
+# `Guard__Inner` typedef.
+#
+# WRONG TODAY (measured at HEAD, Rust gg, both backends):
+#   `gg check`                      -> "OK: no semantic errors"
+#   `gg build`                      -> C: error: unknown type name 'Guard__Inner'
+#                                            (the generated `<out>.c`, in the
+#                                            emitted `Holder` struct definition)
+#   `gg build --backend=llvm`       -> the SAME C error, in the emitted runtime
+#                                      `__gorget_runtime_<out>.c` — so it is a
+#                                      SHARED type-emission gap, not a
+#                                      C-backend-only one.
+# No binary is produced on either lane, so there is no output to diff.
+#
+# SCOPE — this fixture samples exactly ONE cell: `Guard[T]` at a STRUCT-FIELD
+# position, moved in with `!`. Its sibling `sound_guard_closure_capture_cc_fail`
+# samples the CLOSURE-ENVIRONMENT position, which fails with the byte-identical
+# diagnostic (the closure environment is lowered as a struct). Both are DISTINCT
+# from `sound_guard_return_position_cc_fail`, which compiles the type fine and
+# instead calls a runtime symbol (`gorget_guard_clone`) that does not exist.
+#
+# MECHANISM (not chased to the writer site — do not treat as established): the
+# guard wrapper types are registered as C typedefs only for the positions the
+# guard-deref lowering knows about (locals and parameters); an aggregate FIELD
+# of guard type reaches the struct emitter with a mangled name that has no
+# typedef behind it.
+#
+# INTENDED (asserted below): a `Guard[T]` is an ordinary single-owner value, so
+# moving one into a struct field and reading `h.g.fd` through the guard's
+# auto-deref prints the guarded value — `10`.
+#
+# ⚠ THIS FIXTURE CANNOT RUN UNTIL FIXED: no binary is produced on either lane.
+# It is `#[ignore]`d and asserts the intended value.
+#
+# The seed is COMPUTED, not a literal, so no const-fold can elide the guard.
+#
+# Cited from TODO.md (guard/wrapper subsystem).
+struct Inner:
+    int fd
+
+struct Holder:
+    Guard[Inner] g
+
+int seed():
+    return 10
+
+void main():
+    Mutex[Inner] m = Mutex[Inner](Inner(seed()))
+    Guard[Inner] g = m.lock()
+    Holder h = Holder(!g)
+    print(h.g.fd)
