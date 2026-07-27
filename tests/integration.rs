@@ -32175,6 +32175,89 @@ EVal=B
     );
 }
 
+/// FAMILY-1 — an `&<projection>` argument at an INDIRECT call (closure variable
+/// OR IIFE) must REACH the callee. It used to vanish at BOTH. Neither indirect
+/// path sets `func_state.expected_type`, so `maybe_auto_propagate` unwrapped the
+/// `Result`-typed argument, saw the `Error`, and propagated — silently skipping
+/// the call, even though each callee's parameter is itself `Result[int, int]`
+/// and the argument was meant to arrive whole. The chokepoint's early return
+/// closes it for a RESOLVABLE projection argument.
+///
+/// ⚠⚠ BOTH ROWS ARE POS, NOT CONTROLS — and two things mask this defect, both of
+/// which produced a wrong verdict in this round before the fixture existed:
+/// an `Ok` payload (a correct and a broken compiler both call), and an EXPLICIT
+/// `Callable[...]` annotation on the closure variable. Measured at base, same
+/// program, only the annotation differing: `auto f = …` SKIPS while
+/// `Callable[void(&Result[int,int])] f = …` CALLS. Row B uses `auto`
+/// deliberately; tidying it into an annotation silently disarms the fixture.
+///
+/// RED-VERIFIED at base — BOTH rows printed `err` with neither callee body
+/// running. A genuine Core #9 semantic change, now pinned.
+/// The BARE-identifier siblings are still broken at both call kinds and filed
+/// separately (`sound_autoprop_indirect_bare_arg_skips_call`).
+#[test]
+fn cow_amp_projection_indirect_call_arg() {
+    run_gg(
+        "cow_amp_projection_indirect_call_arg.gg",
+        "\
+  A-called
+A: ok
+  B-called
+B: ok",
+    );
+}
+
+/// KNOWN GAP — an INDIRECT call (closure variable or IIFE) with a BARE
+/// `Result`-typed argument is silently SKIPPED: the error auto-propagates even
+/// though the callee's parameter is itself a `Result`, so there was nothing to
+/// unwrap. Root: neither indirect call path sets `expected_type`, unlike their
+/// free-call and method-call siblings.
+///
+/// Both rows survive the Family-1 fix because `try_resolve_place` has no
+/// `Identifier` arm BY DESIGN — the projection twins are resolved and return
+/// early (pinned live by `cow_amp_projection_indirect_call_arg`), the bare ones
+/// fall through to the unguarded unwrap. ⚠ The fix is for the indirect call
+/// paths to set `expected_type`, NOT to widen the producer.
+#[test]
+#[ignore = "KNOWN GAP: an indirect call (closure-var or IIFE) with a BARE `Result`-typed arg \
+auto-unwraps and silently skips the call, though the callee's param is itself a Result. Asserts \
+the INTENDED call; TODO.md. Un-ignore when the indirect call paths set `expected_type` like \
+their free/method siblings."]
+fn sound_autoprop_indirect_bare_arg_skips_call() {
+    run_gg(
+        "known_gaps/sound_autoprop_indirect_bare_arg_skips_call.gg",
+        "\
+  cvar-called
+cvar_bare: ok
+  iife-called
+iife_bare: ok",
+    );
+}
+
+/// FAMILY-1 — an `&<projection>` argument that is `Result`-typed while the
+/// CALLEE's parameter is NOT must still AUTO-PROPAGATE. `void take(int &x)`
+/// called as `take(&h.r)` only typechecks because auto-propagation unwraps the
+/// `Result`; on an `Error` payload it must PROPAGATE rather than call.
+///
+/// ⚠ INVISIBLE UNDER AN `Ok` PAYLOAD — both a correct and a broken compiler
+/// print `in take`. Row A is Error-seeded for exactly that reason (the
+/// masked-probe trap, Core #15e(d)); row B is the Ok control.
+///
+/// RED-VERIFIED against a regression the chokepoint INTRODUCED: without the
+/// type-only auto-propagate pre-check the Error row printed `in take` / `ok`,
+/// silently swallowing the error AND handing the callee a pointer to a `Result`
+/// where an `int` was expected. Base and post-fix now agree.
+#[test]
+fn cow_amp_projection_autoprop_arg() {
+    run_gg(
+        "cow_amp_projection_autoprop_arg.gg",
+        "\
+err_seeded: ERR(propagated)
+  in take
+ok_seeded: called",
+    );
+}
+
 /// FAMILY-1 — `&` of a field whose DECLARED TYPE IS ALREADY A POINTER
 /// (`Ref[T]` / `MutRef[T]` / extern `T*`) must FORWARD the stored pointer, not
 /// take its address. The place resolvers resolve such a field fine — the place
@@ -32191,6 +32274,15 @@ EVal=B
 /// That guard is what makes postcondition 1 literally true rather than
 /// aspirational, which is what lets every caller `emit_borrow_mut`
 /// unconditionally.
+///
+/// ⚠ ROW 4 (`MutRef[Vector[int]]`) PINS A DIFFERENT GUARD and is the only shape
+/// found that reds it: the `is_already_ptr` fall-through in `lower_call_arg`'s
+/// `MutableBorrow` arm. Disable that guard and row 4 SIGSEGVs (exit 139) where
+/// it prints `3`. Rows 1-3 use `Ref[Vector[int]]`, whose local IS
+/// `SlotKind::BorrowedPtr`-kinded, so `lir/lower/operands.rs` forwards the
+/// pointer via `SlotLoad` and they stay GREEN with that guard disabled — which
+/// is precisely why row 4 exists. A green suite is not evidence that the
+/// `is_already_ptr` guard is dead; most shapes never reach it.
 #[test]
 fn cow_amp_ref_field_forward() {
     run_gg(
@@ -32198,6 +32290,7 @@ fn cow_amp_ref_field_forward() {
         "\
 3
 4
+3
 3",
     );
 }

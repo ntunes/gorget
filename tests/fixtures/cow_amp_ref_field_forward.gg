@@ -34,8 +34,32 @@
 # the callee's view of the vector (row 2, len 4) while `v` — a separate binding
 # the Ref aliases — is observed through its own handle at row 3. Asserting only
 # rows 1-2 would pass even if the pointer were mangled into a fresh copy.
+# ─────────────────────────────────────────────────────────────────────────────
+# ROW 4 (`MutRef`) IS THE ONE THAT REDS THE `is_already_ptr` FALL-THROUGH GUARD.
+#
+# Rows 1-3 pin the PRODUCER's postcondition-1 exit guard (above). Row 4 pins a
+# DIFFERENT guard one step later — the `is_already_ptr` fast-path in
+# `lower_call_arg`'s `MutableBorrow` arm — and it is the only shape found that
+# reds it. Measured:
+#     guard present : 3        (correct)
+#     guard disabled: SIGSEGV, exit 139
+#
+# ⚠ WHY A GREEN SUITE IS NOT EVIDENCE ABOUT THAT GUARD. `lir/lower/operands.rs`
+# already forwards a stored pointer for a bare place when the local is
+# `SlotKind::BorrowedPtr`-kinded OR its slot is specifically
+# `PtrTo(GorgetString)`. The GIR-level guard is BROADER — it tests the GIR TYPE
+# (`Ptr`/`MutPtr`) with no `slot_kind` component. Those are different sets, and
+# `MutRef[Vector[int]]` lands in the gap: a `PtrTo` slot whose pointee is NOT
+# `GorgetString`, so the LIR takes `SlotAddr` and the callee gets `**T` unless
+# the GIR guard forwards first. Rows 1-3 use `Ref[Vector[int]]`, whose local IS
+# `BorrowedPtr`-kinded, so they stay green with that guard disabled — which is
+# why row 4 exists and must not be folded into them.
+# ─────────────────────────────────────────────────────────────────────────────
 struct Holder:
     Ref[Vector[int]] vec
+
+struct MutHolder:
+    MutRef[Vector[int]] vec
 
 void push_it(Vector[int] &q):
     q.push(99)
@@ -47,4 +71,10 @@ int main():
     push_it(&h.vec)
     print(h.vec.len())
     print(v.len())
+
+    # Row 4 — the `is_already_ptr` red (see the banner above).
+    Vector[int] w = [1, 2]
+    MutHolder m = MutHolder(w)
+    push_it(&m.vec)
+    print(m.vec.len())
     return 0

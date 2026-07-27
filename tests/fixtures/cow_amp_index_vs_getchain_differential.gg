@@ -18,12 +18,26 @@
 # RED-VERIFIED, and note the two halves need DIFFERENT forms of red (Core #12's
 # ⚠ clause):
 #   * The `&v[0]` half: RED against the pre-fix compiler, which printed `10`.
-#   * The `&v.get(0).unwrap()` half was ALREADY GREEN at HEAD (printed `142`), so
-#     no pre-fix compiler can red it. Break-and-watch instead: delete the
-#     `is_already_ptr` fall-through guard in `lower_call_arg`'s `MutableBorrow`
-#     arm and this half emits `**T`, so the callee reads pointer bits as payload
-#     and the assertion fails. That guard is what this half pins — the fix must
-#     NOT remove it, because unresolvable shapes still land there.
+#   * ⚠ The `&v.get(0).unwrap()` half is NOT RED-VERIFIED, and this header
+#     previously claimed it was. The claim was: "delete the `is_already_ptr`
+#     fall-through guard and this half emits `**T` and the assertion fails."
+#     THAT DOES NOT REPRODUCE — measured by disabling that exact guard and
+#     re-running this family: everything stays GREEN, including this row. The
+#     reason is one layer down: `lir/lower/operands.rs` emits `SlotLoad` (reading
+#     the pointer bits) rather than `SlotAddr` for a bare place whose local is
+#     `SlotKind::BorrowedPtr`-kinded, and a `.get().unwrap()` result IS such a
+#     local — so the LIR already forwards the pointer and the GIR-level guard is
+#     not what saves this row.
+#
+#     WHAT THIS HALF ACTUALLY PINS, then: that the two spellings AGREE. It is a
+#     DIFFERENTIAL, not an independent guard — its value is that a future change
+#     which fixes or breaks one spelling without the other fails here. It was
+#     green before this round and is green after; that is the claim, and it is
+#     worth pinning because the two spellings measurably DISAGREED for five
+#     months. (A shape that genuinely reds the `is_already_ptr` guard does exist
+#     — `MutRef[Vector[int]]`, a `PtrTo` slot whose pointee is not
+#     `GorgetString`, so the LIR takes `SlotAddr` — and it is pinned as row 4 of
+#     `cow_amp_ref_field_forward.gg`. It is NOT this shape.)
 #
 # GUARDED MECHANISM: the index half pins `try_resolve_place`'s `Index` arm and
 # its `Projection::Deref` normalisation (postcondition 1); the get-chain half

@@ -117,6 +117,15 @@ const EXCLUDE: &[&str] = &[
     //     subset" (no comprehension arm in `elaborate_expr`), the same class as
     //     the comprehension row noted in the for-element block above.
     "cow_comprehension_amp_projection_source.gg",
+    // Family-1 FIX ROUND (auto-propagate interaction with the chokepoint). Both
+    // rows are ggdef-run-verified out-of-subset; both pin ERROR-PROPAGATION
+    // semantics, which phase 0 does not model at all.
+    //   - `expr! catch (e): …` — "expression `unsupported` is outside the
+    //     phase-0 subset".
+    "cow_amp_projection_autoprop_arg.gg",
+    //   - an IIFE / closure-variable call — "only named callees are supported in
+    //     phase 0".
+    "cow_amp_projection_indirect_call_arg.gg",
     //   - list comprehension: `elaborate_expr` has no comprehension arm, so the
     //     `[x*2 for x in &a]` expression is "outside the phase-0 subset".
     "cow_comprehension_amp_source.gg",

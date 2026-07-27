@@ -2289,10 +2289,7 @@ fn lower_field_access(
                         let inner_type_name = inner_type_name.to_string();
                         if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
                             // Resource-type fields → Ptr(T) reference (same as non-Guard path).
-                            let result_type = if ctx.type_registry.is_collection_type(field_type)
-                                || field_type == ctx.type_mapper.owned_string_type
-                                || ctx.type_registry.is_resource_type(field_type)
-                            {
+                            let result_type = if field_read_yields_ptr(ctx, field_type) {
                                 ctx.type_registry.insert(GirType::Ptr(field_type))
                             } else {
                                 field_type
@@ -2308,10 +2305,7 @@ fn lower_field_access(
                             if let TypeDefKind::Struct(ref s) = type_def.kind {
                                 for (i, field) in s.fields.iter().enumerate() {
                                     if field.name == field_name {
-                                        let result_type = if ctx.type_registry.is_collection_type(field.type_id)
-                                            || field.type_id == ctx.type_mapper.owned_string_type
-                                            || ctx.type_registry.is_resource_type(field.type_id)
-                                        {
+                                        let result_type = if field_read_yields_ptr(ctx, field.type_id) {
                                             ctx.type_registry.insert(GirType::Ptr(field.type_id))
                                         } else {
                                             field.type_id
@@ -2360,9 +2354,7 @@ fn lower_field_access(
                     // not borrowed. The source field is zeroed, and the struct's
                     // drop function handles cleanup of any unconsumed fields.
                     if is_consuming_self_access
-                        && (ctx.type_registry.is_collection_type(field_type)
-                            || field_type == ctx.type_mapper.owned_string_type
-                            || ctx.type_registry.is_resource_type(field_type))
+                        && field_read_yields_ptr(ctx, field_type)
                     {
                         let dst = builder.field_load(base_place.clone(), field_idx, field_type);
                         // Zero the source field to prevent double-free when
@@ -2394,10 +2386,7 @@ fn lower_field_access(
                     // `is_collection_type` / `owned_string_type` cases stay
                     // for self-documentation and to keep the predicate stable
                     // if `is_resource_type` ever narrows.
-                    let result_type = if ctx.type_registry.is_collection_type(field_type)
-                        || field_type == ctx.type_mapper.owned_string_type
-                        || ctx.type_registry.is_resource_type(field_type)
-                    {
+                    let result_type = if field_read_yields_ptr(ctx, field_type) {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else {
                         field_type
@@ -2420,9 +2409,7 @@ fn lower_field_access(
                 if let Some((field_idx, field_type)) = field_info {
                     // !self consuming access (fallback path)
                     if is_consuming_self_access
-                        && (ctx.type_registry.is_collection_type(field_type)
-                            || field_type == ctx.type_mapper.owned_string_type
-                            || ctx.type_registry.is_resource_type(field_type))
+                        && field_read_yields_ptr(ctx, field_type)
                     {
                         let dst = builder.field_load(base_place.clone(), field_idx, field_type);
                         builder.move_zero(Place {
@@ -2438,10 +2425,7 @@ fn lower_field_access(
                         return FunctionBuilder::copy(dst);
                     }
                     // Same FieldLoad migration as above — drop `base_is_ptr &&`.
-                    let result_type = if ctx.type_registry.is_collection_type(field_type)
-                        || field_type == ctx.type_mapper.owned_string_type
-                        || ctx.type_registry.is_resource_type(field_type)
-                    {
+                    let result_type = if field_read_yields_ptr(ctx, field_type) {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else {
                         field_type
@@ -2680,7 +2664,37 @@ pub(super) fn materialize_global_field_base(
 /// resolvable place (a call, literal, etc.). Used by the `Expr::Index`
 /// write-through pre-check so a side-effecting collection producer
 /// (`make()[k].field = x`) is not evaluated twice.
-fn place_expr_type_only(ctx: &mut LoweringContext, expr: &Spanned<Expr>) -> Option<TypeId> {
+/// THE field-read Ptr-wrap predicate — one accessor, one source of truth
+/// (devbook/24 rule 3).
+///
+/// Answers: does a READ of a field of this type yield a `Ptr(T)` reference INTO
+/// the parent rather than a shallow value copy? True for collections, owned
+/// `String`s, and resource user-structs — the shallow copy would alias the
+/// field's heap data and a drop of either side would double-free.
+///
+/// ⚠ This predicate was open-coded SIX times in this file, which is how the
+/// `&`-argument path came to disagree with itself: the four types this returns
+/// `true` for were the four whose `&`-of-a-projection write-through worked BY
+/// ACCIDENT (the read handed back a pointer, so `emit_borrow_mut` addressed real
+/// storage), while the six it returns `false` for silently lost the callee's
+/// write. That accident is no longer load-bearing — the `&`-formation faces now
+/// resolve a PLACE through `try_resolve_place` instead of inferring one from
+/// this predicate's output — but the predicate itself still governs read
+/// semantics, so it gets one home rather than six.
+///
+/// The explicit `is_collection_type` / `owned_string_type` arms are redundant
+/// with `is_resource_type` today and are KEPT deliberately: they document the
+/// intent and keep the predicate stable if `is_resource_type` ever narrows.
+pub(in crate::ir::lowering) fn field_read_yields_ptr(ctx: &LoweringContext, field_type: TypeId) -> bool {
+    ctx.type_registry.is_collection_type(field_type)
+        || field_type == ctx.type_mapper.owned_string_type
+        || ctx.type_registry.is_resource_type(field_type)
+}
+
+pub(in crate::ir::lowering) fn place_expr_type_only(
+    ctx: &mut LoweringContext,
+    expr: &Spanned<Expr>,
+) -> Option<TypeId> {
     match &expr.node {
         Expr::Identifier(name) => {
             if let Some((_, tid)) = ctx.lookup_local(name) {

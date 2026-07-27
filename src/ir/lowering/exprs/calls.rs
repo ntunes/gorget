@@ -207,37 +207,57 @@ pub(super) fn lower_call_arg(
     //   * The G2 untrack still runs on the handles the projection minted, before
     //     the borrow escapes into the call, preserving the UAF-fold close.
     //
-    // ⚠ THE EARLY RETURN SKIPS `maybe_auto_propagate` (below, `Snag #43`), and
-    // the verdict is SCOPED, not blanket-inert. `maybe_auto_propagate`'s FIRST
-    // gate is `ctx.func_state.expected_type`: when the caller sets it to the
-    // CALLEE's declared param type — which for an `&<projection>` argument is by
-    // construction the projected value's own type — the operand is returned
-    // unchanged before `should_auto_propagate` is ever consulted. The free-call
-    // path (`calls.rs`, set just before the arg loop) and the METHOD-call path
-    // (`methods.rs`, likewise) both set it, so on those two the skip is INERT —
-    // verified, and it must not be dropped on a future merge of the two faces.
-    // (Two earlier explanations were wrong and are recorded as such so nobody
-    // re-derives them: it is NOT "a projection is never a throws-call result" —
-    // `should_auto_propagate` is TYPE-gated, not shape-gated, and a `Result`-typed
-    // FIELD is a projection whose type is `Result`; and it is NOT "`Result` is
-    // resource-typed so the read takes the Ptr branch" — `is_resource_name` has
-    // no enum-variant clause, and a value-payload `Result` field measurably takes
-    // the value-copy branch, i.e. the OPPOSITE way.)
-    // The closure-var-call and IIFE paths do NOT set `expected_type` themselves.
-    // MEASURED at the Family-1 commit, on `void take(Result[int,int] &x)` called
-    // through a `Callable` variable inside a `throws` fn, in four spellings
-    // (fn-reference and capturing-closure-literal × projection arg `&h.r` and
-    // bare-identifier arg `&hr`): the call HAPPENS in every one, pre-fix and
-    // post-fix alike, and the emitted programs are byte-identical across this
-    // change. Instrumenting `maybe_auto_propagate` shows why — every
-    // `Result`-typed operand on those paths is stopped by GATE 1 anyway
-    // (`expected_type` is a `Result` at that point), so `should_auto_propagate`
-    // is never consulted for them (`would_prop=false`, zero exceptions).
-    // So the skip is inert on all five callers as measured, not just the two
-    // that set `expected_type` explicitly. It must not be dropped on a future
-    // merge of the two faces. `methods.rs`'s FxHasher caller is unprobed for the
-    // auto-propagate axis, and cannot exercise it: its argument is a Hasher by
-    // the method contract, never a `Result`.
+    // ⚠ THE EARLY RETURN SKIPS `maybe_auto_propagate` (below, `Snag #43`). That
+    // skip is NOT inert, and the auto-propagate PRE-CHECK below is what makes it
+    // safe — read both together.
+    //
+    // WHEN THE SKIP WOULD MATTER. `maybe_auto_propagate`'s first gate is
+    // `ctx.func_state.expected_type`. When the CALLEE's parameter is itself a
+    // `Result`, that gate returns the operand unchanged and no unwrap was ever
+    // going to happen — skipping it is genuinely inert. But when the ARGUMENT is
+    // `Result`-typed and the PARAMETER is NOT (`void take(int &x)` called as
+    // `take(&h.r)`), auto-propagation is what makes the call typecheck at all,
+    // and on an `Error` payload it propagates INSTEAD of calling. Skipping it
+    // there swallows the error and hands the callee a pointer to a `Result`.
+    //
+    // ⚠ TWO THINGS MASK THIS, AND BOTH PRODUCED A WRONG VERDICT IN THE ROUND
+    // THAT WROTE THIS CODE. A false measurement in source is worse than a wrong
+    // explanation (Core #14), so the corrections are recorded rather than
+    // quietly swapped:
+    //   (1) An `Ok` payload. The unwrap succeeds and the call proceeds, so a
+    //       correct and a broken compiler are INDISTINGUISHABLE. Probe with
+    //       `Error`.
+    //   (2) An explicit `Callable[...]` annotation on a closure variable.
+    //       Measured at base, same program, same payload, only the annotation
+    //       differing: `auto f = (Result[int,int] &x): …` SKIPS the call, while
+    //       `Callable[void(&Result[int,int])] f = …` CALLS it. The annotated
+    //       VarDecl leaves `expected_type` in a state that blocks the unwrap.
+    // An earlier revision of this comment asserted as MEASUREMENTS that the call
+    // "HAPPENS in every one, pre-fix and post-fix alike", that emitted programs
+    // were "byte-identical across this change", and that the skip is "inert on
+    // all five callers" — ALL THREE FALSE, reached with annotated closure
+    // variables and never testing an IIFE at all. Adjacency of the constructor
+    // and ambient-state pollution were separately ruled out as explanations
+    // (measured with the construction moved into a helper fn and an intervening
+    // statement); the ANNOTATION was the discriminator.
+    //
+    // MEASURED, `Error`-seeded, `void take(int &x)` + a `Result[int,int]` field:
+    // base propagates (`ERR(propagated)`, call skipped) — correct; the
+    // chokepoint WITHOUT the pre-check below printed `in take` and returned
+    // `ok`; WITH it, base and post agree. Pinned by
+    // `cow_amp_projection_autoprop_arg.gg`, whose Error row is the live half and
+    // whose Ok row is the control.
+    //
+    // (Two earlier explanations of why the skip "could not" matter were also
+    // wrong and are recorded so nobody re-derives them: it is NOT "a projection
+    // is never a throws-call result" — `should_auto_propagate` is TYPE-gated,
+    // not shape-gated; and it is NOT "`Result` is resource-typed so the read
+    // takes the Ptr branch" — `is_resource_name` has no enum-variant clause, and
+    // a value-payload `Result` field measurably takes the value-copy branch,
+    // i.e. the OPPOSITE way.)
+    //
+    // `methods.rs`'s FxHasher caller cannot exercise this axis at all: its
+    // argument is a Hasher by the method contract, never a `Result`.
     // BORROW PROVENANCE — verdict: CONVERGENCE, not a new shape. Before this,
     // a RESOURCE-typed field `&`-arg flowed through `lower_field_access`, which
     // tags the forwarded `Ptr` local with borrow provenance
@@ -247,13 +267,86 @@ pub(super) fn lower_call_arg(
     // resource cells stop carrying it. That is not a regression in kind: the
     // pre-existing fall-through borrow below is equally untagged, so this makes
     // the resource cells behave like every other `&`-arg rather than like a
-    // special case. MEASURED on a resource-field program
-    // (`security/sound_amp_field_thinptr_control.gg`): `--clones=stats` is
-    // byte-identical before and after — `string_clone=0`, `array_clone=0`,
-    // `total_allocs=2`, `total_frees=3`, `live_bytes=0` on both. On the
-    // box-projection shape it strictly IMPROVES (`string_clone` 9 → 1,
-    // `total_allocs` 27 → 19: the whole-struct clone per loop iteration is gone).
-    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+    // special case.
+    //
+    // ⚠ REGENERATE, DO NOT TRUST THE FIGURES BELOW (Core #5) — the command is
+    // what is being asserted, not the number:
+    //   gg build --clones=stats <fixture> -o /tmp/cs && /tmp/cs   # read [clone-stats]
+    // On `security/sound_amp_field_thinptr_control.gg` (a resource-field
+    // program) the line was byte-identical before and after this change. On
+    // `tests/fixtures/cow_amp_deref_box_projection.gg` it strictly IMPROVES:
+    // `string_clone` 60→35, `array_clone` 20→10, `map_clone` 20→10,
+    // `total_allocs` 154→88, and `live_bytes` 2→0 — the whole-struct clone the
+    // `&(*box).field` read used to mint per projection is gone, which is the
+    // same clone that leaked (`security/sound_amp_deref_box_field_leak.gg`).
+    // (An earlier revision of this comment quoted `9 → 1` / `27 → 19`; those
+    // came from a scratch probe, not from the committed fixture, and were
+    // unreproducible as cited. Corrected rather than silently swapped.)
+    //
+    // 🚨 THE AUTO-PROPAGATE PRE-CHECK IS LOAD-BEARING — do not remove it.
+    // The early return below SKIPS `maybe_auto_propagate` (Snag #43), and that
+    // is NOT unconditionally inert. When the ARGUMENT is `Result`-typed and the
+    // CALLEE's parameter is NOT (`void take(int &x)` called as `take(&h.r)`),
+    // auto-propagation is what makes the call typecheck at all: it unwraps the
+    // `Result`, and on an `Error` it PROPAGATES instead of calling. Skipping it
+    // would swallow the error AND hand the callee a pointer to a `Result` where
+    // an `int` is expected — a lost propagation plus a type confusion.
+    //
+    // MEASURED (this is a regression this chokepoint introduced and this gate
+    // fixes): `void take(int &x)` + `Holder{Result[int,int] r}` seeded
+    // `Error(5)`, called as `take(&h.r)` inside a `throws int` fn. Base prints
+    // `ERR(propagated)` — correct. Without this pre-check the chokepoint printed
+    // `in take` / `ok`, silently swallowing the error. With it, base and post
+    // agree. Pinned by `cow_amp_projection_autoprop_arg.gg`.
+    //
+    // The check is TYPE-ONLY (`place_expr_type_only`) and runs BEFORE any
+    // lowering, so a side-effecting base is not evaluated twice — the same
+    // discipline `try_resolve_index_element_ptr`'s kind-gate uses. When it says
+    // the argument would auto-propagate, we fall through to the normal path and
+    // let the existing machinery own the semantics.
+    // ⚠ THE SIGNAL IS THE CALLEE'S DECLARED PARAMETER TYPE, not
+    // `func_state.expected_type`. `expected_type` is AMBIENT state: the
+    // free-call and method-call paths set it, the closure-var and IIFE paths do
+    // not, and at an indirect call site its value is therefore whatever earlier
+    // lowering happened to leave there rather than anything about this call.
+    // Keying on it makes the decision depend on WHICH CALLER lowered the
+    // argument instead of on what the call MEANS. Measured consequence: at an
+    // indirect call site the surrounding SOURCE SPELLING changes it — an
+    // explicit `Callable[void(&Result[int,int])] f = …` declaration leaves it in
+    // a state that blocks the unwrap while an `auto f = …` declaration does not,
+    // so the same call is served differently by a decl one line above it.
+    // (Whether the enclosing constructor also contributes was NOT isolated —
+    // that hypothesis was tested and REFUTED as the explanation for the
+    // closure-var behaviour: the skip persists with the construction moved into
+    // a helper fn and an intervening statement.)
+    // `callee_param_type` is the typed fact:
+    //   * param IS a `Result`  → the argument is meant to arrive whole; an
+    //     unwrap here would be WRONG, so the chokepoint proceeds. (This is the
+    //     cell where BOTH indirect call kinds — closure-variable call AND IIFE —
+    //     measurably LOSE the call at base, because neither caller sets
+    //     `expected_type` and the unwrap fires unguarded. A pre-existing defect
+    //     this chokepoint fixes for a resolvable projection argument; the
+    //     bare-identifier siblings still lose it and are filed. Pinned by
+    //     `cow_amp_projection_indirect_call_arg.gg`.)
+    //     ⚠ MEASURING THIS NEEDS TWO PRECAUTIONS, both learned the hard way in
+    //     the round that introduced this code: the payload must be `Error` (an
+    //     `Ok` unwraps successfully and the call proceeds either way), and the
+    //     closure variable must be `auto`-annotated — an explicit
+    //     `Callable[void(&Result[int,int])] f = …` leaves `expected_type` in a
+    //     state that blocks the unwrap and HIDES the defect completely.
+    //   * param is NOT a `Result` while the ARG is → auto-propagation is what
+    //     makes the call typecheck at all, and on an `Error` it must PROPAGATE
+    //     rather than call, so we fall through and let it.
+    let arg_would_auto_propagate = matches!(arg.node.ownership, Ownership::MutableBorrow) && {
+        let param_is_result = callee_param_type
+            .map(|p| ctx.type_registry.enum_category(p) == Some(EnumCategory::Result))
+            .unwrap_or(false);
+        !param_is_result
+            && super::place_expr_type_only(ctx, &arg.node.value)
+                .map(|t| super::should_auto_propagate(ctx, builder, t).is_some())
+                .unwrap_or(false)
+    };
+    if matches!(arg.node.ownership, Ownership::MutableBorrow) && !arg_would_auto_propagate {
         if let Some((place, place_type)) = super::try_resolve_place(ctx, builder, &arg.node.value) {
             if let Some(s) = g2_projected_untrack_start {
                 ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());
@@ -320,9 +413,33 @@ pub(super) fn lower_call_arg(
                 // exprs/mod.rs). Both now guard only the FALL-THROUGH path: a
                 // resolvable projection returns early at the Family-1 chokepoint
                 // above, whose producer postcondition makes the borrow
-                // unconditional. This guard still matters for the shapes the
-                // producer returns `None` for — `&xs.get(i).unwrap()`, whose
-                // read yields a `Ptr(T)` that must be forwarded, not re-borrowed.
+                // unconditional.
+                //
+                // 🚨 THIS GUARD IS LIVE — DEMONSTRATED, not assumed. Disable it
+                // and `push_it(&c.p)` on a `struct HMut { MutRef[Vector[int]] p }`
+                // SIGSEGVs (exit 139) where it prints `3` with the guard in
+                // place. Pinned by the `MutRef` row of
+                // `cow_amp_ref_field_forward.gg`.
+                //
+                // ⚠ WHY THAT ROW, AND WHY A GREEN RUN PROVES NOTHING HERE. The
+                // LIR ALREADY forwards a stored pointer for SOME bare places:
+                // `lir/lower/operands.rs` emits `SlotLoad` (reading the pointer
+                // bits) instead of `SlotAddr` when the local is
+                // `SlotKind::BorrowedPtr`-kinded OR its slot is specifically
+                // `PtrTo(GorgetString)`, and there is no `Deref` projection.
+                // This GIR-level guard's condition is BROADER — it tests the GIR
+                // TYPE (`Ptr`/`MutPtr`) with no `slot_kind` component. The two
+                // predicates are DIFFERENT SETS, and the gap between them is
+                // exactly where this guard earns its keep: a `PtrTo` slot whose
+                // pointee is NOT `GorgetString` (a `Vector`, above) takes
+                // `SlotAddr`, so without the guard the callee receives `**T`.
+                // Most shapes are covered by the LIR path and never exercise
+                // this arm, so a green suite is NOT evidence that it is dead.
+                // ⚠ An earlier revision claimed `&xs.get(i).unwrap()` as the
+                // shape needing it. That claim is NOT reproducible — disabling
+                // the guard leaves the get-chain fixtures green, because those
+                // locals ARE `BorrowedPtr`-kinded — and it is corrected here
+                // rather than silently swapped (Core #14).
                 if place.projections.is_empty()
                     && matches!(
                         ctx.type_registry.get(local_type),

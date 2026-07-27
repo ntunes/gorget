@@ -79,6 +79,12 @@ const EXCLUDE: &[&str] = &[
     "cow_amp_projection_type_axis.gg",
     "cow_amp_projection_base_shapes.gg",
     "cow_comprehension_amp_projection_source.gg",
+    // Family-1 fix round — both pin ERROR-PROPAGATION semantics, which phase 0
+    // does not model: `catch` is "expression `unsupported`", and an IIFE /
+    // closure-variable call is "only named callees are supported in phase 0".
+    // Both ggdef-run-verified; see corpus_b.rs for the long form.
+    "cow_amp_projection_autoprop_arg.gg",
+    "cow_amp_projection_indirect_call_arg.gg",
     "cow_for_amp_vector_field_writethrough.gg",
     "cow_for_amp_vector_alias_root.gg",
     "cow_for_amp_resource_elem_writethrough.gg",

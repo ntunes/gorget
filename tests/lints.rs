@@ -6854,6 +6854,54 @@ fn borrow_mut_formation_site_count() {
     );
 }
 
+/// devbook/24 rule 3 — the field-read Ptr-wrap predicate has ONE home.
+///
+/// The predicate "does a READ of a field of this type yield a `Ptr(T)` into the
+/// parent rather than a value copy?" was open-coded SIX times in
+/// `exprs/mod.rs`. That is the same class of defect as Family-1 itself: the four
+/// types it answers `true` for were exactly the four whose `&`-of-a-projection
+/// write-through worked BY ACCIDENT, and nothing forced the copies to agree.
+/// It now lives in `field_read_yields_ptr`; this lint stops the copies coming
+/// back.
+///
+/// Fails if the open-coded triple (`is_collection_type` / `owned_string_type` /
+/// `is_resource_type`) reappears anywhere in the file outside the accessor's own
+/// body. If you need the predicate, CALL it.
+#[test]
+fn field_read_ptr_predicate_has_one_home() {
+    let src = fs::read_to_string(Path::new("src/ir/lowering/exprs/mod.rs"))
+        .expect("read src/ir/lowering/exprs/mod.rs");
+
+    // The accessor's own body is the one legitimate spelling.
+    let accessor = "pub(in crate::ir::lowering) fn field_read_yields_ptr(";
+    assert!(
+        src.contains(accessor),
+        "the shared field-read Ptr-wrap accessor `field_read_yields_ptr` is GONE from \
+         src/ir/lowering/exprs/mod.rs. It is the single source of truth for whether a field \
+         read yields a `Ptr(T)` into the parent; six open-coded copies preceded it. If it was \
+         renamed, update this lint's anchor — do not re-inline the predicate."
+    );
+
+    // Count occurrences of the open-coded triple's distinctive middle LINE. The
+    // bare `== ctx.type_mapper.owned_string_type` is NOT specific enough — the
+    // file legitimately compares a value type and a local's type against it
+    // elsewhere. The `||`-prefixed form is unique to this predicate.
+    let inlined = src.matches("|| field_type == ctx.type_mapper.owned_string_type").count()
+        + src.matches("|| field.type_id == ctx.type_mapper.owned_string_type").count();
+    assert_eq!(
+        inlined, 1,
+        "the field-read Ptr-wrap predicate is open-coded {inlined} time(s) in \
+         src/ir/lowering/exprs/mod.rs; exactly 1 is expected (the body of \
+         `field_read_yields_ptr` itself).\n\n\
+         Each extra site is a copy of a semantic rule that nothing keeps in sync — the \
+         devbook/24 rule-3 violation that sat directly under the Family-1 defect, where the \
+         four types this predicate accepts were the four whose `&`-projection write-through \
+         worked by accident. CALL `field_read_yields_ptr(ctx, ty)` instead of re-spelling it.\n\n\
+         (If the accessor's body was legitimately rewritten so the term no longer appears \
+         once, update this expectation deliberately — and say why in the bump comment.)"
+    );
+}
+
 /// LIMB 3 (Core #6, Core #15e Q2) — the shared producer must actually be
 /// INVOKED at BOTH `&`-formation faces.
 ///

@@ -1,0 +1,67 @@
+# REGRESSION FIXTURE — an `&<projection>` argument whose type is a `Result`
+# while the CALLEE's parameter is NOT must still AUTO-PROPAGATE.
+#
+# THE SHAPE, and why it is the one that matters. `void take(int &x)` called as
+# `take(&h.r)` where `h.r` is `Result[int, int]` only TYPECHECKS because
+# auto-propagation unwraps the `Result` to an `int` (Snag #43). On an `Error`
+# payload it does not call at all — it propagates. That is live, load-bearing
+# semantics, not a formality.
+#
+# ⚠ IT IS INVISIBLE UNDER AN `Ok` PAYLOAD. Seeded `Ok(7)` the unwrap succeeds and
+# the call proceeds, so BOTH a correct and a broken compiler print `in take`.
+# Only an `Error` payload separates them. Row A is Error-seeded for exactly that
+# reason; row B is the Ok control that proves the call still happens when it
+# should. A fixture with only row B would be a false negative — this is the
+# masked-probe trap in Core #15e(d)'s "MIND THE PROBE", and it cost this round a
+# wrong verdict before the fixture existed.
+#
+# AXIS + CELL (Core #12): the ARGUMENT-vs-PARAMETER TYPE axis of an
+# `&`-projection call argument, at the cell where they DISAGREE and
+# auto-propagation bridges them — crossed with the payload axis (Error / Ok).
+# The agreeing cell (callee param is itself a `Result`, so gate 1 blocks the
+# unwrap) is the common case covered throughout the rest of the `cow_amp_*`
+# family.
+#
+# RED-VERIFIED — and this pins a regression the Family-1 chokepoint INTRODUCED,
+# so its red is the mid-round state, not the pre-round compiler:
+#   * base (pre-Family-1):                    ERR(propagated) / in take / ok
+#   * chokepoint WITHOUT the auto-prop gate:  in take / ok / in take / ok   ← WRONG
+#   * chokepoint WITH the gate:               ERR(propagated) / in take / ok
+# The broken middle row is worse than a lost write: the `Error` is silently
+# SWALLOWED and the callee receives a pointer to a `Result` where an `int` is
+# expected — a lost propagation plus a type confusion, `gg check` clean.
+#
+# GUARDED MECHANISM: the TYPE-ONLY auto-propagate pre-check that guards the
+# Family-1 chokepoint in `lower_call_arg` (`place_expr_type_only` +
+# `should_auto_propagate`, evaluated BEFORE any lowering so a side-effecting base
+# is not evaluated twice). Delete that pre-check — let the chokepoint's early
+# return fire unconditionally on a `MutableBorrow` projection — and row A flips
+# to `in take`. The early return skips `maybe_auto_propagate`; the pre-check is
+# what keeps that skip honest.
+struct Holder:
+    Result[int, int] r
+
+int seed():
+    return 7
+
+void take(int &x):
+    print("  in take")
+    x = x + 1
+
+# A. ERROR payload — must PROPAGATE; the call must NOT happen.
+String err_seeded() throws int:
+    Holder h = Holder(Error(5))
+    take(&h.r)
+    return "err_seeded: called"
+
+# B. OK payload — must UNWRAP and call.
+String ok_seeded() throws int:
+    Holder h = Holder(Ok(seed()))
+    take(&h.r)
+    return "ok_seeded: called"
+
+void main():
+    String a = err_seeded()! catch (e): "err_seeded: ERR(propagated)"
+    print(a)
+    String b = ok_seeded()! catch (e): "ok_seeded: ERR(propagated)"
+    print(b)
