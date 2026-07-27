@@ -2754,7 +2754,38 @@ impl<'a> TypeChecker<'a> {
                                         "clone" | "debug" | "display" | "hash"
                                     );
                                     let has_inherent_only = self.traits.has_inherent_only_impls(name);
-                                    if has_inherent_only && !is_auto_derivable {
+                                    // TRACK E SCOUT PROTOTYPE: fabrication class Core #8.
+                                    // A builtin `DerefWrapperKind` container that fell through every
+                                    // avenue above (trait registry, closure-Option/Result, builtin
+                                    // protocol, name-based fallback) either has no such method (the
+                                    // fabrication cell) OR expects auto-deref (§9.3/§9.4). Route:
+                                    //   - NonDerefContainer → REJECT (Shared/Weak/Mutex/RWLock have
+                                    //     explicit-method access; any other name is genuinely absent).
+                                    //   - GuardAccept / DerefTarget → currently REJECT here; the full
+                                    //     reference-grade shape (auto-deref-through-inner) is the
+                                    //     executor's job. For the scout we prove the REJECT arm
+                                    //     closes the fabrication cells (the docs' examples still
+                                    //     REJECT under this reject-only prototype — that is fine as
+                                    //     an interim step, because they REJECT with a diagnostic
+                                    //     rather than silently accepting a bogus symbol; the executor
+                                    //     converts the reject to a resolve-on-inner + typed
+                                    //     `method_call_auto_deref` marker).
+                                    let container_kind = self.scopes.get_def(
+                                        match self.types.get(resolved_receiver) {
+                                            ResolvedType::Defined(did) | ResolvedType::Generic(did, _) => *did,
+                                            _ => {
+                                                // Unreachable here — base_name is Some so we resolved to a Defined/Generic.
+                                                return self.types.error_id;
+                                            }
+                                        }
+                                    ).deref_wrapper_kind;
+                                    let is_wrapper_reject = matches!(
+                                        container_kind,
+                                        Some(DerefWrapperKind::NonDerefContainer)
+                                        | Some(DerefWrapperKind::GuardAccept)
+                                        | Some(DerefWrapperKind::DerefTarget)
+                                    );
+                                    if (has_inherent_only || is_wrapper_reject) && !is_auto_derivable {
                                         // If inference was attempted at this
                                         // call site and failed, emit the
                                         // typed MethodGenericInferenceFailed

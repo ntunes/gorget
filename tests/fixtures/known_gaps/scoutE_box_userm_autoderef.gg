@@ -1,0 +1,24 @@
+# Track E1 KNOWN GAP — Box[Person].greet(5): user equip method through Box.
+#
+# INTENDED (per docs/language-design.md §9.4, "Deref Coercion"): the receiver
+# auto-derefs through `DerefTarget` to the inner `Person`, resolves `greet` on
+# `Person`, prints `35`.
+#
+# E1 status (this Track): closes the fabrication class as a REJECT for
+# `DerefTarget`. Pre-fix the C backend fabricated `Box__Person__greet` (link
+# error); post-fix the typechecker emits `E_NoMethodFound` at the terminal
+# `MethodCall` fallthrough.
+#
+# E2 (deferred, pending owner ratification of §9.4 "Deref Coercion" +
+# `docs/internals/cow-transient-view-model.md` §3.7 interaction): PROMOTES to
+# auto-deref-through-inner + un-ignores this fixture.
+struct Person:
+    String name
+    int age
+
+equip Person:
+    int greet(int e): return self.age + e
+
+void main():
+    Box[Person] b = Box[Person](Person("A", 30))
+    print(b.greet(5))

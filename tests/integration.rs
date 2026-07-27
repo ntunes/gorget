@@ -1916,6 +1916,46 @@ fn reject_field_on_string() {
     check_gg_fails("reject_field_on_string.gg", FIELDACCESS_CODE);
 }
 
+// ══════════════════════════════════════════════════════════════
+// Track E1 — smart-pointer/lock-guard METHOD-call fabrication class
+// (mirror of the FieldAccess-fabrication block above, but for MethodCall).
+//
+// Pre-fix, a user equip method on a wrapper receiver whose builtin
+// `DerefWrapperKind` avenue silently fell through the terminal `MethodCall`
+// arm returned `error_id` — the C backend then emitted a call to a
+// nonexistent runtime symbol (`Shared__Person__greet`,
+// `gorget_guard_nonexistent_zzz`) → link error, Core #8 (a KNOWN DEFECT
+// shipped, "both backends fail the same way" is not evidence of correctness).
+//
+// Post-fix, the terminal fallthrough reads `DerefWrapperKind` on the receiver
+// and emits `E_NoMethodFound` at CHECK-time for `NonDerefContainer`
+// (Shared/Weak/Mutex/RWLock — §9.2 explicit-method-access rule, ratified
+// diagnostic) and — as an interim shape pending E2 — also for
+// `GuardAccept`/`DerefTarget` when NO method matches (the auto-deref
+// promotion for GuardAccept/DerefTarget is E2's scope, see TODO.md).
+// ══════════════════════════════════════════════════════════════
+const METHOD_NOTFOUND_CODE: &str = "error[E_NoMethodFound]";
+
+// NEGATIVE (Track E1, ratified reject cell): user equip method on
+// `Shared[Person]` — a `NonDerefContainer`. §9.2 mandates explicit-method
+// access; a user method on the wrapper is a genuine absence. E1's REJECT
+// arm is the FINAL shape here — E2 does NOT flip this to accept.
+#[test]
+fn reject_shared_user_method() {
+    check_gg_fails("reject_shared_user_method.gg", METHOD_NOTFOUND_CODE);
+}
+
+// NEGATIVE (Track E1, ratified reject cell): a genuinely-absent method name
+// on `Guard[int]` — neither the guard family nor the inner (`int`) has any
+// method called `nonexistent_zzz`. E1 catches the typo at check-time
+// instead of fabricating `gorget_guard_nonexistent_zzz` and link-erroring.
+// E2's auto-deref lookup on the inner also fails on the inner (int has no
+// such method), so this reject is invariant under E2.
+#[test]
+fn reject_guard_typo_method() {
+    check_gg_fails("reject_guard_typo_method.gg", METHOD_NOTFOUND_CODE);
+}
+
 // A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
 // emits `unreachable` right after it, so a noreturn function that falls
 // off its end, executes a `return`, or has a non-diverging expression body
@@ -37126,5 +37166,99 @@ fn sound_readguard_write_faces_dropped() {
     check_gg_fails(
         "known_gaps/sound_readguard_write_faces_dropped.gg",
         "error[E_",
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// Track E1 KNOWN GAPS — auto-deref for GuardAccept/DerefTarget receivers
+// (Track E2, deferred pending owner design rulings). Also the two TREE
+// defects surfaced during Track E scouting (double-free + LLVM SIGSEGV).
+// All `#[ignore]`d asserting the INTENDED post-E2 output; un-ignore when
+// E2 promotes the auto-deref path (§9.3/§9.4). See TODO.md for the open
+// design questions.
+// ══════════════════════════════════════════════════════════════
+
+/// KNOWN GAP — E1 rejects `Guard[Person].greet(5)` with `E_NoMethodFound`
+/// as an interim shape (fabrication class was closed as reject). E2 will
+/// PROMOTE to auto-deref-through-inner: resolve `greet` on `Person`, self
+/// obtained via `emit_guard_get_ptr`, print `35`.
+#[test]
+#[ignore = "KNOWN GAP (Track E2): E1 closed as reject; E2 promotes to auto-deref-through-inner \
+per docs §9.3. Un-ignore when E2 lands + owner rulings on GuardAccept scope + channel design."]
+fn scout_e_guard_userm_autoderef() {
+    run_gg("known_gaps/scoutE_guard_userm_autoderef.gg", "35");
+}
+
+/// KNOWN GAP — E1 rejects `Box[Person].greet(5)` with `E_NoMethodFound`.
+/// E2 promotes to auto-deref via the box pointee, prints `35`.
+#[test]
+#[ignore = "KNOWN GAP (Track E2): E1 closed as reject; E2 promotes to auto-deref per docs §9.4 \
+Deref Coercion. Un-ignore when E2 lands + owner ratification of §9.4."]
+fn scout_e_box_userm_autoderef() {
+    run_gg("known_gaps/scoutE_box_userm_autoderef.gg", "35");
+}
+
+/// KNOWN GAP — docs/language-design.md §9.3 verbatim example. E1 rejects
+/// `guard.push(42)` on `Guard[Vector[int]]`; E2 promotes to auto-deref
+/// (dispatches `Vector[int].push`, then `guard.len()` prints `1`).
+#[test]
+#[ignore = "KNOWN GAP (Track E2): E1 rejects docs §9.3 example; E2 makes it compile as documented."]
+fn scout_e_docs_93_guard_push() {
+    run_gg("known_gaps/scoutE_docs_93_guard_push.gg", "1");
+}
+
+/// KNOWN GAP — docs/language-design.md §9.4 verbatim example. E1 rejects
+/// `boxed.len()` on `Box[String]`; E2 promotes to auto-deref, prints `5`.
+#[test]
+#[ignore = "KNOWN GAP (Track E2): E1 rejects docs §9.4 example; E2 makes it compile as documented."]
+fn scout_e_docs_94_box_len() {
+    run_gg("known_gaps/scoutE_docs_94_box_len.gg", "5");
+}
+
+/// KNOWN GAP — `ReadGuard[Person].greet(5)`. Pre-fix this already rejected
+/// via `has_inherent_only_impls`; E1 does not change that (the reject is
+/// now via `DerefWrapperKind::GuardAccept` instead, but the disposition
+/// is identical). E2 GATED on the owner ruling: is `GuardAccept` uniform
+/// across Guard/ReadGuard/WriteGuard, or does ReadGuard reject MUTATING
+/// methods only? `greet` is non-mutating — it would auto-deref-and-accept
+/// under either ruling. Asserts INTENDED `35`.
+#[test]
+#[ignore = "KNOWN GAP (Track E2): non-mutating equip method through ReadGuard; asserts INTENDED \
+`35` post-E2. GATED on owner ruling on GuardAccept scope (see TODO.md)."]
+fn scout_e_readguard_userm_autoderef() {
+    run_gg("known_gaps/scoutE_readguard_userm_autoderef.gg", "35");
+}
+
+/// KNOWN GAP (Track E1 scouting surfaced) — `Guard[T].get()` on a heap-carrying
+/// inner is a REGISTERED method (NOT the fabrication class E1 closes); its
+/// runtime shim returns the inner by-value while the compiler treats the local
+/// as owned → double-free at scope exit. HEAP-FORCED (no literal). RED-verified
+/// at HEAD: build OK, run aborts exit 134 (`free(): double free detected in
+/// tcache 2`). Fix direction: `.get()` returns `Ref[T]` for heap-carrying inners.
+/// Asserts INTENDED single-print + no abort.
+#[test]
+#[ignore = "KNOWN GAP (Track E1 filed): Guard[String].get() ownership contract wrong for \
+heap-carrying inners — double-free at scope exit. Fix direction: .get() returns Ref[T]. TODO.md."]
+fn sound_guard_get_string_double_free() {
+    run_gg(
+        "known_gaps/sound_guard_get_string_double_free.gg",
+        "hello world-forced",
+    );
+}
+
+/// KNOWN GAP (Track E1 scouting surfaced) — `g.0 = v` on `Guard[(int, int)]`
+/// SIGSEGVs on LLVM (exit 139) and fails the C build (`Guard__Tuple__int64_t__int64_t
+/// has no member named 'owner'`). Tuple-field write-through does not project
+/// through `emit_guard_get_ptr`. Likely closes alongside a Track-D-adjacent
+/// fix generalising the guard write-place projection to tuple-field spellings.
+/// Asserts INTENDED `(42, 2)`.
+#[test]
+#[ignore = "KNOWN GAP (Track E1 filed): tuple-field write-through through Guard receiver — \
+LLVM SIGSEGV + C-compile-fail. Fix direction: route through emit_guard_get_ptr for tuple-field \
+assigns. TODO.md."]
+fn scout_e_guard_tuple_field_assign_segv() {
+    run_gg(
+        "known_gaps/scoutE_guard_tuple_field_assign_segv.gg",
+        "(42, 2)",
     );
 }

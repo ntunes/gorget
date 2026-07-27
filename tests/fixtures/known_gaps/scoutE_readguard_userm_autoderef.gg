@@ -1,0 +1,28 @@
+# Track E1 KNOWN GAP — ReadGuard[Person].greet(5): user equip method through ReadGuard.
+#
+# INTENDED: ReadGuard, WriteGuard, and Guard are all `DerefWrapperKind::GuardAccept`
+# (see `src/semantic/scope.rs:78-85`). Per the same §9.3 auto-deref shape, this
+# should resolve `greet` on `Person` and print `35`.
+#
+# ⚠ E2 OPEN QUESTION — the scout brief flags whether `ReadGuard` vs `WriteGuard`
+# needs a FINER split for mutating methods (a ReadGuard treats mutating methods
+# differently per the round handover). For NON-mutating methods like this `greet`
+# — a plain `&self` read — the answer is uniform GuardAccept auto-deref. Owner
+# decision needed for the mutating-method case before E2 closes.
+#
+# E1 status: REJECT with `E_NoMethodFound` (interim); the pre-fix path here was
+# already `has_inherent_only_impls` (also a reject), so this fixture is a durable
+# repro for the INTENDED post-E2 behavior more than for a pre-fix miscompile.
+from std.sync import RWLock
+
+struct Person:
+    String name
+    int age
+
+equip Person:
+    int greet(int e): return self.age + e
+
+void main():
+    RWLock[Person] r = RWLock[Person](Person("A", 30))
+    ReadGuard[Person] g = r.read()
+    print(g.greet(5))

@@ -1,0 +1,25 @@
+# Track E1 KNOWN GAP — Guard[Person].greet(5): user equip method through Guard.
+#
+# INTENDED (per docs/language-design.md §9.3): the receiver auto-derefs through
+# `GuardAccept` to the inner `Person`, resolves `greet` on `Person`, self is
+# `&Person` obtained via `emit_guard_get_ptr` → prints `35`.
+#
+# E1 status (this Track): closes the fabrication class as a REJECT — the
+# terminal typechecker fallthrough emits `E_NoMethodFound` for `GuardAccept`
+# receivers rather than silently accepting and fabricating a nonexistent
+# runtime symbol at LIR. That is INTERIM, not final.
+#
+# E2 (deferred, pending owner design rulings on §9.4 ratification + GuardAccept
+# scope): PROMOTES this cell to auto-deref-through-inner and un-ignores this
+# fixture. Fix direction documented in /tmp/scoutE_report_final.md.
+struct Person:
+    String name
+    int age
+
+equip Person:
+    int greet(int e): return self.age + e
+
+void main():
+    Mutex[Person] m = Mutex[Person](Person("A", 30))
+    Guard[Person] g = m.lock()
+    print(g.greet(5))

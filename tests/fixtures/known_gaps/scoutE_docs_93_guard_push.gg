@@ -1,0 +1,15 @@
+# Track E1 KNOWN GAP — docs §9.3 example: `guard.push(42)` on Guard[Vector[int]].
+#
+# INTENDED (per docs/language-design.md §9.3 verbatim example): `guard.push(42)`
+# auto-derefs `Guard[Vector[int]]` → `Vector[int]`, resolves `push`, extends
+# the guarded vector. This fixture verifies the DOCUMENTED shape as of the docs
+# in-tree at HEAD.
+#
+# E1 status: REJECT with `E_NoMethodFound` (interim). The class-closing scope
+# for E1 was JUST the terminal fabrication fallthrough; E2 adds the auto-deref
+# lookup on the inner type. Un-ignore under E2.
+void main():
+    Mutex[Vector[int]] shared_data = Mutex[Vector[int]](Vector[int]())
+    Guard[Vector[int]] guard = shared_data.lock()
+    guard.push(42)
+    print(guard.len())
