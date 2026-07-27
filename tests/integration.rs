@@ -32220,6 +32220,20 @@ B: ok",
 ///
 /// ⚠ Cannot run until fixed (SIGSEGV on C, no binary on LLVM), so it asserts the
 /// intended values — same shape as `sound_amp_deque_element_field`.
+/// KNOWN GAP — the `Callable`-function-type `&` parameter SEGFAULTS on BOTH lanes
+/// while `gg check` accepts it (Core #8: both lanes agreeing on the wrong
+/// behaviour is >=2 bugs). Measured 2026-07-27: C exits 139, LLVM builds clean
+/// and exits 139. Asserts the INTENDED write-through (101).
+///
+/// Un-ignore when D35's bundled fix lands (see TODO.md, anchor
+/// `grep -nF -- 'Callable`-function-type SEGFAULT' TODO.md`).
+#[test]
+#[ignore = "KNOWN GAP: `Callable[void(&int)]` called through the variable SEGFAULTs on \
+both backends; gg check accepts it. Asserts the INTENDED 101."]
+fn sound_callable_amp_fntype_segv() {
+    run_gg("known_gaps/sound_callable_amp_fntype_segv.gg", "101");
+}
+
 #[test]
 #[ignore = "KNOWN GAP: a `Guard[T]` field through a PARAMETER SIGSEGVs at the `&` face on C and \
 hard-fails `llc` on LLVM, and is silently wrong at the assign face, while a guard LOCAL is \

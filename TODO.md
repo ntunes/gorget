@@ -19,15 +19,32 @@ Owner's standing rule: rank by severity of unsoundness (mem-unsafety > silent-wr
    against `current_type` BEFORE the `pointee_type` deref, so a param local typed `Ptr(Guard__Inner)` never matches. Repro committed
    (`known_gaps/sound_guard_param_field_unsafe.gg`). ⚠ The mutation is the discriminator on the bare-param row — a read-only body
    silently reads `0` and reports a much milder defect. Anchor: `grep -nF -- 'Guard[T] field through a PARAMETER' TODO.md`.
-2. **Family 2 — the cross-resolver arm matrix** (`&t.0.fd`, `&v[0].0`, the get-chain fallback). Orthogonal axis to Family-1 (resolver
+2. **D35 + the `Callable`-function-type SEGFAULT — MEMORY-UNSAFE, BOTH LANES, and owner-bundled.** Re-verified 2026-07-27:
+   `Callable[void(&int)] cb = bump; cb(&a)` → `gg check` **"OK: no semantic errors"**, then **C exits 139 AND LLVM builds clean and
+   exits 139**. Both lanes agree on the wrong behaviour = Core #8, ≥2 bugs. The ratified re-spelling (`Callable[void(int &)]`, sigil
+   AFTER the type, because the sigil marks the BINDING) is **NOT implemented** — re-verified: the target spelling is a **parse error**
+   (`expected expression, found 'void'`) for simple AND generic types. ⚠ **MIND THE PROBE:** that message is a bare `error:` with no
+   code, so a `grep -cE 'error\['` returns **0** and reads as "already implemented" — it fooled the orchestrator once.
+   **⚠⚠ SCOUT QUESTION, ANSWER IT BEFORE SPLITTING TRACKS: does this share a ROOT with item 1?** Both are the same shape — *`&`
+   reaching through an indirection where the type is not matched properly*, `gg check`-clean, both lanes, pre-existing. Item 1's
+   mechanism is isolated (`guard_inner_suffix` tested against `current_type` BEFORE the `pointee_type` deref). If the `Callable`
+   indirection fails the same way, **ONE track closes both** and the arm-parity work is shared; if not, they are two tracks and the
+   scout says why with `file:line`. **Do not brief them separately until this is answered.**
+   ⚠ Owner bundled the re-spelling WITH the SEGFAULT deliberately: re-spelling a construct that segfaults ships a new spelling for a
+   broken thing. ⚠ The re-spelling is an **accept/reject surface change** ⇒ full gauntlet, three lanes, NEG fixture per rejected
+   position, doc write-through. ⚠ **NEW DEPENDENCY (2026-07-27):** this round's two-mask documentation cites the CURRENT
+   `Callable[void(&…)]` spelling in `cow_amp_projection_indirect_call_arg.gg` and its `known_gaps` twin, so the D35 migration now
+   touches fixtures that just landed — re-spell them and keep the mask warning true. Full lane census in the ledger's D35 entry.
+
+3. **Family 2 — the cross-resolver arm matrix** (`&t.0.fd`, `&v[0].0`, the get-chain fallback). Orthogonal axis to Family-1 (resolver
    arm sets vs projected type). All rows filed with anchors. ⚠ **No arm-set lint can see this** — it is an OBJECT-arm asymmetry across
    two resolvers, and the extractor is syntactic. It owes measured write-through probes, not a guard.
-3. **The indirect-call auto-propagate call-skip** — a `Result`-typed `&`-projection arg at a closure-var/IIFE call is auto-unwrapped
+4. **The indirect-call auto-propagate call-skip** — a `Result`-typed `&`-projection arg at a closure-var/IIFE call is auto-unwrapped
    even when the callee's param IS `Result`, silently skipping the call. Reference-grade fix: have those call paths set
    `expected_type` (as the free-call and method-call paths do) — **NOT** widening the producer.
-4. **Self-host Family-1 mirror** — filed with `file:line`; needs `borrow_flags` keying (the SH AST has no `CallArg.ownership`) plus
+5. **Self-host Family-1 mirror** — filed with `file:line`; needs `borrow_flags` keying (the SH AST has no `CallArg.ownership`) plus
    bootstrap re-convergence, which is why it is a track and not a rider.
-5. `ReadGuard[T]` symmetric write-drop (reference-grade = check-time rejection; the producer comment already says so) · the Deque
+6. `ReadGuard[T]` symmetric write-drop (reference-grade = check-time rejection; the producer comment already says so) · the Deque
    backend divergence · the spawn face now diverging from its own twin.
 
 **PROCESS FOR THE ROUND:** scout → brief → ≥3 fresh sequential brief-reviews → executor (worktree) → fresh output-review → integrate.
