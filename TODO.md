@@ -121,6 +121,16 @@ unsettled: its callee-shape family could not reach the IIFE cell, and its guard 
 class. Needs its own scout + gauntlet. **While it is open, bare `cb(a)` stays accepted-and-segfaulting —
 a known Core #8 defect, and it has NO committed repro. File one.**
 
+- **🆕🐛 [LOW — parser gap surfaced by the Track B3 scout] A closure literal with a `&`-sigil parameter and
+  a body that ASSIGNS through it (`(int &x): x = x + 100`) fails at PARSE with `expected ')', found '='`.
+  The read-only twin (`(int &x): print(x)`) parses fine. Blocks IIFE that mutates a captured argument;
+  blocked B3's scout from probing the IIFE cell of the callable-shape axis. Under Option A (D31-uniform)
+  the parsed shape would REJECT mis-spelled bare-arg IIFEs at check time -- which needs the parser fix
+  first. Fix direction: extend the closure-body parser so `identifier = ...` at statement position after
+  the `:` forms a statement, not a misparsed expression. **DURABLE REPRO**:
+  `tests/fixtures/known_gaps/sound_closure_amp_param_write_body_parse_error.gg` + `#[ignore]`d test
+  `sound_closure_amp_param_write_body_parse_error` asserting the INTENDED `101`.
+
 ### UNOWNED, HIGH SEVERITY
 
 - **`Mutex[T]` as a struct field aborts (exit 134, double free) — SELF-HOST ONLY.** Rust exits 0. Present
