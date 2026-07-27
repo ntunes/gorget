@@ -32175,6 +32175,64 @@ EVal=B
     );
 }
 
+/// FAMILY-1 SELF-HOST FOLD — the WRITE-place resolver
+/// (`amp_object_base` in `tests/fixtures/self_host_lowerer/lower_expr.gg`)
+/// must not evaluate the projection BASE twice on a decline path. The
+/// pre-fold code fell through to `lower_place_base` for a non-place base
+/// (a call / arithmetic / method-result), bottomed out in `lower_expr` and
+/// EMITTED the base, then a downstream predicate declined and the chokepoint
+/// re-lowered the whole argument — the base fired twice. Fold restricts the
+/// fall-through to place shapes (EIdentifier / ESelfExpr / EDeref /
+/// EFieldAccess / EIndex) and returns `None` for other shapes, mirroring
+/// Rust's `place_expr_type_only` `_ => None` arm.
+///
+/// SAMPLED CELL (Core #12): call-typed base + opaque-handle field
+/// (`is_opaque_pointer_type` = true → `field_storage_holds_pointer` fires).
+/// The base `mk()` prints `MK`; the argument prints `look`; end prints
+/// `done`.
+///
+/// RED-VERIFIED against Track D commit 30d5f60d on the SELF-HOST lane
+/// (`gg build` on Rust always emitted the base once): the pre-fold binary
+/// printed `MK / MK / look / done`; Rust and the post-fold self-host both
+/// print `MK / look / done`.
+#[test]
+fn sound_amp_selfhost_double_eval() {
+    run_gg(
+        "sound_amp_selfhost_double_eval.gg",
+        "\
+MK
+look
+done",
+    );
+}
+
+/// FAMILY-1 SELF-HOST SOUNDNESS — writing through a `ReadGuard[T]` must not
+/// mutate the guarded value. Track D's diff routed the write face through
+/// `guard_field_deref_base` uniformly for Guard / ReadGuard / WriteGuard,
+/// so `inc(&rg.port)` handed the callee a pointer into the read view's
+/// guarded data and observed `11`. Two concurrent read guards would then
+/// see shared mutation. The fold gates at the WRITE-face caller
+/// (`amp_object_base` with `for_write=true`) via `is_read_guard_type`
+/// (typed `guard_method_prefix` channel, not a `ReadGuard__` substring),
+/// which falls the argument through to the value-copy path; the mutation
+/// lands on the discarded copy and the guarded value is untouched
+/// (`10`). Mirrors Rust `try_resolve_field_place`'s ReadGuard early-out
+/// (`is_read_only`).
+///
+/// The ratified end-state is a check-time `E_CannotWriteThroughReadView`
+/// reject (filed in `TODO.md` — SH lane succession); pinning `10` here
+/// traps regressions to the memory-unsafe `11` shape while the reject is
+/// designed. The read arm (`lower_field_access`) is UNCHANGED and its
+/// uniform-across-Guards resolution stays true.
+///
+/// RED-VERIFIED against Track D commit 30d5f60d on the SELF-HOST lane
+/// (Rust prints `10`): the pre-fold binary printed `11`; Rust and the
+/// post-fold self-host both print `10`.
+#[test]
+fn sound_amp_readguard_write_rejected() {
+    run_gg("sound_amp_readguard_write_rejected.gg", "10");
+}
+
 /// FAMILY-1 — an `&<projection>` argument at an INDIRECT call (closure variable
 /// OR IIFE) must REACH the callee. It used to vanish at BOTH. Neither indirect
 /// path sets `func_state.expected_type`, so `maybe_auto_propagate` unwrapped the

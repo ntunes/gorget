@@ -434,6 +434,14 @@ void refine_local_type(LowerCtx &ctx, int lid, int new_type):
 #     like the Box arm reads `box_kind == BkRegularBox`).
 # Returns None for a non-guard base (caller falls through to the normal
 # struct field path).
+#
+# ⚠ THIS HELPER IS UNIFORM ACROSS Guard / ReadGuard / WriteGuard — deliberately.
+# The READ face (`lower_field_access`) needs the same field projection for all
+# three. The WRITE-face soundness gate — ReadGuard has no write place, and
+# writing through one would let two concurrent readers observe shared mutation
+# — lives at the WRITE-FACE CALLER (`amp_object_base` with `for_write=true`),
+# not inside this helper. Do NOT push the gate down here: it would break the
+# read arm.
 Option[FieldDerefResult] guard_field_deref_base(LowerCtx &ctx, int base, String base_type_name, GirModule &gmod):
     if not is_guard_struct_type(base_type_name, &gmod):
         return None
@@ -455,6 +463,17 @@ Option[FieldDerefResult] guard_field_deref_base(LowerCtx &ctx, int base, String 
     int gd_inner_ptr = add_local(&ctx, gd_inner_ptr_tid, None)
     emit(&ctx, GICallExtern(gd_inner_ptr, gd_get_ptr_fn, [OpBorrow(base)]))
     return Some(FieldDerefResult(gd_inner_ptr, gd_inner_name))
+
+# Typed check: is this a `ReadGuard[T]` type? Reads through the typed
+# `guard_method_prefix` channel (which unwraps `method_prefix` off
+# `resource_meta_for` — ReadGuard's slot is populated with the literal
+# `gorget_read_guard` at `build_resource_metadata`), NOT a `ReadGuard__`
+# prefix substring. One decision, one source of truth (Core #2 / layering
+# rule 2). Used by the WRITE-face `amp_object_base` gate to REFUSE emitting a
+# write place for a ReadGuard base; the READ face keeps resolving all three
+# guard variants uniformly through `guard_field_deref_base`.
+bool is_read_guard_type(String name, GirModule &gmod):
+    return guard_method_prefix(name, &gmod) == "gorget_read_guard"
 
 # ── Box[T] deref-as-PLACE inner-name (shared write helper) ──────────
 # `box_deref_inner_name(name)` returns Some(inner) when `name` is a
@@ -553,7 +572,18 @@ Option[FieldDerefResult] box_deref_ptr_base(LowerCtx &ctx, int base, String base
 #
 # Returns None when the base is not a resolvable PLACE (a call result, an
 # arithmetic temp, a literal) — the caller falls through unchanged.
-Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
+#
+# `for_write` is caller-scoped (same pattern the diff already uses for
+# `require_struct_elem` on the index producer). Both `&`-formation call-arg
+# faces are WRITE-through by construction, so every consumer here passes
+# `true`. The gate switches on a single arm — a ReadGuard base — because
+# writing through a read view lets two concurrent readers observe shared
+# mutation (measured: `inc(&rg.fd)` mutated a `RWLock`-guarded value the
+# read view was supposed to freeze). Kept CALLER-scoped so the READ arm
+# (`lower_field_access`) can go on resolving all three guard variants
+# uniformly through `guard_field_deref_base` — the RIGHT thing for the read
+# face is not the right thing for the write face.
+Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod, bool for_write):
     int aob_local = -1
     match base_expr.expr:
         case EIndex(aob_coll_box, aob_idx_box):
@@ -566,10 +596,40 @@ Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, G
             # place, so recurse through the SAME resolver rather than falling
             # back to a value read of the intermediate struct.
             aob_local = lower_amp_place(&ctx, base_expr, &gmod)
+        case EIdentifier(_):
+            # Bare local or module-level static. `lower_place_base` is a
+            # nl_get lookup (idempotent) for a local and a `__global_ref__`
+            # Ptr alias reservation for a static — no user-visible side
+            # effect either way. Safe to re-run on a decline path.
+            aob_local = lower_place_base(&ctx, base_expr, &gmod)
+        case ESelfExpr():
+            # `self.…` — bare `self` resolves through `lower_place_base` →
+            # `lower_expr(ESelfExpr)` → nl_get on "self". Idempotent.
+            aob_local = lower_place_base(&ctx, base_expr, &gmod)
+        case EDeref(_):
+            # `(*b).f`. `lower_place_base` returns the BOX local so the
+            # downstream box arm re-types it to `GtPtr(T)` (Family-1 write
+            # place). Non-idempotent for a call-typed box (`(*mk_bx()).f`)
+            # — the box expression is user-lowered — but that shape is
+            # rejected by the checker unless the inner is itself a place,
+            # so the surviving cells are lookups.
+            aob_local = lower_place_base(&ctx, base_expr, &gmod)
         else:
-            pass
-    if aob_local < 0:
-        aob_local = lower_place_base(&ctx, base_expr, &gmod)
+            # NOT a resolvable place shape (a call, arithmetic, literal,
+            # method-chain result, …). BLOCKING #1 fold: the pre-fix code
+            # fell THROUGH to `lower_place_base(base_expr)` for every shape,
+            # which for a non-place bottomed out in `lower_expr(base_expr)`
+            # and EMITTED the base's side effects. The chokepoint (line
+            # ~8956) then declined on a downstream predicate — a
+            # pointer-in-storage field, a nested type miss — and re-lowered
+            # the WHOLE argument via `lower_expr(arg)`, evaluating the base
+            # a SECOND time. Measured on `look(&mk().rwlock_field)`:
+            # `MK / MK / …`; base (Rust gg + un-patched self-host)
+            # `MK / …`. Refusing to emit HERE keeps the caller's fallback
+            # to a single `lower_expr(arg)`. Mirrors the `_ => None` arm of
+            # Rust's `place_expr_type_only` (src/ir/lowering/exprs/mod.rs
+            # around `Postcondition 2 — EMISSION`).
+            return None
     if aob_local < 0 or aob_local >= ctx.locals.len():
         return None
     # The struct name is read off the resolved local's OWN type (Ptr/MutPtr
@@ -582,6 +642,19 @@ Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, G
             return Some(aob_bx)
         case None:
             pass
+    # BLOCKING #2 fold — WRITE-face soundness gate. A `ReadGuard[T]` base
+    # holds a read view; writing THROUGH one lets two concurrent read guards
+    # observe shared mutation. `guard_field_deref_base` is uniform across
+    # Guard/ReadGuard/WriteGuard by design (the READ face
+    # `lower_field_access` needs that uniformity), so the write-face
+    # asymmetry lives HERE, at the caller. `is_read_guard_type` reads the
+    # typed method-prefix channel — no name-substring dispatch. Declining
+    # falls the argument through to the value-read path (mirrors Rust gg
+    # `try_resolve_field_place`'s ReadGuard early-out at
+    # src/ir/lowering/exprs/mod.rs); an ideal follow-up is a check-time
+    # `E_CannotWriteThroughReadView` reject, filed.
+    if for_write and is_read_guard_type(aob_name, &gmod):
+        return None
     match guard_field_deref_base(&ctx, aob_local, aob_name, &gmod):
         case Some(aob_gd):
             return Some(aob_gd)
@@ -598,7 +671,18 @@ Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, G
 # This resolver dispatches on the projection KIND only; the object is handed to
 # `amp_object_base` (above), which owns the domain axis. Returns the local
 # holding the place pointer, or -1 to DECLINE (the caller then lowers the
-# argument exactly as before — declining is always safe, never a silent drop).
+# argument as a value read, exactly ONCE).
+#
+# ⚠ DECLINING IS NOT FREE. The pre-fix comment claimed "declining is always
+# safe, never a silent drop"; the SILENT DROP half is still true (Core #10),
+# but the SAFE half was measurably wrong — a decline downstream of an
+# emitting `amp_object_base` used to make the chokepoint re-lower the WHOLE
+# argument (`lower_expr(arg)`), evaluating the base twice. The write-place
+# resolver now refuses to emit for a non-place base and the ReadGuard write
+# arm; the surviving `-1` returns downstream of a real emission (an owned
+# static's `__global_ref__` alias reservation, a nested-EFieldAccess whose
+# outer field is pointer-storage) are locally idempotent — they widen the
+# generated locals, never the observable execution.
 #
 # The `.field` arm is deliberately the SAME emission the field-READ arm uses
 # for a resource field (`GIFieldLoad` into a `GtPtr(field)`-typed,
@@ -611,7 +695,7 @@ Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, G
 int lower_amp_place(LowerCtx &ctx, SpannedExpr arg, GirModule &gmod):
     match arg.expr:
         case EFieldAccess(ap_base_box, ap_field_name):
-            match amp_object_base(&ctx, *ap_base_box, &gmod):
+            match amp_object_base(&ctx, *ap_base_box, &gmod, true):
                 case Some(ap_obj):
                     # Tuple `t.0` registers as `_0` (same normalisation the
                     # read arm and both write arms apply).

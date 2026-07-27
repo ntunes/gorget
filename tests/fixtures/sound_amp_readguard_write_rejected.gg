@@ -1,0 +1,46 @@
+# SOUNDNESS FIXTURE — the self-host lowerer must NOT resolve a WRITE PLACE
+# through a `ReadGuard[T]`. A read view holds a shared lock; two readers
+# holding concurrent guards must both observe the same value, so writing
+# through one is UB. Rust gg's `try_resolve_field_place` closes it with a
+# ReadGuard early-out (src/ir/lowering/exprs/mod.rs — the `is_read_only`
+# arm), and the self-host now mirrors it at the WRITE-face caller:
+# `amp_object_base` with `for_write=true` refuses to project through a
+# ReadGuard base (`is_read_guard_type` — reads the typed
+# `guard_method_prefix` channel, not a `ReadGuard__` substring). The READ
+# arm (`lower_field_access`) is UNCHANGED: `guard_field_deref_base` still
+# resolves all three guard variants uniformly for the read face.
+#
+# SAMPLED CELL (Core #12): a bare ReadGuard local as the projection base,
+# with an `int` field. Track D's diff routed this through
+# `guard_field_deref_base` unconditionally on the write face, so
+# `inc(&rg.port)` mutated the guarded value and print observed `11`.
+#
+# GUARDED MECHANISM: the `for_write and is_read_guard_type(aob_name, gmod)`
+# gate in `amp_object_base`. Delete the gate and the fixture reads `11` on
+# the self-host again (measured).
+#
+# RED-VERIFIED against the pre-fix self-host (Track D commit 30d5f60d):
+#   11
+# Rust gg (oracle) and the post-fix self-host both print:
+#   10
+#
+# `10` demonstrates the write was silently discarded — the value-read
+# fallback path takes a value COPY of the field, `inc` mutates the copy, the
+# copy dies at end-of-statement, and the guarded data is untouched. The
+# ratified end-state is a check-time reject
+# (`E_CannotWriteThroughReadView` — filed as a follow-up); pinning the
+# `10` here traps regressions to the memory-unsafe `11` shape while the
+# reject is designed.
+from std.sync import RWLock
+
+struct Config:
+    int port
+
+void inc(int &n):
+    n = n + 1
+
+void main():
+    RWLock[Config] lock = RWLock[Config](Config(10))
+    ReadGuard[Config] rg = lock.read()
+    inc(&rg.port)
+    print(rg.port)
