@@ -196,6 +196,24 @@ pub struct FunctionState {
     /// Callable parameter return types: LocalId → return TypeId.
     /// Populated during function setup for parameters with Callable/function types.
     pub callable_return_types: FxHashMap<LocalId, TypeId>,
+    /// Callable parameter *argument* types: LocalId → Vec of the callable's
+    /// declared param TypeIds (plain inner — no MutPtr wrap; the sigil-side of
+    /// this axis lives in the parallel `callable_param_ownerships` sidecar).
+    /// Read by the indirect-call arg-emit loops in `exprs/calls.rs` so
+    /// `lower_call_arg`'s `callee_param_type` and `callee_param_ownership`
+    /// derivations see the SAME shape they see for a direct call — the
+    /// write-site fix for the both-lane SIGSEGV class Track B1 closes.
+    /// Empty vec for a callable with zero params. Uniform on LOCAL declarations
+    /// and PARAM binding (populated at the same four `set_callable_return_type`
+    /// sites in `functions.rs` plus the one in `stmts/mod.rs`).
+    pub callable_param_types: FxHashMap<LocalId, Vec<TypeId>>,
+    /// Parallel to `callable_param_types` — the callable's declared param
+    /// `Ownership` per index (`MutableBorrow` for `&`, `Move` for `!`,
+    /// `Borrow` otherwise). Wired via `fn_param_ownerships` under the synthetic
+    /// call name (`__callable_N` / `__gorget_closure_call_N`) so
+    /// `lower_call_arg` picks the same pointer-vs-value forwarding it uses on
+    /// direct calls.
+    pub callable_param_ownerships: FxHashMap<LocalId, Vec<crate::parser::ast::Ownership>>,
     /// Active `with shared_var:` auto-refresh bindings.
     /// Maps the with-binding local → the shared facade local it mirrors.
     /// After each await, the shared var is re-read into the binding local.
@@ -2834,6 +2852,8 @@ impl<'a> LoweringContext<'a> {
     /// entry; per-function transient state.
     pub fn callable_return_types_clear(&mut self) {
         self.func_state.callable_return_types.clear();
+        self.func_state.callable_param_types.clear();
+        self.func_state.callable_param_ownerships.clear();
     }
 
     /// Record the return type of a callable-typed local. Reads back via
@@ -2846,6 +2866,50 @@ impl<'a> LoweringContext<'a> {
     /// Look up the recorded return type for a callable-typed local.
     pub fn callable_return_type(&self, local: LocalId) -> Option<TypeId> {
         self.func_state.callable_return_types.get(&local).copied()
+    }
+
+    /// Record the ARGUMENT types + ownerships of a callable-typed local. Plain
+    /// inner TypeIds (no MutPtr wrap) — matches the direct-call `fn_sigs` shape.
+    /// The `Ownership` per index (`MutableBorrow` for `&`, `Move` for `!`,
+    /// `Borrow` otherwise) is the second sidecar the indirect-call arg-emit
+    /// loops feed to `lower_call_arg` as if they were a direct call.
+    pub fn set_callable_param_types(
+        &mut self,
+        local: LocalId,
+        param_types: Vec<TypeId>,
+        param_ownerships: Vec<crate::parser::ast::Ownership>,
+    ) {
+        self.func_state.callable_param_types.insert(local, param_types);
+        self.func_state.callable_param_ownerships.insert(local, param_ownerships);
+    }
+
+    /// Look up the recorded ARGUMENT types for a callable-typed local.
+    pub fn callable_param_types(&self, local: LocalId) -> Option<&[TypeId]> {
+        self.func_state.callable_param_types.get(&local).map(|v| v.as_slice())
+    }
+
+    /// Look up the recorded ARGUMENT ownerships for a callable-typed local.
+    pub fn callable_param_ownerships(&self, local: LocalId) -> Option<&[crate::parser::ast::Ownership]> {
+        self.func_state.callable_param_ownerships.get(&local).map(|v| v.as_slice())
+    }
+
+    /// Record ALL THREE callable sidecars for a callable-typed local at ONE
+    /// call. Layering-discipline chokepoint (Core #4/#6): the three sidecars
+    /// (return type, param types, param ownerships) are one logical fact — a
+    /// call site that populates only some is a parallel-population defect the
+    /// indirect-call arg-emit path would silently mis-route on. Every
+    /// function-registration path (`src/ir/lowering/functions.rs` — 4 sites)
+    /// and the `lower_var_decl` Binding arm (`src/ir/lowering/stmts/mod.rs`)
+    /// call this instead of writing the three sidecars in parallel.
+    pub fn set_callable_sig(
+        &mut self,
+        local: LocalId,
+        ret_type: TypeId,
+        param_types: Vec<TypeId>,
+        param_ownerships: Vec<crate::parser::ast::Ownership>,
+    ) {
+        self.set_callable_return_type(local, ret_type);
+        self.set_callable_param_types(local, param_types, param_ownerships);
     }
 
     /// Mark a local as a generic Ptr reference. Only sets if not already tracked

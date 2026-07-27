@@ -1467,11 +1467,14 @@ fn retborrow_valuepos_amp_return_throws_known_unsafe() {
 
 // ── A1: Callable-typed local bound to an `&`-param function ─────────────────
 
-/// Measured at HEAD: `gg check` clean, build clean, binary exits 139 (SIGSEGV);
-/// under ASan, `SEGV on unknown address 0x29 ... in bumpint`.
+/// REGRESSION — A1 cell of the callable-indirection axis: a `Callable`-typed
+/// LOCAL bound to an `&`-param function writes through on indirect call.
+/// (`f = bumpint; f(&x)` — plain-local int root × LOCAL callable × `&`-arg.)
+/// Pre-Track-B1: `gg check` clean, build clean, binary exit 139 (SIGSEGV);
+/// under ASan, `SEGV on unknown address 0x29 ... in bumpint`. Fix wires the
+/// callable's declared `param_ownerships` into `lower_call_arg` at both
+/// indirect-call arms in `src/ir/lowering/exprs/calls.rs`.
 #[test]
-#[ignore = "KNOWN GAP A1: a Callable-typed local bound to an &-param fn SEGFAULTS on call \
-(gg check clean, exit 139); TODO.md. Un-ignore when the indirect-call &-param ABI is fixed."]
 fn sound_callable_amp_param_indirect_call_safe() {
     security_safe("sound_callable_amp_param_indirect_call", "42");
 }
@@ -1525,40 +1528,16 @@ fn sound_amp_operand_position_duplicate_drop_safe() {
     security_safe("sound_amp_operand_position_duplicate_drop", "1\nclose 9");
 }
 
-/// A2 — the SIBLING costume: the Callable arrives as a PARAM and the `&`-arg is
-/// a PROJECTION (`&c.fd`), not a whole local. Measured at HEAD: `gg check`
-/// clean, `gg build` clean, binary exits 139 (SIGSEGV); reproduces at base AND
-/// under the `&`-of-projection prototype, so that fix does not close it.
-/// ⚠ `gg run` masks this as exit 1 with no output — it does not propagate the
-/// child's signal status; build and run the binary directly to see the SEGV.
-/// ROOT (re-measured 2026-07-27; SUPERSEDES the earlier "`calls.rs:1455` and
-/// `:1880`, the FnPtr / `__gorget_closure_call_N` loops" reading, which was
-/// wrong about WHICH loop and whose line numbers have since rotted): the SEGV
-/// takes the **Callable-PARAMETER** loop in `src/ir/lowering/exprs/calls.rs` —
-/// the `if local_type_id == UNIT_TYPE` branch that emits `__callable_N`.
-/// Verification command: `gg build --emit-gir` on this fixture prints
-/// `fn @with_it(unit, *mut Counter)` with `_1: unit ; f` and
-/// `_4 = call @__callable_1(copy _1, copy _3)`, where `_3 = field_load _2.*, 0`
-/// — i.e. the `&c.fd` argument was lowered as a VALUE copy of the int and
-/// handed to a callee expecting a pointer.
-///
-/// ⚠ The loop is not simply "ignoring `arg.node.ownership`": it decides
-/// pointer-vs-value from the ARGUMENT LOCAL's provenance
-/// (`is_param_borrow_unique`, which forwards the pointer only when the arg is
-/// itself a borrow parameter) instead of from the sigil plus the callee's
-/// declared function-type parameter. That is why the neighbouring cells split
-/// the way they do — measured 2026-07-27, all four `gg check`-clean:
-///   `Callable[void(&int)]` LOCAL   + `cb(&a)`, `a` a plain local -> SEGV
-///   `Callable[void(&int)]` PARAM   + `cb(&a)`, `a` a plain local -> SEGV
-///   `Callable[void(&int)]` PARAM   + `cb(a)`,  `a` an `int &` param -> 11/11 OK
-///   `Callable[int(&Counter)]` PARAM + `f(&c)`, `c` a `Counter &` param -> OK (UNPINNED;
-///   `callable_ref_param.gg` spells it BARE `f(c)` and pins only that cell)
-/// (the last is the live, green in-tree fixture `callable_ref_param.gg`).
-/// So the discriminator is whether the argument's ROOT is already a pointer,
-/// not the callable's provenance.
+/// REGRESSION — A2 cell of the callable-indirection axis: a PROJECTION arg
+/// through a `Callable`-typed PARAMETER writes through on indirect call.
+/// (`struct-`&`-param projection root × PARAM callable × `&`-arg`.) Pre-Track-B1:
+/// SEGV on both backends at runtime; the UNIT_TYPE arm in
+/// `src/ir/lowering/exprs/calls.rs` (Callable-PARAMETER, `__callable_N`) chose
+/// pointer-vs-value from the argument's provenance rather than the callee's
+/// declared param types. Fix populates `callable_param_types` +
+/// `callable_param_ownerships` for the parameter and routes each user arg
+/// through `lower_call_arg`.
 #[test]
-#[ignore = "KNOWN GAP A2: a projection arg through a Callable-PARAM SEGFAULTS (gg check clean, \
-exit 139); TODO.md. Un-ignore when the non-routing indirect-call arg loops honour the sigil."]
 fn sound_callable_amp_param_projection_safe() {
     security_safe("sound_callable_amp_param_projection", "11\n11");
 }

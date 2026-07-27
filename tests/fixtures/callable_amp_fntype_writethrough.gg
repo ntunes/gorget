@@ -1,0 +1,28 @@
+# REGRESSION — an indirect call through a `Callable[void(&int)]` LOCAL writes
+# through to the caller's `int` slot exactly as calling `bump(&a)` directly does.
+#
+# AXIS / CELL (root x callable-provenance x arg-spelling):
+#   plain-local int root  x  LOCAL callable  x  `&`-spelled arg
+# This is the reference's canonical `&`-in-a-function-type spelling
+# (§9.1 position table), and the LOCAL cell of the callable-indirection axis.
+#
+# Pre-fix: `gg check` clean, `gg build` clean, binary exits 139 (SIGSEGV) on both
+# C and LLVM. Root: `types.rs` mapped `Type::Function { .. }` to `GirType::FnPtr`
+# with the `&` dropped from the params axis, and the non-routing indirect-call
+# arms in `src/ir/lowering/exprs/calls.rs` never consulted the callee's declared
+# param types, so `cb(&a)` handed the callee a VALUE where the body dereferenced
+# a pointer.
+#
+# Fix (Track B1): the callable-typed local now carries `callable_param_types` +
+# `callable_param_ownerships` sidecars written at every function-registration
+# path and read at both indirect-call arms, which route each user arg through
+# `lower_call_arg` on the callee's sig — the standard direct-call arg lowering
+# with the pointer-vs-value forwarding pass.
+void bump(int &n):
+    n = n + 100
+
+void main():
+    int a = 1
+    Callable[void(&int)] cb = bump
+    cb(&a)
+    print(a)

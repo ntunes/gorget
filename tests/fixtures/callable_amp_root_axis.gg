@@ -1,0 +1,62 @@
+# AXIS-COMPLETENESS — the callable-indirection matrix.
+#
+# Every cell of the three axes gets one call with a distinguishable output, so a
+# partial regression trips MULTIPLE lines (Core #12). The axes are independent:
+#   root                × callable-provenance × arg-spelling
+#   plain-local | &-param   LOCAL | PARAM         bare | `&`
+# and the reference-grade shape at each cell is "write through the borrow".
+#
+# Pre-Track-B1 measurements (both backends):
+#   L1 LOCAL callable + plain-local + &-arg     -> SEGV (was cell 1 of scout table)
+#   L2 LOCAL callable + plain-local + bare-arg  -> SEGV (was cell 3)
+#   P1 PARAM callable + plain-local + &-arg     -> SEGV (was cells 2, 4)
+#   G1 PARAM callable + &-param    + bare-arg   -> 101  (accidentally green via
+#                                                        `is_param_borrow_unique`;
+#                                                        preserved by the shortcut)
+#   G2 PARAM callable + &-param    + &-arg      -> 101  (accidentally green same
+#                                                        family; the sibling fixture
+#                                                        `callable_ref_param_amp.gg`
+#                                                        pins the analogous cell on
+#                                                        a `Counter &` root)
+#
+# The output digits below identify which cell ran, so a regression that hits
+# only one cell prints a still-recognisable-but-wrong sequence rather than
+# silently degrading to the correct total. Cells L1/L2/P1 formerly SEGV'd, so a
+# regression that reintroduces the bug drops the line's second column (or
+# crashes the run before it can print).
+void bump(int &n):
+    n = n + 100
+
+void with_local_amp():
+    int a = 1
+    Callable[void(&int)] cb = bump
+    cb(&a)
+    print(f"L1={a}")
+
+void with_local_bare():
+    int a = 2
+    Callable[void(&int)] cb = bump
+    cb(a)
+    print(f"L2={a}")
+
+void with_param_amp(Callable[void(&int)] cb):
+    int a = 3
+    cb(&a)
+    print(f"P1={a}")
+
+void with_param_bare_ampparam(Callable[void(&int)] cb, int &a):
+    cb(a)
+    print(f"G1={a}")
+
+void with_param_amp_ampparam(Callable[void(&int)] cb, int &a):
+    cb(&a)
+    print(f"G2={a}")
+
+void main():
+    with_local_amp()
+    with_local_bare()
+    with_param_amp(bump)
+    int g1 = 4
+    with_param_bare_ampparam(bump, &g1)
+    int g2 = 5
+    with_param_amp_ampparam(bump, &g2)

@@ -81,6 +81,40 @@ pub(super) fn lower_call_arg(
         }
     }
 
+    // Track B1 A-2 (Option (b), 2026-07-27): bare-identifier arg forwarded to a
+    // callee that expects pass-by-`&` (`callee_passes_by_ptr`). If the source
+    // local is a `&`-param whose stored value IS the caller's `*mut T`
+    // (`is_param_borrow_unique`), forward that pointer directly — the
+    // `Ownership::Borrow` arm below would first `lower_expr` the identifier,
+    // which for a `&`-param AUTO-DEREFS into a value-typed temp, losing the
+    // pointer and re-borrowing a dying stack temp instead. Two indirect-call
+    // arg-emit loops (`__callable_N` UNIT_TYPE + `__gorget_closure_call_N`
+    // FnPtr) used to compensate by SKIPPING `lower_call_arg` entirely for this
+    // exact shape (the pre-Option-(b) shortcut); routing them through
+    // `lower_call_arg` requires this fast-path to preserve their observation
+    // AND, unlike the shortcut, run `cow_before_mutation` on the source so
+    // aliases of the caller's slot are severed before the callee's
+    // write-through fires. Mirrors the `MutableBorrow` special-case above —
+    // that arm handles `f(&c)`; this arm handles `f(c)` when `f` is
+    // `Callable[void(&T)]` (indirect) or `void f(T &x)` (direct D31 bare-arg).
+    // The plain-local case (`int a = 5; cb(a)`) is UNAFFECTED: it falls
+    // through to the `Ownership::Borrow if callee_passes_by_ptr` arm below,
+    // which emits a fresh `borrow` on the int slot — exactly right.
+    if matches!(arg.node.ownership, Ownership::Borrow) && callee_passes_by_ptr {
+        if let Expr::Identifier(name) = &arg.node.value.node {
+            if let Some((local_id, _)) = ctx.lookup_local(name) {
+                ctx.cow_before_mutation(builder, local_id, arg.span);
+                // Re-resolve in case cow_before_mutation rebound `name` to a
+                // freshly-materialized owned local; forwarding the stale
+                // pre-materialize borrow would escape the caller's slot.
+                let local_id = ctx.lookup_local(name).map(|(l, _)| l).unwrap_or(local_id);
+                if ctx.is_param_borrow_unique(builder, local_id) {
+                    return FunctionBuilder::copy(local_id);
+                }
+            }
+        }
+    }
+
     // Special case: !name where name is a `!`-sigil resource parameter (the
     // local already holds a MutPtr to caller-owned data). Forward the pointer
     // directly and emit MoveZero on the param slot, bypassing the
@@ -483,9 +517,19 @@ pub(super) fn lower_call_arg(
             if let Operand::Copy(ref place) | Operand::Move(ref place) = val {
                 if place.projections.is_empty() {
                     let local_type = builder.local_type(place.local);
-                    // Already a Ptr (borrowed resource param) — forward directly,
-                    // don't wrap in another Ptr layer.
-                    if matches!(ctx.type_registry.get(local_type), Some(GirType::Ptr(_))) {
+                    // Already a Ptr / MutPtr (borrowed resource param, or `&`-param
+                    // whose stored local is `*mut T`) — forward directly, don't
+                    // wrap in another Ptr layer. Track B1 (2026-07-27): the
+                    // MutPtr arm was missing; the MutableBorrow arm above already
+                    // handles both — same completeness there. Without it, a
+                    // bare-arg call `cb(a)` where `a` is a `&`-param and the
+                    // callable's declared param is `&T` re-wraps the caller's
+                    // MutPtr(T) into a fresh Ptr(MutPtr(T)) and the callee's
+                    // write-through lands on the wrong indirection level.
+                    if matches!(
+                        ctx.type_registry.get(local_type),
+                        Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                    ) {
                         return FunctionBuilder::copy(place.local);
                     }
                     if use_mut_ptr {
@@ -1631,28 +1675,77 @@ pub(super) fn lower_call(
             // Emit as __callable_N where N is the local ID, which the C backend
             // will recognize and emit as an indirect function pointer call.
             if local_type_id == UNIT_TYPE {
+                let callable_name = format!("__callable_{}", local_id.0);
+                // TRACK B1 SIGSEGV FIX (write-site).
+                //
+                // Track B1 root: this arm used to decide pointer-vs-value from the
+                // ARGUMENT LOCAL's provenance (`is_param_borrow_unique` — was the
+                // arg a borrow param?) — which meant a `Callable[void(&int)]`
+                // called with a plain-local arg forwarded the VALUE bits, and
+                // the closure body's write-through dereferenced them as a
+                // pointer → SIGSEGV on BOTH backends (C + LLVM). The correct
+                // signal is the CALLEE's declared param type + ownership spelled
+                // on the callable, carried through the parallel
+                // `callable_param_types` / `callable_param_ownerships` sidecars
+                // (populated at the four param registration sites plus the
+                // var-decl site — every place that already sets
+                // `callable_return_types`). We rewire the arg emit to
+                // `lower_call_arg` — the sigil+callee-aware path every other
+                // call uses — by transplanting the sidecars into the
+                // conventional `fn_sigs` / `fn_param_ownerships` axes under the
+                // synthetic `callable_name` key. `lower_call_arg` then picks the
+                // pointer-vs-value forwarding exactly as if this were a direct
+                // call to a function of that signature. When the sidecars are
+                // missing (untyped closure whose signature was never
+                // registered), the legacy fallback below preserves the
+                // pre-existing behaviour so the change is strictly additive.
+                let sig_params: Option<Vec<TypeId>> = ctx.callable_param_types(local_id).map(|s| s.to_vec());
+                let sig_owns: Option<Vec<Ownership>> = ctx.callable_param_ownerships(local_id).map(|s| s.to_vec());
                 let mut call_args = vec![FunctionBuilder::copy(local_id)];
-                for arg in args {
-                    // For borrow params passed to callable, preserve the pointer
-                    // (don't auto-deref). The adapter function expects the pointer type.
-                    if let Expr::Identifier(arg_name) = &arg.node.value.node {
-                        if let Some((arg_local, _)) = ctx.lookup_local(arg_name) {
-                            if ctx.is_param_borrow_unique(builder, arg_local) {
-                                call_args.push(FunctionBuilder::copy(arg_local));
-                                continue;
+                if let (Some(sig_params), Some(sig_owns)) = (sig_params, sig_owns) {
+                    // Transplant into the axes lower_call_arg reads. Idempotent
+                    // — the synthetic name embeds `local_id` so two writes for
+                    // the same callable local match.
+                    ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), UNIT_TYPE));
+                    ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
+                    for (i, arg) in args.iter().enumerate() {
+                        // Track B1 A-2 Option (b), 2026-07-27: the pre-fix
+                        // "already-a-pointer bare-arg forwarding" shortcut (a
+                        // bare-arg `cb(a)` on a `&`-param local, skipping
+                        // `lower_call_arg` — and with it `cow_before_mutation`)
+                        // used to sit here. Retired to the sanctioned path — the
+                        // fast-path lives inside `lower_call_arg` now (see the
+                        // `Ownership::Borrow && callee_passes_by_ptr` special-case
+                        // at the top of that fn), so ALL arg loops route through
+                        // ONE gate and `cow_before_mutation` becomes a hard
+                        // invariant, not a bypass-conditional call.
+                        let param_type = sig_params.get(i).copied();
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
+                    }
+                } else {
+                    for arg in args {
+                        // Legacy fallback: for borrow params passed to callable,
+                        // preserve the pointer (don't auto-deref). The adapter
+                        // function expects the pointer type.
+                        if let Expr::Identifier(arg_name) = &arg.node.value.node {
+                            if let Some((arg_local, _)) = ctx.lookup_local(arg_name) {
+                                if ctx.is_param_borrow_unique(builder, arg_local) {
+                                    call_args.push(FunctionBuilder::copy(arg_local));
+                                    continue;
+                                }
                             }
                         }
+                        let val = lower_expr(ctx, builder, &arg.node.value);
+                        // Auto-deref Ptr(T) → T for non-resource value types. A
+                        // closure declared `(Entity e): ...` expects an Entity by
+                        // value, but the caller's local may hold a Ref[Entity]
+                        // (from a collection `.get().unwrap()` or a `Ref[T]`
+                        // field). Resource types stay as Ptr since their adapter
+                        // expects the pointer form.
+                        let val = ctx.auto_clone_if_ptr(builder, val, arg.span);
+                        call_args.push(val);
                     }
-                    let val = lower_expr(ctx, builder, &arg.node.value);
-                    // Auto-deref Ptr(T) → T for non-resource value types. A closure
-                    // declared `(Entity e): ...` expects an Entity by value, but
-                    // the caller's local may hold a Ref[Entity] (from a collection
-                    // `.get().unwrap()` or a `Ref[T]` field). Resource types stay
-                    // as Ptr since their adapter expects the pointer form.
-                    let val = ctx.auto_clone_if_ptr(builder, val, arg.span);
-                    call_args.push(val);
                 }
-                let callable_name = format!("__callable_{}", local_id.0);
                 // Look up tracked callable return type, fall back to I64_TYPE
                 let ret_type = ctx.callable_return_type(local_id).unwrap_or(I64_TYPE);
                 if ret_type == UNIT_TYPE {
@@ -1665,11 +1758,34 @@ pub(super) fn lower_call(
             // FnPtr-typed local: escaped closure returned from a function, stored as GorgetClosure.
             // Emit __gorget_closure_call_N; the C backend expands it to fn_ptr+env dispatch.
             if let Some(GirType::FnPtr { return_type: fn_ret, .. }) = ctx.type_registry.get(local_type_id).cloned() {
-                let mut call_args = vec![FunctionBuilder::copy(local_id)];
-                for arg in args {
-                    call_args.push(lower_expr(ctx, builder, &arg.node.value));
-                }
                 let callable_name = format!("__gorget_closure_call_{}", local_id.0);
+                // TRACK B1 SIGSEGV FIX (write-site, LOCAL cell). Same class as
+                // the UNIT_TYPE arm above; same fix. This arm used to lower
+                // every argument through `lower_expr(&arg.node.value)`, which
+                // strips the outer `arg.node.ownership` sigil AND ignores the
+                // FnPtr's own declared param types — so a
+                // `Callable[void(&int)] cb = bump; cb(&a)` LOCAL forwarded the
+                // VALUE of `a` and the closure body's write-through
+                // segfaulted on it.
+                let sig_params: Option<Vec<TypeId>> = ctx.callable_param_types(local_id).map(|s| s.to_vec());
+                let sig_owns: Option<Vec<Ownership>> = ctx.callable_param_ownerships(local_id).map(|s| s.to_vec());
+                let mut call_args = vec![FunctionBuilder::copy(local_id)];
+                if let (Some(sig_params), Some(sig_owns)) = (sig_params, sig_owns) {
+                    ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), fn_ret));
+                    ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
+                    for (i, arg) in args.iter().enumerate() {
+                        // Track B1 A-2 Option (b), 2026-07-27: same retirement as
+                        // the UNIT_TYPE arm above. The bare-arg-`is_param_borrow_unique`
+                        // fast-path lives inside `lower_call_arg` now, on the
+                        // sanctioned path with `cow_before_mutation`.
+                        let param_type = sig_params.get(i).copied();
+                        call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
+                    }
+                } else {
+                    for arg in args {
+                        call_args.push(lower_expr(ctx, builder, &arg.node.value));
+                    }
+                }
                 if fn_ret == UNIT_TYPE {
                     builder.call_void(callable_name, call_args);
                     return Operand::Constant(Constant::Unit);
