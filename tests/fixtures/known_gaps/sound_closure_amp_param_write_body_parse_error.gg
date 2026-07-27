@@ -16,7 +16,7 @@
 #
 # IMPACT:
 #   - blocks writing an IIFE that mutates its captured argument -- forces
-#     naming the closure into a local (`Callable[void(&int)] cb = (int &x):
+#     naming the closure into a local (`Callable[void(int &)] cb = (int &x):
 #     x = x + 100; cb(&a)`)
 #   - blocked the Track B3 scout's IIFE cell probe (G2/G3): the scout could
 #     not test the semantic sigil gate on IIFE callee shape because the

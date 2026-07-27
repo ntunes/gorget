@@ -30,6 +30,6 @@ void bumpint(int &n):
 
 void main():
     int x = seed()
-    Callable[void(&int)] f = bumpint
+    Callable[void(int &)] f = bumpint
     f(&x)
     print(x)

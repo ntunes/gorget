@@ -26,7 +26,7 @@
 #   |----------------------------------|------------|----------------------|
 #   | `auto f = (…)`                   | `Error(5)` | **SKIPPED** ← the only exposing cell |
 #   | `auto f = (…)`                   | `Ok(7)`    | called — masked by PAYLOAD |
-#   | `Callable[void(&Result[…])] f =` | `Error(5)` | called — masked by ANNOTATION |
+#   | `Callable[void(Result[…] &)] f =` | `Error(5)` | called — masked by ANNOTATION |
 #   | `Callable[…] f =`                | `Ok(7)`    | called — masked twice over |
 #
 # Both rows below are `Error`-seeded and row A is `auto`-annotated DELIBERATELY.

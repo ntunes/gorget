@@ -41,7 +41,7 @@
 #
 # Cited from TODO.md (the `Callable` indirect-call costume census).
 struct Holder:
-    Callable[void(&int)] f
+    Callable[void(int &)] f
 
 int seed():
     return 10

@@ -8,7 +8,7 @@ equip State:
     int get_pos(self):
         return self.pos
 
-Option[T] try_action[T](Callable[Option[T](&State)] f, State &s):
+Option[T] try_action[T](Callable[Option[T](State &)] f, State &s):
     int saved = s.pos
     Option[T] result = f(&s)
     match result:

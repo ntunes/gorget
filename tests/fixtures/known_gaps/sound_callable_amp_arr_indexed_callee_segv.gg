@@ -43,7 +43,7 @@ void bump(int &n):
 
 void main():
     int a = 1
-    Vector[Callable[void(&int)]] arr = []
+    Vector[Callable[void(int &)]] arr = []
     arr.push(bump)
     arr[0](&a)
     print(a)

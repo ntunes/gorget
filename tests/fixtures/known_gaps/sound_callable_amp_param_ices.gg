@@ -21,7 +21,7 @@
 #   A2  `security/sound_callable_amp_param_projection.gg`      -> SEGFAULT
 #       — Callable arrives as a bare PARAM; `&`-ARG is `&c.fd`
 #   THIS — the Callable parameter is itself `&`-SIGILLED
-#       (`Callable[int(&int)] &cb`)                            -> ICE
+#       (`Callable[int(int &)] &cb`)                            -> ICE
 # The first two reach the backend and crash at RUNTIME; this one never gets
 # there. Do not assume a fix for the segfault family covers this cell.
 #
@@ -54,11 +54,11 @@ int bumpret(int &n):
     n = n + 1
     return n
 
-int with_it(Callable[int(&int)] &cb, int &v):
+int with_it(Callable[int(int &)] &cb, int &v):
     return cb(&v)
 
 void main():
     int x = seed()
-    Callable[int(&int)] f = bumpret
+    Callable[int(int &)] f = bumpret
     print(with_it(&f, &x))
     print(x)

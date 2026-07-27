@@ -34,16 +34,16 @@ void bump(int &n):
 
 void with_local_amp():
     int a = 1
-    Callable[void(&int)] cb = bump
+    Callable[void(int &)] cb = bump
     cb(&a)
     print(f"L1={a}")
 
-void with_param_amp(Callable[void(&int)] cb):
+void with_param_amp(Callable[void(int &)] cb):
     int a = 3
     cb(&a)
     print(f"P1={a}")
 
-void with_param_amp_ampparam(Callable[void(&int)] cb, int &a):
+void with_param_amp_ampparam(Callable[void(int &)] cb, int &a):
     cb(&a)
     print(f"G2={a}")
 

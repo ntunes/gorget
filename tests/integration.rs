@@ -8673,6 +8673,57 @@ void main():
     );
 }
 
+/// D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): a function
+/// type's unnamed parameter carries its sigil AFTER the type — `Callable[void(int &)]`,
+/// `Callable[void(String !)]`. The formatter must emit this shape and it must
+/// round-trip through the parser (both `&` and `!` variants). A regression
+/// where the formatter still emits the retired `&Type`/`!Type` spelling would
+/// trip here because the parser now rejects it (`FunctionTypeParamSigilBeforeType`).
+#[test]
+fn fmt_d35_fn_type_sigil_round_trips() {
+    // `&` variant — the exemplar case from D35's ratification.
+    let amp_src = "\
+void bump(int &n):
+    n = n + 100
+
+void main():
+    Callable[void(int &)] cb = bump
+    int a = 1
+    cb(&a)
+    print(a)
+";
+    assert_fmt_round_trips("d35_fn_type_sigil_amp", amp_src);
+    let amp_fmt = gorget::formatter::format_source(amp_src);
+    assert!(
+        amp_fmt.contains("Callable[void(int &)]"),
+        "formatter must emit D35 spelling with sigil AFTER type.\nformatted:\n{amp_fmt}"
+    );
+    assert!(
+        !amp_fmt.contains("Callable[void(&int)]"),
+        "formatter must NOT emit retired pre-D35 spelling.\nformatted:\n{amp_fmt}"
+    );
+
+    // `!` twin — same rule, different sigil.
+    let bang_src = "\
+void take(String !s):
+    print(s)
+
+void main():
+    Callable[void(String !)] cb = take
+    cb(!\"hi\")
+";
+    assert_fmt_round_trips("d35_fn_type_sigil_bang", bang_src);
+    let bang_fmt = gorget::formatter::format_source(bang_src);
+    assert!(
+        bang_fmt.contains("Callable[void(String !)]"),
+        "formatter must emit D35 spelling for the `!` twin.\nformatted:\n{bang_fmt}"
+    );
+    assert!(
+        !bang_fmt.contains("Callable[void(!String)]"),
+        "formatter must NOT emit retired pre-D35 `!Type` spelling.\nformatted:\n{bang_fmt}"
+    );
+}
+
 // ══════════════════════════════════════════════════════════════
 // Semantic error tests (expected check failures)
 // ══════════════════════════════════════════════════════════════
