@@ -9,7 +9,7 @@ equip Counter:
         return self.value
 
 int with_counter(Callable[int(&Counter)] f, Counter &c):
-    return f(c)
+    return f(&c)
 
 int bump_and_read(Counter &c):
     c.increment()
