@@ -10,9 +10,17 @@
 #
 # Pre-Track-B1: prints 1 / 2 / 2 / done (accidentally green — the
 # `is_param_borrow_unique` shortcut inside the UNIT_TYPE arm forwarded the
-# `Counter &` param's pointer directly). Post-fix: same output — the shortcut is
-# deliberately preserved inside the sidecar-driven branch so this cell remains
-# green through the fix.
+# `Counter &` param's pointer directly for BARE `f(c)`; this file's `f(&c)`
+# spelling was ALREADY served by `lower_call_arg`'s `Ownership::MutableBorrow`
+# special-case (calls.rs, the top-of-fn `is_param_borrow_unique` branch), a
+# different code path than the sibling — a fold cite verified by the reviewer,
+# who measured that this fixture never entered the UNIT_TYPE-arm shortcut).
+# Post-A-2 Option (b): the UNIT_TYPE-arm shortcut is retired and BOTH
+# spellings route through `lower_call_arg` — this fixture through the same
+# `Ownership::MutableBorrow` arm as before, the sibling through the newly
+# added `Ownership::Borrow if callee_passes_by_ptr` fast-path (both call
+# `cow_before_mutation` on the source, then forward the `is_param_borrow_unique`
+# local's pointer). Same output; ONE sanctioned pass instead of two.
 struct Counter:
     int value
 
