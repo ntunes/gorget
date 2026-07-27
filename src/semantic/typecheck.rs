@@ -2773,8 +2773,8 @@ impl<'a> TypeChecker<'a> {
                                     let container_kind = self.scopes.get_def(
                                         match self.types.get(resolved_receiver) {
                                             ResolvedType::Defined(did) | ResolvedType::Generic(did, _) => *did,
-                                            _ => {
-                                                // Unreachable here — base_name is Some so we resolved to a Defined/Generic.
+                                            other => {
+                                                debug_assert!(false, "MethodCall wrapper-kind read: base_name resolved but ResolvedType is {other:?}, expected Defined/Generic");
                                                 return self.types.error_id;
                                             }
                                         }
