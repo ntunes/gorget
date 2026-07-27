@@ -584,6 +584,14 @@ Option[FieldDerefResult] box_deref_ptr_base(LowerCtx &ctx, int base, String base
 # uniformly through `guard_field_deref_base` — the RIGHT thing for the read
 # face is not the right thing for the write face.
 Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod, bool for_write):
+    # A3 guard (BLOCKING #2 re-open shield): every current caller is a
+    # `&`-formation write face and passes `for_write=true`. A future naive
+    # caller passing `false` would silently no-op the ReadGuard rejection
+    # below and re-open the write-through-a-read-view class. Trip loudly
+    # instead — if you legitimately need a read-face variant of this helper,
+    # split it off as its own function rather than widening this one.
+    if not for_write:
+        diag_bug("amp_object_base", "called with for_write=false — split off a read-face variant instead of widening this helper (see fold rationale)")
     int aob_local = -1
     match base_expr.expr:
         case EIndex(aob_coll_box, aob_idx_box):
@@ -679,10 +687,19 @@ Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, G
 # emitting `amp_object_base` used to make the chokepoint re-lower the WHOLE
 # argument (`lower_expr(arg)`), evaluating the base twice. The write-place
 # resolver now refuses to emit for a non-place base and the ReadGuard write
-# arm; the surviving `-1` returns downstream of a real emission (an owned
-# static's `__global_ref__` alias reservation, a nested-EFieldAccess whose
-# outer field is pointer-storage) are locally idempotent — they widen the
-# generated locals, never the observable execution.
+# arm, so the `MK / MK / …` class is closed.
+# ⚠ A NARROW RESIDUAL survives: an `EIndex` base whose index expression has
+# a side effect (`&v[side_effect_call()].pointer_storage_field`) emits the
+# index via `lower_index_element_ptr_place` at the object arm above, then
+# `lower_amp_place` may decline at a downstream predicate
+# (`field_storage_holds_pointer`), triggering the caller's fallback
+# `lower_expr(arg)` re-fire — so the index expression evaluates TWICE. The
+# reservation-shape emissions (owned static's `__global_ref__`, nested
+# EFieldAccess into a pointer-storage outer field) remain locally idempotent:
+# they widen the generated locals, never the observable execution. The
+# side-effecting-index cell is filed in TODO.md; a fix here belongs at the
+# `field_storage_holds_pointer` predicate hoisted ahead of the `EIndex`
+# emission (mirroring what BLOCKING 1's fold did for the object-domain arm).
 #
 # The `.field` arm is deliberately the SAME emission the field-READ arm uses
 # for a resource field (`GIFieldLoad` into a `GtPtr(field)`-typed,
