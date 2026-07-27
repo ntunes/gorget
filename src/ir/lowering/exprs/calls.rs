@@ -81,6 +81,40 @@ pub(super) fn lower_call_arg(
         }
     }
 
+    // Track B1 A-2 (Option (b), 2026-07-27): bare-identifier arg forwarded to a
+    // callee that expects pass-by-`&` (`callee_passes_by_ptr`). If the source
+    // local is a `&`-param whose stored value IS the caller's `*mut T`
+    // (`is_param_borrow_unique`), forward that pointer directly — the
+    // `Ownership::Borrow` arm below would first `lower_expr` the identifier,
+    // which for a `&`-param AUTO-DEREFS into a value-typed temp, losing the
+    // pointer and re-borrowing a dying stack temp instead. Two indirect-call
+    // arg-emit loops (`__callable_N` UNIT_TYPE + `__gorget_closure_call_N`
+    // FnPtr) used to compensate by SKIPPING `lower_call_arg` entirely for this
+    // exact shape (the pre-Option-(b) shortcut); routing them through
+    // `lower_call_arg` requires this fast-path to preserve their observation
+    // AND, unlike the shortcut, run `cow_before_mutation` on the source so
+    // aliases of the caller's slot are severed before the callee's
+    // write-through fires. Mirrors the `MutableBorrow` special-case above —
+    // that arm handles `f(&c)`; this arm handles `f(c)` when `f` is
+    // `Callable[void(&T)]` (indirect) or `void f(T &x)` (direct D31 bare-arg).
+    // The plain-local case (`int a = 5; cb(a)`) is UNAFFECTED: it falls
+    // through to the `Ownership::Borrow if callee_passes_by_ptr` arm below,
+    // which emits a fresh `borrow` on the int slot — exactly right.
+    if matches!(arg.node.ownership, Ownership::Borrow) && callee_passes_by_ptr {
+        if let Expr::Identifier(name) = &arg.node.value.node {
+            if let Some((local_id, _)) = ctx.lookup_local(name) {
+                ctx.cow_before_mutation(builder, local_id, arg.span);
+                // Re-resolve in case cow_before_mutation rebound `name` to a
+                // freshly-materialized owned local; forwarding the stale
+                // pre-materialize borrow would escape the caller's slot.
+                let local_id = ctx.lookup_local(name).map(|(l, _)| l).unwrap_or(local_id);
+                if ctx.is_param_borrow_unique(builder, local_id) {
+                    return FunctionBuilder::copy(local_id);
+                }
+            }
+        }
+    }
+
     // Special case: !name where name is a `!`-sigil resource parameter (the
     // local already holds a MutPtr to caller-owned data). Forward the pointer
     // directly and emit MoveZero on the param slot, bypassing the
@@ -1675,26 +1709,16 @@ pub(super) fn lower_call(
                     ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), UNIT_TYPE));
                     ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
                     for (i, arg) in args.iter().enumerate() {
-                        // Pre-fix "already-a-pointer bare-arg forwarding" shortcut
-                        // — kept for the accidentally-correct cell the pre-fix code
-                        // served: `cb(a)` where the callable's declared param is
-                        // `&T` and `a` is a `&`-param local (already `*mut T`). The
-                        // strict-sigil semantics of `cb(a)` (bare) vs `cb(&a)`
-                        // (mutable-borrow) at an indirect call are OWNED BY TRACK B3
-                        // and deliberately not decided here; the shortcut preserves
-                        // the pre-fix output on that cell so Track B1's fix is
-                        // strictly-additive on runtime observations.
-                        let expects_ptr = matches!(sig_owns.get(i), Some(Ownership::MutableBorrow));
-                        if expects_ptr && matches!(arg.node.ownership, Ownership::Borrow) {
-                            if let Expr::Identifier(arg_name) = &arg.node.value.node {
-                                if let Some((arg_local, _)) = ctx.lookup_local(arg_name) {
-                                    if ctx.is_param_borrow_unique(builder, arg_local) {
-                                        call_args.push(FunctionBuilder::copy(arg_local));
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
+                        // Track B1 A-2 Option (b), 2026-07-27: the pre-fix
+                        // "already-a-pointer bare-arg forwarding" shortcut (a
+                        // bare-arg `cb(a)` on a `&`-param local, skipping
+                        // `lower_call_arg` — and with it `cow_before_mutation`)
+                        // used to sit here. Retired to the sanctioned path — the
+                        // fast-path lives inside `lower_call_arg` now (see the
+                        // `Ownership::Borrow && callee_passes_by_ptr` special-case
+                        // at the top of that fn), so ALL arg loops route through
+                        // ONE gate and `cow_before_mutation` becomes a hard
+                        // invariant, not a bypass-conditional call.
                         let param_type = sig_params.get(i).copied();
                         call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
                     }
@@ -1750,19 +1774,10 @@ pub(super) fn lower_call(
                     ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), fn_ret));
                     ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
                     for (i, arg) in args.iter().enumerate() {
-                        // Pre-fix "already-a-pointer bare-arg forwarding" shortcut,
-                        // mirrored from the UNIT_TYPE arm above — same rationale.
-                        let expects_ptr = matches!(sig_owns.get(i), Some(Ownership::MutableBorrow));
-                        if expects_ptr && matches!(arg.node.ownership, Ownership::Borrow) {
-                            if let Expr::Identifier(arg_name) = &arg.node.value.node {
-                                if let Some((arg_local, _)) = ctx.lookup_local(arg_name) {
-                                    if ctx.is_param_borrow_unique(builder, arg_local) {
-                                        call_args.push(FunctionBuilder::copy(arg_local));
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
+                        // Track B1 A-2 Option (b), 2026-07-27: same retirement as
+                        // the UNIT_TYPE arm above. The bare-arg-`is_param_borrow_unique`
+                        // fast-path lives inside `lower_call_arg` now, on the
+                        // sanctioned path with `cow_before_mutation`.
                         let param_type = sig_params.get(i).copied();
                         call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
                     }
