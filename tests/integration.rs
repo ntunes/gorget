@@ -32207,6 +32207,33 @@ B: ok",
     );
 }
 
+/// KNOWN GAP — a `Guard[T]` field reached through a PARAMETER is MEMORY-UNSAFE
+/// at the `&` face (C: SIGSEGV exit 139; LLVM: `llc` hard-fails) and silently
+/// wrong at the assign face, while the identical access on a guard LOCAL is
+/// correct. PRE-EXISTING: identical at base and at the Family-1 tip.
+///
+/// ⚠ NOT the served-at-one-face asymmetry Family-1 closed — BOTH faces are wrong
+/// here. Root: `try_resolve_field_place` tests `guard_inner_suffix` against
+/// `current_type` BEFORE the `pointee_type` deref, so a param local typed
+/// `Ptr(Guard__Inner)` never matches the guard name. Peeling the pointer first
+/// closes all four measured cells.
+///
+/// ⚠ Cannot run until fixed (SIGSEGV on C, no binary on LLVM), so it asserts the
+/// intended values — same shape as `sound_amp_deque_element_field`.
+#[test]
+#[ignore = "KNOWN GAP: a `Guard[T]` field through a PARAMETER SIGSEGVs at the `&` face on C and \
+hard-fails `llc` on LLVM, and is silently wrong at the assign face, while a guard LOCAL is \
+correct. Pre-existing. Asserts the INTENDED write-through; TODO.md. Un-ignore when the producer \
+peels the pointer before the guard-name test."]
+fn sound_guard_param_field_unsafe() {
+    run_gg(
+        "known_gaps/sound_guard_param_field_unsafe.gg",
+        "\
+11
+11",
+    );
+}
+
 /// KNOWN GAP — `&(*b).0`, a TUPLE FIELD through a `Box` DEREF, passes
 /// `gg check` and then fails the C build (`unknown type name
 /// 'Tuple__Result__…'` — the mangled tuple type is referenced but never

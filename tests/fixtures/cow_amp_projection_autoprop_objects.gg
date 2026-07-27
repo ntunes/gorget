@@ -34,25 +34,37 @@
 # Re-seeding either row to `Ok` silently converts this fixture into a
 # green-on-arrival one (Core #15e(d), "MIND THE PROBE").
 #
-# GUARDED MECHANISM — ⚠ TWO EDITS, NOT ONE, and the single-edit version does not
-# reproduce. `lower_call_arg`'s `safe_to_skip_auto_propagate` has the fail-safe
-# `None => false`; `place_expr_type_only` has the arms that decide whether these
-# objects reach it as `Some`.
+# GUARDED MECHANISM — ⚠ EACH ROW NEEDS A CONJUNCTION OF TWO EDITS. No single
+# edit reds either row. `lower_call_arg`'s `safe_to_skip_auto_propagate` holds
+# the fail-safe `None => false`; `place_expr_type_only` holds the arms that
+# decide whether these objects reach it as `Some` at all. A row is only WRONG
+# when the object goes untyped AND the untyped case is treated as safe:
 #
-#   * Row B (Guard) reds on the fail-safe flip ALONE: flip `None => false` to
-#     `None => true` and it prints `in take` / `1` / `called`. The guard object
-#     is typed by a branch that can still miss, so the fail-safe is what carries
-#     it.
-#   * Row A (Box deref) does NOT red on that flip alone — `place_expr_type_only`
-#     now has an `Expr::Deref` arm, so `(*b).r` types successfully and never
-#     reaches the `None` case. Row A reds only under the CONJUNCTION: flip the
-#     fail-safe AND remove the `Deref` arm.
+#   * Row A (Box deref) — flip `None => false` to `None => true` AND remove
+#     `place_expr_type_only`'s `Expr::Deref` arm. Measured: row A then prints
+#     `in take` / `1` / `called`.
+#   * Row B (Guard)     — flip the same `None => false` AND remove
+#     `place_expr_type_only`'s GUARD AUTO-DEREF branch (the
+#     `guard_inner_suffix` → `c_suffix_to_type_id` fallback in the `FieldAccess`
+#     arm). Measured: row B then prints `in take` / `1` / `called`.
 #
-# Its HISTORICAL red is genuine (both rows were WRONG at tip `a65bbe97`, before
-# either limb existed) — but a future reader executing the break-and-watch
-# procedure needs the instruction that actually works, not the one that produced
-# the original evidence. Stating the single-edit version would have them conclude
-# row A guards nothing.
+# The flip ALONE leaves BOTH rows green (measured on the shipped tip:
+# `box: ERR(propagated)` / `guard: ERR(propagated)`), because each object form now
+# types successfully and never reaches the `None` case.
+#
+# ⚠ TWO SUPERSEDED VERSIONS OF THIS FIELD, recorded rather than swapped, because
+# the correction history IS the evidence here (Core #14):
+#   1. The first version claimed the flip alone reds BOTH rows. False for row A
+#      once the `Deref` arm landed.
+#   2. The second version corrected row A to a conjunction but kept "row B reds
+#      on the fail-safe flip ALONE". Also false — and false for exactly the
+#      reason it had just written down for row A: the SAME COMMIT that added the
+#      Guard auto-deref branch wrote that bullet. A fix that lands an arm must
+#      re-check every break-and-watch that depended on the arm being absent.
+#
+# The HISTORICAL red is genuine — both rows were WRONG at tip `a65bbe97`, before
+# either arm existed — but a reader executing this procedure needs the
+# instruction that works today, not the one that produced the original evidence.
 struct Holder:
     Result[int, int] r
 

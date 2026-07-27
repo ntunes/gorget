@@ -19,6 +19,27 @@
 #      It was NOT covered when this fixture first claimed the base-shape axis,
 #      and it was genuinely broken (10, want 11) at base and at the first
 #      Family-1 tip. A fixture that names an axis must sample it.
+#      ⚠ A SECOND UNCOVERED PRODUCT CELL, and this one is MEMORY-UNSAFE: row 8's
+#      Guard object is sampled only at a guard LOCAL root. The same object form
+#      at a `&`-PARAM root (`void f(Guard[Inner] &g): inc(&g.fd)`) SIGSEGVs on C
+#      and hard-fails `llc` on LLVM, `gg check` clean, at base and after this
+#      round alike. Filed with a committed repro
+#      (`known_gaps/sound_guard_param_field_unsafe.gg`); named here because this
+#      fixture enumerates the root-shape axis and must not imply that cell is
+#      covered by row 8.
+#      ⚠ THE WRAPPER-KIND AXIS IS SAMPLED AT ONE VALUE OF THREE.
+#      `guard_inner_suffix` matches `Guard__`, `ReadGuard__` and `WriteGuard__`;
+#      row 8 exercises `Guard` only.
+#        · `WriteGuard[T]` — write-capable, same branch, expected to behave as
+#          row 8 does. NOT sampled here: obtaining one needs an `RWLock[T]`
+#          receiver, which did not resolve in this fixture's context, and
+#          chasing that is a separate thread rather than a base-shape row. Cell
+#          named per Core #12 rather than left implied.
+#        · `ReadGuard[T]` — deliberately NOT sampled: writes through it are
+#          silently DROPPED rather than rejected (both faces, `gg check` clean,
+#          base and tip identical), which is a filed Core #10 lower-or-reject
+#          defect. Asserting today's behaviour would wire the defect in as
+#          canonical; the reference-grade fix is a check-time rejection.
 #   8. GUARD AUTO-DEREF object     `&g.fd`   ← added later still, same lesson,
 #      and the sharpest instance of it: broken at base and through THREE fix
 #      rounds while `g.fd = v` worked. It is the only object form resolved by a
@@ -142,3 +163,4 @@ void main():
     Guard[Inner] gd = mx.lock()
     inc(&gd.fd)
     print(gd.fd)
+
