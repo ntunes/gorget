@@ -37110,3 +37110,63 @@ fn sound_readguard_write_faces_dropped() {
         "error[E_",
     );
 }
+
+// ══════════════════════════════════════════════════════════════
+// Track E1 KNOWN GAPS — auto-deref for GuardAccept/DerefTarget receivers
+// (Track E2, deferred pending owner design rulings). Also the two TREE
+// defects surfaced during Track E scouting (double-free + LLVM SIGSEGV).
+// All `#[ignore]`d asserting the INTENDED post-E2 output; un-ignore when
+// E2 promotes the auto-deref path (§9.3/§9.4). See TODO.md for the open
+// design questions.
+// ══════════════════════════════════════════════════════════════
+
+/// KNOWN GAP — E1 rejects `Guard[Person].greet(5)` with `E_NoMethodFound`
+/// as an interim shape (fabrication class was closed as reject). E2 will
+/// PROMOTE to auto-deref-through-inner: resolve `greet` on `Person`, self
+/// obtained via `emit_guard_get_ptr`, print `35`.
+#[test]
+#[ignore = "KNOWN GAP (Track E2): E1 closed as reject; E2 promotes to auto-deref-through-inner \
+per docs §9.3. Un-ignore when E2 lands + owner rulings on GuardAccept scope + channel design."]
+fn scout_e_guard_userm_autoderef() {
+    run_gg("known_gaps/scoutE_guard_userm_autoderef.gg", "35");
+}
+
+/// KNOWN GAP — E1 rejects `Box[Person].greet(5)` with `E_NoMethodFound`.
+/// E2 promotes to auto-deref via the box pointee, prints `35`.
+#[test]
+#[ignore = "KNOWN GAP (Track E2): E1 closed as reject; E2 promotes to auto-deref per docs §9.4 \
+Deref Coercion. Un-ignore when E2 lands + owner ratification of §9.4."]
+fn scout_e_box_userm_autoderef() {
+    run_gg("known_gaps/scoutE_box_userm_autoderef.gg", "35");
+}
+
+/// KNOWN GAP — docs/language-design.md §9.3 verbatim example. E1 rejects
+/// `guard.push(42)` on `Guard[Vector[int]]`; E2 promotes to auto-deref
+/// (dispatches `Vector[int].push`, then `guard.len()` prints `1`).
+#[test]
+#[ignore = "KNOWN GAP (Track E2): E1 rejects docs §9.3 example; E2 makes it compile as documented."]
+fn scout_e_docs_93_guard_push() {
+    run_gg("known_gaps/scoutE_docs_93_guard_push.gg", "1");
+}
+
+/// KNOWN GAP — docs/language-design.md §9.4 verbatim example. E1 rejects
+/// `boxed.len()` on `Box[String]`; E2 promotes to auto-deref, prints `5`.
+#[test]
+#[ignore = "KNOWN GAP (Track E2): E1 rejects docs §9.4 example; E2 makes it compile as documented."]
+fn scout_e_docs_94_box_len() {
+    run_gg("known_gaps/scoutE_docs_94_box_len.gg", "5");
+}
+
+/// KNOWN GAP — `ReadGuard[Person].greet(5)`. Pre-fix this already rejected
+/// via `has_inherent_only_impls`; E1 does not change that (the reject is
+/// now via `DerefWrapperKind::GuardAccept` instead, but the disposition
+/// is identical). E2 GATED on the owner ruling: is `GuardAccept` uniform
+/// across Guard/ReadGuard/WriteGuard, or does ReadGuard reject MUTATING
+/// methods only? `greet` is non-mutating — it would auto-deref-and-accept
+/// under either ruling. Asserts INTENDED `35`.
+#[test]
+#[ignore = "KNOWN GAP (Track E2): non-mutating equip method through ReadGuard; asserts INTENDED \
+`35` post-E2. GATED on owner ruling on GuardAccept scope (see TODO.md)."]
+fn scout_e_readguard_userm_autoderef() {
+    run_gg("known_gaps/scoutE_readguard_userm_autoderef.gg", "35");
+}

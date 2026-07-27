@@ -1,0 +1,11 @@
+# Track E1 KNOWN GAP — docs §9.4 example: `boxed.len()` on Box[String].
+#
+# INTENDED (per docs/language-design.md §9.4 verbatim example): the receiver
+# `Box[String]` auto-derefs to the inner `String`, calls `String.len()`, prints
+# `5`.
+#
+# E1 status: REJECT with `E_NoMethodFound` (interim). E2 promotes to the
+# auto-deref lookup.
+void main():
+    Box[String] boxed = Box[String](String("hello"))
+    print(boxed.len())
