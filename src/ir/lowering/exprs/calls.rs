@@ -207,46 +207,13 @@ pub(super) fn lower_call_arg(
     //   * The G2 untrack still runs on the handles the projection minted, before
     //     the borrow escapes into the call, preserving the UAF-fold close.
     //
-    // ⚠ THE EARLY RETURN SKIPS `maybe_auto_propagate` (below, `Snag #43`). That
-    // skip is NOT inert, and the auto-propagate PRE-CHECK below is what makes it
-    // safe — read both together.
-    //
-    // WHEN THE SKIP WOULD MATTER. `maybe_auto_propagate`'s first gate is
-    // `ctx.func_state.expected_type`. When the CALLEE's parameter is itself a
-    // `Result`, that gate returns the operand unchanged and no unwrap was ever
-    // going to happen — skipping it is genuinely inert. But when the ARGUMENT is
-    // `Result`-typed and the PARAMETER is NOT (`void take(int &x)` called as
-    // `take(&h.r)`), auto-propagation is what makes the call typecheck at all,
-    // and on an `Error` payload it propagates INSTEAD of calling. Skipping it
-    // there swallows the error and hands the callee a pointer to a `Result`.
-    //
-    // ⚠ TWO THINGS MASK THIS, AND BOTH PRODUCED A WRONG VERDICT IN THE ROUND
-    // THAT WROTE THIS CODE. A false measurement in source is worse than a wrong
-    // explanation (Core #14), so the corrections are recorded rather than
-    // quietly swapped:
-    //   (1) An `Ok` payload. The unwrap succeeds and the call proceeds, so a
-    //       correct and a broken compiler are INDISTINGUISHABLE. Probe with
-    //       `Error`.
-    //   (2) An explicit `Callable[...]` annotation on a closure variable.
-    //       Measured at base, same program, same payload, only the annotation
-    //       differing: `auto f = (Result[int,int] &x): …` SKIPS the call, while
-    //       `Callable[void(&Result[int,int])] f = …` CALLS it. The annotated
-    //       VarDecl leaves `expected_type` in a state that blocks the unwrap.
-    // An earlier revision of this comment asserted as MEASUREMENTS that the call
-    // "HAPPENS in every one, pre-fix and post-fix alike", that emitted programs
-    // were "byte-identical across this change", and that the skip is "inert on
-    // all five callers" — ALL THREE FALSE, reached with annotated closure
-    // variables and never testing an IIFE at all. Adjacency of the constructor
-    // and ambient-state pollution were separately ruled out as explanations
-    // (measured with the construction moved into a helper fn and an intervening
-    // statement); the ANNOTATION was the discriminator.
-    //
-    // MEASURED, `Error`-seeded, `void take(int &x)` + a `Result[int,int]` field:
-    // base propagates (`ERR(propagated)`, call skipped) — correct; the
-    // chokepoint WITHOUT the pre-check below printed `in take` and returned
-    // `ok`; WITH it, base and post agree. Pinned by
-    // `cow_amp_projection_autoprop_arg.gg`, whose Error row is the live half and
-    // whose Ok row is the control.
+    // ⚠ THE EARLY RETURN SKIPS `maybe_auto_propagate` (below, `Snag #43`), which
+    // is NOT unconditionally safe. The auto-propagate PRE-CHECK immediately
+    // above the `try_resolve_place` call is what makes it safe; the full
+    // explanation, the measurements, and the two probe masks live THERE, in one
+    // place, next to the code they govern. Do not restate them here — an earlier
+    // revision carried the whole account three times in this one function body,
+    // which is three places for it to rot independently.
     //
     // (Two earlier explanations of why the skip "could not" matter were also
     // wrong and are recorded so nobody re-derives them: it is NOT "a projection
@@ -337,6 +304,28 @@ pub(super) fn lower_call_arg(
     //   * param is NOT a `Result` while the ARG is → auto-propagation is what
     //     makes the call typecheck at all, and on an `Error` it must PROPAGATE
     //     rather than call, so we fall through and let it.
+    //
+    // ⚠ CORRECTIONS ON RECORD (Core #14 — a false measurement in source is worse
+    // than a wrong explanation, so these are kept rather than quietly swapped).
+    // Earlier revisions of this comment asserted, as MEASUREMENTS: that the call
+    // "HAPPENS in every one, pre-fix and post-fix alike"; that emitted programs
+    // were "byte-identical across this change"; and that the skip is "inert on
+    // all five callers". ALL THREE FALSE — reached with annotated closure
+    // variables (mask 2) and without ever testing an IIFE. A further revision
+    // blamed the enclosing constructor for polluting `expected_type`; that
+    // hypothesis was tested and REFUTED (the skip persists with the construction
+    // moved into a helper fn and an intervening statement) — the ANNOTATION was
+    // the discriminator.
+    //
+    // ⚠⚠ AND THE PRE-CHECK'S DOMAIN MUST TRACK THE PRODUCER'S. This gate asks
+    // `place_expr_type_only`, whose `match` must cover every form
+    // `try_resolve_place` resolves. It shipped without a `TupleFieldAccess` arm
+    // while the producer had one, so `take(&t.0)` on a `(Result[int,int], int)`
+    // took the early return with this question never asked and SWALLOWED the
+    // error — the same miscompile, one costume over, introduced by the very
+    // commit that fixed the struct-field costume. Pinned by
+    // `place_type_only_covers_the_producer_forms` in `tests/lints.rs` and by row
+    // C of `cow_amp_projection_autoprop_arg.gg`.
     let arg_would_auto_propagate = matches!(arg.node.ownership, Ownership::MutableBorrow) && {
         let param_is_result = callee_param_type
             .map(|p| ctx.type_registry.enum_category(p) == Some(EnumCategory::Result))

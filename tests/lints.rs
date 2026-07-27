@@ -6802,6 +6802,95 @@ fn amp_formation_and_assign_cover_the_same_place_forms() {
     );
 }
 
+/// LIMB 1b (Core #4, Core #15e Q3) — the auto-propagate PRE-CHECK's expression
+/// domain must be a SUPERSET of the shared place producer's.
+///
+/// **The class this retires, which cost a live miscompile.** The Family-1
+/// chokepoint asks `place_expr_type_only` whether an `&`-argument would
+/// auto-propagate; if the answer is "no", it lets `try_resolve_place` resolve the
+/// argument and RETURNS EARLY, skipping `maybe_auto_propagate`. So a form the
+/// PRODUCER resolves but the PRE-CHECK returns `None` for gets the early return
+/// with the auto-propagate question never asked.
+///
+/// That is not hypothetical. `place_expr_type_only` shipped without a
+/// `TupleFieldAccess` arm while `try_resolve_place` had one, and
+/// `void take(int &x)` called as `take(&t.0)` on a
+/// `(Result[int,int], int)` seeded `Error(…)` SWALLOWED the error, handed the
+/// callee a pointer to a `Result` where an `int` was expected, and wrote through
+/// it — `gg check` clean, both backends, while the base compiler correctly
+/// propagated. The struct-field costume of the same defect had been fixed one
+/// commit earlier: an instance fix where a class existed.
+///
+/// Direction matters and only ONE direction is unsafe. Pre-check ⊋ producer is
+/// fine (a form the pre-check understands but the producer declines simply falls
+/// through). Producer ⊋ pre-check is the miscompile. So this asserts
+/// **producer ⊆ pre-check**, modulo exemptions with stated reasons.
+#[test]
+fn place_type_only_covers_the_producer_forms() {
+    let exprs = fs::read_to_string(Path::new("src/ir/lowering/exprs/mod.rs"))
+        .expect("read src/ir/lowering/exprs/mod.rs");
+
+    let producer = top_level_expr_arm_variants(
+        &exprs,
+        "pub(in crate::ir::lowering) fn try_resolve_place(",
+    );
+    let precheck = top_level_expr_arm_variants(
+        &exprs,
+        "pub(in crate::ir::lowering) fn place_expr_type_only(",
+    );
+
+    /// Producer forms the PRE-CHECK deliberately does not model. Each needs a
+    /// reason that explains why the omission cannot lose a propagation.
+    const PRECHECK_EXEMPT: &[(&str, &str)] = &[(
+        "Deref",
+        "a missing arm here yields `None`, which the chokepoint reads as \
+         \"do NOT skip maybe_auto_propagate\" — the CONSERVATIVE answer. For \
+         `&*b` that costs the early-return optimisation, never a lost \
+         propagation, so the asymmetry is safe in the only direction that \
+         matters. (Adding a Deref arm would be an improvement, not a fix.)",
+    )];
+
+    let exempt: std::collections::BTreeSet<String> = PRECHECK_EXEMPT
+        .iter()
+        .map(|(name, _)| (*name).to_string())
+        .collect();
+
+    let missing: Vec<&str> = producer
+        .difference(&precheck)
+        .filter(|n| !exempt.contains(*n))
+        .map(|s| s.as_str())
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "AUTO-PROPAGATE PRE-CHECK DOMAIN IS NARROWER THAN THE PLACE PRODUCER'S.\n\n\
+         Handled by `try_resolve_place` but NOT by `place_expr_type_only`: {missing:?}\n\n\
+         producer  = {producer:?}\n\
+         pre-check = {precheck:?}\n\
+         exempt    = {exempt:?}\n\n\
+         This is a MISCOMPILE, not a missed optimisation. The Family-1 chokepoint in \
+         `lower_call_arg` consults `place_expr_type_only` to decide whether an \
+         `&`-argument would auto-propagate; a `None` answer means \"it would not\", so \
+         the chokepoint returns early and SKIPS `maybe_auto_propagate`. For a form the \
+         producer resolves but the pre-check does not, a `Result`-typed argument bound \
+         for a non-`Result` parameter has its `Error` SILENTLY SWALLOWED and the callee \
+         receives a pointer to a `Result` — measured exactly this way when \
+         `TupleFieldAccess` was missing.\n\n\
+         Add the arm to `place_expr_type_only` (it only needs the TYPE, no lowering), \
+         or add it to PRECHECK_EXEMPT WITH a reason showing the omission cannot lose a \
+         propagation.\n\n\
+         See AGENTS.md Core #4 (one fix, all siblings) and Core #15e Q3 (enumerate the \
+         set, don't sample it)."
+    );
+
+    assert!(
+        producer.len() >= 4 && precheck.len() >= 4,
+        "arm-superset lint extracted suspiciously few arms \
+         (producer={producer:?}, pre-check={precheck:?}) — the matches were probably \
+         respelled or reindented. Fix the extractor rather than lowering these floors."
+    );
+}
+
 /// LIMB 2 (Core #4) — pin the number of `emit_borrow_mut` call sites under
 /// `src/ir/lowering/`.
 ///

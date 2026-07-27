@@ -39,9 +39,16 @@
 #     `GorgetString`, so the LIR takes `SlotAddr` — and it is pinned as row 4 of
 #     `cow_amp_ref_field_forward.gg`. It is NOT this shape.)
 #
-# GUARDED MECHANISM: the index half pins `try_resolve_place`'s `Index` arm and
-# its `Projection::Deref` normalisation (postcondition 1); the get-chain half
-# pins the surviving `is_already_ptr` fall-through.
+# GUARDED MECHANISM: the index half (row A) pins `try_resolve_place`'s `Index`
+# arm and its `Projection::Deref` normalisation (postcondition 1) — break either
+# and row A goes RED.
+# ⚠ The get-chain half (row B) guards NO mechanism of its own: it is the
+# DIFFERENTIAL partner, pinning only that the two spellings AGREE. Disabling the
+# `is_already_ptr` fall-through leaves row B GREEN (measured), because the LIR
+# already forwards the pointer for a `BorrowedPtr`-kinded local. Do not run the
+# break-and-watch procedure against row B expecting a red; the shape that DOES
+# red that guard is `MutRef[Vector[int]]`, pinned as row 4 of
+# `cow_amp_ref_field_forward.gg`.
 #
 # Seeds are computed, never literals.
 int seed():
@@ -61,6 +68,7 @@ void main():
     inc(&v[0])
     print(v[0])
 
-    # Spelling B — get-chain. Was already correct; pins the fall-through guard.
+    # Spelling B — get-chain. Was already correct; pins only that it AGREES with
+    # spelling A (see GUARDED MECHANISM above — it guards no mechanism itself).
     setv(&v.get(0).unwrap())
     print(v[0])

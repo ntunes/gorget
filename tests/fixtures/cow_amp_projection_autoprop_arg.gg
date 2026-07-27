@@ -60,8 +60,25 @@ String ok_seeded() throws int:
     take(&h.r)
     return "ok_seeded: called"
 
+# C. 🚨 THE TUPLE-FIELD SIBLING. Same defect, second costume — and it SHIPPED
+# BROKEN for one commit after row A was fixed, because the pre-check
+# (`place_expr_type_only`) had no `TupleFieldAccess` arm while the producer
+# (`try_resolve_place`) did. A form the producer resolves but the pre-check
+# does not gets the early return with the auto-propagate question never asked.
+# Measured at that tip: `in take` / `1` / `called` — the `Error` SWALLOWED, the
+# callee handed a pointer to a `Result` where an `int` was expected (it printed
+# the tag word, `1`) and then writing through it. Base propagates correctly.
+# Fixing row A without this row is the instance fix Core #4 forbids; the arm
+# sets are now pinned by `place_type_only_covers_the_producer_forms`.
+String tuple_err_seeded() throws int:
+    (Result[int, int], int) t = (Error(5), 1)
+    take(&t.0)
+    return "tuple_err_seeded: called"
+
 void main():
     String a = err_seeded()! catch (e): "err_seeded: ERR(propagated)"
     print(a)
     String b = ok_seeded()! catch (e): "ok_seeded: ERR(propagated)"
     print(b)
+    String c = tuple_err_seeded()! catch (e): "tuple_err_seeded: ERR(propagated)"
+    print(c)

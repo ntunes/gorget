@@ -32207,6 +32207,34 @@ B: ok",
     );
 }
 
+/// KNOWN GAP — Result→T auto-propagation fires at a FREE-call argument but is
+/// REJECTED (`E_TypeMismatch`) at a METHOD-call argument, for the same
+/// expression and the same declared parameter type. PRE-EXISTING: identical at
+/// base and after the Family-1 round.
+///
+/// Checked against the design record before filing (Core #15e Q1): `DONE.md`
+/// (Snag #49) records auto-propagation centralized "gated to `Call` /
+/// `MethodCall` expressions only" — method calls are named IN SCOPE — and Snag
+/// #43's note lists call args among the sites that need it. So this is a gap
+/// against intent, not an undecided asymmetry. The asymmetry lives in the
+/// TYPECHECKER (the method arm never admits the unwrap, so it never reaches
+/// lowering); a fix belongs there.
+#[test]
+#[ignore = "KNOWN GAP: Result→T auto-propagation is admitted at a free-call arg but REJECTED at \
+a method-call arg (E_TypeMismatch), same expression and param type. Pre-existing. Asserts the \
+INTENDED symmetric acceptance; TODO.md. Un-ignore when the method-call arg position admits the \
+same unwrap."]
+fn sound_autoprop_method_arg_rejected() {
+    run_gg(
+        "known_gaps/sound_autoprop_method_arg_rejected.gg",
+        "\
+  free took
+1
+  method took
+1",
+    );
+}
+
 /// KNOWN GAP — an INDIRECT call (closure variable or IIFE) with a BARE
 /// `Result`-typed argument is silently SKIPPED: the error auto-propagates even
 /// though the callee's parameter is itself a `Result`, so there was nothing to
@@ -32247,6 +32275,14 @@ iife_bare: ok",
 /// type-only auto-propagate pre-check the Error row printed `in take` / `ok`,
 /// silently swallowing the error AND handing the callee a pointer to a `Result`
 /// where an `int` was expected. Base and post-fix now agree.
+///
+/// 🚨 ROW C IS THE TUPLE-FIELD SIBLING, and it SHIPPED BROKEN for one commit
+/// after row A was fixed: `place_expr_type_only` had no `TupleFieldAccess` arm
+/// while `try_resolve_place` did, so `take(&t.0)` took the early return with the
+/// auto-propagate question never asked. Measured at that tip: `in take` / `1` /
+/// `called` — error swallowed, callee handed a pointer to a `Result` (it printed
+/// the tag word). An instance fix where a class existed (Core #4); the arm sets
+/// are now pinned by `place_type_only_covers_the_producer_forms`.
 #[test]
 fn cow_amp_projection_autoprop_arg() {
     run_gg(
@@ -32254,7 +32290,8 @@ fn cow_amp_projection_autoprop_arg() {
         "\
 err_seeded: ERR(propagated)
   in take
-ok_seeded: called",
+ok_seeded: called
+tuple_err_seeded: ERR(propagated)",
     );
 }
 
@@ -32339,6 +32376,7 @@ fn cow_amp_projection_base_shapes() {
     run_gg(
         "cow_amp_projection_base_shapes.gg",
         "\
+11
 11
 11
 11

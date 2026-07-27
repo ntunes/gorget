@@ -15,6 +15,10 @@
 #   4. `!`-param base             `void f(Holder !h): inc(&h.fd)`
 #   5. module-level `static` base `&G.fd`
 #   6. struct field under a collection element `&v[0].fd`
+#   7. TUPLE-ROOTED projection    `&t.0[0]`  ← added late; see its inline note.
+#      It was NOT covered when this fixture first claimed the base-shape axis,
+#      and it was genuinely broken (10, want 11) at base and at the first
+#      Family-1 tip. A fixture that names an axis must sample it.
 #
 # Cells covered ELSEWHERE, named here so the omission is explicit rather than
 # silent (Core #12 wants each omission justified, not invisible):
@@ -32,8 +36,11 @@
 #   * `&v.get(0).unwrap().fd` (get-chain) — also unfixed, filed, its own repro.
 #
 # RED-VERIFIED against the pre-fix compiler, which printed
-#     10 / 10 / 10 / 10 / 10 / 10
-# — every base shape lost the write. Post-fix all six write through.
+#     10 / 10 / 10 / 10 / 10 / 10 / 10
+# — every base shape lost the write. Post-fix all seven print 11. ⚠ Row 7
+# needed a SECOND fix beyond the original chokepoint (the `TupleFieldAccess` arm
+# in `place_expr_type_only`) and was still printing 10 after the first one, so it
+# is RED-verified against BOTH tips, not just the pre-round compiler.
 #
 # Seeds are computed, never literals.
 struct Inner:
@@ -91,3 +98,17 @@ void main():
     v.push(Inner(seed()))
     inc(&v[0].fd)
     print(v[0].fd)
+
+    # 7. TUPLE-ROOTED projection — `&t.0[0]`, a collection element under a
+    #    tuple field. Added because this fixture CLAIMS the base-shape axis and
+    #    a reader would otherwise take tuple roots as covered when they were not
+    #    (Core #12: a fixture's NAME is a claim about SCOPE). It was measurably
+    #    NOT covered: this row printed 10 at base AND at the first Family-1 tip,
+    #    because `place_expr_type_only` had no `TupleFieldAccess` arm, so the
+    #    index resolver's type-only pre-check declined and the whole projection
+    #    fell through to a value copy. The same one arm that fixed the
+    #    auto-propagate tuple costume fixes this.
+    (Vector[int], int) tup = (Vector[int](), 1)
+    tup.0.push(seed())
+    inc(&tup.0[0])
+    print(tup.0[0])

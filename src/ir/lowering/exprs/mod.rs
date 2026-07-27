@@ -2711,10 +2711,39 @@ pub(in crate::ir::lowering) fn place_expr_type_only(
             let name = ctx.type_name_for_id(resolved)?.to_string();
             ctx.lookup_field(&name, &field.node).map(|(_, ft)| ft)
         }
+        // ⚠ THIS ARM IS LOAD-BEARING FOR CORRECTNESS, not just for coverage.
+        // `place_expr_type_only`'s expression domain MUST be a superset of
+        // `try_resolve_place`'s, because the Family-1 chokepoint asks THIS
+        // function whether an argument would auto-propagate and then, if the
+        // answer is "no", lets the PRODUCER resolve it and returns early —
+        // skipping `maybe_auto_propagate`. A form the producer resolves but this
+        // function returns `None` for therefore gets the early return with the
+        // auto-propagate question never asked.
+        //
+        // MEASURED when this arm was missing: `void take(int &x)` called as
+        // `take(&t.0)` on a `(Result[int,int], int)` tuple seeded `Error(mk())`
+        // printed `in take` / `1` / `ok` — the `Error` SWALLOWED, the callee
+        // handed a pointer to a `Result` where an `int` was expected, printing
+        // the tag word and then writing THROUGH it. Base correctly propagates.
+        // Identical on both backends, `gg check` clean. The struct-field twin
+        // (`&h.r`) was fixed first and this one shipped broken: an instance fix
+        // where a class existed (Core #4). The arm-superset lint
+        // `place_type_only_covers_the_producer_forms` now guards the pairing.
+        Expr::TupleFieldAccess { object, index } => {
+            let obj_t = place_expr_type_only(ctx, object)?;
+            let resolved = ctx.pointee_type(obj_t).unwrap_or(obj_t);
+            Some(resolve_tuple_field_type(ctx, resolved, *index))
+        }
         Expr::Index { object, .. } => {
             let coll_t = place_expr_type_only(ctx, object)?;
             Some(infer_collection_element_type(ctx, coll_t))
         }
+        // ⚠ `Expr::Deref` is deliberately absent, and that is SAFE in the
+        // direction that matters: this function is consulted to decide whether
+        // to SKIP `maybe_auto_propagate`, and returning `None` means "don't
+        // skip" — the conservative answer. A missing arm costs a lost
+        // optimisation, never a lost propagation. (The lint's exemption list
+        // records this with the same reasoning.)
         _ => None,
     }
 }
@@ -2936,9 +2965,17 @@ pub(in crate::ir::lowering) fn try_resolve_place(
     // chokepoint and SIGSEGV'd (exit 139) with the chokepoint but WITHOUT this
     // guard. Returning `None` falls the shape through to `lower_call_arg`'s
     // surviving `is_already_ptr` fast-path, which FORWARDS the stored pointer
-    // instead of taking its address — the correct and already-correct behaviour
-    // for these cells (the projection matrix proves that fall-through path right
-    // for all ten types).
+    // instead of taking its address.
+    //
+    // ⚠ SCOPE OF THAT EVIDENCE, stated honestly. An earlier revision cited "the
+    // projection matrix proves that fall-through path right for all ten types".
+    // That citation does not support this guard: post-fix those ten cells are
+    // RESOLVED and return early, so they never reach the fall-through at all.
+    // The already-a-pointer cell is sampled at exactly ONE pointee type
+    // (`Vector[int]`, in `cow_amp_ref_field_forward.gg`) — plus the `MutRef`
+    // variant of the same pointee, which is what reds the fall-through guard
+    // itself. Other pointee types (extern `T*` fields, `Ref[<user struct>]`)
+    // are UNSAMPLED here.
     //
     // This is what makes postcondition 1 literally true rather than aspirational:
     // "the returned Place is an lvalue OF THE VALUE, never of a pointer to it"
