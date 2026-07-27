@@ -1,13 +1,15 @@
 # REGRESSION — a `Guard[T]` field reached through a `&` parameter behaves
-# identically to a `Guard[T]` local: reads see the guarded value, writes reach
-# through. The producer peels `Ptr`/`MutPtr` off the local's TypeId before
-# consulting the typed `TypeMapper::guard_types` channel (`guard_of` in
+# identically to a `Guard[T]` local across ALL FOUR field-access cells: bare
+# read-only, `&`-face read, `&`-face write, and direct field assign. The
+# producer peels `Ptr`/`MutPtr` off the local's TypeId before consulting the
+# typed `TypeMapper::guard_types` channel (`guard_of` in
 # `src/ir/lowering/exprs/shared.rs`), so a guard behind a `&`/`!` parameter
-# takes the SAME auto-deref branch as a bare guard local.
+# takes the SAME auto-deref branch as a bare guard local on every cell.
 #
-# Exercises three sites at once — the read path (`lower_field_access` on
-# `g.fd`), the `&`-face write path (`try_resolve_field_place` on `&g.fd`), and
-# the auto-propagate typing path (`place_expr_type_only`).
+# Exercises FOUR sites at once — the bare read path (`int x = g.fd`), the
+# `&`-face read path (`lower_field_access` on `g.fd`), the `&`-face write path
+# (`try_resolve_field_place` on `&g.fd`), and the direct-assign path
+# (`g.fd = v`), plus auto-propagate typing (`place_expr_type_only`).
 struct Inner:
     int fd
 
@@ -17,15 +19,27 @@ int seed():
 void inc(int &n):
     n = n + 1
 
-# A guard reached through a `&` parameter — the cell that missed the guard
-# branch when detection was a name-prefix test against the outer `Ptr`-typed
-# local's name. Prints 11 inside the callee and 11 back at main.
-void via_amp(Guard[Inner] &g):
+# `&`-face read + write cells: `g.fd` and `&g.fd`.
+void via_amp_borrow(Guard[Inner] &g):
     inc(&g.fd)
     print(g.fd)
+
+# Direct-assign cell: `g.fd = v`.
+void via_amp_assign(Guard[Inner] &g):
+    g.fd = g.fd + 1
+    print(g.fd)
+
+# Bare read-only cell: `int x = g.fd`.
+void via_amp_readonly(Guard[Inner] &g):
+    int x = g.fd
+    print(x)
 
 void main():
     Mutex[Inner] m = Mutex[Inner](Inner(seed()))
     Guard[Inner] g = m.lock()
-    via_amp(&g)
+    via_amp_borrow(&g)       # 11 inside, 11 back at main
     print(g.fd)
+    via_amp_assign(&g)       # 12 inside, 12 back at main
+    print(g.fd)
+    via_amp_readonly(&g)     # bare read: 12
+    print(g.fd)              # still 12 (no write from readonly)

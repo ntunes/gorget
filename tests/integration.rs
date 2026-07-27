@@ -32222,18 +32222,24 @@ fn sound_callable_amp_fntype_segv() {
 }
 
 /// REGRESSION — a `Guard[T]` field reached through a `&` parameter behaves
-/// identically to a `Guard[T]` local. The producer peels `Ptr`/`MutPtr` off
-/// the local's TypeId before consulting the typed `TypeMapper::guard_types`
-/// channel (`guard_of` in `src/ir/lowering/exprs/shared.rs`) so a guard behind
-/// a `&`/`!` param takes the SAME auto-deref branch as a bare guard local.
-/// Pre-funnel this was SIGSEGV on C and `llc` hard-fail on LLVM.
+/// identically to a `Guard[T]` local across all four field-access cells: bare
+/// read-only, `&`-face read, `&`-face write, and direct field assign. The
+/// producer peels `Ptr`/`MutPtr` off the local's TypeId before consulting the
+/// typed `TypeMapper::guard_types` channel (`guard_of` in
+/// `src/ir/lowering/exprs/shared.rs`) so a guard behind a `&`/`!` param takes
+/// the SAME auto-deref branch as a bare guard local on every cell. Pre-funnel
+/// this was SIGSEGV on C and `llc` hard-fail on LLVM.
 #[test]
 fn guard_amp_param_field_writethrough() {
     run_gg(
         "guard_amp_param_field_writethrough.gg",
         "\
 11
-11",
+11
+12
+12
+12
+12",
     );
 }
 

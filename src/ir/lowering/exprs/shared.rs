@@ -277,11 +277,11 @@ pub fn emit_guard_get_ptr(
     guard_place: &Place,
     info: &GuardInfo,
 ) -> (LocalId, TypeId) {
-    // The guard pointer. When the place is ALREADY a pointer to the guard (a
-    // `&`/`!` param, a `.get()` Ref chain), it is the pointer — re-borrowing it
-    // would hand `get_ptr` a `Guard**` and the callee would read the pointer
-    // slot as the guard struct (measured: SIGSEGV on C, an `llc` type error on
-    // LLVM). Only a by-value guard place needs the borrow.
+    // When the place is already a pointer to the guard (a `&`/`!` param, a
+    // `.get()` Ref chain), pass the pointer directly instead of re-borrowing.
+    // Both shapes are sound (`guard_of` peels one Ptr layer so the callee sees
+    // the guard either way), so this is a codegen-cleanliness choice, not a
+    // correctness fix.
     let guard_ptr_operand = if info.through_pointer {
         Operand::Copy(guard_place.clone())
     } else {
