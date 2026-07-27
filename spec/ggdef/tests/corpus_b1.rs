@@ -67,6 +67,18 @@ const EXCLUDE: &[&str] = &[
     // entry-by-key is not expressible as a `Proj`", eval.rs:805-812) so `as_index`
     // IllFormeds on the String key (eval.rs:818). See corpus_b.rs for the long form.
     "cow_getref_dict_writethrough.gg",
+    // Family-1 (`&<projection>` call args borrow THE PLACE, 2026-07-27) — the
+    // same four rows EXCLUDEd from corpus_b, same phase-0 gates, each
+    // ggdef-run-verified: `Box(...)` is an unresolved callee (Increment B2);
+    // `if x is Some(v):` and a list comprehension both hit the `expression
+    // \`unsupported\`` catch-all; `static Holder G` is "item kind static". The
+    // ADJUDICABLE core of the same claim is
+    // `cow_amp_projection_resource_value_split.gg`, written inside the subset on
+    // purpose and IN this gate — see corpus_b.rs for the long form.
+    "cow_amp_deref_box_projection.gg",
+    "cow_amp_projection_type_axis.gg",
+    "cow_amp_projection_base_shapes.gg",
+    "cow_comprehension_amp_projection_source.gg",
     "cow_for_amp_vector_field_writethrough.gg",
     "cow_for_amp_vector_alias_root.gg",
     "cow_for_amp_resource_elem_writethrough.gg",
@@ -304,5 +316,9 @@ fn corpus_b1_all_match() {
     // both landed top-level and match (in-subset), refreshing 122→124. History:
     // +15 net from the CoW-2G landings (2026-07-18) refreshed with the D31
     // exclusion additions; prior 107 counted the earlier surface.
-    assert_eq!(fixtures.len(), 124, "B1 gate set drifted from 124 fixtures");
+    // +2 (2026-07-27, Family-1 round): `cow_amp_index_vs_getchain_differential`
+    // + `cow_amp_projection_resource_value_split`, both top-level, both
+    // in-subset, both MATCH — the two rows the oracle adjudicates for that
+    // round (the other four are EXCLUDEd above with per-row citations).
+    assert_eq!(fixtures.len(), 126, "B1 gate set drifted from 126 fixtures");
 }

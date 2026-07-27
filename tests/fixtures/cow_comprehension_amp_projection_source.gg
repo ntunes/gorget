@@ -1,0 +1,70 @@
+# REGRESSION FIXTURE — the RATIFIED `&`-iterable comprehension, with a
+# PROJECTION iterable.
+#
+# `[e for x in &xs]` is the LEGAL spelling of a comprehension over a borrowed
+# collection (D32 rider, `docs/define-gorget/decisions.md`). It is the one
+# LEGITIMATE shape that reaches the STANDALONE `&`-formation face carrying a
+# projection: `lower_list_comprehension`'s non-range path lowers the iterable
+# through `lower_expr`, landing in the `Expr::MutableBorrow` arm.
+#
+# ⚠ WHY THIS FIXTURE EXISTS AT ALL. The only other live comprehension-`&`
+# fixture (`cow_comprehension_amp_source.gg`) uses a BARE-IDENTIFIER iterable —
+# the one cell the shared place producer returns `None` for — so it is
+# STRUCTURALLY INCAPABLE of observing any change at this face. A fixture's NAME
+# is a claim about SCOPE; that one's scope is narrower than it reads.
+#
+# AXIS + CELL (Core #12): the ITERABLE-SHAPE axis of the `&`-comprehension, at
+# the two PROJECTION cells — a struct field (`&s.items`) and a nested collection
+# element (`&vv[0]`). The bare-identifier cell is the sibling fixture's.
+#
+# ⚠ IDENTICAL OUTPUT IS THE CORRECT RESULT HERE, NOT A NO-OP. `decisions.md`
+# records the inversion explicitly: for a non-mutating body, `[x*2 for x in &xs]`
+# and `[x*2 for x in xs]` MUST AGREE. Rows 1 and 2 assert exactly that agreement;
+# a future change that makes the `&` spelling diverge fails this fixture.
+#
+# RED-VERIFICATION — the pre-fix-compiler form is IMPOSSIBLE here: this shape was
+# already green at HEAD (the Family-1 fix changes what this face EMITS —
+# a forwarded field-load `Ptr(T)` becomes an `emit_borrow_mut` `MutPtr(T)` — but
+# measurably not what it PRINTS; verified byte-identical pre/post rather than
+# assumed). So it is RED-verified by BREAK-AND-WATCH instead (Core #12's ⚠
+# clause): removing the `Projection::Deref` normalisation from
+# `try_resolve_place`'s `Index` arm — i.e. violating the producer's postcondition
+# 1, that the returned Place is an lvalue OF THE VALUE and never of a pointer to
+# it — makes row 3 abort with
+#     trap[T_Bounds]: index out of bounds: index 0, length 0
+# because the comprehension then iterates a pointer's bits instead of the vector.
+# That postcondition is what this fixture pins.
+struct S:
+    Vector[int] items
+
+int seed():
+    return 1
+
+int dbl(int y):
+    return y * 2
+
+void main():
+    Vector[int] v0 = Vector[int]()
+    v0.push(seed())
+    v0.push(seed())
+    S s = S(v0)
+
+    # 1/2. struct-field projection iterable — `&` and bare MUST agree (D32).
+    Vector[int] a = [dbl(y) for y in &s.items]
+    print(a.len())
+    print(a[0])
+    Vector[int] b = [dbl(y) for y in s.items]
+    print(b.len())
+    print(b[0])
+
+    # 3. nested collection-element projection iterable — the row that pins the
+    #    producer's Deref normalisation.
+    Vector[Vector[int]] vv = Vector[Vector[int]]()
+    Vector[int] r0 = Vector[int]()
+    r0.push(seed())
+    r0.push(seed())
+    r0.push(seed())
+    vv.push(r0)
+    Vector[int] c = [dbl(y) for y in &vv[0]]
+    print(c.len())
+    print(c[0])

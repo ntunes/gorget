@@ -1,0 +1,93 @@
+# REGRESSION FIXTURE — the BASE-SHAPE axis of an `&<projection>` call argument.
+#
+# AXIS + CELL (Core #12). Family-1's discriminator is the projected TYPE, not the
+# projection FORM — Scout A measured every genuine projection form giving the
+# SAME per-type verdict. This fixture is the form axis's own net: it holds the
+# type fixed at the broken side (`int`, a by-value field) and varies the ROOT /
+# BASE shape instead, so a future change that fixes one base shape and not
+# another cannot pass. Individually low-yield, deliberately; the point is that
+# the axis is NAMED and enumerated rather than silently sampled.
+#
+# Cells covered here:
+#   1. nested struct field        `&o.inner.fd`
+#   2. `&self.fd` inside a method
+#   3. `&`-param base             `void f(Holder &h): inc(&h.fd)`
+#   4. `!`-param base             `void f(Holder !h): inc(&h.fd)`
+#   5. module-level `static` base `&G.fd`
+#   6. struct field under a collection element `&v[0].fd`
+#
+# Cells covered ELSEWHERE, named here so the omission is explicit rather than
+# silent (Core #12 wants each omission justified, not invisible):
+#   * BARE-param base — `known_gaps/sound_amp_bareparam_root_materialize.gg`.
+#     It is deliberately NOT here because it must MATERIALIZE (11 / 10), not
+#     write through, and mixing it into a write-through fixture is how a fix that
+#     writes through in both directions passes everything.
+#   * nested collection element `&vv[0][0]` — `cow_amp_projection_type_axis.gg`.
+#   * `&(*box).fd` — `cow_amp_deref_box_projection.gg`.
+#   * `&t.0.fd` (struct field under a TUPLE) and `&v[0].0` (tuple field under a
+#     collection element) — NOT covered by any live fixture and NOT fixed by
+#     Family-1: they are the Family-2 resolver-arm-matrix defect (the two place
+#     resolvers are a mutually-recursive pair differing by exactly two arms).
+#     Both have committed `#[ignore]`d repros; filed in TODO.md.
+#   * `&v.get(0).unwrap().fd` (get-chain) — also unfixed, filed, its own repro.
+#
+# RED-VERIFIED against the pre-fix compiler, which printed
+#     10 / 10 / 10 / 10 / 10 / 10
+# — every base shape lost the write. Post-fix all six write through.
+#
+# Seeds are computed, never literals.
+struct Inner:
+    int fd
+
+struct Holder:
+    int fd
+    Inner inner
+
+static Holder G = Holder(10, Inner(10))
+
+int seed():
+    return 10
+
+void inc(int &n):
+    n = n + 1
+
+equip Holder:
+    void bump_self(&self):
+        inc(&self.fd)
+
+void via_amp(Holder &h):
+    inc(&h.fd)
+
+void via_move(Holder !h):
+    inc(&h.fd)
+    print(h.fd)
+
+void main():
+    # 1. nested struct field
+    Holder o = Holder(seed(), Inner(seed()))
+    inc(&o.inner.fd)
+    print(o.inner.fd)
+
+    # 2. &self.fd inside a method
+    Holder m = Holder(seed(), Inner(seed()))
+    m.bump_self()
+    print(m.fd)
+
+    # 3. &-param base
+    Holder a = Holder(seed(), Inner(seed()))
+    via_amp(&a)
+    print(a.fd)
+
+    # 4. !-param base (the callee observes its own write)
+    Holder b = Holder(seed(), Inner(seed()))
+    via_move(!b)
+
+    # 5. module-level static base
+    inc(&G.fd)
+    print(G.fd)
+
+    # 6. struct field under a collection element
+    Vector[Inner] v = Vector[Inner]()
+    v.push(Inner(seed()))
+    inc(&v[0].fd)
+    print(v[0].fd)

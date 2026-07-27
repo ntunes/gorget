@@ -93,6 +93,30 @@ const EXCLUDE: &[&str] = &[
     //     `&` sits inside the expression), so :~967 does NOT fire — it falls to
     //     `binding_name` (:~969, "only simple bindings…").
     "cow_for_enumerate_amp_recv_wrap.gg",
+    // Family-1 (`&<projection>` call args borrow THE PLACE). Four of the round's
+    // fixtures sit outside the phase-0 subset; each citation below is
+    // ggdef-run-verified, and the ADJUDICABLE core of the same claim is the
+    // fixture `cow_amp_projection_resource_value_split.gg`, which is deliberately
+    // written inside the subset (no generics / `is`-binding / static / Box /
+    // comprehension) and which ggdef DOES adjudicate: it prints
+    // 110/a!/110/a!/110/a!, agreeing with production post-fix and disagreeing
+    // with it pre-fix on exactly the three by-value cells. So this family is
+    // oracle-covered, not merely excluded.
+    //   - `Box(...)`: "unresolved callee `Box` (unknown function/struct/enum;
+    //     may need Increment B2)".
+    "cow_amp_deref_box_projection.gg",
+    //   - `if h.oi is Some(v):` — the `is`-pattern binding elaborates to the
+    //     catch-all "expression `unsupported` is outside the phase-0 subset".
+    //     (The fixture also carries a generic struct field, phase 1.)
+    "cow_amp_projection_type_axis.gg",
+    //   - module-level `static Holder G` — "item kind static is outside the
+    //     phase-0 subset", the same class as the `cow_value_index_field_*`
+    //     exclusion above.
+    "cow_amp_projection_base_shapes.gg",
+    //   - list comprehension — "expression `unsupported` is outside the phase-0
+    //     subset" (no comprehension arm in `elaborate_expr`), the same class as
+    //     the comprehension row noted in the for-element block above.
+    "cow_comprehension_amp_projection_source.gg",
     //   - list comprehension: `elaborate_expr` has no comprehension arm, so the
     //     `[x*2 for x in &a]` expression is "outside the phase-0 subset".
     "cow_comprehension_amp_source.gg",
@@ -325,5 +349,15 @@ fn corpus_b_all_match() {
     // fixtures `cow_taint_getchain_{vector,firstlast,compound,receiver,formation}`
     // all MATCH ggdef as `check_fails` rejections (the ggdef both-lane pin); the
     // POS `cow_taint_getchain_user_get_ok` is EXCLUDEd (out-of-subset write-place).
-    assert_eq!(fixtures.len(), 157, "B2 gate set drifted from 157 fixtures");
+    // +2 (2026-07-27, Family-1 round — `&<projection>` call args borrow THE
+    // PLACE): `cow_amp_index_vs_getchain_differential` and
+    // `cow_amp_projection_resource_value_split` both land as top-level cow_*
+    // fixtures INSIDE the phase-0 subset and both MATCH ggdef. They are the
+    // adjudicated core of that round: pre-fix, production disagreed with the
+    // oracle on every by-value cell (`10` where ggdef said `110`) while agreeing
+    // on every resource cell — the accidental-correctness split that hid the
+    // class. The round's four out-of-subset fixtures are EXCLUDEd above with a
+    // per-row citation, so this pin refreshes 157→159 to accompany the two the
+    // oracle actually covers.
+    assert_eq!(fixtures.len(), 159, "B2 gate set drifted from 159 fixtures");
 }

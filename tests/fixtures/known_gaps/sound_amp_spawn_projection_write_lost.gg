@@ -1,0 +1,54 @@
+# DURABLE REPRO — the SPAWN argument face never reads `arg.node.ownership`, so
+# `spawn f(&c.fd)` silently drops the callee's write.
+#
+# THE MECHANISM. `spawn.rs` lowers spawn arguments with a bare
+# `lower_expr(ctx, builder, &arg.node.value)` at three sites and never consults
+# `arg.node.ownership`, bypassing `lower_call_arg` and BOTH `&`-formation faces
+# entirely. The sigil is simply not there by the time the argument is lowered.
+#
+# 🚨 THE DIVERGENCE IS NEW, AND THAT IS THE POINT OF COMMITTING THIS NOW.
+# Measured, both `gg check`-clean, on the same program:
+#
+#   | spelling             | before Family-1 | after Family-1 |
+#   |----------------------|-----------------|----------------|
+#   | `bumpi(&c.fd)`       | 10 (wrong)      | **110** (fixed) |
+#   | `spawn bumpi(&c.fd)` | 10 (wrong)      | **10** (still wrong) |
+#
+# So two spellings of one intent were EQUALLY WRONG and are now SILENTLY
+# DIVERGENT. That is strictly more dangerous than the old state: a reader who
+# verifies the direct call now has every reason to believe the spawned one works.
+#
+# ⚠ THIS FACE IS TYPE-INDEPENDENT, unlike Family-1's. Measured on the same shape:
+# `spawn bumpv(&c.vd)` (`Vector[int]`) also loses its `push` — and `Vector` is
+# one of the four types that worked BY ACCIDENT at the call-arg face. So the
+# spawn face is NOT the projected-TYPE axis; do not file it as another Family-1
+# cell. (`spawn bumps(&c.sd)` on a `String` field fails the C build outright — a
+# third symptom of the same face, already filed separately.)
+#
+# INTENDED (asserted below): 110 / 110 — the spawned call's write-through reaches
+# the caller exactly as the direct call's does.
+#
+# NOT Family-1's to fix: the fix must teach the spawn arg lowering to honour
+# `arg.node.ownership`, ideally by routing those three sites through
+# `lower_call_arg` so they inherit both `&`-formation faces at once (Core #4 —
+# fix the class at the producer, not the instance). Cited from TODO.md's
+# consumption-limb census entry, which already names the three sites.
+#
+# Seeds are computed, never literals.
+struct C:
+    int fd
+
+int seed():
+    return 10
+
+void bumpi(int &n):
+    n = n + 100
+
+void main():
+    C c = C(seed())
+    bumpi(&c.fd)
+    print(c.fd)
+
+    C c2 = C(seed())
+    spawn bumpi(&c2.fd)
+    print(c2.fd)

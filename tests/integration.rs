@@ -32175,6 +32175,170 @@ EVal=B
     );
 }
 
+/// FAMILY-1 — the RESOURCE/VALUE split INSIDE each type kind, and the ONLY
+/// fixture of this family ggdef can ADJUDICATE (written inside the phase-0
+/// subset on purpose: no generics, no `is`-binding, no statics, no Box, no
+/// comprehension — its four siblings are EXCLUDEd from corpus_b for exactly
+/// those constructs, each citation recorded there).
+///
+/// ORACLE (Core #13): ggdef prints `110 / a! / 110 / a! / 110 / a!` — all six
+/// cells must write through. The PRE-fix compiler printed
+/// `10 / a! / 10 / a! / 10 / a!`, i.e. it DISAGREED WITH THE ORACLE on exactly
+/// the three by-value cells, on both backends, `gg check` clean. Post-fix,
+/// production and ggdef agree on all six.
+///   cargo run -q -p ggdef --bin ggdef -- run tests/fixtures/cow_amp_projection_resource_value_split.gg
+#[test]
+fn cow_amp_projection_resource_value_split() {
+    run_gg(
+        "cow_amp_projection_resource_value_split.gg",
+        "\
+110
+a!
+110
+a!
+110
+a!",
+    );
+}
+
+/// FAMILY-1 — the BASE-SHAPE axis, with the projected type held fixed at the
+/// broken side (`int`). Family-1's discriminator is the TYPE, not the FORM, so
+/// these cells are individually low-yield by design; the point is that the form
+/// axis is NAMED and enumerated rather than silently sampled (Core #12).
+/// Covers: nested field · `&self.fd` · `&`-param base · `!`-param base ·
+/// module `static` base · `&v[0].fd`. The fixture header names each cell covered
+/// elsewhere and each cell deliberately left to Family-2.
+///
+/// ⚠ The BARE-param base is deliberately NOT here — it must MATERIALIZE, not
+/// write through (`sound_amp_bareparam_root_materialize`, 11/10). Mixing it into
+/// a write-through fixture is exactly how a both-directions fix passes.
+///
+/// RED-VERIFIED against the pre-fix compiler: printed `10` six times.
+#[test]
+fn cow_amp_projection_base_shapes() {
+    run_gg(
+        "cow_amp_projection_base_shapes.gg",
+        "\
+11
+11
+11
+11
+11
+11",
+    );
+}
+
+/// KNOWN GAP — `Deque` is ADMITTED to the addressable-element path but has no
+/// element-type arm, so `&d[i].fd` is `gg check`-clean and MEMORY-UNSAFE.
+/// `infer_collection_element_type` strips `Vector__`/`Dict__`/`Map__` but has no
+/// `Deque__` arm, so the element type falls back to `I64_TYPE` and an `int` local
+/// is used as a struct pointer.
+///
+/// 🚨 BACKEND DIVERGENCE, measured and UNCHANGED by the Family-1 chokepoint:
+/// C SIGSEGVs (exit 139, no output); LLVM produces NO BINARY at all — `llc`
+/// hard-fails with `'%v17' defined with type 'i32' but expected 'ptr'`.
+/// ⚠ THIS FIXTURE THEREFORE HAS NO LLVM LANE (documented, not overlooked — same
+/// shape as `sound_amp_owning_position_return`'s C/LLVM split).
+///
+/// Also pins single evaluation: `Deque` is a REACHABLE emit-then-`None` row, so
+/// the base is evaluated TWICE after the resolver falls through. Asserts `IDX`
+/// exactly ONCE. Accepting that double evaluation is the chokepoint's deliberate
+/// disposition — the remedy would edit the SHARED resolvers and change the assign
+/// and method-receiver faces' `None`-path emission too.
+#[test]
+#[ignore = "KNOWN GAP: `Deque` is admitted to the addressable-element path with no `Deque__` arm \
+in `infer_collection_element_type`, so `&d[i].fd` SIGSEGVs on C and hard-fails `llc` on LLVM, \
+`gg check` clean. Asserts the INTENDED single evaluation + write-through; TODO.md. Un-ignore when \
+the element-type arm lands (or the kind-gate stops admitting Deque)."]
+fn sound_amp_deque_element_field() {
+    run_gg(
+        "known_gaps/sound_amp_deque_element_field.gg",
+        "\
+IDX
+11",
+    );
+}
+
+/// KNOWN GAP — the SPAWN argument face never reads `arg.node.ownership`
+/// (`spawn.rs` lowers args with a bare `lower_expr`), bypassing `lower_call_arg`
+/// and both `&`-formation faces, so `spawn f(&c.fd)` drops the write.
+///
+/// 🚨 THE DIVERGENCE IS NEW. Before Family-1 both `bumpi(&c.fd)` and
+/// `spawn bumpi(&c.fd)` printed 10 — equally wrong. After it the direct call
+/// prints 110 and the spawned one still prints 10: two spellings of one intent,
+/// now SILENTLY DIVERGENT, which is more dangerous than the old symmetry.
+///
+/// ⚠ TYPE-INDEPENDENT, unlike Family-1: `spawn bumpv(&c.vd)` loses its `push`
+/// too, and `Vector` is one of the four types that worked BY ACCIDENT at the
+/// call-arg face. Not another Family-1 cell.
+#[test]
+#[ignore = "KNOWN GAP: `spawn f(&c.fd)` drops the callee's write — the spawn arg face ignores \
+`arg.node.ownership` entirely. Newly DIVERGENT from the direct call, which Family-1 fixed. \
+Asserts the INTENDED 110/110; TODO.md. Un-ignore when the spawn arg sites route through \
+`lower_call_arg`."]
+fn sound_amp_spawn_projection_write_lost() {
+    run_gg(
+        "known_gaps/sound_amp_spawn_projection_write_lost.gg",
+        "\
+110
+110",
+    );
+}
+
+/// FAMILY-1 (standalone face) — the RATIFIED `&`-iterable comprehension with a
+/// PROJECTION iterable. This is the one LEGITIMATE shape that reaches the
+/// standalone `&`-formation face carrying a projection (D32 rider), and the only
+/// other live comprehension-`&` fixture uses a BARE-IDENTIFIER iterable — the one
+/// cell the producer returns `None` for — so it is structurally incapable of
+/// seeing this face change.
+///
+/// Rows 1/2 assert that `&`-iterable and bare-iterable AGREE for a non-mutating
+/// body, which `decisions.md` records as the CORRECT result, not a no-op.
+///
+/// RED-VERIFIED by break-and-watch (the pre-fix form is impossible — this shape
+/// was already green, and the fix changes what the face EMITS but measurably not
+/// what it PRINTS): removing the `Projection::Deref` normalisation from
+/// `try_resolve_place`'s `Index` arm makes row 3 abort with
+/// `trap[T_Bounds]: index out of bounds: index 0, length 0`.
+#[test]
+fn cow_comprehension_amp_projection_source() {
+    run_gg(
+        "cow_comprehension_amp_projection_source.gg",
+        "\
+2
+2
+2
+2
+3
+2",
+    );
+}
+
+/// KNOWN GAP — a `&`-iterable comprehension whose body WRITES THROUGH the
+/// element does not reach the source collection: prints `101 / 1`, want
+/// `101 / 101`. RATIFIED by the D32 rider (`[e for x in &xs]` opens the
+/// collection for write-through and writes reach the source), so this is a gap
+/// against a decision, not an open question.
+///
+/// NOT Family-1's to fix and measured UNTOUCHED by it (identical output before
+/// and after): the write is dropped further up, in
+/// `lower_list_comprehension`, which never consults the iterable's ownership.
+/// Asserts the INTENDED 101/101 rather than today's 101/1 so the fix flips an
+/// `#[ignore]` instead of rewriting an expectation.
+#[test]
+#[ignore = "KNOWN GAP: a `&`-iterable comprehension's write-through never reaches the source \
+(prints 101/1, want 101/101), though the D32 rider ratifies that it must. Asserts the INTENDED \
+behaviour; TODO.md. Un-ignore when `ListComprehension.ownership` is threaded into \
+`lower_list_comprehension`."]
+fn cow_comprehension_amp_projection_writethrough() {
+    run_gg(
+        "known_gaps/cow_comprehension_amp_projection_writethrough.gg",
+        "\
+101
+101",
+    );
+}
+
 /// FAMILY-1 — the cheapest differential in the family: two spellings of one
 /// intent that behaved oppositely, both `gg check`-clean, in one program.
 /// `inc(&v[0])` was wrong for the six by-value types; `inc(&v.get(0).unwrap())`
