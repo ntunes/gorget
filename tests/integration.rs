@@ -32207,19 +32207,6 @@ B: ok",
     );
 }
 
-/// KNOWN GAP — a `Guard[T]` field reached through a PARAMETER is MEMORY-UNSAFE
-/// at the `&` face (C: SIGSEGV exit 139; LLVM: `llc` hard-fails) and silently
-/// wrong at the assign face, while the identical access on a guard LOCAL is
-/// correct. PRE-EXISTING: identical at base and at the Family-1 tip.
-///
-/// ⚠ NOT the served-at-one-face asymmetry Family-1 closed — BOTH faces are wrong
-/// here. Root: `try_resolve_field_place` tests `guard_inner_suffix` against
-/// `current_type` BEFORE the `pointee_type` deref, so a param local typed
-/// `Ptr(Guard__Inner)` never matches the guard name. Peeling the pointer first
-/// closes all four measured cells.
-///
-/// ⚠ Cannot run until fixed (SIGSEGV on C, no binary on LLVM), so it asserts the
-/// intended values — same shape as `sound_amp_deque_element_field`.
 /// KNOWN GAP — the `Callable`-function-type `&` parameter SEGFAULTS on BOTH lanes
 /// while `gg check` accepts it (Core #8: both lanes agreeing on the wrong
 /// behaviour is >=2 bugs). Measured 2026-07-27: C exits 139, LLVM builds clean
@@ -32234,17 +32221,36 @@ fn sound_callable_amp_fntype_segv() {
     run_gg("known_gaps/sound_callable_amp_fntype_segv.gg", "101");
 }
 
+/// REGRESSION — a `Guard[T]` field reached through a `&` parameter behaves
+/// identically to a `Guard[T]` local. The producer peels `Ptr`/`MutPtr` off
+/// the local's TypeId before consulting the typed `TypeMapper::guard_types`
+/// channel (`guard_of` in `src/ir/lowering/exprs/shared.rs`) so a guard behind
+/// a `&`/`!` param takes the SAME auto-deref branch as a bare guard local.
+/// Pre-funnel this was SIGSEGV on C and `llc` hard-fail on LLVM.
 #[test]
-#[ignore = "KNOWN GAP: a `Guard[T]` field through a PARAMETER SIGSEGVs at the `&` face on C and \
-hard-fails `llc` on LLVM, and is silently wrong at the assign face, while a guard LOCAL is \
-correct. Pre-existing. Asserts the INTENDED write-through; TODO.md. Un-ignore when the producer \
-peels the pointer before the guard-name test."]
-fn sound_guard_param_field_unsafe() {
+fn guard_amp_param_field_writethrough() {
     run_gg(
-        "known_gaps/sound_guard_param_field_unsafe.gg",
+        "guard_amp_param_field_writethrough.gg",
         "\
 11
 11",
+    );
+}
+
+/// KNOWN GAP — a BARE `Guard[T]` PARAMETER whose body MUTATES a field fails
+/// the C build with an implicit-declaration of `gorget_guard_clone`; the CoW
+/// materialize pass emits a clone helper that has no runtime symbol. DISTINCT
+/// root from the pointer-peeling family retired by `guard_of` — the peel gets
+/// the field access right; this cell breaks earlier at the materialize step.
+/// Un-ignore when the CoW materialize pass either declines to clone
+/// single-owner guards or the runtime provides the helper.
+#[test]
+#[ignore = "KNOWN GAP: bare `Guard[T]` param + field mutation triggers an undefined \
+`gorget_guard_clone` symbol at the C build step. Asserts the INTENDED 11."]
+fn sound_guard_bare_param_mutate_undefined_symbol() {
+    run_gg(
+        "known_gaps/sound_guard_bare_param_mutate_undefined_symbol.gg",
+        "11",
     );
 }
 

@@ -1,0 +1,31 @@
+# REGRESSION — a `Guard[T]` field reached through a `&` parameter behaves
+# identically to a `Guard[T]` local: reads see the guarded value, writes reach
+# through. The producer peels `Ptr`/`MutPtr` off the local's TypeId before
+# consulting the typed `TypeMapper::guard_types` channel (`guard_of` in
+# `src/ir/lowering/exprs/shared.rs`), so a guard behind a `&`/`!` parameter
+# takes the SAME auto-deref branch as a bare guard local.
+#
+# Exercises three sites at once — the read path (`lower_field_access` on
+# `g.fd`), the `&`-face write path (`try_resolve_field_place` on `&g.fd`), and
+# the auto-propagate typing path (`place_expr_type_only`).
+struct Inner:
+    int fd
+
+int seed():
+    return 10
+
+void inc(int &n):
+    n = n + 1
+
+# A guard reached through a `&` parameter — the cell that missed the guard
+# branch when detection was a name-prefix test against the outer `Ptr`-typed
+# local's name. Prints 11 inside the callee and 11 back at main.
+void via_amp(Guard[Inner] &g):
+    inc(&g.fd)
+    print(g.fd)
+
+void main():
+    Mutex[Inner] m = Mutex[Inner](Inner(seed()))
+    Guard[Inner] g = m.lock()
+    via_amp(&g)
+    print(g.fd)
