@@ -6057,7 +6057,14 @@ fn ratchet_b_materialize_site_count() {
     // (`cow_before_mutation_planned`), removing all six direct calls behind the
     // `MaterializePlan`. Remaining 14 = the un-migrated classes B/C/D/E/F + the
     // funnel's own lone real call; each future class conversion drops the ceiling.
-    const RUST_CEILING: usize = 14;
+    //
+    // 2026-07-27 (Track B1 fold, commit `02082ae8`): +1 site in
+    // `src/ir/lowering/exprs/calls.rs` — the bare-arg indirect-call route
+    // now goes through `lower_call_arg`, which runs `cow_before_mutation`
+    // on the source to close the Callable-`&`-projection SEGV class.
+    // Legitimate new mutation-root materialize; ceiling raised 14→15 to
+    // pin the new floor.
+    const RUST_CEILING: usize = 15;
     let mut rust_sites = 0usize;
     let mut per_file: Vec<(String, usize)> = Vec::new();
     for entry in walk_files("src/ir/lowering", "rs") {
