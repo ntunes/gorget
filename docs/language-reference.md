@@ -2449,7 +2449,7 @@ A move capture is never inferred; it is requested with `!`.
 > mutation-through (`e.push('!')`), and ⚠ **double-frees at runtime** when
 > rebound (`e = e + "!"`). Continuing the divergences: `&` through a
 > `Callable`-typed **value** — a local, or a parameter whose type declares the
-> sigil (`Callable[void(&int)] cb`) — segfaults on both backends when called,
+> sigil (`Callable[void(int &)] cb`) — segfaults on both backends when called,
 > and a `&`-declared `Callable` parameter (`Callable[…] &cb`) ICEs the compiler
 > when called; a
 > sigil on a receiver (`&c.add(1)`) is accepted and inert; and these remain
@@ -2495,13 +2495,16 @@ void g(Callable[void(int &)] cb)  # unnamed: the sigil sits where the name would
 Those are the only two forms. `&int x` is rejected, and so is `&int` — putting
 the sigil before the type is the same mistake in both, with and without a name.
 
-> **Status against the current compiler (D35).** This is the ratified spelling
-> and is not implemented: today the parser accepts only the retired `&int` form
-> and rejects `int &`. The `!` twin behaves identically (`String !` is the
-> ratified form, `!String` the retired one). D35 also records that the shape
-> this note describes — a `Callable` parameter whose type declares a sigil —
-> **segfaults on both backends when called**, so the re-spelling and that fix
-> land together.
+> **Status against the current compiler (D35).** The Rust parser accepts
+> the ratified `int &` / `String !` spelling and rejects the retired `&int` /
+> `!String` form with a diagnostic naming the replacement. The self-host
+> parser accepts the ratified form and records the sigil faithfully in the
+> function type's per-parameter ownership vector (retiring the earlier
+> hardcoded `OWN_BORROW`). D35 also records that the shape this note
+> describes — a `Callable` parameter whose type declares a sigil — used to
+> **segfault on both backends when called**; the re-spelling landed together
+> with the write-through fix (Track B1, `1028972f`) so the ratified spelling
+> now works end-to-end.
 
 Underneath the sigils, the ownership model itself is these ten rules:
 
@@ -2641,7 +2644,7 @@ invisible optimization, not part of any API contract, so no `!` appears.
 `Callable[T]` / `MutCallable[T]` / `ConsumeCallable[T]` / `Box[Callable[T]]`
 local, parameter, field, subscript, or IIFE. Where the declared parameter
 carries a sigil, the caller spells it at every call site — a bare `cb(a)`
-against a `Callable[void(&int)] cb` is rejected with `E_OwnershipMismatch`
+against a `Callable[void(int &)] cb` is rejected with `E_OwnershipMismatch`
 exactly as a bare `f(a)` against a `void f(int &n)` direct call is. The
 call-site-visibility promise does not weaken through a function-typed
 value.
