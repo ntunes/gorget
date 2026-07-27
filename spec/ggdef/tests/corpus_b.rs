@@ -359,5 +359,10 @@ fn corpus_b_all_match() {
     // class. The round's four out-of-subset fixtures are EXCLUDEd above with a
     // per-row citation, so this pin refreshes 157→159 to accompany the two the
     // oracle actually covers.
-    assert_eq!(fixtures.len(), 159, "B2 gate set drifted from 159 fixtures");
+    // +1 (same round): `cow_amp_ref_field_forward`, also in-subset and MATCHing
+    // (ggdef prints 3/4/3). It pins the already-a-pointer FIELD cell — where the
+    // shared producer must DECLINE and let the `is_already_ptr` fall-through
+    // forward the stored pointer — a regression introduced and caught inside the
+    // round itself.
+    assert_eq!(fixtures.len(), 160, "B2 gate set drifted from 160 fixtures");
 }

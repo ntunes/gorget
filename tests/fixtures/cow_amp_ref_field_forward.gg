@@ -1,0 +1,50 @@
+# REGRESSION FIXTURE — `&` of a field whose DECLARED TYPE IS ALREADY A POINTER
+# must FORWARD the stored pointer, not take its address.
+#
+# THE SHAPE. `Ref[T]` / `MutRef[T]` struct fields (and extern `T*` fields) hold a
+# `*T` in the field slot. The place resolvers resolve them perfectly well — the
+# place IS the field slot — but the VALUE living there is already a pointer. A
+# caller that `emit_borrow_mut`s that place produces `**T`, and the callee reads
+# the pointer's bits as payload: the gorget-js snag #1 shape.
+#
+# AXIS + CELL (Core #12): the FIELD-DECLARED-TYPE axis at the already-a-pointer
+# cell — the one cell of that axis where the shared place producer must DECLINE
+# and let the `is_already_ptr` fall-through handle it. Every other cell of that
+# axis (by-value and resource-carrying fields alike) is the producer's job and is
+# covered by `cow_amp_projection_type_axis.gg` and
+# `cow_amp_projection_resource_value_split.gg`.
+#
+# RED-VERIFIED — and note this fixture pins a regression that was INTRODUCED and
+# CAUGHT INSIDE the Family-1 round, so its red is not the pre-round compiler:
+#   * before Family-1:                     3 / 4 / 3   (correct)
+#   * Family-1 chokepoint, WITHOUT the guard: SIGSEGV, exit 139
+#   * Family-1 chokepoint, WITH the guard:  3 / 4 / 3   (correct)
+# Reproduce the red by deleting the postcondition-1 guard at the exit of
+# `try_resolve_place` (`src/ir/lowering/exprs/mod.rs`) — the `if let Some((_,
+# place_type)) = resolved` block that returns `None` for a `Ptr`/`MutPtr` place
+# type — and rebuilding.
+#
+# GUARDED MECHANISM: that guard is what makes the producer's postcondition 1
+# ("the returned Place is an lvalue OF THE VALUE, never of a pointer to it")
+# literally true rather than aspirational, which is in turn what lets every
+# caller `emit_borrow_mut` UNCONDITIONALLY. Remove it and the postcondition
+# becomes a comment that lies.
+#
+# ⚠ ROW 3 IS THE LOAD-BEARING ONE. `Ref[T]` is a BORROW, so the push must reach
+# the callee's view of the vector (row 2, len 4) while `v` — a separate binding
+# the Ref aliases — is observed through its own handle at row 3. Asserting only
+# rows 1-2 would pass even if the pointer were mangled into a fresh copy.
+struct Holder:
+    Ref[Vector[int]] vec
+
+void push_it(Vector[int] &q):
+    q.push(99)
+
+int main():
+    Vector[int] v = [10, 20, 30]
+    Holder h = Holder(v)
+    print(h.vec.len())
+    push_it(&h.vec)
+    print(h.vec.len())
+    print(v.len())
+    return 0

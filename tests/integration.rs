@@ -32175,6 +32175,33 @@ EVal=B
     );
 }
 
+/// FAMILY-1 — `&` of a field whose DECLARED TYPE IS ALREADY A POINTER
+/// (`Ref[T]` / `MutRef[T]` / extern `T*`) must FORWARD the stored pointer, not
+/// take its address. The place resolvers resolve such a field fine — the place
+/// IS the slot — but the VALUE there is already a `*T`, so `emit_borrow_mut`
+/// would yield `**T` and the callee would read pointer bits as payload
+/// (gorget-js snag #1).
+///
+/// ⚠ PINS A REGRESSION INTRODUCED AND CAUGHT INSIDE THE FAMILY-1 ROUND, so its
+/// red is NOT the pre-round compiler: before Family-1 this printed `3/4/3`; with
+/// the chokepoint but WITHOUT the postcondition-1 exit guard it SIGSEGV'd
+/// (exit 139); with the guard it prints `3/4/3` again. Reproduce by deleting the
+/// `Ptr`/`MutPtr` early-`None` at the exit of `try_resolve_place`.
+///
+/// That guard is what makes postcondition 1 literally true rather than
+/// aspirational, which is what lets every caller `emit_borrow_mut`
+/// unconditionally.
+#[test]
+fn cow_amp_ref_field_forward() {
+    run_gg(
+        "cow_amp_ref_field_forward.gg",
+        "\
+3
+4
+3",
+    );
+}
+
 /// FAMILY-1 — the RESOURCE/VALUE split INSIDE each type kind, and the ONLY
 /// fixture of this family ggdef can ADJUDICATE (written inside the phase-0
 /// subset on purpose: no generics, no `is`-binding, no statics, no Box, no

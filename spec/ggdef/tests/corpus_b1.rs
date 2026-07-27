@@ -320,5 +320,7 @@ fn corpus_b1_all_match() {
     // + `cow_amp_projection_resource_value_split`, both top-level, both
     // in-subset, both MATCH — the two rows the oracle adjudicates for that
     // round (the other four are EXCLUDEd above with per-row citations).
-    assert_eq!(fixtures.len(), 126, "B1 gate set drifted from 126 fixtures");
+    // +1 (same round): `cow_amp_ref_field_forward`, in-subset, MATCH (3/4/3) —
+    // the already-a-pointer FIELD cell where the producer must decline.
+    assert_eq!(fixtures.len(), 127, "B1 gate set drifted from 127 fixtures");
 }

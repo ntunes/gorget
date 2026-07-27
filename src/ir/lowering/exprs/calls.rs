@@ -238,6 +238,21 @@ pub(super) fn lower_call_arg(
     // merge of the two faces. `methods.rs`'s FxHasher caller is unprobed for the
     // auto-propagate axis, and cannot exercise it: its argument is a Hasher by
     // the method contract, never a `Result`.
+    // BORROW PROVENANCE — verdict: CONVERGENCE, not a new shape. Before this,
+    // a RESOURCE-typed field `&`-arg flowed through `lower_field_access`, which
+    // tags the forwarded `Ptr` local with borrow provenance
+    // (`ctx.set_field_or_elem_borrow`) — typed metadata that `cow_before_mutation`
+    // and the var-decl default-borrow branch read. The producer path returns a
+    // place and `emit_borrow_mut`s a FRESH, UNTAGGED local, so those four
+    // resource cells stop carrying it. That is not a regression in kind: the
+    // pre-existing fall-through borrow below is equally untagged, so this makes
+    // the resource cells behave like every other `&`-arg rather than like a
+    // special case. MEASURED on a resource-field program
+    // (`security/sound_amp_field_thinptr_control.gg`): `--clones=stats` is
+    // byte-identical before and after — `string_clone=0`, `array_clone=0`,
+    // `total_allocs=2`, `total_frees=3`, `live_bytes=0` on both. On the
+    // box-projection shape it strictly IMPROVES (`string_clone` 9 → 1,
+    // `total_allocs` 27 → 19: the whole-struct clone per loop iteration is gone).
     if matches!(arg.node.ownership, Ownership::MutableBorrow) {
         if let Some((place, place_type)) = super::try_resolve_place(ctx, builder, &arg.node.value) {
             if let Some(s) = g2_projected_untrack_start {

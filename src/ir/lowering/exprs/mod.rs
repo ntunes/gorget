@@ -2857,7 +2857,7 @@ pub(in crate::ir::lowering) fn try_resolve_place(
     builder: &mut FunctionBuilder,
     expr: &Spanned<Expr>,
 ) -> Option<(Place, TypeId)> {
-    match &expr.node {
+    let resolved = match &expr.node {
         Expr::FieldAccess { object, field } => {
             try_resolve_field_place(ctx, builder, object, &field.node)
         }
@@ -2905,7 +2905,40 @@ pub(in crate::ir::lowering) fn try_resolve_place(
         // here BY DESIGN: `&x` on a whole local is served by the bare-identifier
         // fast paths that run BEFORE this producer at both faces.
         _ => None,
+    };
+
+    // 🚨 POSTCONDITION 1, ENFORCED — never hand back a place whose VALUE is
+    // ITSELF A POINTER.
+    //
+    // A field can be DECLARED as a pointer: `Ref[T]` / `MutRef[T]` struct fields
+    // (`struct Holder: Ref[Vector[int]] vec`) and extern `T*` fields. The place
+    // resolvers resolve those perfectly well — the place is the field slot — but
+    // the VALUE living there is already a `*T`. A caller that then
+    // `emit_borrow_mut`s it gets `**T`, and the callee reads the pointer's bits
+    // as payload: the gorget-js snag #1 shape.
+    //
+    // MEASURED, and this guard exists because of it: `push_it(&h.vec)` on a
+    // `Ref[Vector[int]]` field printed `3 / 4 / 3` before the Family-1
+    // chokepoint and SIGSEGV'd (exit 139) with the chokepoint but WITHOUT this
+    // guard. Returning `None` falls the shape through to `lower_call_arg`'s
+    // surviving `is_already_ptr` fast-path, which FORWARDS the stored pointer
+    // instead of taking its address — the correct and already-correct behaviour
+    // for these cells (the projection matrix proves that fall-through path right
+    // for all ten types).
+    //
+    // This is what makes postcondition 1 literally true rather than aspirational:
+    // "the returned Place is an lvalue OF THE VALUE, never of a pointer to it"
+    // now holds by construction, so `emit_borrow_mut` really is unconditional at
+    // every caller. Pinned by `cow_amp_ref_field_forward.gg`.
+    if let Some((_, place_type)) = resolved {
+        if matches!(
+            ctx.type_registry.get(place_type),
+            Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+        ) {
+            return None;
+        }
     }
+    resolved
 }
 
 /// Resolve a field access expression to a Place (with projections) and the field's type,
