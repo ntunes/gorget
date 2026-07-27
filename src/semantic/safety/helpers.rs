@@ -1341,35 +1341,71 @@ impl<'a> BorrowChecker<'a> {
         callee: &Spanned<Expr>,
         args: &[Spanned<CallArg>],
     ) {
-        let def_id = match self.resolve_callee_def_id(callee) {
-            Some(id) => id,
-            None => return,
-        };
-
-        // Skip constructors (structs, enum variants) — they don't have FunctionInfo
-        let kind = self.scopes.get_def(def_id).kind;
-        if matches!(kind, DefKind::Struct | DefKind::Variant) {
-            return;
+        // DIRECT path: callee resolves to a named function via `resolve_callee_def_id`.
+        // Use `function_info` (which carries `param_names` for D31's diagnostic).
+        if let Some(def_id) = self.resolve_callee_def_id(callee) {
+            let kind = self.scopes.get_def(def_id).kind;
+            if matches!(kind, DefKind::Struct | DefKind::Variant) {
+                return;
+            }
+            if let Some(info) = self.function_info.get(&def_id) {
+                for (i, arg) in args.iter().enumerate() {
+                    if i >= info.param_ownerships.len() {
+                        break;
+                    }
+                    let expected = info.param_ownerships[i];
+                    let found = arg.node.ownership;
+                    if expected != found {
+                        let param_name = info.param_names[i].clone();
+                        self.error(
+                            SemanticErrorKind::OwnershipMismatch {
+                                param_name,
+                                expected,
+                                found,
+                                arg_is_temp: !expr_is_place(&arg.node.value.node),
+                            },
+                            arg.span,
+                        );
+                    }
+                }
+                return;
+            }
+            // builtins/extern with no FunctionInfo — fall through to the
+            // type-based indirect path (which handles Callable-typed values).
         }
 
-        let info = match self.function_info.get(&def_id) {
-            Some(info) => info,
-            None => return, // builtins, extern, etc.
+        // INDIRECT path (Track B3 prototype): callee is not a named function —
+        // it is a Callable-typed local/param/expression. Consult the callee's
+        // ResolvedType via `expr_types` (or, for a bare Identifier, via the
+        // resolved DefId's `type_id`) and unwrap through the callable-trait
+        // wrappers to read `param_ownerships` off the underlying Function type.
+        //
+        // Design rationale: D31 makes contractual consumption visible at every
+        // call site (README's call-site-visibility promise). Indirect calls
+        // must not be a hole — bare arg into `&`-param loses the mutation
+        // (silent SEGV via a value-typed pointer arg today, see the SEGV
+        // fixtures for E2/F2/H2 cells).
+        let callee_type_id = self.callee_function_type_id(callee);
+        let Some(fn_type_id) = callee_type_id else { return };
+        let param_ownerships = match self.types.get(fn_type_id) {
+            crate::semantic::types::ResolvedType::Function { param_ownerships, .. } => {
+                param_ownerships.clone()
+            }
+            _ => return,
         };
 
         for (i, arg) in args.iter().enumerate() {
-            if i >= info.param_ownerships.len() {
-                break; // varargs or mismatched count (caught by type checker)
+            if i >= param_ownerships.len() {
+                break;
             }
-
-            let expected = info.param_ownerships[i];
+            let expected = param_ownerships[i];
             let found = arg.node.ownership;
-
             if expected != found {
-                let param_name = info.param_names[i].clone();
                 self.error(
                     SemanticErrorKind::OwnershipMismatch {
-                        param_name,
+                        // Indirect calls have no source-level param name.
+                        // Use the positional slot so the message stays informative.
+                        param_name: format!("arg{}", i),
                         expected,
                         found,
                         arg_is_temp: !expr_is_place(&arg.node.value.node),
@@ -1378,6 +1414,39 @@ impl<'a> BorrowChecker<'a> {
                 );
             }
         }
+    }
+
+    /// For an indirect (Callable-typed) callee, resolve the underlying
+    /// Function type-id. Returns None for direct-named callees (handled by
+    /// the DefId path above) and for non-callable expressions.
+    fn callee_function_type_id(&self, callee: &Spanned<Expr>) -> Option<crate::semantic::ids::TypeId> {
+        // Prefer a directly-recorded expression type; fall back to the def_id
+        // path for a bare Identifier callee whose expr_types entry may not
+        // have been recorded (typechecker records expr_types only at
+        // certain sites; a Callable-typed identifier callee is often absent).
+        let raw = if let Some(&t) = self.expr_types.get(&callee.span) {
+            t
+        } else if let Expr::Identifier(_) = &callee.node {
+            let def_id = self.resolution_map.get(&callee.span.start).copied()?;
+            self.scopes.get_def(def_id).type_id?
+        } else {
+            return None;
+        };
+        // Unwrap callable-trait wrappers (Callable[T] / MutCallable[T] /
+        // ConsumeCallable[T] / Box[Callable[T]]) to reach the inner Function.
+        use crate::semantic::types::ResolvedType;
+        let mut cur = raw;
+        for _ in 0..4 {
+            match self.types.get(cur) {
+                ResolvedType::Function { .. } => return Some(cur),
+                ResolvedType::CallableTrait(inner)
+                | ResolvedType::MutCallableTrait(inner)
+                | ResolvedType::ConsumeCallableTrait(inner)
+                | ResolvedType::BoxedCallable { inner, .. } => cur = *inner,
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// D31 (`decisions.md` 2026-07-19 + the 2026-07-20 ADDENDUM-2, FULL STRICT):
