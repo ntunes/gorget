@@ -1,0 +1,61 @@
+# SOUNDNESS FIXTURE — the self-host lowerer must evaluate the BASE of an
+# `&<projection>` call argument EXACTLY ONCE, even when a downstream predicate
+# (`field_storage_holds_pointer` for a pointer-storage field, an unknown inner
+# type, an unresolved field name) declines the write-place resolution.
+#
+# CLASS: `amp_object_base` (self_host_lowerer/lower_expr.gg) used to fall
+# through to `lower_place_base` for a call/arithmetic/method-result base,
+# which BOTTOMS OUT in `lower_expr(base)` — the base's side effects were
+# emitted, then the write-place resolver declined on a downstream predicate,
+# and the `&`-argument chokepoint re-lowered the WHOLE argument
+# (`lower_expr(arg)`), evaluating the base a SECOND time. The fold restricts
+# `amp_object_base` to place-shape whitelist (EIdentifier / ESelfExpr /
+# EDeref / EFieldAccess / EIndex), returning None for other shapes so the
+# fallback path lowers the argument exactly once. Mirrors the `_ => None`
+# arm of Rust's `place_expr_type_only` (src/ir/lowering/exprs/mod.rs, around
+# the `Postcondition 2 — EMISSION` comment).
+#
+# SAMPLED CELL (Core #12): a CALL as the projection base whose declared
+# return type carries an OPAQUE-HANDLE field (RWLock — reads `true` from
+# `is_opaque_pointer_type` in self_host_lowerer/lir_lower.gg, so
+# `field_storage_holds_pointer` fires and `lower_amp_place` declines). The
+# base `mk()` prints `MK` — a visible side effect. A single call site
+# reaches every `&<projection>` face; other bases (a bare local, a nested
+# projection, an index) are exercised by cow_amp_field_arg / …_type_axis /
+# …_deref_box_projection.
+#
+# GUARDED MECHANISM: the whitelist arm of `amp_object_base`. Restore the
+# `else` arm to `lower_place_base(base_expr, gmod)` (or remove the `return
+# None`) and the base's `mk()` fires TWICE.
+#
+# RED-VERIFIED against the pre-fix self-host (Track D commit 30d5f60d):
+#   MK
+#   MK
+#   look
+#   done
+# Rust gg (oracle) and the post-fix self-host both print:
+#   MK
+#   look
+#   done
+#
+# The `look` callee is intentionally read-only through its `&`-parameter —
+# the fixture pins BASE EVALUATION COUNT, not write-through behaviour (which
+# is pinned by cow_amp_field_arg).
+from std.sync import RWLock
+
+struct Config:
+    int port
+
+struct Bag:
+    RWLock[Config] lock
+
+Bag mk():
+    print("MK")
+    return Bag(RWLock[Config](Config(10)))
+
+void look(RWLock[Config] &l):
+    print("look")
+
+void main():
+    look(&mk().lock)
+    print("done")

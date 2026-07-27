@@ -38,7 +38,7 @@ from lower import LazyMember, cow_lazy_materialize_family, cow_lazy_retire_stmt_
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, register_owning_opaque_local, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
-from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, guard_field_deref_base, box_deref_inner_name
+from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call, guard_field_deref_base, box_deref_inner_name, lower_amp_place
 from lower_expr import register_shared_carrier_type, emit_shared_mutex_lock_get, emit_shared_mutex_lock_set
 from lower_expr import register_rwlock_carrier_type, register_atomic_carrier_type, atomic_runtime_prefix
 from lower_expr import emit_shared_read, emit_shared_write, emit_shared_compound
@@ -1684,7 +1684,16 @@ int lower_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
 # base resolves the map VALUE slot (write-through), matching Vector/Deque.
 # Mirrors Rust gg's `try_resolve_field_place` Index arm
 # (src/ir/lowering/exprs/mod.rs).
-int lower_index_element_ptr_place(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_expr, bool allow_map, GirModule &gmod):
+#
+# `require_struct_elem` is CALLER-SCOPED, and deliberately so. A FIELD STORE
+# needs a struct-ish element — `v[i].f = x` on a `Vector[int]` names no field —
+# so the two field-write call sites pass `true` and a scalar element declines.
+# An `&`-ARGUMENT names the element ITSELF (`inc(&v[0])`), and a `GtPtr(int)`
+# into the buffer is precisely the intended result, so that caller passes
+# `false`. The old unconditional `>= PRIM_COUNT` gate encoded the field-store
+# caller's requirement inside the shared producer, where the `&`-place caller
+# could not opt out of it.
+int lower_index_element_ptr_place(LowerCtx &ctx, SpannedExpr coll_expr, SpannedExpr idx_expr, bool allow_map, bool require_struct_elem, GirModule &gmod):
     # Lower the collection base via the SHARED `lower_place_base` (a static
     # resolves to a `GtMutPtr` through `__global_ref__`, a `&self`/`&param` to
     # its `GtPtr`), then consume it with the is_ptr_type→OpCopy idiom below —
@@ -1734,11 +1743,14 @@ int lower_index_element_ptr_place(LowerCtx &ctx, SpannedExpr coll_expr, SpannedE
             if fpb_elem_name == "Str":
                 fpb_elem_norm = "GorgetString"
             int fpb_elem_tid = resolve_field_gir_type(fpb_elem_norm, &gmod)
-            # Only struct/resource elements (>= PRIM_COUNT) get the pointer — a
-            # field store needs a struct-ish element. Scalar (< PRIM_COUNT) and
-            # unregistered (< 0) fall through (a scalar has no field to write
-            # through).
-            if fpb_elem_tid >= PRIM_COUNT:
+            # An UNREGISTERED element (< 0) never gets a pointer — there is no
+            # type to point at. A SCALAR element (< PRIM_COUNT) is refused only
+            # when the caller requires a struct-ish element (a field store);
+            # an `&`-place of `v[0]: int` wants `GtPtr(int)` and is served.
+            bool fpb_elem_ok = fpb_elem_tid >= 0
+            if require_struct_elem and fpb_elem_tid < PRIM_COUNT:
+                fpb_elem_ok = false
+            if fpb_elem_ok:
                 # Index is independently typed — clear any leaked
                 # expected_type (mirror the read / index-assign arms).
                 int fpb_saved_expected = ctx.expected_type
@@ -1799,9 +1811,19 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
             # via the shared producer (Vector/Deque/Dict; allow_map=true). On a
             # non-pointer-eligible element (scalar / unregistered / Set) it
             # returns -1 and we fall through to `lower_place_base` unchanged.
-            int fpb_ix = lower_index_element_ptr_place(&ctx, *fpb_base_box, *fpb_idx_box, true, &gmod)
+            int fpb_ix = lower_index_element_ptr_place(&ctx, *fpb_base_box, *fpb_idx_box, true, true, &gmod)
             if fpb_ix >= 0:
                 return fpb_ix
+        case EFieldAccess(_, _):
+            # NESTED projection object (`t.0.fd = v`, `o.inner.fd = v`): the
+            # intermediate `t.0` / `o.inner` is itself a PLACE, and resolving it
+            # as a value read stores into a discarded copy. `lower_amp_place` is
+            # the SAME producer the `&`-formation face uses, so the two faces
+            # cannot drift into the served-at-one-face asymmetry this resolver
+            # pair has produced twice already.
+            int fpb_np = lower_amp_place(&ctx, base_expr, &gmod)
+            if fpb_np >= 0:
+                return fpb_np
         case EMethodCall(fpb_recv_box, fpb_mname, fpb_margs, _):
             # `coll.get(i).unwrap().field = x` — the ratified auto-borrow-from-get
             # chain (docs/language-design §3, docs/language-reference §9.6,
@@ -1830,7 +1852,7 @@ int lower_field_place_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod
                     case EMethodCall(fpb_get_recv_box, fpb_get_mname, fpb_get_args, _):
                         if fpb_get_mname == "get" and fpb_get_args.len() == 1:
                             SpannedExpr fpb_get_idx = fpb_get_args.get(0).unwrap().value
-                            int fpb_ch = lower_index_element_ptr_place(&ctx, *fpb_get_recv_box, fpb_get_idx, true, &gmod)
+                            int fpb_ch = lower_index_element_ptr_place(&ctx, *fpb_get_recv_box, fpb_get_idx, true, true, &gmod)
                             if fpb_ch >= 0:
                                 return fpb_ch
                     else:

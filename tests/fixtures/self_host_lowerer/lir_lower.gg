@@ -175,6 +175,33 @@ bool is_opaque_pointer_type(String name, GirModule &gmod):
             return false
     return false
 
+# Does the STORAGE of field #`field_idx` of struct `type_name` already hold a
+# POINTER value? Two cases, both meaning `&field` is a pointer-TO-a-pointer:
+#   * a user borrow pointer — `Ref[T]` / `MutRef[T]` (name-derived residual,
+#     per the `resolve_field_lir_type` `Ref__` guard: `map_ast_type` lowers
+#     these to `GtNamed("Ref__T")`, so no typed id survives to read here);
+#   * an opaque-handle resource — Shared/Mutex/RWLock/Channel — whose handle
+#     value IS the pointer (typed `.opaque_handle` flag, never a name match).
+# Aggregate resources (Vector/Dict/String) are stored INLINE and are therefore
+# false: you do pass the aggregate's own address.
+#
+# ONE SOURCE OF TRUTH for two consumers that must not drift:
+#   * `GIFieldLoad` lowering below skips its pointer-ALIAS store for these and
+#     LOADS the stored pointer instead (you want the pointee, not the cell);
+#   * the `&<projection>` place resolver (`lower_amp_place`, lower_expr.gg)
+#     DECLINES these for exactly that reason — the address it could hand back
+#     would be the pointee's, not the place's.
+bool field_storage_holds_pointer(String type_name, int field_idx, GirModule &gmod):
+    if not gmod.type_infos.contains(type_name):
+        return false
+    GirTypeInfo fsp_info = gmod.type_infos.get(type_name).unwrap()
+    if field_idx < 0 or field_idx >= fsp_info.fields.len():
+        return false
+    String fsp_tn = fsp_info.fields.get(field_idx).unwrap().type_name
+    if fsp_tn.starts_with("Ref__") or fsp_tn.starts_with("MutRef__"):
+        return true
+    return is_opaque_pointer_type(fsp_tn, &gmod)
+
 # Phase A typed-metadata read via `resource_meta_for`; the prefix
 # cascade lives in `build_resource_metadata` (Guard family →
 # runtime_name "Guard").
@@ -3871,7 +3898,25 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                     int src_slot = local_to_slot.get(rebind_src).unwrap()
                     int src_slot_ty = f.slots.get(src_slot).unwrap().ty
                     bool src_is_ptr = (src_slot_ty == LT_PTR) or (src_slot_ty >= LT_PTR_TO_BASE and src_slot_ty < LT_STRUCT_BASE)
-                    if not src_is_ptr:
+                    if lir_slot_is_box(src_slot_ty, m):
+                        # BOX src: `Box__T` is `typedef void*`, so the slot
+                        # already HOLDS the heap address — the alias is the
+                        # slot's VALUE, not its address. `ISlotAddr` here would
+                        # produce a pointer to the box variable itself (`T**`),
+                        # and every field projection through it would read the
+                        # pointer's own bytes as a struct.
+                        #
+                        # A box slot is struct-KIND (`lir_struct(sid)` with
+                        # `type_runtime_map[name] == "Box"`, per
+                        # `lir_slot_is_box`), so it lands in the value-typed
+                        # branch below unless it is discriminated FIRST. Same
+                        # box-slot discrimination the extern arg-prep and
+                        # `GIDeref` already perform.
+                        int box_val = lir_fn_next_value(&f)
+                        lir_push_inst(&f, bb, ISlotLoad(box_val, src_slot, LT_PTR))
+                        lir_push_inst(&f, bb, ISlotStore(slot, box_val, false))
+                        handled = true
+                    elif not src_is_ptr:
                         # Value-typed src + Ptr-typed dst: take the
                         # address of src's storage and store it as
                         # the dst's pointer value.
@@ -5135,13 +5180,7 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
             #     path (you DO pass the aggregate's address). This mirrors the
             #     Rust `field_is_ptr` carve-out at insts.rs:1029-1034 ("load the
             #     pointer value first").
-            bool fl_field_value_is_ptr = false
-            if gmod.type_infos.contains(fl_base_tn):
-                GirTypeInfo fl_base_info = gmod.type_infos.get(fl_base_tn).unwrap()
-                if fl_field >= 0 and fl_field < fl_base_info.fields.len():
-                    String fl_field_tn = fl_base_info.fields.get(fl_field).unwrap().type_name
-                    if fl_field_tn.starts_with("Ref__") or fl_field_tn.starts_with("MutRef__") or is_opaque_pointer_type(fl_field_tn, &gmod):
-                        fl_field_value_is_ptr = true
+            bool fl_field_value_is_ptr = field_storage_holds_pointer(fl_base_tn, fl_field, &gmod)
             if fl_dst_is_ptr and not fl_field_value_is_ptr:
                 # Pointer-alias: store the field address directly as
                 # the dst's pointer value. No byte-copy.
