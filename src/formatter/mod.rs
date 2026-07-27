@@ -1532,20 +1532,24 @@ impl Formatter {
                 params,
                 param_ownerships,
             } => {
+                // D35 (docs/define-gorget/decisions.md, ratified 2026-07-26):
+                // an unnamed parameter's sigil is spelled AFTER the type
+                // (`int &`, `String !`) — uniform with the named form
+                // (`Message &msg`) and with `Type::Ref`/`Type::Owned` above.
                 self.format_type(return_type);
                 self.emitter.write("(");
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         self.emitter.write(", ");
                     }
+                    self.format_type(p);
                     if let Some(ownership) = param_ownerships.get(i) {
                         match ownership {
-                            Ownership::MutableBorrow => self.emitter.write("&"),
-                            Ownership::Move => self.emitter.write("!"),
+                            Ownership::MutableBorrow => self.emitter.write(" &"),
+                            Ownership::Move => self.emitter.write(" !"),
                             Ownership::Borrow => {}
                         }
                     }
-                    self.format_type(p);
                 }
                 self.emitter.write(")");
             }
