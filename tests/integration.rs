@@ -13200,17 +13200,20 @@ done");
 }
 
 /// AXIS-COMPLETENESS matrix for the callable-indirection axis (root ×
-/// callable-provenance × arg-spelling). One call per cell with a
-/// distinguishable per-line output so a partial regression trips MULTIPLE
-/// lines. Cells L1/L2/P1 SEGV'd at gorget-1 base; G1/G2 were accidentally
-/// green and remain green through the fix.
+/// callable-provenance × arg-spelling) — the RUNTIME-REACHABLE cells only.
+/// Post-Track-B3 (D31-uniform, ledger 2026-07-20 D31 ADDENDUM-2), the bare-arg
+/// cells (L2 = plain-local root + bare arg; G1 = `&`-param root + bare arg)
+/// are REJECTED at `gg check` with `E_OwnershipMismatch` — the same rule
+/// direct calls have long enforced now applies uniformly at every indirect
+/// call site. Those cells are pinned as check-time NEG fixtures in
+/// `indirect_call_bare_arg_amp_callee_error` /
+/// `indirect_call_bare_arg_param_amp_callee_error`. Cells L1/P1 SEGV'd at
+/// gorget-1 base; G2 was accidentally green and remains green through the fix.
 #[test]
 fn callable_amp_root_axis() {
     run_gg("callable_amp_root_axis.gg", "\
 L1=101
-L2=102
 P1=103
-G1=104
 G2=105");
 }
 
@@ -32347,6 +32350,65 @@ fn callable_amp_fntype_writethrough() {
     run_gg("callable_amp_fntype_writethrough.gg", "101");
 }
 
+/// REGRESSION — Track B3 (D31-uniform, indirect call sigil gate): a BARE
+/// argument passed into a `Callable[void(&int)]` LOCAL whose parameter
+/// declares `&` REJECTS at `gg check` with `E_OwnershipMismatch` -- the exact
+/// same rule D31 enforces at direct call sites, applied UNIFORMLY at every
+/// indirect call site (`check_call_ownership` in `src/semantic/safety/helpers.rs`,
+/// extended with a type-based path that reads `param_ownerships` off the
+/// callee's resolved function type). The LOCAL cell of the callable-shape
+/// axis. Pre-B3 (RED-verified): `gg check` accepted; runtime exhibited UB
+/// (silent mis-write / SEGV depending on backend and memory layout).
+#[test]
+fn indirect_call_bare_arg_amp_callee_error() {
+    check_gg_fails(
+        "indirect_call_bare_arg_amp_callee_error.gg",
+        "error[E_OwnershipMismatch]",
+    );
+}
+
+/// REGRESSION — Track B3, MIRROR of `indirect_call_bare_arg_amp_callee_error`:
+/// an `&`-spelled argument passed into a `Callable[void(int)]` LOCAL whose
+/// parameter is bare-declared REJECTS at `gg check` with `E_OwnershipMismatch`.
+/// Under D31 the caller cannot ADD a sigil the callee did not contract for.
+/// Pre-B3 (RED-verified): `gg check` accepted; runtime silently dropped the
+/// caller's `&` intent.
+#[test]
+fn indirect_call_amp_arg_bare_callee_error() {
+    check_gg_fails(
+        "indirect_call_amp_arg_bare_callee_error.gg",
+        "error[E_OwnershipMismatch]",
+    );
+}
+
+/// REGRESSION — Track B3, PARAM cell: when the callee is a
+/// `Callable[void(&int)]` PARAMETER (not a local), a bare argument REJECTS at
+/// `gg check` -- same rule, callee-shape independent. Pre-B3 (RED-verified):
+/// `gg check` accepted; runtime silently dropped the mutation.
+#[test]
+fn indirect_call_bare_arg_param_amp_callee_error() {
+    check_gg_fails(
+        "indirect_call_bare_arg_param_amp_callee_error.gg",
+        "error[E_OwnershipMismatch]",
+    );
+}
+
+/// REGRESSION — Track B3, ARRAY-ELEMENT cell: a Vector-element callee
+/// (`arr[0]` where `arr` is `Vector[Callable[void(&int)]]`) fires the same
+/// check, exercising the non-Identifier callee arm. The prototype records
+/// `expr_types[callee.span]` at `Expr::Call` entry so the check reaches the
+/// callable's `param_ownerships` even on subscript / field-access / IIFE
+/// callees. Pre-B3 (RED-verified): `gg check` accepted; runtime SEGV'd
+/// (masked also by an independent Vector-of-Callable storage defect, filed
+/// separately at `sound_callable_amp_arr_indexed_callee_segv`).
+#[test]
+fn indirect_call_bare_arg_vec_amp_callee_error() {
+    check_gg_fails(
+        "indirect_call_bare_arg_vec_amp_callee_error.gg",
+        "error[E_OwnershipMismatch]",
+    );
+}
+
 /// KNOWN GAP — the THIRD `__gorget_closure_call_N` construction site (the
 /// non-identifier callee arm at `src/ir/lowering/exprs/calls.rs` — grep the
 /// current site with `grep -n 'lower_expr(ctx, builder, &arg.node.value)' \
@@ -32362,6 +32424,23 @@ fn callable_amp_fntype_writethrough() {
 on both backends; gg check accepts it. Asserts the INTENDED 101; TODO.md."]
 fn sound_callable_amp_arr_indexed_callee_segv() {
     run_gg("known_gaps/sound_callable_amp_arr_indexed_callee_segv.gg", "101");
+}
+
+/// KNOWN GAP — a closure literal with a `&`-sigil parameter and a body that
+/// writes through it (`(int &x): x = ...`) fails to PARSE with "expected ')',
+/// found '='". The read-only twin (`(int &x): print(x)`) parses. This blocks
+/// writing an IIFE that mutates its captured argument and blocked Track B3's
+/// scout from probing the IIFE cell of the callable-shape axis. Filed with
+/// the intended output (accept + run + print 101 under Option A / D31-uniform);
+/// un-ignore when the closure-body statement-position parse lands.
+#[test]
+#[ignore = "KNOWN GAP: closure `&`-param with assignment body fails to parse. \
+Asserts the INTENDED 101; TODO.md IIFE parse entry."]
+fn sound_closure_amp_param_write_body_parse_error() {
+    run_gg(
+        "known_gaps/sound_closure_amp_param_write_body_parse_error.gg",
+        "101",
+    );
 }
 
 /// REGRESSION — a `Guard[T]` field reached through a `&` parameter behaves

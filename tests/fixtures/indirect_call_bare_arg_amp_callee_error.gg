@@ -1,0 +1,38 @@
+# REGRESSION -- Track B3 (D31-uniform, indirect call sigil gate): a BARE argument
+# passed into a `Callable[void(&int)]` LOCAL whose parameter declares `&`
+# (mutable borrow) must REJECT at `gg check` with `E_OwnershipMismatch` -- the
+# exact same rule D31 enforces at DIRECT call sites is now enforced UNIFORMLY at
+# indirect call sites too (over `Callable[..]` / `MutCallable[..]` /
+# `ConsumeCallable[..]` / `Box[Callable[..]]` callees whose function-type
+# parameter declares a sigil).
+#
+# AXIS / CELL (callable-shape x sigil-mismatch direction):
+#   Callable LOCAL callee  x  bare arg vs `&`-declared param
+# Sibling cells covered by separate NEG fixtures:
+#   - `indirect_call_amp_arg_bare_callee_error.gg`    (E4: `&` arg vs bare-declared param)
+#   - `indirect_call_bare_arg_param_amp_callee_error.gg` (F2: same as this but callee is a PARAM)
+#   - `indirect_call_bare_arg_vec_amp_callee_error.gg`  (H2: callee is a Vector-element indirection)
+#
+# Pre-B3 (RED-verified at HEAD 1028972f): `gg check` printed "OK: no semantic
+# errors"; the emitted binary exhibited undefined behavior (silent mis-write /
+# SEGV depending on backend and memory layout) because the callee's `&int`
+# parameter treated the by-value argument as a pointer.
+# Post-B3: `gg check` REJECTS with `E_OwnershipMismatch` at the argument span --
+# the UB is unreachable by construction.
+#
+# The class-retiring guard (Core #6): `check_call_ownership` in
+# `src/semantic/safety/helpers.rs` was extended with a type-based indirect path
+# that reads `param_ownerships` off the callee's resolved function type. The
+# fix lives at ONE producer site (single semantic call check), so the class
+# cannot leak to new callee shapes -- every `Expr::Call` reaches it.
+void bump(int &n):
+    n = n + 100
+
+void main():
+    int a = 1
+    Callable[void(&int)] cb = bump
+    # THE ASSERTION: bare `cb(a)` REJECTS under D31-uniform (Track B3) because
+    # `cb` declares a `&int` parameter -- the same rule that rejects `bump(a)`
+    # at a direct call site. Callers must re-spell as `cb(&a)`.
+    cb(a)
+    print(a)

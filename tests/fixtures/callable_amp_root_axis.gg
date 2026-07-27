@@ -1,18 +1,23 @@
-# AXIS-COMPLETENESS — the callable-indirection matrix.
+# AXIS-COMPLETENESS -- the callable-indirection matrix (post-Track-B3).
 #
 # Every cell of the three axes gets one call with a distinguishable output, so a
 # partial regression trips MULTIPLE lines (Core #12). The axes are independent:
 #   root                × callable-provenance × arg-spelling
-#   plain-local | &-param   LOCAL | PARAM         bare | `&`
+#   plain-local | &-param   LOCAL | PARAM         `&`
 # and the reference-grade shape at each cell is "write through the borrow".
+#
+# Under Track B3 (D31-uniform, ledger 2026-07-20 D31 ADDENDUM-2), the bare-arg
+# cells (L2 = plain-local root + bare arg, G1 = &-param root + bare arg) are
+# REJECTED at `gg check` with `E_OwnershipMismatch` -- the same rule direct
+# calls have long enforced now applies uniformly to indirect calls. Those cells
+# therefore no longer belong here (they cannot RUN); they are pinned as
+# check-time REJECTS in the sibling NEG fixtures:
+#   indirect_call_bare_arg_amp_callee_error.gg        (was L2)
+#   indirect_call_bare_arg_param_amp_callee_error.gg  (was F2 / analogous shape)
 #
 # Pre-Track-B1 measurements (both backends):
 #   L1 LOCAL callable + plain-local + &-arg     -> SEGV (was cell 1 of scout table)
-#   L2 LOCAL callable + plain-local + bare-arg  -> SEGV (was cell 3)
 #   P1 PARAM callable + plain-local + &-arg     -> SEGV (was cells 2, 4)
-#   G1 PARAM callable + &-param    + bare-arg   -> 101  (accidentally green via
-#                                                        `is_param_borrow_unique`;
-#                                                        preserved by the shortcut)
 #   G2 PARAM callable + &-param    + &-arg      -> 101  (accidentally green same
 #                                                        family; the sibling fixture
 #                                                        `callable_ref_param_amp.gg`
@@ -21,7 +26,7 @@
 #
 # The output digits below identify which cell ran, so a regression that hits
 # only one cell prints a still-recognisable-but-wrong sequence rather than
-# silently degrading to the correct total. Cells L1/L2/P1 formerly SEGV'd, so a
+# silently degrading to the correct total. Cells L1/P1 formerly SEGV'd, so a
 # regression that reintroduces the bug drops the line's second column (or
 # crashes the run before it can print).
 void bump(int &n):
@@ -33,20 +38,10 @@ void with_local_amp():
     cb(&a)
     print(f"L1={a}")
 
-void with_local_bare():
-    int a = 2
-    Callable[void(&int)] cb = bump
-    cb(a)
-    print(f"L2={a}")
-
 void with_param_amp(Callable[void(&int)] cb):
     int a = 3
     cb(&a)
     print(f"P1={a}")
-
-void with_param_bare_ampparam(Callable[void(&int)] cb, int &a):
-    cb(a)
-    print(f"G1={a}")
 
 void with_param_amp_ampparam(Callable[void(&int)] cb, int &a):
     cb(&a)
@@ -54,9 +49,6 @@ void with_param_amp_ampparam(Callable[void(&int)] cb, int &a):
 
 void main():
     with_local_amp()
-    with_local_bare()
     with_param_amp(bump)
-    int g1 = 4
-    with_param_bare_ampparam(bump, &g1)
     int g2 = 5
     with_param_amp_ampparam(bump, &g2)

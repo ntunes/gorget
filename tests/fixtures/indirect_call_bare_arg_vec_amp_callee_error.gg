@@ -1,0 +1,30 @@
+# REGRESSION -- Track B3 (D31-uniform, indirect call sigil gate): the ARRAY-
+# ELEMENT cell of the callable-shape axis. When the callee expression is an
+# index into a `Vector[Callable[void(&int)]]` (i.e. `arr[0]`), a bare argument
+# at the invocation must REJECT at `gg check` with `E_OwnershipMismatch` --
+# same rule, non-Identifier callee shape.
+#
+# AXIS / CELL:
+#   Vector-element callee  x  bare arg vs `&`-declared param
+# This is the exemplary NON-IDENTIFIER callee: the check must fire on any
+# expression whose type resolves to a callable, not merely on bare-name
+# callees. The prototype records `expr_types[callee.span]` at `Expr::Call`
+# entry so the safety pass reaches the callable's `param_ownerships` even
+# when the callee is a subscript / field-access / IIFE.
+#
+# Pre-B3 (RED-verified at HEAD 1028972f): `gg check` accepted the shape; the
+# runtime SEGV is masked by an independent Vector-of-Callable storage/dispatch
+# defect (H1 cell -- SEGV even with the correctly-sigil-spelled call). This
+# fixture guards ONLY the check-time reject; the H1 storage defect is filed
+# separately (`sound_callable_amp_arr_indexed_callee_segv`).
+# Post-B3: `gg check` REJECTS at the argument span.
+void bump(int &n):
+    n = n + 100
+
+void main():
+    int a = 1
+    Vector[Callable[void(&int)]] arr = [bump]
+    # THE ASSERTION: bare `arr[0](a)` REJECTS -- the callable's declared param
+    # is `&int`; the caller must re-spell `arr[0](&a)`.
+    arr[0](a)
+    print(a)
