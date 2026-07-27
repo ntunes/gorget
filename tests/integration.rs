@@ -37170,3 +37170,37 @@ fn scout_e_docs_94_box_len() {
 fn scout_e_readguard_userm_autoderef() {
     run_gg("known_gaps/scoutE_readguard_userm_autoderef.gg", "35");
 }
+
+/// KNOWN GAP (Track E1 scouting surfaced) — `Guard[T].get()` on a heap-carrying
+/// inner is a REGISTERED method (NOT the fabrication class E1 closes); its
+/// runtime shim returns the inner by-value while the compiler treats the local
+/// as owned → double-free at scope exit. HEAP-FORCED (no literal). RED-verified
+/// at HEAD: build OK, run aborts exit 134 (`free(): double free detected in
+/// tcache 2`). Fix direction: `.get()` returns `Ref[T]` for heap-carrying inners.
+/// Asserts INTENDED single-print + no abort.
+#[test]
+#[ignore = "KNOWN GAP (Track E1 filed): Guard[String].get() ownership contract wrong for \
+heap-carrying inners — double-free at scope exit. Fix direction: .get() returns Ref[T]. TODO.md."]
+fn sound_guard_get_string_double_free() {
+    run_gg(
+        "known_gaps/sound_guard_get_string_double_free.gg",
+        "hello world-forced",
+    );
+}
+
+/// KNOWN GAP (Track E1 scouting surfaced) — `g.0 = v` on `Guard[(int, int)]`
+/// SIGSEGVs on LLVM (exit 139) and fails the C build (`Guard__Tuple__int64_t__int64_t
+/// has no member named 'owner'`). Tuple-field write-through does not project
+/// through `emit_guard_get_ptr`. Likely closes alongside a Track-D-adjacent
+/// fix generalising the guard write-place projection to tuple-field spellings.
+/// Asserts INTENDED `(42, 2)`.
+#[test]
+#[ignore = "KNOWN GAP (Track E1 filed): tuple-field write-through through Guard receiver — \
+LLVM SIGSEGV + C-compile-fail. Fix direction: route through emit_guard_get_ptr for tuple-field \
+assigns. TODO.md."]
+fn scout_e_guard_tuple_field_assign_segv() {
+    run_gg(
+        "known_gaps/scoutE_guard_tuple_field_assign_segv.gg",
+        "(42, 2)",
+    );
+}
