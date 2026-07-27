@@ -8669,7 +8669,9 @@ fn ast_type_to_gorget_name(ty: &Type) -> Option<String> {
 /// Run type checking on the entire module.
 /// Returns (expr_types, method_resolutions):
 /// - expr_types: span → inferred TypeId (for Result-based `?` codegen)
-/// - method_resolutions: method span start → DefId (for borrow checker origin tracking)
+/// - method_resolutions: method span start → `MethodResolution` (D36:
+///   extended value carries the resolved DefId + optional auto-deref
+///   wrapper kind for borrow-checker origin tracking + IR lowering)
 pub fn check_module(
     module: &Module,
     scopes: &mut ScopeTable,
