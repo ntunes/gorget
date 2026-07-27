@@ -16,12 +16,80 @@ pub struct DeferredBuiltin {
     pub type_args: BuiltinTypeArgs,
 }
 
+/// Which lock-guard wrapper a TypeId is, and whether writes through it are
+/// permitted. Replaces the `guard_inner_suffix` name-prefix test
+/// (`docs/devbook/24-layering-discipline.md` rule 2: facts cross boundaries as
+/// typed fields, never as name prefixes).
+///
+/// POLARITY LIVES HERE, not on `ResourceMetadata`: all three prefixes share
+/// `runtime_name = "Guard"` in the resource schema, so that channel cannot
+/// distinguish read-only from writable. This enum can (plain enum, no schema
+/// gate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuardKind {
+    /// `Guard[T]` from `Mutex.lock()` — writable.
+    Mutex,
+    /// `ReadGuard[T]` from `RWLock.read()` — READ-ONLY; write places refuse.
+    Read,
+    /// `WriteGuard[T]` from `RWLock.write()` — writable.
+    Write,
+}
+
+impl GuardKind {
+    /// The ONE registration-time name match (`for_builtin_name` precedent).
+    /// Returns the kind and the mangled inner C suffix.
+    pub fn classify(name: &str) -> Option<GuardKind> {
+        if name.starts_with("Guard__") {
+            Some(GuardKind::Mutex)
+        } else if name.starts_with("ReadGuard__") {
+            Some(GuardKind::Read)
+        } else if name.starts_with("WriteGuard__") {
+            Some(GuardKind::Write)
+        } else {
+            None
+        }
+    }
+
+    /// Writes through this guard are forbidden (`ReadGuard`).
+    pub fn is_read_only(self) -> bool {
+        matches!(self, GuardKind::Read)
+    }
+
+    /// The mangled inner C suffix of a guard's registered name.
+    ///
+    /// ⚠ RESIDUAL, deliberately NOT retired by this channel. The guarded
+    /// value's TypeId is NOT available at `register_named` — the funnel with
+    /// total coverage (see there) receives only `(name, type_id)`, and the two
+    /// mint paths that DO know the inner type (`ensure_*_type_def`,
+    /// `stmts/mod.rs`'s ArcMutex arm) are a strict subset. Resolving the suffix
+    /// eagerly at registration would freeze a possibly-unregistered inner name
+    /// to the `I64_TYPE` fallback, which is worse than resolving late.
+    ///
+    /// So the SEMANTIC axis (is-a-guard + polarity) is typed, and the inner
+    /// TYPE stays a registration-time-name round-trip resolved at the read
+    /// site — the same boundary and the same precedent as
+    /// `emit_guard_get_ptr`'s `format!("{name}__get_ptr")`, where the mangled
+    /// name IS the contract with the runtime.
+    pub fn inner_suffix(name: &str) -> Option<&str> {
+        name.strip_prefix("Guard__")
+            .or_else(|| name.strip_prefix("ReadGuard__"))
+            .or_else(|| name.strip_prefix("WriteGuard__"))
+    }
+}
+
 /// Maps AST types to GIR TypeIds.
 pub struct TypeMapper {
     /// `String` (owned) maps to Named("GorgetString") for string interpolation results.
     pub owned_string_type: TypeId,
     /// Cache of Named type → GIR TypeId.
-    pub named_types: FxHashMap<String, TypeId>,
+    ///
+    /// PRIVATE ON PURPOSE. `register_named` is the sole writer; `type_name_for_id`
+    /// is this map's inverse. Keeping the field private is what makes
+    /// `guard_types` provably as complete as the name test it replaces.
+    named_types: FxHashMap<String, TypeId>,
+    /// Typed guard channel: TypeId → `GuardKind`. Written at the one funnel
+    /// (`register_named`), read via `LoweringContext::guard_of`.
+    pub guard_types: FxHashMap<TypeId, GuardKind>,
     /// Builtin types registered during `map_ast_type_mut`, pending fn_sigs population.
     pub deferred_builtins: Vec<DeferredBuiltin>,
     /// Typed payload channel for `Thread[T]` handle types: the name-deduped
@@ -67,6 +135,7 @@ impl TypeMapper {
         Self {
             owned_string_type,
             named_types: FxHashMap::default(),
+            guard_types: FxHashMap::default(),
             deferred_builtins: Vec::new(),
             thread_payload_types: FxHashMap::default(),
         }
@@ -244,7 +313,7 @@ impl TypeMapper {
                         let td = make_option_type_def(&mangled, inner_type, registry);
                         registry.add_type_def(td);
                         let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
+                        self.register_named(mangled, type_id);
                         return type_id;
                     }
                     if base == "Result" && generic_args.len() == 2 {
@@ -254,7 +323,7 @@ impl TypeMapper {
                         let td = make_result_type_def(&mangled, ok_type, err_type, registry);
                         registry.add_type_def(td);
                         let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
+                        self.register_named(mangled, type_id);
                         return type_id;
                     }
                     // Box[T] auto-registration. Without this, Box[T] surfacing
@@ -291,7 +360,7 @@ impl TypeMapper {
                         };
                         registry.add_type_def(type_def);
                         let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
+                        self.register_named(mangled, type_id);
                         return type_id;
                     }
                     // Callable/MutCallable/ConsumeCallable generics: return a FnPtr TypeId
@@ -447,7 +516,7 @@ impl TypeMapper {
                     // get a real inner TypeId instead of UNIT_TYPE.
                     if base == "Task" {
                         let type_id = registry.insert(GirType::Named(mangled.clone()));
-                        self.named_types.insert(mangled, type_id);
+                        self.register_named(mangled, type_id);
                         return type_id;
                     }
                     return UNIT_TYPE;
@@ -515,7 +584,7 @@ impl TypeMapper {
                 };
                 registry.add_type_def(type_def);
                 let type_id = registry.insert(GirType::Named(mangled.clone()));
-                self.named_types.insert(mangled, type_id);
+                self.register_named(mangled, type_id);
                 type_id
             }
             Type::Function { return_type, params, .. } => {
@@ -542,8 +611,42 @@ impl TypeMapper {
     }
 
     /// Register a named type that has already been added to the TypeRegistry.
+    ///
+    /// THE SINGLE WRITE FUNNEL for `named_types`. The map is private precisely
+    /// so this is the only door: `type_name_for_id` is this map's inverse, so a
+    /// TypeId is name-resolvable IF AND ONLY IF it passed through here. Any
+    /// TypeId→fact channel written here therefore has EXACTLY the coverage of
+    /// the name test it replaces — a bijection argument, not an enumeration of
+    /// mint sites.
+    #[cfg_attr(debug_assertions, track_caller)]
     pub fn register_named(&mut self, name: String, type_id: TypeId) {
+        // Registration-time classification (the `for_builtin_name` precedent:
+        // ONE name match, at registration, feeding typed metadata that every
+        // consumer reads instead of re-deriving from the name).
+        if let Some(kind) = GuardKind::classify(&name) {
+            if std::env::var("GG_GUARD_CENSUS").is_ok() {
+                let loc = std::panic::Location::caller();
+                eprintln!("[guard-census] {}:{} | {name} -> {type_id:?} {kind:?}",
+                          loc.file(), loc.line());
+            }
+            self.guard_types.insert(type_id, kind);
+        }
         self.named_types.insert(name, type_id);
+    }
+
+    /// Typed guard lookup — the replacement for `guard_inner_suffix(name)`.
+    /// Callers peel `Ptr`/`MutPtr` first (see `LoweringContext::guard_of`) so a
+    /// `Guard[T]` reached through a `&`/`!` param answers the same as a bare
+    /// `Guard[T]` local — the asymmetry that made three of the four read sites
+    /// miss the guard branch.
+    pub fn guard_kind(&self, type_id: TypeId) -> Option<GuardKind> {
+        self.guard_types.get(&type_id).copied()
+    }
+
+    /// True iff `name` is in the guard family — the WRITE-SIDE assertion helper
+    /// for the miss policy (see `LoweringContext::guard_of`).
+    pub fn is_guard_name(name: &str) -> bool {
+        GuardKind::classify(name).is_some()
     }
 
     /// Idempotent type registration: returns existing TypeId if `name` is already
@@ -563,13 +666,26 @@ impl TypeMapper {
         let type_def = make_def(name);
         registry.add_type_def(type_def);
         let type_id = registry.insert(GirType::Named(name.to_string()));
-        self.named_types.insert(name.to_string(), type_id);
+        self.register_named(name.to_string(), type_id);
         type_id
     }
 
     /// Look up a named type's GIR TypeId.
     pub fn lookup_named(&self, name: &str) -> Option<TypeId> {
         self.named_types.get(name).copied()
+    }
+
+    /// Read accessors — the map is private, these are the only doors in.
+    pub fn contains_named(&self, name: &str) -> bool {
+        self.named_types.contains_key(name)
+    }
+
+    pub fn iter_named(&self) -> impl Iterator<Item = (&String, &TypeId)> {
+        self.named_types.iter()
+    }
+
+    pub fn named_snapshot(&self) -> FxHashMap<String, TypeId> {
+        self.named_types.clone()
     }
 
     /// Reverse-lookup: find the registered name for a GIR TypeId.
@@ -646,7 +762,7 @@ pub fn register_struct_type(
     // This allows recursive references within the same struct's fields.
     if !mapper.named_types.contains_key(name.as_str()) {
         let placeholder_id = registry.insert(GirType::Named(name.clone()));
-        mapper.named_types.insert(name.clone(), placeholder_id);
+        mapper.register_named(name.clone(), placeholder_id);
     }
 
     // Pre-register any generic types used as field types (e.g., Option[Color])
@@ -703,7 +819,7 @@ pub fn register_newtype(
     // Pre-register name → TypeId if not already done by a pre-pass
     if !mapper.named_types.contains_key(name.as_str()) {
         let placeholder_id = registry.insert(GirType::Named(name.clone()));
-        mapper.named_types.insert(name.clone(), placeholder_id);
+        mapper.register_named(name.clone(), placeholder_id);
     }
 
     let inner_type = mapper.map_ast_type(&nt.inner_type.node);
@@ -802,7 +918,7 @@ fn register_builtin_option(
     let type_def = make_option_type_def(mangled_name, inner_type, registry);
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
-    mapper.named_types.insert(mangled_name.to_string(), type_id);
+    mapper.register_named(mangled_name.to_string(), type_id);
 }
 
 /// Register a monomorphized Result[T, E] type (built-in: Ok(T) | Error(E)).
@@ -820,7 +936,7 @@ fn register_builtin_result(
     let type_def = make_result_type_def(mangled_name, ok_type, err_type, registry);
     registry.add_type_def(type_def);
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
-    mapper.named_types.insert(mangled_name.to_string(), type_id);
+    mapper.register_named(mangled_name.to_string(), type_id);
 }
 
 /// Register a collection type alias (Vector[T], Dict[K,V], etc.) as a named GIR type.
@@ -836,7 +952,7 @@ pub(super) fn register_collection_alias(
     // All collection instances are structurally identical at runtime.
     // The C backend handles collection_type_alias for the actual C type name.
     let type_id = registry.insert(GirType::Named(mangled_name.to_string()));
-    mapper.named_types.insert(mangled_name.to_string(), type_id);
+    mapper.register_named(mangled_name.to_string(), type_id);
 
     // Phase A: register a TypeDef with full metadata so consumers can read
     // drop_strategy / clone_fn / clone_inplace_fn from the protocol table
@@ -953,7 +1069,7 @@ pub(super) fn register_callable_alias(
         id
     } else {
         let id = registry.insert(GirType::Named(mangled_name.to_string()));
-        mapper.named_types.insert(mangled_name.to_string(), id);
+        mapper.register_named(mangled_name.to_string(), id);
         id
     };
 
@@ -1024,7 +1140,7 @@ pub fn register_enum_type(
     // This allows recursive references (e.g., Box[Json] in Json) to resolve.
     if !mapper.named_types.contains_key(name.as_str()) {
         let placeholder_id = registry.insert(GirType::Named(name.clone()));
-        mapper.named_types.insert(name.clone(), placeholder_id);
+        mapper.register_named(name.clone(), placeholder_id);
     }
 
     // Pre-register generic types used in variant fields (e.g., Vector[Json], Dict[str, Json])

@@ -153,7 +153,7 @@ impl ClosureLowering {
         };
         ctx.type_registry.add_type_def(type_def);
         let struct_type_id = ctx.type_registry.insert(GirType::Named(struct_name.clone()));
-        ctx.type_mapper.named_types.insert(struct_name.clone(), struct_type_id);
+        ctx.type_mapper.register_named(struct_name.clone(), struct_type_id);
 
         // Map closure params to GIR types
         let closure_param_names: Vec<String> = params.iter()
@@ -1043,7 +1043,7 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
                 if name == "Some" && args.len() == 1 {
                     let inner_type = infer_closure_return_type(ctx, &args[0].node.value);
                     let mangled = format!("Option__{}", crate::ir::types::format_type_for_mangle(inner_type, &ctx.type_registry));
-                    if let Some(&tid) = ctx.type_mapper.named_types.get(&mangled) {
+                    if let Some(tid) = ctx.type_mapper.lookup_named(&mangled) {
                         return tid;
                     }
                 }
@@ -1058,7 +1058,7 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
                 }
                 // Check enum_variants for user-defined enums
                 if let Some((enum_name, _)) = ctx.enum_variants.get(name.as_str()) {
-                    if let Some(&type_id) = ctx.type_mapper.named_types.get(enum_name.as_str()) {
+                    if let Some(type_id) = ctx.type_mapper.lookup_named(enum_name.as_str()) {
                         return type_id;
                     }
                 }
@@ -1067,7 +1067,7 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
             // Callee is `Expr::FieldAccess { object: Identifier(enum_name), field: variant }`.
             if let Expr::FieldAccess { object, .. } = &callee.node {
                 if let Expr::Identifier(enum_name) = &object.node {
-                    if let Some(&type_id) = ctx.type_mapper.named_types.get(enum_name.as_str()) {
+                    if let Some(type_id) = ctx.type_mapper.lookup_named(enum_name.as_str()) {
                         return type_id;
                     }
                 }
@@ -1143,7 +1143,7 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
             // `__gg_Box = int64_t`.
             if let Expr::Identifier(name) = &receiver.node {
                 if ctx.lookup_local(name).is_none() {
-                    if let Some(&type_id) = ctx.type_mapper.named_types.get(name.as_str()) {
+                    if let Some(type_id) = ctx.type_mapper.lookup_named(name.as_str()) {
                         return type_id;
                     }
                 }

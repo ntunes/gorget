@@ -5,6 +5,7 @@ use crate::ir::instructions::*;
 use crate::ir::types::*;
 
 use super::super::context::LoweringContext;
+use super::super::types::{GuardKind, TypeMapper};
 
 /// Emit Shared.get() → Mutex, then lock+get+release on a Shared[Mutex[T]] hidden local.
 /// Returns an operand holding the inner value T.
@@ -205,16 +206,67 @@ pub fn atomic_type_name_for(inner_type: TypeId) -> String {
     }
 }
 
-pub fn guard_inner_suffix(type_name: &str) -> Option<(&str, bool)> {
-    if let Some(suffix) = type_name.strip_prefix("Guard__") {
-        Some((suffix, false))
-    } else if let Some(suffix) = type_name.strip_prefix("ReadGuard__") {
-        Some((suffix, true))
-    } else if let Some(suffix) = type_name.strip_prefix("WriteGuard__") {
-        Some((suffix, false))
-    } else {
-        None
+/// Everything the four guard-projection sites need, resolved ONCE from typed
+/// metadata (`TypeMapper::guard_types`, written at the single `register_named`
+/// funnel) instead of from a name prefix.
+///
+/// `docs/devbook/24-layering-discipline.md` rule 2 (typed metadata, not
+/// name-matched) + rule 3 (one source of truth per axis) + rule 4 (resolve
+/// once, write through).
+#[derive(Debug, Clone)]
+pub struct GuardInfo {
+    /// Which guard, and therefore whether writes are permitted.
+    pub kind: GuardKind,
+    /// The guard TypeId with any `Ptr`/`MutPtr` peeled off.
+    pub guard_type: TypeId,
+    /// The guarded value's TypeId.
+    pub inner_type: TypeId,
+    /// The registered mangled name — used ONLY to spell the runtime symbol
+    /// `{name}__get_ptr`. That is the C-emit boundary, where the name IS the
+    /// contract (the sanctioned exception in the No-name-matching rule).
+    pub guard_name: String,
+    /// The place's own type was `Ptr`/`MutPtr` of the guard (a `&`/`!` param or
+    /// a `.get()` Ref chain), so the pointer is already in hand and must NOT be
+    /// re-borrowed. THIS is the axis three of the four sites silently ignored.
+    pub through_pointer: bool,
+}
+
+impl GuardInfo {
+    pub fn is_read_only(&self) -> bool {
+        self.kind.is_read_only()
     }
+}
+
+/// Resolve a GIR TypeId to guard metadata, peeling ONE level of `Ptr`/`MutPtr`.
+///
+/// MISS POLICY (Core #10 — no silent-drop arm): the typed channel and the
+/// registered name must agree exactly. They are provably co-extensive
+/// (`register_named` is the sole writer of `named_types`, and
+/// `type_name_for_id` is that map's inverse), so a disagreement means a new
+/// mint path bypassed the funnel — a compiler bug, not a user program. The
+/// differential `debug_assert!` below fires on EITHER direction (a miss where
+/// the name says guard, or a hit where it does not), so a bypassing mint path
+/// trips every debug test run instead of shipping a silently-dropped access.
+pub fn guard_of(ctx: &LoweringContext, type_id: TypeId) -> Option<GuardInfo> {
+    let (peeled, through_pointer) = match ctx.pointee_type(type_id) {
+        Some(inner) => (inner, true),
+        None => (type_id, false),
+    };
+    let kind = ctx.type_mapper.guard_kind(peeled);
+
+    debug_assert_eq!(
+        kind.is_some(),
+        ctx.type_name_for_id(peeled).is_some_and(TypeMapper::is_guard_name),
+        "guard channel / registered name disagree for {peeled:?} (name = {:?}, kind = {kind:?}); \
+         a guard mint path bypassed TypeMapper::register_named",
+        ctx.type_name_for_id(peeled),
+    );
+
+    let kind = kind?;
+    let guard_name = ctx.type_name_for_id(peeled)?.to_string();
+    let suffix = GuardKind::inner_suffix(&guard_name)?;
+    let inner_type = c_suffix_to_type_id(suffix, ctx);
+    Some(GuardInfo { kind, guard_type: peeled, inner_type, guard_name, through_pointer })
 }
 
 /// Emit a call to `Guard__T__get_ptr` (or ReadGuard/WriteGuard variant).
@@ -223,24 +275,26 @@ pub fn emit_guard_get_ptr(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     guard_place: &Place,
-    guard_type_id: TypeId,
-    guard_type_name: &str,
-    inner_suffix: &str,
+    info: &GuardInfo,
 ) -> (LocalId, TypeId) {
-    let inner_type = c_suffix_to_type_id(inner_suffix, ctx);
-    // Borrow guard mutably for the get_ptr call
-    let guard_ptr_type = ctx.register_mut_ptr_type(guard_type_id);
-    let guard_ptr = builder.add_local(guard_ptr_type, None);
-    builder.emit_borrow_mut(guard_ptr, guard_place.clone());
+    // When the place is already a pointer to the guard (a `&`/`!` param, a
+    // `.get()` Ref chain), pass the pointer directly instead of re-borrowing.
+    // Both shapes are sound (`guard_of` peels one Ptr layer so the callee sees
+    // the guard either way), so this is a codegen-cleanliness choice, not a
+    // correctness fix.
+    let guard_ptr_operand = if info.through_pointer {
+        Operand::Copy(guard_place.clone())
+    } else {
+        let guard_ptr_type = ctx.register_mut_ptr_type(info.guard_type);
+        let guard_ptr = builder.add_local(guard_ptr_type, None);
+        builder.emit_borrow_mut(guard_ptr, guard_place.clone());
+        Operand::Copy(Place::local(guard_ptr))
+    };
     // Call get_ptr → returns T* (MutPtr(inner_type))
-    let inner_ptr_type = ctx.register_mut_ptr_type(inner_type);
-    let get_ptr_fn = format!("{guard_type_name}__get_ptr");
-    let inner_ptr_local = builder.call(
-        &get_ptr_fn,
-        vec![Operand::Copy(Place::local(guard_ptr))],
-        inner_ptr_type,
-    );
-    (inner_ptr_local, inner_type)
+    let inner_ptr_type = ctx.register_mut_ptr_type(info.inner_type);
+    let get_ptr_fn = format!("{}__get_ptr", info.guard_name);
+    let inner_ptr_local = builder.call(&get_ptr_fn, vec![guard_ptr_operand], inner_ptr_type);
+    (inner_ptr_local, info.inner_type)
 }
 
 /// Map a C type suffix (e.g. "bool", "int64_t", "double") to a GIR TypeId.
