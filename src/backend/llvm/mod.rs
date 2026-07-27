@@ -5515,7 +5515,11 @@ fn emit_inst(
             }
 
             // ── Box__T__get → dereference void* to the boxed value ──
-            if name.contains("__get") && name.starts_with("Box__") && !args.is_empty() {
+            // (`Box__T__get_ptr` — the D36 auto-deref helper — is passed through
+            // as an opaque `ptr` return by the generic call path below, NOT loaded.)
+            if name.contains("__get") && !name.ends_with("__get_ptr")
+                && name.starts_with("Box__") && !args.is_empty()
+            {
                 if let Some(d) = dst {
                     let uid = *trap_counter;
                     *trap_counter += 1;

@@ -570,17 +570,60 @@ pub(super) fn lower_method_call(
                 }
             }
             DerefWrapperKind::DerefTarget => {
-                // Box[T] auto-deref requires a `Box__T__get_ptr` runtime helper
-                // (returning `T*` from the box's `void*` handle) that the C/LLVM
-                // backends emit alongside `Box__T__get`/`__set`. The SCOUT does
-                // NOT emit this helper — the executor adds it in
-                // `src/backend/c_lir/helpers.rs::emit_box_wrapper` and the LLVM
-                // equivalent, plus wiring in `emit_types.rs` to force emission
-                // (call-name scan) whenever a Box auto-deref call is present.
-                // For the scout, leave recv unchanged → the current dispatch
-                // fabricates `Box__T__method` which fails at link. The check
-                // side proves feasibility; the lowering shape is documented in
-                // the brief.
+                // Box[T] auto-deref (D36): project through `Box__T__get_ptr`
+                // — mirrors the Guard branch. `emit_box_wrapper` emits the
+                // helper; the C emitter's call-name scan pulls it in from
+                // the emitted call automatically.
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                let box_type_name: Option<String> = ctx
+                    .type_name_for_id(recv_type)
+                    .map(|s| s.to_string())
+                    .or_else(|| {
+                        // If recv is a pointer to Box (e.g. `&`/`!` param),
+                        // peel one Ptr layer to find the Box name.
+                        ctx.pointee_type(recv_type)
+                            .and_then(|inner| ctx.type_name_for_id(inner))
+                            .map(|s| s.to_string())
+                    });
+                if let Some(box_name) = box_type_name {
+                    if ctx.type_registry.is_box_name(&box_name) {
+                        let inner_suffix = &box_name["Box__".len()..];
+                        let inner_type = ctx.type_mapper
+                            .lookup_named(inner_suffix)
+                            .unwrap_or(I64_TYPE);
+                        // Ensure recv is a place we can pass by value.
+                        let _place = match &recv {
+                            Operand::Copy(p) | Operand::Move(p) => p.clone(),
+                            _ => {
+                                let box_ty = ctx.type_mapper
+                                    .lookup_named(&box_name)
+                                    .unwrap_or(I64_TYPE);
+                                let tmp = builder.add_local(box_ty, None);
+                                builder.assign(Place::local(tmp), recv.clone());
+                                Place::local(tmp)
+                            }
+                        };
+                        // If recv is currently a pointer-to-Box (`&`/`!` param),
+                        // load the box handle first so the helper sees the
+                        // Box (which is itself `void*`).
+                        let box_operand = if ctx.pointee_type(recv_type).is_some() {
+                            // recv is Ptr(Box) — Box__T__get_ptr expects Box
+                            // (a `void*`) by value, so dereference through
+                            // the pointer. LIR: load through the ptr local.
+                            recv.clone()
+                        } else {
+                            recv.clone()
+                        };
+                        let inner_ptr_type = ctx.register_mut_ptr_type(inner_type);
+                        let get_ptr_fn = format!("{box_name}__get_ptr");
+                        let inner_ptr_local = builder.call(
+                            &get_ptr_fn,
+                            vec![box_operand],
+                            inner_ptr_type,
+                        );
+                        recv = Operand::Copy(Place::local(inner_ptr_local));
+                    }
+                }
             }
             DerefWrapperKind::NonDerefContainer => {}
         }
