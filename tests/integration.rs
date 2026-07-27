@@ -1916,6 +1916,46 @@ fn reject_field_on_string() {
     check_gg_fails("reject_field_on_string.gg", FIELDACCESS_CODE);
 }
 
+// ══════════════════════════════════════════════════════════════
+// Track E1 — smart-pointer/lock-guard METHOD-call fabrication class
+// (mirror of the FieldAccess-fabrication block above, but for MethodCall).
+//
+// Pre-fix, a user equip method on a wrapper receiver whose builtin
+// `DerefWrapperKind` avenue silently fell through the terminal `MethodCall`
+// arm returned `error_id` — the C backend then emitted a call to a
+// nonexistent runtime symbol (`Shared__Person__greet`,
+// `gorget_guard_nonexistent_zzz`) → link error, Core #8 (a KNOWN DEFECT
+// shipped, "both backends fail the same way" is not evidence of correctness).
+//
+// Post-fix, the terminal fallthrough reads `DerefWrapperKind` on the receiver
+// and emits `E_NoMethodFound` at CHECK-time for `NonDerefContainer`
+// (Shared/Weak/Mutex/RWLock — §9.2 explicit-method-access rule, ratified
+// diagnostic) and — as an interim shape pending E2 — also for
+// `GuardAccept`/`DerefTarget` when NO method matches (the auto-deref
+// promotion for GuardAccept/DerefTarget is E2's scope, see TODO.md).
+// ══════════════════════════════════════════════════════════════
+const METHOD_NOTFOUND_CODE: &str = "error[E_NoMethodFound]";
+
+// NEGATIVE (Track E1, ratified reject cell): user equip method on
+// `Shared[Person]` — a `NonDerefContainer`. §9.2 mandates explicit-method
+// access; a user method on the wrapper is a genuine absence. E1's REJECT
+// arm is the FINAL shape here — E2 does NOT flip this to accept.
+#[test]
+fn reject_shared_user_method() {
+    check_gg_fails("reject_shared_user_method.gg", METHOD_NOTFOUND_CODE);
+}
+
+// NEGATIVE (Track E1, ratified reject cell): a genuinely-absent method name
+// on `Guard[int]` — neither the guard family nor the inner (`int`) has any
+// method called `nonexistent_zzz`. E1 catches the typo at check-time
+// instead of fabricating `gorget_guard_nonexistent_zzz` and link-erroring.
+// E2's auto-deref lookup on the inner also fails on the inner (int has no
+// such method), so this reject is invariant under E2.
+#[test]
+fn reject_guard_typo_method() {
+    check_gg_fails("reject_guard_typo_method.gg", METHOD_NOTFOUND_CODE);
+}
+
 // A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
 // emits `unreachable` right after it, so a noreturn function that falls
 // off its end, executes a `return`, or has a non-diverging expression body

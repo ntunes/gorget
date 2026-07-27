@@ -1,0 +1,26 @@
+# Track E1 NEG (SCOPE: NonDerefContainer + user equip method).
+#
+# `Shared[T]` is a `NonDerefContainer` per docs/language-design.md §9.2 —
+# accessed via explicit `.clone()` / `.downgrade()` / etc, NEVER via deref
+# to the inner. So a user equip method (`greet`) called on a `Shared[Person]`
+# receiver must REJECT with `error[E_NoMethodFound]` at check-time.
+#
+# Pre-fix (HEAD `482f6f45`, before the terminal `MethodCall` fallthrough was
+# split by DerefWrapperKind): silently accepted the call, then the C backend
+# emitted a call to a nonexistent runtime symbol `Shared__Person__greet`
+# → link error. The fabrication class (Core #8: known-defect ship, "both
+# backends fail the same way" is not evidence of correctness).
+#
+# Post-fix (this track): typechecker reads `DerefWrapperKind::NonDerefContainer`
+# at the terminal `MethodCall` fallthrough and emits `E_NoMethodFound` — the
+# ratified diagnostic per §9.2's explicit-method-access rule.
+struct Person:
+    String name
+    int age
+
+equip Person:
+    int greet(int e): return self.age + e
+
+void main():
+    Shared[Person] s = Shared[Person](Person("A", 30))
+    print(s.greet(5))

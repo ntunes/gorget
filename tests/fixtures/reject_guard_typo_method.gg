@@ -1,0 +1,19 @@
+# Track E1 NEG (SCOPE: GuardAccept + genuinely-absent method — the "typo" cell).
+#
+# A method NAME that is not present on `Guard[T]` NOR on the inner (`int`) must
+# REJECT at check-time — never silently accepted and then fabricated at LIR into
+# a call to a nonexistent runtime symbol.
+#
+# Pre-fix (HEAD `482f6f45`): silently accepted, the C backend emitted a call to
+# `gorget_guard_nonexistent_zzz` → link error. The exact fabrication class
+# (Core #8: known-defect ship).
+#
+# Post-fix (this track, E1 scope): typechecker reads `DerefWrapperKind::GuardAccept`
+# at the terminal fallthrough and emits `E_NoMethodFound`. NOTE: this is an
+# INTERIM shape — E2 (deferred) adds the auto-deref path for GuardAccept, at
+# which point a name PRESENT on the inner accepts. A name absent on BOTH `Guard`
+# and the inner (`int` here — `int` has no `nonexistent_zzz`) still rejects.
+void main():
+    Mutex[int] m = Mutex[int](42)
+    Guard[int] g = m.lock()
+    print(g.nonexistent_zzz())
