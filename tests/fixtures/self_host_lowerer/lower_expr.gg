@@ -25,7 +25,7 @@ from gir import CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet, CkNo
 from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
-from lir_lower import resource_meta_for, is_guard_struct_type, guard_method_prefix, is_opaque_pointer_type
+from lir_lower import resource_meta_for, is_guard_struct_type, guard_method_prefix, is_opaque_pointer_type, field_storage_holds_pointer
 from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types, resolve_elem_type_id, for_iterable_mode
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
@@ -480,6 +480,191 @@ Option[String] box_deref_inner_name(String base_type_name, GirModule &gmod):
                     return None
         case None:
             return None
+
+# ── Box[T] deref-as-PLACE base (shared read+write helper) ──────────
+# The exact SIBLING of `guard_field_deref_base` above: both answer the one
+# question the OBJECT DOMAIN of a projection asks — *given a wrapper object,
+# which local holds the ADDRESS of the wrapped T, and what is T called?*
+#
+# `Box__T` is `typedef void*`, so the box local's VALUE already is the heap
+# address; the whole job is to re-TYPE it as `GtPtr(T)`. That re-typing is the
+# load-bearing part, not a formality:
+#   * `GIFieldLoad` derives its LIR struct id from the base local's own type
+#     name (`gir_type_id_to_base_name` → `sr.get(...)`). `Box__T` is not a
+#     registered struct, so a box-typed base yields struct id -1 and a bogus
+#     `IFieldPtr`; `GtPtr(T)` yields T's real id.
+#   * the `GtPtr` slot is pointer-KIND, so `GIFieldLoad` LOADS the pointer
+#     rather than taking the slot's address — the field pointer lands inside
+#     the HEAP allocation.
+# The alternative — `GIDeref` — byte-copies sizeof(T) into a stack slot and
+# projects THAT, so every write through the resulting pointer is lost when the
+# statement ends. Copying the POINTER, never the pointee, is the invariant.
+#
+# Returns None for a non-box base (caller falls through unchanged).
+Option[FieldDerefResult] box_deref_ptr_base(LowerCtx &ctx, int base, String base_type_name, GirModule &gmod):
+    match box_deref_inner_name(base_type_name, &gmod):
+        case Some(bd_inner_name):
+            int bd_inner_tid = resolve_field_gir_type(bd_inner_name, &gmod)
+            int bd_ptr_tid = register_ptr(&gmod, bd_inner_tid)
+            # LoBorrowed: the alias points INTO the box's allocation, which the
+            # box local still owns — a LoOwned alias would drop-register the
+            # same heap block twice (Core #3, the same reasoning the collection
+            # element-pointer producer records).
+            int bd_ptr = add_local_with(&ctx, bd_ptr_tid, None, LoBorrowed(), BoRuntimeView(base))
+            # `GIAssign(PtrDst, OpBorrow(src))` is the canonical alias shape.
+            # For a BOX src the LIR resolves it to the slot's VALUE (the heap
+            # address), not its address — see the box arm of the D.1 rebind in
+            # `lir_lower.gg`. `OpCopy` would be wrong twice over: it reads as a
+            # resource duplication to `validate_resource_moves`, and it is not
+            # what an alias means.
+            emit(&ctx, GIAssign(bd_ptr, OpBorrow(base)))
+            return Some(FieldDerefResult(bd_ptr, bd_inner_name))
+        case None:
+            return None
+
+# ── The OBJECT DOMAIN of a place projection ────────────────────────
+# A projection has TWO INDEPENDENT axes, and conflating them is what makes
+# place resolution grow arms that contradict each other:
+#
+#   * the projection KIND — which sub-place of the object is named
+#     (`.field`, `[index]`); resolved by `lower_amp_place` below.
+#   * the OBJECT DOMAIN  — what KIND OF THING the object is, and therefore
+#     WHO produces its address; resolved HERE, once, for every kind.
+#
+#   domain                      address produced by                result
+#   ──────────────────────────  ─────────────────────────────────  ───────────
+#   local / `&`/`!` param /     lower_place_base (the slot, or     value slot
+#   `self` / module static      the param's own pointer)           or GtPtr(T)
+#   Box[T]   (`*b`, `b.f`)      box_deref_ptr_base                 GtPtr(T)
+#   Guard[T] (`g.f`)            guard_field_deref_base             GtPtr(T)
+#   collection element          lower_index_element_ptr_place      GtPtr(elem)
+#     (`v[i]`, `d[k]`)            (gorget_array_get/map_get)
+#   nested projection (`o.a.b`) lower_amp_place, recursively       GtPtr(T)
+#
+# Every domain hands back the SAME shape — a local plus the struct name to
+# project through — so the projection arms never learn what produced the base,
+# and a new domain (a future smart pointer, a newtype) is one arm HERE rather
+# than one arm in each kind.
+#
+# Note the two wrapper domains are resolved by TYPE, not by an `Expr::` arm:
+# `b.f` and `g.f` are syntactically ordinary field accesses. That is exactly
+# why they belong in the domain resolver and not in a kind-keyed arm set — and
+# why the arm-set lints cannot see them (TODO.md's recorded blind spot).
+#
+# Returns None when the base is not a resolvable PLACE (a call result, an
+# arithmetic temp, a literal) — the caller falls through unchanged.
+Option[FieldDerefResult] amp_object_base(LowerCtx &ctx, SpannedExpr base_expr, GirModule &gmod):
+    int aob_local = -1
+    match base_expr.expr:
+        case EIndex(aob_coll_box, aob_idx_box):
+            # A collection element's address comes from the runtime getter, not
+            # from a slot — `require_struct_elem=false` because a PLACE of a
+            # scalar element (`&v[0]`) is exactly what an `&`-argument wants.
+            aob_local = lower_index_element_ptr_place(&ctx, *aob_coll_box, *aob_idx_box, true, false, &gmod)
+        case EFieldAccess(_, _):
+            # Nested projection (`&o.inner.fd`): the inner object is itself a
+            # place, so recurse through the SAME resolver rather than falling
+            # back to a value read of the intermediate struct.
+            aob_local = lower_amp_place(&ctx, base_expr, &gmod)
+        else:
+            pass
+    if aob_local < 0:
+        aob_local = lower_place_base(&ctx, base_expr, &gmod)
+    if aob_local < 0 or aob_local >= ctx.locals.len():
+        return None
+    # The struct name is read off the resolved local's OWN type (Ptr/MutPtr
+    # unwrapped) — one derivation, never a per-arm recomputation.
+    String aob_name = type_id_to_base_name(ctx.locals.get(aob_local).unwrap().type_id, &gmod)
+    # Wrapper hop: a Box or Guard base needs one more step to reach the wrapped
+    # value. Both produce a GtPtr(T) local; both are typed decisions.
+    match box_deref_ptr_base(&ctx, aob_local, aob_name, &gmod):
+        case Some(aob_bx):
+            return Some(aob_bx)
+        case None:
+            pass
+    match guard_field_deref_base(&ctx, aob_local, aob_name, &gmod):
+        case Some(aob_gd):
+            return Some(aob_gd)
+        case None:
+            pass
+    return Some(FieldDerefResult(aob_local, aob_name))
+
+# ── `&<projection>` → the ADDRESS OF THE PLACE ─────────────────────
+# A `&`-argument names a PLACE, and the callee writes THROUGH it. Lowering the
+# projection as a value read — load the field into a fresh slot, then borrow
+# that slot — hands the callee the address of a temp that dies at the end of
+# the statement, so every write is silently lost.
+#
+# This resolver dispatches on the projection KIND only; the object is handed to
+# `amp_object_base` (above), which owns the domain axis. Returns the local
+# holding the place pointer, or -1 to DECLINE (the caller then lowers the
+# argument exactly as before — declining is always safe, never a silent drop).
+#
+# The `.field` arm is deliberately the SAME emission the field-READ arm uses
+# for a resource field (`GIFieldLoad` into a `GtPtr(field)`-typed,
+# `LoBorrowed` dst + `set_field_borrow`) — the read arm was already correct for
+# resource fields and wrong only in that it gated the Ptr-typed dst on
+# `is_resource_type_name`. A place is a place regardless of what is stored in
+# it, so here the gate is absent. `set_field_borrow` keeps the borrow ORIGIN
+# truthful: the resulting pointer is known to be field #i of the base, which is
+# what the escaping-borrow validators read.
+int lower_amp_place(LowerCtx &ctx, SpannedExpr arg, GirModule &gmod):
+    match arg.expr:
+        case EFieldAccess(ap_base_box, ap_field_name):
+            match amp_object_base(&ctx, *ap_base_box, &gmod):
+                case Some(ap_obj):
+                    # Tuple `t.0` registers as `_0` (same normalisation the
+                    # read arm and both write arms apply).
+                    String ap_fname = normalize_tuple_digit_field(ap_field_name)
+                    if not gmod.type_infos.contains(ap_obj.inner_name):
+                        return -1
+                    GirTypeInfo ap_info = gmod.type_infos.get(ap_obj.inner_name).unwrap()
+                    int ap_fi = -1
+                    String ap_ftn = ""
+                    int ap_i = 0
+                    while ap_i < ap_info.fields.len():
+                        GirFieldInfo ap_f = ap_info.fields.get(ap_i).unwrap()
+                        if ap_f.name == ap_fname:
+                            ap_fi = ap_i
+                            ap_ftn = ap_f.type_name.clone()
+                            break
+                        ap_i += 1
+                    if ap_fi < 0:
+                        return -1
+                    # DECLINE: the field's storage already HOLDS a pointer
+                    # (`Ref[T]`/`MutRef[T]`, or an opaque handle). `GIFieldLoad`
+                    # deliberately loads the stored pointer for those rather
+                    # than aliasing the cell, so what we could return is the
+                    # POINTEE's address, not the place's. One predicate, shared
+                    # with the LIR consumer so the two cannot drift.
+                    if field_storage_holds_pointer(ap_obj.inner_name, ap_fi, &gmod):
+                        return -1
+                    int ap_fty = resolve_field_gir_type(ap_ftn, &gmod)
+                    int ap_dst = add_local_with(&ctx, register_ptr(&gmod, ap_fty), None, LoBorrowed(), BoNone())
+                    set_field_borrow(&ctx, ap_dst, ap_obj.inner_ptr_local, ap_fi)
+                    emit(&ctx, GIFieldLoad(ap_dst, ap_obj.inner_ptr_local, ap_fi))
+                    return ap_dst
+                case None:
+                    return -1
+        case EIndex(ap_coll_box, ap_idx_box):
+            # `&v[i]` / `&d[k]` — the element IS the place.
+            return lower_index_element_ptr_place(&ctx, *ap_coll_box, *ap_idx_box, true, false, &gmod)
+        case EDeref(ap_box_box):
+            # `&*b` — the box VALUE is the heap address. Re-typed to GtPtr(T)
+            # by the domain resolver so downstream consumers see a real struct
+            # pointer rather than an unregistered `Box__T`.
+            int ap_bl = lower_expr(&ctx, *ap_box_box, &gmod)
+            if ap_bl < 0 or ap_bl >= ctx.locals.len():
+                return -1
+            String ap_bn = type_id_to_base_name(ctx.locals.get(ap_bl).unwrap().type_id, &gmod)
+            match box_deref_ptr_base(&ctx, ap_bl, ap_bn, &gmod):
+                case Some(ap_bx):
+                    return ap_bx.inner_ptr_local
+                case None:
+                    return -1
+        else:
+            pass
+    return -1
 
 # Map a GIR type-id to the runtime C-struct name used for a spawn param/return
 # slot in the SpawnCtx and the spawn helper signatures. String collapses to the
@@ -8762,6 +8947,16 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
             # root is skipped. Mirrors Rust G2 site 1 (calls.rs, 2c7fbf04).
             if ai < borrow_flags.len() and borrow_flags.get(ai).unwrap():
                 cow_materialize_projected_root(&ctx, &gmod, arg)
+                # FAMILY-1: `&<projection>` borrows THE PLACE. Strictly AFTER
+                # the materialize above (which may replace the projection ROOT
+                # with a private copy) and BEFORE the value-read fallback
+                # below, so the place we resolve is the post-materialize one.
+                # Declining (-1) falls through to the unchanged value read.
+                if not ad_handled:
+                    int amp_place = lower_amp_place(&ctx, arg, &gmod)
+                    if amp_place >= 0:
+                        arg_local = amp_place
+                        ad_handled = true
             if not ad_handled:
                 arg_local = lower_expr(&ctx, arg, &gmod)
             ctx.expected_type = prev_expected_arg
