@@ -20053,6 +20053,45 @@ fn self_host_bootstrap_fixed_point() {
         }
     }
 
+    // Report the convergence stage always — round-close visibility for the
+    // "converges at stage-K" ratchet below. Silent otherwise.
+    if let Some(k) = converged_at {
+        eprintln!("[bootstrap-fixed-point] converged at stage-{k} (MAX_GEN={MAX_GEN})");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // BOOTSTRAP CONVERGENCE STAGE — TIGHTEN-ONLY RATCHET
+    // ═══════════════════════════════════════════════════════════════
+    // Convergence stage = smallest K where stage(K).c == stage(K+1).c.
+    // Stage-1 is Rust-emitted (different lowering); stages 2..N are self-
+    // host-emitted, so the first legitimate convergence pair is stage-2 vs
+    // stage-3 (K=2). Each ownership-tag / materialize-decision discrepancy
+    // between Rust's lowering and the self-host's takes one extra generation
+    // to settle (see the test docstring above at MAX_GEN discussion).
+    //
+    // BOOTSTRAP_MAX_CONVERGENCE_STAGE is a TIGHTEN-ONLY ratchet, same
+    // discipline as the array-clone / string-clone ceilings above. If
+    // the current bootstrap converges FASTER than the ceiling (measured
+    // stage < ceiling), lower the constant in the SAME commit to lock in
+    // the gain — the round-close hygiene ratchets DOWN. Raising the ceiling
+    // needs a cited re-pin naming what round's change added a lowering
+    // divergence that costs an extra generation.
+    //
+    // The strict goal is K=2 (pre-2026-05-21 invariant); Phase 2c relaxed it
+    // during an ownership cascade. Seed = the measured value at 2026-07-27
+    // (initial visibility instrumentation for the round-close battery).
+    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 5;
+    if let Some(k) = converged_at {
+        assert!(
+            k <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,
+            "self-host bootstrap converged at stage-{k}, exceeding the tighten-only \
+             ceiling BOOTSTRAP_MAX_CONVERGENCE_STAGE={BOOTSTRAP_MAX_CONVERGENCE_STAGE}. \
+             Some round's change added a lowering divergence that costs an extra \
+             generation to settle. Either revert the divergence or raise this ceiling \
+             with a cited re-pin naming the change."
+        );
+    }
+
     if converged_at.is_none() {
         // Did not converge within MAX_GEN. Persist every stage for
         // inspection and report the comparison set.
