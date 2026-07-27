@@ -10,7 +10,7 @@ use super::super::context::{LoweringContext, SharedLocalKind};
 use super::super::exprs::{
     lower_expr, infer_operand_type_full, maybe_auto_propagate,
     emit_operator_overload_call,
-    guard_inner_suffix, emit_guard_get_ptr,
+    guard_of, emit_guard_get_ptr,
     emit_shared_mutex_lock_get, emit_shared_mutex_lock_set,
     atomic_type_name_for, emit_atomic_load, emit_atomic_store,
     emit_rwlock_write_get, emit_rwlock_write_set, emit_rwlock_write_finish,
@@ -848,17 +848,15 @@ fn resolve_ptr_field_place(
             let local_type_id = builder.locals[local_idx].type_id;
 
             // Guard[T] auto-deref for writes: guard.field = val →
-            // (*get_ptr(&guard)).field = val
-            if let Some(type_name) = ctx.type_name_for_id(local_type_id) {
-                let type_name = type_name.to_string();
-                if let Some((inner_suffix, is_read_only)) = guard_inner_suffix(&type_name) {
-                    if is_read_only {
+            // (*get_ptr(&guard)).field = val. `guard_of` peels Ptr/MutPtr so a
+            // guard reached through a `&`/`!` param resolves identically.
+            {
+                if let Some(info) = guard_of(ctx, local_type_id) {
+                    if info.is_read_only() {
                         // ReadGuard: writes are forbidden — skip.
                         return PtrFieldPlace::ReadGuardSkip;
                     }
-                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(
-                        ctx, builder, place, local_type_id, &type_name, inner_suffix,
-                    );
+                    let (inner_ptr_local, inner_type) = emit_guard_get_ptr(ctx, builder, place, &info);
                     let deref_place = Place {
                         local: inner_ptr_local,
                         projections: vec![Projection::Deref],
