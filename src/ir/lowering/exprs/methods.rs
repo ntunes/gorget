@@ -543,7 +543,7 @@ pub(super) fn lower_method_call(
     // Box), then let the normal dispatch flow re-mangle from the INNER type
     // name. `guard_of` peels `Ptr`/`MutPtr` from a `&`/`!` param so the pattern
     // is uniform.
-    if let Some(&wrapper_kind) = ctx.analysis.method_call_auto_deref.get(&method_span_start) {
+    if let Some(wrapper_kind) = ctx.analysis.method_resolutions.get(&method_span_start).and_then(|r| r.auto_deref) {
         use crate::semantic::scope::DerefWrapperKind;
         match wrapper_kind {
             DerefWrapperKind::GuardAccept => {

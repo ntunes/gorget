@@ -391,8 +391,8 @@ impl<'a> BorrowChecker<'a> {
 
     /// Compute the origin of a method call result using `return_borrows_from` data.
     pub(super) fn compute_method_call_origin(&self, receiver: &Spanned<Expr>, method: &Spanned<String>, args: &[Spanned<CallArg>]) -> BorrowOrigin {
-        let method_def_id_opt = self.method_resolutions.get(&method.span.start);
-        if let Some(&def_id) = method_def_id_opt {
+        let method_def_id_opt = self.method_resolutions.get(&method.span.start).and_then(|r| r.def_id);
+        if let Some(def_id) = method_def_id_opt {
             let info_opt = self.function_info.get(&def_id);
             if let Some(info) = info_opt {
                 if !info.return_borrows_from.is_empty() {

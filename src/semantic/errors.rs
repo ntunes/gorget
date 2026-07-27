@@ -323,6 +323,24 @@ pub enum SemanticErrorKind {
     /// Method doesn't exist on type.
     NoMethodFound { method: String, type_: String },
 
+    /// D36 face-split reject: a write-face method (`&self`) was called
+    /// through a `ReadGuard`. Writes are forbidden through a shared-read
+    /// view — mirrors the `for_write` gate on `&rg.field` at a `push`
+    /// argument. Suggested fix: acquire a `WriteGuard` via `.write()` or
+    /// change the invocation to a read-face method (bare `self`).
+    /// See `docs/language-design.md` §9.3 for the ratified per-face rules.
+    AutoDerefWriteThroughReadGuard { method: String, wrapper: String },
+
+    /// D36 face-split reject: a consuming-face method (`!self`) was called
+    /// through a `Guard` / `ReadGuard` / `WriteGuard`. Consuming through a
+    /// guard breaks the guard's Drop invariant (moving the inner OUT would
+    /// orphan the mutex-unlock in the guard's Drop). Consuming auto-deref
+    /// is legal only through `Box`. Suggested fix: consume the inner
+    /// explicitly (`!guard.into_inner()` is unavailable — release the
+    /// guard first, then move the value out of the container).
+    /// See `docs/language-design.md` §9.3 for the ratified per-face rules.
+    AutoDerefConsumingThroughGuard { method: String, wrapper: String },
+
     /// `unwrap` / `expect` / `unwrap_or` called on a receiver whose type is
     /// neither `Option` nor `Result`. These methods only exist on the optional
     /// types; on anything else they used to silently fall through the IR
@@ -801,6 +819,8 @@ impl SemanticErrorKind {
             SemanticErrorKind::NotAStruct { .. } => "E_NotAStruct",
             SemanticErrorKind::MissingTraitMethod { .. } => "E_MissingTraitMethod",
             SemanticErrorKind::NoMethodFound { .. } => "E_NoMethodFound",
+            SemanticErrorKind::AutoDerefWriteThroughReadGuard { .. } => "E_AutoDerefWriteThroughReadGuard",
+            SemanticErrorKind::AutoDerefConsumingThroughGuard { .. } => "E_AutoDerefConsumingThroughGuard",
             SemanticErrorKind::UnwrapOnNonOptional { .. } => "E_UnwrapOnNonOptional",
             SemanticErrorKind::DerefNonBox { .. } => "E_DerefNonBox",
             SemanticErrorKind::DefaultOpNonOptional { .. } => "E_DefaultOpNonOptional",
@@ -952,6 +972,22 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::NoMethodFound { method, type_ } => {
                 write!(f, "no method `{method}` found on type `{type_}`")
+            }
+            SemanticErrorKind::AutoDerefWriteThroughReadGuard { method, wrapper } => {
+                write!(
+                    f,
+                    "cannot call write-face method `{method}` through a `{wrapper}` \
+                     (RWLock read-only invariant; use `.write()` to obtain a `WriteGuard`, \
+                     or call a read-face method instead). See docs/language-design.md §9.3."
+                )
+            }
+            SemanticErrorKind::AutoDerefConsumingThroughGuard { method, wrapper } => {
+                write!(
+                    f,
+                    "cannot call consuming-face (`!self`) method `{method}` through a `{wrapper}` \
+                     (guard Drop invariant; release the guard first and consume the container). \
+                     See docs/language-design.md §9.3."
+                )
             }
             SemanticErrorKind::UnwrapOnNonOptional { method, type_ } => {
                 write!(

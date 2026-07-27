@@ -221,7 +221,7 @@ pub(super) struct CapturedMutationCollector<'a> {
     pub(super) locals: FxHashSet<String>,
     pub(super) mutated: FxHashSet<String>,
     /// Method call span start → DefId (for checking if method takes &self).
-    pub(super) method_resolutions: &'a FxHashMap<usize, DefId>,
+    pub(super) method_resolutions: &'a FxHashMap<usize, super::super::MethodResolution>,
     /// Function/method info (for checking param_ownerships[0] == MutableBorrow).
     pub(super) function_info: &'a FxHashMap<DefId, FunctionInfo>,
 }
@@ -247,7 +247,7 @@ impl crate::parser::visitor::ExprVisitor for CapturedMutationCollector<'_> {
             Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
             // Detect method calls that take &self (mutable borrow) as mutations
             Expr::MethodCall { receiver, method, .. } => {
-                if let Some(&method_def_id) = self.method_resolutions.get(&method.span.start) {
+                if let Some(method_def_id) = self.method_resolutions.get(&method.span.start).and_then(|r| r.def_id) {
                     if let Some(info) = self.function_info.get(&method_def_id) {
                         if info.param_ownerships.first() == Some(&Ownership::MutableBorrow) {
                             if let Some(name) = extract_root_name(&receiver.node) {

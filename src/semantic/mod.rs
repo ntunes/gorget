@@ -26,6 +26,34 @@ use scope::DerefWrapperKind as ScopeDerefWrapperKind;
 use traits::TraitRegistry;
 use types::TypeTable;
 
+/// The resolution of a method call — the resolved definition plus, when
+/// D36 auto-deref fired, the wrapper kind whose inner supplied the method.
+///
+/// Design (`docs/define-gorget/decisions.md` D36, 2026-07-27): the ratified
+/// shape is a single record on `method_resolutions`, NOT a parallel
+/// sidecar. Consumers that only care about the def read `.def_id`; the
+/// lowering reads `.auto_deref` to decide whether to project the receiver
+/// through the wrapper's `get_ptr` helper before dispatch.
+///
+/// `def_id` is `None` when the resolved method is a BUILTIN on the inner
+/// type (no user `FunctionInfo`) — the borrow checker skips such entries
+/// (nothing to consult on ownership), and the lowering dispatches through
+/// the builtin path once the receiver is projected through `get_ptr`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MethodResolution {
+    pub def_id: Option<DefId>,
+    pub auto_deref: Option<ScopeDerefWrapperKind>,
+}
+
+impl MethodResolution {
+    /// Convenience: a resolution with no auto-deref (direct method-on-type
+    /// dispatch). Every call site that previously stored a bare `DefId`
+    /// now stores `MethodResolution::direct(def_id)`.
+    pub fn direct(def_id: DefId) -> Self {
+        MethodResolution { def_id: Some(def_id), auto_deref: None }
+    }
+}
+
 /// CFA (Custody Flow Analysis) decision for a `shared` binding.
 /// Determines what synchronization primitive the compiler wraps the binding in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,14 +82,11 @@ pub struct AnalysisResult {
     pub expr_types: FxHashMap<Span, TypeId>,
     /// Maps (function_name, span_start) → body scope id (for ALL functions including equip methods).
     pub function_body_scopes: FxHashMap<(String, usize), ids::ScopeId>,
-    /// Maps method-call span start → DefId of the resolved method.
+    /// Maps method-call span start → resolved method + optional auto-deref
+    /// wrapper kind (D36: extended value type replaces the parallel sidecar).
     /// Threaded from typechecker through borrow checker to codegen for
     /// ownership-aware move-zeroing at call sites.
-    pub method_resolutions: FxHashMap<usize, DefId>,
-    /// TRACK E2 SCOUT PROTOTYPE — auto-deref-through-inner marker per D36 Q2.
-    /// The executor promotes this to `method_resolutions`'s extended value type
-    /// (`MethodResolution { def_id, auto_deref }`) and retires the sidecar.
-    pub method_call_auto_deref: FxHashMap<usize, ScopeDerefWrapperKind>,
+    pub method_resolutions: FxHashMap<usize, MethodResolution>,
     /// Snag #11: for each cross-error-type auto-propagation site whose error
     /// is convertible via an equipped `From[CalleeE]` on the caller's
     /// `CallerE`, the resolved `From::from` method DefId, keyed by the
@@ -305,7 +330,7 @@ pub fn analyze_with_source_dir(
     });
 
     // Pass 4: Type check everything
-    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs, from_conversions, method_call_auto_deref) = time_pass(&mut pass_times, "typecheck_module", || {
+    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs, from_conversions) = time_pass(&mut pass_times, "typecheck_module", || {
         typecheck::check_module(
             module,
             &mut scopes,
@@ -387,7 +412,6 @@ pub fn analyze_with_source_dir(
         expr_types,
         function_body_scopes: resolve_ctx.function_body_scopes,
         method_resolutions,
-        method_call_auto_deref,
         from_conversions,
         shared_bindings,
         warnings,

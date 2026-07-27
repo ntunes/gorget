@@ -347,7 +347,7 @@ pub(super) struct BorrowChecker<'a> {
 
     // ── Method resolution (Phase 7) ──
     /// Method span start → DefId (from typechecker, for origin/temporary tracking).
-    pub(super) method_resolutions: &'a FxHashMap<usize, DefId>,
+    pub(super) method_resolutions: &'a FxHashMap<usize, super::MethodResolution>,
 
     // ── Reassignment invalidation (Phase 11) ──
     /// Variables whose borrow source was reassigned, making their reference stale.
@@ -504,7 +504,7 @@ impl<'a> BorrowChecker<'a> {
         function_info: &'a FxHashMap<DefId, FunctionInfo>,
         function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,
         expr_types: &'a FxHashMap<Span, TypeId>,
-        method_resolutions: &'a FxHashMap<usize, DefId>,
+        method_resolutions: &'a FxHashMap<usize, super::MethodResolution>,
         ref_type_structs: FxHashSet<DefId>,
         struct_field_ref_flags: FxHashMap<DefId, Vec<bool>>,
         struct_field_mut_ref_flags: FxHashMap<DefId, Vec<bool>>,
@@ -613,7 +613,7 @@ pub fn check_module(
     function_info: &mut FxHashMap<DefId, FunctionInfo>,
     function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
     expr_types: &FxHashMap<Span, TypeId>,
-    method_resolutions: &FxHashMap<usize, DefId>,
+    method_resolutions: &FxHashMap<usize, super::MethodResolution>,
     errors: &mut Vec<SemanticError>,
     warn_const: bool,
 ) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName, FxHashMap<DefId, Vec<DefId>>, FxHashMap<&'static str, Duration>) {
