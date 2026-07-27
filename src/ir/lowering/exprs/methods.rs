@@ -13,6 +13,7 @@ use super::{lower_expr, lower_call_arg, maybe_auto_propagate, infer_operand_type
             index_expr_to_mangle_fragment, try_resolve_field_place, try_resolve_index_element_ptr,
             extract_field_path_string,
             resolve_projection_root_local, expr_projection_contains_index};
+use super::shared::{guard_of, emit_guard_get_ptr};
 
 fn gorget_name_for_type_id(ctx: &LoweringContext, type_id: TypeId) -> String {
     if type_id == ctx.type_mapper.owned_string_type {
@@ -173,6 +174,7 @@ pub(super) fn lower_method_call(
     builder: &mut FunctionBuilder,
     receiver: &Spanned<Expr>,
     method_name: &str,
+    method_span_start: usize,
     method_generic_args: Option<&[Spanned<ast::Type>]>,
     args: &[Spanned<ast::CallArg>],
 ) -> Operand {
@@ -533,6 +535,56 @@ pub(super) fn lower_method_call(
     } else {
         lower_expr(ctx, builder, receiver)
     };
+
+    // ─── D36 auto-deref for method-call receivers ────────────────────
+    // TRACK E2 SCOUT PROTOTYPE — when the typechecker resolved the method
+    // through the wrapper's INNER type (docs §9.3/§9.4), project the receiver
+    // through `emit_guard_get_ptr` (GuardAccept) or the inner cast (DerefTarget,
+    // Box), then let the normal dispatch flow re-mangle from the INNER type
+    // name. `guard_of` peels `Ptr`/`MutPtr` from a `&`/`!` param so the pattern
+    // is uniform.
+    if let Some(&wrapper_kind) = ctx.analysis.method_call_auto_deref.get(&method_span_start) {
+        use crate::semantic::scope::DerefWrapperKind;
+        match wrapper_kind {
+            DerefWrapperKind::GuardAccept => {
+                let recv_type = infer_operand_type_full(ctx, &recv, builder);
+                if let Some(info) = guard_of(ctx, recv_type) {
+                    // Extract the place; for a projected recv we materialise
+                    // first (matches the guard field-access read path pattern).
+                    let guard_place = match &recv {
+                        Operand::Copy(p) | Operand::Move(p) => p.clone(),
+                        _ => {
+                            let tmp = builder.add_local(recv_type, None);
+                            builder.assign(Place::local(tmp), recv.clone());
+                            Place::local(tmp)
+                        }
+                    };
+                    let (inner_ptr_local, _inner_type) =
+                        emit_guard_get_ptr(ctx, builder, &guard_place, &info);
+                    // Replace recv with the inner-pointer local. Downstream
+                    // dispatch reads `type_name` from the inner-pointer's
+                    // pointee via `infer_type_name_from_operand_full`, mangles
+                    // `Inner__method`, and dispatches through the equipped
+                    // method's fn_sigs entry.
+                    recv = Operand::Copy(Place::local(inner_ptr_local));
+                }
+            }
+            DerefWrapperKind::DerefTarget => {
+                // Box[T] auto-deref requires a `Box__T__get_ptr` runtime helper
+                // (returning `T*` from the box's `void*` handle) that the C/LLVM
+                // backends emit alongside `Box__T__get`/`__set`. The SCOUT does
+                // NOT emit this helper — the executor adds it in
+                // `src/backend/c_lir/helpers.rs::emit_box_wrapper` and the LLVM
+                // equivalent, plus wiring in `emit_types.rs` to force emission
+                // (call-name scan) whenever a Box auto-deref call is present.
+                // For the scout, leave recv unchanged → the current dispatch
+                // fabricates `Box__T__method` which fails at link. The check
+                // side proves feasibility; the lowering shape is documented in
+                // the brief.
+            }
+            DerefWrapperKind::NonDerefContainer => {}
+        }
+    }
 
     // .await() on Task → dispatch through __gorget_await_<fn> (joins pthread, returns result).
     // Check spawn_result_locals FIRST, before type check, since the declared type may be I64_TYPE

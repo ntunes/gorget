@@ -22,6 +22,7 @@ use errors::{SemanticError, SemanticErrorKind, SemanticWarning};
 use ids::{DefId, TypeId};
 use resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use scope::ScopeTable;
+use scope::DerefWrapperKind as ScopeDerefWrapperKind;
 use traits::TraitRegistry;
 use types::TypeTable;
 
@@ -57,6 +58,10 @@ pub struct AnalysisResult {
     /// Threaded from typechecker through borrow checker to codegen for
     /// ownership-aware move-zeroing at call sites.
     pub method_resolutions: FxHashMap<usize, DefId>,
+    /// TRACK E2 SCOUT PROTOTYPE — auto-deref-through-inner marker per D36 Q2.
+    /// The executor promotes this to `method_resolutions`'s extended value type
+    /// (`MethodResolution { def_id, auto_deref }`) and retires the sidecar.
+    pub method_call_auto_deref: FxHashMap<usize, ScopeDerefWrapperKind>,
     /// Snag #11: for each cross-error-type auto-propagation site whose error
     /// is convertible via an equipped `From[CalleeE]` on the caller's
     /// `CallerE`, the resolved `From::from` method DefId, keyed by the
@@ -300,7 +305,7 @@ pub fn analyze_with_source_dir(
     });
 
     // Pass 4: Type check everything
-    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs, from_conversions) = time_pass(&mut pass_times, "typecheck_module", || {
+    let (expr_types, method_resolutions, inferred_method_targs, inferred_call_targs, from_conversions, method_call_auto_deref) = time_pass(&mut pass_times, "typecheck_module", || {
         typecheck::check_module(
             module,
             &mut scopes,
@@ -382,6 +387,7 @@ pub fn analyze_with_source_dir(
         expr_types,
         function_body_scopes: resolve_ctx.function_body_scopes,
         method_resolutions,
+        method_call_auto_deref,
         from_conversions,
         shared_bindings,
         warnings,
