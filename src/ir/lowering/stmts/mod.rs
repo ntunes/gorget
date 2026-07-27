@@ -141,6 +141,72 @@ fn callable_local_return_type_bounded(
     }
 }
 
+/// If the local's declared AST type is (or resolves to) a `Callable` or bare
+/// function type, return the mapped GIR TypeIds of its params (plain inner —
+/// no MutPtr wrap) and the parallel `Ownership` per index. Parallels
+/// `callable_local_return_type` for the sidecars the indirect-call
+/// arg-emit loops in `exprs/calls.rs` read to route pointer-expecting args
+/// through `lower_call_arg` (Track B1 write-site fix). Returns `None` when
+/// `ty` isn't a callable; empty vecs mean "callable with zero params".
+fn callable_local_param_types(
+    ctx: &LoweringContext,
+    ty: &ast::Type,
+) -> Option<(Vec<TypeId>, Vec<crate::parser::ast::Ownership>)> {
+    callable_local_param_types_bounded(ctx, ty, 8)
+}
+
+fn callable_local_param_types_bounded(
+    ctx: &LoweringContext,
+    ty: &ast::Type,
+    depth: u32,
+) -> Option<(Vec<TypeId>, Vec<crate::parser::ast::Ownership>)> {
+    if depth == 0 {
+        return None;
+    }
+    match ty {
+        ast::Type::Named { name, generic_args } => {
+            let name_str = name.node.as_str();
+            if matches!(name_str, "Callable" | "MutCallable" | "ConsumeCallable") {
+                if let Some(func_type) = generic_args.first() {
+                    if let ast::Type::Function { params, param_ownerships, .. } = &func_type.node {
+                        let mut types = Vec::with_capacity(params.len());
+                        let mut owns = Vec::with_capacity(params.len());
+                        for (i, p) in params.iter().enumerate() {
+                            types.push(ctx.map_type_with_subs(&p.node));
+                            owns.push(param_ownerships.get(i).copied()
+                                .unwrap_or(crate::parser::ast::Ownership::Borrow));
+                        }
+                        return Some((types, owns));
+                    }
+                }
+                return None;
+            }
+            if generic_args.is_empty() {
+                if let Some(concrete) = ctx.generics.generic_param_ast_types.get(name_str).cloned() {
+                    if let ast::Type::Named { name: cn, generic_args: cgs } = &concrete {
+                        if cgs.is_empty() && cn.node == *name_str {
+                            return None;
+                        }
+                    }
+                    return callable_local_param_types_bounded(ctx, &concrete, depth - 1);
+                }
+            }
+            None
+        }
+        ast::Type::Function { params, param_ownerships, .. } => {
+            let mut types = Vec::with_capacity(params.len());
+            let mut owns = Vec::with_capacity(params.len());
+            for (i, p) in params.iter().enumerate() {
+                types.push(ctx.map_type_with_subs(&p.node));
+                owns.push(param_ownerships.get(i).copied()
+                    .unwrap_or(crate::parser::ast::Ownership::Borrow));
+            }
+            Some((types, owns))
+        }
+        _ => None,
+    }
+}
+
 /// Lower a block of statements.
 pub fn lower_block(
     ctx: &mut LoweringContext,
@@ -469,6 +535,10 @@ fn lower_var_decl(
             // method-level-generic param that resolves to a Function type.
             if let Some(ret_type) = callable_local_return_type(ctx, &type_.node) {
                 ctx.set_callable_return_type(local_id, ret_type);
+            }
+            // Track callable ARGUMENT types + ownerships (Track B1 write-site).
+            if let Some((param_types, param_owns)) = callable_local_param_types(ctx, &type_.node) {
+                ctx.set_callable_param_types(local_id, param_types, param_owns);
             }
             // P2.6: Register Move-type locals for drop at scope exit
             ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);

@@ -1229,6 +1229,13 @@ pub fn lower_function(
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
             ctx.set_callable_return_type(local_id, ret_type);
         }
+        // Track callable parameter argument types + ownerships (Track B1 write
+        // site). Read by the indirect-call arg-emit loops so a
+        // `Callable[void(&int)]` value forwards a pointer for a plain-local
+        // arg — the write-site fix for the SIGSEGV class Track B1 closes.
+        if let Some((param_types, param_owns)) = extract_callable_param_types(&p.node.type_.node, &[], ctx) {
+            ctx.set_callable_param_types(local_id, param_types, param_owns);
+        }
     }
 
     // Cross-frame fault propagation (error-model.md §11, Inc-2.1a): record the
@@ -1639,6 +1646,10 @@ pub fn lower_equip_method(
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
             ctx.set_callable_return_type(LocalId(param_idx), ret_type);
         }
+        // Track callable parameter argument types + ownerships (Track B1).
+        if let Some((param_types, param_owns)) = extract_callable_param_types(&p.node.type_.node, &[], ctx) {
+            ctx.set_callable_param_types(LocalId(param_idx), param_types, param_owns);
+        }
         param_idx += 1;
     }
 
@@ -1964,6 +1975,10 @@ pub fn lower_generic_function(
         // Track callable parameter return types for indirect call lowering
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
             ctx.set_callable_return_type(local_id, ret_type);
+        }
+        // Track callable parameter argument types + ownerships (Track B1).
+        if let Some((param_types, param_owns)) = extract_callable_param_types(&p.node.type_.node, &subs, ctx) {
+            ctx.set_callable_param_types(local_id, param_types, param_owns);
         }
         // Phase D4: store move-override flag as a typed LocalId set so the
         // return path can zero the source through the pointer without a
@@ -2371,6 +2386,10 @@ fn lower_equip_method_with_subs(
         if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, subs, ctx) {
             ctx.set_callable_return_type(LocalId(param_idx), ret_type);
         }
+        // Track callable parameter argument types + ownerships (Track B1).
+        if let Some((param_types, param_owns)) = extract_callable_param_types(&p.node.type_.node, subs, ctx) {
+            ctx.set_callable_param_types(LocalId(param_idx), param_types, param_owns);
+        }
         param_idx += 1;
     }
 
@@ -2701,6 +2720,83 @@ fn extract_callable_return_type_bounded(
         Type::Function { return_type, .. } => {
             let ret_type = substitute_and_map_type(ctx, &return_type.node, subs);
             Some(ret_type)
+        }
+        _ => None,
+    }
+}
+
+/// Extract the ARGUMENT types AND ownerships of a callable/function parameter
+/// type. Parallels `extract_callable_return_type` for the sidecars
+/// `callable_param_types` + `callable_param_ownerships` set at every site
+/// that already sets `callable_return_type`. Types are PLAIN inner
+/// (no MutPtr wrap) — matches the direct-call `fn_sigs` shape — and the
+/// ownership per index feeds `lower_call_arg` via the same
+/// `fn_param_ownerships` axis it uses on direct calls.
+///
+/// Returns `None` when the type isn't a callable; empty vecs mean "callable
+/// with zero params". This is the WRITE site the Track-B1 SIGSEGV class
+/// needs: the Function-type ARM discards `param_ownerships` elsewhere, so
+/// the two indirect-call arg loops in `exprs/calls.rs` can't tell whether
+/// the callee expected `int` or `*mut int` and pass the value bits either
+/// way — segfault on the callee's pointer deref.
+fn extract_callable_param_types(
+    ty: &Type,
+    subs: &[(String, Type)],
+    ctx: &LoweringContext,
+) -> Option<(Vec<TypeId>, Vec<Ownership>)> {
+    extract_callable_param_types_bounded(ty, subs, ctx, 8)
+}
+
+fn extract_callable_param_types_bounded(
+    ty: &Type,
+    subs: &[(String, Type)],
+    ctx: &LoweringContext,
+    depth: u32,
+) -> Option<(Vec<TypeId>, Vec<Ownership>)> {
+    if depth == 0 {
+        return None;
+    }
+    match ty {
+        Type::Named { name, generic_args } => {
+            let name_str = name.node.as_str();
+            if name_str == "Callable" || name_str == "MutCallable" || name_str == "ConsumeCallable" {
+                if let Some(func_type) = generic_args.first() {
+                    if let Type::Function { params, param_ownerships, .. } = &func_type.node {
+                        let mut types = Vec::with_capacity(params.len());
+                        let mut owns = Vec::with_capacity(params.len());
+                        for (i, p) in params.iter().enumerate() {
+                            types.push(substitute_and_map_type(ctx, &p.node, subs));
+                            owns.push(param_ownerships.get(i).copied().unwrap_or(Ownership::Borrow));
+                        }
+                        return Some((types, owns));
+                    }
+                }
+                return None;
+            }
+            // Generic type param bound to a Callable at the call site — same
+            // recursion pattern as extract_callable_return_type.
+            if generic_args.is_empty() {
+                for (param, concrete) in subs {
+                    if param == name_str {
+                        if let Type::Named { name: cn, generic_args: cgs } = concrete {
+                            if cgs.is_empty() && cn.node == *name_str {
+                                return None;
+                            }
+                        }
+                        return extract_callable_param_types_bounded(concrete, subs, ctx, depth - 1);
+                    }
+                }
+            }
+            None
+        }
+        Type::Function { params, param_ownerships, .. } => {
+            let mut types = Vec::with_capacity(params.len());
+            let mut owns = Vec::with_capacity(params.len());
+            for (i, p) in params.iter().enumerate() {
+                types.push(substitute_and_map_type(ctx, &p.node, subs));
+                owns.push(param_ownerships.get(i).copied().unwrap_or(Ownership::Borrow));
+            }
+            Some((types, owns))
         }
         _ => None,
     }
