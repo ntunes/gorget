@@ -103,13 +103,15 @@ pub(super) fn lower_call_arg(
     if matches!(arg.node.ownership, Ownership::Borrow) && callee_passes_by_ptr {
         if let Expr::Identifier(name) = &arg.node.value.node {
             if let Some((local_id, _)) = ctx.lookup_local(name) {
-                ctx.cow_before_mutation(builder, local_id, arg.span);
-                // Re-resolve in case cow_before_mutation rebound `name` to a
-                // freshly-materialized owned local; forwarding the stale
-                // pre-materialize borrow would escape the caller's slot.
-                let local_id = ctx.lookup_local(name).map(|(l, _)| l).unwrap_or(local_id);
                 if ctx.is_param_borrow_unique(builder, local_id) {
-                    return FunctionBuilder::copy(local_id);
+                    ctx.cow_before_mutation(builder, local_id, arg.span);
+                    // Re-resolve in case cow_before_mutation rebound `name` to a
+                    // freshly-materialized owned local; forwarding the stale
+                    // pre-materialize borrow would escape the caller's slot.
+                    let local_id = ctx.lookup_local(name).map(|(l, _)| l).unwrap_or(local_id);
+                    if ctx.is_param_borrow_unique(builder, local_id) {
+                        return FunctionBuilder::copy(local_id);
+                    }
                 }
             }
         }
