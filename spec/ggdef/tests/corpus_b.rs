@@ -126,6 +126,10 @@ const EXCLUDE: &[&str] = &[
     //   - an IIFE / closure-variable call — "only named callees are supported in
     //     phase 0".
     "cow_amp_projection_indirect_call_arg.gg",
+    //   - `Box(...)` + `Mutex`/`Guard` objects, and `catch` — "unresolved callee
+    //     `Box`". Pins the OBJECT domain of the auto-propagate pre-check, which
+    //     is error-propagation semantics phase 0 does not model either.
+    "cow_amp_projection_autoprop_objects.gg",
     //   - list comprehension: `elaborate_expr` has no comprehension arm, so the
     //     `[x*2 for x in &a]` expression is "outside the phase-0 subset".
     "cow_comprehension_amp_source.gg",

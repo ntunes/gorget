@@ -326,16 +326,38 @@ pub(super) fn lower_call_arg(
     // commit that fixed the struct-field costume. Pinned by
     // `place_type_only_covers_the_producer_forms` in `tests/lints.rs` and by row
     // C of `cow_amp_projection_autoprop_arg.gg`.
-    let arg_would_auto_propagate = matches!(arg.node.ownership, Ownership::MutableBorrow) && {
+    // 🚨 FAIL-SAFE BY CONSTRUCTION — an UNKNOWN form must DECLINE the early
+    // return, never take it.
+    //
+    // This predicate is phrased as "is it PROVABLY SAFE to skip
+    // `maybe_auto_propagate`?" rather than "would it auto-propagate?", because
+    // the two differ exactly on the `None` case and that difference is a
+    // miscompile. An earlier revision computed `arg_would_auto_propagate` with
+    // `.unwrap_or(false)` and then branched on `!arg_would_auto_propagate`, so an
+    // untypeable form produced `false` → `!false` → SKIP. Its comment claimed the
+    // opposite ("a missing arm costs a lost optimisation, never a lost
+    // propagation"); the comment was INVERTED, and reasoning from it shipped the
+    // same swallowed-`Error` miscompile THREE times in successive costumes
+    // (struct field, tuple field, then `Deref`/`Guard` objects). The invariant is
+    // now enforced by the `match` below instead of asserted in prose.
+    let safe_to_skip_auto_propagate = matches!(arg.node.ownership, Ownership::MutableBorrow) && {
         let param_is_result = callee_param_type
             .map(|p| ctx.type_registry.enum_category(p) == Some(EnumCategory::Result))
             .unwrap_or(false);
-        !param_is_result
-            && super::place_expr_type_only(ctx, &arg.node.value)
-                .map(|t| super::should_auto_propagate(ctx, builder, t).is_some())
-                .unwrap_or(false)
+        match super::place_expr_type_only(ctx, &arg.node.value) {
+            // Typeable: skipping is safe iff no unwrap was going to happen —
+            // either the callee wants the whole `Result`, or the argument is not
+            // a propagating `Result` in this context.
+            Some(t) => {
+                param_is_result || super::should_auto_propagate(ctx, builder, t).is_none()
+            }
+            // NOT typeable here: we cannot PROVE skipping is safe, so we do not
+            // skip. Costs the early-return optimisation on that form; never an
+            // error propagation. This is the direction the old code got backwards.
+            None => false,
+        }
     };
-    if matches!(arg.node.ownership, Ownership::MutableBorrow) && !arg_would_auto_propagate {
+    if safe_to_skip_auto_propagate {
         if let Some((place, place_type)) = super::try_resolve_place(ctx, builder, &arg.node.value) {
             if let Some(s) = g2_projected_untrack_start {
                 ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());

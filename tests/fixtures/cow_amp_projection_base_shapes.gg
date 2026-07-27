@@ -26,6 +26,15 @@
 #     It is deliberately NOT here because it must MATERIALIZE (11 / 10), not
 #     write through, and mixing it into a write-through fixture is how a fix that
 #     writes through in both directions passes everything.
+#     ⚠ THE PRODUCT CELL IS UNCOVERED AND KNOWN-BROKEN: a BARE `Box[T]` param
+#     crossed with a `(*box).fd` projection (`void f(Box[Holder] b):
+#     inc(&(*b).fd)`) prints `10 / 10` at base AND after this round — the write
+#     is lost INSIDE the callee too, so it is not even the materialize
+#     behaviour, just a dropped write. Same shape as the materialize trap's
+#     defect, one costume over. Named here rather than added because asserting
+#     it would require deciding and implementing the materialize semantics for a
+#     `Box` root, which is its own track; this fixture's rows all write through
+#     and it must not silently imply that cell does too.
 #   * nested collection element `&vv[0][0]` — `cow_amp_projection_type_axis.gg`.
 #   * `&(*box).fd` — `cow_amp_deref_box_projection.gg`.
 #   * `&t.0.fd` (struct field under a TUPLE) and `&v[0].0` (tuple field under a

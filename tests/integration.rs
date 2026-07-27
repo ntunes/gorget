@@ -32207,6 +32207,56 @@ B: ok",
     );
 }
 
+/// KNOWN GAP — `&(*b).0`, a TUPLE FIELD through a `Box` DEREF, passes
+/// `gg check` and then fails the C build (`unknown type name
+/// 'Tuple__Result__…'` — the mangled tuple type is referenced but never
+/// emitted). PRE-EXISTING: identical at base and after the Family-1 round.
+///
+/// ⚠ Filed despite never having worked, because during the round it briefly
+/// became a SILENT WRONG ANSWER (built, swallowed the `Error`, handed the callee
+/// a pointer to a `Result`) when the auto-propagate pre-check's `None` case was
+/// inverted. The fail-safe restored the loud failure. Trading a loud build error
+/// for a silent wrong answer is a regression even on a broken shape (Core #8).
+#[test]
+#[ignore = "KNOWN GAP: `&(*b).0` (tuple field through a Box deref) passes `gg check` then fails \
+the C build — the mangled tuple type is referenced but never emitted. Pre-existing. Asserts the \
+INTENDED propagation; TODO.md. Un-ignore when the emission lands."]
+fn sound_amp_box_tuple_field_cc_fail() {
+    run_gg(
+        "known_gaps/sound_amp_box_tuple_field_cc_fail.gg",
+        "ERR(propagated)",
+    );
+}
+
+/// FAMILY-1 — the OBJECT domain of an `&<projection>` auto-propagate argument:
+/// a `Box` deref object (`&(*b).r`) and a `Guard[T]` auto-deref object (`&g.r`).
+///
+/// ⚠ PINS A ROOT-CAUSE FIX. The pre-check used to be phrased "would it
+/// auto-propagate?" and computed with `.unwrap_or(false)`, so an UNTYPEABLE form
+/// produced `false`, the caller tested `!that`, and the chokepoint SKIPPED
+/// `maybe_auto_propagate` — while the comment asserted the opposite. Reasoning
+/// from that inverted invariant shipped the same swallowed-`Error` miscompile
+/// three times (struct field, tuple field, then these objects). It is now phrased
+/// "is it PROVABLY SAFE to skip?" with an explicit `None => false`.
+///
+/// ⚠ Both rows declare a top-level `FieldAccess`, so the first arm-set lint was
+/// GREEN on them — the defect lives one level down, in the OBJECT domain, which
+/// `place_type_only_covers_the_producer_forms` now compares as well.
+///
+/// RED-VERIFIED IN BOTH DIRECTIONS: correct at base `6cf79126`, WRONG at tip
+/// `a65bbe97` (`in take` / `1` / `called`, both rows), correct again with the
+/// fail-safe. A regression introduced and closed inside one round. Error-seeded
+/// deliberately — an `Ok` payload makes correct and broken indistinguishable.
+#[test]
+fn cow_amp_projection_autoprop_objects() {
+    run_gg(
+        "cow_amp_projection_autoprop_objects.gg",
+        "\
+box: ERR(propagated)
+guard: ERR(propagated)",
+    );
+}
+
 /// KNOWN GAP — Result→T auto-propagation fires at a FREE-call argument but is
 /// REJECTED (`E_TypeMismatch`) at a METHOD-call argument, for the same
 /// expression and the same declared parameter type. PRE-EXISTING: identical at

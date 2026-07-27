@@ -2732,18 +2732,50 @@ pub(in crate::ir::lowering) fn place_expr_type_only(
         Expr::TupleFieldAccess { object, index } => {
             let obj_t = place_expr_type_only(ctx, object)?;
             let resolved = ctx.pointee_type(obj_t).unwrap_or(obj_t);
-            Some(resolve_tuple_field_type(ctx, resolved, *index))
+            // ⚠ DELIBERATELY NOT `resolve_tuple_field_type` HERE, even though it
+            // is the obvious helper. That function falls back to `I64_TYPE` when
+            // the lookup misses (`exprs/type_reg.rs`) — a WRONG type rather than
+            // an unknown one. This function's contract is "the type, or `None`",
+            // and the call site's fail-safe can only protect against `None`: a
+            // bogus `I64_TYPE` reads as "not a propagating `Result`", so the
+            // chokepoint would skip `maybe_auto_propagate` on a form it never
+            // actually typed. Doing the lookup here and returning `None` on a
+            // miss keeps `None` meaning UNKNOWN. (The fallback stays for
+            // `resolve_tuple_field_type`'s other callers, which want a type
+            // unconditionally; it is filed as a latent silent-disagreement
+            // source.)
+            let type_name = ctx.type_name_for_id(resolved)?;
+            let type_def = ctx.type_registry.get_type_def(type_name)?;
+            match &type_def.kind {
+                TypeDefKind::Struct(s) => s.fields.get(*index).map(|f| f.type_id),
+                _ => None,
+            }
         }
         Expr::Index { object, .. } => {
             let coll_t = place_expr_type_only(ctx, object)?;
             Some(infer_collection_element_type(ctx, coll_t))
         }
-        // ⚠ `Expr::Deref` is deliberately absent, and that is SAFE in the
-        // direction that matters: this function is consulted to decide whether
-        // to SKIP `maybe_auto_propagate`, and returning `None` means "don't
-        // skip" — the conservative answer. A missing arm costs a lost
-        // optimisation, never a lost propagation. (The lint's exemption list
-        // records this with the same reasoning.)
+        // `(*b).f` / `(*b)[i]` — resolve through the pointee.
+        //
+        // ⚠ THIS ARM EXISTS FOR COVERAGE, NOT FOR SAFETY, and the distinction
+        // matters because an earlier revision had it backwards. A `None` from
+        // this function does NOT mean "be conservative": the call site treats an
+        // unknown form as *provably safe to skip* unless it is written to do
+        // otherwise. That inversion shipped the same swallowed-`Error`
+        // miscompile three times. The fail-safe now lives at the call site
+        // (`lower_call_arg`'s `safe_to_skip_auto_propagate` matches on `None`
+        // explicitly); this arm's job is to keep `Deref`-object projections on
+        // the fast path, not to prevent a miscompile.
+        Expr::Deref { expr: inner } => {
+            let inner_t = place_expr_type_only(ctx, inner)?;
+            ctx.deref_inner_type(inner_t)
+        }
+        // ⚠ NOT EXHAUSTIVE, and that is now SAFE BY CONSTRUCTION rather than by
+        // assertion — see the call site's `None => false`. Forms still absent
+        // include a `Guard[T]` auto-deref object (`g.f`, where `lookup_field`
+        // on the `Guard__…` wrapper legitimately misses) and method-chain
+        // objects. Each costs the early-return optimisation on that shape and
+        // nothing else.
         _ => None,
     }
 }

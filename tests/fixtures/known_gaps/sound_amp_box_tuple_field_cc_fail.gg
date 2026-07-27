@@ -1,0 +1,57 @@
+# DURABLE REPRO — `&(*b).0`, a TUPLE FIELD through a `Box` DEREF, passes
+# `gg check` and then fails the C build.
+#
+# WRONG TODAY (measured, identical at base `6cf79126` and after the Family-1
+# round — PRE-EXISTING, neither introduced nor fixed there):
+#     gg check  → OK: no semantic errors
+#     gg build  → error: unknown type name 'Tuple__Result__int64_t__int64_t__int64_t'
+#                 error: void value not ignored as it ought to be
+# The mangled tuple type is REFERENCED by the emitted C but never EMITTED.
+#
+# INTENDED (asserted below): the same thing the struct-field twin does. The
+# callee's parameter is `int &x` and the argument is `Result[int,int]`, so
+# auto-propagation unwraps it — and on this `Error` payload it must PROPAGATE
+# without calling, printing `ERR(propagated)`. The `Box`-deref object must not
+# change that; `&(*b).r` on a struct field already behaves exactly so (pinned
+# live by `cow_amp_projection_autoprop_objects.gg`).
+#
+# ⚠ WHY THIS IS FILED RATHER THAN LEFT AS FOLKLORE, even though it was already
+# broken: during the Family-1 round it briefly became a SILENT WRONG ANSWER. At
+# tip `a65bbe97` this program BUILT and printed `  in take` / `1` / `called` —
+# the `Error` swallowed and the callee handed a pointer to a `Result` where an
+# `int` was expected — because the auto-propagate pre-check treated an
+# untypeable form as "safe to skip". The fail-safe (`None => false` in
+# `lower_call_arg`'s `safe_to_skip_auto_propagate`) restored the loud failure.
+# Trading a loud build error for a silent wrong answer is a REGRESSION even on a
+# shape that never worked (Core #8), so the excursion is recorded here where the
+# next person to touch this shape will see it.
+#
+# ⚠ ERROR-SEEDED DELIBERATELY. Under an `Ok` payload the unwrap succeeds and the
+# call proceeds, so a correct and a broken compiler are indistinguishable on the
+# propagation axis. Do not re-seed to `Ok` when un-ignoring.
+#
+# LIKELY SIBLING: the filed `(*b).0` READ-arm `llc` hard-failure (recorded as B5
+# in TODO's measured-gaps block). Both are tuple-through-Box emission gaps —
+# check whether one fix closes both before treating them separately.
+#
+# Cited from TODO.md. Un-ignore when the Box-deref tuple-field projection emits
+# its tuple type and the propagation lands.
+void take(int &x):
+    print("  in take")
+    print(x)
+    x = x + 1
+
+int mk():
+    return 5
+
+int via_boxtup() throws int:
+    Box[(Result[int, int], int)] b = Box((Error(mk()), 1))
+    take(&(*b).0)
+    return 1
+
+void main():
+    int a = via_boxtup()! catch (e): -1
+    if a == 1:
+        print("called")
+    else:
+        print("ERR(propagated)")

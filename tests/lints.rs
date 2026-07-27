@@ -6839,16 +6839,19 @@ fn place_type_only_covers_the_producer_forms() {
         "pub(in crate::ir::lowering) fn place_expr_type_only(",
     );
 
-    /// Producer forms the PRE-CHECK deliberately does not model. Each needs a
-    /// reason that explains why the omission cannot lose a propagation.
-    const PRECHECK_EXEMPT: &[(&str, &str)] = &[(
-        "Deref",
-        "a missing arm here yields `None`, which the chokepoint reads as \
-         \"do NOT skip maybe_auto_propagate\" — the CONSERVATIVE answer. For \
-         `&*b` that costs the early-return optimisation, never a lost \
-         propagation, so the asymmetry is safe in the only direction that \
-         matters. (Adding a Deref arm would be an improvement, not a fix.)",
-    )];
+    /// Producer forms the PRE-CHECK deliberately does not model.
+    ///
+    /// ⚠ EMPTY, AND THE PREVIOUS ENTRY'S REASON WAS FALSE. `Deref` was exempted
+    /// here on the grounds that "a missing arm yields `None`, which the
+    /// chokepoint reads as do-NOT-skip — the conservative answer". The call site
+    /// did the OPPOSITE: `None` produced `false`, the branch tested
+    /// `!arg_would_auto_propagate`, and the chokepoint SKIPPED. Reasoning from
+    /// that inverted comment shipped the same swallowed-`Error` miscompile three
+    /// times. The fail-safe now lives in `lower_call_arg` as an explicit
+    /// `None => false` on a predicate phrased as "provably safe to skip", so an
+    /// unmodelled form declines the early return by construction. Any future
+    /// entry here must justify itself against THAT code, not against prose.
+    const PRECHECK_EXEMPT: &[(&str, &str)] = &[];
 
     let exempt: std::collections::BTreeSet<String> = PRECHECK_EXEMPT
         .iter()
@@ -6888,6 +6891,61 @@ fn place_type_only_covers_the_producer_forms() {
         "arm-superset lint extracted suspiciously few arms \
          (producer={producer:?}, pre-check={precheck:?}) — the matches were probably \
          respelled or reindented. Fix the extractor rather than lowering these floors."
+    );
+
+    // ── OBJECT domain, one level below the top-level arms ────────────────────
+    //
+    // 🚨 THE TOP-LEVEL COMPARISON ABOVE CANNOT CATCH ITS OWN CLASS HERE, and
+    // that gap shipped two live regressions. `try_resolve_field_place` accepts a
+    // WIDER set of OBJECT forms than `place_expr_type_only`'s recursion does, so
+    // `(*b).f` and a `Guard[T]` auto-deref `g.f` both resolve in the producer
+    // while the pre-check returns `None` — yet BOTH declare a top-level
+    // `FieldAccess`, so the sets above match and the lint was green on them
+    // (Core #15e Q2: a guard that green-lights the class it exists to retire).
+    //
+    // The fail-safe at the call site is what makes an unmodelled object form
+    // SAFE; this limb is what makes it VISIBLE, so widening is a deliberate act
+    // rather than a discovery.
+    let field_obj = top_level_expr_arm_variants(&exprs, "pub(super) fn try_resolve_field_place(");
+    let tuple_obj =
+        top_level_expr_arm_variants(&exprs, "pub(super) fn try_resolve_tuple_field_place(");
+    let resolver_objs: std::collections::BTreeSet<String> =
+        field_obj.union(&tuple_obj).cloned().collect();
+
+    let obj_missing: Vec<&str> = resolver_objs
+        .difference(&precheck)
+        .map(|s| s.as_str())
+        .collect();
+
+    // KNOWN, MEASURED SHORTFALL — recorded as a budget rather than hidden. Each
+    // name here is an object form the resolvers accept and the pre-check does
+    // not; each costs the early-return optimisation on that shape and, thanks to
+    // the call-site `None => false`, nothing more. Shrink this list by adding
+    // arms to `place_expr_type_only`; never grow it without measuring that the
+    // fail-safe still holds for the new form.
+    const KNOWN_OBJ_SHORTFALL: &[&str] = &[];
+
+    let unexpected: Vec<&str> = obj_missing
+        .iter()
+        .filter(|n| !KNOWN_OBJ_SHORTFALL.contains(*n))
+        .copied()
+        .collect();
+
+    assert!(
+        unexpected.is_empty(),
+        "PLACE-RESOLVER OBJECT DOMAIN EXCEEDS THE PRE-CHECK'S, in forms not on the \
+         known-shortfall list: {unexpected:?}\n\n\
+         resolver object arms = {resolver_objs:?}\n\
+         pre-check arms       = {precheck:?}\n\
+         known shortfall      = {KNOWN_OBJ_SHORTFALL:?}\n\n\
+         An object form the RESOLVERS accept but `place_expr_type_only` cannot type \
+         makes the pre-check return `None` for the whole projection. That is safe today \
+         only because `lower_call_arg` treats `None` as \"do not skip\" — verify that is \
+         STILL true before waving this through, because when it was the other way round \
+         this exact gap swallowed an `Error` and handed the callee a pointer to a \
+         `Result` for `(*b).f` and `g.f`.\n\n\
+         Either add the arm to `place_expr_type_only`, or add it to \
+         KNOWN_OBJ_SHORTFALL after measuring an `Error`-seeded probe of that shape."
     );
 }
 
