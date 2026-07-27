@@ -1224,16 +1224,23 @@ pub fn lower_function(
         {
             ctx.set_owned(&mut builder, local_id);
         }
-        // Track callable parameter return types
-        if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
-            ctx.set_callable_return_type(local_id, ret_type);
-        }
-        // Track callable parameter argument types + ownerships (Track B1 write
-        // site). Read by the indirect-call arg-emit loops so a
+        // Track callable parameter return types + argument types + ownerships
+        // (Track B1 write site). Fused via `set_callable_sig` — layering
+        // chokepoint (Core #4/#6) so the three sidecars cannot be populated in
+        // parallel. Read by the indirect-call arg-emit loops so a
         // `Callable[void(&int)]` value forwards a pointer for a plain-local
         // arg — the write-site fix for the SIGSEGV class Track B1 closes.
-        if let Some((param_types, param_owns)) = extract_callable_param_types(&p.node.type_.node, &[], ctx) {
-            ctx.set_callable_param_types(local_id, param_types, param_owns);
+        let ret = extract_callable_return_type(&p.node.type_.node, &[], ctx);
+        let sig = extract_callable_param_types(&p.node.type_.node, &[], ctx);
+        match (ret, sig) {
+            (Some(ret_type), Some((param_types, param_owns))) => {
+                ctx.set_callable_sig(local_id, ret_type, param_types, param_owns);
+            }
+            (Some(ret_type), None) => ctx.set_callable_return_type(local_id, ret_type),
+            (None, Some((param_types, param_owns))) => {
+                ctx.set_callable_param_types(local_id, param_types, param_owns);
+            }
+            (None, None) => {}
         }
     }
 
@@ -1641,13 +1648,19 @@ pub fn lower_equip_method(
                 ctx.set_owning_param(&mut builder, LocalId(param_idx));
             }
         }
-        // Track callable parameter return types for indirect call lowering
-        if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &[], ctx) {
-            ctx.set_callable_return_type(LocalId(param_idx), ret_type);
-        }
-        // Track callable parameter argument types + ownerships (Track B1).
-        if let Some((param_types, param_owns)) = extract_callable_param_types(&p.node.type_.node, &[], ctx) {
-            ctx.set_callable_param_types(LocalId(param_idx), param_types, param_owns);
+        // Track callable parameter sidecars for indirect-call lowering (all
+        // three fused via `set_callable_sig` — the layering chokepoint).
+        let ret = extract_callable_return_type(&p.node.type_.node, &[], ctx);
+        let sig = extract_callable_param_types(&p.node.type_.node, &[], ctx);
+        match (ret, sig) {
+            (Some(ret_type), Some((param_types, param_owns))) => {
+                ctx.set_callable_sig(LocalId(param_idx), ret_type, param_types, param_owns);
+            }
+            (Some(ret_type), None) => ctx.set_callable_return_type(LocalId(param_idx), ret_type),
+            (None, Some((param_types, param_owns))) => {
+                ctx.set_callable_param_types(LocalId(param_idx), param_types, param_owns);
+            }
+            (None, None) => {}
         }
         param_idx += 1;
     }
@@ -1971,13 +1984,19 @@ pub fn lower_generic_function(
                 ctx.set_owning_param(&mut builder, local_id);
             }
         }
-        // Track callable parameter return types for indirect call lowering
-        if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, &subs, ctx) {
-            ctx.set_callable_return_type(local_id, ret_type);
-        }
-        // Track callable parameter argument types + ownerships (Track B1).
-        if let Some((param_types, param_owns)) = extract_callable_param_types(&p.node.type_.node, &subs, ctx) {
-            ctx.set_callable_param_types(local_id, param_types, param_owns);
+        // Track callable parameter sidecars for indirect-call lowering (fused
+        // via `set_callable_sig`).
+        let ret = extract_callable_return_type(&p.node.type_.node, &subs, ctx);
+        let sig = extract_callable_param_types(&p.node.type_.node, &subs, ctx);
+        match (ret, sig) {
+            (Some(ret_type), Some((param_types, param_owns))) => {
+                ctx.set_callable_sig(local_id, ret_type, param_types, param_owns);
+            }
+            (Some(ret_type), None) => ctx.set_callable_return_type(local_id, ret_type),
+            (None, Some((param_types, param_owns))) => {
+                ctx.set_callable_param_types(local_id, param_types, param_owns);
+            }
+            (None, None) => {}
         }
         // Phase D4: store move-override flag as a typed LocalId set so the
         // return path can zero the source through the pointer without a
@@ -2381,13 +2400,19 @@ fn lower_equip_method_with_subs(
                 ctx.set_owning_param(&mut builder, LocalId(param_idx));
             }
         }
-        // Track callable parameter return types for indirect call lowering
-        if let Some(ret_type) = extract_callable_return_type(&p.node.type_.node, subs, ctx) {
-            ctx.set_callable_return_type(LocalId(param_idx), ret_type);
-        }
-        // Track callable parameter argument types + ownerships (Track B1).
-        if let Some((param_types, param_owns)) = extract_callable_param_types(&p.node.type_.node, subs, ctx) {
-            ctx.set_callable_param_types(LocalId(param_idx), param_types, param_owns);
+        // Track callable parameter sidecars for indirect-call lowering (fused
+        // via `set_callable_sig`).
+        let ret = extract_callable_return_type(&p.node.type_.node, subs, ctx);
+        let sig = extract_callable_param_types(&p.node.type_.node, subs, ctx);
+        match (ret, sig) {
+            (Some(ret_type), Some((param_types, param_owns))) => {
+                ctx.set_callable_sig(LocalId(param_idx), ret_type, param_types, param_owns);
+            }
+            (Some(ret_type), None) => ctx.set_callable_return_type(LocalId(param_idx), ret_type),
+            (None, Some((param_types, param_owns))) => {
+                ctx.set_callable_param_types(LocalId(param_idx), param_types, param_owns);
+            }
+            (None, None) => {}
         }
         param_idx += 1;
     }

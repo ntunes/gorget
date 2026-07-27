@@ -529,16 +529,24 @@ fn lower_var_decl(
             };
             let local_id = builder.add_local(gir_type, Some(name));
             ctx.register_local(name, local_id, gir_type);
-            // Track callable return types for locals declared with a Callable
-            // or bare-function type. Enables `cb(...)` call-site return-type
-            // inference when `F cb = self.f` binds a closure field and F is a
-            // method-level-generic param that resolves to a Function type.
-            if let Some(ret_type) = callable_local_return_type(ctx, &type_.node) {
-                ctx.set_callable_return_type(local_id, ret_type);
-            }
-            // Track callable ARGUMENT types + ownerships (Track B1 write-site).
-            if let Some((param_types, param_owns)) = callable_local_param_types(ctx, &type_.node) {
-                ctx.set_callable_param_types(local_id, param_types, param_owns);
+            // Track callable sidecars for locals declared with a Callable or
+            // bare-function type. Enables `cb(...)` call-site return-type
+            // inference AND indirect-call arg lowering when `F cb = self.f`
+            // binds a closure field and F is a method-level-generic param that
+            // resolves to a Function type. Fused via `set_callable_sig` — the
+            // layering chokepoint (Core #4/#6) shared with the four
+            // function-registration paths in `src/ir/lowering/functions.rs`.
+            let ret = callable_local_return_type(ctx, &type_.node);
+            let sig = callable_local_param_types(ctx, &type_.node);
+            match (ret, sig) {
+                (Some(ret_type), Some((param_types, param_owns))) => {
+                    ctx.set_callable_sig(local_id, ret_type, param_types, param_owns);
+                }
+                (Some(ret_type), None) => ctx.set_callable_return_type(local_id, ret_type),
+                (None, Some((param_types, param_owns))) => {
+                    ctx.set_callable_param_types(local_id, param_types, param_owns);
+                }
+                (None, None) => {}
             }
             // P2.6: Register Move-type locals for drop at scope exit
             ctx.drops.register_local(local_id, gir_type, &ctx.type_registry);

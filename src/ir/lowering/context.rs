@@ -2893,6 +2893,25 @@ impl<'a> LoweringContext<'a> {
         self.func_state.callable_param_ownerships.get(&local).map(|v| v.as_slice())
     }
 
+    /// Record ALL THREE callable sidecars for a callable-typed local at ONE
+    /// call. Layering-discipline chokepoint (Core #4/#6): the three sidecars
+    /// (return type, param types, param ownerships) are one logical fact — a
+    /// call site that populates only some is a parallel-population defect the
+    /// indirect-call arg-emit path would silently mis-route on. Every
+    /// function-registration path (`src/ir/lowering/functions.rs` — 4 sites)
+    /// and the `lower_var_decl` Binding arm (`src/ir/lowering/stmts/mod.rs`)
+    /// call this instead of writing the three sidecars in parallel.
+    pub fn set_callable_sig(
+        &mut self,
+        local: LocalId,
+        ret_type: TypeId,
+        param_types: Vec<TypeId>,
+        param_ownerships: Vec<crate::parser::ast::Ownership>,
+    ) {
+        self.set_callable_return_type(local, ret_type);
+        self.set_callable_param_types(local, param_types, param_ownerships);
+    }
+
     /// Mark a local as a generic Ptr reference. Only sets if not already tracked
     /// with a more specific origin (set_bare_param / set_param_borrow_unique /
     /// set_field_borrow / set_collection_ref / set_view_of / cow_register_alias).
