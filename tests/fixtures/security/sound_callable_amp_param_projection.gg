@@ -34,6 +34,7 @@
 # `gg check`-clean):
 #   `Callable[void(&int)]` PARAM, `cb(a)` where `a` is an `int &` param -> OK
 #   `Callable[int(&Counter)]` PARAM, `f(&c)` where `c` is a `Counter &` param -> OK
+#     (UNPINNED: callable_ref_param.gg spells it BARE `f(c)`, pinning only that cell)
 #     (that second one is the LIVE, GREEN in-tree `tests/fixtures/callable_ref_param.gg`
 #      — it must stay green through any fix)
 #   `Callable[void(&int)]` LOCAL or PARAM, `cb(&a)` where `a` is a plain local -> SEGV

@@ -1551,7 +1551,8 @@ fn sound_amp_operand_position_duplicate_drop_safe() {
 ///   `Callable[void(&int)]` LOCAL   + `cb(&a)`, `a` a plain local -> SEGV
 ///   `Callable[void(&int)]` PARAM   + `cb(&a)`, `a` a plain local -> SEGV
 ///   `Callable[void(&int)]` PARAM   + `cb(a)`,  `a` an `int &` param -> 11/11 OK
-///   `Callable[int(&Counter)]` PARAM + `f(&c)`, `c` a `Counter &` param -> OK
+///   `Callable[int(&Counter)]` PARAM + `f(&c)`, `c` a `Counter &` param -> OK (UNPINNED;
+///   `callable_ref_param.gg` spells it BARE `f(c)` and pins only that cell)
 /// (the last is the live, green in-tree fixture `callable_ref_param.gg`).
 /// So the discriminator is whether the argument's ROOT is already a pointer,
 /// not the callable's provenance.

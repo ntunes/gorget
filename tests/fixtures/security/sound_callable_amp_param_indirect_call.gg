@@ -3,7 +3,7 @@
 #
 # ⚠ READ THE FILENAME CAREFULLY. `_amp_param_` names the CALLEE's `&`-parameter
 # signature (`void bumpint(int &n)`), NOT how the callable is bound: the
-# callable here is a **LOCAL** (`:34`, inside `main`). Its sibling
+# callable here is a **LOCAL**, declared inside `main`. Its sibling
 # `sound_callable_amp_param_projection.gg` is the one where the callable arrives
 # as a PARAMETER. The two filenames read as a matched pair and are not one.
 #

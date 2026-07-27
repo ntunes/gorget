@@ -3200,9 +3200,13 @@ pub(super) fn try_resolve_field_place(
             // The guard wraps a pointer to the guarded value; field access goes
             // THROUGH the inner pointer (docs/devbook/11-copy-on-write.md, Guard
             // single-owner carve-out). Centralized here so EVERY field-place
-            // consumer — `lower_assign`, `lower_compound_assign`, and index-base
-            // resolution (all in stmts/assigns.rs) — projects
-            // through the guard identically. Uses the SAME emit_guard_get_ptr
+            // consumer projects through the guard identically. ⚠ That consumer set
+            // is NOT confined to stmts/assigns.rs (an earlier version of this
+            // comment said so, and also named `lower_assign`, which does not call
+            // this): re-derive it with
+            // `grep -rn 'try_resolve_field_place(' src/ir/lowering/` — at time of
+            // writing 8 sites across stmts/assigns.rs, exprs/methods.rs (the
+            // mutating-method receiver) and this file. Uses the SAME emit_guard_get_ptr
             // helper as the read path (`lower_field_access`) and the plain-assign
             // path (`lower_field_assign`, stmts/assigns.rs).
             //
