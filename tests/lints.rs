@@ -6053,7 +6053,17 @@ fn ratchet_b_materialize_site_count() {
     // (`cow_before_mutation_planned`), removing all six direct calls behind the
     // `MaterializePlan`. Remaining 14 = the un-migrated classes B/C/D/E/F + the
     // funnel's own lone real call; each future class conversion drops the ceiling.
-    const RUST_CEILING: usize = 14;
+    //
+    // 2026-07-27 re-pin 14 → 15 (Track B1 A-2 Option (b), commit `02082ae8`):
+    // retiring the `is_param_borrow_unique` bypass in `calls.rs` routed the two
+    // indirect-call arg loops (UNIT_TYPE `__callable_N` + `GirType::FnPtr`
+    // `__gorget_closure_call_N`) through `lower_call_arg`, which now calls
+    // `cow_before_mutation` on the sanctioned path. This is a NEW mutation-root
+    // materialize on a path that previously bypassed CoW — the exact ratified
+    // outcome of the fold (making `cow_before_mutation` a hard invariant on the
+    // indirect-call arg-loop path). Site added in `calls.rs` (5 sites; was 4).
+    // Future class conversions may fold this back through the planner.
+    const RUST_CEILING: usize = 15;
     let mut rust_sites = 0usize;
     let mut per_file: Vec<(String, usize)> = Vec::new();
     for entry in walk_files("src/ir/lowering", "rs") {
