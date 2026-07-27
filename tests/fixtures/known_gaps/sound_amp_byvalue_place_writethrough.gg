@@ -20,6 +20,17 @@
 # `lower_call_arg`'s `MutableBorrow` arm before `lower_expr`. Short-circuit that
 # call to `None` and every row below returns to 10.
 #
+# ⚠ WHY A PASSING FIXTURE STILL LIVES UNDER `known_gaps/`. This file is GREEN and
+# its test is LIVE (un-`#[ignore]`d when the class was fixed) — the directory
+# name no longer describes it. It stays here DELIBERATELY: `known_gaps/` fixtures
+# are excluded from the runtime-diff parity corpus, and the SELF-HOST lane still
+# has this defect (filed, with `file:line` and the reason it is a separate
+# track). Promoting the file would enrol it in the parity corpus, where the
+# self-host fails it and drops parity below its floor — converting a documented,
+# filed lane gap into a red gate. Move it when the self-host lane lands, not
+# before. The same applies to `sound_amp_bareparam_root_materialize.gg` and
+# `sound_amp_projection_two_writes.gg`.
+#
 # ⚠ THE FILED "by-value FIELD" FRAMING UNDERCOUNTS THE CLASS. Rows 8 and 9 have
 # NO struct anywhere: `&vv[0]` and `&dd["k"]` on a PLAIN LOCAL collection lose
 # the write too. The discriminator is not "is it a field" but "how is the

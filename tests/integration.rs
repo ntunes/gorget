@@ -32420,12 +32420,19 @@ a!",
 /// write through (`sound_amp_bareparam_root_materialize`, 11/10). Mixing it into
 /// a write-through fixture is exactly how a both-directions fix passes.
 ///
-/// RED-VERIFIED against the pre-fix compiler: printed `10` six times.
+/// RED-VERIFIED against the pre-fix compiler: printed `10` eight times.
+/// ⚠ Rows 7 (tuple root) and 8 (GUARD auto-deref) are RED against LATER tips as
+/// well — each needed a further `place_expr_type_only` arm after the original
+/// chokepoint. Row 8 is the sharpest case in the family: `&g.fd` dropped the
+/// write while `g.fd = v` worked, through THREE fix rounds, and NO arm-set lint
+/// could demand it because the guard projection is resolved by a TYPE-level
+/// branch rather than a syntactic `Expr::` arm.
 #[test]
 fn cow_amp_projection_base_shapes() {
     run_gg(
         "cow_amp_projection_base_shapes.gg",
         "\
+11
 11
 11
 11

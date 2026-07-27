@@ -6898,14 +6898,32 @@ fn place_type_only_covers_the_producer_forms() {
     // 🚨 THE TOP-LEVEL COMPARISON ABOVE CANNOT CATCH ITS OWN CLASS HERE, and
     // that gap shipped two live regressions. `try_resolve_field_place` accepts a
     // WIDER set of OBJECT forms than `place_expr_type_only`'s recursion does, so
-    // `(*b).f` and a `Guard[T]` auto-deref `g.f` both resolve in the producer
-    // while the pre-check returns `None` — yet BOTH declare a top-level
-    // `FieldAccess`, so the sets above match and the lint was green on them
-    // (Core #15e Q2: a guard that green-lights the class it exists to retire).
+    // `(*b).f` resolved in the producer while the pre-check returned `None` —
+    // yet it declares a top-level `FieldAccess`, so the sets above matched and
+    // the lint was green on it (Core #15e Q2: a guard that green-lights the
+    // class it exists to retire).
     //
-    // The fail-safe at the call site is what makes an unmodelled object form
-    // SAFE; this limb is what makes it VISIBLE, so widening is a deliberate act
-    // rather than a discovery.
+    // ⚠⚠ AND THIS LIMB HAS A PERMANENT BLIND SPOT OF ITS OWN — a KNOWN
+    // LIMITATION, not a shortfall to burn down. `top_level_expr_arm_variants`
+    // extracts `Expr::<Variant>` names from arm-indentation lines, so it sees
+    // only the SYNTACTIC object domain. The producer's domain is partly
+    // TYPE-DRIVEN: the `Guard[T]` auto-deref (`g.f`, where the field lives on the
+    // guarded value and `lookup_field` on the `Guard__…` wrapper misses) is a
+    // type-level branch inside `try_resolve_field_place`, not an `Expr::` arm.
+    // This limb CANNOT see it and never could.
+    //
+    // That is not hypothetical: `&g.a` silently dropped its write — while
+    // `g.a = v` worked, Family-1's exact signature — through three fix rounds,
+    // with `--test lints` green the whole time and an earlier version of THIS
+    // COMMENT naming `g.f` as a form the limb made "visible". It did not. Do not
+    // read a green here as "the pre-check covers the producer"; it means only
+    // that the two SYNTACTIC arm sets agree. A type-driven branch added to either
+    // resolver needs a measured write-through probe, because no lint in this file
+    // will ask for one.
+    //
+    // The fail-safe at the call site keeps an unmodelled object form MEMORY-safe;
+    // it does not keep it CORRECT (declining the early return falls back to the
+    // read path, which is the lost write). Widening remains a real fix.
     let field_obj = top_level_expr_arm_variants(&exprs, "pub(super) fn try_resolve_field_place(");
     let tuple_obj =
         top_level_expr_arm_variants(&exprs, "pub(super) fn try_resolve_tuple_field_place(");
@@ -6917,12 +6935,14 @@ fn place_type_only_covers_the_producer_forms() {
         .map(|s| s.as_str())
         .collect();
 
-    // KNOWN, MEASURED SHORTFALL — recorded as a budget rather than hidden. Each
-    // name here is an object form the resolvers accept and the pre-check does
-    // not; each costs the early-return optimisation on that shape and, thanks to
-    // the call-site `None => false`, nothing more. Shrink this list by adding
-    // arms to `place_expr_type_only`; never grow it without measuring that the
-    // fail-safe still holds for the new form.
+    // KNOWN, MEASURED SHORTFALL — a budget, not a hiding place. Each name here
+    // is a SYNTACTIC object form the resolvers accept and the pre-check does not.
+    // ⚠ Empty does NOT mean "the pre-check covers the producer" — see the
+    // type-driven blind spot above. And an entry here costs a LOST WRITE on that
+    // shape, not merely an optimisation: declining the early return falls back to
+    // the read path. Adding a name requires a measured write-through probe
+    // showing what it actually costs; shrink the list by adding arms to
+    // `place_expr_type_only`.
     const KNOWN_OBJ_SHORTFALL: &[&str] = &[];
 
     let unexpected: Vec<&str> = obj_missing

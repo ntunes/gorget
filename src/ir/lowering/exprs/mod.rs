@@ -2658,12 +2658,6 @@ pub(super) fn materialize_global_field_base(
     Some(Operand::Copy(Place::local(ptr_local)))
 }
 
-/// Type-only resolution of a PURE place expression (identifier / `self` /
-/// field / index chain) to its `TypeId`, WITHOUT lowering it (no side effects,
-/// no IR emitted). Returns `None` for anything that is side-effecting or not a
-/// resolvable place (a call, literal, etc.). Used by the `Expr::Index`
-/// write-through pre-check so a side-effecting collection producer
-/// (`make()[k].field = x`) is not evaluated twice.
 /// THE field-read Ptr-wrap predicate — one accessor, one source of truth
 /// (devbook/24 rule 3).
 ///
@@ -2691,6 +2685,42 @@ pub(in crate::ir::lowering) fn field_read_yields_ptr(ctx: &LoweringContext, fiel
         || ctx.type_registry.is_resource_type(field_type)
 }
 
+/// Type-only resolution of a PURE place expression to its `TypeId`, WITHOUT
+/// lowering it — no IR is emitted, so a side-effecting base is not evaluated.
+///
+/// # `None` means UNKNOWN, and callers must treat it as such
+///
+/// This is the contract that matters, because two consumers key SAFETY on it:
+///
+/// * `lower_call_arg`'s `safe_to_skip_auto_propagate` — decides whether the
+///   Family-1 chokepoint may return early and skip `maybe_auto_propagate`. It
+///   matches `None => false` (DECLINE) explicitly. An earlier revision computed
+///   the inverse with `.unwrap_or(false)` and branched on the negation, so
+///   `None` meant SKIP; a `Result`-typed argument bound for a non-`Result`
+///   parameter then had its `Error` silently swallowed and the callee received a
+///   pointer to a `Result`. Never return a GUESS from this function: a plausible
+///   wrong type reads as a definite answer and no downstream fail-safe can
+///   distinguish it from a real one. That is why the `TupleFieldAccess` arm does
+///   its lookup inline instead of calling `resolve_tuple_field_type`, whose miss
+///   returns `I64_TYPE`.
+/// * `index_base_kind_type_only` — the collection-kind pre-check gating
+///   `try_resolve_index_element_ptr`, so a side-effecting collection producer
+///   (`make()[k].field = x`) is resolved without being lowered twice.
+///
+/// # `None` is memory-safe but NOT free
+///
+/// Declining the early return falls back to the READ path, and for a by-value
+/// projection that path loads a value copy and loses the callee's write — the
+/// Family-1 defect itself. So an unmodelled form costs a LOST WRITE on that
+/// shape, not merely a missed optimisation. Widening this function is a fix.
+///
+/// # Not quite side-effect-free
+///
+/// The previous doc claimed "no side effects". Not strictly true: the `Index`
+/// arm reaches `infer_collection_element_type`, which INTERNS a `FnPtr` type for
+/// `Callable` elements. Idempotent and benign, but it now runs on every `&` call
+/// argument, and the claim was unenforced — stated accurately rather than
+/// repeated.
 pub(in crate::ir::lowering) fn place_expr_type_only(
     ctx: &mut LoweringContext,
     expr: &Spanned<Expr>,
@@ -2709,7 +2739,30 @@ pub(in crate::ir::lowering) fn place_expr_type_only(
             let obj_t = place_expr_type_only(ctx, object)?;
             let resolved = ctx.pointee_type(obj_t).unwrap_or(obj_t);
             let name = ctx.type_name_for_id(resolved)?.to_string();
-            ctx.lookup_field(&name, &field.node).map(|(_, ft)| ft)
+            if let Some((_, ft)) = ctx.lookup_field(&name, &field.node) {
+                return Some(ft);
+            }
+            // GUARD AUTO-DEREF — `g.f` where `g: Guard[T]` and `f` lives on the
+            // GUARDED value, not on the wrapper. `try_resolve_field_place`
+            // projects through the guard's inner pointer, so this function must
+            // be able to TYPE that same projection or `&g.f` never reaches the
+            // Family-1 chokepoint and falls back to the read path — which loads a
+            // value COPY of the field and borrows the dying temp, silently losing
+            // the callee's write while `g.f = v` works. That is Family-1's own
+            // class, at the one object form whose resolution is TYPE-driven
+            // rather than a syntactic `Expr::` arm.
+            //
+            // ⚠ Mirrors the producer's branch and must keep mirroring it,
+            // including the `ReadGuard` early-out: a read-only guard resolves no
+            // WRITE place there, so typing one here would send `&rg.f` down the
+            // chokepoint for a place the producer will refuse.
+            let (inner_suffix, is_read_only) = guard_inner_suffix(&name)?;
+            if is_read_only {
+                return None;
+            }
+            let inner_type = c_suffix_to_type_id(inner_suffix, ctx);
+            let inner_name = ctx.type_name_for_id(inner_type)?.to_string();
+            ctx.lookup_field(&inner_name, &field.node).map(|(_, ft)| ft)
         }
         // ⚠ THIS ARM IS LOAD-BEARING FOR CORRECTNESS, not just for coverage.
         // `place_expr_type_only`'s expression domain MUST be a superset of
@@ -2770,12 +2823,25 @@ pub(in crate::ir::lowering) fn place_expr_type_only(
             let inner_t = place_expr_type_only(ctx, inner)?;
             ctx.deref_inner_type(inner_t)
         }
-        // ⚠ NOT EXHAUSTIVE, and that is now SAFE BY CONSTRUCTION rather than by
-        // assertion — see the call site's `None => false`. Forms still absent
-        // include a `Guard[T]` auto-deref object (`g.f`, where `lookup_field`
-        // on the `Guard__…` wrapper legitimately misses) and method-chain
-        // objects. Each costs the early-return optimisation on that shape and
-        // nothing else.
+        // ⚠ NOT EXHAUSTIVE. A `None` here is MEMORY-SAFE by construction — the
+        // call site's `None => false` declines the early return — but it is NOT
+        // free, and an earlier revision of this comment said it was.
+        //
+        // 🚨 DECLINING THE EARLY RETURN MEANS FALLING BACK TO THE READ PATH, AND
+        // THE READ PATH IS THE FAMILY-1 BUG. The early return IS the fix: it
+        // borrows the PLACE. Fall back and a by-value projection loads a value
+        // COPY and the callee's write is silently lost. So an unmodelled form
+        // costs a LOST WRITE, not "the early-return optimisation". The old
+        // wording ("each costs the early-return optimisation on that shape and
+        // nothing else") named `g.f` specifically as harmless — and `&g.a` was
+        // measurably dropping its write at the time, while `g.a = v` worked.
+        // That is Family-1's own signature. Corrected rather than swapped
+        // (Core #14).
+        //
+        // Forms still absent: method-chain objects (`&v.get(i).unwrap().f`,
+        // filed as its own gap and NOT closed by this function). Adding an arm
+        // here is a real fix, not a tidy-up — measure a write-through probe
+        // before assuming otherwise.
         _ => None,
     }
 }

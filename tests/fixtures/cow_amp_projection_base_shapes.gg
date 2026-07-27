@@ -19,6 +19,11 @@
 #      It was NOT covered when this fixture first claimed the base-shape axis,
 #      and it was genuinely broken (10, want 11) at base and at the first
 #      Family-1 tip. A fixture that names an axis must sample it.
+#   8. GUARD AUTO-DEREF object     `&g.fd`   ← added later still, same lesson,
+#      and the sharpest instance of it: broken at base and through THREE fix
+#      rounds while `g.fd = v` worked. It is the only object form resolved by a
+#      TYPE-level branch instead of a syntactic `Expr::` arm, so neither arm-set
+#      lint can see it — an omission that three shipped comments called harmless.
 #
 # Cells covered ELSEWHERE, named here so the omission is explicit rather than
 # silent (Core #12 wants each omission justified, not invisible):
@@ -45,11 +50,14 @@
 #   * `&v.get(0).unwrap().fd` (get-chain) — also unfixed, filed, its own repro.
 #
 # RED-VERIFIED against the pre-fix compiler, which printed
-#     10 / 10 / 10 / 10 / 10 / 10 / 10
-# — every base shape lost the write. Post-fix all seven print 11. ⚠ Row 7
-# needed a SECOND fix beyond the original chokepoint (the `TupleFieldAccess` arm
-# in `place_expr_type_only`) and was still printing 10 after the first one, so it
-# is RED-verified against BOTH tips, not just the pre-round compiler.
+#     10 / 10 / 10 / 10 / 10 / 10 / 10 / 10
+# — every base shape lost the write. Post-fix all eight print 11. ⚠ Rows 7 and 8
+# each needed a FURTHER fix beyond the original chokepoint and were still
+# printing 10 after it, so they are RED-verified against LATER tips as well as
+# the pre-round compiler: row 7 needed the `TupleFieldAccess` arm in
+# `place_expr_type_only`, and row 8 needed that function's GUARD auto-deref
+# branch — which no arm-set lint could have demanded, because the guard
+# projection is resolved by a TYPE-level branch rather than an `Expr::` arm.
 #
 # Seeds are computed, never literals.
 struct Inner:
@@ -121,3 +129,16 @@ void main():
     tup.0.push(seed())
     inc(&tup.0[0])
     print(tup.0[0])
+
+    # 8. GUARD AUTO-DEREF object — `&g.fd`, where the field lives on the GUARDED
+    #    value and NOT on the `Guard[T]` wrapper. This cell was broken at base
+    #    AND through three fix rounds of this round (printed the seed, write
+    #    lost) while the ASSIGN face `g.fd = v` worked — Family-1's own
+    #    served-at-one-face signature, surviving in the one object form whose
+    #    resolution is TYPE-driven rather than a syntactic `Expr::` arm, which is
+    #    exactly why the arm-set lints could not see it and why three shipped
+    #    comments asserted the omission was harmless.
+    Mutex[Inner] mx = Mutex[Inner](Inner(seed()))
+    Guard[Inner] gd = mx.lock()
+    inc(&gd.fd)
+    print(gd.fd)

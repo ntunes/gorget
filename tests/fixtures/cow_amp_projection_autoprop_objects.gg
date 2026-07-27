@@ -34,10 +34,25 @@
 # Re-seeding either row to `Ok` silently converts this fixture into a
 # green-on-arrival one (Core #15e(d), "MIND THE PROBE").
 #
-# GUARDED MECHANISM: `lower_call_arg`'s `safe_to_skip_auto_propagate`, whose
-# `None => false` arm is the fail-safe. Flip that arm to `None => true` — i.e.
-# restore the old inverted behaviour — and BOTH rows print `in take` / `1` /
-# `called` again.
+# GUARDED MECHANISM — ⚠ TWO EDITS, NOT ONE, and the single-edit version does not
+# reproduce. `lower_call_arg`'s `safe_to_skip_auto_propagate` has the fail-safe
+# `None => false`; `place_expr_type_only` has the arms that decide whether these
+# objects reach it as `Some`.
+#
+#   * Row B (Guard) reds on the fail-safe flip ALONE: flip `None => false` to
+#     `None => true` and it prints `in take` / `1` / `called`. The guard object
+#     is typed by a branch that can still miss, so the fail-safe is what carries
+#     it.
+#   * Row A (Box deref) does NOT red on that flip alone — `place_expr_type_only`
+#     now has an `Expr::Deref` arm, so `(*b).r` types successfully and never
+#     reaches the `None` case. Row A reds only under the CONJUNCTION: flip the
+#     fail-safe AND remove the `Deref` arm.
+#
+# Its HISTORICAL red is genuine (both rows were WRONG at tip `a65bbe97`, before
+# either limb existed) — but a future reader executing the break-and-watch
+# procedure needs the instruction that actually works, not the one that produced
+# the original evidence. Stating the single-edit version would have them conclude
+# row A guards nothing.
 struct Holder:
     Result[int, int] r
 
