@@ -1,0 +1,15 @@
+# D36 axis coverage — Guard + WRITE-face user method (`&self`) auto-derefs
+# and the mutation is VISIBLE through the guard. This pins the write face on
+# the Guard[T] cell of the wrapper axis.
+struct Counter:
+    int value
+
+equip Counter:
+    void bump(&self):
+        self.value = self.value + 1
+
+void main():
+    Mutex[Counter] m = Mutex[Counter](Counter(10))
+    Guard[Counter] g = m.lock()
+    g.bump()
+    print(g.value)

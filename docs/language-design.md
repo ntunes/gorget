@@ -1838,9 +1838,22 @@ auto guard = shared_data.lock().unwrap()
 guard.push(42)
 ```
 
+Method auto-deref through the guard follows the per-face rules ratified in
+D36: reading auto-derefs through `Guard` / `ReadGuard` / `WriteGuard` /
+`Box` uniformly; writing auto-derefs through `Guard` / `WriteGuard` / `Box`
+but **rejects `ReadGuard`** (the RWLock read-only invariant); consuming
+(`!wrapper.into_inner()` / any `!self` method on the inner) works for
+`Box` only (guards' Drop invariant forbids moving the inner out).
+`Shared[T]` / `Mutex[T]` / `RWLock[T]` / `Weak[T]` require explicit access
+(`.get()` / `.lock()` / `.read()` / `.write()` / `.upgrade()`) — auto-deref
+does not fire on those.
+
 ### 9.4 Deref Coercion
 
-Smart pointers automatically dereference to their inner type:
+Smart pointers automatically dereference to their inner type for method
+calls: the coercion is scoped to method-call receivers, and there is no
+`*boxed` operator.
+
 ```gorget
 Box[String] boxed = Box.new(String("hello"))
 print(boxed.len())       # Box[String] auto-derefs to String, calls String.len()

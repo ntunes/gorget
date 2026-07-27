@@ -1956,6 +1956,32 @@ fn reject_guard_typo_method() {
     check_gg_fails("reject_guard_typo_method.gg", METHOD_NOTFOUND_CODE);
 }
 
+// NEGATIVE (Track E2, D36 face-split reject cell): a write-face user method
+// (`&self`) called through a `ReadGuard`. Ratified per D36 (2026-07-27) —
+// writes are forbidden through a shared-read view; mirrors the `for_write`
+// gate on `&rg.field` at a `push` argument. Dedicated diagnostic points at
+// the RWLock read-only invariant + suggests `.write()`.
+#[test]
+fn reject_readguard_write_userm() {
+    check_gg_fails(
+        "reject_readguard_write_userm.gg",
+        "error[E_AutoDerefWriteThroughReadGuard]",
+    );
+}
+
+// NEGATIVE (Track E2, D36 face-split reject cell): a consuming-face user
+// method (`!self`) called through a `Guard`. Ratified per D36 — consuming
+// through a guard breaks the guard's Drop invariant (only `Box` accepts
+// the consuming face). Dedicated diagnostic points at the guard-Drop
+// rationale.
+#[test]
+fn reject_guard_consuming_userm() {
+    check_gg_fails(
+        "reject_guard_consuming_userm.gg",
+        "error[E_AutoDerefConsumingThroughGuard]",
+    );
+}
+
 // A `noreturn` body must DIVERGE: callers type the call `Never` and the IR
 // emits `unreachable` right after it, so a noreturn function that falls
 // off its end, executes a `return`, or has a non-diverging expression body
@@ -37223,55 +37249,79 @@ fn sound_readguard_write_faces_dropped() {
 // design questions.
 // ══════════════════════════════════════════════════════════════
 
-/// KNOWN GAP — E1 rejects `Guard[Person].greet(5)` with `E_NoMethodFound`
-/// as an interim shape (fabrication class was closed as reject). E2 will
-/// PROMOTE to auto-deref-through-inner: resolve `greet` on `Person`, self
-/// obtained via `emit_guard_get_ptr`, print `35`.
+/// D36 auto-deref: `guard.greet(5)` on `Guard[Person]` resolves `greet`
+/// on `Person`, self obtained via `emit_guard_get_ptr`, prints `35`.
 #[test]
-#[ignore = "KNOWN GAP (Track E2): E1 closed as reject; E2 promotes to auto-deref-through-inner \
-per docs §9.3. Un-ignore when E2 lands + owner rulings on GuardAccept scope + channel design."]
 fn scout_e_guard_userm_autoderef() {
     run_gg("known_gaps/scoutE_guard_userm_autoderef.gg", "35");
 }
 
-/// KNOWN GAP — E1 rejects `Box[Person].greet(5)` with `E_NoMethodFound`.
-/// E2 promotes to auto-deref via the box pointee, prints `35`.
+/// D36 auto-deref: `boxed.greet(5)` on `Box[Person]` projects through
+/// `Box__Person__get_ptr`, dispatches `Person.greet`, prints `35`.
 #[test]
-#[ignore = "KNOWN GAP (Track E2): E1 closed as reject; E2 promotes to auto-deref per docs §9.4 \
-Deref Coercion. Un-ignore when E2 lands + owner ratification of §9.4."]
 fn scout_e_box_userm_autoderef() {
     run_gg("known_gaps/scoutE_box_userm_autoderef.gg", "35");
 }
 
-/// KNOWN GAP — docs/language-design.md §9.3 verbatim example. E1 rejects
-/// `guard.push(42)` on `Guard[Vector[int]]`; E2 promotes to auto-deref
-/// (dispatches `Vector[int].push`, then `guard.len()` prints `1`).
+/// D36 auto-deref — docs/language-design.md §9.3 verbatim example.
+/// `guard.push(42)` on `Guard[Vector[int]]` dispatches `Vector.push`
+/// (builtin) through the guarded inner, then `guard.len()` prints `1`.
 #[test]
-#[ignore = "KNOWN GAP (Track E2): E1 rejects docs §9.3 example; E2 makes it compile as documented."]
 fn scout_e_docs_93_guard_push() {
     run_gg("known_gaps/scoutE_docs_93_guard_push.gg", "1");
 }
 
-/// KNOWN GAP — docs/language-design.md §9.4 verbatim example. E1 rejects
-/// `boxed.len()` on `Box[String]`; E2 promotes to auto-deref, prints `5`.
+/// D36 auto-deref — docs/language-design.md §9.4 verbatim example.
+/// `boxed.len()` on `Box[String]` dispatches `String.len` (builtin)
+/// through `Box__GorgetString__get_ptr`, prints `5`.
 #[test]
-#[ignore = "KNOWN GAP (Track E2): E1 rejects docs §9.4 example; E2 makes it compile as documented."]
 fn scout_e_docs_94_box_len() {
     run_gg("known_gaps/scoutE_docs_94_box_len.gg", "5");
 }
 
-/// KNOWN GAP — `ReadGuard[Person].greet(5)`. Pre-fix this already rejected
-/// via `has_inherent_only_impls`; E1 does not change that (the reject is
-/// now via `DerefWrapperKind::GuardAccept` instead, but the disposition
-/// is identical). E2 GATED on the owner ruling: is `GuardAccept` uniform
-/// across Guard/ReadGuard/WriteGuard, or does ReadGuard reject MUTATING
-/// methods only? `greet` is non-mutating — it would auto-deref-and-accept
-/// under either ruling. Asserts INTENDED `35`.
+/// D36 auto-deref — non-mutating equip method through ReadGuard. `greet`
+/// is a read-face (bare `self`) method, so the D36 face split accepts it
+/// through ReadGuard (writes reject; consuming rejects; read accepts on
+/// Guard / ReadGuard / WriteGuard / Box uniformly). Prints `35`.
 #[test]
-#[ignore = "KNOWN GAP (Track E2): non-mutating equip method through ReadGuard; asserts INTENDED \
-`35` post-E2. GATED on owner ruling on GuardAccept scope (see TODO.md)."]
 fn scout_e_readguard_userm_autoderef() {
     run_gg("known_gaps/scoutE_readguard_userm_autoderef.gg", "35");
+}
+
+/// D36 axis coverage — Guard + WRITE-face user method (`&self`) auto-derefs
+/// and the mutation is VISIBLE. Cell on the wrapper axis (Guard[T]).
+#[test]
+fn scout_e_guard_write_userm_autoderef() {
+    run_gg("known_gaps/scoutE_guard_write_userm_autoderef.gg", "11");
+}
+
+/// D36 axis coverage — WriteGuard + WRITE-face user method (`&self`).
+/// Cell on the wrapper axis (WriteGuard[T]).
+#[test]
+fn scout_e_writeguard_write_userm_autoderef() {
+    run_gg(
+        "known_gaps/scoutE_writeguard_write_userm_autoderef.gg",
+        "11",
+    );
+}
+
+/// D36 axis coverage — Box + WRITE-face user method (`&self`). Mutation
+/// visible via a subsequent read-face method call (Box field auto-deref
+/// is a separate §9.4 field feature, not the D36 method rule tested here).
+#[test]
+fn scout_e_box_write_userm_autoderef() {
+    run_gg("known_gaps/scoutE_box_write_userm_autoderef.gg", "11");
+}
+
+/// D36 axis coverage — Box + CONSUMING-face user method (`!self`). Box is
+/// the sole wrapper that accepts the consuming face (Guard/ReadGuard/
+/// WriteGuard reject — see `reject_guard_consuming_userm`).
+#[test]
+fn scout_e_box_consuming_userm_autoderef() {
+    run_gg(
+        "known_gaps/scoutE_box_consuming_userm_autoderef.gg",
+        "42",
+    );
 }
 
 /// KNOWN GAP (Track E1 scouting surfaced) — `Guard[T].get()` on a heap-carrying

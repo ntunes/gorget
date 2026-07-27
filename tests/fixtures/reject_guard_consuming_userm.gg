@@ -1,0 +1,18 @@
+# D36 face-split reject — a CONSUMING-face user method (`!self`) called
+# through a `Guard` fails with `E_AutoDerefConsumingThroughGuard`. Consuming
+# through a guard breaks the guard's Drop invariant (moving the inner out
+# would orphan the mutex-unlock). Only `Box` accepts the consuming face.
+# See docs/language-design.md §9.3.
+struct Payload:
+    int val
+
+equip Payload:
+    void consume(!self):
+        # Consuming self drops the payload.
+        return
+
+void main():
+    Mutex[Payload] m = Mutex[Payload](Payload(42))
+    Guard[Payload] g = m.lock()
+    g.consume()
+    print(1)

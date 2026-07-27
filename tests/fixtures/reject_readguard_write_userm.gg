@@ -1,0 +1,22 @@
+# D36 face-split reject — a WRITE-face user method (`&self`) called through
+# a `ReadGuard` fails with `E_AutoDerefWriteThroughReadGuard`. Mirrors the
+# `for_write` gate on `&rg.field` at a `push` argument: one invariant, two
+# enforcement points (see docs/language-design.md §9.3).
+#
+# Reject expected (see tests/integration.rs). If ReadGuard write auto-deref
+# is ever accepted, this fixture flips to a compile-success run — the
+# RED-verify signal for the reject gate.
+from std.sync import RWLock
+
+struct Counter:
+    int value
+
+equip Counter:
+    void bump(&self):
+        self.value = self.value + 1
+
+void main():
+    RWLock[Counter] r = RWLock[Counter](Counter(10))
+    ReadGuard[Counter] g = r.read()
+    g.bump()
+    print(g.value)
