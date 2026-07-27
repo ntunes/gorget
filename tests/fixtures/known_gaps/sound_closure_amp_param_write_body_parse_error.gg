@@ -1,0 +1,44 @@
+# DURABLE REPRO -- a closure literal that declares a `&`-sigil parameter
+# (`&x`) and whose body ASSIGNS through that parameter (`x = ...`, `x += ...`)
+# fails to PARSE with "expected ')', found '='". The read-only twin
+# (`(int &x): print(x)`) parses fine, so the gap is in the closure body
+# parser: after the `:`, an `x = ...` at statement position is misparsed
+# because the enclosing `(...)` is treated as expression-parenthesization
+# and `=` at expression position is not a valid token.
+#
+# MEASURED 2026-07-27 at HEAD 1028972f (Track B3 scout):
+#   gg check                       -> parse error at the `=`
+#
+# The read-only shape works:
+#   ((int &x): print(x))(&a)       -> parses; SEGVs at runtime (Track B1 target
+#                                     of the callable-value SEGV class -- an
+#                                     independent lowering defect)
+#
+# IMPACT:
+#   - blocks writing an IIFE that mutates its captured argument -- forces
+#     naming the closure into a local (`Callable[void(&int)] cb = (int &x):
+#     x = x + 100; cb(&a)`)
+#   - blocked the Track B3 scout's IIFE cell probe (G2/G3): the scout could
+#     not test the semantic sigil gate on IIFE callee shape because the
+#     mismatched shapes did not reach `gg check` -- they died at parse.
+#
+# INTENDED (Option A, D31-uniform under B3): PARSE, then behave identically
+# to the equivalent named-closure form:
+#   1. `((int &x): x = x + 100)(&a)`  -> accept, run, print 101.
+#   2. `((int &x): x = x + 100)(a)`   -> REJECT E_OwnershipMismatch (B3's
+#                                        semantic gate; asserted by the sibling
+#                                        NEG fixtures once this parses).
+#
+# Fix direction: extend `parse_closure` (or the closure-body parser) so a
+# body starting with an identifier-followed-by-assignment forms a statement,
+# not a mis-classified expression. The read-only case works because
+# `print(x)` is a call expression -- the assignment case needs the same
+# statement-position path a top-level function body has.
+#
+# Cited from TODO.md -- anchor: grep -nF -- 'IIFE parse' TODO.md
+void main():
+    int a = 1
+    # THE DEFECT: this line fails at parse today; it should parse, run,
+    # and print 101 under Option A (D31-uniform + parse fix).
+    ((int &x): x = x + 100)(&a)
+    print(a)

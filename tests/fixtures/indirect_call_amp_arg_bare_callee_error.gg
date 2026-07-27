@@ -1,0 +1,27 @@
+# REGRESSION -- Track B3 (D31-uniform, indirect call sigil gate): the MIRROR of
+# `indirect_call_bare_arg_amp_callee_error.gg`. An `&`-spelled argument passed
+# into a `Callable[void(int)]` LOCAL whose parameter declares BARE (borrow, no
+# sigil) must REJECT at `gg check` with `E_OwnershipMismatch`. Under D31 the
+# sigil is CONTRACTUAL at every call site: a caller cannot ADD `&` where the
+# callee did not declare it (the callee gets a by-value copy, so the caller's
+# `&` intent would be silently discarded).
+#
+# AXIS / CELL:
+#   Callable LOCAL callee  x  `&` arg vs bare-declared param (mirror of E2)
+#
+# Pre-B3 (RED-verified at HEAD 1028972f): `gg check` printed "OK: no semantic
+# errors" and the emitted binary silently dropped the `&` -- the caller's local
+# was NOT mutated even though the syntactic intent said "write-through".
+# Post-B3: `gg check` REJECTS with `E_OwnershipMismatch`; the silent-drop is
+# unreachable by construction.
+void bare(int n):
+    n = n + 100
+
+void main():
+    int a = 1
+    Callable[void(int)] cb = bare
+    # THE ASSERTION: `cb(&a)` REJECTS -- callee is bare-declared, caller
+    # cannot ADD a sigil the callee did not contract for. Correct spelling is
+    # bare `cb(a)` (the callee's mutation stays local to its own copy).
+    cb(&a)
+    print(a)

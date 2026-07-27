@@ -10,7 +10,7 @@ equip State:
 
 Option[T] try_action[T](Callable[Option[T](&State)] f, State &s):
     int saved = s.pos
-    Option[T] result = f(s)
+    Option[T] result = f(&s)
     match result:
         case None:
             s.pos = saved

@@ -2461,9 +2461,10 @@ A move capture is never inferred; it is requested with `!`.
 > doubled `for x in & &a`. For the two CALL-ARGUMENT items in that list
 > (constructor/enum-variant and compiler-builtin) the mechanism is that the
 > sigil gate only runs where the callee has a resolved signature, so
-> **user-declared functions, methods, and `extern` declarations all reject
-> correctly** — the other five items have no callee at all, so that mechanism
-> does not explain them. ⚠ Independently of the sigil gate, **wrapping any call
+> **user-declared functions, methods, `extern` declarations, and indirect
+> calls through a `Callable[T]` / `MutCallable[T]` / `ConsumeCallable[T]` /
+> `Box[Callable[T]]` value all reject correctly** — the other five items have
+> no callee at all, so that mechanism does not explain them. ⚠ Independently of the sigil gate, **wrapping any call
 > in an f-string suppresses the rejection**. For a user-declared
 > `String tag(String s)`, `print(tag(&a))` is rejected with
 > `E_OwnershipMismatch` while `print(f"{tag(&a)}")` is accepted, because
@@ -2634,6 +2635,16 @@ bare value flowing into a *non-`!`* consuming position — a collection `push`, 
 constructor field, a `return` — is **not** sigil-marked: the
 compiler still moves it when it is dead (copy-on-write, §9.6), but that is an
 invisible optimization, not part of any API contract, so no `!` appears.
+
+**Uniform at indirect call sites too.** The same rule applies at every
+**indirect** call site whose callee has a resolvable function type — a
+`Callable[T]` / `MutCallable[T]` / `ConsumeCallable[T]` / `Box[Callable[T]]`
+local, parameter, field, subscript, or IIFE. Where the declared parameter
+carries a sigil, the caller spells it at every call site — a bare `cb(a)`
+against a `Callable[void(&int)] cb` is rejected with `E_OwnershipMismatch`
+exactly as a bare `f(a)` against a `void f(int &n)` direct call is. The
+call-site-visibility promise does not weaken through a function-typed
+value.
 
 ### 9.4 Same-Call Aliasing
 

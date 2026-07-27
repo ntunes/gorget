@@ -1636,6 +1636,11 @@ impl<'a> TypeChecker<'a> {
                 self.type_name_position_ok = true;
                 let callee_type = self.infer_expr(callee);
                 let resolved = self.resolve_type(callee_type);
+                // Track B3 prototype: record the callee's type so the safety
+                // pass's indirect-call ownership check can consult it for
+                // non-identifier callees (Vec[Callable[..]]'s `arr[0]`,
+                // struct field callable `h.f`, an IIFE closure literal).
+                self.expr_types.insert(callee.span, callee_type);
 
                 // Unlowered builtin "cast call" names (Chain C item 6+):
                 // the resolver's `is_builtin` accepts these so `gg check`

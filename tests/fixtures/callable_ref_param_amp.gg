@@ -1,9 +1,16 @@
 # AXIS-COMPLETENESS — the previously-UNPINNED green cell of the callable-
 # indirection axis: PARAM callable, `Counter &` root, `&`-spelled arg.
 #
-# Sibling: `callable_ref_param.gg` pins the same shape with BARE `f(c)` spelling
-# — this file mirrors it with `f(&c)` so a fix that regresses only the `&`
-# spelling on a `&`-param root does NOT silently pass.
+# Sibling: `callable_ref_param.gg` pins the same shape with `f(&c)` spelling
+# too — its BARE `f(c)` predecessor was migrated to `f(&c)` under Track B3
+# (D31-uniform, 2026-07-27; ledger 2026-07-20 D31 ADDENDUM-2). The bare
+# spelling now REJECTs at `gg check` with `E_OwnershipMismatch`, pinned by
+# `indirect_call_bare_arg_param_amp_callee_error.gg`. This file's `f(&c)`
+# spelling is served by `lower_call_arg`'s `Ownership::MutableBorrow`
+# special-case — a different code path than the migrated sibling's
+# newly-routed `Ownership::MutableBorrow`-through-place, kept alive by this
+# fixture so a fold that regresses only the `&`-arg-on-a-`&`-param-root cell
+# does NOT silently pass.
 #
 # AXIS / CELL (root × callable-provenance × arg-spelling):
 #   struct-`&`-param root  ×  PARAM callable  ×  `&`-spelled arg
