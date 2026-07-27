@@ -758,10 +758,14 @@ fn snag11_auto_prop_gate_site_count() {
 /// (`Expr::Call`) plus the one call inside `resolve_throws_method_ret` = 2.
 ///
 /// Baseline 2026-07-10: 3 `resolve_throws_method_ret` call sites +
-/// 2 `resolve_throws_call_type` call sites.
+/// 2 `resolve_throws_call_type` call sites. Track E2 (2026-07-27) added a
+/// 4th `resolve_throws_method_ret` call in the D36 auto-deref
+/// user-method-hit arm — routes through the same producer so
+/// `throws`-carrying equipped methods called via auto-deref propagate
+/// the throws obligation identically to a direct call.
 #[test]
 fn d23_method_throws_return_sites() {
-    const EXPECTED_METHOD_RET_SITES: usize = 3;
+    const EXPECTED_METHOD_RET_SITES: usize = 4;
     const EXPECTED_PRODUCER_CALLS: usize = 2;
 
     let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
