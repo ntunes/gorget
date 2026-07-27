@@ -132,30 +132,12 @@ pub(super) fn lower_call_arg(
             }
         }
     }
-    // Snag #26: `mutate(&*box)` should pass a pointer to the heap data,
-    // not a pointer to a stack copy of the heap data. Without this, the
-    // callee mutates the discarded copy and the user's heap value is
-    // unchanged. Build the borrow through a Deref-projected place when
-    // the call arg is `&`-sigil + Deref expr — same lvalue treatment as
-    // standalone `Expr::MutableBorrow { Expr::Deref { ... } }` in mod.rs.
-    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
-        if let Expr::Deref { expr: deref_inner } = &arg.node.value.node {
-            let inner_op = lower_expr(ctx, builder, deref_inner);
-            if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
-                let mut deref_place = inner_place.clone();
-                deref_place.projections.push(crate::ir::instructions::Projection::Deref);
-                let local_idx = inner_place.local.0 as usize;
-                let pointee = if local_idx < builder.locals.len() {
-                    let t = builder.local_type(inner_place.local);
-                    ctx.deref_inner_type(t).unwrap_or(t)
-                } else { UNIT_TYPE };
-                let ptr_type = ctx.register_mut_ptr_type(pointee);
-                let dst = builder.add_local(ptr_type, None);
-                builder.emit_borrow_mut(dst, deref_place);
-                return FunctionBuilder::copy(dst);
-            }
-        }
-    }
+    // (Snag #26's `mutate(&*box)` Deref-lvalue block used to sit HERE; it is now
+    // the `Expr::Deref` arm of the shared `try_resolve_place` producer invoked
+    // below, so `&*b` and `&b.fd` take ONE path instead of two. Order is
+    // preserved: the G2 block immediately below explicitly excludes
+    // `Expr::Deref` from root-materialize, so a `&*b` arg still reaches the
+    // producer with `g2_projected_untrack_start == None`, exactly as before.)
     // CoW `&`-of-a-PROJECTED-bare-value FORMATION (G2, site 3, call-arg form):
     // `f(&s.field)`, `f(&arr[i])` where the projection ROOT is a bare param /
     // bare alias. Materialize the root BEFORE the SINGLE lowering of the arg
@@ -185,6 +167,90 @@ pub(super) fn lower_call_arg(
             if before != after {
                 g2_projected_untrack_start = Some(start);
             }
+        }
+    }
+    // FAMILY-1 CHOKEPOINT (CALL-ARG face): an `&`-argument naming a PLACE
+    // borrows THAT PLACE.
+    //
+    // Before this, the `MutableBorrow` arm below lowered the argument through
+    // the READ path and then `emit_borrow_mut`'d whatever temp came back. For a
+    // thin-pointer field (`String`/`Vector`/`Dict`/resource struct) the read
+    // path yields a `Ptr` INTO the real slot and the `is_already_ptr`
+    // fast-path forwarded it — write-through worked BY ACCIDENT. For a by-value
+    // place (`int`/`float`/`bool`/value struct/tuple/value-payload enum) the read
+    // path yields a value COPY, so the callee got a pointer to a dying temp and
+    // its write was silently discarded, `gg check` clean, on BOTH backends.
+    // Same expression, same sigil, opposite semantics, decided by the projected
+    // TYPE — nothing in the CoW rule mentions the type of the projected value.
+    // That is the wrong-layer read-site symptom (Core #1): the read arms had
+    // already discarded place identity and no work here could recover it. The
+    // fix is to never lose it — ask the shared place producer FIRST.
+    //
+    // ⚠ THE OWNERSHIP GATE IS LOAD-BEARING. `lower_call_arg` serves all three
+    // ownership modes; the match that distinguishes them is far below. Without
+    // this gate the block would fire for bare and `!` arguments too, turning
+    // every projected argument into a `MutPtr` borrow and bypassing
+    // `callee_passes_by_ptr`, the `Borrow` arm and the `Move` arm entirely. Both
+    // neighbouring blocks gate themselves the same way.
+    //
+    // ORDER IS THE WHOLE DESIGN (Core #15e Q5) — this call sits exactly here:
+    //   * AFTER the G2 root-materialize above. `cow_before_mutation` REBINDS the
+    //     root's name when it materialises a private copy, so a place resolved
+    //     BEFORE it would address the SHARED source and the callee's write would
+    //     escape to the caller — turning a borrow into a mutable alias and
+    //     breaking CoW's central guarantee. Pinned by
+    //     `sound_amp_bareparam_root_materialize.gg`, which must print 11 / 10;
+    //     a naive fix prints 11 / 11 and looks correct on every other fixture.
+    //   * BEFORE `lower_expr`, and returning early, so the argument is lowered
+    //     EXACTLY ONCE — `&arr[side_effect()]` still evaluates its index once
+    //     (`cow_amp_index_side_effect_once.gg`).
+    //   * The G2 untrack still runs on the handles the projection minted, before
+    //     the borrow escapes into the call, preserving the UAF-fold close.
+    //
+    // ⚠ THE EARLY RETURN SKIPS `maybe_auto_propagate` (below, `Snag #43`), and
+    // the verdict is SCOPED, not blanket-inert. `maybe_auto_propagate`'s FIRST
+    // gate is `ctx.func_state.expected_type`: when the caller sets it to the
+    // CALLEE's declared param type — which for an `&<projection>` argument is by
+    // construction the projected value's own type — the operand is returned
+    // unchanged before `should_auto_propagate` is ever consulted. The free-call
+    // path (`calls.rs`, set just before the arg loop) and the METHOD-call path
+    // (`methods.rs`, likewise) both set it, so on those two the skip is INERT —
+    // verified, and it must not be dropped on a future merge of the two faces.
+    // (Two earlier explanations were wrong and are recorded as such so nobody
+    // re-derives them: it is NOT "a projection is never a throws-call result" —
+    // `should_auto_propagate` is TYPE-gated, not shape-gated, and a `Result`-typed
+    // FIELD is a projection whose type is `Result`; and it is NOT "`Result` is
+    // resource-typed so the read takes the Ptr branch" — `is_resource_name` has
+    // no enum-variant clause, and a value-payload `Result` field measurably takes
+    // the value-copy branch, i.e. the OPPOSITE way.)
+    // The closure-var-call and IIFE paths do NOT set `expected_type` themselves.
+    // MEASURED at the Family-1 commit, on `void take(Result[int,int] &x)` called
+    // through a `Callable` variable inside a `throws` fn, in four spellings
+    // (fn-reference and capturing-closure-literal × projection arg `&h.r` and
+    // bare-identifier arg `&hr`): the call HAPPENS in every one, pre-fix and
+    // post-fix alike, and the emitted programs are byte-identical across this
+    // change. Instrumenting `maybe_auto_propagate` shows why — every
+    // `Result`-typed operand on those paths is stopped by GATE 1 anyway
+    // (`expected_type` is a `Result` at that point), so `should_auto_propagate`
+    // is never consulted for them (`would_prop=false`, zero exceptions).
+    // So the skip is inert on all five callers as measured, not just the two
+    // that set `expected_type` explicitly. It must not be dropped on a future
+    // merge of the two faces. `methods.rs`'s FxHasher caller is unprobed for the
+    // auto-propagate axis, and cannot exercise it: its argument is a Hasher by
+    // the method contract, never a `Result`.
+    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+        if let Some((place, place_type)) = super::try_resolve_place(ctx, builder, &arg.node.value) {
+            if let Some(s) = g2_projected_untrack_start {
+                ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());
+            }
+            // The producer guarantees `place` is an lvalue of the VALUE itself
+            // (postcondition 1), so this borrow is unconditional — no
+            // `is_already_ptr` re-derivation, which is the special case that grew
+            // into this bug in the first place.
+            let ptr_type = ctx.register_mut_ptr_type(place_type);
+            let dst = builder.add_local(ptr_type, None);
+            builder.emit_borrow_mut(dst, place);
+            return FunctionBuilder::copy(dst);
         }
     }
     let val = lower_expr(ctx, builder, &arg.node.value);
@@ -235,7 +301,13 @@ pub(super) fn lower_call_arg(
                 // `_21 = borrow_mut _20` producing `*mut *JsVal` — callee then
                 // reads the pointer's bits as the payload (zeros for
                 // page-aligned addresses). Mirrors `is_already_ptr` in the
-                // standalone `Expr::MutableBorrow` handler (exprs/mod.rs:362).
+                // standalone `Expr::MutableBorrow` handler (`is_already_ptr`,
+                // exprs/mod.rs). Both now guard only the FALL-THROUGH path: a
+                // resolvable projection returns early at the Family-1 chokepoint
+                // above, whose producer postcondition makes the borrow
+                // unconditional. This guard still matters for the shapes the
+                // producer returns `None` for — `&xs.get(i).unwrap()`, whose
+                // read yields a `Ptr(T)` that must be forwarded, not re-borrowed.
                 if place.projections.is_empty()
                     && matches!(
                         ctx.type_registry.get(local_type),

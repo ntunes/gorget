@@ -414,29 +414,15 @@ fn lower_expr_inner(
                     }
                 }
             }
-            // Snag #26: `&*box` and `&*ptr` should produce a pointer to the
-            // heap (Box) or pointee (Ptr), not a pointer to a stack copy.
-            // Without this, `mutate(&*b)` would mutate a discarded local copy
-            // and the user's heap value would be unchanged. Build the borrow
-            // through a Deref-projected place so the resulting pointer
-            // addresses the underlying data, mirroring the lvalue path
-            // taken by field-assign-through-deref.
-            if let Expr::Deref { expr: deref_inner } = &inner.node {
-                let inner_op = lower_expr(ctx, builder, deref_inner);
-                if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
-                    let mut deref_place = inner_place.clone();
-                    deref_place.projections.push(Projection::Deref);
-                    let local_idx = inner_place.local.0 as usize;
-                    let pointee = if local_idx < builder.locals.len() {
-                        let t = builder.local_type(inner_place.local);
-                        ctx.deref_inner_type(t).unwrap_or(t)
-                    } else { UNIT_TYPE };
-                    let ptr_type = ctx.register_mut_ptr_type(pointee);
-                    let dst = builder.add_local(ptr_type, None);
-                    builder.emit_borrow_mut(dst, deref_place);
-                    return FunctionBuilder::copy(dst);
-                }
-            }
+            // (Snag #26's `&*box` / `&*ptr` Deref-lvalue block used to sit HERE;
+            // it is now the `Expr::Deref` arm of the shared `try_resolve_place`
+            // producer invoked below — the STANDALONE face of the two
+            // `&`-formation faces, resolving through the same producer as the
+            // CALL-ARG face in `calls.rs` so a projection form cannot be served
+            // at one face and dropped at the other. Order is preserved: the G2
+            // block immediately below explicitly excludes `Expr::Deref` from
+            // root-materialize, so `&*b` still reaches the producer with
+            // `g2_projected_untrack_start == None`, exactly as before.)
             // CoW `&`-of-a-PROJECTED-bare-value FORMATION (G2, site 3, standalone
             // form): `auto r = &b.data`, `auto r = &b.data[i]` where the
             // projection ROOT is a bare param / bare alias. Materialize the root
@@ -474,6 +460,33 @@ fn lower_expr_inner(
                         g2_projected_untrack_start = Some(start);
                     }
                 }
+            }
+            // FAMILY-1 CHOKEPOINT (STANDALONE face). Same producer and the same
+            // ordering contract as the CALL-ARG face in `calls.rs`: AFTER the G2
+            // root-materialize (so a rebound root is addressed, not the shared
+            // source), BEFORE `lower_expr` and returning early (so `inner` is
+            // lowered exactly once), with the G2 untrack still closing over the
+            // handles the projection minted.
+            //
+            // ⚠ THIS FACE IS GENUINELY GUARD-FREE, and that is not an oversight:
+            // unlike `lower_call_arg` there is NO ownership field to gate on here
+            // — the NODE ITSELF is the sigil. The two faces DIFFER; do not
+            // "unify" them by deleting the call-arg gate.
+            //
+            // The live, RATIFIED shape reaching this face with a projection is
+            // the list-comprehension iterable (`[e for x in &s.items]`, D32
+            // rider): `lower_list_comprehension`'s non-range path lowers the
+            // iterable through `lower_expr`, landing here. Its emission changes
+            // from a forwarded field-load `Ptr(T)` to an `emit_borrow_mut`
+            // `MutPtr(T)`; pinned by `cow_comprehension_amp_projection_source.gg`.
+            if let Some((place, place_type)) = try_resolve_place(ctx, builder, inner) {
+                if let Some(s) = g2_projected_untrack_start {
+                    ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());
+                }
+                let ptr_type = ctx.register_mut_ptr_type(place_type);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(dst, place);
+                return FunctionBuilder::copy(dst);
             }
             let val = lower_expr(ctx, builder, inner);
             // G2 site-3 UAF-fold close: reset the transient element/field handles
@@ -2766,6 +2779,133 @@ pub(super) fn try_resolve_index_element_ptr(
     let elem_ptr_type = ctx.register_ptr_type(elem_type);
     let elem_ptr = builder.index_load(coll_place, idx, elem_ptr_type);
     Some((Place::local(elem_ptr), elem_type))
+}
+
+/// THE shared place resolver — the SINGLE entry point mapping a projection
+/// expression to a write-through `Place` plus the type of the value AT that
+/// place. Both `&`-borrow FORMATION faces dispatch here (`lower_call_arg`'s
+/// `MutableBorrow` arm and the standalone `Expr::MutableBorrow` handler); the
+/// three specialist resolvers below are the grammar's productions, not entry
+/// points.
+///
+/// # Postcondition 1 — the returned `Place` is an lvalue OF THE VALUE
+///
+/// Never of a pointer to it. `try_resolve_index_element_ptr` hands back a bare
+/// local holding `Ptr(elem)`, so the `Projection::Deref` normalisation happens
+/// HERE, once, at the producer — rather than every caller re-deriving "is this
+/// one already a pointer?" from the shape it got back. That re-derivation is
+/// exactly how the `&`-argument path grew its `is_already_ptr` special case, and
+/// a caller that forgets it emits `**T`, so the callee reads pointer bits as
+/// payload (gorget-js snag #1). With this postcondition every caller may
+/// `emit_borrow_mut` the result UNCONDITIONALLY and get a pointer to real
+/// storage. That invariant is what makes one producer safe to share.
+///
+/// # Postcondition 2 — EMISSION: a `None` may arrive AFTER instructions emitted
+///
+/// The specialist resolvers can emit and THEN return `None`. On that path the
+/// caller falls through to `lower_expr` and the base is evaluated a SECOND time.
+/// This is a surface the Family-1 chokepoint CREATES at the `&`-formation faces
+/// (before it, those faces had only the fall-through path, so the question never
+/// arose). TOTAL enumeration of the `return None` sites, one row each:
+///
+/// | site | emits before returning? | reachable from an `&`-formation face? |
+/// |---|---|---|
+/// | `try_resolve_index_element_ptr` kind-gate | no (type-only pre-check) | yes — `Set`/`HashMap`/user-`Index` bases |
+/// | `try_resolve_index_element_ptr` non-place coll | YES (`lower_expr(coll)`) | yes |
+/// | `try_resolve_field_place` Identifier-not-a-local | no | yes |
+/// | `try_resolve_field_place` SelfExpr-not-bound | no | no (checker rejects) |
+/// | `try_resolve_field_place` nested-FieldAccess recursion | inherits the inner row | yes |
+/// | `try_resolve_field_place` Deref non-place | YES (`lower_expr(inner)`) | yes |
+/// | `try_resolve_field_place` Index recursion (`?`) | inherits the index rows | yes |
+/// | `try_resolve_field_place` head `_ =>` | no | yes — method chains, temps |
+/// | `try_resolve_field_place` ReadGuard early-out | only if the OBJECT arm emitted | yes, when combined with an emitting base |
+/// | `try_resolve_field_place` field-lookup fall-off | only if the OBJECT arm emitted | yes — see the `Deque` row below |
+/// | `try_resolve_tuple_field_place` Identifier / SelfExpr / recursions / Deref / head `_ =>` | mirrors the field resolver row-for-row | yes |
+/// | `try_resolve_tuple_field_place` non-place obj / out-of-range local / walk fall-off | only if the OBJECT arm emitted | yes |
+///
+/// A REACHABLE emit-then-`None` row exists and is measured: a `Deque[S]` element
+/// base. `Deque` is ADMITTED by the kind-gate (`builtins.rs` gives it
+/// `CollectionKind::Array`) but `infer_collection_element_type` has no `Deque__`
+/// arm, so the element type falls to `I64_TYPE`, the field walk finds nothing,
+/// and control falls off the field resolver AFTER `lower_expr(coll)`,
+/// `lower_expr(index)` and `index_load` have all emitted. The double evaluation
+/// is ACCEPTED here rather than remedied: the remedy ("never emit before you can
+/// return `None`") edits the SHARED resolvers, which would change assign-face
+/// and method-receiver emission on their `None` paths too — a semantic change on
+/// faces this chokepoint deliberately leaves byte-identical. The `Deque` shape
+/// is filed with a committed `known_gaps` repro; see
+/// `known_gaps/sound_amp_deque_element_field.gg`.
+///
+/// # `None` means FALL THROUGH, never DROP
+///
+/// Returns `None` for anything that is not a resolvable place — a whole
+/// identifier, a temp, a call result, a literal, an out-of-domain collection
+/// kind. The caller must fall through to its existing behaviour; `None` must
+/// never mean "discard the construct" (Core #10).
+///
+/// # Parity with the ASSIGN face is held by the GUARD, not by shared code
+///
+/// `lower_assign` deliberately does NOT route through this producer:
+/// `lower_index_assign` must be able to INSERT a missing Dict key, which a write
+/// through a resolved element pointer cannot do, and the field/tuple-field
+/// assign paths differ in their materialize / untrack / clone prologues. The two
+/// faces are kept in parity by `tests/lints.rs`'s
+/// `amp_formation_and_assign_cover_the_same_place_forms`, NOT by calling the
+/// same code. Do not assume otherwise.
+pub(in crate::ir::lowering) fn try_resolve_place(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    expr: &Spanned<Expr>,
+) -> Option<(Place, TypeId)> {
+    match &expr.node {
+        Expr::FieldAccess { object, field } => {
+            try_resolve_field_place(ctx, builder, object, &field.node)
+        }
+        Expr::TupleFieldAccess { object, index } => {
+            try_resolve_tuple_field_place(ctx, builder, object, *index)
+        }
+        Expr::Index { object, index } => {
+            let (ptr_place, elem_type) = try_resolve_index_element_ptr(ctx, builder, object, index)?;
+            // Postcondition 1: the index resolver returns a local holding
+            // `Ptr(elem)`; normalise it to an lvalue OF THE ELEMENT here, once.
+            let mut place = ptr_place;
+            place.projections.push(Projection::Deref);
+            Some((place, elem_type))
+        }
+        // Snag #26 lvalue-through-deref, hoisted out of the TWO open-coded
+        // `&`-formation copies (`lower_call_arg`'s `&*b` block and the standalone
+        // `Expr::MutableBorrow` `&*b` block) into this shared producer, so `&*b`
+        // and `&b.fd` take ONE path instead of two.
+        //
+        // ⚠ A THIRD copy remains open-coded in `lower_assign`'s `Expr::Deref` arm
+        // (`stmts/assigns.rs`), deliberately. Absorbing it is NOT a move: that
+        // copy walks the inner place's projections to compute the pointee type
+        // (peeling `Field` through struct definitions as well as `Deref`), where
+        // this arm reads the local's type directly. They agree on every measured
+        // shape, but reconciling them changes emission for multi-projection deref
+        // targets, so it owes its own fixtures and lane census. Filed, not fixed.
+        Expr::Deref { expr: inner } => {
+            let inner_op = lower_expr(ctx, builder, inner);
+            let inner_place = match &inner_op {
+                Operand::Copy(p) | Operand::Move(p) => p.clone(),
+                _ => return None,
+            };
+            let local_idx = inner_place.local.0 as usize;
+            let pointee = if local_idx < builder.locals.len() {
+                let t = builder.local_type(inner_place.local);
+                ctx.deref_inner_type(t).unwrap_or(t)
+            } else {
+                UNIT_TYPE
+            };
+            let mut place = inner_place;
+            place.projections.push(Projection::Deref);
+            Some((place, pointee))
+        }
+        // Fall through — NOT a drop (Core #10). A bare `Expr::Identifier` lands
+        // here BY DESIGN: `&x` on a whole local is served by the bare-identifier
+        // fast paths that run BEFORE this producer at both faces.
+        _ => None,
+    }
 }
 
 /// Resolve a field access expression to a Place (with projections) and the field's type,

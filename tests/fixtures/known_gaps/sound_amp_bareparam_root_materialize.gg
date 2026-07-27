@@ -1,28 +1,30 @@
-# DURABLE REPRO — B2: the by-value `&`-projection write-through bug with a
-# BARE-PARAM root. This is the row a naive fix breaks.
+# 🚨 REGRESSION FIXTURE — THE TRAP ROW. B2: the `&`-projection with a BARE-PARAM
+# root. Asserts 11 / 10.
 #
 # `via_bare` takes `Holder h` BARE, which under CoW-default-borrow is a BORROW.
 # The write `bump_int(&h.i)` therefore MATERIALIZES a private copy at the
 # closest immutable context: the callee observes its own write, and the CALLER'S
-# object is UNCHANGED.
-#
-# WRONG TODAY (measured at HEAD, Rust gg, C backend): prints
-#     10 / 10
-# The caller's 10 is right by accident — the write is lost everywhere, including
-# inside the callee, which is the same defect as
-# `sound_amp_byvalue_place_writethrough.gg`.
-#
-# ORACLE: ggdef prints 11 / 10 — the materialized copy is written, the caller is
-# untouched.
-#
-# INTENDED (asserted below): 11 / 10.
+# object is UNCHANGED. ggdef agrees: 11 / 10.
 #
 # ⚠ THIS IS THE ROW MOST LIKELY TO REGRESS SILENTLY. A fix that makes the
 # `&`-projection write THROUGH to the root looks correct on every other fixture
 # in the batch and is WRONG here — it would print 11 / 11, turning a borrow into
-# a mutable alias and breaking CoW's central guarantee. Whoever fixes the class
-# must land this fixture green at 11 / 10, not merely make the caller's 10 stay
-# 10 (which it already does today, for the wrong reason).
+# a mutable alias and breaking CoW's central guarantee. Landing 11 / 10 (not
+# merely keeping the caller's 10, which the fully-broken compiler also did) is
+# what separates a correct fix from a plausible one.
+#
+# AXIS + CELL (Core #12): the ROOT-SHAPE axis of the `&`-argument face, at the
+# bare-parameter cell — the one root shape that must NOT write through. The
+# owned-local cell is `sound_amp_byvalue_place_writethrough.gg`.
+#
+# RED-VERIFIED: against the pre-fix compiler this printed 10 / 10 — the caller's
+# 10 right by accident, the write lost inside the callee too.
+#
+# GUARDED MECHANISM: the ORDER of the Family-1 chokepoint. `try_resolve_place`
+# is called AFTER the G2 root-materialize in `lower_call_arg`, so it resolves a
+# place in the private copy `cow_before_mutation` rebound the name to. Hoist that
+# call above the G2 block and this fixture prints 11 / 11 while every other
+# fixture in the batch stays green.
 #
 # The seed is computed, not a literal.
 #

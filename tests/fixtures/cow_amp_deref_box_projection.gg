@@ -1,0 +1,127 @@
+# REGRESSION FIXTURE — `f(&(*box).field)`: an `&`-argument projecting a field
+# THROUGH a Box deref must write through to the heap.
+#
+# AXIS + CELL (Core #12): the BASE-SHAPE axis at the `*box` cell, crossed with
+# the full projected-TYPE axis. This row is the one that broke for ALL TEN types
+# — not just the six by-value ones — because it had a SECOND, independent
+# mechanism: the `Expr::Deref` fast-path at the `&`-formation faces matched only
+# a BARE deref (`&*b`), so `&(*b).field` fell past it into the value-copy read
+# path. The fix folds that fast-path into the shared `try_resolve_place`
+# producer, whose `FieldAccess` arm recurses into a `Deref` object, so the bare
+# and projected deref forms take ONE path.
+#
+# RED-VERIFIED against the pre-fix compiler, which printed:
+#     10 / 10.000000 / false / a / 1 / 1 / 10 / a / EVal=A / 10
+# — every row lost the write, resource-carrying types included, which is why
+# this row is NOT covered by the type-axis fixture next door.
+#
+# ⚠ THE RESOURCE ROWS ALSO LEAKED. On a resource-carrying field the `&`-arg
+# lowering materialised a WHOLE-STRUCT CLONE to take the address of, handed the
+# callee that clone, and nobody dropped it — unbounded in a loop. The leak is
+# pinned separately under ASan by
+# `security/sound_amp_deref_box_field_leak.gg`; this fixture pins the VALUE.
+#
+# GUARDED MECHANISM: `try_resolve_place`'s `Expr::Deref` arm plus the `Deref`
+# object arm of `try_resolve_field_place`. Short-circuit the producer to `None`
+# and every row below reverts.
+#
+# Every seed is COMPUTED, never a literal.
+enum EVal:
+    A(int)
+    B()
+
+struct SVal:
+    int n
+
+struct SRes:
+    String s
+
+struct Holder:
+    int i
+    float f
+    bool z
+    String s
+    Vector[int] v
+    Dict[String, int] d
+    SVal sv
+    SRes sr
+    EVal ev
+    (int, int) t
+
+int seed():
+    return 10
+
+float fseed():
+    return 10.0
+
+String sseed():
+    return "a"
+
+void bump_int(int &n):
+    n = n + 1
+
+void bump_float(float &x):
+    x = x + 1.0
+
+void flip_bool(bool &b):
+    b = true
+
+void app_str(String &s):
+    s = s + "!"
+
+void push_vec(Vector[int] &v):
+    v.push(seed())
+
+void put_dict(Dict[String, int] &d):
+    d.put("k2", seed())
+
+void bump_sval(SVal &s):
+    s.n = s.n + 1
+
+void app_sres(SRes &s):
+    s.s = s.s + "!"
+
+void set_eval(EVal &e):
+    e = EVal.B()
+
+void bump_tup((int, int) &t):
+    t.0 = t.0 + 1
+
+void main():
+    Vector[int] v0 = Vector[int]()
+    v0.push(seed())
+    Dict[String, int] d0 = Dict[String, int]()
+    d0.put("k", seed())
+    Box[Holder] b = Box(Holder(seed(), fseed(), false, sseed(), v0, d0, SVal(seed()), SRes(sseed()), EVal.A(seed()), (seed(), 0)))
+
+    bump_int(&(*b).i)
+    print((*b).i)
+
+    bump_float(&(*b).f)
+    print((*b).f)
+
+    flip_bool(&(*b).z)
+    print((*b).z)
+
+    app_str(&(*b).s)
+    print((*b).s)
+
+    push_vec(&(*b).v)
+    print((*b).v.len())
+
+    put_dict(&(*b).d)
+    print((*b).d.len())
+
+    bump_sval(&(*b).sv)
+    print((*b).sv.n)
+
+    app_sres(&(*b).sr)
+    print((*b).sr.s)
+
+    set_eval(&(*b).ev)
+    match (*b).ev:
+        case EVal.A(n): print("EVal=A")
+        case EVal.B(): print("EVal=B")
+
+    bump_tup(&(*b).t)
+    print((*b).t.0)

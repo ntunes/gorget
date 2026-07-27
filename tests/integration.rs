@@ -32119,6 +32119,80 @@ done",
     );
 }
 
+/// FAMILY-1 — the PROJECTED-TYPE axis, sampled on BOTH SIDES of the
+/// resource/value split inside each type kind (enum · struct · tuple), plus the
+/// four cells that converged with the fix and had no coverage: `Option[int]`
+/// field, generic struct field, nested collection element, value-payload enum.
+///
+/// The axis is RESOURCE-CARRYING-NESS, not type KIND — an `Option[String]`
+/// fixture proves nothing about `enum Color {Red(), Green()}`, which is how the
+/// class survived ~5 months behind a green suite (Core #12).
+///
+/// RED-VERIFIED against the pre-fix compiler: printed
+/// `EVal=A / ERes=B / 10 / a! / 10 / a! / 10 / 10 / 10` — every VALUE-side cell
+/// lost the write while every RESOURCE-side twin was already correct.
+#[test]
+fn cow_amp_projection_type_axis() {
+    run_gg(
+        "cow_amp_projection_type_axis.gg",
+        "\
+EVal=B
+ERes=B
+110
+a!
+110
+a!
+110
+110
+110",
+    );
+}
+
+/// FAMILY-1 — `f(&(*box).field)`: the BASE-SHAPE cell that was wrong for ALL TEN
+/// types, not just the six by-value ones, because the `Expr::Deref` fast-path at
+/// the `&`-formation faces matched only a BARE deref. The fix folds that
+/// fast-path into `try_resolve_place`, so `&*b` and `&(*b).fd` take one path.
+///
+/// RED-VERIFIED against the pre-fix compiler: printed
+/// `10 / 10.000000 / false / a / 1 / 1 / 10 / a / EVal=A / 10`. The resource rows
+/// also LEAKED; that half is pinned under ASan by
+/// `security.rs::sound_amp_deref_box_field_leak_safe`.
+#[test]
+fn cow_amp_deref_box_projection() {
+    run_gg(
+        "cow_amp_deref_box_projection.gg",
+        "\
+11
+11.000000
+true
+a!
+2
+2
+11
+a!
+EVal=B
+11",
+    );
+}
+
+/// FAMILY-1 — the cheapest differential in the family: two spellings of one
+/// intent that behaved oppositely, both `gg check`-clean, in one program.
+/// `inc(&v[0])` was wrong for the six by-value types; `inc(&v.get(0).unwrap())`
+/// was correct for all ten, because `.get()` already returns a `Ptr`.
+///
+/// RED-VERIFIED: the index half printed `10` pre-fix. The get-chain half was
+/// already green, so it is pinned by break-and-watch instead — it guards the
+/// SURVIVING `is_already_ptr` fall-through, which unresolvable shapes still need.
+#[test]
+fn cow_amp_index_vs_getchain_differential() {
+    run_gg(
+        "cow_amp_index_vs_getchain_differential.gg",
+        "\
+11
+142",
+    );
+}
+
 /// CoW G2 (site 1, live second alias): the source is READ AFTER the `&`
 /// mutation — both aliases stay live. No use-after-free; source untouched,
 /// copy grown. MUST be ASan-clean under `--sanitize`.
@@ -35831,22 +35905,21 @@ fn release_flag_optimizes_at_o2() {
 /// Covered: `int` · `float` · `bool` · plain struct · tuple · Dict value ·
 /// Vector element, plus two rows with NO struct at all (`&vv[0]`, `&dd["k"]` on
 /// plain locals), which is a widening of the filed "by-value FIELD" framing.
-/// NOT covered, each measured RED at HEAD and green under the prototype, so
-/// each is a genuine uncovered cell rather than a hypothetical: **user enum**
-/// (prints `RED`, want `BLUE`) · **`Option[int]` field** · **generic struct
-/// field** (`Cell[int].val`) · **nested collection** (`&outer[0][1]`) ·
-/// **generic function** (`bumpg(&c.fd)`) · **match/`is`-binding root**.
-/// (This comment previously claimed "every value of the field-type axis". It
-/// was false in exactly the way Core #12 warns about — an axis claim that reads
-/// as coverage on the dashboard while six cells go untested.) The
-/// thin-pointer cells of the same axis (`String`, `Vector[int]` fields — the two
-/// that work by accident) are the live control
+/// The remaining cells of the axis — user enum with a VALUE payload, the
+/// resource/value contrast INSIDE each type kind, `Option[int]`, generic struct
+/// field, nested collection, generic function — are covered by the sibling
+/// fixtures `cow_amp_projection_type_axis` and
+/// `cow_amp_projection_resource_value_split`, added with the fix.
+/// The thin-pointer cells of the same axis (`String`, `Vector[int]` fields — the
+/// two that used to work by accident) are the live control
 /// `security.rs::sound_amp_field_thinptr_control_safe`, and the whole-bare-local
 /// cell is `sound_amp_local_scalar_control` below.
+///
+/// GRADUATED from `known_gaps` with the Family-1 chokepoint (`try_resolve_place`
+/// as the single place producer for both `&`-formation faces). RED-verified
+/// against the pre-fix compiler at that commit: printed
+/// `10 / 10.000000 / false / 10 ×6`, i.e. all nine rows dropped the write.
 #[test]
-#[ignore = "KNOWN GAP: `&`-arg of a by-value place silently drops the write on both backends \
-(ggdef is correct). Asserts the INTENDED write-through; TODO.md. Un-ignore when `&`-of-a-place \
-resolves to the place instead of a value temp."]
 fn sound_amp_byvalue_place_writethrough() {
     run_gg(
         "known_gaps/sound_amp_byvalue_place_writethrough.gg",
@@ -36116,18 +36189,22 @@ fn sound_amp_local_scalar_control() {
     run_gg("known_gaps/sound_amp_local_scalar_control.gg", "11");
 }
 
-/// KNOWN GAP — B2, and the row a naive fix breaks. A BARE-param root is a
+/// 🚨 THE TRAP ROW — the one a naive Family-1 fix breaks. A BARE-param root is a
 /// BORROW, so the write must MATERIALIZE: the callee sees 11, the CALLER stays
-/// 10. Measured at HEAD: `10 / 10` (the caller's 10 is right by accident — the
-/// write is lost inside the callee too). ggdef: `11 / 10`.
+/// 10. A fix that write-throughs to the root looks correct on every other
+/// fixture in this batch and is WRONG here — it would print `11 / 11`, turning a
+/// borrow into a mutable alias and breaking CoW's central guarantee.
 ///
-/// A fix that write-throughs to the root looks correct on every other fixture in
-/// this batch and is WRONG here — it would print `11 / 11`, turning a borrow
-/// into a mutable alias and breaking CoW's central guarantee.
+/// This is the pin for the Family-1 chokepoint's ORDERING contract: the
+/// `try_resolve_place` call sits AFTER the G2 root-materialize, so the place it
+/// resolves addresses the private copy `cow_before_mutation` rebound the name
+/// to, not the shared source. Move that call one block earlier and this fixture
+/// prints 11 / 11 while everything else stays green.
+///
+/// GRADUATED with that chokepoint. RED-verified against the pre-fix compiler:
+/// printed `10 / 10` (the caller's 10 was right by accident — the write was lost
+/// inside the callee too). ggdef: `11 / 10`.
 #[test]
-#[ignore = "KNOWN GAP: `&`-projection off a BARE-param root must MATERIALIZE (callee 11, caller \
-10); today both print 10. Asserts the INTENDED materialize; TODO.md. Un-ignore when the \
-by-value `&`-projection class is fixed — and check it prints 11/10, not 11/11."]
 fn sound_amp_bareparam_root_materialize() {
     run_gg(
         "known_gaps/sound_amp_bareparam_root_materialize.gg",
@@ -36137,14 +36214,14 @@ fn sound_amp_bareparam_root_materialize() {
     );
 }
 
-/// KNOWN GAP — B3: TWO sequential writes through the same `&`-projection.
-/// Measured at HEAD: 10 (both lost). ggdef: 12. A partial fix that write-throughs
-/// the first projection and then re-reads a stale value prints 11 here and
-/// passes every single-write pin in the batch.
+/// B3: TWO sequential writes through the same `&`-projection. A PARTIAL fix that
+/// write-throughs the first projection and then re-reads a stale value prints 11
+/// here and passes every single-write pin in the batch — that is what this
+/// fixture exists to separate.
+///
+/// GRADUATED with the Family-1 chokepoint. RED-verified against the pre-fix
+/// compiler: printed `10` (both writes lost). ggdef: `12`.
 #[test]
-#[ignore = "KNOWN GAP: two sequential writes through the same `&`-projection both vanish \
-(ggdef prints 12). Asserts the INTENDED 12; TODO.md. Un-ignore when the by-value `&`-projection \
-class is fixed — a partial fix prints 11."]
 fn sound_amp_projection_two_writes() {
     run_gg("known_gaps/sound_amp_projection_two_writes.gg", "12");
 }

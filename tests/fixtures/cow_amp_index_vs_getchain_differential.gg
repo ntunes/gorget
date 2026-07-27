@@ -1,0 +1,52 @@
+# REGRESSION FIXTURE — the cheapest differential in this family: TWO SPELLINGS
+# OF ONE INTENT that behaved OPPOSITELY, both `gg check`-clean, in one program.
+#
+#   inc(&v[0])                  -> was WRONG for the six by-value types
+#   inc(&v.get(0).unwrap())     -> was CORRECT for all ten
+#
+# The get-chain spelling was right by a different mechanism: `.get()` returns a
+# `Ptr(T)`, so the read already yielded a pointer and the `is_already_ptr`
+# fall-through forwarded it. The index spelling read a value COPY. Nothing in the
+# language distinguishes the two — same collection, same element, same sigil —
+# so the split was pure implementation accident.
+#
+# AXIS + CELL (Core #12): the SPELLING axis of one intent, at the `Vector[int]`
+# element cell — the value-typed element, which is the side that was broken. Both
+# halves are asserted in the same program so a future change that fixes one and
+# breaks the other cannot pass.
+#
+# RED-VERIFIED, and note the two halves need DIFFERENT forms of red (Core #12's
+# ⚠ clause):
+#   * The `&v[0]` half: RED against the pre-fix compiler, which printed `10`.
+#   * The `&v.get(0).unwrap()` half was ALREADY GREEN at HEAD (printed `142`), so
+#     no pre-fix compiler can red it. Break-and-watch instead: delete the
+#     `is_already_ptr` fall-through guard in `lower_call_arg`'s `MutableBorrow`
+#     arm and this half emits `**T`, so the callee reads pointer bits as payload
+#     and the assertion fails. That guard is what this half pins — the fix must
+#     NOT remove it, because unresolvable shapes still land there.
+#
+# GUARDED MECHANISM: the index half pins `try_resolve_place`'s `Index` arm and
+# its `Projection::Deref` normalisation (postcondition 1); the get-chain half
+# pins the surviving `is_already_ptr` fall-through.
+#
+# Seeds are computed, never literals.
+int seed():
+    return 10
+
+void inc(int &n):
+    n = n + 1
+
+void setv(int &n):
+    n = 142
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(seed())
+
+    # Spelling A — subscript. Was silently wrong.
+    inc(&v[0])
+    print(v[0])
+
+    # Spelling B — get-chain. Was already correct; pins the fall-through guard.
+    setv(&v.get(0).unwrap())
+    print(v[0])

@@ -6620,3 +6620,356 @@ fn ratified_decisions_are_cited_in_the_spec() {
         uncited.join(", ")
     );
 }
+
+// ---------------------------------------------------------------------------
+// FAMILY-1 GUARD — the `&`-formation faces and the assign face must recognise
+// the same projection forms, no new formation face may appear unnoticed, and
+// the shared place producer must actually be INVOKED at both formation faces.
+//
+// Three limbs, because no one of them catches the class alone (Core #6 / #15e
+// Q2): limb 1 catches arm DRIFT, limb 2 catches a NEW formation site, limb 3
+// catches the producer never being CALLED — which is the exact mechanism
+// Family-1 was, and which limbs 1 and 2 both sail past.
+// ---------------------------------------------------------------------------
+
+/// Collect the `Expr::<Variant>` names appearing in the TOP-LEVEL match-arm
+/// heads of a function body.
+///
+/// Anchoring is structural, not semantic: in this rustfmt'd tree a top-level
+/// `fn` ends with `}` in column 0, its body is indented 4, and the arms of the
+/// body's `match` are indented exactly 8. So an arm head is "a line inside the
+/// function whose indentation is exactly 8". Comment lines are skipped — a
+/// doc-comment at arm indentation legitimately *mentions* `Expr::MutableBorrow`
+/// without being an arm, and counting it would make the lint lie.
+fn top_level_expr_arm_variants(src: &str, anchor: &str) -> std::collections::BTreeSet<String> {
+    let start = src.find(anchor).unwrap_or_else(|| {
+        panic!(
+            "place-form parity lint: anchor not found in source: {anchor}\n\n\
+             The lint is anchored on the function signature; if it was renamed, \
+             update the anchor here."
+        )
+    });
+    let rest = &src[start..];
+    // A top-level fn ends at the first `}` in column 0.
+    let end = rest.find("\n}\n").map(|e| e + 1).unwrap_or(rest.len());
+    let body = &rest[..end];
+
+    let mut out = std::collections::BTreeSet::new();
+    for line in body.lines() {
+        let Some(after_indent) = line.strip_prefix("        ") else {
+            continue;
+        };
+        if after_indent.starts_with(' ') {
+            continue; // deeper than an arm head — inside an arm
+        }
+        if after_indent.trim_start().starts_with("//") {
+            continue; // a comment at arm indentation is not an arm
+        }
+        let mut hay = after_indent;
+        while let Some(p) = hay.find("Expr::") {
+            let tail = &hay[p + "Expr::".len()..];
+            let name: String = tail
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                out.insert(name.clone());
+            }
+            hay = &tail[name.len()..];
+        }
+    }
+    out
+}
+
+/// LIMB 1 (Core #6, Core #4) — the `&`-borrow FORMATION face and the ASSIGNMENT
+/// face must recognise the SAME set of projection forms as places.
+///
+/// **The class this retires.** A projection form served at one face and silently
+/// dropped at the other is a miscompile `gg check` cannot see: `f(&c.fd)`
+/// discarded the callee's write for every by-value field type for ~5 months
+/// while `c.fd = v` worked, because the two faces resolved places through
+/// *different code*. The fix made `try_resolve_place` the single producer for
+/// both `&`-formation faces; this lint stops the faces drifting apart again.
+///
+/// **Why SET-equality and not a COUNT.** A count passes when one face gains
+/// `Index` and the other gains `TupleFieldAccess` — the exact swap that would
+/// reintroduce the bug. It also cannot NAME the missing form in its failure
+/// message. Both arm sets are compared as sets and the assertion prints the
+/// symmetric difference.
+///
+/// ⚠ **WHAT THIS LIMB CANNOT CATCH — read before trusting a green.**
+///   * It checks ROUTING (is the form dispatched?), never SEMANTICS (does the
+///     arm resolve the *right* place?). An arm that exists and is wrong passes.
+///   * It cannot catch the *fallback* hole: an arm that exists but whose inner
+///     `if let Some(..)` has no `else`, so a resolver `None` silently drops the
+///     write. That is a different SUBJECT (Core #15e Q4 — the missing subject is
+///     the FALLBACK, not the arm); `lower_tuple_field_assign` has exactly that
+///     shape today and this lint is green on it, by design and not by accident.
+///   * It does NOT cover the METHOD-RECEIVER face. There are THREE in-tree
+///     consumers of these resolvers, not two: beyond `lower_assign`, the
+///     method-receiver face calls them with its own receiver-form arm set
+///     (`methods.rs`, `try_resolve_field_place` / `try_resolve_index_element_ptr`).
+///     Probed at the Family-1 commit: `t.0.push(9)` and `(*b).v.push(9)` both
+///     print `2` (correct), so no live divergence is claimed — but a guard that
+///     exists to stop faces drifting must NAME every face it does not cover.
+///     ⚠ The method-call face is also the only non-free-call `lower_call_arg`
+///     caller that sets `expected_type`, so a refactor dropping those lines
+///     would silently re-arm the auto-propagate call-skip there.
+///   * It does NOT cover the SELF-HOST lane — `lower_field_place_base`
+///     (`self_host_lowerer/lower_stmt.gg`) is another arm set entirely, and the
+///     SH parser emits `EFieldAccess(base, "0")` for tuple fields, so parity
+///     takes a different shape there.
+///   * It is a text-shape lint over Rust source. Respelling either `match`
+///     breaks it noisily, which is the intended ratchet behaviour.
+#[test]
+fn amp_formation_and_assign_cover_the_same_place_forms() {
+    let exprs = fs::read_to_string(Path::new("src/ir/lowering/exprs/mod.rs"))
+        .expect("read src/ir/lowering/exprs/mod.rs");
+    let assigns = fs::read_to_string(Path::new("src/ir/lowering/stmts/assigns.rs"))
+        .expect("read src/ir/lowering/stmts/assigns.rs");
+
+    let formation = top_level_expr_arm_variants(
+        &exprs,
+        "pub(in crate::ir::lowering) fn try_resolve_place(",
+    );
+    let assign = top_level_expr_arm_variants(&assigns, "pub(super) fn lower_assign(");
+
+    /// Forms the ASSIGN dispatch handles that are deliberately NOT place
+    /// projections. Each needs a stated reason; adding a row without one is how
+    /// a real hole gets waved through.
+    ///
+    /// NOTE on `Expr::Index`, deliberately NOT exempt: the two faces reach it by
+    /// different MECHANISMS — `d[k] = v` is a setter call (Dict index-assign
+    /// must be able to INSERT a missing key, which a write through a resolved
+    /// element pointer cannot do), while `&d[k]` resolves an element place. Both
+    /// faces nonetheless RECOGNISE the form, which is what this limb measures,
+    /// so it belongs in the compared set. Exempting it would let the `&d[k]` arm
+    /// be deleted with nothing going red. (The guard already caught its own
+    /// author here: a first draft exempted `Index`, and the lint went red showing
+    /// the exemption would allow exactly that silent deletion.)
+    const ASSIGN_ONLY_EXEMPT: &[(&str, &str)] = &[(
+        "Identifier",
+        "a whole variable is not a projection — `x = v` rebinds the slot (and may \
+         take the Shared/Mutex/Atomic paths), while `&x` is served by the \
+         bare-identifier fast paths in lower_call_arg / Expr::MutableBorrow BEFORE \
+         try_resolve_place is consulted",
+    )];
+
+    let exempt: std::collections::BTreeSet<String> = ASSIGN_ONLY_EXEMPT
+        .iter()
+        .map(|(name, _)| (*name).to_string())
+        .collect();
+
+    let assign_places: std::collections::BTreeSet<String> =
+        assign.difference(&exempt).cloned().collect();
+
+    let missing_from_formation: Vec<&str> = assign_places
+        .difference(&formation)
+        .map(|s| s.as_str())
+        .collect();
+    let missing_from_assign: Vec<&str> = formation
+        .difference(&assign_places)
+        .map(|s| s.as_str())
+        .collect();
+
+    assert!(
+        missing_from_formation.is_empty() && missing_from_assign.is_empty(),
+        "PLACE-FORM PARITY BROKEN between the `&`-formation faces and the assign face.\n\n\
+         Handled by the assign face (`lower_assign`) but NOT by the shared producer \
+         (`try_resolve_place`): {missing_from_formation:?}\n\
+         Handled by `try_resolve_place` but NOT by the assign face: {missing_from_assign:?}\n\n\
+         formation = {formation:?}\n\
+         assign (minus exemptions) = {assign_places:?}\n\
+         exemptions = {exempt:?}\n\n\
+         A projection form that one face treats as a place and the other does not is \
+         the Family-1 defect class: `f(&x.p)` silently discards the callee's write \
+         while `x.p = v` works, `gg check` clean on both. Add the arm to \
+         `try_resolve_place` (src/ir/lowering/exprs/mod.rs) so BOTH `&`-formation \
+         faces get it at once — or, if the form genuinely cannot be a borrow target, \
+         add it to ASSIGN_ONLY_EXEMPT WITH a reason.\n\n\
+         See AGENTS.md Core #4 (one fix, all siblings) and Core #10 (lower-or-reject)."
+    );
+
+    // Sanity: the anchors resolved to real matches. A silently-empty set would
+    // make the equality above vacuously true — the guard must not pass by
+    // finding nothing (Core #15e Q2: a guard that green-lights its own class).
+    assert!(
+        formation.len() >= 4 && assign_places.len() >= 3,
+        "place-form parity lint extracted suspiciously few arms \
+         (formation={formation:?}, assign={assign_places:?}). The match statements \
+         were probably respelled or reindented — fix the extractor rather than \
+         lowering these floors."
+    );
+}
+
+/// LIMB 2 (Core #4) — pin the number of `emit_borrow_mut` call sites under
+/// `src/ir/lowering/`.
+///
+/// Limb 1 proves the two KNOWN formation faces agree; it says nothing about a
+/// THIRD face appearing. `emit_borrow_mut` is the one call that mints a mutable
+/// borrow, so a new site is a new formation path — which must either route
+/// through `try_resolve_place` or justify why it does not. The budget makes that
+/// a deliberate, reviewed act instead of a silent one.
+///
+/// Baseline 28 at the Family-1 commit: the chokepoint REMOVED two open-coded
+/// `&*box` blocks and ADDED two producer-routed borrows, net 0. Distribution:
+/// calls.rs 9 · assigns.rs 5 · methods.rs 5 · stmts/mod.rs 4 · exprs/mod.rs 2 ·
+/// closures.rs 1 · shared.rs 1 · spawn.rs 1 — and `for_loops.rs` has ZERO (its
+/// four-arm `&`-match computes `write_through`; it is not a formation site).
+#[test]
+fn borrow_mut_formation_site_count() {
+    const EXPECTED: usize = 28;
+
+    let mut sites = Vec::new();
+    let mut stack = vec![Path::new("src/ir/lowering").to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).expect("read src/ir/lowering") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = fs::read_to_string(&path).expect("read lowering source");
+                for (i, line) in text.lines().enumerate() {
+                    if line.contains("emit_borrow_mut(") && !line.trim_start().starts_with("//") {
+                        sites.push(format!("{}:{}", path.display(), i + 1));
+                    }
+                }
+            }
+        }
+    }
+    sites.sort();
+
+    assert_eq!(
+        sites.len(),
+        EXPECTED,
+        "`emit_borrow_mut` call-site count under src/ir/lowering/ changed: {} vs expected {EXPECTED}.\n\n\
+         Sites:\n  {}\n\n\
+         Every site mints a mutable borrow. A NEW one is a new `&`-formation path: \
+         route it through `try_resolve_place` so it inherits the whole projection \
+         grammar, or state in the bump comment why the borrow target is not a place \
+         (a whole local, a synthesized temp, a closure capture slot).\n\n\
+         If sites were REMOVED, lower EXPECTED here to lock the new floor.",
+        sites.len(),
+        sites.join("\n  ")
+    );
+}
+
+/// LIMB 3 (Core #6, Core #15e Q2) — the shared producer must actually be
+/// INVOKED at BOTH `&`-formation faces.
+///
+/// **Why limbs 1 and 2 cannot cover this, which is the whole point.** Family-1's
+/// defect was never a missing arm — `lower_call_arg`'s `MutableBorrow` arm
+/// simply *never called a resolver*. Run the regression scenario: someone
+/// short-circuits the `try_resolve_place` call at a formation face (returns
+/// `None` unconditionally, or re-implements it with a different resolver).
+///   * Limb 1: both faces still declare the same arms → GREEN.
+///   * Limb 2: the block is textually intact and the fall-through
+///     `emit_borrow_mut` still exists → count unchanged at 28 → GREEN.
+///   ⇒ guard green, Family 1 fully regressed. A guard that green-lights the
+///     class it was written to retire is worse than none.
+///
+/// (Note that *deleting* the whole chokepoint block would also delete ITS
+/// `emit_borrow_mut`, dropping the count to 27 and tripping limb 2. It is the
+/// short-circuit variants that slip both — which is why this limb asserts
+/// PRESENCE OF THE CALL, not presence of the block.)
+///
+/// ⚠ This limb covers BOTH faces deliberately. An earlier design covered only
+/// the call-arg face and asserted the standalone face was "covered by limb 2's
+/// count" — that is false for exactly the same face-independent reason above: a
+/// short-circuit at the standalone face leaves its fall-through
+/// `emit_borrow_mut` intact and the count stays 28. The standalone face carries
+/// a RATIFIED, projection-carrying live shape (the list-comprehension iterable,
+/// D32 rider), so leaving it unguarded would be a real hole.
+///
+/// ⚠ LIMIT: this limb proves the producer is CALLED, never that its result is
+/// USED correctly. A face that calls `try_resolve_place` and discards the
+/// `Some(..)` passes. Semantics are pinned by the RED-verified fixtures
+/// (`sound_amp_byvalue_place_writethrough`, `cow_amp_projection_type_axis`,
+/// and the ordering trap `sound_amp_bareparam_root_materialize`).
+///
+/// In-tree precedent for this shape: `compound_assign_fieldaccess_fallback_present`
+/// scans a named function body (comments stripped) for a required call.
+#[test]
+fn amp_formation_faces_invoke_the_shared_place_producer() {
+    let calls = fs::read_to_string(Path::new("src/ir/lowering/exprs/calls.rs"))
+        .expect("read src/ir/lowering/exprs/calls.rs");
+    let exprs = fs::read_to_string(Path::new("src/ir/lowering/exprs/mod.rs"))
+        .expect("read src/ir/lowering/exprs/mod.rs");
+
+    // Strip line comments so the guard reasons about EXECUTABLE code only — both
+    // faces carry long comment blocks that legitimately NAME `try_resolve_place`
+    // in prose, and counting those would make this limb vacuous.
+    let strip = |s: &str| -> String {
+        s.lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // --- FACE 1: the CALL-ARG face, `lower_call_arg`'s body. ---
+    let sig = "pub(super) fn lower_call_arg(";
+    let start = calls.find(sig).expect("locate lower_call_arg");
+    let rest = &calls[start..];
+    let end = rest.find("\n}\n").map(|e| e + 1).unwrap_or(rest.len());
+    let call_arg_body = strip(&rest[..end]);
+
+    assert!(
+        call_arg_body.contains("try_resolve_place("),
+        "THE CALL-ARG `&`-FORMATION FACE NO LONGER INVOKES THE SHARED PLACE PRODUCER.\n\n\
+         `lower_call_arg`'s body contains no executable `try_resolve_place(` call.\n\n\
+         That call IS the Family-1 fix: an `&`-argument naming a place must borrow \
+         THAT PLACE. Without it the argument falls through to the READ path, and for \
+         every by-value projected type (`int`/`float`/`bool`/value struct/tuple/\
+         value-payload enum) the callee receives a pointer to a DYING TEMP and its \
+         write is silently discarded — `gg check` clean, on both backends.\n\n\
+         Neither sibling limb catches this: the arm sets are unchanged (limb 1 green) \
+         and the fall-through `emit_borrow_mut` keeps the site count at 28 (limb 2 \
+         green). RESTORE the call; do not delete this limb."
+    );
+
+    // --- FACE 2: the STANDALONE face, the `Expr::MutableBorrow` arm. ---
+    let arm_head = "Expr::MutableBorrow { expr: inner } => {";
+    let a_start = exprs
+        .find(arm_head)
+        .expect("locate the standalone Expr::MutableBorrow arm in lower_expr_inner");
+    // The arm ends where the next arm head at the same indentation begins.
+    let a_rest = &exprs[a_start..];
+    let a_end = a_rest
+        .find("\n        Expr::Closure {")
+        .unwrap_or(a_rest.len());
+    let standalone_body = strip(&a_rest[..a_end]);
+
+    assert!(
+        standalone_body.contains("try_resolve_place("),
+        "THE STANDALONE `&`-FORMATION FACE NO LONGER INVOKES THE SHARED PLACE PRODUCER.\n\n\
+         The `Expr::MutableBorrow` arm of `lower_expr_inner` contains no executable \
+         `try_resolve_place(` call.\n\n\
+         This face is NOT dead code: the list-comprehension iterable \
+         (`[e for x in &s.items]`) is a RATIFIED shape (D32 rider) that reaches it \
+         carrying a PROJECTION, via `lower_list_comprehension`'s non-range path. \
+         Without the producer it falls back to the read path and a projection \
+         iterable loses write-through.\n\n\
+         Neither sibling limb catches this — same face-independent argument as the \
+         call-arg face above. RESTORE the call; do not delete this limb."
+    );
+
+    // Sanity: the slices resolved to real, non-trivial bodies. A mis-anchored
+    // empty slice would make both assertions above fail LOUDLY rather than pass,
+    // but a slice that swallowed the whole file would make them vacuously true.
+    assert!(
+        call_arg_body.len() > 500 && standalone_body.len() > 500,
+        "limb-3 anchors extracted suspiciously small bodies (call_arg={}, standalone={}). \
+         The function or arm was probably respelled — fix the anchors rather than \
+         weakening this limb.",
+        call_arg_body.len(),
+        standalone_body.len()
+    );
+    assert!(
+        standalone_body.len() < exprs.len() / 2,
+        "limb-3 standalone anchor swallowed {} of {} bytes — the arm-end anchor \
+         (`Expr::Closure {{`) no longer matches, so this limb would pass vacuously. \
+         Fix the anchor.",
+        standalone_body.len(),
+        exprs.len()
+    );
+}

@@ -1,18 +1,24 @@
-# DURABLE REPRO — B1: a `&`-arg naming a BY-VALUE place silently LOSES the
-# write.
-#
-# WRONG TODAY (measured at HEAD, Rust gg, C backend — identical on LLVM):
-#     10 / 10.000000 / false / 10 / 10 / 10 / 10 / 10 / 10
-# i.e. EVERY row below drops the callee's write on the floor. `gg check` is
-# clean and the program runs to completion, so this is silent-wrong-output —
-# the most insidious class.
-#
-# ORACLE: ggdef prints 11 / 11 / true / 11 / 11 for the rows it covers (the
-# `Dict[String, _]` index rows are outside its phase-0 subset). The definition
-# lane is right and both production backends are wrong — Core #8.
-#
-# INTENDED (asserted below): the write reaches the caller on every row.
+# REGRESSION FIXTURE — B1: a `&`-arg naming a BY-VALUE place must write THROUGH
+# to that place. Nine rows, all asserting the write reaches the caller:
 #     11 / 11.000000 / true / 11 / 11 / 11 / 11 / 11 / 11
+#
+# AXIS + CELL (Core #12): this samples the *projected TYPE* axis of the
+# `&`-argument face, on the BY-VALUE side — `int` · `float` · `bool` · value
+# struct · tuple · Dict value · Vector element, plus two rows with no struct at
+# all. The RESOURCE side of the same axis (`String`/`Vector`/`Dict`/resource
+# struct fields, which used to work by accident) is
+# `security/sound_amp_field_thinptr_control.gg`; the resource/value contrast
+# INSIDE each type kind is `cow_amp_projection_resource_value_split.gg`.
+#
+# RED-VERIFIED: against the pre-fix compiler this printed
+#     10 / 10.000000 / false / 10 / 10 / 10 / 10 / 10 / 10
+# — EVERY row dropped the callee's write on the floor, `gg check` clean, on both
+# backends, for ~5 months. ggdef printed the incremented value throughout: the
+# definition lane was right and both production backends were wrong (Core #8).
+#
+# GUARDED MECHANISM: the Family-1 chokepoint — `try_resolve_place` called from
+# `lower_call_arg`'s `MutableBorrow` arm before `lower_expr`. Short-circuit that
+# call to `None` and every row below returns to 10.
 #
 # ⚠ THE FILED "by-value FIELD" FRAMING UNDERCOUNTS THE CLASS. Rows 8 and 9 have
 # NO struct anywhere: `&vv[0]` and `&dd["k"]` on a PLAIN LOCAL collection lose
