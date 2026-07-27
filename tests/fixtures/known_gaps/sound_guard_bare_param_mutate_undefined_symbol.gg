@@ -1,0 +1,45 @@
+# DURABLE REPRO — a BARE `Guard[T]` parameter whose body MUTATES a field
+# fails the C build with an implicit declaration of `gorget_guard_clone`. The
+# CoW materialize pass emits a private-copy clone helper for the bare-param
+# receiver (materializing before the mutation) but `gorget_guard_clone` is
+# not a runtime symbol — nothing declares or defines it, so cc1 refuses.
+#
+# DISTINCT root from the pointer-peeling guard-field family retired by
+# `guard_of` (`src/ir/lowering/exprs/shared.rs`, 2026-07-27): after the peel
+# the FIELD ACCESS is correct, but the caller-visible clone step still runs
+# and this cell breaks earlier — that is why the READ-ONLY twin (no mutation)
+# builds and silently prints 0 instead of the guarded value while the
+# MUTATING one hits an undefined symbol at link time.
+#
+# INTENDED (asserted below): the same as a guard LOCAL — the write reaches
+# the guarded value and both the callee and the caller observe `11`. In the
+# reference-grade shape a bare `Guard[T]` receiver is either move-consumed
+# without a clone or refused by the checker (single-owner-by-design carve-out
+# in the CoW spec, `docs/devbook/11-copy-on-write.md`); this fixture asserts
+# the semantic outcome, agnostic to which of those two lands.
+#
+# ⚠ THE MUTATION IS THE DISCRIMINATOR — a read-only probe over the same shape
+# builds fine and merely prints the wrong value; a mutating probe fails the
+# build outright. Probing read-only mis-scopes the fix.
+#
+# `#[ignore]`d in `tests/integration.rs::sound_guard_bare_param_mutate_undefined_symbol`
+# — un-ignore when the CoW materialize pass either declines to clone
+# single-owner guards or the runtime provides the helper.
+struct Inner:
+    int fd
+
+int seed():
+    return 10
+
+void inc(int &n):
+    n = n + 1
+
+# BARE Guard param that MUTATES — the cell that fails the C build.
+void via_bare(Guard[Inner] g):
+    inc(&g.fd)
+    print(g.fd)
+
+void main():
+    Mutex[Inner] m = Mutex[Inner](Inner(seed()))
+    Guard[Inner] g = m.lock()
+    via_bare(g)
