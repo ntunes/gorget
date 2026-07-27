@@ -192,7 +192,14 @@ enum Ty {
     /// a single-owner callable whose call consumes it (D5 kind axis). Resolved
     /// once here so the `CallValue` elaboration reads a typed field rather than
     /// name-matching the surface spelling (layering rule 2).
-    Callable { consuming: bool },
+    ///
+    /// `param_ownerships` carries the callable's declared per-parameter sigil
+    /// modes (Track B3, D31-uniform: the call-site sigil rule applies
+    /// UNIFORMLY at every INDIRECT call site whose callee has a resolvable
+    /// function type). Empty when the callable's generic arg is not a
+    /// `Function` type (e.g. `Callable[Unknown]`), in which case the sigil
+    /// check falls back to Unknown just like the direct-call path does.
+    Callable { consuming: bool, param_ownerships: Vec<Mode> },
     /// Not inferable at this position — dispatch falls through to the builtins.
     Unknown,
 }
@@ -1776,15 +1783,50 @@ impl Elaborator {
         // A first-class closure value stored in a local: `f()`, `grow()`.
         if self.local_names.contains(name) && !self.func_names.contains(name) {
             self.reject_named_args(args, "closure-value call")?;
+            // Track B3 (D31-uniform): read the callee's declared param sigil
+            // modes off its typed `Ty::Callable { param_ownerships }`. When
+            // present, enforce the same sigil rule the direct-call path
+            // enforces via `free_fn_sigil_check` — the caller's per-arg sigil
+            // must EQUAL the declared param mode, else `E_OwnershipMismatch`.
+            // When the callable's inner type is not resolvable (`Callable[Unknown]`),
+            // `param_ownerships` is empty and the check silently skips.
+            let param_modes: Vec<Option<Mode>> = match self.local_ty.get(name) {
+                Some(Ty::Callable { param_ownerships, .. }) if !param_ownerships.is_empty() => {
+                    param_ownerships.iter().map(|m| Some(*m)).collect()
+                }
+                _ => (0..args.len()).map(|_| None).collect(),
+            };
             let mut out = Vec::with_capacity(args.len());
-            for a in args {
-                out.push(self.call_arg_source(&a.node, None)?);
+            for (i, a) in args.iter().enumerate() {
+                let pmode = param_modes.get(i).copied().flatten();
+                if let Some(pm) = pmode {
+                    let found = mode_of(a.node.ownership);
+                    if found != pm {
+                        let render = |m: Mode| match m {
+                            Mode::Borrow => "borrow (bare)",
+                            Mode::WriteThrough => "mutable borrow (&)",
+                            Mode::Move => "consume (!)",
+                        };
+                        return Err(ElabError::new(
+                            format!(
+                                "argument #{i} of indirect call through `{name}` expects {}, \
+                                 found {} — the call-site sigil must match the declared param \
+                                 at every call site, indirect calls included (production \
+                                 E_OwnershipMismatch, D31-uniform, Track B3)",
+                                render(pm),
+                                render(found)
+                            ),
+                            a.span,
+                        ));
+                    }
+                }
+                out.push(self.call_arg_source(&a.node, pmode)?);
             }
             // Single-owner `ConsumeCallable`: the call consumes the callee (D5
             // kind axis). Read the typed callable classification resolved at
             // `ty_of_type` — never the surface name.
             let consumes_callee =
-                matches!(self.local_ty.get(name), Some(Ty::Callable { consuming: true }));
+                matches!(self.local_ty.get(name), Some(Ty::Callable { consuming: true, .. }));
             return Ok(Expr::CallValue {
                 callee: Box::new(Expr::Local(name.clone())),
                 args: out,
@@ -2825,14 +2867,45 @@ fn ty_of_type(t: &ast::Type) -> Ty {
                 // single-owner (consumed by its call); `Callable`/`MutCallable`
                 // are reusable. Classified once here so `CallValue` reads a
                 // typed field, never the surface name.
-                "ConsumeCallable" => Ty::Callable { consuming: true },
-                "Callable" | "MutCallable" => Ty::Callable { consuming: false },
+                //
+                // Track B3: extract the declared parameter sigil modes from
+                // the inner function type (`Callable[void(&int)]` has an
+                // `ast::Type::Function` at generic_args[0]) so the
+                // `CallValue` elaboration can enforce the D31-uniform
+                // sigil rule at indirect call sites.
+                "ConsumeCallable" => Ty::Callable {
+                    consuming: true,
+                    param_ownerships: callable_param_ownerships(generic_args),
+                },
+                "Callable" | "MutCallable" => Ty::Callable {
+                    consuming: false,
+                    param_ownerships: callable_param_ownerships(generic_args),
+                },
                 other => Ty::Named(other.to_string()),
             }
         }
         ast::Type::Tuple(ts) => Ty::Tuple(ts.iter().map(|t| ty_of_type(&t.node)).collect()),
         ast::Type::Ref(inner) | ast::Type::Owned(inner) => ty_of_type(&inner.node),
         _ => Ty::Unknown,
+    }
+}
+
+/// Extract the declared per-parameter sigil modes from a callable's inner
+/// function type: `Callable[void(&int, int)]` has `param_ownerships` at
+/// generic_args[0]'s `ast::Type::Function`. Returns an empty Vec when the
+/// generic arg is not a function type (or missing) — the sigil check then
+/// falls back to Unknown, i.e. inert.
+///
+/// Track B3 (D31-uniform, ledger 2026-07-20 D31 ADDENDUM-2, FULL STRICT):
+/// the call-site sigil rule applies UNIFORMLY at every indirect call site
+/// whose callee has a resolvable function type; this helper is the source
+/// where the per-arg param mode is read.
+fn callable_param_ownerships(generic_args: &[gorget::span::Spanned<ast::Type>]) -> Vec<Mode> {
+    match generic_args.first().map(|t| &t.node) {
+        Some(ast::Type::Function { param_ownerships, .. }) => {
+            param_ownerships.iter().map(|o| mode_of(*o)).collect()
+        }
+        _ => Vec::new(),
     }
 }
 
