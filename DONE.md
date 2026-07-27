@@ -1,5 +1,40 @@
 # DONE
 
+- [2026-07-27] **Family-1 — `&<projection>` call arguments now borrow THE PLACE.** Closed a ~5-month regression (first bad commit
+  `7aa3d3b7`, 2026-03-01) in which `f(&c.fd)` silently lost the callee's write for **6 of 10 projected types** (`int`·`float`·`bool`·
+  value-struct·enum-with-value-payload·tuple), on BOTH backends, `gg check`-clean, with ggdef adjudicating against production on every
+  in-subset cell. `String`/`Vector`/`Dict`/resource-struct worked only **by accident** (their read yields a thin `Ptr` that
+  `is_already_ptr` forwarded). **Root: a layering violation, not a missing arm** — `lower_call_arg` rebuilt "is this a place?" from the
+  TYPE `lower_expr` happened to return (devbook/24 litmus). **Fix: one shared `try_resolve_place` producer with an ENFORCED
+  postcondition** (the returned Place is an lvalue of the value, never of a pointer to it), called by both `&`-formation faces,
+  ownership-gated at the call-arg face, ordered AFTER the G2 root-materialize and BEFORE `lower_expr`. **Also fixed:** an attributable
+  LEAK (`f(&(*box).field)` on a resource field materialized a whole-struct clone nobody dropped — unbounded in a loop), and the
+  devbook/24 **rule-3 violation underneath the bug** (the 6× Ptr-wrap predicate → `field_read_yields_ptr` + a one-home lint).
+  **Guard (Core #6):** a 3-limb lint whose third limb is load-bearing — short-circuiting the producer leaves arm-sets equal and the
+  `emit_borrow_mut` count at 28, so limbs 1+2 both report green; demonstrated RED by executor and reviewer independently.
+  Gates: **C 1846/0 · LLVM 1846/0** · lib 1129 · lints 75 · security 126 · ggdef all targets · spec_conformance 3/3 lanes ·
+  `self_host_bootstrap_fixed_point` ok (809s, serial). Merge `2ae21079`.
+  ⚠ **FIVE output-review rounds; FOUR found defects the fix itself introduced or did not reach** — a `Ref[T]` pointer-field SIGSEGV, a
+  `TupleFieldAccess` swallowed `Error` (callee handed a `Result*` where an `int` was expected, then writing through it), the object-arm
+  domain (`(*b).f`, `guard.f`), and `&guard.field` losing the write. **Root of three of them: an INVERTED comment** asserting a `None`
+  return was "the conservative answer" that "costs a lost optimisation, never a lost propagation" — while the call site did
+  `unwrap_or(false)` → `!false` → **SKIP**. The author reasoned from it every time. The predicate is now **fail-safe by construction**
+  (`None => false`), so the invariant is enforced by a `match` rather than asserted in prose. **LESSONS (→ devbook/29-30):**
+  (a) *the fold is the dominant defect source* — 15 brief-review passes, 19 blocking, and **six blockers were introduced BY A FOLD**;
+  twice the author's anchor-verification command differed from the command written into the brief (`grep -n` vs `grep -nF --`).
+  (b) *nine enumerations presented as closed were selections.*
+  (c) **THE TWO-MASK INCIDENT** — three parties measured three different answers to one behavioural question and **all three were reading
+  their own program correctly**: two independent masks (closure-var annotation `auto` vs `Callable[…]`, and payload `Error` vs `Ok`),
+  either alone hiding the defect, exactly one of four cells exposing it. **When two agents disagree on a behavioural claim, the default
+  hypothesis is that they are running different programs — arbitrate by diffing the PROGRAMS, not the conclusions.**
+  (d) *no lint could ever demand the last two cells* — the arm-set extractor's domain is syntactic, the producer's is partly type-driven
+  (Guard auto-deref), so the durable mitigation is the axis-complete write-through fixture, not a guard.
+  **Filed, not fixed** (each with a committed `known_gaps` repro): the self-host lane mirror (no `CallArg.ownership` in the SH AST → must
+  key on `borrow_flags`, plus forced bootstrap re-convergence) · Family-2's cross-resolver `&t.0.fd` · the indirect-call auto-propagate
+  call-skip · `Guard[T]` through a **parameter** (SIGSEGV both lanes, `gg check`-clean, pre-existing) · `ReadGuard[T]` symmetric
+  write-drop · Deque (C SIGSEGV / LLVM `llc` fail, no LLVM lane) · the spawn face now diverging from its own twin (110 vs 10).
+
+
 - [2026-07-25] AGENTS.md compaction round (owner-directed): 64,608 → 56,332 B (−12.8%) with ZERO rules lost. Evidence/war-stories
   relocated to NEW `docs/devbook/30-excellence-system.md` (extended excellence system: round/battery origins, gauntlet + model-allocation
   measurements, Core #12–#15 receipts, the six-questions saves, the disk-fill, the known_gaps origin, post-succession leaning marked NOT

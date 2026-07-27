@@ -2,33 +2,43 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🔄 ROUND CLOSING — the sigil-prose track ends; the NEXT ROUND SHIPS CODE (owner 2026-07-26).**
+**🔄 FAMILY-1 LANDED (merge `2ae21079`). The next round picks a NEW headline — see the ranked list below.**
 
-**⏱ WHERE THINGS ARE.** A 15-pass documentation gauntlet on the bare/`&`/`!` sigil prose is finishing. **Owner has closed the track**: stop sharpening prose, start landing compiler fixes. The reason is structural, not impatience — most remaining "defects" are STATUS NOTES, i.e. descriptions of live compiler divergences. They retire from the prose the day their code lands, so the prose cannot converge while the compiler does not. Fix the code and the notes delete themselves.
+**⏱ WHERE THINGS ARE.** Family-1 is closed on the Rust lane, both backends: `f(&<projection>)` now borrows the PLACE for all ten
+projected types, via one shared `try_resolve_place` producer with an enforced postcondition. Detail + lessons in `DONE.md`
+[2026-07-27]. The round took FIVE output-review rounds; four found defects the fix itself introduced or did not reach. **Read the
+DONE entry's LESSONS before briefing the next code round** — especially the two-mask incident and "no lint could demand the last two
+cells".
 
-### ▶ START HERE NEXT ROUND — Family-1: route `&<projection>` args through place resolution
+### ▶ START HERE NEXT ROUND — pick ONE headline, ranked by soundness severity
 
-**This is the headline. It is scoped, the root is PROVEN, and the approach is MEASURED.** Full defect detail, provenance and the prototype result are in the CoW/ownership section below (search `ROOT PROVEN + APPROACH VALIDATED`). One-paragraph version:
+Owner's standing rule: rank by severity of unsoundness (mem-unsafety > silent-wrong-output > ICE > leak), NOT by parity %.
 
-`f(&c.fd)` silently loses the callee's write (42 where 142 belongs, both backends, `gg check` clean). `lower_call_arg` (`src/ir/lowering/exprs/calls.rs:190`) lowers the arg as a READ — a value COPY for an `int` field — then `emit_borrow_mut`s **that temp** (`:219-253`). A `String`/`Vector` field reads as a thin `Ptr`, so those cells work BY ACCIDENT. Core #1: the write site discards place identity. REGRESSION, first bad commit `7aa3d3b7` (2026-03-01), ~5 months live.
+1. **`Guard[T]` through a PARAMETER is MEMORY-UNSAFE** — `void f(Guard[Inner] &g): inc(&g.fd)` is `gg check`-clean and **SIGSEGVs on C
+   (exit 139) / hard-fails `llc` on LLVM**. Pre-existing, both lanes. Mechanism: `try_resolve_field_place` tests `guard_inner_suffix`
+   against `current_type` BEFORE the `pointee_type` deref, so a param local typed `Ptr(Guard__Inner)` never matches. Repro committed
+   (`known_gaps/sound_guard_param_field_unsafe.gg`). ⚠ The mutation is the discriminator on the bare-param row — a read-only body
+   silently reads `0` and reports a much milder defect. Anchor: `grep -nF -- 'Guard[T] field through a PARAMETER' TODO.md`.
+2. **Family 2 — the cross-resolver arm matrix** (`&t.0.fd`, `&v[0].0`, the get-chain fallback). Orthogonal axis to Family-1 (resolver
+   arm sets vs projected type). All rows filed with anchors. ⚠ **No arm-set lint can see this** — it is an OBJECT-arm asymmetry across
+   two resolvers, and the extractor is syntactic. It owes measured write-through probes, not a guard.
+3. **The indirect-call auto-propagate call-skip** — a `Result`-typed `&`-projection arg at a closure-var/IIFE call is auto-unwrapped
+   even when the callee's param IS `Result`, silently skipping the call. Reference-grade fix: have those call paths set
+   `expected_type` (as the free-call and method-call paths do) — **NOT** widening the producer.
+4. **Self-host Family-1 mirror** — filed with `file:line`; needs `borrow_flags` keying (the SH AST has no `CallArg.ownership`) plus
+   bootstrap re-convergence, which is why it is a track and not a rider.
+5. `ReadGuard[T]` symmetric write-drop (reference-grade = check-time rejection; the producer comment already says so) · the Deque
+   backend divergence · the spawn face now diverging from its own twin.
 
-**THE FIX SHAPE — do not re-derive this, it cost a session to find.** The **ASSIGN path already does it correctly and is the model**: `src/ir/lowering/stmts/assigns.rs:542-561` dispatches all four projection forms (`FieldAccess` → `lower_field_assign` · `TupleFieldAccess` → `lower_tuple_field_assign` · `Index` → `lower_index_assign` · `Deref` → inline place + `Projection::Deref`). The `&`-arg path dispatches **ONE of the four: `Deref`, at `calls.rs:141-158` (Snag #26) — and it WORKS** (`inc(&*b)` on `Box[int]` prints 111, the very `int` pointee type where the field form fails; live pin `box_deref_write.gg`). ⚠ **An earlier draft said "dispatches NONE" — FALSE, and it would mislead you into adding a SECOND Deref path or regressing a working one.** Correct: **1 of 4 dispatched (Deref), 3 missing (FieldAccess, TupleFieldAccess, Index)**. The shape is **ONE SHARED RESOLVER both paths call** (Core #4), and it must **SUBSUME AND DELETE `:141-158`** — that inline pair is exactly the duplication step 1 exists to end. Deref is a KEEP-GREEN cell, not a fix cell.
-  1. Build `try_resolve_place(ctx, builder, expr) -> Option<(Place, TypeId)>` over the four forms. ⚠ **THREE resolvers ALREADY EXIST and already return `Option<(Place, TypeId)>`** — `try_resolve_field_place` (`exprs/mod.rs:2774`), `try_resolve_index_element_ptr` (`:2728`), `try_resolve_tuple_field_place` (`:2974`). Do NOT re-derive from the assign path: `lower_index_assign` (`assigns.rs:1230`) does NOT use the index resolver — it materializes a root and stores through a SETTER. ⚠ **Addressability limit:** the index resolver admits only `Array | OrderedMap`, so HashMap/Set values have no addressable place — a NON-CELL, not a bug to fix here.
-  2. **Insert BETWEEN `:188` and `:190`** — after the G2 block, before `lower_expr`. NOT inside the `:219` arm: that runs AFTER the read-lowering, so resolving there re-evaluates the operand and breaks the once-only guarantee `calls.rs:169-170` protects (`&arr[side_effect()]`). `emit_borrow_mut` the resolved place; fall through to today's behaviour on `None`.
-  3. **Preserve three live carve-outs**, all with cited comments — the `GlobalRef → GlobalRefPtr` case, the already-a-`Ptr` case (gorget-js snag #1, `&xs.get(i).unwrap()`), and the G2 root-materialize at `:171-188` (`cow_before_mutation`, which must still run and still only when the root actually materializes).
-  4. **Guard (Core #6, required):** a `tests/lints.rs` set-equality lint asserting the `&`-arg path and the assign path cover the SAME projection-form set, so a form added to one cannot silently bypass the other. Verify it fails when a form is added to `assigns.rs` alone — a guard that green-lights its own class is worse than none.
-  5. **Fixtures axis-complete on the PROJECTION-FORM axis** (the axis that hid this): one per form — field · tuple field · index · Dict value · deref — wired to RUN. Plus the TYPE axis within the field form: `int` (broken) and `String` (accidentally working, must stay). ⚠ **RED-verify, but the list SPLITS** (Core #12): pre-fix-RED for field-`int`, tuple, index and Dict-value; **break-and-watch** for deref and field-`String`, which are GREEN TODAY — break the mechanism, confirm RED, restore. Graduate the `known_gaps/` repros out and un-ignore them as they pass — that is part of the fix, not a follow-up.
-  6. **Lanes (Core #9):** Rust gg both backends · ggdef IS the oracle for the control probe (142; also index 110, tuple 111) — ⚠ **but it cannot adjudicate 2 of the 5 fixture forms**: Dict-value errors "index must be int, got String", deref is "outside the phase-0 subset". Explicit note + filed subset gap (Core #9); those cells fall to ASan + stdout on the real backends (Core #13) · self-host probably has the same defect: probe, fix or file explicitly, never silent.
+**PROCESS FOR THE ROUND:** scout → brief → ≥3 fresh sequential brief-reviews → executor (worktree) → fresh output-review → integrate.
+⚠ **Budget for MORE than one output-review round.** Five were needed here and four found real defects; a single clean output review is
+the floor, not the expectation, on any change that adds a chokepoint.
 
-⚠ **A ~15-line prototype proving this converges was checkpointed to `/tmp/recover_family1_place_borrow_proto.patch` and a full executor brief to `/tmp/brief_family1_chokepoint.md` — BOTH ARE `/tmp` AND WILL EVAPORATE.** Everything needed to regenerate them is in this block and the CoW-section entry. The prototype was an INSTANCE fix (`FieldAccess` only) and was deliberately NOT shipped: it would have turned the headline fixture green while `&vv[0]` and `&dd["k"]` stayed broken, which is worse than no fix because the green fixture reads as coverage.
-
-⚠ **SEQUENCING RULING OWED BEFORE YOU BRIEF.** The CoW section below says "land D32 FIRST — it deletes the standalone `&`-formation site, so Family 1 touches one site instead of two". That second site is REAL (`exprs/mod.rs:394`) and this block did not mention it. Either land D32 first, or scope Family-1 to both sites explicitly.
-
-⚠ **THE ROW A NAIVE FIX BREAKS — read before designing.** `sound_amp_bareparam_root_materialize`: a bare-param root must **MATERIALIZE**, ggdef `11/10`. A fix that writes through prints `11/11` and is **WRONG**. It is `#[ignore]`d, so the prototype's "239-test subset green" did NOT exercise it. Detail is under the **`By-value-field`** anchor further down this file — the 2 OK / 18 WRONG battery and the graduation list are THERE, not at the `ROOT PROVEN` anchor.
-
-⚠ **THE FOR-LOOP `&` ITERABLE IS A THIRD SITE, OUT OF SCOPE.** `stmts/for_loops.rs:112-120` takes `&` from the statement's ownership field and never calls `lower_call_arg`, so this fix will NOT un-ignore `sound_for_amp_scalar_elem_writethrough` even though D33's open item attributes that loss here. State the boundary in the brief.
-
-**PROCESS FOR THE ROUND:** the brief needs ≥3 fresh sequential brief-reviews before launching an executor (worktree), then a fresh output-review before integrating. Standard pipeline.
+**ROUND-CLOSE GATE:** full C **and** LLVM `--test integration` · `--lib` · `-p ggdef` · `--test spec_conformance` · `--test security` ·
+`--test lints` · **`self_host_bootstrap_fixed_point` SERIALLY** (fixed `/tmp/self_host_stage*` paths collide between concurrent agents —
+this bit the parent three times this round) · parity re-measure. This is CLAUDE.md's full local battery; local-green IS the sign-off.
+⚠ **CORRECTED 2026-07-27: `no_growth_in_phase_d_proxy_reads` is NOT pre-existing RED** — the previous handover said so; it was green at
+base (70/0) and is green now (75/0). Do not inherit that warning.
 
 ### Sigil prose — CLOSING, not closed
 
