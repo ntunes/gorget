@@ -1,34 +1,27 @@
-# DURABLE REPRO — A1: calling a `Callable`-typed LOCAL bound to an `&`-param
-# function SEGFAULTS.
+# REGRESSION — A1 cell of the callable-indirection axis: a `Callable`-typed
+# LOCAL bound to an `&`-param function writes through on indirect call.
+#
+# AXIS / CELL (root x callable-provenance x arg-spelling):
+#   plain-local int root  x  LOCAL callable  x  `&`-spelled arg
+# Sibling: `sound_callable_amp_param_projection.gg` covers the PARAM-callable +
+# projection-root cell of the same axis.
 #
 # ⚠ READ THE FILENAME CAREFULLY. `_amp_param_` names the CALLEE's `&`-parameter
 # signature (`void bumpint(int &n)`), NOT how the callable is bound: the
-# callable here is a **LOCAL**, declared inside `main`. Its sibling
-# `sound_callable_amp_param_projection.gg` is the one where the callable arrives
-# as a PARAMETER. The two filenames read as a matched pair and are not one.
+# callable here is a LOCAL, declared inside `main`.
 #
-# WRONG TODAY (measured at HEAD, Rust gg, C backend): `gg check` reports "OK: no
-# semantic errors", `gg build` succeeds, and the binary exits **139 (SIGSEGV)**.
-# Bare `f(x)` crashes the same way; a plain-arg `Callable[void(int)]` works, and
-# the assignment on its own works — so the defect is specifically the `&`-param
-# signature reached through an INDIRECT call.
+# Pre-Track-B1 (measured on gorget-1 base): `gg check` OK, `gg build` OK, binary
+# exit 139 (SIGSEGV); under ASan, `SEGV on unknown address 0x29 ... in bumpint`.
+# Fix wires `callable_param_types` + `callable_param_ownerships` sidecars on the
+# callable-typed local and routes each indirect-call arg through `lower_call_arg`
+# on the callee's sig at both `__callable_N` and `__gorget_closure_call_N` arms.
 #
-# INTENDED: the indirect call is an ordinary write-through call. `bumpint`
-# increments the caller's `x`, so the program prints 42 and exits 0. (If the
-# language instead decides an `&`-param function may not be reified into a
-# `Callable` value at all, the reference-grade answer is a CHECK-TIME rejection —
-# never an accepted program that segfaults. Either way today's behaviour is a
-# defect; this fixture asserts the accept-and-run reading, which is what the
-# `Callable[void(&int)]` type annotation the compiler already accepts promises.)
+# INTENDED: `bumpint` increments the caller's `x`, so the program prints 42 and
+# exits 0. The seed is computed, not a literal, so no const-fold can elide the
+# call.
 #
-# The seed is computed, not a literal, so no const-fold can elide the call.
-#
-#
-# ORACLE (ggdef, measured this session): OUT OF SUBSET — "unresolved local
-# `bumpint`"; ggdef does not reify a named function into a `Callable` value.
-# Recorded explicitly per Core #9.
-# Cited from TODO.md (CoW / ownership / High): "Calling a `Callable`-typed LOCAL
-# bound to an `&`-param function SEGFAULTS".
+# ORACLE (ggdef): OUT OF SUBSET — "unresolved local `bumpint`"; ggdef does not
+# reify a named function into a `Callable` value. Recorded explicitly per Core #9.
 int seed():
     return 41
 

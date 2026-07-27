@@ -1,67 +1,32 @@
-# DURABLE REPRO — A2: a PROJECTION arg passed through a `Callable`-PARAM
-# SEGFAULTS. Sibling of A1 (`sound_callable_amp_param_indirect_call.gg`), and a
-# DISTINCT costume: A1 is a Callable-typed LOCAL bound to an `&`-param function;
-# here the Callable arrives as a PARAMETER and the `&`-arg is a PROJECTION
-# (`&c.fd`) rather than a whole local.
+# REGRESSION — A2 cell of the callable-indirection axis: a PROJECTION arg
+# through a `Callable`-typed PARAMETER writes through on indirect call.
 #
-# WRONG TODAY (measured at HEAD, Rust gg, C backend): `gg check` reports "OK: no
-# semantic errors", `gg build` succeeds, and the binary exits **139 (SIGSEGV)**.
-# Reproduces at base AND under the `&`-of-projection prototype, so the
-# projection fix does not close it.
+# AXIS / CELL (root x callable-provenance x arg-spelling):
+#   struct-`&`-param projection root  x  PARAM callable  x  `&`-spelled arg
+# Sibling: `sound_callable_amp_param_indirect_call.gg` covers the LOCAL-callable
+# + plain-local-int-root cell of the same axis.
 #
-# ⚠ `gg run` MASKS this as exit 1 with no output — it does not propagate the
-# child's signal status. Reproduce by BUILDING and running the binary directly,
-# or the failure looks like an ordinary build error.
+# Pre-Track-B1 (measured on gorget-1 base): `gg check` OK, `gg build` OK, binary
+# exit 139 (SIGSEGV). The UNIT_TYPE indirect-call arm in
+# `src/ir/lowering/exprs/calls.rs` (Callable-PARAMETER, emits `__callable_N`)
+# decided pointer-vs-value from the argument's provenance
+# (`is_param_borrow_unique`) rather than the callee's declared param types, so
+# `&c.fd` was lowered as a value copy of the int and handed to a callee
+# expecting a pointer. Fix populates `callable_param_types` +
+# `callable_param_ownerships` for the parameter and routes each user arg through
+# `lower_call_arg`.
 #
-# ROOT (re-measured 2026-07-27 — two earlier versions of this header named the
-# wrong site, and the version after that pinned it by LINE NUMBER, which has
-# since rotted; cite the BRANCH, not the line): the SEGV takes the
-# Callable-PARAMETER arm in `src/ir/lowering/exprs/calls.rs` — the
-# `if local_type_id == UNIT_TYPE` branch that emits `__callable_N` — NOT the
-# `GirType::FnPtr` / `__gorget_closure_call_N` arm.
-# Verification command:
-#     gg build --emit-gir tests/fixtures/security/sound_callable_amp_param_projection.gg
-# prints `fn @with_it(unit, *mut Counter)` with `_1: unit ; f`,
-# `_3 = field_load _2.*, 0`, `_4 = call @__callable_1(copy _1, copy _3)` — i.e.
-# `&c.fd` was lowered as a VALUE copy of the int and handed to a callee that
-# expects a pointer.
-#
-# ⚠ "IT DISCARDS `arg.node.ownership`" UNDERSTATES IT. That arm actively decides
-# pointer-vs-value from the ARGUMENT LOCAL's provenance (`is_param_borrow_unique`
-# — forward the pointer only if the argument is itself a borrow parameter),
-# rather than from the call-site sigil plus the callee's declared function-type
-# parameter. The green cells show the axis (all measured at HEAD, all
-# `gg check`-clean):
-#   `Callable[void(&int)]` PARAM, `cb(a)` where `a` is an `int &` param -> OK
-#   `Callable[int(&Counter)]` PARAM, `f(&c)` where `c` is a `Counter &` param -> OK
-#     (UNPINNED: callable_ref_param.gg spells it BARE `f(c)`, pinning only that cell)
-#     (that second one is the LIVE, GREEN in-tree `tests/fixtures/callable_ref_param.gg`
-#      — it must stay green through any fix)
-#   `Callable[void(&int)]` LOCAL or PARAM, `cb(&a)` where `a` is a plain local -> SEGV
-# So the axis is whether the ARGUMENT's root is already a pointer.
-#
-# ⚠ A guard wired only at the FnPtr / `__gorget_closure_call_N` arm LEAVES THIS
-# CELL LIVE — that was the first (wrong) reading, and acting on it would be a
-# Core #4 instance-fix with the actual instance omitted. Re-derive the arg-loop
-# census before wiring anything:
-#     grep -n 'lower_call_arg\|lower_expr(ctx, builder, &arg.node.value)' \
-#       src/ir/lowering/exprs/calls.rs
+# ⚠ `gg run` masks the pre-fix crash as exit 1 with no output — it does not
+# propagate the child's signal status. Reproduce a regression by BUILDING and
+# running the binary directly, or the failure looks like an ordinary build
+# error.
 #
 # INTENDED: the indirect call is an ordinary write-through call, so `bumpret`
-# increments the caller's `c.fd` and the program prints 11 then 11 and exits 0.
-# (If the language instead decides an `&`-param function may not be reified into
-# a `Callable` value, the reference-grade answer is a CHECK-TIME rejection —
-# never an accepted program that segfaults. Either way today's behaviour is a
-# defect; this fixture asserts the accept-and-run reading, matching its A1
-# sibling and the `Callable[int(&int)]` annotation the compiler already accepts.)
+# increments the caller's `c.fd` and the program prints 11 then 11. The seed is
+# COMPUTED, not a literal, so no const-fold can elide the call.
 #
 # ORACLE (ggdef): OUT OF SUBSET — ggdef does not reify a named function into a
 # `Callable` value ("unresolved local"). Recorded explicitly per Core #9.
-#
-# The seed is COMPUTED, not a literal, so no const-fold can elide the call.
-#
-# Cited from TODO.md (CoW / ownership / High): "A PROJECTION arg through a
-# `Callable`-PARAM segfaults".
 
 struct Counter:
     int fd

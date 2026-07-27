@@ -1,0 +1,40 @@
+# AXIS-COMPLETENESS — the previously-UNPINNED green cell of the callable-
+# indirection axis: PARAM callable, `Counter &` root, `&`-spelled arg.
+#
+# Sibling: `callable_ref_param.gg` pins the same shape with BARE `f(c)` spelling
+# — this file mirrors it with `f(&c)` so a fix that regresses only the `&`
+# spelling on a `&`-param root does NOT silently pass.
+#
+# AXIS / CELL (root × callable-provenance × arg-spelling):
+#   struct-`&`-param root  ×  PARAM callable  ×  `&`-spelled arg
+#
+# Pre-Track-B1: prints 1 / 2 / 2 / done (accidentally green — the
+# `is_param_borrow_unique` shortcut inside the UNIT_TYPE arm forwarded the
+# `Counter &` param's pointer directly). Post-fix: same output — the shortcut is
+# deliberately preserved inside the sidecar-driven branch so this cell remains
+# green through the fix.
+struct Counter:
+    int value
+
+equip Counter:
+    void increment(&self):
+        self.value = self.value + 1
+
+    int get(self):
+        return self.value
+
+int with_counter(Callable[int(&Counter)] f, Counter &c):
+    return f(&c)
+
+int bump_and_read(Counter &c):
+    c.increment()
+    return c.get()
+
+void main():
+    Counter c = Counter(0)
+    int r1 = with_counter(bump_and_read, &c)
+    print(f"{r1}")
+    int r2 = with_counter(bump_and_read, &c)
+    print(f"{r2}")
+    print(f"{c.get()}")
+    print("done")

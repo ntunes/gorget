@@ -13144,6 +13144,36 @@ fn callable_ref_param() {
 done");
 }
 
+/// AXIS-COMPLETENESS SIBLING of `callable_ref_param`: same PARAM callable +
+/// `Counter &` root cell, but with the `&c` argument spelling instead of `c`.
+/// Pins the previously-UNPINNED G-2 cell of the callable-indirection axis so a
+/// regression that hits only the `&`-spelled path on an already-pointer root
+/// (e.g. removing the `is_already_ptr` fast-path in `lower_call_arg` or the
+/// shortcut inside the sidecar-driven indirect-call arms) cannot silently pass.
+#[test]
+fn callable_ref_param_amp() {
+    run_gg("callable_ref_param_amp.gg", "\
+1
+2
+2
+done");
+}
+
+/// AXIS-COMPLETENESS matrix for the callable-indirection axis (root ×
+/// callable-provenance × arg-spelling). One call per cell with a
+/// distinguishable per-line output so a partial regression trips MULTIPLE
+/// lines. Cells L1/L2/P1 SEGV'd at gorget-1 base; G1/G2 were accidentally
+/// green and remain green through the fix.
+#[test]
+fn callable_amp_root_axis() {
+    run_gg("callable_amp_root_axis.gg", "\
+L1=101
+L2=102
+P1=103
+G1=104
+G2=105");
+}
+
 #[test]
 fn vector_callable_two_locals() {
     run_gg("vector_callable_two_locals.gg", "\
@@ -32207,18 +32237,33 @@ B: ok",
     );
 }
 
-/// KNOWN GAP — the `Callable`-function-type `&` parameter SEGFAULTS on BOTH lanes
-/// while `gg check` accepts it (Core #8: both lanes agreeing on the wrong
-/// behaviour is >=2 bugs). Measured 2026-07-27: C exits 139, LLVM builds clean
-/// and exits 139. Asserts the INTENDED write-through (101).
-///
-/// Un-ignore when D35's bundled fix lands (see TODO.md, anchor
-/// `grep -nF -- 'Callable`-function-type SEGFAULT' TODO.md`).
+/// REGRESSION — an indirect call through a `Callable[void(&int)]` LOCAL writes
+/// through to the caller's `int` slot exactly as `bump(&a)` does. Pins the
+/// LOCAL cell of the callable-indirection axis (plain-local int root × LOCAL
+/// callable × `&`-spelled arg). Pre-fix (Track B1) both backends segfaulted at
+/// runtime while `gg check` accepted: `types.rs` dropped `&` on the FnPtr
+/// params axis and the indirect-call arms in `src/ir/lowering/exprs/calls.rs`
+/// never consulted the callee's declared param types.
 #[test]
-#[ignore = "KNOWN GAP: `Callable[void(&int)]` called through the variable SEGFAULTs on \
-both backends; gg check accepts it. Asserts the INTENDED 101."]
-fn sound_callable_amp_fntype_segv() {
-    run_gg("known_gaps/sound_callable_amp_fntype_segv.gg", "101");
+fn callable_amp_fntype_writethrough() {
+    run_gg("callable_amp_fntype_writethrough.gg", "101");
+}
+
+/// KNOWN GAP — the THIRD `__gorget_closure_call_N` construction site (the
+/// non-identifier callee arm at `src/ir/lowering/exprs/calls.rs` — grep the
+/// current site with `grep -n 'lower_expr(ctx, builder, &arg.node.value)' \
+/// src/ir/lowering/exprs/calls.rs`) still lowers args via naive
+/// `lower_expr(&arg.node.value)`. Track B1's sidecar-transplant does not reach
+/// this arm because `callee_local` is a temp with no sidecar AND `GirType::FnPtr`
+/// (`src/ir/types.rs:72-75`) drops `param_ownerships` at the type-mapping
+/// writer. Reference-grade fix: extend `GirType::FnPtr` with
+/// `param_ownerships: Vec<Ownership>`. Filed with the intended output;
+/// un-ignore when that extension lands.
+#[test]
+#[ignore = "KNOWN GAP: non-identifier callee arm (`arr[0](x)` / `make_adder(3)(x)`) SEGFAULTs \
+on both backends; gg check accepts it. Asserts the INTENDED 101; TODO.md."]
+fn sound_callable_amp_arr_indexed_callee_segv() {
+    run_gg("known_gaps/sound_callable_amp_arr_indexed_callee_segv.gg", "101");
 }
 
 /// REGRESSION — a `Guard[T]` field reached through a `&` parameter behaves
