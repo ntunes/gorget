@@ -121,6 +121,8 @@ unsettled: its callee-shape family could not reach the IIFE cell, and its guard 
 class. Needs its own scout + gauntlet. **While it is open, bare `cb(a)` stays accepted-and-segfaulting —
 a known Core #8 defect, and it has NO committed repro. File one.**
 
+- **🧹 [LOW — Track B3 output-review advisory A3, filed 2026-07-27] `Callable[Unknown]` skips B3's indirect-call sigil check on both lanes.** The indirect check resolves the callee's function type via `expr_types[callee.span]`; when that resolves to `Unknown` (unresolved generic parameter, error type, etc.), the check silently skips — matching the direct-call fallback behavior per the scout's plan. Reasonable default (mirrors direct calls), but a hardening avenue: probe whether an `Unknown`-typed callee is EVER a legitimate reachable shape at check time (typechecker should have concretised it); if not, the skip could tighten to a `debug_assert!` that catches the class of "checker forgot to fill `expr_types`" bugs. Trivial follow-up.
+
 - **🆕🐛 [LOW — parser gap surfaced by the Track B3 scout] A closure literal with a `&`-sigil parameter and
   a body that ASSIGNS through it (`(int &x): x = x + 100`) fails at PARSE with `expected ')', found '='`.
   The read-only twin (`(int &x): print(x)`) parses fine. Blocks IIFE that mutates a captured argument;
