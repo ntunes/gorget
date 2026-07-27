@@ -1,3 +1,19 @@
+- [2026-07-27] **Round-2 tree-defect filing + output-review fold.** Filed the compiler/doc/record defects
+  surfaced while reviewing this round's briefs, as durable artifacts rather than review exhaust: 7
+  `known_gaps` reproducers + 7 `#[ignore]`d tests asserting INTENDED output, every one RED-verified at
+  HEAD; 5 false invariant-asserting comments corrected in place (not deleted — one was only partly wrong
+  and the narrower true version was filed); 4 record errors fixed, including a ledger clause whose "no
+  green cell here" premise was refuted by measurement. Scope discipline held: zero non-comment lines under
+  `src/`, bootstrap untouched.
+  Its output-review returned 1 blocking + 6 advisory and all three gates passed. The blocking finding is
+  the lesson: `callable_ref_param.gg` was cited as spelling `f(&c)` in four places including the ratified
+  ledger — it spells `f(c)` — while the same clause called it "the regression pin that must stay green",
+  so the `&`-spelled cell had no pin at all and a fix regressing it would have passed the cited gate. A
+  false SCOPE claim landed in a design record by the round whose job was correcting false premises.
+  Three advisories were the same species: anchors that had rotted within days, including one the commit's
+  own header insertion invalidated. Replaced with symbols + re-derivation commands rather than fresh
+  numbers.
+
 # DONE
 
 - [2026-07-27] **Family-1 — `&<projection>` call arguments now borrow THE PLACE.** Closed a ~5-month regression (first bad commit
