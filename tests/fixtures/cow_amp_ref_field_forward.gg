@@ -1,0 +1,80 @@
+# REGRESSION FIXTURE — `&` of a field whose DECLARED TYPE IS ALREADY A POINTER
+# must FORWARD the stored pointer, not take its address.
+#
+# THE SHAPE. `Ref[T]` / `MutRef[T]` struct fields (and extern `T*` fields) hold a
+# `*T` in the field slot. The place resolvers resolve them perfectly well — the
+# place IS the field slot — but the VALUE living there is already a pointer. A
+# caller that `emit_borrow_mut`s that place produces `**T`, and the callee reads
+# the pointer's bits as payload: the gorget-js snag #1 shape.
+#
+# AXIS + CELL (Core #12): the FIELD-DECLARED-TYPE axis at the already-a-pointer
+# cell — the one cell of that axis where the shared place producer must DECLINE
+# and let the `is_already_ptr` fall-through handle it. Every other cell of that
+# axis (by-value and resource-carrying fields alike) is the producer's job and is
+# covered by `cow_amp_projection_type_axis.gg` and
+# `cow_amp_projection_resource_value_split.gg`.
+#
+# RED-VERIFIED — and note this fixture pins a regression that was INTRODUCED and
+# CAUGHT INSIDE the Family-1 round, so its red is not the pre-round compiler:
+#   * before Family-1:                     3 / 4 / 3   (correct)
+#   * Family-1 chokepoint, WITHOUT the guard: SIGSEGV, exit 139
+#   * Family-1 chokepoint, WITH the guard:  3 / 4 / 3   (correct)
+# Reproduce the red by deleting the postcondition-1 guard at the exit of
+# `try_resolve_place` (`src/ir/lowering/exprs/mod.rs`) — the `if let Some((_,
+# place_type)) = resolved` block that returns `None` for a `Ptr`/`MutPtr` place
+# type — and rebuilding.
+#
+# GUARDED MECHANISM: that guard is what makes the producer's postcondition 1
+# ("the returned Place is an lvalue OF THE VALUE, never of a pointer to it")
+# literally true rather than aspirational, which is in turn what lets every
+# caller `emit_borrow_mut` UNCONDITIONALLY. Remove it and the postcondition
+# becomes a comment that lies.
+#
+# ⚠ ROW 3 IS THE LOAD-BEARING ONE. `Ref[T]` is a BORROW, so the push must reach
+# the callee's view of the vector (row 2, len 4) while `v` — a separate binding
+# the Ref aliases — is observed through its own handle at row 3. Asserting only
+# rows 1-2 would pass even if the pointer were mangled into a fresh copy.
+# ─────────────────────────────────────────────────────────────────────────────
+# ROW 4 (`MutRef`) IS THE ONE THAT REDS THE `is_already_ptr` FALL-THROUGH GUARD.
+#
+# Rows 1-3 pin the PRODUCER's postcondition-1 exit guard (above). Row 4 pins a
+# DIFFERENT guard one step later — the `is_already_ptr` fast-path in
+# `lower_call_arg`'s `MutableBorrow` arm — and it is the only shape found that
+# reds it. Measured:
+#     guard present : 3        (correct)
+#     guard disabled: SIGSEGV, exit 139
+#
+# ⚠ WHY A GREEN SUITE IS NOT EVIDENCE ABOUT THAT GUARD. `lir/lower/operands.rs`
+# already forwards a stored pointer for a bare place when the local is
+# `SlotKind::BorrowedPtr`-kinded OR its slot is specifically
+# `PtrTo(GorgetString)`. The GIR-level guard is BROADER — it tests the GIR TYPE
+# (`Ptr`/`MutPtr`) with no `slot_kind` component. Those are different sets, and
+# `MutRef[Vector[int]]` lands in the gap: a `PtrTo` slot whose pointee is NOT
+# `GorgetString`, so the LIR takes `SlotAddr` and the callee gets `**T` unless
+# the GIR guard forwards first. Rows 1-3 use `Ref[Vector[int]]`, whose local IS
+# `BorrowedPtr`-kinded, so they stay green with that guard disabled — which is
+# why row 4 exists and must not be folded into them.
+# ─────────────────────────────────────────────────────────────────────────────
+struct Holder:
+    Ref[Vector[int]] vec
+
+struct MutHolder:
+    MutRef[Vector[int]] vec
+
+void push_it(Vector[int] &q):
+    q.push(99)
+
+int main():
+    Vector[int] v = [10, 20, 30]
+    Holder h = Holder(v)
+    print(h.vec.len())
+    push_it(&h.vec)
+    print(h.vec.len())
+    print(v.len())
+
+    # Row 4 — the `is_already_ptr` red (see the banner above).
+    Vector[int] w = [1, 2]
+    MutHolder m = MutHolder(w)
+    push_it(&m.vec)
+    print(m.vec.len())
+    return 0

@@ -132,30 +132,12 @@ pub(super) fn lower_call_arg(
             }
         }
     }
-    // Snag #26: `mutate(&*box)` should pass a pointer to the heap data,
-    // not a pointer to a stack copy of the heap data. Without this, the
-    // callee mutates the discarded copy and the user's heap value is
-    // unchanged. Build the borrow through a Deref-projected place when
-    // the call arg is `&`-sigil + Deref expr — same lvalue treatment as
-    // standalone `Expr::MutableBorrow { Expr::Deref { ... } }` in mod.rs.
-    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
-        if let Expr::Deref { expr: deref_inner } = &arg.node.value.node {
-            let inner_op = lower_expr(ctx, builder, deref_inner);
-            if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
-                let mut deref_place = inner_place.clone();
-                deref_place.projections.push(crate::ir::instructions::Projection::Deref);
-                let local_idx = inner_place.local.0 as usize;
-                let pointee = if local_idx < builder.locals.len() {
-                    let t = builder.local_type(inner_place.local);
-                    ctx.deref_inner_type(t).unwrap_or(t)
-                } else { UNIT_TYPE };
-                let ptr_type = ctx.register_mut_ptr_type(pointee);
-                let dst = builder.add_local(ptr_type, None);
-                builder.emit_borrow_mut(dst, deref_place);
-                return FunctionBuilder::copy(dst);
-            }
-        }
-    }
+    // (Snag #26's `mutate(&*box)` Deref-lvalue block used to sit HERE; it is now
+    // the `Expr::Deref` arm of the shared `try_resolve_place` producer invoked
+    // below, so `&*b` and `&b.fd` take ONE path instead of two. Order is
+    // preserved: the G2 block immediately below explicitly excludes
+    // `Expr::Deref` from root-materialize, so a `&*b` arg still reaches the
+    // producer with `g2_projected_untrack_start == None`, exactly as before.)
     // CoW `&`-of-a-PROJECTED-bare-value FORMATION (G2, site 3, call-arg form):
     // `f(&s.field)`, `f(&arr[i])` where the projection ROOT is a bare param /
     // bare alias. Materialize the root BEFORE the SINGLE lowering of the arg
@@ -185,6 +167,209 @@ pub(super) fn lower_call_arg(
             if before != after {
                 g2_projected_untrack_start = Some(start);
             }
+        }
+    }
+    // FAMILY-1 CHOKEPOINT (CALL-ARG face): an `&`-argument naming a PLACE
+    // borrows THAT PLACE.
+    //
+    // Before this, the `MutableBorrow` arm below lowered the argument through
+    // the READ path and then `emit_borrow_mut`'d whatever temp came back. For a
+    // thin-pointer field (`String`/`Vector`/`Dict`/resource struct) the read
+    // path yields a `Ptr` INTO the real slot and the `is_already_ptr`
+    // fast-path forwarded it — write-through worked BY ACCIDENT. For a by-value
+    // place (`int`/`float`/`bool`/value struct/tuple/value-payload enum) the read
+    // path yields a value COPY, so the callee got a pointer to a dying temp and
+    // its write was silently discarded, `gg check` clean, on BOTH backends.
+    // Same expression, same sigil, opposite semantics, decided by the projected
+    // TYPE — nothing in the CoW rule mentions the type of the projected value.
+    // That is the wrong-layer read-site symptom (Core #1): the read arms had
+    // already discarded place identity and no work here could recover it. The
+    // fix is to never lose it — ask the shared place producer FIRST.
+    //
+    // ⚠ THE OWNERSHIP GATE IS LOAD-BEARING. `lower_call_arg` serves all three
+    // ownership modes; the match that distinguishes them is far below. Without
+    // this gate the block would fire for bare and `!` arguments too, turning
+    // every projected argument into a `MutPtr` borrow and bypassing
+    // `callee_passes_by_ptr`, the `Borrow` arm and the `Move` arm entirely. Both
+    // neighbouring blocks gate themselves the same way.
+    //
+    // ORDER IS THE WHOLE DESIGN (Core #15e Q5) — this call sits exactly here:
+    //   * AFTER the G2 root-materialize above. `cow_before_mutation` REBINDS the
+    //     root's name when it materialises a private copy, so a place resolved
+    //     BEFORE it would address the SHARED source and the callee's write would
+    //     escape to the caller — turning a borrow into a mutable alias and
+    //     breaking CoW's central guarantee. Pinned by
+    //     `sound_amp_bareparam_root_materialize.gg`, which must print 11 / 10;
+    //     a naive fix prints 11 / 11 and looks correct on every other fixture.
+    //   * BEFORE `lower_expr`, and returning early, so the argument is lowered
+    //     EXACTLY ONCE — `&arr[side_effect()]` still evaluates its index once
+    //     (`cow_amp_index_side_effect_once.gg`).
+    //   * The G2 untrack still runs on the handles the projection minted, before
+    //     the borrow escapes into the call, preserving the UAF-fold close.
+    //
+    // ⚠ THE EARLY RETURN SKIPS `maybe_auto_propagate` (below, `Snag #43`), which
+    // is NOT unconditionally safe. The auto-propagate PRE-CHECK immediately
+    // above the `try_resolve_place` call is what makes it safe; the full
+    // explanation, the measurements, and the two probe masks live THERE, in one
+    // place, next to the code they govern. Do not restate them here — an earlier
+    // revision carried the whole account three times in this one function body,
+    // which is three places for it to rot independently.
+    //
+    // (Two earlier explanations of why the skip "could not" matter were also
+    // wrong and are recorded so nobody re-derives them: it is NOT "a projection
+    // is never a throws-call result" — `should_auto_propagate` is TYPE-gated,
+    // not shape-gated; and it is NOT "`Result` is resource-typed so the read
+    // takes the Ptr branch" — `is_resource_name` has no enum-variant clause, and
+    // a value-payload `Result` field measurably takes the value-copy branch,
+    // i.e. the OPPOSITE way.)
+    //
+    // `methods.rs`'s FxHasher caller cannot exercise this axis at all: its
+    // argument is a Hasher by the method contract, never a `Result`.
+    // BORROW PROVENANCE — verdict: CONVERGENCE, not a new shape. Before this,
+    // a RESOURCE-typed field `&`-arg flowed through `lower_field_access`, which
+    // tags the forwarded `Ptr` local with borrow provenance
+    // (`ctx.set_field_or_elem_borrow`) — typed metadata that `cow_before_mutation`
+    // and the var-decl default-borrow branch read. The producer path returns a
+    // place and `emit_borrow_mut`s a FRESH, UNTAGGED local, so those four
+    // resource cells stop carrying it. That is not a regression in kind: the
+    // pre-existing fall-through borrow below is equally untagged, so this makes
+    // the resource cells behave like every other `&`-arg rather than like a
+    // special case.
+    //
+    // ⚠ REGENERATE, DO NOT TRUST THE FIGURES BELOW (Core #5) — the command is
+    // what is being asserted, not the number:
+    //   gg build --clones=stats <fixture> -o /tmp/cs && /tmp/cs   # read [clone-stats]
+    // On `security/sound_amp_field_thinptr_control.gg` (a resource-field
+    // program) the line was byte-identical before and after this change. On
+    // `tests/fixtures/cow_amp_deref_box_projection.gg` it strictly IMPROVES:
+    // `string_clone` 60→35, `array_clone` 20→10, `map_clone` 20→10,
+    // `total_allocs` 154→88, and `live_bytes` 2→0 — the whole-struct clone the
+    // `&(*box).field` read used to mint per projection is gone, which is the
+    // same clone that leaked (`security/sound_amp_deref_box_field_leak.gg`).
+    // (An earlier revision of this comment quoted `9 → 1` / `27 → 19`; those
+    // came from a scratch probe, not from the committed fixture, and were
+    // unreproducible as cited. Corrected rather than silently swapped.)
+    //
+    // 🚨 THE AUTO-PROPAGATE PRE-CHECK IS LOAD-BEARING — do not remove it.
+    // The early return below SKIPS `maybe_auto_propagate` (Snag #43), and that
+    // is NOT unconditionally inert. When the ARGUMENT is `Result`-typed and the
+    // CALLEE's parameter is NOT (`void take(int &x)` called as `take(&h.r)`),
+    // auto-propagation is what makes the call typecheck at all: it unwraps the
+    // `Result`, and on an `Error` it PROPAGATES instead of calling. Skipping it
+    // would swallow the error AND hand the callee a pointer to a `Result` where
+    // an `int` is expected — a lost propagation plus a type confusion.
+    //
+    // MEASURED (this is a regression this chokepoint introduced and this gate
+    // fixes): `void take(int &x)` + `Holder{Result[int,int] r}` seeded
+    // `Error(5)`, called as `take(&h.r)` inside a `throws int` fn. Base prints
+    // `ERR(propagated)` — correct. Without this pre-check the chokepoint printed
+    // `in take` / `ok`, silently swallowing the error. With it, base and post
+    // agree. Pinned by `cow_amp_projection_autoprop_arg.gg`.
+    //
+    // The check is TYPE-ONLY (`place_expr_type_only`) and runs BEFORE any
+    // lowering, so a side-effecting base is not evaluated twice — the same
+    // discipline `try_resolve_index_element_ptr`'s kind-gate uses. When it says
+    // the argument would auto-propagate, we fall through to the normal path and
+    // let the existing machinery own the semantics.
+    // ⚠ THE SIGNAL IS THE CALLEE'S DECLARED PARAMETER TYPE, not
+    // `func_state.expected_type`. `expected_type` is AMBIENT state: the
+    // free-call and method-call paths set it, the closure-var and IIFE paths do
+    // not, and at an indirect call site its value is therefore whatever earlier
+    // lowering happened to leave there rather than anything about this call.
+    // Keying on it makes the decision depend on WHICH CALLER lowered the
+    // argument instead of on what the call MEANS. Measured consequence: at an
+    // indirect call site the surrounding SOURCE SPELLING changes it — an
+    // explicit `Callable[void(&Result[int,int])] f = …` declaration leaves it in
+    // a state that blocks the unwrap while an `auto f = …` declaration does not,
+    // so the same call is served differently by a decl one line above it.
+    // (Whether the enclosing constructor also contributes was NOT isolated —
+    // that hypothesis was tested and REFUTED as the explanation for the
+    // closure-var behaviour: the skip persists with the construction moved into
+    // a helper fn and an intervening statement.)
+    // `callee_param_type` is the typed fact:
+    //   * param IS a `Result`  → the argument is meant to arrive whole; an
+    //     unwrap here would be WRONG, so the chokepoint proceeds. (This is the
+    //     cell where BOTH indirect call kinds — closure-variable call AND IIFE —
+    //     measurably LOSE the call at base, because neither caller sets
+    //     `expected_type` and the unwrap fires unguarded. A pre-existing defect
+    //     this chokepoint fixes for a resolvable projection argument; the
+    //     bare-identifier siblings still lose it and are filed. Pinned by
+    //     `cow_amp_projection_indirect_call_arg.gg`.)
+    //     ⚠ MEASURING THIS NEEDS TWO PRECAUTIONS, both learned the hard way in
+    //     the round that introduced this code: the payload must be `Error` (an
+    //     `Ok` unwraps successfully and the call proceeds either way), and the
+    //     closure variable must be `auto`-annotated — an explicit
+    //     `Callable[void(&Result[int,int])] f = …` leaves `expected_type` in a
+    //     state that blocks the unwrap and HIDES the defect completely.
+    //   * param is NOT a `Result` while the ARG is → auto-propagation is what
+    //     makes the call typecheck at all, and on an `Error` it must PROPAGATE
+    //     rather than call, so we fall through and let it.
+    //
+    // ⚠ CORRECTIONS ON RECORD (Core #14 — a false measurement in source is worse
+    // than a wrong explanation, so these are kept rather than quietly swapped).
+    // Earlier revisions of this comment asserted, as MEASUREMENTS: that the call
+    // "HAPPENS in every one, pre-fix and post-fix alike"; that emitted programs
+    // were "byte-identical across this change"; and that the skip is "inert on
+    // all five callers". ALL THREE FALSE — reached with annotated closure
+    // variables (mask 2) and without ever testing an IIFE. A further revision
+    // blamed the enclosing constructor for polluting `expected_type`; that
+    // hypothesis was tested and REFUTED (the skip persists with the construction
+    // moved into a helper fn and an intervening statement) — the ANNOTATION was
+    // the discriminator.
+    //
+    // ⚠⚠ AND THE PRE-CHECK'S DOMAIN MUST TRACK THE PRODUCER'S. This gate asks
+    // `place_expr_type_only`, whose `match` must cover every form
+    // `try_resolve_place` resolves. It shipped without a `TupleFieldAccess` arm
+    // while the producer had one, so `take(&t.0)` on a `(Result[int,int], int)`
+    // took the early return with this question never asked and SWALLOWED the
+    // error — the same miscompile, one costume over, introduced by the very
+    // commit that fixed the struct-field costume. Pinned by
+    // `place_type_only_covers_the_producer_forms` in `tests/lints.rs` and by row
+    // C of `cow_amp_projection_autoprop_arg.gg`.
+    // 🚨 FAIL-SAFE BY CONSTRUCTION — an UNKNOWN form must DECLINE the early
+    // return, never take it.
+    //
+    // This predicate is phrased as "is it PROVABLY SAFE to skip
+    // `maybe_auto_propagate`?" rather than "would it auto-propagate?", because
+    // the two differ exactly on the `None` case and that difference is a
+    // miscompile. An earlier revision computed `arg_would_auto_propagate` with
+    // `.unwrap_or(false)` and then branched on `!arg_would_auto_propagate`, so an
+    // untypeable form produced `false` → `!false` → SKIP. Its comment claimed the
+    // opposite ("a missing arm costs a lost optimisation, never a lost
+    // propagation"); the comment was INVERTED, and reasoning from it shipped the
+    // same swallowed-`Error` miscompile THREE times in successive costumes
+    // (struct field, tuple field, then `Deref`/`Guard` objects). The invariant is
+    // now enforced by the `match` below instead of asserted in prose.
+    let safe_to_skip_auto_propagate = matches!(arg.node.ownership, Ownership::MutableBorrow) && {
+        let param_is_result = callee_param_type
+            .map(|p| ctx.type_registry.enum_category(p) == Some(EnumCategory::Result))
+            .unwrap_or(false);
+        match super::place_expr_type_only(ctx, &arg.node.value) {
+            // Typeable: skipping is safe iff no unwrap was going to happen —
+            // either the callee wants the whole `Result`, or the argument is not
+            // a propagating `Result` in this context.
+            Some(t) => {
+                param_is_result || super::should_auto_propagate(ctx, builder, t).is_none()
+            }
+            // NOT typeable here: we cannot PROVE skipping is safe, so we do not
+            // skip. Costs the early-return optimisation on that form; never an
+            // error propagation. This is the direction the old code got backwards.
+            None => false,
+        }
+    };
+    if safe_to_skip_auto_propagate {
+        if let Some((place, place_type)) = super::try_resolve_place(ctx, builder, &arg.node.value) {
+            if let Some(s) = g2_projected_untrack_start {
+                ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());
+            }
+            // The producer guarantees `place` is an lvalue of the VALUE itself
+            // (postcondition 1), so this borrow is unconditional — no
+            // `is_already_ptr` re-derivation, which is the special case that grew
+            // into this bug in the first place.
+            let ptr_type = ctx.register_mut_ptr_type(place_type);
+            let dst = builder.add_local(ptr_type, None);
+            builder.emit_borrow_mut(dst, place);
+            return FunctionBuilder::copy(dst);
         }
     }
     let val = lower_expr(ctx, builder, &arg.node.value);
@@ -235,7 +420,37 @@ pub(super) fn lower_call_arg(
                 // `_21 = borrow_mut _20` producing `*mut *JsVal` — callee then
                 // reads the pointer's bits as the payload (zeros for
                 // page-aligned addresses). Mirrors `is_already_ptr` in the
-                // standalone `Expr::MutableBorrow` handler (exprs/mod.rs:362).
+                // standalone `Expr::MutableBorrow` handler (`is_already_ptr`,
+                // exprs/mod.rs). Both now guard only the FALL-THROUGH path: a
+                // resolvable projection returns early at the Family-1 chokepoint
+                // above, whose producer postcondition makes the borrow
+                // unconditional.
+                //
+                // 🚨 THIS GUARD IS LIVE — DEMONSTRATED, not assumed. Disable it
+                // and `push_it(&c.p)` on a `struct HMut { MutRef[Vector[int]] p }`
+                // SIGSEGVs (exit 139) where it prints `3` with the guard in
+                // place. Pinned by the `MutRef` row of
+                // `cow_amp_ref_field_forward.gg`.
+                //
+                // ⚠ WHY THAT ROW, AND WHY A GREEN RUN PROVES NOTHING HERE. The
+                // LIR ALREADY forwards a stored pointer for SOME bare places:
+                // `lir/lower/operands.rs` emits `SlotLoad` (reading the pointer
+                // bits) instead of `SlotAddr` when the local is
+                // `SlotKind::BorrowedPtr`-kinded OR its slot is specifically
+                // `PtrTo(GorgetString)`, and there is no `Deref` projection.
+                // This GIR-level guard's condition is BROADER — it tests the GIR
+                // TYPE (`Ptr`/`MutPtr`) with no `slot_kind` component. The two
+                // predicates are DIFFERENT SETS, and the gap between them is
+                // exactly where this guard earns its keep: a `PtrTo` slot whose
+                // pointee is NOT `GorgetString` (a `Vector`, above) takes
+                // `SlotAddr`, so without the guard the callee receives `**T`.
+                // Most shapes are covered by the LIR path and never exercise
+                // this arm, so a green suite is NOT evidence that it is dead.
+                // ⚠ An earlier revision claimed `&xs.get(i).unwrap()` as the
+                // shape needing it. That claim is NOT reproducible — disabling
+                // the guard leaves the get-chain fixtures green, because those
+                // locals ARE `BorrowedPtr`-kinded — and it is corrected here
+                // rather than silently swapped (Core #14).
                 if place.projections.is_empty()
                     && matches!(
                         ctx.type_registry.get(local_type),

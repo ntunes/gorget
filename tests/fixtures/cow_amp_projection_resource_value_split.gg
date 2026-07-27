@@ -1,0 +1,106 @@
+# REGRESSION FIXTURE — the RESOURCE/VALUE split INSIDE each type kind, in a form
+# ggdef can ADJUDICATE.
+#
+# THE POINT OF THIS FIXTURE. Family-1's axis is not the projection FORM and not
+# the type KIND — it is whether the projected type CARRIES A RESOURCE. A
+# resource-carrying field's read yields a `Ptr` into the real slot (so
+# write-through worked BY ACCIDENT); a by-value field's read yields a value COPY
+# (so the callee's write went to a dying temp). Each row below pairs a VALUE cell
+# with its RESOURCE twin in the SAME type kind, so the pairing is visible in one
+# program:
+#
+#   struct : SVal{int n}   / SRes{String s}
+#   tuple  : (int, int)    / (String, int)
+#   scalar : int           / String
+#
+# AXIS + CELL (Core #12): the PROJECTED-TYPE axis, sampled at BOTH cells of the
+# resource/value split in each of three type kinds (struct · tuple · scalar) —
+# six cells, no omissions within those kinds. The kinds NOT sampled here are enum
+# (`cow_amp_projection_type_axis.gg`, which covers `EVal`/`ERes`), collection
+# elements (same fixture, rows 8-9), and the already-a-pointer field cell
+# (`cow_amp_ref_field_forward.gg`); this fixture trades that breadth for being
+# inside ggdef's subset, which none of those are.
+#
+# ⚠ CONSEQUENCE FOR ANYONE ADDING COVERAGE HERE: an "enum field" or "struct
+# field" fixture built on a RESOURCE payload proves NOTHING about its value-typed
+# twin. That is the Core #12 trap that hid this class for ~5 months behind a
+# green suite.
+#
+# ORACLE-ADJUDICATED (Core #13). Unlike its siblings, this fixture is INSIDE
+# ggdef's phase-0 subset — deliberately: no generics, no `is`-pattern binding, no
+# module statics, no `Box`, no comprehension. ggdef prints
+#     110 / a! / 110 / a! / 110 / a!
+# i.e. the definition lane says ALL SIX cells must write through. Re-check with:
+#     cargo run -q -p ggdef --bin ggdef -- run tests/fixtures/cow_amp_projection_resource_value_split.gg
+#
+# RED-VERIFIED against the pre-fix compiler, which printed
+#     10 / a! / 10 / a! / 10 / a!
+# — the three VALUE cells lost the write while the three RESOURCE twins were
+# already correct. So the pre-fix compiler DISAGREED WITH THE ORACLE on exactly
+# the value cells, on both backends, `gg check` clean (Core #8: two backends
+# agreeing on a wrong answer is a red flag, not a pass). Post-fix, production and
+# ggdef agree on all six.
+#
+# GUARDED MECHANISM: the Family-1 chokepoint — `try_resolve_place` called from
+# `lower_call_arg`'s `MutableBorrow` arm. Short-circuit it to `None` and the
+# three VALUE rows revert to the seed while the RESOURCE rows stay green.
+#
+# Every seed is COMPUTED, never a literal, so const-fold cannot elide a write.
+struct SVal:
+    int n
+
+struct SRes:
+    String s
+
+struct Holder:
+    SVal sv
+    SRes sr
+    (int, int) tv
+    (String, int) tr
+    int i
+    String s
+
+int seed():
+    return 10
+
+String sseed():
+    return "a"
+
+void bump_sval(SVal &v):
+    v.n = v.n + 100
+
+void app_sres(SRes &v):
+    v.s = v.s + "!"
+
+void bump_tval((int, int) &t):
+    t.0 = t.0 + 100
+
+void app_tres((String, int) &t):
+    t.0 = t.0 + "!"
+
+void bump_int(int &n):
+    n = n + 100
+
+void app_str(String &x):
+    x = x + "!"
+
+void main():
+    Holder h = Holder(SVal(seed()), SRes(sseed()), (seed(), 0), (sseed(), 0), seed(), sseed())
+
+    # struct kind: value payload vs resource payload
+    bump_sval(&h.sv)
+    print(h.sv.n)
+    app_sres(&h.sr)
+    print(h.sr.s)
+
+    # tuple kind: value payload vs resource payload
+    bump_tval(&h.tv)
+    print(h.tv.0)
+    app_tres(&h.tr)
+    print(h.tr.0)
+
+    # scalar kind: int vs String
+    bump_int(&h.i)
+    print(h.i)
+    app_str(&h.s)
+    print(h.s)

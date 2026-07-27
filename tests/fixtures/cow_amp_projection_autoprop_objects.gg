@@ -1,0 +1,103 @@
+# REGRESSION FIXTURE — the OBJECT domain of an `&<projection>` auto-propagate
+# argument: a `Box` deref object and a `Guard[T]` auto-deref object.
+#
+# ⚠ THIS PINS A ROOT-CAUSE FIX, NOT A THIRD PATCH. The Family-1 chokepoint asks
+# `place_expr_type_only` whether an `&`-argument would auto-propagate and, when
+# the answer does not prove a propagation is coming, returns early — SKIPPING
+# `maybe_auto_propagate`. The predicate used to be phrased "would it
+# auto-propagate?" and computed with `.unwrap_or(false)`, so an UNTYPEABLE form
+# yielded `false`, the caller tested `!that`, and the chokepoint SKIPPED. Its
+# comment asserted the opposite ("a missing arm costs a lost optimisation, never
+# a lost propagation"). THE COMMENT WAS INVERTED, and reasoning from it shipped
+# the same swallowed-`Error` miscompile THREE TIMES in successive costumes:
+# struct field, then tuple field, then these two object forms. The predicate is
+# now phrased "is it PROVABLY SAFE to skip?" with an explicit `None => false`, so
+# an unmodelled form declines the early return BY CONSTRUCTION.
+#
+# AXIS + CELL (Core #12): the OBJECT-FORM axis of the projection whose type the
+# pre-check must resolve — Identifier · SelfExpr · FieldAccess · Deref · Index ·
+# TupleFieldAccess · Guard-auto-deref. Rows A and B are the two cells that were
+# live-broken; the others are covered by `cow_amp_projection_autoprop_arg.gg`.
+# ⚠ These two share a top-level `FieldAccess`, which is why the first arm-set
+# lint was GREEN on both — the defect lives one level down, in the OBJECT domain.
+# `place_type_only_covers_the_producer_forms` now compares that level too.
+#
+# RED-VERIFIED IN BOTH DIRECTIONS — rare and worth stating precisely:
+#   base `6cf79126`            : ERR(propagated) / ERR(propagated)   (correct)
+#   tip  `a65bbe97`            : `in take` / `1` / `called`          (WRONG, both rows)
+#   with the fail-safe applied : ERR(propagated) / ERR(propagated)   (correct)
+# So these rows are RED against the IMMEDIATELY PRECEDING commit, not against the
+# pre-round compiler — a regression introduced and closed inside one round.
+#
+# ⚠ ERROR-SEEDED DELIBERATELY. Under an `Ok` payload the unwrap succeeds and the
+# call proceeds, so a correct and a broken compiler are INDISTINGUISHABLE.
+# Re-seeding either row to `Ok` silently converts this fixture into a
+# green-on-arrival one (Core #15e(d), "MIND THE PROBE").
+#
+# GUARDED MECHANISM — ⚠ EACH ROW NEEDS A CONJUNCTION OF TWO EDITS. No single
+# edit reds either row. `lower_call_arg`'s `safe_to_skip_auto_propagate` holds
+# the fail-safe `None => false`; `place_expr_type_only` holds the arms that
+# decide whether these objects reach it as `Some` at all. A row is only WRONG
+# when the object goes untyped AND the untyped case is treated as safe:
+#
+#   * Row A (Box deref) — flip `None => false` to `None => true` AND remove
+#     `place_expr_type_only`'s `Expr::Deref` arm. Measured: row A then prints
+#     `in take` / `1` / `called`.
+#   * Row B (Guard)     — flip the same `None => false` AND remove
+#     `place_expr_type_only`'s GUARD AUTO-DEREF branch (the
+#     `guard_inner_suffix` → `c_suffix_to_type_id` fallback in the `FieldAccess`
+#     arm). Measured: row B then prints `in take` / `1` / `called`.
+#
+# The flip ALONE leaves BOTH rows green (measured on the shipped tip:
+# `box: ERR(propagated)` / `guard: ERR(propagated)`), because each object form now
+# types successfully and never reaches the `None` case.
+#
+# ⚠ TWO SUPERSEDED VERSIONS OF THIS FIELD, recorded rather than swapped, because
+# the correction history IS the evidence here (Core #14):
+#   1. The first version claimed the flip alone reds BOTH rows. False for row A
+#      once the `Deref` arm landed.
+#   2. The second version corrected row A to a conjunction but kept "row B reds
+#      on the fail-safe flip ALONE". Also false — and false for exactly the
+#      reason it had just written down for row A: the SAME COMMIT that added the
+#      Guard auto-deref branch wrote that bullet. A fix that lands an arm must
+#      re-check every break-and-watch that depended on the arm being absent.
+#
+# The HISTORICAL red is genuine — both rows were WRONG at tip `a65bbe97`, before
+# either arm existed — but a reader executing this procedure needs the
+# instruction that works today, not the one that produced the original evidence.
+struct Holder:
+    Result[int, int] r
+
+void take(int &x):
+    print("  in take")
+    print(x)
+    x = x + 1
+
+int mk():
+    return 5
+
+# A. Box DEREF object — `&(*b).r`.
+int via_box() throws int:
+    Box[Holder] b = Box(Holder(Error(mk())))
+    take(&(*b).r)
+    return 1
+
+# B. Guard AUTO-DEREF object — `&g.r`, where `g` is a `Guard[Holder]` and the
+#    field lives on the GUARDED value, not on the wrapper.
+int via_guard() throws int:
+    Mutex[Holder] m = Mutex[Holder](Holder(Error(mk())))
+    Guard[Holder] g = m.lock()
+    take(&g.r)
+    return 1
+
+void main():
+    int a = via_box()! catch (e): -1
+    if a == 1:
+        print("box: called")
+    else:
+        print("box: ERR(propagated)")
+    int b = via_guard()! catch (e): -1
+    if b == 1:
+        print("guard: called")
+    else:
+        print("guard: ERR(propagated)")

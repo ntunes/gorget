@@ -32119,6 +32119,486 @@ done",
     );
 }
 
+/// FAMILY-1 — the PROJECTED-TYPE axis, sampled on BOTH SIDES of the
+/// resource/value split inside each type kind (enum · struct · tuple), plus the
+/// four cells that converged with the fix and had no coverage: `Option[int]`
+/// field, generic struct field, nested collection element, value-payload enum.
+///
+/// The axis is RESOURCE-CARRYING-NESS, not type KIND — an `Option[String]`
+/// fixture proves nothing about `enum Color {Red(), Green()}`, which is how the
+/// class survived ~5 months behind a green suite (Core #12).
+///
+/// RED-VERIFIED against the pre-fix compiler: printed
+/// `EVal=A / ERes=B / 10 / a! / 10 / a! / 10 / 10 / 10` — every VALUE-side cell
+/// lost the write while every RESOURCE-side twin was already correct.
+#[test]
+fn cow_amp_projection_type_axis() {
+    run_gg(
+        "cow_amp_projection_type_axis.gg",
+        "\
+EVal=B
+ERes=B
+110
+a!
+110
+a!
+110
+110
+110",
+    );
+}
+
+/// FAMILY-1 — `f(&(*box).field)`: the BASE-SHAPE cell that was wrong for ALL TEN
+/// types, not just the six by-value ones, because the `Expr::Deref` fast-path at
+/// the `&`-formation faces matched only a BARE deref. The fix folds that
+/// fast-path into `try_resolve_place`, so `&*b` and `&(*b).fd` take one path.
+///
+/// RED-VERIFIED against the pre-fix compiler: printed
+/// `10 / 10.000000 / false / a / 1 / 1 / 10 / a / EVal=A / 10`. The resource rows
+/// also LEAKED; that half is pinned under ASan by
+/// `security.rs::sound_amp_deref_box_field_leak_safe`.
+#[test]
+fn cow_amp_deref_box_projection() {
+    run_gg(
+        "cow_amp_deref_box_projection.gg",
+        "\
+11
+11.000000
+true
+a!
+2
+2
+11
+a!
+EVal=B
+11",
+    );
+}
+
+/// FAMILY-1 — an `&<projection>` argument at an INDIRECT call (closure variable
+/// OR IIFE) must REACH the callee. It used to vanish at BOTH. Neither indirect
+/// path sets `func_state.expected_type`, so `maybe_auto_propagate` unwrapped the
+/// `Result`-typed argument, saw the `Error`, and propagated — silently skipping
+/// the call, even though each callee's parameter is itself `Result[int, int]`
+/// and the argument was meant to arrive whole. The chokepoint's early return
+/// closes it for a RESOLVABLE projection argument.
+///
+/// ⚠⚠ BOTH ROWS ARE POS, NOT CONTROLS — and two things mask this defect, both of
+/// which produced a wrong verdict in this round before the fixture existed:
+/// an `Ok` payload (a correct and a broken compiler both call), and an EXPLICIT
+/// `Callable[...]` annotation on the closure variable. Measured at base, same
+/// program, only the annotation differing: `auto f = …` SKIPS while
+/// `Callable[void(&Result[int,int])] f = …` CALLS. Row B uses `auto`
+/// deliberately; tidying it into an annotation silently disarms the fixture.
+///
+/// RED-VERIFIED at base — BOTH rows printed `err` with neither callee body
+/// running. A genuine Core #9 semantic change, now pinned.
+/// The BARE-identifier siblings are still broken at both call kinds and filed
+/// separately (`sound_autoprop_indirect_bare_arg_skips_call`).
+#[test]
+fn cow_amp_projection_indirect_call_arg() {
+    run_gg(
+        "cow_amp_projection_indirect_call_arg.gg",
+        "\
+  A-called
+A: ok
+  B-called
+B: ok",
+    );
+}
+
+/// KNOWN GAP — a `Guard[T]` field reached through a PARAMETER is MEMORY-UNSAFE
+/// at the `&` face (C: SIGSEGV exit 139; LLVM: `llc` hard-fails) and silently
+/// wrong at the assign face, while the identical access on a guard LOCAL is
+/// correct. PRE-EXISTING: identical at base and at the Family-1 tip.
+///
+/// ⚠ NOT the served-at-one-face asymmetry Family-1 closed — BOTH faces are wrong
+/// here. Root: `try_resolve_field_place` tests `guard_inner_suffix` against
+/// `current_type` BEFORE the `pointee_type` deref, so a param local typed
+/// `Ptr(Guard__Inner)` never matches the guard name. Peeling the pointer first
+/// closes all four measured cells.
+///
+/// ⚠ Cannot run until fixed (SIGSEGV on C, no binary on LLVM), so it asserts the
+/// intended values — same shape as `sound_amp_deque_element_field`.
+#[test]
+#[ignore = "KNOWN GAP: a `Guard[T]` field through a PARAMETER SIGSEGVs at the `&` face on C and \
+hard-fails `llc` on LLVM, and is silently wrong at the assign face, while a guard LOCAL is \
+correct. Pre-existing. Asserts the INTENDED write-through; TODO.md. Un-ignore when the producer \
+peels the pointer before the guard-name test."]
+fn sound_guard_param_field_unsafe() {
+    run_gg(
+        "known_gaps/sound_guard_param_field_unsafe.gg",
+        "\
+11
+11",
+    );
+}
+
+/// KNOWN GAP — `&(*b).0`, a TUPLE FIELD through a `Box` DEREF, passes
+/// `gg check` and then fails the C build (`unknown type name
+/// 'Tuple__Result__…'` — the mangled tuple type is referenced but never
+/// emitted). PRE-EXISTING: identical at base and after the Family-1 round.
+///
+/// ⚠ Filed despite never having worked, because during the round it briefly
+/// became a SILENT WRONG ANSWER (built, swallowed the `Error`, handed the callee
+/// a pointer to a `Result`) when the auto-propagate pre-check's `None` case was
+/// inverted. The fail-safe restored the loud failure. Trading a loud build error
+/// for a silent wrong answer is a regression even on a broken shape (Core #8).
+#[test]
+#[ignore = "KNOWN GAP: `&(*b).0` (tuple field through a Box deref) passes `gg check` then fails \
+the C build — the mangled tuple type is referenced but never emitted. Pre-existing. Asserts the \
+INTENDED propagation; TODO.md. Un-ignore when the emission lands."]
+fn sound_amp_box_tuple_field_cc_fail() {
+    run_gg(
+        "known_gaps/sound_amp_box_tuple_field_cc_fail.gg",
+        "ERR(propagated)",
+    );
+}
+
+/// FAMILY-1 — the OBJECT domain of an `&<projection>` auto-propagate argument:
+/// a `Box` deref object (`&(*b).r`) and a `Guard[T]` auto-deref object (`&g.r`).
+///
+/// ⚠ PINS A ROOT-CAUSE FIX. The pre-check used to be phrased "would it
+/// auto-propagate?" and computed with `.unwrap_or(false)`, so an UNTYPEABLE form
+/// produced `false`, the caller tested `!that`, and the chokepoint SKIPPED
+/// `maybe_auto_propagate` — while the comment asserted the opposite. Reasoning
+/// from that inverted invariant shipped the same swallowed-`Error` miscompile
+/// three times (struct field, tuple field, then these objects). It is now phrased
+/// "is it PROVABLY SAFE to skip?" with an explicit `None => false`.
+///
+/// ⚠ Both rows declare a top-level `FieldAccess`, so the first arm-set lint was
+/// GREEN on them — the defect lives one level down, in the OBJECT domain, which
+/// `place_type_only_covers_the_producer_forms` now compares as well.
+///
+/// RED-VERIFIED IN BOTH DIRECTIONS: correct at base `6cf79126`, WRONG at tip
+/// `a65bbe97` (`in take` / `1` / `called`, both rows), correct again with the
+/// fail-safe. A regression introduced and closed inside one round. Error-seeded
+/// deliberately — an `Ok` payload makes correct and broken indistinguishable.
+#[test]
+fn cow_amp_projection_autoprop_objects() {
+    run_gg(
+        "cow_amp_projection_autoprop_objects.gg",
+        "\
+box: ERR(propagated)
+guard: ERR(propagated)",
+    );
+}
+
+/// KNOWN GAP — Result→T auto-propagation fires at a FREE-call argument but is
+/// REJECTED (`E_TypeMismatch`) at a METHOD-call argument, for the same
+/// expression and the same declared parameter type. PRE-EXISTING: identical at
+/// base and after the Family-1 round.
+///
+/// Checked against the design record before filing (Core #15e Q1): `DONE.md`
+/// (Snag #49) records auto-propagation centralized "gated to `Call` /
+/// `MethodCall` expressions only" — method calls are named IN SCOPE — and Snag
+/// #43's note lists call args among the sites that need it. So this is a gap
+/// against intent, not an undecided asymmetry. The asymmetry lives in the
+/// TYPECHECKER (the method arm never admits the unwrap, so it never reaches
+/// lowering); a fix belongs there.
+#[test]
+#[ignore = "KNOWN GAP: Result→T auto-propagation is admitted at a free-call arg but REJECTED at \
+a method-call arg (E_TypeMismatch), same expression and param type. Pre-existing. Asserts the \
+INTENDED symmetric acceptance; TODO.md. Un-ignore when the method-call arg position admits the \
+same unwrap."]
+fn sound_autoprop_method_arg_rejected() {
+    run_gg(
+        "known_gaps/sound_autoprop_method_arg_rejected.gg",
+        "\
+  free took
+1
+  method took
+1",
+    );
+}
+
+/// KNOWN GAP — an INDIRECT call (closure variable or IIFE) with a BARE
+/// `Result`-typed argument is silently SKIPPED: the error auto-propagates even
+/// though the callee's parameter is itself a `Result`, so there was nothing to
+/// unwrap. Root: neither indirect call path sets `expected_type`, unlike their
+/// free-call and method-call siblings.
+///
+/// Both rows survive the Family-1 fix because `try_resolve_place` has no
+/// `Identifier` arm BY DESIGN — the projection twins are resolved and return
+/// early (pinned live by `cow_amp_projection_indirect_call_arg`), the bare ones
+/// fall through to the unguarded unwrap. ⚠ The fix is for the indirect call
+/// paths to set `expected_type`, NOT to widen the producer.
+#[test]
+#[ignore = "KNOWN GAP: an indirect call (closure-var or IIFE) with a BARE `Result`-typed arg \
+auto-unwraps and silently skips the call, though the callee's param is itself a Result. Asserts \
+the INTENDED call; TODO.md. Un-ignore when the indirect call paths set `expected_type` like \
+their free/method siblings."]
+fn sound_autoprop_indirect_bare_arg_skips_call() {
+    run_gg(
+        "known_gaps/sound_autoprop_indirect_bare_arg_skips_call.gg",
+        "\
+  cvar-called
+cvar_bare: ok
+  iife-called
+iife_bare: ok",
+    );
+}
+
+/// FAMILY-1 — an `&<projection>` argument that is `Result`-typed while the
+/// CALLEE's parameter is NOT must still AUTO-PROPAGATE. `void take(int &x)`
+/// called as `take(&h.r)` only typechecks because auto-propagation unwraps the
+/// `Result`; on an `Error` payload it must PROPAGATE rather than call.
+///
+/// ⚠ INVISIBLE UNDER AN `Ok` PAYLOAD — both a correct and a broken compiler
+/// print `in take`. Row A is Error-seeded for exactly that reason (the
+/// masked-probe trap, Core #15e(d)); row B is the Ok control.
+///
+/// RED-VERIFIED against a regression the chokepoint INTRODUCED: without the
+/// type-only auto-propagate pre-check the Error row printed `in take` / `ok`,
+/// silently swallowing the error AND handing the callee a pointer to a `Result`
+/// where an `int` was expected. Base and post-fix now agree.
+///
+/// 🚨 ROW C IS THE TUPLE-FIELD SIBLING, and it SHIPPED BROKEN for one commit
+/// after row A was fixed: `place_expr_type_only` had no `TupleFieldAccess` arm
+/// while `try_resolve_place` did, so `take(&t.0)` took the early return with the
+/// auto-propagate question never asked. Measured at that tip: `in take` / `1` /
+/// `called` — error swallowed, callee handed a pointer to a `Result` (it printed
+/// the tag word). An instance fix where a class existed (Core #4); the arm sets
+/// are now pinned by `place_type_only_covers_the_producer_forms`.
+#[test]
+fn cow_amp_projection_autoprop_arg() {
+    run_gg(
+        "cow_amp_projection_autoprop_arg.gg",
+        "\
+err_seeded: ERR(propagated)
+  in take
+ok_seeded: called
+tuple_err_seeded: ERR(propagated)",
+    );
+}
+
+/// FAMILY-1 — `&` of a field whose DECLARED TYPE IS ALREADY A POINTER
+/// (`Ref[T]` / `MutRef[T]` / extern `T*`) must FORWARD the stored pointer, not
+/// take its address. The place resolvers resolve such a field fine — the place
+/// IS the slot — but the VALUE there is already a `*T`, so `emit_borrow_mut`
+/// would yield `**T` and the callee would read pointer bits as payload
+/// (gorget-js snag #1).
+///
+/// ⚠ PINS A REGRESSION INTRODUCED AND CAUGHT INSIDE THE FAMILY-1 ROUND, so its
+/// red is NOT the pre-round compiler: before Family-1 this printed `3/4/3`; with
+/// the chokepoint but WITHOUT the postcondition-1 exit guard it SIGSEGV'd
+/// (exit 139); with the guard it prints `3/4/3` again. Reproduce by deleting the
+/// `Ptr`/`MutPtr` early-`None` at the exit of `try_resolve_place`.
+///
+/// That guard is what makes postcondition 1 literally true rather than
+/// aspirational, which is what lets every caller `emit_borrow_mut`
+/// unconditionally.
+///
+/// ⚠ ROW 4 (`MutRef[Vector[int]]`) PINS A DIFFERENT GUARD and is the only shape
+/// found that reds it: the `is_already_ptr` fall-through in `lower_call_arg`'s
+/// `MutableBorrow` arm. Disable that guard and row 4 SIGSEGVs (exit 139) where
+/// it prints `3`. Rows 1-3 use `Ref[Vector[int]]`, whose local IS
+/// `SlotKind::BorrowedPtr`-kinded, so `lir/lower/operands.rs` forwards the
+/// pointer via `SlotLoad` and they stay GREEN with that guard disabled — which
+/// is precisely why row 4 exists. A green suite is not evidence that the
+/// `is_already_ptr` guard is dead; most shapes never reach it.
+#[test]
+fn cow_amp_ref_field_forward() {
+    run_gg(
+        "cow_amp_ref_field_forward.gg",
+        "\
+3
+4
+3
+3",
+    );
+}
+
+/// FAMILY-1 — the RESOURCE/VALUE split INSIDE each type kind, and the ONLY
+/// fixture of this family ggdef can ADJUDICATE (written inside the phase-0
+/// subset on purpose: no generics, no `is`-binding, no statics, no Box, no
+/// comprehension — its four siblings are EXCLUDEd from corpus_b for exactly
+/// those constructs, each citation recorded there).
+///
+/// ORACLE (Core #13): ggdef prints `110 / a! / 110 / a! / 110 / a!` — all six
+/// cells must write through. The PRE-fix compiler printed
+/// `10 / a! / 10 / a! / 10 / a!`, i.e. it DISAGREED WITH THE ORACLE on exactly
+/// the three by-value cells, on both backends, `gg check` clean. Post-fix,
+/// production and ggdef agree on all six.
+///   cargo run -q -p ggdef --bin ggdef -- run tests/fixtures/cow_amp_projection_resource_value_split.gg
+#[test]
+fn cow_amp_projection_resource_value_split() {
+    run_gg(
+        "cow_amp_projection_resource_value_split.gg",
+        "\
+110
+a!
+110
+a!
+110
+a!",
+    );
+}
+
+/// FAMILY-1 — the BASE-SHAPE axis, with the projected type held fixed at the
+/// broken side (`int`). Family-1's discriminator is the TYPE, not the FORM, so
+/// these cells are individually low-yield by design; the point is that the form
+/// axis is NAMED and enumerated rather than silently sampled (Core #12).
+/// Covers: nested field · `&self.fd` · `&`-param base · `!`-param base ·
+/// module `static` base · `&v[0].fd`. The fixture header names each cell covered
+/// elsewhere and each cell deliberately left to Family-2.
+///
+/// ⚠ The BARE-param base is deliberately NOT here — it must MATERIALIZE, not
+/// write through (`sound_amp_bareparam_root_materialize`, 11/10). Mixing it into
+/// a write-through fixture is exactly how a both-directions fix passes.
+///
+/// RED-VERIFIED against the pre-fix compiler: printed `10` eight times.
+/// ⚠ Rows 7 (tuple root) and 8 (GUARD auto-deref) are RED against LATER tips as
+/// well — each needed a further `place_expr_type_only` arm after the original
+/// chokepoint. Row 8 is the sharpest case in the family: `&g.fd` dropped the
+/// write while `g.fd = v` worked, through THREE fix rounds, and NO arm-set lint
+/// could demand it because the guard projection is resolved by a TYPE-level
+/// branch rather than a syntactic `Expr::` arm.
+#[test]
+fn cow_amp_projection_base_shapes() {
+    run_gg(
+        "cow_amp_projection_base_shapes.gg",
+        "\
+11
+11
+11
+11
+11
+11
+11
+11",
+    );
+}
+
+/// KNOWN GAP — `Deque` is ADMITTED to the addressable-element path but has no
+/// element-type arm, so `&d[i].fd` is `gg check`-clean and MEMORY-UNSAFE.
+/// `infer_collection_element_type` strips `Vector__`/`Dict__`/`Map__` but has no
+/// `Deque__` arm, so the element type falls back to `I64_TYPE` and an `int` local
+/// is used as a struct pointer.
+///
+/// 🚨 BACKEND DIVERGENCE, measured and UNCHANGED by the Family-1 chokepoint:
+/// C SIGSEGVs (exit 139, no output); LLVM produces NO BINARY at all — `llc`
+/// hard-fails with `'%v17' defined with type 'i32' but expected 'ptr'`.
+/// ⚠ THIS FIXTURE THEREFORE HAS NO LLVM LANE (documented, not overlooked — same
+/// shape as `sound_amp_owning_position_return`'s C/LLVM split).
+///
+/// Also pins single evaluation: `Deque` is a REACHABLE emit-then-`None` row, so
+/// the base is evaluated TWICE after the resolver falls through. Asserts `IDX`
+/// exactly ONCE. Accepting that double evaluation is the chokepoint's deliberate
+/// disposition — the remedy would edit the SHARED resolvers and change the assign
+/// and method-receiver faces' `None`-path emission too.
+#[test]
+#[ignore = "KNOWN GAP: `Deque` is admitted to the addressable-element path with no `Deque__` arm \
+in `infer_collection_element_type`, so `&d[i].fd` SIGSEGVs on C and hard-fails `llc` on LLVM, \
+`gg check` clean. Asserts the INTENDED single evaluation + write-through; TODO.md. Un-ignore when \
+the element-type arm lands (or the kind-gate stops admitting Deque)."]
+fn sound_amp_deque_element_field() {
+    run_gg(
+        "known_gaps/sound_amp_deque_element_field.gg",
+        "\
+IDX
+11",
+    );
+}
+
+/// KNOWN GAP — the SPAWN argument face never reads `arg.node.ownership`
+/// (`spawn.rs` lowers args with a bare `lower_expr`), bypassing `lower_call_arg`
+/// and both `&`-formation faces, so `spawn f(&c.fd)` drops the write.
+///
+/// 🚨 THE DIVERGENCE IS NEW. Before Family-1 both `bumpi(&c.fd)` and
+/// `spawn bumpi(&c.fd)` printed 10 — equally wrong. After it the direct call
+/// prints 110 and the spawned one still prints 10: two spellings of one intent,
+/// now SILENTLY DIVERGENT, which is more dangerous than the old symmetry.
+///
+/// ⚠ TYPE-INDEPENDENT, unlike Family-1: `spawn bumpv(&c.vd)` loses its `push`
+/// too, and `Vector` is one of the four types that worked BY ACCIDENT at the
+/// call-arg face. Not another Family-1 cell.
+#[test]
+#[ignore = "KNOWN GAP: `spawn f(&c.fd)` drops the callee's write — the spawn arg face ignores \
+`arg.node.ownership` entirely. Newly DIVERGENT from the direct call, which Family-1 fixed. \
+Asserts the INTENDED 110/110; TODO.md. Un-ignore when the spawn arg sites route through \
+`lower_call_arg`."]
+fn sound_amp_spawn_projection_write_lost() {
+    run_gg(
+        "known_gaps/sound_amp_spawn_projection_write_lost.gg",
+        "\
+110
+110",
+    );
+}
+
+/// FAMILY-1 (standalone face) — the RATIFIED `&`-iterable comprehension with a
+/// PROJECTION iterable. This is the one LEGITIMATE shape that reaches the
+/// standalone `&`-formation face carrying a projection (D32 rider), and the only
+/// other live comprehension-`&` fixture uses a BARE-IDENTIFIER iterable — the one
+/// cell the producer returns `None` for — so it is structurally incapable of
+/// seeing this face change.
+///
+/// Rows 1/2 assert that `&`-iterable and bare-iterable AGREE for a non-mutating
+/// body, which `decisions.md` records as the CORRECT result, not a no-op.
+///
+/// RED-VERIFIED by break-and-watch (the pre-fix form is impossible — this shape
+/// was already green, and the fix changes what the face EMITS but measurably not
+/// what it PRINTS): removing the `Projection::Deref` normalisation from
+/// `try_resolve_place`'s `Index` arm makes row 3 abort with
+/// `trap[T_Bounds]: index out of bounds: index 0, length 0`.
+#[test]
+fn cow_comprehension_amp_projection_source() {
+    run_gg(
+        "cow_comprehension_amp_projection_source.gg",
+        "\
+2
+2
+2
+2
+3
+2",
+    );
+}
+
+/// KNOWN GAP — a `&`-iterable comprehension whose body WRITES THROUGH the
+/// element does not reach the source collection: prints `101 / 1`, want
+/// `101 / 101`. RATIFIED by the D32 rider (`[e for x in &xs]` opens the
+/// collection for write-through and writes reach the source), so this is a gap
+/// against a decision, not an open question.
+///
+/// NOT Family-1's to fix and measured UNTOUCHED by it (identical output before
+/// and after): the write is dropped further up, in
+/// `lower_list_comprehension`, which never consults the iterable's ownership.
+/// Asserts the INTENDED 101/101 rather than today's 101/1 so the fix flips an
+/// `#[ignore]` instead of rewriting an expectation.
+#[test]
+#[ignore = "KNOWN GAP: a `&`-iterable comprehension's write-through never reaches the source \
+(prints 101/1, want 101/101), though the D32 rider ratifies that it must. Asserts the INTENDED \
+behaviour; TODO.md. Un-ignore when `ListComprehension.ownership` is threaded into \
+`lower_list_comprehension`."]
+fn cow_comprehension_amp_projection_writethrough() {
+    run_gg(
+        "known_gaps/cow_comprehension_amp_projection_writethrough.gg",
+        "\
+101
+101",
+    );
+}
+
+/// FAMILY-1 — the cheapest differential in the family: two spellings of one
+/// intent that behaved oppositely, both `gg check`-clean, in one program.
+/// `inc(&v[0])` was wrong for the six by-value types; `inc(&v.get(0).unwrap())`
+/// was correct for all ten, because `.get()` already returns a `Ptr`.
+///
+/// RED-VERIFIED: the index half printed `10` pre-fix. The get-chain half was
+/// already green, so it is pinned by break-and-watch instead — it guards the
+/// SURVIVING `is_already_ptr` fall-through, which unresolvable shapes still need.
+#[test]
+fn cow_amp_index_vs_getchain_differential() {
+    run_gg(
+        "cow_amp_index_vs_getchain_differential.gg",
+        "\
+11
+142",
+    );
+}
+
 /// CoW G2 (site 1, live second alias): the source is READ AFTER the `&`
 /// mutation — both aliases stay live. No use-after-free; source untouched,
 /// copy grown. MUST be ASan-clean under `--sanitize`.
@@ -35831,22 +36311,21 @@ fn release_flag_optimizes_at_o2() {
 /// Covered: `int` · `float` · `bool` · plain struct · tuple · Dict value ·
 /// Vector element, plus two rows with NO struct at all (`&vv[0]`, `&dd["k"]` on
 /// plain locals), which is a widening of the filed "by-value FIELD" framing.
-/// NOT covered, each measured RED at HEAD and green under the prototype, so
-/// each is a genuine uncovered cell rather than a hypothetical: **user enum**
-/// (prints `RED`, want `BLUE`) · **`Option[int]` field** · **generic struct
-/// field** (`Cell[int].val`) · **nested collection** (`&outer[0][1]`) ·
-/// **generic function** (`bumpg(&c.fd)`) · **match/`is`-binding root**.
-/// (This comment previously claimed "every value of the field-type axis". It
-/// was false in exactly the way Core #12 warns about — an axis claim that reads
-/// as coverage on the dashboard while six cells go untested.) The
-/// thin-pointer cells of the same axis (`String`, `Vector[int]` fields — the two
-/// that work by accident) are the live control
+/// The remaining cells of the axis — user enum with a VALUE payload, the
+/// resource/value contrast INSIDE each type kind, `Option[int]`, generic struct
+/// field, nested collection, generic function — are covered by the sibling
+/// fixtures `cow_amp_projection_type_axis` and
+/// `cow_amp_projection_resource_value_split`, added with the fix.
+/// The thin-pointer cells of the same axis (`String`, `Vector[int]` fields — the
+/// two that used to work by accident) are the live control
 /// `security.rs::sound_amp_field_thinptr_control_safe`, and the whole-bare-local
 /// cell is `sound_amp_local_scalar_control` below.
+///
+/// GRADUATED from `known_gaps` with the Family-1 chokepoint (`try_resolve_place`
+/// as the single place producer for both `&`-formation faces). RED-verified
+/// against the pre-fix compiler at that commit: printed
+/// `10 / 10.000000 / false / 10 ×6`, i.e. all nine rows dropped the write.
 #[test]
-#[ignore = "KNOWN GAP: `&`-arg of a by-value place silently drops the write on both backends \
-(ggdef is correct). Asserts the INTENDED write-through; TODO.md. Un-ignore when `&`-of-a-place \
-resolves to the place instead of a value temp."]
 fn sound_amp_byvalue_place_writethrough() {
     run_gg(
         "known_gaps/sound_amp_byvalue_place_writethrough.gg",
@@ -36116,18 +36595,22 @@ fn sound_amp_local_scalar_control() {
     run_gg("known_gaps/sound_amp_local_scalar_control.gg", "11");
 }
 
-/// KNOWN GAP — B2, and the row a naive fix breaks. A BARE-param root is a
+/// 🚨 THE TRAP ROW — the one a naive Family-1 fix breaks. A BARE-param root is a
 /// BORROW, so the write must MATERIALIZE: the callee sees 11, the CALLER stays
-/// 10. Measured at HEAD: `10 / 10` (the caller's 10 is right by accident — the
-/// write is lost inside the callee too). ggdef: `11 / 10`.
+/// 10. A fix that write-throughs to the root looks correct on every other
+/// fixture in this batch and is WRONG here — it would print `11 / 11`, turning a
+/// borrow into a mutable alias and breaking CoW's central guarantee.
 ///
-/// A fix that write-throughs to the root looks correct on every other fixture in
-/// this batch and is WRONG here — it would print `11 / 11`, turning a borrow
-/// into a mutable alias and breaking CoW's central guarantee.
+/// This is the pin for the Family-1 chokepoint's ORDERING contract: the
+/// `try_resolve_place` call sits AFTER the G2 root-materialize, so the place it
+/// resolves addresses the private copy `cow_before_mutation` rebound the name
+/// to, not the shared source. Move that call one block earlier and this fixture
+/// prints 11 / 11 while everything else stays green.
+///
+/// GRADUATED with that chokepoint. RED-verified against the pre-fix compiler:
+/// printed `10 / 10` (the caller's 10 was right by accident — the write was lost
+/// inside the callee too). ggdef: `11 / 10`.
 #[test]
-#[ignore = "KNOWN GAP: `&`-projection off a BARE-param root must MATERIALIZE (callee 11, caller \
-10); today both print 10. Asserts the INTENDED materialize; TODO.md. Un-ignore when the \
-by-value `&`-projection class is fixed — and check it prints 11/10, not 11/11."]
 fn sound_amp_bareparam_root_materialize() {
     run_gg(
         "known_gaps/sound_amp_bareparam_root_materialize.gg",
@@ -36137,14 +36620,14 @@ fn sound_amp_bareparam_root_materialize() {
     );
 }
 
-/// KNOWN GAP — B3: TWO sequential writes through the same `&`-projection.
-/// Measured at HEAD: 10 (both lost). ggdef: 12. A partial fix that write-throughs
-/// the first projection and then re-reads a stale value prints 11 here and
-/// passes every single-write pin in the batch.
+/// B3: TWO sequential writes through the same `&`-projection. A PARTIAL fix that
+/// write-throughs the first projection and then re-reads a stale value prints 11
+/// here and passes every single-write pin in the batch — that is what this
+/// fixture exists to separate.
+///
+/// GRADUATED with the Family-1 chokepoint. RED-verified against the pre-fix
+/// compiler: printed `10` (both writes lost). ggdef: `12`.
 #[test]
-#[ignore = "KNOWN GAP: two sequential writes through the same `&`-projection both vanish \
-(ggdef prints 12). Asserts the INTENDED 12; TODO.md. Un-ignore when the by-value `&`-projection \
-class is fixed — a partial fix prints 11."]
 fn sound_amp_projection_two_writes() {
     run_gg("known_gaps/sound_amp_projection_two_writes.gg", "12");
 }

@@ -1,0 +1,72 @@
+# ASan/LSan REGRESSION FIXTURE — `f(&(*box).field)` used to CLONE THE WHOLE
+# STRUCT to take an address of, and leak the clone.
+#
+# THE LEAK. Before the Family-1 chokepoint, an `&`-argument projecting through a
+# Box deref fell past the bare-`&*b` fast-path into the value-copy read path.
+# That read emitted `Holder__clone(...)` — a whole-struct clone, whose
+# resource fields are deep-copied by `gorget_string_clone_to_owned` — took the
+# address of a field INSIDE that clone, and handed it to the callee. The callee's
+# write landed on the clone, the clone was never dropped, and the caller's value
+# was untouched: a silent wrong answer AND an unbounded leak in one shape.
+#
+# AXIS + CELL (Core #12): the MEMORY-VALIDITY axis at the
+# `&(*box).<resource field>` cell. ⚠ It is specifically a bare `String` field
+# that leaks — the `Vector`/`Dict`/resource-struct field cells emit the same
+# `Holder__clone` but their clone temps happen to be drop-registered, so they
+# lose the write WITHOUT leaking. Sampling only those cells is a false negative;
+# that is why this fixture pins the String one.
+#
+# ggdef is STRUCTURALLY BLIND to this class — it adjudicates value semantics and
+# cannot observe an unfreed allocation — so ASan on the real backends is the only
+# instrument that can see it (Core #13).
+#
+# RED-VERIFIED against the pre-fix compiler under `detect_leaks=1`:
+#     ERROR: LeakSanitizer: detected memory leaks
+#     Direct leak of 5 byte(s) in 1 object(s)
+#       gorget_string_clone_to_owned <- Holder__clone <- main
+#     SUMMARY: AddressSanitizer: 5 byte(s) leaked in 1 allocation(s).   exit 99
+# Post-fix: exit 0, no report.
+#
+# ⚠ SHAPE NOTE — why the String field is seeded with a LITERAL and assigned a
+# COMPUTED string, rather than the reverse. The leaked allocation is made by
+# `clone_to_owned` on the FIELD, so it fires from a literal seed just as well
+# (RED-verified above — not a false negative). Seeding with a literal keeps the
+# POST-fix state clean: assigning over a static-literal slot has no old heap
+# pointee to release, which sidesteps the separately-filed
+# "re-assigning through a `&`-param never drops the param slot's OLD pointee"
+# leak (TODO.md, `Vector[int]` cell filed; the `String` cell appended by this
+# round). Seeding with a heap string instead makes this fixture RED post-fix for
+# THAT unrelated defect and it would guard nothing. The ASSIGNED value is still
+# heap-forced (`mk()` concatenates), so the write itself is a real allocation.
+#
+# GUARDED MECHANISM: `try_resolve_place`'s `Expr::Deref` arm plus the `Deref`
+# object arm of `try_resolve_field_place`, which resolve the field to a place
+# INSIDE the box instead of cloning the struct to address a copy. Short-circuit
+# the producer to `None` and the `Holder__clone` leak returns.
+struct Holder:
+    String s
+    int n
+
+String mk():
+    return "gg" + "-payload"
+
+int seed():
+    return 1
+
+void set_str(String &x):
+    x = mk()
+
+void bump(int &k):
+    k = k + 1
+
+void main():
+    Box[Holder] b = Box(Holder("base", seed()))
+
+    set_str(&(*b).s)
+    print((*b).s)
+
+    int i = 0
+    while i < 8:
+        bump(&(*b).n)
+        i = i + 1
+    print((*b).n)

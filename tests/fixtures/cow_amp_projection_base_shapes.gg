@@ -1,0 +1,166 @@
+# REGRESSION FIXTURE — the BASE-SHAPE axis of an `&<projection>` call argument.
+#
+# AXIS + CELL (Core #12). Family-1's discriminator is the projected TYPE, not the
+# projection FORM — Scout A measured every genuine projection form giving the
+# SAME per-type verdict. This fixture is the form axis's own net: it holds the
+# type fixed at the broken side (`int`, a by-value field) and varies the ROOT /
+# BASE shape instead, so a future change that fixes one base shape and not
+# another cannot pass. Individually low-yield, deliberately; the point is that
+# the axis is NAMED and enumerated rather than silently sampled.
+#
+# Cells covered here:
+#   1. nested struct field        `&o.inner.fd`
+#   2. `&self.fd` inside a method
+#   3. `&`-param base             `void f(Holder &h): inc(&h.fd)`
+#   4. `!`-param base             `void f(Holder !h): inc(&h.fd)`
+#   5. module-level `static` base `&G.fd`
+#   6. struct field under a collection element `&v[0].fd`
+#   7. TUPLE-ROOTED projection    `&t.0[0]`  ← added late; see its inline note.
+#      It was NOT covered when this fixture first claimed the base-shape axis,
+#      and it was genuinely broken (10, want 11) at base and at the first
+#      Family-1 tip. A fixture that names an axis must sample it.
+#      ⚠ A SECOND UNCOVERED PRODUCT CELL, and this one is MEMORY-UNSAFE: row 8's
+#      Guard object is sampled only at a guard LOCAL root. The same object form
+#      at a `&`-PARAM root (`void f(Guard[Inner] &g): inc(&g.fd)`) SIGSEGVs on C
+#      and hard-fails `llc` on LLVM, `gg check` clean, at base and after this
+#      round alike. Filed with a committed repro
+#      (`known_gaps/sound_guard_param_field_unsafe.gg`); named here because this
+#      fixture enumerates the root-shape axis and must not imply that cell is
+#      covered by row 8.
+#      ⚠ THE WRAPPER-KIND AXIS IS SAMPLED AT ONE VALUE OF THREE.
+#      `guard_inner_suffix` matches `Guard__`, `ReadGuard__` and `WriteGuard__`;
+#      row 8 exercises `Guard` only.
+#        · `WriteGuard[T]` — write-capable, same branch, expected to behave as
+#          row 8 does. NOT sampled here: obtaining one needs an `RWLock[T]`
+#          receiver, which did not resolve in this fixture's context, and
+#          chasing that is a separate thread rather than a base-shape row. Cell
+#          named per Core #12 rather than left implied.
+#        · `ReadGuard[T]` — deliberately NOT sampled: writes through it are
+#          silently DROPPED rather than rejected (both faces, `gg check` clean,
+#          base and tip identical), which is a filed Core #10 lower-or-reject
+#          defect. Asserting today's behaviour would wire the defect in as
+#          canonical; the reference-grade fix is a check-time rejection.
+#   8. GUARD AUTO-DEREF object     `&g.fd`   ← added later still, same lesson,
+#      and the sharpest instance of it: broken at base and through THREE fix
+#      rounds while `g.fd = v` worked. It is the only object form resolved by a
+#      TYPE-level branch instead of a syntactic `Expr::` arm, so neither arm-set
+#      lint can see it — an omission that three shipped comments called harmless.
+#
+# Cells covered ELSEWHERE, named here so the omission is explicit rather than
+# silent (Core #12 wants each omission justified, not invisible):
+#   * BARE-param base — `known_gaps/sound_amp_bareparam_root_materialize.gg`.
+#     It is deliberately NOT here because it must MATERIALIZE (11 / 10), not
+#     write through, and mixing it into a write-through fixture is how a fix that
+#     writes through in both directions passes everything.
+#     ⚠ THE PRODUCT CELL IS UNCOVERED AND KNOWN-BROKEN: a BARE `Box[T]` param
+#     crossed with a `(*box).fd` projection (`void f(Box[Holder] b):
+#     inc(&(*b).fd)`) prints `10 / 10` at base AND after this round — the write
+#     is lost INSIDE the callee too, so it is not even the materialize
+#     behaviour, just a dropped write. Same shape as the materialize trap's
+#     defect, one costume over. Named here rather than added because asserting
+#     it would require deciding and implementing the materialize semantics for a
+#     `Box` root, which is its own track; this fixture's rows all write through
+#     and it must not silently imply that cell does too.
+#   * nested collection element `&vv[0][0]` — `cow_amp_projection_type_axis.gg`.
+#   * `&(*box).fd` — `cow_amp_deref_box_projection.gg`.
+#   * `&t.0.fd` (struct field under a TUPLE) and `&v[0].0` (tuple field under a
+#     collection element) — NOT covered by any live fixture and NOT fixed by
+#     Family-1: they are the Family-2 resolver-arm-matrix defect (the two place
+#     resolvers are a mutually-recursive pair differing by exactly two arms).
+#     Both have committed `#[ignore]`d repros; filed in TODO.md.
+#   * `&v.get(0).unwrap().fd` (get-chain) — also unfixed, filed, its own repro.
+#
+# RED-VERIFIED against the pre-fix compiler, which printed
+#     10 / 10 / 10 / 10 / 10 / 10 / 10 / 10
+# — every base shape lost the write. Post-fix all eight print 11. ⚠ Rows 7 and 8
+# each needed a FURTHER fix beyond the original chokepoint and were still
+# printing 10 after it, so they are RED-verified against LATER tips as well as
+# the pre-round compiler: row 7 needed the `TupleFieldAccess` arm in
+# `place_expr_type_only`, and row 8 needed that function's GUARD auto-deref
+# branch — which no arm-set lint could have demanded, because the guard
+# projection is resolved by a TYPE-level branch rather than an `Expr::` arm.
+#
+# Seeds are computed, never literals.
+struct Inner:
+    int fd
+
+struct Holder:
+    int fd
+    Inner inner
+
+static Holder G = Holder(10, Inner(10))
+
+int seed():
+    return 10
+
+void inc(int &n):
+    n = n + 1
+
+equip Holder:
+    void bump_self(&self):
+        inc(&self.fd)
+
+void via_amp(Holder &h):
+    inc(&h.fd)
+
+void via_move(Holder !h):
+    inc(&h.fd)
+    print(h.fd)
+
+void main():
+    # 1. nested struct field
+    Holder o = Holder(seed(), Inner(seed()))
+    inc(&o.inner.fd)
+    print(o.inner.fd)
+
+    # 2. &self.fd inside a method
+    Holder m = Holder(seed(), Inner(seed()))
+    m.bump_self()
+    print(m.fd)
+
+    # 3. &-param base
+    Holder a = Holder(seed(), Inner(seed()))
+    via_amp(&a)
+    print(a.fd)
+
+    # 4. !-param base (the callee observes its own write)
+    Holder b = Holder(seed(), Inner(seed()))
+    via_move(!b)
+
+    # 5. module-level static base
+    inc(&G.fd)
+    print(G.fd)
+
+    # 6. struct field under a collection element
+    Vector[Inner] v = Vector[Inner]()
+    v.push(Inner(seed()))
+    inc(&v[0].fd)
+    print(v[0].fd)
+
+    # 7. TUPLE-ROOTED projection — `&t.0[0]`, a collection element under a
+    #    tuple field. Added because this fixture CLAIMS the base-shape axis and
+    #    a reader would otherwise take tuple roots as covered when they were not
+    #    (Core #12: a fixture's NAME is a claim about SCOPE). It was measurably
+    #    NOT covered: this row printed 10 at base AND at the first Family-1 tip,
+    #    because `place_expr_type_only` had no `TupleFieldAccess` arm, so the
+    #    index resolver's type-only pre-check declined and the whole projection
+    #    fell through to a value copy. The same one arm that fixed the
+    #    auto-propagate tuple costume fixes this.
+    (Vector[int], int) tup = (Vector[int](), 1)
+    tup.0.push(seed())
+    inc(&tup.0[0])
+    print(tup.0[0])
+
+    # 8. GUARD AUTO-DEREF object — `&g.fd`, where the field lives on the GUARDED
+    #    value and NOT on the `Guard[T]` wrapper. This cell was broken at base
+    #    AND through three fix rounds of this round (printed the seed, write
+    #    lost) while the ASSIGN face `g.fd = v` worked — Family-1's own
+    #    served-at-one-face signature, surviving in the one object form whose
+    #    resolution is TYPE-driven rather than a syntactic `Expr::` arm, which is
+    #    exactly why the arm-set lints could not see it and why three shipped
+    #    comments asserted the omission was harmless.
+    Mutex[Inner] mx = Mutex[Inner](Inner(seed()))
+    Guard[Inner] gd = mx.lock()
+    inc(&gd.fd)
+    print(gd.fd)
+

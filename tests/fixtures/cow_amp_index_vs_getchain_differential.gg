@@ -1,0 +1,74 @@
+# REGRESSION FIXTURE — the cheapest differential in this family: TWO SPELLINGS
+# OF ONE INTENT that behaved OPPOSITELY, both `gg check`-clean, in one program.
+#
+#   inc(&v[0])                  -> was WRONG for the six by-value types
+#   inc(&v.get(0).unwrap())     -> was CORRECT for all ten
+#
+# The get-chain spelling was right by a different mechanism: `.get()` returns a
+# `Ptr(T)`, so the read already yielded a pointer and the `is_already_ptr`
+# fall-through forwarded it. The index spelling read a value COPY. Nothing in the
+# language distinguishes the two — same collection, same element, same sigil —
+# so the split was pure implementation accident.
+#
+# AXIS + CELL (Core #12): the SPELLING axis of one intent, at the `Vector[int]`
+# element cell — the value-typed element, which is the side that was broken. Both
+# halves are asserted in the same program so a future change that fixes one and
+# breaks the other cannot pass.
+#
+# RED-VERIFIED, and note the two halves need DIFFERENT forms of red (Core #12's
+# ⚠ clause):
+#   * The `&v[0]` half: RED against the pre-fix compiler, which printed `10`.
+#   * ⚠ The `&v.get(0).unwrap()` half is NOT RED-VERIFIED, and this header
+#     previously claimed it was. The claim was: "delete the `is_already_ptr`
+#     fall-through guard and this half emits `**T` and the assertion fails."
+#     THAT DOES NOT REPRODUCE — measured by disabling that exact guard and
+#     re-running this family: everything stays GREEN, including this row. The
+#     reason is one layer down: `lir/lower/operands.rs` emits `SlotLoad` (reading
+#     the pointer bits) rather than `SlotAddr` for a bare place whose local is
+#     `SlotKind::BorrowedPtr`-kinded, and a `.get().unwrap()` result IS such a
+#     local — so the LIR already forwards the pointer and the GIR-level guard is
+#     not what saves this row.
+#
+#     WHAT THIS HALF ACTUALLY PINS, then: that the two spellings AGREE. It is a
+#     DIFFERENTIAL, not an independent guard — its value is that a future change
+#     which fixes or breaks one spelling without the other fails here. It was
+#     green before this round and is green after; that is the claim, and it is
+#     worth pinning because the two spellings measurably DISAGREED for five
+#     months. (A shape that genuinely reds the `is_already_ptr` guard does exist
+#     — `MutRef[Vector[int]]`, a `PtrTo` slot whose pointee is not
+#     `GorgetString`, so the LIR takes `SlotAddr` — and it is pinned as row 4 of
+#     `cow_amp_ref_field_forward.gg`. It is NOT this shape.)
+#
+# GUARDED MECHANISM: the index half (row A) pins `try_resolve_place`'s `Index`
+# arm and its `Projection::Deref` normalisation (postcondition 1) — break either
+# and row A goes RED.
+# ⚠ The get-chain half (row B) guards NO mechanism of its own: it is the
+# DIFFERENTIAL partner, pinning only that the two spellings AGREE. Disabling the
+# `is_already_ptr` fall-through leaves row B GREEN (measured), because the LIR
+# already forwards the pointer for a `BorrowedPtr`-kinded local. Do not run the
+# break-and-watch procedure against row B expecting a red; the shape that DOES
+# red that guard is `MutRef[Vector[int]]`, pinned as row 4 of
+# `cow_amp_ref_field_forward.gg`.
+#
+# Seeds are computed, never literals.
+int seed():
+    return 10
+
+void inc(int &n):
+    n = n + 1
+
+void setv(int &n):
+    n = 142
+
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(seed())
+
+    # Spelling A — subscript. Was silently wrong.
+    inc(&v[0])
+    print(v[0])
+
+    # Spelling B — get-chain. Was already correct; pins only that it AGREES with
+    # spelling A (see GUARDED MECHANISM above — it guards no mechanism itself).
+    setv(&v.get(0).unwrap())
+    print(v[0])

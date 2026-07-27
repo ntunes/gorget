@@ -1,0 +1,69 @@
+# DURABLE REPRO — Result→T auto-propagation fires at a FREE-call argument but is
+# REJECTED at a METHOD-call argument. Same expression, same types, opposite
+# verdicts.
+#
+# WRONG TODAY (measured, identical at base `6cf79126` and after the Family-1
+# round — PRE-EXISTING, not introduced by it):
+#     take_f(&t.0)      on a `(Result[int,int], int)` → `gg check` OK, runs
+#     b.take_m(&t.0)    same argument, same param type → `error[E_TypeMismatch]:
+#                       type mismatch: expected `int`, found `Result[int, int]``
+#
+# INTENDED (asserted below): both accept. The argument is `Result[int,int]`, both
+# callees declare `int &x`, and auto-propagation is exactly the mechanism that
+# bridges them — it unwraps the `Ok` and calls, or propagates the `Error` without
+# calling. Nothing about the receiver changes that.
+#
+# ⚠ THE DESIGN RECORD SAYS METHOD CALLS ARE IN SCOPE, so this is a gap against
+# intent rather than an open question (Core #15e Q1 — check the record before
+# calling an accept/reject asymmetry a bug). `DONE.md` (2026-05-15, Snag #49)
+# records auto-propagation being centralized producer-side at the `lower_expr`
+# exit and "gated to `Call` / `MethodCall` expressions ONLY" — method calls are
+# named explicitly. Snag #43's note generalizes it: "every value-consuming site
+# (call args, struct fields, enum variant fields, collection puts, returns …)
+# that crosses a Result-to-T boundary in a `throws E` context needs
+# `maybe_auto_propagate`."
+#
+# ⚠ WHERE THE ASYMMETRY LIVES: the TYPECHECKER, not the lowering. The free-call
+# arm admits the Result→T unwrap when typing the argument; the method-call arm
+# does not, so it never reaches lowering (where `methods.rs` DOES set
+# `expected_type` and would handle it). A fix belongs on the check side, and
+# should make the two arg positions agree rather than teaching the lowering to
+# compensate.
+#
+# ⚠ NOT the Family-1 chokepoint's doing and not fixed by it — the rejection is
+# identical before and after. Surfaced while auditing the auto-propagate
+# interaction that round introduced.
+#
+# Cited from TODO.md. Un-ignore when the method-call argument position admits the
+# same Result→T unwrap the free-call position does.
+struct Recv:
+    int v
+
+equip Recv:
+    void take_m(&self, int &x):
+        print("  method took")
+        x = x + 1
+
+void take_f(int &x):
+    print("  free took")
+    x = x + 1
+
+int mk():
+    return 5
+
+int free_call() throws int:
+    (Result[int, int], int) t = (Ok(mk()), 1)
+    take_f(&t.0)
+    return 1
+
+int method_call() throws int:
+    (Result[int, int], int) t = (Ok(mk()), 1)
+    Recv r = Recv(1)
+    r.take_m(&t.0)
+    return 1
+
+void main():
+    int a = free_call()! catch (e): -1
+    print(a)
+    int b = method_call()! catch (e): -1
+    print(b)

@@ -1,0 +1,84 @@
+# DURABLE REPRO — an INDIRECT call (closure variable or IIFE) whose argument is
+# a BARE `Result`-typed local is silently SKIPPED: the error auto-propagates even
+# though the callee's parameter is itself a `Result`, so there was nothing to
+# unwrap.
+#
+# WRONG TODAY (measured, Rust gg, C backend — identical BEFORE and AFTER the
+# Family-1 chokepoint, on BOTH rows):
+#     cvar_bare: err
+#     iife_bare: err
+# Neither callee body runs. `gg check` is clean.
+#
+# INTENDED (asserted below): each callee runs, then `ok`.
+#
+# ROOT. `maybe_auto_propagate`'s first gate is `ctx.func_state.expected_type`.
+# The free-call and method-call paths set it to the callee's declared parameter
+# type before lowering the argument, so a `Result` bound for a `Result` parameter
+# is correctly left alone. **Neither indirect call path sets it**, so
+# `should_auto_propagate` is consulted with whatever ambient value was left over,
+# fires, unwraps, sees the `Error`, and propagates — the call vanishes.
+#
+# 🚨🚨 TWO INDEPENDENT MASKS — EITHER ONE ALONE HIDES THIS DEFECT, and the same
+# hazard applies here as to the live projection pin next door. Measured at base
+# on the projection twin, all four cells:
+#
+#   | closure-var annotation           | payload    | base result          |
+#   |----------------------------------|------------|----------------------|
+#   | `auto f = (…)`                   | `Error(5)` | **SKIPPED** ← the only exposing cell |
+#   | `auto f = (…)`                   | `Ok(7)`    | called — masked by PAYLOAD |
+#   | `Callable[void(&Result[…])] f =` | `Error(5)` | called — masked by ANNOTATION |
+#   | `Callable[…] f =`                | `Ok(7)`    | called — masked twice over |
+#
+# Both rows below are `Error`-seeded and row A is `auto`-annotated DELIBERATELY.
+# Changing either seed to `Ok`, **or** row A's `auto` to an explicit
+# `Callable[...]`, would make this repro report the gap as already-fixed and it
+# would be silently un-ignored against a defect that is still live.
+#
+#   * The `Ok` mask: auto-propagate unwraps the `Ok` and the call proceeds, so a
+#     correct and a broken compiler are indistinguishable.
+#   * The annotation mask: the annotated VarDecl leaves `expected_type` in a
+#     state that blocks the unwrap entirely.
+#
+# WHY THESE CELLS SURVIVE THE FAMILY-1 FIX while their PROJECTION twins do not.
+# The chokepoint returns early — before `maybe_auto_propagate` — only for
+# arguments the shared place producer RESOLVES. `try_resolve_place` has no
+# `Expr::Identifier` arm BY DESIGN (`&x` on a whole local is served by the
+# bare-identifier fast paths that run earlier), so a bare `&hr` falls through to
+# the unguarded unwrap and still vanishes. The projection twins (`&h.r`) ARE
+# resolved, return early, and therefore now reach the callee — pinned live by
+# `cow_amp_projection_indirect_call_arg.gg`.
+#
+# ⚠ DO NOT CLOSE THIS BY WIDENING THE PRODUCER. Giving `try_resolve_place` an
+# `Identifier` arm would change what `&x` means at every `&`-formation site in
+# order to paper over a defect that lives in the indirect CALL paths. The
+# reference-grade fix is for those paths to set `expected_type` to the callee's
+# declared parameter type, exactly as their free-call and method-call siblings
+# do — which fixes the whole family (bare AND projection, closure AND IIFE) at
+# one site rather than one costume of it.
+#
+# Cited from TODO.md. Un-ignore when the indirect call paths set `expected_type`.
+
+# A. CLOSURE-VARIABLE call, `auto`-annotated, bare-identifier argument.
+int cvar_bare() throws int:
+    Result[int, int] hr = Error(5)
+    auto f = (Result[int, int] &x): print("  cvar-called")
+    f(&hr)
+    return 1
+
+# B. IIFE, bare-identifier argument.
+int iife_bare() throws int:
+    Result[int, int] hr = Error(5)
+    ((Result[int, int] &x): print("  iife-called"))(&hr)
+    return 1
+
+void main():
+    int a = cvar_bare()! catch (e): -1
+    if a == 1:
+        print("cvar_bare: ok")
+    else:
+        print("cvar_bare: err")
+    int b = iife_bare()! catch (e): -1
+    if b == 1:
+        print("iife_bare: ok")
+    else:
+        print("iife_bare: err")

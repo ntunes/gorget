@@ -1754,6 +1754,21 @@ fn sound_amp_field_thinptr_control_safe() {
     security_safe("sound_amp_field_thinptr_control", "base-grown\n2\n99");
 }
 
+/// LEAK GUARD — `f(&(*box).field)` must NOT clone the whole struct to take an
+/// address of. Before the Family-1 chokepoint it did, leaking the clone's
+/// deep-copied `String` field (`gorget_string_clone_to_owned` <- `Holder__clone`
+/// <- `main`) while ALSO discarding the callee's write.
+///
+/// RED-VERIFIED against the pre-fix compiler: `SUMMARY: AddressSanitizer:
+/// 5 byte(s) leaked in 1 allocation(s)`, exit 99. ggdef is structurally blind to
+/// this class, so ASan is the instrument (Core #13). See the fixture header for
+/// why the field is literal-seeded — a heap seed makes this RED post-fix for the
+/// separately-filed "re-assign through a `&`-param drops nothing" leak.
+#[test]
+fn sound_amp_deref_box_field_leak_safe() {
+    security_safe_no_leak("sound_amp_deref_box_field_leak", "gg-payload\n9");
+}
+
 /// KNOWN GAP — assigning to a `String` element inside `for … in &coll`
 /// DOUBLE-FREES. `gg check` passes, `gg build` succeeds, the binary aborts with
 /// "free(): double free detected in tcache 2".

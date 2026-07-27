@@ -1,12 +1,15 @@
-# DURABLE REPRO — B3: TWO SEQUENTIAL writes through the same `&`-projection.
-# Both must land.
+# REGRESSION FIXTURE — B3: TWO SEQUENTIAL writes through the same
+# `&`-projection. Both must land. Asserts 12; ggdef agrees.
 #
-# WRONG TODAY (measured at HEAD, Rust gg, C backend): prints 10 — both writes
-# are lost, same root as `sound_amp_byvalue_place_writethrough.gg`.
+# AXIS + CELL (Core #12): the WRITE-COUNT axis at the repeated-write cell — the
+# only cell that separates a complete fix from one that resolves the place once
+# and then re-reads a stale value.
 #
-# ORACLE: ggdef prints 12.
+# RED-VERIFIED: against the pre-fix compiler this printed 10 — both writes lost,
+# same root as `sound_amp_byvalue_place_writethrough.gg`.
 #
-# INTENDED (asserted below): 12.
+# GUARDED MECHANISM: the Family-1 chokepoint's per-call-site place resolution.
+# Short-circuit `try_resolve_place` to `None` and this returns to 10.
 #
 # ⚠ WHY THIS IS A SEPARATE FIXTURE FROM THE SINGLE-WRITE ROW. A partial fix that
 # write-throughs the FIRST projection and then re-reads a stale value (or

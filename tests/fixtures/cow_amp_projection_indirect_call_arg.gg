@@ -1,0 +1,96 @@
+# REGRESSION FIXTURE — an `&<projection>` argument at an INDIRECT call (closure
+# variable or IIFE) must REACH the callee. It used to VANISH, at both.
+#
+# THE DEFECT THIS FIXES (pre-existing; the Family-1 chokepoint closes it for a
+# resolvable projection argument). `maybe_auto_propagate`'s first gate is
+# `ctx.func_state.expected_type`. The free-call and method-call paths set it to
+# the callee's declared parameter type, so a `Result`-typed argument bound for a
+# `Result`-typed parameter is correctly left alone. **Neither indirect call path
+# sets it**, so the unwrap fires unguarded: the `Result` is unwrapped, the
+# `Error` is propagated, and THE CALL NEVER HAPPENS — silently, `gg check`
+# clean, even though each callee's parameter is itself `Result[int, int]` and
+# the argument was meant to arrive WHOLE. Nothing was there to unwrap.
+#
+# 🚨🚨 TWO INDEPENDENT MASKS — EITHER ONE ALONE HIDES THIS DEFECT COMPLETELY.
+# This fixture pins the ONE cell of four that exposes it. Measured at base, one
+# program, all four cells:
+#
+#   | closure-var annotation           | payload    | base result          |
+#   |----------------------------------|------------|----------------------|
+#   | `auto f = (…)`                   | `Error(5)` | **SKIPPED** ← the only exposing cell |
+#   | `auto f = (…)`                   | `Ok(7)`    | called — masked by PAYLOAD |
+#   | `Callable[void(&Result[…])] f =` | `Error(5)` | called — masked by ANNOTATION |
+#   | `Callable[…] f =`                | `Ok(7)`    | called — masked twice over |
+#
+# So: CHANGING ROW B TO `Callable[...]`, **OR** CHANGING EITHER SEED TO `Ok`,
+# MAKES THIS FIXTURE PASS FOR THE WRONG REASON — silently converting a
+# RED-verified pin into a green-on-arrival one, which is precisely the failure
+# this round exists to close. Neither edit looks dangerous; both are fatal.
+#
+#   * The `Ok` mask: auto-propagate unwraps the `Ok` successfully and the call
+#     proceeds, so a correct and a broken compiler are INDISTINGUISHABLE.
+#   * The annotation mask: the annotated VarDecl leaves `expected_type` in a
+#     state that blocks the unwrap entirely.
+#
+# ⚠ THIS IS WHY THREE PEOPLE MEASURED THREE DIFFERENT THINGS IN ONE ROUND and
+# each was reading their own program correctly: one probed with an explicit
+# annotation, one with an `Ok` payload, one with neither mask. Adjacency of the
+# constructor and ambient-state pollution were separately ruled out (construction
+# moved into a helper fn plus an intervening statement: still skips). Do not
+# "tidy" row B's `auto`, and do not "tidy" the seeds.
+#
+# AXIS + CELL (Core #12): the CALL-SITE-KIND axis of an `&`-projection argument
+# — free · method · closure-variable · IIFE. Rows A and B are the two INDIRECT
+# cells, which are the two that lose the call; both are POS rows, not controls.
+# The free-call and method-call cells set `expected_type` themselves and are
+# covered throughout the rest of the `cow_amp_*` family.
+#
+# RED-VERIFIED against the pre-fix compiler — BOTH rows:
+#     A: err        ("A-called" never printed)
+#     B: err        ("B-called" never printed)
+# Post-fix both call. So this is a genuine Core #9 semantic change that this
+# round's chokepoint makes, and it now ships with its pin instead of silently.
+#
+# ⚠ THE BARE-IDENTIFIER SIBLINGS ARE STILL BROKEN at both call kinds and are
+# filed with their own `#[ignore]`d repro
+# (`known_gaps/sound_autoprop_indirect_bare_arg_skips_call.gg`):
+# `try_resolve_place` has no `Identifier` arm BY DESIGN, so a bare `&hr` falls
+# through to the unguarded unwrap. Do NOT close that by widening the producer —
+# the reference-grade fix is for the indirect call paths to set `expected_type`,
+# like their free-call and method-call siblings, which fixes bare AND projection
+# at one site.
+#
+# GUARDED MECHANISM: the Family-1 chokepoint's early return, plus the TYPE-ONLY
+# auto-propagate pre-check that keys on the CALLEE'S DECLARED PARAMETER TYPE
+# rather than on ambient `expected_type`. Re-key that pre-check to
+# `func_state.expected_type` and both rows revert to `err`.
+struct Holder:
+    Result[int, int] r
+
+Holder mk():
+    return Holder(Error(5))
+
+# A. IIFE, Result-typed parameter, projection arg, ERROR-seeded.
+int via_iife() throws int:
+    Holder h = mk()
+    ((Result[int, int] &x): print("  A-called"))(&h.r)
+    return 1
+
+# B. CLOSURE-VARIABLE call, `auto`-annotated (see the masking note above).
+int via_closure_var() throws int:
+    Holder h = mk()
+    auto f = (Result[int, int] &x): print("  B-called")
+    f(&h.r)
+    return 1
+
+void main():
+    int a = via_iife()! catch (e): -1
+    if a == 1:
+        print("A: ok")
+    else:
+        print("A: err")
+    int b = via_closure_var()! catch (e): -1
+    if b == 1:
+        print("B: ok")
+    else:
+        print("B: err")

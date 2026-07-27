@@ -414,29 +414,15 @@ fn lower_expr_inner(
                     }
                 }
             }
-            // Snag #26: `&*box` and `&*ptr` should produce a pointer to the
-            // heap (Box) or pointee (Ptr), not a pointer to a stack copy.
-            // Without this, `mutate(&*b)` would mutate a discarded local copy
-            // and the user's heap value would be unchanged. Build the borrow
-            // through a Deref-projected place so the resulting pointer
-            // addresses the underlying data, mirroring the lvalue path
-            // taken by field-assign-through-deref.
-            if let Expr::Deref { expr: deref_inner } = &inner.node {
-                let inner_op = lower_expr(ctx, builder, deref_inner);
-                if let Operand::Copy(ref inner_place) | Operand::Move(ref inner_place) = inner_op {
-                    let mut deref_place = inner_place.clone();
-                    deref_place.projections.push(Projection::Deref);
-                    let local_idx = inner_place.local.0 as usize;
-                    let pointee = if local_idx < builder.locals.len() {
-                        let t = builder.local_type(inner_place.local);
-                        ctx.deref_inner_type(t).unwrap_or(t)
-                    } else { UNIT_TYPE };
-                    let ptr_type = ctx.register_mut_ptr_type(pointee);
-                    let dst = builder.add_local(ptr_type, None);
-                    builder.emit_borrow_mut(dst, deref_place);
-                    return FunctionBuilder::copy(dst);
-                }
-            }
+            // (Snag #26's `&*box` / `&*ptr` Deref-lvalue block used to sit HERE;
+            // it is now the `Expr::Deref` arm of the shared `try_resolve_place`
+            // producer invoked below — the STANDALONE face of the two
+            // `&`-formation faces, resolving through the same producer as the
+            // CALL-ARG face in `calls.rs` so a projection form cannot be served
+            // at one face and dropped at the other. Order is preserved: the G2
+            // block immediately below explicitly excludes `Expr::Deref` from
+            // root-materialize, so `&*b` still reaches the producer with
+            // `g2_projected_untrack_start == None`, exactly as before.)
             // CoW `&`-of-a-PROJECTED-bare-value FORMATION (G2, site 3, standalone
             // form): `auto r = &b.data`, `auto r = &b.data[i]` where the
             // projection ROOT is a bare param / bare alias. Materialize the root
@@ -474,6 +460,33 @@ fn lower_expr_inner(
                         g2_projected_untrack_start = Some(start);
                     }
                 }
+            }
+            // FAMILY-1 CHOKEPOINT (STANDALONE face). Same producer and the same
+            // ordering contract as the CALL-ARG face in `calls.rs`: AFTER the G2
+            // root-materialize (so a rebound root is addressed, not the shared
+            // source), BEFORE `lower_expr` and returning early (so `inner` is
+            // lowered exactly once), with the G2 untrack still closing over the
+            // handles the projection minted.
+            //
+            // ⚠ THIS FACE IS GENUINELY GUARD-FREE, and that is not an oversight:
+            // unlike `lower_call_arg` there is NO ownership field to gate on here
+            // — the NODE ITSELF is the sigil. The two faces DIFFER; do not
+            // "unify" them by deleting the call-arg gate.
+            //
+            // The live, RATIFIED shape reaching this face with a projection is
+            // the list-comprehension iterable (`[e for x in &s.items]`, D32
+            // rider): `lower_list_comprehension`'s non-range path lowers the
+            // iterable through `lower_expr`, landing here. Its emission changes
+            // from a forwarded field-load `Ptr(T)` to an `emit_borrow_mut`
+            // `MutPtr(T)`; pinned by `cow_comprehension_amp_projection_source.gg`.
+            if let Some((place, place_type)) = try_resolve_place(ctx, builder, inner) {
+                if let Some(s) = g2_projected_untrack_start {
+                    ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());
+                }
+                let ptr_type = ctx.register_mut_ptr_type(place_type);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(dst, place);
+                return FunctionBuilder::copy(dst);
             }
             let val = lower_expr(ctx, builder, inner);
             // G2 site-3 UAF-fold close: reset the transient element/field handles
@@ -2276,10 +2289,7 @@ fn lower_field_access(
                         let inner_type_name = inner_type_name.to_string();
                         if let Some((field_idx, field_type)) = ctx.lookup_field(&inner_type_name, field_name) {
                             // Resource-type fields → Ptr(T) reference (same as non-Guard path).
-                            let result_type = if ctx.type_registry.is_collection_type(field_type)
-                                || field_type == ctx.type_mapper.owned_string_type
-                                || ctx.type_registry.is_resource_type(field_type)
-                            {
+                            let result_type = if field_read_yields_ptr(ctx, field_type) {
                                 ctx.type_registry.insert(GirType::Ptr(field_type))
                             } else {
                                 field_type
@@ -2295,10 +2305,7 @@ fn lower_field_access(
                             if let TypeDefKind::Struct(ref s) = type_def.kind {
                                 for (i, field) in s.fields.iter().enumerate() {
                                     if field.name == field_name {
-                                        let result_type = if ctx.type_registry.is_collection_type(field.type_id)
-                                            || field.type_id == ctx.type_mapper.owned_string_type
-                                            || ctx.type_registry.is_resource_type(field.type_id)
-                                        {
+                                        let result_type = if field_read_yields_ptr(ctx, field.type_id) {
                                             ctx.type_registry.insert(GirType::Ptr(field.type_id))
                                         } else {
                                             field.type_id
@@ -2347,9 +2354,7 @@ fn lower_field_access(
                     // not borrowed. The source field is zeroed, and the struct's
                     // drop function handles cleanup of any unconsumed fields.
                     if is_consuming_self_access
-                        && (ctx.type_registry.is_collection_type(field_type)
-                            || field_type == ctx.type_mapper.owned_string_type
-                            || ctx.type_registry.is_resource_type(field_type))
+                        && field_read_yields_ptr(ctx, field_type)
                     {
                         let dst = builder.field_load(base_place.clone(), field_idx, field_type);
                         // Zero the source field to prevent double-free when
@@ -2381,10 +2386,7 @@ fn lower_field_access(
                     // `is_collection_type` / `owned_string_type` cases stay
                     // for self-documentation and to keep the predicate stable
                     // if `is_resource_type` ever narrows.
-                    let result_type = if ctx.type_registry.is_collection_type(field_type)
-                        || field_type == ctx.type_mapper.owned_string_type
-                        || ctx.type_registry.is_resource_type(field_type)
-                    {
+                    let result_type = if field_read_yields_ptr(ctx, field_type) {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else {
                         field_type
@@ -2407,9 +2409,7 @@ fn lower_field_access(
                 if let Some((field_idx, field_type)) = field_info {
                     // !self consuming access (fallback path)
                     if is_consuming_self_access
-                        && (ctx.type_registry.is_collection_type(field_type)
-                            || field_type == ctx.type_mapper.owned_string_type
-                            || ctx.type_registry.is_resource_type(field_type))
+                        && field_read_yields_ptr(ctx, field_type)
                     {
                         let dst = builder.field_load(base_place.clone(), field_idx, field_type);
                         builder.move_zero(Place {
@@ -2425,10 +2425,7 @@ fn lower_field_access(
                         return FunctionBuilder::copy(dst);
                     }
                     // Same FieldLoad migration as above — drop `base_is_ptr &&`.
-                    let result_type = if ctx.type_registry.is_collection_type(field_type)
-                        || field_type == ctx.type_mapper.owned_string_type
-                        || ctx.type_registry.is_resource_type(field_type)
-                    {
+                    let result_type = if field_read_yields_ptr(ctx, field_type) {
                         ctx.type_registry.insert(GirType::Ptr(field_type))
                     } else {
                         field_type
@@ -2661,13 +2658,73 @@ pub(super) fn materialize_global_field_base(
     Some(Operand::Copy(Place::local(ptr_local)))
 }
 
-/// Type-only resolution of a PURE place expression (identifier / `self` /
-/// field / index chain) to its `TypeId`, WITHOUT lowering it (no side effects,
-/// no IR emitted). Returns `None` for anything that is side-effecting or not a
-/// resolvable place (a call, literal, etc.). Used by the `Expr::Index`
-/// write-through pre-check so a side-effecting collection producer
-/// (`make()[k].field = x`) is not evaluated twice.
-fn place_expr_type_only(ctx: &mut LoweringContext, expr: &Spanned<Expr>) -> Option<TypeId> {
+/// THE field-read Ptr-wrap predicate — one accessor, one source of truth
+/// (devbook/24 rule 3).
+///
+/// Answers: does a READ of a field of this type yield a `Ptr(T)` reference INTO
+/// the parent rather than a shallow value copy? True for collections, owned
+/// `String`s, and resource user-structs — the shallow copy would alias the
+/// field's heap data and a drop of either side would double-free.
+///
+/// ⚠ This predicate was open-coded SIX times in this file, which is how the
+/// `&`-argument path came to disagree with itself: the four types this returns
+/// `true` for were the four whose `&`-of-a-projection write-through worked BY
+/// ACCIDENT (the read handed back a pointer, so `emit_borrow_mut` addressed real
+/// storage), while the six it returns `false` for silently lost the callee's
+/// write. That accident is no longer load-bearing — the `&`-formation faces now
+/// resolve a PLACE through `try_resolve_place` instead of inferring one from
+/// this predicate's output — but the predicate itself still governs read
+/// semantics, so it gets one home rather than six.
+///
+/// The explicit `is_collection_type` / `owned_string_type` arms are redundant
+/// with `is_resource_type` today and are KEPT deliberately: they document the
+/// intent and keep the predicate stable if `is_resource_type` ever narrows.
+pub(in crate::ir::lowering) fn field_read_yields_ptr(ctx: &LoweringContext, field_type: TypeId) -> bool {
+    ctx.type_registry.is_collection_type(field_type)
+        || field_type == ctx.type_mapper.owned_string_type
+        || ctx.type_registry.is_resource_type(field_type)
+}
+
+/// Type-only resolution of a PURE place expression to its `TypeId`, WITHOUT
+/// lowering it — no IR is emitted, so a side-effecting base is not evaluated.
+///
+/// # `None` means UNKNOWN, and callers must treat it as such
+///
+/// This is the contract that matters, because two consumers key SAFETY on it:
+///
+/// * `lower_call_arg`'s `safe_to_skip_auto_propagate` — decides whether the
+///   Family-1 chokepoint may return early and skip `maybe_auto_propagate`. It
+///   matches `None => false` (DECLINE) explicitly. An earlier revision computed
+///   the inverse with `.unwrap_or(false)` and branched on the negation, so
+///   `None` meant SKIP; a `Result`-typed argument bound for a non-`Result`
+///   parameter then had its `Error` silently swallowed and the callee received a
+///   pointer to a `Result`. Never return a GUESS from this function: a plausible
+///   wrong type reads as a definite answer and no downstream fail-safe can
+///   distinguish it from a real one. That is why the `TupleFieldAccess` arm does
+///   its lookup inline instead of calling `resolve_tuple_field_type`, whose miss
+///   returns `I64_TYPE`.
+/// * `index_base_kind_type_only` — the collection-kind pre-check gating
+///   `try_resolve_index_element_ptr`, so a side-effecting collection producer
+///   (`make()[k].field = x`) is resolved without being lowered twice.
+///
+/// # `None` is memory-safe but NOT free
+///
+/// Declining the early return falls back to the READ path, and for a by-value
+/// projection that path loads a value copy and loses the callee's write — the
+/// Family-1 defect itself. So an unmodelled form costs a LOST WRITE on that
+/// shape, not merely a missed optimisation. Widening this function is a fix.
+///
+/// # Not quite side-effect-free
+///
+/// The previous doc claimed "no side effects". Not strictly true: the `Index`
+/// arm reaches `infer_collection_element_type`, which INTERNS a `FnPtr` type for
+/// `Callable` elements. Idempotent and benign, but it now runs on every `&` call
+/// argument, and the claim was unenforced — stated accurately rather than
+/// repeated.
+pub(in crate::ir::lowering) fn place_expr_type_only(
+    ctx: &mut LoweringContext,
+    expr: &Spanned<Expr>,
+) -> Option<TypeId> {
     match &expr.node {
         Expr::Identifier(name) => {
             if let Some((_, tid)) = ctx.lookup_local(name) {
@@ -2682,12 +2739,109 @@ fn place_expr_type_only(ctx: &mut LoweringContext, expr: &Spanned<Expr>) -> Opti
             let obj_t = place_expr_type_only(ctx, object)?;
             let resolved = ctx.pointee_type(obj_t).unwrap_or(obj_t);
             let name = ctx.type_name_for_id(resolved)?.to_string();
-            ctx.lookup_field(&name, &field.node).map(|(_, ft)| ft)
+            if let Some((_, ft)) = ctx.lookup_field(&name, &field.node) {
+                return Some(ft);
+            }
+            // GUARD AUTO-DEREF — `g.f` where `g: Guard[T]` and `f` lives on the
+            // GUARDED value, not on the wrapper. `try_resolve_field_place`
+            // projects through the guard's inner pointer, so this function must
+            // be able to TYPE that same projection or `&g.f` never reaches the
+            // Family-1 chokepoint and falls back to the read path — which loads a
+            // value COPY of the field and borrows the dying temp, silently losing
+            // the callee's write while `g.f = v` works. That is Family-1's own
+            // class, at the one object form whose resolution is TYPE-driven
+            // rather than a syntactic `Expr::` arm.
+            //
+            // ⚠ Mirrors the producer's branch and must keep mirroring it,
+            // including the `ReadGuard` early-out: a read-only guard resolves no
+            // WRITE place there, so typing one here would send `&rg.f` down the
+            // chokepoint for a place the producer will refuse.
+            let (inner_suffix, is_read_only) = guard_inner_suffix(&name)?;
+            if is_read_only {
+                return None;
+            }
+            let inner_type = c_suffix_to_type_id(inner_suffix, ctx);
+            let inner_name = ctx.type_name_for_id(inner_type)?.to_string();
+            ctx.lookup_field(&inner_name, &field.node).map(|(_, ft)| ft)
+        }
+        // ⚠ THIS ARM IS LOAD-BEARING FOR CORRECTNESS, not just for coverage.
+        // `place_expr_type_only`'s expression domain MUST be a superset of
+        // `try_resolve_place`'s, because the Family-1 chokepoint asks THIS
+        // function whether an argument would auto-propagate and then, if the
+        // answer is "no", lets the PRODUCER resolve it and returns early —
+        // skipping `maybe_auto_propagate`. A form the producer resolves but this
+        // function returns `None` for therefore gets the early return with the
+        // auto-propagate question never asked.
+        //
+        // MEASURED when this arm was missing: `void take(int &x)` called as
+        // `take(&t.0)` on a `(Result[int,int], int)` tuple seeded `Error(mk())`
+        // printed `in take` / `1` / `ok` — the `Error` SWALLOWED, the callee
+        // handed a pointer to a `Result` where an `int` was expected, printing
+        // the tag word and then writing THROUGH it. Base correctly propagates.
+        // Identical on both backends, `gg check` clean. The struct-field twin
+        // (`&h.r`) was fixed first and this one shipped broken: an instance fix
+        // where a class existed (Core #4). The arm-superset lint
+        // `place_type_only_covers_the_producer_forms` now guards the pairing.
+        Expr::TupleFieldAccess { object, index } => {
+            let obj_t = place_expr_type_only(ctx, object)?;
+            let resolved = ctx.pointee_type(obj_t).unwrap_or(obj_t);
+            // ⚠ DELIBERATELY NOT `resolve_tuple_field_type` HERE, even though it
+            // is the obvious helper. That function falls back to `I64_TYPE` when
+            // the lookup misses (`exprs/type_reg.rs`) — a WRONG type rather than
+            // an unknown one. This function's contract is "the type, or `None`",
+            // and the call site's fail-safe can only protect against `None`: a
+            // bogus `I64_TYPE` reads as "not a propagating `Result`", so the
+            // chokepoint would skip `maybe_auto_propagate` on a form it never
+            // actually typed. Doing the lookup here and returning `None` on a
+            // miss keeps `None` meaning UNKNOWN. (The fallback stays for
+            // `resolve_tuple_field_type`'s other callers, which want a type
+            // unconditionally; it is filed as a latent silent-disagreement
+            // source.)
+            let type_name = ctx.type_name_for_id(resolved)?;
+            let type_def = ctx.type_registry.get_type_def(type_name)?;
+            match &type_def.kind {
+                TypeDefKind::Struct(s) => s.fields.get(*index).map(|f| f.type_id),
+                _ => None,
+            }
         }
         Expr::Index { object, .. } => {
             let coll_t = place_expr_type_only(ctx, object)?;
             Some(infer_collection_element_type(ctx, coll_t))
         }
+        // `(*b).f` / `(*b)[i]` — resolve through the pointee.
+        //
+        // ⚠ THIS ARM EXISTS FOR COVERAGE, NOT FOR SAFETY, and the distinction
+        // matters because an earlier revision had it backwards. A `None` from
+        // this function does NOT mean "be conservative": the call site treats an
+        // unknown form as *provably safe to skip* unless it is written to do
+        // otherwise. That inversion shipped the same swallowed-`Error`
+        // miscompile three times. The fail-safe now lives at the call site
+        // (`lower_call_arg`'s `safe_to_skip_auto_propagate` matches on `None`
+        // explicitly); this arm's job is to keep `Deref`-object projections on
+        // the fast path, not to prevent a miscompile.
+        Expr::Deref { expr: inner } => {
+            let inner_t = place_expr_type_only(ctx, inner)?;
+            ctx.deref_inner_type(inner_t)
+        }
+        // ⚠ NOT EXHAUSTIVE. A `None` here is MEMORY-SAFE by construction — the
+        // call site's `None => false` declines the early return — but it is NOT
+        // free, and an earlier revision of this comment said it was.
+        //
+        // 🚨 DECLINING THE EARLY RETURN MEANS FALLING BACK TO THE READ PATH, AND
+        // THE READ PATH IS THE FAMILY-1 BUG. The early return IS the fix: it
+        // borrows the PLACE. Fall back and a by-value projection loads a value
+        // COPY and the callee's write is silently lost. So an unmodelled form
+        // costs a LOST WRITE, not "the early-return optimisation". The old
+        // wording ("each costs the early-return optimisation on that shape and
+        // nothing else") named `g.f` specifically as harmless — and `&g.a` was
+        // measurably dropping its write at the time, while `g.a = v` worked.
+        // That is Family-1's own signature. Corrected rather than swapped
+        // (Core #14).
+        //
+        // Forms still absent: method-chain objects (`&v.get(i).unwrap().f`,
+        // filed as its own gap and NOT closed by this function). Adding an arm
+        // here is a real fix, not a tidy-up — measure a write-through probe
+        // before assuming otherwise.
         _ => None,
     }
 }
@@ -2766,6 +2920,174 @@ pub(super) fn try_resolve_index_element_ptr(
     let elem_ptr_type = ctx.register_ptr_type(elem_type);
     let elem_ptr = builder.index_load(coll_place, idx, elem_ptr_type);
     Some((Place::local(elem_ptr), elem_type))
+}
+
+/// THE shared place resolver — the SINGLE entry point mapping a projection
+/// expression to a write-through `Place` plus the type of the value AT that
+/// place. Both `&`-borrow FORMATION faces dispatch here (`lower_call_arg`'s
+/// `MutableBorrow` arm and the standalone `Expr::MutableBorrow` handler); the
+/// three specialist resolvers below are the grammar's productions, not entry
+/// points.
+///
+/// # Postcondition 1 — the returned `Place` is an lvalue OF THE VALUE
+///
+/// Never of a pointer to it. `try_resolve_index_element_ptr` hands back a bare
+/// local holding `Ptr(elem)`, so the `Projection::Deref` normalisation happens
+/// HERE, once, at the producer — rather than every caller re-deriving "is this
+/// one already a pointer?" from the shape it got back. That re-derivation is
+/// exactly how the `&`-argument path grew its `is_already_ptr` special case, and
+/// a caller that forgets it emits `**T`, so the callee reads pointer bits as
+/// payload (gorget-js snag #1). With this postcondition every caller may
+/// `emit_borrow_mut` the result UNCONDITIONALLY and get a pointer to real
+/// storage. That invariant is what makes one producer safe to share.
+///
+/// # Postcondition 2 — EMISSION: a `None` may arrive AFTER instructions emitted
+///
+/// The specialist resolvers can emit and THEN return `None`. On that path the
+/// caller falls through to `lower_expr` and the base is evaluated a SECOND time.
+/// This is a surface the Family-1 chokepoint CREATES at the `&`-formation faces
+/// (before it, those faces had only the fall-through path, so the question never
+/// arose). TOTAL enumeration of the `return None` sites, one row each:
+///
+/// | site | emits before returning? | reachable from an `&`-formation face? |
+/// |---|---|---|
+/// | `try_resolve_index_element_ptr` kind-gate | no (type-only pre-check) | yes — `Set`/`HashMap`/user-`Index` bases |
+/// | `try_resolve_index_element_ptr` non-place coll | YES (`lower_expr(coll)`) | yes |
+/// | `try_resolve_field_place` Identifier-not-a-local | no | yes |
+/// | `try_resolve_field_place` SelfExpr-not-bound | no | no (checker rejects) |
+/// | `try_resolve_field_place` nested-FieldAccess recursion | inherits the inner row | yes |
+/// | `try_resolve_field_place` Deref non-place | YES (`lower_expr(inner)`) | yes |
+/// | `try_resolve_field_place` Index recursion (`?`) | inherits the index rows | yes |
+/// | `try_resolve_field_place` head `_ =>` | no | yes — method chains, temps |
+/// | `try_resolve_field_place` ReadGuard early-out | only if the OBJECT arm emitted | yes, when combined with an emitting base |
+/// | `try_resolve_field_place` field-lookup fall-off | only if the OBJECT arm emitted | yes — see the `Deque` row below |
+/// | `try_resolve_tuple_field_place` Identifier / SelfExpr / recursions / Deref / head `_ =>` | mirrors the field resolver row-for-row | yes |
+/// | `try_resolve_tuple_field_place` non-place obj / out-of-range local / walk fall-off | only if the OBJECT arm emitted | yes |
+///
+/// A REACHABLE emit-then-`None` row exists and is measured: a `Deque[S]` element
+/// base. `Deque` is ADMITTED by the kind-gate (`builtins.rs` gives it
+/// `CollectionKind::Array`) but `infer_collection_element_type` has no `Deque__`
+/// arm, so the element type falls to `I64_TYPE`, the field walk finds nothing,
+/// and control falls off the field resolver AFTER `lower_expr(coll)`,
+/// `lower_expr(index)` and `index_load` have all emitted. The double evaluation
+/// is ACCEPTED here rather than remedied: the remedy ("never emit before you can
+/// return `None`") edits the SHARED resolvers, which would change assign-face
+/// and method-receiver emission on their `None` paths too — a semantic change on
+/// faces this chokepoint deliberately leaves byte-identical. The `Deque` shape
+/// is filed with a committed `known_gaps` repro; see
+/// `known_gaps/sound_amp_deque_element_field.gg`.
+///
+/// # `None` means FALL THROUGH, never DROP
+///
+/// Returns `None` for anything that is not a resolvable place — a whole
+/// identifier, a temp, a call result, a literal, an out-of-domain collection
+/// kind. The caller must fall through to its existing behaviour; `None` must
+/// never mean "discard the construct" (Core #10).
+///
+/// # Parity with the ASSIGN face is held by the GUARD, not by shared code
+///
+/// `lower_assign` deliberately does NOT route through this producer:
+/// `lower_index_assign` must be able to INSERT a missing Dict key, which a write
+/// through a resolved element pointer cannot do, and the field/tuple-field
+/// assign paths differ in their materialize / untrack / clone prologues. The two
+/// faces are kept in parity by `tests/lints.rs`'s
+/// `amp_formation_and_assign_cover_the_same_place_forms`, NOT by calling the
+/// same code. Do not assume otherwise.
+pub(in crate::ir::lowering) fn try_resolve_place(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    expr: &Spanned<Expr>,
+) -> Option<(Place, TypeId)> {
+    let resolved = match &expr.node {
+        Expr::FieldAccess { object, field } => {
+            try_resolve_field_place(ctx, builder, object, &field.node)
+        }
+        Expr::TupleFieldAccess { object, index } => {
+            try_resolve_tuple_field_place(ctx, builder, object, *index)
+        }
+        Expr::Index { object, index } => {
+            let (ptr_place, elem_type) = try_resolve_index_element_ptr(ctx, builder, object, index)?;
+            // Postcondition 1: the index resolver returns a local holding
+            // `Ptr(elem)`; normalise it to an lvalue OF THE ELEMENT here, once.
+            let mut place = ptr_place;
+            place.projections.push(Projection::Deref);
+            Some((place, elem_type))
+        }
+        // Snag #26 lvalue-through-deref, hoisted out of the TWO open-coded
+        // `&`-formation copies (`lower_call_arg`'s `&*b` block and the standalone
+        // `Expr::MutableBorrow` `&*b` block) into this shared producer, so `&*b`
+        // and `&b.fd` take ONE path instead of two.
+        //
+        // ⚠ A THIRD copy remains open-coded in `lower_assign`'s `Expr::Deref` arm
+        // (`stmts/assigns.rs`), deliberately. Absorbing it is NOT a move: that
+        // copy walks the inner place's projections to compute the pointee type
+        // (peeling `Field` through struct definitions as well as `Deref`), where
+        // this arm reads the local's type directly. They agree on every measured
+        // shape, but reconciling them changes emission for multi-projection deref
+        // targets, so it owes its own fixtures and lane census. Filed, not fixed.
+        Expr::Deref { expr: inner } => {
+            let inner_op = lower_expr(ctx, builder, inner);
+            let inner_place = match &inner_op {
+                Operand::Copy(p) | Operand::Move(p) => p.clone(),
+                _ => return None,
+            };
+            let local_idx = inner_place.local.0 as usize;
+            let pointee = if local_idx < builder.locals.len() {
+                let t = builder.local_type(inner_place.local);
+                ctx.deref_inner_type(t).unwrap_or(t)
+            } else {
+                UNIT_TYPE
+            };
+            let mut place = inner_place;
+            place.projections.push(Projection::Deref);
+            Some((place, pointee))
+        }
+        // Fall through — NOT a drop (Core #10). A bare `Expr::Identifier` lands
+        // here BY DESIGN: `&x` on a whole local is served by the bare-identifier
+        // fast paths that run BEFORE this producer at both faces.
+        _ => None,
+    };
+
+    // 🚨 POSTCONDITION 1, ENFORCED — never hand back a place whose VALUE is
+    // ITSELF A POINTER.
+    //
+    // A field can be DECLARED as a pointer: `Ref[T]` / `MutRef[T]` struct fields
+    // (`struct Holder: Ref[Vector[int]] vec`) and extern `T*` fields. The place
+    // resolvers resolve those perfectly well — the place is the field slot — but
+    // the VALUE living there is already a `*T`. A caller that then
+    // `emit_borrow_mut`s it gets `**T`, and the callee reads the pointer's bits
+    // as payload: the gorget-js snag #1 shape.
+    //
+    // MEASURED, and this guard exists because of it: `push_it(&h.vec)` on a
+    // `Ref[Vector[int]]` field printed `3 / 4 / 3` before the Family-1
+    // chokepoint and SIGSEGV'd (exit 139) with the chokepoint but WITHOUT this
+    // guard. Returning `None` falls the shape through to `lower_call_arg`'s
+    // surviving `is_already_ptr` fast-path, which FORWARDS the stored pointer
+    // instead of taking its address.
+    //
+    // ⚠ SCOPE OF THAT EVIDENCE, stated honestly. An earlier revision cited "the
+    // projection matrix proves that fall-through path right for all ten types".
+    // That citation does not support this guard: post-fix those ten cells are
+    // RESOLVED and return early, so they never reach the fall-through at all.
+    // The already-a-pointer cell is sampled at exactly ONE pointee type
+    // (`Vector[int]`, in `cow_amp_ref_field_forward.gg`) — plus the `MutRef`
+    // variant of the same pointee, which is what reds the fall-through guard
+    // itself. Other pointee types (extern `T*` fields, `Ref[<user struct>]`)
+    // are UNSAMPLED here.
+    //
+    // This is what makes postcondition 1 literally true rather than aspirational:
+    // "the returned Place is an lvalue OF THE VALUE, never of a pointer to it"
+    // now holds by construction, so `emit_borrow_mut` really is unconditional at
+    // every caller. Pinned by `cow_amp_ref_field_forward.gg`.
+    if let Some((_, place_type)) = resolved {
+        if matches!(
+            ctx.type_registry.get(place_type),
+            Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+        ) {
+            return None;
+        }
+    }
+    resolved
 }
 
 /// Resolve a field access expression to a Place (with projections) and the field's type,

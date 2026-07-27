@@ -1,0 +1,139 @@
+# REGRESSION FIXTURE — the PROJECTED-TYPE axis of an `&<projection>` call
+# argument, sampled on BOTH SIDES of the resource/value split inside each type
+# kind.
+#
+# AXIS + CELL (Core #12). The axis that decides this family is NOT the projection
+# FORM and NOT the type KIND — it is whether the projected type CARRIES A
+# RESOURCE. A resource-carrying field's read happens to yield a `Ptr` into the
+# real slot, so write-through worked BY ACCIDENT; a by-value field's read yields
+# a value COPY and the callee's write was silently discarded. An "enum field"
+# fixture built on `Option[String]` therefore proves NOTHING about
+# `enum Color {Red(), Green()}` — which is exactly how this class survived ~5
+# months behind a green suite. Every row below pairs a VALUE-payload cell with
+# its RESOURCE-payload twin in the same type kind:
+#
+#   enum   : EVal{A(int)}      / ERes{A(String)}
+#   struct : SVal{int n}       / SRes{String s}
+#   tuple  : (int, int)        / (String, int)
+#
+# plus the four cells that converged with the fix and had no coverage at all:
+# `Option[int]` field · GENERIC struct field (`Cell[int].val`) · nested
+# collection element (`&outer[0][1]`) · enum field with a VALUE payload.
+#
+# RED-VERIFIED against the pre-fix compiler, which printed:
+#     EVal=A / ERes=B / 10 / a! / 10 / a! / 10 / 10 / 10
+# i.e. every VALUE-side cell lost the write while every RESOURCE-side twin was
+# already correct — the split this fixture exists to pin. Post-fix all nine rows
+# are correct and the resource twins are UNCHANGED, which is the other half of
+# the claim: the fix converts the broken cells without disturbing the working
+# ones.
+#
+# GUARDED MECHANISM: the Family-1 chokepoint — `try_resolve_place` called from
+# `lower_call_arg`'s `MutableBorrow` arm. Short-circuit it to `None` and every
+# VALUE-side row reverts to the seed while the RESOURCE rows stay green.
+#
+# Every seed is COMPUTED, never a literal, so const-fold cannot elide a write.
+enum EVal:
+    A(int)
+    B()
+
+enum ERes:
+    A(String)
+    B()
+
+struct SVal:
+    int n
+
+struct SRes:
+    String s
+
+struct Cell[T]:
+    T val
+
+struct Holder:
+    EVal ev
+    ERes er
+    SVal sv
+    SRes sr
+    (int, int) tv
+    (String, int) tr
+    Option[int] oi
+    Cell[int] gen
+
+int seed():
+    return 10
+
+String sseed():
+    return "a"
+
+void set_eval(EVal &e):
+    e = EVal.B()
+
+void set_eres(ERes &e):
+    e = ERes.B()
+
+void bump_sval(SVal &s):
+    s.n = s.n + 100
+
+void set_sres(SRes &s):
+    s.s = s.s + "!"
+
+void bump_tval((int, int) &t):
+    t.0 = t.0 + 100
+
+void set_tres((String, int) &t):
+    t.0 = t.0 + "!"
+
+void set_opt(Option[int] &o):
+    o = Some(110)
+
+void bump_cell(Cell[int] &c):
+    c.val = c.val + 100
+
+void bump_int(int &n):
+    n = n + 100
+
+void main():
+    Holder h = Holder(EVal.A(seed()), ERes.A(sseed()), SVal(seed()), SRes(sseed()), (seed(), 0), (sseed(), 0), Some(seed()), Cell[int](seed()))
+
+    # 1. enum field, VALUE payload — the cell an Option[String] fixture misses
+    set_eval(&h.ev)
+    match h.ev:
+        case EVal.A(n): print("EVal=A")
+        case EVal.B(): print("EVal=B")
+
+    # 2. enum field, RESOURCE payload — the twin that already worked
+    set_eres(&h.er)
+    match h.er:
+        case ERes.A(s): print("ERes=A")
+        case ERes.B(): print("ERes=B")
+
+    # 3/4. struct field: value payload vs resource payload
+    bump_sval(&h.sv)
+    print(h.sv.n)
+    set_sres(&h.sr)
+    print(h.sr.s)
+
+    # 5/6. tuple field: value payload vs resource payload
+    bump_tval(&h.tv)
+    print(h.tv.0)
+    set_tres(&h.tr)
+    print(h.tr.0)
+
+    # 7. Option[int] field — a converged cell with no prior coverage
+    set_opt(&h.oi)
+    if h.oi is Some(v):
+        print(v)
+
+    # 8. GENERIC struct field — a converged cell with no prior coverage
+    bump_cell(&h.gen)
+    print(h.gen.val)
+
+    # 9. nested collection element `&outer[0][1]` — a converged cell
+    Vector[Vector[int]] outer = Vector[Vector[int]]()
+    Vector[int] row = Vector[int]()
+    row.push(seed())
+    row.push(seed())
+    outer.push(row)
+    bump_int(&outer[0][1])
+    print(outer[0][1])

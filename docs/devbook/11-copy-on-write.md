@@ -661,6 +661,47 @@ and it hoists the round-33 CoW untrack across its callers (including the
 compound-index arm and the `methods.rs` method-receiver sibling) so the
 transient element ref cannot be left CoW-tracked into a dangling Case-3 clone.
 
+### Write-through place for an `&`-argument — one producer, both formation faces
+
+The same value-vs-resource asymmetry closed above for the *store* lvalue has a
+twin on the **`&`-argument** face, and it is resolved the same way: by asking for
+a PLACE rather than inferring one from a read.
+
+`f(&c.fd)` must borrow *the field*, not a copy of it. The projection's read,
+however, is typed: a resource-carrying field loads as a `Ptr` into its parent
+while a by-value field loads a value COPY into a fresh temp. Taking the address
+of whichever one came back means the resource cases write through by accident and
+the by-value cases borrow a temp that dies at the end of the statement — the same
+silent lost write, decided by the projected type rather than by the language rule,
+which mentions no such distinction (§3.1: an unbroken `&` chain reaches the
+owner; the chain breaks only at an immutable binding).
+
+So place identity is carried rather than reconstructed. `try_resolve_place` is
+the single producer that maps a projection expression — field, tuple field, index
+element, deref — to a write-through `Place`, and **both** `&`-formation faces
+consult it: the call-argument face in `lower_call_arg` and the standalone
+`Expr::MutableBorrow` handler. Its postcondition is what makes one producer safe
+to share: the returned place is an lvalue **of the value itself**, never of a
+pointer to it, so every caller may borrow it unconditionally instead of
+re-deriving "is this already a pointer?" — the re-derivation that grew into the
+asymmetry in the first place. A field whose *declared* type is already a pointer
+(`Ref[T]`, `MutRef[T]`, extern `T*`) is therefore declined by the producer and
+served by the fall-through, which forwards the stored pointer.
+
+Two orderings are load-bearing. The producer is consulted **after** the CoW
+root-materialize, so a projection off a bare (immutable) root resolves into the
+private copy and the callee's write does *not* escape to the caller — write-through
+and materialize remain one rule, not two. And it is consulted **before** the
+argument is lowered, returning early, so a side-effecting index is evaluated once.
+
+One interaction is worth naming because it is easy to get backwards: the early
+return skips the Result→T auto-propagation step that a call argument would
+otherwise pay. That is safe only when the skip is *proven* safe — when the callee
+wants the whole `Result`, or the argument is not a propagating `Result` here. A
+form the producer resolves but the pre-check cannot type must therefore **decline**
+the early return, not take it; an argument whose error would have propagated must
+never be handed to the callee instead.
+
 ### Remaining increments (campaign state 2026-07-17)
 
 The uniform rule (§3.1: a resource is a borrow until a write; the write

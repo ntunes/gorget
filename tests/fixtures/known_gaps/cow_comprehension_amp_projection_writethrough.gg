@@ -1,0 +1,49 @@
+# DURABLE REPRO — a `&`-iterable comprehension whose body WRITES THROUGH the
+# element must reach the source collection. It does not.
+#
+# WRONG TODAY (measured, Rust gg, C backend — identical on LLVM, and identical
+# before and after the Family-1 chokepoint):
+#     101 / 1
+# The comprehension's own result carries the bumped value, but the SOURCE
+# collection is untouched — the write is lost.
+#
+# INTENDED (asserted below): 101 / 101.
+#
+# RATIFIED, NOT MERELY DESIRABLE. The D32 rider (`docs/define-gorget/decisions.md`)
+# states that `[e for x in &xs]` is the legal spelling for opening the collection
+# for write-through and that writes REACH THE SOURCE. So `101 / 1` is a gap
+# against a ratified decision, not an open design question.
+#
+# ⚠ THIS FIXTURE IS `#[ignore]`d AND ASSERTS THE INTENDED 101/101 ON PURPOSE.
+# A live fixture asserting today's `101 / 1` would make known-wrong behaviour the
+# load-bearing artifact and would have to be FLIPPED when the fix lands — the
+# "Don't redesign around compiler gaps" rule-2 trap. Un-ignore when
+# `ListComprehension.ownership` is threaded into `lower_list_comprehension`.
+#
+# ⚠ NOT FAMILY-1's TO FIX, and measured to be untouched by it. The Family-1
+# chokepoint changes what the standalone `&`-formation face EMITS for a
+# projection iterable (a forwarded field-load `Ptr(T)` becomes an
+# `emit_borrow_mut` `MutPtr(T)`), but the write is dropped further up: the
+# comprehension lowering never consults the iterable's ownership at all. The
+# non-mutating half of this shape is pinned LIVE and green by
+# `cow_comprehension_amp_projection_source.gg`.
+#
+# Seeds are computed, never literals.
+struct S:
+    Vector[int] items
+
+int seed():
+    return 1
+
+int bump_ret(int &x):
+    x = x + 100
+    return x
+
+void main():
+    Vector[int] w0 = Vector[int]()
+    w0.push(seed())
+    S t = S(w0)
+
+    Vector[int] d = [bump_ret(&x) for x in &t.items]
+    print(d[0])
+    print(t.items[0])
