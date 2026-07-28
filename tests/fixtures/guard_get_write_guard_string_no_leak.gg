@@ -1,0 +1,14 @@
+# Track J regression net — WriteGuard[String].get() mirror. Same class as
+# Guard/ReadGuard: the write guard's `.get()` runtime-callee was returning
+# a borrow, but the compiler tagged the destination local Owned. Post-fix
+# routing through `emit_guard_get_ptr` fires uniformly across all three
+# guard families.
+from std.sync import RWLock
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    RWLock[String] lock = RWLock[String](heaped())
+    WriteGuard[String] g = lock.write()
+    print(g.get())

@@ -1,0 +1,18 @@
+# Track J regression net — Guard[Vector[String]].get() axis-cell (heap UAF,
+# NOT double-free): the shallow header copy aliased the guard's array, then
+# scope-exit `gorget_array_free` on the loaded local walked the (already
+# element-freed) backing again → `gorget_string_free invariant: cap=<garbage>
+# but alloc=NULL` (exit 1). Post-fix: View tag → no shadow drop.
+#
+# HEAP-FORCED elements (`"a-forced"` etc. via `push`) — each String slot has a
+# real heap `alloc`, so the invalid re-walk actually poisons memory.
+Vector[String] make():
+    Vector[String] v = []
+    v.push("a-forced")
+    v.push("b-forced")
+    return v
+
+void main():
+    Mutex[Vector[String]] m = Mutex[Vector[String]](make())
+    Guard[Vector[String]] g = m.lock()
+    print(g.get().len())

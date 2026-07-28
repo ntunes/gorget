@@ -37747,19 +37747,69 @@ fn scout_e_box_consuming_userm_autoderef() {
     );
 }
 
-/// KNOWN GAP (Track E1 scouting surfaced) — `Guard[T].get()` on a heap-carrying
-/// inner is a REGISTERED method (NOT the fabrication class E1 closes); its
-/// runtime shim returns the inner by-value while the compiler treats the local
-/// as owned → double-free at scope exit. HEAP-FORCED (no literal). RED-verified
-/// at HEAD: build OK, run aborts exit 134 (`free(): double free detected in
-/// tcache 2`). Fix direction: `.get()` returns `Ref[T]` for heap-carrying inners.
-/// Asserts INTENDED single-print + no abort.
+/// Track J regression: `Guard[String].get()` used to shallow-copy the Str
+/// header into a drop-tracked local aliasing the Mutex-owned buffer →
+/// `free(): double free detected in tcache 2` (exit 134) at scope exit.
+/// Post-fix (`src/ir/lowering/exprs/methods.rs` intercept + `View` tag)
+/// prints once and drops exactly once.
 #[test]
-#[ignore = "KNOWN GAP (Track E1 filed): Guard[String].get() ownership contract wrong for \
-heap-carrying inners — double-free at scope exit. Fix direction: .get() returns Ref[T]. TODO.md."]
 fn sound_guard_get_string_double_free() {
     run_gg(
-        "known_gaps/sound_guard_get_string_double_free.gg",
+        "sound_guard_get_string_no_leak.gg",
+        "hello world-forced",
+    );
+}
+
+/// Track J axis: `Guard[Vector[int]].get()` — the array-header double-free
+/// cell. Pre-fix: `gorget_array_free` ran twice → exit 134. Post-fix: the
+/// View-tagged local skips drop, guard drops the array exactly once.
+#[test]
+fn guard_get_vec_no_leak() {
+    run_gg("guard_get_vec_no_leak.gg", "2");
+}
+
+/// Track J axis: `Guard[Vector[String]].get()` — heap-UAF cell (elements
+/// walked through a freed backing → invariant panic exit 1). Post-fix
+/// clean.
+#[test]
+fn guard_get_vec_string_no_leak() {
+    run_gg("guard_get_vec_string_no_leak.gg", "2");
+}
+
+/// Track J axis: `Guard[Dict[String, String]].get()` — the map internal
+/// double-free cell. Pre-fix exit 134. Post-fix clean.
+#[test]
+fn guard_get_dict_no_leak() {
+    run_gg("guard_get_dict_no_leak.gg", "1");
+}
+
+/// Track J sibling: `ReadGuard[String].get()` — same class as
+/// `Guard.get`, uniform fix (routing intercept fires on all three guard
+/// families via `guard_of` typed metadata).
+#[test]
+fn guard_get_read_guard_string_no_leak() {
+    run_gg(
+        "guard_get_read_guard_string_no_leak.gg",
+        "hello world-forced",
+    );
+}
+
+/// Track J sibling: `WriteGuard[String].get()` mirror.
+#[test]
+fn guard_get_write_guard_string_no_leak() {
+    run_gg(
+        "guard_get_write_guard_string_no_leak.gg",
+        "hello world-forced",
+    );
+}
+
+/// Track J ASan gate: primary Guard[String] double-free fixture under
+/// `--sanitize` (LeakSanitizer + AddressSanitizer). Pre-fix: `abort_on_error=0`
+/// still exits non-zero via LSan `exitcode=99`; post-fix clean.
+#[test]
+fn security_guard_get_string_asan() {
+    assert_gg_sanitize_clean(
+        "sound_guard_get_string_no_leak",
         "hello world-forced",
     );
 }

@@ -1,0 +1,16 @@
+# Track J regression net — Guard[Dict[String, String]].get() axis-cell:
+# Dict has both a heap keys array and a heap values array, plus per-entry
+# heap Strings. The pre-fix shallow copy aliased everything → double-free
+# on the map internal free at scope exit (`free(): double free detected in
+# tcache 2`, exit 134). Post-fix: View tag suppresses the shadow drop.
+#
+# HEAP-FORCED — `put("k", "v-forced")` gives the value a real heap alloc.
+Dict[String, String] make():
+    Dict[String, String] d = {}
+    d.put("k", "v-forced")
+    return d
+
+void main():
+    Mutex[Dict[String, String]] m = Mutex[Dict[String, String]](make())
+    Guard[Dict[String, String]] g = m.lock()
+    print(g.get().len())

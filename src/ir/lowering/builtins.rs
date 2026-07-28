@@ -649,8 +649,19 @@ pub static GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
+        // Track J note: `.get()` returns a BORROW into the Mutex-owned buffer,
+        // not an owned T. The drop-suppression fix intercepts at IR-lowering
+        // (`exprs/methods.rs` — routes through `emit_guard_get_ptr` and tags
+        // the loaded local `LocalOwnership::View`). The `returns_view` flag
+        // stays `false` here because the `str_view_producer_enumeration_is_closed`
+        // lint uses it as the CAP=0 STRING-VIEW producer marker (see
+        // `STR_VIEW_PRODUCERS` in `tests/lints.rs`); Guard.get is a distinct
+        // borrow class that needs no `materialize_lazy_source_if_needed` /
+        // string-view hooks. A typed `borrow_read: bool` axis would carry the
+        // Guard-family truth cleanly — filed as a follow-up in `TODO.md`
+        // alongside the `is_elem_borrow_read` name-whitelist retirement.
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
-        BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_guard_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
+        BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_guard_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true,  returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
     ],
 };
 
@@ -691,6 +702,8 @@ pub static READ_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
+        // Track J note: see the `Guard.get` decl above — same intercept, same
+        // reason `returns_view` stays `false`.
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_read_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
     ],
 };
@@ -708,8 +721,9 @@ pub static WRITE_GUARD: BuiltinTypeProtocol = BuiltinTypeProtocol {
     owns_buffered_elements: false,
     c_runtime_alias: None,
     methods: &[
+        // Track J note: see the `Guard.get` decl above.
         BuiltinMethodDecl { name: "get", runtime_callee: Some("gorget_write_guard_get"), self_conv: SelfConvention::MutBorrow, is_mutating: false, returns_view: false, returns_fresh: false, params: no_params, return_type: ret_elem },
-        BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_write_guard_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
+        BuiltinMethodDecl { name: "set", runtime_callee: Some("gorget_write_guard_set"), self_conv: SelfConvention::MutBorrow, is_mutating: true,  returns_view: false, returns_fresh: false, params: elem_param, return_type: ret_void },
     ],
 };
 

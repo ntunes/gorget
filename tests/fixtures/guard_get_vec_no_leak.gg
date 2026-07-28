@@ -1,0 +1,19 @@
+# Track J regression net — Guard[Vector[int]].get() double-free axis-cell.
+# Pre-fix: the shallow `Vector` header copy hit `gorget_array_free` twice at
+# scope exit → `free(): double free detected in tcache 2` (exit 134).
+# Post-fix: routing through `emit_guard_get_ptr` + View tag suppresses the
+# duplicate drop; the array backing is freed exactly once by the guard's
+# scope-exit drop.
+#
+# HEAP-FORCED — the Vector is built with `push` on a non-literal source so
+# `.data` is a heap allocation the double-free class actually reaches.
+Vector[int] make():
+    Vector[int] v = []
+    v.push(1)
+    v.push(2)
+    return v
+
+void main():
+    Mutex[Vector[int]] m = Mutex[Vector[int]](make())
+    Guard[Vector[int]] g = m.lock()
+    print(g.get().len())
