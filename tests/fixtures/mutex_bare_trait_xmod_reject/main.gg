@@ -1,0 +1,12 @@
+# Round XII Track P — REJECT `Mutex[Trait]` when the trait is imported
+# cross-module. Cross-module cell — the reject predicate must handle a
+# `DefKind::Import` inner (which points at a Trait def in another module)
+# via the `defs_named` name-index lookup, not just the same-file
+# `DefKind::Trait` case. See sibling `mutex_bare_trait_reject.gg` for the
+# same-file cell.
+
+from speaker import Speaker, Robot
+
+int main():
+    Mutex[Speaker] m = Mutex[Speaker](Robot("R2"))
+    return 0

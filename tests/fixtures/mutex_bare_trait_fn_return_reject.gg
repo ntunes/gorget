@@ -1,0 +1,19 @@
+# Round XII Track P — REJECT `Mutex[Trait]` at fn-return declaration.
+# Fn-return cell. The reject fires from `register_function_signature`'s
+# return-type resolution. See sibling `mutex_bare_trait_reject.gg`.
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name
+
+Mutex[Speaker] make():
+    return Mutex[Speaker](Robot("R2"))
+
+int main():
+    return 0

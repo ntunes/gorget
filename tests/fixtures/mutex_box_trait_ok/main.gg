@@ -1,0 +1,19 @@
+# Round XII Track P — POSITIVE control for the NonDerefContainer[Trait] reject.
+# `Mutex[Box[Trait]]` is the sanctioned explicit spelling (Box makes the heap
+# allocation visible); the reject at `ast_type_to_resolved` MUST NOT fire on
+# the Box-wrapped inner (the outer Container's arg is `Box[Trait]`, whose
+# `trait_name_of_inner` returns None because Box is a struct, not a trait).
+#
+# Owner Q1 2026-07-28 + pass-2 R2 fold: shape avoids Track N2's pending
+# SIGBUS class (no trait-method dispatch through the Guard receiver).
+# Construct + lock + print — no `.greet()`. Follow-up TODO to strengthen
+# to `g.greet()` once N2 lands.
+
+from std.collections import Box
+from speaker import Speaker, Robot
+
+int main():
+    Mutex[Box[Speaker]] m = Mutex[Box[Speaker]](Box.new(Robot("R2")))
+    Guard[Box[Speaker]] g = m.lock()
+    print("ok")
+    return 0

@@ -5,7 +5,7 @@ use super::errors::{SemanticError, SemanticErrorKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::ids::{DefId, TypeId};
-use super::scope::{DefKind, ScopeTable};
+use super::scope::{DefKind, DerefWrapperKind, ScopeTable};
 
 /// A resolved type, separate from the parser's AST Type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -369,6 +369,40 @@ pub fn is_callable_type(type_id: TypeId, types: &TypeTable) -> bool {
 }
 
 /// Convert an AST Type to a resolved TypeId.
+/// If `inner_tid` resolves to a bare trait (same-file `DefKind::Trait`, or a
+/// cross-module `DefKind::Import` placeholder whose name matches a Trait def in
+/// any scope), return the trait name for diagnostics. Otherwise `None` — the
+/// container's type-arg is a concrete type and NonDerefContainer-of-trait's
+/// reject does not fire. Used by the Track P reject in `ast_type_to_resolved`.
+fn trait_name_of_inner(
+    inner_tid: TypeId,
+    scopes: &ScopeTable,
+    types: &TypeTable,
+) -> Option<String> {
+    let inner_def_id = match types.get(inner_tid) {
+        ResolvedType::Defined(d) => *d,
+        _ => return None,
+    };
+    let inner_def = scopes.get_def(inner_def_id);
+    match inner_def.kind {
+        DefKind::Trait => Some(inner_def.name.clone()),
+        DefKind::Import => {
+            // Cross-module placeholder: consult the global name index for a
+            // Trait def sharing this name (traits from nested Item::Module wrappers
+            // land with their true DefKind::Trait — see traits.rs:501). If ANY
+            // matching def is a Trait, the imported name is a trait.
+            let name = &inner_def.name;
+            for did in scopes.defs_named(name) {
+                if scopes.get_def(did).kind == DefKind::Trait {
+                    return Some(name.clone());
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 pub fn ast_type_to_resolved(
     ast_ty: &ast::Type,
     span: Span,
@@ -419,6 +453,33 @@ pub fn ast_type_to_resolved(
                                     resolved_args.push(ast_type_to_resolved(
                                         &arg.node, arg.span, scopes, types,
                                     )?);
+                                }
+                                // Track P (owner Q1 2026-07-28): NonDerefContainer[BareTrait]
+                                // — Mutex/RWLock/Weak/Shared of a bare trait must be
+                                // written as `Container[Box[Trait]]` explicitly. Costs
+                                // stay visible (Box[T] is an ownership contract that
+                                // changes storage layout — hiding it violates D31's
+                                // spelling philosophy and CoW's no-user-visible-Ref[T]
+                                // principle); a typo `Mutex[Trait]` (meaning
+                                // `Mutex[Box[Trait]]`) is told clearly instead of
+                                // silently magicked. The predicate reads typed
+                                // metadata (`deref_wrapper_kind == NonDerefContainer`),
+                                // not the container name — layering rule 2.
+                                if def.deref_wrapper_kind
+                                    == Some(DerefWrapperKind::NonDerefContainer)
+                                    && resolved_args.len() == 1
+                                {
+                                    if let Some(trait_name) = trait_name_of_inner(
+                                        resolved_args[0], scopes, types,
+                                    ) {
+                                        return Err(SemanticError {
+                                            kind: SemanticErrorKind::NonDerefContainerBareTrait {
+                                                container: name.node.clone(),
+                                                trait_: trait_name,
+                                            },
+                                            span: name.span,
+                                        });
+                                    }
                                 }
                                 // Box[Trait] → TraitObject: automatic dispatch
                                 if name.node == "Box" && resolved_args.len() == 1 {

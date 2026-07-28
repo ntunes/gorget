@@ -1,0 +1,12 @@
+# Round XII Track P — cross-module Speaker trait (companion to main.gg).
+# See main.gg header.
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name

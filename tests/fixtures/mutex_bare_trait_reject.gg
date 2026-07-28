@@ -1,0 +1,21 @@
+# Round XII Track P — REJECT `Mutex[Trait]` at declaration time (var-decl cell).
+# Owner Q1 2026-07-28: NonDerefContainer[BareTrait] must be spelled
+# `Mutex[Box[Trait]]` explicitly so the heap allocation stays visible in the
+# type (D31 spelling philosophy; CoW's no-user-visible-Ref[T] principle).
+# Rejected at type-resolution time in `ast_type_to_resolved` with
+# `E_NonDerefContainerBareTrait`. See TODO.md Round XII handover + D36
+# (`docs/define-gorget/decisions.md:1373`).
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name
+
+int main():
+    Mutex[Speaker] m = Mutex[Speaker](Robot("R2"))
+    return 0

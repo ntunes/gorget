@@ -1,0 +1,20 @@
+# Round XII Track P — REJECT `equip Mutex[Trait] with Foo:` (equip-self surface).
+# Owner Q1 2026-07-28 + pass-2 R1 fold: the equip-block SELF type is a
+# user-facing type spelling that also silently accepted `Mutex[Trait]` at
+# HEAD — the `.unwrap_or(types.error_id)` at `src/semantic/traits.rs::
+# process_impl` dropped the NonDerefContainer[Trait] Err. This fixture pins
+# the reject at the equip-self site (the 6th top-level user-facing surface
+# for `ast_type_to_resolved`).
+
+trait Speaker:
+    String greet(self)
+
+trait Foo:
+    void bar(self)
+
+equip Mutex[Speaker] with Foo:
+    void bar(self):
+        return
+
+int main():
+    return 0

@@ -16896,6 +16896,119 @@ fn mutex_async_contention() {
     run_gg("mutex_async_contention.gg", "400");
 }
 
+// ── Round XII Track P (owner Q1 2026-07-28) ─────────────────────────────────
+// REJECT `Mutex[Trait]` / `RWLock[Trait]` / `Weak[Trait]` / `Shared[Trait]`
+// at declaration time. Users MUST spell `Container[Box[Trait]]` explicitly
+// so the heap allocation stays visible (D31 spelling philosophy + CoW's
+// no-user-visible-Ref[T] principle). Reject fires in
+// `src/semantic/types.rs::ast_type_to_resolved` via the typed
+// `deref_wrapper_kind == NonDerefContainer` flag (layering rule 2 — no
+// name-matching). Every REJECT below was RED-verified against HEAD (silently
+// accepts EXIT=0 pre-fix; rejects with `E_NonDerefContainerBareTrait`
+// post-fix). D36: `docs/define-gorget/decisions.md:1373`.
+
+const NON_DEREF_CONTAINER_BARE_TRAIT_CODE: &str = "error[E_NonDerefContainerBareTrait]";
+
+#[test]
+fn mutex_bare_trait_reject() {
+    check_gg_fails(
+        "mutex_bare_trait_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn rwlock_bare_trait_reject() {
+    check_gg_fails(
+        "rwlock_bare_trait_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn weak_bare_trait_reject() {
+    check_gg_fails(
+        "weak_bare_trait_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn shared_bare_trait_reject() {
+    check_gg_fails(
+        "shared_bare_trait_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn mutex_bare_trait_xmod_reject() {
+    // Cross-module cell — `trait Speaker` in a sibling module, imported
+    // via `from speaker import Speaker`. Predicate handles the
+    // `DefKind::Import`-inner case by consulting the global name-index
+    // via `ScopeTable::defs_named`.
+    check_gg_fails(
+        "mutex_bare_trait_xmod_reject/main.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn mutex_bare_trait_struct_field_reject() {
+    check_gg_fails(
+        "mutex_bare_trait_struct_field_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn mutex_bare_trait_fn_param_reject() {
+    check_gg_fails(
+        "mutex_bare_trait_fn_param_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn mutex_bare_trait_fn_return_reject() {
+    check_gg_fails(
+        "mutex_bare_trait_fn_return_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn mutex_bare_trait_enum_variant_reject() {
+    check_gg_fails(
+        "mutex_bare_trait_enum_variant_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn mutex_bare_trait_equip_self_reject() {
+    // Pass-2 R1 fold: the equip-block SELF type is a 6th user-facing
+    // surface for `ast_type_to_resolved` — the `.unwrap_or(types.error_id)`
+    // at `src/semantic/traits.rs::process_impl` silently dropped the Err
+    // at HEAD. Fix: match-arm error propagation into `errors`.
+    check_gg_fails(
+        "mutex_bare_trait_equip_self_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
+    );
+}
+
+#[test]
+fn mutex_box_trait_ok() {
+    // POSITIVE control: `Mutex[Box[Trait]]` is the sanctioned explicit
+    // spelling — the reject at `ast_type_to_resolved` MUST NOT fire because
+    // the Container's arg is `Box[Trait]`, whose `trait_name_of_inner`
+    // returns None (Box is a struct, not a trait). Cross-module Speaker/Robot
+    // to avoid Track N2's pending SIGBUS class (no trait-method dispatch —
+    // construct + lock + drop-through-print). TODO: strengthen to `g.greet()`
+    // once Track N2 lands.
+    run_gg_dir("mutex_box_trait_ok", "main.gg", "ok");
+}
+
 #[test]
 fn shared_multi_token() {
     run_gg("shared_multi_token.gg", "21\n11\n12\n22");
