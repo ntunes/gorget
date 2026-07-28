@@ -25150,7 +25150,11 @@ fn self_host_runtime_diff() {
     // — 9 tracks A/D/E1/B1/B3/E2/B2/F/G): ADJ-MATCH 373 (of MATCH 1236 = ADJ 373 +
     // UNADJ 853 + BOTH-WRONG 10). D31-uniform indirect-call sigil + D36 auto-deref +
     // ratified rejects widened ggdef's adjudication reach.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 373;
+    // Reseeded 2026-07-28 (round X close: CoW recursive-materialize + Family-2 arm-parity):
+    // ADJ-MATCH 381 (of MATCH 1244 = ADJ 381 + UNADJ 853 + BOTH-WRONG 10). Track H's
+    // cross-resolver arm-parity (TupleFieldAccess + Index arms) closed the Family-2 write-drops
+    // on struct-under-tuple + tuple-under-collection, ratcheting ggdef adjudication +8.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 381;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -25293,7 +25297,12 @@ fn self_host_runtime_diff() {
     // 1304→1323 from the round's new NEG + regression fixtures (Track B3 axis
     // fixtures, Track G box_trait_cross_module, Track F clone-bomb pin, Track B2
     // D35 NEG, Track E2 auto-deref accepts + rejects). Floor = 1236 − 5 jitter = 1231.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1231;
+    // Reseeded 2026-07-28 (round X close: CoW recursive-materialize + Family-2 arm-parity):
+    // MATCH 1244 / 1332 = 93.4% (ADJ 381 / UNADJ 853 / BOTH-WRONG 10). Denom
+    // 1323→1332 from the round's new fixtures (Track H's sound_amp_v_i_tuple_field_writethrough
+    // + sound_tupstruct_field_writethrough graduated; Track I's 7 diagnostic fixtures — POS 1-4
+    // + NEG 1-3, none of which are self_host_runtime_diff-eligible). Floor = 1244 − 5 jitter = 1239.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1239;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
