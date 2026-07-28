@@ -1,0 +1,39 @@
+# Round XI Track M — KNOWN GAP (D36 unimplemented, HIGH).
+#
+# Class 2b of 4 filed by Track M: NAMED-binding
+# `Guard[Box[Speaker]] g = m.lock()` then `g.greet()` on a
+# `Mutex[Box[Speaker]]`. Same shape as main_bare.gg but with an explicit
+# Box wrapper around the trait — enumerated separately per Core-#12
+# axis-completeness because the checker prints a DISTINCT error text
+# (the wrapper type surfaces in the diagnostic).
+#
+# Under D36 (ratified 2026-07-27, `docs/define-gorget/decisions.md:1363-1381`)
+# the read face `.method()` on Guard + ReadGuard + WriteGuard + Box MUST
+# accept + auto-deref uniformly. This reject is the D36 defect.
+#
+# DISTINCT FROM Track J (`sound_guard_get_string_double_free.gg` — heap-inner
+# ownership on non-trait inners; different root).
+#
+# HEAD behavior (probe 2026-07-28):
+#   gg check main_box.gg → exit 1, stderr contains:
+#     error[E_NoMethodFound]: no method `greet` found on type `Guard[Box[Speaker]]`
+#
+#   ⚠ Same-file setup (all types + main in one file) prints
+#   `Guard[trait Speaker]` for the same shape — cross-module renders the
+#   full `Box[Speaker]`. The fixture is cross-module (imports the trait
+#   from speaker.gg) so the pinned error is `Guard[Box[Speaker]]`.
+#
+# FIX DIRECTION (Option A / D36-implementation, DEFERRED to Round XII+):
+# accept via the auto-deref path that Box[Trait].greet() rides today; the
+# per-face rule (D36 Q1) says read-face `.method()` accepts uniformly for
+# every Guard/Read/Write + Box combination.
+#
+# INTENDED (after Option A): accepts + prints `beep R2`.
+
+from std.collections import Box
+from speaker import Speaker, Robot
+
+void main():
+    Mutex[Box[Speaker]] m = Mutex[Box[Speaker]](Box.new(Robot("R2")))
+    Guard[Box[Speaker]] g = m.lock()
+    print(g.greet())

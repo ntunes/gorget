@@ -1,0 +1,19 @@
+# Round XI Track M — shared trait + impl for the guard_trait_named_reject
+# family (classes 2 and 2b — see main_bare.gg / main_box.gg).
+#
+# Kept in a separate module (rather than embedded in each main) so the
+# fixtures adjudicate the check-reject on the Guard-wrapper type, not on
+# any accidental same-file resolution shortcut. The error text differs
+# between same-file and cross-module setups (same-file prints
+# `Guard[trait Speaker]`, cross-module prints `Guard[Box[Speaker]]` for
+# the Box variant — the cross-module rendering is what these fixtures pin).
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name

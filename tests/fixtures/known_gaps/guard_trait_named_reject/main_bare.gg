@@ -1,0 +1,39 @@
+# Round XI Track M — KNOWN GAP (D36 unimplemented, HIGH).
+#
+# Class 2 of 4 filed by Track M: NAMED-binding `Guard[Speaker] g = m.lock()`
+# then `g.greet()` (bare trait as Mutex inner). Unlike the chained shape
+# (class 1 / guard_trait_chained_c_emit_fabrication.gg — which slips past
+# the checker and fabricates a C-emit symbol), the NAMED binding is
+# rejected at the checker with `E_NoMethodFound: Guard[Speaker]`.
+#
+# Under D36 (ratified 2026-07-27, `docs/define-gorget/decisions.md:1363-1381`)
+# the read face `.method()` MUST accept + auto-deref for Guard uniformly with
+# Box/ReadGuard/WriteGuard. This reject is the D36 defect — the current
+# error advises users at nothing (no fix suggestion), and Track E1's earlier
+# sharpening of the reject would ship in the WRONG direction because it
+# would point users at "wrap in Box[Trait]" which D36 says is unnecessary.
+#
+# DISTINCT FROM Track J (`sound_guard_get_string_double_free.gg` — heap-inner
+# ownership on non-trait inners; different root). Also distinct from
+# fixtures/scoutE_guard_userm_autoderef.gg (write-through / auto-deref on
+# CONCRETE Guard[Struct]; this fixture is Guard[TRAIT] method dispatch).
+#
+# HEAD behavior (probe 2026-07-28):
+#   gg check main_bare.gg → exit 1, stderr contains:
+#     error[E_NoMethodFound]: no method `greet` found on type `Guard[Speaker]`
+#
+# The Box sibling (main_box.gg) rejects with a DISTINCT error text
+# (`Guard[Box[Speaker]]` under cross-module import) — enumerated per
+# Core-#12 axis-completeness.
+#
+# FIX DIRECTION (Option A / D36-implementation, DEFERRED to Round XII+):
+# accept via the same auto-deref path that Box[Trait].greet() rides.
+#
+# INTENDED (after Option A): accepts + prints `beep R2`.
+
+from speaker import Speaker, Robot
+
+void main():
+    Mutex[Speaker] m = Mutex[Speaker](Robot("R2"))
+    Guard[Speaker] g = m.lock()
+    print(g.greet())
