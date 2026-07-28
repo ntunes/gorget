@@ -1473,7 +1473,7 @@ impl<'a> BorrowChecker<'a> {
         method: &Spanned<String>,
         args: &[Spanned<CallArg>],
     ) {
-        let Some(&def_id) = self.method_resolutions.get(&method.span.start) else {
+        let Some(def_id) = self.method_resolutions.get(&method.span.start).and_then(|r| r.def_id) else {
             return;
         };
         // Skip constructors (structs, enum variants) — no FunctionInfo.
@@ -1948,7 +1948,7 @@ impl<'a> BorrowChecker<'a> {
     pub(super) fn is_auto_propagated_call(&self, value: &Spanned<Expr>) -> bool {
         let def_id = match &value.node {
             Expr::Call { callee, .. } => self.resolve_callee_def_id(callee),
-            Expr::MethodCall { method, .. } => self.method_resolutions.get(&method.span.start).copied(),
+            Expr::MethodCall { method, .. } => self.method_resolutions.get(&method.span.start).and_then(|r| r.def_id),
             _ => None,
         };
         let Some(def_id) = def_id else { return false };
@@ -1989,7 +1989,7 @@ impl<'a> BorrowChecker<'a> {
                 self.is_temporary_from_function(def_id)
             }
             Expr::MethodCall { method, .. } => {
-                let Some(&def_id) = self.method_resolutions.get(&method.span.start) else { return false };
+                let Some(def_id) = self.method_resolutions.get(&method.span.start).and_then(|r| r.def_id) else { return false };
                 self.is_temporary_from_function(def_id)
             }
             _ => false,

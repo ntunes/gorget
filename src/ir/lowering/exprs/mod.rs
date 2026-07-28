@@ -283,7 +283,7 @@ fn lower_expr_inner(
 
         // -- P2.2: Method calls --
         Expr::MethodCall { receiver, method, generic_args, args } => {
-            lower_method_call(ctx, builder, receiver, &method.node, generic_args.as_deref(), args)
+            lower_method_call(ctx, builder, receiver, &method.node, method.span.start, generic_args.as_deref(), args)
         }
 
         // -- Index access --

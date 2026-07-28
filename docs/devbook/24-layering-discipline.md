@@ -113,6 +113,15 @@ the consolidation: *"Source of truth at the GIR/LIR boundary (D6: lifted from
 `func_state.local_ownership` directly onto Local)."* When you find two pieces of
 state answering the same question, pick one and delete the other.
 
+The same rule governs wrapper disposition. `DerefWrapperKind`
+(`src/semantic/scope.rs`) is the **SSoT** for BOTH field-access AND
+method-dispatch wrapper dispositions — read once at the checker to decide
+the D36 face split, written through to the IR lowering via
+`MethodResolution.auto_deref` (the extended value type on
+`method_resolutions`, D36 Q2). There is no parallel sidecar; the two
+downstream reads (field access + method dispatch) consult the same typed
+channel.
+
 ### Rule 4 — Resolve once, write through
 
 When a pass *resolves* an abstraction — method dispatch picks a callee, generic

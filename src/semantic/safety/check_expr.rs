@@ -397,7 +397,7 @@ impl<'a> BorrowChecker<'a> {
                     let is_user_mut = self
                         .method_resolutions
                         .get(&method.span.start)
-                        .and_then(|mdid| self.function_info.get(mdid))
+                        .and_then(|res| res.def_id.and_then(|d| self.function_info.get(&d)))
                         .map_or(false, |info| {
                             info.param_ownerships.first() == Some(&Ownership::MutableBorrow)
                         });
@@ -466,7 +466,7 @@ impl<'a> BorrowChecker<'a> {
                     if let Some(&recv_def_id) = self.resolution_map.get(&receiver.span.start) {
                         let kind = self.scopes.get_def(recv_def_id).kind;
                         if kind == DefKind::Variable {
-                            if let Some(&method_def_id) = self.method_resolutions.get(&method.span.start) {
+                            if let Some(method_def_id) = self.method_resolutions.get(&method.span.start).and_then(|r| r.def_id) {
                                 if let Some(info) = self.function_info.get(&method_def_id) {
                                     if info.param_ownerships.first() == Some(&Ownership::Move) {
                                         self.check_move(recv_def_id, expr.span);

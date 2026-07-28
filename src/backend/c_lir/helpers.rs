@@ -310,6 +310,10 @@ pub(super) fn emit_box_wrapper(out: &mut String, type_name: &str, method: &str, 
     match method {
         "get" => writeln!(out, "static inline {elem} {type_name}__get({type_name} self) {{ return *({elem}*)self; }}").unwrap(),
         "set" => writeln!(out, "static inline void {type_name}__set({type_name} self, {elem} val) {{ *({elem}*)self = val; }}").unwrap(),
+        // D36: `Box[T]` auto-deref projects the receiver through this helper
+        // so the equipped-on-T method dispatches against a `T*`. Mirrors
+        // `emit_guard_get_ptr`'s role for `Guard[T]` (`shared.rs`).
+        "get_ptr" => writeln!(out, "static inline {elem}* {type_name}__get_ptr({type_name} self) {{ return ({elem}*)self; }}").unwrap(),
         "drop" | "free" => writeln!(out, "static inline void {type_name}__drop({type_name} self) {{ GORGET_FREE(self, sizeof({elem})); }}").unwrap(),
         _ => {}
     }

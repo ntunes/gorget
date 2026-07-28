@@ -5,6 +5,7 @@ use crate::span::{Span, Spanned};
 
 use super::errors::{FallibleMarkReason, SemanticError, SemanticErrorKind};
 use super::ids::{DefId, ScopeId, TypeId};
+use super::MethodResolution;
 use super::resolve::{EnumVariantInfo, FunctionInfo, ResolutionMap, StructFieldInfo};
 use super::scope::{DefKind, DerefWrapperKind, ScopeKind, ScopeTable};
 use super::traits::TraitRegistry;
@@ -540,8 +541,10 @@ struct TypeChecker<'a> {
     /// unguarded catch-all pattern, or the panic-by-default `Fault` enum).
     /// Consulted by the definite-return analysis.
     exhaustive_matches: rustc_hash::FxHashSet<Span>,
-    /// Map from method call span start → DefId of resolved method (for borrow checker).
-    method_resolutions: FxHashMap<usize, DefId>,
+    /// Map from method call span start → `MethodResolution` (D36: extended
+    /// value type carries the resolved DefId + optional auto-deref wrapper
+    /// kind, replacing the earlier parallel sidecar per Layering rule 3).
+    method_resolutions: FxHashMap<usize, MethodResolution>,
     /// Snag #11: for each cross-error-type auto-propagation site that resolves
     /// to a `From[CalleeE]` impl on the caller's `CallerE`, the resolved
     /// `From::from` method DefId, keyed by the producing call expression's
@@ -2508,7 +2511,7 @@ impl<'a> TypeChecker<'a> {
                 if let Some((def_id, sig)) =
                     self.traits.resolve_method(resolved_receiver, &method.node)
                 {
-                    self.method_resolutions.insert(method.span.start, *def_id);
+                    self.method_resolutions.insert(method.span.start, MethodResolution::direct(*def_id));
                     let stored_def_id = *def_id;
                     let mut sig = sig.clone();
                     // Trait-default substitution: when resolve_method falls
@@ -2624,7 +2627,7 @@ impl<'a> TypeChecker<'a> {
                         }
                     });
                     if let Some((def_id, mut sig)) = default_hit {
-                        self.method_resolutions.insert(method.span.start, def_id);
+                        self.method_resolutions.insert(method.span.start, MethodResolution::direct(def_id));
                         if let Some(substituted) = self.substitute_default_method_sig(
                             def_id, &method.node, resolved_receiver,
                         ) {
@@ -2759,31 +2762,194 @@ impl<'a> TypeChecker<'a> {
                                         "clone" | "debug" | "display" | "hash"
                                     );
                                     let has_inherent_only = self.traits.has_inherent_only_impls(name);
-                                    // TRACK E SCOUT PROTOTYPE: fabrication class Core #8.
-                                    // A builtin `DerefWrapperKind` container that fell through every
-                                    // avenue above (trait registry, closure-Option/Result, builtin
-                                    // protocol, name-based fallback) either has no such method (the
-                                    // fabrication cell) OR expects auto-deref (§9.3/§9.4). Route:
-                                    //   - NonDerefContainer → REJECT (Shared/Weak/Mutex/RWLock have
-                                    //     explicit-method access; any other name is genuinely absent).
-                                    //   - GuardAccept / DerefTarget → currently REJECT here; the full
-                                    //     reference-grade shape (auto-deref-through-inner) is the
-                                    //     executor's job. For the scout we prove the REJECT arm
-                                    //     closes the fabrication cells (the docs' examples still
-                                    //     REJECT under this reject-only prototype — that is fine as
-                                    //     an interim step, because they REJECT with a diagnostic
-                                    //     rather than silently accepting a bogus symbol; the executor
-                                    //     converts the reject to a resolve-on-inner + typed
-                                    //     `method_call_auto_deref` marker).
-                                    let container_kind = self.scopes.get_def(
-                                        match self.types.get(resolved_receiver) {
-                                            ResolvedType::Defined(did) | ResolvedType::Generic(did, _) => *did,
-                                            other => {
-                                                debug_assert!(false, "MethodCall wrapper-kind read: base_name resolved but ResolvedType is {other:?}, expected Defined/Generic");
-                                                return self.types.error_id;
+                                    // TRACK E2 SCOUT PROTOTYPE — D36 (2026-07-27, decisions.md):
+                                    // when the wrapper is `GuardAccept` or `DerefTarget` and the
+                                    // method exists on the INNER type, resolve on the inner and
+                                    // record the auto-deref decision for the lowering. Per D36:
+                                    //   - Read face (bare `self`): accept for Guard + ReadGuard +
+                                    //     WriteGuard + Box.
+                                    //   - Write face (`&self`): accept for Guard + WriteGuard + Box;
+                                    //     REJECT ReadGuard (mutex read-only invariant).
+                                    //   - Consuming face (`!self`): accept for Box only.
+                                    //   - `NonDerefContainer` (Shared/Weak/Mutex/RWLock) → REJECT.
+                                    // The extracted inner TypeId + method resolution + face check
+                                    // reads a typed `DerefWrapperKind` at the SSoT (no name-match).
+                                    let container_did = match self.types.get(resolved_receiver) {
+                                        ResolvedType::Defined(did) | ResolvedType::Generic(did, _) => *did,
+                                        _ => {
+                                            // Unreachable here — base_name is Some so we resolved to a Defined/Generic.
+                                            return self.types.error_id;
+                                        }
+                                    };
+                                    let container_kind = self.scopes.get_def(container_did).deref_wrapper_kind;
+                                    // Try auto-deref for GuardAccept / DerefTarget.
+                                    if !is_auto_derivable {
+                                        if let Some(wrapper_kind) = container_kind {
+                                            if matches!(wrapper_kind,
+                                                DerefWrapperKind::GuardAccept | DerefWrapperKind::DerefTarget)
+                                            {
+                                                // Extract the inner TypeId from the wrapper's generic args.
+                                                let inner_tid = match self.types.get(resolved_receiver) {
+                                                    ResolvedType::Generic(_, targs) => targs.first().copied(),
+                                                    _ => None,
+                                                };
+                                                if let Some(inner_tid) = inner_tid {
+                                                    let inner_resolved = self.resolve_type(inner_tid);
+                                                    if let Some((def_id, sig)) =
+                                                        self.traits.resolve_method(inner_resolved, &method.node)
+                                                    {
+                                                        let stored_def_id = *def_id;
+                                                        let mut sig = sig.clone();
+                                                        // D36 per-face split — check the SELF FACE
+                                                        // of the resolved method against the wrapper.
+                                                        // Read face: any wrapper (Guard/ReadGuard/
+                                                        // WriteGuard/Box) accepts.
+                                                        // Write face: ReadGuard REJECTS.
+                                                        // Consuming face: only Box accepts.
+                                                        let self_ownership = self
+                                                            .function_info
+                                                            .get(&stored_def_id)
+                                                            .and_then(|fi| fi.param_ownerships.first().copied());
+                                                        let container_name = self.scopes.get_def(container_did).name.clone();
+                                                        // Parser mapping (src/parser/mod.rs:1878-1895):
+                                                        //   bare `self`  => Ownership::Borrow        — READ face
+                                                        //   `&self`      => Ownership::MutableBorrow — WRITE face
+                                                        //   `!self`      => Ownership::Move         — CONSUMING face
+                                                        // D36 face split:
+                                                        //   Read      → any wrapper accepts.
+                                                        //   Write     → ReadGuard rejects.
+                                                        //   Consuming → only Box accepts.
+                                                        let face_reject: Option<SemanticErrorKind> = match self_ownership {
+                                                            Some(crate::parser::ast::Ownership::MutableBorrow) => {
+                                                                if container_name == "ReadGuard" {
+                                                                    Some(SemanticErrorKind::AutoDerefWriteThroughReadGuard {
+                                                                        method: method.node.clone(),
+                                                                        wrapper: container_name.clone(),
+                                                                    })
+                                                                } else { None }
+                                                            }
+                                                            Some(crate::parser::ast::Ownership::Move) => {
+                                                                if matches!(wrapper_kind, DerefWrapperKind::GuardAccept) {
+                                                                    Some(SemanticErrorKind::AutoDerefConsumingThroughGuard {
+                                                                        method: method.node.clone(),
+                                                                        wrapper: container_name.clone(),
+                                                                    })
+                                                                } else { None }
+                                                            }
+                                                            _ => None,
+                                                        };
+                                                        if let Some(err) = face_reject {
+                                                            self.error(err, expr.span);
+                                                            return self.types.error_id;
+                                                        }
+                                                        // Substitute default-body sigs (if any).
+                                                        if self.traits.traits.contains_key(&stored_def_id) {
+                                                            if let Some(substituted) = self.substitute_default_method_sig(
+                                                                stored_def_id, &method.node, inner_resolved,
+                                                            ) {
+                                                                sig = substituted;
+                                                            }
+                                                        }
+                                                        // D36: record the resolution with the
+                                                        // auto-deref marker in the SSoT record.
+                                                        self.method_resolutions.insert(
+                                                            method.span.start,
+                                                            MethodResolution {
+                                                                def_id: Some(stored_def_id),
+                                                                auto_deref: Some(wrapper_kind),
+                                                            },
+                                                        );
+                                                        // Simple positional arg unification.
+                                                        // (Named-arg / default-fill support is a follow-up.)
+                                                        if args.len() != sig.params.len() {
+                                                            self.error(
+                                                                SemanticErrorKind::WrongArgCount {
+                                                                    expected: sig.params.len(),
+                                                                    found: args.len(),
+                                                                },
+                                                                expr.span,
+                                                            );
+                                                        }
+                                                        for (arg, &param_type) in args.iter().zip(sig.params.iter()) {
+                                                            let arg_type = self.infer_expr(&arg.node.value);
+                                                            self.unify(param_type, arg_type, arg.span);
+                                                        }
+                                                        let ret = self.resolve_throws_method_ret(
+                                                            stored_def_id,
+                                                            &method.node,
+                                                            inner_resolved,
+                                                            sig.return_type,
+                                                            suppress_auto_prop,
+                                                            fallible_call_marked,
+                                                            expr.span,
+                                                        );
+                                                        self.expr_types.insert(expr.span, ret);
+                                                        return ret;
+                                                    }
+                                                    // No user-equipped method — probe builtin
+                                                    // methods on the inner (Vector.push / Vector.len /
+                                                    // Dict.get / String.len / …). Face split for
+                                                    // builtins uses `is_mutating_builtin_method`
+                                                    // as the write-face proxy (no FunctionInfo).
+                                                    if let Some(ret_type) = self
+                                                        .builtin_method_type(inner_resolved, &method.node)
+                                                    {
+                                                        let is_write =
+                                                            crate::ir::lowering::builtins::is_mutating_builtin_method(
+                                                                method.node.as_str(),
+                                                            );
+                                                        let container_name = self
+                                                            .scopes
+                                                            .get_def(container_did)
+                                                            .name
+                                                            .clone();
+                                                        if is_write && container_name == "ReadGuard" {
+                                                            self.error(
+                                                                SemanticErrorKind::AutoDerefWriteThroughReadGuard {
+                                                                    method: method.node.clone(),
+                                                                    wrapper: container_name,
+                                                                },
+                                                                expr.span,
+                                                            );
+                                                            return self.types.error_id;
+                                                        }
+                                                        // Consuming face for builtins is not a
+                                                        // shape the builtin registry expresses;
+                                                        // the write/read split above is the whole
+                                                        // discriminator for builtins under D36.
+                                                        // Record the auto-deref marker with
+                                                        // `def_id: None` — builtins have no
+                                                        // user FunctionInfo; the borrow checker
+                                                        // skips these entries.
+                                                        self.method_resolutions.insert(
+                                                            method.span.start,
+                                                            MethodResolution {
+                                                                def_id: None,
+                                                                auto_deref: Some(wrapper_kind),
+                                                            },
+                                                        );
+                                                        // Infer args using the same hint mechanism
+                                                        // as the outer builtin path (so container
+                                                        // literals infer their enum context).
+                                                        let arg_hints = self
+                                                            .builtin_mutator_arg_hints(
+                                                                inner_resolved,
+                                                                &method.node,
+                                                            );
+                                                        let prev_hint = self.decl_type_hint;
+                                                        for (i, arg) in args.iter().enumerate() {
+                                                            self.decl_type_hint =
+                                                                arg_hints.get(i).copied().flatten();
+                                                            self.infer_expr(&arg.node.value);
+                                                        }
+                                                        self.decl_type_hint = prev_hint;
+                                                        self.expr_types.insert(expr.span, ret_type);
+                                                        return ret_type;
+                                                    }
+                                                }
                                             }
                                         }
-                                    ).deref_wrapper_kind;
+                                    }
                                     let is_wrapper_reject = matches!(
                                         container_kind,
                                         Some(DerefWrapperKind::NonDerefContainer)
@@ -8508,7 +8674,9 @@ fn ast_type_to_gorget_name(ty: &Type) -> Option<String> {
 /// Run type checking on the entire module.
 /// Returns (expr_types, method_resolutions):
 /// - expr_types: span → inferred TypeId (for Result-based `?` codegen)
-/// - method_resolutions: method span start → DefId (for borrow checker origin tracking)
+/// - method_resolutions: method span start → `MethodResolution` (D36:
+///   extended value carries the resolved DefId + optional auto-deref
+///   wrapper kind for borrow-checker origin tracking + IR lowering)
 pub fn check_module(
     module: &Module,
     scopes: &mut ScopeTable,
@@ -8521,7 +8689,7 @@ pub fn check_module(
     function_body_scopes: &FxHashMap<(String, usize), ScopeId>,
     struct_generic_bounds: &FxHashMap<DefId, (Vec<String>, Vec<(String, Vec<String>)>)>,
     errors: &mut Vec<SemanticError>,
-) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, DefId>, FxHashMap<usize, Vec<Type>>, FxHashMap<usize, Vec<Type>>, FxHashMap<Span, DefId>) {
+) -> (FxHashMap<Span, TypeId>, FxHashMap<usize, super::MethodResolution>, FxHashMap<usize, Vec<Type>>, FxHashMap<usize, Vec<Type>>, FxHashMap<Span, DefId>) {
     let mut checker = TypeChecker::new(scopes, types, traits, resolution_map, function_info, enum_variants, struct_fields, function_body_scopes, struct_generic_bounds);
 
     // Pre-pass: register function signatures so callers can infer return types.

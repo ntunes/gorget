@@ -1,0 +1,16 @@
+# D36 axis coverage — Box + WRITE-face user method (`&self`) auto-derefs
+# and the mutation is VISIBLE via a subsequent read-face method call.
+# Pins the write face on the Box[T] cell. `b.value` field auto-deref is a
+# SEPARATE feature (§9.4 field), NOT the D36 method rule tested here.
+struct Counter:
+    int value
+
+equip Counter:
+    void bump(&self):
+        self.value = self.value + 1
+    int read(self): return self.value
+
+void main():
+    Box[Counter] b = Box[Counter](Counter(10))
+    b.bump()
+    print(b.read())

@@ -1,0 +1,16 @@
+# D36 axis coverage — WriteGuard + WRITE-face user method (`&self`) auto-derefs
+# and the mutation is VISIBLE. Pins the write face on the WriteGuard[T] cell.
+from std.sync import RWLock
+
+struct Counter:
+    int value
+
+equip Counter:
+    void bump(&self):
+        self.value = self.value + 1
+
+void main():
+    RWLock[Counter] r = RWLock[Counter](Counter(10))
+    WriteGuard[Counter] g = r.write()
+    g.bump()
+    print(g.value)

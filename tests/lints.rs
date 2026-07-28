@@ -758,10 +758,14 @@ fn snag11_auto_prop_gate_site_count() {
 /// (`Expr::Call`) plus the one call inside `resolve_throws_method_ret` = 2.
 ///
 /// Baseline 2026-07-10: 3 `resolve_throws_method_ret` call sites +
-/// 2 `resolve_throws_call_type` call sites.
+/// 2 `resolve_throws_call_type` call sites. Track E2 (2026-07-27) added a
+/// 4th `resolve_throws_method_ret` call in the D36 auto-deref
+/// user-method-hit arm — routes through the same producer so
+/// `throws`-carrying equipped methods called via auto-deref propagate
+/// the throws obligation identically to a direct call.
 #[test]
 fn d23_method_throws_return_sites() {
-    const EXPECTED_METHOD_RET_SITES: usize = 3;
+    const EXPECTED_METHOD_RET_SITES: usize = 4;
     const EXPECTED_PRODUCER_CALLS: usize = 2;
 
     let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
@@ -6054,15 +6058,17 @@ fn ratchet_b_materialize_site_count() {
     // `MaterializePlan`. Remaining 14 = the un-migrated classes B/C/D/E/F + the
     // funnel's own lone real call; each future class conversion drops the ceiling.
     //
-    // 2026-07-27 re-pin 14 → 15 (Track B1 A-2 Option (b), commit `02082ae8`):
-    // retiring the `is_param_borrow_unique` bypass in `calls.rs` routed the two
-    // indirect-call arg loops (UNIT_TYPE `__callable_N` + `GirType::FnPtr`
-    // `__gorget_closure_call_N`) through `lower_call_arg`, which now calls
-    // `cow_before_mutation` on the sanctioned path. This is a NEW mutation-root
-    // materialize on a path that previously bypassed CoW — the exact ratified
-    // outcome of the fold (making `cow_before_mutation` a hard invariant on the
-    // indirect-call arg-loop path). Site added in `calls.rs` (5 sites; was 4).
-    // Future class conversions may fold this back through the planner.
+    // 2026-07-27 re-pin 14 → 15 (Track B1 A-2 Option (b), commit `02082ae8`;
+    // refined by Track F, commit `c8c346f2`):
+    // retiring the `is_param_borrow_unique` bypass in `calls.rs` added a new
+    // `cow_before_mutation` site inside the `lower_call_arg` `Ownership::Borrow
+    // if callee_passes_by_ptr` fast-path (5 sites; was 4). Track F subsequently
+    // moved that call INSIDE the `is_param_borrow_unique` guard so it fires only
+    // on true `&`-param locals (bare params fall through), closing the driver.gg
+    // clone-bomb. The site COUNT stays 5; the SCOPE of the invariant is now
+    // narrower than the pre-F fold intended, correctly so. Future class
+    // conversions may fold this call back through the planner.
+
     const RUST_CEILING: usize = 15;
     let mut rust_sites = 0usize;
     let mut per_file: Vec<(String, usize)> = Vec::new();

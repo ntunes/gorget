@@ -20,7 +20,7 @@ struct Person:
     int age
 
 equip Person:
-    int greet(int e): return self.age + e
+    int greet(self, int e): return self.age + e
 
 void main():
     RWLock[Person] r = RWLock[Person](Person("A", 30))

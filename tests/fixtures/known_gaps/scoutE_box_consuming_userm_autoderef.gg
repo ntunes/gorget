@@ -1,0 +1,13 @@
+# D36 axis coverage — Box + CONSUMING-face user method (`!self`) auto-derefs.
+# Only `Box` accepts the consuming face (Guard/ReadGuard/WriteGuard reject —
+# the guard Drop invariant would be broken). Verifies Box's exclusive accept.
+struct Payload:
+    int val
+
+equip Payload:
+    int take(!self):
+        return self.val * 2
+
+void main():
+    Box[Payload] b = Box[Payload](Payload(21))
+    print(b.take())
