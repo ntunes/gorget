@@ -11,6 +11,13 @@
 !modules_pkg*/**
 !fstring_cross_module/
 !fstring_cross_module/**
+# Track G regression net: cross-module `Box[Trait]` vtable dispatch. Same-file
+# `Box[Trait]` types the receiver as `TraitObject`; cross-module types it as
+# `Generic(Box, [Import(...)])` and takes the terminal-fallthrough path E1
+# extended — this fixture pins the cross-module cell so a future re-broken
+# reject arm trips at check.
+!box_trait_cross_module/
+!box_trait_cross_module/*.gg
 !imported_call_arg_type_check/
 !imported_call_arg_type_check/**
 !mutarg_import_probe/
