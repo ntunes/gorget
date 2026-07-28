@@ -37981,19 +37981,25 @@ fn guard_trait_named_reject_bare() {
     );
 }
 
-/// KNOWN GAP (Round XI Track M) — NAMED-binding
-/// `Guard[Box[Speaker]] g = m.lock(); g.greet()` on `Mutex[Box[Speaker]]`.
-/// Same reject class as the bare sibling, DISTINCT error text
-/// (`Guard[Box[Speaker]]`) — enumerated per Core-#12 axis-completeness.
-/// D36 (2026-07-27) makes this a defect.
+/// Round XII Track N1 (2026-07-28) — CHECK-SIDE GRADUATION.
+/// `Guard[Box[Speaker]] g = m.lock(); g.greet()` on `Mutex[Box[Speaker]]`,
+/// cross-module (imports `Speaker` from `speaker.gg`). N1 widens the
+/// Track-G Box[Trait] carve-out at `src/semantic/typecheck.rs` to also
+/// cover the guard family (Guard/ReadGuard/WriteGuard) with a
+/// `TraitObject`, bare-trait, or cross-module `Generic(Box, [Import])`
+/// inner. `check_gg_ok` pins the D36-target check-side acceptance
+/// TODAY.
+///
+/// The fixture STAYS in `known_gaps/` because RUN still SIGBUSes
+/// pending Track N2 (call-arg `Box[Trait]` coercion). Header comment
+/// on the fixture documents the split; the fixture graduates fully
+/// out of `known_gaps/` (moved into a live directory + rewired to
+/// `run_gg_dir`) when N2 lands. See TODO.md
+/// "Graduate `guard_trait_named_reject/main_box.gg` to `run_gg_dir`
+/// post-Track-N2."
 #[test]
-#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented — named \
-Guard[Box[Speaker]] g = m.lock(); g.greet() rejects E_NoMethodFound. TODO.md."]
 fn guard_trait_named_reject_box() {
-    check_gg_fails(
-        "known_gaps/guard_trait_named_reject/main_box.gg",
-        "no method `greet` found on type `Guard[Box[Speaker]]`",
-    );
+    check_gg_ok("known_gaps/guard_trait_named_reject/main_box.gg");
 }
 
 /// KNOWN GAP (Round XI Track M) — CHAINED `m.lock().get().greet()` on
