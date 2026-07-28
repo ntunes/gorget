@@ -1,0 +1,30 @@
+# AXIS SIBLING (Track K, mixed `&` and `!` sigils) -- a Vector-stored callable
+# that takes an `&`-arg AND a `!`-arg is indirect-called via `arr[0](...)`; the
+# `&` arg still writes through, and the `!` arg is still moved into the callee.
+#
+# AXIS / CELL:
+#   Vector-of-Callable storage x mixed-ownership params (`&`+`!`) x
+#   plain-local root.
+# Pins the interaction cell: after Track K's `lower_call_arg` routing at the
+# non-identifier arm, each arg picks pointer-vs-value forwarding based on the
+# recovered sig's PER-PARAM ownership -- not a single default.
+#
+# Pre-Track-K (measured at gorget-1 tip `1ec3ba55`): `gg check` clean, `gg
+# build` clean, binary exits 139 (SIGSEGV) on BOTH C and LLVM -- the `&` arg's
+# pointer-forwarding is the crash trigger even in the presence of a `!` sibling
+# param. Post-fix: `hi\n101` on both backends.
+#
+# Discriminator vs. the pure-`&` sibling: this fixture would regress if a
+# future refactor routed args by a UNIFORM ownership assumption (all-`&` or
+# all-`!`) instead of per-param.
+void mix(int &n, String !s):
+    n = n + 100
+    print(s)
+
+void main():
+    int a = 1
+    String greeting = "hi"
+    Vector[Callable[void(int &, String !)]] arr = []
+    arr.push(mix)
+    arr[0](&a, !greeting)
+    print(a)

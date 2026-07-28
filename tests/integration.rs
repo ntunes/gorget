@@ -32759,21 +32759,71 @@ fn indirect_call_bare_arg_vec_amp_callee_error() {
     );
 }
 
-/// KNOWN GAP — the THIRD `__gorget_closure_call_N` construction site (the
-/// non-identifier callee arm at `src/ir/lowering/exprs/calls.rs` — grep the
-/// current site with `grep -n 'lower_expr(ctx, builder, &arg.node.value)' \
-/// src/ir/lowering/exprs/calls.rs`) still lowers args via naive
-/// `lower_expr(&arg.node.value)`. Track B1's sidecar-transplant does not reach
-/// this arm because `callee_local` is a temp with no sidecar AND `GirType::FnPtr`
-/// (`src/ir/types.rs:72-75`) drops `param_ownerships` at the type-mapping
-/// writer. Reference-grade fix: extend `GirType::FnPtr` with
-/// `param_ownerships: Vec<Ownership>`. Filed with the intended output;
-/// un-ignore when that extension lands.
+/// REGRESSION (Track K) — non-identifier callee arm `arr[0](&a)` on a
+/// `Vector[Callable[void(int &)]]` element writes through to the caller's
+/// `int` slot. Pre-Track-K: SEGV exit 139 on both C and LLVM. Fix: extended
+/// `GirType::FnPtr` with `param_ownerships` + populated
+/// `TypeMapper::callable_alias_sigs` at `register_callable_inner_if_any` +
+/// taught `infer_collection_element_type` to look up the sig + routed the
+/// non-identifier arm's args through `lower_call_arg` on the recovered sig.
 #[test]
-#[ignore = "KNOWN GAP: non-identifier callee arm (`arr[0](x)` / `make_adder(3)(x)`) SEGFAULTs \
-on both backends; gg check accepts it. Asserts the INTENDED 101; TODO.md."]
-fn sound_callable_amp_arr_indexed_callee_segv() {
-    run_gg("known_gaps/sound_callable_amp_arr_indexed_callee_segv.gg", "101");
+fn callable_amp_arr_indexed_callee() {
+    run_gg("callable_amp_arr_indexed_callee.gg", "101");
+}
+
+/// AXIS SIBLING (Track K, Dict-storage cell) — `d["k"](&a)` on a
+/// `Dict[String, Callable[void(int &)]]` value writes through the borrow the
+/// same way the Vector-storage sibling does. Pre-Track-K: SEGV exit 139 on
+/// both backends (identical failure mode — same `infer_collection_element_type`
+/// gap in the Dict arm at `src/ir/lowering/exprs/methods.rs`).
+#[test]
+fn callable_amp_dict_indexed_callee() {
+    run_gg("callable_amp_dict_indexed_callee.gg", "101");
+}
+
+/// AXIS SIBLING (Track K, mixed `&`+`!` sigils) — a Vector-stored callable
+/// with mixed-ownership params (`int &`, `String !`) indirect-called via
+/// `arr[0](&a, !s)` picks pointer-vs-value forwarding per-param based on the
+/// recovered sig, not a uniform default. Pre-Track-K: SEGV exit 139 on both
+/// backends (the `&` arg's pointer-forwarding is the crash trigger even
+/// alongside the `!` sibling).
+#[test]
+fn callable_bang_arr_indexed_callee() {
+    run_gg("callable_bang_arr_indexed_callee.gg", "hi\n101");
+}
+
+/// KNOWN GAP (Track K residual) — RETURNED-CALL-RESULT cell of the
+/// non-identifier-callee class. `make_bumper()(&a)` where `make_bumper()`
+/// returns `Callable[void(int &)]` from a FUNCTION CALL (not an identifier).
+/// Track K's `callable_alias_sigs` + `infer_collection_element_type` path
+/// retires the Vector/Dict-element cells but NOT this one — a call-result
+/// temp's type comes from `infer_operand_type_full` at `calls.rs:2191` and
+/// still yields a Named alias, not a full-sig FnPtr. Also currently blocked
+/// upstream by (1) closure-literal `&`-param parse error and (2) return-of-
+/// callable-value `E_UnresolvedBorrowOrigin`; un-ignore when either path is
+/// unblocked. INTENDED (asserted): 101.
+#[test]
+#[ignore = "KNOWN GAP (Track K residual): returned-call-result cell of the \
+non-identifier-callee class; blocked upstream by parse-error + return-of-callable \
+check-reject. Asserts the INTENDED 101; TODO.md."]
+fn sound_callable_amp_returned_callee_segv() {
+    run_gg("known_gaps/sound_callable_amp_returned_callee_segv.gg", "101");
+}
+
+/// KNOWN GAP (Track K residual) — METHOD-CALL-RESULT cell of the
+/// non-identifier-callee class. `arr.get(0)(&a)` on a
+/// `Vector[Callable[void(int &)]]` SEGFAULTs on both C and LLVM even after
+/// Track K's fix; the `Dict.get(k)(&a)` shape SEGVs identically. Method-call
+/// result-type inference doesn't route through `callable_alias_sigs` the way
+/// the container-element inferrer now does, so the returned FnPtr has an
+/// empty-params sig and the read side at the non-identifier arm falls back
+/// to the naive lowering that segfaults for `&`-args. Un-ignore when the
+/// method-inference fix lands. INTENDED (asserted): 101.
+#[test]
+#[ignore = "KNOWN GAP (Track K residual): method-call-result cell (`arr.get(0)(&a)`, \
+`d.get(k)(&a)`) SEGFAULTs on both backends; gg check accepts. Asserts the INTENDED 101; TODO.md."]
+fn sound_callable_amp_shared_get_call_segv() {
+    run_gg("known_gaps/sound_callable_amp_shared_get_call_segv.gg", "101");
 }
 
 /// KNOWN GAP — a closure literal with a `&`-sigil parameter and a body that

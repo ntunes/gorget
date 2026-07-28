@@ -4071,9 +4071,25 @@ pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringC
             // leaving env uninitialized and causing SIGSEGV/SIGBUS when the
             // closure is read back and called (attack_82).
             if is_callable_alias_name(ctx, elem_name) {
+                // TRACK K: previously constructed an EMPTY-params, I64-return
+                // FnPtr — right size (16-byte GorgetClosure), wrong sig.
+                // The read side at `calls.rs`'s non-identifier arm (line
+                // ~2213) could not tell that `arr[0](&a)` had an `&int`
+                // param, so it lowered `&a` as a plain value and the
+                // callee's write-through segfaulted on both backends.
+                // Recover the sig from the `callable_alias_sigs`
+                // side-table (populated by `register_callable_alias`).
+                if let Some((params, owns, ret)) = ctx.type_mapper.callable_alias_sigs.get(elem_name).cloned() {
+                    return ctx.type_registry.insert(GirType::FnPtr {
+                        params,
+                        return_type: ret,
+                        param_ownerships: owns,
+                    });
+                }
                 return ctx.type_registry.insert(GirType::FnPtr {
                     params: vec![],
                     return_type: I64_TYPE,
+                    param_ownerships: vec![],
                 });
             }
             let elem_name = elem_name.to_string();
@@ -4085,7 +4101,15 @@ pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringC
                 let val_name = &rest[pos + 2..];
                 // Callable value types → FnPtr TypeId so the local is declared as GorgetClosure
                 if is_callable_alias_name(ctx, val_name) {
-                    return ctx.type_registry.insert(GirType::FnPtr { params: vec![], return_type: I64_TYPE });
+                    // TRACK K: same sig-recovery as the Vector arm above.
+                    if let Some((params, owns, ret)) = ctx.type_mapper.callable_alias_sigs.get(val_name).cloned() {
+                        return ctx.type_registry.insert(GirType::FnPtr {
+                            params,
+                            return_type: ret,
+                            param_ownerships: owns,
+                        });
+                    }
+                    return ctx.type_registry.insert(GirType::FnPtr { params: vec![], return_type: I64_TYPE, param_ownerships: vec![] });
                 }
                 let val_name = val_name.to_string();
                 return resolve_type_name_to_id(ctx, &val_name);

@@ -1,0 +1,35 @@
+# DURABLE REPRO -- the `.get()()` sibling of the non-identifier-callee class.
+# A `Vector[Callable[void(int &)]].get(0)(&a)` call (or the analogous
+# `Dict.get(k)(&a)`) SEGFAULTs on both C and LLVM. Track K's
+# `infer_collection_element_type` fix retires the direct-subscript cells
+# (`arr[0](&a)`, `d["k"](&a)`) but NOT this one: `.get()` returns via a
+# METHOD-CALL result temp whose type comes from method-signature inference,
+# not from the collection-element-type path Track K teaches to consult
+# `callable_alias_sigs`.
+#
+# Measured 2026-07-28 (post-Track-K on the fix branch):
+#   Vector[Callable[void(int &)]].get(0)(&a)   -> SEGV exit 139 on C AND LLVM
+#   Dict[String, Callable[void(int &)]].get(k)(&a) -> SEGV exit 139 on C AND LLVM
+# Both shapes hit the same underlying gap; this fixture pins the Vector shape
+# as the representative -- the Dict shape shares the same fix.
+#
+# Fix direction: teach the method-call result-type inference to preserve the
+# full FnPtr sig (params + ownerships + return) when the receiver is a
+# `Vector[Callable[...]]` or `Dict[K, Callable[...]]` and the method is
+# `.get()`. The `callable_alias_sigs` side-table Track K added is the
+# consumer that already knows how to build a full-sig FnPtr -- the
+# method-inference path needs to route through it.
+#
+# INTENDED (asserted): 101. Same reference-grade semantics as the
+# graduated `callable_amp_arr_indexed_callee.gg` sibling.
+#
+# AXIS / CELL: non-identifier-callee axis, METHOD-CALL-RESULT cell.
+void bump(int &n):
+    n = n + 100
+
+void main():
+    int a = 1
+    Vector[Callable[void(int &)]] arr = []
+    arr.push(bump)
+    arr.get(0)(&a)
+    print(a)

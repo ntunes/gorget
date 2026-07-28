@@ -2505,7 +2505,7 @@ impl<'a> FuncLowering<'a> {
             .gir_types
             .get(method_field.type_id)?
         {
-            ir::types::GirType::FnPtr { params, return_type } => {
+            ir::types::GirType::FnPtr { params, return_type, .. } => {
                 (params.clone(), *return_type)
             }
             _ => return None,

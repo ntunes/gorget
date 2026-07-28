@@ -1,0 +1,42 @@
+# REGRESSION -- an indirect call whose callee is a NON-IDENTIFIER expression
+# (`arr[0]`) on a `Callable[void(int &)]` element writes through to the
+# caller's `int` slot exactly as calling `bump(&a)` directly does.
+#
+# AXIS / CELL (Track K, non-identifier callee axis):
+#   Vector-of-Callable storage x plain-local int root x `&`-arg spelling.
+# Sibling of `callable_amp_fntype_writethrough.gg` (identifier callee, LOCAL)
+# and `sound_callable_amp_param_projection.gg` (identifier callee, PARAM); the
+# discriminator here is the callee SHAPE (Vector index vs. bare name), not
+# the arg's root.
+#
+# Pre-Track-K (measured at gorget-1 tip `1ec3ba55`): `gg check` clean, `gg
+# build` clean, binary exits 139 (SIGSEGV) on BOTH C and LLVM. Root cause is
+# TWO-LAYER:
+#   1. `GirType::FnPtr` at `src/ir/types.rs` had no `param_ownerships` axis,
+#      so the `Type::Function` mapper at `src/ir/lowering/types.rs` dropped
+#      the `&` sigil at the AST->GIR boundary.
+#   2. `infer_collection_element_type` at `src/ir/lowering/exprs/methods.rs`
+#      built an EMPTY-params FnPtr for `Vector[Callable[...]]` elements --
+#      sized right for the 16-byte GorgetClosure (attack_82 fix) but with
+#      the signature lost -- so even after fixing step 1 the read side at
+#      the non-identifier arm at `src/ir/lowering/exprs/calls.rs` had
+#      nothing to consult.
+#
+# Fix (Track K): (a) extend `GirType::FnPtr` with `param_ownerships`; (b) add
+# `TypeMapper::callable_alias_sigs` populated at `register_callable_inner_if_any`
+# where the `Type::Function` inner is still in scope; (c) teach
+# `infer_collection_element_type` to look up the sig; (d) route the
+# non-identifier arm's args through `lower_call_arg` on the recovered sig
+# (mirroring B1's identifier-callee fix).
+#
+# INTENDED (asserted): 101. Same reference-grade semantics as the
+# `callable_amp_fntype_writethrough.gg` LOCAL-callee sibling.
+void bump(int &n):
+    n = n + 100
+
+void main():
+    int a = 1
+    Vector[Callable[void(int &)]] arr = []
+    arr.push(bump)
+    arr[0](&a)
+    print(a)

@@ -157,6 +157,25 @@ pub fn register_trait_types(
                     let fn_ptr_type_id = ctx.type_registry.insert(GirType::FnPtr {
                         params: param_types.clone(),
                         return_type,
+                        // Vtable method slots take the sigils spelled on the
+                        // trait method signature. Populate from the method's
+                        // own AST params so a `&self`/`&arg` slot dispatches
+                        // through `lower_call_arg` correctly at the read
+                        // side (currently this vtable path doesn't reach
+                        // the non-identifier arm, but the field keeps the
+                        // invariant that every FnPtr writer sets it).
+                        param_ownerships: {
+                            let mut owns: Vec<Ownership> = vec![
+                                if self_is_mutable { Ownership::MutableBorrow } else { Ownership::Borrow }
+                            ];
+                            for p in &method_def.params {
+                                if p.node.name.node == "self" {
+                                    continue;
+                                }
+                                owns.push(p.node.ownership);
+                            }
+                            owns
+                        },
                     });
 
                     methods.push(VTableMethod {
@@ -195,6 +214,7 @@ pub fn register_trait_types(
             let drop_fn_ptr_type = ctx.type_registry.insert(GirType::FnPtr {
                 params: vec![mut_void_ptr],
                 return_type: UNIT_TYPE,
+                param_ownerships: vec![Ownership::MutableBorrow],
             });
             vtable_fields.push(StructField {
                 name: VTABLE_DROP_FIELD.to_string(),

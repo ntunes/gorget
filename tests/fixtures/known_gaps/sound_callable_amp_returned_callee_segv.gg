@@ -1,0 +1,37 @@
+# DURABLE REPRO -- the RETURNED-CALLABLE sibling of the non-identifier-callee
+# class. `make_bumper()(&a)` returns a `Callable[void(int &)]` value from a
+# function CALL (not an identifier); the callee's `param_ownerships` cannot
+# reach the read side at `calls.rs`'s non-identifier arm the same way the
+# Vector/Dict-element inferrer's now can, because a call-result temp doesn't
+# go through `infer_collection_element_type`. Track K's `callable_alias_sigs`
+# side-table + inferrer lookup path retires the Vector/Dict cells but NOT this
+# one.
+#
+# Post-Track-K (measured 2026-07-28): shape blocked upstream by TWO independent
+# gaps that must land first:
+#   (1) closure literal with `&` param fails to PARSE ("expected ')', found '='")
+#       -- filed at `known_gaps/sound_closure_amp_param_write_body_parse_error.gg`
+#   (2) returning a bare function identifier or a `!f`'d callable local fails
+#       check with `E_UnresolvedBorrowOrigin` -- a distinct gap in the
+#       return-of-callable-value path.
+# Once EITHER path is unblocked, this shape becomes constructible and the
+# runtime SEGV must be verifiable on both C and LLVM. INTENDED (asserted): 101.
+#
+# Fix direction: the third `__gorget_closure_call_N` construction site's temp
+# needs its sig from `infer_operand_type_full` at `calls.rs:2191` -- likely
+# by teaching that path to consult the callee-function's return-type
+# metadata for a full-sig FnPtr rather than the current Named alias.
+#
+# AXIS / CELL: non-identifier-callee axis, RETURNED-CALL-RESULT cell (distinct
+# from the Vector-INDEX and Dict-SUBSCRIPT cells retired by Track K).
+void bump(int &n):
+    n = n + 100
+
+void(int &) make_bumper():
+    void(int &) f = bump
+    return !f
+
+void main():
+    int a = 1
+    make_bumper()(&a)
+    print(a)

@@ -106,6 +106,15 @@ pub struct TypeMapper {
     /// the symbol axis, where the name IS the contract with the emitted
     /// helpers.
     pub thread_payload_types: FxHashMap<TypeId, TypeId>,
+    /// TRACK K: mangled `Callable__T_args` name → the original signature
+    /// (params, param ownerships, return). Populated by
+    /// `register_callable_inner_if_any` (via `register_callable_alias`) when
+    /// the AST-level `Type::Function` inner is still in scope. Read by
+    /// `infer_collection_element_type` so `Vector[Callable[T(P)]]` /
+    /// `Dict[K, Callable[T(P)]]` element inference produces a
+    /// full-signature FnPtr (not the empty-params placeholder that used
+    /// to segfault at `arr[0](&a)` on `Callable[void(int &)]` elements).
+    pub callable_alias_sigs: FxHashMap<String, (Vec<TypeId>, Vec<crate::parser::ast::Ownership>, TypeId)>,
 }
 
 impl TypeMapper {
@@ -138,6 +147,7 @@ impl TypeMapper {
             guard_types: FxHashMap::default(),
             deferred_builtins: Vec::new(),
             thread_payload_types: FxHashMap::default(),
+            callable_alias_sigs: FxHashMap::default(),
         }
     }
 
@@ -376,7 +386,7 @@ impl TypeMapper {
                         return if generic_args.len() == 1 {
                             self.map_ast_type_mut(&generic_args[0].node, registry)
                         } else {
-                            registry.insert(GirType::FnPtr { params: vec![], return_type: UNIT_TYPE })
+                            registry.insert(GirType::FnPtr { params: vec![], return_type: UNIT_TYPE, param_ownerships: vec![] })
                         };
                     }
                     // Auto-register builtin generic types via protocol table.
@@ -587,12 +597,23 @@ impl TypeMapper {
                 self.register_named(mangled, type_id);
                 type_id
             }
-            Type::Function { return_type, params, .. } => {
+            Type::Function { return_type, params, param_ownerships } => {
                 let ret = self.map_ast_type_mut(&return_type.node, registry);
                 let param_types: Vec<TypeId> = params.iter()
                     .map(|p| self.map_ast_type_mut(&p.node, registry))
                     .collect();
-                registry.insert(GirType::FnPtr { params: param_types, return_type: ret })
+                // TRACK K: preserve param ownerships through the AST→GIR
+                // FnPtr boundary so the indirect-call arg-loop (`calls.rs`
+                // non-identifier arm) can route `&`-args through
+                // `lower_call_arg`. Pre-fix this arm dropped the sigils,
+                // and `arr[0](&a)` on a `Callable[void(int &)]` element
+                // segfaulted on both backends because the arg loop
+                // forwarded a VALUE bit-pattern to a callee expecting a
+                // pointer.
+                let owns: Vec<crate::parser::ast::Ownership> = params.iter().enumerate()
+                    .map(|(i, _)| param_ownerships.get(i).copied().unwrap_or(crate::parser::ast::Ownership::Borrow))
+                    .collect();
+                registry.insert(GirType::FnPtr { params: param_types, return_type: ret, param_ownerships: owns })
             }
             Type::Ref(inner) => {
                 // At a parameter position, `T &` means a mutable borrow (Ptr(T)).
@@ -1038,6 +1059,30 @@ fn register_callable_inner_if_any(
         let base = name.node.as_str();
         if matches!(base, "Callable" | "MutCallable" | "ConsumeCallable") {
             let mangled = mangle_generic_name(base, generic_args);
+            // TRACK K: extract the sig from the Function inner AND record it
+            // in the side-table before the alias is registered. This is the
+            // one write site where the AST-level params + ownerships are in
+            // scope; downstream `infer_collection_element_type` reads it
+            // when producing the FnPtr type for a `Vector[Callable[T(P)]]`
+            // element (so the read side at `calls.rs`'s non-identifier arm
+            // can route each arg through `lower_call_arg`).
+            if let Some(func_arg) = generic_args.first() {
+                if let Type::Function { return_type, params, param_ownerships } = &func_arg.node {
+                    // Compute types + owns. Idempotent — if the entry already
+                    // exists (this same mangled name registered twice), the
+                    // insert overwrites with byte-identical data.
+                    // NB: uses map_ast_type_mut so the arg types get properly
+                    // interned in the registry too.
+                    let ret = mapper.map_ast_type_mut(&return_type.node, registry);
+                    let param_types: Vec<TypeId> = params.iter()
+                        .map(|p| mapper.map_ast_type_mut(&p.node, registry))
+                        .collect();
+                    let owns: Vec<crate::parser::ast::Ownership> = params.iter().enumerate()
+                        .map(|(i, _)| param_ownerships.get(i).copied().unwrap_or(crate::parser::ast::Ownership::Borrow))
+                        .collect();
+                    mapper.callable_alias_sigs.insert(mangled.clone(), (param_types, owns, ret));
+                }
+            }
             register_callable_alias(mapper, registry, &mangled);
         }
         // Recurse into generic args so `Vector[Vector[Callable[T(P)]]]` and
