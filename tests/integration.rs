@@ -17154,6 +17154,40 @@ fn sync_rwlock() {
     run_gg("sync_rwlock.gg", "42\n100");
 }
 
+// Track N3 (Round XII): RWLock.read()/.write() return-type inference gap.
+// Pre-fix, `builtin_method_type` had no `"RWLock"` arm, so `.read()`/`.write()`
+// returned `ReadGuard[<error>]`/`WriteGuard[<error>]`. The live regression is
+// this check-NEG: annotation-less `int wrong = r.read()` was already a type
+// error either way, but the diagnostic pointed at `ReadGuard[<error>]` and
+// post-fix it correctly cites `ReadGuard[int]` — pinning the corrected
+// error text as an executable regression. RED-verified against pre-fix.
+//
+// Adjacent bug uncovered during Track N3 but NOT closed by this fix: chained
+// `r.read().get()` / `r.write().set(v)` silently drop the `.get()`/`.set()`
+// (and the guard's drop), producing wrong output on read and a write-lock
+// deadlock on write. Filed as `known_gaps/rwlock_chained_{read,write}_*.gg`
+// with `#[ignore]`d tests below asserting the intended behaviour; they
+// graduate out when the chained-receiver LIR lowering lands.
+#[test]
+fn rwlock_read_annotation_less_binding_check() {
+    check_gg_fails(
+        "rwlock_read_annotation_less_binding_check.gg",
+        "expected `int`, found `ReadGuard[int]`",
+    );
+}
+
+#[test]
+#[ignore = "known_gaps: chained r.read().get() silently drops .get() and the ReadGuard drop; separate LIR-lowering bug independent of Track N3's typecheck fix. See TODO.md."]
+fn rwlock_chained_read_get_silent_drop() {
+    run_gg("known_gaps/rwlock_chained_read_get_silent_drop.gg", "42");
+}
+
+#[test]
+#[ignore = "known_gaps: chained r.write().set(v) silently drops .set() AND the WriteGuard's drop, deadlocking the follow-up read. Same LIR class as the read sibling. See TODO.md."]
+fn rwlock_chained_write_set_silent_drop() {
+    run_gg("known_gaps/rwlock_chained_write_set_silent_drop.gg", "99");
+}
+
 #[test]
 fn thread_atomic() {
     run_gg("thread_atomic.gg", "2");
