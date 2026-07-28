@@ -31864,6 +31864,35 @@ done",
     );
 }
 
+/// Track F regression fixture (2026-07-28): the `Ownership::Borrow &&
+/// callee_passes_by_ptr` fast-path in `src/ir/lowering/exprs/calls.rs` MUST
+/// only fire for genuine unique-borrow (`is_param_borrow_unique`) params —
+/// never for bare non-`&`-param locals. Commit `02082ae8` (Track B1 A-2
+/// Option (b)) called `cow_before_mutation` BEFORE the uniqueness guard,
+/// which for a bare resource param hits Case 1c of `cow_before_mutation`
+/// (`context.rs:3653`) and emits `cow_materialize_alias(local, local, span)`
+/// — a full deep-clone at EVERY call site. On driver.gg's
+/// `expand_meta_for_in_stmts` (recursive SMatch/SIf/SWhile/SFor traversal
+/// passing bare `Module m` at each level) that clone-bombed the ~9600-line
+/// self-compile from ~3 s to a 600 s bootstrap timeout.
+///
+/// This fixture is a minimal, deterministic proxy — exponential recursion
+/// passing a bare `Big` param (Vector[Vector[int]], ~4 MB per Big) — that
+/// hangs past 30 s pre-fix and completes in milliseconds post-fix.
+///
+/// RED-verified against the pre-fix compiler (`git checkout HEAD^ --
+/// src/ir/lowering/exprs/calls.rs`, c030aa10 gorget-1 tip): timed out at
+/// 60 s (RC=124). Post-fix: 6 ms, prints `13107200\ndone`.
+#[test]
+fn callable_bare_param_no_clone_bomb() {
+    run_gg(
+        "callable_bare_param_no_clone_bomb.gg",
+        "\
+13107200
+done",
+    );
+}
+
 /// CoW G2 site 1b: a bare alias passed by `&` to a METHOD arg routes through
 /// the same `lower_call_arg` materialize — the copy grows, the source is
 /// untouched.

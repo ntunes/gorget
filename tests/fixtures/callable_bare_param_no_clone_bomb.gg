@@ -1,0 +1,56 @@
+# Regression fixture: bare-param + callee-passes-by-ptr must NOT deep-clone.
+#
+# Culprit shape (regressed by 02082ae8, fixed same round):
+# `src/ir/lowering/exprs/calls.rs` fast-path unconditionally called
+# `cow_before_mutation` on any bare-identifier arg going to a
+# `callee_passes_by_ptr` callee, BEFORE checking `is_param_borrow_unique`.
+# For a bare-param local (e.g. `Big b` here), that hit
+# `cow_before_mutation` Case 1c (`context.rs:3653`) ->
+# `cow_materialize_alias(local, local, span)` = full deep-clone of the
+# whole resource EVERY CALL. On driver.gg's `expand_meta_for_in_stmts`
+# (recursive SMatch/SIf/SWhile/SFor traversal passing bare `Module m` at
+# every level), the driver-on-driver run hung ~60s per recompile.
+#
+# This fixture is a minimal, deterministic proxy: exponential (2^depth)
+# recursion passing a bare `Big` param at every level. `Big` wraps a
+# Vector[Vector[int]] so each deep-clone traverses the outer vector AND
+# per-element clones every inner Vector[int] (~4 MB per Big deep-clone).
+# Pre-fix, each of the 2^depth - 1 internal recursive calls does the
+# full nested clone (hangs past the 30 s default GG_TEST_TIMEOUT_SECS).
+# Post-fix, the fast-path only fires for genuine unique-borrow params
+# (nothing here), so the recursion is O(2^depth) trivial calls -- well
+# under a second.
+#
+# RED-verified against the pre-fix compiler (HEAD^, c030aa10 gorget-1
+# tip with buggy calls.rs).
+
+struct Big:
+    Vector[Vector[int]] data
+
+# Bare `Big b` param -- plus recursive call passing bare `b`. This is the
+# exact shape from meta.gg:1662/1675/1680/1685/1690 (with `Module m`).
+int recurse(int depth, Big b):
+    if depth <= 0:
+        return b.data.len()
+    int left = recurse(depth - 1, b)
+    int right = recurse(depth - 1, b)
+    return left + right
+
+void main():
+    Big big = Big(Vector[Vector[int]]())
+    int i = 0
+    while i < 50:
+        Vector[int] inner = Vector[int]()
+        int j = 0
+        while j < 10000:
+            inner.push(j)
+            j = j + 1
+        big.data.push(inner)
+        i = i + 1
+    # Depth 18: 2^18 - 1 = 262143 internal nodes, each doing one full Big
+    # deep-clone (50 * 10000 ints * 8 bytes = 4 MB per clone -> ~1 TB
+    # total memcpy pre-fix, comfortably past 30 s at ~15 GB/s memcpy
+    # throughput). Post-fix: 2^18 = 262144 trivial recursive calls
+    # returning 50 -- well under a second.
+    print(recurse(18, big))
+    print("done")
