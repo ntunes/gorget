@@ -4405,6 +4405,51 @@ fn equip_exprbody_owning_param_return_uaf() {
     run_gg("known_gaps/equip_exprbody_owning_param_return_uaf.gg", "5\n28");
 }
 
+// PERF PATHOLOGY — Track I sibling filing (2026-07-28). `Ownership::Move if
+// callee_is_move_param` arm at `src/ir/lowering/exprs/calls.rs:624`
+// unconditionally emits an `emit_clone` on the Ptr(T) operand of a `!`-arg
+// (`consume(!v.get(0).unwrap())`). Measured O(N) per-call clones under linear
+// recursion (N=1000 -> array_clone=1000, --clones=stats). Correct output
+// survives (semantics unaffected); Track I in-scope is `Ownership::Borrow` and
+// `MutableBorrow` whole-value arms — this arm was owner-scoped OUT
+// (2026-07-28) and files as a durable repro. Un-ignore + promote out of
+// known_gaps/ (assert clone-stats floor `array_clone <= K`) when the arm gains
+// a sever-aliases guard / hoist-to-caller-root fix. See TODO.md.
+#[test]
+#[ignore = "PERF PATHOLOGY known_gap (Track I sibling): Move-callee arm at \
+calls.rs:624 O(N) clone-bomb under recursive !-arg from .get(); fixture pins \
+the SHAPE at small N; TODO.md."]
+fn mutable_borrow_move_callee_recursive() {
+    run_gg(
+        "known_gaps/mutable_borrow_move_callee_recursive.gg",
+        "0\n0\n0\n1\ndone",
+    );
+}
+
+// PERF PATHOLOGY — Track I sibling filing (2026-07-28). G2 projected-root arm
+// at `src/ir/lowering/exprs/calls.rs:189-207` fires
+// `cow_before_mutation(root_local)` on a bare-param root when the arg is
+// `f(&b.field)`. Same G2 site-1 whole-root deep-clone as the MutableBorrow
+// whole-value arm (Track F fixed the `is_param_borrow_unique` fast-path there),
+// applied to a projection root. Measured 2026-07-28 with a resource `Big`
+// (Vector[Vector[int]] payload, ~4MB): N=100 -> array_clone=10050, N=500 ->
+// array_clone=150250 + 2GB peak RSS (O(N*data.len)). Correct output survives.
+// Owner-scoped OUT of Track I (2026-07-28) — files as a durable repro. Fix
+// direction: narrow materialize to the projected field-place (needs
+// field-place-aliasing analysis) OR share ONE materialized root across the
+// call-scope. Un-ignore + promote (assert clone-stats floor) when the arm
+// narrows or scope-hoists. See TODO.md.
+#[test]
+#[ignore = "PERF PATHOLOGY known_gap (Track I sibling): G2 projected-root arm \
+at calls.rs:189-207 O(N*data.len) whole-root clone-bomb for `f(&b.field)` when \
+`b` is a bare-param; fixture pins the SHAPE at small N; TODO.md."]
+fn mutable_borrow_projected_root_recursive() {
+    run_gg(
+        "known_gaps/mutable_borrow_projected_root_recursive.gg",
+        "6\ndone",
+    );
+}
+
 // A `&`-param is a BORROW: crossing an ownership boundary owes exactly ONE
 // clone, a typed binding owes ZERO (borrow now, materialize on mutation), and
 // mutating the param ITSELF must still write through. All four in-scope arms

@@ -1,0 +1,41 @@
+# PERF PATHOLOGY (filed 2026-07-28 by Track I measurement scout) —
+# `Ownership::Move if callee_is_move_param` arm at
+# `src/ir/lowering/exprs/calls.rs:624`. The arm unconditionally emits an
+# `emit_clone` on the Ptr(T) operand of a `!`-arg (`consume(!v.get(0).unwrap())`)
+# to materialize an owned value before the move.
+#
+# Under linear recursion the arm fires ONCE per call: at N=1000 measured
+# `array_clone=1000` (perfect linear scaling); the payload here is empty so
+# each clone is trivial, but for a resource-payload Big (e.g. inner
+# Vector[Vector[int]] of ~4MB) the same shape clone-bombs. Correct output
+# survives (semantics unaffected), so `gg check` and `cargo test` stay green.
+# Same SHAPE class as the MutableBorrow arm (calls.rs:55-82) Track F fixed;
+# owner-scoped OUT of Track I (2026-07-28) — files as a durable repro.
+#
+# Reference-grade fix direction: sever-aliases / clone-only-when-needed guard on
+# the `emit_clone` (parallel to Track F's `is_param_borrow_unique` gate) OR a
+# semantic pass that hoists the clone to the caller-owned root when the .get()
+# chain is provably unique. UN-IGNORE + promote to a top-level ratchet asserting
+# `array_clone <= K` when the fix lands.
+#
+# RED-verified 2026-07-28 (this-scout run): array_clone=1000 at N=1000 (this
+# fixture, `--clones=stats`), confirms O(N) per-call.
+
+struct Big:
+    Vector[int] data
+
+void consume(Big !b):
+    print(b.data.len())
+
+int recurse(int depth, Vector[Big] v):
+    if depth <= 0:
+        return v.len()
+    consume(!v.get(0).unwrap())
+    return recurse(depth - 1, v)
+
+void main():
+    Vector[Big] v = Vector[Big]()
+    v.push(Big(Vector[int]()))
+    # Small N so the fixture runs fast; the SHAPE is what is pinned.
+    print(recurse(3, v))
+    print("done")
