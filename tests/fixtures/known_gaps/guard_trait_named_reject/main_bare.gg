@@ -1,43 +1,15 @@
-# Round XI Track M — KNOWN GAP (D36 unimplemented + Track P residual, HIGH).
+# Round XII Track P (LHS annotation) + Track R (call-expression) —
+# NAMED-binding form `Guard[Speaker] g = m.lock(); g.greet()` (bare trait
+# as Mutex inner) is REJECTED at check with `E_NonDerefContainerBareTrait`
+# at the LHS `Mutex[Speaker]` annotation. Track R's up-front call-site
+# reject has a no-double-report gate so this shape emits ONE error at the
+# annotation, not two (verified as a Track R integration probe).
 #
-# Class 2 of 4 filed by Track M: NAMED-binding `Guard[Speaker] g = m.lock()`
-# then `g.greet()` (bare trait as Mutex inner). Unlike the chained shape
-# (class 1 / guard_trait_chained_c_emit_fabrication.gg — which slips past
-# the checker and fabricates a C-emit symbol), the NAMED binding is
-# rejected at the checker with `E_NoMethodFound: Guard[Speaker]`.
-#
-# ⚠ SIBLING GRADUATED: `main_box.gg` graduated out in Round XII Track N2 →
-# `tests/fixtures/guard_trait_named_box_dispatch/main.gg`. This bare-trait
-# variant stays in `known_gaps/` pending Track P follow-up (extend the
-# `E_NonDerefContainerBareTrait` reject to fire on generic-CTOR-CALL type-args
-# such as `Mutex[Speaker](Robot(...))` — Track P only rejected TYPE
-# ANNOTATIONS today, so this fixture accepts at the ctor call but fails
-# downstream). See TODO.md "Track P residual".
-#
-# Under D36 (ratified 2026-07-27, `docs/define-gorget/decisions.md:1363-1381`)
-# the read face `.method()` MUST accept + auto-deref for Guard uniformly with
-# Box/ReadGuard/WriteGuard. This reject is the D36 defect — the current
-# error advises users at nothing (no fix suggestion), and Track E1's earlier
-# sharpening of the reject would ship in the WRONG direction because it
-# would point users at "wrap in Box[Trait]" which D36 says is unnecessary.
-#
-# DISTINCT FROM Track J (`sound_guard_get_string_double_free.gg` — heap-inner
-# ownership on non-trait inners; different root). Also distinct from
-# fixtures/scoutE_guard_userm_autoderef.gg (write-through / auto-deref on
-# CONCRETE Guard[Struct]; this fixture is Guard[TRAIT] method dispatch).
-#
-# HEAD behavior (probe 2026-07-28):
-#   gg check main_bare.gg → exit 1, stderr contains:
-#     error[E_NoMethodFound]: no method `greet` found on type `Guard[Speaker]`
-#
-# The Box sibling (main_box.gg) rejects with a DISTINCT error text
-# (`Guard[Box[Speaker]]` under cross-module import) — enumerated per
-# Core-#12 axis-completeness.
-#
-# FIX DIRECTION (Option A / D36-implementation, DEFERRED to Round XII+):
-# accept via the same auto-deref path that Box[Trait].greet() rides.
-#
-# INTENDED (after Option A): accepts + prints `beep R2`.
+# Kept under `known_gaps/` (rather than promoted to top-level) because the
+# paired `speaker.gg` module keeps the reject on the Guard-wrapper type
+# rather than an accidental same-file resolution shortcut. `main_box.gg`
+# (the class-2b Box sibling) graduated out in Round XII Track N2 to
+# `tests/fixtures/guard_trait_named_box_dispatch/main.gg`.
 
 from speaker import Speaker, Robot
 

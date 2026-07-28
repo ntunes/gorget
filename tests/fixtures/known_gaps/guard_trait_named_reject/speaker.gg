@@ -1,10 +1,12 @@
-# Round XI Track M — shared trait + impl for the guard_trait_named_reject
-# family (bare-trait class 2 — `main_bare.gg`; the Box variant graduated
-# out in Round XII Track N2 to `tests/fixtures/guard_trait_named_box_dispatch/`).
+# Round XI Track M / Round XII Tracks P+R — shared trait + impl for the
+# guard_trait_named_reject family (bare-trait class 2 — `main_bare.gg`;
+# the Box variant graduated out in Round XII Track N2 to
+# `tests/fixtures/guard_trait_named_box_dispatch/`).
 #
 # Kept in a separate module (rather than embedded in `main_bare.gg`) so
 # the fixture adjudicates the check-reject on the Guard-wrapper type,
-# not on any accidental same-file resolution shortcut.
+# not on any accidental same-file resolution shortcut. The class-2 reject
+# is live (Track P at the LHS annotation, no double-fire from Track R).
 
 trait Speaker:
     String greet(self)
