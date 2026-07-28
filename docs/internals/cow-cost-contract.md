@@ -51,6 +51,45 @@ Measured at depth 200 (regenerate: build with `--clones=stats`, run, read the
 All four print the same result — the caller's value is untouched in every variant.
 So the 201 is pure waste and the 8191 is half waste.
 
+The remaining three probes, in full (the shape above is probe 1; these are the
+fixture seeds §3 refers to — same `Big` / `mutate` preamble in each):
+
+```gorget
+# probe 2 — linear, hand-optimal: 1 clone at depth 200
+void walk_inner(int d, Big !b):        # consumes: no per-frame materialize
+    mutate(&b)
+    if d > 0:
+        walk_inner(d - 1, !b)
+void walk(int d, Big b):               # value semantics preserved at the boundary
+    Big local = b.clone()              # the ONE clone, explicit
+    walk_inner(d, !local)
+
+# probe 3 — branching, today: 8191 clones at depth 12
+void rec(int d, Big b):
+    mutate(&b)
+    if d > 0:
+        rec(d - 1, b)
+        rec(d - 1, b)
+
+# probe 4 — branching, hand-optimal: 4096 clones at depth 12 (the 2x ceiling)
+void rec_inner(int d, Big !b):
+    mutate(&b)
+    if d > 0:
+        Big c = b.clone()              # child 1 needs its own — b is still live
+        rec_inner(d - 1, !c)
+        rec_inner(d - 1, !b)           # child 2 is the last use — move
+void rec(int d, Big b):
+    Big local = b.clone()
+    rec_inner(d, !local)
+```
+
+Note what probe 2 demonstrates about the *user's* options today: the elision is
+not expressible at the call site. `walk(d - 1, !b)` on a bare param is
+`E_OwnershipMismatch` ("the parameter only borrows — it does not consume the
+argument"), so reaching the hand-optimal count requires changing the callee's
+**signature** — a different API contract, not an optimization. That is the gap §2
+closes without any user syntax at all.
+
 Three properties of this defect class matter for the design:
 
 1. **It is a TIME bomb, not a space bomb.** Each frame's copy dies at frame exit,
