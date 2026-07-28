@@ -25154,7 +25154,12 @@ fn self_host_runtime_diff() {
     // ADJ-MATCH 381 (of MATCH 1244 = ADJ 381 + UNADJ 853 + BOTH-WRONG 10). Track H's
     // cross-resolver arm-parity (TupleFieldAccess + Index arms) closed the Family-2 write-drops
     // on struct-under-tuple + tuple-under-collection, ratcheting ggdef adjudication +8.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 381;
+    // Reseeded 2026-07-28 (round XII Track Q: ggdef struct-value match-pattern binding):
+    // ADJ-MATCH 383 (of MATCH 1254 = ADJ 383 + UNADJ 863 + BOTH-WRONG 8). The new
+    // `Value::Struct` arm in `eval.rs::match_pattern` closed the two `struct_value_match_bind*`
+    // Class-B cells (ratified §8.4 semantics ggdef was silently mis-modeling), moving them
+    // from BOTH-WRONG to ADJ-MATCH.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 383;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -25195,8 +25200,11 @@ fn self_host_runtime_diff() {
     //       drop ordering (drop_collection_custom_elem_leak, drop_reassign,
     //       drop_struct_collection_fields), `:b` format specs
     //       (fstring_binary_spec_leak), print sep/end/stderr kwargs
-    //       (print_builtin, print_terminator), struct match patterns → silent
-    //       "no match" (struct_value_match_bind, struct_value_match_bind3).
+    //       (print_builtin, print_terminator). Struct-value match patterns
+    //       were BURNED DOWN 2026-07-28 (round XII Track Q): `eval.rs::match_pattern`
+    //       grew a `Value::Struct` arm mirroring the enum arm, closing
+    //       struct_value_match_bind + struct_value_match_bind3 (both moved to
+    //       ADJ-MATCH). Remaining Class-B cells: 8.
     const EXPECTED_BOTH_WRONG: &[&str] = &[
         "core_traits",
         "drop_collection_custom_elem_leak",
@@ -25206,8 +25214,6 @@ fn self_host_runtime_diff() {
         "print_builtin",
         "print_display_temp_leak",
         "print_terminator",
-        "struct_value_match_bind",
-        "struct_value_match_bind3",
     ];
     if !cfg!(debug_assertions) && parity_floor_active("self_host_runtime_diff") {
         let new_both_wrong: Vec<&str> = both_wrong

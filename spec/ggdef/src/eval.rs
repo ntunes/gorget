@@ -1765,6 +1765,24 @@ fn match_pattern(
                 }
                 Ok(Some(binds))
             }
+            // Struct constructor patterns match struct values by declaration order
+            // (language-reference §8.4 — constructor patterns match enum *or* struct).
+            Value::Struct { name, fields: sfs } if name == variant && sfs.len() == fields.len() => {
+                let mut binds = Vec::new();
+                for ((fname, fv), fp) in sfs.iter().zip(fields.iter()) {
+                    match match_pattern(ctx, state, fv, fp)? {
+                        Some(sub) => {
+                            for (n, proj) in sub {
+                                let mut full = vec![Proj::Field(fname.clone())];
+                                full.extend(proj);
+                                binds.push((n, full));
+                            }
+                        }
+                        None => return Ok(None),
+                    }
+                }
+                Ok(Some(binds))
+            }
             _ => Ok(None),
         },
     }
