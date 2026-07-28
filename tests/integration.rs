@@ -20080,7 +20080,22 @@ fn self_host_bootstrap_fixed_point() {
     // The strict goal is K=2 (pre-2026-05-21 invariant); Phase 2c relaxed it
     // during an ownership cascade. Seed = the measured value at 2026-07-27
     // (initial visibility instrumentation for the round-close battery).
-    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 5;
+    //
+    // Tightened 2026-07-28 from placeholder 5 -> 2 post-Track-F. Track B1 A-2
+    // Option (b) fold (`02082ae8`, `src/ir/lowering/exprs/calls.rs`) added a
+    // `cow_before_mutation` call BEFORE the `is_param_borrow_unique` guard on
+    // the bare-identifier / callee-passes-by-ptr fast-path. For a bare
+    // resource param it hit `cow_before_mutation` Case 1c
+    // (`context.rs:3653`) -> `cow_materialize_alias(local, local, span)`, a
+    // full deep-clone at every call site. On self-host's `expand_meta_for_in_stmts`
+    // (recursive SMatch/SIf/SWhile/SFor traversal passing bare `Module m`
+    // at each level) the ~9600-line self-compile ran one full-Module deep-clone
+    // per statement traversal — a clone-bomb that pushed stage-3 past its
+    // 600 s timeout. Track F moved `cow_before_mutation` and the re-resolve
+    // INSIDE the uniqueness guard, restoring the pre-Option-(b) fall-through
+    // for bare params. Convergence measured at stage-2 (strict, pre-2026-05-21
+    // invariant); latency 695.63 s from cold cache.
+    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 2;
     if let Some(k) = converged_at {
         assert!(
             k <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,
@@ -31845,6 +31860,35 @@ fn cow_amp_bare_param_arg() {
         "\
 4
 3
+done",
+    );
+}
+
+/// Track F regression fixture (2026-07-28): the `Ownership::Borrow &&
+/// callee_passes_by_ptr` fast-path in `src/ir/lowering/exprs/calls.rs` MUST
+/// only fire for genuine unique-borrow (`is_param_borrow_unique`) params —
+/// never for bare non-`&`-param locals. Commit `02082ae8` (Track B1 A-2
+/// Option (b)) called `cow_before_mutation` BEFORE the uniqueness guard,
+/// which for a bare resource param hits Case 1c of `cow_before_mutation`
+/// (`context.rs:3653`) and emits `cow_materialize_alias(local, local, span)`
+/// — a full deep-clone at EVERY call site. On driver.gg's
+/// `expand_meta_for_in_stmts` (recursive SMatch/SIf/SWhile/SFor traversal
+/// passing bare `Module m` at each level) that clone-bombed the ~9600-line
+/// self-compile from ~3 s to a 600 s bootstrap timeout.
+///
+/// This fixture is a minimal, deterministic proxy — exponential recursion
+/// passing a bare `Big` param (Vector[Vector[int]], ~4 MB per Big) — that
+/// hangs past 30 s pre-fix and completes in milliseconds post-fix.
+///
+/// RED-verified against the pre-fix compiler (`git checkout HEAD^ --
+/// src/ir/lowering/exprs/calls.rs`, c030aa10 gorget-1 tip): timed out at
+/// 60 s (RC=124). Post-fix: 6 ms, prints `13107200\ndone`.
+#[test]
+fn callable_bare_param_no_clone_bomb() {
+    run_gg(
+        "callable_bare_param_no_clone_bomb.gg",
+        "\
+13107200
 done",
     );
 }
