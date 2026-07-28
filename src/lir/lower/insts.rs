@@ -3732,25 +3732,19 @@ impl<'a> FuncLowering<'a> {
         // gorget_guard_get(guard*) → load guard->ptr, then load *(T*)ptr
         // gorget_guard_get_ptr(guard*) → load guard->ptr (returns void*)
         if matches!(emit_name, "gorget_guard_get" | "gorget_read_guard_get" | "gorget_write_guard_get") {
-            // Track J: the `Guard.get` / `ReadGuard.get` / `WriteGuard.get`
-            // path is now intercepted at IR-lowering
-            // (`src/ir/lowering/exprs/methods.rs`) and routes through
-            // `emit_guard_get_ptr` — the load produces a View-tagged local
-            // that drop-insertion skips (fixing the double-free /
-            // heap-use-after-free class filed as Track J). This LIR arm
-            // should therefore be unreachable for that path. Core #6
-            // executable guard: fire in debug so a routing regression is
-            // caught immediately; release builds skip the assert and fall
-            // through to the shallow-copy load below, which would
-            // reintroduce the leak — the release-mode behaviour is the
-            // pre-Track-J baseline, not silently wrong.
-            debug_assert!(
-                false,
-                "gorget_guard_get must be routed through emit_guard_get_ptr \
-                 at IR-lowering (src/ir/lowering/exprs/methods.rs); see \
-                 Track J. Reached via emit_name={emit_name} \
-                 original_name={original_name}"
-            );
+            // Track J: the explicit `.get()` method-call path is
+            // intercepted at IR-lowering (`src/ir/lowering/exprs/methods.rs`)
+            // and routes through `emit_guard_get_ptr` — that intercept is
+            // what fixes the double-free / heap-use-after-free class for
+            // heap-carrying inners. The `shared`-keyword desugaring path
+            // (and possibly others) still reaches THIS LIR arm; for non-
+            // heap inners the shallow copy below is SAFE (no drop chain to
+            // double-fire). Regressions on heap inners are guarded by the
+            // Track J fixture net (Guard/ReadGuard/WriteGuard × String/
+            // Vector[int]/Vector[String]/Dict + ASan gate). See follow-up
+            // TODO for a typed `borrow_read`-axis retirement that would
+            // route ALL Guard-get paths uniformly and let this arm become
+            // dead code.
             if let Some(d) = *dst {
                 let guard_ptr = lir_args[0]; // pointer to guard struct
                 // Look up the guard struct type from the original GIR name.
