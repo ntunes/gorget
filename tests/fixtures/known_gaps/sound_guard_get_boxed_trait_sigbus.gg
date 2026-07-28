@@ -1,0 +1,63 @@
+# Round XI Track M — KNOWN GAP (D36 unimplemented + MEMORY-UNSAFETY, HIGH).
+#
+# Class 4 of 4 filed by Track M — the WORST class per severity ranking (a
+# memory-unsafety defect; the strongest priority argument for a dedicated
+# Option A / D36-implementation round). CHAINED
+# `m.lock().get().greet()` on `Mutex[Box[Speaker]]`. Same `.get().greet()`
+# shape as class 3 (guard_get_bare_trait_fabricated_symbol.gg) but the outer
+# Box wrapper turns the fabricated-symbol LINK failure into a RUNTIME
+# SIGBUS — the code compiles clean AND links, and the crash only surfaces
+# at direct-binary execution. SIGBUS ships PAST build, which is arguably
+# worse than class 3's link error.
+#
+# Name-prefix `sound_` per the memory-safety fixture convention (siblings
+# in tests/fixtures/known_gaps/: sound_guard_bare_param_mutate_undefined_symbol
+# .gg, sound_guard_closure_capture_cc_fail.gg, sound_guard_get_string_
+# double_free.gg, sound_readguard_write_faces_dropped.gg, …).
+#
+# MECHANISM: `Guard[Box[Speaker]].get()` returns a value the compiler
+# treats as owned; Box's own auto-deref through the returned inner
+# subsequently accesses a bus-fault memory address (likely a stale Box
+# header interpreted as a raw pointer, or misaligned inner-object access).
+# Under D36 (ratified 2026-07-27, `docs/define-gorget/decisions.md:1363-1381`)
+# the entire chain should either dispatch correctly through the Guard →
+# Box → trait auto-deref stack OR be REJECTED at check with a
+# principled diagnostic — never compile-and-SIGBUS.
+#
+# DISTINCT FROM Track J (`sound_guard_get_string_double_free.gg` — double-free
+# on non-trait heap-inner via `.get()`'s ownership contract; different
+# root — that's an owned-return contract, this is a trait-dispatch +
+# Box-auto-deref stack producing invalid memory access).
+#
+# HEAD behavior (probe 2026-07-28):
+#   gg check <this>            → OK: no semantic errors (exit 0)
+#   gg build <this> -o /tmp/p  → OK (exit 0; compiles and links clean)
+#   /tmp/p                     → SIGBUS, direct-binary exit=135
+#   gg run <this>              → exit 1 (masks the signal detail;
+#                                per Core #15(d) `gg run` masks SIGSEGV/SIGBUS
+#                                as a silent exit 1 — always probe the
+#                                built binary directly)
+#
+# FIX DIRECTION (Option A / D36-implementation, DEFERRED to Round XII+):
+# same as classes 1/3 — extend Guard vtable dispatch to mirror Box in
+# `src/ir/lowering/exprs/methods.rs:1627-1682` AND extend Guard's `.get()`
+# return-type propagation to preserve trait inners. This class merits high
+# priority within Round XII's queue because it is memory-unsafety (per
+# Round XI theme).
+#
+# INTENDED (after Option A): prints `beep R2`.
+
+from std.collections import Box
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name
+
+void main():
+    print(Mutex[Box[Speaker]](Box.new(Robot("R2"))).lock().get().greet())

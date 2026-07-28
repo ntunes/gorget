@@ -37937,3 +37937,95 @@ fn guard_tuple_field_read() {
 fn writeguard_tuple_field_assign() {
     run_gg("writeguard_tuple_field_assign.gg", "42\n2");
 }
+
+// ============================================================================
+// Round XI Track M — D36 unimplemented, `Guard[Trait]`-method dispatch.
+// Four distinct defect classes filed as durable known_gaps repros. All four
+// assert the INTENDED post-D36 output (`beep R2`) or the correct reject; each
+// is `#[ignore]`d until Option A (D36-implementation) lands. See the
+// "Semantics / reference-grade rejection" bucket in TODO.md.
+// ============================================================================
+
+/// KNOWN GAP (Round XI Track M) — CHAINED `.method()` on a `Guard[Trait]`
+/// receiver passes the checker and reaches C-emit which fabricates
+/// `gorget_guard_greet` (no runtime definition), producing an
+/// `implicit declaration of function 'gorget_guard_greet'` cc error.
+/// The Box variant `Mutex[Box[Speaker]](Box.new(...)).lock().greet()`
+/// collapses to the SAME fabricated symbol at C-emit — one fixture
+/// pins both cells. D36 (2026-07-27) makes this a defect: the read
+/// face `.method()` MUST accept + auto-deref uniformly for
+/// Guard/ReadGuard/WriteGuard/Box. Asserts INTENDED `beep R2`.
+#[test]
+#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented — chained \
+Guard[Trait].method() fabricates gorget_guard_greet at C-emit. TODO.md."]
+fn guard_trait_chained_c_emit_fabrication() {
+    run_gg(
+        "known_gaps/guard_trait_chained_c_emit_fabrication.gg",
+        "beep R2",
+    );
+}
+
+/// KNOWN GAP (Round XI Track M) — NAMED-binding
+/// `Guard[Speaker] g = m.lock(); g.greet()` (bare trait as Mutex inner).
+/// Unlike the chained shape, the named form is REJECTED at check with
+/// `E_NoMethodFound: Guard[Speaker]`. D36 (2026-07-27) makes this a defect.
+/// Fixture pins the exact reject text (cross-module setup — same-file
+/// would render `Guard[trait Speaker]`).
+#[test]
+#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented — named \
+Guard[Speaker] g = m.lock(); g.greet() rejects E_NoMethodFound. TODO.md."]
+fn guard_trait_named_reject_bare() {
+    check_gg_fails(
+        "known_gaps/guard_trait_named_reject/main_bare.gg",
+        "no method `greet` found on type `Guard[Speaker]`",
+    );
+}
+
+/// KNOWN GAP (Round XI Track M) — NAMED-binding
+/// `Guard[Box[Speaker]] g = m.lock(); g.greet()` on `Mutex[Box[Speaker]]`.
+/// Same reject class as the bare sibling, DISTINCT error text
+/// (`Guard[Box[Speaker]]`) — enumerated per Core-#12 axis-completeness.
+/// D36 (2026-07-27) makes this a defect.
+#[test]
+#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented — named \
+Guard[Box[Speaker]] g = m.lock(); g.greet() rejects E_NoMethodFound. TODO.md."]
+fn guard_trait_named_reject_box() {
+    check_gg_fails(
+        "known_gaps/guard_trait_named_reject/main_box.gg",
+        "no method `greet` found on type `Guard[Box[Speaker]]`",
+    );
+}
+
+/// KNOWN GAP (Round XI Track M) — CHAINED `m.lock().get().greet()` on
+/// `Mutex[Speaker]` (bare trait): `Guard[Speaker].get()` mistypes its
+/// return as the raw inner slot, fabricating `int64_t__greet` which
+/// resolves at LINK stage with `undefined reference to 'int64_t__greet'`.
+/// Distinct from class 1 (C-emit stage). D36 (2026-07-27) makes this a
+/// defect — Guard[T].get() must propagate T faithfully AND dispatch on
+/// the returned value must auto-deref through the wrapper. Asserts
+/// INTENDED `beep R2`.
+#[test]
+#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented — \
+Guard[Speaker].get().greet() link-fails with int64_t__greet. TODO.md."]
+fn guard_get_bare_trait_fabricated_symbol() {
+    run_gg(
+        "known_gaps/guard_get_bare_trait_fabricated_symbol.gg",
+        "beep R2",
+    );
+}
+
+/// KNOWN GAP (Round XI Track M) — CHAINED `m.lock().get().greet()` on
+/// `Mutex[Box[Speaker]]` (MEMORY-UNSAFETY). Compiles clean, links clean,
+/// direct-binary SIGBUS exit=135 (`gg run` masks the signal as exit 1;
+/// always probe the built binary directly per Core #15(d)). Worst class
+/// per severity ranking — SIGBUS ships PAST build. D36 (2026-07-27)
+/// makes this a defect. Asserts INTENDED `beep R2`.
+#[test]
+#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented + \
+MEMORY-UNSAFETY — Guard[Box[Speaker]].get().greet() SIGBUS at runtime. TODO.md."]
+fn sound_guard_get_boxed_trait_sigbus() {
+    run_gg(
+        "known_gaps/sound_guard_get_boxed_trait_sigbus.gg",
+        "beep R2",
+    );
+}

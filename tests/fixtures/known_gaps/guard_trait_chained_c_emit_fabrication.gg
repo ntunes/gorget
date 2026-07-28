@@ -1,0 +1,49 @@
+# Round XI Track M — KNOWN GAP (D36 unimplemented, HIGH).
+#
+# Class 1 of 4 filed by Track M: CHAINED `.method()` on a Guard[Trait] receiver
+# passes the checker (surprising — the checker's auto-deref logic accepts it)
+# and reaches C-emit which FABRICATES a runtime call `gorget_guard_greet`
+# that has no runtime definition, causing a hard C-compile error.
+#
+# Under D36 (ratified 2026-07-27, `docs/define-gorget/decisions.md:1363-1381`)
+# the read face `.method()` with `&Inner` self MUST accept + auto-deref
+# uniformly for Guard + ReadGuard + WriteGuard + Box. This fixture pins the
+# bare-trait shape; the Box variant `Mutex[Box[Speaker]](Box.new(...)).lock()
+# .greet()` collapses to the SAME fabricated symbol at C-emit (pass-5 probe
+# verified `gorget_guard_greet`, not a distinct `gorget_guard_box_greet`),
+# so ONE fixture pins this class. The shape asymmetry between bare-trait and
+# Box variants surfaces in the check-REJECT of the NAMED form (see class 2 /
+# guard_trait_named_reject/).
+#
+# DISTINCT FROM Track J (`sound_guard_get_string_double_free.gg` — heap-inner
+# ownership on non-trait inners; different root — `.get()` returns owned Str
+# treated as owned local, double-freed at scope exit). This class is about
+# TRAIT dispatch on the Guard wrapper, not heap-inner ownership.
+#
+# HEAD behavior (probe 2026-07-28):
+#   gg check <this>            → OK: no semantic errors (exit 0)
+#   gg build <this> -o /tmp/p  → C-emit stage error (printed to stderr,
+#     wrapper still exits 0 — Core #15(d) probe note):
+#     implicit declaration of function 'gorget_guard_greet'
+#     C compiler exited with: exit status: 1
+#     (C source generated at /tmp/p.c line 3442; no binary produced)
+#
+# FIX DIRECTION (Option A / D36-implementation, DEFERRED to Round XII+):
+# extend `method_resolutions` value per D36 Q2 to
+# `{ def_id, auto_deref: Option<DerefWrapperKind> }`, add a Guard vtable
+# dispatch branch mirroring Box in `src/ir/lowering/exprs/methods.rs:1627-1682`.
+#
+# INTENDED (after Option A): prints `beep R2`.
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name
+
+void main():
+    print(Mutex[Speaker](Robot("R2")).lock().greet())
