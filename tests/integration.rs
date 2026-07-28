@@ -31068,6 +31068,29 @@ fn break_value_removed_error() {
     );
 }
 
+/// D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): an unnamed
+/// parameter's sigil in a function type goes AFTER the type
+/// (`Callable[void(int &)]`), mirroring the named-parameter rule
+/// (`void modify(Message &msg)`). The pre-D35 spelling with the sigil
+/// BEFORE the type (`Callable[void(&int)]`) is REJECTED at parse —
+/// never co-accepted (D32's close-the-enumeration-by-construction
+/// thesis). Without this NEG fixture, a future regression that re-
+/// permitted the pre-D35 spelling would leave the whole suite green
+/// because the migrated fixtures only exercise the ACCEPT path
+/// (fmt_d35_fn_type_sigil_round_trips covers formatter round-trip, not
+/// parser reject). Fixture is in param-position — a non-speculative
+/// parse context where the `FunctionTypeParamSigilBeforeType`
+/// diagnostic surfaces directly (the local-decl swallow is filed
+/// separately, see TODO). Fixture directory keeps the unparseable
+/// source OUT of top-level sweeps.
+#[test]
+fn d35_fn_type_sigil_before_type_error() {
+    check_gg_fails(
+        "d35_fn_type_sigil_before_type_error/main.gg",
+        "an unnamed parameter's sigil goes AFTER the type in a function type (D35)",
+    );
+}
+
 #[test]
 fn unknown_directive_error() {
     check_gg_fails("unknown_directive_error.gg", "unknown directive");

@@ -31,6 +31,12 @@
 # never feed it to the formatter/self-host drivers.
 !break_value_removed_error/
 !break_value_removed_error/*.gg
+# D35 pre-D35 fn-type sigil-before-type NEG fixture: unparseable BY DESIGN
+# (`Callable[void(&int)]` is REJECTED at parse; the fixture pins the reject
+# so a future regression re-permitting the pre-D35 spelling would trip it).
+# Same subdir rationale as break_value_removed_error/.
+!d35_fn_type_sigil_before_type_error/
+!d35_fn_type_sigil_before_type_error/*.gg
 !expr_nesting_max_depth/
 !expr_nesting_max_depth/*.gg
 !imported_nonexhaustive_match/
