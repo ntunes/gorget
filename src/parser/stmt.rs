@@ -650,6 +650,11 @@ impl Parser {
     fn parse_decl_or_expr_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
 
+        // Defensive clear: no promotable-error stash should be live at the
+        // entry to a fresh var-decl-or-expr attempt. See
+        // `pending_speculative_error` on `Parser` for the promotion protocol.
+        let _ = self.take_promotable_error();
+
         // Speculatively try: [mutable] type [ownership] name =
         //
         // The binding name must be a plain identifier. A reserved keyword in
@@ -682,7 +687,28 @@ impl Parser {
                 p.advance();
                 Spanned::new(Type::Inferred, auto_start)
             } else {
-                p.parse_type().ok()?
+                // D35 (Advisory A1, 2026-07-28): `parse_type` can fail with
+                // `FunctionTypeParamSigilBeforeType` on `Callable[void(&int)] cb`
+                // in local-decl position — a shape that's unambiguously a
+                // function type (`Callable[...]` opens the generic), so falling
+                // back to expression parsing after backtrack surfaces the
+                // fallback's generic `expected expression, found 'void'` and
+                // BURIES the D35 teaching diagnostic that names the
+                // replacement. Stash D35 so the caller can PROMOTE it in the
+                // None arm below; other parse-type failures still drop
+                // silently (the fallback expression parse may succeed).
+                match p.parse_type() {
+                    Ok(t) => t,
+                    Err(err) => {
+                        if matches!(
+                            err.kind,
+                            crate::errors::ParseErrorKind::FunctionTypeParamSigilBeforeType { .. }
+                        ) {
+                            p.stash_promotable_error(err);
+                        }
+                        return None;
+                    }
+                }
             };
 
             // D10(a) (decisions.md, ratified 2026-07-06): a `&` sigil between
@@ -744,6 +770,11 @@ impl Parser {
             }
         }) {
             Some(DeclName::Name { is_mutable, type_, name }) => {
+                // Clear any leftover stash: this path succeeded via the
+                // var-decl branch, so a stashed D35 from a sibling probe
+                // (unreachable in practice — same closure, single call —
+                // but keep the invariant tight) must not leak forward.
+                let _ = self.take_promotable_error();
                 let value = self.parse_expr()?;
                 self.consume_newline();
                 let pattern = Spanned::new(Pattern::Binding(name.node), name.span);
@@ -761,7 +792,24 @@ impl Parser {
                 span,
             }),
             Some(DeclName::MissingInit { span }) => Err(self.error_missing_init(span)),
-            None => self.parse_expr_or_assign_stmt(),
+            None => {
+                // D35 (Advisory A1, 2026-07-28): the speculative type parse
+                // may have stashed `FunctionTypeParamSigilBeforeType`. We
+                // cannot promote it unconditionally — a shape like
+                // `cb(&y)` in stmt position triggers `parse_type` on `cb`
+                // (a `Named` type-start), which sees `cb(...)`, treats it
+                // as a function-type context, then hits `&y` and emits
+                // D35. That shape is a legitimate function-CALL expression
+                // and the fallback expression parse succeeds. So the rule
+                // is: PROMOTE D35 only if the fallback ALSO fails —
+                // meaning the shape really was a function-type-decl and
+                // the D35 teaching diagnostic is the right story to tell.
+                let stashed = self.take_promotable_error();
+                match self.parse_expr_or_assign_stmt() {
+                    Ok(stmt) => Ok(stmt),
+                    Err(fallback_err) => Err(stashed.unwrap_or(fallback_err)),
+                }
+            }
         }
     }
 
