@@ -2966,33 +2966,149 @@ impl<'a> TypeChecker<'a> {
                                     // (name-lookup because the inner def can be a `DefKind::Import`
                                     // placeholder that doesn't key `traits.traits` directly), unify
                                     // args against the sig, and return the sig's return type.
-                                    // We DO NOT set an `auto_deref` marker on `method_resolutions`:
-                                    // the IR vtable-dispatch path (which keys on the `Box__Trait`
-                                    // type name, NOT on the marker) is the right lowering and would
-                                    // be broken by E2's `Box__T__get_ptr` projection (there is no
-                                    // `Shape__area` function to dispatch to).
-                                    if matches!(container_kind, Some(DerefWrapperKind::DerefTarget)) {
+                                    //
+                                    // TRACK N1 (2026-07-28): widened to also cover
+                                    // `Guard[Box[Trait]].method()` (and its ReadGuard/WriteGuard
+                                    // siblings) under D36 read/write face uniformity. When the
+                                    // container is a guard wrapper (`GuardAccept`) OR Box
+                                    // (`DerefTarget`), and the inner shape is either a
+                                    // `TraitObject`, a bare-trait `Defined/Generic`, or a
+                                    // cross-module `Generic(Box, [Import(trait)])`, look up the
+                                    // trait's method sig by name and dispatch.
+                                    //
+                                    // For `GuardAccept` we set `auto_deref = Some(GuardAccept)`
+                                    // so IR-lowering projects the receiver through
+                                    // `emit_guard_get_ptr` (`ir/lowering/exprs/methods.rs:546-570`);
+                                    // the resulting `MutPtr(Box__Trait)` then falls into the
+                                    // existing Box[Trait] vtable dispatch at
+                                    // `ir/lowering/exprs/methods.rs:1694-1749`.
+                                    //
+                                    // For `DerefTarget` we KEEP `auto_deref = None`:
+                                    // Track G's rationale — the IR vtable-dispatch path keys on
+                                    // the `Box__Trait` type name, NOT on the marker, and
+                                    // routing through `Box__T__get_ptr` would look up a
+                                    // nonexistent `Trait__method`.
+                                    //
+                                    // TODO (D36 face rule): the Track-G/N1 dispatch block does
+                                    // NOT enforce D36's face split (ReadGuard rejects `&self`
+                                    // methods; GuardAccept rejects `!self` methods — mirrored
+                                    // by the E2 block at `typecheck.rs:2822-2844` for the
+                                    // concrete-inner case). Fixture 2b is read-face only so it
+                                    // doesn't trip. See TODO.md "Semantics / reference-grade
+                                    // rejection" bucket.
+                                    if matches!(
+                                        container_kind,
+                                        Some(DerefWrapperKind::DerefTarget)
+                                            | Some(DerefWrapperKind::GuardAccept)
+                                    ) {
                                         if let ResolvedType::Generic(_, targs) =
                                             self.types.get(resolved_receiver).clone()
                                         {
                                             if let Some(inner_tid) = targs.first().copied() {
                                                 let inner_resolved = self.resolve_type(inner_tid);
-                                                let inner_name = match self.types.get(inner_resolved) {
-                                                    ResolvedType::Defined(d) | ResolvedType::Generic(d, _) => {
+                                                // Extract the trait def_id + name from the inner
+                                                // type. Three same-file shapes:
+                                                //   * `Defined(d)` / `Generic(d, _)` — bare-trait
+                                                //     inner (e.g. `Guard[Speaker]`).
+                                                //   * `TraitObject(d)` — Box[Trait] inner
+                                                //     normalised by `types.rs:424` (same-file
+                                                //     `Guard[Box[Speaker]]` collapses to
+                                                //     `Generic(Guard, [TraitObject(Speaker)])`).
+                                                let inner_ty_owned =
+                                                    self.types.get(inner_resolved).clone();
+                                                let mut inner_name_opt = match &inner_ty_owned {
+                                                    ResolvedType::Defined(d)
+                                                    | ResolvedType::Generic(d, _)
+                                                    | ResolvedType::TraitObject(d) => {
                                                         Some(self.scopes.get_def(*d).name.clone())
                                                     }
                                                     _ => None,
                                                 };
-                                                if let Some(inner_name) = inner_name {
+                                                // Cross-module `Guard[Box[Trait]]`: the inner is
+                                                // `Generic(Box, [Import(trait)])` — the
+                                                // `types.rs:428` `DefKind::Trait` carve-out
+                                                // doesn't fire on `Import` placeholders, so we
+                                                // never collapse to `TraitObject`. Peel one Box
+                                                // layer when the outer name misses the trait
+                                                // registry AND the outer def carries the typed
+                                                // `DerefWrapperKind::DerefTarget` marker (the
+                                                // SSoT is-Box discriminator — never a name-match,
+                                                // per Layering rule 2).
+                                                let outer_hit_probe = inner_name_opt
+                                                    .as_ref()
+                                                    .and_then(|n| {
+                                                        self.traits
+                                                            .traits
+                                                            .values()
+                                                            .find(|t| &t.name == n)
+                                                    });
+                                                if outer_hit_probe.is_none() {
+                                                    if let ResolvedType::Generic(
+                                                        outer_did,
+                                                        box_targs,
+                                                    ) = &inner_ty_owned
+                                                    {
+                                                        let outer_is_box = self
+                                                            .scopes
+                                                            .get_def(*outer_did)
+                                                            .deref_wrapper_kind
+                                                            == Some(DerefWrapperKind::DerefTarget);
+                                                        if outer_is_box {
+                                                            if let Some(&box_inner_tid) =
+                                                                box_targs.first()
+                                                            {
+                                                                let box_inner_resolved =
+                                                                    self.resolve_type(
+                                                                        box_inner_tid,
+                                                                    );
+                                                                inner_name_opt = match self
+                                                                    .types
+                                                                    .get(box_inner_resolved)
+                                                                {
+                                                                    ResolvedType::Defined(d)
+                                                                    | ResolvedType::Generic(
+                                                                        d,
+                                                                        _,
+                                                                    )
+                                                                    | ResolvedType::TraitObject(
+                                                                        d,
+                                                                    ) => Some(
+                                                                        self.scopes
+                                                                            .get_def(*d)
+                                                                            .name
+                                                                            .clone(),
+                                                                    ),
+                                                                    _ => None,
+                                                                };
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                if let Some(inner_name) = inner_name_opt {
                                                     // Find the trait by name (import-follow-safe).
                                                     let trait_hit = self.traits.traits.values()
                                                         .find(|t| t.name == inner_name)
                                                         .and_then(|t| t.methods.get(&method.node)
                                                             .map(|sig| (t.def_id, sig.clone())));
                                                     if let Some((trait_def_id, sig)) = trait_hit {
+                                                        // For GuardAccept: mark auto_deref so IR
+                                                        // projects the receiver through
+                                                        // `emit_guard_get_ptr`; DerefTarget stays
+                                                        // `None` (see comment above).
+                                                        let auto_deref = if matches!(
+                                                            container_kind,
+                                                            Some(DerefWrapperKind::GuardAccept)
+                                                        ) {
+                                                            Some(DerefWrapperKind::GuardAccept)
+                                                        } else {
+                                                            None
+                                                        };
                                                         self.method_resolutions.insert(
                                                             method.span.start,
-                                                            MethodResolution::direct(trait_def_id),
+                                                            MethodResolution {
+                                                                def_id: Some(trait_def_id),
+                                                                auto_deref,
+                                                            },
                                                         );
                                                         if args.len() != sig.params.len() {
                                                             self.error(
