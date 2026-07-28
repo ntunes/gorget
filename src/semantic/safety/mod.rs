@@ -448,6 +448,24 @@ pub(super) struct BorrowChecker<'a> {
     /// Dead-write lint: bare (Borrow) resource params of the current
     /// function. DefId → tracking info. Reset per function.
     pub(super) deadwrite_params: FxHashMap<DefId, DeadWriteInfo>,
+    /// Bare-Res-param roots that appeared as a bare-borrow arg in a SELF-
+    /// RECURSIVE call site inside this function's body. Populated at the free-
+    /// call and method-call arms in `check_expr`; consumed at end-of-
+    /// `check_function` by the `W_RecursiveBareParamMaterialize` emit block,
+    /// intersected with `bare_param_mutated` (an existing set) — the diagnostic
+    /// fires only for params both mutated in the body AND recursed bare. Reset
+    /// per function (inline in `check_function`, alongside the other per-fn
+    /// sets — NOT in `reset_per_function_state`, which is a different set).
+    pub(super) bare_param_recursed_bare: FxHashSet<DefId>,
+    /// The DefId of the function currently being checked. Set at the top of
+    /// `check_function` via `scopes.lookup_def_by_span(&func.name.node,
+    /// func.name.span)` (the identity-preserving lookup that also succeeds for
+    /// equip methods — plain `scopes.lookup` returns the wrong def for equip
+    /// methods because the equip-block scope is not pushed at `check_function`
+    /// entry). Used by the self-recursion classifier:
+    /// `resolve_callee_def_id(callee) == self.current_fn_def_id` is the
+    /// self-recursive-call predicate at both call arms. Cleared per function.
+    pub(super) current_fn_def_id: Option<DefId>,
     /// Monotonic event clock for read/write ordering within a function walk.
     pub(super) deadwrite_clock: u32,
     /// Stack of unique loop ids currently being walked (For/While/Loop bodies).
@@ -569,6 +587,8 @@ impl<'a> BorrowChecker<'a> {
             current_bare_params: Vec::new(),
             bare_param_mutated: FxHashSet::default(),
             deadwrite_params: FxHashMap::default(),
+            bare_param_recursed_bare: FxHashSet::default(),
+            current_fn_def_id: None,
             deadwrite_clock: 0,
             deadwrite_loop_stack: Vec::new(),
             deadwrite_next_loop_id: 0,

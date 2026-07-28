@@ -1,0 +1,27 @@
+# Track I diagnostic control (NEGATIVE 3) — the user opts into per-frame
+# copies explicitly with `b.data.clone()`. The root of `&local` is `local`
+# (an Owned temp), NOT `b`; `bare_param_mutated` never picks up `b`'s def_id
+# because nothing writes through `b` in the body (`b.data` is only READ into
+# `local`). Emit block stays silent.
+#
+# `b.data.clone()` uses Vector's builtin clone (no derive needed on the user
+# struct); the diagnostic reasoning above is unchanged versus the pattern of
+# cloning the whole `Big`.
+struct Big:
+    Vector[int] data
+
+void nudge(Vector[int] &d, int n):
+    d.push(n)
+
+void go(Big b, int n):
+    if n <= 0:
+        return
+    Vector[int] local = b.data.clone()   # explicit — root of &... is `local`
+    nudge(&local, n)
+    go(b, n - 1)                         # bare recursion, NO &-formation on `b`
+
+void main():
+    Vector[int] v = [1]
+    Big w = Big(!v)
+    go(w, 3)
+    print(w.data.len())                  # 1 — each level's `local` dies

@@ -1,0 +1,24 @@
+# Track I diagnostic pin (POSITIVE 1) — Path X classic: a bare (Borrow) Res
+# param `b` is `&`-formed inside a self-recursive call. `nudge(&b, n)` reaches
+# `mark_mut_param_if_applicable` at check_expr.rs:119 (Call arm's
+# MutableBorrow branch), populating `bare_param_mutated`; `go(b, n-1)` is a
+# self-recursive Call with `b` bare, populating `bare_param_recursed_bare`.
+# Emit block fires ONE `W_RecursiveBareParamMaterialize` per bad fn.
+# See docs/devbook/11-copy-on-write.md "Accepted charter exception".
+struct Big:
+    Vector[int] data
+
+void nudge(Big &x, int n):
+    x.data.push(n)
+
+void go(Big b, int n):
+    if n <= 0:
+        return
+    nudge(&b, n)          # <-- Path X: mark_mut_param_if_applicable(&b)
+    go(b, n - 1)          # <-- self-recursion with `b` bare (rule 5)
+
+void main():
+    Vector[int] v = [1]
+    Big w = Big(!v)
+    go(w, 3)
+    print(w.data.len())   # 1 — caller untouched (per-frame materialize)

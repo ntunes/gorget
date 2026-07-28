@@ -9954,6 +9954,87 @@ fn deadwrite_ok_branch_sibling_read() {
     check_gg_silent_for("deadwrite_ok_branch_sibling_read.gg", DEADWRITE_MSG);
 }
 
+// ─── W_RecursiveBareParamMaterialize (Track I, 2026-07-28) ─────────
+// Charter-accepted §3.1 exception (see docs/devbook/11-copy-on-write.md
+// "Accepted charter exception"): a bare (Borrow) Res param mutated inside a
+// self-recursive call materializes a private copy PER FRAME, and the
+// recursion multiplies the cost. The warning steers users to `&param` +
+// callers spelling `&arg` for write-through-to-owner semantics, OR explicit
+// `.clone()` for per-frame private copies made honest about intent. 4
+// positives (POS 1 Path X classic · POS 2 Path Y user &self · POS 3 Path Y
+// builtin · POS 4 Path Z Assign target) + 3 negatives (silent-when-forwarded ·
+// silent-when-non-recursive · silent-when-explicitly-cloned).
+
+#[test]
+fn recursive_bare_param_materialize_amp_arg_warns() {
+    build_gg_expect_warning(
+        "recursive_bare_param_materialize_amp_arg.gg",
+        "parameter `b` is mutated inside a recursive self-call",
+    );
+}
+
+#[test]
+fn recursive_bare_param_materialize_amp_self_warns() {
+    build_gg_expect_warning(
+        "recursive_bare_param_materialize_amp_self.gg",
+        "parameter `self` is mutated inside a recursive self-call",
+    );
+}
+
+#[test]
+fn recursive_bare_param_materialize_builtin_push_warns() {
+    build_gg_expect_warning(
+        "recursive_bare_param_materialize_builtin_push.gg",
+        "parameter `v` is mutated inside a recursive self-call",
+    );
+}
+
+#[test]
+fn recursive_bare_param_materialize_direct_assign_warns() {
+    build_gg_expect_warning(
+        "recursive_bare_param_materialize_direct_assign.gg",
+        "parameter `c` is mutated inside a recursive self-call",
+    );
+}
+
+#[test]
+fn recursive_bare_param_amp_control_amp_forwarded_silent() {
+    // Correct shape (declared `&b` + spell `&b` at recursion): write-through
+    // reaches the owner via an unbroken `&`-chain; no per-frame materialize;
+    // diagnostic must stay silent.
+    run_gg("recursive_bare_param_amp_control_amp_forwarded.gg", "4");
+    build_gg_expect_no_warning(
+        "recursive_bare_param_amp_control_amp_forwarded.gg",
+        "W_RecursiveBareParamMaterialize",
+    );
+}
+
+#[test]
+fn bare_param_amp_arg_non_recursive_silent() {
+    // LOAD-BEARING negative: `&b`-formation on bare param WITHOUT
+    // self-recursion is Charter-accepted one-shot; diagnostic must stay
+    // silent. Losing this negative would make W_* de-facto reject on every
+    // one-shot `&b`, which the owner explicitly ruled out.
+    run_gg("bare_param_amp_arg_non_recursive_silent.gg", "1");
+    build_gg_expect_no_warning(
+        "bare_param_amp_arg_non_recursive_silent.gg",
+        "W_RecursiveBareParamMaterialize",
+    );
+}
+
+#[test]
+fn recursive_bare_param_explicit_clone_silent() {
+    // User opts into per-frame copies via explicit `b.data.clone()` — root
+    // of `&local` is `local` (Owned temp), not `b`. Nothing writes through
+    // `b`, so `bare_param_mutated` never picks it up; diagnostic stays
+    // silent.
+    run_gg("recursive_bare_param_explicit_clone_silent.gg", "1");
+    build_gg_expect_no_warning(
+        "recursive_bare_param_explicit_clone_silent.gg",
+        "W_RecursiveBareParamMaterialize",
+    );
+}
+
 
 #[test]
 fn const_assign_error() {

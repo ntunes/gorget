@@ -1719,6 +1719,12 @@ impl<'a> BorrowChecker<'a> {
         self.deadwrite_next_loop_id = 0;
         self.deadwrite_write_root = None;
         self.live_guards.clear();
+        // W_RecursiveBareParamMaterialize per-fn state. Cleared here (inline)
+        // alongside the existing per-fn sets — not in `reset_per_function_state`
+        // (a different set). `current_fn_def_id` is set below via
+        // `scopes.lookup_def_by_span` so equip methods resolve correctly.
+        self.bare_param_recursed_bare.clear();
+        self.current_fn_def_id = None;
 
         // Set scope-aware lookup context for this function
         self.current_fn_scope = self.function_body_scopes
@@ -1736,6 +1742,23 @@ impl<'a> BorrowChecker<'a> {
         } else {
             self.current_return_type_id = None;
         }
+
+        // W_RecursiveBareParamMaterialize self-recursion classifier: capture
+        // the CURRENT fn's DefId so the classifier at the Call / MethodCall
+        // arms can compare via `resolve_callee_def_id(callee) ==
+        // self.current_fn_def_id`. ⚠ MUST use `lookup_def_by_span` (identity
+        // by (name, span)), not `scopes.lookup(name)` — `check_items_recursive`
+        // (`mod.rs:723-726`) calls `check_function` on equip methods WITHOUT
+        // pushing the EquipBlock scope, so `scopes.current` is at module scope
+        // and `lookup("tick")` walks module-scope chains, MISSING the equip-
+        // scoped method (and every method with the same name in a different
+        // equip block). `lookup_def_by_span` scans the per-name index by
+        // definition span, which is unique per method, so it resolves the true
+        // decl. Without this the self-recursion classifier silently fails to
+        // fire for method-defined recursive fns (POSITIVE 2 pins this).
+        self.current_fn_def_id = self
+            .scopes
+            .lookup_def_by_span(&func.name.node, func.name.span);
 
         // Set up param origins for lifetime tracking
         for (i, param) in func.params.iter().enumerate() {
@@ -1993,6 +2016,54 @@ impl<'a> BorrowChecker<'a> {
                     },
                     span: wspan,
                 });
+            }
+        }
+
+        // Emit recursive-materialize warnings
+        // (RecursiveBareParamMaterialize): a bare (Borrow) resource param
+        // was (a) mutated inside the body — through `&param` args, mutating
+        // `&self` methods, builtin mutators like `.push`, or direct field/
+        // index assignment (all five sites route through
+        // `mark_mut_param_if_applicable`, which populates
+        // `bare_param_mutated`) — AND (b) reached a bare-borrow arg of a
+        // self-recursive call (populated at the Call / MethodCall arms via
+        // `bare_param_recursed_bare`). Each recursive frame materializes a
+        // private copy under §3.1; recursion multiplies the cost.
+        // Charter-accepted §3.1 exception (devbook/11 "Accepted charter
+        // exception"); steers users to `&param` + callers spelling `&arg` for
+        // caller-side write-through, OR explicit `.clone()` for per-frame
+        // copies. Skipped in imported modules like sibling warnings;
+        // GG_RECURSIVE_MATERIALIZE_ALL=1 is the corpus-sweep bypass (mirrors
+        // GG_DEADWRITE_ALL / GG_NEEDLESSMUT_ALL).
+        let recursive_materialize_all =
+            std::env::var("GG_RECURSIVE_MATERIALIZE_ALL").is_ok();
+        if self.imported_module_depth == 0 || recursive_materialize_all {
+            // Deterministic emission: sort by param_span.
+            let mut entries: Vec<(String, crate::span::Span)> = self
+                .deadwrite_params
+                .iter()
+                .filter_map(|(def_id, info)| {
+                    if !self.bare_param_mutated.contains(def_id) {
+                        return None;
+                    }
+                    if !self.bare_param_recursed_bare.contains(def_id) {
+                        return None;
+                    }
+                    Some((info.name.clone(), info.param_span))
+                })
+                .collect();
+            entries.sort_by_key(|(_, span)| (span.start, span.end));
+            for (name, param_span) in entries {
+                self.stale_warnings.push(
+                    crate::semantic::errors::SemanticWarning {
+                        kind:
+                            crate::semantic::errors::SemanticWarningKind::RecursiveBareParamMaterialize {
+                                name,
+                                param_span,
+                            },
+                        span: param_span,
+                    },
+                );
             }
         }
 

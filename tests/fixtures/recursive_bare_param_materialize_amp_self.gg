@@ -1,0 +1,23 @@
+# Track I diagnostic pin (POSITIVE 2) — Path Y user branch, D2-rider parity:
+# a bare `self` in an equip method's `void tick(self, ...)` receiver is
+# `&`-marked via a mutating `&self` method call (`self.bump()`) at
+# check_expr.rs:459 (MethodCall arm, `receiver_is_mutating` branch's user path).
+# Then `self.tick(n - 1)` is a self-recursive MethodCall — the classifier
+# picks up the receiver being a tracked bare-Res param.
+struct Counter:
+    Vector[int] hits
+
+equip Counter:
+    void bump(&self):
+        self.hits.push(1)
+
+    void tick(self, int n):        # bare `self` (Ownership::Borrow)
+        if n <= 0:
+            return
+        self.bump()                # <-- Path Y: mark self via receiver-mut
+        self.tick(n - 1)           # <-- self-recursion via method call
+
+void main():
+    Counter c = Counter(hits=[])
+    c.tick(3)
+    print(c.hits.len())            # 0 — caller untouched (per-frame copies)

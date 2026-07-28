@@ -1,0 +1,22 @@
+# Track I diagnostic pin (POSITIVE 4) — Path Z: direct field-assign target
+# on a bare (Borrow) Res param `c`. `c.hits = c.hits.clone()` routes through
+# the Assign target site at check_stmt.rs:635, which calls
+# `mark_mut_param_if_applicable` — populating `bare_param_mutated`. The
+# self-recursive `go(c, n-1)` is a bare-borrow Call arg, so
+# `bare_param_recursed_bare` picks up `c`. Payload is `Vector[int]` so the
+# struct is resource-typed (`deadwrite_params` seeding gate at
+# check_stmt.rs:1789-1806 requires `is_self || is_resource`; a scalar-only
+# Counter would be Copy → seeding skipped → diagnostic silent).
+struct Counter:
+    Vector[int] hits              # Vector[int] is a resource -> Counter is a resource
+
+void go(Counter c, int n):
+    if n <= 0:
+        return
+    c.hits = c.hits.clone()       # <-- Path Z (Assign target)
+    go(c, n - 1)
+
+void main():
+    Counter c = Counter(hits=[1])
+    go(c, 3)
+    print(c.hits.len())           # 1 — caller's `c` untouched (per-frame)

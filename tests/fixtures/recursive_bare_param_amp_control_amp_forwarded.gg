@@ -1,0 +1,21 @@
+# Track I diagnostic control (NEGATIVE 1) — the correct shape: declare `&b`
+# and spell `&b` at the self-recursive call, so the write-through propagates
+# via an unbroken `&`-chain to the true owner. No per-frame materialize; the
+# diagnostic must stay silent.
+struct Big:
+    Vector[int] data
+
+void nudge(Big &x, int n):
+    x.data.push(n)
+
+void go(Big &b, int n):            # `&b` — write-through declared
+    if n <= 0:
+        return
+    nudge(&b, n)
+    go(&b, n - 1)                  # `&b` at recursion (D31-strict passes)
+
+void main():
+    Vector[int] v = [1]
+    Big w = Big(!v)
+    go(&w, 3)
+    print(w.data.len())            # 4 — writes reach the owner

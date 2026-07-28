@@ -97,6 +97,24 @@ pub enum SemanticWarningKind {
         /// The parameter's declaration site (secondary label).
         param_span: Span,
     },
+    /// A bare (Borrow) resource parameter is mutated inside a self-recursive
+    /// call — through `&param` into a `&`-declared callee, a mutating `&self`
+    /// method, a builtin mutator like `.push`, or direct field/index
+    /// assignment — AND the parameter reaches a bare-borrow arg of the same
+    /// self-recursive call. Each recursion level materializes a private copy
+    /// per §3.1 (each frame is a fresh immutable context; the write lands on
+    /// a private copy); recursion multiplies the cost (measured: O(N) linear,
+    /// O(2^N) branching). The user almost certainly meant either to declare
+    /// `&{name}` and spell `&arg` at callers (the write-through then reaches
+    /// the true owner via an unbroken `&`-chain), OR to materialize
+    /// explicitly with `{name}.clone()` (per-frame private copies made honest
+    /// about intent). Charter-accepted §3.1 exception; steers `&`-forward —
+    /// see docs/devbook/11-copy-on-write.md "Accepted charter exception".
+    RecursiveBareParamMaterialize {
+        name: String,
+        /// The parameter's declaration site (primary label).
+        param_span: Span,
+    },
     /// Collection mutated while an implicit CoW borrow (from .get/.unwrap/index) is alive.
     /// The CoW system handles correctness, but the pattern may be confusing.
     CowBorrowMutation { source: String, borrow: String },
@@ -141,6 +159,7 @@ impl SemanticWarningKind {
             SemanticWarningKind::CouldBeConst { .. } => "W_CouldBeConst",
             SemanticWarningKind::NeedlessMutableBorrow { .. } => "W_NeedlessMutableBorrow",
             SemanticWarningKind::DeadBareParamWrite { .. } => "W_DeadBareParamWrite",
+            SemanticWarningKind::RecursiveBareParamMaterialize { .. } => "W_RecursiveBareParamMaterialize",
             SemanticWarningKind::CowBorrowMutation { .. } => "W_CowBorrowMutation",
             SemanticWarningKind::SuggestThrowsRefactor { .. } => "W_SuggestThrowsRefactor",
         }
@@ -198,6 +217,20 @@ impl std::fmt::Display for SemanticWarning {
                 // 2026-07-16): one format string yields both flavors —
                 // `&self` for the self param, `&<param>` otherwise.
                 write!(f, "this writes to a private copy that is never read — the caller's value is unchanged; did you mean `&{name}`?")
+            }
+            SemanticWarningKind::RecursiveBareParamMaterialize { name, .. } => {
+                // Message honestly names the two reference-grade fixes
+                // (declare `&param` for caller-side write-through, OR
+                // materialize explicitly with `.clone()`). "Mutated" (not
+                // "`&`-formed") is the precise umbrella term: the diagnostic
+                // covers `&arg`, mutating `&self` methods, builtin mutators
+                // like `.push`, AND direct field/index assignment. For `self`
+                // the same format string renders naturally as "parameter
+                // `self` is mutated…".
+                write!(
+                    f,
+                    "parameter `{name}` is mutated inside a recursive self-call — each recursion level materializes a private copy of `{name}`; declare `&{name}` and spell `&arg` at callers (the write-through then propagates via an unbroken `&`-chain, §3.1), or materialize explicitly with `{name}.clone()` (per-frame private copies)"
+                )
             }
             SemanticWarningKind::CowBorrowMutation { source, borrow } => {
                 write!(f, "`{source}` mutated while `{borrow}` holds an element — clone is inserted automatically")
