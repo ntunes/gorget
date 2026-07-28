@@ -25302,7 +25302,7 @@ fn self_host_runtime_diff() {
     // 1323→1332 from the round's new fixtures (Track H's sound_amp_v_i_tuple_field_writethrough
     // + sound_tupstruct_field_writethrough graduated; Track I's 7 diagnostic fixtures — POS 1-4
     // + NEG 1-3, none of which are self_host_runtime_diff-eligible). Floor = 1244 − 5 jitter = 1239.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1239;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1254;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
