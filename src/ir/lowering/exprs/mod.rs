@@ -841,8 +841,54 @@ fn lower_expr_inner(
         Expr::TupleFieldAccess { object, index } => {
             let obj = lower_expr(ctx, builder, object);
             if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
-                // Resolve the field type from the tuple's TypeDef
                 let local_idx = place.local.0 as usize;
+                if local_idx < builder.locals.len() {
+                    let local_type_id = builder.locals[local_idx].type_id;
+                    // Guard[T] auto-deref for tuple-field READS — `g.0` where
+                    // `g: Guard[(A,B)]` and index 0 lives on the GUARDED tuple,
+                    // not on the wrapper. `guard_of` peels Ptr/MutPtr, so a
+                    // guard reached through a `&`/`!` param takes this same
+                    // branch (READS are legal through every guard kind,
+                    // ReadGuard included — only WRITES discriminate). Without
+                    // this, `field_load` on the Guard type reads the wrapper's
+                    // first slot (`owner`) as an int — LLVM prints garbage, C
+                    // fails to compile (`->owner` doesn't exist on the mangled
+                    // struct). Mirror of `lower_field_access`'s Guard branch
+                    // above.
+                    if let Some(info) = guard_of(ctx, local_type_id) {
+                        let (inner_ptr_local, inner_type) = emit_guard_get_ptr(ctx, builder, place, &info);
+                        let deref_place = Place {
+                            local: inner_ptr_local,
+                            projections: vec![Projection::Deref],
+                        };
+                        let inner_name = match ctx.type_name_for_id(inner_type) {
+                            Some(n) => n.to_string(),
+                            None => return Operand::Constant(Constant::Unit),
+                        };
+                        let elem_type = ctx
+                            .type_registry
+                            .get_type_def(&inner_name)
+                            .and_then(|td| match &td.kind {
+                                TypeDefKind::Struct(s) => s.fields.get(*index).map(|f| f.type_id),
+                                _ => None,
+                            })
+                            .unwrap_or(I64_TYPE);
+                        // Resource-typed elements: return a Ptr(T) reference
+                        // (same as non-Guard tuple-field read path just below).
+                        let result_type = if ctx.type_registry.is_resource_type(elem_type) {
+                            ctx.type_registry.insert(GirType::Ptr(elem_type))
+                        } else {
+                            elem_type
+                        };
+                        let base_local = deref_place.local;
+                        let dst = builder.field_load(deref_place, *index as u32, result_type);
+                        if matches!(ctx.type_registry.get(result_type), Some(GirType::Ptr(_))) {
+                            ctx.set_field_or_elem_borrow(builder, dst, base_local, *index as u32);
+                        }
+                        return FunctionBuilder::copy(dst);
+                    }
+                }
+                // Resolve the field type from the tuple's TypeDef
                 let elem_type = if local_idx < builder.locals.len() {
                     let tuple_type_id = builder.locals[local_idx].type_id;
                     resolve_tuple_field_type(ctx, tuple_type_id, *index)
@@ -2784,6 +2830,30 @@ pub(in crate::ir::lowering) fn place_expr_type_only(
         Expr::TupleFieldAccess { object, index } => {
             let obj_t = place_expr_type_only(ctx, object)?;
             let resolved = ctx.pointee_type(obj_t).unwrap_or(obj_t);
+            // GUARD AUTO-DEREF for tuple-index — `g.0` where `g: Guard[(A,B)]`.
+            // The producer (`try_resolve_tuple_field_place`) projects through
+            // the guard's inner pointer to the tuple element; this function must
+            // TYPE the same projection or `&g.0` never reaches the Family-1
+            // chokepoint and falls back to the read path — the exact class the
+            // `place_type_only_covers_the_producer_forms` lint retires. Mirrors
+            // the `FieldAccess` sibling's Guard branch above (including the
+            // `ReadGuard` early-out: a read-only guard resolves no write place
+            // there, so typing one here would send `&rg.0` down the chokepoint
+            // for a place the producer will refuse). ⚠ NOT
+            // `resolve_tuple_field_type` — it falls back to `I64_TYPE` on miss
+            // (silent mistyping); use the inline lookup, matching the non-Guard
+            // arm's rationale below.
+            if let Some(info) = guard_of(ctx, resolved) {
+                if info.is_read_only() {
+                    return None;
+                }
+                let inner_name = ctx.type_name_for_id(info.inner_type)?;
+                let type_def = ctx.type_registry.get_type_def(inner_name)?;
+                return match &type_def.kind {
+                    TypeDefKind::Struct(s) => s.fields.get(*index).map(|f| f.type_id),
+                    _ => None,
+                };
+            }
             // ⚠ DELIBERATELY NOT `resolve_tuple_field_type` HERE, even though it
             // is the obvious helper. That function falls back to `I64_TYPE` when
             // the lookup misses (`exprs/type_reg.rs`) — a WRONG type rather than
@@ -3407,6 +3477,34 @@ pub(super) fn try_resolve_tuple_field_place(
             }
             _ => {}
         }
+    }
+    // Guard[T] auto-deref for writes: guard.0 = v → (*get_ptr(&guard)).0 = v.
+    // Mirror of `try_resolve_field_place`'s Guard branch (see that fn for the
+    // full narrative on the typed `TypeMapper::guard_types` channel and the
+    // shared `emit_guard_get_ptr` helper). The arm-parity lint
+    // `field_and_tuple_place_resolvers_cover_the_same_object_forms` explicitly
+    // documents this TYPE-DRIVEN branch as a KNOWN blind spot the SYNTACTIC lint
+    // cannot see (lints.rs:7025-7045); without this branch, `g.0 = v` on
+    // `Guard[(int, int)]` walked to `resolve_tuple_field_type(Guard__…, 0)` and
+    // stored through the guard's own struct layout — LLVM SIGSEGV, C
+    // compile-error on `->owner`. Closing the tuple face here retires Track L
+    // (`known_gaps/scoutE_guard_tuple_field_assign_segv.gg`).
+    //
+    // `is_read_only()`: mirrors the struct face — ReadGuard is not a write-place
+    // (silently drops the store, a pre-existing Core #10 defect on the struct
+    // face too — filed in TODO.md against both faces).
+    if let Some(info) = guard_of(ctx, current_type) {
+        if info.is_read_only() {
+            return None;
+        }
+        let (inner_ptr_local, inner_type) = emit_guard_get_ptr(ctx, builder, &place, &info);
+        let mut target_place = Place {
+            local: inner_ptr_local,
+            projections: vec![Projection::Deref],
+        };
+        target_place.projections.push(Projection::Field(index as u32));
+        let elem_type = resolve_tuple_field_type(ctx, inner_type, index);
+        return Some((target_place, elem_type));
     }
     // Deref if the effective type is a pointer (& param / Box / element Ptr).
     let (tuple_type_id, mut base_place) = if let Some(pointee) = ctx.pointee_type(current_type) {

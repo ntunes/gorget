@@ -1,0 +1,14 @@
+# NOT-YET-SAMPLED CELL (Track L, Core #12 axis expansion) — RWLock
+# `WriteGuard[(int, int)].0 = v` counterpart. Same code path as the Guard face
+# per `guard_of` (which discriminates by `GuardKind`, not name — a WriteGuard
+# is NOT read-only, so takes the write branch). Pre-fix RED: C compile-fail
+# (`WriteGuard__Tuple__int64_t__int64_t … has no member named 'owner'`), LLVM
+# SEGV (exit 139). Post-fix: `42\n2`.
+from std.sync import RWLock
+
+void main():
+    RWLock[(int, int)] r = RWLock[(int, int)]((1, 2))
+    WriteGuard[(int, int)] wg = r.write()
+    wg.0 = 42
+    print(wg.0)
+    print(wg.1)

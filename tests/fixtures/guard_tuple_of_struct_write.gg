@@ -1,0 +1,22 @@
+# NOT-YET-SAMPLED CELL (Track L, Core #12 axis expansion) — Guard-of-tuple-of-
+# struct `g.0.field = v` (STRUCT-UNDER-TUPLE-FIELD cell). Exercises the
+# cross-face recursion: `try_resolve_field_place` recurses into a
+# `TupleFieldAccess` object arm (Family-2's tuple-field-under-struct sibling),
+# which recurses into the tuple resolver's Guard branch — the fix must
+# compose across resolver hops. Pre-fix RED: C compiles (the store target
+# writes THROUGH the guard's `owner` first-field position — no `->owner`
+# reference emitted for the struct-field path here), then BOTH lanes print
+# `0\n0\n<garbage>` — the write to `g.0.x` LANDED IN THE GUARD, then reading
+# the guarded tuple's field 0 as a Point read the guard's own struct layout
+# (owner=0, cell=…). Post-fix: `99\n20\n3`.
+struct Point:
+    int x
+    int y
+
+void main():
+    Mutex[(Point, int)] m = Mutex[(Point, int)]((Point(10, 20), 3))
+    Guard[(Point, int)] g = m.lock()
+    g.0.x = 99
+    print(g.0.x)
+    print(g.0.y)
+    print(g.1)

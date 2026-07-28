@@ -1,0 +1,20 @@
+# NOT-YET-SAMPLED CELL (Track L, Core #12 axis expansion; ties to SITE (b)) —
+# `bump(&g.0)`: `&`-argument formation over a Guard-of-tuple field. THIS is the
+# cell that verifies site (b) — the `place_expr_type_only::TupleFieldAccess`
+# Guard branch. Without it, the type oracle returned the type of the guard's
+# field 0 rather than the tuple element, and the Family-1 chokepoint's
+# `place_type_only_covers_the_producer_forms` invariant (lints.rs:6948) would
+# not fire for this shape (the SYNTACTIC extractor is documented-blind to
+# type-driven Guard branches, so the lint stays green either way — but the
+# behavior differs). Pre-fix RED: C compile-fail (same `no member 'owner'` at
+# the `&`-formation), LLVM prints garbage. Post-fix: `101\n2` — the callee's
+# write to the field lands.
+void bump(int &n):
+    n = n + 100
+
+void main():
+    Mutex[(int, int)] m = Mutex[(int, int)]((1, 2))
+    Guard[(int, int)] g = m.lock()
+    bump(&g.0)
+    print(g.0)
+    print(g.1)

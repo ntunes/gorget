@@ -1,0 +1,17 @@
+# AXIS SIBLING (Track L) — resource-carrying inner-element cell (String) of
+# `guard_tuple_field_writethrough.gg`. Element type = String exercises the
+# resource-typed tuple element path — the fix must not introduce a double-free
+# or leak when the write REPLACES an owned resource in the guarded tuple.
+# Pre-fix RED: C compile-fail (same `no member 'owner'`), LLVM builds but prints
+# garbage. Post-fix: `world\n1` — the previous "hello" is dropped by the tuple's
+# in-place field-store; the new String is owned by the guarded tuple.
+#
+# ASan / leak-freedom coverage: this fixture also exercises the resource-typed
+# tuple-element WRITE ownership handoff; if the fix leaks or double-frees, the
+# `security` ASan sweep will catch it (parent's round-close gate).
+void main():
+    Mutex[(String, int)] m = Mutex[(String, int)](("hello", 1))
+    Guard[(String, int)] g = m.lock()
+    g.0 = "world"
+    print(g.0)
+    print(g.1)

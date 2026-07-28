@@ -37764,19 +37764,76 @@ fn sound_guard_get_string_double_free() {
     );
 }
 
-/// KNOWN GAP (Track E1 scouting surfaced) — `g.0 = v` on `Guard[(int, int)]`
-/// SIGSEGVs on LLVM (exit 139) and fails the C build (`Guard__Tuple__int64_t__int64_t
-/// has no member named 'owner'`). Tuple-field write-through does not project
-/// through `emit_guard_get_ptr`. Likely closes alongside a Track-D-adjacent
-/// fix generalising the guard write-place projection to tuple-field spellings.
-/// Asserts INTENDED `(42, 2)`.
+/// TRACK L (graduated from `known_gaps/scoutE_guard_tuple_field_assign_segv.gg`) —
+/// PRIMARY: `g.0 = v` on `Guard[(int, int)]`. Pre-fix: C compile-fail on
+/// `->owner`, LLVM SEGV. Post-fix: write lands in the guarded tuple through
+/// `emit_guard_get_ptr`. Sibling fixtures below cover the axis
+/// (index/writer-kind/inner-type/root-shape/read-side).
 #[test]
-#[ignore = "KNOWN GAP (Track E1 filed): tuple-field write-through through Guard receiver — \
-LLVM SIGSEGV + C-compile-fail. Fix direction: route through emit_guard_get_ptr for tuple-field \
-assigns. TODO.md."]
-fn scout_e_guard_tuple_field_assign_segv() {
-    run_gg(
-        "known_gaps/scoutE_guard_tuple_field_assign_segv.gg",
-        "(42, 2)",
-    );
+fn guard_tuple_field_writethrough() {
+    run_gg("guard_tuple_field_writethrough.gg", "42\n2");
+}
+
+/// TRACK L axis sibling — INDEX=1 cell (`g.1 = v`).
+#[test]
+fn guard_tuple_index1_assign() {
+    run_gg("guard_tuple_index1_assign.gg", "1\n99");
+}
+
+/// TRACK L axis sibling — compound-assign `g.0 += v` (writer-kind axis).
+#[test]
+fn guard_tuple_compound_assign() {
+    run_gg("guard_tuple_compound_assign.gg", "15");
+}
+
+/// TRACK L axis sibling — resource-carrying inner (String); exercises the
+/// resource-typed tuple-element write ownership handoff.
+#[test]
+fn guard_tuple_string_inner() {
+    run_gg("guard_tuple_string_inner.gg", "world\n1");
+}
+
+/// TRACK L axis sibling — `&`-param root: Guard-of-tuple reached via a
+/// borrowed parameter (`guard_of` peels one Ptr layer).
+#[test]
+fn guard_tuple_amp_param_root() {
+    run_gg("guard_tuple_amp_param_root.gg", "42\n2");
+}
+
+/// TRACK L not-yet-sampled cell — Guard-of-nested-tuple `g.0.1 = v`
+/// (recursive tuple-field walk).
+#[test]
+fn guard_tuple_nested_write() {
+    run_gg("guard_tuple_nested_write.gg", "1\n99\n3");
+}
+
+/// TRACK L not-yet-sampled cell — Guard-of-tuple-of-struct `g.0.field = v`
+/// (cross-face recursion tuple ↔ struct through the Guard branch).
+#[test]
+fn guard_tuple_of_struct_write() {
+    run_gg("guard_tuple_of_struct_write.gg", "99\n20\n3");
+}
+
+/// TRACK L not-yet-sampled cell — `bump(&g.0)`: `&`-arg formation over a
+/// Guard-of-tuple field. Verifies SITE (b) — the
+/// `place_expr_type_only::TupleFieldAccess` Guard branch.
+#[test]
+fn guard_tuple_amp_field_arg() {
+    run_gg("guard_tuple_amp_field_arg.gg", "101\n2");
+}
+
+/// TRACK L not-yet-sampled cell — READ path `print(g.0)` on Guard-of-tuple.
+/// Verifies SITE (c) — `lower_expr::TupleFieldAccess` Guard branch. Silent-
+/// wrong-output severity (Core #8), so this MUST land.
+#[test]
+fn guard_tuple_field_read() {
+    run_gg("guard_tuple_field_read.gg", "42\n99");
+}
+
+/// TRACK L not-yet-sampled cell — RWLock `WriteGuard[(int,int)].0 = v`
+/// counterpart; same code path via `guard_of` (`GuardKind`-driven, not
+/// name-matched).
+#[test]
+fn writeguard_tuple_field_assign() {
+    run_gg("writeguard_tuple_field_assign.gg", "42\n2");
 }

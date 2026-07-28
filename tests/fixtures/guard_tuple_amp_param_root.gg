@@ -1,0 +1,16 @@
+# AXIS SIBLING (Track L) — `&`-param root cell (ROOT-SHAPE axis) of
+# `guard_tuple_field_writethrough.gg`: the Guard-of-tuple is reached via a
+# `&`-borrowed parameter, exercising `guard_of`'s Ptr/MutPtr peel-one-layer
+# (the exact axis that silently ignored the fix for three of the four Guard
+# read sites — see the struct-face-branch comment at :3239). Pre-fix RED: C
+# compile-fail, LLVM SEGV (exit 139). Post-fix: `42\n2` — the callee's write
+# reaches the caller's guarded tuple through the borrow.
+void bump(Guard[(int, int)] &g):
+    g.0 = 42
+
+void main():
+    Mutex[(int, int)] m = Mutex[(int, int)]((1, 2))
+    Guard[(int, int)] g = m.lock()
+    bump(&g)
+    print(g.0)
+    print(g.1)
