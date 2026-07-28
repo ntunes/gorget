@@ -118,6 +118,12 @@
 !mutex_bare_trait_xmod_reject/*.gg
 !mutex_box_trait_ok/
 !mutex_box_trait_ok/*.gg
+# Round XII Track N2: graduated Guard[Box[Trait]] method-dispatch fixture
+# (class 2b, cross-module — imports `Speaker`/`Robot` from `speaker.gg`).
+# Sources only — compiled main/main.c/main.ll stay ignored per the catch-all
+# block below.
+!guard_trait_named_box_dispatch/
+!guard_trait_named_box_dispatch/*.gg
 
 # Re-ignore compiled/generated artifacts inside self-host subdirs
 self_host_*/driver

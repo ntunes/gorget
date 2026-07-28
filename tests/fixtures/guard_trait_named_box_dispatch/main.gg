@@ -1,0 +1,36 @@
+# Round XII Track N2 (2026-07-28) — LIVE REGRESSION FIXTURE (graduated from
+# `known_gaps/guard_trait_named_reject/main_box.gg`, class 2b of the Round XI
+# Track M Guard[Trait] family).
+#
+# NAMED-binding `Guard[Box[Speaker]] g = m.lock()` then `g.greet()` on
+# `Mutex[Box[Speaker]]`. Cross-module (`Speaker`/`Robot` in `speaker.gg`).
+#
+# CHECK-SIDE FIXED by Round XII Track N1 (2026-07-28): the widened
+# Track-G carve-out at `src/semantic/typecheck.rs` (~L2974) accepts the
+# `.greet()` dispatch on `Guard[Box[Trait]]` for both the same-file
+# `TraitObject` shape and the cross-module `Generic(Box, [Import(trait)])`
+# shape.
+#
+# RUN-SIDE FIXED by Round XII Track N2 (2026-07-28): the call-arg
+# `Box[Trait]` coercion in `src/ir/lowering/exprs/calls.rs`
+# (`pack_trait_object_for_smart_ptr_ctor`) packs the concrete Box into a
+# `Box[Trait]`-typed temp so the ctor's memcpy(16) reads a valid
+# `{data, vtable}` pair. Same coercion the LIR `try_trait_object_construct`
+# fires on SlotStore; the call-arg site now routes through the same helper
+# (Layering rule 4 — one decision site in LIR).
+#
+# Bindings across BOTH C and LLVM lanes (Track N2 RED-verified).
+# Prints `beep R2` — the D36 intended behavior.
+#
+# DISTINCT FROM `main_bare.gg` (still in `known_gaps/guard_trait_named_reject/`):
+# that fixture's `Mutex[Speaker] m = ...` uses a bare trait as the container
+# inner (Track P residual — `E_NonDerefContainerBareTrait` doesn't fire at
+# generic-ctor-call type-args resolution; TODO'd Round XII Track N2 finding).
+
+from std.collections import Box
+from speaker import Speaker, Robot
+
+void main():
+    Mutex[Box[Speaker]] m = Mutex[Box[Speaker]](Box.new(Robot("R2")))
+    Guard[Box[Speaker]] g = m.lock()
+    print(g.greet())

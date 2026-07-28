@@ -1,0 +1,40 @@
+# Round XII Track N2 (2026-07-28) — LIVE REGRESSION FIXTURE (graduated from
+# `known_gaps/sound_guard_get_boxed_trait_sigbus.gg`, class 4 of the Round XI
+# Track M Guard[Trait] family; net memory-safety close).
+#
+# CHAINED `m.lock().get().greet()` on `Mutex[Box[Speaker]]`. The compiler
+# reads the callee param `Box[Trait]` (16 bytes, `{data, vtable}`) but the
+# `Box.new(Robot(…))` argument's slot holds only `Box[Concrete]` (8 bytes,
+# `void*`). Pre-fix, the ctor call's memcpy(16) read 8 bytes of stack garbage
+# as the vtable pointer → SIGBUS at the first method dispatch through the
+# guard. `gg run` masked the SIGBUS as a silent exit 1 (Core #15(d)); the
+# `sound_` naming convention was the tell.
+#
+# FIX (Round XII Track N2): the call-arg boundary now packs the concrete Box
+# into a `Box[Trait]`-typed temp via `pack_trait_object_for_smart_ptr_ctor`
+# (IR helper in `src/ir/lowering/exprs/calls.rs`) — same coercion the LIR
+# `try_trait_object_construct` (`src/lir/lower/operands.rs:760`) fires on
+# SlotStore. Layering rule 4: one decision site in LIR, IR routes through
+# it. Typed-metadata driven (`is_box` + `<Trait>_TraitObj` registration —
+# no name-matching per CLAUDE.md "no name matching").
+#
+# The fix bindings across BOTH C and LLVM lanes (Track N2 RED-verified on
+# both). Prints `beep R2` — the D36 intended behavior.
+#
+# DISTINCT FROM Track J (`sound_guard_get_string_double_free.gg` — double-free
+# on non-trait heap-inner via `.get()`'s ownership contract; different root).
+
+from std.collections import Box
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name
+
+void main():
+    print(Mutex[Box[Speaker]](Box.new(Robot("R2"))).lock().get().greet())
