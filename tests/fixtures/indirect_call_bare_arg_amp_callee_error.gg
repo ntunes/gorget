@@ -1,5 +1,5 @@
 # REGRESSION -- Track B3 (D31-uniform, indirect call sigil gate): a BARE argument
-# passed into a `Callable[void(&int)]` LOCAL whose parameter declares `&`
+# passed into a `Callable[void(int &)]` LOCAL whose parameter declares `&`
 # (mutable borrow) must REJECT at `gg check` with `E_OwnershipMismatch` -- the
 # exact same rule D31 enforces at DIRECT call sites is now enforced UNIFORMLY at
 # indirect call sites too (over `Callable[..]` / `MutCallable[..]` /
@@ -30,7 +30,7 @@ void bump(int &n):
 
 void main():
     int a = 1
-    Callable[void(&int)] cb = bump
+    Callable[void(int &)] cb = bump
     # THE ASSERTION: bare `cb(a)` REJECTS under D31-uniform (Track B3) because
     # `cb` declares a `&int` parameter -- the same rule that rejects `bump(a)`
     # at a direct call site. Callers must re-spell as `cb(&a)`.

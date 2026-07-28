@@ -106,6 +106,16 @@ pub enum ParseErrorKind {
     /// (unparseable in assignment position, value silently discarded at
     /// lowering). Rejected at parse with a teaching message.
     BreakWithValue,
+    /// D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): an
+    /// unnamed-parameter sigil in a function type is spelled AFTER the type
+    /// (`Callable[void(int &)]`), matching the named-parameter rule
+    /// (`void modify(Message &msg)`). The pre-D35 spelling with the sigil
+    /// BEFORE the type (`Callable[void(&int)]`) is RETIRED, not co-accepted.
+    /// The message names the replacement so `gg check` teaches the fix.
+    FunctionTypeParamSigilBeforeType {
+        /// `&` or `!` — the sigil the user wrote.
+        sigil: char,
+    },
 }
 
 impl std::fmt::Display for ParseError {
@@ -153,6 +163,15 @@ impl std::fmt::Display for ParseError {
                     f,
                     "break takes no value; loops are not expressions; \
                      help: assign to a variable declared before the loop, then `break`"
+                )
+            }
+            ParseErrorKind::FunctionTypeParamSigilBeforeType { sigil } => {
+                write!(
+                    f,
+                    "an unnamed parameter's sigil goes AFTER the type in a function type \
+                     (D35): write `Type {sigil}` instead of `{sigil}Type` — the sigil marks \
+                     the binding position (uniform with the named form `Message &msg`), \
+                     not the type"
                 )
             }
         }

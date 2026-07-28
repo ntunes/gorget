@@ -1,0 +1,24 @@
+# D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): an unnamed
+# parameter's sigil in a function type goes AFTER the type
+# (`Callable[void(int &)]`), mirroring the named-parameter rule
+# (`void modify(Message &msg)`). The pre-D35 spelling with the sigil
+# BEFORE the type (`Callable[void(&int)]`) is REJECTED at parse — never
+# co-accepted (D32's close-the-enumeration-by-construction thesis).
+#
+# The parser must emit `FunctionTypeParamSigilBeforeType` with a
+# teaching diagnostic naming the replacement spelling. This fixture
+# uses PARAM-position (`Callable[void(&int)] cb`) — a non-speculative
+# parse context where the D35 diagnostic surfaces directly (the
+# local-decl case A1 is filed separately). Fixture lives in its own
+# directory so the unparseable source stays OUT of the top-level
+# fixture sweeps (fmt_idempotent, *_comparison, runtime_diff).
+void modify(int &x):
+    x = 42
+
+void call_it(Callable[void(&int)] cb, int &y):
+    cb(&y)
+
+void main():
+    int y = 5
+    call_it(modify, &y)
+    print(y)

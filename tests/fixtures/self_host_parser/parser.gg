@@ -1355,20 +1355,47 @@ equip Parser:
 
     SpannedType parse_function_type(&self, SpannedType ret_ty, int start):
         # Function type: RetType(Param1, Param2, ...)
-        # Params can have ownership markers: &Type, !Type, move Type, mutable Type
+        # D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): an
+        # unnamed parameter's sigil is spelled AFTER the type — `Type &`,
+        # `Type !` — uniform with the named form (`Message &msg`). The pre-D35
+        # spelling with the sigil BEFORE the type is REJECTED with a
+        # diagnostic naming the replacement.
         self.expect_tok(TOK_LPAREN, "expected '(' for function type")
         Vector[SpannedType] param_types = Vector[SpannedType]()
         Vector[int] ownerships = Vector[int]()
         if not self.check_tok(TOK_RPAREN):
-            self.skip_ownership_markers()
+            # Advisory A2 (2026-07-28): after pushing the D35 diagnostic,
+            # ADVANCE past the sigil so `parse_type()` sees the underlying
+            # type — otherwise it hits `&`/`!` again and cascades a
+            # second, unrelated "expected type" error. Rust gg's site
+            # returns Err instead (see src/parser/types.rs); the SH
+            # equivalent is push+advance, so the recovery path pins the
+            # sigil to a single diagnostic.
+            if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
+                self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "D35: an unnamed parameter's sigil goes AFTER the type in a function type — write `Type &` / `Type !`, not `&Type` / `!Type`"))
+                self.advance()
             param_types.push(self.parse_type())
-            ownerships.push(OWN_BORROW)
+            ownerships.push(self.parse_fn_type_param_ownership())
             while self.match_tok(TOK_COMMA):
-                self.skip_ownership_markers()
+                if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
+                    self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "D35: an unnamed parameter's sigil goes AFTER the type in a function type — write `Type &` / `Type !`, not `&Type` / `!Type`"))
+                    self.advance()
                 param_types.push(self.parse_type())
-                ownerships.push(OWN_BORROW)
+                ownerships.push(self.parse_fn_type_param_ownership())
         self.expect_tok(TOK_RPAREN, "expected ')' for function type")
         return self.mk_type(!TFunction(Box(ret_ty), param_types, ownerships), start)
+
+    # D35: consume the trailing sigil AFTER an unnamed function-type parameter
+    # (`Type &` / `Type !`) and return its OWN_* code. Sibling of
+    # `skip_ownership_markers` (which is retained for other positions).
+    int parse_fn_type_param_ownership(&self):
+        if self.check_tok(TOK_AMP):
+            self.advance()
+            return OWN_MUTABLE
+        elif self.check_tok(TOK_BANG):
+            self.advance()
+            return OWN_MOVE
+        return OWN_BORROW
 
     Vector[SpannedType] parse_type_args(&self):
         Vector[SpannedType] args = Vector[SpannedType]()

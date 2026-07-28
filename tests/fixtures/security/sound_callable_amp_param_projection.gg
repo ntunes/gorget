@@ -38,7 +38,7 @@ int bumpret(int &n):
     n = n + 1
     return n
 
-int with_it(Callable[int(&int)] f, Counter &c):
+int with_it(Callable[int(int &)] f, Counter &c):
     return f(&c.fd)
 
 void main():

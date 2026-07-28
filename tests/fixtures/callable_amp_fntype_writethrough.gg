@@ -1,4 +1,4 @@
-# REGRESSION — an indirect call through a `Callable[void(&int)]` LOCAL writes
+# REGRESSION — an indirect call through a `Callable[void(int &)]` LOCAL writes
 # through to the caller's `int` slot exactly as calling `bump(&a)` directly does.
 #
 # AXIS / CELL (root x callable-provenance x arg-spelling):
@@ -23,6 +23,6 @@ void bump(int &n):
 
 void main():
     int a = 1
-    Callable[void(&int)] cb = bump
+    Callable[void(int &)] cb = bump
     cb(&a)
     print(a)

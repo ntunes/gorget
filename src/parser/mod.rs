@@ -62,6 +62,19 @@ pub struct Parser {
     /// different span values across test runs. See
     /// `parse_format_string_interp_exprs` in `expr.rs`.
     pub(crate) next_interp_offset: usize,
+    /// A `ParseError` from inside a `try_parse` speculation that the
+    /// caller should PROMOTE to the user instead of the fallback path's
+    /// diagnostic. `try_parse` only signals failure via `None` (position
+    /// restored) and drops the closure's error; some rejects — like D35's
+    /// `FunctionTypeParamSigilBeforeType`, which unambiguously identifies
+    /// the shape and carries a teaching diagnostic — must survive the
+    /// backtrack so the user does not see the fallback's generic
+    /// `expected expression, found 'void'`. The producer stashes the
+    /// error here (via `stash_promotable_error`); the caller consumes it
+    /// via `take_promotable_error()` after the fallback fails, and clears
+    /// it on success paths so a stashed error from one call site never
+    /// leaks into a later parse.
+    pub(crate) pending_speculative_error: Option<ParseError>,
 }
 
 impl Parser {
@@ -109,7 +122,25 @@ impl Parser {
             in_extern_c: false,
             comments,
             next_interp_offset: interp_base,
+            pending_speculative_error: None,
         }
+    }
+
+    /// Stash a `ParseError` from inside a `try_parse` speculation so the
+    /// caller can PROMOTE it over the fallback path's generic diagnostic.
+    /// See `pending_speculative_error` docs. Callers should stash only
+    /// errors whose diagnostic is more actionable than the fallback's —
+    /// e.g. D35's `FunctionTypeParamSigilBeforeType`, which unambiguously
+    /// identifies the shape and names the replacement spelling.
+    pub(crate) fn stash_promotable_error(&mut self, err: ParseError) {
+        self.pending_speculative_error = Some(err);
+    }
+
+    /// Take and clear any stashed speculative error. Callers that reach a
+    /// non-fallback success path should also clear the stash so a stray
+    /// error does not leak into later parsing.
+    pub(crate) fn take_promotable_error(&mut self) -> Option<ParseError> {
+        self.pending_speculative_error.take()
     }
 
     /// Returns `true` when the current position starts a named scope block:

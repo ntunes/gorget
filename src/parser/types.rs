@@ -191,22 +191,41 @@ impl Parser {
             ));
         }
 
-        // Check for function type suffix: int(int, int) or int(&MyStruct, int)
-        // A type followed by ( is a function type
+        // Check for function type suffix: int(int, int) or int(MyStruct &, int)
+        // A type followed by ( is a function type.
+        //
+        // D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): an
+        // unnamed parameter's sigil goes AFTER the type — `Callable[void(int &)]`
+        // — mirroring the named-parameter rule (`void modify(Message &msg)`).
+        // The pre-D35 spelling with the sigil BEFORE the type is REJECTED with
+        // a diagnostic naming the replacement; retirement is a hard break, per
+        // D35's ratification.
         if self.check(&Token::LParen) && self.is_function_type_context(&base.node) {
             self.advance(); // (
             let mut params = Vec::new();
             let mut param_ownerships = Vec::new();
             while !self.check(&Token::RParen) && !self.at_end() {
-                // Check for ownership prefix: & (MutableBorrow) or ! (Move)
-                let ownership = if self.match_token(&Token::Ampersand) {
-                    Ownership::MutableBorrow
-                } else if self.match_token(&Token::Bang) {
-                    Ownership::Move
-                } else {
-                    Ownership::Borrow
-                };
-                params.push(self.parse_type()?);
+                // Pre-D35 spelling: sigil BEFORE the type. Return `Err` with a
+                // diagnostic that names the replacement — non-speculative parses
+                // (function-def return type, generic arg, top-level decl type)
+                // propagate it to the user. Speculative parses (`try_parse` in
+                // `parse_decl_or_expr_stmt`) map `Err` to `None` and backtrack,
+                // which is correct — we should not push to `self.errors` here
+                // because that error would then leak into a fallback expression
+                // parse. Retirement is a hard break, per D35's ratification.
+                if self.check(&Token::Ampersand) || self.check(&Token::Bang) {
+                    let sigil = if self.check(&Token::Ampersand) { '&' } else { '!' };
+                    let span = self.peek_span();
+                    return Err(ParseError {
+                        kind: crate::errors::ParseErrorKind::FunctionTypeParamSigilBeforeType { sigil },
+                        span,
+                    });
+                }
+                let param_ty = self.parse_type()?;
+                // D35: sigil AFTER the type — routed through
+                // `parse_ownership_modifier` (D32's whitelist mechanism).
+                let ownership = self.parse_ownership_modifier();
+                params.push(param_ty);
                 param_ownerships.push(ownership);
                 if !self.check(&Token::RParen) {
                     self.expect(&Token::Comma)?;

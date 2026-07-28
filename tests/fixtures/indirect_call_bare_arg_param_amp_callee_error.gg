@@ -1,5 +1,5 @@
 # REGRESSION -- Track B3 (D31-uniform, indirect call sigil gate): the PARAM cell
-# of the callable-shape axis. When the callee is a `Callable[void(&int)]`
+# of the callable-shape axis. When the callee is a `Callable[void(int &)]`
 # PARAMETER (not a local), a bare argument at the invocation site must REJECT
 # at `gg check` with `E_OwnershipMismatch` -- exactly as the LOCAL cell does
 # (`indirect_call_bare_arg_amp_callee_error.gg`).
@@ -14,7 +14,7 @@
 # indirect PARAM call fell through the sidecar-transplant path that only
 # fires when the caller explicitly writes `&`).
 # Post-B3: `gg check` REJECTS with `E_OwnershipMismatch` at the argument span.
-void invoke(Callable[void(&int)] cb, int a):
+void invoke(Callable[void(int &)] cb, int a):
     # THE ASSERTION: bare `cb(a)` REJECTS -- the callable param declares `&`;
     # the caller must re-spell `cb(&a)`.
     cb(a)

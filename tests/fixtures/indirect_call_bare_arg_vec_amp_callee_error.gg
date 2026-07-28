@@ -1,6 +1,6 @@
 # REGRESSION -- Track B3 (D31-uniform, indirect call sigil gate): the ARRAY-
 # ELEMENT cell of the callable-shape axis. When the callee expression is an
-# index into a `Vector[Callable[void(&int)]]` (i.e. `arr[0]`), a bare argument
+# index into a `Vector[Callable[void(int &)]]` (i.e. `arr[0]`), a bare argument
 # at the invocation must REJECT at `gg check` with `E_OwnershipMismatch` --
 # same rule, non-Identifier callee shape.
 #
@@ -23,7 +23,7 @@ void bump(int &n):
 
 void main():
     int a = 1
-    Vector[Callable[void(&int)]] arr = [bump]
+    Vector[Callable[void(int &)]] arr = [bump]
     # THE ASSERTION: bare `arr[0](a)` REJECTS -- the callable's declared param
     # is `&int`; the caller must re-spell `arr[0](&a)`.
     arr[0](a)
