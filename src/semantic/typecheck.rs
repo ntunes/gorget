@@ -2950,6 +2950,74 @@ impl<'a> TypeChecker<'a> {
                                             }
                                         }
                                     }
+                                    // TRACK G (2026-07-28): `Box[Trait].method()` — a boxed
+                                    // TRAIT OBJECT dispatched via vtable at runtime. The E2 auto-
+                                    // deref block above tried `traits.resolve_method(inner)` and
+                                    // `builtin_method_type(inner)`; both miss because the trait's
+                                    // methods live in `traits.traits[trait_def_id].methods`, not on
+                                    // any impl indexed by the trait's own TypeId. Pre-E1 this cell
+                                    // fell through the terminal reject (returning `error_id`) and the
+                                    // IR-side `Box[Trait]` vtable dispatch (`ir/lowering/exprs/
+                                    // methods.rs:1627-1682`, keyed by the `Box__Shape` type name +
+                                    // `Shape_VTable` lookup) produced a correct call. E1 promoted the
+                                    // fallthrough to a reject and broke `examples/shapes` at check.
+                                    // Fix: recognise `Box[Trait]` here — look up the trait's own
+                                    // declared method sig by NAME across `traits.traits.values()`
+                                    // (name-lookup because the inner def can be a `DefKind::Import`
+                                    // placeholder that doesn't key `traits.traits` directly), unify
+                                    // args against the sig, and return the sig's return type.
+                                    // We DO NOT set an `auto_deref` marker on `method_resolutions`:
+                                    // the IR vtable-dispatch path (which keys on the `Box__Trait`
+                                    // type name, NOT on the marker) is the right lowering and would
+                                    // be broken by E2's `Box__T__get_ptr` projection (there is no
+                                    // `Shape__area` function to dispatch to).
+                                    if matches!(container_kind, Some(DerefWrapperKind::DerefTarget)) {
+                                        if let ResolvedType::Generic(_, targs) =
+                                            self.types.get(resolved_receiver).clone()
+                                        {
+                                            if let Some(inner_tid) = targs.first().copied() {
+                                                let inner_resolved = self.resolve_type(inner_tid);
+                                                let inner_name = match self.types.get(inner_resolved) {
+                                                    ResolvedType::Defined(d) | ResolvedType::Generic(d, _) => {
+                                                        Some(self.scopes.get_def(*d).name.clone())
+                                                    }
+                                                    _ => None,
+                                                };
+                                                if let Some(inner_name) = inner_name {
+                                                    // Find the trait by name (import-follow-safe).
+                                                    let trait_hit = self.traits.traits.values()
+                                                        .find(|t| t.name == inner_name)
+                                                        .and_then(|t| t.methods.get(&method.node)
+                                                            .map(|sig| (t.def_id, sig.clone())));
+                                                    if let Some((trait_def_id, sig)) = trait_hit {
+                                                        self.method_resolutions.insert(
+                                                            method.span.start,
+                                                            MethodResolution::direct(trait_def_id),
+                                                        );
+                                                        if args.len() != sig.params.len() {
+                                                            self.error(
+                                                                SemanticErrorKind::WrongArgCount {
+                                                                    expected: sig.params.len(),
+                                                                    found: args.len(),
+                                                                },
+                                                                expr.span,
+                                                            );
+                                                        }
+                                                        for (arg, &param_type) in
+                                                            args.iter().zip(sig.params.iter())
+                                                        {
+                                                            let arg_type =
+                                                                self.infer_expr(&arg.node.value);
+                                                            self.unify(param_type, arg_type, arg.span);
+                                                        }
+                                                        self.expr_types
+                                                            .insert(expr.span, sig.return_type);
+                                                        return sig.return_type;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                     let is_wrapper_reject = matches!(
                                         container_kind,
                                         Some(DerefWrapperKind::NonDerefContainer)
