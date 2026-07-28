@@ -687,6 +687,7 @@ fn format_type(type_id: TypeId, reg: &TypeRegistry) -> String {
         Some(GirType::FnPtr {
             params,
             return_type,
+            ..
         }) => {
             let params_str: Vec<String> = params.iter().map(|p| format_type(*p, reg)).collect();
             format!("fn({}) -> {}", params_str.join(", "), format_type(*return_type, reg))

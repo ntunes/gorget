@@ -2196,23 +2196,41 @@ pub(super) fn lower_call(
         };
         let callee_type_id = builder.local_type(callee_local);
 
-        // Resolve the return type. For a `FnPtr` GIR type, pick `return_type`
-        // directly. For a Callable family alias (`Named("Callable__…")`), the
-        // alias TypeDef doesn't carry the function signature, so fall back to
-        // I64 — the C backend honours the call's `ret_ty` from the LIR
-        // instruction, which we reconstruct from `builder.call`'s ret_type
-        // argument. Without a recorded sig we can't be more precise here; the
-        // typical `Callable[int(...)]` case lands on int64_t anyway.
-        let ret_type = match ctx.type_registry.get(callee_type_id).cloned() {
-            Some(GirType::FnPtr { return_type, .. }) => return_type,
-            _ => I64_TYPE,
+        // Resolve sig (params, ownerships, return) from the FnPtr GIR type.
+        // TRACK K: previously this arm only pulled `return_type` and lowered
+        // every arg via naive `lower_expr` — dropping the `&`-sigil on args
+        // to a callable stored in a Vector/Dict, so `arr[0](&a)` on a
+        // `Callable[void(int &)]` element forwarded the VALUE of `a` and the
+        // callee's write-through segfaulted on both backends. The
+        // `Vector[Callable[...]]` element-type inferrer at `methods.rs`
+        // now consults `callable_alias_sigs` to produce the FULL FnPtr
+        // signature — so `sig_params` / `sig_owns` are populated whenever
+        // the callable was declared with a spelled signature.
+        let (sig_params, sig_owns, ret_type) = match ctx.type_registry.get(callee_type_id).cloned() {
+            Some(GirType::FnPtr { params, return_type, param_ownerships }) => {
+                (Some(params), Some(param_ownerships), return_type)
+            }
+            _ => (None, None, I64_TYPE),
         };
 
-        let mut call_args = vec![FunctionBuilder::copy(callee_local)];
-        for arg in args {
-            call_args.push(lower_expr(ctx, builder, &arg.node.value));
-        }
         let callable_name = format!("__gorget_closure_call_{}", callee_local.0);
+        let mut call_args = vec![FunctionBuilder::copy(callee_local)];
+        if let (Some(sig_params), Some(sig_owns)) = (sig_params, sig_owns) {
+            // Transplant the sig onto the synthetic callable_name key so
+            // `lower_call_arg` picks pointer-vs-value forwarding the same
+            // way as a direct call. Mirrors the B1 identifier-callee fix
+            // in the two `Callable`-local arms above.
+            ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), ret_type));
+            ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
+            for (i, arg) in args.iter().enumerate() {
+                let param_type = sig_params.get(i).copied();
+                call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
+            }
+        } else {
+            for arg in args {
+                call_args.push(lower_expr(ctx, builder, &arg.node.value));
+            }
+        }
         if ret_type == UNIT_TYPE {
             builder.call_void(callable_name, call_args);
             Operand::Constant(Constant::Unit)

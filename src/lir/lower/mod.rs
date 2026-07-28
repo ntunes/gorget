@@ -1288,7 +1288,7 @@ impl<'a> LoweringContext<'a> {
                 GirType::Ptr(inner) | GirType::MutPtr(inner) => {
                     self.collect_named_types(inner, out);
                 }
-                GirType::FnPtr { params, return_type } => {
+                GirType::FnPtr { params, return_type, .. } => {
                     for p in params {
                         self.collect_named_types(p, out);
                     }

@@ -1,0 +1,24 @@
+# AXIS SIBLING (Track K, Dict-storage cell) -- Dict subscript of a
+# `Callable[void(int &)]` value writes through to the caller's `int` slot,
+# exactly as calling `bump(&a)` directly does.
+#
+# AXIS / CELL:
+#   Dict-of-Callable storage x plain-local int root x `&`-arg spelling.
+# Complement of `callable_amp_arr_indexed_callee.gg` (Vector storage); the
+# discriminator between them is the collection SHAPE (Vector[C] vs. Dict[K, C]).
+#
+# Pre-Track-K (measured at gorget-1 tip `1ec3ba55`): `gg check` clean, `gg
+# build` clean, binary exits 139 (SIGSEGV) on BOTH C and LLVM -- identical
+# failure mode to the Vector sibling because
+# `infer_collection_element_type`'s Dict arm at
+# `src/ir/lowering/exprs/methods.rs` had the SAME empty-params FnPtr writer
+# gap (fixed in the same file in Track K).
+void bump(int &n):
+    n = n + 100
+
+void main():
+    int a = 1
+    Dict[String, Callable[void(int &)]] d = {}
+    d.put("f", bump)
+    d["f"](&a)
+    print(a)

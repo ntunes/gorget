@@ -72,6 +72,14 @@ pub enum GirType {
     FnPtr {
         params: Vec<TypeId>,
         return_type: TypeId,
+        /// Per-param `Ownership` sigil (`Borrow` / `MutableBorrow` / `Move`).
+        /// Populated by every FnPtr writer so the read side at indirect calls
+        /// (`calls.rs`'s non-identifier arm, callable-through-collection) can
+        /// route each arg through `lower_call_arg` with the right sigil,
+        /// mirroring the direct-call path. Empty vec on writers that don't
+        /// know a signature (e.g. `Vector[Callable[...]]` element-type
+        /// inferrer before the alias table lookup lands).
+        param_ownerships: Vec<crate::parser::ast::Ownership>,
     },
 
     // Named type (references a TypeDef by name)
