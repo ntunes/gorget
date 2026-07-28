@@ -3732,6 +3732,25 @@ impl<'a> FuncLowering<'a> {
         // gorget_guard_get(guard*) → load guard->ptr, then load *(T*)ptr
         // gorget_guard_get_ptr(guard*) → load guard->ptr (returns void*)
         if matches!(emit_name, "gorget_guard_get" | "gorget_read_guard_get" | "gorget_write_guard_get") {
+            // Track J: the `Guard.get` / `ReadGuard.get` / `WriteGuard.get`
+            // path is now intercepted at IR-lowering
+            // (`src/ir/lowering/exprs/methods.rs`) and routes through
+            // `emit_guard_get_ptr` — the load produces a View-tagged local
+            // that drop-insertion skips (fixing the double-free /
+            // heap-use-after-free class filed as Track J). This LIR arm
+            // should therefore be unreachable for that path. Core #6
+            // executable guard: fire in debug so a routing regression is
+            // caught immediately; release builds skip the assert and fall
+            // through to the shallow-copy load below, which would
+            // reintroduce the leak — the release-mode behaviour is the
+            // pre-Track-J baseline, not silently wrong.
+            debug_assert!(
+                false,
+                "gorget_guard_get must be routed through emit_guard_get_ptr \
+                 at IR-lowering (src/ir/lowering/exprs/methods.rs); see \
+                 Track J. Reached via emit_name={emit_name} \
+                 original_name={original_name}"
+            );
             if let Some(d) = *dst {
                 let guard_ptr = lir_args[0]; // pointer to guard struct
                 // Look up the guard struct type from the original GIR name.

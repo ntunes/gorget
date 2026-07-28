@@ -1,0 +1,18 @@
+# Track J regression net — ReadGuard[String].get() mirror of the Guard
+# double-free class. RWLock's read guard shares the same `.get()`
+# runtime-callee ownership contract (`gorget_read_guard_get` returned an
+# owned T while the runtime handed back a borrow) as `Guard.get`, so the
+# double-free class applies uniformly. Post-fix routing through
+# `emit_guard_get_ptr` fires for the ReadGuard-family too.
+#
+# HEAP-FORCED — the String is built from concatenation, forcing a real
+# heap allocation the double-free class actually reaches.
+from std.sync import RWLock
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    RWLock[String] lock = RWLock[String](heaped())
+    ReadGuard[String] g = lock.read()
+    print(g.get())

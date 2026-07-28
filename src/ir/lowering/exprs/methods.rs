@@ -1589,6 +1589,73 @@ pub(super) fn lower_method_call(
     let type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
 
     if let Some(type_name) = type_name {
+        // ─── Guard/ReadGuard/WriteGuard `.get()` — Track J drop-suppression ──
+        //
+        // Route through the same borrow-projection helper the WRITE path uses
+        // (`emit_guard_get_ptr` at `stmts/assigns.rs:859`,
+        // `exprs/mod.rs:2283`). Placed at the TOP of the `type_name` block, so
+        // this fires ahead of `materialize_lazy_source_if_needed` (L2114) and
+        // every other side-effecting arm — the intercept is the sole handler
+        // for the read.
+        //
+        // Root cause (Core #1 — fix at the WRITE site): the declaration in
+        // `builtins.rs` said `return_type: ret_elem`, so the typechecker saw
+        // an OWNED T flowing back. The runtime returns a pointer INTO the
+        // Mutex-owned buffer; the LIR inline arm loaded the T-sized header
+        // into a drop-tracked local (`call_tracked` registers it), which
+        // aliased the guard's buffer → scope-exit dropped both, hitting
+        // `gorget_array_free` twice (Vector[int] double-free) or reading
+        // through a freed vector backing (Vector[String] / Dict[..]
+        // heap-UAF). The read-site LIR arm is faithful; the LIE was the
+        // owned-T ownership tag at the write site.
+        //
+        // The fix: emit `Guard__T__get_ptr(&g) → MutPtr(T)`, load through the
+        // pointer into a fresh local of type T, and tag its ownership as
+        // View { RuntimeView(guard_local) }. Consequences:
+        //   * drop-insertion emits NO drop for a View local (View is a no-op
+        //     drop by design — see `LocalOwnership::View` in `ir/mod.rs`);
+        //   * `ensure_owned_at_boundary` (`is_ref_local` returns true for
+        //     View) clones-if-borrow when the value flows into an owned
+        //     position (return, ctor field, `push`/`put`, etc.);
+        //   * `views_of_source(guard_local)` picks it up so a subsequent
+        //     `g.set(...)` invalidates the alias via `cow_before_mutation`.
+        //
+        // Symmetric with `emit_guard_get_ptr` at the write path — one shared
+        // helper, one class fix (Core #4). The LIR inline arm at
+        // `src/lir/lower/insts.rs:3729` for `gorget_guard_get` becomes
+        // unreachable through this path; a `debug_assert!(false, ...)` there
+        // catches any regression that would re-route through it.
+        if method_name == "get" && args.is_empty() {
+            let recv_type = infer_operand_type_full(ctx, &recv, builder);
+            if let Some(info) = guard_of(ctx, recv_type) {
+                let guard_place = match &recv {
+                    Operand::Copy(p) | Operand::Move(p) => p.clone(),
+                    _ => {
+                        let tmp = builder.add_local(recv_type, None);
+                        builder.assign(Place::local(tmp), recv.clone());
+                        Place::local(tmp)
+                    }
+                };
+                // Guard's own local is the source axis for the view provenance
+                // tag — mutating the guard (e.g. `g.set(...)`) invalidates the
+                // view; `views_of_source(source_local)` reads this.
+                let source_local = guard_place.local;
+                let (inner_ptr_local, inner_type) =
+                    emit_guard_get_ptr(ctx, builder, &guard_place, &info);
+                // Load through the MutPtr(inner) into a fresh local of type
+                // `inner_type`. `LoadRef` on a bare MutPtr local emits the
+                // two-step "load pointer bits, load pointee" sequence at LIR
+                // (`insts.rs` `Instruction::LoadRef` arm's needs_two_step
+                // branch), matching the raw-Load pair the retired inline LIR
+                // arm at `insts.rs:3729` used to emit — the value memcpy
+                // that materialises the inner T's struct-header into the
+                // destination local. The View tag below suppresses drop.
+                let dst_local = builder.load_ref(Place::local(inner_ptr_local), inner_type);
+                ctx.set_view_of(builder, dst_local, source_local);
+                return FunctionBuilder::copy(dst_local);
+            }
+        }
+
         // Box[T] methods — read the typed `metadata.is_box` flag rather than
         // name-prefix-probing. `is_box_name` checks the TypeDef metadata at the
         // registry, which every Box registration path now writes uniformly.

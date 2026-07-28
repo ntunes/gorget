@@ -1,0 +1,22 @@
+# Track J regression net — `Guard[String].get()` used to double-free when the
+# inner was a heap-carrying String: the runtime `.get()` returned a `void*` the
+# compiler was treating as an OWNED T, so the caller local received a shallow
+# copy of the Str header aliasing the Mutex-owned buffer. Scope-exit dropped
+# both slots → `free(): double free detected in tcache 2` (exit 134).
+#
+# Post-fix: `Guard/ReadGuard/WriteGuard.get()` route at IR-lowering through
+# `emit_guard_get_ptr` (the same helper the write path uses). The loaded value
+# is tagged `LocalOwnership::View`, so drop-insertion emits no drop for it, and
+# `ensure_owned_at_boundary` clones-if-borrow when the value flows into an
+# owned position (return/ctor field/collection put).
+#
+# HEAP-FORCED VALUE (never a literal — a literal is a false negative per the
+# durable-known_gaps rule; a rodata String has cap=0 so `gorget_string_free`
+# short-circuits and the pre-fix compiler would appear clean).
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    Mutex[String] m = Mutex[String](heaped())
+    Guard[String] g = m.lock()
+    print(g.get())
