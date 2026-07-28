@@ -104,15 +104,35 @@ Three properties of this defect class matter for the design:
    self-host bootstrap's recursive `check_safety_stmt` visitor took a deep
    `ScopeTable__clone` per frame and blew its 600s stage deadline (recorded in
    [`devbook/11`](../devbook/11-copy-on-write.md), Consumer #1 row — a historical
-   measurement, not a live figure). Root-caused by stack-sampling. No diagnostic
-   fired, because there is none.
+   measurement, not a live figure). Root-caused by stack-sampling; no diagnostic
+   existed at the time.
+
+**What already ships — and the gap it leaves.** Round X (Track I, `1c594a4f`,
+2026-07-28) landed **`W_RecursiveBareParamMaterialize`**, on the owner ruling to
+*keep* §3.1's tolerance and steer users rather than reject the mutation. It fires
+on a bare resource param mutated via any of five sites and reaching a bare-borrow
+arg of a **direct self-recursive** call, and its message names both reference-grade
+fixes (`&param` + `&arg` at callers, or an explicit `param.clone()`). Verified
+firing on probe 1 at HEAD. That closes the *acute* problem — the linear cliff is no
+longer silent — and everything below is the sequel, not a replacement.
+
+The residual, **measured 2026-07-28 at HEAD**: the warning is *direct*
+self-recursion only. A two-function cycle pays the identical cost in silence —
+`ping → pong → ping` at depth 200 emits **zero warnings** and clones **201** times,
+byte-for-byte the shape that does warn when it recurses directly. Generalising the
+predicate from "direct self-call" to "reaches a bare-borrow arg of a call inside
+this function's SCC" is the call-graph-summary version of the same question, and it
+is a natural first consumer of §1 (the SCC is a by-product of the call-graph pass
+the summary needs anyway).
 
 **The failure quadrant.** Gorget's runtime stack overflow is a bare `SIGSEGV`, no
 message (verify: build a `deep(100000000)` recursion and run the binary directly —
 `rc=139`; ⚠ never read this off `gg run`, which masks it). The clone bomb is worse
-than that, because a SIGSEGV at least *stops*. Both bombs currently sit in the
-silent quadrant — the C-without-stack-probes position, not the Rust
-guard-page-plus-probe position.
+in one respect, because a SIGSEGV at least *stops*. Post-Track-I the clone bomb has
+left the silent quadrant for direct self-recursion; it remains there for **mutual
+recursion** (measured above) and for any non-recursive path whose multiplicity is
+high but statically unbounded. The stack overflow is still fully silent — the
+C-without-stack-probes position, not the Rust guard-page-plus-probe position.
 
 ## What this is NOT
 
@@ -120,6 +140,11 @@ guard-page-plus-probe position.
   implementation detail of the semantics. The write site is doing the only sound
   thing: `&`-of-a-bare-param must materialize, or the callee's write-through would
   reach the caller and break the param's value semantics.
+- **NOT a case for rejecting the mutation.** Owner-ruled 2026-07-28 (Round X):
+  §3.1's tolerance stays, because the caller-side "bare means you keep your value"
+  guarantee is load-bearing for D31's contract-at-the-call-site model. The remedy
+  is to steer (`W_RecursiveBareParamMaterialize`, shipped) and then to elide and
+  let the user assert (this note).
 - **NOT a case for marking the copy in source.** A sigil for "implicit copy
   happens here" was considered and rejected: it taxes every honest by-value helper
   to catch a pattern that only bites under recursion and in hot loops, and it
@@ -222,6 +247,13 @@ compatibility hazard below.
 The `tailrec` design generalized: an annotation that does nothing except make the
 compiler **prove a property or error**. `tailrec` does not make your function
 tail-recursive; it tells you when it isn't.
+
+This is the sequel to `W_RecursiveBareParamMaterialize`, not a duplicate of it. The
+warning **steers** on one recognised shape the compiler chose to flag; the knob lets
+the author **assert** the property over a function, module, or project and have it
+discharged — including on shapes no heuristic nominates (a hot non-recursive path, a
+mutual cycle, a `.map()` receiver). Warning: compiler picks the shape, user reads.
+Knob: user picks the scope, compiler proves.
 
 | scope | spelling |
 |---|---|
@@ -412,10 +444,16 @@ independently valuable and independently shippable.
   cost axis while the transient-view model keeps the legality axis;
   transitive-guarantee / non-transitive-obligation; error-biased checker vs
   clone-biased optimizer; §3-before-§4 ordering.
-- **MEASURED THIS SESSION (2026-07-28):** 201→1 linear, 8191→4096 branching (the
-  2× ceiling), all variants observationally identical; stack overflow is a bare
-  `rc=139`; `@inline` is rejected at HEAD though `language-reference.md:595`
-  advertises it; hyphens do not lex in attribute position.
+- **ALREADY SHIPPED (Round X, `1c594a4f`, 2026-07-28):**
+  `W_RecursiveBareParamMaterialize` — the steering diagnostic for *direct*
+  self-recursion, with 7 RED-verified fixtures including a load-bearing
+  false-positive control. This note does NOT re-propose it.
+- **MEASURED AT HEAD (2026-07-28, post-Round-X):** 201→1 linear, 8191→4096
+  branching (the 2× ceiling), all variants observationally identical; the warning
+  fires on the linear bare shape; **mutual recursion `ping→pong→ping` clones 201
+  and warns ZERO times** (the SCC residual); stack overflow is a bare `rc=139`;
+  `@inline` is rejected at HEAD though `language-reference.md:595` advertises it;
+  hyphens do not lex in attribute position.
 - **OPEN:** everything under § Risks and open questions; whether the runtime
   tripwire is in scope at all.
 - **NOT IMPLEMENTED.** No code exists for the summary layer, either elision
