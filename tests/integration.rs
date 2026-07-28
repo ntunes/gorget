@@ -2103,6 +2103,29 @@ fn box_trait_drop() {
     );
 }
 
+// Track G regression (2026-07-28): a CROSS-MODULE trait imported via
+// `from mod import Trait` types `Box[Trait]` as `Generic(Box, [Import(...)])`
+// rather than `TraitObject(...)` (the same-file shape). Pre-E1 that fell
+// through the terminal `error_id` silently and the IR-side `Box__T` vtable
+// dispatch (`ir/lowering/exprs/methods.rs`) produced a correct call. E1's
+// wrapper-reject arm promoted the fallthrough to a check-time reject and
+// broke `examples/shapes` + this shape everywhere. Fix: recognise `Box[Trait]`
+// at the terminal fallthrough and resolve the method against the trait's
+// declared sig by name (import-follow-safe), returning the sig's return type
+// so downstream unify sees an int / String / etc. rather than `error_id`.
+// The IR path stays untouched (no `auto_deref` marker set) — vtable dispatch
+// is the correct lowering for a boxed trait object.
+// Red-verified: reverting the typecheck.rs fix makes this test emit
+// `E_NoMethodFound` on both greet() and rank() sites.
+#[test]
+fn box_trait_cross_module() {
+    run_gg_dir(
+        "box_trait_cross_module",
+        "main.gg",
+        "beep R2\nhi Ada\n3",
+    );
+}
+
 #[test]
 fn auto_types() {
     run_gg(

@@ -1,0 +1,34 @@
+# Cross-module `Box[Trait]` dynamic dispatch via vtable — the regression cell
+# Track G restored (2026-07-28). Two structs equip the cross-module Speaker
+# trait; both are erased through `Box[Speaker]` and dispatched by vtable.
+# Exercises TWO trait methods (`greet` returning String, `rank` returning int)
+# so the trait's method sig lookup covers more than the return-type-int cell.
+
+from std.collections import Box
+from speaker import Speaker
+
+struct Bot:
+    String id
+
+struct Human:
+    String name
+
+equip Bot with Speaker:
+    String greet(self):
+        return f"beep {self.id}"
+    int rank(self):
+        return 1
+
+equip Human with Speaker:
+    String greet(self):
+        return f"hi {self.name}"
+    int rank(self):
+        return 2
+
+void main():
+    Box[Speaker] s1 = Box.new(Bot("R2"))
+    Box[Speaker] s2 = Box.new(Human("Ada"))
+    print(s1.greet())
+    print(s2.greet())
+    int total = s1.rank() + s2.rank()
+    print(total)

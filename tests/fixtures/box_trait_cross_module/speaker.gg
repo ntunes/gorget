@@ -1,0 +1,11 @@
+# Trait defined in a separate module — the cross-module import shape that
+# was the actual regression cell. Track G (2026-07-28): a same-file trait's
+# `Box[Trait]` receiver types as `TraitObject(trait_did)` and falls through
+# to the terminal `error_id` silently; a CROSS-MODULE trait types as
+# `Generic(Box, [Import(trait_did)])` and hits the `base_name=Some("Box")`
+# branch — which E1's wrapper-reject then wrongly triggered on. This
+# fixture pins the cross-module shape.
+
+trait Speaker:
+    String greet(self)
+    int rank(self)
