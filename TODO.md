@@ -40,21 +40,6 @@ only per `docs/internals/cow-transient-view-model.md`; not user-visible per feed
 `feedback-cow-transient-views-no-stored-borrows`). Cross-lane per Core #9 (ggdef adjudication —
 adjudicable if in phase-0 subset; check).
 
-**TRACK K — `arr[0](&a)` Callable-through-array SEGV (third construction site).** LANDED
-Round XI: extended `GirType::FnPtr` with `param_ownerships`, added
-`TypeMapper::callable_alias_sigs` populated at `register_callable_inner_if_any`, taught
-`infer_collection_element_type` to look up the sig, routed the non-identifier arm's args
-through `lower_call_arg`. Retired the Vector-INDEX + Dict-SUBSCRIPT cells of the class
-(`callable_amp_arr_indexed_callee.gg`, `callable_amp_dict_indexed_callee.gg`,
-`callable_bang_arr_indexed_callee.gg` — mixed `&`+`!` sigils). TWO CELLS REMAIN:
-(a) RETURNED-CALL-RESULT — `make_bumper()(&a)`, pinned at
-`known_gaps/sound_callable_amp_returned_callee_segv.gg`, blocked upstream by closure-literal
-`&`-param parse-error + return-of-callable `E_UnresolvedBorrowOrigin`; fix requires teaching
-`infer_operand_type_full` at `calls.rs:2191` to consult the callee-function's return-type
-metadata. (b) METHOD-CALL-RESULT — `arr.get(0)(&a)` / `d.get(k)(&a)`, pinned at
-`known_gaps/sound_callable_amp_shared_get_call_segv.gg` (both Vector and Dict shapes SEGV
-post-fix); fix requires routing method-inference through `callable_alias_sigs`.
-
 **TRACK L — Guard tuple-field assign LLVM SIGSEGV.** Durable `known_gap` committed
 (`scoutE_guard_tuple_field_assign_segv.gg` from Round IX E1). `g.0 = v` on `Guard[(int, int)]` LLVM
 SIGSEGV; C also affected (tuple-field write-through doesn't project through `emit_guard_get_ptr`).
