@@ -1,0 +1,14 @@
+from std.sync import RWLock
+
+# known_gaps repro (filed Round XII Track N3, 2026-07-28): chained
+# `r.write().set(99)` silently drops the `.set()` AND fails to drop the
+# WriteGuard, so the pthread rwlock write lock is never released. The
+# follow-up `r.read().get()` (which itself also drops `.get()`) deadlocks
+# waiting for the write lock to release. Same class as the read sibling —
+# LIR chained-receiver lowering for RWLock/Guard methods with
+# `SelfConvention::MutBorrow` receivers.  Intended: prints `99` and exits.
+# When the LIR bug lands, un-ignore and promote out of known_gaps/.
+void main():
+    RWLock[int] r = RWLock[int](7)
+    r.write().set(99)
+    print(r.read().get())

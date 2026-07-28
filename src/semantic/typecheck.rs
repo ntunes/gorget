@@ -8073,6 +8073,32 @@ impl<'a> TypeChecker<'a> {
                 }
                 _ => None,
             },
+            // Track N3: RWLock[T].read()/.write() — mirror Mutex.lock's shape.
+            // Pre-fix, fall-through to `None` had the call-site infer `error_id`;
+            // `describe_resolved_type` then printed `<error>` in the wrapper, and
+            // the `<error>` inner propagated through chained `.get()`/`.set()`
+            // as a silent-wrong-output miscompile (chained-read printed 0;
+            // chained-write dropped the mutation and deadlocked the follow-up
+            // read because the WriteGuard[<error>] never released its lock).
+            // The builtin protocol enumerates only `read` and `write`
+            // (src/ir/lowering/builtins.rs RWLOCK), so the arm is complete.
+            "RWLock" => match method {
+                "read" => {
+                    if let Some(read_guard_def_id) = self.scopes.lookup("ReadGuard") {
+                        Some(self.types.intern_generic(read_guard_def_id, vec![elem_type()]))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                "write" => {
+                    if let Some(write_guard_def_id) = self.scopes.lookup("WriteGuard") {
+                        Some(self.types.intern_generic(write_guard_def_id, vec![elem_type()]))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                _ => None,
+            },
             "Guard" => match method {
                 // get() returns a copy of the inner T
                 "get" => Some(elem_type()),

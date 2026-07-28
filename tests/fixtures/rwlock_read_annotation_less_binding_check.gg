@@ -1,0 +1,12 @@
+from std.sync import RWLock
+
+# Track N3 check-NEG: annotation-less binding `int wrong = r.read()` — the LHS
+# is `int`, the RHS is `ReadGuard[int]`, so this MUST reject at typecheck
+# regardless. What Track N3 pins is the ERROR TEXT: pre-fix the mismatch cited
+# `ReadGuard[<error>]` (the inner escaped as `<error>` because `builtin_method_type`
+# had no RWLock arm); post-fix the mismatch cites the correctly-inferred
+# `ReadGuard[int]`.
+void main():
+    RWLock[int] r = RWLock[int](42)
+    int wrong = r.read()
+    print(wrong)
