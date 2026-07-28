@@ -2776,8 +2776,8 @@ impl<'a> TypeChecker<'a> {
                                     // reads a typed `DerefWrapperKind` at the SSoT (no name-match).
                                     let container_did = match self.types.get(resolved_receiver) {
                                         ResolvedType::Defined(did) | ResolvedType::Generic(did, _) => *did,
-                                        _ => {
-                                            // Unreachable here — base_name is Some so we resolved to a Defined/Generic.
+                                        other => {
+                                            debug_assert!(false, "MethodCall auto-deref container-did read: base_name resolved but ResolvedType is {other:?}, expected Defined/Generic");
                                             return self.types.error_id;
                                         }
                                     };
