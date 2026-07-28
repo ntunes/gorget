@@ -2,136 +2,65 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**ROUND IN FLIGHT — theme: `&`-through-an-indirection memory-unsafety. SIX tracks, ONE landed, ONE at the
-gate, FOUR not started.** `gorget-1` is the integration branch. Nothing else has merged to it.
+**ROUND IX CLOSED 2026-07-28** — theme `&`-through-an-indirection memory-unsafety, 9 tracks landed
+(A/D/E1/B1/B3/E2/B2/F/G). Full battery green on `gorget-1` tip; parity 1236/1323 = 93.4% (ADJ 373,
+BOTH-WRONG 10); floors ratcheted `RUNTIME_DIFF_MATCH_FLOOR` 1219→1231 and `GGDEF_ADJUDICATED_FLOOR`
+371→373. Detail: DONE.md.
+
+**ROUND X — theme: FAMILY-2 (cross-resolver arm-parity) + FAMILY-1's sibling MutableBorrow arm.** Two
+tracks queued, both tight. `gorget-1` is the integration branch.
 
 ⚠ **THE ORCHESTRATOR STAYS ON `gorget-1`.** Track work happens in agent worktrees. Checking out a track
 branch in the parent checkout silently re-bases every read, grep and gate onto that track's state — and if
-a round-close battery ran there it would certify one branch instead of the integration branch. This was
-done and corrected this round; do not repeat it.
+a round-close battery ran there it would certify one branch instead of the integration branch. Standing
+operational rule (Round IX enforced this by re-correction).
 
 ⚠ **THE FULL BATTERY IS THE ROUND-CLOSE GATE, RUN ONCE**, after every track's commits are on `gorget-1`.
 Per track it is `cargo build` + `cargo test --lib` + targeted integration only. Running the battery per
 track wastes ~20 min each time AND holds the box, which serialises tracks that are meant to be parallel —
 that is the mechanism by which an N-track round degrades into N one-track rounds.
 
-⚠ **VOCABULARY (a mislabel cost a round-trip this round):** *committed* = on a track branch · *at the gate*
-= output-review running · *landed* = reviewed AND merged to `gorget-1` · *closed* = round-close battery
-green over all landed tracks.
+⚠ **VOCABULARY:** *committed* = on a track branch · *at the gate* = output-review running · *landed* =
+reviewed AND merged to `gorget-1` · *closed* = round-close battery green over all landed tracks.
 
-### TRACK STATUS
+⚠ **RESUMING A SESSION AFTER A CRASH:** two agents crashed mid-flight in Round IX. Recovery: grep
+`git branch --list 'worktree-agent-*'` for the crashed agents' branches; check each for committed work
+(often zero); `git diff HEAD > /tmp/recover_worktree_<id>.patch` to capture any uncommitted; re-dispatch
+fresh with the same brief + a "checkpoint after every commit to /tmp" clause. Prior partial state in
+`/tmp/recover_*` is REFERENCE only, don't blindly re-apply.
 
-**7 `#[ignore]`d `known_gaps` repros now exist and are OWED GRADUATION** — each un-ignores and asserts
-the intended output the round its defect is fixed (guard struct-field / closure-capture / return-position,
-the named-arg sigil drop, the `Callable` struct-field link failure, the user-generic `Guard` collision, the
-ReadGuard write faces). Confirm they are still RED before relying on any of them:
-`cargo test --test integration -- --ignored sound_guard_ sound_named_arg_ sound_callable_struct_`.
+### ROUND X TRACK QUEUE (not started)
 
-**TRACK D — self-host `&<projection>` call args. AT THE GATE, 2 BLOCKING. Branch `trackD-selfhost-family1`.**
-Design: treat the OBJECT DOMAIN as a first-class axis independent of projection KIND (local/param/static →
-`lower_place_base`; `Box[T]` → new `box_deref_ptr_base`; `Guard[T]` → `guard_field_deref_base`; collection
-element → `lower_index_element_ptr_place`; nested → recursive). Box points into the HEAP because the box's
-POINTER VALUE is re-typed to `GtPtr(T)`; that needed the LIR alias rebind fixed at the WRITER.
-Output-review VERIFIED: Box heap-addressed (emitted C), trap row `11/10`, ordering correct, `driver.gg` C
-byte-identical (bootstrap not perturbed), leak row LSan-clean with a demonstrated red at base, blast radius
-23 changed / 0 new failures / 0 regressions over 1916 fixtures.
-**BLOCKING 1 — double-evaluation.** `amp_object_base` emits BEFORE every decline point, so a decline makes
-the caller lower the base twice: `look(&mk().m)` prints `MK/MK/2/done` (base and Rust: `MK/2/done`).
-Fix: hoist the decline predicates ahead of emission (Rust's analogue is `place_expr_type_only`), and
-DELETE the diff's false comment claiming "declining is always safe". Rust's own total enumeration of this
-class is at `src/ir/lowering/exprs/mod.rs` — search `Postcondition 2 — EMISSION`.
-**BLOCKING 2 — the `&` face writes THROUGH a `ReadGuard[T]`.** `guard_field_deref_base` treats all three
-wrappers uniformly (correct for the READ arm); the diff wires it into the WRITE face. `inc(&rg.fd)` gives
-11 patched vs 10 at base and on Rust; two simultaneously-held read guards observe shared mutation.
-Fix: gate at the write-face CALLER via a `for_write: bool` parameter — the same caller-scoped pattern the
-diff already established for `require_struct_elem`. Do NOT gate inside the shared helper; the read arm
-must keep resolving ReadGuards.
+**TRACK H — Family-2: cross-resolver arm-parity.** The natural sequel to Family-1 (Track D). Two arms
+in `src/ir/lowering/exprs/mod.rs` differ by exactly TWO cells:
+`try_resolve_field_place` lacks `Expr::TupleFieldAccess` in its object-arm set;
+`try_resolve_tuple_field_place` lacks `Expr::Index`. Both silently drop the write on the missing cell.
+Round IX did NOT close them because Family-1's chokepoint retired the projected-TYPE axis;
+Family-2 lives on the ORTHOGONAL resolver arm-matrix axis. Fix: both arms symmetric (~4 lines each) +
+ARM-PARITY LINT (precedent: `container_literal_arms_count`, `compound_assign_root_materialize_arms_count`
+at `tests/lints.rs`). Committed durable `known_gaps` already exist for both faces:
+`sound_tupstruct_field_writethrough` (struct-field-under-tuple) + `sound_tuple_getchain_writethrough`
+(tuple get-chain) + `&v[i].0` variant. All ggdef-adjudicated. Cross-lane per Core #9.
 
-**TRACK A — guard family, `guard_inner_suffix` un-peeled sites. PROTOTYPE VERIFIED, NOT COMMITTED.**
-⚠ The prototype lives at `/tmp/r2_scoutG_proto.patch` and **`/tmp` will not survive** — the design below is
-self-contained; re-derive rather than depend on the file. It applies to `275b0efb`; at HEAD one comment
-hunk in `src/ir/lowering/exprs/mod.rs` conflicts (both this work and the filing commit corrected the same
-false comment — take both edits).
-Defect: `guard_inner_suffix` is a name-prefix test making a semantic decision (devbook/24 forbids it), and
-three of its four call sites test the name BEFORE the `pointee_type` peel, so a `Ptr(Guard__Inner)` param
-local misses the guard branch. Census: `grep -rn 'guard_inner_suffix(' src/ | grep -v 'pub fn'`.
-**Design — the funnel is `TypeMapper::register_named`, justified by a BIJECTION, not an enumeration:**
-`type_name_for_id` is that map's inverse (it reverse-scans `type_mapper.named_types`), so a TypeId is
-name-resolvable IFF it passed through `register_named`. A channel written there therefore has EXACTLY the
-coverage of the name test it replaces. Make the field private and rustc enforces it. **Two earlier
-prescriptions failed by enumerating mint sites; do not enumerate.**
-Miss policy: a **differential `debug_assert!`** (catches a miss AND a spurious hit; a one-directional
-hard-error cannot). Verified RED by sabotaging the funnel.
-⚠ **Do NOT ask this fix to retire both axes.** The inner TypeId is not available at the funnel. Semantic
-axis (is-a-guard + polarity) goes typed; **inner-type stays a name round-trip**, same precedent as
-`{name}__get_ptr`.
-⚠ The collision gate (user `struct Guard[T]` adopted by the prefix table) is blocked on
-`GenericCollector::struct_templates` being keyed by BARE NAME — module-qualify that map first, or scope the
-cell out explicitly.
-⚠ NOT closed by this fix: the bare-param MUTATING cell fails on a separate root — `gorget_guard_clone`
-names a runtime symbol that exists nowhere while `types.rs` sets `clone_fn` for guards. File it.
-⚠ **The self-host is AHEAD of Rust here on both axes** — `is_guard_struct_type` reads typed
-`resource_meta_for(...).runtime_name`, and `lower_field_write` already peels. Fix Rust as oracle hygiene;
-never dumb the SH down. Unverified sub-question: whether `guard_field_deref_base`'s unconditional
-`OpBorrow(base)` still hits the double-pointer shape — cheap probe, run it first.
-**NEXT:** commit the patch to a track branch FROM A WORKTREE, resolve the one comment hunk, per-track
-gates, output-review.
+**TRACK I — Family-1's sibling MutableBorrow arm.** F reviewer measured `MutableBorrow` arm at
+`src/ir/lowering/exprs/calls.rs:55-82` ALSO clone-bombs under recursive `f(&b)` with bare-param
+resource-typed receiver (probed with RC=124 at 30s). Filed as advisory during F because arguably
+by-design CoW G2 write-through materialize; mechanical guard restructure would break write-through
+semantics. Needs a **design ruling** before executor moves: (a) accept as by-design + document in the
+`MaterializePlan` charter; (b) narrow to a specific safer shape; (c) full retire. Scout should
+enumerate the axis (parameter root shape × payload type × recursion depth) and propose options.
 
-**TRACK B1 — function-type param ownership at LOCAL positions. BRIEF ONLY, 8 REVIEW PASSES, NOT LAUNCHED.**
-⚠ **Do not run a 9th brief pass — send it to a scout to PROTOTYPE.** Eight passes produced 46 blocking
-findings and no implementation; two scouts produced verified designs in one pass each. That is the lesson
-of this round.
-Root: `types.rs` lowers `Type::Function { .. }` discarding `param_ownerships`; a `Callable[void(&int)]`
-local's GIR type becomes `fn(i64)` and the call passes the VALUE, so the callee derefs `0x1`. Verify:
-`gg build <repro> --emit-gir`. Repro `known_gaps/sound_callable_amp_fntype_segv.gg`.
-⚠ Fixing the TYPE alone does NOT stop the segfault — the indirect arg loops must also consult the callee's
-`FnPtr` param types. Both halves are needed.
-⚠ **The accidental-green axis is the ARGUMENT's ROOT, not the callee's provenance.** Both provenances SEGV
-with a plain-local argument; a pointer-rooted argument is green through both. `callable_ref_param.gg` is
-the pin any fix must keep green — and it spells the call BARE (`f(c)`), so it pins only the bare cell.
-⚠ **Do NOT "migrate" `f(c)` → `f(&c)`.** Measured: GIR bit-for-bit identical; the sigil is inert at that
-loop. The migration retires nothing and converts an honest fixture into one that teaches a false rule.
-⚠ CUT `ROOT 1c` (the `ast::Type::Function` arm in `lower_var_decl`'s `UNIT_TYPE` fallback) to its own
-track: measured bit-for-bit unchanged under the full prototype, so it is an independent defect, and its
-guard choice (invert the global default vs a domain lint) is unresolved design.
+### QUEUED FOR ROUND XI (memory-unsafety pack — filed as `known_gaps` this round)
 
-**TRACK E — method call routed through a guard receiver. SCOUTED, UNBRIEFED.**
-`Guard[UserStruct].user_method()` at a guard LOCAL is `gg check`-clean and emits `gorget_guard_<method>` —
-a symbol that does not exist. Settling control: `Guard[int].nonexistent_zzz()`, a method on NO type, is
-also accepted. Not Guard-only: `Box[T]`/`Shared[T]` fabricate too, while `ReadGuard`/`WriteGuard` reject —
-an artifact of `ReadGuard` being declared with an `equip` block, not a ratified asymmetry.
-`docs/language-design.md` §9.3 AND §9.4 both teach shapes that have never compiled.
-Severest cells: `Guard[String].get()` / `Guard[Vector[int]].get()` (heap-forced) **double-free on both
-backends**; `g.0 = v` SIGSEGVs on LLVM. `get` is REGISTERED, so that is a separate defect from the
-fabrication class.
-Class evidence: 16 unconditional `format!("gorget_<family>_{method}")` sites in `calls.rs`, exactly ONE
-carrying the round-31 assert — the chokepoint guard is the right scope, not the instance fix.
-Reference-grade shape (from §9.3/§9.4 + the existing `GuardAccept` metadata): NOT rejection for
-`Guard`/`Box` — typed method auto-deref resolved at the checker and written through so lowering mangles on
-the INNER type, reusing `emit_guard_get_ptr`; `NonDerefContainer` (`Shared`/`Mutex`/`RWLock`) rejects.
-Blast radius ≈ 0 fixtures. Coverage gap that let it survive: 18 fixtures use `Guard[`, **none calls a
-method through a guard** — only `get`/`set`, the two registered ones.
-
-**TRACK B2 — D35 re-spelling + the self-host parser lane. NOT STARTED.** Follows B1. Owns the SH
-`parse_function_type` work in all three `parser.gg` copies (the SH parses the sigil then hardcodes
-`OWN_BORROW` — the same hole Rust closed in March).
-
-**TRACK B3 — the semantic indirect-call sigil gate. NOT STARTED.** Split out of B1 because its design is
-unsettled: its callee-shape family could not reach the IIFE cell, and its guard could not catch its own
-class. Needs its own scout + gauntlet. **While it is open, bare `cb(a)` stays accepted-and-segfaulting —
-a known Core #8 defect, and it has NO committed repro. File one.**
-
-- **🧹 [LOW — Track B3 output-review advisory A3, filed 2026-07-27] `Callable[Unknown]` skips B3's indirect-call sigil check on both lanes.** The indirect check resolves the callee's function type via `expr_types[callee.span]`; when that resolves to `Unknown` (unresolved generic parameter, error type, etc.), the check silently skips — matching the direct-call fallback behavior per the scout's plan. Reasonable default (mirrors direct calls), but a hardening avenue: probe whether an `Unknown`-typed callee is EVER a legitimate reachable shape at check time (typechecker should have concretised it); if not, the skip could tighten to a `debug_assert!` that catches the class of "checker forgot to fill `expr_types`" bugs. Trivial follow-up.
-
-- **🆕🐛 [LOW — parser gap surfaced by the Track B3 scout] A closure literal with a `&`-sigil parameter and
-  a body that ASSIGNS through it (`(int &x): x = x + 100`) fails at PARSE with `expected ')', found '='`.
-  The read-only twin (`(int &x): print(x)`) parses fine. Blocks IIFE that mutates a captured argument;
-  blocked B3's scout from probing the IIFE cell of the callable-shape axis. Under Option A (D31-uniform)
-  the parsed shape would REJECT mis-spelled bare-arg IIFEs at check time -- which needs the parser fix
-  first. Fix direction: extend the closure-body parser so `identifier = ...` at statement position after
-  the `:` forms a statement, not a misparsed expression. **DURABLE REPRO**:
-  `tests/fixtures/known_gaps/sound_closure_amp_param_write_body_parse_error.gg` + `#[ignore]`d test
-  `sound_closure_amp_param_write_body_parse_error` asserting the INTENDED `101`.
+- **`sound_guard_get_string_double_free.gg`** (E1 filed) — heap-forced `Guard[String].get()`
+  double-frees at scope exit. Fix direction: `.get()` returns `Ref[T]` for heap-carrying inners.
+- **`sound_callable_amp_arr_indexed_callee_segv.gg`** (B1 filed) — third `__gorget_closure_call_N`
+  construction site (`arr[0](&a)`) SEGVs both backends. Fix direction: extend `GirType::FnPtr` to carry
+  `param_ownerships`, consult in the arg loop.
+- **`scoutE_guard_tuple_field_assign_segv.gg`** (E1 filed) — `g.0 = v` on `Guard[(int, int)]` LLVM
+  SIGSEGV. Fix direction: tuple-field write-through doesn't project through `emit_guard_get_ptr`.
+- **Cross-module `Guard[Trait]` dispatch** (G scope note) — same shape G fixed for Box but Guard's IR
+  vtable support would need extension; separate design decision.
 
 ### UNOWNED, HIGH SEVERITY
 
@@ -140,27 +69,6 @@ a known Core #8 defect, and it has NO committed repro. File one.**
   and no `known_gaps` repro exist yet — file both.
 - **Self-host reads `0` from a static with a nested ctor initialiser**, before any write; flat statics work.
   No entry, no repro — file both.
-
-### PROCESS CORRECTIONS RATIFIED THIS ROUND (detail in DONE.md)
-
-1. **TWO LEDGERS.** A finding is a BRIEF defect (the artifact is wrong) or a TREE defect (the compiler is
-   wrong). Only BRIEF defects gate a launch; tree defects are filed and never restart the clock.
-2. **A discovery is triaged THREE ways** — FOLD (only if it CORRECTS existing text), **SPAWN** (a new
-   parallel track, the default for a genuine new axis), or FILE. Litmus: *would this need its own scout to
-   brief properly?* If yes it is a SPAWN — folding it means briefing a track nobody scouted.
-3. **Exit on zero BLOCKING**, not zero reservations. BLOCKING = an executor following this literally
-   produces wrong work, OR the design violates a Core invariant.
-4. **Never prime reviewers with the finding history** — it makes SIGN OFF look negligent and manufactures
-   non-convergence.
-5. **NEVER foreclose downstream error-correction.** Forbidding an ACTION measured wrong is fine; forbidding
-   THINKING or REPORTING never is. Every brief carries a "you are the last reviewer — contradict this"
-   clause, and whatever the executor overturns is CONFIRMED by the orchestrator or a fresh reviewer, not
-   merely accepted.
-6. **The orchestrator does not prescribe write sets from reading.** Three prescriptions were refuted this
-   round, each naming a single site where a census showed a family. Route design questions to a scout with
-   prototype budget.
-7. **Anchors rot within days.** Cite a symbol plus a re-derivation command, not a bare line number — and
-   note that a long-lived hand-maintained brief rots against its OWN round's commits.
 
 ### ROUND-CLOSE GATE (once, over all landed tracks)
 
@@ -175,7 +83,9 @@ worth knowing.
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
 
-- **🔒 NEXT (owner-designated 2026-07-22):** CoW `&`-write-through soundness class — scalar `&`-arg (~L112) · snag#53 nested `&field` (~L100) · closure `&`-formation (~L106), all both-lane Core #8 ∥ SH Core #9 lag pack — `v[i].bump` (~L97) + `overload_arg_temp_*` ×4 (~L98).
+- **🔒 ROUND X (queued 2026-07-28, headline in the handover block above):** FAMILY-2 (cross-resolver arm-parity, tight scope, ggdef-adjudicated `known_gaps` already committed) ∥ FAMILY-1's MutableBorrow-arm sibling (F reviewer-measured to also clone-bomb under recursive `f(&b)`, needs design ruling first: by-design CoW G2 vs narrow vs retire).
+- **ROUND XI (memory-unsafety pack, filed this round):** `sound_guard_get_string_double_free` (heap-forced `Guard[String].get()` double-frees, `.get()` should return `Ref[T]` for heap-carrying inners) · `sound_callable_amp_arr_indexed_callee_segv` (3rd `__gorget_closure_call_N` construction site, extend `FnPtr` to carry `param_ownerships`) · `scoutE_guard_tuple_field_assign_segv` (`g.0 = v` LLVM SIGSEGV, tuple-field write-through doesn't project through `emit_guard_get_ptr`).
+- **ROUND XII+ (owner-designated 2026-07-22, still on the queue):** CoW `&`-write-through soundness class — scalar `&`-arg (~L112) · snag#53 nested `&field` (~L100) · closure `&`-formation (~L106), all both-lane Core #8 ∥ SH Core #9 lag pack — `v[i].bump` (~L97) + `overload_arg_temp_*` ×4 (~L98).
 - **THEN:** resolver-totality soundness slice (design note `docs/internals/cow-transient-view-model.md`; internal views only, no user `Ref[T]`; gated on the `.get()`-chain coverage audit) · #13 perf reclaim (measurement-gated; SH-excess VarDecl first) · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first).
 
 ## Operating invariants (load-bearing — process/reference context, not filed work)

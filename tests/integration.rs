@@ -25020,7 +25020,11 @@ fn self_host_runtime_diff() {
     // Reseeded 2026-07-22 (solid-ground Rust CoW close, force-rebuild): ADJ-MATCH 371
     // (of MATCH 1224 = ADJ 371 + UNADJ 843 + BOTH-WRONG 10). Prior floor 371
     // (lag-close). Floor = measured count (no ADJ jitter margin); ADJ held.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 371;
+    // Reseeded 2026-07-28 (round IX close: `&`-through-an-indirection memory-unsafety
+    // — 9 tracks A/D/E1/B1/B3/E2/B2/F/G): ADJ-MATCH 373 (of MATCH 1236 = ADJ 373 +
+    // UNADJ 853 + BOTH-WRONG 10). D31-uniform indirect-call sigil + D36 auto-deref +
+    // ratified rejects widened ggdef's adjudication reach.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 373;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -25158,7 +25162,12 @@ fn self_host_runtime_diff() {
     // Denom 1299→1304 from new overload_arg_temp_* + vector_string_concat fixtures;
     // MATCH +1 vs lag-close 1223 (Rust CoW correct; SH WRONG on the four overload
     // pins + residual R1 index lag — Core #9, not a MATCH regression).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1219;
+    // Reseeded 2026-07-28 (round IX close: `&`-through-an-indirection memory-unsafety):
+    // MATCH 1236 / 1323 = 93.4% (ADJ 373 / UNADJ 853 / BOTH-WRONG 10). Denom
+    // 1304→1323 from the round's new NEG + regression fixtures (Track B3 axis
+    // fixtures, Track G box_trait_cross_module, Track F clone-bomb pin, Track B2
+    // D35 NEG, Track E2 auto-deref accepts + rejects). Floor = 1236 − 5 jitter = 1231.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1231;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

@@ -1,3 +1,95 @@
+- [2026-07-28] **Round IX close — `&`-through-an-indirection memory-unsafety.** Nine tracks landed on
+  `gorget-1` (A, D, E1, B1, B3, E2, B2, F, G). Round arc: fix the round's headline class (Callable /
+  wrapper receivers silently accepting sigil-mismatched or fabricated calls) without breaking pre-round
+  trait-object dispatch, ratify the new semantics via D36, and close a round-close bootstrap regression
+  the round itself introduced.
+
+  **Landed (in merge order):**
+  - **A** (`5d007ea5` + `482f6f45`): retired `guard_inner_suffix` name-matching via typed `guard_types`
+    channel at `TypeMapper::register_named` (BIJECTION-justified), private field + differential
+    `debug_assert!`, `guard_of` peels one Ptr/MutPtr. Graduated `guard_amp_param_field_writethrough`
+    covering all 4 field-access cells; filed 1 TREE defect (`gorget_guard_clone` bare-param mutating
+    cell, undefined-symbol link failure).
+  - **D** (`119b6174` + `20c1f52e`): self-host `&<projection>` call args, object-domain-first. Treats
+    the OBJECT DOMAIN as a first-class axis; `for_write`-gated `amp_object_base` mirrors the ReadGuard
+    write-face rejection. RED-verified live fixtures for the double-eval hoist +
+    write-through-a-ReadGuard rejection.
+  - **B1** (`1028972f` + `fa6367e3`): Callable-param `&`-projection SEGV closed via
+    `callable_param_types`/`ownerships` sidecars + Option (b) `is_param_borrow_unique` bypass retirement.
+    5 SEGV cells graduated (including the primary `callable_amp_fntype_writethrough` at `101`) + 2 axis
+    fixtures. Filed third construction site (`arr[0](&a)`) as durable `known_gaps`.
+  - **B3** (`867e89c5` + `f8316a57`): D31-uniform indirect-call sigil check — `!` and `&` contractual
+    at indirect calls (Callable / FnPtr / IIFE / array-element) exactly as at direct calls. 4 axis NEG
+    fixtures + 2 migration fixtures + ggdef mirror (152/0). IIFE parser gap filed as `known_gaps`.
+  - **E1** (`308feb7f` + `a2933ef4`): smart-pointer method fabrication class closed as check-time reject
+    (`E_NoMethodFound` for `NonDerefContainer` receivers — ratified permanent; interim reject for
+    `GuardAccept`/`DerefTarget`, promoted by E2). 2 ratified NEG + 5 `known_gaps` accept fixtures.
+  - **D36 ledger** (`10d53d9e`): ratified auto-deref shape — receiver-only, no `*boxed` operator,
+    per-face split on wrapper (read: all 4; write: Guard/WG/Box reject ReadGuard; consuming: Box only),
+    `method_resolutions` extended with `auto_deref: Option<DerefWrapperKind>` per Q2 sidecar-retirement
+    directive. §9.4 stands with clarifying sentence.
+  - **F** (`077a3669` + `20c1f52e` was D's fold; F's is post-B1): closed the bootstrap clone-bomb B1's
+    A-2 Option (b) introduced. B1's fast-path unconditionally called `cow_before_mutation` on
+    bare-identifier args, hitting Case 1c's `cow_materialize_alias(local, local, ...)` — a full
+    deep-clone. In `meta.gg:expand_meta_for_in_stmts`'s recursive bare-Module passing, `lower_expr.gg`'s
+    ~9600-line self-compile deep-cloned per statement traversal. 8-line fix moved
+    `cow_before_mutation` INSIDE the `is_param_borrow_unique` guard. `BOOTSTRAP_MAX_CONVERGENCE_STAGE`
+    tightened 5 → 2 (pre-2026-05-21 strict invariant restored). Durable regression fixture
+    RED-verified (60s hang → 6ms clean exit). Sibling `MutableBorrow` arm filed for future audit
+    (measured to hang under recursive `f(&b)` but arguably by-design CoW G2).
+  - **E2** (`5964d6c8` + `4d58173e`): D36 auto-deref path implemented. `MethodResolution { def_id,
+    auto_deref }` extends `method_resolutions`'s value type (Q2 pattern); Box `Box__T__get_ptr` helper
+    mirroring Guard shape; per-face check-side rejection with `E_AutoDerefWriteThroughReadGuard` +
+    `E_AutoDerefConsumingThroughGuard` diagnostics. 11 accept + 2 reject fixtures.
+  - **B2** (`8d1ac44b` + fold): D35 unnamed-parameter sigil re-spelling. Rust parser rejects old
+    `Callable[void(&int)]` with cited diagnostic; new `Callable[void(int &)]` accepted via
+    `parse_ownership_modifier`. Self-host lane: 3 parser.gg copies parse trailing sigil, retire
+    `OWN_BORROW` hardcode. 20 fixture migrations (behavior-preserving). Fold closed the NEG-fixture
+    blocking + local-decl diagnostic promotion advisory + SH parser cascade advisory.
+  - **G** (`6a3960f9`): round-close bugfix — E1's wrapper-kind reject caught `Box[Trait].method()` for
+    CROSS-MODULE trait imports (types as `Generic(Box, [Import(...)])`, not `TraitObject(...)`), breaking
+    `examples/shapes` and other vtable-dispatch shapes. Fix at typecheck.rs terminal fallthrough:
+    when `container_kind == DerefTarget` and inner's name matches a trait, look up the trait's method
+    sig without setting `auto_deref` (IR vtable dispatch stays untouched). Durable
+    `box_trait_cross_module` regression fixture, RED-verified.
+
+  **Ratifications this round:**
+  - **D36** — smart-pointer method auto-deref is receiver-only, per-face on the wrapper, extends
+    `method_resolutions` value (not a parallel channel).
+  - **D31 extension** (via B3) — indirect calls are subject to the same sigil-strict rule as direct
+    calls.
+  - **D35 execution** (via B2) — the ratified spelling landed with the migration.
+
+  **Round-close battery (all green on `gorget-1` tip):**
+  - `cargo test --lib` 1129/0
+  - `cargo test --test lints` 75/0 (D35 + D36 both cited; ratchet_b materialize 15/15; agents_md size
+    ratchet passes)
+  - `cargo test -p ggdef` 1/0
+  - `cargo test --test security` 128/0 (22 pre-existing `known_gaps` ignored)
+  - `cargo test --test spec_conformance` 3/0 (C + LLVM + selfhost lanes, 180s)
+  - **C integration sweep** 1873/0/66-ignored (3563s)
+  - **LLVM integration sweep** 1873/0/66-ignored (2843s; `parser_comparison` flaked once under
+    `--test-threads=4` PermissionDenied race — passes standalone in 19s)
+  - `self_host_bootstrap_fixed_point` GREEN, converged at stage-2 (pre-Phase-2c invariant), 3 measurements
+  - **Parity** 1236/1323 = 93.4% (up from 1212/1285 = 94.3% baseline — +24 MATCH cells and +38 total
+    denominator; ADJ-MATCH 373 vs 368 = +5; BOTH-WRONG stayed at 10). `RUNTIME_DIFF_MATCH_FLOOR` ratchets
+    1219 → 1231, `GGDEF_ADJUDICATED_FLOOR` ratchets 371 → 373.
+
+  **Filed as follow-ups (durable `known_gaps` + TODO entries):**
+  Third `__gorget_closure_call_N` construction site SEGV (B1); heap-forced `Guard[String].get()`
+  double-free (E1); `g.0 = v` LLVM SIGSEGV on `Guard[(int,int)]` (E1); IIFE closure `&`-param write-body
+  parse error (B3); `MutableBorrow` arm clone-bomb under recursive `f(&b)` (F sibling); Layering
+  `GuardAccept` split + ReadGuard name-match census (E2 A1); Callable-family name-matching sibling of
+  the `Ref__`/`MutRef__` census (B1 A-3); `Callable[Unknown]` skips B3's sigil check (B3 A3).
+
+  **Process notes:** two agent crashes (F fix executor + B2 fold executor) mid-session; salvaged
+  minimal partial state to `/tmp/recover_*` and re-dispatched with crash-defense checkpoint requirement
+  — both cleanly re-executed. Worktree hygiene: 46 → 13 worktrees at round close (33 removed after
+  capture-first-then-prune sweep). One incorrectly-scoped merge (Track B3 was merged before its
+  output-review dispatched; retroactive review SIGNED OFF with 3 non-blocking advisories, no roll-back
+  needed — recorded as a discipline slip).
+
+
 - [2026-07-27] **Round-2 tree-defect filing + output-review fold.** Filed the compiler/doc/record defects
   surfaced while reviewing this round's briefs, as durable artifacts rather than review exhaust: 7
   `known_gaps` reproducers + 7 `#[ignore]`d tests asserting INTENDED output, every one RED-verified at
