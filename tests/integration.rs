@@ -20080,7 +20080,22 @@ fn self_host_bootstrap_fixed_point() {
     // The strict goal is K=2 (pre-2026-05-21 invariant); Phase 2c relaxed it
     // during an ownership cascade. Seed = the measured value at 2026-07-27
     // (initial visibility instrumentation for the round-close battery).
-    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 5;
+    //
+    // Tightened 2026-07-28 from placeholder 5 -> 2 post-Track-F. Track B1 A-2
+    // Option (b) fold (`02082ae8`, `src/ir/lowering/exprs/calls.rs`) added a
+    // `cow_before_mutation` call BEFORE the `is_param_borrow_unique` guard on
+    // the bare-identifier / callee-passes-by-ptr fast-path. For a bare
+    // resource param it hit `cow_before_mutation` Case 1c
+    // (`context.rs:3653`) -> `cow_materialize_alias(local, local, span)`, a
+    // full deep-clone at every call site. On self-host's `expand_meta_for_in_stmts`
+    // (recursive SMatch/SIf/SWhile/SFor traversal passing bare `Module m`
+    // at each level) the ~9600-line self-compile ran one full-Module deep-clone
+    // per statement traversal — a clone-bomb that pushed stage-3 past its
+    // 600 s timeout. Track F moved `cow_before_mutation` and the re-resolve
+    // INSIDE the uniqueness guard, restoring the pre-Option-(b) fall-through
+    // for bare params. Convergence measured at stage-2 (strict, pre-2026-05-21
+    // invariant); latency 695.63 s from cold cache.
+    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 2;
     if let Some(k) = converged_at {
         assert!(
             k <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,
