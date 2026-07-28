@@ -1,0 +1,15 @@
+# AXIS SIBLING (Track L) — `g.1 = v` (INDEX=1 cell of the tuple-field-index axis)
+# of `guard_tuple_field_writethrough.gg`. Pre-fix RED: C compile-fail (same
+# `no member 'owner'` at `&guard->owner` for the store), LLVM builds but PRINTS
+# GARBAGE for `g.0` (`187651236676256`) — the write to field 1 landed in the
+# guard wrapper, not the tuple. Post-fix: `1\n99`.
+#
+# GUARDED MECHANISM: `try_resolve_tuple_field_place` Guard branch — index axis
+# beyond 0. Same code path; the fix is index-agnostic (`index as u32` field
+# projection), this pins the second-index cell.
+void main():
+    Mutex[(int, int)] m = Mutex[(int, int)]((1, 2))
+    Guard[(int, int)] g = m.lock()
+    g.1 = 99
+    print(g.0)
+    print(g.1)

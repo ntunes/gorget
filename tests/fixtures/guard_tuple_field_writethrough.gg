@@ -1,0 +1,32 @@
+# REGRESSION FIXTURE — `g.0 = v` where `g: Guard[(int, int)]`. Track L primary
+# (graduated from `known_gaps/scoutE_guard_tuple_field_assign_segv.gg`).
+#
+# AXIS + CELL (Core #12): TUPLE-FIELD WRITE-THROUGH through a Guard receiver at
+# the base cell — element type `int`, index 0, root shape bare local. Sibling
+# fixtures cover the axis (index=1, compound-assign, resource-inner, &-root,
+# nested, tuple-of-struct, &-field arg, read-side, WriteGuard).
+#
+# RED-VERIFIED against the pre-fix compiler (tip `1ec3ba55`, in worktree):
+#   - C lane:    C-compile ERROR `'Guard__Tuple__int64_t__int64_t' … has no
+#                member named 'owner'` at generated `.c` line 3436 — the tuple
+#                assign resolver walked to `resolve_tuple_field_type(Guard__…,0)`
+#                and stored through the guard wrapper's `owner` slot.
+#   - LLVM lane: build OK, run SIGSEGVs (exit 139) — same bogus pointer.
+#
+# GUARDED MECHANISM: `try_resolve_tuple_field_place` (src/ir/lowering/exprs/mod.rs
+# ~3410) now projects through `emit_guard_get_ptr` on a Guard receiver — mirror
+# of the struct-face branch at :3239. Revert that block (and the two siblings at
+# :2846 and :858) and this fixture RE-REDs. Site (c) at :858 (the READ path)
+# also fixed silent-wrong-output on `print(g.0)` — see the read-side fixture.
+#
+# ⚠ CAVEAT — do NOT collapse the two prints into `print(g.get())`: `print` on a
+# `(int, int)` tuple prints garbage (independent pre-existing defect, unrelated
+# to this bug). Per-field prints pin the write actually landing.
+#
+# INTENDED (post-fix): `42\n2` — write to field 0 lands, field 1 untouched.
+void main():
+    Mutex[(int, int)] m = Mutex[(int, int)]((1, 2))
+    Guard[(int, int)] g = m.lock()
+    g.0 = 42
+    print(g.0)
+    print(g.1)

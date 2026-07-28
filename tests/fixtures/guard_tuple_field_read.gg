@@ -1,0 +1,13 @@
+# NOT-YET-SAMPLED CELL (Track L, Core #12 axis expansion; VERIFIES SITE (c)) —
+# `print(g.0)` read path on Guard-of-tuple. Site (c) at
+# `lower_expr::TupleFieldAccess` (mod.rs:841) was the SILENT-WRONG-OUTPUT face
+# of this class: without the Guard branch, `field_load` on the Guard type read
+# the wrapper's `owner` slot AS AN INT — LLVM prints garbage
+# (`187650629157536\n187650629157680`), C fails to compile (same `->owner`).
+# This fixture MUST land (severity: silent wrong output, Core #8). Post-fix:
+# `42\n99` — the guarded tuple's actual elements.
+void main():
+    Mutex[(int, int)] m = Mutex[(int, int)]((42, 99))
+    Guard[(int, int)] g = m.lock()
+    print(g.0)
+    print(g.1)

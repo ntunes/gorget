@@ -1,0 +1,14 @@
+# NOT-YET-SAMPLED CELL (Track L, Core #12 axis expansion) — Guard-of-nested-tuple
+# `g.0.1 = v` (RECURSIVE-TUPLE-FIELD-WALK cell). Exercises the recursion at
+# `try_resolve_tuple_field_place`'s `Expr::TupleFieldAccess` object arm (:3351)
+# — the outer resolver recurses on the inner `g.0` to get the guard-projected
+# tuple place, then descends field 1 on the returned place. Pre-fix RED: C
+# compile-fail, LLVM builds but prints garbage on `g.0.0` (`187650655756960`).
+# Post-fix: `1\n99\n3`.
+void main():
+    Mutex[((int, int), int)] m = Mutex[((int, int), int)](((1, 2), 3))
+    Guard[((int, int), int)] g = m.lock()
+    g.0.1 = 99
+    print(g.0.0)
+    print(g.0.1)
+    print(g.1)

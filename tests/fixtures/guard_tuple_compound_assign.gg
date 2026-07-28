@@ -1,0 +1,10 @@
+# AXIS SIBLING (Track L) — compound-assign `g.0 += v` cell (WRITER-KIND axis) of
+# `guard_tuple_field_writethrough.gg`. Compound-assign shares the tuple-field
+# write-place resolver (per doc-comment at `try_resolve_tuple_field_place`:3319).
+# Pre-fix RED: C compile-fail (same `no member 'owner'`), LLVM builds but prints
+# garbage (`187651502785189`). Post-fix: `15`.
+void main():
+    Mutex[(int, int)] m = Mutex[(int, int)]((10, 20))
+    Guard[(int, int)] g = m.lock()
+    g.0 += 5
+    print(g.0)
