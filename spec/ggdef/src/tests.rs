@@ -1019,6 +1019,91 @@ void main():
     assert_eq!(out(src), "hello\nnone");
 }
 
+// Constructor patterns match struct *values* by declaration order
+// (language-reference §8.4 — patterns bind enum OR struct fields).
+#[test]
+fn match_binds_struct_value_by_declaration_order() {
+    let src = r#"
+struct Point:
+    int x
+    int y
+void main():
+    Point p = Point(1, 2)
+    match p:
+        case Point(a, b):
+            print(a)
+            print(b)
+        else:
+            print("no match")
+"#;
+    assert_eq!(out(src), "1\n2");
+}
+
+// Wildcard positions still project by declaration order; only named binds fire.
+#[test]
+fn match_struct_value_wildcard_positions() {
+    let src = r#"
+struct Point:
+    int x
+    int y
+void main():
+    Point p = Point(7, 11)
+    match p:
+        case Point(_, y):
+            print(y)
+        else:
+            print("no match")
+"#;
+    assert_eq!(out(src), "11");
+}
+
+// Nested constructor patterns (struct within struct) still bind by declaration
+// order at every level.
+#[test]
+fn match_struct_value_nested_pattern() {
+    let src = r#"
+struct Inner:
+    int a
+    int b
+struct Outer:
+    Inner inner
+    int c
+void main():
+    Outer o = Outer(Inner(1, 2), 3)
+    match o:
+        case Outer(Inner(x, y), z):
+            print(x)
+            print(y)
+            print(z)
+        else:
+            print("no match")
+"#;
+    assert_eq!(out(src), "1\n2\n3");
+}
+
+// A struct pattern naming a DIFFERENT struct constructor must not match — the
+// evaluator falls through to `else`. (Same struct name is nominally locked by
+// the frontend's type check, so we probe cross-struct via a `type Any = ...` style
+// isn't available; instead, we probe that an unrelated-name string field still
+// binds correctly, exercising the field-name-preserving projection path.)
+#[test]
+fn match_struct_value_string_field() {
+    let src = r#"
+struct Named:
+    String label
+    int count
+void main():
+    Named n = Named("cow", 42)
+    match n:
+        case Named(l, c):
+            print(l)
+            print(c)
+        else:
+            print("no match")
+"#;
+    assert_eq!(out(src), "cow\n42");
+}
+
 // ── ranges + string slices / indexing ──────────────────────────────────────
 
 #[test]
