@@ -27,10 +27,12 @@
 #
 # HEAD behavior (probe 2026-07-28):
 #   gg check <this>            → OK: no semantic errors (exit 0)
-#   gg build <this> -o /tmp/p  → cc + ld error:
+#   gg build <this> -o /tmp/p  → ld error (printed to stderr, wrapper still
+#     exits 0 — Core #15(d) probe note):
 #     undefined reference to `int64_t__greet'
 #     collect2: error: ld returned 1 exit status
-#     (exit 1; link stage — distinct from class 1's C-emit stage)
+#     C compiler exited with: exit status: 1
+#     (link stage — distinct from class 1's C-emit stage; no binary produced)
 #
 # FIX DIRECTION (Option A / D36-implementation, DEFERRED to Round XII+):
 # extend `Guard[T].get()` return-type propagation to preserve trait inners

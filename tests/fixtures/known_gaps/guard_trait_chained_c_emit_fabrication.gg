@@ -22,9 +22,11 @@
 #
 # HEAD behavior (probe 2026-07-28):
 #   gg check <this>            → OK: no semantic errors (exit 0)
-#   gg build <this> -o /tmp/p  → C-emit stage error:
+#   gg build <this> -o /tmp/p  → C-emit stage error (printed to stderr,
+#     wrapper still exits 0 — Core #15(d) probe note):
 #     implicit declaration of function 'gorget_guard_greet'
-#     (exit 1; C source generated at /tmp/p.c line 3442)
+#     C compiler exited with: exit status: 1
+#     (C source generated at /tmp/p.c line 3442; no binary produced)
 #
 # FIX DIRECTION (Option A / D36-implementation, DEFERRED to Round XII+):
 # extend `method_resolutions` value per D36 Q2 to
