@@ -4405,6 +4405,51 @@ fn equip_exprbody_owning_param_return_uaf() {
     run_gg("known_gaps/equip_exprbody_owning_param_return_uaf.gg", "5\n28");
 }
 
+// PERF PATHOLOGY — Track I sibling filing (2026-07-28). `Ownership::Move if
+// callee_is_move_param` arm at `src/ir/lowering/exprs/calls.rs:624`
+// unconditionally emits an `emit_clone` on the Ptr(T) operand of a `!`-arg
+// (`consume(!v.get(0).unwrap())`). Measured O(N) per-call clones under linear
+// recursion (N=1000 -> array_clone=1000, --clones=stats). Correct output
+// survives (semantics unaffected); Track I in-scope is `Ownership::Borrow` and
+// `MutableBorrow` whole-value arms — this arm was owner-scoped OUT
+// (2026-07-28) and files as a durable repro. Un-ignore + promote out of
+// known_gaps/ (assert clone-stats floor `array_clone <= K`) when the arm gains
+// a sever-aliases guard / hoist-to-caller-root fix. See TODO.md.
+#[test]
+#[ignore = "PERF PATHOLOGY known_gap (Track I sibling): Move-callee arm at \
+calls.rs:624 O(N) clone-bomb under recursive !-arg from .get(); fixture pins \
+the SHAPE at small N; TODO.md."]
+fn mutable_borrow_move_callee_recursive() {
+    run_gg(
+        "known_gaps/mutable_borrow_move_callee_recursive.gg",
+        "0\n0\n0\n1\ndone",
+    );
+}
+
+// PERF PATHOLOGY — Track I sibling filing (2026-07-28). G2 projected-root arm
+// at `src/ir/lowering/exprs/calls.rs:189-207` fires
+// `cow_before_mutation(root_local)` on a bare-param root when the arg is
+// `f(&b.field)`. Same G2 site-1 whole-root deep-clone as the MutableBorrow
+// whole-value arm (Track F fixed the `is_param_borrow_unique` fast-path there),
+// applied to a projection root. Measured 2026-07-28 with a resource `Big`
+// (Vector[Vector[int]] payload, ~4MB): N=100 -> array_clone=10050, N=500 ->
+// array_clone=150250 + 2GB peak RSS (O(N*data.len)). Correct output survives.
+// Owner-scoped OUT of Track I (2026-07-28) — files as a durable repro. Fix
+// direction: narrow materialize to the projected field-place (needs
+// field-place-aliasing analysis) OR share ONE materialized root across the
+// call-scope. Un-ignore + promote (assert clone-stats floor) when the arm
+// narrows or scope-hoists. See TODO.md.
+#[test]
+#[ignore = "PERF PATHOLOGY known_gap (Track I sibling): G2 projected-root arm \
+at calls.rs:189-207 O(N*data.len) whole-root clone-bomb for `f(&b.field)` when \
+`b` is a bare-param; fixture pins the SHAPE at small N; TODO.md."]
+fn mutable_borrow_projected_root_recursive() {
+    run_gg(
+        "known_gaps/mutable_borrow_projected_root_recursive.gg",
+        "6\ndone",
+    );
+}
+
 // A `&`-param is a BORROW: crossing an ownership boundary owes exactly ONE
 // clone, a typed binding owes ZERO (borrow now, materialize on mutation), and
 // mutating the param ITSELF must still write through. All four in-scope arms
@@ -9907,6 +9952,87 @@ fn deadwrite_ok_branch_sibling_read() {
     // Deliberate false-negative pin: write in branch A, read in branch B —
     // walk-order union semantics (no BranchState threading) suppress.
     check_gg_silent_for("deadwrite_ok_branch_sibling_read.gg", DEADWRITE_MSG);
+}
+
+// ─── W_RecursiveBareParamMaterialize (Track I, 2026-07-28) ─────────
+// Charter-accepted §3.1 exception (see docs/devbook/11-copy-on-write.md
+// "Accepted charter exception"): a bare (Borrow) Res param mutated inside a
+// self-recursive call materializes a private copy PER FRAME, and the
+// recursion multiplies the cost. The warning steers users to `&param` +
+// callers spelling `&arg` for write-through-to-owner semantics, OR explicit
+// `.clone()` for per-frame private copies made honest about intent. 4
+// positives (POS 1 Path X classic · POS 2 Path Y user &self · POS 3 Path Y
+// builtin · POS 4 Path Z Assign target) + 3 negatives (silent-when-forwarded ·
+// silent-when-non-recursive · silent-when-explicitly-cloned).
+
+#[test]
+fn recursive_bare_param_materialize_amp_arg_warns() {
+    build_gg_expect_warning(
+        "recursive_bare_param_materialize_amp_arg.gg",
+        "parameter `b` is mutated inside a recursive self-call",
+    );
+}
+
+#[test]
+fn recursive_bare_param_materialize_amp_self_warns() {
+    build_gg_expect_warning(
+        "recursive_bare_param_materialize_amp_self.gg",
+        "parameter `self` is mutated inside a recursive self-call",
+    );
+}
+
+#[test]
+fn recursive_bare_param_materialize_builtin_push_warns() {
+    build_gg_expect_warning(
+        "recursive_bare_param_materialize_builtin_push.gg",
+        "parameter `v` is mutated inside a recursive self-call",
+    );
+}
+
+#[test]
+fn recursive_bare_param_materialize_direct_assign_warns() {
+    build_gg_expect_warning(
+        "recursive_bare_param_materialize_direct_assign.gg",
+        "parameter `c` is mutated inside a recursive self-call",
+    );
+}
+
+#[test]
+fn recursive_bare_param_amp_control_amp_forwarded_silent() {
+    // Correct shape (declared `&b` + spell `&b` at recursion): write-through
+    // reaches the owner via an unbroken `&`-chain; no per-frame materialize;
+    // diagnostic must stay silent.
+    run_gg("recursive_bare_param_amp_control_amp_forwarded.gg", "4");
+    build_gg_expect_no_warning(
+        "recursive_bare_param_amp_control_amp_forwarded.gg",
+        "W_RecursiveBareParamMaterialize",
+    );
+}
+
+#[test]
+fn bare_param_amp_arg_non_recursive_silent() {
+    // LOAD-BEARING negative: `&b`-formation on bare param WITHOUT
+    // self-recursion is Charter-accepted one-shot; diagnostic must stay
+    // silent. Losing this negative would make W_* de-facto reject on every
+    // one-shot `&b`, which the owner explicitly ruled out.
+    run_gg("bare_param_amp_arg_non_recursive_silent.gg", "1");
+    build_gg_expect_no_warning(
+        "bare_param_amp_arg_non_recursive_silent.gg",
+        "W_RecursiveBareParamMaterialize",
+    );
+}
+
+#[test]
+fn recursive_bare_param_explicit_clone_silent() {
+    // User opts into per-frame copies via explicit `b.data.clone()` — root
+    // of `&local` is `local` (Owned temp), not `b`. Nothing writes through
+    // `b`, so `bare_param_mutated` never picks it up; diagnostic stays
+    // silent.
+    run_gg("recursive_bare_param_explicit_clone_silent.gg", "1");
+    build_gg_expect_no_warning(
+        "recursive_bare_param_explicit_clone_silent.gg",
+        "W_RecursiveBareParamMaterialize",
+    );
 }
 
 

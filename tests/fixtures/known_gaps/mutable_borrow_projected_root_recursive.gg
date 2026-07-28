@@ -1,0 +1,54 @@
+# PERF PATHOLOGY (filed 2026-07-28 by Track I measurement scout) —
+# G2 projected-root arm at `src/ir/lowering/exprs/calls.rs:189-207`.
+# `f(&b.field)` where the projection ROOT `b` is a bare-param triggers
+# `cow_before_mutation(root_local)` — the SAME G2 site-1 whole-root materialize
+# pattern as calls.rs:55-82 (MutableBorrow whole-value arm), applied to a
+# projection root. Deep-clones the whole `b` at every level, even though only
+# `b.data` is written through.
+#
+# Measured 2026-07-28 with a resource `Big { Vector[Vector[int]] data }`:
+# N=100 → array_clone=10050 (linear O(N * data.len)); N=500 → 150250 clones,
+# 2GB peak RSS. Same class as the MutableBorrow whole-value pathology but
+# hits at ANY `&b.field` where `b` is bare-alias; guarding at the root
+# projection is architecturally the same problem.
+#
+# Reference-grade fix direction: narrow the materialize to just the projected
+# field-place (require field-place-aliasing analysis, or the transient-view
+# CoW model — cf. `feedback-cow-transient-views-no-stored-borrows`), OR share
+# ONE materialized root across the whole call-scope. UN-IGNORE + promote when
+# a narrowed-materialize or scope-hoist fix lands.
+#
+# RED-verified 2026-07-28 (this-scout run): at N=3 the fixture is trivial and
+# runs green; the pathology is measured on the shape at larger N — see the
+# scout report `/tmp/scout_trackI_measurement.md` for the axis table.
+#
+# NOTE (Track I diagnostic commit): `recurse`'s param is spelled `_b` (not `b`)
+# — a deliberate `_`-prefix silence for the sibling `W_RecursiveBareParamMaterialize`
+# warning landing in the follow-up commit. The `_` convention mirrors
+# `NeedlessMutableBorrow` and `DeadBareParamWrite`; without it this fixture would
+# fire the new warning (Path X: bare-param `_b` is `&`-formed via `&_b.data` inside
+# a self-recursive call), which is spam here because we are pinning the perf
+# pathology, not the diagnostic.
+
+struct Big:
+    Vector[Vector[int]] data
+    int tag
+
+void mutate(Vector[Vector[int]] &d):
+    d.push(Vector[int]())
+
+int recurse(int depth, Big _b):
+    if depth <= 0:
+        return _b.data.len()
+    mutate(&_b.data)
+    return recurse(depth - 1, _b)
+
+void main():
+    Big big = Big(Vector[Vector[int]](), 0)
+    int i = 0
+    while i < 3:
+        big.data.push(Vector[int]())
+        i = i + 1
+    # Small N so the fixture runs fast; the SHAPE is what is pinned.
+    print(recurse(3, big))
+    print("done")

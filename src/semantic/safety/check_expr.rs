@@ -330,6 +330,33 @@ impl<'a> BorrowChecker<'a> {
 
                 self.check_call_arg_ownership(args, is_constructor);
 
+                // W_RecursiveBareParamMaterialize: self-recursion classifier
+                // (Call arm). If the callee resolves to the CURRENT fn (direct
+                // self-recursion), each bare-borrow arg whose ROOT is a
+                // tracked bare-Res-param (i.e. in `deadwrite_params`) records
+                // the param's DefId in `bare_param_recursed_bare`. The emit
+                // block at end-of-`check_function` intersects this with the
+                // pre-existing `bare_param_mutated` set — the fired warning
+                // means: "this param is mutated in the body AND passes itself
+                // bare into a self-recursive call, so each frame materializes
+                // a private copy". Mutual/indirect recursion is v1
+                // non-goal (filed TODO). Compare `Option<DefId>` directly.
+                if self.current_fn_def_id.is_some()
+                    && self.resolve_callee_def_id(callee) == self.current_fn_def_id
+                {
+                    for arg in args {
+                        if arg.node.ownership == Ownership::Borrow {
+                            if let Some(root_def_id) =
+                                self.find_root_def_id(&arg.node.value)
+                            {
+                                if self.deadwrite_params.contains_key(&root_def_id) {
+                                    self.bare_param_recursed_bare.insert(root_def_id);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // §3.4 Stale-condition: blocking calls release the token just like await.
                 if self.current_function_is_async {
                     if self.is_yield_point_call(&callee.node) {
@@ -779,6 +806,81 @@ impl<'a> BorrowChecker<'a> {
                         }
                     }
                 }
+                // W_RecursiveBareParamMaterialize: self-recursion classifier
+                // (MethodCall arm). Resolves the method's DefId via
+                // `method_resolutions` (⚠ `MethodResolution.def_id: Option<
+                // DefId>`, so unwrap with `.and_then(|r| r.def_id)` — the
+                // shorthand `method_resolutions[key].def_id` is
+                // `Option<DefId>`, not `DefId`). If it resolves to the current
+                // fn (direct self-recursion via `self.tick(...)`):
+                //   (a) the RECEIVER — not present in `args` — is checked
+                //       separately: if the method's `self` param mode is
+                //       `Ownership::Borrow` (bare self, per
+                //       `function_info[def_id].param_ownerships.first()`) AND
+                //       the receiver's root is a tracked bare-Res param, that
+                //       param recurses bare via the receiver;
+                //   (b) `args` are iterated as in the Call arm, with callee
+                //       param modes read at index `i + 1` to offset for
+                //       `self`.
+                if self.current_fn_def_id.is_some() {
+                    let method_def_id_opt = self
+                        .method_resolutions
+                        .get(&method.span.start)
+                        .and_then(|r| r.def_id);
+                    if method_def_id_opt.is_some()
+                        && method_def_id_opt == self.current_fn_def_id
+                    {
+                        let method_def_id = method_def_id_opt.unwrap();
+                        // (a) Receiver: bare-self recursion via a bare-Res root.
+                        if let Some(info) = self.function_info.get(&method_def_id) {
+                            if info.param_ownerships.first()
+                                == Some(&Ownership::Borrow)
+                            {
+                                if let Some(root_def_id) =
+                                    self.find_root_def_id(receiver)
+                                {
+                                    if self.deadwrite_params.contains_key(&root_def_id) {
+                                        self.bare_param_recursed_bare
+                                            .insert(root_def_id);
+                                    }
+                                }
+                            }
+                        }
+                        // (b) Args at offset `+1` for `self`.
+                        for (i, arg) in args.iter().enumerate() {
+                            if arg.node.ownership == Ownership::Borrow {
+                                if let Some(root_def_id) =
+                                    self.find_root_def_id(&arg.node.value)
+                                {
+                                    if self
+                                        .deadwrite_params
+                                        .contains_key(&root_def_id)
+                                    {
+                                        // Belt-and-braces: only record when
+                                        // the callee's positional slot is
+                                        // itself Borrow (bare) — mirrors the
+                                        // Call arm's implicit invariant that
+                                        // the arg's sigil matches the callee's
+                                        // param mode. `args[i]` maps to callee
+                                        // param `i + 1`.
+                                        let callee_bare = self
+                                            .function_info
+                                            .get(&method_def_id)
+                                            .and_then(|info| {
+                                                info.param_ownerships.get(i + 1)
+                                            })
+                                            == Some(&Ownership::Borrow);
+                                        if callee_bare {
+                                            self.bare_param_recursed_bare
+                                                .insert(root_def_id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Dead-write lint: record the receiver mutation
                 // after receiver AND args are walked (arg reads evaluate
                 // before the mutation lands).

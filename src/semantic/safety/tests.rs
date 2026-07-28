@@ -4739,3 +4739,226 @@ void main():
         );
     }
 
+    // ─── W_RecursiveBareParamMaterialize (Track I, 2026-07-28) ──
+    //
+    // Charter-accepted §3.1 exception (devbook/11 "Accepted charter exception"):
+    // a bare (Borrow) Res param mutated inside a self-recursive call
+    // materializes a private copy per frame; recursion multiplies the cost.
+    // The warning steers users to `&param` + `&arg` at callers for caller-side
+    // write-through, OR explicit `.clone()` for per-frame private copies.
+    // 4 positives × 3 negatives mirror the integration fixtures.
+
+    fn has_recursive_materialize(
+        warnings: &[crate::semantic::errors::SemanticWarning],
+        param: &str,
+    ) -> bool {
+        has_warning(warnings, |k| matches!(k,
+            crate::semantic::errors::SemanticWarningKind::RecursiveBareParamMaterialize { name, .. }
+            if name == param
+        ))
+    }
+
+    #[test]
+    fn recursive_materialize_amp_arg_warns() {
+        // Path X classic: `&b` at a MutableBorrow-declared callee param inside
+        // a self-recursive `go(b, n-1)` with `b` bare.
+        let source = "\
+struct Big:
+    Vector[int] data
+
+void nudge(Big &x, int n):
+    x.data.push(n)
+
+void go(Big b, int n):
+    if n <= 0:
+        return
+    nudge(&b, n)
+    go(b, n - 1)
+
+void main():
+    Vector[int] v = [1]
+    Big w = Big(!v)
+    go(w, 3)
+    print(w.data.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_recursive_materialize(&warnings, "b"),
+            "expected W_RecursiveBareParamMaterialize for b, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn recursive_materialize_amp_self_warns() {
+        // Path Y user branch (D2-rider parity): plain-`self` equip method
+        // reaches a mutating `&self` method on the bare self, and the
+        // recursive `self.tick(n-1)` classifies the receiver's root.
+        let source = "\
+struct Counter:
+    Vector[int] hits
+
+equip Counter:
+    void bump(&self):
+        self.hits.push(1)
+
+    void tick(self, int n):
+        if n <= 0:
+            return
+        self.bump()
+        self.tick(n - 1)
+
+void main():
+    Counter c = Counter(hits=[])
+    c.tick(3)
+    print(c.hits.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_recursive_materialize(&warnings, "self"),
+            "expected W_RecursiveBareParamMaterialize for self, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn recursive_materialize_builtin_push_warns() {
+        // Path Y builtin branch: `v.push(n)` on a bare `Vector[int] v` param
+        // then self-recurses `go(v, n-1)`.
+        let source = "\
+void go(Vector[int] v, int n):
+    if n <= 0:
+        return
+    v.push(n)
+    go(v, n - 1)
+
+void main():
+    Vector[int] v = [1]
+    go(v, 3)
+    print(v.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_recursive_materialize(&warnings, "v"),
+            "expected W_RecursiveBareParamMaterialize for v (builtin push), got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn recursive_materialize_direct_assign_warns() {
+        // Path Z: `c.hits = c.hits.clone()` — direct field-assign target on a
+        // resource-typed bare-Res param routes through the Assign site's
+        // `mark_mut_param_if_applicable`. Payload MUST be resource so
+        // `deadwrite_params` seeds `c` (Copy `int hits` would skip).
+        let source = "\
+struct Counter:
+    Vector[int] hits
+
+void go(Counter c, int n):
+    if n <= 0:
+        return
+    c.hits = c.hits.clone()
+    go(c, n - 1)
+
+void main():
+    Counter c = Counter(hits=[1])
+    go(c, 3)
+    print(c.hits.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            has_recursive_materialize(&warnings, "c"),
+            "expected W_RecursiveBareParamMaterialize for c (direct assign), got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn recursive_materialize_amp_forwarded_silent() {
+        // Correct shape: declared `&b` + spell `&b` at recursion. `b` is
+        // MutableBorrow so NOT seeded in `deadwrite_params`; warning stays
+        // silent as an upstream consequence.
+        let source = "\
+struct Big:
+    Vector[int] data
+
+void nudge(Big &x, int n):
+    x.data.push(n)
+
+void go(Big &b, int n):
+    if n <= 0:
+        return
+    nudge(&b, n)
+    go(&b, n - 1)
+
+void main():
+    Vector[int] v = [1]
+    Big w = Big(!v)
+    go(&w, 3)
+    print(w.data.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_recursive_materialize(&warnings, "b"),
+            "unexpected W_RecursiveBareParamMaterialize for &b-forwarded, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn recursive_materialize_non_recursive_silent() {
+        // LOAD-BEARING negative: `&b`-formation on bare param WITHOUT
+        // self-recursion is a Charter-accepted one-shot. `bare_param_mutated`
+        // fires but `bare_param_recursed_bare` does not, so the intersection
+        // is empty and the warning stays silent.
+        let source = "\
+struct Big:
+    Vector[int] data
+
+void nudge(Big &x, int n):
+    x.data.push(n)
+
+void once(Big b):
+    nudge(&b, 42)
+
+void main():
+    Vector[int] v = [1]
+    Big w = Big(!v)
+    once(w)
+    print(w.data.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_recursive_materialize(&warnings, "b"),
+            "unexpected W_RecursiveBareParamMaterialize for one-shot &b, got: {:?}", warnings
+        );
+    }
+
+    #[test]
+    fn recursive_materialize_explicit_clone_silent() {
+        // User opts into per-frame copy via `b.data.clone()`. `b` is never
+        // mutated in `go`'s body (only b.data is READ into `local`), so
+        // `bare_param_mutated` never picks up `b`.
+        let source = "\
+struct Big:
+    Vector[int] data
+
+void nudge(Vector[int] &d, int n):
+    d.push(n)
+
+void go(Big b, int n):
+    if n <= 0:
+        return
+    Vector[int] local = b.data.clone()
+    nudge(&local, n)
+    go(b, n - 1)
+
+void main():
+    Vector[int] v = [1]
+    Big w = Big(!v)
+    go(w, 3)
+    print(w.data.len())
+";
+        let warnings = check_warnings(source);
+        assert!(
+            !has_recursive_materialize(&warnings, "b"),
+            "unexpected W_RecursiveBareParamMaterialize for explicit clone, got: {:?}", warnings
+        );
+    }
+

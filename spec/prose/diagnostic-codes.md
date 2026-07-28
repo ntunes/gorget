@@ -175,6 +175,7 @@ and is cited concretely.
 | `W_CouldBeConst` | `CouldBeConst` | — |
 | `W_NeedlessMutableBorrow` | `NeedlessMutableBorrow` | — |
 | `W_DeadBareParamWrite` | `DeadBareParamWrite` | [`11`](../../docs/devbook/11-copy-on-write.md) — D2-rider; extended to plain `self` 2026-07-17. Promotes to a reserved `E_DeadBareParamWrite` after corpus burn-down (Core-#6 ratchet). |
+| `W_RecursiveBareParamMaterialize` | `RecursiveBareParamMaterialize` | [`11`](../../docs/devbook/11-copy-on-write.md) — Charter-accepted §3.1 exception; steers users to `&param` + `&arg` at callers (write-through) OR explicit `.clone()` (per-frame copies) for a bare-Res param mutated inside a self-recursive call. |
 | `W_CowBorrowMutation` | `CowBorrowMutation` | — |
 | `W_SuggestThrowsRefactor` | `SuggestThrowsRefactor` | — |
 

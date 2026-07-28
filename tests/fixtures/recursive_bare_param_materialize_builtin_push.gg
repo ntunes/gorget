@@ -1,0 +1,16 @@
+# Track I diagnostic pin (POSITIVE 3) — Path Y builtin branch: a bare
+# (Borrow) Res param `v` reaches a builtin mutating method (`v.push(n)`),
+# `receiver_is_mutating`'s `is_builtin_mut` branch fires and
+# `mark_mut_param_if_applicable` populates `bare_param_mutated`. The
+# self-recursive `go(v, n-1)` is a Call with `v` bare, populating
+# `bare_param_recursed_bare`.
+void go(Vector[int] v, int n):
+    if n <= 0:
+        return
+    v.push(n)                # <-- Path Y (builtin): builtin mutator on bare v
+    go(v, n - 1)             # <-- self-recursion
+
+void main():
+    Vector[int] v = [1]
+    go(v, 3)
+    print(v.len())           # 1 — caller untouched (per-frame materialize)

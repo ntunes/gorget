@@ -285,7 +285,34 @@ read-only-`&`-formation charter-suspect class was retired at its SOURCE (the
 `&`-params → bare across the whole self-host), dropping the driver.gg
 self-compile's `array_clone` 527.4M → 12.6M (−97.6%) and `string_clone` 444.0M →
 29.1M (−93.4%) with byte-identical emitted C — the meter's first large move
-toward ~0 (the Rust lane; the SH lane exposed a separate lowerer gap, filed). **Scope (owner 2026-07-19): the charter binds BOTH production
+toward ~0 (the Rust lane; the SH lane exposed a separate lowerer gap, filed).
+
+**Accepted charter exception: bare-param mutation under self-recursion.** A
+bare (Borrow) resource param whose body mutates it — through `&param` args,
+mutating `&self` methods, builtin mutators like `.push`, or direct field/
+index assignment — is materialize-per-frame under §3.1 (each frame is a
+fresh immutable context; the write lands on a private copy). Under self-
+recursion the cost scales with the recursion (linear per-call; exponential
+with branching), which is charter-suspect. Owner-ruled to keep §3.1's
+tolerance (a bare param is a caller-owned reference the callee reads; a
+write through it must not reach the caller) rather than adding a REJECT
+lane at the mutation site — the caller-side guarantee that "bare = the
+caller keeps its value" is load-bearing for D31's contract-at-the-call-site
+model and for the callee's freedom to reason locally. The pathology is
+instead flagged by `W_RecursiveBareParamMaterialize`
+(`docs/language-reference.md` diagnostic register) — a bare-param mutated
+inside a self-recursive fn gets one warning per fn decl naming the two
+reference-grade fixes: declare `&param` and spell `&arg` at callers (the
+write-through then propagates via an unbroken `&`-chain to the true owner,
+retiring the clone bomb at compile time), OR materialize explicitly with
+`param.clone()` (per-frame private copies are honest about intent). This
+is the ONE `ImplicitCloneReason` class the charter-meter accepts as a
+documented exception: the fix is a source rewrite, not a compiler pass;
+the warning carries the design register. Retiring it in the compiler (via
+a signature inference pass, or a whole-program `&`-inference) is possible
+future work.
+
+**Scope (owner 2026-07-19): the charter binds BOTH production
 compilers — Rust gg and the self-host — and deliberately NOT ggdef.** ggdef
 eager-clones by design: it implements value semantics the simplest faithful way,
 which is what makes it the readable definition of WHAT a program means (the

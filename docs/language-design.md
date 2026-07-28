@@ -401,8 +401,17 @@ demands it, never speculative; a mutation that never runs never allocates
 `&` is *write-through*, `!` is *move*. This is deliberately **more tolerant
 than Rust**, which rejects a mutation through an immutable borrow; Gorget
 copies instead. Everything below — parameters (§3.2), assignments
-(§3.3–3.4), fields (§3.4), collection elements, loops — is this single
+(§3.3–§3.4), fields (§3.4), collection elements, loops — is this single
 rule applied at each position.
+
+When a bare param is mutated (via `&`-formation, a mutating `&self` method,
+a builtin mutator like `.push`, or direct field/index assignment) AND the
+fn recurses on itself with that param bare, the per-frame materialize
+compounds; `gg check` emits `W_RecursiveBareParamMaterialize` naming two
+reference-grade fixes (declare `&param` + spell `&arg` at callers for
+write-through-to-owner semantics, OR materialize explicitly with
+`param.clone()` for per-frame copies) — see devbook/11's "accepted charter
+exception" section.
 
 **The charter — implicit clones as good as the best hand-written.** The
 promise underneath the tolerance is a quality bar, not just a semantics:
