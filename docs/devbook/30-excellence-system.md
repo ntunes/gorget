@@ -426,6 +426,58 @@ Because this is open thinking, it binds nothing: a round that needs a decision
 in this area asks the owner (Round lifecycle step 7) rather than treating this
 section as settled policy.
 
+## 10. Convergence gate — the ratchet that keeps the ledger shrinking (owner 2026-07-28)
+
+The compact rule (in `AGENTS.md` Round lifecycle steps 1 and 5):
+
+- **Step 1 lens.** The round's expected NET items closed is an axis alongside
+  severity and theme fit. Bias toward class-fix (Core #4) and bulk-graduation
+  tracks over instance-fixes-with-follow-ups. A projected-positive round is
+  reshaped (bundle a class-fix track into it) or split so the additions land
+  in a dedicated later round.
+- **Step 5 gate.** Every `DONE.md` round entry MUST carry:
+  `Convergence: known_gaps A→B · TODO items C→D · net ±N`. A net ≥ 0 round
+  does NOT close on paper — either land more closures OR name the reason.
+
+**Why the rule.** Round XI added four `known_gaps/` (Track M) plus three
+follow-up TODOs while graduating three; retrospectively, +2 net. Left
+unchecked, that trend drifts monotonically upward. The owner formalized
+the counter after that round: measurement is cheap (one `find` + one
+`grep`), the correction is a first-class round action (bundle a class-fix,
+or open a dedicated pruning round: BOTH-WRONG hunt, `known_gaps` triage,
+TODO stale-scan).
+
+**When a positive-net closure is legitimate.** Two shapes recur, both must
+be named explicitly in the DONE entry rather than glossed over:
+
+1. **Class-hunt discovery.** A track's Core #4 class-hunt uncovers filed-
+   worthy adjacent defects the round did NOT know about at open. Filing
+   them openly is Core #8 hygiene — an unfiled defect the round could have
+   filed is silently-wrong-output at the meta level. Round XII Track N2's
+   9-cell class-hunt discovered four adjacent defects (struct-lit field /
+   enum-variant field / vector-lit element / closure-body return SIGILL);
+   filing them raised the round's net by four, and the DONE entry names
+   this cause instead of showing the round as convergent-by-omission.
+2. **Wrong-direction alternative rejected.** A round would ship faster
+   with net-negative if it took a shortcut that violates Core #8
+   ("shipping a known defect"). Naming the reason ("declined to sharpen
+   the reject because D36 mandates accept") protects the discipline.
+
+**How the numbers avoid gaming.** Both counts are regen commands, not
+values: `find tests/fixtures/known_gaps -name '*.gg' | wc -l` and a
+grep-based TODO-bullet count. Recording the commands (not the numbers) in
+the round entry lets the next round re-run identically. A round that
+manually edits the count without regenerating trips the gauntlet's
+"re-verify every premise" rule as soon as the next round tries to diff.
+
+**What the rule does not cover.** Rules like this are for the *ledger*
+(what's tracked as pending); they do NOT displace parity ratchets
+(`RUNTIME_DIFF_MATCH_FLOOR`, `GGDEF_ADJUDICATED_FLOOR`), which are code-
+measurable and belong in the round-close gate itself. Convergence and
+parity are orthogonal: a round can raise parity while opening a filed
+class of new defects (that is what a bulk-fix + class-hunt round looks
+like), and the DONE entry carries both.
+
 ---
 
 *The rules this chapter explains live in `AGENTS.md`/`CLAUDE.md`; if this

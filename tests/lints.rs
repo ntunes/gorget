@@ -5869,7 +5869,12 @@ fn agents_md_size_ratchet() {
          lint both route evidence there; the split rule is unenforceable without it."
     );
     let bytes = fs::metadata("AGENTS.md").expect("AGENTS.md metadata").len();
-    const CEILING: u64 = 58_000;
+    // 2026-07-28: raised 58_000 → 59_000 for the Round XII convergence-gate
+    // rule fold (owner-signed-off in-round). Extended treatment moved to
+    // devbook/30 §10; the AGENTS.md text was already compacted to a single-
+    // sentence rule + regen commands. Compact further and lower this back
+    // toward 58_000 as a follow-up round.
+    const CEILING: u64 = 59_000;
     assert!(
         bytes <= CEILING,
         "AGENTS.md is {bytes} bytes > {CEILING}. Move the new lesson's war-story/evidence \
