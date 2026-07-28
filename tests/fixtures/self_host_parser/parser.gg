@@ -1364,13 +1364,22 @@ equip Parser:
         Vector[SpannedType] param_types = Vector[SpannedType]()
         Vector[int] ownerships = Vector[int]()
         if not self.check_tok(TOK_RPAREN):
+            # Advisory A2 (2026-07-28): after pushing the D35 diagnostic,
+            # ADVANCE past the sigil so `parse_type()` sees the underlying
+            # type — otherwise it hits `&`/`!` again and cascades a
+            # second, unrelated "expected type" error. Rust gg's site
+            # returns Err instead (see src/parser/types.rs); the SH
+            # equivalent is push+advance, so the recovery path pins the
+            # sigil to a single diagnostic.
             if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
                 self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "D35: an unnamed parameter's sigil goes AFTER the type in a function type — write `Type &` / `Type !`, not `&Type` / `!Type`"))
+                self.advance()
             param_types.push(self.parse_type())
             ownerships.push(self.parse_fn_type_param_ownership())
             while self.match_tok(TOK_COMMA):
                 if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
                     self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "D35: an unnamed parameter's sigil goes AFTER the type in a function type — write `Type &` / `Type !`, not `&Type` / `!Type`"))
+                    self.advance()
                 param_types.push(self.parse_type())
                 ownerships.push(self.parse_fn_type_param_ownership())
         self.expect_tok(TOK_RPAREN, "expected ')' for function type")
