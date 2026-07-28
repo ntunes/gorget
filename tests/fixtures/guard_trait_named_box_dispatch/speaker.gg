@@ -1,0 +1,19 @@
+# Round XII Track N2 (2026-07-28) — shared trait + impl for the graduated
+# `guard_trait_named_box_dispatch` fixture (`main.gg`, class 2b).
+#
+# Kept in a separate module (rather than embedded in `main.gg`) so the
+# fixture adjudicates the cross-module `from speaker import` path
+# (`Generic(Box, [Import(Speaker)])`) rather than the same-file
+# `TraitObject` shape — the two check-side shapes take different arms
+# in the Track-G Box[Trait] carve-out, and this fixture pins the
+# cross-module arm.
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name

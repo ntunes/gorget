@@ -1,10 +1,18 @@
-# Round XI Track M — KNOWN GAP (D36 unimplemented, HIGH).
+# Round XI Track M — KNOWN GAP (D36 unimplemented + Track P residual, HIGH).
 #
 # Class 2 of 4 filed by Track M: NAMED-binding `Guard[Speaker] g = m.lock()`
 # then `g.greet()` (bare trait as Mutex inner). Unlike the chained shape
 # (class 1 / guard_trait_chained_c_emit_fabrication.gg — which slips past
 # the checker and fabricates a C-emit symbol), the NAMED binding is
 # rejected at the checker with `E_NoMethodFound: Guard[Speaker]`.
+#
+# ⚠ SIBLING GRADUATED: `main_box.gg` graduated out in Round XII Track N2 →
+# `tests/fixtures/guard_trait_named_box_dispatch/main.gg`. This bare-trait
+# variant stays in `known_gaps/` pending Track P follow-up (extend the
+# `E_NonDerefContainerBareTrait` reject to fire on generic-CTOR-CALL type-args
+# such as `Mutex[Speaker](Robot(...))` — Track P only rejected TYPE
+# ANNOTATIONS today, so this fixture accepts at the ctor call but fails
+# downstream). See TODO.md "Track P residual".
 #
 # Under D36 (ratified 2026-07-27, `docs/define-gorget/decisions.md:1363-1381`)
 # the read face `.method()` MUST accept + auto-deref for Guard uniformly with

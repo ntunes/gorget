@@ -38134,25 +38134,21 @@ fn guard_trait_named_reject_bare() {
     );
 }
 
-/// Round XII Track N1 (2026-07-28) — CHECK-SIDE GRADUATION.
-/// `Guard[Box[Speaker]] g = m.lock(); g.greet()` on `Mutex[Box[Speaker]]`,
-/// cross-module (imports `Speaker` from `speaker.gg`). N1 widens the
-/// Track-G Box[Trait] carve-out at `src/semantic/typecheck.rs` to also
-/// cover the guard family (Guard/ReadGuard/WriteGuard) with a
-/// `TraitObject`, bare-trait, or cross-module `Generic(Box, [Import])`
-/// inner. `check_gg_ok` pins the D36-target check-side acceptance
-/// TODAY.
+/// Round XII Track N2 (2026-07-28) — GRADUATED. Class 2b of the Round XI
+/// Track M Guard[Trait] family. NAMED-binding `Guard[Box[Speaker]] g =
+/// m.lock(); g.greet()` on `Mutex[Box[Speaker]]`, cross-module (imports
+/// `Speaker`/`Robot` from `speaker.gg`).
 ///
-/// The fixture STAYS in `known_gaps/` because RUN still SIGBUSes
-/// pending Track N2 (call-arg `Box[Trait]` coercion). Header comment
-/// on the fixture documents the split; the fixture graduates fully
-/// out of `known_gaps/` (moved into a live directory + rewired to
-/// `run_gg_dir`) when N2 lands. See TODO.md
-/// "Graduate `guard_trait_named_reject/main_box.gg` to `run_gg_dir`
-/// post-Track-N2."
+/// N1 widened the Track-G Box[Trait] carve-out at
+/// `src/semantic/typecheck.rs` to accept the check-side `.greet()` dispatch;
+/// N2 closes the run-side by packing `Box[Concrete]` → `Box[Trait]` at the
+/// call-arg boundary via `pack_trait_object_for_smart_ptr_ctor` (IR helper
+/// in `src/ir/lowering/exprs/calls.rs`), routing through the same LIR
+/// `try_trait_object_construct` SlotStore trigger (Layering rule 4).
+/// `run_gg_dir` pins BOTH lanes' `beep R2`.
 #[test]
-fn guard_trait_named_reject_box() {
-    check_gg_ok("known_gaps/guard_trait_named_reject/main_box.gg");
+fn guard_trait_named_box_dispatch() {
+    run_gg_dir("guard_trait_named_box_dispatch", "main.gg", "beep R2");
 }
 
 /// KNOWN GAP (Round XI Track M) — CHAINED `m.lock().get().greet()` on
@@ -38173,18 +38169,21 @@ fn guard_get_bare_trait_fabricated_symbol() {
     );
 }
 
-/// KNOWN GAP (Round XI Track M) — CHAINED `m.lock().get().greet()` on
-/// `Mutex[Box[Speaker]]` (MEMORY-UNSAFETY). Compiles clean, links clean,
-/// direct-binary SIGBUS exit=135 (`gg run` masks the signal as exit 1;
-/// always probe the built binary directly per Core #15(d)). Worst class
-/// per severity ranking — SIGBUS ships PAST build. D36 (2026-07-27)
-/// makes this a defect. Asserts INTENDED `beep R2`.
+/// Round XII Track N2 (2026-07-28) — GRADUATED. Class 4 of the Round XI
+/// Track M Guard[Trait] family; the memory-safety close for the round.
+/// CHAINED `m.lock().get().greet()` on `Mutex[Box[Speaker]]`. Pre-fix, the
+/// ctor call's memcpy(16) read 8 bytes of stack garbage as the vtable
+/// pointer → SIGBUS at method dispatch (Core #15(d): `gg run` masked the
+/// signal as exit 1; the sound_ naming convention was the tell). N2 packs
+/// `Box[Concrete]` → `Box[Trait]` at the call-arg boundary via
+/// `pack_trait_object_for_smart_ptr_ctor` (IR helper in
+/// `src/ir/lowering/exprs/calls.rs`), routing through the same LIR
+/// `try_trait_object_construct` SlotStore trigger (Layering rule 4).
+/// Asserts `beep R2` — bindings across BOTH C and LLVM lanes.
 #[test]
-#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented + \
-MEMORY-UNSAFETY — Guard[Box[Speaker]].get().greet() SIGBUS at runtime. TODO.md."]
-fn sound_guard_get_boxed_trait_sigbus() {
+fn guard_boxed_trait_dispatch() {
     run_gg(
-        "known_gaps/sound_guard_get_boxed_trait_sigbus.gg",
+        "guard_boxed_trait_dispatch.gg",
         "beep R2",
     );
 }

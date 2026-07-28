@@ -427,6 +427,18 @@ pub(super) fn lower_call_arg(
     // the param type is itself a Result, e.g. `Vector[Result[T,E]]
     // .push(Ok(...))`) prevents over-unwrapping.
     let val = super::maybe_auto_propagate(ctx, builder, val, arg.node.value.span);
+    // Track N2 (2026-07-28): if the callee expects `Box[Trait]` and the arg
+    // is `Box[Concrete]`, materialise a Box[Trait] TraitObj temp so the
+    // downstream borrow / value / MutPtr paths see a well-typed 16-byte
+    // `{data, vtable}` operand. Same coercion the LIR `try_trait_object_construct`
+    // pass fires on SlotStore; this hoists it to the call-arg boundary so a
+    // ctor / user fn taking `Box[Trait]` doesn't memcpy(16) from an 8-byte
+    // `Box[Concrete]` slot (the SIGBUS class closed by this track). Helper
+    // is a no-op when either the callee's param or the arg source isn't a
+    // Box, when both Boxes have the same inner, or when the destination
+    // inner isn't a trait — so it costs a single string-strip + typedef
+    // lookup on the non-firing paths.
+    let val = maybe_pack_trait_object_at_arg(ctx, builder, val, callee_param_type);
     // G2 site-3 UAF-fold close: the projection above minted transient
     // element/field handles INTO the freshly-materialized private copy. Reset
     // their CoW tags now (before the borrow is built and the arg is forwarded)
@@ -822,6 +834,146 @@ pub(super) fn pack_closure_for_smart_ptr_ctor(
     // `lir/lower/mod.rs:700+`), so the SlotStore here triggers
     // `try_closure_pack` which packs the env into a real GorgetClosure.
     let tmp = builder.add_local(alias_tid, None);
+    builder.assign(Place::local(tmp), val_op);
+    FunctionBuilder::copy(tmp)
+}
+
+/// Track N2 general-call-arg entry: peel the callee's declared param TypeId
+/// down to its Box[Trait] alias name and dispatch to
+/// `pack_trait_object_for_smart_ptr_ctor`. Callee params come typed as either
+/// `Box[Trait]` (a `GirType::Named("Box__<Trait>")`) or as `Ptr(Box[Trait])` /
+/// `MutPtr(Box[Trait])` (the pass-by-pointer ABI is decided downstream). We
+/// peel one layer of Ptr/MutPtr, then delegate to the same helper the smart-
+/// pointer ctors use — the helper's typed-metadata checks (Box + trait_obj
+/// registration + source-is-different-Box) provide the fine filtering.
+pub(super) fn maybe_pack_trait_object_at_arg(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    val: Operand,
+    callee_param_type: Option<TypeId>,
+) -> Operand {
+    let pt = match callee_param_type {
+        Some(t) => t,
+        None => return val,
+    };
+    // Peel one layer of Ptr / MutPtr: the callee's ABI carries `Box[Trait]`
+    // as a bare Named type OR as a pointer to it; both shapes reach here.
+    let pointee_or_self = match ctx.type_registry.get(pt) {
+        Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+        _ => pt,
+    };
+    let name = match ctx.type_registry.get(pointee_or_self) {
+        Some(GirType::Named(n)) => n.clone(),
+        _ => return val,
+    };
+    pack_trait_object_for_smart_ptr_ctor(ctx, builder, val, &name)
+}
+
+/// Round XII Track N2 (2026-07-28): closes the `Mutex[Box[Trait]](Box.new(Concrete))`
+/// SIGBUS class filed by Round XI Track M as `sound_guard_get_boxed_trait_sigbus.gg`.
+///
+/// SIBLING of `pack_closure_for_smart_ptr_ctor` — same shape, different coercion.
+/// Smart-pointer constructors (`Mutex/RWLock/Shared[Box[Trait]](Box.new(Concrete))`)
+/// lower to `Mutex__Box__Trait__new(val)` etc., which memcpy `sizeof(Box[Trait])`
+/// bytes (16, the {data, vtable} TraitObj layout) out of the arg's slot. But
+/// `Box.new(Concrete)` produces a `Box__Concrete` (void*, 8 bytes) — the
+/// mutex-new memcpy then reads 8 bytes of stack garbage as the vtable pointer,
+/// producing a SIGBUS at the first method dispatch through the guard.
+///
+/// The LIR's `try_trait_object_construct` (in `operands.rs`) already handles
+/// the Box[Trait]←Box[Concrete] coercion, but it fires only on `Assign` /
+/// `SlotStore` instructions where the destination slot's typed `is_box`
+/// metadata matches the source's and the inner names differ. Direct `Call`
+/// arguments bypass it — the ctor call is emitted with the raw
+/// `Box__Concrete`-typed operand.
+///
+/// This helper bridges the two: it allocates an intermediate local typed as
+/// the Box[Trait] alias, assigns the concrete Box into it (triggering
+/// `try_trait_object_construct`'s SlotStore path), and returns an operand
+/// pointing at the now-packed local. The constructor then sees a proper
+/// 16-byte TraitObj value.
+///
+/// Layering rule 4 (resolve once, write through): the coercion decision is
+/// still made at ONE place in the LIR (`try_trait_object_construct`); this
+/// helper's job is only to route the ctor path through that same SlotStore
+/// site the SlotStore consumers use.
+///
+/// Decision driven by typed metadata (`is_box` on both types + the trait's
+/// registered `<Trait>_TraitObj` TypeDef), not by name — per CLAUDE.md
+/// "no name matching" + "layering discipline §3".
+///
+/// **Predicate scope (pass-1 R5 polish, 2026-07-28) — what this helper WILL NOT
+/// widen.** No-ops on:
+///   1. `inner_c` not prefixed `Box__` (destination isn't a Box — no coercion
+///       applies).
+///   2. No `<inner>_TraitObj` registered (inner of the Box isn't a trait — no
+///      TraitObj shape to construct into).
+///   3. `Box[Trait]` alias TypeId not resolvable via `lookup_named` (the
+///      typedef hasn't been registered on the type_mapper — bail rather than
+///      invent a TypeId).
+///   4. Source operand is NOT a plain `Copy` / `Move` of a local with empty
+///      projections — Constants, projections-into-fields, and complex
+///      operands are out of scope. The LIR SlotStore trigger requires a
+///      direct local as the RHS to fire, so a `Constant(Constant::...)` or a
+///      `Place` with projections wouldn't produce the shape
+///      `try_trait_object_construct` matches; passing through unchanged
+///      preserves behavior for those cases (they either aren't Box-typed
+///      or route through a different LIR path).
+///   5. Source's type isn't a `GirType::Named` starting with `Box__` (not a
+///      Box source, e.g. someone passed a raw pointer or a primitive).
+///   6. Source's Box-inner equals destination's Box-inner (already the right
+///      Box[Trait] type — no coercion needed).
+/// Future readers: widening the accepted-operand-shape (e.g. to constants or
+/// projections) requires teaching `try_trait_object_construct` to fire on the
+/// widened source shape as well (Layering rule 4 — resolve once, write
+/// through: the IR side only constructs the triggering shape; the decision
+/// itself lives in LIR).
+pub(super) fn pack_trait_object_for_smart_ptr_ctor(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    val_op: Operand,
+    inner_c: &str,
+) -> Operand {
+    // Fast-out: `inner_c` must be a Box type (Box__X).
+    let inner_c_inner = match inner_c.strip_prefix("Box__") {
+        Some(i) => i,
+        None => return val_op,
+    };
+    // The inner-of-inner must be a trait (has a registered `<name>_TraitObj`).
+    let trait_obj_name = format!("{inner_c_inner}_TraitObj");
+    if ctx.type_registry.get_type_def(&trait_obj_name).is_none() {
+        return val_op;
+    }
+    // Look up the Box[Trait] TypeId (the destination we want to coerce into).
+    let box_trait_tid = match ctx.type_mapper.lookup_named(inner_c) {
+        Some(tid) => tid,
+        None => return val_op,
+    };
+    // Inspect the source operand's type. Only fire if source is a Box[X] with
+    // a DIFFERENT inner (Box[Concrete] not Box[Trait]) — same predicate as
+    // `try_trait_object_construct`.
+    let src_tid = match &val_op {
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+            builder.local_type(p.local)
+        }
+        _ => return val_op,
+    };
+    let src_name = match ctx.type_registry.get(src_tid) {
+        Some(GirType::Named(n)) => n.clone(),
+        _ => return val_op,
+    };
+    let src_inner = match src_name.strip_prefix("Box__") {
+        Some(i) => i,
+        None => return val_op,
+    };
+    if src_inner == inner_c_inner {
+        // Already a Box[Trait] of the correct kind — no coercion needed.
+        return val_op;
+    }
+    // Materialise into a Box[Trait]-typed temp. The SlotStore here triggers
+    // `try_trait_object_construct` at LIR which constructs the
+    // `{data, vtable}` TraitObj into the temp's slot.
+    let tmp = builder.add_local(box_trait_tid, None);
     builder.assign(Place::local(tmp), val_op);
     FunctionBuilder::copy(tmp)
 }
@@ -1262,6 +1414,7 @@ pub(super) fn lower_call(
                     // alias. See `pack_closure_for_smart_ptr_ctor` for rationale.
                     let inner_c = mangled.strip_prefix("Shared__").unwrap_or("");
                     let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
+                    let val_op = pack_trait_object_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
                     // Shared[T](v) takes ownership of v's data. Mark Move-type locals
@@ -1314,6 +1467,7 @@ pub(super) fn lower_call(
                     let mutex_type = get_or_register_type(ctx, &mangled, Some(&|c| ensure_mutex_type_def(c, &mangled, vt)));
                     let inner_c = mangled.strip_prefix("Mutex__").unwrap_or("");
                     let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
+                    let val_op = pack_trait_object_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op], mutex_type);
                     return FunctionBuilder::copy(dst);
@@ -1385,6 +1539,7 @@ pub(super) fn lower_call(
                     let val_op = lower_expr(ctx, builder, &args[0].node.value);
                     let inner_c = mangled.strip_prefix("RWLock__").unwrap_or("");
                     let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
+                    let val_op = pack_trait_object_for_smart_ptr_ctor(ctx, builder, val_op, inner_c);
                     let new_fn = format!("{mangled}__new");
                     let dst = builder.call(&new_fn, vec![val_op], rw_type);
                     return FunctionBuilder::copy(dst);

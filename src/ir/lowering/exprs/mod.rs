@@ -1977,6 +1977,11 @@ fn lower_struct_literal(
         // Pack closure → GorgetClosure when the inner is a Callable alias.
         // See `pack_closure_for_smart_ptr_ctor` in calls.rs for rationale.
         let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, &inner_c);
+        // Track N2 (2026-07-28): pack `Box[Concrete]` → `Box[Trait]` TraitObj
+        // when the inner is a Box[Trait]. Closes the SIGBUS class filed by
+        // Round XI Track M as `sound_guard_get_boxed_trait_sigbus.gg`. See
+        // `pack_trait_object_for_smart_ptr_ctor` in calls.rs.
+        let val_op = pack_trait_object_for_smart_ptr_ctor(ctx, builder, val_op, &inner_c);
         let new_fn = format!("{shared_mangled}__new");
         let dst = builder.call(&new_fn, vec![val_op.clone()], shared_type);
         // Shared[T](v) takes ownership of v's data via a shallow memcpy into the shared
@@ -2012,6 +2017,7 @@ fn lower_struct_literal(
         let vt = val_type;
         let mutex_type = get_or_register_type(ctx, &mutex_mangled, Some(&|c| ensure_mutex_type_def(c, &mutex_mangled, vt)));
         let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, &inner_c);
+        let val_op = pack_trait_object_for_smart_ptr_ctor(ctx, builder, val_op, &inner_c);
         let new_fn = format!("{mutex_mangled}__new");
         let dst = builder.call(&new_fn, vec![val_op], mutex_type);
         return FunctionBuilder::copy(dst);
@@ -2061,6 +2067,7 @@ fn lower_struct_literal(
             let rw_mangled = format!("RWLock__{inner_c}");
             let rw_type = get_or_register_type(ctx, &rw_mangled, None);
             let val_op = pack_closure_for_smart_ptr_ctor(ctx, builder, val_op, &inner_c);
+            let val_op = pack_trait_object_for_smart_ptr_ctor(ctx, builder, val_op, &inner_c);
             let new_fn = format!("{rw_mangled}__new");
             let dst = builder.call(&new_fn, vec![val_op], rw_type);
             return FunctionBuilder::copy(dst);
