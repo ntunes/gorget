@@ -1,0 +1,13 @@
+# Round XII Track P — REJECT `Mutex[Trait]` at struct-field declaration.
+# Struct-field cell. The reject fires from `populate_def_field_types` via
+# the newly-threaded errors accumulator. See sibling
+# `mutex_bare_trait_reject.gg`.
+
+trait Speaker:
+    String greet(self)
+
+struct Cage:
+    Mutex[Speaker] inhabitant
+
+int main():
+    return 0

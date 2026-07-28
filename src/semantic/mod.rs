@@ -313,7 +313,7 @@ pub fn analyze_with_source_dir(
 
     // Populate struct/enum field types on DefInfo BEFORE typecheck.
     time_pass(&mut pass_times, "populate_def_field_types", || {
-        populate_def_field_types(module, &mut scopes, &mut types);
+        populate_def_field_types(module, &mut scopes, &mut types, &mut errors);
     });
 
     // Pass 3.55: D4 drop-purity taint (D12 enforcement). Seed `is_drop_tainted`
@@ -441,23 +441,36 @@ fn populate_def_field_types(
     module: &crate::parser::ast::Module,
     scopes: &mut scope::ScopeTable,
     types: &mut types::TypeTable,
+    errors: &mut Vec<SemanticError>,
 ) {
     use crate::parser::ast::{Item, VariantFields};
+    fn resolve_or_error(
+        ast_ty: &crate::parser::ast::Type,
+        span: crate::span::Span,
+        scopes: &ScopeTable,
+        types: &mut types::TypeTable,
+        errors: &mut Vec<SemanticError>,
+    ) -> TypeId {
+        match types::ast_type_to_resolved(ast_ty, span, scopes, types) {
+            Ok(tid) => tid,
+            Err(e) => {
+                errors.push(e);
+                types.error_id
+            }
+        }
+    }
     fn scan_items(
         items: &[crate::span::Spanned<Item>],
         scopes: &mut scope::ScopeTable,
         types: &mut types::TypeTable,
+        errors: &mut Vec<SemanticError>,
     ) {
         for item in items {
             match &item.node {
                 Item::Struct(s) => {
                     if let Some(def_id) = scopes.lookup(&s.name.node) {
                         let field_tids: Vec<TypeId> = s.fields.iter()
-                            .map(|f| {
-                                types::ast_type_to_resolved(
-                                    &f.node.type_.node, f.node.type_.span, scopes, types,
-                                ).unwrap_or_else(|_| types.error_id)
-                            })
+                            .map(|f| resolve_or_error(&f.node.type_.node, f.node.type_.span, scopes, types, errors))
                             .collect();
                         if !field_tids.is_empty() {
                             scopes.get_def_mut(def_id).field_types = Some(field_tids);
@@ -472,11 +485,7 @@ fn populate_def_field_types(
                                     VariantFields::Unit => Vec::new(),
                                     VariantFields::Tuple(fields) => {
                                         fields.iter()
-                                            .map(|f| {
-                                                types::ast_type_to_resolved(
-                                                    &f.node, f.span, scopes, types,
-                                                ).unwrap_or_else(|_| types.error_id)
-                                            })
+                                            .map(|f| resolve_or_error(&f.node, f.span, scopes, types, errors))
                                             .collect()
                                     }
                                 }
@@ -488,13 +497,13 @@ fn populate_def_field_types(
                     }
                 }
                 Item::Module { items: inner, .. } => {
-                    scan_items(inner, scopes, types);
+                    scan_items(inner, scopes, types, errors);
                 }
                 _ => {}
             }
         }
     }
-    scan_items(&module.items, scopes, types);
+    scan_items(&module.items, scopes, types, errors);
 }
 
 /// D4 drop-purity (D12): whether a type is (transitively) drop-tainted — a

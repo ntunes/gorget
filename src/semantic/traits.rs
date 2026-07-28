@@ -1008,15 +1008,23 @@ fn process_impl(
     registry: &mut TraitRegistry,
     errors: &mut Vec<SemanticError>,
 ) {
-    // Resolve the self type
+    // Resolve the self type. Track P (owner Q1 2026-07-28): propagate the
+    // NonDerefContainer[Trait] Err at the equip-self surface too — otherwise
+    // `equip Mutex[Speaker] with Foo:` silently accepts. The `mutex_bare_trait_
+    // equip_self_reject.gg` fixture pins this.
     let self_type_name = type_name(&impl_block.type_.node);
-    let self_type_id = types::ast_type_to_resolved(
+    let self_type_id = match types::ast_type_to_resolved(
         &impl_block.type_.node,
         impl_block.type_.span,
         scopes,
         types,
-    )
-    .unwrap_or(types.error_id);
+    ) {
+        Ok(tid) => tid,
+        Err(e) => {
+            errors.push(e);
+            types.error_id
+        }
+    };
 
     // Resolve the trait (if any). Use type-namespace lookup so that,
     // e.g., `equip IoError with Error:` finds the user-defined `trait

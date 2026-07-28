@@ -1,0 +1,18 @@
+# Round XII Track P — REJECT `Shared[Trait]` at declaration time (var-decl cell).
+# Owner Q1 2026-07-28: NonDerefContainer[BareTrait] must be spelled
+# `Shared[Box[Trait]]` explicitly. Rejected with `E_NonDerefContainerBareTrait`.
+# See sibling `mutex_bare_trait_reject.gg`.
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name
+
+int main():
+    Shared[Speaker] s = Shared[Speaker](Robot("R2"))
+    return 0

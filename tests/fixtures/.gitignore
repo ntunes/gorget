@@ -110,6 +110,14 @@
 # the oracle for the self_host_runtime test (regen via GG_REGEN_RUNTIME_SNAPSHOT=1).
 !runtime_snapshots/
 !runtime_snapshots/*.out
+# Round XII Track P: NonDerefContainer[BareTrait] reject fixtures — cross-module
+# `Mutex[Trait]` reject + `Mutex[Box[Trait]]` positive control. Subdirectory
+# form so imports resolve to a sibling `speaker.gg` module. Sources only —
+# compiled main/main.c/main.ll stay ignored per the catch-all below.
+!mutex_bare_trait_xmod_reject/
+!mutex_bare_trait_xmod_reject/*.gg
+!mutex_box_trait_ok/
+!mutex_box_trait_ok/*.gg
 
 # Re-ignore compiled/generated artifacts inside self-host subdirs
 self_host_*/driver

@@ -350,6 +350,36 @@ impl ScopeTable {
             }
         }
 
+        // Track P (2026-07-28): when the user's `from std.sync import Mutex`
+        // creates a NEW def replacing the dummy-span builtin-wrapper
+        // placeholder (registered in `resolve.rs::collect_top_level` via
+        // `BUILTIN_GENERIC_TYPES` + `DerefWrapperKind::for_builtin_name`),
+        // inherit the `deref_wrapper_kind` so the imported alias keeps the
+        // typed metadata. Layering rule 3: resolve once, write through — one
+        // seed at the builtin, propagated at every user-import shadow.
+        //
+        // Gated on `kind == DefKind::Import` so a USER `struct Guard` /
+        // `struct Mutex` (shadowing the name with their own type) does NOT
+        // inherit the wrapper semantics — the typed-flag fix's whole point
+        // is that a USER struct with the same name gets `None` and stops
+        // escaping E_NoFieldFound (see `fieldaccess_user_guard_missing_field_reject`
+        // fixture + scope.rs::DerefWrapperKind::for_builtin_name doc-comment).
+        let inherited_deref_kind = if kind == DefKind::Import {
+            existing_ids
+                .iter()
+                .copied()
+                .flatten()
+                .find_map(|id| {
+                    let d = &self.definitions[id.0 as usize];
+                    if d.span == Span::dummy() {
+                        d.deref_wrapper_kind
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
         let def_id = DefId(self.definitions.len() as u32);
         self.name_index.entry(name.clone()).or_default().push(def_id);
         self.definitions.push(DefInfo {
@@ -365,7 +395,7 @@ impl ScopeTable {
             field_types: None,
             variant_field_types: None,
             is_drop_tainted: false,
-            deref_wrapper_kind: None,
+            deref_wrapper_kind: inherited_deref_kind,
         });
         let scope = &mut self.scopes[self.current.0 as usize];
         match ns {
@@ -496,6 +526,15 @@ impl ScopeTable {
     pub fn lookup_in_scope(&self, scope_id: ScopeId, name: &str) -> Option<DefId> {
         let scope = &self.scopes[scope_id.0 as usize];
         scope.values.get(name).copied().or_else(|| scope.types.get(name).copied())
+    }
+
+    /// All def-ids sharing `name`, in registration order. Backed by the
+    /// per-name `name_index`, so it sees cross-module / un-imported defs.
+    /// Track P (2026-07-28): used by `trait_name_of_inner` to detect that a
+    /// `DefKind::Import` placeholder points at a Trait defined elsewhere in
+    /// the program.
+    pub fn defs_named(&self, name: &str) -> Vec<DefId> {
+        self.name_index.get(name).cloned().unwrap_or_default()
     }
 
     /// True if any definition with this name exists ANYWHERE in the program —

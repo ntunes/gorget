@@ -4628,12 +4628,23 @@ impl<'a> TypeChecker<'a> {
                                 );
                             }
                         }
-                        super::types::ast_type_to_resolved(
+                        // Track P: propagate Err (NonDerefContainer[BareTrait]) — the
+                        // legacy `.ok()` silently dropped it. Other error kinds from
+                        // this call are already reported ahead of time (e.g.
+                        // `unknown_named_type` above); the new NonDerefContainer[Trait]
+                        // reject is the one that would otherwise vanish here.
+                        match super::types::ast_type_to_resolved(
                             &type_.node,
                             type_.span,
                             self.scopes,
                             self.types,
-                        ).ok()
+                        ) {
+                            Ok(tid) => Some(tid),
+                            Err(e) => {
+                                self.error(e.kind, e.span);
+                                None
+                            }
+                        }
                     }
                 };
 
@@ -8412,25 +8423,36 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
-        // Resolve return type
-        let return_type = super::types::ast_type_to_resolved(
+        // Resolve return type. Track P: propagate NonDerefContainer[Trait]
+        // Err on function return / param declarations.
+        let return_type = match super::types::ast_type_to_resolved(
             &func.return_type.node,
             func.return_type.span,
             self.scopes,
             self.types,
-        )
-        .unwrap_or(self.types.void_id);
+        ) {
+            Ok(tid) => tid,
+            Err(e) => {
+                self.error(e.kind, e.span);
+                self.types.void_id
+            }
+        };
 
         // Resolve parameter types
         let mut param_types = Vec::new();
         for param in &func.params {
-            let type_id = super::types::ast_type_to_resolved(
+            let type_id = match super::types::ast_type_to_resolved(
                 &param.node.type_.node,
                 param.node.type_.span,
                 self.scopes,
                 self.types,
-            )
-            .unwrap_or(self.types.error_id);
+            ) {
+                Ok(tid) => tid,
+                Err(e) => {
+                    self.error(e.kind, e.span);
+                    self.types.error_id
+                }
+            };
             // Self-typed params: use the equip target type instead of error_id
             let type_id = if type_id == self.types.error_id {
                 if matches!(&param.node.type_.node, crate::parser::ast::Type::SelfType) {

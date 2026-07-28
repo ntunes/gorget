@@ -1,0 +1,15 @@
+# Round XII Track P — REJECT `Weak[Trait]` at declaration time (var-decl cell).
+# Owner Q1 2026-07-28: NonDerefContainer[BareTrait] must be spelled
+# `Weak[Box[Trait]]` explicitly. Rejected with `E_NonDerefContainerBareTrait`.
+# See sibling `mutex_bare_trait_reject.gg`. Note the fixture never actually
+# constructs a Weak — the reject fires at type-resolution time on the
+# declaration alone, so no runtime path is needed.
+
+trait Speaker:
+    String greet(self)
+
+void see(Weak[Speaker] w):
+    return
+
+int main():
+    return 0

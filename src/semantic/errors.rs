@@ -356,6 +356,17 @@ pub enum SemanticErrorKind {
     /// Method doesn't exist on type.
     NoMethodFound { method: String, type_: String },
 
+    /// Track P (owner Q1 2026-07-28): a NonDerefContainer
+    /// (`Mutex` / `RWLock` / `Weak` / `Shared`) declared with a bare trait as
+    /// its type-arg. Concurrency containers cannot hold a bare trait; the user
+    /// must write `Container[Box[Trait]]` explicitly so the heap allocation is
+    /// visible in the type. Silently boxing would violate D31's spelling
+    /// philosophy (costs stay visible) and CoW's no-user-visible-`Ref[T]`
+    /// principle. Rejected at type-resolution time; see
+    /// `docs/define-gorget/decisions.md:1373` (D36 NonDerefContainer clause)
+    /// and the owner Q1 ruling in TODO.md's Round XII handover.
+    NonDerefContainerBareTrait { container: String, trait_: String },
+
     /// D36 face-split reject: a write-face method (`&self`) was called
     /// through a `ReadGuard`. Writes are forbidden through a shared-read
     /// view — mirrors the `for_write` gate on `&rg.field` at a `push`
@@ -852,6 +863,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::NotAStruct { .. } => "E_NotAStruct",
             SemanticErrorKind::MissingTraitMethod { .. } => "E_MissingTraitMethod",
             SemanticErrorKind::NoMethodFound { .. } => "E_NoMethodFound",
+            SemanticErrorKind::NonDerefContainerBareTrait { .. } => "E_NonDerefContainerBareTrait",
             SemanticErrorKind::AutoDerefWriteThroughReadGuard { .. } => "E_AutoDerefWriteThroughReadGuard",
             SemanticErrorKind::AutoDerefConsumingThroughGuard { .. } => "E_AutoDerefConsumingThroughGuard",
             SemanticErrorKind::UnwrapOnNonOptional { .. } => "E_UnwrapOnNonOptional",
@@ -1020,6 +1032,15 @@ impl std::fmt::Display for SemanticError {
                     "cannot call consuming-face (`!self`) method `{method}` through a `{wrapper}` \
                      (guard Drop invariant; release the guard first and consume the container). \
                      See docs/language-design.md §9.3."
+                )
+            }
+            SemanticErrorKind::NonDerefContainerBareTrait { container, trait_ } => {
+                write!(
+                    f,
+                    "`{container}[{trait_}]` cannot hold a bare trait — \
+                     write `{container}[Box[{trait_}]]` to make the heap \
+                     allocation explicit (concurrency containers require an \
+                     owning wrapper for trait objects; D36, owner Q1 2026-07-28)"
                 )
             }
             SemanticErrorKind::UnwrapOnNonOptional { method, type_ } => {

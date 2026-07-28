@@ -1,0 +1,14 @@
+# Round XII Track P — REJECT `Mutex[Trait]` inside an enum-variant field.
+# Enum-variant cell. The reject fires from `populate_def_field_types` via
+# the enum-variant tuple-fields resolution path. See sibling
+# `mutex_bare_trait_reject.gg`.
+
+trait Speaker:
+    String greet(self)
+
+enum Wrap:
+    Full(Mutex[Speaker])
+    Empty()
+
+int main():
+    return 0

@@ -1,0 +1,30 @@
+# Round XII Track P — REJECT `RWLock[Trait]` at declaration time (var-decl cell).
+# Owner Q1 2026-07-28: NonDerefContainer[BareTrait] must be spelled
+# `RWLock[Box[Trait]]` explicitly. Rejected with `E_NonDerefContainerBareTrait`.
+# See sibling `mutex_bare_trait_reject.gg`.
+#
+# RWLock resolution path (pass-1 BLOCKER-3 traced): RWLock is NOT in
+# `BUILTIN_GENERIC_TYPES` (`resolve.rs:19-22`). Its `deref_wrapper_kind` is
+# seeded on the actual struct def in std.sync (`resolve.rs:~L619`, gated on
+# the builtin-module check). The user's `from std.sync import RWLock` first
+# registers `RWLock` as a `DefKind::Import` placeholder in the user file
+# scope; the `export_non_private` pass on std.sync's FileModule scope
+# (`scope.rs:~L784`) then REPLACES the placeholder with the actual struct
+# def_id. `scopes.lookup("RWLock")` from user code returns the struct def
+# with the seeded flag — reject fires. Step-2 inheritance not on this path.
+
+from std.sync import RWLock
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name
+
+int main():
+    RWLock[Speaker] r = RWLock[Speaker](Robot("R2"))
+    return 0

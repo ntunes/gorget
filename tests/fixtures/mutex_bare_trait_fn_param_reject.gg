@@ -1,0 +1,12 @@
+# Round XII Track P — REJECT `Mutex[Trait]` at fn-param declaration.
+# Fn-param cell. The reject fires from `register_function_signature`'s
+# param loop. See sibling `mutex_bare_trait_reject.gg`.
+
+trait Speaker:
+    String greet(self)
+
+void doit(Mutex[Speaker] m):
+    return
+
+int main():
+    return 0
