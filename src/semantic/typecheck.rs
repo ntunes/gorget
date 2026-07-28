@@ -1645,6 +1645,84 @@ impl<'a> TypeChecker<'a> {
                 // struct field callable `h.f`, an IIFE closure literal).
                 self.expr_types.insert(callee.span, callee_type);
 
+                // Track R (owner Q1 2026-07-28): NonDerefContainer[BareTrait]
+                // reject at CALL-EXPRESSION generic-arg position (7th user-facing
+                // surface — Track P covered the 6 annotation-shaped surfaces via
+                // `ast_type_to_resolved`). Constructor calls whose callee is a
+                // builtin container name (Mutex / RWLock / Shared / Weak — the
+                // `DefKind::Import` placeholder registered in
+                // `resolve.rs::collect_top_level`, with `deref_wrapper_kind`
+                // seeded to `NonDerefContainer` in the same pass) NEVER route
+                // their generic-args through `ast_type_to_resolved` at this
+                // position: the callee's `Identifier` types as `error_id`
+                // (Import has no `type_id`), and the resulting
+                // `ResolvedType::Error` branch below has no arm for
+                // `DefKind::Import`, so `generic_args` is silently dropped and
+                // the whole call types as `error_id`. Without Track P (which
+                // fires on the ANNOTATION only), `Mutex[Speaker](Robot(...))`
+                // in expression position (no var-decl annotation to catch it
+                // upstream) reached C-emit and fabricated `gorget_guard_greet`
+                // / `int64_t__greet` — Track M classes 1 and 3. Reads the
+                // typed metadata (`deref_wrapper_kind`), not the container
+                // name (layering rule 2). Emitted BEFORE `ast_type_to_resolved`
+                // is called on the annotation (via the enclosing var-decl /
+                // fn-param / field), so on `Mutex[Speaker] m = Mutex[Speaker](...)`
+                // the annotation reject fires FIRST at the LHS span and the
+                // call-site reject at the RHS span is suppressed by the
+                // no-double-report gate below.
+                if let Expr::Identifier(cname) = &callee.node {
+                    if let Some(type_args) = generic_args.as_ref() {
+                        if type_args.len() == 1 {
+                            if let Some(def_id) = self.resolve_name(callee.span.start, cname) {
+                                let def = self.scopes.get_def(def_id);
+                                if def.deref_wrapper_kind
+                                    == Some(DerefWrapperKind::NonDerefContainer)
+                                {
+                                    if let Ok(inner_tid) = super::types::ast_type_to_resolved(
+                                        &type_args[0].node,
+                                        type_args[0].span,
+                                        self.scopes,
+                                        self.types,
+                                    ) {
+                                        if let Some(trait_name) = super::types::trait_name_of_inner(
+                                            inner_tid, self.scopes, self.types,
+                                        ) {
+                                            // Suppress double-report when a
+                                            // surrounding annotation would emit
+                                            // the same class at the LHS span
+                                            // (`Mutex[Speaker] m = Mutex[Speaker](...)`
+                                            // : Track P already fires at the
+                                            // annotation before infer_expr walks
+                                            // the RHS). We test the errors buffer
+                                            // for a matching NonDerefContainerBareTrait
+                                            // entry.
+                                            let already = self.errors.iter().any(|e| matches!(
+                                                &e.kind,
+                                                SemanticErrorKind::NonDerefContainerBareTrait {
+                                                    container: c, trait_: t,
+                                                } if c == &def.name && t == &trait_name
+                                            ));
+                                            if !already {
+                                                self.error(
+                                                    SemanticErrorKind::NonDerefContainerBareTrait {
+                                                        container: def.name.clone(),
+                                                        trait_: trait_name,
+                                                    },
+                                                    callee.span,
+                                                );
+                                            }
+                                            for arg in args {
+                                                self.infer_expr(&arg.node.value);
+                                            }
+                                            return self.types.error_id;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Unlowered builtin "cast call" names (Chain C item 6+):
                 // the resolver's `is_builtin` accepts these so `gg check`
                 // passed, but they have NO lowering — the emitted C gets a

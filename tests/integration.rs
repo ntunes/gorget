@@ -38099,38 +38099,40 @@ fn writeguard_tuple_field_assign() {
 // "Semantics / reference-grade rejection" bucket in TODO.md.
 // ============================================================================
 
-/// KNOWN GAP (Round XI Track M) — CHAINED `.method()` on a `Guard[Trait]`
-/// receiver passes the checker and reaches C-emit which fabricates
-/// `gorget_guard_greet` (no runtime definition), producing an
-/// `implicit declaration of function 'gorget_guard_greet'` cc error.
-/// The Box variant `Mutex[Box[Speaker]](Box.new(...)).lock().greet()`
-/// collapses to the SAME fabricated symbol at C-emit — one fixture
-/// pins both cells. D36 (2026-07-27) makes this a defect: the read
-/// face `.method()` MUST accept + auto-deref uniformly for
-/// Guard/ReadGuard/WriteGuard/Box. Asserts INTENDED `beep R2`.
+/// Round XII Track R (2026-07-28) — GRADUATED. Class 1 of the Round XI
+/// Track M Guard[Trait] family. CHAINED `Mutex[Speaker](Robot(...)).lock()
+/// .greet()`: pre-Track-R HEAD accepted this and fabricated
+/// `gorget_guard_greet` at C-emit. Track R adds an up-front reject at the
+/// CALL-EXPRESSION generic-arg position (the 7th user-facing surface for
+/// `NonDerefContainer[BareTrait]`; Track P covered the 6 annotation-shaped
+/// surfaces via `ast_type_to_resolved`). Reject is driven by the typed
+/// `deref_wrapper_kind == NonDerefContainer` flag Track P seeds on the def
+/// in `resolve.rs::collect_top_level` (layering rule 2 — no name-matching)
+/// and reuses `types::trait_name_of_inner`. Asserts the reject text.
 #[test]
-#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented — chained \
-Guard[Trait].method() fabricates gorget_guard_greet at C-emit. TODO.md."]
-fn guard_trait_chained_c_emit_fabrication() {
-    run_gg(
-        "known_gaps/guard_trait_chained_c_emit_fabrication.gg",
-        "beep R2",
+fn mutex_bare_trait_chained_call_reject() {
+    check_gg_fails(
+        "mutex_bare_trait_chained_call_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
     );
 }
 
-/// KNOWN GAP (Round XI Track M) — NAMED-binding
-/// `Guard[Speaker] g = m.lock(); g.greet()` (bare trait as Mutex inner).
-/// Unlike the chained shape, the named form is REJECTED at check with
-/// `E_NoMethodFound: Guard[Speaker]`. D36 (2026-07-27) makes this a defect.
-/// Fixture pins the exact reject text (cross-module setup — same-file
-/// would render `Guard[trait Speaker]`).
+/// Round XII Track R (2026-07-28) — GRADUATED. Class 2 of the Round XI
+/// Track M Guard[Trait] family. NAMED-binding `Guard[Speaker] g = m.lock();
+/// g.greet()` (bare trait as Mutex inner) — cross-module, kept here so the
+/// paired `speaker.gg` module keeps the reject on the Guard-wrapper type
+/// rather than an accidental same-file resolution shortcut. Pre-Track-P the
+/// checker rejected this with a fuzzy `E_NoMethodFound: Guard[Speaker]`;
+/// Track P (2026-07-28) sharpened it to `E_NonDerefContainerBareTrait` at
+/// the LHS annotation, and Track R keeps the reject SINGLE (the up-front
+/// call-site reject's no-double-report gate consults the errors buffer for
+/// a matching entry — so the shape here emits ONE error at the annotation,
+/// not two).
 #[test]
-#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented — named \
-Guard[Speaker] g = m.lock(); g.greet() rejects E_NoMethodFound. TODO.md."]
 fn guard_trait_named_reject_bare() {
     check_gg_fails(
         "known_gaps/guard_trait_named_reject/main_bare.gg",
-        "no method `greet` found on type `Guard[Speaker]`",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
     );
 }
 
@@ -38151,21 +38153,20 @@ fn guard_trait_named_box_dispatch() {
     run_gg_dir("guard_trait_named_box_dispatch", "main.gg", "beep R2");
 }
 
-/// KNOWN GAP (Round XI Track M) — CHAINED `m.lock().get().greet()` on
-/// `Mutex[Speaker]` (bare trait): `Guard[Speaker].get()` mistypes its
-/// return as the raw inner slot, fabricating `int64_t__greet` which
-/// resolves at LINK stage with `undefined reference to 'int64_t__greet'`.
-/// Distinct from class 1 (C-emit stage). D36 (2026-07-27) makes this a
-/// defect — Guard[T].get() must propagate T faithfully AND dispatch on
-/// the returned value must auto-deref through the wrapper. Asserts
-/// INTENDED `beep R2`.
+/// Round XII Track R (2026-07-28) — GRADUATED. Class 3 of the Round XI
+/// Track M Guard[Trait] family. `.get()`-chained variant of class 1:
+/// `Mutex[Speaker](Robot(...)).lock().get().greet()`. Pre-Track-R HEAD
+/// accepted this and fabricated `int64_t__greet` at LINK stage. Track R's
+/// up-front reject fires on the callee (`Mutex`) before typecheck ever
+/// walks the `.get()` chain, so both classes 1 and 3 collapse to the same
+/// check-time reject — kept as a distinct axis cell so a partial regression
+/// that removed `.get()` from the shape's early-return would still be
+/// caught rather than silently accept the `.get()`-shape.
 #[test]
-#[ignore = "KNOWN GAP (Round XI Track M filed): D36 unimplemented — \
-Guard[Speaker].get().greet() link-fails with int64_t__greet. TODO.md."]
-fn guard_get_bare_trait_fabricated_symbol() {
-    run_gg(
-        "known_gaps/guard_get_bare_trait_fabricated_symbol.gg",
-        "beep R2",
+fn mutex_bare_trait_get_call_reject() {
+    check_gg_fails(
+        "mutex_bare_trait_get_call_reject.gg",
+        NON_DEREF_CONTAINER_BARE_TRAIT_CODE,
     );
 }
 

@@ -1,0 +1,28 @@
+# Round XII Track R — REJECT `Mutex[Trait]` at CALL-EXPRESSION generic-arg
+# position (7th user-facing surface for `NonDerefContainer[BareTrait]`; Track
+# P covered the 6 annotation-shaped surfaces via `ast_type_to_resolved`).
+#
+# CHAINED shape `Mutex[Speaker](Robot(...)).lock().greet()` — no LHS
+# annotation to trigger Track P's reject at a type-position, so the reject
+# must fire on the callee identifier itself. Pre-Track-R HEAD accepted this
+# and fabricated `gorget_guard_greet` at C-emit (Round XI Track M class 1).
+# Post-Track-R the up-front reject in `src/semantic/typecheck.rs::Expr::Call`
+# reads the typed `deref_wrapper_kind == NonDerefContainer` seeded on the def
+# by `resolve.rs::collect_top_level` (layering rule 2 — no name-matching)
+# and reuses the shared `types::trait_name_of_inner` predicate.
+#
+# Reject fires at the callee span (`Mutex` identifier); user is advised to
+# write `Mutex[Box[Speaker]]` (D36, `docs/define-gorget/decisions.md:1373`).
+
+trait Speaker:
+    String greet(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String greet(self):
+        return "beep " + self.name
+
+void main():
+    print(Mutex[Speaker](Robot("R2")).lock().greet())

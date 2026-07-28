@@ -374,7 +374,7 @@ pub fn is_callable_type(type_id: TypeId, types: &TypeTable) -> bool {
 /// any scope), return the trait name for diagnostics. Otherwise `None` — the
 /// container's type-arg is a concrete type and NonDerefContainer-of-trait's
 /// reject does not fire. Used by the Track P reject in `ast_type_to_resolved`.
-fn trait_name_of_inner(
+pub(super) fn trait_name_of_inner(
     inner_tid: TypeId,
     scopes: &ScopeTable,
     types: &TypeTable,
