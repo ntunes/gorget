@@ -1,0 +1,50 @@
+# FAMILY-2 REGRESSION — a STRUCT FIELD UNDER A TUPLE (`t.0.fd`) writes through
+# on BOTH faces. The MIRROR of the `&v[i].0` cell (see the sibling fixture
+# `sound_amp_v_i_tuple_field_writethrough.gg`), and the second half of the same
+# Core #4 class.
+#
+# `try_resolve_field_place` and `try_resolve_tuple_field_place`
+# (`src/ir/lowering/exprs/mod.rs`) are a mutually-recursive PAIR whose object-arm
+# sets must match. They differed by exactly TWO cells pre-fix:
+#   * the TUPLE resolver had no `Expr::Index` arm       -> `&v[i].0` broken
+#   * the FIELD resolver had no `Expr::TupleFieldAccess` arm -> THIS fixture
+# Fixing one and not the other is the instance-fix-where-a-class-exists that
+# Core #4 forbids — so the two arms land together, locked by the arm-parity lint
+# `field_and_tuple_place_resolvers_cover_the_same_object_forms` in `tests/lints.rs`.
+#
+# RED-VERIFIED AT HEAD PRE-FIX (Round IX tip b65ddb9d, `gg check` clean,
+# C and LLVM identical):
+#   `&` face      `bumpi(&t.0.fd)`   -> printed 10   (want 11)
+#   assign face   `u.0.fd = 42`      -> printed 10   (want 42)
+# `ggdef` printed 11 / 42 — CORRECT on both, adjudicating against production.
+#
+# ⚠ The assign face was a SILENT WRITE-DROP (Core #10) that Round X's new
+# `E_InvalidAssignTarget` gate does NOT catch — it is a well-formed lvalue, just
+# an unlowered one before Family-2.
+#
+# INTENDED: 11 then 42.
+#
+# Contrast, both ALREADY CORRECT pre-fix and worth keeping as mental controls:
+#   `&o.st.fd` / `o.st.fd = 42`  (struct under struct) -> 11 / 42
+#   `&t.0.0`   / `t.0.0 = 42`    (tuple under tuple)   -> 11 / 42
+# Only the struct-under-TUPLE crossing was missing its arm.
+#
+# The seeds are COMPUTED, not literals, so const-folding cannot elide the store.
+
+struct S:
+    int fd
+
+int seed():
+    return 10
+
+void bumpi(int &x):
+    x = x + 1
+
+void main():
+    (S, int) t = (S(seed()), 5)
+    bumpi(&t.0.fd)
+    print(t.0.fd)
+
+    (S, int) u = (S(seed()), 5)
+    u.0.fd = 42
+    print(u.0.fd)

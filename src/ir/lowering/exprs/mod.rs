@@ -2955,12 +2955,13 @@ pub(super) fn try_resolve_index_element_ptr(
 /// | `try_resolve_field_place` Identifier-not-a-local | no | yes |
 /// | `try_resolve_field_place` SelfExpr-not-bound | no | no (checker rejects) |
 /// | `try_resolve_field_place` nested-FieldAccess recursion | inherits the inner row | yes |
+/// | `try_resolve_field_place` nested-TupleFieldAccess recursion (`?`) | inherits the inner row | yes |
 /// | `try_resolve_field_place` Deref non-place | YES (`lower_expr(inner)`) | yes |
 /// | `try_resolve_field_place` Index recursion (`?`) | inherits the index rows | yes |
 /// | `try_resolve_field_place` head `_ =>` | no | yes — method chains, temps |
 /// | `try_resolve_field_place` ReadGuard early-out | only if the OBJECT arm emitted | yes, when combined with an emitting base |
 /// | `try_resolve_field_place` field-lookup fall-off | only if the OBJECT arm emitted | yes — see the `Deque` row below |
-/// | `try_resolve_tuple_field_place` Identifier / SelfExpr / recursions / Deref / head `_ =>` | mirrors the field resolver row-for-row | yes |
+/// | `try_resolve_tuple_field_place` Identifier / SelfExpr / FieldAccess+TupleFieldAccess recursions / Deref / Index recursion (`?`) / head `_ =>` | mirrors the field resolver row-for-row (enforced by tests/lints.rs::field_and_tuple_place_resolvers_cover_the_same_object_forms) | yes |
 /// | `try_resolve_tuple_field_place` non-place obj / out-of-range local / walk fall-off | only if the OBJECT arm emitted | yes |
 ///
 /// A REACHABLE emit-then-`None` row exists and is measured: a `Deque[S]` element
@@ -3158,6 +3159,15 @@ pub(super) fn try_resolve_field_place(
                 try_resolve_index_element_ptr(ctx, builder, coll, index)?;
             Operand::Copy(elem_ptr_place)
         }
+        // Family-2 arm-parity: `t.0.fd = v` / `&t.0.fd` — a struct field UNDER
+        // a TUPLE field. Recurse into the tuple resolver so the object's
+        // resolved place carries a `Field(idx)` projection and the field-walk
+        // below descends through it. Mirror of the FieldAccess arm above.
+        Expr::TupleFieldAccess { object: inner_obj, index: inner_index } => {
+            let (inner_place, _inner_type) =
+                try_resolve_tuple_field_place(ctx, builder, inner_obj, *inner_index)?;
+            Operand::Copy(inner_place)
+        }
         _ => return None,
     };
 
@@ -3351,6 +3361,17 @@ pub(super) fn try_resolve_tuple_field_place(
             } else {
                 return None;
             }
+        }
+        // Family-2 arm-parity: `v[i].0 = v` / `&v[i].0` — a tuple field UNDER
+        // a collection ELEMENT. Route through the shared element-pointer
+        // producer so the object's resolved place is a write-through element
+        // pointer and the tuple-field projection below lands in the heap
+        // buffer, not on a stack copy. Mirror of the Index arm in
+        // `try_resolve_field_place`.
+        Expr::Index { object: coll, index } => {
+            let (elem_ptr_place, _elem_type) =
+                try_resolve_index_element_ptr(ctx, builder, coll, index)?;
+            Operand::Copy(elem_ptr_place)
         }
         _ => return None,
     };

@@ -6818,6 +6818,109 @@ fn amp_formation_and_assign_cover_the_same_place_forms() {
     );
 }
 
+/// LIMB 1a (Core #4, devbook/24 Rule 3) — the two SPECIALIST place resolvers,
+/// `try_resolve_field_place` and `try_resolve_tuple_field_place`, must dispatch
+/// on the SAME set of OBJECT `Expr::` forms. They are a mutually-recursive PAIR;
+/// asymmetry is the Family-2 defect class.
+///
+/// **The class this retires, which cost two silent write-drops.** The two
+/// resolvers previously diverged by exactly two cells — the tuple resolver had
+/// no `Expr::Index` arm (`&v[i].0` silently dropped the write on BOTH faces),
+/// the field resolver had no `Expr::TupleFieldAccess` arm (`&t.0.fd` and
+/// `u.0.fd = v` silently dropped on BOTH faces). `gg check` clean, C and LLVM
+/// identical, `ggdef` adjudicating against production on both. The doc-comment
+/// at `src/ir/lowering/exprs/mod.rs:try_resolve_place` (`# Postcondition 2`
+/// table) already claimed the two resolvers "mirror row-for-row" — an
+/// invariant-asserting comment without a guard (Core #14). Family-2 made the
+/// two arms symmetric; this lint locks that symmetry so future drift trips
+/// noisily instead of shipping.
+///
+/// **Why SET-equality and not a COUNT** (same rationale as LIMB 1): a count
+/// passes when the field resolver gains form X and the tuple resolver gains a
+/// DIFFERENT form Y — the exact swap that would reintroduce Family-2 at new
+/// costumes. The failure message NAMES the missing form on each side.
+///
+/// ⚠ **KNOWN BLIND-SPOT — read before trusting a green.**
+///   * `top_level_expr_arm_variants` extracts `Expr::<Variant>` names from
+///     arm-indentation lines, so it sees only the SYNTACTIC object domain. The
+///     field resolver's `Guard[T]` auto-deref block (~L3228-3261 at time of
+///     writing) is TYPE-driven inside the FieldAccess arm — no matching
+///     `Expr::` head — so this lint cannot see it. The tuple resolver has no
+///     equivalent Guard branch today; `g.0` where `g: Guard[(int,int)]` is
+///     therefore filed as a separate class (Round XI's
+///     `scoutE_guard_tuple_field_assign_segv.gg`), not covered here.
+///   * Like LIMB 1, this checks ROUTING, not SEMANTICS. An arm that exists but
+///     mis-resolves passes. Semantic coverage lives in the durable
+///     `sound_tup*` / `sound_amp_v_i_tuple_field_writethrough` fixtures.
+///   * It is a text-shape lint over Rust source. Respelling either `match`
+///     breaks it noisily, which is the intended ratchet behaviour.
+#[test]
+fn field_and_tuple_place_resolvers_cover_the_same_object_forms() {
+    let exprs = fs::read_to_string(Path::new("src/ir/lowering/exprs/mod.rs"))
+        .expect("read src/ir/lowering/exprs/mod.rs");
+
+    let field = top_level_expr_arm_variants(&exprs, "pub(super) fn try_resolve_field_place(");
+    let tuple =
+        top_level_expr_arm_variants(&exprs, "pub(super) fn try_resolve_tuple_field_place(");
+
+    /// Object forms one resolver deliberately handles and the other does not.
+    /// EMPTY at Family-2 land: the two resolvers cover the exact same object
+    /// domain (`Identifier`, `SelfExpr`, `FieldAccess`, `TupleFieldAccess`,
+    /// `Deref`, `Index`). Any future entry MUST carry a written reason showing
+    /// the asymmetry cannot silently drop a write on either face.
+    const EXEMPT: &[(&str, &str)] = &[];
+
+    let exempt: std::collections::BTreeSet<String> =
+        EXEMPT.iter().map(|(name, _)| (*name).to_string()).collect();
+
+    let missing_from_field: Vec<&str> = tuple
+        .difference(&field)
+        .filter(|n| !exempt.contains(*n))
+        .map(|s| s.as_str())
+        .collect();
+    let missing_from_tuple: Vec<&str> = field
+        .difference(&tuple)
+        .filter(|n| !exempt.contains(*n))
+        .map(|s| s.as_str())
+        .collect();
+
+    assert!(
+        missing_from_field.is_empty() && missing_from_tuple.is_empty(),
+        "PLACE-RESOLVER ARM-PARITY BROKEN between `try_resolve_field_place` and \
+         `try_resolve_tuple_field_place`.\n\n\
+         Handled by the tuple resolver but NOT by the field resolver: {missing_from_field:?}\n\
+         Handled by the field resolver but NOT by the tuple resolver: {missing_from_tuple:?}\n\n\
+         field = {field:?}\n\
+         tuple = {tuple:?}\n\
+         exempt = {exempt:?}\n\n\
+         The two resolvers are a mutually-recursive PAIR whose object-arm sets \
+         must match — asymmetry is a silent write-drop (Family-2). Missing \
+         `Expr::TupleFieldAccess` in the field resolver breaks `&t.0.fd` and \
+         `u.0.fd = v`; missing `Expr::Index` in the tuple resolver breaks \
+         `&v[i].0` and `w[i].0 = v` — both faces silently drop the write, \
+         `gg check` clean.\n\n\
+         Add the missing arm to `src/ir/lowering/exprs/mod.rs` (mirror the \
+         existing sibling arm line-for-line), or — if the asymmetry is \
+         intentional — add the variant to EXEMPT WITH a reason showing the \
+         omission cannot lose a write on either the `&`-formation face or the \
+         assign face.\n\n\
+         See AGENTS.md Core #4 (one fix, all siblings), Core #10 (lower-or-reject), \
+         and devbook/24 Rule 3 (one source of truth per axis)."
+    );
+
+    // Sanity floor (Core #15e Q2 — a guard that green-lights its own class):
+    // both resolvers dispatch on at least the 5 non-`_` heads {Identifier,
+    // SelfExpr, FieldAccess or TupleFieldAccess, Deref, Index}. A silently-
+    // shrunken resolver (e.g. an arm deleted by refactor) would make the
+    // equality above vacuously true without this floor.
+    assert!(
+        field.len() >= 5 && tuple.len() >= 5,
+        "place-resolver arm-parity lint extracted suspiciously few arms \
+         (field={field:?}, tuple={tuple:?}). The match statements were probably \
+         respelled or reindented — fix the extractor rather than lowering these floors."
+    );
+}
+
 /// LIMB 1b (Core #4, Core #15e Q3) — the auto-propagate PRE-CHECK's expression
 /// domain must be a SUPERSET of the shared place producer's.
 ///

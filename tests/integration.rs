@@ -36821,9 +36821,12 @@ true
 /// struct-field-specific (`field_name: &str`), so this needs a tuple-index
 /// analogue or a real chain arm.
 #[test]
-#[ignore = "KNOWN GAP: the tuple-field get-chain drops the write on BOTH faces (`&`-arg and \
-plain assign), on C and LLVM alike, while ggdef is correct on both. Asserts the INTENDED \
-write-through; TODO.md. Un-ignore when the tuple-field place resolver grows a method-chain arm."]
+#[ignore = "FAMILY-3 KNOWN GAP: get-chain method-call object (`.get(0).unwrap().0`). NOT \
+Family-2 (arm-parity of the two resolvers) — that closed in Round X. This shape falls to the \
+head `_ =>` in `try_resolve_tuple_field_place` regardless: the object is a `Expr::MethodCall`, \
+not one of the six place-resolvable heads. Needs a tuple-index analogue of \
+`resolve_ptr_field_place` (stmts/assigns.rs:838, struct-field-specific today) or a real \
+method-chain arm in the tuple resolver. Filed at TODO.md L151."]
 fn sound_tuple_getchain_writethrough() {
     run_gg(
         "known_gaps/sound_tuple_getchain_writethrough.gg",
@@ -36833,22 +36836,39 @@ fn sound_tuple_getchain_writethrough() {
     );
 }
 
-/// KNOWN GAP — a struct field UNDER A TUPLE (`t.0.fd`) loses the write on BOTH
-/// faces. The MIRROR of the `&v[i].0` cell: the two place resolvers are a
-/// mutually-recursive pair differing by exactly two arms — the tuple resolver
-/// lacks `Expr::Index`, the field resolver lacks `Expr::TupleFieldAccess`.
-/// Fixing one without the other is the instance-fix Core #4 forbids.
+/// FAMILY-2 — a tuple field UNDER A COLLECTION ELEMENT (`v[i].0`) writes
+/// through on BOTH faces after the arm-parity fix. The SIBLING of
+/// `sound_tupstruct_field_writethrough`: this pins the tuple resolver's new
+/// `Expr::Index` arm, while the sibling pins the field resolver's new
+/// `Expr::TupleFieldAccess` arm. Together they cover the two cells the
+/// mutually-recursive resolver pair previously diverged on, locked by
+/// `tests/lints.rs::field_and_tuple_place_resolvers_cover_the_same_object_forms`.
 ///
-/// RED-verified at HEAD: C `10 / 10`, LLVM identical, ggdef `11 / 42`.
-/// The assign face is a silent write-drop (Core #10) that `E_InvalidAssignTarget`
-/// does not catch — it is a well-formed lvalue, merely an unlowered one.
-/// Struct-under-struct and tuple-under-tuple are both already correct.
+/// Pre-fix RED (at Round IX tip `b65ddb9d`, both C and LLVM): `10 / 10`; ggdef
+/// `11 / 42`. Both faces (`bumpi(&vt[0].0)` and `wt[0].0 = 42`) silently dropped
+/// the write (Core #10); `gg check` clean; struct-field-of-element
+/// (`v[i].fd`) was already correct — only the TUPLE-field-of-element crossing
+/// was missing its arm.
 #[test]
-#[ignore = "KNOWN GAP: a struct field under a tuple drops the write on both the `&` and assign \
-faces while ggdef is correct on both. Asserts the INTENDED write-through; TODO.md. Un-ignore when \
-the field resolver grows its `Expr::TupleFieldAccess` arm."]
+fn sound_amp_v_i_tuple_field_writethrough() {
+    run_gg("sound_amp_v_i_tuple_field_writethrough.gg", "11\n42");
+}
+
+/// FAMILY-2 — a struct field UNDER A TUPLE (`t.0.fd`) writes through on BOTH
+/// faces after the arm-parity fix. The MIRROR of the `&v[i].0` cell (its
+/// sibling fixture `sound_amp_v_i_tuple_field_writethrough` pins the other
+/// half): the two place resolvers are a mutually-recursive pair whose object
+/// arm sets are locked identical by
+/// `tests/lints.rs::field_and_tuple_place_resolvers_cover_the_same_object_forms`.
+///
+/// Pre-fix RED (at Round IX tip `b65ddb9d`): C `10 / 10`, LLVM identical, ggdef
+/// `11 / 42`. The assign face was a silent write-drop (Core #10) that
+/// `E_InvalidAssignTarget` did not catch — it is a well-formed lvalue, merely
+/// an unlowered one. Struct-under-struct and tuple-under-tuple were both
+/// already correct; only the STRUCT-under-TUPLE crossing was missing its arm.
+#[test]
 fn sound_tupstruct_field_writethrough() {
-    run_gg("known_gaps/sound_tupstruct_field_writethrough.gg", "11\n42");
+    run_gg("sound_tupstruct_field_writethrough.gg", "11\n42");
 }
 
 /// KNOWN GAP — indexing a `Set[T]` emits a raw ADDRESS. No `&` involved.

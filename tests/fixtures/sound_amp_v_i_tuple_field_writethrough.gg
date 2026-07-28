@@ -1,0 +1,46 @@
+# DURABLE REPRO — a TUPLE FIELD UNDER A COLLECTION ELEMENT (`v[i].0`) loses the
+# write on BOTH faces. This is the SIBLING of `sound_tupstruct_field_writethrough`
+# — the OTHER half of the same Core #4 class (Family-2 arm-parity).
+#
+# `try_resolve_field_place` and `try_resolve_tuple_field_place`
+# (`src/ir/lowering/exprs/mod.rs`) are a mutually-recursive PAIR whose object-arm
+# sets must match. They differed by exactly TWO cells before the Track H fix:
+#   * the TUPLE resolver had no `Expr::Index` arm       -> THIS fixture (`&v[i].0`)
+#   * the FIELD resolver had no `Expr::TupleFieldAccess` arm -> the sibling fixture
+# Fixing one and not the other is the instance-fix-where-a-class-exists that
+# Core #4 forbids. The class is now guarded by the arm-parity lint
+# `field_and_tuple_place_resolvers_cover_the_same_object_forms` in `tests/lints.rs`.
+#
+# RED-VERIFIED AT HEAD (pre-fix, `gg check` clean, C AND LLVM identical):
+#   `&` face      `bumpi(&vt[0].0)`   -> printed 10   (want 11)
+#   assign face   `wt[0].0 = 42`      -> printed 10   (want 42)
+# `ggdef` prints 11 / 42 — CORRECT on both, adjudicating against production.
+#
+# ⚠ The assign face is a SILENT WRITE-DROP (Core #10) that Round X's new
+# `E_InvalidAssignTarget` gate does NOT catch — it is a well-formed lvalue, just
+# an unlowered one before Family-2.
+#
+# INTENDED (what this fixture asserts): 11 then 42.
+#
+# Contrast, both ALREADY CORRECT and worth keeping as mental controls:
+#   `&v[i].fd` / `v[i].fd = 42`      (struct field of an element) -> 11 / 42
+#   `&t.0.0`   / `t.0.0 = 42`         (tuple under tuple)         -> 11 / 42
+# Only the tuple-field-under-COLLECTION crossing was missing its arm.
+#
+# The seeds are COMPUTED, not literals, so const-folding cannot elide the store
+# on the real path (Core #11).
+
+int seed():
+    return 10
+
+void bumpi(int &x):
+    x = x + 1
+
+void main():
+    Vector[(int, int)] vt = [(seed(), 5)]
+    bumpi(&vt[0].0)
+    print(vt[0].0)
+
+    Vector[(int, int)] wt = [(seed(), 5)]
+    wt[0].0 = 42
+    print(wt[0].0)
