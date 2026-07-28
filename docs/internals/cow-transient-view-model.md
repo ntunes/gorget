@@ -7,6 +7,14 @@
 > `docs/book/12-borrowing.md`; until then this file is the single durable record
 > of the design so far. Pairs with the return-view (#13) ruling in
 > [`unified-resource-model.md`](unified-resource-model.md) §6.
+>
+> **Scope split (2026-07-28):** this note owns the **legality** axis — what is a
+> place, what may be mutated through, accept/reject. The **cost** axis (the
+> per-signature ownership summary, arg- and return-boundary elision including #13,
+> the guaranteed-elision set, and the `implicit_clones` knob) is
+> [`cow-cost-contract.md`](cow-cost-contract.md). `returns_view_of[i]` is defined
+> HERE — it is legality-determining — and merely *read* there; § Articulation with
+> #13 below is retained as context, with the live cost design in that note.
 
 ## Resolved direction (owner-ruled 2026-07-22) — internal views only, no user `Ref[T]`
 
