@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**ROUND XV OPEN 2026-07-29** — theme: CLOSE THE COMBINATOR CLASS (closed in ONE producer, on ONE lane after XIV). Integration branch for this session: `gorget-2` (tip at open: `e4b69f47`, same as `gorget-1`). Core #4 + Core #6: every producer + every lane + the class-retiring guard. Projected close: 4 `#[ignore]`d pins un-ignore · 2 `known_gaps` graduate · 4 TODO entries close · parity recovery of the SH-lag rows XIV added to the denominator.
+**ROUND XV OPEN 2026-07-29** — theme: CLOSE THE COMBINATOR CLASS (closed in ONE producer, on ONE lane after XIV). Orchestrator worktree: this checkout (`gorget-2` @ open tip `51c8e4ef`). Core #4 + Core #6: every producer + every lane + the class-retiring guard. Projected close: 4 `#[ignore]`d pins un-ignore · 2 `known_gaps` graduate · 4 TODO entries close · parity recovery of the SH-lag rows XIV added to the denominator.
 
 **Tracks (parallel; each owns a scout → brief → ≥3 reviews → executor → output-review loop):**
 - **A — SH-lane combinator port** (`tests/fixtures/self_host_lowerer/lir_codegen.gg:5066+` `emit_option_result_combinator`). Wrong mapped value + missing `__option_flat_map`. ⚠ NOT a mechanical mirror of Rust Edits A–D — SH uses runtime helpers, different bug shape. Pins: `#[ignore]`d `sh_combinator_map_money_param_and_field_probe` + `sh_combinator_and_then_money_local_probe` (reuse live fixtures via `self_host_emit_cc_run`). TODO §Self-host parity > High.
@@ -35,14 +35,11 @@
 - **TODO stale-scan** — grep entries citing fixed commits / closed known_gaps. XI's curation drain missed 2 buckets that XIII's scouts then spent scout budget rediscovering; this is cheap insurance against that exact cost.
 - **XIV's `map_err` accidentally-correct trace** — one probe: why does `map_err` bare-param work where `or_else` bare-param didn't? (Core #12 Q6 — a green cell may be green for a reason unrelated to what you think it tests.)
 
-Tracks should be scoped so the round's projected net-close is ≥ 1 per the convergence gate. Session integration branch: `gorget-2` (same tip as `gorget-1` at XV open).
+Tracks should be scoped so the round's projected net-close is ≥ 1 per the convergence gate. Orchestrator worktree this session: `gorget-2` (rule 0 — launch worktree = integration branch).
 
-⚠ **THE ORCHESTRATOR STAYS ON THE SESSION INTEGRATION BRANCH (`gorget-2` this session; historically `gorget-1`).** Track work happens in agent worktrees. Checking out a track
-branch in the parent checkout silently re-bases every read, grep and gate onto that track's state — and if
-a round-close battery ran there it would certify one branch instead of the integration branch. Standing
-operational rule (Round IX enforced this by re-correction).
+⚠ **ORCHESTRATOR IS BRANCH-AGNOSTIC (AGENTS.md Multi-agent rule 0).** Stay in the launch worktree — that *is* the session integration branch. Subagents always get `isolation: "worktree"`. Checking a track branch out in the orchestrator worktree re-bases every read/gate onto track state. Never hardcode a branch name (`gorget-1`, etc.). Standing rule (Round IX re-correction; owner 2026-07-29).
 
-⚠ **THE FULL BATTERY IS THE ROUND-CLOSE GATE, RUN ONCE**, after every track's commits are on the session integration branch.
+⚠ **THE FULL BATTERY IS THE ROUND-CLOSE GATE, RUN ONCE**, after every track's commits are integrated into the orchestrator worktree.
 Per track it is `cargo build` + `cargo test --lib` + targeted integration only. Running the battery per
 track wastes ~20 min each time AND holds the box, which serialises tracks that are meant to be parallel —
 that is the mechanism by which an N-track round degrades into N one-track rounds. **C sweep and LLVM sweep
@@ -53,7 +50,7 @@ paths that collide across simultaneous runs. The short-gate batch (`--lib` / `--
 either integration sweep.
 
 ⚠ **VOCABULARY:** *committed* = on a track branch · *at the gate* = output-review running · *landed* =
-reviewed AND merged to the session integration branch · *closed* = round-close battery green over all landed tracks.
+reviewed AND merged into the orchestrator worktree · *closed* = round-close battery green over all landed tracks.
 
 ⚠ **RESUMING A SESSION AFTER A CRASH:** two agents crashed mid-flight in Round IX. Recovery: grep
 `git branch --list 'worktree-agent-*'` for the crashed agents' branches; check each for committed work
