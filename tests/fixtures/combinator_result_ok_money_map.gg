@@ -1,0 +1,54 @@
+# CELL: `.map()` x {plain-local, bare-param} recv x Result[Money, int] (Ok side)
+# COMMITTED Round XIV (74f566c6+) — combinator-receiver ownership class-fix.
+# BRIEF §Step 5 called this cell UNPROBED by scout; probed by executor.
+# PRE-FIX (RED-verified at HEAD 6171d564 with methods.rs reverted):
+#   plain-local recv:  prints `10 / 10` (GREEN — live control; receiver
+#     preserved because named-Result[Money,int] type has a registered
+#     clone_fn and the pre-fix bare-place path fired correctly).
+#   bare-param recv:   prints `10 / 0` (WRONG — SURPRISE finding; Result[Money,int]
+#     on the Ok side is ALSO broken for bare-borrow params, same class as
+#     Option[Money].map. Edit A (Ptr-unwrap) covers this cell.
+# The two rows in one fixture cover both a live control and a regression pin
+# for the receiver-materialization mechanism (Core #12 axis: recv-shape).
+# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
+# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+
+struct Money:
+    Vector[int] cents
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Result[Money, int] make_res(int n):
+    return Ok(Money(heap_cents(n)))
+
+# CELL 1 — plain-local (control, GREEN pre-fix and post-fix).
+void via_local():
+    Result[Money, int] r = make_res(10)
+    Result[int, int] mapped = r.map((Money m): size_of(m))
+    if mapped is Ok(v):
+        print(v)
+    if r is Ok(m2):
+        print(size_of(m2))
+    print("local-end")
+
+# CELL 2 — bare-param (RED pre-fix — SURPRISE finding, Edit A regression pin).
+void via_param(Result[Money, int] p):
+    Result[int, int] r = p.map((Money m): size_of(m))
+    if r is Ok(v):
+        print(v)
+    if p is Ok(m2):
+        print(size_of(m2))
+    print("param-end")
+
+void main():
+    via_local()
+    via_param(make_res(11))

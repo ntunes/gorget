@@ -37526,6 +37526,123 @@ loop-end",
     );
 }
 
+// ---- Round XIV matrix — combinator-receiver ownership class ----
+// Fourteen new axis-covering fixtures for the class-fix at
+// try_lower_option_result_combinator (74f566c6). Each fixture header records
+// its CELL (combinator × receiver-shape × payload), pre-fix observation
+// (WRONG/SIGSEGV/ICE), and RED-verify at HEAD 6171d564. Companion to the four
+// graduated known_gaps above.
+
+#[test]
+fn combinator_filter_money_param() {
+    run_gg("combinator_filter_money_param.gg", "10");
+}
+
+#[test]
+fn combinator_filter_money_field() {
+    run_gg("combinator_filter_money_field.gg", "11");
+}
+
+#[test]
+fn combinator_or_else_money_param() {
+    run_gg("combinator_or_else_money_param.gg", "10");
+}
+
+#[test]
+fn combinator_and_then_money_param() {
+    run_gg("combinator_and_then_money_param.gg", "10");
+}
+
+#[test]
+fn combinator_and_then_money_field() {
+    run_gg("combinator_and_then_money_field.gg", "11");
+}
+
+#[test]
+fn combinator_flat_map_money_local() {
+    run_gg("combinator_flat_map_money_local.gg", "10");
+}
+
+// REV-P1 RSV-2: bare-param exercises the Ptr(Option[T])-unwrap path
+// (Edit A) which is structurally distinct from projected-place.
+#[test]
+fn combinator_flat_map_money_param() {
+    run_gg("combinator_flat_map_money_param.gg", "10");
+}
+
+#[test]
+fn combinator_flat_map_money_field() {
+    run_gg("combinator_flat_map_money_field.gg", "11");
+}
+
+// Proves the ICE is NOT projection-gated (Core #12 axis).
+#[test]
+fn combinator_unwrap_or_else_money_local() {
+    run_gg("combinator_unwrap_or_else_money_local.gg", "10");
+}
+
+#[test]
+fn combinator_unwrap_or_else_money_param() {
+    run_gg("combinator_unwrap_or_else_money_param.gg", "10");
+}
+
+// map_err with receiver READ-BACK. The scout's map_err probes appeared to
+// make map_err "the only green combinator" but only because they did not
+// sample the receiver-ownership axis — this fixture does, and it was RED
+// pre-fix (Core #12 authoring finding).
+#[test]
+fn combinator_map_err_money_local() {
+    run_gg(
+        "combinator_map_err_money_local.gg",
+        "\
+10
+10",
+    );
+}
+
+#[test]
+fn combinator_map_err_money_param() {
+    run_gg(
+        "combinator_map_err_money_param.gg",
+        "\
+10
+10",
+    );
+}
+
+// UNPROBED by scout; probed by executor. Result[Money, int] Ok side x map.
+// SURPRISE finding: bare-param variant was WRONG pre-fix (10\n0 not 10\n10)
+// — Result-Ok side ALSO broken for bare-borrow params, same class as
+// Option[Money].map. Local row is a live control (GREEN pre-fix + post-fix).
+#[test]
+fn combinator_result_ok_money_map() {
+    run_gg(
+        "combinator_result_ok_money_map.gg",
+        "\
+10
+10
+local-end
+11
+11
+param-end",
+    );
+}
+
+// Sequential producer calls on the same bare-param receiver.
+// PRE-FIX exited 139 (SIGSEGV) — receiver destructively re-aliased across
+// two adapter entries. POST-FIX: 42/10/10.
+#[test]
+fn combinator_chain_map_filter() {
+    run_gg(
+        "combinator_chain_map_filter.gg",
+        "\
+42
+10
+10
+chain-end",
+    );
+}
+
 /// KNOWN GAP — the STRUCT get-chain, `&`-FACE ONLY. The other cell that
 /// survives the `&`-of-projection fix, and narrower than the tuple get-chain
 /// above: here the assign face ALREADY WORKS.

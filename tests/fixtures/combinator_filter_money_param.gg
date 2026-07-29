@@ -1,0 +1,36 @@
+# CELL: `.filter()` x bare-param recv x Option[Money]
+# COMMITTED Round XIV (74f566c6+) — combinator-receiver ownership class-fix.
+# PRE-FIX (RED-verified at HEAD 6171d564 with methods.rs reverted): print 0
+#   (want 10). Bare-param `Option[Money]` receiver had local type
+#   `Ptr(Option[Money])`, so scrut_local was a Ptr-typed alias that
+#   enum_field_load_move then destructively read through — the caller's heap
+#   payload was zeroed. Third sibling of the map/or_else silent write-drop
+#   mode; not in the graduated known_gaps, this cell was pure Core #4
+#   surface-area proof that filing map + or_else did NOT close the class.
+# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
+# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+
+struct Money:
+    Vector[int] cents
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Option[Money] make_opt(int n):
+    return Some(Money(heap_cents(n)))
+
+void call_it(Option[Money] p):
+    Option[Money] r = p.filter((Money m): size_of(m) > 0)
+    if r is Some(m):
+        print(size_of(m))
+
+void main():
+    call_it(make_opt(10))

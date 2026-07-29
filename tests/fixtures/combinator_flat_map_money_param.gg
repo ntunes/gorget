@@ -1,0 +1,33 @@
+# CELL: `.flat_map()` x bare-param recv x Option[Money]
+# COMMITTED Round XIV (74f566c6+) — combinator-receiver ownership class-fix.
+# PRE-FIX (RED-verified at HEAD 6171d564): SIGSEGV (exit 139). REV-P1 RSV-2:
+#   bare-param exercises the Ptr(Option[Money])-unwrap path (Edit A) AND
+#   the result_type fallthrough fix (Edit C) — structurally distinct from
+#   plain-local. Without this cell the axis is under-sampled.
+# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
+# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+
+struct Money:
+    Vector[int] cents
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Option[Money] make_opt(int n):
+    return Some(Money(heap_cents(n)))
+
+void call_it(Option[Money] p):
+    Option[int] r = p.flat_map((Money m): Some(size_of(m)))
+    if r is Some(v):
+        print(v)
+
+void main():
+    call_it(make_opt(10))

@@ -1,0 +1,32 @@
+# CELL: `.unwrap_or_else()` x plain-local recv x Option[Money]
+# COMMITTED Round XIV (74f566c6+) — combinator-receiver ownership class-fix.
+# PRE-FIX (RED-verified at HEAD 6171d564): ICE ("thread 'main' panicked at
+#   src/main.rs:2303:18: gg main thread panicked" — Tier 2a AssignIntoOwnedSlot
+#   consume-site violation from src/ir/lowering/mod.rs:2127). PROVES the ICE
+#   is NOT projection-gated: even plain-local receivers hit it, because the
+#   Untracked closure-call result flowed into the Owned Money slot on the None
+#   arm regardless of receiver shape. Edit D fixes it.
+# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
+# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+
+struct Money:
+    Vector[int] cents
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Option[Money] make_opt(int n):
+    return Some(Money(heap_cents(n)))
+
+void main():
+    Option[Money] o = make_opt(10)
+    Money r = o.unwrap_or_else((): Money(heap_cents(99)))
+    print(size_of(r))
