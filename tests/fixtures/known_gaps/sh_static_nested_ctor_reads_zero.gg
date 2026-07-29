@@ -1,0 +1,56 @@
+# DURABLE REPRO — a top-level `static` whose initializer is a struct
+# constructor with a NESTED struct constructor argument reads `0` from every
+# field on the self-host lane, BEFORE any write. Rust gg (both backends) reads
+# the initialiser correctly.
+#
+# RED-VERIFIED 2026-07-29 at HEAD (branch `worktree-agent-aa503e0e5c6ae0e04`):
+#   Rust gg (C backend)         -> stdout `42`, exit 0
+#   Rust gg (LLVM backend)      -> stdout `42`, exit 0
+#   Self-host (driver --emit-c) -> stdout `0`,  exit 0 (silent WRONG output)
+#
+# SCOPE — this fixture samples exactly ONE cell of the discovered axis: an
+# outer struct-typed static whose ctor argument is another struct ctor
+# (`Outer(Inner(42))`). Adjacent cells the scout probed CONFIRM the axis:
+#   - `static int G = 42`                          -> SH `42` (works — flat)
+#   - `static Outer G = Outer(42)` (single-level)  -> SH `42` (works — no nest)
+#   - `static Point G = Point(3, 4)` (flat args)   -> SH `3`  (works — no nest)
+#   - `static Outer G = Outer(Inner(42))`          -> SH `0`  (WRONG)
+# The discriminator is the NESTED ctor argument, not the number of fields or
+# the field type. Not probed here: enum-variant ctor nested in a struct ctor
+# (`Outer(Some(42))`), tuple literal, or a resource-typed inner ctor — a
+# fuller cell census belongs to whichever round fixes this.
+#
+# MECHANISM (hypothesised, NOT chased to the writer site): a likely sibling of
+# the Rust-lane α cluster filed in TODO.md near line 326 (S-C: "extend
+# self-host static-init synthesis to enum-variant + non-literal-arg struct
+# ctors" via `build_static_init_fn`). Landed on the Rust side (`743412da` /
+# `6ac72607`); the self-host `IStaticDecl` (`self_host_lowerer/lower.gg:3182`)
+# only routes literal array/dict initialisers, so a nested-ctor initialiser
+# falls through to a zeroed global. Cross-ref: `static_struct_resource_field`
+# lives in `tests/fixtures/` and exercises `Box2(Vector[int]())` — the
+# no-arg-nested-ctor variant of the same class — but is a Rust-only live test
+# with NO SH parity gate today. If the SH-port lands the α cluster, that
+# should close this too.
+#
+# INTENDED (asserted below): print `42` on both lanes. The initialiser value
+# is a NON-CONSTANT `42` (a literal, but the WRAPPER structure is what
+# matters — no const-fold can elide the nested-ctor axis), and the field is
+# read directly, no write beforehand, so the failure mode is pure
+# initialisation-was-dropped.
+#
+# ⚠ THIS FIXTURE CANNOT RUN GREEN on the self-host until fixed — the emitted
+# binary exits 0 with the wrong stdout. It is `#[ignore]`d and asserts the
+# INTENDED Rust-lane behaviour.
+#
+# Cited from TODO.md (UNOWNED HIGH -> Static-decl subsystem SH-lag).
+
+struct Inner:
+    int fd
+
+struct Outer:
+    Inner i
+
+static Outer G = Outer(Inner(42))
+
+void main():
+    print(G.i.fd)

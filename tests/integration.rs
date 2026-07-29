@@ -37940,6 +37940,112 @@ fn sound_guard_return_position_cc_fail() {
     run_gg("known_gaps/sound_guard_return_position_cc_fail.gg", "10");
 }
 
+/// KNOWN GAP — a struct holding `Mutex[T]` FIELD alongside ANY other droppable
+/// field aborts with `free(): double free detected in tcache 2` (exit 134) on
+/// the SELF-HOST lane only. Rust gg (both backends) exits 0 with the correct
+/// stdout. The bug reproduces WITHOUT calling `.lock()` — pure drop-path defect
+/// in the self-host. Discriminator is the DROPPABLE-COMPANION axis: Mutex alone
+/// or Mutex+int is clean on SH, Mutex+String and Mutex+Vector[int] both abort.
+///
+/// RED-VERIFIED 2026-07-29 at HEAD: Rust C/LLVM stdout `hello-heap-forced` exit
+/// 0; self-host driver+cc build clean, binary aborts exit 134. String is
+/// heap-forced so no const-fold can elide the payload axis (Core #12).
+///
+/// Wired via `self_host_emit_cc_run` (not `run_gg`) because the bug is
+/// SELF-HOST-ONLY — the Rust lane is a green control. Asserts SH parity to
+/// Rust; currently panics via the `Err(Crashed { exit_code: Some(134), ... })`
+/// path so the `#[ignore]` guards the exit-134 abort until fixed.
+///
+/// Distinct from every filed Guard-family bug (no Guard, no `.lock()`, no
+/// field-access through a guard). Distinct from Round 14 Inc-A `Mutex[T]`
+/// scope-drop (that landed for owning LOCALS in both lanes; this is the STRUCT
+/// FIELD position, a companion-field axis not covered by Inc-A).
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "KNOWN GAP: a struct with `Mutex[T]` + ANY other droppable field double-frees at \
+exit on the SELF-HOST lane (exit 134, tcache); Rust gg exits 0. Reproduces without any \
+`.lock()`. Asserts SH parity to Rust; TODO.md. Un-ignore when the SH struct-drop path stops \
+double-freeing Mutex handles in the presence of a droppable sibling field."]
+fn sh_mutex_struct_field_double_free() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/sh_mutex_struct_field_double_free.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_mutex_struct_field_double_free_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout, "hello-heap-forced",
+            "SH-emitted binary must produce the same stdout as Rust gg for a struct with \
+             a `Mutex[T]` field alongside a droppable sibling field"
+        ),
+        Err(outcome) => panic!(
+            "SH sh_mutex_struct_field_double_free emit/cc/run failed (expected once fixed \
+             to succeed with `hello-heap-forced`): {outcome:?}"
+        ),
+    }
+}
+
+/// KNOWN GAP — a top-level `static` whose initializer is a struct constructor
+/// with a NESTED struct constructor argument reads `0` from every field on the
+/// self-host lane, BEFORE any write. Rust gg (both backends) prints the correct
+/// value. Flat statics work on both lanes; single-level struct ctors work on
+/// both lanes; the NESTED ctor argument is the discriminator.
+///
+/// RED-VERIFIED 2026-07-29 at HEAD: Rust C/LLVM stdout `42`; self-host driver
+/// emits C that builds+runs clean with silent WRONG stdout `0`. Silent
+/// wrong-output failure mode (both processes exit 0), not a crash.
+///
+/// Wired via `self_host_emit_cc_run` (not `run_gg`) because the bug is
+/// SELF-HOST-ONLY — the Rust lane is a green control. Asserts SH parity to
+/// Rust; currently fails on the stdout assertion (`0` vs `42`).
+///
+/// Likely a sibling of the Rust-lane α cluster filed in TODO.md near line 326
+/// (S-C: extend self-host static-init synthesis to enum-variant + non-literal-
+/// arg struct ctors). The Rust-only `static_struct_resource_field` test
+/// exercises the no-arg-nested-ctor variant (`Box2(Vector[int]())`) as a live
+/// gate WITHOUT a SH parity check — this fixture is the corresponding SH gap.
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "KNOWN GAP: SELF-HOST reads `0` from every field of a `static` whose ctor init \
+argument is itself a struct ctor (`static Outer G = Outer(Inner(42))`); flat statics and \
+single-level struct ctors work. Rust gg reads the initialiser correctly. Silent wrong output. \
+Asserts SH parity to Rust; TODO.md. Un-ignore when SH static-init synthesis routes \
+non-literal-arg struct ctors through the runtime `__gg_static_init_<name>` path."]
+fn sh_static_nested_ctor_reads_zero() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/sh_static_nested_ctor_reads_zero.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_static_nested_ctor_reads_zero_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout, "42",
+            "SH-emitted binary must produce the same stdout as Rust gg for a static with \
+             a nested-ctor initialiser (`static Outer G = Outer(Inner(42))`)"
+        ),
+        Err(outcome) => panic!(
+            "SH sh_static_nested_ctor_reads_zero emit/cc/run failed (expected once fixed \
+             to succeed with `42`): {outcome:?}"
+        ),
+    }
+}
+
 /// KNOWN GAP — a `&` written AFTER a named argument's `=` is silently discarded,
 /// so `f(b = &x)` is ACCEPTED where the positional twin `f(&x)` correctly
 /// REJECTS `E_OwnershipMismatch`. The legal spelling is sigil-BEFORE-the-name

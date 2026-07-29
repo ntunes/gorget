@@ -1,0 +1,56 @@
+# DURABLE REPRO — a struct holding a `Mutex[T]` FIELD alongside ANY other
+# droppable field aborts (exit 134, `free(): double free detected in tcache 2`)
+# on the SELF-HOST lane only. Rust gg (both backends) prints and exits 0.
+#
+# RED-VERIFIED 2026-07-29 at HEAD (branch `worktree-agent-aa503e0e5c6ae0e04`):
+#   Rust gg (C backend)         -> stdout `hello-heap-forced`, exit 0
+#   Rust gg (LLVM backend)      -> stdout `hello-heap-forced`, exit 0
+#   Self-host (driver --emit-c) -> stderr `free(): double free detected in
+#                                  tcache 2`, exit 134 (SIGABRT)
+#
+# SCOPE — this fixture samples exactly ONE cell of the discovered axis:
+# `Mutex[int]` paired with a `String` field in an ordinary struct, moved into
+# the struct with `!`. The following adjacent cells were probed by the scout
+# and CONFIRM the axis is "Mutex field + ANY droppable companion field",
+# INDEPENDENT of order:
+#   - Mutex[int] alone (no sibling field)          -> SH exit 0 (works)
+#   - Mutex[int] + int (trivial)                   -> SH exit 0 (works)
+#   - Mutex[int] + String  (this fixture)          -> SH exit 134
+#   - Mutex[int] + Vector[int]                     -> SH exit 134
+#   - String first, Mutex[int] second              -> SH exit 134
+# The discriminator is the presence of a SECOND droppable field, not the
+# String vs Vector inner type and not the field order. Not probed: RWLock /
+# Channel / Shared / Weak companions (a sibling family per Core #12).
+#
+# The bug reproduces WITHOUT any `.lock()` call — it is purely a drop-path
+# defect in the self-host, so no exercising of the Mutex is required.
+#
+# MECHANISM (hypothesised, NOT chased to the writer site — do not treat as
+# established): the self-host struct-drop path double-frees the Mutex handle
+# when the containing struct has ANOTHER field that owes its own drop, most
+# likely a per-field drop emission mis-order or a drop-flag double-emit that
+# only Mutex's runtime `gorget_mutex_free` (single-owner, unique-free) trips
+# because a second free abort()s in `tcache`. The Rust lane's own Mutex-drop
+# machinery (Core #8 Inc-A, `82de2110`) does not exhibit this on the same
+# shape. Distinct from every filed Guard-family bug: no Guard, no `.lock()`,
+# no field-access through a guard here.
+#
+# INTENDED (asserted below): printing the String field prints
+# `hello-heap-forced` on ALL lanes and the process exits 0 cleanly. The String
+# is heap-forced (concat of two runtime String parts, per Core #12 payload
+# axis) so no const-fold can elide the droppable-companion axis.
+#
+# ⚠ THIS FIXTURE CANNOT RUN GREEN on the self-host until fixed — the SH build
+# succeeds and the emitted binary aborts. It is `#[ignore]`d and asserts the
+# INTENDED Rust-lane behaviour.
+#
+# Cited from TODO.md (UNOWNED HIGH -> Concurrency subsystem SH-lag).
+
+struct Holder:
+    Mutex[int] m
+    String tag
+
+void main():
+    Mutex[int] mu = Mutex[int](42)
+    Holder h = Holder(!mu, "hello" + "-heap-forced")
+    print(h.tag)
