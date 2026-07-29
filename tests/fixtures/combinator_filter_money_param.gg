@@ -7,8 +7,9 @@
 #   payload was zeroed. Third sibling of the map/or_else silent write-drop
 #   mode; not in the graduated known_gaps, this cell was pure Core #4
 #   surface-area proof that filing map + or_else did NOT close the class.
-# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
-# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+# Pinned by Core #6 guard (`combinator_adapter_ownership_invariants` +
+# `assert_scrut_is_value_enum`) AND this runtime fixture; fixtures stay
+# (Core #11/#12). The guard does not retire this axis cell.
 
 struct Money:
     Vector[int] cents

@@ -3460,6 +3460,27 @@ fn call_closure_in_adapter(
 /// closure call, and enum construction — giving the compiler full ownership visibility.
 
 
+
+/// Core #6 Edit-A pin: destructive enum extract must never target a Ptr-typed
+/// `scrut_local`. The adapter unwraps `Ptr(Option/Result)` → value type before
+/// allocating the slot; a regression re-opens receiver-emptying / wrong-layout
+/// extraction (Round XIV Edit A). Centralized so every `enum_field_load_move`
+/// site shares one assertion (Core #4 sibling discipline).
+fn assert_scrut_is_value_enum(
+    ctx: &LoweringContext,
+    builder: &FunctionBuilder,
+    scrut_local: LocalId,
+) {
+    let scrut_ty = builder.local_type(scrut_local);
+    debug_assert!(
+        !matches!(
+            ctx.type_registry.get(scrut_ty),
+            Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+        ),
+        "try_lower_option_result_combinator: enum_field_load_move on Ptr-typed scrut_local (Edit A regression) — unwrap Ptr(Option/Result) before allocating scrut_local"
+    );
+}
+
 fn try_lower_option_result_combinator(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -3661,7 +3682,6 @@ fn try_lower_option_result_combinator(
 
     // Determine the result type (may differ from recv_type for cross-type map)
     let result_type = match method_name {
-        "not_a_real_combinator" => recv_type,
         "unwrap_or_else" => some_ok_type,
         "map" => {
             // Closure returns U → result is Option[U] or Result[U, E]
@@ -3758,6 +3778,7 @@ fn try_lower_option_result_combinator(
 
     // === Some/Ok branch ===
     builder.switch_to(some_bb);
+    assert_scrut_is_value_enum(ctx, builder, scrut_local);
     let payload = builder.enum_field_load_move(Place::local(scrut_local), if is_option { "Some" } else { "Ok" }, 0, some_ok_type);
     // payload owns the extracted field; tag it and zero scrut so
     // tag_ownership infers Owned for payload (Tier 2a Phase 2B).
@@ -3850,6 +3871,7 @@ fn try_lower_option_result_combinator(
             // Error → Error(err)
             // MoveZero scrut_local after extraction so tag_ownership sees the
             // base is consumed and tags err_val as Owned (Tier 2a Phase 2B).
+                    assert_scrut_is_value_enum(ctx, builder, scrut_local);
                     let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));
@@ -3859,6 +3881,7 @@ fn try_lower_option_result_combinator(
         "or_else" if is_result => {
             // or_else: Error → fn(err)
             // err_val owns the extracted payload — tag and zero scrut to propagate.
+                    assert_scrut_is_value_enum(ctx, builder, scrut_local);
                     let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));
@@ -3869,6 +3892,7 @@ fn try_lower_option_result_combinator(
         "unwrap_or_else" if is_result => {
             // unwrap_or_else: Error → fn(err)
             // err_val owns the extracted payload — tag and zero scrut to propagate.
+                    assert_scrut_is_value_enum(ctx, builder, scrut_local);
                     let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));
@@ -3879,6 +3903,7 @@ fn try_lower_option_result_combinator(
         "map_err" if is_result => {
             // map_err: Error → Error(fn(err))
             // err_val owns the extracted payload — tag and zero scrut to propagate.
+                    assert_scrut_is_value_enum(ctx, builder, scrut_local);
                     let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));

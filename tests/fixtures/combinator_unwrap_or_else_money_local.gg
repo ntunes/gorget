@@ -6,8 +6,9 @@
 #   is NOT projection-gated: even plain-local receivers hit it, because the
 #   Untracked closure-call result flowed into the Owned Money slot on the None
 #   arm regardless of receiver shape. Edit D fixes it.
-# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
-# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+# Pinned by Core #6 guard (`combinator_adapter_ownership_invariants` +
+# `assert_scrut_is_value_enum`) AND this runtime fixture; fixtures stay
+# (Core #11/#12). The guard does not retire this axis cell.
 
 struct Money:
     Vector[int] cents

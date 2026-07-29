@@ -7421,3 +7421,352 @@ fn no_combinator_predicate_name_match_in_methods() {
             .join("\n")
     );
 }
+
+/// Core #6 class-retirement guard for combinator-receiver ownership
+/// (Round XIV Edits A–D at `try_lower_option_result_combinator`, Round XV Track C).
+///
+/// **Class this retires.** A new combinator arm (or a rewrite of the adapter) that
+/// forgets one of the four write-site invariants re-opens:
+/// - Edit A: `scrut_local` typed `Ptr(T)` → destructive extract empties caller storage
+/// - Edit B: skip clone-through-Ptr for place recv → shallow Copy alias emptied by load_move
+/// - Edit C: drop `and_then`/`flat_map` result_type arm → wrong `result_local` type (SIGSEGV / LLVM verifier)
+/// - Edit D: drop Option `unwrap_or_else` None `set_owned` → Tier-2a ICE (`AssignIntoOwnedSlot` Untracked)
+///
+/// Ship shape (c) pairs this structural ratchet with `assert_scrut_is_value_enum` before
+/// every `enum_field_load_move` on `scrut_local` (Edit A dynamic half). The live
+/// `combinator_*` fixtures stay as the dynamic net (Core #11/#12) — this lint does
+/// **not** retire them.
+///
+/// **Pins:**
+/// - **P1** Edit A Ptr-unwrap marker (`GirType::Ptr`/`raw_recv_type`/`add_local(recv_type`)
+/// - **P2** Edit B clone path (`clone_fn_for_ptr` + `call_clone` + `recv_is_ptr` + `emit_borrow`)
+/// - **P3** Core #14 resource fallback (`is_resource_type(recv_type)` near load_ref)
+/// - **P4** Edit C `and_then`/`flat_map` + `infer_closure_return_type` in result_type match
+/// - **P5** Edit D `ctx.set_owned` arm-scoped to Option `unwrap_or_else` None arm only
+/// - **P6** dispatch ↔ adapter arm-set parity (string `matches!` and/or typed Track D registration)
+/// - **P7** `enum_field_load_move` count floor ≥ 5 + `assert_scrut_is_value_enum` call floor ≥ 5
+/// - **P8** `assign_result_local_move` discipline (exclude the helper *definition*)
+/// - **P9** vacuous-extraction floor (fn found + pin hit count)
+///
+/// **EXEMPT (with reason):**
+/// - `or` / `flatten` / `unwrap` / `expect` / `unwrap_or` — not routed through this adapter
+/// - String-coercion early `return None` (`has_string_coercion`) — Track B distinct producer
+/// - Result `unwrap_or_else` Error-path closure-return `set_owned` — probed green 2026-07-29
+///   (`Error(7).unwrap_or_else((int e): make_money(...))` → 10, no Tier-2a ICE)
+/// - SH `emit_option_result_combinator` — Track A parallel lane
+///
+/// Precedent: `container_literal_arms_count`, `field_and_tuple_place_resolvers_cover_the_same_object_forms`.
+#[test]
+fn combinator_adapter_ownership_invariants() {
+    let methods = fs::read_to_string(Path::new("src/ir/lowering/exprs/methods.rs"))
+        .expect("read src/ir/lowering/exprs/methods.rs");
+
+    let bodies = top_level_fn_bodies(&methods);
+    let adapter = bodies
+        .iter()
+        .find(|(n, _)| n == "try_lower_option_result_combinator")
+        .map(|(_, b)| b.as_str())
+        .expect(
+            "P9: `try_lower_option_result_combinator` not found in methods.rs — \
+             rename/extract broke the Core #6 combinator guard; fix the extractor \
+             or restore the chokepoint name.",
+        );
+
+    // P1 Edit A
+    assert!(
+        adapter.contains("GirType::Ptr(inner)")
+            && adapter.contains("raw_recv_type")
+            && adapter.contains("add_local(recv_type"),
+        "P1 Edit A REGRESSION: adapter must unwrap Ptr/MutPtr from `raw_recv_type` and \
+         allocate `scrut_local` as value-typed `recv_type`."
+    );
+
+    // P2 Edit B
+    assert!(
+        adapter.contains("clone_fn_for_ptr(recv_type)")
+            && adapter.contains("call_clone(")
+            && adapter.contains("recv_is_ptr")
+            && adapter.contains("emit_borrow"),
+        "P2 Edit B REGRESSION: adapter must materialize place receivers via \
+         clone_fn_for_ptr + call_clone, with recv_is_ptr / emit_borrow."
+    );
+
+    // P3 Core #14
+    assert!(
+        adapter.contains("is_resource_type(recv_type)"),
+        "P3 Core #14 REGRESSION: load_ref fallback must debug_assert \
+         !is_resource_type(recv_type)."
+    );
+
+    // P4 Edit C
+    assert!(
+        combinator_result_type_has_and_then_flat_map_infer(adapter),
+        "P4 Edit C REGRESSION: `result_type` match must have an `\"and_then\" | \"flat_map\"` \
+         arm that calls `infer_closure_return_type`."
+    );
+
+    // P5 Edit D — require ctx.set_owned inside the Option unwrap_or_else None arm
+    assert!(
+        combinator_option_unwrap_or_else_none_has_set_owned(adapter),
+        "P5 Edit D REGRESSION: Option `unwrap_or_else` None arm must `ctx.set_owned` the \
+         closure-call result. A free-floating set_owned elsewhere does NOT satisfy this pin."
+    );
+
+    // P6 arm-set parity
+    let expected: std::collections::BTreeSet<&str> = [
+        "map", "and_then", "or_else", "filter", "unwrap_or_else", "flat_map", "map_err",
+    ]
+    .into_iter()
+    .collect();
+    let adapter_names = combinator_adapter_method_names(adapter);
+    assert_eq!(
+        adapter_names, expected,
+        "P6 adapter method-arm set {adapter_names:?} != expected {expected:?}."
+    );
+    let dispatch = combinator_dispatch_names_for_adapter(&methods);
+    let dispatch_refs: std::collections::BTreeSet<&str> =
+        dispatch.iter().map(|s| s.as_str()).collect();
+    assert_eq!(
+        dispatch_refs, expected,
+        "P6 dispatch set {dispatch_refs:?} != expected {expected:?}.          String matches! and typed CombinatorKind registration must stay in parity          with the adapter arms (GIR-adapter set only — not or/flatten)."
+    );
+
+    // P7 extract-site floors
+    let load_moves = adapter.matches("enum_field_load_move(").count();
+    assert!(
+        load_moves >= 5,
+        "P7: enum_field_load_move count in adapter is {load_moves} (want ≥ 5)."
+    );
+    let assert_calls = adapter.matches("assert_scrut_is_value_enum(").count();
+    assert!(
+        assert_calls >= 5,
+        "P7b: assert_scrut_is_value_enum call count is {assert_calls} (want ≥ 5)."
+    );
+
+    // P8 assign_result_local_move
+    let (call_count, bare_assigns) = combinator_assign_result_discipline(adapter);
+    assert!(
+        call_count >= 10,
+        "P8: assign_result_local_move call count is {call_count} (want ≥ 10, excluding def)."
+    );
+    assert!(
+        bare_assigns.is_empty(),
+        "P8: bare assign into result_local found: {bare_assigns:?}"
+    );
+
+    // P9 vacuous floor
+    let pin_hits = [
+        adapter.contains("GirType::Ptr(inner)"),
+        adapter.contains("clone_fn_for_ptr(recv_type)"),
+        adapter.contains("call_clone("),
+        adapter.contains("is_resource_type(recv_type)"),
+        adapter.contains("infer_closure_return_type"),
+        adapter.contains("assert_scrut_is_value_enum("),
+        adapter.contains("assign_result_local_move("),
+    ]
+    .iter()
+    .filter(|&&b| b)
+    .count();
+    assert!(
+        adapter.len() > 2000 && pin_hits >= 7,
+        "P9 vacuous-extraction floor: adapter body len={} pin_hits={} (want len>2000, ≥7 pins).",
+        adapter.len(),
+        pin_hits
+    );
+}
+
+fn combinator_result_type_has_and_then_flat_map_infer(adapter: &str) -> bool {
+    let Some(start) = adapter.find("let result_type = match method_name") else {
+        return false;
+    };
+    let rest = &adapter[start..];
+    let end = rest
+        .find("let result_local")
+        .unwrap_or(rest.len().min(4000));
+    let window = &rest[..end];
+    for (i, line) in window.lines().enumerate() {
+        let t = line.trim();
+        if t.contains("\"and_then\"") && t.contains("\"flat_map\"") && t.contains("=>") {
+            let body: String = window
+                .lines()
+                .skip(i + 1)
+                .take_while(|l| {
+                    let s = l.trim_start();
+                    !(s.starts_with('"') || s.starts_with("_ =>") || s.starts_with('}'))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if body.contains("infer_closure_return_type") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn combinator_option_unwrap_or_else_none_has_set_owned(adapter: &str) -> bool {
+    let Some(none_start) = adapter.find("// === None/Error branch ===") else {
+        return false;
+    };
+    let none_branch = &adapter[none_start..];
+    let Some(arm_rel) = none_branch.find("\"unwrap_or_else\" if is_option =>") else {
+        return false;
+    };
+    let after = &none_branch[arm_rel..];
+    let mut body = String::new();
+    let mut past_head = false;
+    for line in after.lines() {
+        if !past_head {
+            past_head = true;
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if line.starts_with("        \"")
+            || line.starts_with("        _")
+            || (trimmed.starts_with('}') && line.starts_with("    }"))
+        {
+            break;
+        }
+        body.push_str(line);
+        body.push('\n');
+    }
+    body.contains("ctx.set_owned")
+}
+
+/// Dispatch names into the GIR adapter: string `matches!` above the call, OR
+/// (when Track D is present) GIR-adapter `combinator_kind` registrations in
+/// builtins.rs. Always returns the closed set that should equal adapter arms.
+fn combinator_dispatch_names_for_adapter(methods: &str) -> std::collections::BTreeSet<String> {
+    // Try string matches! near a non-definition call of the adapter.
+    let mut search = 0;
+    while let Some(rel) = methods[search..].find("try_lower_option_result_combinator(") {
+        let at = search + rel;
+        let line_start = methods[..at].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line = &methods[line_start..at];
+        if line.trim_start().starts_with("fn ") || line.contains("enum_field_load_move on Ptr") {
+            search = at + 1;
+            continue;
+        }
+        let before = &methods[..at];
+        if let Some(mpos) = before.rfind("matches!(method_name") {
+            let window = &before[mpos..];
+            let end = window.find(')').unwrap_or(400).min(400);
+            let names = extract_quoted_method_names(&window[..end]);
+            if names.contains("map") && names.contains("and_then") {
+                return names.into_iter().map(|s| s.to_string()).collect();
+            }
+        }
+        // Typed Track D path: no string matches! — fall through to registration.
+        break;
+    }
+
+    // Typed registration (Track D): scan builtins for GIR-adapter kinds.
+    let builtins = fs::read_to_string(Path::new("src/ir/lowering/builtins.rs")).unwrap_or_default();
+    if builtins.contains("enum CombinatorKind") {
+        let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for line in builtins.lines() {
+            if !line.contains("combinator_kind: Some(CombinatorKind::") {
+                continue;
+            }
+            // Parse the kind variant carefully: `CombinatorKind::Or` must NOT
+            // match `OrElse` (prefix trap).
+            let Some(kpos) = line.find("CombinatorKind::") else { continue };
+            let after = &line[kpos + "CombinatorKind::".len()..];
+            let kind: String = after
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if kind == "Or" || kind == "Flatten" {
+                continue;
+            }
+            if let Some(npos) = line.find("name: \"") {
+                let nstart = npos + 7; // len of name: "
+                if let Some(rel) = line[nstart..].find('"') {
+                    let name = &line[nstart..nstart + rel];
+                    if name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                        out.insert(name.to_string());
+                    }
+                }
+            }
+        }
+        if out.iter().any(|s| s == "map") {
+            return out;
+        }
+    }
+
+    std::collections::BTreeSet::new()
+}
+
+fn combinator_adapter_method_names(adapter: &str) -> std::collections::BTreeSet<&str> {
+    let mut names = std::collections::BTreeSet::new();
+    if let Some(s) = adapter.find("let result_type = match method_name") {
+        let rest = &adapter[s..];
+        let e = rest.find("let result_local").unwrap_or(3000);
+        names.extend(extract_quoted_method_names(&rest[..e]));
+    }
+    if let Some(s) = adapter.find("// === Some/Ok branch ===") {
+        let rest = &adapter[s..];
+        let e = rest
+            .find("// === None/Error branch ===")
+            .unwrap_or(rest.len().min(5000));
+        if let Some(ms) = rest[..e].find("match method_name") {
+            names.extend(extract_quoted_method_names(&rest[ms..e]));
+        }
+    }
+    if let Some(s) = adapter.find("// === None/Error branch ===") {
+        let rest = &adapter[s..];
+        let e = rest
+            .find("// === Merge ===")
+            .unwrap_or(rest.len().min(5000));
+        if let Some(ms) = rest[..e].find("match method_name") {
+            names.extend(extract_quoted_method_names(&rest[ms..e]));
+        }
+    }
+    names
+}
+
+fn extract_quoted_method_names(window: &str) -> std::collections::BTreeSet<&str> {
+    let mut out = std::collections::BTreeSet::new();
+    let bytes = window.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != b'"' {
+                j += 1;
+            }
+            if j < bytes.len() {
+                let s = &window[start..j];
+                if !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                    out.insert(s);
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn combinator_assign_result_discipline(adapter: &str) -> (usize, Vec<String>) {
+    let mut call_count = 0usize;
+    let mut bare = Vec::new();
+    for line in adapter.lines() {
+        let t = line.trim_start();
+        if t.starts_with("fn assign_result_local_move") {
+            continue;
+        }
+        if t.contains("assign_result_local_move(") {
+            call_count += 1;
+        }
+        if t.contains("assign(Place::local(result_local")
+            && !t.contains("assign_result_local_move")
+            && !t.contains("assign_mode")
+        {
+            bare.push(t.to_string());
+        }
+    }
+    (call_count, bare)
+}

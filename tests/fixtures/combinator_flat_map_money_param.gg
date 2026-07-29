@@ -4,8 +4,9 @@
 #   bare-param exercises the Ptr(Option[Money])-unwrap path (Edit A) AND
 #   the result_type fallthrough fix (Edit C) — structurally distinct from
 #   plain-local. Without this cell the axis is under-sampled.
-# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
-# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+# Pinned by Core #6 guard (`combinator_adapter_ownership_invariants` +
+# `assert_scrut_is_value_enum`) AND this runtime fixture; fixtures stay
+# (Core #11/#12). The guard does not retire this axis cell.
 
 struct Money:
     Vector[int] cents

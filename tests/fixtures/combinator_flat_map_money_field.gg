@@ -2,8 +2,9 @@
 # COMMITTED Round XIV (74f566c6+) — combinator-receiver ownership class-fix.
 # PRE-FIX (RED-verified at HEAD 6171d564): SIGSEGV (exit 139). Projected
 #   place recv (Edit B) x wrong result_type (Edit C).
-# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
-# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+# Pinned by Core #6 guard (`combinator_adapter_ownership_invariants` +
+# `assert_scrut_is_value_enum`) AND this runtime fixture; fixtures stay
+# (Core #11/#12). The guard does not retire this axis cell.
 
 struct Money:
     Vector[int] cents

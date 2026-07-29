@@ -5,8 +5,9 @@
 #   gate excluded it from the clone path and it fell through to plain Copy —
 #   a shallow alias that enum_field_load_move destroyed on read. Edit B
 #   (uniform materialization) covers this cell.
-# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
-# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+# Pinned by Core #6 guard (`combinator_adapter_ownership_invariants` +
+# `assert_scrut_is_value_enum`) AND this runtime fixture; fixtures stay
+# (Core #11/#12). The guard does not retire this axis cell.
 
 struct Money:
     Vector[int] cents

@@ -8,8 +8,9 @@
 # The plain-local row was and is a live control — it passes today and must keep
 # passing; it is also why this went unnoticed for months: a plain-local receiver
 # is the shape fixtures happened to use, and it was the one shape that worked.
-# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
-# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+# Pinned by Core #6 guard (`combinator_adapter_ownership_invariants` +
+# `assert_scrut_is_value_enum`) AND this runtime fixture; fixtures stay
+# (Core #11/#12). The guard does not retire this axis cell.
 #
 # PRE-FIX MECHANISM (localized, `src/ir/lowering/exprs/methods.rs` before the
 # graduating commit): the receiver-clone path was gated on
