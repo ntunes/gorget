@@ -1490,12 +1490,246 @@ fn eval_method(ctx: &Ctx, state: &mut State, recv: &Expr, method: BuiltinMethod,
                 other => Err(Halt::IllFormed(format!("`.substring()` on {}", other.kind_name()))),
             }
         }
+        // ── Option/Result combinators (Increment B3). READ-ONLY on the
+        //    receiver — produces a fresh Option[U]/Result[U,E]/payload. The
+        //    receiver's value is preserved (the ownership defect these
+        //    fixtures pin in production is invisible in the ggdef store model,
+        //    since ggdef reads the receiver's VALUE and clones out; the
+        //    adjudication axis is VALUE semantics on the returned value and
+        //    on any subsequent receiver read). Core #13: ggdef is
+        //    STRUCTURALLY BLIND to memory-invalidation — SIGSEGV cells are
+        //    NOT adjudicable here; the C+LLVM ASan lane is the adjudicator
+        //    for that failure mode.
+        M::Map => eval_combinator_map(ctx, state, recv, args),
+        M::Filter => eval_combinator_filter(ctx, state, recv, args),
+        M::OrElse => eval_combinator_or_else(ctx, state, recv, args),
+        M::AndThen | M::FlatMap => eval_combinator_and_then(ctx, state, recv, args),
+        M::UnwrapOrElse => eval_combinator_unwrap_or_else(ctx, state, recv, args),
+        M::MapErr => eval_combinator_map_err(ctx, state, recv, args),
         // ── Mutating methods: read-modify-write through the receiver place
         //    (materialise-on-write if it is a Borrow binding). On a temp
         //    receiver the mutation is simply discarded (only the return used). ─
         M::Push | M::Set | M::Pop | M::Clear | M::Fill | M::Add => {
             eval_mut_method(ctx, state, recv, method, args)
         }
+    }
+}
+
+// ── Increment B3 combinator eval rules. ────────────────────────────────────
+//
+// Shape common to all six: the receiver's value is a `Value::Enum { variant,
+// payload, .. }`; the sole arg is a `Source::Value` wrapping an
+// `Expr::Closure(idx)` (per elaborate/mod.rs's owning_source_from_arg on a
+// bare closure literal). We evaluate the receiver, evaluate the closure to a
+// `Value::Closure`, then decide per-method whether to invoke it with the
+// payload and how to reshape the result.
+//
+// Design constraint (Core #9 note): these rules mirror production's adapter
+// contract at the VALUE level. Ownership decisions (materialise-on-write,
+// clone-through-Ptr) are production concerns that ggdef's store model handles
+// generically — the receiver is READ, so materialise-on-write does not fire
+// (`eval_recv_value` clones out).
+
+/// Evaluate a Source known to be a bare closure literal into a `Value::Closure`.
+/// Wraps the mismatch case in IllFormed rather than a generic panic.
+fn eval_closure_value(
+    ctx: &Ctx,
+    state: &mut State,
+    src: &Source,
+    span: Span,
+) -> Result<Value, Halt> {
+    let v = eval_source_to_value(ctx, state, src, span)?;
+    if !matches!(v, Value::Closure { .. }) {
+        return Err(Halt::IllFormed(format!(
+            "combinator arg is {}, expected a closure",
+            v.kind_name()
+        )));
+    }
+    Ok(v)
+}
+
+/// Call a closure value with a fresh set of owning param slots. `arg_values`
+/// carries one Value per closure parameter; wrap each into `Slot::Owned`
+/// before dispatching to `call_closure`.
+fn invoke_closure(
+    ctx: &Ctx,
+    state: &mut State,
+    closure_val: Value,
+    arg_values: Vec<Value>,
+) -> Result<Value, Halt> {
+    let (def_idx, captured) = match closure_val {
+        Value::Closure { def, captured } => (def, captured),
+        other => {
+            return Err(Halt::IllFormed(format!(
+                "combinator arg is {}, expected a closure",
+                other.kind_name()
+            )));
+        }
+    };
+    let slots = arg_values.into_iter().map(Slot::Owned).collect();
+    call_closure(ctx, state, def_idx, captured, slots)
+}
+
+fn eval_combinator_map(ctx: &Ctx, state: &mut State, recv: &Expr, args: &[Source]) -> Result<Value, Halt> {
+    let f = eval_closure_value(ctx, state, arg_at(args, 0)?, state.cur_span)?;
+    let v = eval_recv_value(ctx, state, recv)?;
+    match v {
+        Value::Enum { type_name, variant, mut payload }
+            if (type_name == "Option" && variant == "Some")
+                || (type_name == "Result" && variant == "Ok") =>
+        {
+            let inner = payload.pop().unwrap_or(Value::Unit);
+            let mapped = invoke_closure(ctx, state, f, vec![inner])?;
+            Ok(Value::Enum { type_name, variant, payload: vec![mapped] })
+        }
+        v @ Value::Enum { .. } => Ok(v),
+        other => Err(Halt::IllFormed(format!("`.map()` on {}", other.kind_name()))),
+    }
+}
+
+fn eval_combinator_filter(ctx: &Ctx, state: &mut State, recv: &Expr, args: &[Source]) -> Result<Value, Halt> {
+    let f = eval_closure_value(ctx, state, arg_at(args, 0)?, state.cur_span)?;
+    let v = eval_recv_value(ctx, state, recv)?;
+    match v {
+        Value::Enum { type_name, variant, payload } if type_name == "Option" && variant == "Some" => {
+            let inner = payload.first().cloned().unwrap_or(Value::Unit);
+            let keep = invoke_closure(ctx, state, f, vec![inner])?;
+            match keep {
+                Value::Bool(true) => Ok(Value::Enum { type_name, variant, payload }),
+                Value::Bool(false) => Ok(Value::Enum {
+                    type_name,
+                    variant: "None".to_string(),
+                    payload: vec![],
+                }),
+                other => Err(Halt::IllFormed(format!(
+                    "`.filter()` predicate returned {}, expected Bool",
+                    other.kind_name()
+                ))),
+            }
+        }
+        v @ Value::Enum { .. } if matches!(&v, Value::Enum { type_name, .. } if type_name == "Option") => Ok(v),
+        Value::Enum { type_name, .. } if type_name == "Result" => Err(Halt::IllFormed(
+            "`.filter()` on Result is outside the phase-0 subset (Option-only)".to_string(),
+        )),
+        other => Err(Halt::IllFormed(format!("`.filter()` on {}", other.kind_name()))),
+    }
+}
+
+fn eval_combinator_or_else(ctx: &Ctx, state: &mut State, recv: &Expr, args: &[Source]) -> Result<Value, Halt> {
+    let f = eval_closure_value(ctx, state, arg_at(args, 0)?, state.cur_span)?;
+    let v = eval_recv_value(ctx, state, recv)?;
+    match v {
+        Value::Enum { type_name, variant, payload }
+            if (type_name == "Option" && variant == "Some")
+                || (type_name == "Result" && variant == "Ok") =>
+        {
+            Ok(Value::Enum { type_name, variant, payload })
+        }
+        Value::Enum { type_name, variant, .. }
+            if type_name == "Option" && variant == "None" =>
+        {
+            let new_v = invoke_closure(ctx, state, f, vec![])?;
+            if let Value::Enum { type_name: tn, .. } = &new_v {
+                if tn == "Option" {
+                    return Ok(new_v);
+                }
+            }
+            Err(Halt::IllFormed(format!(
+                "`.or_else()` closure on Option must return Option, got {}",
+                new_v.kind_name()
+            )))
+        }
+        Value::Enum { type_name, variant, payload }
+            if type_name == "Result" && variant == "Error" =>
+        {
+            let err_payload = payload.first().cloned().unwrap_or(Value::Unit);
+            let new_v = invoke_closure(ctx, state, f, vec![err_payload])?;
+            if let Value::Enum { type_name: tn, .. } = &new_v {
+                if tn == "Result" {
+                    return Ok(new_v);
+                }
+            }
+            Err(Halt::IllFormed(format!(
+                "`.or_else()` closure on Result must return Result, got {}",
+                new_v.kind_name()
+            )))
+        }
+        other => Err(Halt::IllFormed(format!("`.or_else()` on {}", other.kind_name()))),
+    }
+}
+
+fn eval_combinator_and_then(ctx: &Ctx, state: &mut State, recv: &Expr, args: &[Source]) -> Result<Value, Halt> {
+    let f = eval_closure_value(ctx, state, arg_at(args, 0)?, state.cur_span)?;
+    let v = eval_recv_value(ctx, state, recv)?;
+    match v {
+        Value::Enum { type_name, variant, mut payload }
+            if (type_name == "Option" && variant == "Some")
+                || (type_name == "Result" && variant == "Ok") =>
+        {
+            let inner = payload.pop().unwrap_or(Value::Unit);
+            let new_v = invoke_closure(ctx, state, f, vec![inner])?;
+            // The closure returns Option/Result already-wrapped; the same
+            // container kind as the receiver.
+            if let Value::Enum { type_name: tn, .. } = &new_v {
+                if tn == &type_name {
+                    return Ok(new_v);
+                }
+            }
+            Err(Halt::IllFormed(format!(
+                "`.and_then()` on {} closure must return {}, got {}",
+                type_name,
+                type_name,
+                new_v.kind_name()
+            )))
+        }
+        v @ Value::Enum { .. } => Ok(v),
+        other => Err(Halt::IllFormed(format!("`.and_then()` on {}", other.kind_name()))),
+    }
+}
+
+fn eval_combinator_unwrap_or_else(ctx: &Ctx, state: &mut State, recv: &Expr, args: &[Source]) -> Result<Value, Halt> {
+    let f = eval_closure_value(ctx, state, arg_at(args, 0)?, state.cur_span)?;
+    let v = eval_recv_value(ctx, state, recv)?;
+    match v {
+        Value::Enum { type_name, variant, mut payload }
+            if (type_name == "Option" && variant == "Some")
+                || (type_name == "Result" && variant == "Ok") =>
+        {
+            Ok(payload.pop().unwrap_or(Value::Unit))
+        }
+        Value::Enum { type_name, variant, .. }
+            if type_name == "Option" && variant == "None" =>
+        {
+            // Option's unwrap_or_else closure takes no args.
+            invoke_closure(ctx, state, f, vec![])
+        }
+        Value::Enum { type_name, variant, payload }
+            if type_name == "Result" && variant == "Error" =>
+        {
+            // Result's unwrap_or_else closure takes the Error payload.
+            let err_payload = payload.first().cloned().unwrap_or(Value::Unit);
+            invoke_closure(ctx, state, f, vec![err_payload])
+        }
+        other => Err(Halt::IllFormed(format!("`.unwrap_or_else()` on {}", other.kind_name()))),
+    }
+}
+
+fn eval_combinator_map_err(ctx: &Ctx, state: &mut State, recv: &Expr, args: &[Source]) -> Result<Value, Halt> {
+    let f = eval_closure_value(ctx, state, arg_at(args, 0)?, state.cur_span)?;
+    let v = eval_recv_value(ctx, state, recv)?;
+    match v {
+        Value::Enum { type_name, variant, mut payload }
+            if type_name == "Result" && variant == "Error" =>
+        {
+            let inner = payload.pop().unwrap_or(Value::Unit);
+            let mapped = invoke_closure(ctx, state, f, vec![inner])?;
+            Ok(Value::Enum { type_name, variant, payload: vec![mapped] })
+        }
+        v @ Value::Enum { .. } if matches!(&v, Value::Enum { type_name, .. } if type_name == "Result") => Ok(v),
+        Value::Enum { type_name, .. } if type_name == "Option" => Err(Halt::IllFormed(
+            "`.map_err()` on Option is outside the phase-0 subset (Result-only)".to_string(),
+        )),
+        other => Err(Halt::IllFormed(format!("`.map_err()` on {}", other.kind_name()))),
     }
 }
 

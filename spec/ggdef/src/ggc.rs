@@ -249,6 +249,36 @@ pub enum BuiltinMethod {
     Trim,
     /// `s.substring(a, b)` — String codepoint slice `[a, b)` (→ new String).
     Substring,
+    // ── Option / Result combinators (Increment B3). ─────────────────────────
+    // All READ-ONLY on the receiver in the phase-0 semantic model — they
+    // produce a fresh `Option[U]` / `Result[U, E]` / payload, never mutate
+    // the receiver in place. Adjudication axis: VALUE semantics on the
+    // returned value AND on the preserved receiver. Structurally BLIND to
+    // memory-invalidation (Core #13: SIGSEGV cells are not adjudicable via
+    // ggdef; the C+LLVM ASan lane is the adjudicator there).
+    /// `o.map(f)` — apply f to the payload on the success arm; None/Error
+    /// arms pass through unchanged.
+    Map,
+    /// `o.filter(pred)` — Option only: keep the Some payload only if pred
+    /// returns true. On Result, elaboration is IllFormed (the phase-0 model
+    /// keeps filter Option-only).
+    Filter,
+    /// `o.or_else(f)` — call f() on None/Error, else pass through the
+    /// success arm unchanged. Closure receives no args on Option; on Result
+    /// it receives the Error payload.
+    OrElse,
+    /// `o.and_then(f)` — apply f to the payload; f RETURNS the wrapped
+    /// Option/Result (no auto-wrap). None/Error passes through.
+    AndThen,
+    /// `o.flat_map(f)` — alias of `and_then` at the phase-0 semantic level.
+    FlatMap,
+    /// `o.unwrap_or_else(f)` — payload on success, else the value f()
+    /// returns. On Result f receives the Error payload; on Option it takes
+    /// no args.
+    UnwrapOrElse,
+    /// `r.map_err(f)` — Result only: apply f to the Error payload; Ok
+    /// passes through. On Option, elaboration is IllFormed.
+    MapErr,
 }
 
 /// The target of an `as`-cast (unit-tested only — no phase-0 corpus fixture).

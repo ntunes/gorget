@@ -2324,6 +2324,16 @@ impl Elaborator {
             "add" => (BuiltinMethod::Add, Some(1)),
             "trim" => (BuiltinMethod::Trim, Some(0)),
             "substring" => (BuiltinMethod::Substring, Some(2)),
+            // Option/Result combinators (Increment B3). All take exactly one
+            // closure arg. READ-ONLY on the receiver, so no
+            // `reject_materialize_on_write` (unlike push/set/pop/…).
+            "map" => (BuiltinMethod::Map, Some(1)),
+            "filter" => (BuiltinMethod::Filter, Some(1)),
+            "or_else" => (BuiltinMethod::OrElse, Some(1)),
+            "and_then" => (BuiltinMethod::AndThen, Some(1)),
+            "flat_map" => (BuiltinMethod::FlatMap, Some(1)),
+            "unwrap_or_else" => (BuiltinMethod::UnwrapOrElse, Some(1)),
+            "map_err" => (BuiltinMethod::MapErr, Some(1)),
             "clone" => {
                 if !args.is_empty() {
                     return Err(ElabError::new("`.clone` takes no args", span));
