@@ -862,6 +862,18 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
                         call_name = gmod.call_redirects.get(call_name).unwrap()
                     if gmod.fn_sigs.contains(call_name):
                         return gmod.fn_sigs.get(call_name).unwrap()
+                    # User struct / enum-variant constructors after fn_sigs miss
+                    # (SH-5a): `Money(...)` is ECall(EIdentifier("Money"), …) and
+                    # fell through to I64_TYPE → CC-fail
+                    # `incompatible types … __gg_Money but int64_t expected` on
+                    # unwrap_or_else Money closures. Mirror free-call lowering
+                    # (lower_expr.gg is_type_constructor arm): parent enum when
+                    # the name is a variant, else the bare struct name.
+                    if is_type_constructor(fname, &gmod):
+                        String parent = enum_variant_parent(fname, gmod)
+                        if parent != "":
+                            return lookup_or_register_named(&gmod, parent)
+                        return lookup_or_register_named(&gmod, fname)
                 else:
                     pass
         case EMethodCall(recv, mname, margs, _):

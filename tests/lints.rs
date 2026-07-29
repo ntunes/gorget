@@ -2312,6 +2312,33 @@ fn self_host_combinator_template_arms_count() {
          every HOF arm that loads src_pay_c must peel LT_PTR_TO_BASE → struct \
          before field lookup (param/field Money map truncate class).",
     );
+
+    // ── SH-4/5b residual ban (class: resource keep/copy-out without clone) ──
+    // Keep paths that shallow-memcpy Option[Money] / Money payload double-free
+    // when src and dst both drop (exit 134). Central helper
+    // `combinator_owned_copy_stmt` uses field_drop_fn_for_lir_type (LIR name,
+    // NOT c_type_name) → drop_to_clone_fn. Pin helper presence + that the HOF
+    // window calls it on filter/or_else/uoe keep paths.
+    assert!(
+        content.contains("String combinator_owned_copy_stmt("),
+        "SH-4/5b helper `combinator_owned_copy_stmt` missing from lir_codegen.gg — \
+         every filter/or_else/or/flatten/uoe keep path must own-copy resource \
+         Option/payload via LIR-keyed drop→clone (not shallow memcpy).",
+    );
+    assert!(
+        content.contains("field_drop_fn_for_lir_type"),
+        "SH-4/5b must look up drop/clone via field_drop_fn_for_lir_type (LIR \
+         struct name Money), never c_type_name alone (__gg_Money misses the \
+         registry → shallow copy → exit 134).",
+    );
+    let owned_copy_calls = window.matches("combinator_owned_copy_stmt").count();
+    assert!(
+        owned_copy_calls >= 4,
+        "HOF combinator window only has {owned_copy_calls} combinator_owned_copy_stmt \
+         call(s); expected ≥4 (filter keep, or_else/or keep, flatten, uoe Some, \
+         plus result_or / result_uoe class twins). A keep path regressed to \
+         bare memcpy of a resource Option/payload.",
+    );
     assert!(
         !window.contains("void* __pay"),
         "HOF combinator window hardcodes `void* __pay` — the class-1 residual \

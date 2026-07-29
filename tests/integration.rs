@@ -11983,10 +11983,8 @@ fn sh_combinator_and_then_money_local_probe() {
 /// CRASH exit 134. Clone on resource keep paths at emit (filter/or_else).
 /// Reuses live fixture via self_host_emit_cc_run. Un-ignore when SH-4 lands.
 #[test]
-#[ignore = "KNOWN GAP (SH-4): filter Money keep path double-free — shallow \
-memcpy of Option[Money] in emit_option_result_combinator. Scout stems \
-combinator_filter_money_{param,field}. TODO.md §Self-host parity. Un-ignore \
-when resource keep paths clone."]
+// Round XVI SH-4: filter keep path now clones resource Option via
+// combinator_owned_copy_stmt (was shallow memcpy → double-free exit 134).
 #[serial(self_host_lowerer_driver)]
 fn sh_combinator_filter_money_param_probe() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
@@ -12014,13 +12012,10 @@ fn sh_combinator_filter_money_param_probe() {
     }
 }
 
-/// SH-4 residual sibling: or_else × Money Some-keep shallow-copy double-free.
-/// Scout stems combinator_or_else_money_{param,field}. Un-ignore with SH-4.
+/// SH-4 sibling: or_else × Money Some-keep — owned whole-Option copy.
+/// Scout stems combinator_or_else_money_{param,field}.
 #[test]
-#[ignore = "KNOWN GAP (SH-4): or_else Money keep path double-free — shallow \
-memcpy of Option[Money] in emit_option_result_combinator. Scout stems \
-combinator_or_else_money_{param,field}. TODO.md §Self-host parity. Un-ignore \
-when resource keep paths clone."]
+// Round XVI SH-4: or_else keep path clones via combinator_owned_copy_stmt.
 #[serial(self_host_lowerer_driver)]
 fn sh_combinator_or_else_money_param_probe() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
@@ -12048,15 +12043,11 @@ fn sh_combinator_or_else_money_param_probe() {
     }
 }
 
-/// SH-5 residual (Round XV Track A filed, not landed): unwrap_or_else × Money
-/// closure return typed as int64_t instead of __gg_Money → CC-fail. Scout
-/// stems combinator_unwrap_or_else_money_{param,field,local}. Un-ignore when
-/// SH-5 lands.
+/// SH-5: unwrap_or_else × Money — guess_return_type struct-ctor + payload
+/// owned-copy on Some path. Scout stems combinator_unwrap_or_else_money_*.
 #[test]
-#[ignore = "KNOWN GAP (SH-5): unwrap_or_else Money closure ret typing — \
-__Closure_*__call returns __gg_Money but typed int64_t. Scout stems \
-combinator_unwrap_or_else_money_*. TODO.md §Self-host parity. Un-ignore when \
-uoe Money ret typing lands."]
+// Round XVI SH-5a+b: Money ctor ret typing + Some_0 owned copy (was CC-fail
+// then exit 134 on shallow payload).
 #[serial(self_host_lowerer_driver)]
 fn sh_combinator_unwrap_or_else_money_param_probe() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");

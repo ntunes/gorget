@@ -4608,6 +4608,18 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     else:
                         # no outer annotation — Inc-4c same-type bare None()/Ok/Error
                         _combinator_et = peel_ptr_tid(&gmod, _recv_tid_at)
+            elif mname == "unwrap_or_else":
+                # SH-5: uoe returns the PAYLOAD (Some_0 / Ok_0), not the wrapper.
+                # Force the closure's expected_type from enum_category.ok_type —
+                # the same source lower_types.gg uses for the method return
+                # (~2343–2357). Do NOT peel_ptr the whole Option/Result (that
+                # would make the closure expected Option[T] while the body
+                # returns T / Money(...)).
+                int _recv_tid_uoe = ctx.locals.get(recv).unwrap().type_id
+                EnumCategory _recv_ec_uoe = enum_category_of(&gmod, _recv_tid_uoe)
+                if _recv_ec_uoe.category == ENUM_CAT_OPTION or _recv_ec_uoe.category == ENUM_CAT_RESULT:
+                    if _recv_ec_uoe.ok_type >= 0:
+                        _combinator_et = _recv_ec_uoe.ok_type
             # EQUIP-METHOD named-arg REORDER + trailing default-fill. An explicit
             # method call may use named args (`p.add3(b=5, a=1)`) and/or leave
             # trailing param slots unsupplied (`p.add(5)` for

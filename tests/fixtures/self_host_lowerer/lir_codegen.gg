@@ -2061,6 +2061,23 @@ String field_drop_fn_for_lir_type(int field_ty, LirModule m):
     String fty_name = m.structs.get(fsid).unwrap().name
     return lc_collection_drop_fn(fty_name, m)
 
+# Combinator keep / copy-out: emit an owned deep-copy of `*src_ptr_expr` into
+# `dst_expr` when the LIR type has a registered drop→clone pair; else POD
+# `memcpy`. SH has no Rust Edit-B scrut clone, so keep paths that shallow-
+# memcpy a resource Option[Money] / Money payload double-free at drop (SH-4 /
+# SH-5b). Lookup is via LIR struct name (`field_drop_fn_for_lir_type` →
+# `m.structs[sid].name` → `Money` / `Option__Money`), NOT `c_type_name` —
+# user structs emit as `__gg_Money` in C but the drop/clone registry key is
+# the LIR name `Money`; a c_type_name key returns "" → shallow copy → exit 134.
+# Clone symbols are `T T__clone(void*)` (by value). Central producer for every
+# keep/copy-out arm below (Core #4).
+String combinator_owned_copy_stmt(String dst_expr, String src_ptr_expr, int ty, LirModule m):
+    String drop_fn = field_drop_fn_for_lir_type(ty, m)
+    String clone_fn = drop_to_clone_fn(drop_fn)
+    if clone_fn != "":
+        return dst_expr + " = " + clone_fn + "(" + src_ptr_expr + ");"
+    return "memcpy(&" + dst_expr + ", " + src_ptr_expr + ", sizeof(" + dst_expr + "));"
+
 bool is_runtime_array_ctor(String mapped_name):
     if mapped_name == "gorget_array_new":
         return true
@@ -5258,9 +5275,12 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
                 return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); ((" + dst_c + "*)&" + v(dst) + ")->Some_0 = ((" + dst_pay_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
         case "__option_filter":
-            # if tag==0 && predicate(payload): keep; else: None
+            # if tag==0 && predicate(payload): keep; else: None.
+            # Keep path: OWNED copy of whole Option (SH-4) — shallow memcpy of
+            # Option[Money] double-frees the Vector heap when src + dst both drop.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); bool __keep = (bool)((int64_t(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); if (__keep) { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+                String filt_keep = combinator_owned_copy_stmt(v(dst), src, src_ty, m)
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); bool __keep = (bool)((int64_t(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); if (__keep) { " + filt_keep + " } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
         case "__option_and_then" | "__option_flat_map":
             # SH-2: flat_map ≡ and_then for Option (same semantics as Rust
@@ -5272,26 +5292,36 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
                 return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
         case "__option_or_else" | "__option_or":
-            # if tag!=0: dst = fn() or alt; else: keep src
+            # if tag!=0: dst = fn() or alt; else: keep src.
+            # Some-keep + both or arms: OWNED whole-Option copy (SH-4 sibling).
             if dst >= 0:
+                String or_keep = combinator_owned_copy_stmt(v(dst), src, src_ty, m)
                 if name == "__option_or" and args.len() > 1:
                     # __option_or(src, alt) — alt is a pointer to the alternative
                     String alt = v(args.get(1).unwrap())
-                    return "{ if ((*(int32_t*)" + src + ") != 0) { memcpy(&" + v(dst) + ", " + alt + ", sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
-                return "{ if ((*(int32_t*)" + src + ") != 0) { " + v(dst) + " = ((" + dst_c + "(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                    String or_alt = combinator_owned_copy_stmt(v(dst), alt, src_ty, m)
+                    return "{ if ((*(int32_t*)" + src + ") != 0) { " + or_alt + " } else { " + or_keep + " } }"
+                return "{ if ((*(int32_t*)" + src + ") != 0) { " + v(dst) + " = ((" + dst_c + "(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } else { " + or_keep + " } }"
             return ";"
         case "__option_flatten":
-            # Unwrap nested Option: if tag==0, return inner Option; else None
+            # Unwrap nested Option: if tag==0, return OWNED inner Option; else None.
+            # Inner Option may itself hold a resource payload (class twin of filter keep).
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
+                String flat_src = "(char*)" + src + " + 8"
+                if src_struct_c != "":
+                    flat_src = "&((" + src_struct_c + "*)" + src + ")->Some_0"
+                String flat_copy = combinator_owned_copy_stmt(v(dst), flat_src, dst_ty, m)
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + flat_copy + " } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
         case "__option_unwrap_or_else":
-            # if tag==0: return payload (named Some_0 field, type-correct offset);
-            # else: return fn() with the REAL payload return type (no void* trunc).
+            # if tag==0: return OWNED payload (SH-5b — shallow Some_0 of Money
+            # double-frees when Option src + unwrapped dst both drop); else:
+            # return fn() with the REAL payload return type (no void* trunc).
             if dst >= 0:
-                String some_read = "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+                String some_ptr = "(char*)" + src + " + 8"
                 if src_struct_c != "":
-                    some_read = v(dst) + " = ((" + src_struct_c + "*)" + src + ")->Some_0;"
+                    some_ptr = "&((" + src_struct_c + "*)" + src + ")->Some_0"
+                String some_read = combinator_owned_copy_stmt(v(dst), some_ptr, dst_ty, m)
                 return "{ if ((*(int32_t*)" + src + ") == 0) { " + some_read + " } else { " + v(dst) + " = ((" + uoe_ret_c + "(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
             return ";"
         case "__result_map":
@@ -5302,6 +5332,9 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # a `memcpy(&dst, src, sizeof(dst))` lands garbage in dst.Error_0
             # (and over-reads when dst is larger), crashing at drop. Copy the
             # surviving Error_0 by typed field assignment at the correct offset.
+            # DEFER (Round XVI SH residual): resource Error_0 field passthrough
+            # is still a shallow assign — clone when drop_to_clone_fn non-empty
+            # (no open Money Result keep-path stem in the SH-4/5 matrix).
             if dst >= 0:
                 return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + dst_pay_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; } }"
             return ";"
@@ -5311,6 +5344,8 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # struct memcpy): `map_err` changes the Error type, so src/dst differ
             # in size; a memcpy would over-read past the smaller source. Ok_0 is
             # at offset 8 in both, but the field-copy is the principled form.
+            # DEFER (Round XVI SH residual): resource Ok_0 field passthrough
+            # still shallow — same class as map's Error_0 above.
             if dst >= 0:
                 return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; " + src_err_c + " __pay = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + dst_err_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Ok_0; } }"
             return ";"
@@ -5321,6 +5356,8 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # whole-struct memcpy: `and_then` changes the Ok type (T->U), so src
             # and dst have different layouts and the Error_0 offset shifts —
             # the memcpy form was a latent drop-time crash (same class as map).
+            # DEFER (Round XVI SH residual): resource Error_0 field passthrough
+            # still shallow — same class as map/map_err.
             if dst >= 0:
                 return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; } }"
             return ";"
@@ -5329,6 +5366,8 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # Ok passthrough copies Ok_0 by typed field assignment, NOT a whole-
             # struct memcpy: `or_else` changes the Error type, so src/dst differ
             # in size and the memcpy would over-read past the smaller source.
+            # DEFER (Round XVI SH residual): resource Ok_0 field passthrough
+            # still shallow — same class as map/map_err.
             if dst >= 0:
                 return "{ if ((*(int32_t*)" + src + ") != 0) { " + src_err_c + " __pay = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Ok_0; } }"
             return ";"
@@ -5337,15 +5376,18 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # `__option_or` sibling reads it bare). The prior `&alt` here copied
             # the pointer-to-pointer (8 bytes of a pointer + garbage) instead of
             # the Result struct → err.or(alt) yielded the original Error. Mirror
-            # __option_or: deref via the bare `alt`.
+            # __option_or: deref via the bare `alt`. Both arms: OWNED whole-Result
+            # copy (class twin of option_or keep — resource Result heap).
             if dst >= 0 and args.len() > 1:
                 String alt = v(args.get(1).unwrap())
-                return "{ if ((*(int32_t*)" + src + ") != 0) { memcpy(&" + v(dst) + ", " + alt + ", sizeof(" + v(dst) + ")); } else { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } }"
+                String ror_alt = combinator_owned_copy_stmt(v(dst), alt, src_ty, m)
+                String ror_keep = combinator_owned_copy_stmt(v(dst), src, src_ty, m)
+                return "{ if ((*(int32_t*)" + src + ") != 0) { " + ror_alt + " } else { " + ror_keep + " } }"
             return ";"
         case "__result_unwrap_or_else":
-            # if tag==0 (Ok): return payload (named Ok_0 field, type-correct
-            # offset); else: run fn(error_payload) with the REAL payload return
-            # type. UNLIKE `__option_unwrap_or_else` (whose closure is nullary —
+            # if tag==0 (Ok): return OWNED payload (class twin of option uoe);
+            # else: run fn(error_payload) with the REAL payload return type.
+            # UNLIKE `__option_unwrap_or_else` (whose closure is nullary —
             # `None` carries no payload), a Result's `unwrap_or_else` closure
             # RECEIVES the Error payload (`(String e): len(e)`). The pre-fix arm
             # called the fn-ptr as `(void*)`-only → the closure read a garbage
@@ -5355,9 +5397,10 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # type. Fall back to the env-only call only when the source layout is
             # unknown (no `Error_0` to read).
             if dst >= 0:
-                String ok_read = "memcpy(&" + v(dst) + ", (char*)" + src + " + 8, sizeof(" + v(dst) + "));"
+                String ok_ptr = "(char*)" + src + " + 8"
                 if src_struct_c != "":
-                    ok_read = v(dst) + " = ((" + src_struct_c + "*)" + src + ")->Ok_0;"
+                    ok_ptr = "&((" + src_struct_c + "*)" + src + ")->Ok_0"
+                String ok_read = combinator_owned_copy_stmt(v(dst), ok_ptr, dst_ty, m)
                 if src_struct_c != "":
                     return "{ if ((*(int32_t*)" + src + ") == 0) { " + ok_read + " } else { " + src_err_c + " __err_pay = ((" + src_struct_c + "*)" + src + ")->Error_0; " + v(dst) + " = ((" + uoe_ret_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __err_pay); } }"
                 return "{ if ((*(int32_t*)" + src + ") == 0) { " + ok_read + " } else { " + v(dst) + " = ((" + uoe_ret_c + "(*)(void*))((void**)" + closure + ")[0])(((void**)" + closure + ")[1]); } }"
