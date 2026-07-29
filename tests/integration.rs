@@ -11893,20 +11893,14 @@ fn sh_vector_compound_concat() {
 /// GIR desugar). The Rust class-fix at 74f566c6 does NOT automatically cover
 /// it. Per Core #9 the round owes either a port or an explicit filed gap.
 ///
-/// PROBED Round XIV: SH lane is RED on this fixture. Measured SH stdout at
-/// 74f566c6+d7f2aede: `2\n10\nparam-end\n2\n11\nfield-end\n39\n13\nloop-end`
-/// vs INTENDED `10\n10\nparam-end\n11\n11\nfield-end\n39\n13\nloop-end`.
-/// The mapped-value column reads `2` (looks like a wrong offset into the
-/// enum payload — different bug shape from Rust pre-fix which read the
-/// correct value but emptied the receiver). NOT a mechanical mirror of the
-/// Rust fix. Per REV-P1 RSV-1 outcome (b): FILED as gap + citation, SH-side
-/// port OWED for a follow-up round (see TODO.md §Self-host parity > High).
-/// This test asserts the INTENDED output; un-ignore when the SH port lands.
+/// GRADUATED Round XV Track A (SH-1): SH lane's emit_option_result_combinator
+/// previously printed wrong mapped values on Money param/field receivers
+/// (`2` vs `10`/`11`) because bare `LT_PTR` src_ty made `src_pay_c = "void*"`
+/// and truncated the Money payload. NOT the Rust receiver-ownership class
+/// (opposite symptom: SH emptied nothing; recv readback stayed correct).
+/// Fix: peel LT_PTR_TO_BASE + write-through pointee type on ISlotAddr/IFieldPtr.
+/// PRE-FIX RED: scout `/tmp/xv_scoutA_sh_combinator.md` + Round XIV pin.
 #[test]
-#[ignore = "KNOWN GAP: SH lane's emit_option_result_combinator \
-(lir_codegen.gg:5066+) shares the receiver-ownership class the Rust lane's \
-74f566c6 retired. SH prints wrong mapped value. TODO.md §Self-host parity. \
-Un-ignore when the SH port lands."]
 #[serial(self_host_lowerer_driver)]
 fn sh_combinator_map_money_param_and_field_probe() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
@@ -11935,9 +11929,9 @@ field-end
 13
 loop-end",
             "SH combinator_map_money_param_and_field must match Rust post-Round-XIV \
-             (74f566c6). If this fails the SH lane's emit_option_result_combinator \
-             (lir_codegen.gg:5066+) shares the receiver-ownership class the Rust \
-             lane just retired — file per Core #9."
+             (74f566c6). If this fails SH-1 (payload C type peel / bare LT_PTR \
+             write-through) regressed in emit_option_result_combinator \
+             (lir_codegen.gg) — file per Core #9."
         ),
         Err(outcome) => panic!(
             "SH combinator_map_money_param_and_field emit/cc/run failed: {outcome:?}"
@@ -11945,21 +11939,14 @@ loop-end",
     }
 }
 
-/// SELF-HOST parity probe — sibling of the map probe above, this time on
-/// the SIGSEGV cell (and_then + flat_map). Distinct failure mode (result_type
-/// / closure-return-type mismatch), so it stresses a DIFFERENT edit of the
-/// Rust class-fix (Edit C).
-///
-/// PROBED Round XIV: SH lane RED — the emitted C fails to LINK with
-/// `undefined reference to __option_flat_map`. Different mode from the map
-/// probe (SH's flat_map runtime helper is missing/unemitted). Two distinct
-/// SH-lane defects on the combinator family; both filed as gap under
-/// TODO.md §Self-host parity > High per REV-P1 RSV-1 outcome (b).
+/// GRADUATED Round XV Track A (SH-2 + SH-3): and_then + flat_map × local Money.
+/// PRE-FIX RED modes (scout): (1) `undefined reference to __option_flat_map`
+/// — missing match arm fell through to unknown-combinator external call;
+/// (2) after link, and_then result typed as Option[Money] not Option[int]
+/// (lower_expr Inc-4e-1 sibling missing). Fixes: flat_map≡and_then arm +
+/// combinator_closure_ret_type for and_then/flat_map result type. Asserts
+/// intended stdout `11\n12` (not merely links).
 #[test]
-#[ignore = "KNOWN GAP: SH lane's flat_map path emits calls to \
-`__option_flat_map` that is undefined at link time (SH's combinator runtime \
-helper table doesn't cover flat_map). Distinct SH-lane defect from the map \
-probe above. TODO.md §Self-host parity. Un-ignore when the SH port lands."]
 #[serial(self_host_lowerer_driver)]
 fn sh_combinator_and_then_money_local_probe() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
@@ -11980,12 +11967,118 @@ fn sh_combinator_and_then_money_local_probe() {
             "\
 11
 12",
-            "SH combinator_and_then_money_local must match Rust post-Round-XIV. \
-             If this fails the SH lane's emit_option_result_combinator shares \
-             the result-type mismatch class (Edit C class) — file per Core #9."
+            "SH combinator_and_then_money_local must print 11\\n12 (SH-2 flat_map \
+             arm + SH-3 and_then/flat_map result type). Link-only without stdout \
+             is not enough — file per Core #9."
         ),
         Err(outcome) => panic!(
             "SH combinator_and_then_money_local emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
+/// SH-4 residual (Round XV Track A filed, not landed): filter × Money keep path
+/// shallow-copies the resource Option (`memcpy(&dst, src, sizeof(dst))`) →
+/// double-free at drop. Scout matrix cell: combinator_filter_money_{param,field}
+/// CRASH exit 134. Clone on resource keep paths at emit (filter/or_else).
+/// Reuses live fixture via self_host_emit_cc_run. Un-ignore when SH-4 lands.
+#[test]
+#[ignore = "KNOWN GAP (SH-4): filter Money keep path double-free — shallow \
+memcpy of Option[Money] in emit_option_result_combinator. Scout stems \
+combinator_filter_money_{param,field}. TODO.md §Self-host parity. Un-ignore \
+when resource keep paths clone."]
+#[serial(self_host_lowerer_driver)]
+fn sh_combinator_filter_money_param_probe() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/combinator_filter_money_param.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_combinator_filter_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout.trim_end(),
+            "10",
+            "SH combinator_filter_money_param must match Rust (filter keep \
+             clones resource Option — SH-4)."
+        ),
+        Err(outcome) => panic!(
+            "SH combinator_filter_money_param emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
+/// SH-4 residual sibling: or_else × Money Some-keep shallow-copy double-free.
+/// Scout stems combinator_or_else_money_{param,field}. Un-ignore with SH-4.
+#[test]
+#[ignore = "KNOWN GAP (SH-4): or_else Money keep path double-free — shallow \
+memcpy of Option[Money] in emit_option_result_combinator. Scout stems \
+combinator_or_else_money_{param,field}. TODO.md §Self-host parity. Un-ignore \
+when resource keep paths clone."]
+#[serial(self_host_lowerer_driver)]
+fn sh_combinator_or_else_money_param_probe() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/combinator_or_else_money_param.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_combinator_or_else_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout.trim_end(),
+            "10",
+            "SH combinator_or_else_money_param must match Rust (or_else keep \
+             clones resource Option — SH-4)."
+        ),
+        Err(outcome) => panic!(
+            "SH combinator_or_else_money_param emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
+/// SH-5 residual (Round XV Track A filed, not landed): unwrap_or_else × Money
+/// closure return typed as int64_t instead of __gg_Money → CC-fail. Scout
+/// stems combinator_unwrap_or_else_money_{param,field,local}. Un-ignore when
+/// SH-5 lands.
+#[test]
+#[ignore = "KNOWN GAP (SH-5): unwrap_or_else Money closure ret typing — \
+__Closure_*__call returns __gg_Money but typed int64_t. Scout stems \
+combinator_unwrap_or_else_money_*. TODO.md §Self-host parity. Un-ignore when \
+uoe Money ret typing lands."]
+#[serial(self_host_lowerer_driver)]
+fn sh_combinator_unwrap_or_else_money_param_probe() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/combinator_unwrap_or_else_money_param.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_combinator_uoe_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout.trim_end(),
+            "10",
+            "SH combinator_unwrap_or_else_money_param must match Rust (SH-5)."
+        ),
+        Err(outcome) => panic!(
+            "SH combinator_unwrap_or_else_money_param emit/cc/run failed: {outcome:?}"
         ),
     }
 }

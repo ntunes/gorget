@@ -4577,26 +4577,30 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # cleanly — NO lir_lower change is needed (the original "wrong ABI"
             # diagnosis was inverted; see the drop-emission notes (git history)).
             CollectionKind _recv_ck = collection_kind_of(&gmod, recv_type_name)
-            # Inc-4c: a same-type Option/Result combinator (`and_then`/`or_else`/
-            # `flat_map`) takes a closure that returns the SAME Option/Result type
-            # as the receiver; `or` takes a Result/Option VALUE of the same type.
-            # Carry the receiver's enum TypeId as the closure/value arg's
-            # `expected_type` so a bare `Ok(e)`/`Error(e)`/`Some(e)`/`None` tail
-            # (closure tail OR direct arg) infers the full `Result__T__E` /
-            # `Option__T` (not the int64_t fallback → `int64_t was expected`
-            # cc-fail). Mirrors Rust gg `try_lower_option_result_combinator`
-            # setting `expected_type` for exactly these methods
-            # (methods.rs:2987-2993). `map`/`map_err` CHANGE the wrapper type, so
-            # they are EXCLUDED (their closure returns the INNER type, handled by
-            # the existing Some/inner arms). The selection is TYPED (enum_category
-            # of the receiver), not a name-match for meaning — the method-name
-            # set is just the same-type-combinator family.
+            # Inc-4c + SH-3: same-type combinators (`or_else`/`or`) force the
+            # receiver Option/Result as the closure/value arg's `expected_type`
+            # so a bare `Ok`/`Error`/`Some`/`None` tail infers the full wrapper
+            # (not the int64_t fallback → cc-fail). Cross-type `and_then`/
+            # `flat_map` (Money→Option[int]) must NOT force the RECEIVER type
+            # over a correct outer/annotated Option[U] — that made the closure
+            # expected Option[Money] while the body returned Option[int]. Prefer
+            # the outer `ctx.expected_type` (assignment annotation) when it is
+            # already Option/Result; otherwise leave -1 so `Some(U)` self-infers.
+            # `map`/`map_err` CHANGE the wrapper via Inc-4e-1 and stay excluded.
             int _combinator_et = -1
-            if mname == "and_then" or mname == "or_else" or mname == "flat_map" or mname == "or":
+            if mname == "or_else" or mname == "or":
                 int _recv_tid = ctx.locals.get(recv).unwrap().type_id
                 EnumCategory _recv_ec = enum_category_of(&gmod, _recv_tid)
                 if _recv_ec.category == ENUM_CAT_RESULT or _recv_ec.category == ENUM_CAT_OPTION:
                     _combinator_et = peel_ptr_tid(&gmod, _recv_tid)
+            elif mname == "and_then" or mname == "flat_map":
+                int _recv_tid_at = ctx.locals.get(recv).unwrap().type_id
+                EnumCategory _recv_ec_at = enum_category_of(&gmod, _recv_tid_at)
+                if _recv_ec_at.category == ENUM_CAT_RESULT or _recv_ec_at.category == ENUM_CAT_OPTION:
+                    if ctx.expected_type >= 0:
+                        EnumCategory _outer_ec = enum_category_of(&gmod, ctx.expected_type)
+                        if _outer_ec.category == ENUM_CAT_RESULT or _outer_ec.category == ENUM_CAT_OPTION:
+                            _combinator_et = peel_ptr_tid(&gmod, ctx.expected_type)
             # EQUIP-METHOD named-arg REORDER + trailing default-fill. An explicit
             # method call may use named args (`p.add3(b=5, a=1)`) and/or leave
             # trailing param slots unsupplied (`p.add(5)` for
@@ -4907,6 +4911,21 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             int _cm_res2 = lookup_or_register_named(&gmod, "Result__" + _cm_t_name + "__" + _cm_f_name)
                             record_enum_category(&gmod, _cm_res2, ENUM_CAT_RESULT, _cm_t, _cm_u)
                             ret_tid = _cm_res2
+            # SH-3 (Inc-4e-1 sibling): CROSS-TYPE and_then/flat_map result type.
+            # The closure returns the FULL Option[U] / Result[U,E] — use that
+            # return DIRECTLY; do NOT re-wrap as if it were map's inner U.
+            # Without this, ret_tid stays the RECEIVER Option[Money] while the
+            # closure yields Option[int] → emit cast + match as Money (empty/
+            # wrong print). Gate is TYPED on enum_category (Vector.and_then
+            # falls through). Same-type and_then re-reads the identical tid.
+            if mname == "and_then" or mname == "flat_map":
+                int _at_recv_tid = ctx.locals.get(recv).unwrap().type_id
+                EnumCategory _at_ec = enum_category_of(&gmod, _at_recv_tid)
+                if (_at_ec.category == ENUM_CAT_OPTION or _at_ec.category == ENUM_CAT_RESULT) and margs.len() == 1:
+                    int _at_ret = combinator_closure_ret_type(margs.get(0).unwrap().value, &gmod)
+                    EnumCategory _at_ret_ec = enum_category_of(&gmod, _at_ret)
+                    if _at_ret_ec.category == ENUM_CAT_OPTION or _at_ret_ec.category == ENUM_CAT_RESULT:
+                        ret_tid = _at_ret
             if ret_tid == UNIT_TYPE:
                 # Void-returning method — no destination
                 emit(&ctx, GICallExtern(-1, full_name, call_args))

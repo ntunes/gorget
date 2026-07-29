@@ -2095,13 +2095,16 @@ String map_set_method(String method):
             return ""
 
 # Map an Option/Result method name to its combinator function.
+# SH-2: `flat_map` is in the table (≡ and_then template arm) so production is
+# one source of truth; without it the `"__option_" + method` fallback still
+# mangles the name but the emit match had no arm → link-fail.
 String map_option_result_method(String method):
     match method:
         case "is_none" | "is_some":
             return "__option_" + method
         case "unwrap" | "expect":
             return "__option_" + method
-        case "map" | "filter" | "and_then" | "or_else" | "or":
+        case "map" | "filter" | "and_then" | "flat_map" | "or_else" | "or" | "flatten" | "unwrap_or_else":
             return "__option_" + method
         case "is_ok":
             return "__result_is_ok"

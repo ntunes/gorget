@@ -2195,20 +2195,30 @@ fn self_host_mutinf_scan_stmts_arms_count() {
 /// truncating `((void*(*)(void*[, void*]))…)` closure call — route it through
 /// the typed cast (`c_type_name(dst_ty, &sn)` / `combinator_field_c_type`)
 /// instead.
+///
+/// Round XV Track A (Core #6): also enforces (1) name-completeness — every
+/// name produced by `map_option_result_method` + the `"__option_"/"__result_"+
+/// method` fallback for known Option/Result methods must appear as a match arm
+/// (retires the `__option_flat_map` link-fail class), and (2) the SH-1 residual
+/// ban — HOF arms must not hardcode `void* __pay` (the Money payload truncate
+/// that survived the return-cast ban alone).
 #[test]
 fn self_host_combinator_template_arms_count() {
     /// Baseline 2026-06-26 (Inc-4b): 12 `case` lines for the closure-dispatching
     /// / value HOF combinator arms in the third `match name:` block of
-    /// `emit_option_result_combinator` — option_{map,filter,and_then,
+    /// `emit_option_result_combinator` — option_{map,filter,and_then|flat_map,
     /// `or_else|or` (one merged case line),flatten,unwrap_or_else} +
-    /// result_{map,map_err,and_then,or_else,or,unwrap_or_else}. Counts `case`
-    /// LINES, so a `|`-merged arm (option_or_else|option_or) is one.
+    /// result_{map,map_err,and_then|flat_map,or_else,or,unwrap_or_else}. Counts
+    /// `case` LINES, so a `|`-merged arm is one. Round XV SH-2 merged flat_map
+    /// into the and_then case line — count stays 12.
     const EXPECTED_ARMS: usize = 12;
 
     // lir_codegen.gg lives ONLY in self_host_lowerer (real file, not symlinked),
     // so no double-count guard is needed.
     let content =
         fs::read_to_string("tests/fixtures/self_host_lowerer/lir_codegen.gg").unwrap_or_default();
+    let map_fn = fs::read_to_string("tests/fixtures/self_host_lowerer/lir_lower.gg")
+        .unwrap_or_default();
 
     // The HOF combinator arms are exactly the `case "__option_…"` / `case
     // "__result_…"` arms that live BELOW the "HOF combinators" banner and ABOVE
@@ -2289,6 +2299,116 @@ fn self_host_combinator_template_arms_count() {
          Str/Option/Result return → an empty Str on the fn() path). Declare the \
          call with the real return C type (`c_type_name(dst_ty, &sn)` / \
          `combinator_field_c_type`) instead.",
+    );
+
+    // ── SH-1 residual ban (class 1: void* payload truncate) ──
+    // The return-cast ban above misses `int64_t(*)(void*, void*)` + a hardcoded
+    // `void* __pay` load that only reads 8 bytes of Money. Require the shared
+    // peel helper and forbid a hardcoded void* payload declaration in the HOF
+    // window (templates must drive off `src_pay_c`, which peels to Money).
+    assert!(
+        content.contains("combinator_peel_enum_ty"),
+        "SH-1 helper `combinator_peel_enum_ty` missing from lir_codegen.gg — \
+         every HOF arm that loads src_pay_c must peel LT_PTR_TO_BASE → struct \
+         before field lookup (param/field Money map truncate class).",
+    );
+    assert!(
+        !window.contains("void* __pay"),
+        "HOF combinator window hardcodes `void* __pay` — the class-1 residual \
+         that truncates a Money payload on param/field receivers. Drive the \
+         payload C type off `src_pay_c` via `combinator_field_c_type` after \
+         `combinator_peel_enum_ty`.",
+    );
+    // Also ban the 2-arg cast with void* payload arg (distinct from the
+    // void*-return cast already banned): `((int64_t(*)(void*, void*))`.
+    let void_pay_cast = fn_body.matches("(void*, void*)").count();
+    assert_eq!(
+        void_pay_cast, 0,
+        "Found {void_pay_cast} `(void*, void*)` cast fragment(s) in \
+         `emit_option_result_combinator` — a HOF arm re-introduced a void* \
+         payload-arg cast (Money param/field map reads 8 bytes of payload). \
+         Use `src_pay_c` for the closure arg type.",
+    );
+
+    // ── Name-completeness ratchet (class 2: missing flat_map arm) ──
+    // Every name `map_option_result_method` can produce for HOF methods, plus
+    // the Option/Result `"__option_"/"__result_"+method` fallback for the same
+    // method set, must appear as a quoted arm in the HOF match (or in the
+    // whole emit_option_result_combinator for tag/unwrap helpers that live
+    // above the HOF banner).
+    let map_start = map_fn
+        .find("String map_option_result_method(String method):")
+        .expect("self_host_combinator_template_arms_count: map_option_result_method not found");
+    let map_end = map_fn[map_start..]
+        .find("\n# Phase A")
+        .or_else(|| map_fn[map_start..].find("\nint type_category_for_name"))
+        .or_else(|| map_fn[map_start..].find("\nString type_category_for_name"))
+        .map(|o| map_start + o)
+        .unwrap_or(map_fn.len());
+    let map_body = &map_fn[map_start..map_end];
+
+    // Methods that must have emit arms (HOF + tag/unwrap that map_option_result
+    // or the __option_+method fallback can produce).
+    let required_methods = [
+        "map",
+        "filter",
+        "and_then",
+        "flat_map",
+        "or_else",
+        "or",
+        "flatten",
+        "unwrap_or_else",
+        "is_some",
+        "is_none",
+        "unwrap",
+        "expect",
+    ];
+    let mut missing: Vec<String> = Vec::new();
+    for method in required_methods {
+        let opt_name = format!("__option_{method}");
+        let res_name = format!("__result_{method}");
+        // Accept either an exact case arm or a | merge in any match of
+        // emit_option_result_combinator (tag checks + HOF).
+        let opt_ok = fn_body.contains(&format!("\"{opt_name}\""))
+            || window.contains(&format!("\"{opt_name}\""));
+        if !opt_ok {
+            missing.push(opt_name);
+        }
+        // Result siblings that share the method name (map, and_then, flat_map,
+        // or_else, or, unwrap_or_else). Tag helpers use different spellings
+        // (is_ok / is_error) — only require result arm when map_option_result
+        // would emit __option_X for that method (converted to __result_X).
+        let needs_result = matches!(
+            method,
+            "map" | "filter" | "and_then" | "flat_map" | "or_else" | "or" | "unwrap_or_else"
+        );
+        if needs_result {
+            let res_ok = fn_body.contains(&format!("\"{res_name}\""))
+                || window.contains(&format!("\"{res_name}\""));
+            // filter is Option-only in practice; Result has no filter arm —
+            // only require when the table maps it and an arm could be needed.
+            if method == "filter" {
+                continue;
+            }
+            if !res_ok {
+                missing.push(res_name);
+            }
+        }
+    }
+    // flat_map must be in map_option_result_method's case list (production
+    // one-table) so a future rename can't re-introduce the fallback-only path.
+    assert!(
+        map_body.contains("flat_map"),
+        "`flat_map` missing from map_option_result_method — keep production \
+         one-table so `__option_flat_map` is not only a fallback mangle.",
+    );
+    assert!(
+        missing.is_empty(),
+        "SH combinator name-completeness: emit_option_result_combinator is missing \
+         match arm(s) for {missing:?}.\n\
+         Every name from map_option_result_method + the `__option_`/`__result_`+method \
+         fallback must be a match arm (never the unknown-combinator external call). \
+         Add the arm (≡ and_then for flat_map) or update this list with justification.",
     );
 }
 
