@@ -2,41 +2,22 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**ROUND XI CLOSED 2026-07-28** — theme MEMORY-UNSAFETY PACK, 4 tracks landed (J, K, L, M). Full battery
-green on `gorget-1` tip `74726315`; parity 1254/1351 = 92.8% (ADJ 381, BOTH-WRONG 10); floor ratcheted
-`RUNTIME_DIFF_MATCH_FLOOR` 1239→1254 (`GGDEF_ADJUDICATED_FLOOR` stays 381 — the new fixtures land outside
-phase-0 subset). Track M discovered a **SIGBUS memory-unsafety** class on `Mutex[Box[Trait]].lock().get().greet()`
-(fixture `sound_guard_get_boxed_trait_sigbus.gg` `#[ignore]`d) which per severity ranking outranks the
-queued Round XII CoW `&`-write-through work; owner ruled (2026-07-28) that Round XII becomes the D36
-Option A implementation. Detail: DONE.md.
+**ROUND XII CLOSED 2026-07-29** — theme D36 GUARD[TRAIT] METHOD DISPATCH (SIGBUS-first), 6 tracks landed
+(Q, N1, N3, P, N2, R). Full battery green on `gorget-1` tip `80b3a664`; parity 1254/1352 = 92.8%
+(ADJ 383, BOTH-WRONG 8); `GGDEF_ADJUDICATED_FLOOR` ratcheted 381→383 (Track Q closed 2 BOTH-WRONG
+via ggdef `Value::Struct` match arm), `RUNTIME_DIFF_MATCH_FLOOR` stays 1254. **First round measured
+under the convergence-gate rule** (owner 2026-07-28, folded ac0c73a5+80b3a664): known_gaps 101→99,
+TODO 531→532, **net −1 item closed** — convergent by the gate. Track M's SIGBUS class (from Round XI)
+closed as fixture 4 graduated; Round XI Track M classes 1, 2, 3 all closed by Track P (bare-trait
+reject) + Track R (call-expression generic-args). Detail: DONE.md.
 
-**Owner rulings (2026-07-28, folded from Round XI Track M):**
-- **Q1 — `Mutex[Trait]` / `RWLock[Trait]` storage semantics:** **REJECT at declaration**; require explicit
-  `Mutex[Box[Trait]]` / `RWLock[Box[Trait]]`. No implicit-boxing. Rationale: costs stay visible (`Box[T]`
-  is an ownership contract that changes storage layout — hiding it violates D31's spelling philosophy
-  and CoW's no-user-visible-`Ref[T]` principle); a typo `Mutex[Trait]` (meaning `Mutex[Box[Trait]]`) is
-  told clearly instead of silently magicked. If ergonomics ever becomes a papercut, a separate feature
-  (e.g. `impl Trait`-style type elision) can be considered as a distinct disclosed addition.
-- **Q2 — priority:** Option A (D36 implementation) is Round XII, ahead of the previously-queued CoW
-  `&`-write-through soundness class. Justified by the SIGBUS class (mem-unsafety > silent-wrong-output
-  per `feedback-rounds-serve-soundness-not-metrics`).
-
-**ROUND XII — theme: D36 IMPLEMENTATION FOR `Guard[Trait]` METHOD DISPATCH (Option A).** Retires the four
-distinct defect classes Track M filed in `known_gaps/`, closing the SIGBUS memory-unsafety cell along
-with the C-emit / IR-link fabrications and the check-reject. Per D36 (`docs/define-gorget/decisions.md:1363-1381`)
-+ Q1 above: `Mutex[Trait]` / `RWLock[Trait]` REJECT at check with a specific error pointing at the
-`Mutex[Box[Trait]]` fix; the read face `.method()` accepts+auto-derefs uniformly through
-Guard/ReadGuard/WriteGuard/Box (extend `method_resolutions` value type per D36 Q2 to carry
-`Option<DerefWrapperKind>`; add `type_is_guard` vtable-dispatch branch mirroring Box in
-`src/ir/lowering/exprs/methods.rs:1627-1682`; extend `Guard[T].get()` return-type propagation to preserve
-trait inners). The adjacent `.read()`/`.write()`-return-type-inference gap (RWLock arm missing from
-`builtin_method_type` → `ReadGuard[<error>]`/`WriteGuard[<error>]` return types propagating through
-chained expressions) was CLOSED in-round by Track N3 (see DONE.md) — with it, `.read()`/`.write()` now
-type as `ReadGuard[T]`/`WriteGuard[T]` uniformly, so once D36 lands the read-face `.method()` dispatch
-will apply to RWLock guards without a further inference tweak. Multi-file landing (types.rs ·
-typecheck.rs · ir/lowering/exprs/methods.rs · traits.rs · runtime.rs) + graduate the four Round XI
-`known_gaps/*` fixtures out of ignore as they turn green.
-`gorget-1` is the integration branch.
+**ROUND XIII — theme: CoW `&`-WRITE-THROUGH SOUNDNESS CLASS.** Owner-designated 2026-07-22
+(deferred one round when Round XI's SIGBUS class jumped the priority queue for Round XII per Q2).
+Multi-fixture Core #8 class across three cells: scalar `&`-arg (approximately `TODO.md:~L112`),
+snag#53 nested `&field` (`~L100`), closure `&`-formation (`~L106`) — all both-lane. In parallel:
+SH Core #9 lag pack — `v[i].bump` (`~L97`) + `overload_arg_temp_*` ×4 (`~L98`). Tracks should be
+scoped so the round's projected net-close is ≥ 1 per the convergence gate. `gorget-1` is the
+integration branch.
 
 ⚠ **THE ORCHESTRATOR STAYS ON `gorget-1`.** Track work happens in agent worktrees. Checking out a track
 branch in the parent checkout silently re-bases every read, grep and gate onto that track's state — and if
@@ -73,15 +54,14 @@ sign-off. ⚠ `self_host_bootstrap_fixed_point` declares success when ANY adjace
 (stage-1 is excluded — it is Rust-emitted), so it cannot distinguish "converges at stage-2" from
 "converges at stage-3"; a change that delays convergence by a generation is invisible to it. Not a defect;
 worth knowing.
-Round XI measured 1254 MATCH / 381 ADJ post-close; MATCH ratcheted 1239→1254 (+10 from Round X;
-+15 vs the last measured 1239-floor). ADJ stays 381 (new fixtures outside phase-0 subset).
-BOTH-WRONG stable at 10.
+Round XII measured 1254 MATCH / 383 ADJ post-close; MATCH stable at 1254 (denominator +1 from new fixtures);
+ADJ ratcheted 381→383 (Track Q's ggdef struct-match fix closed 2 BOTH-WRONG). BOTH-WRONG 10→8.
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
 
-- **🔒 ROUND XII (queued 2026-07-28, headline in the handover block above):** D36 IMPLEMENTATION FOR `Guard[Trait]` METHOD DISPATCH (Option A). SIGBUS mem-unsafety class first; extends `method_resolutions` value + adds `type_is_guard` vtable dispatch + fixes `Guard[T].get()` trait-inner return-type propagation + `Mutex[Trait]`/`RWLock[Trait]` reject-at-decl per owner Q1. (Adjacent RWLock `.read()`/`.write()`-return-type-inference gap closed in-round by Track N3 — see DONE.md.) Multi-file (types.rs · typecheck.rs · ir/lowering/exprs/methods.rs · traits.rs · runtime.rs). Graduate the four Round XI `known_gaps/guard_*.gg` fixtures as classes close.
-- **ROUND XIII (deferred from Round XII slot, owner-designated 2026-07-22):** CoW `&`-write-through soundness class — scalar `&`-arg (~L112) · snag#53 nested `&field` (~L100) · closure `&`-formation (~L106), all both-lane Core #8 ∥ SH Core #9 lag pack — `v[i].bump` (~L97) + `overload_arg_temp_*` ×4 (~L98).
-- **THEN:** Family-3 tuple-field get-chain (`sound_tuple_getchain_writethrough` — Round X close punted; the struct-field get-chain needs `resolve_ptr_field_place` fallback in `try_resolve_place`, the tuple face needs a tuple-index analogue) · MaterializePlan campaign follow-up (auto-move for post-materialize params — owner-suggested 2026-07-28, half-wins branching-recursion / full-wins linear; requires callee-ABI extension or call-mode specialization) · Round XI Track J follow-up: typed `borrow_read: bool` on `BuiltinMethodDecl` retiring the `is_elem_borrow_read` name-whitelist + letting the Guard-get LIR arm become dead code · Round XI Track K follow-up: two `#[ignore]`d class-siblings still live (`sound_callable_amp_returned_callee_segv.gg` returned-callable; `sound_callable_amp_shared_get_call_segv.gg` shared-get) · Track K SH-lag `GtFnPtr` shape-only port · `lower_tuple_field_assign` silent-drop fallback (Track H §9.1, mirror `compound_assign_fieldaccess_fallback_present`) · SH-lane `W_*` parity port (`NeedlessMutableBorrow` + `DeadBareParamWrite` + `RecursiveBareParamMaterialize` — sequenced post-succession) · `W_RecursiveBareParamMaterialize` v2 (mutual-recursion widening; callee-Needless downgrade filter) · resolver-totality soundness slice · #13 perf reclaim (measurement-gated; SH-excess VarDecl first) · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first).
+- **🔒 ROUND XIII (queued 2026-07-29, headline in the handover block above):** CoW `&`-write-through soundness class — scalar `&`-arg (~L112) · snag#53 nested `&field` (~L100) · closure `&`-formation (~L106), all both-lane Core #8 ∥ SH Core #9 lag pack — `v[i].bump` (~L97) + `overload_arg_temp_*` ×4 (~L98).
+- **ROUND XIV candidate: Round XII residual + fold-in tracks.** N3 filed HIGH LIR chained-receiver mut-borrow bug (`rwlock_chained_read_get_silent_drop.gg` + `rwlock_chained_write_set_silent_drop.gg`) — same class blocks `print(rwlock.read().get())` from working. N2's Core #4 class-hunt discovered 4 filed adjacent defects (struct-lit field / enum-variant field / vector-lit element / closure-body return SIGILL) that graduate as the class-fix lands. P + R filed 2 SH-lag TODOs (`ast_type_to_resolved` always-Ok signature refactor + NonDerefContainer[BareTrait] SH port) that a bulk-SH-hygiene round could sweep. Bundle for a net-negative round.
+- **THEN:** Family-3 tuple-field get-chain (`sound_tuple_getchain_writethrough` — Round X close punted; the struct-field get-chain needs `resolve_ptr_field_place` fallback in `try_resolve_place`, the tuple face needs a tuple-index analogue) · MaterializePlan campaign follow-up (auto-move for post-materialize params — owner-suggested 2026-07-28, half-wins branching-recursion / full-wins linear; requires callee-ABI extension or call-mode specialization) · Round XI Track J follow-up: typed `borrow_read: bool` on `BuiltinMethodDecl` retiring the `is_elem_borrow_read` name-whitelist + letting the Guard-get LIR arm become dead code · Round XI Track K follow-up: two `#[ignore]`d class-siblings still live (`sound_callable_amp_returned_callee_segv.gg` returned-callable; `sound_callable_amp_shared_get_call_segv.gg` shared-get) · Track K SH-lag `GtFnPtr` shape-only port · `lower_tuple_field_assign` silent-drop fallback (Track H §9.1, mirror `compound_assign_fieldaccess_fallback_present`) · SH-lane `W_*` parity port (`NeedlessMutableBorrow` + `DeadBareParamWrite` + `RecursiveBareParamMaterialize` — sequenced post-succession) · `W_RecursiveBareParamMaterialize` v2 (mutual-recursion widening; callee-Needless downgrade filter) · resolver-totality soundness slice · Compact AGENTS.md convergence-gate paragraphs and lower `agents_md_size_ratchet` ceiling 59_000 → 58_000 (in-round bump 2026-07-29 was owner-implicit-signoff for the fold; further compaction is a follow-up) · #13 perf reclaim (measurement-gated; SH-excess VarDecl first) · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first).
 
 ## Operating invariants (load-bearing — process/reference context, not filed work)
 
