@@ -4549,14 +4549,13 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                 # EXCLUDE the EIndex-exclusive raw getters (`gorget_array_get`/
                 # `gorget_map_get`, keyed on the UNMAPPED `func_name` — a `.get()`
                 # arrives as `gorget_array_safe_get` / mapped from `Dict__K__V__get`,
-                # never these raw symbols; same predicate the `eindex_raw_getter`
-                # copy-out below trusts). For `vec[i]` the dst Option-ness means the
+                # never these raw symbols). For `vec[i]` the dst Option-ness means the
                 # *element type* is `Option[T]`, NOT that we must wrap a nullable
                 # pointer: wrapping here reads only `*(int64_t*)ptr` (the tag) and
                 # rebuilds a bogus `Some(tag)`, so every `Vector[Option[T]]` index
                 # read collapsed to `Some(0)` (test_if_expressions / _collections_nested /
                 # _vector_edge_cases). Skipping the lift lets EIndex fall through to
-                # the aggregate `*(StructT*)(void*)` copy-out at `eindex_raw_getter`.
+                # the unified is_ptr_ret aggregate `*(StructT*)(void*)` ILoad copy-out.
                 bool eix_raw_get_lift = (func_name == "gorget_array_get") or (func_name == "gorget_map_get")
                 if dst_local >= 0 and is_collection_void_return(call_name) and not eix_raw_get_lift:
                     int lift_dst_slot = local_to_slot.get(dst_local).unwrap()
@@ -4636,40 +4635,30 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                 if dst >= 0 and dst_local >= 0:
                     int dst_slot = local_to_slot.get(dst_local).unwrap()
                     int dst_slot_ty = f.slots.get(dst_slot).unwrap().ty
-                    # Pointer-returning runtime calls (`gorget_array_safe_get`
-                    # etc.) return a void* pointing to the element. When the
-                    # GIR caller typed the result slot as the element type
-                    # (from `infer_method_return_type` flattening `.get()` on
-                    # Vector[scalar] to the scalar element directly), emit an
-                    # explicit ILoad to dereference the pointer into a scalar
-                    # before the SlotStore. Codegen-side fixes don't survive
-                    # the SSA pass's scalar-slot promotion (stores/loads get
-                    # eliminated, leaving the raw void* flowing downstream
-                    # as if it were the int — the `bb = &block_map[i]` bug).
+                    # Pointer-returning runtime calls (`gorget_array_safe_get`,
+                    # `gorget_guard_get`, EIndex `gorget_array_get` /
+                    # `gorget_map_get`, etc.) return a void* pointing at the
+                    # element. When the GIR caller typed the result slot as
+                    # the element type itself (scalar *or* aggregate —
+                    # `GorgetArray` / `Str` / `GorgetMap` from Guard.get, or
+                    # a by-value struct from EIndex), emit an explicit ILoad
+                    # to dereference the pointer into that type before the
+                    # SlotStore. A bare SlotStore of void* into a non-ptr
+                    # slot is a C type error (aggregate) or a silent value
+                    # corruption (scalar — the `bb = &block_map[i]` bug).
+                    # Codegen-side fixes don't survive SSA scalar-slot
+                    # promotion. Unified under `returns_ptr_to_element` (which
+                    # already lists guard getters + array/map getters) —
+                    # do NOT gate the aggregate arm on an EIndex-only name
+                    # list; Guard.get aggregates need the same `*(T*)ptr`
+                    # copy-out as EIndex (Round XVI Track 3A / R-GET).
+                    # Pure pointer-typed slots keep the raw void* (no ILoad).
                     bool is_ptr_ret = returns_ptr_to_element(call_name)
                     bool slot_is_ptr_kind = (dst_slot_ty == LT_PTR) or (dst_slot_ty >= LT_PTR_TO_BASE and dst_slot_ty < LT_STRUCT_BASE)
-                    # EIndex-exclusive raw getter into a by-value struct dst
-                    # (lower.gg EIndex case (c)). The getter returns a void*
-                    # pointing at the element; the GIR caller typed the result
-                    # slot as the bare aggregate struct, so dereference the
-                    # void* with an aggregate `*(StructT*)(void*)` copy-out
-                    # (ILoad codegen at lir_codegen.gg:3179) before the
-                    # SlotStore — a plain SlotStore of the void* into a struct
-                    # slot is the bug this fixes. Keyed on the UNMAPPED
-                    # `func_name` (NOT `call_name`): only the EIndex arm emits
-                    # the raw `gorget_array_get`/`gorget_map_get` symbols —
-                    # `Vector.get()` arrives as `gorget_array_safe_get` and
-                    # `Dict.get()` arrives mapped from `Dict__K__V__get`, so
-                    # this never catches a `.get()`/`.unwrap()` Option dst.
-                    bool eindex_raw_getter = (func_name == "gorget_array_get") or (func_name == "gorget_map_get")
-                    if is_ptr_ret and lir_is_scalar(dst_slot_ty) and not slot_is_ptr_kind:
+                    if is_ptr_ret and not slot_is_ptr_kind and (lir_is_scalar(dst_slot_ty) or lir_is_aggregate(dst_slot_ty)):
                         int loaded = lir_fn_next_value(&f)
                         lir_push_inst(&f, bb, ILoad(loaded, dst, dst_slot_ty))
                         lir_push_inst(&f, bb, ISlotStore(dst_slot, loaded, false))
-                    elif eindex_raw_getter and lir_is_aggregate(dst_slot_ty):
-                        int agg_loaded = lir_fn_next_value(&f)
-                        lir_push_inst(&f, bb, ILoad(agg_loaded, dst, dst_slot_ty))
-                        lir_push_inst(&f, bb, ISlotStore(dst_slot, agg_loaded, false))
                     else:
                         lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
 
