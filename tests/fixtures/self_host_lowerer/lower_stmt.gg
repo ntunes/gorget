@@ -1164,8 +1164,6 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             emit(&ctx, GIDerefStore(lid, op_consume(ctx, &gmod, cmp_dst, CkAssign()), cmp_inner_ty))
                         else:
                             int lhs_type = lhs_full_type
-                            int lhs_val = add_local(&ctx, lhs_type, None)
-                            emit(&ctx, GIAssign(lhs_val, op_consume(ctx, &gmod, lid, CkAssign())))
                             int rhs_val = lower_expr(&ctx, value_expr, &gmod)
                             int op_dst = add_local(&ctx, lhs_type, None)
                             # R42-A: user operator-overload compound-assign
@@ -1174,15 +1172,29 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                             # "centralize at the producer"), so this and every
                             # other emit_compound_arith caller gets it uniformly.
                             # Array-kind `+=` also lands here (clone+extend).
-                            emit_compound_arith(&ctx, op, op_dst, lhs_val, rhs_val, lhs_type, &gmod)
+                            #
+                            # Track W (Round XIII): pass `lid` DIRECTLY as the
+                            # receiver instead of MOVEing it into an intermediate
+                            # `lhs_val` temp. The pre-fix code emitted
+                            # `GIAssign(lhs_val, OpMove(lid))`, which zeroed the
+                            # `lid` slot before emit_compound_arith even fired —
+                            # so the drop-old `GIDropIfAlive(lid)` below no-op'd
+                            # (memcmp against a zeroed slot returns 0 → guard
+                            # elided → OLD Acc leaked). Every arm of
+                            # emit_compound_arith (Array clone+extend, String
+                            # str_cat, user overload, scalar binop) reads the
+                            # receiver through `op_consume(..., Ck*ArgBorrow /
+                            # CkBinOpArg)` — all NON-consume kinds → OpBorrow /
+                            # OpCopy — so lid stays alive across the call and
+                            # the drop-old below fires on the OLD value.
+                            emit_compound_arith(&ctx, op, op_dst, lid, rhs_val, lhs_type, &gmod)
                             # Drop-old before rebind (mirror SAssign :874-931 and
                             # Rust Array compound drop-before-Move). Fresh concat
                             # / overload / str_cat results must not leak the
-                            # prior buffer. Two sites can hold it:
-                            #   (1) `lid` if the cur-read was OpClone / OpCopy
-                            #   (2) `lhs_val` if the cur-read was OpMove'd from lid
-                            # GIDropIfAlive is memcmp-gated (zeroed / never-
-                            # owned slots are no-ops).
+                            # prior buffer held by `lid`. GIDropIfAlive is
+                            # memcmp-gated (zeroed / never-owned slots are
+                            # no-ops); LoBorrowed / LoView aliases skip (the
+                            # real owner's drop handles the buffer).
                             if is_droppable_type(lhs_type, &gmod):
                                 match ctx.locals.get(lid).unwrap().ownership:
                                     case LoBorrowed():
@@ -1191,7 +1203,6 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
                                         pass
                                     else:
                                         emit(&ctx, GIDropIfAlive(lid))
-                                emit(&ctx, GIDropIfAlive(lhs_val))
                             emit(&ctx, GIAssign(lid, op_consume(ctx, &gmod, op_dst, CkAssign())))
                     elif static_contains(gmod, name):
                         # Module-level mutable-static COMPOUND-assign

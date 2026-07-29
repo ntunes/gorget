@@ -11744,6 +11744,85 @@ drop Acc 1",
     );
 }
 
+// ── Track W (Round XIII): compare/eq class-fold exercising fixture ──
+// The four `overload_arg_temp_*` pins above are BOOL-return arithmetic
+// dispatch — they do NOT exercise the `Type__compare` / `Type__eq` sites
+// the emit_overload_call class fold also covers. `Foo`-with-`Comparable`
+// pins the LHS-receiver drop discipline for `<` dispatch (a live
+// String-carrying receiver + an inline-ctor RHS) on BOTH the Rust and
+// self-host lanes. RED-verify: revert `Type__compare`'s OpMove→OpBorrow
+// flip in `lower_expr.gg` in isolation and the SH lane leaks (drop
+// trace lines missing / ASan complaint); the Rust lane has always been
+// correct so use the SH pin as the class's drop-net probe.
+#[test]
+fn sh_overload_compare_receiver_live() {
+    run_gg(
+        "sh_overload_compare_receiver_live.gg",
+        "\
+a < b
+drop Foo temp
+a < temp
+b still world
+drop Foo world
+drop Foo hello",
+    );
+}
+
+#[test]
+fn sh_overload_compare_receiver_live_asan() {
+    assert_gg_sanitize_clean(
+        "sh_overload_compare_receiver_live",
+        "\
+a < b
+drop Foo temp
+a < temp
+b still world
+drop Foo world
+drop Foo hello",
+    );
+}
+
+/// SH-lane pin for the compare class fold — force the SH driver to lower
+/// the fixture and compare its emitted-C stdout to the ratified Rust
+/// output. Guarantees the OpMove→OpBorrow flip on `Type__compare` (and
+/// the emit_overload_call post-call temp drain) actually flows through
+/// SH's emitted binary. Sibling of `sh_vector_compound_concat` — same
+/// `self_host_emit_cc_run` harness.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_overload_compare_receiver_live_sh() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/sh_overload_compare_receiver_live.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_overload_compare_receiver_live_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout,
+            "\
+a < b
+drop Foo temp
+a < temp
+b still world
+drop Foo world
+drop Foo hello",
+            "SH emit-cc-run stdout for sh_overload_compare_receiver_live must \
+             match Rust (Track W: emit_overload_call OpBorrow flip on \
+             Type__compare + post-call temp drain)"
+        ),
+        Err(outcome) => panic!(
+            "SH sh_overload_compare_receiver_live emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
 /// Deque compound `+=` is Array-kind sibling of Vector concat rebind.
 #[test]
 fn deque_compound_concat() {
@@ -25455,7 +25534,14 @@ fn self_host_runtime_diff() {
     // 1323→1332 from the round's new fixtures (Track H's sound_amp_v_i_tuple_field_writethrough
     // + sound_tupstruct_field_writethrough graduated; Track I's 7 diagnostic fixtures — POS 1-4
     // + NEG 1-3, none of which are self_host_runtime_diff-eligible). Floor = 1244 − 5 jitter = 1239.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1254;
+    // Reseeded 2026-07-29 (Round XIII Track W close: SH emit_overload_call helper — the
+    // OpMove→OpBorrow receiver flip on all 6 user-op-overload direct sites + inline-ctor RHS
+    // post-call drop drain + Identifier arm lid-direct rebind). MATCH 1259 / 1353 = 93.1%
+    // (ADJ 383 / UNADJ 868 / BOTH-WRONG 8) — the four `overload_arg_temp_*` pins all flipped
+    // WRONG→MATCH (contributes to UNADJ since ggdef is out-of-phase-0 for operator overloads,
+    // per the Track W brief scout). Denom 1352→1353 from the new Track W fixture
+    // `sh_overload_compare_receiver_live_sh`. Floor = 1259 − 5 jitter = 1254.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1259;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

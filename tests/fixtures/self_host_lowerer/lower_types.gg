@@ -33,7 +33,7 @@ from lower import collection_kind_of, collection_kind_eq, int_vec_contains
 from lower import is_builtin_collection_base
 from lower import classify_call_arg
 from lower import op_consume
-from lower_drops import is_droppable_type, register_local_for_drop
+from lower_drops import is_droppable_type, register_local_for_drop, is_local_registered_for_drop
 
 # ── Type mapping ─────────────────────────────────────────
 
@@ -2935,6 +2935,84 @@ int map_compound_binop(String op):
             diag_warn("map_compound_binop", "unknown compound operator '" + op + "' — routing through map_binop")
             return map_binop(op)
 
+# ── Track W (Round XIII): shared user-operator-overload call helper ──
+#
+# Analog of Rust gg's `emit_operator_overload_call` (src/ir/lowering/exprs/
+# calls.rs:3037-3082). Centralises the ownership/drop discipline for every
+# user-op-overload call site (binary op, unary neg, compound-arith arm,
+# `Type__compare`, `Type__eq`) so a future 7th site can't re-open the class
+# — Core #4 (fix the class, not the instance).
+#
+# Contract:
+#   1. Emit `GICallExtern(op_dst, callee, args)` and register `op_dst` for
+#      scope-exit drop. `register_local_for_drop`'s `is_droppable_type`
+#      gate makes BOOL-return dispatch (`Type__eq`, `Type__compare` folded
+#      through a comparator) a natural no-op — no spurious drop on a scalar.
+#   2. For each source local in `arg_sources` that is an ANONYMOUS OWNING
+#      RESOURCE (typically an inline-ctor RHS temp like `Acc(5, [5])` — no
+#      `name_hint`, `LoOwned`, `is_droppable_type` true), emit a post-call
+#      `GIDropIfAlive(src)` + `GIMoveZero(src)`. drop_elab strips the guard
+#      (state=Initialized) and its scope-exit sibling (state=Uninitialized
+#      after IMoveSlot), so the temp drops EXACTLY ONCE at the semantically
+#      correct point — right after the call, mirroring Rust's
+#      `pending_temp_drops` drain. Named live locals (`name_hint = Some(_)`)
+#      skip: the scope-exit drop covers them and the caller may still read
+#      them past the call.
+#
+# Callers MUST pre-flip user-overload receivers from `OpMove(recv)` →
+# `OpBorrow(recv)` (the C ABI `T__add(T*, T*)` passes the receiver by
+# pointer; `OpMove` would falsely mark the receiver dead and elide its
+# scope-exit drop → LHS leak — the Track W root cause on all four
+# `overload_arg_temp_*` pins). Non-user-overload receivers keep their
+# existing operand shape.
+void emit_overload_call(LowerCtx &ctx, GirModule &gmod, String callee, Vector[Operand] args, int op_dst, int ret_ty, Vector[int] arg_sources):
+    emit(&ctx, GICallExtern(op_dst, callee, args))
+    register_local_for_drop(&ctx, op_dst, ret_ty, &gmod)
+    int asi = 0
+    while asi < arg_sources.len():
+        int src = arg_sources.get(asi).unwrap()
+        asi += 1
+        if src < 0 or src >= ctx.locals.len():
+            continue
+        GirLocal src_loc = ctx.locals.get(src).unwrap()
+        # A non-droppable source (primitive, pointer, POD struct) cannot leak
+        # — skip. Guards against Type__compare/Type__eq sites whose args happen
+        # to be non-resource wrappers too.
+        if not is_droppable_type(src_loc.type_id, &gmod):
+            continue
+        # A NAMED local outlives the call: the user still refers to it by
+        # name, and the scope-exit drop is exactly right. An anonymous local
+        # (`name_hint == None`) is a candidate temp — but still gated by
+        # ownership + drop-registration below.
+        match src_loc.name_hint:
+            case Some(_):
+                continue
+            case None:
+                pass
+        # LoBorrowed / LoView aliases are not owners — the real owner's
+        # drop covers the buffer. LoParam / LoMaybeOwned are the caller's
+        # responsibility. Only LoOwned candidates get further consideration.
+        match src_loc.ownership:
+            case LoOwned():
+                pass
+            else:
+                continue
+        # A genuine inline-ctor temp SELF-REGISTERS on creation (lower_call
+        # / SVarDecl / EStructLiteral all route through
+        # register_local_for_drop). An UNREGISTERED anonymous owning droppable
+        # is typically a builtin-getter-result slot — e.g.
+        # `gorget_array_get`'s Acc-typed dst in `lower_index_compound_assign`
+        # — whose C-emit stores a Ptr-alias into an Acc-typed slot; the
+        # collection still owns the element, so post-dropping it double-frees
+        # the buffer. Only registered temps get the post-call drain (mirrors
+        # Rust's `pending_temp_drops` — Rust re-homes UNREGISTERED owning
+        # temps because Rust's ctor doesn't auto-register; SH's ctors DO
+        # register, so the criterion inverts: registered = candidate).
+        if not is_local_registered_for_drop(ctx, src):
+            continue
+        emit(&ctx, GIDropIfAlive(src))
+        emit(&ctx, GIMoveZero(src))
+
 # Emit a compound-assign arithmetic step (`x = x <op> y`). For `+=` with a
 # String operand, route to `gorget_str_cat(lhs, rhs)` (allocates a new
 # String, reads both operands → both borrow) — same form as the EBinaryOp
@@ -2971,9 +3049,12 @@ void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs
     # The guard (`lhs_val` is a REGISTERED user type AND `X__op` is a real
     # fn_sig) makes it inert for scalar/String operands — so the Shared/Mutex/
     # Atomic inner-type callers (lower_expr.gg) and the scalar static/field/
-    # element callers keep the raw binop. `lhs_val` is always a fresh value
-    # temp at every caller, so OpMove is safe. Mirrors Rust lower_compound_
-    # assign's identifier overload arm (src/ir/lowering/stmts/assigns.rs:1292-1330).
+    # element callers keep the raw binop. Mirrors Rust lower_compound_assign's
+    # identifier overload arm (src/ir/lowering/stmts/assigns.rs:1292-1330).
+    #
+    # Track W: receiver is OpBorrow (C ABI passes by pointer; OpMove would
+    # falsely mark it dead and elide its scope-exit drop → LHS leak).
+    # Post-call temp drops + result registration go through emit_overload_call.
     String ov_meth = compound_op_overload_method(op)
     if ov_meth != "":
         String ov_tn = local_type_name(lhs_val, ctx, &gmod)
@@ -2984,8 +3065,9 @@ void emit_compound_arith(LowerCtx &ctx, String op, int dst, int lhs_val, int rhs
                 ov_user = true
         String ov_full = ov_tn + "__" + ov_meth
         if ov_user and gmod.fn_sigs.contains(ov_full):
-            Vector[Operand] ov_args = [OpMove(lhs_val), op_consume(ctx, &gmod, rhs_val, classify_call_arg(gmod, ov_full, 1))]
-            emit(&ctx, GICallExtern(dst, ov_full, ov_args))
+            Vector[Operand] ov_args = [OpBorrow(lhs_val), op_consume(ctx, &gmod, rhs_val, classify_call_arg(gmod, ov_full, 1))]
+            Vector[int] ov_sources = [lhs_val, rhs_val]
+            emit_overload_call(&ctx, &gmod, ov_full, ov_args, dst, result_ty, ov_sources)
             return
     if op == "+=" and (is_string_local(lhs_val, ctx, &gmod) or is_string_local(rhs_val, ctx, &gmod)):
         Vector[Operand] cat_args = []

@@ -37,7 +37,7 @@ from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand
 from lower import LazyMember, cow_lazy_materialize_family, call_arg_lets_callee_mutate, cow_lazy_join_view_result
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_lazy_slot_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
 from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
-from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, local_method_prefix_is, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, collection_accumulator_tid, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop, eval_const_int_expr
+from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, local_method_prefix_is, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, index_value_type_name, collection_accumulator_tid, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, emit_overload_call, is_comparison, map_cmpop, eval_const_int_expr
 
 # ── f-string format-spec application (`{x:.2f}`, `{n:08d}`, `{255:#x}`) ──
 #
@@ -2604,9 +2604,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     String cmp_method = lhs_cmp_name + "__compare"
                     if gmod.fn_sigs.contains(cmp_method):
                         # `a < b` → Type__compare(a, b): comparison reads only.
-                        Vector[Operand] cmp_args = [OpMove(lhs), op_consume(ctx, &gmod, rhs, CkCallArgBorrow())]
+                        # Track W: OpBorrow (C ABI `Type__compare(T*, T*)`);
+                        # emit_overload_call registers cmp_val for drop (no-op
+                        # for I64 return via is_droppable_type gate) + post-call
+                        # drops for anonymous owning receivers/RHS temps.
+                        Vector[Operand] cmp_args = [OpBorrow(lhs), op_consume(ctx, &gmod, rhs, CkCallArgBorrow())]
                         int cmp_val = add_local(&ctx, I64_TYPE, None)
-                        emit(&ctx, GICallExtern(cmp_val, cmp_method, cmp_args))
+                        Vector[int] cmp_sources = [lhs, rhs]
+                        emit_overload_call(&ctx, &gmod, cmp_method, cmp_args, cmp_val, I64_TYPE, cmp_sources)
                         int zero = add_local(&ctx, I64_TYPE, None)
                         emit(&ctx, GIAssign(zero, OpConstI64(0)))
                         int cmp_dst = add_local(&ctx, BOOL_TYPE, None)
@@ -2617,9 +2622,14 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     String eq_method = lhs_cmp_name + "__eq"
                     if gmod.fn_sigs.contains(eq_method):
                         # `a == b` → Type__eq(a, b): equality reads only.
-                        Vector[Operand] eq_args = [OpMove(lhs), op_consume(ctx, &gmod, rhs, CkCallArgBorrow())]
+                        # Track W: OpBorrow (C ABI `Type__eq(T*, T*) -> bool`);
+                        # emit_overload_call gates BOOL result (non-droppable)
+                        # → no spurious drop-reg; post-call drops the RHS temp
+                        # if it is a fresh inline-ctor.
+                        Vector[Operand] eq_args = [OpBorrow(lhs), op_consume(ctx, &gmod, rhs, CkCallArgBorrow())]
                         int eq_dst = add_local(&ctx, BOOL_TYPE, None)
-                        emit(&ctx, GICallExtern(eq_dst, eq_method, eq_args))
+                        Vector[int] eq_sources = [lhs, rhs]
+                        emit_overload_call(&ctx, &gmod, eq_method, eq_args, eq_dst, BOOL_TYPE, eq_sources)
                         if op == "==":
                             return eq_dst
                         int neq_dst = add_local(&ctx, BOOL_TYPE, None)
@@ -2717,9 +2727,21 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if lhs_is_user:
                     String method_full = lhs_tname + "__" + op_method
                     # User op overload `a OP b` → Type__OP(a, b): consult
-                    # callee signature for the rhs (lhs is the receiver,
-                    # always OpMove). bare `T` → borrow; `!T` → owning.
-                    Vector[Operand] op_args = [OpMove(lhs), op_consume(ctx, &gmod, rhs, classify_call_arg(gmod, method_full, 1))]
+                    # callee signature for the rhs (lhs is the receiver, C ABI
+                    # is `Type__op(T*, T*)` — pass by pointer). bare `T` →
+                    # borrow; `!T` → owning.
+                    #
+                    # Track W (Round XIII): OpBorrow for the receiver, NOT
+                    # OpMove. The C ABI already passes the receiver by pointer
+                    # via SlotAddr; OpMove would flip the caller-side ownership
+                    # tracker (drop-elab) into treating `lhs` as dead after the
+                    # call, silently eliding its scope-exit drop → LHS leaks
+                    # on all four `overload_arg_temp_*` pins. emit_overload_call
+                    # registers the result for drop AND drains anonymous owning
+                    # arg-source temps (inline-ctor RHS shapes) post-call —
+                    # mirrors Rust `emit_operator_overload_call` at
+                    # `src/ir/lowering/exprs/calls.rs:3037-3082`.
+                    Vector[Operand] op_args = [OpBorrow(lhs), op_consume(ctx, &gmod, rhs, classify_call_arg(gmod, method_full, 1))]
                     int op_ret = I64_TYPE
                     if gmod.fn_sigs.contains(method_full):
                         op_ret = gmod.fn_sigs.get(method_full).unwrap()
@@ -2729,7 +2751,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                         if lhs_tid != I64_TYPE:
                             op_ret = lhs_tid
                     int op_dst = add_local(&ctx, op_ret, None)
-                    emit(&ctx, GICallExtern(op_dst, method_full, op_args))
+                    Vector[int] op_sources = [lhs, rhs]
+                    emit_overload_call(&ctx, &gmod, method_full, op_args, op_dst, op_ret, op_sources)
                     return op_dst
             # Result type of + - * / follows the operand type, not hardcoded
             # I64. Mirrors Rust infer_operand_type_full + bin_op
@@ -2819,15 +2842,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             match op:
                 case "-":
                     # Operator overload: -user_struct → user_struct.neg()
+                    # Track W: OpBorrow for the receiver (C ABI passes by
+                    # pointer); emit_overload_call registers the result AND
+                    # post-drops an anonymous owning inner temp — sibling of
+                    # binary op / compare / eq / compound-arith.
                     String inner_tname = local_type_name(inner, ctx, &gmod)
                     if gmod.type_infos.contains(inner_tname):
                         String neg_method = inner_tname + "__neg"
-                        Vector[Operand] neg_args = [OpMove(inner)]
+                        Vector[Operand] neg_args = [OpBorrow(inner)]
                         int neg_ret = inner_type
                         if gmod.fn_sigs.contains(neg_method):
                             neg_ret = gmod.fn_sigs.get(neg_method).unwrap()
                         int neg_dst = add_local(&ctx, neg_ret, None)
-                        emit(&ctx, GICallExtern(neg_dst, neg_method, neg_args))
+                        Vector[int] neg_sources = [inner]
+                        emit_overload_call(&ctx, &gmod, neg_method, neg_args, neg_dst, neg_ret, neg_sources)
                         return neg_dst
                     int dst = add_local(&ctx, inner_type, None)
                     emit(&ctx, GIUnOp(dst, UNOP_NEG, inner_type, OpCopy(inner)))

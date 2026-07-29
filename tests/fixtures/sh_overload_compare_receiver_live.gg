@@ -1,0 +1,62 @@
+# Track W (Round XIII): compare/eq class-fold exercising fixture.
+#
+# The four `overload_arg_temp_*` pins are BOOL-return arithmetic dispatch;
+# they do NOT exercise the `Type__compare` / `Type__eq` sites the same
+# class fold covers. This fixture pins the LHS-receiver drop discipline
+# for the `<` (Comparable → Type__compare) shape:
+#
+#   * The receiver `f` is a NAMED live local owning a droppable resource
+#     (`String label`) — a leak / double-free surfaces as an ASan complaint
+#     or a wrong drop trace.
+#   * The RHS is an inline `Foo(...)` constructor — an anonymous owning
+#     temp that emit_overload_call must drop RIGHT AFTER the compare call
+#     (mirroring Rust's post-call temp drain), NOT at scope exit.
+#
+# SCOPE (Core #12(c)): sole cell is `Foo` (String-carrying struct receiver)
+# with `Comparable` (`<`) dispatch through `Type__compare`. Sibling cells
+# (`Equatable` `==` through `Type__eq`; non-String resource payloads;
+# anonymous-receiver `mk() < b` shapes) are NOT sampled — the axis-complete
+# net for compare/eq class-fold is future work if a shape breaks.
+#
+# RED-verify (Track W): revert the OpMove→OpBorrow flip on `Type__compare`
+# in `lower_expr.gg` in isolation and rerun `run_gg`. Pre-fix (OpMove) the
+# receiver drop trace disappears (LHS leak → the `drop Foo hello` / `drop
+# Foo world` prints are missing on the pre-fix compiler). Restore the flip
+# and the fixture goes green.
+#
+# Pass-3 R2 note: if a contributor swaps this fixture to `==` (Equatable),
+# they must swap the RED-verify probe to `Type__eq` too — the probe MUST
+# match the operator the fixture exercises.
+
+struct Foo:
+    int mag
+    String label
+
+equip Foo with Comparable:
+    int compare(self, Foo other):
+        if self.mag < other.mag:
+            return -1
+        elif self.mag > other.mag:
+            return 1
+        return 0
+
+equip Foo with Drop:
+    void drop(!self):
+        print(f"drop Foo {self.label}")
+
+void main():
+    Foo a = Foo(1, "hello")
+    Foo b = Foo(5, "world")
+
+    if a < b:
+        print("a < b")
+
+    # Inline-ctor RHS: temp must drop RIGHT AFTER the compare, not at
+    # scope exit (mirrors Rust's emit_operator_overload_call post-call
+    # temp drain).
+    if a < Foo(10, "temp"):
+        print("a < temp")
+
+    # `b` stays live past its earlier use — scope-exit drops both named
+    # receivers exactly once.
+    print(f"b still {b.label}")
