@@ -11744,6 +11744,85 @@ drop Acc 1",
     );
 }
 
+// ── Track W (Round XIII): compare/eq class-fold exercising fixture ──
+// The four `overload_arg_temp_*` pins above are BOOL-return arithmetic
+// dispatch — they do NOT exercise the `Type__compare` / `Type__eq` sites
+// the emit_overload_call class fold also covers. `Foo`-with-`Comparable`
+// pins the LHS-receiver drop discipline for `<` dispatch (a live
+// String-carrying receiver + an inline-ctor RHS) on BOTH the Rust and
+// self-host lanes. RED-verify: revert `Type__compare`'s OpMove→OpBorrow
+// flip in `lower_expr.gg` in isolation and the SH lane leaks (drop
+// trace lines missing / ASan complaint); the Rust lane has always been
+// correct so use the SH pin as the class's drop-net probe.
+#[test]
+fn sh_overload_compare_receiver_live() {
+    run_gg(
+        "sh_overload_compare_receiver_live.gg",
+        "\
+a < b
+drop Foo temp
+a < temp
+b still world
+drop Foo world
+drop Foo hello",
+    );
+}
+
+#[test]
+fn sh_overload_compare_receiver_live_asan() {
+    assert_gg_sanitize_clean(
+        "sh_overload_compare_receiver_live",
+        "\
+a < b
+drop Foo temp
+a < temp
+b still world
+drop Foo world
+drop Foo hello",
+    );
+}
+
+/// SH-lane pin for the compare class fold — force the SH driver to lower
+/// the fixture and compare its emitted-C stdout to the ratified Rust
+/// output. Guarantees the OpMove→OpBorrow flip on `Type__compare` (and
+/// the emit_overload_call post-call temp drain) actually flows through
+/// SH's emitted binary. Sibling of `sh_vector_compound_concat` — same
+/// `self_host_emit_cc_run` harness.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_overload_compare_receiver_live_sh() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/sh_overload_compare_receiver_live.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_overload_compare_receiver_live_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout,
+            "\
+a < b
+drop Foo temp
+a < temp
+b still world
+drop Foo world
+drop Foo hello",
+            "SH emit-cc-run stdout for sh_overload_compare_receiver_live must \
+             match Rust (Track W: emit_overload_call OpBorrow flip on \
+             Type__compare + post-call temp drain)"
+        ),
+        Err(outcome) => panic!(
+            "SH sh_overload_compare_receiver_live emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
 /// Deque compound `+=` is Array-kind sibling of Vector concat rebind.
 #[test]
 fn deque_compound_concat() {
@@ -25486,13 +25565,19 @@ fn self_host_runtime_diff() {
     // 1323→1332 from the round's new fixtures (Track H's sound_amp_v_i_tuple_field_writethrough
     // + sound_tupstruct_field_writethrough graduated; Track I's 7 diagnostic fixtures — POS 1-4
     // + NEG 1-3, none of which are self_host_runtime_diff-eligible). Floor = 1244 − 5 jitter = 1239.
-    // Reseeded 2026-07-29 (round XIII Track V close: SH bare Index mut-method receiver
-    // write-through). MATCH 1255 / 1353 = 92.8%. Denom 1352→1353 from Track V's new
-    // `cow_value_index_bare_mut_recv_writethrough.gg` corpus fixture (auto-enrolled via its
-    // runtime snapshot). MATCH +1: the new fixture is a both-lane MATCH post-fix (SH pre-fix
-    // dropped the writes → `0/10/2/0/0`; post-fix `2/10/3/2/2` matches Rust). Bumped
-    // ratchet-tight to lock the improvement in the same commit.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1255;
+    // Reseeded 2026-07-29 (Round XIII combined V + W landings): both bumped from the same
+    // 1254 baseline in parallel and stack additively at merge time.
+    // - Track V (SH bare Index mut-method receiver write-through): +1 MATCH from
+    //   `cow_value_index_bare_mut_recv_writethrough.gg` (auto-enrolled via its runtime
+    //   snapshot; SH pre-fix `0/10/2/0/0` → post-fix `2/10/3/2/2` both-lane MATCH).
+    // - Track W (SH emit_overload_call helper — the OpMove→OpBorrow receiver flip on all 6
+    //   user-op-overload direct sites + inline-ctor RHS post-call drop drain + Identifier
+    //   arm lid-direct rebind): +5 MATCH — 4 `overload_arg_temp_*` pins flip WRONG→MATCH +
+    //   the new `sh_overload_compare_receiver_live_sh` fixture. Contributes to UNADJ (ggdef
+    //   is out-of-phase-0 for operator overloads).
+    // Additive prediction: 1254 + 1 (V) + 5 (W) = 1260. Round-close parity re-measure will
+    // pin the actual value; re-ratchet then if the measurement differs.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1260;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

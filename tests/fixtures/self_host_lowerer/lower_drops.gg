@@ -232,6 +232,36 @@ void register_lazy_slot_for_drop(LowerCtx &ctx, int local_id, int type_id):
 # types so callers can call this blindly after add_local. Skips when
 # no scope is open (defensive — should never happen during normal
 # function lowering, but cheap to guard).
+# Track W (Round XIII) — is `local_id` currently on the drop scope stack?
+#
+# Used by `emit_overload_call` to distinguish a GENUINE inline-ctor OWNING
+# temp (an ECall through `lower_call` self-registers via
+# `register_local_for_drop`; a named let-binding path likewise registers)
+# from an UNREGISTERED anonymous owning local (typically a builtin-getter
+# result like `gorget_array_get`'s Acc-typed slot in
+# `lower_index_compound_assign` — semantically a Ptr-alias, but its dst
+# slot is Acc-typed + LoOwned by construction). Only the former needs a
+# post-call drop drain; post-dropping the latter double-frees the buffer
+# the collection still owns.
+#
+# LINEAR scan across every open drop scope: at initial-lowering time the
+# stack is shallow (function-body outer + per-loop/branch inner scopes),
+# so O(scope-count × entries-per-scope) is fine. Rust reads the same
+# invariant via a `HashSet` for O(1); the SH cost is amortised by how
+# rarely user-op-overload call sites exercise the loop (four fixtures +
+# ancestors in the corpus).
+bool is_local_registered_for_drop(LowerCtx ctx, int local_id):
+    int si = 0
+    while si < ctx.drop_elab.scopes.len():
+        DropScope scope = ctx.drop_elab.scopes.get(si).unwrap()
+        int ei = 0
+        while ei < scope.entries.len():
+            if scope.entries.get(ei).unwrap().local_id == local_id:
+                return true
+            ei += 1
+        si += 1
+    return false
+
 void register_local_for_drop(LowerCtx &ctx, int local_id, int type_id, GirModule &gmod):
     if not is_droppable_type(type_id, &gmod):
         return
