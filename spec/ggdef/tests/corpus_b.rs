@@ -377,5 +377,8 @@ fn corpus_b_all_match() {
     // shared producer must DECLINE and let the `is_already_ptr` fall-through
     // forward the stored pointer — a regression introduced and caught inside the
     // round itself.
-    assert_eq!(fixtures.len(), 160, "B2 gate set drifted from 160 fixtures");
+    // +2 (Round XIII, 2026-07-29): Tracks V + X added two cow_* corpus fixtures
+    // (`cow_value_index_bare_mut_recv_writethrough` + `cow_value_index_nested_mut_recv_writethrough`)
+    // that ggdef adjudicates in-subset. Both are new-in-round MATCHes.
+    assert_eq!(fixtures.len(), 162, "B2 gate set drifted from 162 fixtures");
 }
