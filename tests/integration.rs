@@ -37700,6 +37700,42 @@ fn sound_amp_bareparam_root_materialize() {
     );
 }
 
+/// KNOWN GAP — string-coercion combinator fallback path (bare-param).
+/// `.map()` on `Option[String]` bails to the C-inline path via `has_string_coercion`
+/// BEFORE reaching the Round XIV class-fix; the fallback path has its own clone
+/// site at methods.rs ~L2020-2053 with distinct `!is_last_use` semantics. Not
+/// fixed by 74f566c6. Post-fix behaviour: heap-corruption panic on cleanup
+/// (`gorget_string_free invariant: cap=... but alloc=NULL`) — RED-verified.
+/// See TODO.md §CoW > ### High "String-coercion combinator fallback path
+/// shares receiver-ownership class" for the OWED follow-up-round port.
+#[test]
+#[ignore = "KNOWN GAP: string-coercion `.map()` on Option[String] bare-param bails to the C-inline \
+fallback path (methods.rs L3517-3527) which shares the receiver-ownership class the Round XIV \
+adapter fix retired. Panics at gorget_string_free after printing readback. TODO.md §CoW."]
+fn sound_option_string_coercion_map_param() {
+    run_gg(
+        "known_gaps/sound_option_string_coercion_map_param.gg",
+        "\
+2
+hi",
+    );
+}
+
+/// KNOWN GAP — string-coercion combinator fallback path (field-access).
+/// Sibling of `sound_option_string_coercion_map_param`; same class, projected
+/// place recv shape. See sibling for analysis.
+#[test]
+#[ignore = "KNOWN GAP: string-coercion `.map()` on Option[String] field-access takes the same \
+C-inline fallback path. Panics at gorget_string_free after printing readback. TODO.md §CoW."]
+fn sound_option_string_coercion_map_field() {
+    run_gg(
+        "known_gaps/sound_option_string_coercion_map_field.gg",
+        "\
+2
+hi",
+    );
+}
+
 /// B3: TWO sequential writes through the same `&`-projection. A PARTIAL fix that
 /// write-throughs the first projection and then re-reads a stale value prints 11
 /// here and passes every single-write pin in the batch — that is what this

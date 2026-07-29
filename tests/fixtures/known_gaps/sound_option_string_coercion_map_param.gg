@@ -1,0 +1,32 @@
+# DURABLE REPRO — `.map()` on `Option[String]` (the string-coercion bail path)
+# still corrupts the receiver even AFTER the Round XIV combinator-receiver
+# class-fix (74f566c6). The adapter BAILS to the C-inline fallback path via
+# `has_string_coercion` (methods.rs L3517-3527) BEFORE reaching the fixed
+# scrut_local materialization — the fallback has its own clone site at
+# methods.rs ~L2020-2053 with distinct `!is_last_use` semantics.
+#
+# WRONG (POST-FIX at 74f566c6+):
+#   `gg build`: succeeds
+#   binary exit=1, prints:
+#     gorget: panic: gorget_string_free invariant: cap=281473324163072 but alloc=NULL
+#     hi
+#   The `hi` line is the receiver readback; then a heap-corruption panic fires
+#   at cleanup. So the receiver IS still there, but the ownership hand-off is
+#   producing a torn/aliased String value that fails validation.
+#
+# INTENDED: prints `2` (mapped length) then `hi` (receiver preserved), exit 0.
+#
+# CLASS: string-coercion combinator fallback path shares receiver-ownership
+# class. Not shipped in Round XIV (REV-P2 RSV-10 clarification: skip mirror,
+# file TODO, keep landing rest of class-fix). Filed under §CoW > ### High in
+# TODO.md for a follow-up round with its own scout + design.
+
+void call_it(Option[String] p):
+    Option[int] r = p.map((String s): s.len())
+    if r is Some(v):
+        print(v)
+    if p is Some(s2):
+        print(s2)
+
+void main():
+    call_it(Some("hi"))
