@@ -1291,6 +1291,12 @@ pub(super) fn lower_method_call(
 
     // Mutex[T] methods: lock — dispatch via C wrapper functions.
     // Mutex[T] is a Copy pointer typedef (GorgetMutex*).
+    //
+    // The fresh Guard temp is REGISTERED FOR DROP so `{Guard__T}__drop` fires
+    // and releases the pthread mutex. Without this the mutex leaks (a chained
+    // `m.lock().get()` would hold the mutex forever, deadlocking any follow-up
+    // `m.lock()` on the same thread). Sibling of the RWLock read/write arm
+    // below (Round XIII Track Y; Core #4 "one fix, all siblings").
     {
         let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
         if let Some(ref mtn) = recv_type_name {
@@ -1302,6 +1308,7 @@ pub(super) fn lower_method_call(
                 if method_name == "lock" {
                     let lock_fn = format!("{mtn}__lock");
                     let dst = builder.call(&lock_fn, vec![recv], guard_type);
+                    ctx.drops.register_local(dst, guard_type, &ctx.type_registry);
                     return FunctionBuilder::copy(dst);
                 }
             }
@@ -1352,6 +1359,17 @@ pub(super) fn lower_method_call(
     }
 
     // RWLock[T] methods: read, write — pass the GorgetRWLock* receiver directly by value.
+    //
+    // The returned ReadGuard[T] / WriteGuard[T] carries a TypeDef + guard-kind
+    // metadata so a chained `.get()` / `.set()` on the fresh temp resolves
+    // through the guard intercept above (methods.rs:1628 -> `guard_of` ->
+    // `emit_guard_get_ptr`). Without registration the return type falls back
+    // to UNIT_TYPE, the guard channel misses, and the `.get()`/`.set()` call
+    // is silently dropped in the emitted C — see
+    // `tests/fixtures/known_gaps/rwlock_chained_{read,write}_*.gg`
+    // (Round XII Track N3 filing; Round XIII Track Y fix). Registration path
+    // mirrors the `shared(rwlock)` `SharedStrategy::ArcRwLock` arm at
+    // `stmts/mod.rs:1737-1739`.
     {
         let recv_type_name = infer_type_name_from_operand_full(ctx, &recv, builder);
         if let Some(ref rtn) = recv_type_name {
@@ -1360,16 +1378,38 @@ pub(super) fn lower_method_call(
                 match method_name {
                     "read" => {
                         let rg_name = format!("ReadGuard__{elem_suffix}");
-                        let rg_type = ctx.type_mapper.lookup_named(&rg_name).unwrap_or(UNIT_TYPE);
+                        let inner_type = super::shared::c_suffix_to_type_id(elem_suffix, ctx);
+                        let rg_type = super::type_reg::get_or_register_type(
+                            ctx,
+                            &rg_name,
+                            Some(&|c| super::type_reg::ensure_rwlock_guard_type_def(c, &rg_name, inner_type)),
+                        );
                         let read_fn = format!("{rtn}__read");
                         let dst = builder.call(&read_fn, vec![recv], rg_type);
+                        // Register the fresh guard temp for scope-exit drop so
+                        // `{ReadGuard__T}__drop` fires and releases the pthread
+                        // read lock. Without this the read lock leaks (the
+                        // annotated `ReadGuard[T] g = r.read()` path gets the
+                        // drop via the named-local `stmt::let` registration; a
+                        // fresh temp minted here does not).
+                        ctx.drops.register_local(dst, rg_type, &ctx.type_registry);
                         return FunctionBuilder::copy(dst);
                     }
                     "write" => {
                         let wg_name = format!("WriteGuard__{elem_suffix}");
-                        let wg_type = ctx.type_mapper.lookup_named(&wg_name).unwrap_or(UNIT_TYPE);
+                        let inner_type = super::shared::c_suffix_to_type_id(elem_suffix, ctx);
+                        let wg_type = super::type_reg::get_or_register_type(
+                            ctx,
+                            &wg_name,
+                            Some(&|c| super::type_reg::ensure_rwlock_guard_type_def(c, &wg_name, inner_type)),
+                        );
                         let write_fn = format!("{rtn}__write");
                         let dst = builder.call(&write_fn, vec![recv], wg_type);
+                        // Register the fresh guard temp for scope-exit drop —
+                        // see the read arm above; without this the write lock
+                        // leaks and a follow-up `r.read()`/`r.write()` on the
+                        // same thread can deadlock.
+                        ctx.drops.register_local(dst, wg_type, &ctx.type_registry);
                         return FunctionBuilder::copy(dst);
                     }
                     _ => {}
