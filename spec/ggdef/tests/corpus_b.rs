@@ -190,6 +190,20 @@ const EXCLUDE: &[&str] = &[
     // as an unknown callee). Not blocked by the class-fix, just outside the
     // phase-0 subset for that separate reason.
     "combinator_unwrap_or_else_str.gg",
+    // Round XV Track B — string-coercion bail retired; new combinator_string*
+    // / combinator_*_string_* axis fixtures. ggdef phase-0 has no String
+    // methods / GorgetString surface for these programs (elaborates
+    // "expression `unsupported` is outside the phase-0 subset"). Scout
+    // confirmed out-of-subset; no ggdef flip. EXCLUDE with citation (Core #9
+    // note: in-subset Money combinators remain the adjudicated surface).
+    "combinator_map_string_to_int_param.gg",
+    "combinator_map_string_to_int_field.gg",
+    "combinator_map_string_to_int_local.gg",
+    "combinator_map_string_to_string_param.gg",
+    "combinator_and_then_string_to_int_param.gg",
+    "combinator_flat_map_string_to_int_param.gg",
+    "combinator_result_ok_string_map_to_int_param.gg",
+    "combinator_result_ok_string_and_then_to_int_param.gg",
 ];
 
 fn ws_root() -> PathBuf {
