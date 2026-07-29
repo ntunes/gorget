@@ -24892,19 +24892,20 @@ fn rust_named_recv_user_mutator_caller_untouched() {
 /// `try_resolve_index_element_ptr` producer used by bare Index mut method receivers
 /// (forces `Ptr(T)` for value elements too) + the hoisted round-33 CoW untrack.
 ///
-/// Corpus split (CoW Track 1B): the SINGLE-LEVEL shapes — plain + compound
-/// value-element field stores on a LOCAL and a STATIC Vector (`v[0].x = 88`,
-/// `v[1].y += 5`, `PTS[0].x = 99`, `PTS[1].x += 100`) — are now fixed in the
-/// self-host too (the write-only `lower_field_place_base` producer forces the
-/// element `Ptr(T)` for the field-store base) and promoted to the corpus fixture
-/// `cow_value_index_field_writethrough.gg`. This inline test is KEPT because it
-/// uniquely guards residual / R1 shapes that are still self-host-broken (nested-
-/// place / Track 2F's class + bare Index method receiver until the SH twin lands):
-/// the NESTED store `ns[0].inner.val = 99`, the value-field-METHOD-receiver
-/// `hs[0].c.bump()`, and the bare Index METHOD-receiver `cs[i].bump()` (const and
-/// non-const index). Promoting the full body would count a permanent WRONG in
-/// `self_host_runtime_diff`, so they stay Rust-only here (asserting BOTH backends
-/// — the pre-fix miscompile reproduced on both).
+/// Corpus split (CoW Track 1B / Track V / Track X): the SINGLE-LEVEL shapes —
+/// plain + compound value-element field stores on a LOCAL and a STATIC Vector
+/// (`v[0].x = 88`, `v[1].y += 5`, `PTS[0].x = 99`, `PTS[1].x += 100`) — are fixed
+/// in the self-host too and promoted to `cow_value_index_field_writethrough.gg`.
+/// The bare Index METHOD-receiver `cs[i].bump()` (const and non-const index) is
+/// promoted to `cow_value_index_bare_mut_recv_writethrough.gg` after Track V. The
+/// value-field-METHOD-receiver `hs[0].c.bump()` (EFieldAccess-of-EIndex, and its
+/// deeper `ws[0].h.c.bump()` sibling) is promoted to
+/// `cow_value_index_nested_mut_recv_writethrough.gg` after Track X. This inline
+/// test is KEPT because it uniquely guards the residual NESTED store
+/// `ns[0].inner.val = 99` (Rust-only until its SH twin lands). Promoting that
+/// shape would count a permanent WRONG in `self_host_runtime_diff`, so it stays
+/// Rust-only here (asserting BOTH backends — the pre-fix miscompile reproduced
+/// on both).
 #[test]
 fn rust_value_index_element_field_writethrough() {
     let gg_exe: PathBuf = gg_binary().to_path_buf();
@@ -24934,17 +24935,6 @@ fn rust_value_index_element_field_writethrough() {
             "    Inner inner\n",
             "    int tag\n",
             "\n",
-            "struct Counter:\n",
-            "    int n\n",
-            "\n",
-            "equip Counter:\n",
-            "    void bump(&self):\n",
-            "        self.n = self.n + 1\n",
-            "\n",
-            "struct Holder:\n",
-            "    Counter c\n",
-            "    int id\n",
-            "\n",
             "static Vector[Point] PTS = [Point(1, 2), Point(3, 4)]\n",
             "\n",
             "void main():\n",
@@ -24963,29 +24953,12 @@ fn rust_value_index_element_field_writethrough() {
             "    ns[0].inner.val = 99\n",    // nested value-element field store
             "    print(ns[0].inner.val)\n",  // 99
             "    print(ns[1].inner.val)\n",  // 2
-            "    Vector[Holder] hs = [Holder(Counter(0), 1), Holder(Counter(5), 2)]\n",
-            "    hs[0].c.bump()\n",          // &mut-self method on value-field of value-index element
-            "    hs[0].c.bump()\n",
-            "    print(hs[0].c.n)\n",        // 2  (write-through)
-            "    print(hs[1].c.n)\n",        // 5  (untouched)
-            // R1: bare Index mut method receiver — value-type element, NOT a
-            // field-of-index. Pre-fix lowered via lower_index_access → value
-            // COPY, so bump wrote a throwaway and printed 0.
-            "    Vector[Counter] cs = [Counter(0), Counter(10)]\n",
-            "    cs[0].bump()\n",
-            "    cs[0].bump()\n",
-            "    print(cs[0].n)\n",          // 2  (write-through)
-            "    print(cs[1].n)\n",          // 10 (untouched sibling)
-            // Non-const index — same write-through class (const-fold cannot elide).
-            "    int i = 0\n",
-            "    cs[i].bump()\n",
-            "    print(cs[0].n)\n",          // 3
             "    print(\"done\")\n",
         ),
     )
     .expect("failed to write value_index_field_writethrough.gg");
 
-    let expected = "99\n3\n88\n30\n103\n45\n99\n2\n2\n5\n2\n10\n3\ndone";
+    let expected = "99\n3\n88\n30\n103\n45\n99\n2\ndone";
 
     // Both backends must agree AND be correct — the pre-fix miscompile
     // reproduced identically on C and LLVM (this fix is in shared GIR lowering,
@@ -25053,8 +25026,9 @@ fn cow_value_index_field_writethrough() {
 /// `_r37_mut` typed mutation flag. This fixture also pins the 1B guard: the
 /// value-struct `.clone()` receiver on the SAME `cs[0]` shape must skip the
 /// pointer path (Copy-ish elision returns the receiver's VALUE — a ptr in a
-/// value slot would cc-fail). Track 2F's nested EFieldAccess-of-EIndex shape
-/// (`hs[0].c.bump()`) remains in the inline Rust test until 2F lands.
+/// value slot would cc-fail). Track X (Round XIII) closes the sibling
+/// EFieldAccess-of-EIndex shape (`hs[0].c.bump()`) — see
+/// `cow_value_index_nested_mut_recv_writethrough.gg`.
 #[test]
 fn cow_value_index_bare_mut_recv_writethrough() {
     run_gg(
@@ -25065,6 +25039,49 @@ fn cow_value_index_bare_mut_recv_writethrough() {
 3
 2
 2",
+    );
+}
+
+/// Round XIII Track X corpus fixture (C + LLVM lanes; the self-host lane
+/// auto-enrolls via the `runtime_snapshots/cow_value_index_nested_mut_recv_writethrough.out`
+/// snapshot net). A NESTED-place mut-method receiver on a value-struct element
+/// of a Vector — `hs[0].c.bump()` (EFieldAccess-of-EIndex) and its deeper
+/// cousin `ws[0].h.c.bump()` — is an unbroken owned place → the mutating
+/// `&self` method WRITES THROUGH to the collection's heap buffer
+/// (language-design §3.1 + CoW default-borrow at ownership boundaries, uniform
+/// for `&self` receivers). Rust gg has done this since R39-T1 / solid-ground R1
+/// via `try_resolve_field_place`'s `Expr::Index` object arm
+/// (`src/ir/lowering/exprs/methods.rs:2196-2215`). Track X wires the SH
+/// `EMethodCall` arm — Track V's `_r37_mut`-gated match at
+/// `self_host_lowerer/lower_expr.gg:~3713` — to route EFieldAccess-rooted
+/// mut-method receivers through the shared write-only `&`-formation producer
+/// `lower_amp_place`, the SAME producer already used by
+/// `lower_field_place_base`'s EFieldAccess arm (`lower_stmt.gg:~1817`) so the
+/// mut-method-receiver face and the field-store face cannot drift into a
+/// served-at-one-face asymmetry. Pre-Track-X the SH match matched only a bare
+/// `EIndex(coll, idx)` receiver; the EFieldAccess-rooted shape fell through to
+/// `lower_recv_place` whose EFieldAccess arm handles only `ESelfExpr`/
+/// `EIdentifier` bases, so an EIndex base walked as a value read via
+/// `gorget_array_get` and `bump` mutated a throwaway stack copy (SH prints
+/// `0/5/0/0/7/0/1/0`, RED-verified in the round-close commit). This fixture
+/// also pins the deeper `ws[0].h.c.bump()` axis cell (Core #12
+/// axis-completeness) and the 1B guard: value-struct `.clone()` on the SAME
+/// nested shape must skip the pointer path (Copy-ish elision returns the
+/// receiver's VALUE — a ptr in a value slot would cc-fail). Both are ratified
+/// by the shared `_r37_mut` gate.
+#[test]
+fn cow_value_index_nested_mut_recv_writethrough() {
+    run_gg(
+        "cow_value_index_nested_mut_recv_writethrough.gg",
+        "\
+2
+5
+3
+3
+7
+3
+4
+3",
     );
 }
 
@@ -25416,7 +25433,11 @@ fn self_host_runtime_diff() {
     // `Value::Struct` arm in `eval.rs::match_pattern` closed the two `struct_value_match_bind*`
     // Class-B cells (ratified §8.4 semantics ggdef was silently mis-modeling), moving them
     // from BOTH-WRONG to ADJ-MATCH.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 383;
+    // Ratcheted 2026-07-29 (Round XIII Tracks V + W + X): ADJ-MATCH 385 (of MATCH 1261).
+    // Track X's nested-place mut-method-receiver fixture (`Vector[Holder]` + `Vector[Wrap]`
+    // with a mutating equip method + `Struct-Field`+`Vector-Index` projections) is in
+    // ggdef's subset and adjudicates the write-through counts, adding ADJ rows.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 385;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -25575,9 +25596,11 @@ fn self_host_runtime_diff() {
     //   arm lid-direct rebind): +5 MATCH — 4 `overload_arg_temp_*` pins flip WRONG→MATCH +
     //   the new `sh_overload_compare_receiver_live_sh` fixture. Contributes to UNADJ (ggdef
     //   is out-of-phase-0 for operator overloads).
-    // Additive prediction: 1254 + 1 (V) + 5 (W) = 1260. Round-close parity re-measure will
-    // pin the actual value; re-ratchet then if the measurement differs.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1260;
+    // Ratcheted 2026-07-29 (Round XIII Track X — SH nested EFieldAccess-of-EIndex mut-method
+    // receiver): +1 MATCH from `cow_value_index_nested_mut_recv_writethrough.gg`
+    // (auto-enrolled via its runtime snapshot; SH pre-fix `0/5/0/0/7/0/1/0` → post-fix
+    // `2/5/3/3/7/3/4/3` both-lane MATCH). Measured 1261/1355 = 93.1%, ADJ-MATCH 385.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1261;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

@@ -25,9 +25,8 @@ from std.collections import Vector
 #    counts.
 #
 # The nested `hs[0].c.bump()` (EFieldAccess-of-EIndex receiver) shape
-# routes through a chained EFieldAccess place base and stays in the
-# inline Rust test `rust_value_index_element_field_writethrough`
-# until Track 2F lands.
+# is covered by the sibling fixture
+# `cow_value_index_nested_mut_recv_writethrough.gg` (Round XIII Track X).
 
 struct Counter:
     int n
