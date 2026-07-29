@@ -11886,6 +11886,110 @@ fn sh_vector_compound_concat() {
     }
 }
 
+/// SELF-HOST parity probe — Round XIV combinator-receiver ownership class.
+/// The SH lane has its OWN combinator implementation at
+/// `tests/fixtures/self_host_lowerer/lir_codegen.gg:5066+`
+/// (`emit_option_result_combinator` — emits calls to C runtime helpers, NOT
+/// GIR desugar). The Rust class-fix at 74f566c6 does NOT automatically cover
+/// it. Per Core #9 the round owes either a port or an explicit filed gap.
+///
+/// PROBED Round XIV: SH lane is RED on this fixture. Measured SH stdout at
+/// 74f566c6+d7f2aede: `2\n10\nparam-end\n2\n11\nfield-end\n39\n13\nloop-end`
+/// vs INTENDED `10\n10\nparam-end\n11\n11\nfield-end\n39\n13\nloop-end`.
+/// The mapped-value column reads `2` (looks like a wrong offset into the
+/// enum payload — different bug shape from Rust pre-fix which read the
+/// correct value but emptied the receiver). NOT a mechanical mirror of the
+/// Rust fix. Per REV-P1 RSV-1 outcome (b): FILED as gap + citation, SH-side
+/// port OWED for a follow-up round (see TODO.md §Self-host parity > High).
+/// This test asserts the INTENDED output; un-ignore when the SH port lands.
+#[test]
+#[ignore = "KNOWN GAP: SH lane's emit_option_result_combinator \
+(lir_codegen.gg:5066+) shares the receiver-ownership class the Rust lane's \
+74f566c6 retired. SH prints wrong mapped value. TODO.md §Self-host parity. \
+Un-ignore when the SH port lands."]
+#[serial(self_host_lowerer_driver)]
+fn sh_combinator_map_money_param_and_field_probe() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/combinator_map_money_param_and_field.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_combinator_map_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout,
+            "\
+10
+10
+param-end
+11
+11
+field-end
+39
+13
+loop-end",
+            "SH combinator_map_money_param_and_field must match Rust post-Round-XIV \
+             (74f566c6). If this fails the SH lane's emit_option_result_combinator \
+             (lir_codegen.gg:5066+) shares the receiver-ownership class the Rust \
+             lane just retired — file per Core #9."
+        ),
+        Err(outcome) => panic!(
+            "SH combinator_map_money_param_and_field emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
+/// SELF-HOST parity probe — sibling of the map probe above, this time on
+/// the SIGSEGV cell (and_then + flat_map). Distinct failure mode (result_type
+/// / closure-return-type mismatch), so it stresses a DIFFERENT edit of the
+/// Rust class-fix (Edit C).
+///
+/// PROBED Round XIV: SH lane RED — the emitted C fails to LINK with
+/// `undefined reference to __option_flat_map`. Different mode from the map
+/// probe (SH's flat_map runtime helper is missing/unemitted). Two distinct
+/// SH-lane defects on the combinator family; both filed as gap under
+/// TODO.md §Self-host parity > High per REV-P1 RSV-1 outcome (b).
+#[test]
+#[ignore = "KNOWN GAP: SH lane's flat_map path emits calls to \
+`__option_flat_map` that is undefined at link time (SH's combinator runtime \
+helper table doesn't cover flat_map). Distinct SH-lane defect from the map \
+probe above. TODO.md §Self-host parity. Un-ignore when the SH port lands."]
+#[serial(self_host_lowerer_driver)]
+fn sh_combinator_and_then_money_local_probe() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/combinator_and_then_money_local.gg");
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_sh_combinator_and_then_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    ) {
+        Ok(stdout) => assert_eq!(
+            stdout,
+            "\
+11
+12",
+            "SH combinator_and_then_money_local must match Rust post-Round-XIV. \
+             If this fails the SH lane's emit_option_result_combinator shares \
+             the result-type mismatch class (Edit C class) — file per Core #9."
+        ),
+        Err(outcome) => panic!(
+            "SH combinator_and_then_money_local emit/cc/run failed: {outcome:?}"
+        ),
+    }
+}
+
 /// SELF-HOST parity (Core #9 / W2 T8): SH Deque compound `+=` sibling of
 /// `sh_vector_compound_concat` (typed Array-kind, not name match).
 #[test]
