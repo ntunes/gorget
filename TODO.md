@@ -14,8 +14,6 @@
 
 Repros (committed, `#[ignore]`d, RED at HEAD): `sound_option_map_receiver_emptied.gg` · `sound_option_combinator_or_else_receiver.gg` · `sound_option_and_then_resource_typeconfusion.gg` · `sound_option_unwrap_or_else_ice.gg`. Filed entries carry the mechanism + census: `TODO.md` §CoW (the `.map()` entry with the 7-row table, and the `and_then`/`flat_map` type-confusion entry).
 
-**RIDE-ALONGS — cheap, and deferred three rounds running; do NOT defer again.** File entries + durable `known_gaps` repros for the two `UNOWNED, HIGH SEVERITY` items below (`Mutex[T]` struct-field abort exit 134 SH-only; SH static-with-nested-ctor reads 0). They are the only HIGH items in the tree with **no repro at all**, which makes them the likeliest to rot into exactly the stale premise Round XIII burned two scouts on.
-
 **ROUND XV — theme: BULK HYGIENE + ROUND XII/XIII RESIDUALS.** (Was Round XIV; deferred 2026-07-29 — nothing in it is shipping-severity, and the items keep.) Round XIII's tracks opened a handful of small filed items that a dedicated pruning/close round can drain, and Round XII left the AGENTS.md compaction (bumped 58_000 → 59_000 with owner-implicit sign-off) as an unfinished follow-up. Candidate bundle:
 - **N3's LIR chained-receiver bug** — CLOSED by Round XIII Track Y.
 - **Y's statement-end drop residual** — sequential chained `r.read().get(); r.write().set(v)` self-deadlocks; needs Rust-like NLL/end-of-statement drop rule for guard temps. Durable repro committed (`rwlock_seq_lock_scope_deadlock.gg`).
@@ -46,14 +44,6 @@ reviewed AND merged to `gorget-1` · *closed* = round-close battery green over a
 (often zero); `git diff HEAD > /tmp/recover_worktree_<id>.patch` to capture any uncommitted; re-dispatch
 fresh with the same brief + a "checkpoint after every commit to /tmp" clause. Prior partial state in
 `/tmp/recover_*` is REFERENCE only, don't blindly re-apply.
-
-### UNOWNED, HIGH SEVERITY
-
-- **`Mutex[T]` as a struct field aborts (exit 134, double free) — SELF-HOST ONLY.** Rust exits 0. Present
-  at base and unchanged by Track D. ⚠ An earlier claim of "all three lanes" was WRONG. No `TODO.md` entry
-  and no `known_gaps` repro exist yet — file both.
-- **Self-host reads `0` from a static with a nested ctor initialiser**, before any write; flat statics work.
-  No entry, no repro — file both.
 
 ### ROUND-CLOSE GATE (once, over all landed tracks)
 
