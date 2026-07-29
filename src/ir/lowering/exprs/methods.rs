@@ -3632,16 +3632,32 @@ fn try_lower_option_result_combinator(
         _ => {}
     }
 
-    // Set expected_type for or_else/flat_map. and_then intentionally
-    // does NOT force recv type: Result[T,E].and_then may return Result[U,E]
-    // (cross-type Ok). Forcing recv made Ok(u) construct Result[T,E] with a
-    // size-mismatched Ok payload (silent wrong / free-panic). Option.and_then
-    // still works because Some(u) is fully determined by the arg type.
+    // Set expected_type for the closure body so bare Ok/Error/Some/None
+    // constructors resolve to a full wrapper (not int64_t fallback).
+    //
+    // and_then is CROSS-TYPE capable (Option[T]→Option[U], Result[T,E]→Result[U,E]).
+    // Always-forcing recv made Result Ok(u) build Result[T,E] with a size-
+    // mismatched Ok payload (Track B silent-wrong). Never-forcing broke bare
+    // `None()` in same-type Option chains (`test_option_chaining` → mangled
+    // `int64_t__and_then`). Dual rule (mirrors SH-3 RSV-1):
+    //   and_then: if outer expected is Option/Result → keep outer (annotated
+    //             cross-type); else → recv (bare None/Ok same-type chains).
+    //   or_else / flat_map: force recv.
     let prev_expected = ctx.func_state.expected_type;
     if matches!(method_name, "or_else" | "flat_map") {
         if let Some(type_id) = ctx.lookup_type_by_name(type_name) {
             ctx.func_state.expected_type = Some(type_id);
         }
+    } else if method_name == "and_then" {
+        let outer_is_opt_res = prev_expected
+            .and_then(|tid| ctx.type_registry.enum_category(tid))
+            .is_some();
+        if !outer_is_opt_res {
+            if let Some(type_id) = ctx.lookup_type_by_name(type_name) {
+                ctx.func_state.expected_type = Some(type_id);
+            }
+        }
+        // outer_is_opt_res: leave prev_expected (annotated Result[U,E]/Option[U])
     }
 
     // Lower the closure argument
