@@ -7567,6 +7567,7 @@ fn no_combinator_predicate_name_match_in_methods() {
 /// - **P7** `enum_field_load_move` count floor ≥ 5 + `assert_scrut_is_value_enum` call floor ≥ 5
 /// - **P8** `assign_result_local_move` discipline (exclude the helper *definition*)
 /// - **P9** vacuous-extraction floor (fn found + pin hit count)
+/// - **P10** exact `return None` count == 4 (enum bail, empty args, Some `_`, None `_`)
 ///
 /// **EXEMPT (with reason):**
 /// - `or` / `flatten` / `unwrap` / `expect` / `unwrap_or` — not routed through this adapter
@@ -7692,6 +7693,21 @@ fn combinator_adapter_ownership_invariants() {
         "P9 vacuous-extraction floor: adapter body len={} pin_hits={} (want len>2000, ≥7 pins).",
         adapter.len(),
         pin_hits
+    );
+
+    // P10: exact early-bail / unknown-arm `return None` count in adapter body.
+    // Roles (must stay intentional when this count changes):
+    //   1) non-Option/non-Result enum category bail
+    //   2) empty-args bail
+    //   3) Some/Ok-branch `_ => return None` (unknown combinator arm)
+    //   4) None/Error-branch `_ => return None` (unknown combinator arm)
+    // A new bail without updating this pin is a class-scope change (Round XVI F3).
+    let return_none_count = adapter.matches("return None").count();
+    assert_eq!(
+        return_none_count, 4,
+        "P10 adapter `return None` count is {return_none_count} (want exactly 4: \
+         enum-bail, empty-args, Some-arm `_`, None-arm `_`). A new bail must be \
+         intentional — update this pin and document the role."
     );
 }
 

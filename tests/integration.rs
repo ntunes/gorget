@@ -36222,6 +36222,65 @@ fn cow_lazy_selfref_concat_poke() {
     run_gg("cow_lazy_selfref_concat_poke.gg", "s = hello!\nv0 = mutated");
 }
 
+/// Core #6 behavioural half of combinator Edit-B (Round XVI F1).
+///
+/// Structural P2 in `combinator_adapter_ownership_invariants` only checks that
+/// marker strings (`clone_fn_for_ptr` / `call_clone` / …) still appear in the
+/// adapter source. That stays GREEN if materialization is dead-coded
+/// (`ptr_local_opt = None` after the block that still contains the markers).
+/// This pin builds `combinator_filter_money_param.gg` with `--clones=sites` and
+/// asserts the adapter still emits ≥1 `Option[Money]` call-argument clone.
+///
+/// RED-verify (recorded in Round XVI P1 commit): force `ptr_local_opt = None`
+/// after the materialization block → this test fails with n=0 while structural
+/// P2 stays green; restore before commit.
+#[test]
+fn combinator_edit_b_receiver_clone_sites() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let work_dir = std::env::temp_dir().join(format!(
+        "gg_combinator_edit_b_clones_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&work_dir).unwrap();
+    let fixture = "combinator_filter_money_param";
+    let src = manifest_dir
+        .join("tests/fixtures")
+        .join(format!("{fixture}.gg"));
+    assert!(src.exists(), "fixture not found: {}", src.display());
+    let gg_path = work_dir.join(format!("{fixture}.gg"));
+    std::fs::copy(&src, &gg_path).unwrap();
+    let out = build_with_timeout(
+        gg_command("build").arg(&gg_path).arg("--clones=sites"),
+        fixture,
+    );
+    assert!(
+        out.status.success(),
+        "build failed for {fixture}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let n: u32 = stderr
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("=== Clone Report (")
+                .and_then(|r| r.split_whitespace().next())
+                .and_then(|d| d.parse().ok())
+        })
+        .expect("clone report header on stderr");
+    assert!(
+        n >= 1,
+        "Edit B REGRESSION: expected ≥1 Option[Money] call-arg clone from \
+         try_lower_option_result_combinator materialization, got {n}. stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("Option[Money]") && stderr.contains("call argument"),
+        "expected Option[Money] call argument clone site, got:\n{stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&work_dir);
+}
+
 // gorget-arena snag #1 (CoW contract): an owning `!` (move) resource param
 // forwarded into a consuming position (push / index-set / dict-assign /
 // field-assign) at its single-use LAST use MOVES, not clones. A clone here is

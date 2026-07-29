@@ -2446,15 +2446,13 @@ pub(super) fn lower_method_call(
             }
         }
 
-        // For and_then/or_else, the closure should return the same Option/Result type
-        // as the receiver. Set expected_type so Ok()/Error()/Some()/None() constructors
-        // inside the closure body get the correct type.
+        // Save/restore frame for expected_type around method-arg lowering.
+        // Combinator dual-rule forces live only inside
+        // `try_lower_option_result_combinator` (or_else/flat_map always;
+        // and_then conditional on outer expected). The pre-adapter always-
+        // force for and_then|or_else was deleted (Round XVI F3 / Core #14):
+        // it double-set the same field and contradicted the dual rule.
         let prev_expected = ctx.func_state.expected_type;
-        if matches!(method_name, "and_then" | "or_else") {
-            if let Some(type_id) = ctx.lookup_type_by_name(&type_name) {
-                ctx.func_state.expected_type = Some(type_id);
-            }
-        }
 
         // Save pending_move_zeros baseline so we only drain entries added
         // by THIS method call's argument lowering (not from nested/prior calls).
@@ -3551,25 +3549,32 @@ fn try_lower_option_result_combinator(
     // We use (b) for now. Last-use liveness analysis can later refine
     // this to pick Move at last-use sites.
     let scrut_local = builder.add_local(recv_type, None);
-    // SCOUT: uniform materialization for ANY receiver shape (bare place,
-    // projected place, Ptr(T) borrow-param). Previously only a bare, non-
-    // projected place with a registered clone_fn was cloned; projected and
-    // Ptr recvs fell through to plain Copy, creating a shallow alias that
-    // enum_field_load_move then emptied — corrupting caller storage on
-    // map/filter/or_else (Core #1: fix at the write site).
+    // Edit B: materialize place receivers via a Ptr into the clone path.
+    // Live cases at this adapter are bare places and already-Ptr params —
+    // projected places are materialised to empty-proj temps by lower_expr
+    // / field_load before the adapter (Round XVI F2 scout-proved).
+    // Previously only a bare, non-projected place with a registered
+    // clone_fn was cloned; Ptr recvs fell through to plain Copy, creating
+    // a shallow alias that enum_field_load_move then emptied — corrupting
+    // caller storage on map/filter/or_else (Core #1: fix at the write site).
     //
-    // Build a Ptr(recv_type) that points at the receiver's storage in every
-    // case where recv is a place; then either clone through the ptr (deep,
-    // safe) or load-then-copy (fallback when no clone fn exists).
+    // Build a Ptr(recv_type) that points at the receiver's storage; then
+    // either clone through the ptr (deep, safe) or load-then-copy
+    // (fallback when no clone fn exists).
     let ptr_local_opt: Option<LocalId> = if let Operand::Copy(ref p) | Operand::Move(ref p) = recv {
+        debug_assert!(
+            p.projections.is_empty(),
+            "combinator adapter: projected place recv unreachable (lower_expr materializes); \
+             if this fires, restore emit_borrow(projected) or fix the producer"
+        );
         let ptr_type = ctx.register_ptr_type(recv_type);
         let ptr_local = builder.add_local(ptr_type, None);
-        if recv_is_ptr && p.projections.is_empty() {
+        if recv_is_ptr {
             // recv is already a Ptr(T) value — pass the pointer through.
             builder.assign(Place::local(ptr_local), FunctionBuilder::copy(p.local));
         } else {
-            // Bare place or projected place — borrow into a Ptr(T).
-            builder.emit_borrow(ptr_local, p.clone());
+            // Bare place — borrow into a Ptr(T).
+            builder.emit_borrow(ptr_local, Place::local(p.local));
         }
         Some(ptr_local)
     } else {

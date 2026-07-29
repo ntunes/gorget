@@ -1,4 +1,10 @@
 # Option chaining: combined map, filter, and_then, unwrap_or, or, is_some/is_none
+# POLE (never-force): dual rule must still force recv expected_type for bare
+# same-type Option and_then (`Some(x).and_then((int x): None())` etc.). Without
+# it, bare None()/Some() inside the closure mangle as int64_t__and_then.
+# RED-verify: remove the and_then expected_type force branch (never set recv)
+# inside try_lower_option_result_combinator → this fixture fails typecheck /
+# build; restore dual rule. Do NOT change dual semantics (Round XVI F4 header).
 
 void main():
     Option[int] none_val = None()

@@ -8,6 +8,11 @@
 #   (2) stop forcing expected_type = recv Result for and_then (Ok(u) was
 #       building Result[T,E] with size-mismatched Ok payload). Same defect
 #       also broke Result[Money,int].and_then → Result[int,int] pre-fix.
+# POLE (always-force): dual rule must NOT always-force recv expected_type
+# for and_then — that reintroduces the size-mismatched Ok. RED-verify:
+# force `and_then` to always set expected_type = recv inside
+# try_lower_option_result_combinator → this fixture prints garbage / wrong
+# Ok payload (or crashes); restore dual rule. Do NOT change dual semantics.
 # INTENDED: `2`, exit 0.
 # AXIS SAMPLE: payload=Result Ok=String · combinator=and_then · ret=
 # Result[int,int] · recv=bare-param.
