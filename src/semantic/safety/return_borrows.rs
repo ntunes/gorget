@@ -215,7 +215,8 @@ impl crate::parser::visitor::ExprVisitor for CapturedRefOriginCollector<'_> {
 // ─── Visitor: Captured Mutation Collector ─────────────────────
 
 /// Walks a closure body collecting names of variables that are mutated
-/// (assigned, compound-assigned, or receiver of a `&self` method call)
+/// (assigned, compound-assigned, receiver of a `&self` method call, or
+/// passed as an `&` call/method arg — contractually a write under D31)
 /// inside the body. Excludes locals declared inside the closure itself.
 pub(super) struct CapturedMutationCollector<'a> {
     pub(super) locals: FxHashSet<String>,
@@ -245,8 +246,9 @@ impl crate::parser::visitor::ExprVisitor for CapturedMutationCollector<'_> {
         match &expr.node {
             // Skip nested closures — they have their own mutation scope
             Expr::Closure { .. } | Expr::ImplicitClosure { .. } => {}
-            // Detect method calls that take &self (mutable borrow) as mutations
-            Expr::MethodCall { receiver, method, .. } => {
+            // Detect method calls that take &self (mutable borrow) as mutations.
+            // Also detect any `&`-sigil args (contractually a write under D31).
+            Expr::MethodCall { receiver, method, args, .. } => {
                 if let Some(method_def_id) = self.method_resolutions.get(&method.span.start).and_then(|r| r.def_id) {
                     if let Some(info) = self.function_info.get(&method_def_id) {
                         if info.param_ownerships.first() == Some(&Ownership::MutableBorrow) {
@@ -254,6 +256,28 @@ impl crate::parser::visitor::ExprVisitor for CapturedMutationCollector<'_> {
                                 if !self.locals.contains(name) {
                                     self.mutated.insert(name.to_string());
                                 }
+                            }
+                        }
+                    }
+                }
+                for arg in args {
+                    if arg.node.ownership == Ownership::MutableBorrow {
+                        if let Some(name) = extract_root_name(&arg.node.value.node) {
+                            if !self.locals.contains(name) {
+                                self.mutated.insert(name.to_string());
+                            }
+                        }
+                    }
+                }
+                crate::parser::visitor::walk_expr(self, expr);
+            }
+            // Detect `&`-sigil call args (contractually a write under D31).
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    if arg.node.ownership == Ownership::MutableBorrow {
+                        if let Some(name) = extract_root_name(&arg.node.value.node) {
+                            if !self.locals.contains(name) {
+                                self.mutated.insert(name.to_string());
                             }
                         }
                     }

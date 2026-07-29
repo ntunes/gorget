@@ -37247,30 +37247,47 @@ fn sound_move_out_of_amp_param_ices() {
     check_gg_fails("known_gaps/sound_move_out_of_amp_param_ices.gg", "error[E_");
 }
 
-/// KNOWN GAP — a `&` sigil written INSIDE a closure body is silently INERT, on
-/// both the projection row and the whole-bare-local row. RED-verified at HEAD:
-/// C `10 / 10`, LLVM `10 / 10`, while the IDENTICAL `bumpi(&loc)` at top level
-/// prints 11 — so it is the closure body, not the shape.
+/// LIVE REGRESSION (Track U, Round XIII) — a `&` sigil written INSIDE a
+/// closure body no longer silently drops the write; both the projection row
+/// (`bumpi(&b.fd)`) and the whole-bare-local row (`bumpi(&loc)`) now
+/// check-reject with `E_ReadWhileMutCaptured` at the outer read, matching the
+/// assignment spelling which had this diagnostic from the start.
 ///
-/// Two spellings of one intent disagree, which is what makes it a defect: an
-/// ASSIGNMENT to a capture is classified `BorrowCaptureMode::Mutable` and the
-/// outer read then rejects with `E_ReadWhileMutCaptured`, while the
-/// `&`-through-a-call spelling is not classified at all.
+/// Root retired: `CapturedMutationCollector`
+/// (`semantic/safety/return_borrows.rs`) recognised THREE closure-body
+/// mutation forms (`Stmt::Assign`, `Stmt::CompoundAssign`, `&self` method
+/// receiver) with NO arm for `Ownership::MutableBorrow` call args. Track U
+/// added the fourth arm at the producer (Core #4: fix the class, not the
+/// instance) so both `Expr::Call` and `Expr::MethodCall` args classify the
+/// same as the receiver / assignment cases and flow through the existing
+/// `BorrowCaptureMode::Mutable` → `E_ReadWhileMutCaptured` machinery.
 ///
-/// Root: `CapturedMutationCollector` (`semantic/safety/return_borrows.rs`)
-/// recognises exactly three closure-body mutation forms and has no arm for
-/// `Ownership::MutableBorrow` call args — a Core #4 hole in an enumerated set
-/// whose own doc-comment states the closed list. Under the ratified boundary
-/// model the crossing is at CAPTURE, and with no capture-list syntax the mode
-/// is inferred there, so an in-body sigil sits after the crossing.
+/// INTERIM behaviour (pre-D7 capture-syntax): reject. Under D7 the sigil
+/// belongs in a per-variable capture list `(&count)(): ...`; until then the
+/// in-body path rejects so no user program relies on a silently-vanished
+/// write. Twin fixture `closure_amp_method_arg_body_reject.gg` pins the
+/// `Expr::MethodCall` arm.
 ///
 /// ggdef cannot adjudicate: closures are outside the phase-0 subset.
 #[test]
-#[ignore = "KNOWN GAP: a `&` sigil inside a closure body is silently inert on both backends, while \
-the same shape at top level writes through and the assignment spelling captures mutably. Asserts \
-the INTENDED write-through; TODO.md."]
-fn sound_closure_amp_formation_inert() {
-    run_gg("known_gaps/sound_closure_amp_formation_inert.gg", "11\n11");
+fn closure_amp_body_inert_reject() {
+    check_gg_fails(
+        "closure_amp_body_inert_reject.gg",
+        "error[E_ReadWhileMutCaptured]",
+    );
+}
+
+/// LIVE REGRESSION (Track U, Round XIII) — twin of
+/// `closure_amp_body_inert_reject`. The primary pins the `Expr::Call` arm;
+/// this one pins the `Expr::MethodCall` arg-loop that Track U added alongside
+/// the existing `&self` receiver check. Same class, same diagnostic; each arm
+/// gets its own row so a partial regression trips a dedicated fixture.
+#[test]
+fn closure_amp_method_arg_body_reject() {
+    check_gg_fails(
+        "closure_amp_method_arg_body_reject.gg",
+        "error[E_ReadWhileMutCaptured]",
+    );
 }
 
 /// KNOWN GAP — `&`-of-a-projection in an OPERAND position is silently wrong.
