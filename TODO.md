@@ -2,22 +2,19 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**ROUND XII CLOSED 2026-07-29** — theme D36 GUARD[TRAIT] METHOD DISPATCH (SIGBUS-first), 6 tracks landed
-(Q, N1, N3, P, N2, R). Full battery green on `gorget-1` tip `80b3a664`; parity 1254/1352 = 92.8%
-(ADJ 383, BOTH-WRONG 8); `GGDEF_ADJUDICATED_FLOOR` ratcheted 381→383 (Track Q closed 2 BOTH-WRONG
-via ggdef `Value::Struct` match arm), `RUNTIME_DIFF_MATCH_FLOOR` stays 1254. **First round measured
-under the convergence-gate rule** (owner 2026-07-28, folded ac0c73a5+80b3a664): known_gaps 101→99,
-TODO 531→532, **net −1 item closed** — convergent by the gate. Track M's SIGBUS class (from Round XI)
-closed as fixture 4 graduated; Round XI Track M classes 1, 2, 3 all closed by Track P (bare-trait
-reject) + Track R (call-expression generic-args). Detail: DONE.md.
+**ROUND XIII CLOSED 2026-07-29** — theme CoW `&`-WRITE-THROUGH SOUNDNESS + SH-lag pack + adjacent hygiene, 5 tracks landed (U, V, W, X, Y) plus 2 tracks subsumed at scout stage (S, T were stale-premise breadcrumbs — Core #5 catches). Full battery green on `gorget-1` tip `21214388`; parity 1261/1357 = 92.9% (ADJ 385, BOTH-WRONG 8); ratchets: `RUNTIME_DIFF_MATCH_FLOOR` 1254→1261 (+7: V+W+X), `GGDEF_ADJUDICATED_FLOOR` 383→385 (+2 from X's fixture in phase-0 subset), `corpus_b` fixture count 160→162 (+2 for V+X). **Convergence: known_gaps 99→97 · TODO items 532→529 · net −5** — best round-close ratio under the gate (Round XII was −1). Detail: DONE.md.
 
-**ROUND XIII — theme: CoW `&`-WRITE-THROUGH SOUNDNESS CLASS.** Owner-designated 2026-07-22
-(deferred one round when Round XI's SIGBUS class jumped the priority queue for Round XII per Q2).
-Multi-fixture Core #8 class across three cells: scalar `&`-arg (approximately `TODO.md:~L112`),
-snag#53 nested `&field` (`~L100`), closure `&`-formation (`~L106`) — all both-lane. In parallel:
-SH Core #9 lag pack — `v[i].bump` (`~L97`) + `overload_arg_temp_*` ×4 (`~L98`). Tracks should be
-scoped so the round's projected net-close is ≥ 1 per the convergence gate. `gorget-1` is the
-integration branch.
+**ROUND XIV — theme: BULK HYGIENE + ROUND XII/XIII RESIDUALS.** Round XIII's tracks opened a handful of small filed items that a dedicated pruning/close round can drain, and Round XII left the AGENTS.md compaction (bumped 58_000 → 59_000 with owner-implicit sign-off) as an unfinished follow-up. Candidate bundle:
+- **N3's LIR chained-receiver bug** — CLOSED by Round XIII Track Y.
+- **Y's statement-end drop residual** — sequential chained `r.read().get(); r.write().set(v)` self-deadlocks; needs Rust-like NLL/end-of-statement drop rule for guard temps. Durable repro committed (`rwlock_seq_lock_scope_deadlock.gg`).
+- **W's Core #6 arm-count lint** — `emit_overload_call` producer chokepoint could use a `tests/lints.rs` census.
+- **W's Layering-debt cleanup** — SH getter-slot producer should emit `LoBorrowed(GtPtr(elem))` so `is_local_registered_for_drop` predicate becomes deletable.
+- **N2's 4 class-hunt siblings from Round XII** — struct-lit field / enum-variant field / vector-lit element / closure-body return SIGILL (all filed with citations).
+- **X's nested-store residual** — `ns[0].inner.val = 99` nested value-struct field-store SH lag (analogous to X's method-receiver fix but on the STORE face).
+- **AGENTS.md compaction** — lower `agents_md_size_ratchet` ceiling 59_000 → 58_000 by moving more war-story to devbook/30.
+- **snag#53 SH-lane predicted-broken source-read** (Track T scout's follow-up finding — SH `lower_place_base` at `lower_stmt.gg:1631` has EIdentifier + EDeref arms only; nested EFieldAccess base falls through to value-copy).
+
+Tracks should be scoped so the round's projected net-close is ≥ 1 per the convergence gate. `gorget-1` is the integration branch.
 
 ⚠ **THE ORCHESTRATOR STAYS ON `gorget-1`.** Track work happens in agent worktrees. Checking out a track
 branch in the parent checkout silently re-bases every read, grep and gate onto that track's state — and if
