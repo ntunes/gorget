@@ -1,0 +1,16 @@
+# CELL: `.map()` × plain-local recv × Option[String] → Option[int]
+# COMMITTED Round XV Track B — axis pin (local live readback).
+# PRE-FIX (RED-verified at HEAD e7abec29, scout matrix): C SIGSEGV / free panic;
+# LLVM also RED. Same has_string_coercion → wrong GIR result type root.
+# INTENDED: `2\nhi`, exit 0.
+# AXIS SAMPLE: payload=String · combinator=map · ret=int · recv=plain-local.
+# Non-constant body via String literal is fine for the type-axis cell; receiver
+# is re-read after map so liveness is exercised.
+
+void main():
+    Option[String] o = Some("hi")
+    Option[int] r = o.map((String s): s.len())
+    if r is Some(v):
+        print(v)
+    if o is Some(s2):
+        print(s2)

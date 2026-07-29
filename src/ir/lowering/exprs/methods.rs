@@ -1822,10 +1822,10 @@ pub(super) fn lower_method_call(
 
         // GIR-level desugaring for Option/Result combinators.
         // Replaces C backend inline functions with explicit tag check + closure call,
-        // giving the compiler full ownership visibility.
-        // GIR-level desugaring for Option/Result combinators on primitive-payload types.
-        // For resource-payload types (String, Vector, etc.), the C inline path handles
-        // implicit type coercions (GorgetString ↔ Str) that GIR can't express.
+        // giving the compiler full ownership visibility — including String
+        // payloads (Round XV Track B retired the has_string_coercion bail so
+        // the adapter owns GorgetString Some/Ok the same way it owns Money;
+        // Tier 1c already did this for map_err).
         let is_opt_or_result = ctx.type_registry.get_type_def(&type_name)
             .and_then(|td| td.metadata.enum_category)
             .is_some();
@@ -3507,26 +3507,14 @@ fn try_lower_option_result_combinator(
         (ok_ty, err_ty)
     };
 
-    // Bail to C inline path for types needing GorgetString→Str coercion.
-    // The C inline combinator handles this implicitly; GIR would need explicit coercion.
-    //
-    // Tier 1c (2026-05-11): `map_err` no longer bails for `Result[T,
-    // String]` — the GIR adapter correctly builds the NEW Result type
-    // (Result[T, Closure-ret]) and lets the type-mapper handle any
-    // coercion. The old bail produced a stale fallback call to
-    // `Result__T_String__map_err` that returned the OLD recv type,
-    // mis-sizing the destination local and causing a memcpy buffer
-    // overread once Option/Result became Resource via Tier 1c.
-    let has_string_coercion = |ty: TypeId| -> bool {
-        matches!(ctx.type_registry.get(ty), Some(GirType::Named(n)) if n == "GorgetString")
-    };
-    match method_name {
-        "map" | "filter" | "and_then" | "flat_map" | "unwrap_or_else" if has_string_coercion(some_ok_type) => return None,
-        "or_else" if has_string_coercion(none_err_type) => return None,
-        _ => {}
-    }
+    // String payloads use the GIR adapter (Tier 1c map_err precedent;
+    // Round XV Track B retired the remaining `has_string_coercion` bail for
+    // map/filter/and_then/flat_map/unwrap_or_else/or_else). The old bail
+    // forced the C-inline path while GIR still typed the result local as the
+    // *receiver* type (Option[GorgetString] over Option[int]), causing
+    // size-mismatched memcpy + free-panic. Adapter owns String now.
 
-    // Store receiver in a local for field extraction (after bail checks).
+    // Store receiver in a local for field extraction.
     //
     // Tier 1c: now that Option/Result are Resource, the Copy default
     // would create a shallow alias with the receiver — both recv and
@@ -3621,9 +3609,13 @@ fn try_lower_option_result_combinator(
         _ => {}
     }
 
-    // Set expected_type for and_then/or_else closures that return Option/Result
+    // Set expected_type for or_else/flat_map. and_then intentionally
+    // does NOT force recv type: Result[T,E].and_then may return Result[U,E]
+    // (cross-type Ok). Forcing recv made Ok(u) construct Result[T,E] with a
+    // size-mismatched Ok payload (silent wrong / free-panic). Option.and_then
+    // still works because Some(u) is fully determined by the arg type.
     let prev_expected = ctx.func_state.expected_type;
-    if matches!(method_name, "and_then" | "or_else" | "flat_map") {
+    if matches!(method_name, "or_else" | "flat_map") {
         if let Some(type_id) = ctx.lookup_type_by_name(type_name) {
             ctx.func_state.expected_type = Some(type_id);
         }

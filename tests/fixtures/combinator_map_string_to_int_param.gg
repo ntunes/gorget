@@ -1,0 +1,29 @@
+# CELL: `.map()` × bare-param recv × Option[String] → Option[int]
+# GRADUATED Round XV Track B — retired `has_string_coercion` bail so XIV
+# adapter owns String payloads (methods.rs try_lower_option_result_combinator).
+# PRE-FIX (RED-verified at HEAD e7abec29 / known_gap path, C and LLVM):
+#   C: exit=1, stdout blank-line then `hi`, stderr
+#     `gorget_string_free invariant: cap=… but alloc=NULL`
+#   LLVM: exit 139, empty stdout
+# PRE-FIX MECHANISM (refined, scout /tmp/xv_scoutB_string_coercion.md):
+#   Bail returned None from the adapter → C-inline fallback. GIR typed result
+#   local `r` as Option[GorgetString] (receiver type) not Option[int] →
+#   size-mismatched memcpy + String free on garbage. Mapped `2` never printed;
+#   receiver readback often still printed `hi`. L2020 `!is_last_use` clone is a
+#   non-firing sibling on bare-param (Ptr type fails is_resource_type).
+# INTENDED: `2\nhi`, exit 0.
+# AXIS SAMPLE: payload=String · combinator=map · ret=int · recv=bare-param.
+# OMIT-LIST (same bail site; capacity): filter / unwrap_or_else / or_else
+# String; Result[String,String].map (possible accidental size-overlap — not
+# coverage). See siblings for other cells.
+# FORMER NAME: known_gaps/sound_option_string_coercion_map_param.gg
+
+void call_it(Option[String] p):
+    Option[int] r = p.map((String s): s.len())
+    if r is Some(v):
+        print(v)
+    if p is Some(s2):
+        print(s2)
+
+void main():
+    call_it(Some("hi"))

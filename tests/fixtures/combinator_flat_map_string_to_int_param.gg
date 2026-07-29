@@ -1,0 +1,15 @@
+# CELL: `.flat_map()` × bare-param recv × Option[String] → Option[int]
+# COMMITTED Round XV Track B — sibling combinator; PRE-FIX was BUILD_FAIL
+# (C type error under C-inline + wrong result typing).
+# PRE-FIX (RED-verified at HEAD e7abec29, scout): build fails on C emit.
+# INTENDED: `2`, exit 0.
+# AXIS SAMPLE: payload=String · combinator=flat_map · ret=Option[int] ·
+# recv=bare-param.
+
+void call_it(Option[String] p):
+    Option[int] r = p.flat_map((String s): Some(s.len()))
+    if r is Some(v):
+        print(v)
+
+void main():
+    call_it(Some("hi"))

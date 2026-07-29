@@ -1,0 +1,23 @@
+# CELL: `.and_then()` × bare-param recv × Result[String, int] → Result[int, int]
+# COMMITTED Round XV Track B — Core #8 costume: PRE-FIX was SILENT WRONG
+# (not free-panic). Scout: printed `|hi` (garbage/type-confused Ok) instead
+# of mapped int; both backends agreed on wrong answer.
+# PRE-FIX (RED-verified at HEAD e7abec29): silent wrong / empty Ok readback.
+# TWO write-site fixes required (bail alone was insufficient — measured):
+#   (1) retire has_string_coercion bail so adapter owns String Ok;
+#   (2) stop forcing expected_type = recv Result for and_then (Ok(u) was
+#       building Result[T,E] with size-mismatched Ok payload). Same defect
+#       also broke Result[Money,int].and_then → Result[int,int] pre-fix.
+# INTENDED: `2`, exit 0.
+# AXIS SAMPLE: payload=Result Ok=String · combinator=and_then · ret=
+# Result[int,int] · recv=bare-param.
+
+void call_it(Result[String, int] p):
+    Result[int, int] r = p.and_then((String s): Ok(s.len()))
+    if r is Ok(v):
+        print(v)
+    else:
+        print("err")
+
+void main():
+    call_it(Ok("hi"))
