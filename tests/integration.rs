@@ -37455,82 +37455,64 @@ fn sound_amp_operand_position_scrutinee() {
     run_gg("known_gaps/sound_amp_operand_position_scrutinee.gg", "1");
 }
 
-/// KNOWN GAP — `.or_else()` shares the `.map()`/`.filter()` receiver-emptying
-/// defect. Third costume of that mode; committed so the sibling census is
-/// executable rather than prose (Core #4). Prints 0, want 11.
+/// GRADUATED Round XIV — `.or_else()` receiver-emptying regression pin, third
+/// costume of the map/filter/or_else silent write-drop mode. Uses field-access
+/// receiver (`h.slot.or_else(...)`) with an Option[Money] payload. Was WRONG 0
+/// pre-fix (want 11); the class-fix at try_lower_option_result_combinator
+/// materializes uniformly across all place shapes.
 #[test]
-#[ignore = "KNOWN GAP: `.or_else()` empties its receiver's payload like `.map()`/`.filter()`; \
-resource-payload-specific, ggdef out of subset. Asserts the INTENDED read-back; TODO.md."]
-fn sound_option_combinator_or_else_receiver() {
-    run_gg("known_gaps/sound_option_combinator_or_else_receiver.gg", "11");
+fn combinator_or_else_money_field() {
+    run_gg("combinator_or_else_money_field.gg", "11");
 }
 
-/// KNOWN GAP — `.unwrap_or_else()` with a resource payload PANICS the compiler:
-/// `gg check` reports "OK: no semantic errors", then `gg build` dies on a Tier
-/// 2a consume-site violation (`AssignIntoOwnedSlot(dst: Money) — untracked
-/// source consumed`). The validator catching a real ownership hole is the
-/// system working; surfacing it as a PANIC rather than a diagnostic, and having
-/// `gg check` not see what the lowering validator sees, is the defect.
+/// GRADUATED Round XIV — `.unwrap_or_else()` with a resource payload was
+/// panicking the compiler (Tier 2a AssignIntoOwnedSlot: untracked source
+/// consumed). The validator was doing its job catching a real ownership hole
+/// (closure-call result Untracked before flowing into Owned Money slot); the
+/// defect was that it surfaced as a PANIC rather than a diagnostic. Fix (Edit
+/// D) tags the closure-call result Owned in the None branch.
 #[test]
-#[ignore = "KNOWN GAP: `.unwrap_or_else()` over a resource payload passes `gg check` then panics \
-`gg build` (Tier 2a consume-site violation). Asserts the INTENDED build-and-run; TODO.md."]
-fn sound_option_unwrap_or_else_ice() {
-    run_gg("known_gaps/sound_option_unwrap_or_else_ice.gg", "11");
+fn combinator_unwrap_or_else_money_field() {
+    run_gg("combinator_unwrap_or_else_money_field.gg", "11");
 }
 
-/// KNOWN GAP — `Option[<resource>].and_then` / `.flat_map` is a TYPE CONFUSION:
-/// `gg check` accepts, C emits a SEGFAULTING binary, and LLVM refuses to
-/// compile its own IR (`'%v28' defined with type 'i64' but expected 'ptr'` in a
-/// phi). The LLVM verifier is catching what the C backend emits silently, so
-/// the LLVM build failure is the SAME defect seen by a stricter instrument, not
-/// a separate lane bug.
+/// GRADUATED Round XIV — `Option[<resource>].and_then` / `.flat_map` was
+/// silent-SIGSEGV on C and LLVM-verifier-reject (i64-vs-ptr phi); the two
+/// backends' failures were the SAME defect caught by different instruments
+/// (Core #13). Root: the pre-fix `_ => recv_type` fallthrough gave the result
+/// slot type Option[Money] while the closure produced Option[int], so the
+/// memcpy at the join point interpreted an integer as a pointer downstream.
+/// Fix (Edit C) uses `infer_closure_return_type` for and_then/flat_map.
 ///
-/// Found enumerating the siblings of the `.map()` receiver-emptying defect
-/// (Core #4). It is a DIFFERENT bug: `.map()`/`.filter()` only lose the write
-/// for bare-param and field receivers and still run; this one fails for a plain
-/// LOCAL receiver and is memory-unsafe.
-///
-/// ⚠ RESOURCE-PAYLOAD-SPECIFIC — the same program over an `int` payload prints
-/// 42 and exits 0, so a trivial-payload fixture is a false negative here.
-/// ggdef is out of subset, so this class has no definitional adjudication.
+/// `gg run` MASKS the C failure as exit 1 (does not propagate the child's
+/// signal status — separate filed issue); build the binary and run it
+/// directly to observe the true SIGSEGV pre-fix.
 #[test]
-#[ignore = "KNOWN GAP: Option[<resource>].and_then/.flat_map type-confuses — gg check accepts, C \
-segfaults, LLVM won't compile the emitted IR. Asserts the INTENDED output; TODO.md. Un-ignore when \
-the combinator lowering stops mixing integer and pointer payloads at the phi."]
-fn sound_option_and_then_resource_typeconfusion() {
+fn combinator_and_then_money_local() {
     run_gg(
-        "known_gaps/sound_option_and_then_resource_typeconfusion.gg",
+        "combinator_and_then_money_local.gg",
         "\
 11
 12",
     );
 }
 
-/// KNOWN GAP — `.map()` DESTROYS its receiver's payload for bare-param and
-/// field-access receivers. An ownership defect, not a combinator bug: the
-/// receiver is a BORROW at those positions and the adapter consumes it anyway.
+/// GRADUATED Round XIV — `.map()` was destroying its receiver's payload for
+/// bare-param and field-access receivers (C and LLVM byte-identical: `10 / 0`
+/// and `11 / 0` where controls without `.map()` printed `10 / 10` and
+/// `11 / 11`). The third row (a plain-LOCAL receiver) was CORRECT pre-fix and
+/// remains so as a live control — it is also why this went unnoticed, since
+/// it is the shape existing fixtures happened to use.
 ///
-/// RED-verified at HEAD, C and LLVM byte-identical: `10 / 0` (bare param) and
-/// `11 / 0` (field access), where a control program without the `.map()` call
-/// prints `10 / 10` and `11 / 11`. The third row — a plain-LOCAL receiver — is
-/// CORRECT today and is a live control; it is also why this went unnoticed,
-/// since it is the shape existing fixtures happened to use.
-///
-/// ⚠ ggdef cannot adjudicate: `.map()` is outside the phase-0 subset. So the
-/// two backends agreeing here is necessary, not sufficient (Core #8).
-///
-/// Mechanism: the receiver-clone path is gated on `p.projections.is_empty()`,
-/// so a field-access PLACE is not recognised as a place and falls to the branch
-/// commented "Non-place operand (constants, etc.) — Copy is safe" — false for a
-/// field place, and a Core #14 comment with no enforcing guard.
+/// Root: the receiver-clone path was gated on `p.projections.is_empty()`, so
+/// a field-access PLACE was not recognised as a place and fell to the "non-
+/// place operand" branch (a Core #14 comment with no enforcing guard). Fix
+/// (Edits A + B) unifies materialization for every place-recv shape and
+/// unwraps `Ptr(T)` for bare-borrow parameter recvs.
 #[test]
-#[ignore = "KNOWN GAP: `.map()` empties its receiver's payload for bare-param and field-access \
-receivers on both backends (plain-local receivers are correct); ggdef is out of subset. Asserts \
-the INTENDED read-back; TODO.md. Un-ignore when the combinator receiver borrows instead of \
-consuming."]
-fn sound_option_map_receiver_emptied() {
+fn combinator_map_money_param_and_field() {
     run_gg(
-        "known_gaps/sound_option_map_receiver_emptied.gg",
+        "combinator_map_money_param_and_field.gg",
         "\
 10
 10

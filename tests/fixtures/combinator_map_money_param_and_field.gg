@@ -1,34 +1,31 @@
-# DURABLE REPRO — `.map()` DESTROYS ITS RECEIVER'S PAYLOAD for bare-param and
-# field-access receivers. Silent wrong output on BOTH backends.
-#
-# This is an ownership defect, not a combinator bug: the receiver is a BORROW at
-# these positions, and the adapter consumes it anyway. The value is still there
-# by the type system's reckoning; its heap payload has been emptied underneath.
-#
-# WRONG TODAY (measured at HEAD, C and LLVM byte-identical):
+# CELL: `.map()` × {bare-param, field-access, plain-local} × Option[Money]
+# GRADUATED Round XIV (74f566c6) — combinator-receiver ownership class-fix at
+# producer `try_lower_option_result_combinator` (Edits A + B).
+# PRE-FIX (RED-verified at HEAD 6171d564, C and LLVM byte-identical):
 #   bare-param receiver   `p.map(...)`      then read `p`  -> 10 then **0**  (want 10 then 10)
 #   field-access receiver `h.slot.map(...)` then read it   -> 11 then **0**  (want 11 then 11)
-#   plain-local receiver  (the loop below)                 -> 39 then 13     ✅ CORRECT
+#   plain-local receiver  (the loop below)                 -> 39 then 13     PASS (live control)
+# The plain-local row was and is a live control — it passes today and must keep
+# passing; it is also why this went unnoticed for months: a plain-local receiver
+# is the shape fixtures happened to use, and it was the one shape that worked.
+# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
+# lands — the guard subsumes this axis cell. See TODO.md §Guards.
 #
-# ⚠ THE THIRD ROW IS A LIVE CONTROL, NOT A GAP — it passes today and must keep
-# passing. It is also the reason this went unnoticed: a plain-local receiver is
-# the shape fixtures happened to use, and it is the one shape that works.
-#
-# MECHANISM (localized, `src/ir/lowering/exprs/methods.rs`): the receiver-clone
-# path is gated on `p.projections.is_empty()`, so a FIELD-ACCESS place is not
-# recognised as a place at all and falls to the `else` branch commented
-# "Non-place operand (constants, etc.) — Copy is safe". That comment is FALSE
-# for a field place, and it is a Core #14 comment with no enforcing guard. The
-# bare-param row takes the adjacent "no clone fn registered — fall back to
-# plain Copy" branch, whose own comment concedes "validator may flag".
+# PRE-FIX MECHANISM (localized, `src/ir/lowering/exprs/methods.rs` before the
+# graduating commit): the receiver-clone path was gated on
+# `p.projections.is_empty()`, so a FIELD-ACCESS place was not recognised as a
+# place at all and fell to the `else` branch commented "Non-place operand
+# (constants, etc.) — Copy is safe" (FALSE for a field place). The bare-param
+# row took the adjacent "no clone fn registered — fall back to plain Copy"
+# branch, whose own comment conceded "validator may flag". The class-fix at
+# 74f566c6 unifies materialization across all place shapes and unwraps the Ptr
+# for bare-borrow parameter recvs (Edits A + B).
 #
 # INTENDED (what this fixture asserts):
 #     10 / 10 / param-end / 11 / 11 / field-end / 39 / 13 / loop-end
 #
-# ORACLE: ggdef is OUT OF SUBSET here — `.map()` is not in the phase-0 subset
-# ("method `.map()` is outside the phase-0 subset"). So this defect has NO
-# definitional adjudication; C and LLVM agreeing is necessary, not sufficient
-# (Core #8). Recorded explicitly per Core #9 — the ggdef subset gap is filed.
+# ORACLE: ggdef subset extended by Round XIV (Increment B3) to cover the
+# combinator family; if this fixture lands in-subset, corpus_b adjudicates it.
 #
 # The payloads are HEAP-FORCED (a built `Vector[int]`, not a literal), so the
 # emptying is observable rather than const-folded away.

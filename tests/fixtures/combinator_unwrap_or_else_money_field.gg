@@ -1,0 +1,47 @@
+# CELL: `.unwrap_or_else()` × field-access recv (`h.slot.unwrap_or_else(...)`)
+#       × Option[Money] (payload is a resource type).
+# GRADUATED Round XIV (74f566c6) — combinator-receiver ownership class-fix
+# (Edit D: tag closure-call result Owned in the None branch).
+# PRE-FIX (RED-verified at HEAD 6171d564):
+#   `gg check` -> "OK: no semantic errors"
+#   `gg build` -> PANIC:
+#       Tier 2a consume-site violation: 1 violation(s) in module '<unknown>'.
+#       First: fn @main bb2 i2 — AssignIntoOwnedSlot(dst: Money)
+#              — untracked source consumed (ownership not decided).
+#       at src/ir/lowering/mod.rs:2127
+# The Tier 2a validator CAUGHT the real ownership hole (the combinator lowering
+# never decided ownership for the closure-call result on the None arm); the
+# defect was that it surfaced as a PANIC rather than a diagnostic, and that
+# `gg check` did not see what the lowering validator did. The fix tags the
+# closure-call result Owned before it flows into result_local.
+# RESOURCE-PAYLOAD-SPECIFIC — the same shape over an `int` payload builds and
+# runs fine, so a trivial-payload fixture would be a false negative.
+# INTENDED (asserted): 11.
+# TODO: delete this file when the class-retirement guard (Core #6 follow-up)
+# lands — the guard subsumes this axis cell. See TODO.md §Guards.
+
+struct Money:
+    Vector[int] cents
+
+struct Holder:
+    Option[Money] slot
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Option[Money] make_opt(int n):
+    return Some(Money(heap_cents(n)))
+
+void main():
+    Holder h = Holder(make_opt(11))
+    Money r = h.slot.unwrap_or_else((): Money(heap_cents(9)))
+    if h.slot is Some(m2):
+        print(size_of(m2))
