@@ -1,0 +1,85 @@
+from std.collections import Vector
+
+# CoW write-through: a NESTED-place mut-method receiver on a value-struct
+# element of a Vector — `hs[0].c.bump()` (EFieldAccess-of-EIndex) and its
+# deeper cousin `ws[0].h.c.bump()` — is an unbroken owned place → the
+# mutating `&self` method WRITES THROUGH to the collection's heap buffer
+# (language-design §3.1 + CoW default-borrow at ownership boundaries,
+# uniform for `&self` receivers). Rust gg has done this since R39-T1 /
+# solid-ground R1 via `try_resolve_field_place`'s `Expr::Index` object
+# arm (`src/ir/lowering/exprs/methods.rs:2196-2215`); this fixture pins
+# the self-host after Track X wired the SH `EMethodCall` arm to route
+# EFieldAccess-rooted mut-method receivers through the shared write-only
+# `&`-formation producer `lower_amp_place` — the same producer that
+# already powered `lower_field_place_base`'s EFieldAccess arm.
+#
+# Pre-Track-X the SH `EMethodCall` `_r37_mut` match matched ONLY a bare
+# `EIndex(coll, idx)` receiver (Track V's landing). For `hs[0].c.bump()`
+# the receiver is `EFieldAccess(EIndex(hs, 0), "c")`, so the arm didn't
+# fire; control fell through to `lower_recv_place` whose EFieldAccess
+# arm matches only `ESelfExpr`/`EIdentifier` bases → an EIndex base
+# fell through to `lower_place_base(recv_expr)` which walked it as a
+# VALUE READ (`gorget_array_get` typed as bare `Holder`, not
+# `Ptr(Holder)`), so `bump` mutated a throwaway stack copy and the
+# writes were silently dropped. The fix adds an `EFieldAccess(_, _)`
+# case to Track V's `_r37_mut`-gated match that recurses through
+# `lower_amp_place`'s `amp_object_base` (`EIndex` → element pointer via
+# `lower_index_element_ptr_place`, then `GIFieldLoad` into a
+# `GtPtr(field)+LoBorrowed` dst — an alias INTO the heap slot). Same
+# `_r37_mut` gate as V, so value-struct `.clone()` receivers stay a
+# value read.
+#
+# Expected-output adjudication (campaign principle 1):
+#  - `hs[i].c.bump()` (const AND non-const index) and the deeper
+#    `ws[0].h.c.bump()` on `Vector[Holder]` / `Vector[Wrap]` are IN
+#    ggdef's subset (navigate_write handles Vector-Index + Struct-Field
+#    projections + a mutating equip method) and are ggdef-adjudicated
+#    to the write-through counts.
+
+struct Counter:
+    int n
+
+equip Counter:
+    void bump(&self):
+        self.n = self.n + 1
+    Counter clone(self):
+        return Counter(self.n)
+
+struct Holder:
+    Counter c
+    int id
+
+struct Wrap:
+    Holder h
+    int tag
+
+void main():
+    # Base case — field-of-Index mut-method receiver on a VALUE element.
+    Vector[Holder] hs = [Holder(Counter(0), 1), Holder(Counter(5), 2)]
+    hs[0].c.bump()           # nested-place (EFieldAccess-of-EIndex)
+    hs[0].c.bump()           # repeated — accumulates through the buffer
+    print(hs[0].c.n)         # 2   (write-through, 0 + 1 + 1)
+    print(hs[1].c.n)         # 5   (sibling untouched)
+
+    # Non-const index — same write-through class (const-fold cannot elide).
+    int i = 0
+    hs[i].c.bump()
+    print(hs[i].c.n)         # 3   (write-through, 2 + 1)
+
+    # Deeper nesting — field-of-field-of-Index (axis-completeness, Core #12).
+    Vector[Wrap] ws = [Wrap(Holder(Counter(0), 1), 10), Wrap(Holder(Counter(7), 2), 20)]
+    ws[0].h.c.bump()
+    ws[0].h.c.bump()
+    ws[0].h.c.bump()
+    print(ws[0].h.c.n)       # 3   (write-through, 0 + 1 + 1 + 1)
+    print(ws[1].h.c.n)       # 7   (sibling untouched)
+
+    # 1B guard — value-struct `.clone()` receiver on the SAME nested
+    # shape must skip the pointer path (Copy-ish elision returns the
+    # receiver's VALUE — a ptr in a value slot would cc-fail). Same
+    # `_r37_mut` gate that V uses.
+    Counter cx = hs[0].c.clone()
+    print(cx.n)              # 3   (clone of the write-through-mutated slot)
+    cx.bump()
+    print(cx.n)              # 4   (mutation on the local clone)
+    print(hs[0].c.n)         # 3   (original untouched by clone-then-mutate)

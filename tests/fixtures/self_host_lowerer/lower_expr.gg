@@ -3723,9 +3723,9 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # method-call arm sees `LoBorrowed` → `OpBorrow(recv)`, and the LIR
             # `OpBorrow` arm (lir_lower.gg:~3665) detects a Ptr-typed slot and
             # emits `ISlotLoad` of the pointer VALUE (not `&slot`), so the
-            # method's `T* self` ABI receives the buffer-slot address. Field-
-            # of-index (`hs[0].c.bump()`) already goes through
-            # `lower_recv_place`'s EFieldAccess-on-bare-local arm.
+            # method's `T* self` ABI receives the buffer-slot address. The
+            # sibling EFieldAccess arm below (Track X) handles the nested
+            # `hs[0].c.bump()` shape by routing through `lower_amp_place`.
             #
             # 1B lesson (DONE.md 2026-07-16): this producer is WRITE-ONLY. A
             # value-struct `.clone()` receiver on the SAME `cs[i]` shape must
@@ -3743,6 +3743,25 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 match (*recv_box).expr:
                     case EIndex(_tv_coll_box, _tv_idx_box):
                         recv = lower_index_element_ptr_place(&ctx, *_tv_coll_box, *_tv_idx_box, true, false, &gmod)
+                    case EFieldAccess(_, _):
+                        # Track 2F — sibling of the EIndex arm above for the
+                        # nested-place mut method receiver `hs[0].c.bump()`
+                        # (EFieldAccess-of-EIndex) and any EFieldAccess-rooted
+                        # place shape. `lower_amp_place` is the SAME shared
+                        # `&`-formation write-only producer used by
+                        # `lower_field_place_base`'s EFieldAccess arm
+                        # (`lower_stmt.gg`), so the mut-method receiver face
+                        # and the field-store face cannot drift into a
+                        # served-at-one-face asymmetry. It recurses through
+                        # `amp_object_base` on the base (`hs[0]` → element
+                        # pointer via `lower_index_element_ptr_place`), then
+                        # loads the field via `GIFieldLoad` into a
+                        # `GtPtr(field)+LoBorrowed` dst — an alias INTO the
+                        # collection's heap buffer. Declines (-1) for a
+                        # `Ref[T]`/`MutRef[T]` field (their storage IS the
+                        # pointer) or a ReadGuard base, falling through to
+                        # `lower_recv_place` unchanged.
+                        recv = lower_amp_place(&ctx, *recv_box, &gmod)
                     else:
                         pass
             # Place base — a method receiver is passed as `self` BY POINTER,

@@ -17,10 +17,12 @@ from std.collections import Vector
 #    a static addressed by its own name is an owned place, so the store
 #    writes through (99, then 3+100=103); the untouched sibling stays.
 #
-# The NESTED (`ns[0].inner.val = x`) and value-field-METHOD-receiver
-# (`hs[0].c.bump()`) shapes route through a chained EFieldAccess place base,
-# NOT the EIndex arm, so they stay in the inline Rust test
-# `rust_value_index_element_field_writethrough` (nested-place / Track 2F).
+# The value-field-METHOD-receiver `hs[0].c.bump()` shape is covered by the
+# sibling fixture `cow_value_index_nested_mut_recv_writethrough.gg` (Round XIII
+# Track X). The remaining NESTED store `ns[0].inner.val = x` still routes
+# through a chained EFieldAccess place base on the SH lane and stays in the
+# inline Rust test `rust_value_index_element_field_writethrough` until its SH
+# twin lands.
 
 struct Point:
     int x
