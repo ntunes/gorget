@@ -1,0 +1,33 @@
+# LIVE REGRESSION (twin) — the METHOD-CALL `&`-arg spelling of the closure-
+# body write. Primary sibling `closure_amp_body_inert_reject.gg` pins the
+# `Expr::Call` arm; this file pins the `Expr::MethodCall` arm that Track U
+# extended alongside it (same fix, same producer, same diagnostic).
+#
+# INTENDED (post-Track-U interim, pre-D7): check-time REJECT with
+# `E_ReadWhileMutCaptured` at the outer read. Under the D7 capture-syntax
+# package the sigil will belong in a capture list `(&total)(): ...`, at which
+# point the in-body sigil path may relax; until then, reject.
+#
+# Two arms of the SAME class need their own rows so a partial regression trips
+# a dedicated fixture (Core #11 / #12: axis-complete net; each arm is its own
+# cell of the "closure-body `&`-arg" axis).
+#
+# The seed is COMPUTED so const-folding cannot elide the store.
+
+struct H:
+    int spare
+
+equip H:
+    void merge(self, int n, int &sink):
+        sink = sink + n
+
+int seed():
+    return 10
+
+void main():
+    H h = H(0)
+    int total = seed()
+    auto f = ():
+        h.merge(1, &total)
+    f()
+    print(total)

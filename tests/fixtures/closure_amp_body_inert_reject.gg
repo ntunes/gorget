@@ -1,0 +1,55 @@
+# LIVE REGRESSION — a `&` sigil written INSIDE a closure body no longer
+# silently drops the write; it now check-time REJECTS with
+# `E_ReadWhileMutCaptured` on BOTH the projection row and the whole-bare-local
+# row, matching the assignment spelling (`a.fd = 11`) which had this diagnostic
+# from the start.
+#
+# INTERIM behaviour (Track U, Round XIII): reject. Under the ratified D7
+# capture-syntax package the sigil belongs in a per-variable capture list —
+# `(&count)(): ...` — at which point the boundary is spelled at the crossing
+# and an in-body sigil path may relax. Until D7 lands, in-body sigil = reject
+# so no user program relies on a silently-vanished write.
+#
+# ROOT (retired): `CapturedMutationCollector`
+# (`src/semantic/safety/return_borrows.rs`) recognised THREE closure-body
+# mutation forms — `Stmt::Assign`, `Stmt::CompoundAssign`, `&self` method
+# receiver — with NO arm for `Ownership::MutableBorrow` call args. Track U
+# added the fourth arm (Core #4: fix the class at the producer, not the
+# instance) so both `Expr::Call` and `Expr::MethodCall` args classify the
+# same as the receiver / assignment cases and flow through the existing
+# `BorrowCaptureMode::Mutable` → `E_ReadWhileMutCaptured` machinery.
+#
+# BOUNDARY-MODEL rationale (why this is reference-grade): a boundary is where
+# a value CROSSES FROM ONE SCOPE INTO ANOTHER, and the sigil is written AT the
+# crossing. For a closure the crossing is at CAPTURE — Gorget infers the mode
+# from the body until D7 lands — so an in-body sigil sits AFTER the crossing.
+# Two spellings of one intent must not disagree; rejecting the vanished-write
+# spelling keeps the language honest until the capture list arrives.
+#
+# ORACLE: ggdef cannot adjudicate — closures are outside the phase-0 subset.
+# TWIN: `closure_amp_method_arg_body_reject.gg` covers the `Expr::MethodCall`
+# arm; this file covers the `Expr::Call` arm.
+#
+# The seeds are COMPUTED, not literals, so const-folding cannot elide the store.
+
+struct B:
+    int fd
+
+int seed():
+    return 10
+
+void bumpi(int &x):
+    x = x + 1
+
+void main():
+    B b = B(seed())
+    auto f1 = ():
+        bumpi(&b.fd)
+    f1()
+    print(b.fd)
+
+    int loc = seed()
+    auto f2 = ():
+        bumpi(&loc)
+    f2()
+    print(loc)
