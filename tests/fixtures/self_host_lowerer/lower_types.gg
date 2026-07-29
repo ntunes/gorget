@@ -2582,6 +2582,57 @@ int infer_method_return_type(String method, int recv, LowerCtx ctx, GirModule &g
                         pass
             case None:
                 pass
+    # `Mutex[T].lock()` → `Guard[T]`; `RWLock[T].read()` → `ReadGuard[T]`;
+    # `RWLock[T].write()` → `WriteGuard[T]`. Mirrors Rust builtins.rs:672–728
+    # (MUTEX.lock / RWLOCK.read|write return_type closures). Gated on the
+    # TYPED method_prefix (`gorget_mutex` / `gorget_rwlock` via
+    # resource_meta_for, Core #2) — NOT a Guard-style name-prefix strip to
+    # the element type (that path is for Guard.get → T). Without these arms
+    # the call falls to I64, so the GIR slot is `int64_t` while the runtime
+    # returns `gorget_guard_t` / `gorget_read_guard_t` / `gorget_write_guard_t`
+    # (cc: incompatible types; fixtures guard_boxed_trait_dispatch,
+    # rwlock_chained_read_get, rwlock_chained_write_set). Monomorph method
+    # names (`Mutex__T__lock`) are not map_mono_to_runtime'd, so GIR typing
+    # is load-bearing; CallExtern→SlotStore then picks the aggregate slot
+    # via apply_callextern_slotstore_override. Strip lengths: Mutex__ = 7,
+    # RWLock__ = 8 (mechanical after the typed gate).
+    if method == "lock" or method == "read" or method == "write":
+        String lk_recv = ""
+        if recv >= 0 and recv < ctx.locals.len():
+            int lk_tid = ctx.locals.get(recv).unwrap().type_id
+            if lk_tid >= 0 and lk_tid < gmod.type_table.len():
+                GirType lk_gt0 = gmod.type_table.get(lk_tid).unwrap()
+                match lk_gt0:
+                    case GtPtr(lk_in):
+                        lk_tid = lk_in
+                    case GtMutPtr(lk_in2):
+                        lk_tid = lk_in2
+                    else:
+                        pass
+            if lk_tid >= 0 and lk_tid < gmod.type_table.len():
+                GirType lk_gt = gmod.type_table.get(lk_tid).unwrap()
+                match lk_gt:
+                    case GtNamed(lk_n):
+                        lk_recv = lk_n
+                    else:
+                        pass
+        match resource_meta_for(&gmod, lk_recv):
+            case Some(lk_meta):
+                match lk_meta.method_prefix:
+                    case Some(lk_pfx):
+                        if method == "lock" and lk_pfx == "gorget_mutex":
+                            String lk_elem = lk_recv.slice(7, lk_recv.len())
+                            return lookup_or_register_named(&gmod, "Guard__" + lk_elem)
+                        if method == "read" and lk_pfx == "gorget_rwlock":
+                            String rd_elem = lk_recv.slice(8, lk_recv.len())
+                            return lookup_or_register_named(&gmod, "ReadGuard__" + rd_elem)
+                        if method == "write" and lk_pfx == "gorget_rwlock":
+                            String wr_elem = lk_recv.slice(8, lk_recv.len())
+                            return lookup_or_register_named(&gmod, "WriteGuard__" + wr_elem)
+                    case None:
+                        pass
+            case None:
+                pass
     # Default to I64 for unknown methods
     return I64_TYPE
 

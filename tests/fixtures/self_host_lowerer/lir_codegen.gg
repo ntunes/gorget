@@ -3089,6 +3089,26 @@ int runtime_fn_return_type(String name, LirModule m):
         return LT_I64
     if name == "gorget_math_infinity" or name == "gorget_math_nan":
         return LT_F64
+    # Process/exec: `gorget_exec_output` returns ExecResult by value
+    # (`{Str output, Str errors, int64_t exit_code}`). Without this the
+    # CallExtern dst falls to LT_I64 → cc rejects `int64_t = ExecResult`
+    # (test_process, exec_output_captures_stderr). LIR struct name is
+    # `ExecResult` (same as C typedef; is_lir_named_struct).
+    if name == "gorget_exec_output":
+        return find_struct_type("ExecResult", m)
+    # Crypto: `gorget_crypto_x25519_keygen` returns GorgetX25519KeyPair by
+    # value. LIR/GIR name is `X25519KeyPair` (lib/xtd/crypto.gg); C spelling
+    # `GorgetX25519KeyPair` is only via `lir_to_runtime_name`. Looking up
+    # the C-prefixed name misses → LT_PTR, and infer_inst_type treats
+    # rt_ret != LT_VOID as success — silent wrong type. Use the LIR name.
+    if name == "gorget_crypto_x25519_keygen":
+        return find_struct_type("X25519KeyPair", m)
+    # Locks (gorget_mutex_lock / gorget_rwlock_read / gorget_rwlock_write)
+    # return guard structs by value, but monomorph methods
+    # (`Mutex__T__lock`) are NOT remapped by map_mono_to_runtime — GIR
+    # method return typing (infer_method_return_type → Guard__/ReadGuard__/
+    # WriteGuard__) + apply_callextern_slotstore_override owns the type.
+    # Bare runtime arms are intentionally NOT registered here (Option A).
     return LT_VOID
 
 # Known void-returning runtime functions (used to suppress assignment in emit).
@@ -3157,9 +3177,13 @@ bool is_void_runtime_fn(String name):
     if name == "gorget_shared_set" or name == "gorget_shared_free":
         return true
     # NOTE: gorget_mutex_lock / gorget_rwlock_read / gorget_rwlock_write are
-    # NOT void — they return a `gorget_guard_t` struct by value (the acquired
-    # guard). Their dst-store + struct-copy-into-`g` chain must run, so they
-    # are intentionally absent here and typed in `runtime_fn_return_type`.
+    # NOT void — they return a guard struct by value (gorget_guard_t /
+    # gorget_read_guard_t / gorget_write_guard_t). Their dst-store chain must
+    # run, so they are intentionally absent here. Return typing is owned by
+    # GIR `infer_method_return_type` (lock/read/write → Guard__/ReadGuard__/
+    # WriteGuard__ monomorphs) + `apply_callextern_slotstore_override` when
+    # the GIR slot is aggregate — NOT by bare arms in runtime_fn_return_type
+    # (Option A; monomorph names are not map_mono_to_runtime'd).
     if name == "gorget_mutex_unlock" or name == "gorget_mutex_free":
         return true
     if name == "gorget_rwlock_free":
