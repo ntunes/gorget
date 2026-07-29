@@ -3476,7 +3476,14 @@ fn try_lower_option_result_combinator(
     if args.is_empty() { return None; }
 
     // Resolve the receiver's TypeId and the result type for the combinator.
-    let recv_type = infer_operand_type_full(ctx, &recv, builder);
+    // If recv is Ptr(T) (a bare-borrow parameter), unwrap to the VALUE type —
+    // the scrut_local + all extraction ops need an owned T, not a T*.
+    let raw_recv_type = infer_operand_type_full(ctx, &recv, builder);
+    let recv_type = match ctx.type_registry.get(raw_recv_type) {
+        Some(GirType::Ptr(inner)) | Some(GirType::MutPtr(inner)) => *inner,
+        _ => raw_recv_type,
+    };
+    let recv_is_ptr = recv_type != raw_recv_type;
 
     // Resolve inner types from the TypeDef (needed for bail check below)
     let (some_ok_type, none_err_type) = if is_option {
@@ -3533,38 +3540,69 @@ fn try_lower_option_result_combinator(
     // We use (b) for now. Last-use liveness analysis can later refine
     // this to pick Move at last-use sites.
     let scrut_local = builder.add_local(recv_type, None);
-    let recv_place = match &recv {
-        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => Some(p.clone()),
-        _ => None,
-    };
-    if let Some(ref p) = recv_place {
-        if let Some(clone_fn) = ctx.clone_fn_for_ptr(recv_type) {
-            // `args` is non-empty here (guarded above); use the closure arg's
-            // span as the diagnostic site for this combinator-receiver clone.
-            ctx.warn_clone_and_hit(builder, args[0].span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
-            let ptr_type = ctx.register_ptr_type(recv_type);
-            let ptr_local = builder.add_local(ptr_type, None);
-            builder.emit_borrow(ptr_local, p.clone());
-            let cloned = builder.call_clone(
-                &clone_fn,
-                vec![FunctionBuilder::copy(ptr_local)],
-                recv_type,
-                crate::ir::ImplicitCloneReason::CallArg,
-            );
-            ctx.set_owned(builder, cloned);
-            builder.assign_mode(
-                crate::ir::instructions::AssignMode::Move,
-                Place::local(scrut_local),
-                FunctionBuilder::copy(cloned),
-            );
-            builder.move_zero(Place::local(cloned));
+    // SCOUT: uniform materialization for ANY receiver shape (bare place,
+    // projected place, Ptr(T) borrow-param). Previously only a bare, non-
+    // projected place with a registered clone_fn was cloned; projected and
+    // Ptr recvs fell through to plain Copy, creating a shallow alias that
+    // enum_field_load_move then emptied — corrupting caller storage on
+    // map/filter/or_else (Core #1: fix at the write site).
+    //
+    // Build a Ptr(recv_type) that points at the receiver's storage in every
+    // case where recv is a place; then either clone through the ptr (deep,
+    // safe) or load-then-copy (fallback when no clone fn exists).
+    let ptr_local_opt: Option<LocalId> = if let Operand::Copy(ref p) | Operand::Move(ref p) = recv {
+        let ptr_type = ctx.register_ptr_type(recv_type);
+        let ptr_local = builder.add_local(ptr_type, None);
+        if recv_is_ptr && p.projections.is_empty() {
+            // recv is already a Ptr(T) value — pass the pointer through.
+            builder.assign(Place::local(ptr_local), FunctionBuilder::copy(p.local));
         } else {
-            // No clone fn registered — fall back to plain Copy. Validator
-            // may flag; can be refined when clone routing covers this type.
-            builder.assign(Place::local(scrut_local), recv.clone());
+            // Bare place or projected place — borrow into a Ptr(T).
+            builder.emit_borrow(ptr_local, p.clone());
         }
+        Some(ptr_local)
     } else {
-        // Non-place operand (constants, etc.) — Copy is safe.
+        None
+    };
+    if let (Some(ptr_local), Some(clone_fn)) = (ptr_local_opt, ctx.clone_fn_for_ptr(recv_type)) {
+        // `args` is non-empty here (guarded above); use the closure arg's
+        // span as the diagnostic site for this combinator-receiver clone.
+        ctx.warn_clone_and_hit(builder, args[0].span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
+        let cloned = builder.call_clone(
+            &clone_fn,
+            vec![FunctionBuilder::copy(ptr_local)],
+            recv_type,
+            crate::ir::ImplicitCloneReason::CallArg,
+        );
+        ctx.set_owned(builder, cloned);
+        builder.assign_mode(
+            crate::ir::instructions::AssignMode::Move,
+            Place::local(scrut_local),
+            FunctionBuilder::copy(cloned),
+        );
+        builder.move_zero(Place::local(cloned));
+    } else if let Some(ptr_local) = ptr_local_opt {
+        // No clone fn — load through the ptr into scrut_local. Downstream may
+        // still be unsound for a resource type, but this is no worse than the
+        // previous plain-Copy fallback and preserves the pre-fix behavior for
+        // trivial-copy receivers.
+        //
+        // Core #14 guard (REV-P1 RSV-5): this fallback is only sound when
+        // recv_type is trivial-copy. If a resource type reaches here, upstream
+        // has failed to register a clone_fn — the class-fix's invariant is
+        // that any destructive receiver-extraction happens on an OWNED
+        // scrut_local, and load_ref of a resource is not that. debug_assert!
+        // so the class-retirement guard (Core #6 follow-up) has a concrete
+        // enforcement point to graduate.
+        debug_assert!(
+            !ctx.type_registry.is_resource_type(recv_type),
+            "combinator fallback path (load_ref, no clone_fn) reached for resource type {:?} — clone_fn registration missing at upstream write site",
+            recv_type
+        );
+        let loaded = builder.load_ref(Place::local(ptr_local), recv_type);
+        builder.assign(Place::local(scrut_local), FunctionBuilder::copy(loaded));
+    } else {
+        // Non-place operand (constants) — Copy is safe.
         builder.assign(Place::local(scrut_local), recv.clone());
     }
 
@@ -3649,6 +3687,22 @@ fn try_lower_option_result_combinator(
                     }
                     ctx.lookup_type_by_name(&result_name).unwrap_or(recv_type)
                 }
+            } else {
+                recv_type
+            }
+        }
+        "and_then" | "flat_map" => {
+            // Closure returns Option[U] or Result[U, E] — that IS the result type.
+            // Previously fell through to `_ => recv_type`, which for Option[Money]
+            // → Option[int] produced an Option[Money]-typed result_local that the
+            // closure's Option[int] return got Move-assigned into — LLVM verifier
+            // caught the i64-vs-ptr phi; the C backend silently emitted the
+            // memcpy and dereffed an int as a Vector[int] handle → SIGSEGV.
+            // (Core #1 write-site fix: the wrong type was chosen when result_local
+            // was allocated, not at the assign.)
+            let closure_ret = infer_closure_return_type(ctx, &closure_op, builder);
+            if closure_ret != UNIT_TYPE {
+                closure_ret
             } else {
                 recv_type
             }
@@ -3777,7 +3831,16 @@ fn try_lower_option_result_combinator(
         }
         "unwrap_or_else" if is_option => {
             // unwrap_or_else: None → fn()
+            // SCOUT: for a resource payload, the closure's return value must be
+            // tagged Owned before it flows into result_local (Tier 2a). Without
+            // this, the closure-call result dst is Untracked and the AssignInto-
+            // OwnedSlot validator panics (`ICE at mod.rs:2127`).
             let result = call_closure_in_adapter(ctx, builder, &closure_op, vec![], some_ok_type);
+            if let Operand::Copy(ref p) | Operand::Move(ref p) = result {
+                if p.projections.is_empty() {
+                    ctx.set_owned(builder, p.local);
+                }
+            }
             assign_result_local_move(builder, result_local, result);
         }
         "map" | "and_then" | "flat_map" if is_result => {
