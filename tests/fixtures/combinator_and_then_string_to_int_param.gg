@@ -1,0 +1,15 @@
+# CELL: `.and_then()` × bare-param recv × Option[String] → Option[int]
+# COMMITTED Round XV Track B — sibling combinator on String payload.
+# PRE-FIX (RED-verified at HEAD e7abec29, scout): free-panic (same bail →
+# wrong result type class as map).
+# INTENDED: `2`, exit 0.
+# AXIS SAMPLE: payload=String · combinator=and_then · ret=Option[int] ·
+# recv=bare-param.
+
+void call_it(Option[String] p):
+    Option[int] r = p.and_then((String s): Some(s.len()))
+    if r is Some(v):
+        print(v)
+
+void main():
+    call_it(Some("hi"))

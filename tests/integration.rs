@@ -37804,38 +37804,92 @@ fn sound_amp_bareparam_root_materialize() {
     );
 }
 
-/// KNOWN GAP — string-coercion combinator fallback path (bare-param).
-/// `.map()` on `Option[String]` bails to the C-inline path via `has_string_coercion`
-/// BEFORE reaching the Round XIV class-fix; the fallback path has its own clone
-/// site at methods.rs ~L2020-2053 with distinct `!is_last_use` semantics. Not
-/// fixed by 74f566c6. Post-fix behaviour: heap-corruption panic on cleanup
-/// (`gorget_string_free invariant: cap=... but alloc=NULL`) — RED-verified.
-/// See TODO.md §CoW > ### High "String-coercion combinator fallback path
-/// shares receiver-ownership class" for the OWED follow-up-round port.
+// ---- Round XV Track B — String payload combinator axis (bail retired) ----
+// Root: `has_string_coercion` bailed map/filter/and_then/flat_map/uoe/or_else
+// when Some/Ok was GorgetString, forcing C-inline while GIR typed the result
+// as the *receiver* type → size-mismatched Option[String] over Option[int].
+// Fix: remove bail; XIV adapter owns String. Graduated known_gaps + axis net.
+
+/// GRADUATED Round XV Track B — bare-param Option[String].map → int.
+/// PRE-FIX: free-panic after `hi` (C exit 1); LLVM 139. Former known_gap
+/// `sound_option_string_coercion_map_param`.
 #[test]
-#[ignore = "KNOWN GAP: string-coercion `.map()` on Option[String] bare-param bails to the C-inline \
-fallback path (methods.rs L3517-3527) which shares the receiver-ownership class the Round XIV \
-adapter fix retired. Panics at gorget_string_free after printing readback. TODO.md §CoW."]
-fn sound_option_string_coercion_map_param() {
+fn combinator_map_string_to_int_param() {
     run_gg(
-        "known_gaps/sound_option_string_coercion_map_param.gg",
+        "combinator_map_string_to_int_param.gg",
         "\
 2
 hi",
     );
 }
 
-/// KNOWN GAP — string-coercion combinator fallback path (field-access).
-/// Sibling of `sound_option_string_coercion_map_param`; same class, projected
-/// place recv shape. See sibling for analysis.
+/// GRADUATED Round XV Track B — field-access Option[String].map → int.
+/// PRE-FIX: free-panic (C); LLVM 135. Former known_gap
+/// `sound_option_string_coercion_map_field`.
 #[test]
-#[ignore = "KNOWN GAP: string-coercion `.map()` on Option[String] field-access takes the same \
-C-inline fallback path. Panics at gorget_string_free after printing readback. TODO.md §CoW."]
-fn sound_option_string_coercion_map_field() {
+fn combinator_map_string_to_int_field() {
     run_gg(
-        "known_gaps/sound_option_string_coercion_map_field.gg",
+        "combinator_map_string_to_int_field.gg",
         "\
 2
+hi",
+    );
+}
+
+/// Round XV Track B — plain-local Option[String].map → int axis pin.
+/// PRE-FIX RED (SIGSEGV / free-panic).
+#[test]
+fn combinator_map_string_to_int_local() {
+    run_gg(
+        "combinator_map_string_to_int_local.gg",
+        "\
+2
+hi",
+    );
+}
+
+/// Round XV Track B — Option[String].and_then → Option[int].
+/// PRE-FIX free-panic.
+#[test]
+fn combinator_and_then_string_to_int_param() {
+    run_gg("combinator_and_then_string_to_int_param.gg", "2");
+}
+
+/// Round XV Track B — Option[String].flat_map → Option[int].
+/// PRE-FIX BUILD_FAIL on C.
+#[test]
+fn combinator_flat_map_string_to_int_param() {
+    run_gg("combinator_flat_map_string_to_int_param.gg", "2");
+}
+
+/// Round XV Track B — Result[String,int].map → Result[int,int] (Ok=String).
+/// PRE-FIX free-panic.
+#[test]
+fn combinator_result_ok_string_map_to_int_param() {
+    run_gg(
+        "combinator_result_ok_string_map_to_int_param.gg",
+        "\
+2
+hi",
+    );
+}
+
+/// Round XV Track B — Result[String,int].and_then → Result[int,int].
+/// PRE-FIX SILENT WRONG (`|hi` type-confused Ok) — Core #8 costume.
+#[test]
+fn combinator_result_ok_string_and_then_to_int_param() {
+    run_gg("combinator_result_ok_string_and_then_to_int_param.gg", "2");
+}
+
+/// Round XV Track B — same-type Option[String].map → String CONTROL.
+/// PRE-FIX GREEN on C-inline (accidental same-type size match). Header records
+/// path change only — no pre-fix RED. Pins adapter still correct for same-type.
+#[test]
+fn combinator_map_string_to_string_param() {
+    run_gg(
+        "combinator_map_string_to_string_param.gg",
+        "\
+HI
 hi",
     );
 }

@@ -1,0 +1,21 @@
+# CELL: `.map()` × field-access recv × Option[String] → Option[int]
+# GRADUATED Round XV Track B — sibling of combinator_map_string_to_int_param
+# (recv shape = projected place, not Ptr(T)).
+# PRE-FIX (RED-verified at HEAD e7abec29, C and LLVM):
+#   C: exit=1, stdout `hi` then free-invariant panic; LLVM exit 135.
+# Same root: has_string_coercion bail → wrong GIR result type (Option[String]
+# over Option[int]) → size-mismatched free. L2020 clone does not fire (projected).
+# INTENDED: `2\nhi`, exit 0.
+# AXIS SAMPLE: payload=String · combinator=map · ret=int · recv=field.
+# FORMER NAME: known_gaps/sound_option_string_coercion_map_field.gg
+
+struct Wrap:
+    Option[String] s
+
+void main():
+    Wrap w = Wrap(Some("hi"))
+    Option[int] r = w.s.map((String s): s.len())
+    if r is Some(v):
+        print(v)
+    if w.s is Some(s2):
+        print(s2)

@@ -1,0 +1,20 @@
+# CELL: `.map()` × bare-param recv × Option[String] → Option[String] (SAME-TYPE)
+# COMMITTED Round XV Track B — CONTROL pin for path change.
+# PRE-FIX: GREEN on the C-inline / has_string_coercion bail path (accidental:
+# result type coincided with recv type, so size-mismatched memcpy did not
+# fire). No pre-fix RED — this pins that post-fix the adapter path keeps
+# same-type map correct (Core #12 Q6 / brief B2).
+# PATH CHANGE: post-fix routes through try_lower_option_result_combinator
+# (extra clone) instead of C-inline; behavior must stay `HI\nhi`.
+# AXIS SAMPLE: payload=String · combinator=map · ret=String · recv=bare-param.
+# Not coverage for cross-type cells — see combinator_map_string_to_int_*.
+
+void call_it(Option[String] p):
+    Option[String] r = p.map((String s): s.to_upper())
+    if r is Some(v):
+        print(v)
+    if p is Some(s2):
+        print(s2)
+
+void main():
+    call_it(Some("hi"))
