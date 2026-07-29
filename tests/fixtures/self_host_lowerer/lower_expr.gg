@@ -3681,6 +3681,42 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             pass
             if _r37_mut:
                 cow_materialize_projected_root(&ctx, &gmod, *recv_box)
+            # Track V — SH mirror of Rust's `try_resolve_index_element_ptr`
+            # method-receiver path (src/ir/lowering/exprs/methods.rs:2229-2266).
+            # A bare Index mut receiver `cs[i].bump()` on a VALUE-typed element
+            # is silently dropped by the base `lower_recv_place` path: its
+            # EIndex fallback runs `lower_expr(EIndex)` → `lower_index_access`
+            # which mints a VALUE COPY (`gorget_array_get` typed as the bare
+            # element, not `Ptr(elem)`), so the mut method borrows that
+            # throwaway and the mutation never reaches the collection buffer.
+            # Route mutating-method Index receivers through the shared
+            # WRITE-ONLY element-ptr producer instead — the returned `GtPtr(elem)`
+            # (LoBorrowed) aliases the collection's heap slot; downstream the
+            # method-call arm sees `LoBorrowed` → `OpBorrow(recv)`, and the LIR
+            # `OpBorrow` arm (lir_lower.gg:~3665) detects a Ptr-typed slot and
+            # emits `ISlotLoad` of the pointer VALUE (not `&slot`), so the
+            # method's `T* self` ABI receives the buffer-slot address. Field-
+            # of-index (`hs[0].c.bump()`) already goes through
+            # `lower_recv_place`'s EFieldAccess-on-bare-local arm.
+            #
+            # 1B lesson (DONE.md 2026-07-16): this producer is WRITE-ONLY. A
+            # value-struct `.clone()` receiver on the SAME `cs[i]` shape must
+            # stay a value read (`.clone()` is Copy-ish-elided to identity —
+            # returning the receiver's value directly; a pointer receiver would
+            # assign `void*` into a value dst → cc-fail). The `_r37_mut` gate
+            # (the SAME typed mutation flag used for the CoW materialize above)
+            # is exactly Rust's `needs_mut` filter — read-only methods skip
+            # this path unchanged. `require_struct_elem=false` mirrors the
+            # `&`-formation call-arg producer (`lower_amp_place` EIndex, :752):
+            # a scalar-element mutating method (unusual but permitted; e.g. a
+            # trait-instance user equip on int) still wants the ptr.
+            int recv = -1
+            if _r37_mut:
+                match (*recv_box).expr:
+                    case EIndex(_tv_coll_box, _tv_idx_box):
+                        recv = lower_index_element_ptr_place(&ctx, *_tv_coll_box, *_tv_idx_box, true, false, &gmod)
+                    else:
+                        pass
             # Place base — a method receiver is passed as `self` BY POINTER,
             # so a `&`/`!`-param (`GtMutPtr`) receiver must stay the pointer
             # (else the method mutates a discarded dereffed copy, not the
@@ -3690,7 +3726,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # by-value copy (ROOT-A lazy-iterator SPIN); it delegates every
             # non-field-receiver shape to `lower_place_base` unchanged, which
             # bypasses Edit-1's value-read deref for a bare identifier.
-            int recv = lower_recv_place(&ctx, *recv_box, &gmod)
+            if recv < 0:
+                recv = lower_recv_place(&ctx, *recv_box, &gmod)
             if mname == "unwrap" or mname == "unwrap_or" or mname == "expect":
                 # `unwrap`, `expect`, and `unwrap_or` share this intercept so
                 # the Option[Ref[T]] ref-payload deref (Phase 3 below) applies

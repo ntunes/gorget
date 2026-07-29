@@ -24958,6 +24958,37 @@ fn cow_value_index_field_writethrough() {
     );
 }
 
+/// Round XIII Track V corpus fixture (C + LLVM lanes; the self-host lane
+/// auto-enrolls via the `runtime_snapshots/cow_value_index_bare_mut_recv_writethrough.out`
+/// snapshot net). A bare Index mut-method receiver on a VALUE-typed element of
+/// a Vector (`cs[i].bump()`, both const-index and non-const-index) is an
+/// unbroken owned place → the mutating `&self` method WRITES THROUGH to the
+/// collection's heap buffer (language-design §3.1 + CoW default-borrow at
+/// ownership boundaries, uniform for `&self` receivers). Pre-Track-V the SH
+/// lane fell through to `lower_recv_place`'s EIndex fallback → `lower_index_access`
+/// which minted a value COPY typed as bare element (not `Ptr(elem)`), so `bump`
+/// mutated a throwaway stack slot and the writes were silently dropped
+/// (`0/10/2/0/0`). The fix routes mutating-method Index receivers through the
+/// shared write-only element-ptr producer `lower_index_element_ptr_place`
+/// (already used by field-writes and `&`-formation) gated on the CoW
+/// `_r37_mut` typed mutation flag. This fixture also pins the 1B guard: the
+/// value-struct `.clone()` receiver on the SAME `cs[0]` shape must skip the
+/// pointer path (Copy-ish elision returns the receiver's VALUE — a ptr in a
+/// value slot would cc-fail). Track 2F's nested EFieldAccess-of-EIndex shape
+/// (`hs[0].c.bump()`) remains in the inline Rust test until 2F lands.
+#[test]
+fn cow_value_index_bare_mut_recv_writethrough() {
+    run_gg(
+        "cow_value_index_bare_mut_recv_writethrough.gg",
+        "\
+2
+10
+3
+2
+2",
+    );
+}
+
 /// CoW Track 1C corpus fixture (C + LLVM lanes; the self-host lane auto-enrolls
 /// via the `runtime_snapshots/cow_dict_index_field_writethrough.out` snapshot
 /// net). A value-struct element of a Dict, addressed as `d[k].field`, is an
@@ -25455,7 +25486,13 @@ fn self_host_runtime_diff() {
     // 1323→1332 from the round's new fixtures (Track H's sound_amp_v_i_tuple_field_writethrough
     // + sound_tupstruct_field_writethrough graduated; Track I's 7 diagnostic fixtures — POS 1-4
     // + NEG 1-3, none of which are self_host_runtime_diff-eligible). Floor = 1244 − 5 jitter = 1239.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1254;
+    // Reseeded 2026-07-29 (round XIII Track V close: SH bare Index mut-method receiver
+    // write-through). MATCH 1255 / 1353 = 92.8%. Denom 1352→1353 from Track V's new
+    // `cow_value_index_bare_mut_recv_writethrough.gg` corpus fixture (auto-enrolled via its
+    // runtime snapshot). MATCH +1: the new fixture is a both-lane MATCH post-fix (SH pre-fix
+    // dropped the writes → `0/10/2/0/0`; post-fix `2/10/3/2/2` matches Rust). Bumped
+    // ratchet-tight to lock the improvement in the same commit.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1255;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
