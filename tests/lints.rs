@@ -7312,3 +7312,112 @@ fn amp_formation_faces_invoke_the_shared_place_producer() {
         exprs.len()
     );
 }
+
+/// Residual-predicate ban (Round XV Track D / Core #6 + Layering rule 2):
+/// the GIR "is this an Option/Result combinator?" decision at D1/D2/D3 used
+/// to be a multi-name `matches!(method_name, "map" | "and_then" | … | "flat_map" …)`
+/// blob. That debt is retired by `BuiltinMethodDecl.combinator_kind` +
+/// `ctx.builtin_combinator_kind`. A reintroduction of the full predicate blob
+/// re-opens name-list drift with the protocol table.
+///
+/// Scope is deliberately narrow:
+///   - ONLY `matches!(method_name, …)` forms whose arm set looks like the
+///     historical D1/D2/D3 predicates (≥5 of the 9 historical combinator names,
+///     including both `"and_then"` and `"flat_map"`).
+///   - Does NOT ban the collection HOF hint list (~`filter|map|flat_map|any|…`
+///     — no `and_then`).
+///   - Does NOT ban Phase-2 internal adapter arms (`match method_name { … }`
+///     form, or small `matches!` subsets like `"and_then" | "or_else" | "flat_map"`).
+///
+/// **If this fails:** a D1/D2/D3-shaped name-list came back. Route through
+/// `ctx.builtin_combinator_kind` (and `CombinatorKind::is_gir_adapter` for D1)
+/// instead of matching method names.
+#[test]
+fn no_combinator_predicate_name_match_in_methods() {
+    const HISTORICAL: &[&str] = &[
+        "map",
+        "and_then",
+        "or_else",
+        "filter",
+        "unwrap_or_else",
+        "flat_map",
+        "or",
+        "flatten",
+        "map_err",
+    ];
+
+    let content = fs::read_to_string("src/ir/lowering/exprs/methods.rs").unwrap_or_default();
+    let mut residuals: Vec<(usize, String)> = Vec::new();
+
+    // Scan for `matches!(method_name, …)` — allow the body to span lines.
+    let bytes = content.as_bytes();
+    let needle = b"matches!(method_name";
+    let mut search_from = 0usize;
+    while let Some(rel) = content[search_from..]
+        .as_bytes()
+        .windows(needle.len())
+        .position(|w| w == needle)
+    {
+        let start = search_from + rel;
+        // Find the matching close paren for this matches!(…).
+        let mut depth = 0i32;
+        let mut end = start;
+        let mut in_str = false;
+        let mut prev = b'\0';
+        for (i, &b) in bytes[start..].iter().enumerate() {
+            if in_str {
+                if b == b'"' && prev != b'\\' {
+                    in_str = false;
+                }
+            } else {
+                match b {
+                    b'"' => in_str = true,
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = start + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            prev = b;
+        }
+        if end <= start {
+            break;
+        }
+        let body = &content[start..end];
+        // Collect quoted string arms that are exact historical names.
+        let mut found: Vec<&str> = Vec::new();
+        for name in HISTORICAL {
+            // Match `"name"` as a whole arm token (not a substring of another
+            // name — e.g. `"map"` must not hit `"map_err"` / `"flat_map"`).
+            let pat = format!("\"{name}\"");
+            if body.contains(&pat) {
+                found.push(name);
+            }
+        }
+        let has_and_then = found.contains(&"and_then");
+        let has_flat_map = found.contains(&"flat_map");
+        if found.len() >= 5 && has_and_then && has_flat_map {
+            let line = content[..start].bytes().filter(|&b| b == b'\n').count() + 1;
+            residuals.push((line, body.chars().take(120).collect()));
+        }
+        search_from = end;
+    }
+
+    assert!(
+        residuals.is_empty(),
+        "Residual D1/D2/D3 combinator name-match predicate(s) in methods.rs:\n{}\n\n\
+         Route through `ctx.builtin_combinator_kind` + `CombinatorKind::is_gir_adapter` \
+         (Round XV Track D). Do NOT reintroduce the multi-name matches! blob. \
+         Collection HOF lists and small Phase-2 adapter matches! are out of scope.",
+        residuals
+            .iter()
+            .map(|(l, b)| format!("  L{l}: {b}…"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}

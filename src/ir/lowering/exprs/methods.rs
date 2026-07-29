@@ -1829,14 +1829,16 @@ pub(super) fn lower_method_call(
         let is_opt_or_result = ctx.type_registry.get_type_def(&type_name)
             .and_then(|td| td.metadata.enum_category)
             .is_some();
-        if is_opt_or_result
-            && matches!(method_name, "map" | "and_then" | "or_else" | "filter"
-                | "unwrap_or_else" | "flat_map" | "map_err")
-        {
-            if let Some(result) = try_lower_option_result_combinator(
-                ctx, builder, &type_name, method_name, recv.clone(), args,
-            ) {
-                return result;
+        // Typed combinator_kind (Round XV Track D) — not a method-name match.
+        if is_opt_or_result {
+            if let Some(kind) = ctx.builtin_combinator_kind(&type_name, method_name) {
+                if kind.is_gir_adapter() {
+                    if let Some(result) = try_lower_option_result_combinator(
+                        ctx, builder, &type_name, method_name, recv.clone(), args,
+                    ) {
+                        return result;
+                    }
+                }
             }
         }
 
@@ -2021,9 +2023,8 @@ pub(super) fn lower_method_call(
             let is_option_result = ctx.type_registry.get_type_def(&type_name)
                 .and_then(|td| td.metadata.enum_category)
                 .is_some();
-            let is_combinator = matches!(method_name,
-                "map" | "and_then" | "or_else" | "filter" | "unwrap_or_else"
-                | "flat_map" | "or" | "flatten" | "map_err");
+            // Typed combinator_kind (Round XV Track D) — D2 pre-call clone gate.
+            let is_combinator = ctx.builtin_combinator_kind(&type_name, method_name).is_some();
             if is_option_result && is_combinator
                 && ctx.type_registry.is_resource_type(builder.local_type(recv_local))
             {
@@ -3281,9 +3282,8 @@ pub(super) fn lower_method_call(
                 let is_option_result = ctx.type_registry.get_type_def(&type_name)
                     .and_then(|td| td.metadata.enum_category)
                     .is_some();
-                let is_combinator = matches!(method_name,
-                    "map" | "and_then" | "or_else" | "filter" | "unwrap_or_else"
-                    | "flat_map" | "or" | "flatten" | "map_err");
+                // Typed combinator_kind (Round XV Track D) — D3 post-call MoveZero gate.
+                let is_combinator = ctx.builtin_combinator_kind(&type_name, method_name).is_some();
                 if is_option_result && is_combinator
                     && ctx.type_registry.is_resource_type(builder.local_type(recv_local))
                     && !ctx.drops.is_moved(recv_local)
@@ -3458,6 +3458,8 @@ fn call_closure_in_adapter(
 /// GIR-level desugaring of Option/Result combinators.
 /// Replaces C backend inline functions with explicit tag check, field extraction,
 /// closure call, and enum construction — giving the compiler full ownership visibility.
+
+
 fn try_lower_option_result_combinator(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -3659,6 +3661,7 @@ fn try_lower_option_result_combinator(
 
     // Determine the result type (may differ from recv_type for cross-type map)
     let result_type = match method_name {
+        "not_a_real_combinator" => recv_type,
         "unwrap_or_else" => some_ok_type,
         "map" => {
             // Closure returns U → result is Option[U] or Result[U, E]
@@ -3847,7 +3850,7 @@ fn try_lower_option_result_combinator(
             // Error → Error(err)
             // MoveZero scrut_local after extraction so tag_ownership sees the
             // base is consumed and tags err_val as Owned (Tier 2a Phase 2B).
-            let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
+                    let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));
             let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)], None);
@@ -3856,7 +3859,7 @@ fn try_lower_option_result_combinator(
         "or_else" if is_result => {
             // or_else: Error → fn(err)
             // err_val owns the extracted payload — tag and zero scrut to propagate.
-            let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
+                    let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
@@ -3866,7 +3869,7 @@ fn try_lower_option_result_combinator(
         "unwrap_or_else" if is_result => {
             // unwrap_or_else: Error → fn(err)
             // err_val owns the extracted payload — tag and zero scrut to propagate.
-            let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
+                    let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
@@ -3876,7 +3879,7 @@ fn try_lower_option_result_combinator(
         "map_err" if is_result => {
             // map_err: Error → Error(fn(err))
             // err_val owns the extracted payload — tag and zero scrut to propagate.
-            let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
+                    let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
             ctx.set_owned(builder, err_val);
             builder.move_zero(Place::local(scrut_local));
             let mapped = call_closure_in_adapter(ctx, builder, &closure_op,

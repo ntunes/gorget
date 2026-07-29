@@ -1058,6 +1058,23 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
+    /// Typed Option/Result combinator kind for `type_name::method_name`, if any.
+    ///
+    /// Reads [`BuiltinMethodDecl::combinator_kind`] from the protocol table —
+    /// the single source of truth. Never reconstructs meaning from the method
+    /// name string (layering rule 2 / Core #2). `None` for non-combinators and
+    /// for Vector/Dict/Set HOFs that share names like `map`/`flat_map`.
+    pub fn builtin_combinator_kind(
+        &self,
+        type_name: &str,
+        method_name: &str,
+    ) -> Option<crate::ir::lowering::builtins::CombinatorKind> {
+        use crate::ir::lowering::builtins;
+        builtins::protocol_for_mangled_name(type_name)
+            .and_then(|p| p.methods.iter().find(|m| m.name == method_name))
+            .and_then(|m| m.combinator_kind)
+    }
+
     /// G3: true when the builtin method `type_name::method_name` is a `.clone()`
     /// (deep clone dispatched to `gorget_array_clone`/`gorget_map_clone`/
     /// `gorget_set_clone`). Mirrors [`Self::builtin_returns_view`] — reads the
