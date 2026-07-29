@@ -2209,13 +2209,14 @@ int infer_method_return_type(String method, int recv, LowerCtx ctx, GirModule &g
     # the downstream `.unwrap()`/`.is_none()` reads garbage (option_map crash;
     # map_err truncation). Mirror Rust's typecheck.rs combinator arms
     # (`("Option","map") => Option[U]`, `("Result","map_err") => Result[T,F]`,
-    # etc.): filter/and_then/or_else/or preserve the receiver type exactly;
-    # map/map_err derive a new payload (U/F) from the closure return — but the
-    # self-host has no closure-return-type inference at this layer yet (Inc-4c),
-    # so we return the receiver type, which is correct whenever U==T / F==E
-    # (the common shape, and every combinator fixture in the corpus). GUARDED on
-    # `enum_category_of` so Vector/Dict receivers fall through UNCHANGED to the
-    # GorgetArray-returning HOF arms below (the inline Vector-HOF path).
+    # etc.): filter/or_else/or preserve the receiver type exactly.
+    # CROSS-TYPE map/map_err/and_then/flat_map: this helper has no closure arg,
+    # so it cannot mint Option[U]. Round XV SH-3 lands the closure-return
+    # rewrite at the Inc-4e-1 sibling in `lower_expr.gg` (method-call return
+    # path) — `infer_method_return_type` alone is NOT sufficient for those.
+    # Returning the receiver here is the last-resort floor (correct when
+    # U==T / same-type and_then). GUARDED on `enum_category_of` so Vector/Dict
+    # receivers fall through UNCHANGED to the GorgetArray HOF arms below.
     if method == "map" or method == "filter" or method == "and_then" or method == "or_else" or method == "or" or method == "map_err" or method == "flat_map":
         if recv >= 0 and recv < ctx.locals.len():
             int comb_recv_tid = ctx.locals.get(recv).unwrap().type_id

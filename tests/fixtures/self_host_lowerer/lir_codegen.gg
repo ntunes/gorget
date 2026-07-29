@@ -3325,11 +3325,26 @@ int lir_struct_field_index(int sid, String field, LirModule m):
     return -1
 
 # Infer the result type of an LIR instruction.
-int infer_inst_type_with_ret(LirInst inst, LirModule m, Dict[int, int] val_types, int func_ret_ty):
+# SH-1b write-through (Core #1): pointer-producing instructions that address a
+# known aggregate must carry `LT_PTR_TO_BASE + sid`, not bare `LT_PTR`. The
+# combinator emitter peels that to the struct for payload-field lookup; bare
+# `LT_PTR` left `src_pay_c = "void*"` and truncated Money payloads on param/
+# field receivers. Mirrors Rust `infer_inst_type` for SlotAddr (Struct|PtrTo →
+# PtrTo); FieldPtr is the SH extension that preserves field-sid when the field
+# is an aggregate (Rust still emits bare Ptr and uses a separate pointee map).
+int infer_inst_type_with_ret(LirInst inst, LirModule m, Dict[int, int] val_types, int func_ret_ty, LirFunction func):
     match inst:
         case ISlotLoad(_, _, ty):
             return ty
-        case ISlotAddr(_, _):
+        case ISlotAddr(_, slot):
+            if slot >= 0 and slot < func.slots.len():
+                int sa_ty = func.slots.get(slot).unwrap().ty
+                if sa_ty >= LT_STRUCT_BASE:
+                    int sa_sid = sa_ty - LT_STRUCT_BASE
+                    if sa_sid >= 0 and sa_sid < m.structs.len():
+                        return LT_PTR_TO_BASE + sa_sid
+                if sa_ty >= LT_PTR_TO_BASE and sa_ty < LT_STRUCT_BASE:
+                    return sa_ty
             return LT_PTR
         case IIConst(_, ty, _):
             return ty
@@ -3400,7 +3415,17 @@ int infer_inst_type_with_ret(LirInst inst, LirModule m, Dict[int, int] val_types
             return to_ty
         case ILoad(_, _, ty):
             return ty
-        case IFieldPtr(_, _, _, _):
+        case IFieldPtr(_, _, struct_id, field):
+            if struct_id >= 0 and struct_id < m.structs.len():
+                LirStructDef fp_def = m.structs.get(struct_id).unwrap()
+                if field >= 0 and field < fp_def.fields.len():
+                    int fp_fty = fp_def.fields.get(field).unwrap().ty
+                    if fp_fty >= LT_STRUCT_BASE:
+                        int fp_sid = fp_fty - LT_STRUCT_BASE
+                        if fp_sid >= 0 and fp_sid < m.structs.len():
+                            return LT_PTR_TO_BASE + fp_sid
+                    if fp_fty >= LT_PTR_TO_BASE and fp_fty < LT_STRUCT_BASE:
+                        return fp_fty
             return LT_PTR
         case IElemPtr(_, _, _, _):
             return LT_PTR
@@ -3767,7 +3792,7 @@ Dict[int, int] compute_val_types(LirFunction func, LirModule m):
         while ii < func.blocks.get(bi).unwrap().insts.len():
             int dst = inst_dst(func.blocks.get(bi).unwrap().insts.get(ii).unwrap())
             if dst >= 0:
-                int ty = infer_inst_type_with_ret(func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), m, types, func.return_type)
+                int ty = infer_inst_type_with_ret(func.blocks.get(bi).unwrap().insts.get(ii).unwrap(), m, types, func.return_type, func)
                 types.put(dst, ty)
             ii += 1
         bi += 1
@@ -5035,6 +5060,16 @@ String map_mono_to_runtime(String name, LirModule m):
 # All combinators take a pointer to the Option/Result as first arg.
 # HOF combinators (map, filter, and_then, or_else) take a closure ptr as second arg.
 
+# SH-1a consumer peel: bare `LT_PTR_TO_BASE+sid` (param ABI / field-addr) is a
+# POINTER to the enum struct, not the struct itself. Field lookup needs the
+# struct form. Shared helper used by every HOF arm that loads src_pay_c /
+# src_err_c (Core #4 — one fix, all siblings). Does NOT rewrite the runtime
+# expression `src` (already a pointer).
+int combinator_peel_enum_ty(int ty):
+    if ty >= LT_PTR_TO_BASE and ty < LT_STRUCT_BASE:
+        return LT_STRUCT_BASE + (ty - LT_PTR_TO_BASE)
+    return ty
+
 # Closure Phase-2 Inc-4b (R2) helper: the LIR field type of the variant
 # payload at `field_idx` of the enum struct `struct_ty` (Some_0/Ok_0 = idx 1,
 # Error_0 = idx 2), or LT_VOID if `struct_ty` is not a known struct or has no
@@ -5043,6 +5078,9 @@ String map_mono_to_runtime(String name, LirModule m):
 # truncating `void*` cast (a 16-byte Str/Option/Result return cast to void*
 # lost its upper 8 bytes → garbage/SIGSEGV). Mirrors the field-cast read in
 # `__result_unwrap_error` (single mechanism: drive off the typed struct def).
+# Callers MUST pass a peeled struct ty (`combinator_peel_enum_ty`); bare
+# `LT_PTR` / unpeeled `LT_PTR_TO_BASE` returns LT_VOID → "void*" (the class-1
+# residual the Core #6 lint forbids on HOF arms).
 int combinator_field_lir_type(int struct_ty, int field_idx, LirModule m):
     if struct_ty < LT_STRUCT_BASE:
         return LT_VOID
@@ -5076,6 +5114,11 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
         src_ty = val_types.get(src_id).unwrap()
     if lir_is_aggregate(src_ty):
         src = "(&" + src + ")"
+    # SH-1a: peel PtrTo(Option/Result) → the enum struct for field lookup.
+    # Writer (SH-1b) puts LT_PTR_TO_BASE+sid on ISlotAddr / IFieldPtr / params;
+    # without this peel, combinator_field_c_type sees a non-struct and falls
+    # back to void* (truncates Money → wrong mapped value on param/field).
+    src_ty = combinator_peel_enum_ty(src_ty)
 
     # Closure Phase-2 Inc-4b (R2): type-aware closure-call + payload types for
     # the HOF templates below. `dst_ty` is the result Option/Result struct (16
@@ -5088,6 +5131,7 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
     int dst_ty = LT_VOID
     if dst >= 0 and val_types.contains(dst):
         dst_ty = val_types.get(dst).unwrap()
+    dst_ty = combinator_peel_enum_ty(dst_ty)
     # src payload (the closure's INPUT for map/filter/and_then; the err payload
     # for map_err/or_else on Result is field idx 2).
     String src_pay_c = combinator_field_c_type(src_ty, 1, sn, m)
@@ -5190,7 +5234,7 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
     # ── HOF combinators: map, filter, and_then, or_else, or ──
     # All take (src_ptr, closure_ptr) and return the Option/Result by value.
     # The closure is dispatched via the void*[2] {fn_ptr, env} protocol.
-    if args.len() < 2 and (name == "__option_map" or name == "__option_filter" or name == "__option_and_then" or name == "__option_or_else" or name == "__result_map" or name == "__result_and_then" or name == "__result_or_else" or name == "__result_map_err"):
+    if args.len() < 2 and (name == "__option_map" or name == "__option_filter" or name == "__option_and_then" or name == "__option_flat_map" or name == "__option_or_else" or name == "__result_map" or name == "__result_and_then" or name == "__result_flat_map" or name == "__result_or_else" or name == "__result_map_err"):
         # No closure arg — skip
         if dst >= 0:
             return "memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); /* no closure */;"
@@ -5218,8 +5262,12 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             if dst >= 0:
                 return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); bool __keep = (bool)((int64_t(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); if (__keep) { memcpy(&" + v(dst) + ", " + src + ", sizeof(" + v(dst) + ")); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
-        case "__option_and_then":
-            # if tag==0: dst = fn(payload) (fn returns Option); else: None
+        case "__option_and_then" | "__option_flat_map":
+            # SH-2: flat_map ≡ and_then for Option (same semantics as Rust
+            # emit_hof `"flat_map"` arm). if tag==0: dst = fn(payload) (fn
+            # returns Option); else: None. Without this arm the name fell
+            # through to the unknown-combinator external call → link-fail
+            # `undefined reference to __option_flat_map`.
             if dst >= 0:
                 return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; } }"
             return ";"
@@ -5266,8 +5314,9 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             if dst >= 0:
                 return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; " + src_err_c + " __pay = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + dst_err_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Ok_0; } }"
             return ";"
-        case "__result_and_then":
-            # if tag==0: dst = fn(ok_payload) (fn returns Result); else: keep error.
+        case "__result_and_then" | "__result_flat_map":
+            # SH-2 sibling: Result.flat_map ≡ and_then. if tag==0: dst =
+            # fn(ok_payload) (fn returns Result); else: keep error.
             # Error passthrough copies Error_0 by typed field assignment, NOT a
             # whole-struct memcpy: `and_then` changes the Ok type (T->U), so src
             # and dst have different layouts and the Error_0 offset shifts —
