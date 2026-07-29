@@ -1,0 +1,53 @@
+from std.collections import Vector
+
+# CoW write-through: a bare Index mut-method receiver on a VALUE-typed
+# element of a Vector (`cs[i].bump()` / `cs[0].bump()`) is an unbroken
+# owned place → the mutating `&self` method WRITES THROUGH to the
+# collection's heap buffer (language-design §3.1 + CoW default-borrow at
+# ownership boundaries, uniform for `&self` receivers). Rust gg has done
+# this since R39-T1 / solid-ground R1; this fixture pins the self-host
+# after Track V wired the SH `EMethodCall` arm to route mut-method Index
+# receivers through the shared write-only element-ptr producer
+# `lower_index_element_ptr_place` — the same producer that already
+# powered field-writes (`v[i].field = x`) and `&`-formation (`&v[i]`).
+#
+# Pre-Track-V the SH lane fell through to `lower_recv_place`'s EIndex
+# fallback → `lower_expr(EIndex)` → `lower_index_access` which minted a
+# value COPY typed as bare `Counter` (not `Ptr(Counter)`), so `bump`
+# mutated a throwaway stack slot and the writes were silently dropped.
+# The gate is the CoW `_r37_mut` typed mutation flag — value-struct
+# `.clone()` receivers (Copy-ish-elided) skip the pointer path.
+#
+# Expected-output adjudication (campaign principle 1):
+#  - `cs[i].bump()` and `cs[0].bump()` on `Vector[Counter]` are IN
+#    ggdef's subset (navigate_write handles Vector-Index + a mutating
+#    equip method) and are ggdef-adjudicated to the write-through
+#    counts.
+#
+# The nested `hs[0].c.bump()` (EFieldAccess-of-EIndex receiver) shape
+# routes through a chained EFieldAccess place base and stays in the
+# inline Rust test `rust_value_index_element_field_writethrough`
+# until Track 2F lands.
+
+struct Counter:
+    int n
+
+equip Counter:
+    void bump(&self):
+        self.n = self.n + 1
+
+void main():
+    Vector[Counter] cs = [Counter(0), Counter(10), Counter(2)]
+    cs[0].bump()             # bare Index (const) mut-method receiver
+    cs[0].bump()             # repeated — accumulates through the buffer
+    print(cs[0].n)           # 2   (write-through, 0 + 1 + 1)
+    print(cs[1].n)           # 10  (sibling untouched)
+    int i = 2
+    cs[i].bump()             # bare Index (non-const) mut-method receiver
+    print(cs[i].n)           # 3   (write-through, 2 + 1)
+    # Value-struct `.clone()` receiver on the SAME index shape — the CoW
+    # `_r37_mut` gate MUST skip the pointer path here (Copy-ish elision
+    # returns the receiver's VALUE; a ptr in a value slot would cc-fail).
+    Counter c = cs[0].clone()
+    print(c.n)               # 2   (clone of the write-through-mutated slot)
+    print(cs[0].n)            # 2   (unchanged by clone read)
