@@ -1,0 +1,10 @@
+from std.sync import RWLock
+
+# Chained `r.write().set(v)`: the fresh WriteGuard[T] temp resolves through
+# the guard intercept for `.set(v)`, and is registered for scope-exit drop so
+# the pthread write lock is released before the follow-up `r.read().get()`
+# acquires the read lock.
+void main():
+    RWLock[int] r = RWLock[int](7)
+    r.write().set(99)
+    print(r.read().get())

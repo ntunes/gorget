@@ -1,0 +1,8 @@
+from std.sync import RWLock
+
+# Chained `r.read().get()`: the fresh ReadGuard[T] temp carries the guard-kind
+# metadata so `.get()` resolves through the guard intercept, and the temp is
+# registered for scope-exit drop so the pthread read lock is released.
+void main():
+    RWLock[int] r = RWLock[int](42)
+    print(r.read().get())

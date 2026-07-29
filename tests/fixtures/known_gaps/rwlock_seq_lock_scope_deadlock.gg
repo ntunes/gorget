@@ -1,0 +1,22 @@
+from std.sync import RWLock
+
+# known_gaps repro (filed Round XIII Track Y, 2026-07-29 — residual after
+# Track Y closed the chained-receiver silent-drop): guard temps minted by
+# chained method calls drop at SCOPE end, not STATEMENT end. Sequential
+# `r.read().get()` then `r.write().set(v)` on the same handle self-deadlocks
+# because the ReadGuard temp from step 1 is still alive when step 2 tries to
+# acquire the write lock. Gorget currently follows Rust's lexical borrow-
+# checker temporary-drop rule; the reference-grade fix is the NLL / end-of-
+# statement drop for guard temps (or, more narrowly, for any temp whose drop
+# releases an OS resource whose next acquire is on the same handle). Intended
+# output: `step1\n42\nstep2\nstep3\n99\nstep4`. RED at HEAD (deadlocks after
+# `step2`, killed by test-timeout / exit 124).
+void main():
+    RWLock[int] r = RWLock[int](42)
+    print("step1")
+    print(r.read().get())
+    print("step2")
+    r.write().set(99)
+    print("step3")
+    print(r.read().get())
+    print("step4")
