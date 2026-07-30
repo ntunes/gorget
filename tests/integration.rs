@@ -2103,37 +2103,33 @@ fn box_trait_drop() {
     );
 }
 
-// Round XIX Track N2 residual cells D/E/F/H (TODO:878-879). Durable known_gaps
-// repros with INTENDED output R2. RED-verified pre-fix 2026-07-30:
-//   D struct-field  → CC-FAIL conflicting types Box__Speaker void* then TraitObj
-//   E Option/Some   → same + Option__Box__Speaker__clone alloc_Speaker undeclared
-//   F vector-lit    → CC-FAIL redefinition Box__Robot__drop (concrete etype)
-//   H closure-ret   → builds; run exit 132 SIGILL (fn-return control GREEN R2)
-// Un-ignore + promote out of known_gaps when Class A emit / B pack / C clone land.
+// Round XIX Track N2 residual cells D/E/F/H (TODO:878-879).
+// D + E graduated LIVE (Class A emit + B pack + C clone + trait-box field drop).
+// RED-verify pre-fix 2026-07-30: both CC-FAIL conflicting types Box__Speaker;
+// E also Option__Box__Speaker__clone alloc_Speaker undeclared.
+// F + H stay known_gaps: C green R2 post-fix; LLVM residual (Box[Trait] slot
+// sized as ptr/8B while memcpy 16B TraitObj — same class as fn-return on LLVM).
 #[test]
-#[ignore = "KNOWN GAP Round XIX N2 cell D: struct field Box[Trait] CC-FAIL \
-conflicting types Box__Speaker (void* then TraitObj); TODO.md:878."]
 fn box_trait_struct_field() {
-    run_gg("known_gaps/box_trait_struct_field.gg", "R2");
+    run_gg("box_trait_struct_field.gg", "R2");
 }
 
 #[test]
-#[ignore = "KNOWN GAP Round XIX N2 cell E: Option[Box[Trait]] CC-FAIL typedef + \
-clone alloc_Speaker; TODO.md:878."]
 fn box_trait_option_variant() {
-    run_gg("known_gaps/box_trait_option_variant.gg", "R2");
+    run_gg("box_trait_option_variant.gg", "R2");
 }
 
 #[test]
-#[ignore = "KNOWN GAP Round XIX N2 cell F: Vector[Box[Trait]] lit CC-FAIL \
-Box__Concrete__drop redefinition / wrong etype; TODO.md N2 residual."]
+#[ignore = "KNOWN GAP Round XIX N2 cell F residual: Vector[Box[Trait]] lit GREEN \
+on C post pack+etype; LLVM realloc-invalid (Box[Trait] slot 8B vs 16B TraitObj)."]
 fn box_trait_vector_lit() {
     run_gg("known_gaps/box_trait_vector_lit.gg", "R2");
 }
 
 #[test]
-#[ignore = "KNOWN GAP Round XIX N2 cell H: Callable[Box[Trait]()] closure return \
-SIGILL exit 132; TODO.md:879."]
+#[ignore = "KNOWN GAP Round XIX N2 cell H residual: Callable[Box[Trait]()] closure \
+return GREEN on C post ambient+pack; LLVM SIGSEGV (return slot 8B vs 16B; fn-return \
+control also SEGV on LLVM)."]
 fn box_trait_closure_return() {
     run_gg("known_gaps/box_trait_closure_return.gg", "R2");
 }

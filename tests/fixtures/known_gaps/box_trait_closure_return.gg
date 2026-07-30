@@ -1,13 +1,13 @@
-# KNOWN GAP (Round XIX Track N2 cell H / TODO:879): formation = closure-return
-# of Box[Trait] (vs plain fn-return control which is GREEN R2).
-# Callable[Box[Speaker]()] f = (): Box.new(Robot("R2")) builds clean, exits 132
-# (SIGILL): emit_implicit_return overrides LocalId(0) to Box[Concrete], killing
-# try_trait_object_construct. Intended: f().speak() prints R2.
+# KNOWN GAP residual (Round XIX Track N2 cell H / TODO:879): formation =
+# closure-return of Box[Trait]. C backend GREEN R2 after ambient Callable
+# return types LiftedClosure + pack + no Concrete re-pin. LLVM still RED
+# (SIGSEGV): Box[Trait] return ABI / slot sized as ptr (8B) while packing
+# 16B — same class as plain `Box[Speaker] make(): ...` on LLVM (control
+# also SEGV on LLVM; C control GREEN). Un-ignore when LLVM Box[Trait]
+# return/slot layout matches C.
 #
-# RED-verify (pre-fix, 2026-07-30): builds; run exit 132 (SIGILL).
-# Control: typed fn return Box[Speaker] make(): Box.new(...) → R2 GREEN.
-# Promote when ambient Callable return types LiftedClosure + pack + no
-# Concrete re-pin on trait-box dest.
+# RED-verify (pre-fix C, 2026-07-30): builds; run exit 132 SIGILL.
+# POST Class-B C: R2. LLVM residual filed here.
 from std.collections import Box
 trait Speaker:
     String speak(self)

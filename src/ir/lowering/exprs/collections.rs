@@ -8,6 +8,7 @@ use crate::span::Spanned;
 
 use super::super::context::LoweringContext;
 use super::{lower_expr, infer_operand_type_full, infer_collection_element_type};
+use super::calls::pack_trait_object_for_smart_ptr_ctor;
 
 /// Lower `[e1, e2, ...]` to `gorget_array_new(sizeof(elem))` + N `gorget_array_push` calls.
 pub(super) fn lower_array_literal(
@@ -61,10 +62,15 @@ pub(super) fn lower_array_literal(
         ctx.func_state.expected_type = Some(elem_t);
     }
 
-    // Infer element type from first element
+    // Infer element type from first element. When the surrounding context
+    // declares `Vector[T]` (nonempty_expected_override), prefer that T over
+    // the inferred first-elem type so `Vector[Box[Trait]] = [Box.new(C)]`
+    // sizes the buffer and elem slots for Box[Trait] (16B TraitObj), not
+    // Box[Concrete] (8B void*) — Round XIX Track N2 cell F.
     let elem_type = if !elems.is_empty() {
         let first = lower_expr(ctx, builder, &elems[0]);
-        let etype = infer_operand_type_full(ctx, &first, builder);
+        let inferred_etype = infer_operand_type_full(ctx, &first, builder);
+        let etype = nonempty_expected_override.unwrap_or(inferred_etype);
         // Type the fresh local as the monomorphized `Vector__<elem>` (carries
         // the element type for a downstream `v[i]` / `for x in v` / element-drop)
         // rather than the bare `GorgetArray`. Mirrors `lower_dict_literal`'s
@@ -110,6 +116,12 @@ pub(super) fn lower_array_literal(
                 _ => AssignMode::Copy,
             }
         };
+        // Pack Box[Concrete]→Box[Trait] when the element slot is a trait-box
+        // (cell F Class B). Named destination drives the pack adapter.
+        let etype_name: Option<String> = match ctx.type_registry.get(etype) {
+            Some(GirType::Named(n)) => Some(n.clone()),
+            _ => None,
+        };
         // Push first element.
         // SCOUT-PROTO #1a (Defect A): route the element through the SAME
         // consuming-position helper push/put/set/ctor use, so a LIVE named
@@ -120,6 +132,11 @@ pub(super) fn lower_array_literal(
         let elem_local = builder.add_local(etype, None);
         let first_owned = ctx.ensure_owned_at_consuming_arg(
             builder, first, &elems[0], crate::ir::ImplicitCloneReason::ConsumingArg);
+        let first_owned = if let Some(ref name) = etype_name {
+            pack_trait_object_for_smart_ptr_ctor(ctx, builder, first_owned, name)
+        } else {
+            first_owned
+        };
         let first_mode = elem_mode(ctx, builder, &first_owned, etype);
         let first_clone = first_owned.clone();
         builder.assign_mode(first_mode, Place::local(elem_local), first_owned);
@@ -154,6 +171,11 @@ pub(super) fn lower_array_literal(
             // shared consuming-position helper (see the first-element note).
             let elem_val = ctx.ensure_owned_at_consuming_arg(
                 builder, elem_val, elem_expr, crate::ir::ImplicitCloneReason::ConsumingArg);
+            let elem_val = if let Some(ref name) = etype_name {
+                pack_trait_object_for_smart_ptr_ctor(ctx, builder, elem_val, name)
+            } else {
+                elem_val
+            };
             let mode = elem_mode(ctx, builder, &elem_val, etype);
             let elem_val_clone = elem_val.clone();
             builder.assign_mode(mode, Place::local(el), elem_val);

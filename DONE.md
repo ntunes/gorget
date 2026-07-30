@@ -1,4 +1,19 @@
+- [2026-07-30] **Round XIX Track N2 — Box[Trait] residual cells D/E (+ C partial F/H).**
+
+  **Closed (C+LLVM live fixtures):**
+  - **D** `box_trait_struct_field.gg` — Class A early `is_trait_box` typedef + post-TraitObj typedef; Class B pack at struct-field init; trait-box field drop via vtable (not `free(&field)`).
+  - **E** `box_trait_option_variant.gg` — pack chokepoint in `emit_enum_init_owned`; Class C `is_trait_box` gate on box clone (no `__gorget_box_alloc_Speaker`).
+
+  **C-green residual known_gaps (LLVM slot/return layout):**
+  - **F** `known_gaps/box_trait_vector_lit.gg` — pack + expected etype; C prints R2; LLVM realloc-invalid.
+  - **H** `known_gaps/box_trait_closure_return.gg` — ambient Callable return + pack + no Concrete re-pin; C prints R2; LLVM SIGSEGV (fn-return control also SEGV on LLVM).
+
+  **RED-verify (pre-fix 2026-07-30):** D/E CC-FAIL conflicting types; F redefinition Box__Robot__drop; H exit 132 SIGILL; controls local+fn-return C GREEN R2.
+
+  **Arm-count lint:** `pack_trait_object_call_sites_count` (EXPECTED=12). TODO residual: LLVM Box[Trait] slot/return layout; SH call-arg lag DEFER.
+
 - [2026-07-30] **Round XIX hygiene — X STALE residual close + W1 SH arm-count lint.** Nested store `ns[0].inner.val = 99` re-measured MATCH (Rust 99 / SH 99; store face already `lower_amp_place` via `lower_field_place_base`). Closed TODO residual; scrubbed stale headers on `cow_value_index_field_writethrough.gg` + `rust_value_index_element_field_writethrough` doc; promoted `cow_value_index_nested_field_store.gg` (expected 99) + runtime snapshot + integration pin. Landed `sh_operator_overload_call_centralized` in `tests/lints.rs` (SH twin of `operator_overload_call_centralized`; 5 direct `emit_overload_call` callers). Handover track 3/X + W1 closed; W2 Layering DEFER retained.
+
 
 - [2026-07-30] **Round XVIII close — AIM THE METER (Gate 0 + aggregate + partition + Family-3 fix).**
 

@@ -477,7 +477,13 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
         }
     }
     // Early Box__* typedefs — Box types appear in struct fields before their real typedef.
-    // Non-trait boxes are void*, trait boxes are typedef'd to their TraitObj struct later.
+    // Non-trait boxes are void* (8B). Trait boxes are the 16B TraitObj layout
+    // (`is_trait_box`); they MUST NOT get a void* placeholder here — the later
+    // monomorphized `typedef <Trait>_TraitObj Box__Trait` would conflict
+    // (Round XIX Track N2 cell D/E: `conflicting types for 'Box__Speaker'`).
+    // Trait-box typedefs are emitted immediately after their TraitObj struct
+    // body is complete (see the struct-definition loop below), mirroring
+    // `emit_wrapper_typedef`'s is_trait_box branch (helpers.rs).
     {
         let mut box_seen = HashSet::new();
         // Collect all Box__* types referenced in struct field types.
@@ -485,8 +491,13 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             for (_, fty) in &def.fields {
                 let ft = c_type_named(fty, &struct_names);
                 if ft.starts_with("Box__") && box_seen.insert(ft.clone()) {
-                    // Non-trait box: typedef as void*.
-                    // Trait boxes will be re-typedef'd later by emit_monomorphized_typedefs.
+                    let is_trait_box = module.structs.iter()
+                        .find(|s| s.name == ft)
+                        .map_or(false, |s| s.is_trait_box);
+                    if is_trait_box {
+                        // Skip — post-TraitObj typedef below / monomorphized path.
+                        continue;
+                    }
                     writeln!(out, "typedef void* {ft};").unwrap();
                 }
             }
@@ -649,6 +660,23 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             }
         }
         writeln!(out, "}};").unwrap();
+        // Round XIX Track N2 Class A: as soon as a TraitObj body is complete,
+        // typedef `Box__<Trait>` to it so subsequent structs/enums that hold
+        // `Box[Trait]` fields (Holder, Option__Box__Trait, …) see the 16-byte
+        // layout — never the void* placeholder that conflicted with the later
+        // monomorphized re-typedef. Identical re-emit from
+        // `emit_wrapper_typedef` is a no-op under C11 (same type).
+        if is_traitobj {
+            if let Some(trait_name) = def.name.strip_suffix("_TraitObj") {
+                let box_name = format!("Box__{trait_name}");
+                let is_trait_box = module.structs.iter()
+                    .find(|s| s.name == box_name)
+                    .map_or(false, |s| s.is_trait_box);
+                if is_trait_box {
+                    writeln!(out, "typedef {cname} {box_name};").unwrap();
+                }
+            }
+        }
         writeln!(out).unwrap();
     }
 

@@ -1,0 +1,24 @@
+# Round XIX Track N2 cell D — LIVE REGRESSION (graduated from known_gaps).
+# formation = struct-field, type = Box[Trait], backend = C+LLVM.
+#
+# Struct field of Box[Trait] previously CC-FAIL'd: early `typedef void* Box__T`
+# then monomorphized `typedef TraitObj Box__T` → conflicting types. Fix: Class A
+# emit gates early typedef on is_trait_box + post-TraitObj typedef; Class B pack
+# at struct-field init; trait-box field drop via vtable (not free(&field)).
+#
+# RED-verify (pre-fix 2026-07-30): `gg build` → CC-FAIL
+# `conflicting types for 'Box__Speaker'` (void* then TraitObj).
+# POST-fix: prints R2 on C and LLVM.
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+struct Holder:
+    Box[Speaker] s
+void main():
+    Holder h = Holder(Box.new(Robot("R2")))
+    print(h.s.speak())

@@ -204,7 +204,23 @@ impl ClosureLowering {
                 (name, prior)
             })
             .collect();
-        let return_type = infer_closure_return_type(ctx, body);
+        let body_return_type = infer_closure_return_type(ctx, body);
+        // Round XIX Track N2 cell H: when the ambient expected type is a
+        // `Callable[R(...)]` / `FnPtr { return_type: R }`, prefer R over the
+        // body-only inference. Body inference of `(): Box.new(Concrete)` yields
+        // `Box[Concrete]`; the ambient `Callable[Box[Trait]()]` requires
+        // `Box[Trait]` so LocalId(0) is trait-box-sized and
+        // `try_trait_object_construct` can fire. Snag #51 still forbids the
+        // polluted auto-fallback (I64) path — only peel a real FnPtr.
+        let return_type = match ctx.func_state.expected_type.and_then(|et| {
+            match ctx.type_registry.get(et) {
+                Some(GirType::FnPtr { return_type: ret, .. }) if *ret != UNIT_TYPE => Some(*ret),
+                _ => None,
+            }
+        }) {
+            Some(ambient_ret) => ambient_ret,
+            None => body_return_type,
+        };
         // Restore the prior locals state for these names.
         for (name, prior) in saved_params {
             if let Some(entry) = prior {
@@ -535,12 +551,38 @@ pub fn emit_closure_call_function(
 
     ctx.flush_ownership_to_locals(&mut builder);
     let mut func = builder.build();
-    // Update the function's return_type to match the actual local[0] type
+    // Update the function's return_type to match the actual local[0] type —
+    // EXCEPT when LocalId(0) was deliberately typed as a Box[Trait] ambient
+    // return and the body produced Box[Concrete] that was packed into it.
+    // Re-pinning to Concrete would desync the call site (Round XIX N2 cell H).
     let actual_ret = func.locals[0].type_id;
     if actual_ret != func.return_type {
-        func.return_type = actual_ret;
+        let declared_is_trait_box = is_trait_box_type(ctx, func.return_type);
+        if !declared_is_trait_box {
+            func.return_type = actual_ret;
+        }
     }
     func
+}
+
+/// True when `tid` is a `Box__X` whose inner has a registered `<X>_TraitObj`
+/// (i.e. a trait-object box). Used to protect LocalId(0) / return_type from
+/// being re-pinned to Box[Concrete] after a pack.
+fn is_trait_box_type(ctx: &LoweringContext, tid: TypeId) -> bool {
+    let name = match ctx.type_registry.get(tid) {
+        Some(GirType::Named(n)) => n,
+        _ => return false,
+    };
+    if !ctx.type_registry.is_box(tid) {
+        return false;
+    }
+    let inner = match name.strip_prefix("Box__") {
+        Some(i) => i,
+        None => return false,
+    };
+    ctx.type_registry
+        .get_type_def(&format!("{inner}_TraitObj"))
+        .is_some()
 }
 
 /// Emit ownership-boundary clone, return-type override, move/copy assign
@@ -562,9 +604,19 @@ fn emit_implicit_return(
         body_span,
         crate::ir::ImplicitCloneReason::ReturnFromBorrow,
     );
+    // Round XIX Track N2 cell H Class B: pack Box[Concrete]→Box[Trait] into
+    // the declared return type before the return-slot assign, so LIR construct
+    // fires on SlotStore into LocalId(0).
+    if let Some(GirType::Named(ref n)) = ctx.type_registry.get(closure.return_type).cloned() {
+        result = super::exprs::pack_trait_object_for_smart_ptr_ctor(ctx, builder, result, &n);
+    }
     let actual_type = super::exprs::infer_operand_type_full(ctx, &result, builder);
+    // Do NOT override LocalId(0) to Box[Concrete] when the declared return is
+    // a trait-box — that kills try_trait_object_construct (SIGILL cell H).
+    let declared_is_trait_box = is_trait_box_type(ctx, closure.return_type);
     let should_override = actual_type != closure.return_type
         && actual_type != UNIT_TYPE
+        && !declared_is_trait_box
         && !(actual_type == ctx.type_mapper.owned_string_type
              && closure.return_type == ctx.type_mapper.owned_string_type);
     if should_override {

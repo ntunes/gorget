@@ -1,0 +1,26 @@
+# Round XIX Track N2 cell E — LIVE REGRESSION (graduated from known_gaps).
+# formation = Option/Some enum-variant payload, type = Box[Trait], backend = C+LLVM.
+#
+# Same Class A typedef collision as struct-field, plus Class C clone path emitted
+# `__gorget_box_alloc_Speaker` (trait name, undeclared). Fix: Class A emit +
+# pack chokepoint in emit_enum_init_owned + is_trait_box gate on box clone.
+#
+# RED-verify (pre-fix 2026-07-30): `gg build` → CC-FAIL
+# `conflicting types for 'Box__Speaker'` + `__gorget_box_alloc_Speaker` /
+# `Speaker undeclared` in Option__Box__Speaker__clone.
+# POST-fix: prints R2 on C and LLVM.
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+void main():
+    Option[Box[Speaker]] o = Some(Box.new(Robot("R2")))
+    match o:
+        case Some(b):
+            print(b.speak())
+        else:
+            print("none")

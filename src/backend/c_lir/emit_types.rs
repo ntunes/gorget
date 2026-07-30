@@ -1036,6 +1036,25 @@ fn field_drop_call_name(module: &LirModule, field_type_name: &str) -> Option<Str
     }
 }
 
+/// True when `field_type_name` is a registered trait-object Box (`is_trait_box`).
+fn field_is_trait_box(module: &LirModule, field_type_name: &str) -> bool {
+    module.structs.iter()
+        .find(|s| s.name == field_type_name)
+        .map_or(false, |s| s.is_trait_box)
+}
+
+/// Emit the C statements that drop a trait-box field (16B TraitObj) via its
+/// vtable `__drop` slot. The concrete `Box__<Concrete>__drop` takes the
+/// address of the data pointer (void** slot) — same ABI as LIR drops.rs.
+/// Used by struct/enum field-drop emitters (Round XIX N2 cell D rider).
+fn emit_trait_box_field_drop(out: &mut String, field_access: &str) {
+    use std::fmt::Write;
+    write!(out,
+        "if (({field_access}).vtable && ({field_access}).vtable->__drop) {{ \
+         ({field_access}).vtable->__drop((void*)&({field_access}).data); }} "
+    ).unwrap();
+}
+
 /// Refcount-handle wrapper families (`Shared` / `Weak` / `Channel`) whose
 /// struct/enum field is a thin pointer to a shared control block. Cloning the
 /// CONTAINING aggregate must RETAIN (refcount++) the handle so the copy's drop
@@ -1172,6 +1191,16 @@ pub(super) fn emit_recursive_struct_drops(out: &mut String, module: &LirModule, 
         writeln!(out, "static inline void {drop_fn_name}(void* __p) {{").unwrap();
         writeln!(out, "    {c_name}* self = ({c_name}*)__p;").unwrap();
         for (field_name, drop_fn, field_type_name) in drop_info {
+            // Round XIX Track N2 Class A rider: trait-box fields are a 16-byte
+            // {data, vtable} TraitObj, NOT a void* to free. Drop via the
+            // vtable `__drop` slot (same shape as LIR drops.rs for locals) —
+            // calling free(&field) is free(invalid pointer) (cell D).
+            if field_is_trait_box(module, field_type_name) {
+                write!(out, "    ").unwrap();
+                emit_trait_box_field_drop(out, &format!("self->{field_name}"));
+                writeln!(out).unwrap();
+                continue;
+            }
             let call = field_drop_call_name(module, field_type_name)
                 .unwrap_or_else(|| drop_fn.clone());
             writeln!(out, "    {call}((void*)&self->{field_name});").unwrap();
@@ -1240,6 +1269,21 @@ pub(super) fn emit_recursive_struct_clones(out: &mut String, module: &LirModule,
                     // inner T into it. Mirrors the enum-variant Box-clone branch.
                     // The shallow `dst = *src` already copied the box pointer; we
                     // overwrite it with a fresh allocation so dst owns independently.
+                    //
+                    // Trait boxes (`is_trait_box`): the shallow `dst = *src` already
+                    // copied the 16-byte {data, vtable} TraitObj. Do NOT route
+                    // through `__gorget_box_alloc_<Trait>` — the "inner" is a trait
+                    // name with no concrete layout (Round XIX N2 cell E: Speaker
+                    // undeclared). The data-box ownership is shared via the
+                    // TraitObj handle; independent deep-clone of the data box is
+                    // a separate future surface.
+                    let box_type_name = &d[..d.len() - "__drop".len()];
+                    let is_trait_box = module.structs.iter()
+                        .find(|s| s.name == box_type_name)
+                        .map_or(false, |s| s.is_trait_box);
+                    if is_trait_box {
+                        continue;
+                    }
                     let inner = &d["Box__".len()..d.len() - "__drop".len()];
                     let alloc_fn = format!("__gorget_box_alloc_{inner}");
                     let inner_c_name = module.structs.iter().enumerate()
@@ -1422,19 +1466,26 @@ pub(super) fn emit_recursive_enum_clones(out: &mut String, module: &LirModule, s
                         field_name.to_string()
                     };
                     if clone_fn == "__gorget_box_clone" {
-                        // Box: alloc new box, copy content, deep-clone content
-                        let inner_type = _field_type_name.strip_prefix("Box__").unwrap_or(_field_type_name);
-                        let inner_clone = format!("{inner_type}__clone_inplace");
-                        let has_inner_clone = module.recursive_drop_structs.contains_key(inner_type)
-                            || module.recursive_drop_enums.contains_key(inner_type);
-                        let alloc_fn = format!("__gorget_box_alloc_{inner_type}");
-                        let inner_c_name = module.structs.iter().enumerate()
-                            .find(|(_, s)| s.name == inner_type)
-                            .and_then(|(i, _)| sn.get(&(i as u32)).cloned())
-                            .unwrap_or_else(|| inner_type.to_string());
-                        write!(out, "dst.{access} = {alloc_fn}(*({inner_c_name}*)dst.{access}); ").unwrap();
-                        if has_inner_clone {
-                            write!(out, "{inner_clone}(dst.{access}); ").unwrap();
+                        // Box: alloc new box, copy content, deep-clone content.
+                        // Trait boxes: shallow 16B TraitObj copy already done by
+                        // `dst = *src` — skip alloc of the trait name (cell E).
+                        let is_trait_box = module.structs.iter()
+                            .find(|s| s.name == *_field_type_name)
+                            .map_or(false, |s| s.is_trait_box);
+                        if !is_trait_box {
+                            let inner_type = _field_type_name.strip_prefix("Box__").unwrap_or(_field_type_name);
+                            let inner_clone = format!("{inner_type}__clone_inplace");
+                            let has_inner_clone = module.recursive_drop_structs.contains_key(inner_type)
+                                || module.recursive_drop_enums.contains_key(inner_type);
+                            let alloc_fn = format!("__gorget_box_alloc_{inner_type}");
+                            let inner_c_name = module.structs.iter().enumerate()
+                                .find(|(_, s)| s.name == inner_type)
+                                .and_then(|(i, _)| sn.get(&(i as u32)).cloned())
+                                .unwrap_or_else(|| inner_type.to_string());
+                            write!(out, "dst.{access} = {alloc_fn}(*({inner_c_name}*)dst.{access}); ").unwrap();
+                            if has_inner_clone {
+                                write!(out, "{inner_clone}(dst.{access}); ").unwrap();
+                            }
                         }
                     } else {
                         write!(out, "dst.{access} = {clone_fn}(&dst.{access}); ").unwrap();
@@ -1500,9 +1551,11 @@ pub(super) fn emit_enum_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                     field_name.to_string()
                 };
                 // Self-cleaning: gorget_array_free/gorget_map_free drop elements.
-                // Trait-box marker keeps `free(value)`; everything else (incl.
-                // non-trait Box via the wrapper) routes through `&self->field`.
-                if *drop_fn == "free" {
+                // Trait-box: vtable __drop (NOT free of the 16B field).
+                // Non-trait Box via the wrapper routes through `&self->field`.
+                if field_is_trait_box(module, field_type_name) {
+                    emit_trait_box_field_drop(out, &format!("self->{access}"));
+                } else if *drop_fn == "free" {
                     write!(out, "free(self->{access}); ").unwrap();
                 } else {
                     let call = field_drop_call_name(module, field_type_name)
@@ -1686,7 +1739,9 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                         } else {
                             field_name.to_string()
                         };
-                        if *drop_fn == "free" {
+                        if field_is_trait_box(module, ftn) {
+                            emit_trait_box_field_drop(out, &format!("self->{access}"));
+                        } else if *drop_fn == "free" {
                             write!(out, "free(self->{access}); ").unwrap();
                         } else {
                             let call = field_drop_call_name(module, ftn)
@@ -1707,7 +1762,11 @@ pub(super) fn emit_type_drop_fns(out: &mut String, module: &LirModule, sn: &Hash
                     writeln!(out, "    {user_fn}(__p);").unwrap();
                 }
                 for (field_name, drop_fn, ftn) in &info.field_drops {
-                    if drop_fn == "free" {
+                    if field_is_trait_box(module, ftn) {
+                        write!(out, "    ").unwrap();
+                        emit_trait_box_field_drop(out, &format!("self->{field_name}"));
+                        writeln!(out).unwrap();
+                    } else if drop_fn == "free" {
                         writeln!(out, "    free(self->{field_name});").unwrap();
                     } else {
                         let call = field_drop_call_name(module, ftn)

@@ -1722,6 +1722,46 @@ impl<'a> LoweringContext<'a> {
         mut args: Vec<Operand>,
         arg_spans: Option<Vec<Option<crate::span::Span>>>,
     ) -> LocalId {
+        // Round XIX Track N2 Class B (cell E chokepoint): pack
+        // `Box[Concrete] → Box[Trait]` into each variant field that expects a
+        // trait-box. Core #4 — one producer for all Some/Ok/Error/user-enum
+        // arms that route through this chokepoint. Same IR adapter the
+        // smart-ptr ctors use; LIR `try_trait_object_construct` remains the
+        // decision site.
+        {
+            let field_type_names: Vec<Option<String>> = self
+                .type_registry
+                .get_type_def(enum_name)
+                .and_then(|td| {
+                    if let crate::ir::types::TypeDefKind::Enum(ref edef) = td.kind {
+                        edef.variants
+                            .iter()
+                            .find(|v| v.name == variant_name)
+                            .map(|v| {
+                                v.fields
+                                    .iter()
+                                    .map(|f| match self.type_registry.get(f.type_id) {
+                                        Some(crate::ir::types::GirType::Named(n)) => {
+                                            Some(n.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .collect()
+                            })
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            for (i, op) in args.iter_mut().enumerate() {
+                if let Some(Some(name)) = field_type_names.get(i) {
+                    *op = crate::ir::lowering::exprs::pack_trait_object_for_smart_ptr_ctor(
+                        self, builder, std::mem::replace(op, Operand::Constant(Constant::Unit)), name,
+                    );
+                }
+            }
+        }
+
         // Snapshot original locals before cloning — we need to know which
         // args were replaced by clones vs consumed directly.
         let originals: Vec<Option<LocalId>> = args.iter().map(|op| {

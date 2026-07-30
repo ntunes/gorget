@@ -10,7 +10,7 @@
 //! See `docs/devbook/25-structural-guards.md` §3a for the full design.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Every mangled monomorphized-type prefix the compiler emits. Adding a new
 /// builtin protocol with a `base_name: "X"` requires adding `X` here so the
@@ -1003,6 +1003,71 @@ fn container_literal_arms_count() {
          exception in the bump comment.\n\n\
          If an arm was removed, lower EXPECTED in tests/lints.rs.",
     );
+}
+
+/// Round XIX Track N2 Class B (Core #4): every Box[Trait] formation site that
+/// cannot rely on a typed SlotStore destination must route through
+/// `pack_trait_object_for_smart_ptr_ctor`. Ratchet the call-site count so a
+/// new formation site can't silently skip the pack.
+///
+/// LAND sites at N2 close: smart-ptr ctors (×6) + maybe_pack_at_arg + struct
+/// field + emit_enum_init_owned + array-lit (×2) + closure return = 12.
+#[test]
+fn pack_trait_object_call_sites_count() {
+    const EXPECTED: usize = 12;
+    let count = count_pack_trait_object_calls();
+    assert_eq!(
+        count, EXPECTED,
+        "pack_trait_object_for_smart_ptr_ctor call-site count changed: {count} vs \
+         expected {EXPECTED}.\n\n\
+         If a new Box[Trait] formation site was added, wire it through the pack \
+         helper (or emit_enum_init_owned for enum fields) and bump EXPECTED.\n\
+         If a site was removed / centralized, lower EXPECTED.",
+    );
+}
+
+fn count_pack_trait_object_calls() -> usize {
+    let mut count = 0;
+    for path in walkdir_rs("src/ir/lowering") {
+        let content = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            if t.contains("fn pack_trait_object_for_smart_ptr_ctor") {
+                continue;
+            }
+            if t.contains("use ") && t.contains("pack_trait_object_for_smart_ptr_ctor") {
+                continue;
+            }
+            if t.contains("pack_trait_object_for_smart_ptr_ctor(") {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Minimal recursive .rs walk without the walkdir crate.
+fn walkdir_rs(root: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::from(root)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(p);
+            }
+        }
+    }
+    out
 }
 
 /// Ratchet (Core #4 "one fix, all siblings" / Layering-discipline "Sibling-site

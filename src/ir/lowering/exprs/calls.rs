@@ -931,7 +931,10 @@ pub(super) fn maybe_pack_trait_object_at_arg(
 /// widened source shape as well (Layering rule 4 — resolve once, write
 /// through: the IR side only constructs the triggering shape; the decision
 /// itself lives in LIR).
-pub(super) fn pack_trait_object_for_smart_ptr_ctor(
+/// Pub(crate): also the Class-B chokepoint from `emit_enum_init_owned`
+/// (Round XIX Track N2 cell E — pack Box[Concrete]→Box[Trait] at every
+/// Option/Result/user-enum variant field in one place).
+pub(crate) fn pack_trait_object_for_smart_ptr_ctor(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     val_op: Operand,
@@ -976,8 +979,13 @@ pub(super) fn pack_trait_object_for_smart_ptr_ctor(
     // Materialise into a Box[Trait]-typed temp. The SlotStore here triggers
     // `try_trait_object_construct` at LIR which constructs the
     // `{data, vtable}` TraitObj into the temp's slot.
+    // Tag FreshOwned so EnumInit / StructInit consume-site validation sees a
+    // decided ownership (Round XIX N2 cell E: untracked pack temp panicked
+    // the Tier-2a validator). No drop-register: the consumer takes the value
+    // (enum/struct/ctor/return) and the temp is dead by construction.
     let tmp = builder.add_local(box_trait_tid, None);
     builder.assign(Place::local(tmp), val_op);
+    ctx.set_owned_fresh(builder, tmp);
     FunctionBuilder::copy(tmp)
 }
 

@@ -2176,13 +2176,22 @@ fn lower_struct_literal(
             if let Some(&Some(ft)) = field_types.get(i) {
                 ctx.func_state.expected_type = Some(ft);
             }
-            let op = lower_expr(ctx, builder, arg);
+            let mut op = lower_expr(ctx, builder, arg);
             // Snag #46: a throws-fn call result at a struct-field position is
             // `Result[T, E]`, but the field expects `T`. Mirror `lower_call_arg`
             // — auto-propagate Result → T at the boundary so the field receives
             // the unwrapped value rather than a memcpy of the Result struct
             // (which the field then reads as the type's zero-init default).
-            let op = maybe_auto_propagate(ctx, builder, op, arg.span);
+            op = maybe_auto_propagate(ctx, builder, op, arg.span);
+            // Round XIX Track N2 Class B cell D: pack Box[Concrete]→Box[Trait]
+            // when the field type is a trait-box. Routes through the same LIR
+            // SlotStore coercion as smart-ptr ctors / enum init.
+            if let Some(&Some(ft)) = field_types.get(i) {
+                if let Some(crate::ir::types::GirType::Named(n)) = ctx.type_registry.get(ft) {
+                    let n = n.clone();
+                    op = pack_trait_object_for_smart_ptr_ctor(ctx, builder, op, &n);
+                }
+            }
             ctx.func_state.expected_type = prev;
             op
         })
