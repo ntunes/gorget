@@ -18,6 +18,8 @@
 
   **Step 3 (top SUSPICIOUS):** Family-3 get-chain field+tuple for `&` and assign (`037c78a7`). Shared `resolve_ptr_field_place` / `resolve_ptr_tuple_field_place` + MutableBorrow uses resolved place type. Graduated `sound_tuple_getchain_writethrough`; added `sound_struct_getchain_writethrough`. Self-host field_place MethodCall hist **cleared** (1026→977, only Identifier residual on SH).
 
+  **Battery (full close):** lib 1138 · lints 79 · ggdef ok · security 128 · conformance 3/3 · C 1962/0/63 · LLVM 1962/0/63 · bootstrap_fixed_point ok · parity **1288**/1385 = **93.0%** (MATCH floor 1288 holds; ADJ 388 holds; denom +2 from graduated getchain fixtures on SH lag, not MATCH regression). Floors unchanged.
+
   **Convergence: known_gaps 95→94 · TODO items 521→521 · net −1** (regen: `scripts/convergence.sh 95 521`). One known_gaps graduated (tuple getchain). Measurement capability + class fix.
 
 - [2026-07-30] **Round XVII close — RESOLVER-TOTALITY INSTRUMENTS (A + B).** Ships the first durable meters of place-resolver coverage — **worklist generators, never correctness gates** (Core #13; `Some(wrong_root)` counts as resolved; instrument C later).
