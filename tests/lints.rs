@@ -7481,7 +7481,13 @@ fn place_type_only_covers_the_producer_forms() {
     // the read path. Adding a name requires a measured write-through probe
     // showing what it actually costs; shrink the list by adding arms to
     // `place_expr_type_only`.
-    const KNOWN_OBJ_SHORTFALL: &[&str] = &[];
+    // MethodCall: Family-3 object form (Round XVIII). G3 specialists accept it;
+    // place_expr_type_only does not yet type method-return shapes. Measured:
+    // write-through on get-chain fields is FIXED by try_resolve_place +
+    // MutableBorrow path that uses the RESOLVED place type (not this pre-check).
+    // Pre-check None still declines auto-prop skip for non-resolving forms.
+    // Shrink by adding a MethodCall arm to place_expr_type_only when typed.
+    const KNOWN_OBJ_SHORTFALL: &[&str] = &["MethodCall"];
 
     let unexpected: Vec<&str> = obj_missing
         .iter()
