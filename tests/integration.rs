@@ -25635,7 +25635,7 @@ fn self_host_runtime_diff() {
     // Track X's nested-place mut-method-receiver fixture (`Vector[Holder]` + `Vector[Wrap]`
     // with a mutating equip method + `Struct-Field`+`Vector-Index` projections) is in
     // ggdef's subset and adjudicates the write-through counts, adding ADJ rows.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 386;
+    const GGDEF_ADJUDICATED_FLOOR: usize = 388;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -25798,7 +25798,7 @@ fn self_host_runtime_diff() {
     // receiver): +1 MATCH from `cow_value_index_nested_mut_recv_writethrough.gg`
     // (auto-enrolled via its runtime snapshot; SH pre-fix `0/5/0/0/7/0/1/0` → post-fix
     // `2/5/3/3/7/3/4/3` both-lane MATCH). Round XV remeasure: MATCH 1278/1383 = 92.4%, ADJ-MATCH 386; floor 1261→1273 (−5 jitter).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1273;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1288;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
