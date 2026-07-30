@@ -61,12 +61,19 @@ fn llvm_type(ty: &LirType) -> &'static str {
 }
 
 /// Map LirType to LLVM IR type string, handling Struct and Void.
-fn llvm_type_full(ty: &LirType, snames: &HashMap<u32, String>) -> String {
+fn llvm_type_full(ty: &LirType, snames: &HashMap<u32, String>, structs: &[StructDef]) -> String {
     match ty {
         LirType::Struct(sid) => {
             let name = &snames[&sid.0];
-            // Box types are opaque pointers (void* in C)
-            if name.starts_with("Box__") {
+            // Box[Concrete] is void* in C (opaque ptr). Box[Trait] is the
+            // 16-byte TraitObj layout (`{data, vtable}`) — typed via
+            // `is_trait_box` at registration (Core #2: no name-match for
+            // meaning). Emitting `ptr` here for trait boxes truncates
+            // returns/slots to 8 bytes → LLVM SIGSEGV / realloc-invalid
+            // on fn-return, closure-return, and vector-element formation.
+            if name.starts_with("Box__")
+                && !structs.get(sid.0 as usize).map_or(false, |s| s.is_trait_box)
+            {
                 "ptr".to_string()
             } else {
                 format!("%{name}")
@@ -90,10 +97,10 @@ fn llvm_type_full(ty: &LirType, snames: &HashMap<u32, String>) -> String {
 
 /// Map LirType to LLVM IR type for use as a function argument or parameter.
 /// Void is invalid as an argument type in LLVM IR — use ptr instead (closure env).
-fn llvm_arg_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
+fn llvm_arg_type(ty: &LirType, snames: &HashMap<u32, String>, structs: &[StructDef]) -> String {
     match ty {
         LirType::Void => "ptr".to_string(),
-        _ => llvm_type_full(ty, snames),
+        _ => llvm_type_full(ty, snames, structs),
     }
 }
 
@@ -110,10 +117,10 @@ fn llvm_arg_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
 /// declaration is sufficient; this mirrors what clang emits for every `bool`
 /// parameter. Keep new C-function declarations that take a `bool` routed
 /// through here (or spell `i1 zeroext` by hand) — a bare `i1` param is the bug.
-fn llvm_c_param_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
+fn llvm_c_param_type(ty: &LirType, snames: &HashMap<u32, String>, structs: &[StructDef]) -> String {
     match ty {
         LirType::Bool => "i1 zeroext".to_string(),
-        _ => llvm_arg_type(ty, snames),
+        _ => llvm_arg_type(ty, snames, structs),
     }
 }
 
@@ -128,11 +135,11 @@ fn llvm_c_param_type(ty: &LirType, snames: &HashMap<u32, String>) -> String {
 /// `GG_LLVM_FORCE_X86_64_ABI=1` forces the x86_64 path on a non-x86_64 host —
 /// dev-time affordance for inspecting the IR shape that an x86_64 build
 /// would emit (e.g. cross-target llc verification from an aarch64 box).
-fn large_agg_byval_attr(ty: &LirType, snames: &HashMap<u32, String>) -> String {
+fn large_agg_byval_attr(ty: &LirType, snames: &HashMap<u32, String>, structs: &[StructDef]) -> String {
     let on_x86_64 = cfg!(target_arch = "x86_64")
         || std::env::var_os("GG_LLVM_FORCE_X86_64_ABI").is_some();
     if on_x86_64 {
-        format!("byval({}) align 8 ", llvm_type_full(ty, snames))
+        format!("byval({}) align 8 ", llvm_type_full(ty, snames, structs))
     } else {
         String::new()
     }
@@ -151,9 +158,9 @@ fn struct_sid_by_name(snames: &HashMap<u32, String>, name: &str) -> Option<u32> 
 /// non-x86_64 — `large_agg_byval_attr` handles the platform check. Returns
 /// empty if `GorgetString` isn't registered (defensive — the runtime always
 /// emits it, but bail rather than crash if a future refactor changes that).
-fn gorget_string_byval_attr(snames: &HashMap<u32, String>) -> String {
+fn gorget_string_byval_attr(snames: &HashMap<u32, String>, structs: &[StructDef]) -> String {
     struct_sid_by_name(snames, "GorgetString")
-        .map(|sid| large_agg_byval_attr(&LirType::Struct(StructId(sid)), snames))
+        .map(|sid| large_agg_byval_attr(&LirType::Struct(StructId(sid)), snames, structs))
         .unwrap_or_default()
 }
 
@@ -301,7 +308,7 @@ fn elem_c_to_llvm(elem: &str, module: &LirModule, snames: &HashMap<u32, String>)
             for (i, def) in module.structs.iter().enumerate() {
                 if def.name == elem {
                     let sid = StructId(i as u32);
-                    let llvm_ty = llvm_type_full(&LirType::Struct(sid), snames);
+                    let llvm_ty = llvm_type_full(&LirType::Struct(sid), snames, &module.structs);
                     let size = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
                     return (llvm_ty, size);
                 }
@@ -394,7 +401,7 @@ fn infer_option_payload_type(
             // Field 1 is the payload (field 0 is tag)
             if def.fields.len() >= 2 {
                 let payload = &def.fields[1].1;
-                return llvm_arg_type(payload, snames);
+                return llvm_arg_type(payload, snames, &module.structs);
             }
         }
     }
@@ -1033,7 +1040,7 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 // field types declared so AArch64's HFA / register-return rules
                 // fire correctly (vs. the `[N x i8]` opaque-blob layout, which
                 // forces sret/memory return and mismatches the C runtime ABI).
-                let parts: Vec<String> = layout.iter().map(|t| llvm_type_full(t, snames)).collect();
+                let parts: Vec<String> = layout.iter().map(|t| llvm_type_full(t, snames, &module.structs)).collect();
                 writeln!(out, "%{name} = type {{ {} }}", parts.join(", ")).unwrap();
             } else if let Some(sz) = crate::lir::lower::types::opaque_runtime_size(name) {
                 // Specific layouts whose internal shape matters for GEP emission.
@@ -1084,7 +1091,7 @@ fn emit_struct_types(out: &mut String, module: &LirModule, snames: &HashMap<u32,
                 } else if *fty == LirType::Void {
                     ("i8".to_string(), 1usize, 1usize)
                 } else {
-                    (llvm_type_full(fty, snames),
+                    (llvm_type_full(fty, snames, &module.structs),
                      sizeof_lir_type(fty, &module.structs, snames),
                      crate::lir::lower::types::c_alignof_lir_type(fty, &module.structs))
                 };
@@ -1142,14 +1149,14 @@ fn llvm_const_value(
     aux_ctr: &mut usize,
 ) -> String {
     match init {
-        LirGlobalInit::Zeroed => format!("{} zeroinitializer", llvm_type_full(ty, snames)),
+        LirGlobalInit::Zeroed => format!("{} zeroinitializer", llvm_type_full(ty, snames, &module.structs)),
         LirGlobalInit::FuncAddr(fid) => {
             let fname = c_func_name(&module.functions[fid.0 as usize].name);
             format!("ptr @{fname}")
         }
         LirGlobalInit::BoxDropAddr(inner) => format!("ptr @Box__{inner}__drop"),
         LirGlobalInit::Bytes(data) if data.len() <= 8 => llvm_scalar_bytes_const(data, ty),
-        LirGlobalInit::Bytes(_) => format!("{} zeroinitializer", llvm_type_full(ty, snames)),
+        LirGlobalInit::Bytes(_) => format!("{} zeroinitializer", llvm_type_full(ty, snames, &module.structs)),
         LirGlobalInit::Extern { name, args } => {
             // Module-level / nested string literal → `%GorgetString` view into
             // the interned `@.str.N` rodata (cap=0, no alloc, no free).
@@ -1159,13 +1166,13 @@ fn llvm_const_value(
                     return format!("%GorgetString {{ ptr @.str.{idx}, i64 0, i64 {len}, ptr null }}");
                 }
             }
-            format!("{} zeroinitializer", llvm_type_full(ty, snames))
+            format!("{} zeroinitializer", llvm_type_full(ty, snames, &module.structs))
         }
         LirGlobalInit::Struct { struct_id, fields } => {
             llvm_struct_const(*struct_id, fields, module, snames, str_globals, aux, aux_ctr)
         }
         LirGlobalInit::StaticArrayView { elem_ty, elems } => {
-            let elem_llvm = llvm_type_full(elem_ty, snames);
+            let elem_llvm = llvm_type_full(elem_ty, snames, &module.structs);
             let elem_size = sizeof_lir_type(elem_ty, &module.structs, snames);
             let data_ptr = if elems.is_empty() {
                 // An empty array needs no backing constant — a zero-length view
@@ -1260,7 +1267,7 @@ fn llvm_struct_const(
         }
         let val = match field_values.get(i) {
             Some(v) => llvm_const_value(v, &field_ty, module, snames, str_globals, aux, aux_ctr),
-            None => format!("{} zeroinitializer", llvm_type_full(&field_ty, snames)),
+            None => format!("{} zeroinitializer", llvm_type_full(&field_ty, snames, &module.structs)),
         };
         parts.push(val);
         offset += fsz;
@@ -1307,7 +1314,7 @@ fn intern_const_strs(init: &LirGlobalInit, ty: &LirType, module: &LirModule, str
 fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, String>, str_globals: &StrGlobals) {
     let mut aux_ctr = 0usize;
     for (i, global) in module.globals.iter().enumerate() {
-        let ty = llvm_type_full(&global.ty, snames);
+        let ty = llvm_type_full(&global.ty, snames, &module.structs);
         let linkage = if global.is_const { "private constant" } else { "internal global" };
         match &global.init {
             LirGlobalInit::Zeroed => {
@@ -1362,7 +1369,7 @@ fn emit_globals(out: &mut String, module: &LirModule, snames: &HashMap<u32, Stri
                         None
                     };
                     let fty = if let Some(t) = field_lir {
-                        llvm_type_full(t, snames)
+                        llvm_type_full(t, snames, &module.structs)
                     } else {
                         match init {
                             LirGlobalInit::FuncAddr(_) => "ptr".to_string(),
@@ -1542,7 +1549,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
     // Listed in LIBC_BUILTINS so module.externs never re-declares them with wrong types.
     // Both take `Str` by value (32-byte struct); on x86_64 SysV that's memory
     // class — annotate the declaration to match the C ABI gcc/clang compile.
-    let str_byval_attr = gorget_string_byval_attr(&snames);
+    let str_byval_attr = gorget_string_byval_attr(&snames, &module.structs);
     let str_byval = str_byval_attr.trim_end();
     let str_param = if str_byval.is_empty() { "ptr".to_string() } else { format!("ptr {str_byval}") };
     writeln!(out, "declare i1 @gorget_str_eq({sp}, {sp})", sp = str_param).unwrap();
@@ -1711,7 +1718,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     // register on x86_64 SysV (rax vs xmm0) → garbage 0.0; a
                     // pointer-sized integer handle keeps `i64`. Aggregate globals
                     // never reach here (sret-routed via known_init_fns above).
-                    let ret = llvm_type_full(&global.ty, snames);
+                    let ret = llvm_type_full(&global.ty, snames, &module.structs);
                     writeln!(out, "declare {ret} @{name}({})", params.join(", ")).unwrap();
                 }
             }
@@ -1805,16 +1812,16 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
         // The real gorget_file_open takes 2 args — redirect to __gorget_file_open_r wrapper.
         // Skip the default declaration; emit the wrapper declaration instead.
         if ext.name == "gorget_file_open" && ext.params.len() == 1 {
-            let ret_ty = llvm_type_full(&ext.return_type, snames);
-            let param_ty = llvm_type_full(&ext.params[0], snames);
+            let ret_ty = llvm_type_full(&ext.return_type, snames, &module.structs);
+            let param_ty = llvm_type_full(&ext.params[0], snames, &module.structs);
             writeln!(out, "declare {ret_ty} @__gorget_file_open_r({param_ty})").unwrap();
             continue; // Do NOT emit the 1-arg gorget_file_open declaration
         }
         // gorget_file_read_all: C function returns GorgetString but LIR expects Result<Str,Str>.
         // Redirect to __gorget_file_read_all_r which wraps the return in a proper Result struct.
         if ext.name == "gorget_file_read_all" {
-            let ret_ty = llvm_type_full(&ext.return_type, snames);
-            let param_ty = ext.params.first().map(|p| llvm_type_full(p, snames)).unwrap_or_else(|| "ptr".to_string());
+            let ret_ty = llvm_type_full(&ext.return_type, snames, &module.structs);
+            let param_ty = ext.params.first().map(|p| llvm_type_full(p, snames, &module.structs)).unwrap_or_else(|| "ptr".to_string());
             writeln!(out, "declare void @__gorget_file_read_all_r(ptr sret({ret_ty}), {param_ty})").unwrap();
             continue; // Do NOT emit the direct gorget_file_read_all declaration
         }
@@ -1882,7 +1889,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                 if force_str_byval && struct_sid_by_name(snames, "GorgetString").is_some() {
                     // On x86_64 the helper produces `byval(%GorgetString) align 8 `;
                     // on other targets it returns "" and we emit bare `ptr` (matches AAPCS64).
-                    let attr = gorget_string_byval_attr(snames);
+                    let attr = gorget_string_byval_attr(snames, &module.structs);
                     return format!("ptr {attr}").trim_end().to_string();
                 }
                 // Aggregate params: small structs (≤16 bytes) pass in registers (aarch64 ABI),
@@ -1894,14 +1901,14 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                 // implicit-pointer-in-register matches the existing emission).
                 if p.is_aggregate() {
                     if is_small_aggregate(p, &module.structs) {
-                        return llvm_type_full(p, snames);
+                        return llvm_type_full(p, snames, &module.structs);
                     }
-                    return format!("ptr {}", large_agg_byval_attr(p, snames)).trim_end().to_string();
+                    return format!("ptr {}", large_agg_byval_attr(p, snames, &module.structs)).trim_end().to_string();
                 }
                 // Scalar params: `bool` must carry `zeroext` at the C-ABI
                 // boundary (see llvm_c_param_type) — a bare `i1` reads garbage
                 // upper bits on the C side.
-                llvm_c_param_type(p, snames)
+                llvm_c_param_type(p, snames, &module.structs)
             })
             .collect();
         let variadic = if ext.is_variadic {
@@ -1916,7 +1923,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             continue;
         }
         if needs_sret(&ext.return_type, &module.structs) {
-            let ret_ty = llvm_type_full(&ext.return_type, snames);
+            let ret_ty = llvm_type_full(&ext.return_type, snames, &module.structs);
             let sret_params = if params.is_empty() {
                 format!("ptr sret({ret_ty}){variadic}")
             } else {
@@ -1924,7 +1931,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
             };
             writeln!(out, "declare void @{}({sret_params})", ext.name).unwrap();
         } else {
-            let ret = llvm_type_full(&ext.return_type, snames);
+            let ret = llvm_type_full(&ext.return_type, snames, &module.structs);
             writeln!(out, "declare {ret} @{}({}{})", ext.name, params.join(", "), variadic).unwrap();
         }
     }
@@ -1983,10 +1990,10 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                     // Try to find the function defined in this module for signature
                     if let Some(target_fn) = fn_by_name.get(name.as_str()) {
                         let params: Vec<String> = target_fn.params.iter()
-                            .map(|p| llvm_arg_type(p, snames))
+                            .map(|p| llvm_arg_type(p, snames, &module.structs))
                             .collect();
                         if needs_sret(&target_fn.return_type, &module.structs) {
-                            let ret_ty = llvm_type_full(&target_fn.return_type, snames);
+                            let ret_ty = llvm_type_full(&target_fn.return_type, snames, &module.structs);
                             let sret_params = if params.is_empty() {
                                 format!("ptr sret({ret_ty})")
                             } else {
@@ -1994,7 +2001,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                             };
                             writeln!(out, "declare void @{name}({sret_params})").unwrap();
                         } else {
-                            let ret = llvm_type_full(&target_fn.return_type, snames);
+                            let ret = llvm_type_full(&target_fn.return_type, snames, &module.structs);
                             writeln!(out, "declare {ret} @{name}({})", params.join(", ")).unwrap();
                         }
                     } else if matches!(name.as_str(),
@@ -2007,7 +2014,7 @@ fn emit_extern_declarations(out: &mut String, module: &LirModule, snames: &HashM
                         // module.externs entry, so we land here. The C runtime defines
                         // these as `Str f(Str s)` — 1 Str arg by value (byval on x86_64)
                         // and Str return via sret (32-byte aggregate).
-                        let str_attr = gorget_string_byval_attr(snames);
+                        let str_attr = gorget_string_byval_attr(snames, &module.structs);
                         writeln!(out, "declare void @{name}(ptr sret(%GorgetString), ptr {str_attr})").unwrap();
                     } else {
                         // Truly unknown — no LirExtern declared and not a locally-defined
@@ -2181,7 +2188,7 @@ fn emit_global_runtime_init(
     if let Some(target_fn) = module.functions.iter().find(|f| f.name == fn_name) {
         let sym = c_func_name(fn_name);
         if needs_sret(&target_fn.return_type, &module.structs) {
-            let ret_llvm = llvm_type_full(&target_fn.return_type, snames);
+            let ret_llvm = llvm_type_full(&target_fn.return_type, snames, &module.structs);
             let sz = sizeof_lir_type(&target_fn.return_type, &module.structs, snames);
             writeln!(out, "  %__ginit_{gid} = alloca {ret_llvm}").unwrap();
             let sret_arg = format!("ptr sret({ret_llvm}) %__ginit_{gid}");
@@ -2193,7 +2200,7 @@ fn emit_global_runtime_init(
             writeln!(out, "  call void @{sym}({all_args})").unwrap();
             writeln!(out, "  call ptr @memcpy(ptr @__lir_g{gid}, ptr %__ginit_{gid}, i64 {sz})").unwrap();
         } else {
-            let ret_llvm = llvm_type_full(&target_fn.return_type, snames);
+            let ret_llvm = llvm_type_full(&target_fn.return_type, snames, &module.structs);
             writeln!(out, "  %__ginit_{gid}_raw = call {ret_llvm} @{sym}({})", arg_strs.join(", ")).unwrap();
             writeln!(out, "  store {ret_llvm} %__ginit_{gid}_raw, ptr @__lir_g{gid}").unwrap();
         }
@@ -2234,7 +2241,7 @@ fn emit_global_runtime_init(
         // x86_64 SysV → garbage 0.0 (the `static_init_imported`/`math_*`
         // bug). Pointer-sized integer handles keep `i64` since their global
         // type is I64/Ptr. Aggregate globals never reach here (sret-routed).
-        let ret_llvm = llvm_arg_type(global_ty, snames);
+        let ret_llvm = llvm_arg_type(global_ty, snames, &module.structs);
         writeln!(out, "  %__ginit_{gid}_raw = call {ret_llvm} @{fn_name}({})", arg_strs.join(", ")).unwrap();
         writeln!(out, "  store {ret_llvm} %__ginit_{gid}_raw, ptr @__lir_g{gid}").unwrap();
         return;
@@ -2475,7 +2482,7 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
         let safe_name = c_func_name(&target.name);
         let adapt_name = format!("__adapt_{safe_name}");
         let target_uses_sret = needs_sret(&target.return_type, &module.structs);
-        let ret_llvm = llvm_type_full(&target.return_type, snames);
+        let ret_llvm = llvm_type_full(&target.return_type, snames, &module.structs);
 
         // Build parameter list (excluding sret, which we handle separately)
         let mut param_names: Vec<String> = Vec::new();
@@ -2495,13 +2502,13 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
         // rule 2). Mirrors the C adapter (src/backend/c_lir/mod.rs).
         let user_param_count = target.params.len().saturating_sub(target.fault_slot_param_count);
         for (i, p) in target.params.iter().take(user_param_count).enumerate() {
-            let ty = llvm_arg_type(p, snames);
+            let ty = llvm_arg_type(p, snames, &module.structs);
             param_decls.push(format!("{ty} %a.p{i}"));
             param_names.push(format!("{ty} %a.p{i}"));
         }
         // Append `null` for each synthesized trailing fault-slot param (panic-by-default).
         for p in target.params.iter().skip(user_param_count) {
-            let ty = llvm_arg_type(p, snames);
+            let ty = llvm_arg_type(p, snames, &module.structs);
             param_names.push(format!("{ty} null"));
         }
 
@@ -2581,7 +2588,7 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
             .find(|(_, s)| s.name == type_name)
             .map(|(i, _)| StructId(i as u32));
         if let Some(sid) = struct_sid {
-            let ty = llvm_type_full(&LirType::Struct(sid), snames);
+            let ty = llvm_type_full(&LirType::Struct(sid), snames, &module.structs);
             let sz = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
             let safe_name = c_func_name(name);
             let safe_clone = c_func_name(clone_fn);
@@ -2618,7 +2625,7 @@ fn emit_function(
     snames: &HashMap<u32, String>,
     str_globals: &mut StrGlobals,
 ) {
-    let ret = llvm_type_full(&func.return_type, snames);
+    let ret = llvm_type_full(&func.return_type, snames, &module.structs);
     // Spawn wrappers cross the C runtime / LLVM IR boundary, so their
     // >16-byte aggregate params need a ptr-passing override (AArch64 PCS
     // rule B.4 vs LLVM's default split-across-8-regs lowering). The
@@ -2627,7 +2634,7 @@ fn emit_function(
     let is_spawn_wrapper = crate::lir::queries::is_spawn_wrapper(func);
     let params: Vec<String> = func.params.iter().enumerate()
         .map(|(i, p)| {
-            let ty = if *p == LirType::Void { "ptr".to_string() } else { llvm_type_full(p, snames) };
+            let ty = if *p == LirType::Void { "ptr".to_string() } else { llvm_type_full(p, snames, &module.structs) };
             if is_spawn_wrapper && p.is_aggregate() && !is_small_aggregate(p, &module.structs) {
                 // x86_64 SysV: a >16-byte by-value aggregate is MEMORY class (a stack
                 // copy), so the C run-fn passes the Str/struct BY VALUE. Without byval the
@@ -2635,7 +2642,7 @@ fn emit_function(
                 // stack-passed bytes as if `%pN` were an address -> SEGV. byval on x86_64
                 // (via the x86_64-gated large_agg_byval_attr); "" on aarch64 -> bare
                 // `ptr %pN`, byte-identical to before (AAPCS64 passes by implicit ptr).
-                let byval = large_agg_byval_attr(p, snames);
+                let byval = large_agg_byval_attr(p, snames, &module.structs);
                 return format!("ptr {byval}%p{i}").trim_end().to_string();
             }
             format!("{ty} %p{i}")
@@ -2909,7 +2916,7 @@ fn emit_function(
             // Void slots hold closure env pointers — allocate space for a ptr.
             writeln!(out, "  %s{i} = alloca ptr ; void slot").unwrap();
         } else {
-            let ty = llvm_type_full(&slot.ty, snames);
+            let ty = llvm_type_full(&slot.ty, snames, &module.structs);
             let name = slot.name.as_deref().unwrap_or("slot");
             writeln!(out, "  %s{i} = alloca {ty} ; {name}").unwrap();
             // Zero-initialize resource-type slots. gorget_string_free / gorget_array_free
@@ -3273,7 +3280,7 @@ fn emit_function(
         // that has the struct value to a slot and passes its pointer.
         for (pi, (param_val, param_ty)) in block.params.iter().enumerate() {
             let phi_as_ptr = param_ty.is_aggregate();
-            let ty = if phi_as_ptr { "ptr".to_string() } else { llvm_type_full(param_ty, snames) };
+            let ty = if phi_as_ptr { "ptr".to_string() } else { llvm_type_full(param_ty, snames, &module.structs) };
             let mut phi_entries = Vec::new();
             if let Some(preds) = pred_map.get(&block.id) {
                 for &pred_id in preds {
@@ -3377,7 +3384,7 @@ fn emit_function(
 
         // Terminator — pre-emit any int-width casts needed for branch args
         // whose types don't match the target block's params.
-        emit_branch_arg_casts(body_out, &block.terminator, func, bid, &val_types, snames);
+        emit_branch_arg_casts(body_out, &block.terminator, func, module, bid, &val_types, snames);
         emit_term(body_out, &block.terminator, func, module, snames, &val_types, bid);
     }
 
@@ -3619,15 +3626,15 @@ fn emit_inst(
                     // Scalar value stored into aggregate slot — type mismatch from extern
                     // that returns aggregate but was declared as scalar. Store the scalar
                     // at the slot's address using the value's actual type.
-                    let vty = llvm_type_full(val_ty.unwrap(), snames);
+                    let vty = llvm_type_full(val_ty.unwrap(), snames, &module.structs);
                     writeln!(out, "  store {vty} %v{}, ptr %s{}", value.0, slot.0).unwrap();
                 } else {
                     // Value is an aggregate by value — store it directly
-                    let sty = llvm_type_full(slot_ty, snames);
+                    let sty = llvm_type_full(slot_ty, snames, &module.structs);
                     writeln!(out, "  store {sty} %v{}, ptr %s{}", value.0, slot.0).unwrap();
                 }
             } else {
-                let sty = llvm_type_full(slot_ty, snames);
+                let sty = llvm_type_full(slot_ty, snames, &module.structs);
                 let val_ty = val_types.get(value.0 as usize).and_then(|t| t.as_ref());
                 // If slot is integer but value is ptr (e.g. Option alloca stored via auto type
                 // inference choosing payload type), use memcpy to treat the slot as raw storage
@@ -3653,7 +3660,7 @@ fn emit_inst(
                 // Downstream code expects ptr and will memcpy or field-access through it.
                 writeln!(out, "  %v{} = getelementptr i8, ptr %s{}, i32 0", dst.0, slot.0).unwrap();
             } else {
-                let lty = llvm_type_full(ty, snames);
+                let lty = llvm_type_full(ty, snames, &module.structs);
                 writeln!(out, "  %v{} = load {lty}, ptr %s{}", dst.0, slot.0).unwrap();
             }
         }
@@ -3742,7 +3749,7 @@ fn emit_inst(
             writeln!(out, "  %v{} = bitcast ptr %strlit.{} to ptr", dst.0, dst.0).unwrap();
         }
         Inst::ParamRef { dst, index, ty } => {
-            let lty = llvm_type_full(ty, snames);
+            let lty = llvm_type_full(ty, snames, &module.structs);
             // Parameters are named %pN — just alias them
             // LLVM doesn't allow direct aliasing, so use a dummy add/bitcast
             match ty {
@@ -4275,7 +4282,7 @@ fn emit_inst(
                 // Our codegen model keeps aggregates as pointers throughout.
                 writeln!(out, "  %v{} = getelementptr i8, ptr %v{}, i32 0", dst.0, ptr.0).unwrap();
             } else {
-                let lty = llvm_type_full(ty, snames);
+                let lty = llvm_type_full(ty, snames, &module.structs);
                 writeln!(out, "  %v{} = load {lty}, ptr %v{}", dst.0, ptr.0).unwrap();
             }
         }
@@ -4363,7 +4370,7 @@ fn emit_inst(
                     }
                     Some(scalar_ty) if !scalar_ty.is_ptr() => {
                         // void* points to a scalar (bool, int, float) — load then store
-                        let ty_str = llvm_type_full(&scalar_ty, snames);
+                        let ty_str = llvm_type_full(&scalar_ty, snames, &module.structs);
                         let tmp = format!("voidderef.{}.{}", ptr.0, value.0);
                         writeln!(out, "  %{tmp} = load {ty_str}, ptr %v{}", value.0).unwrap();
                         writeln!(out, "  store {ty_str} %{tmp}, ptr %v{}", ptr.0).unwrap();
@@ -4397,8 +4404,8 @@ fn emit_inst(
                 };
                 let ty_str = widened_via_callclosure
                     .as_ref()
-                    .map(|t| llvm_type_full(t, snames))
-                    .or_else(|| val_ty.map(|t| llvm_type_full(t, snames)))
+                    .map(|t| llvm_type_full(t, snames, &module.structs))
+                    .or_else(|| val_ty.map(|t| llvm_type_full(t, snames, &module.structs)))
                     .unwrap_or_else(|| "i64".to_string());
                 writeln!(out, "  store {ty_str} %v{}, ptr %v{}", value.0, ptr.0).unwrap();
             }
@@ -4530,7 +4537,7 @@ fn emit_inst(
         // ── Calls ───────────────────────────────────────────────────
         Inst::Call { dst, func: fid, args } => {
             let target = &module.functions[fid.0 as usize];
-            let ret_ty = llvm_type_full(&target.return_type, snames);
+            let ret_ty = llvm_type_full(&target.return_type, snames, &module.structs);
             // Closure→callable wrapping is now done in LIR (ClosurePack).
             // For aggregate params: if value is ptr but param is aggregate, load first
             let mut load_lines = Vec::new();
@@ -4541,13 +4548,13 @@ fn emit_inst(
                 let is_agg_param = param_ty.map_or(false, |t| t.is_aggregate());
 
                 if is_agg_param && is_ptr_val {
-                    let pty = llvm_arg_type(param_ty.unwrap(), snames);
+                    let pty = llvm_arg_type(param_ty.unwrap(), snames, &module.structs);
                     let load_name = format!("arg.load.{}.{i}", a.0);
                     load_lines.push(format!("  %{load_name} = load {pty}, ptr %v{}", a.0));
                     format!("{pty} %{load_name}")
                 } else {
-                    let pty = param_ty.map(|t| llvm_arg_type(t, snames))
-                        .unwrap_or_else(|| actual_ty.map(|t| llvm_arg_type(t, snames))
+                    let pty = param_ty.map(|t| llvm_arg_type(t, snames, &module.structs))
+                        .unwrap_or_else(|| actual_ty.map(|t| llvm_arg_type(t, snames, &module.structs))
                             .unwrap_or_else(|| "i64".to_string()));
                     // Width mismatch (e.g. byte-literal `IConst` typed I64 flowing
                     // into an i8 param). LLVM verifies arg widths strictly; the C
@@ -4617,7 +4624,7 @@ fn emit_inst(
                     let uid = *trap_counter;
                     *trap_counter += 1;
                     let cstr_name = format!("gp.{block_id}.{uid}.cstr");
-                    let str_attr_call = gorget_string_byval_attr(snames);
+                    let str_attr_call = gorget_string_byval_attr(snames, &module.structs);
                     writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {str_attr_call}%v{})", a.0).unwrap();
                     format!("%{cstr_name}")
                 } else {
@@ -4647,7 +4654,7 @@ fn emit_inst(
                         let uid = *trap_counter;
                         *trap_counter += 1;
                         let cstr_name = format!("gt.{block_id}.{uid}.cstr");
-                        let str_attr_call = gorget_string_byval_attr(snames);
+                        let str_attr_call = gorget_string_byval_attr(snames, &module.structs);
                         writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {str_attr_call}%v{})", a.0).unwrap();
                         format!("%{cstr_name}")
                     } else {
@@ -4712,7 +4719,7 @@ fn emit_inst(
                 if let Some(sid) = newtype_sid {
                     if args.len() == 1 {
                         let struct_ty = format!("%{}", snames.get(&sid.0).unwrap_or(&name.to_string()));
-                        let field_ty = llvm_type_full(&module.structs[sid.0 as usize].fields[0].1, snames);
+                        let field_ty = llvm_type_full(&module.structs[sid.0 as usize].fields[0].1, snames, &module.structs);
                         let arg_ty = val_types.get(args[0].0 as usize).and_then(|t| t.as_ref());
                         writeln!(out, "  %v{} = alloca {struct_ty}", d.0).unwrap();
                         let fptr = format!("nt.{block_id}.{}.fp", d.0);
@@ -4876,7 +4883,7 @@ fn emit_inst(
                                         (ret, sret, small_agg)
                                     }
                                 };
-                                let gen_ret_llvm = llvm_type_full(&gen_ret_ty, snames);
+                                let gen_ret_llvm = llvm_type_full(&gen_ret_ty, snames, &module.structs);
                                 // Determine element passing convention
                                 let elem_pass_by_ptr_gen = elem_is_aggregate && elem_size > 16;
                                 // Load fn_ptr and env_ptr from the callable [fn_ptr, env_ptr]
@@ -5073,7 +5080,7 @@ fn emit_inst(
                                             let acc_arg = args[1];
                                             let acc_ty = val_types.get(acc_arg.0 as usize).and_then(|t| t.as_ref())
                                                 .cloned().unwrap_or(LirType::I64);
-                                            let acc_llvm = llvm_arg_type(&acc_ty, snames);
+                                            let acc_llvm = llvm_arg_type(&acc_ty, snames, &module.structs);
                                             let acc_is_agg = acc_llvm.starts_with('%');
                                             let fold_ret_sret = needs_sret(&gen_ret_ty, &module.structs);
                                             let fold_ret_small = gen_ret_ty.is_aggregate() && is_small_aggregate(&gen_ret_ty, &module.structs);
@@ -5177,7 +5184,7 @@ fn emit_inst(
                 if let Some(typed_fn) = variant {
                     let arg1_ty = val_types.get(args[1].0 as usize)
                         .and_then(|t| t.as_ref())
-                        .map(|t| llvm_arg_type(t, snames))
+                        .map(|t| llvm_arg_type(t, snames, &module.structs))
                         .unwrap_or_else(|| "i64".to_string());
                     writeln!(out, "  call void @{typed_fn}(ptr %v{}, {arg1_ty} %v{})", args[0].0, args[1].0).unwrap();
                     return;
@@ -5196,7 +5203,7 @@ fn emit_inst(
                         // 32 bytes. On aarch64 it's passed by hidden pointer (matches
                         // bare `ptr`). On x86_64 SysV it's memory class on the stack —
                         // emit `byval` so llc lowers it to bytes-on-stack.
-                        let str_attr_psc = gorget_string_byval_attr(snames);
+                        let str_attr_psc = gorget_string_byval_attr(snames, &module.structs);
                         writeln!(out, "  call void @gorget_string_push_char(ptr %v{}, ptr {}%v{})", args[0].0, str_attr_psc, args[1].0).unwrap();
                     }
                     return;
@@ -5218,7 +5225,7 @@ fn emit_inst(
                 // Use gorget_str_to_cstr: ensures null termination even for views.
                 // gorget_str_to_cstr takes Str by value — annotate with byval on x86_64
                 // so the C runtime gets the bytes via memory class on the stack.
-                let str_attr_local = gorget_string_byval_attr(snames);
+                let str_attr_local = gorget_string_byval_attr(snames, &module.structs);
                 writeln!(out, "  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {}%v{arg0})", str_attr_local).unwrap();
                 if let Some(d) = dst {
                     // Use the extern's declared return type (not val_types — val_types[d]
@@ -5229,7 +5236,7 @@ fn emit_inst(
                         .map(|e| &e.return_type);
                     if let Some(ret_ty) = ext_ret {
                         if is_small_aggregate(ret_ty, &module.structs) {
-                            let agg_ty = llvm_type_full(ret_ty, snames);
+                            let agg_ty = llvm_type_full(ret_ty, snames, &module.structs);
                             writeln!(out, "  %v{}.ret = call {agg_ty} @__gorget_file_open_r(ptr %{cstr_name})", d.0).unwrap();
                             writeln!(out, "  %v{} = alloca {agg_ty}", d.0).unwrap();
                             writeln!(out, "  store {agg_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
@@ -5420,7 +5427,7 @@ fn emit_inst(
                             format!("ptr %v{}", a.0)
                         } else {
                             // Spill scalar to alloca
-                            let alty = aty.map(|t| llvm_arg_type(t, snames)).unwrap_or_else(|| "i64".to_string());
+                            let alty = aty.map(|t| llvm_arg_type(t, snames, &module.structs)).unwrap_or_else(|| "i64".to_string());
                             let spill_name = format!("{pfx}.spill.{i}");
                             spills.push(format!("  %{spill_name} = alloca {alty}"));
                             spills.push(format!("  store {alty} %v{}, ptr %{spill_name}", a.0));
@@ -5484,7 +5491,7 @@ fn emit_inst(
                         let opt_def = &module.structs[sid.0 as usize];
                         let opt_ty = format!("%{}", snames.get(&sid.0).cloned().unwrap_or_else(|| opt_def.name.clone()));
                         let payload_ty = opt_def.fields.get(1).map(|(_, t)| t.clone()).unwrap_or(LirType::I64);
-                        let payload_llvm = llvm_type_full(&payload_ty, snames);
+                        let payload_llvm = llvm_type_full(&payload_ty, snames, &module.structs);
                         let payload_off = lir_payload_offset(&payload_ty);
                         let opt_size = sizeof_lir_type(&LirType::Struct(sid), &module.structs, snames);
                         // alloca for Option result + scratch for the value
@@ -5554,10 +5561,10 @@ fn emit_inst(
                             let uid = *trap_counter;
                             *trap_counter += 1;
                             let pfx = format!("voidret.{block_id}.{uid}");
-                            let load_ty = llvm_type_full(inferred_ty.unwrap(), snames);
+                            let load_ty = llvm_type_full(inferred_ty.unwrap(), snames, &module.structs);
                             let arg_strs: Vec<String> = args.iter().map(|a| {
                                 let aty = val_types.get(a.0 as usize).and_then(|t| t.as_ref());
-                                let ty_str = aty.map(|t| llvm_arg_type(t, snames)).unwrap_or_else(|| "ptr".to_string());
+                                let ty_str = aty.map(|t| llvm_arg_type(t, snames, &module.structs)).unwrap_or_else(|| "ptr".to_string());
                                 format!("{ty_str} %v{}", a.0)
                             }).collect();
                             writeln!(out, "  %{pfx}.raw = call ptr @{name}({})", arg_strs.join(", ")).unwrap();
@@ -5635,7 +5642,7 @@ fn emit_inst(
                             // Compute offset from struct layout
                             if sdef.fields.len() >= 3 {
                                 let err_field_ty = &sdef.fields.last().unwrap().1;
-                                let ty_str = llvm_type_full(err_field_ty, snames);
+                                let ty_str = llvm_type_full(err_field_ty, snames, &module.structs);
                                 // Error offset: after tag(4) + padding(4) + ok_payload
                                 // For Result__int64_t__GorgetString: tag(4)+pad(4)+ok(8) = 16
                                 // For Result__GorgetString__GorgetString: tag(4)+pad(4)+ok(32) = 40
@@ -5855,13 +5862,13 @@ fn emit_inst(
                     // Get payload type from field 1 (ok/Some) and field 2 (err/None) if present
                     let payload_ty = src_sdef.and_then(|d| d.fields.get(1))
                         .map(|(_, t)| t.clone()).unwrap_or(LirType::I64);
-                    let payload_llvm = llvm_type_full(&payload_ty, snames);
+                    let payload_llvm = llvm_type_full(&payload_ty, snames, &module.structs);
                     let payload_off = lir_payload_offset(&payload_ty);
                     let _payload_is_agg = payload_llvm.starts_with('%');
 
                     let err_ty = src_sdef.and_then(|d| d.fields.get(2))
                         .map(|(_, t)| t.clone());
-                    let _err_llvm = err_ty.as_ref().map(|t| llvm_type_full(t, snames))
+                    let _err_llvm = err_ty.as_ref().map(|t| llvm_type_full(t, snames, &module.structs))
                         .unwrap_or_else(|| "i64".to_string());
                     let err_off = err_ty.as_ref().map(|_t| {
                         let ok_size = sizeof_lir_type(&payload_ty, &module.structs, snames);
@@ -5898,13 +5905,13 @@ fn emit_inst(
                     let result_size = result_sid.map(|s| {
                         sizeof_lir_type(&LirType::Struct(s), &module.structs, snames)
                     }).unwrap_or(16);
-                    let _result_llvm = result_sid.map(|s| llvm_type_full(&LirType::Struct(s), snames))
+                    let _result_llvm = result_sid.map(|s| llvm_type_full(&LirType::Struct(s), snames, &module.structs))
                         .unwrap_or_else(|| "%Option__int64_t".to_string());
 
                     // Result payload type (may differ from source for cross-type map)
                     let result_payload_ty = result_sid.and_then(|s| module.structs[s.0 as usize].fields.get(1))
                         .map(|(_, t)| t.clone()).unwrap_or(LirType::I64);
-                    let _result_payload_llvm = llvm_type_full(&result_payload_ty, snames);
+                    let _result_payload_llvm = llvm_type_full(&result_payload_ty, snames, &module.structs);
                     let result_payload_off = lir_payload_offset(&result_payload_ty);
 
                     // Alloca result
@@ -5985,7 +5992,7 @@ fn emit_inst(
                             writeln!(out, "  br i1 %{pfx}.is_some, label %{then_l}, label %{else_l}").unwrap();
 
                             if let Some((ref call_fn, ref ret_ty, ref params_are_ptr)) = closure_info {
-                                let ret_llvm_ty = llvm_type_full(ret_ty, snames);
+                                let ret_llvm_ty = llvm_type_full(ret_ty, snames, &module.structs);
                                 let ret_is_agg = ret_llvm_ty.starts_with('%');
                                 let ret_sret = ret_is_agg && !is_small_aggregate(ret_ty, &module.structs);
                                 let ret_small_agg = ret_is_agg && is_small_aggregate(ret_ty, &module.structs);
@@ -6026,7 +6033,7 @@ fn emit_inst(
 
                                 // Helper closure: emit a closure call with err payload.
                                 let emit_err_closure_call = |out: &mut String, label: &str, arg_ptr: &str| -> String {
-                                    let err_param_llvm = err_ty.as_ref().map(|t| llvm_type_full(t, snames))
+                                    let err_param_llvm = err_ty.as_ref().map(|t| llvm_type_full(t, snames, &module.structs))
                                         .unwrap_or_else(|| "i64".to_string());
                                     let err_param_is_agg = err_param_llvm.starts_with('%');
                                     let err_param_by_ptr = params_are_ptr.first().copied().unwrap_or(false);
@@ -6462,7 +6469,7 @@ fn emit_inst(
                         extra_args.push(format!("i32 %{sn}.leni"));
                         extra_args.push(format!("ptr %{sn}.data"));
                     } else {
-                        let pty = aty.map(|t| llvm_arg_type(t, snames))
+                        let pty = aty.map(|t| llvm_arg_type(t, snames, &module.structs))
                             .unwrap_or_else(|| "i64".to_string());
                         extra_args.push(format!("{pty} %v{}", a.0));
                     }
@@ -6550,7 +6557,7 @@ fn emit_inst(
                         let pfx = format!("optwrap.{block_id}.{uid}");
                         let opt_ty = format!("%{}", snames.get(&sid.0).unwrap_or(&"Option".to_string()));
                         let ext_ret = ext_decl.map(|e| &e.return_type).unwrap_or(&LirType::I64);
-                        let raw_ty = llvm_type_full(ext_ret, snames);
+                        let raw_ty = llvm_type_full(ext_ret, snames, &module.structs);
 
                         // Build args — match the generic extern handler's coercion rules:
                         // aggregate expected + ptr actual → pass as ptr
@@ -6569,22 +6576,22 @@ fn emit_inst(
                                 // attach `byval(...)` so the call matches the
                                 // SysV memory-class C convention.
                                 let attr = if expected.map_or(false, |t| !is_small_aggregate(t, &module.structs)) {
-                                    large_agg_byval_attr(expected.unwrap(), snames)
+                                    large_agg_byval_attr(expected.unwrap(), snames, &module.structs)
                                 } else {
                                     String::new()
                                 };
                                 format!("ptr {}%v{}", attr, a.0)
                             } else if expects_ptr && !is_ptr && actual.is_some() {
-                                let alty = llvm_arg_type(actual.unwrap(), snames);
+                                let alty = llvm_arg_type(actual.unwrap(), snames, &module.structs);
                                 let sn = format!("{pfx}.spill.{i}");
                                 spill_lines.push(format!("  %{sn} = alloca {alty}"));
                                 spill_lines.push(format!("  store {alty} %v{}, ptr %{sn}", a.0));
                                 format!("ptr %{sn}")
                             } else {
                                 let pty = if let Some(ety) = expected {
-                                    llvm_arg_type(ety, snames)
+                                    llvm_arg_type(ety, snames, &module.structs)
                                 } else {
-                                    actual.map(|t| llvm_arg_type(t, snames))
+                                    actual.map(|t| llvm_arg_type(t, snames, &module.structs))
                                         .unwrap_or_else(|| "i64".to_string())
                                 };
                                 format!("{pty} %v{}", a.0)
@@ -6644,7 +6651,7 @@ fn emit_inst(
                 // copies the bytes onto the outgoing stack frame; bare `ptr`
                 // would put pointers in registers and the C side would read
                 // garbage.
-                let str_attr = gorget_string_byval_attr(snames);
+                let str_attr = gorget_string_byval_attr(snames, &module.structs);
                 if let Some(d) = dst {
                     let uid = *trap_counter;
                     *trap_counter += 1;
@@ -6724,7 +6731,7 @@ fn emit_inst(
                             } else if is_ptr_val {
                                 format!("ptr %v{}", a.0)
                             } else {
-                                let pty = actual.map(|t| llvm_arg_type(t, snames)).unwrap_or_else(|| "i64".to_string());
+                                let pty = actual.map(|t| llvm_arg_type(t, snames, &module.structs)).unwrap_or_else(|| "i64".to_string());
                                 format!("{pty} %v{}", a.0)
                             }
                         }).collect();
@@ -6746,7 +6753,7 @@ fn emit_inst(
                 // Redirect to C wrapper __gorget_file_read_all_r that returns the proper Result.
                 if name == "gorget_file_read_all" && !args.is_empty() {
                     *trap_counter += 1;
-                    let ret_ty = llvm_type_full(&ext.return_type, snames);
+                    let ret_ty = llvm_type_full(&ext.return_type, snames, &module.structs);
                     if let Some(d) = dst {
                         writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                         writeln!(out, "  call void @__gorget_file_read_all_r(ptr sret({ret_ty}) %v{}, ptr %v{})", d.0, args[0].0).unwrap();
@@ -6755,7 +6762,7 @@ fn emit_inst(
                 }
 
                 let actual_ret = ext.return_type.clone();
-                let ret_ty = llvm_type_full(&actual_ret, snames);
+                let ret_ty = llvm_type_full(&actual_ret, snames, &module.structs);
                 // For each arg, handle type mismatches:
                 // - extern expects ptr but value is scalar → spill to alloca
                 // - extern expects aggregate but value is ptr → load struct from ptr
@@ -6815,7 +6822,7 @@ fn emit_inst(
                     if is_str_to_cstr {
                         let cstr_name = format!("cstr.{block_id}.{ext_uid}.{i}");
                         // gorget_str_to_cstr takes Str by value — see large_agg_byval_attr.
-                        let str_attr_call = gorget_string_byval_attr(snames);
+                        let str_attr_call = gorget_string_byval_attr(snames, &module.structs);
                         spill_lines.push(format!("  %{cstr_name} = call ptr @gorget_str_to_cstr(ptr {}%v{})", str_attr_call, a.0));
                         format!("ptr %{cstr_name}")
                     } else if matches!(param_abi,
@@ -6825,7 +6832,7 @@ fn emit_inst(
                         // SSA operand is the address of a strlit struct). Force byval
                         // so x86_64 SysV emits a memory-class stack copy instead of
                         // a bare pointer-in-register.
-                        let attr = gorget_string_byval_attr(snames);
+                        let attr = gorget_string_byval_attr(snames, &module.structs);
                         format!("ptr {}%v{}", attr, a.0)
                     } else if param_abi == crate::ir::abi::AbiKind::Ptr && expects_agg && is_ptr {
                         // The extern declares the param as a pointer (`T*` in
@@ -6837,7 +6844,7 @@ fn emit_inst(
                         format!("ptr %v{}", a.0)
                     } else if expects_small_agg && is_ptr {
                         // Small aggregate (≤16 bytes): load from ptr and pass by value
-                        let agg_ty = llvm_type_full(expected_ty.unwrap(), snames);
+                        let agg_ty = llvm_type_full(expected_ty.unwrap(), snames, &module.structs);
                         let load_name = format!("aggload.{block_id}.{ext_uid}.{i}");
                         spill_lines.push(format!("  %{load_name} = load {agg_ty}, ptr %v{}", a.0));
                         format!("{agg_ty} %{load_name}")
@@ -6848,20 +6855,20 @@ fn emit_inst(
                         // the C-side `Str s` parameter that gcc/clang compile
                         // as stack-passed bytes. aarch64 leaves it bare `ptr`
                         // (AAPCS64 implicit-pointer convention).
-                        let attr = large_agg_byval_attr(expected_ty.unwrap(), snames);
+                        let attr = large_agg_byval_attr(expected_ty.unwrap(), snames, &module.structs);
                         format!("ptr {}%v{}", attr, a.0)
                     } else if expects_ptr && !is_ptr && actual_ty.is_some() {
                         // Spill scalar to alloca and pass pointer
-                        let spill_ty = llvm_arg_type(actual_ty.unwrap(), snames);
+                        let spill_ty = llvm_arg_type(actual_ty.unwrap(), snames, &module.structs);
                         let spill_name = format!("spill.{block_id}.{ext_uid}.{i}");
                         spill_lines.push(format!("  %{spill_name} = alloca {spill_ty}"));
                         spill_lines.push(format!("  store {spill_ty} %v{}, ptr %{spill_name}", a.0));
                         format!("ptr %{spill_name}")
                     } else {
                         let pty = if let Some(ety) = expected_ty {
-                            llvm_arg_type(ety, snames)
+                            llvm_arg_type(ety, snames, &module.structs)
                         } else {
-                            actual_ty.map(|t| llvm_arg_type(t, snames))
+                            actual_ty.map(|t| llvm_arg_type(t, snames, &module.structs))
                                 .unwrap_or_else(|| "i64".to_string())
                         };
                         // Width mismatch (e.g. `gorget_str_byte_at` returns i8
@@ -6882,7 +6889,7 @@ fn emit_inst(
                 }
                 let variadic = if ext.is_variadic { ", ..." } else { "" };
                 let _fn_ty = format!("{ret_ty} ({}{})",
-                    ext.params.iter().map(|p| llvm_type_full(p, snames)).collect::<Vec<_>>().join(", "),
+                    ext.params.iter().map(|p| llvm_type_full(p, snames, &module.structs)).collect::<Vec<_>>().join(", "),
                     variadic,
                 );
                 if let Some(d) = dst {
@@ -6915,7 +6922,7 @@ fn emit_inst(
                 let arg_strs: Vec<String> = args.iter().map(|a| {
                     let pty = val_types.get(a.0 as usize)
                         .and_then(|t| t.as_ref())
-                        .map(|t| llvm_arg_type(t, snames))
+                        .map(|t| llvm_arg_type(t, snames, &module.structs))
                         .unwrap_or_else(|| "i64".to_string());
                     format!("{pty} %v{}", a.0)
                 }).collect();
@@ -6980,14 +6987,14 @@ fn emit_inst(
             let arg_strs: Vec<String> = args.iter().map(|a| {
                 let pty = val_types.get(a.0 as usize)
                     .and_then(|t| t.as_ref())
-                    .map(|t| llvm_arg_type(t, snames))
+                    .map(|t| llvm_arg_type(t, snames, &module.structs))
                     .unwrap_or_else(|| "i64".to_string());
                 format!("{pty} %v{}", a.0)
             }).collect();
 
             if let Some(d) = dst {
                 if !matches!(call_ret_ty, LirType::Void) && needs_sret(call_ret_ty, &module.structs) {
-                    let ret_ty = llvm_type_full(call_ret_ty, snames);
+                    let ret_ty = llvm_type_full(call_ret_ty, snames, &module.structs);
                     writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                     let prepended = if arg_strs.is_empty() {
                         format!("ptr sret({ret_ty}) %v{}", d.0)
@@ -6997,7 +7004,7 @@ fn emit_inst(
                     writeln!(out, "  call void %v{}({prepended})", callee.0).unwrap();
                 } else if !matches!(call_ret_ty, LirType::Void) && call_ret_ty.is_aggregate() {
                     // Small aggregate: returned in registers, stored to alloca
-                    let ret_ty = llvm_type_full(call_ret_ty, snames);
+                    let ret_ty = llvm_type_full(call_ret_ty, snames, &module.structs);
                     writeln!(out, "  %v{}.ret = call {ret_ty} %v{}({})", d.0, callee.0, arg_strs.join(", ")).unwrap();
                     writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                     writeln!(out, "  store {ret_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
@@ -7005,7 +7012,7 @@ fn emit_inst(
                     let ret_ty = if matches!(call_ret_ty, LirType::Void) {
                         "i64".to_string() // legacy fallback when ret_ty wasn't plumbed
                     } else {
-                        llvm_type_full(call_ret_ty, snames)
+                        llvm_type_full(call_ret_ty, snames, &module.structs)
                     };
                     writeln!(out, "  %v{} = call {ret_ty} %v{}({})", d.0, callee.0, arg_strs.join(", ")).unwrap();
                 }
@@ -7013,7 +7020,7 @@ fn emit_inst(
                 let ret_ty = if matches!(call_ret_ty, LirType::Void) {
                     "void".to_string()
                 } else {
-                    llvm_type_full(call_ret_ty, snames)
+                    llvm_type_full(call_ret_ty, snames, &module.structs)
                 };
                 writeln!(out, "  call {ret_ty} %v{}({})", callee.0, arg_strs.join(", ")).unwrap();
             }
@@ -7026,14 +7033,14 @@ fn emit_inst(
             let arg_strs: Vec<String> = args.iter().map(|a| {
                 let pty = val_types.get(a.0 as usize)
                     .and_then(|t| t.as_ref())
-                    .map(|t| llvm_arg_type(t, snames))
+                    .map(|t| llvm_arg_type(t, snames, &module.structs))
                     .unwrap_or_else(|| "i64".to_string());
                 format!("{pty} %v{}", a.0)
             }).collect();
 
             if let Some(d) = dst {
                 if !matches!(call_ret_ty, LirType::Void) && needs_sret(call_ret_ty, &module.structs) {
-                    let ret_ty = llvm_type_full(call_ret_ty, snames);
+                    let ret_ty = llvm_type_full(call_ret_ty, snames, &module.structs);
                     writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                     let prepended = if arg_strs.is_empty() {
                         format!("ptr sret({ret_ty}) %v{}", d.0)
@@ -7042,7 +7049,7 @@ fn emit_inst(
                     };
                     writeln!(out, "  call void %v{}({prepended})", fref.0).unwrap();
                 } else if !matches!(call_ret_ty, LirType::Void) && call_ret_ty.is_aggregate() {
-                    let ret_ty = llvm_type_full(call_ret_ty, snames);
+                    let ret_ty = llvm_type_full(call_ret_ty, snames, &module.structs);
                     writeln!(out, "  %v{}.ret = call {ret_ty} %v{}({})", d.0, fref.0, arg_strs.join(", ")).unwrap();
                     writeln!(out, "  %v{} = alloca {ret_ty}", d.0).unwrap();
                     writeln!(out, "  store {ret_ty} %v{}.ret, ptr %v{}", d.0, d.0).unwrap();
@@ -7050,7 +7057,7 @@ fn emit_inst(
                     let ret_ty = if matches!(call_ret_ty, LirType::Void) {
                         "i64".to_string()
                     } else {
-                        llvm_type_full(call_ret_ty, snames)
+                        llvm_type_full(call_ret_ty, snames, &module.structs)
                     };
                     writeln!(out, "  %v{} = call {ret_ty} %v{}({})", d.0, fref.0, arg_strs.join(", ")).unwrap();
                 }
@@ -7058,7 +7065,7 @@ fn emit_inst(
                 let ret_ty = if matches!(call_ret_ty, LirType::Void) {
                     "void".to_string()
                 } else {
-                    llvm_type_full(call_ret_ty, snames)
+                    llvm_type_full(call_ret_ty, snames, &module.structs)
                 };
                 writeln!(out, "  call {ret_ty} %v{}({})", fref.0, arg_strs.join(", ")).unwrap();
             }
@@ -7132,7 +7139,7 @@ fn emit_inst(
                     writeln!(out, "  %{data_val} = load ptr, ptr %{data_ptr}").unwrap();
                     format!("ptr %{data_val}")
                 } else {
-                    let ty_str = pty.map(|t| llvm_arg_type(t, snames))
+                    let ty_str = pty.map(|t| llvm_arg_type(t, snames, &module.structs))
                         .unwrap_or_else(|| "i64".to_string());
                     format!("{ty_str} %v{}", a.0)
                 }
@@ -7156,7 +7163,7 @@ fn emit_inst(
                     writeln!(out, "  %{data_val} = load ptr, ptr %{data_ptr}").unwrap();
                     format!("ptr %{data_val}")
                 } else {
-                    let ty_str = pty.map(|t| llvm_arg_type(t, snames))
+                    let ty_str = pty.map(|t| llvm_arg_type(t, snames, &module.structs))
                         .unwrap_or_else(|| "i64".to_string());
                     format!("{ty_str} %v{}", a.0)
                 }
@@ -7305,13 +7312,13 @@ fn emit_inst(
                 };
                 if let Some(sid) = by_value_sid {
                     let s_ty = LirType::Struct(sid);
-                    let struct_ty_str = llvm_type_full(&s_ty, snames);
+                    let struct_ty_str = llvm_type_full(&s_ty, snames, &module.structs);
                     let tmp = format!("{pfx}.arg{ai}");
                     writeln!(out, "  %{tmp} = load {struct_ty_str}, ptr %v{}", a.0).unwrap();
                     call_arg_strs.push(format!("{struct_ty_str} %{tmp}"));
                 } else {
                     let pty = vt
-                        .map(|t| llvm_arg_type(t, snames))
+                        .map(|t| llvm_arg_type(t, snames, &module.structs))
                         .unwrap_or_else(|| "i64".to_string());
                     call_arg_strs.push(format!("{pty} %v{}", a.0));
                 }
@@ -7367,7 +7374,7 @@ fn emit_inst(
                     None
                 };
                 let effective_ret_ty = widened_ret_ty.as_ref().unwrap_or(ret_ty);
-                let ret_type_str = llvm_arg_type(effective_ret_ty, snames);
+                let ret_type_str = llvm_arg_type(effective_ret_ty, snames, &module.structs);
                 if needs_sret(effective_ret_ty, &module.structs) {
                     // Large aggregate: sret convention
                     writeln!(out, "  %v{} = alloca {ret_type_str}", d.0).unwrap();
@@ -7577,6 +7584,7 @@ fn emit_branch_arg_casts(
     out: &mut String,
     term: &Term,
     func: &LirFunction,
+    module: &LirModule,
     pred_bid: u32,
     val_types: &[Option<LirType>],
     snames: &HashMap<u32, String>,
@@ -7606,7 +7614,7 @@ fn emit_branch_arg_casts(
             if param_ty.is_aggregate() {
                 let actual_is_ptr = actual.map_or(false, |t| matches!(t, LirType::Ptr | LirType::PtrTo(_) | LirType::FuncRef));
                 if !actual_is_ptr {
-                    let agg_ty = llvm_type_full(param_ty, snames);
+                    let agg_ty = llvm_type_full(param_ty, snames, &module.structs);
                     writeln!(out, "  %br.cast.{pred_bid}.{}.{ai} = alloca {agg_ty}",
                         tgt.0).unwrap();
                     writeln!(out, "  store {agg_ty} %v{}, ptr %br.cast.{pred_bid}.{}.{ai}",
@@ -7633,14 +7641,14 @@ fn emit_term(
     out: &mut String,
     term: &Term,
     func: &LirFunction,
-    _module: &LirModule,
+    module: &LirModule,
     snames: &HashMap<u32, String>,
     val_types: &[Option<LirType>],
     block_id: u32,
 ) {
     match term {
         Term::Ret(val) => {
-            let ret_ty = llvm_type_full(&func.return_type, snames);
+            let ret_ty = llvm_type_full(&func.return_type, snames, &module.structs);
             let is_main = func.name == "main";
             if is_main {
                 // main() always returns i32. LIR return value might be i64 or ptr to Result.
@@ -7651,9 +7659,9 @@ fn emit_term(
                 } else {
                     writeln!(out, "  ret i32 0 ; main implicit return").unwrap();
                 }
-            } else if needs_sret(&func.return_type, &_module.structs) {
+            } else if needs_sret(&func.return_type, &module.structs) {
                 // Large aggregate: sret convention — memcpy result into %sret.out, then ret void
-                let sz = sizeof_lir_type(&func.return_type, &_module.structs, snames);
+                let sz = sizeof_lir_type(&func.return_type, &module.structs, snames);
                 writeln!(out, "  call ptr @memcpy(ptr %sret.out, ptr %v{}, i64 {sz})", val.0).unwrap();
                 writeln!(out, "  ret void").unwrap();
             } else if func.return_type.is_aggregate() {
@@ -7723,7 +7731,7 @@ fn emit_term(
                     let ty = val_types
                         .get(t_arg.0 as usize)
                         .and_then(|x| x.as_ref())
-                        .map(|t| llvm_arg_type(t, snames))
+                        .map(|t| llvm_arg_type(t, snames, &module.structs))
                         .unwrap_or_else(|| "i64".to_string());
                     writeln!(
                         out,

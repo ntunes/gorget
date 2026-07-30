@@ -1,0 +1,15 @@
+# Box[Trait] formation cell F — Round XIX N2 residual (graduated).
+# Axis: Box[Trait] · F formation · C+LLVM · Rust lane.
+# RED-verify (pre-fix): pre-fix C: Box__Robot__drop redefinition; LLVM: realloc-invalid (8B ptr vs 16B TraitObj via llvm_type_full Box__→ptr)
+# Post-fix: prints R2 on C and LLVM (Class A/B/C pack + llvm_type_full is_trait_box).
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+void main():
+    Vector[Box[Speaker]] v = [Box.new(Robot("R2"))]
+    print(v[0].speak())

@@ -2103,12 +2103,10 @@ fn box_trait_drop() {
     );
 }
 
-// Round XIX Track N2 residual cells D/E/F/H (TODO:878-879).
-// D + E graduated LIVE (Class A emit + B pack + C clone + trait-box field drop).
-// RED-verify pre-fix 2026-07-30: both CC-FAIL conflicting types Box__Speaker;
-// E also Option__Box__Speaker__clone alloc_Speaker undeclared.
-// F + H stay known_gaps: C green R2 post-fix; LLVM residual (Box[Trait] slot
-// sized as ptr/8B while memcpy 16B TraitObj — same class as fn-return on LLVM).
+// Round XIX Track N2 cells D/E/F/H — all LIVE C+LLVM.
+// RED-verify pre-fix 2026-07-30: D/E CC-FAIL conflicting types; F redef
+// Box__Robot__drop + LLVM realloc-invalid; H SIGILL/SIGSEGV. LLVM root:
+// llvm_type_full mapped every Box__* to ptr (8B) ignoring is_trait_box (16B).
 #[test]
 fn box_trait_struct_field() {
     run_gg("box_trait_struct_field.gg", "R2");
@@ -2120,18 +2118,13 @@ fn box_trait_option_variant() {
 }
 
 #[test]
-#[ignore = "KNOWN GAP Round XIX N2 cell F residual: Vector[Box[Trait]] lit GREEN \
-on C post pack+etype; LLVM realloc-invalid (Box[Trait] slot 8B vs 16B TraitObj)."]
 fn box_trait_vector_lit() {
-    run_gg("known_gaps/box_trait_vector_lit.gg", "R2");
+    run_gg("box_trait_vector_lit.gg", "R2");
 }
 
 #[test]
-#[ignore = "KNOWN GAP Round XIX N2 cell H residual: Callable[Box[Trait]()] closure \
-return GREEN on C post ambient+pack; LLVM SIGSEGV (return slot 8B vs 16B; fn-return \
-control also SEGV on LLVM)."]
 fn box_trait_closure_return() {
-    run_gg("known_gaps/box_trait_closure_return.gg", "R2");
+    run_gg("box_trait_closure_return.gg", "R2");
 }
 
 // Track G regression (2026-07-28): a CROSS-MODULE trait imported via
