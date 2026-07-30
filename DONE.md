@@ -1,3 +1,11 @@
+- [2026-07-30] **Round XVII close — RESOLVER-TOTALITY INSTRUMENTS (A + B).** Ships the first durable meters of place-resolver coverage — **worklist generators, never correctness gates** (Core #13; `Some(wrong_root)` counts as resolved; instrument C later).
+
+  - **A** (`tests/lints.rs::place_resolvers_arm_census_and_divergence`): required ⊆ arm sets for G1/G2/G3; G4 Expr arms == 0 + caller-presence ≥2; pairwise unexempted divergence **MAX=0** after EXEMPT (MethodCall G1-only; Deref deliberate-or-filed; Identifier/SelfExpr G2-by-design). Existing Family-2 SET lint kept; stale Guard comment on tuple face fixed.
+  - **B** (`--resolvers[=hist|sites|hist-tsv|all]`): `resolver_miss` at None/Unresolved exits of all five resolvers; report **after lower** on `gg build --emit-gir` (gg check never lowers). Help blocks for clones/resolvers kept separate (`53804d02`).
+  - **`scripts/resolver_totality.sh`**: A tags + B sample → `Resolver-totality: arms G1=6 G2=4 G3=6/6 · divergence=0 · top_miss=…`
+
+  **Measured:** census root=6 place=4 field=6 tuple=6 ptr_expr=0 ptr_callers=2 · unexempted=0. Battery: lib 1138 · lints 79 · ggdef · security 128 · conformance 3/3 · C 1960/0 · LLVM 1960/0 · parity **1288**/1383 = **93.1%** (unchanged; floors hold). **Convergence: known_gaps 95→95 · TODO items 521→521 · net +0** (regen: `scripts/convergence.sh 95 521`). Net 0 named: pure measurement capability — closes the “no totality meter” process debt without graduating known_gaps; Family-3 / Guard View residuals remain filed.
+
 - [2026-07-30] **Round XVI close — combinator class for real + SH C-emit type class (P1 · SH · 3A · 3B on `gorget-2`).** Theme: close the XV audit gaps and the SH lane of the combinator class, then burn the largest parity cluster (C-emit typing) by root.
 
   **Part 1 (P1 `b5130961`):** F1 behavioural Edit-B pin (`combinator_edit_b_receiver_clone_sites` via `--clones=sites` — RED under forced `ptr_local_opt=None` while structural P2 stayed green); F2 projected-place dead path → `debug_assert!(projections.is_empty())` + bare/Ptr simplify; F3 delete always-force and_then/or_else fallthrough (kept `prev_expected`); P10 `return None == 4`; F4 dual-rule RED-verify headers only. F5/F6 ledger already on tip at open.
