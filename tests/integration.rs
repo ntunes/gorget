@@ -20336,7 +20336,16 @@ fn self_host_clone_ceiling() {
 //
 // Re-pinned UP 2026-07-21 (lag-close Wave 2 SH Core #9 lands — same citation
 // as stage-0): measured stage-1 array_clone=1,034,938,322. Ceiling = measured + ~1%.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_045_300_000;
+//
+// Re-pinned UP 2026-07-30 (Round XVI Track SH SH-4/SH-5): measured
+// array_clone=1,048,065,493. Justified semantic cost — SH combinator keep
+// paths for filter/or_else/or/flatten/uoe Some now deep-clone resource
+// Option/payload via combinator_owned_copy_stmt (field_drop_fn_for_lir_type
+// → drop_to_clone_fn) instead of shallow memcpy. That retires SH-lane
+// double-free (exit 134) on Money stems; stage-1 self-compile pays the
+// clone whenever the SH lowerer itself keeps a resource Option. Ceiling =
+// measured + ~1%.
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_058_600_000;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -20349,7 +20358,10 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_045_300_000;
 //
 // Re-pinned UP 2026-07-21 (lag-close Wave 2, same citation as stage-1 array):
 // measured string_clone=1,926,672,347. Ceiling = measured + ~1%.
-const STAGE1_STRING_CLONE_CEILING: u64 = 1_945_950_000;
+//
+// Re-pinned UP 2026-07-30 (Round XVI SH-4 owned-copy, same citation as array):
+// measured string_clone=1,949,556,622. Ceiling = measured + ~1%.
+const STAGE1_STRING_CLONE_CEILING: u64 = 1_969_100_000;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
