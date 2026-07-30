@@ -4,12 +4,20 @@
 
 **ROUND XVIII CLOSED 2026-07-30** — theme AIM THE METER. Landed: Gate0 B calibrate 1/0/1 · `--sweep` corpus+self-host · partition BY-DESIGN vs SUSPICIOUS · Family-3 get-chain field/tuple fix · fixtures graduated. Battery: lib 1138 · lints 79 · ggdef · security 128 · conformance 3/3 · C/LLVM **1962**/0/63 · parity **1288**/1385 = **93.0%** (floors MATCH 1288 · ADJ 388 hold). **Convergence: known_gaps 95→94 · TODO 521→521 · net −1** (regen: `scripts/convergence.sh 95 521`). Detail: DONE.md. Dashboard: `scripts/resolver_totality.sh --sweep`.
 
-**ROUND XIX OPEN 2026-07-30 — theme: RESIDUAL-DEFECT PACK** (bumped from XVIII; deliberately not resolver work). Tracks:
-1. **Y** — statement-end drop for guard temps (executor in flight / residual: VarDecl·Assign RHS + SH lag after Stmt::Expr land)
-2. **N2** — Box[Trait] SIGILL/CC-FAIL class-hunt siblings (struct-lit field · enum-variant field · vector-lit element · closure-body return) — durable repros owed first
-3. **X** — nested-store residual CLOSED (hygiene: Gate-0 MATCH 99/99; fixture `cow_value_index_nested_field_store.gg` promoted; stale headers scrubbed)
-4. **snag#53 SH** — Rust green; SH `lower_place_base` gap (fixture still in known_gaps for corpus exclusion)
-5. **W** — W1 arm-count lint LANDED (`sh_operator_overload_call_centralized`); W2 Layering debt (`is_local_registered_for_drop`) DEFER; W3 NEVER
+**ROUND XIX IN PROGRESS 2026-07-30 — RESIDUAL-DEFECT PACK** (partial land; full battery still owed at close).
+
+**Landed (integrated on session branch):**
+- **Y** statement-end GuardKind drop — `4ec42e30` (graduate hang fixture + Mutex sibling + named POS; residual: VarDecl/Assign RHS + SH lag).
+- **N2** Box[Trait] D/E live C+LLVM — `5165965b`/`283c8d1d` (F/H C-green residual on LLVM slot layout; known_gaps + ignore).
+- **X** nested-store residual CLOSED + promote pin — `6fd688a6`.
+- **W1** SH `emit_overload_call` arm-count lint — same commit.
+
+**Still open this round:**
+- snag#53 SH (CC-FAIL Dict get_or void* typing — not mere place-copy).
+- N2 F/H LLVM Box[Trait] 8B vs 16B layout residual.
+- Y residual: VarDecl/Assign sequential hangs; SH statement-end drop port.
+- W2 Layering `is_local_registered_for_drop` DEFER.
+
 
 **INSTRUMENT C (later, after XVIII reading used):** generated cell matrix + build-and-run classification. XVIII histogram is the cross-check on C's axes.
 

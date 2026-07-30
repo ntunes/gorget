@@ -1,3 +1,5 @@
+- [2026-07-30] **Round XIX Track Y — statement-end GuardKind drop (seq lock self-deadlock).** `DropScopeKind::Statement` + `pop_statement_guard_temps` around `Stmt::Expr`; mint sites unconditional `register_local`; typed GuardKind filter; OutPtr on MutexLockTo/RwlockReadTo/WriteTo so drop_elab keeps drops. Graduated `rwlock_seq_lock_scope_deadlock`; Mutex sibling; named multi-stmt POS. Residual: VarDecl/Assign RHS + SH lag (TODO rephrased). RED: hang after step2 (124) → full 6 lines.
+
 - [2026-07-30] **Round XIX Track N2 — Box[Trait] residual cells D/E (+ C partial F/H).**
 
   **Closed (C+LLVM live fixtures):**
