@@ -762,9 +762,12 @@ pub(super) fn lower_tuple_field_assign(
     // `&`/owned roots, preserving write-through). Mirrors lower_field_assign.
     materialize_assign_target_root(ctx, builder, object);
     let stmt_locals_start = builder.locals.len();
-    if let Some((target_place, elem_type)) =
-        try_resolve_tuple_field_place(ctx, builder, object, index)
-    {
+    let resolved = try_resolve_tuple_field_place(ctx, builder, object, index).or_else(|| {
+        // Family-3: method-chain object (`.get().unwrap().N`) — assign face.
+        let obj = lower_field_object_operand(ctx, builder, object);
+        resolve_ptr_tuple_field_place(ctx, builder, &obj, index, object)
+    });
+    if let Some((target_place, elem_type)) = resolved {
         let prev_expected = ctx.func_state.expected_type;
         ctx.func_state.expected_type = Some(elem_type);
         let mut rhs = lower_expr(ctx, builder, value);
@@ -784,8 +787,9 @@ pub(super) fn lower_tuple_field_assign(
 /// `.get().unwrap()` method chain, which lowers to a Ref per the ratified
 /// auto-borrow-from-get — goes through `lower_expr`. Shared by plain `=`
 /// (`lower_field_assign`) AND compound `OP=` (`lower_compound_assign`) so the
-/// two write-through fallbacks cannot drift (Core #4).
-fn lower_field_object_operand(
+/// two write-through fallbacks cannot drift (Core #4). Also shared with
+/// `try_resolve_place` for `&`-formation on get-chain field places (Family-3).
+pub(in crate::ir::lowering) fn lower_field_object_operand(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     object: &Spanned<Expr>,
@@ -814,7 +818,10 @@ fn lower_field_object_operand(
 /// (the `try_resolve_field_place → None` fallback: a `.get().unwrap()` Ref
 /// chain, a `&`/`!` unique-borrow param, a `Guard[T]` receiver, or a
 /// materialized global base).
-enum PtrFieldPlace {
+///
+/// `pub(in crate::ir::lowering)` so `try_resolve_place` (exprs) can share the
+/// assign-face fallback for `&` formation (Family-3 / Core #4).
+pub(in crate::ir::lowering) enum PtrFieldPlace {
     /// A write-through place was resolved: read/store here.
     Resolved(Place, TypeId),
     /// A `ReadGuard` receiver — writes are forbidden; emit no store.
@@ -834,8 +841,9 @@ enum PtrFieldPlace {
 /// the mutable-guard case — identical to the inline path — so plain `=` stays
 /// byte-identical when routed through here. Shared by plain `=` and compound
 /// `OP=` (Core #4 — one resolver, one class; the fallback-presence lint pins
-/// both callers).
-fn resolve_ptr_field_place(
+/// both callers). Also shared with `try_resolve_place` for `&` formation
+/// (Family-3 get-chain field).
+pub(in crate::ir::lowering) fn resolve_ptr_field_place(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     obj: &Operand,
@@ -940,6 +948,48 @@ fn resolve_ptr_field_place(
         Some(object_for_diag.span),
     );
     PtrFieldPlace::Unresolved
+}
+
+/// Numeric-index sibling of `resolve_ptr_field_place` for tuple fields
+/// (`obj.N` when `obj` lowered to a pointer — e.g. `.get().unwrap()` → Ref).
+/// Family-3 tuple face: both `&` and assign need this (Core #4).
+pub(in crate::ir::lowering) fn resolve_ptr_tuple_field_place(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    obj: &Operand,
+    index: usize,
+    object_for_diag: &Spanned<Expr>,
+) -> Option<(Place, TypeId)> {
+    use crate::ir::types::TypeDefKind;
+    let (Operand::Copy(ref place) | Operand::Move(ref place)) = *obj else {
+        return None;
+    };
+    let local_idx = place.local.0 as usize;
+    if local_idx >= builder.locals.len() {
+        return None;
+    }
+    let local_type_id = builder.locals[local_idx].type_id;
+    let (effective_type_id, base_place) =
+        if let Some(pointee) = ctx.pointee_type(local_type_id) {
+            let mut deref_place = place.clone();
+            deref_place.projections.push(Projection::Deref);
+            (pointee, deref_place)
+        } else {
+            (local_type_id, place.clone())
+        };
+    let type_name = ctx.type_name_for_id(effective_type_id)?;
+    let type_name = type_name.to_string();
+    let field_type = ctx.type_registry.get_type_def(&type_name).and_then(|td| {
+        if let TypeDefKind::Struct(ref s) = td.kind {
+            s.fields.get(index).map(|f| f.type_id)
+        } else {
+            None
+        }
+    })?;
+    let mut target_place = base_place;
+    target_place.projections.push(Projection::Field(index as u32));
+    let _ = object_for_diag; // reserved for hist tagging if needed
+    Some((target_place, field_type))
 }
 
 /// Apply the 3-way ownership rule (auto-move if dead / auto-clone if live /

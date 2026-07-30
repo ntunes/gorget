@@ -3098,13 +3098,27 @@ pub(in crate::ir::lowering) fn try_resolve_place(
             match try_resolve_field_place(ctx, builder, object, &field.node) {
                 Some(r) => Some(r),
                 None => {
-                    ctx.resolver_miss(
-                        crate::ir::lowering::ResolverId::TryPlace,
-                        Some(&expr.node),
-                        crate::ir::lowering::MissReason::LookupMiss,
-                        Some(expr.span),
-                    );
-                    None
+                    // Family-3 / Core #4: object shapes the specialist cannot
+                    // name (notably `.get().unwrap()` method chains) still form
+                    // a place via the assign-face fallback — lower the object
+                    // (get-chain → Ref) and resolve the field through the
+                    // pointer. Same producer as plain `=` / `OP=`.
+                    use crate::ir::lowering::stmts::assigns::{
+                        lower_field_object_operand, resolve_ptr_field_place, PtrFieldPlace,
+                    };
+                    let obj_op = lower_field_object_operand(ctx, builder, object);
+                    match resolve_ptr_field_place(ctx, builder, &obj_op, &field.node, object) {
+                        PtrFieldPlace::Resolved(place, field_ty) => Some((place, field_ty)),
+                        PtrFieldPlace::ReadGuardSkip | PtrFieldPlace::Unresolved => {
+                            ctx.resolver_miss(
+                                crate::ir::lowering::ResolverId::TryPlace,
+                                Some(&expr.node),
+                                crate::ir::lowering::MissReason::LookupMiss,
+                                Some(expr.span),
+                            );
+                            None
+                        }
+                    }
                 }
             }
         }
@@ -3112,13 +3126,23 @@ pub(in crate::ir::lowering) fn try_resolve_place(
             match try_resolve_tuple_field_place(ctx, builder, object, *index) {
                 Some(r) => Some(r),
                 None => {
-                    ctx.resolver_miss(
-                        crate::ir::lowering::ResolverId::TryPlace,
-                        Some(&expr.node),
-                        crate::ir::lowering::MissReason::LookupMiss,
-                        Some(expr.span),
-                    );
-                    None
+                    // Family-3 tuple face: same assign-face fallback with index.
+                    use crate::ir::lowering::stmts::assigns::{
+                        lower_field_object_operand, resolve_ptr_tuple_field_place,
+                    };
+                    let obj_op = lower_field_object_operand(ctx, builder, object);
+                    match resolve_ptr_tuple_field_place(ctx, builder, &obj_op, *index, object) {
+                        Some(r) => Some(r),
+                        None => {
+                            ctx.resolver_miss(
+                                crate::ir::lowering::ResolverId::TryPlace,
+                                Some(&expr.node),
+                                crate::ir::lowering::MissReason::LookupMiss,
+                                Some(expr.span),
+                            );
+                            None
+                        }
+                    }
                 }
             }
         }
@@ -3361,6 +3385,13 @@ pub(super) fn try_resolve_field_place(
                     return None;
                 }
             }
+        }
+        // Family-3: method-chain object (`.get().unwrap()` etc.) — lower to a
+        // Ref/pointer operand and finish via the shared ptr-field walk below.
+        // Keeps specialist hist clean when the outer place also succeeds.
+        Expr::MethodCall { .. } => {
+            use crate::ir::lowering::stmts::assigns::lower_field_object_operand;
+            lower_field_object_operand(ctx, builder, object)
         }
         _ => {
             ctx.resolver_miss(
@@ -3633,6 +3664,11 @@ pub(super) fn try_resolve_tuple_field_place(
                     return None;
                 }
             }
+        }
+        // Family-3 + Family-2 arm-parity: method-chain object for tuple field.
+        Expr::MethodCall { .. } => {
+            use crate::ir::lowering::stmts::assigns::lower_field_object_operand;
+            lower_field_object_operand(ctx, builder, object)
         }
         _ => {
             ctx.resolver_miss(

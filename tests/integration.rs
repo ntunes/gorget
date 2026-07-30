@@ -37555,21 +37555,27 @@ true
 /// AGAINST production on BOTH faces, which makes this a Core #8 silent
 /// wrong-output rather than a mere gap.
 ///
-/// Root: a get-chain fallback wires into the `FieldAccess` arm only;
-/// `TupleFieldAccess` gets nothing, and `try_resolve_tuple_field_place` has no
-/// method-chain arm. NOT a 2-line mirror — `resolve_ptr_field_place` is
-/// struct-field-specific (`field_name: &str`), so this needs a tuple-index
-/// analogue or a real chain arm.
+/// GRADUATED Round XVIII: Family-3 get-chain method-call object on BOTH faces.
+/// Fix: shared assign-face fallback via `lower_field_object_operand` +
+/// `resolve_ptr_field_place` / `resolve_ptr_tuple_field_place` from
+/// `try_resolve_place` (and tuple assign), plus MutableBorrow early path that
+/// uses the resolved place type (not place_expr_type_only pre-check alone).
+/// RED pre-fix: 10/10; post: 11/42. Pin both faces.
 #[test]
-#[ignore = "FAMILY-3 KNOWN GAP: get-chain method-call object (`.get(0).unwrap().0`). NOT \
-Family-2 (arm-parity of the two resolvers) — that closed in Round X. This shape falls to the \
-head `_ =>` in `try_resolve_tuple_field_place` regardless: the object is a `Expr::MethodCall`, \
-not one of the six place-resolvable heads. Needs a tuple-index analogue of \
-`resolve_ptr_field_place` (stmts/assigns.rs:838, struct-field-specific today) or a real \
-method-chain arm in the tuple resolver. Filed at TODO.md L151."]
 fn sound_tuple_getchain_writethrough() {
     run_gg(
-        "known_gaps/sound_tuple_getchain_writethrough.gg",
+        "sound_tuple_getchain_writethrough.gg",
+        "\
+11
+42",
+    );
+}
+
+/// FAMILY-3 struct-field get-chain twin of `sound_tuple_getchain_writethrough`.
+#[test]
+fn sound_struct_getchain_writethrough() {
+    run_gg(
+        "sound_struct_getchain_writethrough.gg",
         "\
 11
 42",

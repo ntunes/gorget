@@ -1,0 +1,21 @@
+# CELL: Family-3 struct-field get-chain, both faces (& + assign).
+# Round XVIII — pin for try_resolve_place → resolve_ptr_field_place fallback.
+# Pre-fix: & face 10 (want 11); assign face already worked via assigns path.
+
+int seed():
+    return 10
+
+struct Counter:
+    int fd
+
+void bumpi(int &x):
+    x = x + 1
+
+void main():
+    Vector[Counter] v = [Counter(seed())]
+    bumpi(&v.get(0).unwrap().fd)
+    print(v.get(0).unwrap().fd)
+
+    Vector[Counter] w = [Counter(seed())]
+    w.get(0).unwrap().fd = 42
+    print(w.get(0).unwrap().fd)

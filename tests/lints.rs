@@ -7139,6 +7139,7 @@ fn place_resolvers_arm_census_and_divergence() {
         "TupleFieldAccess",
         "Index",
         "Deref",
+        "MethodCall", // Family-3 object form (Round XVIII)
     ]
     .into_iter()
     .collect();
@@ -7184,8 +7185,8 @@ fn place_resolvers_arm_census_and_divergence() {
     assert!(root.len() >= 6, "G1 arm floor: root={root:?}");
     assert!(place.len() >= 4, "G2 arm floor: place={place:?}");
     assert!(
-        field.len() >= 6 && tuple.len() >= 6,
-        "G3 arm floors: field={field:?} tuple={tuple:?}"
+        field.len() >= 7 && tuple.len() >= 7,
+        "G3 arm floors: field={field:?} tuple={tuple:?} (want ≥7 incl. MethodCall)"
     );
 
     // G4: still Operand-only — zero Expr:: arms (category lock).
@@ -7219,7 +7220,8 @@ fn place_resolvers_arm_census_and_divergence() {
     type Exempt = &'static [(&'static str, &'static str)];
     // field vs tuple: empty (Family-2).
     const EXEMPT_FIELD_TUPLE: Exempt = &[];
-    // place vs field/tuple: bare locals served before G2.
+    // place vs field/tuple: bare locals served before G2; MethodCall is a G3
+    // *object* form (Family-3, Round XVIII) not a top-level place head.
     const EXEMPT_PLACE_G3: Exempt = &[
         (
             "Identifier",
@@ -7230,14 +7232,15 @@ fn place_resolvers_arm_census_and_divergence() {
             "SelfExpr",
             "Same as Identifier — bare self is not a projection place in G2",
         ),
+        (
+            "MethodCall",
+            "G3 object form under FieldAccess/TupleFieldAccess (Family-3 get-chain); \
+             top-level place is FieldAccess(MethodCall(...)), not bare MethodCall — G2 \
+             correctly has no MethodCall head",
+        ),
     ];
     // root vs field/tuple.
     const EXEMPT_ROOT_G3: Exempt = &[
-        (
-            "MethodCall",
-            "G1-only: CoW root descent for get/first/last(+unwrap/expect) chains; \
-             G3 MethodCall is Family-3 filed work — worklist, not silent EXEMPT rot",
-        ),
         (
             "Deref",
             "G1 missing Deref while G3 has it — deliberate-or-filed CoW-root cell; \

@@ -376,36 +376,39 @@ pub(super) fn lower_call_arg(
     // same swallowed-`Error` miscompile THREE times in successive costumes
     // (struct field, tuple field, then `Deref`/`Guard` objects). The invariant is
     // now enforced by the `match` below instead of asserted in prose.
-    let safe_to_skip_auto_propagate = matches!(arg.node.ownership, Ownership::MutableBorrow) && {
-        let param_is_result = callee_param_type
-            .map(|p| ctx.type_registry.enum_category(p) == Some(EnumCategory::Result))
-            .unwrap_or(false);
-        match super::place_expr_type_only(ctx, &arg.node.value) {
-            // Typeable: skipping is safe iff no unwrap was going to happen —
-            // either the callee wants the whole `Result`, or the argument is not
-            // a propagating `Result` in this context.
-            Some(t) => {
-                param_is_result || super::should_auto_propagate(ctx, builder, t).is_none()
+    // MutableBorrow (`&arg`): always TRY the shared place producer first.
+    // Auto-propagate safety is decided from the RESOLVED place's type — not
+    // from a pre-check that can return None for forms the producer still
+    // resolves (get-chain field `v.get(i).unwrap().fd`: Family-3; `place_expr_type_only`
+    // lacked a MethodCall object arm, so the early path was skipped, lower_expr
+    // materialised a field temp, and `borrow_mut` wrote to the temp — silent
+    // wrong output with hist total_misses=0, Core #13 / Some(wrong_root) trap).
+    //
+    // Fail-safe for auto-prop: if the resolved type would auto-propagate and
+    // the callee does not take Result, fall through to lower_expr + maybe_auto_propagate.
+    if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+        if let Some((place, place_type)) = super::try_resolve_place(ctx, builder, &arg.node.value)
+        {
+            let param_is_result = callee_param_type
+                .map(|p| ctx.type_registry.enum_category(p) == Some(EnumCategory::Result))
+                .unwrap_or(false);
+            let safe_to_skip_auto_propagate = param_is_result
+                || super::should_auto_propagate(ctx, builder, place_type).is_none();
+            if safe_to_skip_auto_propagate {
+                if let Some(s) = g2_projected_untrack_start {
+                    ctx.untrack_transient_element_refs_in_range(
+                        builder,
+                        s,
+                        builder.locals.len(),
+                    );
+                }
+                // The producer guarantees `place` is an lvalue of the VALUE itself
+                // (postcondition 1), so this borrow is unconditional.
+                let ptr_type = ctx.register_mut_ptr_type(place_type);
+                let dst = builder.add_local(ptr_type, None);
+                builder.emit_borrow_mut(dst, place);
+                return FunctionBuilder::copy(dst);
             }
-            // NOT typeable here: we cannot PROVE skipping is safe, so we do not
-            // skip. Costs the early-return optimisation on that form; never an
-            // error propagation. This is the direction the old code got backwards.
-            None => false,
-        }
-    };
-    if safe_to_skip_auto_propagate {
-        if let Some((place, place_type)) = super::try_resolve_place(ctx, builder, &arg.node.value) {
-            if let Some(s) = g2_projected_untrack_start {
-                ctx.untrack_transient_element_refs_in_range(builder, s, builder.locals.len());
-            }
-            // The producer guarantees `place` is an lvalue of the VALUE itself
-            // (postcondition 1), so this borrow is unconditional — no
-            // `is_already_ptr` re-derivation, which is the special case that grew
-            // into this bug in the first place.
-            let ptr_type = ctx.register_mut_ptr_type(place_type);
-            let dst = builder.add_local(ptr_type, None);
-            builder.emit_borrow_mut(dst, place);
-            return FunctionBuilder::copy(dst);
         }
     }
     let val = lower_expr(ctx, builder, &arg.node.value);

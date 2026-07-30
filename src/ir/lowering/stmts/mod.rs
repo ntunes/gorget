@@ -1,4 +1,6 @@
-mod assigns;
+// Visible so exprs can share the get-chain field-place fallback with assign
+// faces (Family-3 / Core #4).
+pub(in crate::ir::lowering) mod assigns;
 // Visible inside `ir::lowering` so the string-comprehension lowering in
 // `exprs/collections.rs` can reuse `lower_for_string` (Chain C item 7).
 pub(in crate::ir::lowering) mod for_loops;
