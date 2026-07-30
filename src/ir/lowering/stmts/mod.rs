@@ -289,10 +289,29 @@ pub fn lower_stmt(
 
         Stmt::Expr(expr) => {
             __kind_key = "lower_function::body::lower_block::stmt::expr";
+            // Statement-end GuardKind drop (Round XIX Track Y): Mutex/RWLock
+            // guard temps minted under an expression statement release at
+            // statement end so sequential acquires do not self-deadlock.
+            // Non-Guard droppables re-register into the parent scope.
+            // Named binds / VarDecl / Assign / `with` do NOT push Statement.
+            ctx.drops.push_scope(DropScopeKind::Statement);
             let val = lower_expr(ctx, builder, expr);
             // Auto-propagate: if the expression returns Result in a propagation
             // context, unwrap it so errors aren't silently swallowed.
+            // may emit_early_exit_drops + terminate on the error path.
             let _ = maybe_auto_propagate(ctx, builder, val, expr.span);
+            if builder.is_terminated() {
+                // Drops already emitted on early exit — same contract as Block.
+                ctx.drops.pop_scope_no_emit();
+            } else {
+                // Split-borrow drops / type_mapper / type_registry so the
+                // GuardKind predicate can read typed metadata while we pop.
+                let type_mapper = &ctx.type_mapper;
+                let type_registry = &ctx.type_registry;
+                ctx.drops.pop_statement_guard_temps(builder, type_registry, |tid| {
+                    type_mapper.guard_kind(tid).is_some()
+                });
+            }
         }
 
         Stmt::Pass => {

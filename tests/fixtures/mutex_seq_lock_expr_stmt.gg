@@ -1,0 +1,14 @@
+# Mutex sibling of rwlock_seq_lock_scope_deadlock: sequential
+# `m.lock().get()` / `m.lock().set(v)` under Stmt::Expr must release the
+# Guard at statement end so the next acquire does not self-deadlock on a
+# non-recursive pthread mutex. Cell: Mutex[int] expression-statement
+# chain, C+LLVM. RED-verify pre-fix: hang after `step2`; post-fix green.
+void main():
+    Mutex[int] m = Mutex[int](0)
+    print("step1")
+    print(m.lock().get())
+    print("step2")
+    m.lock().set(99)
+    print("step3")
+    print(m.lock().get())
+    print("step4")

@@ -40,6 +40,13 @@ pub enum DropScopeKind {
     Function,
     Loop,
     Block,
+    /// Expression-statement temporary scope. Pushed around `Stmt::Expr`
+    /// only. `pop_statement_guard_temps` drops `GuardKind` entries at
+    /// statement end (releases Mutex/RWLock guards so sequential
+    /// acquires do not self-deadlock) and re-registers non-Guard
+    /// droppables into the parent scope. Named binds / VarDecl / Assign
+    /// / `with` do **not** use this kind (MVP).
+    Statement,
 }
 
 /// An entry tracking a local that needs dropping at scope exit.
@@ -98,6 +105,70 @@ impl DropElaborator {
     /// Used when drops were already emitted via emit_early_exit_drops (e.g., explicit return).
     pub fn pop_scope_no_emit(&mut self) {
         self.scopes.pop();
+    }
+
+    /// Pop a `DropScopeKind::Statement` frame, dropping only GuardKind temps
+    /// and re-registering every other droppable into the parent scope.
+    ///
+    /// Guard temps minted by `Mutex.lock` / `RWLock.read` / `RWLock.write`
+    /// under an expression statement must release at statement end so a
+    /// follow-up acquire on the same handle does not self-deadlock. Non-Guard
+    /// droppables (String temps, collections, …) keep their enclosing
+    /// Function/Block lifetime — re-registering them is required; skipping
+    /// registration would leak.
+    ///
+    /// `is_guard` is the typed GuardKind predicate (typically
+    /// `|tid| type_mapper.guard_kind(tid).is_some()`). No name-matching.
+    ///
+    /// Callers that already emitted drops via `emit_early_exit_drops` (the
+    /// block is terminated) must use `pop_scope_no_emit` instead — same
+    /// contract as Block scopes.
+    pub fn pop_statement_guard_temps(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        registry: &TypeRegistry,
+        is_guard: impl Fn(TypeId) -> bool,
+    ) {
+        let Some(scope) = self.scopes.pop() else {
+            return;
+        };
+        debug_assert_eq!(
+            scope.kind,
+            DropScopeKind::Statement,
+            "pop_statement_guard_temps expects a Statement scope"
+        );
+
+        // Partition in declaration order; emit guards LIFO; re-register the
+        // rest into the parent (still in declaration order so later parent
+        // LIFO drops preserve relative order among the re-homed entries).
+        let mut guards: Vec<DropEntry> = Vec::new();
+        let mut non_guards: Vec<DropEntry> = Vec::new();
+        for entry in scope.entries {
+            if is_guard(entry.type_id) {
+                guards.push(entry);
+            } else {
+                non_guards.push(entry);
+            }
+        }
+
+        if !guards.is_empty() {
+            emit_scope_drops_ordered(builder, registry, &guards, &self.borrow_deps);
+        }
+
+        if !non_guards.is_empty() {
+            if let Some(parent) = self.scopes.last_mut() {
+                parent.entries.extend(non_guards);
+            }
+            // No parent: drop the entries on the floor only if the elaborator
+            // is empty (should not happen mid-function). Prefer not to free
+            // them here — that would invent a lifetime. debug path only.
+            else {
+                debug_assert!(
+                    false,
+                    "pop_statement_guard_temps: non-Guard temps with no parent scope"
+                );
+            }
+        }
     }
 
     /// Register an owned (Move-type) local in the current scope.
@@ -752,5 +823,69 @@ mod tests {
             .filter(|inst| matches!(inst, Instruction::Drop { .. } | Instruction::DropIfAlive { .. }))
             .count();
         assert_eq!(drop_count, 0, "Should not drop Copy types");
+    }
+
+    /// Statement scope drops only GuardKind entries and re-homes non-Guard
+    /// droppables into the parent (Round XIX Track Y).
+    #[test]
+    fn drop_elaborator_statement_guard_temps() {
+        let mut reg = make_move_registry();
+        let owned_string_id = TypeId(12);
+        // Synthetic "guard" type that needs drop (mirrors Guard[T] Resource+Trivial).
+        reg.add_type_def(TypeDef {
+            name: "FakeGuard".into(),
+            kind: TypeDefKind::Struct(StructDef {
+                fields: vec![StructField {
+                    name: "lock".into(),
+                    type_id: U64_TYPE,
+                }],
+            }),
+            metadata: TypeMetadata {
+                size: Some(8),
+                align: Some(8),
+                drop_strategy: DropStrategy::Trivial("FakeGuard__drop".into()),
+                copy_semantics: CopySemantics::Resource,
+                ..Default::default()
+            },
+        });
+        let guard_id = reg.insert(GirType::Named("FakeGuard".into()));
+
+        let mut elab = DropElaborator::new();
+        let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
+
+        elab.push_scope(DropScopeKind::Function);
+        elab.push_scope(DropScopeKind::Statement);
+        let g = builder.add_local(guard_id, Some("g"));
+        let s = builder.add_local(owned_string_id, Some("s"));
+        elab.register_local(g, guard_id, &reg);
+        elab.register_local(s, owned_string_id, &reg);
+
+        // Only the guard type is "is_guard" — string re-homes to Function.
+        elab.pop_statement_guard_temps(&mut builder, &reg, |tid| tid == guard_id);
+
+        let drop_count = builder.blocks[0]
+            .instructions
+            .iter()
+            .filter(|inst| matches!(inst, Instruction::DropIfAlive { .. }))
+            .count();
+        assert_eq!(drop_count, 1, "Statement pop drops only the GuardKind temp");
+
+        // Non-guard still registered on Function — will drop on function pop.
+        assert!(elab.is_registered(s), "non-Guard temp re-registered into parent");
+        assert!(
+            !elab.is_registered(g),
+            "GuardKind temp consumed by statement-end drop"
+        );
+
+        elab.pop_scope(&mut builder, &reg);
+        let drop_count_2 = builder.blocks[0]
+            .instructions
+            .iter()
+            .filter(|inst| matches!(inst, Instruction::DropIfAlive { .. }))
+            .count();
+        assert_eq!(
+            drop_count_2, 2,
+            "Function pop drops the re-homed non-Guard temp"
+        );
     }
 }

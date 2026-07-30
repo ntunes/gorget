@@ -1,0 +1,9 @@
+# POS control: a *named* Mutex Guard keeps the lock across multiple
+# statements (scope-end drop). Cell: named Guard[int] multi-stmt hold.
+void main():
+    Mutex[int] m = Mutex[int](7)
+    Guard[int] g = m.lock()
+    print(g.get())
+    g.set(11)
+    print(g.get())
+    print("held")

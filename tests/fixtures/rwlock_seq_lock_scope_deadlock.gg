@@ -1,0 +1,17 @@
+from std.sync import RWLock
+
+# Graduated Round XIX Track Y: GuardKind temps under Stmt::Expr drop at
+# STATEMENT end (not Function/Block scope end). Sequential
+# `r.read().get()` then `r.write().set(v)` on the same handle no longer
+# self-deadlocks. Cell: RWLock[int] expression-statement chain, C+LLVM.
+# Named binds / VarDecl keep scope-end lifetime (see named POS fixtures).
+# RED-verify pre-fix: hang after `step2` (timeout exit 124); post-fix green.
+void main():
+    RWLock[int] r = RWLock[int](42)
+    print("step1")
+    print(r.read().get())
+    print("step2")
+    r.write().set(99)
+    print("step3")
+    print(r.read().get())
+    print("step4")

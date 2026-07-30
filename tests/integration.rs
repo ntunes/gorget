@@ -17557,13 +17557,36 @@ fn rwlock_chained_write_set() {
     run_gg("rwlock_chained_write_set.gg", "99");
 }
 
+// Graduated Round XIX Track Y: Stmt::Expr Statement scope drops GuardKind
+// temps at statement end. RED-verify pre-fix: hang after step2 (exit 124).
+// C+LLVM only until SH ports the same Statement drop (Core #9 lag filed).
 #[test]
-#[ignore = "known_gaps: guard temps drop at SCOPE end (Rust lexical-borrow era), not STATEMENT end (NLL); a sequential r.read().get() then r.write().set(v) on the same handle self-deadlocks. See TODO.md."]
 fn rwlock_seq_lock_scope_deadlock() {
     run_gg(
-        "known_gaps/rwlock_seq_lock_scope_deadlock.gg",
+        "rwlock_seq_lock_scope_deadlock.gg",
         "step1\n42\nstep2\nstep3\n99\nstep4",
     );
+}
+
+// Mutex Expr sibling of the RWLock sequential pin — same statement-end
+// GuardKind drop path. RED-verify pre-fix: hang after step2.
+#[test]
+fn mutex_seq_lock_expr_stmt() {
+    run_gg(
+        "mutex_seq_lock_expr_stmt.gg",
+        "step1\n0\nstep2\nstep3\n99\nstep4",
+    );
+}
+
+// Named POS: multi-stmt hold keeps the lock (scope-end, not statement-end).
+#[test]
+fn named_readguard_multi_stmt_hold() {
+    run_gg("named_readguard_multi_stmt_hold.gg", "42\n42\nheld");
+}
+
+#[test]
+fn named_mutex_guard_multi_stmt_hold() {
+    run_gg("named_mutex_guard_multi_stmt_hold.gg", "7\n11\nheld");
 }
 
 #[test]

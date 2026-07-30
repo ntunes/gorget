@@ -1,0 +1,11 @@
+from std.sync import RWLock
+
+# POS control: a *named* ReadGuard keeps the read lock across multiple
+# statements (scope-end drop, not statement-end). Stmt::Expr Statement
+# scope must NOT early-drop named binds. Cell: named ReadGuard[int].
+void main():
+    RWLock[int] r = RWLock[int](42)
+    ReadGuard[int] g = r.read()
+    print(g.get())
+    print(g.get())
+    print("held")

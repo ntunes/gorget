@@ -468,7 +468,12 @@ runtime_table! {
     GuardSet     => "gorget_guard_set",      sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem), (T::I64, A::Scalar)], T::Void, F::Mutates);
     MutexFree    => "gorget_mutex_free",     sig(&[(T::Ptr, A::Opaque)], T::Void, F::Concurrent);
     MutexLock    => "gorget_mutex_lock",     sig(&[(T::Ptr, A::Opaque)], T::Ptr, F::Concurrent);
-    MutexLockTo  => "gorget_mutex_lock_to",  sig(&[(T::Ptr, A::Opaque), (T::Ptr, A::Opaque)], T::Void, F::Concurrent);
+    // Arg 1 is OutPtr: the callee writes the Guard value into the destination
+    // slot. Without OutPtr, drop_elab treats the slot as Uninitialized and
+    // deletes DropIfAlive — expression-statement guard temps (and any path
+    // that drops the ReadTo destination itself rather than a post-Move copy)
+    // would never unlock (Round XIX Track Y; same #11 OutPtr pattern as MapIterKey).
+    MutexLockTo  => "gorget_mutex_lock_to",  sig(&[(T::Ptr, A::Opaque), (T::Ptr, A::OutPtr)], T::Void, F::Concurrent);
     MutexNew     => "gorget_mutex_new",      sig(&[(T::I64, A::Scalar), (T::Ptr, A::VoidElem)], T::Ptr, F::Concurrent);
 
     // ── Shared / Weak ─────────────────────────────────────────────────────
@@ -502,9 +507,11 @@ runtime_table! {
     RwlockFree        => "gorget_rwlock_free",         sig(&[(T::Ptr, A::Opaque)], T::Void, F::Concurrent);
     RwlockNew         => "gorget_rwlock_new",          sig(&[(T::I64, A::Scalar), (T::Ptr, A::VoidElem)], T::Ptr, F::Concurrent);
     RwlockRead        => "gorget_rwlock_read",         sig(&[(T::Ptr, A::Opaque)], T::Ptr, F::Concurrent);
-    RwlockReadTo      => "gorget_rwlock_read_to",      sig(&[(T::Ptr, A::Opaque), (T::Ptr, A::Opaque)], T::Void, F::Concurrent);
+    // Arg 1 OutPtr — see MutexLockTo; without it statement-end DropIfAlive on
+    // the ReadGuard/WriteGuard temp is deleted by drop_elab (Track Y hang).
+    RwlockReadTo      => "gorget_rwlock_read_to",      sig(&[(T::Ptr, A::Opaque), (T::Ptr, A::OutPtr)], T::Void, F::Concurrent);
     RwlockWrite       => "gorget_rwlock_write",        sig(&[(T::Ptr, A::Opaque)], T::Ptr, F::Concurrent);
-    RwlockWriteTo     => "gorget_rwlock_write_to",     sig(&[(T::Ptr, A::Opaque), (T::Ptr, A::Opaque)], T::Void, F::Concurrent);
+    RwlockWriteTo     => "gorget_rwlock_write_to",     sig(&[(T::Ptr, A::Opaque), (T::Ptr, A::OutPtr)], T::Void, F::Concurrent);
     WriteGuardGet     => "gorget_write_guard_get",     sig(&[(T::Ptr, A::Opaque)], T::Ptr, F::Concurrent);
     WriteGuardGetPtr  => "gorget_write_guard_get_ptr", sig(&[(T::Ptr, A::Opaque)], T::Ptr, F::Concurrent);
     WriteGuardRelease => "gorget_write_guard_release", sig(&[(T::Ptr, A::Opaque)], T::Void, F::Concurrent);
