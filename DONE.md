@@ -1,3 +1,25 @@
+- [2026-07-30] **Round XVIII close — AIM THE METER (Gate 0 + aggregate + partition + Family-3 fix).**
+
+  **Gate 0 (B calibrated):** break `try_resolve_place` `_ =>` NoArm on `cow_amp_projection_base_shapes.gg` → total_misses **1→0→1**, shape Identifier vanishes. B counts respond; safe to rank roots. (`d60afbff`)
+
+  **Step 1 (aggregate):** `scripts/resolver_totality.sh --sweep` — corpus `tests/fixtures/*.gg` + self-host `driver.gg`. Dashboard: `Resolver-totality-B: total_misses=… shapes=… top=…`.
+
+  **Step 2 (partition — RESOLVE/REJECT ledger):**
+  | Shape (ranked) | Disposition | Citation |
+  |---|---|---|
+  | try_place NoArm Identifier (dominant) | **BY-DESIGN** | bare locals served before G2 (`mod.rs` try_resolve_place doc) |
+  | root_local MethodNotDescend iter/map/filter… | **BY-DESIGN** | G1 only descends get/first/last(+unwrap/expect) for CoW root |
+  | field_place NoArm MethodCall:unwrap(get(…)) | **SUSPICIOUS → FIXED** | Family-3 get-chain field; was silent write-drop |
+  | root_local NoArm Deref(Identifier) | **ALLOWLIST / later** | G1 missing Deref; named in EXEMPT_ROOT_G3 |
+  | try_place PostPtrFilter | **BY-DESIGN** | postcondition 1 Ptr filter |
+  | field_place LookupMiss / ReadGuard | **BY-DESIGN or residual** | lookup miss / ReadGuard skip |
+
+  Most misses are by-design — publishable: the model is total where it claims to be. Thesis: rising BY-DESIGN against flat RESOLVE.
+
+  **Step 3 (top SUSPICIOUS):** Family-3 get-chain field+tuple for `&` and assign (`037c78a7`). Shared `resolve_ptr_field_place` / `resolve_ptr_tuple_field_place` + MutableBorrow uses resolved place type. Graduated `sound_tuple_getchain_writethrough`; added `sound_struct_getchain_writethrough`. Self-host field_place MethodCall hist **cleared** (1026→977, only Identifier residual on SH).
+
+  **Convergence: known_gaps 95→94 · TODO items 521→521 · net −1** (regen: `scripts/convergence.sh 95 521`). One known_gaps graduated (tuple getchain). Measurement capability + class fix.
+
 - [2026-07-30] **Round XVII close — RESOLVER-TOTALITY INSTRUMENTS (A + B).** Ships the first durable meters of place-resolver coverage — **worklist generators, never correctness gates** (Core #13; `Some(wrong_root)` counts as resolved; instrument C later).
 
   - **A** (`tests/lints.rs::place_resolvers_arm_census_and_divergence`): required ⊆ arm sets for G1/G2/G3; G4 Expr arms == 0 + caller-presence ≥2; pairwise unexempted divergence **MAX=0** after EXEMPT (MethodCall G1-only; Deref deliberate-or-filed; Identifier/SelfExpr G2-by-design). Existing Family-2 SET lint kept; stale Guard comment on tuple face fixed.
