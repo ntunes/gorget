@@ -2429,9 +2429,6 @@ fn real_main() {
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
         println!("  --clones[=MODE,…]       Clone diagnostics (default: silent). Modes: sites (default), verbose, stats, sites-tsv=PATH, all");
-        println!("  --resolvers[=MODE,…]    Place-resolver fall-through worklist (default: silent). Modes: hist (default), sites, hist-tsv=PATH, all");
-        println!("                          ⚠ WORKLIST GENERATOR only — not a correctness gate (Core #13). Some(wrong_root) counts as resolved.");
-        println!("                          Requires the build/lower path (gg build --emit-gir --resolvers=hist); gg check never lowers.");
         println!("                          sites:   compile-time report — file:line:col + type + reason");
         println!("                          verbose: sites + id + size_bytes + runtime_fn columns");
         println!("                          stats:   runtime atexit report — the aggregate `[clone-stats]` counter line");
@@ -2444,6 +2441,14 @@ fn real_main() {
         println!("                          all:     alias for verbose,stats");
         println!("                          Without --clones, no clone diagnostics are printed.");
         println!("                          Note: stats is not supported with --backend=llvm yet.");
+        println!("  --resolvers[=MODE,…]    Place-resolver fall-through worklist (default: silent). Modes: hist (default), sites, hist-tsv=PATH, all");
+        println!("                          ⚠ WORKLIST GENERATOR only — not a correctness gate (Core #13). Some(wrong_root) counts as resolved.");
+        println!("                          Requires the build/lower path (gg build --emit-gir --resolvers=hist); gg check never lowers.");
+        println!("                          hist:    ranked shape histogram of None/Unresolved exits after lower");
+        println!("                          sites:   per-site miss log (resolver + shape + span when available)");
+        println!("                          hist-tsv=PATH: dump full hist rows as TSV to PATH");
+        println!("                          all:     alias for hist,sites");
+        println!("                          Without --resolvers, no fall-through report is printed.");
         println!();
         println!("Targets:");
         println!("  --target native                 Default — build for the host OS with full runtime");
