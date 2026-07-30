@@ -1312,6 +1312,72 @@ fn operator_overload_call_centralized() {
     );
 }
 
+/// SH twin of `operator_overload_call_centralized` (Core #4 / Core #6). The
+/// self-host lowerer centralizes user operator-overload calls through
+/// `emit_overload_call` (`tests/fixtures/self_host_lowerer/lower_types.gg`) —
+/// ByPtr prep + call + post-call temp drops / result registration. A 6th site
+/// that re-open-codes a bare overload call reintroduces the drop-old-before-
+/// rebind / resource-RHS temp class Track W closed.
+///
+/// Call sites pinned (5 direct `emit_overload_call` callers):
+///   lower_expr.gg ×4 — compare / eq / binary op / unary neg
+///   lower_types.gg ×1 — `emit_compound_arith` overload arm
+/// Transitive compound-assign faces (lower_stmt Identifier ~1190 +
+/// `lower_index_compound_assign` ~2296) reach via `emit_compound_arith` and
+/// are NOT counted as direct callers.
+///
+/// **If this fails:** a new SH user-overload call site was added without the
+/// helper, or a site lost the route. Route through `emit_overload_call`; bump
+/// EXPECTED only with a justification naming the new arm.
+#[test]
+fn sh_operator_overload_call_centralized() {
+    let def_src = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_types.gg")
+        .expect("read tests/fixtures/self_host_lowerer/lower_types.gg");
+    assert_eq!(
+        def_src
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with('#') && t.starts_with("void emit_overload_call(")
+            })
+            .count(),
+        1,
+        "emit_overload_call must be defined exactly once in lower_types.gg; \
+         found a different count.",
+    );
+
+    const EXPECTED_CALLS: usize = 5;
+    let files = [
+        "tests/fixtures/self_host_lowerer/lower_expr.gg",
+        "tests/fixtures/self_host_lowerer/lower_types.gg",
+    ];
+    let mut call_count = 0usize;
+    for path in files {
+        let src = fs::read_to_string(path).unwrap_or_else(|_| panic!("read {path}"));
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with('#') {
+                continue;
+            }
+            // Definition is not a call site.
+            if t.starts_with("void emit_overload_call(") {
+                continue;
+            }
+            if t.contains("emit_overload_call(") {
+                call_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        call_count, EXPECTED_CALLS,
+        "expected EXACTLY {EXPECTED_CALLS} callers of emit_overload_call \
+         (lower_expr×4 compare/eq/binary/unary + lower_types emit_compound_arith×1), \
+         found {call_count}. A new SH user-overload call site must route through \
+         the shared helper — open-coding reopens the drop-old / resource-RHS \
+         temp class Track W closed (Core #4).",
+    );
+}
+
 /// Structural guard (Core #6 "convert a recurring bug class into an executable
 /// guard" + Core #2 "typed metadata, never name-matching"): the 2T SEMANTIC
 /// taint reject (`reject_tainted_materialize_on_write` + its formation sibling

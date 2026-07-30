@@ -1,0 +1,33 @@
+from std.collections import Vector
+
+# CoW write-through: NESTED value-struct field store through an EIndex base.
+# Cell: `ns[0].inner.val = 99` (EFieldAccess-of-EFieldAccess-of-EIndex) on a
+# LOCAL Vector[Nest] — an unbroken owned place → the store WRITES THROUGH to
+# the collection's heap buffer (language-design §3.1).
+#
+# Axis cell (Core #12): nested (depth-2) field store · local Vector root ·
+# scalar int leaf. Sibling mut-method-receiver face is
+# `cow_value_index_nested_mut_recv_writethrough.gg`; single-level field stores
+# are `cow_value_index_field_writethrough.gg`.
+#
+# Round XIX hygiene: residual TODO claimed the SH store face still dropped the
+# write; Gate-0 re-measure showed Rust 99 / SH 99 (store face already routes
+# through `lower_amp_place` via `lower_field_place_base`). Promoted from the
+# inline multi-shape pin `rust_value_index_element_field_writethrough` so the
+# SH lane auto-enrolls via the runtime snapshot net.
+#
+# Expected-output adjudication: LOCAL nested store is IN ggdef's subset
+# (navigate_write handles Vector-Index + nested Struct-Field) → write-through
+# value 99.
+
+struct Inner:
+    int val
+
+struct Nest:
+    Inner inner
+    int tag
+
+void main():
+    Vector[Nest] ns = [Nest(Inner(1), 7), Nest(Inner(2), 8)]
+    ns[0].inner.val = 99   # nested value-element field store → write-through
+    print(ns[0].inner.val) # 99

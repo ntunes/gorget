@@ -19,10 +19,9 @@ from std.collections import Vector
 #
 # The value-field-METHOD-receiver `hs[0].c.bump()` shape is covered by the
 # sibling fixture `cow_value_index_nested_mut_recv_writethrough.gg` (Round XIII
-# Track X). The remaining NESTED store `ns[0].inner.val = x` still routes
-# through a chained EFieldAccess place base on the SH lane and stays in the
-# inline Rust test `rust_value_index_element_field_writethrough` until its SH
-# twin lands.
+# Track X). The NESTED store `ns[0].inner.val = x` is covered by the sibling
+# fixture `cow_value_index_nested_field_store.gg` (Round XIX hygiene: store face
+# already routes through `lower_amp_place` via `lower_field_place_base`).
 
 struct Point:
     int x

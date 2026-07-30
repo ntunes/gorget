@@ -1,3 +1,5 @@
+- [2026-07-30] **Round XIX hygiene — X STALE residual close + W1 SH arm-count lint.** Nested store `ns[0].inner.val = 99` re-measured MATCH (Rust 99 / SH 99; store face already `lower_amp_place` via `lower_field_place_base`). Closed TODO residual; scrubbed stale headers on `cow_value_index_field_writethrough.gg` + `rust_value_index_element_field_writethrough` doc; promoted `cow_value_index_nested_field_store.gg` (expected 99) + runtime snapshot + integration pin. Landed `sh_operator_overload_call_centralized` in `tests/lints.rs` (SH twin of `operator_overload_call_centralized`; 5 direct `emit_overload_call` callers). Handover track 3/X + W1 closed; W2 Layering DEFER retained.
+
 - [2026-07-30] **Round XVIII close — AIM THE METER (Gate 0 + aggregate + partition + Family-3 fix).**
 
   **Gate 0 (B calibrated):** break `try_resolve_place` `_ =>` NoArm on `cow_amp_projection_base_shapes.gg` → total_misses **1→0→1**, shape Identifier vanishes. B counts respond; safe to rank roots. (`d60afbff`)

@@ -25090,20 +25090,21 @@ fn rust_named_recv_user_mutator_caller_untouched() {
 /// `try_resolve_index_element_ptr` producer used by bare Index mut method receivers
 /// (forces `Ptr(T)` for value elements too) + the hoisted round-33 CoW untrack.
 ///
-/// Corpus split (CoW Track 1B / Track V / Track X): the SINGLE-LEVEL shapes —
-/// plain + compound value-element field stores on a LOCAL and a STATIC Vector
-/// (`v[0].x = 88`, `v[1].y += 5`, `PTS[0].x = 99`, `PTS[1].x += 100`) — are fixed
-/// in the self-host too and promoted to `cow_value_index_field_writethrough.gg`.
-/// The bare Index METHOD-receiver `cs[i].bump()` (const and non-const index) is
-/// promoted to `cow_value_index_bare_mut_recv_writethrough.gg` after Track V. The
+/// Corpus split (CoW Track 1B / Track V / Track X / Round XIX hygiene): the
+/// SINGLE-LEVEL shapes — plain + compound value-element field stores on a LOCAL
+/// and a STATIC Vector (`v[0].x = 88`, `v[1].y += 5`, `PTS[0].x = 99`,
+/// `PTS[1].x += 100`) — are fixed in the self-host too and promoted to
+/// `cow_value_index_field_writethrough.gg`. The bare Index METHOD-receiver
+/// `cs[i].bump()` (const and non-const index) is promoted to
+/// `cow_value_index_bare_mut_recv_writethrough.gg` after Track V. The
 /// value-field-METHOD-receiver `hs[0].c.bump()` (EFieldAccess-of-EIndex, and its
 /// deeper `ws[0].h.c.bump()` sibling) is promoted to
-/// `cow_value_index_nested_mut_recv_writethrough.gg` after Track X. This inline
-/// test is KEPT because it uniquely guards the residual NESTED store
-/// `ns[0].inner.val = 99` (Rust-only until its SH twin lands). Promoting that
-/// shape would count a permanent WRONG in `self_host_runtime_diff`, so it stays
-/// Rust-only here (asserting BOTH backends — the pre-fix miscompile reproduced
-/// on both).
+/// `cow_value_index_nested_mut_recv_writethrough.gg` after Track X. The NESTED
+/// store `ns[0].inner.val = 99` is promoted to
+/// `cow_value_index_nested_field_store.gg` after Round XIX hygiene (store face
+/// MATCH on Rust + SH via `lower_amp_place`). This inline test is KEPT as a
+/// multi-shape both-backend pin (static/local plain + compound + nested) —
+/// asserting BOTH backends (the pre-fix miscompile reproduced on both).
 #[test]
 fn rust_value_index_element_field_writethrough() {
     let gg_exe: PathBuf = gg_binary().to_path_buf();
@@ -25280,6 +25281,27 @@ fn cow_value_index_nested_mut_recv_writethrough() {
 3
 4
 3",
+    );
+}
+
+/// Round XIX hygiene corpus fixture (C + LLVM lanes; the self-host lane
+/// auto-enrolls via the `runtime_snapshots/cow_value_index_nested_field_store.out`
+/// snapshot net). A NESTED value-struct field store through an EIndex base —
+/// `ns[0].inner.val = 99` (EFieldAccess-of-EFieldAccess-of-EIndex) — is an
+/// unbroken owned place → the store WRITES THROUGH to the collection's heap
+/// buffer (language-design §3.1). Store face already routes through the shared
+/// write-only producer `lower_amp_place` via `lower_field_place_base` on both
+/// Rust and SH (Gate-0 MATCH 99/99); this pin retires the residual TODO that
+/// still claimed an SH-only drop. Sibling faces: single-level field store
+/// (`cow_value_index_field_writethrough.gg`), nested mut-method-receiver
+/// (`cow_value_index_nested_mut_recv_writethrough.gg`). Expected 99 is
+/// ggdef-adjudicable (LOCAL nested Vector-Index + Struct-Field).
+#[test]
+fn cow_value_index_nested_field_store() {
+    run_gg(
+        "cow_value_index_nested_field_store.gg",
+        "\
+99",
     );
 }
 
