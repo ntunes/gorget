@@ -350,6 +350,70 @@ fn parse_features(args: &[String]) -> Vec<String> {
     features
 }
 
+/// Bitset of selected `--resolvers[=MODE]` modes. Place-resolver fall-through
+/// worklist only — **never a correctness gate (Core #13)**. `Some(wrong_root)`
+/// counts as resolved; only instrument C (build-and-run) adjudicates landing.
+/// Default-silent; bare `--resolvers` ⇒ `hist`.
+#[derive(Debug, Clone, Default)]
+struct ResolverDiagModes {
+    /// Ranked histogram of unresolved shape chains after lower.
+    hist: bool,
+    /// Per-site log with span.
+    sites: bool,
+    /// Full histogram dump for scripts.
+    hist_tsv: Option<PathBuf>,
+}
+
+/// Parse `--resolvers[=MODE[,MODE…]]`. Modes: `hist` (default), `sites`,
+/// `hist-tsv=PATH`, `all` (= hist+sites). Mirrors [`parse_clone_modes`].
+fn parse_resolver_modes(args: &[String]) -> Result<ResolverDiagModes, String> {
+    let mut modes = ResolverDiagModes::default();
+    for a in args {
+        let body = if a == "--resolvers" {
+            "hist"
+        } else if let Some(v) = a.strip_prefix("--resolvers=") {
+            v
+        } else {
+            continue;
+        };
+        for tok in body.split(',') {
+            match tok.trim() {
+                "" => continue,
+                "hist" => modes.hist = true,
+                "sites" => modes.sites = true,
+                "all" => {
+                    modes.hist = true;
+                    modes.sites = true;
+                }
+                "hist-tsv" => {
+                    return Err(
+                        "--resolvers=hist-tsv requires a path: --resolvers=hist-tsv=PATH"
+                            .to_string(),
+                    )
+                }
+                tsv if tsv.starts_with("hist-tsv=") => {
+                    let path = &tsv["hist-tsv=".len()..];
+                    if path.is_empty() {
+                        return Err(
+                            "--resolvers=hist-tsv requires a path: --resolvers=hist-tsv=PATH"
+                                .to_string(),
+                        );
+                    }
+                    modes.hist = true; // hist is implied for the dump
+                    modes.hist_tsv = Some(PathBuf::from(path));
+                }
+                other => {
+                    return Err(format!(
+                        "Unknown --resolvers mode '{other}'. Valid modes: hist, sites, hist-tsv=PATH, all. \
+                         ⚠ WORKLIST GENERATOR only — not a correctness gate (Core #13)."
+                    ))
+                }
+            }
+        }
+    }
+    Ok(modes)
+}
+
 /// Bitset of selected `--clones[=MODE]` modes. All clone diagnostics — both the
 /// compile-time per-site report and the runtime `[clone-stats]` line — live
 /// under this one flag and are default-silent. `all` is shorthand for
@@ -477,6 +541,7 @@ fn try_build_ir(
     emit_lir: bool,
     emit_c_lir: bool,
     clone_modes: &CloneDiagModes,
+    resolver_modes: &ResolverDiagModes,
     backend_name: &str,
     target: &str,
 ) -> Result<PathBuf, String> {
@@ -534,9 +599,36 @@ fn try_build_ir(
 
     // Lower AST to GIR. `--clones=stats` also arms per-clone-site runtime
     // attribution in the lowering (see LoweringOptions::clone_stats).
+    // `--resolvers` arms place-resolver fall-through bookkeeping (worklist only).
     let mut options = options;
     options.clone_stats = clone_stats;
+    options.resolver_hist = resolver_modes.hist || resolver_modes.hist_tsv.is_some();
+    options.resolver_sites = resolver_modes.sites;
     let mut gir_module = gorget::ir::lowering::lower_module(&module, &result, &options);
+
+    // Place-resolver fall-through report (`--resolvers`). MUST run after lower
+    // — `gg check` never lowers, so this instrument is build-path only.
+    // ⚠ WORKLIST GENERATOR, never a correctness gate (Core #13).
+    if resolver_modes.hist
+        || resolver_modes.sites
+        || resolver_modes.hist_tsv.is_some()
+    {
+        let reporter = ErrorReporter::new_multi(file_infos.clone());
+        let locate = |span_start: usize| {
+            reporter.span_location(gorget::span::Span {
+                start: span_start,
+                end: span_start,
+            })
+        };
+        gorget::ir::lowering::emit_resolver_report(
+            &gir_module.resolver_miss_hist,
+            &gir_module.resolver_miss_sites,
+            resolver_modes.hist || resolver_modes.hist_tsv.is_some(),
+            resolver_modes.sites,
+            resolver_modes.hist_tsv.as_deref(),
+            &locate,
+        );
+    }
 
     // `--clones=sites-tsv=PATH` (per-site attribution join table): dump EVERY
     // CloneId (no span dedup — monomorphized siblings share a span but have
@@ -2000,7 +2092,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, &CloneDiagModes::default(), "c-lir", "native") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, &CloneDiagModes::default(), &ResolverDiagModes::default(), "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -2036,7 +2128,7 @@ fn run_tui() {
                 continue;
             }
             let gg_path_str = gg_path.display().to_string();
-            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, &CloneDiagModes::default(), "c-lir", "native") {
+            match try_build_ir(&gg_path_str, &source, HashMap::new(), Some(&tmp_dir), None, None, &[], gorget::ir::lowering::LoweringOptions::default(), false, false, false, &CloneDiagModes::default(), &ResolverDiagModes::default(), "c-lir", "native") {
                 Err(e) => {
                     eprintln!("{e}");
                 }
@@ -2337,6 +2429,9 @@ fn real_main() {
         println!("  --emit-lir              Dump LIR (low-level SSA IR) to stdout instead of compiling");
         println!("  --emit-c-lir            Dump C code generated from LIR to stdout");
         println!("  --clones[=MODE,…]       Clone diagnostics (default: silent). Modes: sites (default), verbose, stats, sites-tsv=PATH, all");
+        println!("  --resolvers[=MODE,…]    Place-resolver fall-through worklist (default: silent). Modes: hist (default), sites, hist-tsv=PATH, all");
+        println!("                          ⚠ WORKLIST GENERATOR only — not a correctness gate (Core #13). Some(wrong_root) counts as resolved.");
+        println!("                          Requires the build/lower path (gg build --emit-gir --resolvers=hist); gg check never lowers.");
         println!("                          sites:   compile-time report — file:line:col + type + reason");
         println!("                          verbose: sites + id + size_bytes + runtime_fn columns");
         println!("                          stats:   runtime atexit report — the aggregate `[clone-stats]` counter line");
@@ -2403,7 +2498,11 @@ fn real_main() {
             eprintln!("{e}");
             process::exit(1);
         });
-        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &clone_modes, "c-lir", "native")
+        let resolver_modes = parse_resolver_modes(&args).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            process::exit(1);
+        });
+        let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &clone_modes, &resolver_modes, "c-lir", "native")
             .unwrap_or_else(|e| { eprintln!("{e}"); process::exit(1); });
         let status = Command::new(&exe_path)
             .status()
@@ -2529,6 +2628,10 @@ fn real_main() {
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let clone_modes = parse_clone_modes(&args).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        process::exit(1);
+    });
+    let resolver_modes = parse_resolver_modes(&args).unwrap_or_else(|e| {
         eprintln!("{e}");
         process::exit(1);
     });
@@ -2859,7 +2962,7 @@ fn real_main() {
                     sanitize, scheduler_mode, release,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, &clone_modes, backend_name, target);
+                let result = try_build_ir(filename, &source, dep_paths, None, None, Some(shared_path), &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, &clone_modes, &resolver_modes, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built shared library: {}", p.display()); }
                     Err(e) => {
@@ -2887,7 +2990,7 @@ fn real_main() {
                     sanitize, release,
                     ..Default::default()
                 };
-                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, &clone_modes, backend_name, target);
+                let result = try_build_ir(filename, &source, dep_paths, None, shared_output_path.as_deref(), None, &features, lowering_opts, emit_gir, emit_lir, emit_c_lir, &clone_modes, &resolver_modes, backend_name, target);
                 match result {
                     Ok(p) => if !emit_gir && !emit_lir && !emit_c_lir { println!("Built: {}", p.display()); }
                     Err(e) => {
@@ -2950,7 +3053,7 @@ fn real_main() {
                 sanitize, scheduler_mode, release,
                 ..Default::default()
             };
-            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &clone_modes, "c-lir", "native");
+            let result = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &clone_modes, &resolver_modes, "c-lir", "native");
             match result {
                 Ok(exe_path) => {
                     // Forward positional args that appear AFTER the script filename
@@ -3201,7 +3304,7 @@ fn real_main() {
                 sanitize, scheduler_mode,
                 ..Default::default()
             };
-            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &CloneDiagModes::default(), "c-lir", "native")
+            let exe_path = try_build_ir(filename, &source, dep_paths, Some(tmp_dir.path()), None, None, &features, lowering_opts, false, false, false, &CloneDiagModes::default(), &ResolverDiagModes::default(), "c-lir", "native")
                 .unwrap_or_else(|e| {
                     eprintln!("{e}");
                     process::exit(1);

@@ -305,6 +305,12 @@ pub struct Module {
     pub fn_purity: crate::semantic::purity::PurityByName,
     /// Implicit clone warnings emitted during lowering.
     pub implicit_clone_warnings: Vec<ImplicitCloneWarning>,
+    /// Place-resolver fall-through histogram rows when `--resolvers` was armed:
+    /// `(resolver, shape, reason, count)`. Worklist generator only (Core #13) —
+    /// emptiness is not soundness. Empty when the instrument is off.
+    pub resolver_miss_hist: Vec<(String, String, String, u64)>,
+    /// Per-site fall-through log when `--resolvers=sites` was armed.
+    pub resolver_miss_sites: Vec<crate::ir::lowering::ResolverMissRecord>,
     /// Suggestions to use `!arg` (move) for last-use arguments.
     pub move_suggestions: Vec<MoveSuggestion>,
     /// Maps monomorphized method name → runtime callee metadata.
@@ -396,6 +402,8 @@ impl Module {
             fn_param_abis: rustc_hash::FxHashMap::default(),
             fn_purity: rustc_hash::FxHashMap::default(),
             implicit_clone_warnings: Vec::new(),
+            resolver_miss_hist: Vec::new(),
+            resolver_miss_sites: Vec::new(),
             move_suggestions: Vec::new(),
             runtime_callees: rustc_hash::FxHashMap::default(),
             fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),

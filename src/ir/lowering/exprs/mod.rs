@@ -2605,10 +2605,25 @@ pub(super) fn resolve_projection_root_local(
             if descend {
                 resolve_projection_root_local(ctx, &receiver.node)
             } else {
+                // Worklist only (`--resolvers`); does not change the result.
+                ctx.resolver_miss(
+                    crate::ir::lowering::ResolverId::RootLocal,
+                    Some(expr),
+                    crate::ir::lowering::MissReason::MethodNotDescend,
+                    None,
+                );
                 None
             }
         }
-        _ => None,
+        _ => {
+            ctx.resolver_miss(
+                crate::ir::lowering::ResolverId::RootLocal,
+                Some(expr),
+                crate::ir::lowering::MissReason::NoArm,
+                None,
+            );
+            None
+        }
     }
 }
 
@@ -3077,18 +3092,55 @@ pub(in crate::ir::lowering) fn try_resolve_place(
 ) -> Option<(Place, TypeId)> {
     let resolved = match &expr.node {
         Expr::FieldAccess { object, field } => {
-            try_resolve_field_place(ctx, builder, object, &field.node)
+            // Specialist records its own miss; we still tag the OUTER place
+            // shape here when it declines so the try_place worklist sees the
+            // caller's costume (Core #4 producer-side).
+            match try_resolve_field_place(ctx, builder, object, &field.node) {
+                Some(r) => Some(r),
+                None => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::TryPlace,
+                        Some(&expr.node),
+                        crate::ir::lowering::MissReason::LookupMiss,
+                        Some(expr.span),
+                    );
+                    None
+                }
+            }
         }
         Expr::TupleFieldAccess { object, index } => {
-            try_resolve_tuple_field_place(ctx, builder, object, *index)
+            match try_resolve_tuple_field_place(ctx, builder, object, *index) {
+                Some(r) => Some(r),
+                None => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::TryPlace,
+                        Some(&expr.node),
+                        crate::ir::lowering::MissReason::LookupMiss,
+                        Some(expr.span),
+                    );
+                    None
+                }
+            }
         }
         Expr::Index { object, index } => {
-            let (ptr_place, elem_type) = try_resolve_index_element_ptr(ctx, builder, object, index)?;
-            // Postcondition 1: the index resolver returns a local holding
-            // `Ptr(elem)`; normalise it to an lvalue OF THE ELEMENT here, once.
-            let mut place = ptr_place;
-            place.projections.push(Projection::Deref);
-            Some((place, elem_type))
+            match try_resolve_index_element_ptr(ctx, builder, object, index) {
+                Some((ptr_place, elem_type)) => {
+                    // Postcondition 1: the index resolver returns a local holding
+                    // `Ptr(elem)`; normalise it to an lvalue OF THE ELEMENT here, once.
+                    let mut place = ptr_place;
+                    place.projections.push(Projection::Deref);
+                    Some((place, elem_type))
+                }
+                None => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::TryPlace,
+                        Some(&expr.node),
+                        crate::ir::lowering::MissReason::LookupMiss,
+                        Some(expr.span),
+                    );
+                    None
+                }
+            }
         }
         // Snag #26 lvalue-through-deref, hoisted out of the TWO open-coded
         // `&`-formation copies (`lower_call_arg`'s `&*b` block and the standalone
@@ -3106,7 +3158,15 @@ pub(in crate::ir::lowering) fn try_resolve_place(
             let inner_op = lower_expr(ctx, builder, inner);
             let inner_place = match &inner_op {
                 Operand::Copy(p) | Operand::Move(p) => p.clone(),
-                _ => return None,
+                _ => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::TryPlace,
+                        Some(&expr.node),
+                        crate::ir::lowering::MissReason::NonPlaceOperand,
+                        Some(expr.span),
+                    );
+                    return None;
+                }
             };
             let local_idx = inner_place.local.0 as usize;
             let pointee = if local_idx < builder.locals.len() {
@@ -3122,7 +3182,15 @@ pub(in crate::ir::lowering) fn try_resolve_place(
         // Fall through — NOT a drop (Core #10). A bare `Expr::Identifier` lands
         // here BY DESIGN: `&x` on a whole local is served by the bare-identifier
         // fast paths that run BEFORE this producer at both faces.
-        _ => None,
+        _ => {
+            ctx.resolver_miss(
+                crate::ir::lowering::ResolverId::TryPlace,
+                Some(&expr.node),
+                crate::ir::lowering::MissReason::NoArm,
+                Some(expr.span),
+            );
+            None
+        }
     };
 
     // 🚨 POSTCONDITION 1, ENFORCED — never hand back a place whose VALUE is
@@ -3161,6 +3229,12 @@ pub(in crate::ir::lowering) fn try_resolve_place(
             ctx.type_registry.get(place_type),
             Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
         ) {
+            ctx.resolver_miss(
+                crate::ir::lowering::ResolverId::TryPlace,
+                Some(&expr.node),
+                crate::ir::lowering::MissReason::PostPtrFilter,
+                Some(expr.span),
+            );
             return None;
         }
     }
@@ -3188,6 +3262,12 @@ pub(super) fn try_resolve_field_place(
                 // addressable MutPtr local; the place walk below appends Deref.
                 global_ptr
             } else {
+                ctx.resolver_miss(
+                    crate::ir::lowering::ResolverId::FieldPlace,
+                    Some(&object.node),
+                    crate::ir::lowering::MissReason::LookupMiss,
+                    Some(object.span),
+                );
                 return None;
             }
         }
@@ -3195,6 +3275,12 @@ pub(super) fn try_resolve_field_place(
             if let Some((local_id, _)) = ctx.lookup_local("self") {
                 Operand::Copy(Place::local(local_id))
             } else {
+                ctx.resolver_miss(
+                    crate::ir::lowering::ResolverId::FieldPlace,
+                    Some(&object.node),
+                    crate::ir::lowering::MissReason::LookupMiss,
+                    Some(object.span),
+                );
                 return None;
             }
         }
@@ -3203,6 +3289,13 @@ pub(super) fn try_resolve_field_place(
             if let Some((inner_place, _inner_type)) = try_resolve_field_place(ctx, builder, inner_obj, &inner_field.node) {
                 Operand::Copy(inner_place)
             } else {
+                // Inner already recorded; re-tag outer object shape for the worklist.
+                ctx.resolver_miss(
+                    crate::ir::lowering::ResolverId::FieldPlace,
+                    Some(&object.node),
+                    crate::ir::lowering::MissReason::LookupMiss,
+                    Some(object.span),
+                );
                 return None;
             }
         }
@@ -3219,6 +3312,12 @@ pub(super) fn try_resolve_field_place(
                 deref_place.projections.push(Projection::Deref);
                 Operand::Copy(deref_place)
             } else {
+                ctx.resolver_miss(
+                    crate::ir::lowering::ResolverId::FieldPlace,
+                    Some(&object.node),
+                    crate::ir::lowering::MissReason::NonPlaceOperand,
+                    Some(object.span),
+                );
                 return None;
             }
         }
@@ -3232,20 +3331,46 @@ pub(super) fn try_resolve_field_place(
         // root `cow_before_mutation` already materialized a private copy for a
         // shared local, so the pointer aliases the owned buffer.
         Expr::Index { object: coll, index } => {
-            let (elem_ptr_place, _elem_type) =
-                try_resolve_index_element_ptr(ctx, builder, coll, index)?;
-            Operand::Copy(elem_ptr_place)
+            match try_resolve_index_element_ptr(ctx, builder, coll, index) {
+                Some((elem_ptr_place, _elem_type)) => Operand::Copy(elem_ptr_place),
+                None => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::FieldPlace,
+                        Some(&object.node),
+                        crate::ir::lowering::MissReason::LookupMiss,
+                        Some(object.span),
+                    );
+                    return None;
+                }
+            }
         }
         // Family-2 arm-parity: `t.0.fd = v` / `&t.0.fd` — a struct field UNDER
         // a TUPLE field. Recurse into the tuple resolver so the object's
         // resolved place carries a `Field(idx)` projection and the field-walk
         // below descends through it. Mirror of the FieldAccess arm above.
         Expr::TupleFieldAccess { object: inner_obj, index: inner_index } => {
-            let (inner_place, _inner_type) =
-                try_resolve_tuple_field_place(ctx, builder, inner_obj, *inner_index)?;
-            Operand::Copy(inner_place)
+            match try_resolve_tuple_field_place(ctx, builder, inner_obj, *inner_index) {
+                Some((inner_place, _inner_type)) => Operand::Copy(inner_place),
+                None => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::FieldPlace,
+                        Some(&object.node),
+                        crate::ir::lowering::MissReason::LookupMiss,
+                        Some(object.span),
+                    );
+                    return None;
+                }
+            }
         }
-        _ => return None,
+        _ => {
+            ctx.resolver_miss(
+                crate::ir::lowering::ResolverId::FieldPlace,
+                Some(&object.node),
+                crate::ir::lowering::MissReason::NoArm,
+                Some(object.span),
+            );
+            return None;
+        }
     };
 
     if let Operand::Copy(ref place) | Operand::Move(ref place) = obj {
@@ -3318,6 +3443,12 @@ pub(super) fn try_resolve_field_place(
                         // ReadGuard: writes are forbidden — don't resolve a write
                         // place (type checker should reject in future). Returning
                         // None matches the plain-assign guard arm's early-out.
+                        ctx.resolver_miss(
+                            crate::ir::lowering::ResolverId::FieldPlace,
+                            Some(&object.node),
+                            crate::ir::lowering::MissReason::ReadGuard,
+                            Some(object.span),
+                        );
                         return None;
                     }
                     let (inner_ptr_local, inner_type) = emit_guard_get_ptr(ctx, builder, place, &info);
@@ -3376,6 +3507,12 @@ pub(super) fn try_resolve_field_place(
             }
         }
     }
+    ctx.resolver_miss(
+        crate::ir::lowering::ResolverId::FieldPlace,
+        Some(&object.node),
+        crate::ir::lowering::MissReason::LookupMiss,
+        Some(object.span),
+    );
     None
 }
 
@@ -3411,6 +3548,12 @@ pub(super) fn try_resolve_tuple_field_place(
             } else if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
                 global_ptr
             } else {
+                ctx.resolver_miss(
+                    crate::ir::lowering::ResolverId::TuplePlace,
+                    Some(&object.node),
+                    crate::ir::lowering::MissReason::LookupMiss,
+                    Some(object.span),
+                );
                 return None;
             }
         }
@@ -3418,16 +3561,42 @@ pub(super) fn try_resolve_tuple_field_place(
             if let Some((local_id, _)) = ctx.lookup_local("self") {
                 Operand::Copy(Place::local(local_id))
             } else {
+                ctx.resolver_miss(
+                    crate::ir::lowering::ResolverId::TuplePlace,
+                    Some(&object.node),
+                    crate::ir::lowering::MissReason::LookupMiss,
+                    Some(object.span),
+                );
                 return None;
             }
         }
         Expr::FieldAccess { object: inner_obj, field } => {
-            let (inner_place, _) = try_resolve_field_place(ctx, builder, inner_obj, &field.node)?;
-            Operand::Copy(inner_place)
+            match try_resolve_field_place(ctx, builder, inner_obj, &field.node) {
+                Some((inner_place, _)) => Operand::Copy(inner_place),
+                None => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::TuplePlace,
+                        Some(&object.node),
+                        crate::ir::lowering::MissReason::LookupMiss,
+                        Some(object.span),
+                    );
+                    return None;
+                }
+            }
         }
         Expr::TupleFieldAccess { object: inner_obj, index: inner_index } => {
-            let (inner_place, _) = try_resolve_tuple_field_place(ctx, builder, inner_obj, *inner_index)?;
-            Operand::Copy(inner_place)
+            match try_resolve_tuple_field_place(ctx, builder, inner_obj, *inner_index) {
+                Some((inner_place, _)) => Operand::Copy(inner_place),
+                None => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::TuplePlace,
+                        Some(&object.node),
+                        crate::ir::lowering::MissReason::LookupMiss,
+                        Some(object.span),
+                    );
+                    return None;
+                }
+            }
         }
         Expr::Deref { expr: inner } => {
             let inner_op = lower_expr(ctx, builder, inner);
@@ -3436,6 +3605,12 @@ pub(super) fn try_resolve_tuple_field_place(
                 dp.projections.push(Projection::Deref);
                 Operand::Copy(dp)
             } else {
+                ctx.resolver_miss(
+                    crate::ir::lowering::ResolverId::TuplePlace,
+                    Some(&object.node),
+                    crate::ir::lowering::MissReason::NonPlaceOperand,
+                    Some(object.span),
+                );
                 return None;
             }
         }
@@ -3446,19 +3621,50 @@ pub(super) fn try_resolve_tuple_field_place(
         // buffer, not on a stack copy. Mirror of the Index arm in
         // `try_resolve_field_place`.
         Expr::Index { object: coll, index } => {
-            let (elem_ptr_place, _elem_type) =
-                try_resolve_index_element_ptr(ctx, builder, coll, index)?;
-            Operand::Copy(elem_ptr_place)
+            match try_resolve_index_element_ptr(ctx, builder, coll, index) {
+                Some((elem_ptr_place, _elem_type)) => Operand::Copy(elem_ptr_place),
+                None => {
+                    ctx.resolver_miss(
+                        crate::ir::lowering::ResolverId::TuplePlace,
+                        Some(&object.node),
+                        crate::ir::lowering::MissReason::LookupMiss,
+                        Some(object.span),
+                    );
+                    return None;
+                }
+            }
         }
-        _ => return None,
+        _ => {
+            ctx.resolver_miss(
+                crate::ir::lowering::ResolverId::TuplePlace,
+                Some(&object.node),
+                crate::ir::lowering::MissReason::NoArm,
+                Some(object.span),
+            );
+            return None;
+        }
     };
 
     let place = match obj {
         Operand::Copy(ref p) | Operand::Move(ref p) => p.clone(),
-        _ => return None,
+        _ => {
+            ctx.resolver_miss(
+                crate::ir::lowering::ResolverId::TuplePlace,
+                Some(&object.node),
+                crate::ir::lowering::MissReason::NonPlaceOperand,
+                Some(object.span),
+            );
+            return None;
+        }
     };
     let local_idx = place.local.0 as usize;
     if local_idx >= builder.locals.len() {
+        ctx.resolver_miss(
+            crate::ir::lowering::ResolverId::TuplePlace,
+            Some(&object.node),
+            crate::ir::lowering::MissReason::LookupMiss,
+            Some(object.span),
+        );
         return None;
     }
     // Walk existing projections to the effective type (mirror
@@ -3502,6 +3708,12 @@ pub(super) fn try_resolve_tuple_field_place(
     // face too — filed in TODO.md against both faces).
     if let Some(info) = guard_of(ctx, current_type) {
         if info.is_read_only() {
+            ctx.resolver_miss(
+                crate::ir::lowering::ResolverId::TuplePlace,
+                Some(&object.node),
+                crate::ir::lowering::MissReason::ReadGuard,
+                Some(object.span),
+            );
             return None;
         }
         let (inner_ptr_local, inner_type) = emit_guard_get_ptr(ctx, builder, &place, &info);

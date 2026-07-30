@@ -588,6 +588,9 @@ pub struct LoweringContext<'a> {
     /// runtime attribution (joined offline with the `--clones=verbose` static
     /// table). False (the default) emits nothing — zero cost when off.
     pub clone_stats: bool,
+    /// `--resolvers` place-resolver fall-through bookkeeping (worklist only;
+    /// Core #13). Default-off; single `enabled` check before any string work.
+    pub resolver_diag: super::resolver_diag::ResolverDiag,
     /// G3: the `MaterializeReason` the CoW materialize helpers
     /// (`cow_materialize_alias`/`_view`/`_collection_ref`) stamp on the clone
     /// `Call` they emit. Defaults to `CoWMaterialization` (at-site CoW). The
@@ -758,6 +761,7 @@ impl<'a> LoweringContext<'a> {
             implicit_clone_warnings: Vec::new(),
             next_clone_id: 0,
             clone_stats: false,
+            resolver_diag: super::resolver_diag::ResolverDiag::default(),
             cow_reason: crate::ir::ImplicitCloneReason::CoWMaterialization,
             materialize_plan: MaterializePlan::default(),
             move_suggestions: Vec::new(),
@@ -1152,6 +1156,46 @@ impl<'a> LoweringContext<'a> {
             "__gorget_clone_site_hit",
             vec![Operand::Constant(Constant::I64(id.0 as i64))],
         );
+    }
+
+    /// Place-resolver fall-through chokepoint (`--resolvers`). Worklist only —
+    /// never changes resolve results. No-op when the instrument is off (the
+    /// shape walk is skipped entirely).
+    #[inline]
+    pub fn resolver_miss(
+        &mut self,
+        id: super::resolver_diag::ResolverId,
+        expr: Option<&Expr>,
+        reason: super::resolver_diag::MissReason,
+        span: Option<crate::span::Span>,
+    ) {
+        if !self.resolver_diag.enabled() {
+            return;
+        }
+        let shape = match expr {
+            Some(e) => super::resolver_diag::expr_shape_chain(
+                e,
+                super::resolver_diag::SHAPE_MAX_DEPTH,
+            ),
+            None => "LoweredOperand".to_string(),
+        };
+        self.resolver_diag.bump(id, shape, reason, span);
+    }
+
+    /// Like [`Self::resolver_miss`] but tags a pre-built shape (G4 Operand path
+    /// when the AST object was already threaded as a shape string).
+    #[inline]
+    pub fn resolver_miss_shape(
+        &mut self,
+        id: super::resolver_diag::ResolverId,
+        shape: String,
+        reason: super::resolver_diag::MissReason,
+        span: Option<crate::span::Span>,
+    ) {
+        if !self.resolver_diag.enabled() {
+            return;
+        }
+        self.resolver_diag.bump(id, shape, reason, span);
     }
 
     /// Core-invariant #4 producer helper — the ONE way a straight-line

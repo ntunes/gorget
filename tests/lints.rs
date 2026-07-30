@@ -6995,12 +6995,12 @@ fn amp_formation_and_assign_cover_the_same_place_forms() {
 /// ⚠ **KNOWN BLIND-SPOT — read before trusting a green.**
 ///   * `top_level_expr_arm_variants` extracts `Expr::<Variant>` names from
 ///     arm-indentation lines, so it sees only the SYNTACTIC object domain. The
-///     field resolver's `Guard[T]` auto-deref block (~L3228-3261 at time of
-///     writing) is TYPE-driven inside the FieldAccess arm — no matching
-///     `Expr::` head — so this lint cannot see it. The tuple resolver has no
-///     equivalent Guard branch today; `g.0` where `g: Guard[(int,int)]` is
-///     therefore filed as a separate class (Round XI's
-///     `scoutE_guard_tuple_field_assign_segv.gg`), not covered here.
+///     field resolver's `Guard[T]` auto-deref block is TYPE-driven (no matching
+///     `Expr::` head) — so this lint cannot see it. The tuple resolver has a
+///     matching TYPE-driven Guard branch (Track L closed); this lint still
+///     cannot see *either* Guard branch — that is a permanent syntactic-extractor
+///     limit, not a missing arm. Guard write-through is pinned by durable
+///     fixtures / ASan, not by this SET lint.
 ///   * Like LIMB 1, this checks ROUTING, not SEMANTICS. An arm that exists but
 ///     mis-resolves passes. Semantic coverage lives in the durable
 ///     `sound_tup*` / `sound_amp_v_i_tuple_field_writethrough` fixtures.
@@ -7070,6 +7070,270 @@ fn field_and_tuple_place_resolvers_cover_the_same_object_forms() {
         "place-resolver arm-parity lint extracted suspiciously few arms \
          (field={field:?}, tuple={tuple:?}). The match statements were probably \
          respelled or reindented — fix the extractor rather than lowering these floors."
+    );
+}
+
+/// Round XVII Instrument A — place-resolver arm census + pairwise divergence
+/// ratchet across G1/G2/G3 (Expr-domain). G4 is Operand-domain (category lock).
+///
+/// ⚠ **A and B are WORKLIST GENERATORS, never correctness gates (Core #13).**
+/// `Some(wrong_root)` counts as resolved. Only instrument C (build-and-run cell
+/// matrix, later round) adjudicates landing. Do not promote arm-set green or
+/// histogram emptiness into a soundness bar.
+///
+/// **TYPE-driven Guard blind spot (permanent):** this lint uses
+/// `top_level_expr_arm_variants` — a syntactic extractor. Guard auto-deref is
+/// TYPE-driven and invisible here on both field and tuple faces. Never claim
+/// Guard coverage from this lint.
+///
+/// Category groups (do not flat-compare all five as one universe):
+/// - G1 `resolve_projection_root_local` — CoW root walker
+/// - G2 `try_resolve_place` — top-level place dispatcher
+/// - G3a/G3b field/tuple — object-form specialist PAIR (Family-2 SET lint stays)
+/// - G4 `resolve_ptr_field_place` — Operand/type fallback; **no Expr arms**
+///
+/// Metrics:
+/// 1. required ⊆ extracted for named forms (Core #15e Q2 — count floors alone
+///    green-light swapping form X for Y).
+/// 2. Pairwise unexempted divergence DOWN-ONLY after EXEMPT table.
+/// 3. G4 Expr arms == 0; G4 caller-presence ≥2 in assigns.rs.
+#[test]
+fn place_resolvers_arm_census_and_divergence() {
+    let exprs = fs::read_to_string(Path::new("src/ir/lowering/exprs/mod.rs"))
+        .expect("read src/ir/lowering/exprs/mod.rs");
+    let assigns = fs::read_to_string(Path::new("src/ir/lowering/stmts/assigns.rs"))
+        .expect("read src/ir/lowering/stmts/assigns.rs");
+
+    let root = top_level_expr_arm_variants(
+        &exprs,
+        "pub(super) fn resolve_projection_root_local(",
+    );
+    let place = top_level_expr_arm_variants(
+        &exprs,
+        "pub(in crate::ir::lowering) fn try_resolve_place(",
+    );
+    let field = top_level_expr_arm_variants(&exprs, "pub(super) fn try_resolve_field_place(");
+    let tuple =
+        top_level_expr_arm_variants(&exprs, "pub(super) fn try_resolve_tuple_field_place(");
+    let ptr = top_level_expr_arm_variants(&assigns, "fn resolve_ptr_field_place(");
+
+    // --- required ⊆ extracted (named forms) ---
+    let root_required: std::collections::BTreeSet<&str> = [
+        "Identifier",
+        "SelfExpr",
+        "FieldAccess",
+        "TupleFieldAccess",
+        "Index",
+        "MethodCall",
+    ]
+    .into_iter()
+    .collect();
+    let place_required: std::collections::BTreeSet<&str> =
+        ["FieldAccess", "TupleFieldAccess", "Index", "Deref"]
+            .into_iter()
+            .collect();
+    let g3_required: std::collections::BTreeSet<&str> = [
+        "Identifier",
+        "SelfExpr",
+        "FieldAccess",
+        "TupleFieldAccess",
+        "Index",
+        "Deref",
+    ]
+    .into_iter()
+    .collect();
+
+    let missing_root: Vec<_> = root_required
+        .iter()
+        .filter(|n| !root.contains(**n))
+        .collect();
+    let missing_place: Vec<_> = place_required
+        .iter()
+        .filter(|n| !place.contains(**n))
+        .collect();
+    let missing_field: Vec<_> = g3_required
+        .iter()
+        .filter(|n| !field.contains(**n))
+        .collect();
+    let missing_tuple: Vec<_> = g3_required
+        .iter()
+        .filter(|n| !tuple.contains(**n))
+        .collect();
+
+    assert!(
+        missing_root.is_empty(),
+        "G1 resolve_projection_root_local missing required arms {missing_root:?}\n\
+         root={root:?}\n\
+         ⚠ routing census only — not a correctness gate (Core #13)."
+    );
+    assert!(
+        missing_place.is_empty(),
+        "G2 try_resolve_place missing required arms {missing_place:?}\n\
+         place={place:?}\n\
+         ⚠ routing census only — not a correctness gate (Core #13)."
+    );
+    assert!(
+        missing_field.is_empty() && missing_tuple.is_empty(),
+        "G3 field/tuple missing required object forms\n\
+         field missing={missing_field:?} field={field:?}\n\
+         tuple missing={missing_tuple:?} tuple={tuple:?}\n\
+         ⚠ routing census only — not a correctness gate (Core #13)."
+    );
+
+    // Secondary vacuous floors (after required ⊆ holds).
+    assert!(root.len() >= 6, "G1 arm floor: root={root:?}");
+    assert!(place.len() >= 4, "G2 arm floor: place={place:?}");
+    assert!(
+        field.len() >= 6 && tuple.len() >= 6,
+        "G3 arm floors: field={field:?} tuple={tuple:?}"
+    );
+
+    // G4: still Operand-only — zero Expr:: arms (category lock).
+    assert!(
+        ptr.is_empty(),
+        "G4 resolve_ptr_field_place gained Expr:: arms {ptr:?} — reclassify G4 \
+         or stop comparing it as Operand-domain. Category error if forced into \
+         the Expr pairwise graph (Core #15e Q4)."
+    );
+
+    // G4 caller-presence floor: plain `=` and compound `OP=` both route the
+    // fallback through resolve_ptr_field_place (Core #4).
+    let ptr_calls = assigns
+        .matches("resolve_ptr_field_place(")
+        .count()
+        // definition site is one match; require ≥2 *call* sites ⇒ ≥3 total.
+        .saturating_sub(1);
+    assert!(
+        ptr_calls >= 2,
+        "G4 resolve_ptr_field_place must have ≥2 call sites in assigns.rs \
+         (plain `=` and compound `OP=`); found {ptr_calls} non-def matches. \
+         Silent drop of the Operand-path fallback reopens the get-chain write \
+         hole on one face only."
+    );
+
+    // --- Pairwise unexempted divergence (down-only) ---
+    // EXEMPT cells are deliberate category / design differences — name the
+    // reason; never raise MAX without an EXEMPT row or an arm fix.
+    //
+    // Pair directions: cells in leftΔright after removing EXEMPT for that pair.
+    type Exempt = &'static [(&'static str, &'static str)];
+    // field vs tuple: empty (Family-2).
+    const EXEMPT_FIELD_TUPLE: Exempt = &[];
+    // place vs field/tuple: bare locals served before G2.
+    const EXEMPT_PLACE_G3: Exempt = &[
+        (
+            "Identifier",
+            "Bare locals served by fast paths BEFORE try_resolve_place \
+             (mod.rs try_resolve_place doc; Family-1 ASSIGN_ONLY_EXEMPT)",
+        ),
+        (
+            "SelfExpr",
+            "Same as Identifier — bare self is not a projection place in G2",
+        ),
+    ];
+    // root vs field/tuple.
+    const EXEMPT_ROOT_G3: Exempt = &[
+        (
+            "MethodCall",
+            "G1-only: CoW root descent for get/first/last(+unwrap/expect) chains; \
+             G3 MethodCall is Family-3 filed work — worklist, not silent EXEMPT rot",
+        ),
+        (
+            "Deref",
+            "G1 missing Deref while G3 has it — deliberate-or-filed CoW-root cell; \
+             B/C decide later. Pin named, not silent.",
+        ),
+    ];
+    // root vs place: union of deliberate cells above.
+    const EXEMPT_ROOT_PLACE: Exempt = &[
+        (
+            "Identifier",
+            "G2 deliberately declines bare Identifier (served earlier)",
+        ),
+        (
+            "SelfExpr",
+            "G2 deliberately declines bare SelfExpr (served earlier)",
+        ),
+        (
+            "MethodCall",
+            "G1-only CoW get-chain root descent",
+        ),
+        (
+            "Deref",
+            "G1 missing Deref / G2 has it — deliberate-or-filed",
+        ),
+    ];
+
+    fn unexempted_delta(
+        a: &std::collections::BTreeSet<String>,
+        b: &std::collections::BTreeSet<String>,
+        exempt: Exempt,
+    ) -> Vec<String> {
+        let ex: std::collections::BTreeSet<&str> = exempt.iter().map(|(n, _)| *n).collect();
+        a.symmetric_difference(b)
+            .filter(|n| !ex.contains(n.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    let mut unexempted: Vec<(String, Vec<String>)> = Vec::new();
+    let d_ft = unexempted_delta(&field, &tuple, EXEMPT_FIELD_TUPLE);
+    if !d_ft.is_empty() {
+        unexempted.push(("field_vs_tuple".into(), d_ft));
+    }
+    let d_pf = unexempted_delta(&place, &field, EXEMPT_PLACE_G3);
+    if !d_pf.is_empty() {
+        unexempted.push(("place_vs_field".into(), d_pf));
+    }
+    let d_pt = unexempted_delta(&place, &tuple, EXEMPT_PLACE_G3);
+    if !d_pt.is_empty() {
+        unexempted.push(("place_vs_tuple".into(), d_pt));
+    }
+    let d_rf = unexempted_delta(&root, &field, EXEMPT_ROOT_G3);
+    if !d_rf.is_empty() {
+        unexempted.push(("root_vs_field".into(), d_rf));
+    }
+    let d_rt = unexempted_delta(&root, &tuple, EXEMPT_ROOT_G3);
+    if !d_rt.is_empty() {
+        unexempted.push(("root_vs_tuple".into(), d_rt));
+    }
+    let d_rp = unexempted_delta(&root, &place, EXEMPT_ROOT_PLACE);
+    if !d_rp.is_empty() {
+        unexempted.push(("root_vs_place".into(), d_rp));
+    }
+
+    let unexempted_cell_count: usize = unexempted.iter().map(|(_, v)| v.len()).sum();
+
+    /// Measured 2026-07-30 at HEAD after EXEMPT pairs (Round XVII).
+    /// Down-only: new unexempted cells FAIL. To add a deliberate cell, append
+    /// EXEMPT with a reason; never raise the ceiling without owner review.
+    /// Expected 0 when the allowlist is honest (all residual cells deliberate).
+    const MAX_UNEXEMPTED_DIVERGENCE_CELLS: usize = 0;
+
+    assert!(
+        unexempted_cell_count <= MAX_UNEXEMPTED_DIVERGENCE_CELLS,
+        "PLACE-RESOLVER UNEXEMPTED DIVERGENCE rose above the down-only ceiling.\n\n\
+         unexempted_cell_count={unexempted_cell_count} MAX={MAX_UNEXEMPTED_DIVERGENCE_CELLS}\n\
+         details={unexempted:?}\n\n\
+         root={root:?}\nplace={place:?}\nfield={field:?}\ntuple={tuple:?}\n\n\
+         Either add the missing arm (class fix) or append the cell to the pair's \
+         EXEMPT table WITH a reason. Do not raise MAX without citation.\n\n\
+         ⚠ A is a WORKLIST GENERATOR, not a correctness gate (Core #13). \
+         Routing ≠ semantics; Guard/type-driven branches are invisible here."
+    );
+
+    // Stable tags for scripts/resolver_totality.sh (parse under --nocapture).
+    eprintln!(
+        "[resolver-census] root={} place={} field={} tuple={} ptr_expr=0 ptr_callers={}",
+        root.len(),
+        place.len(),
+        field.len(),
+        tuple.len(),
+        ptr_calls
+    );
+    eprintln!(
+        "[resolver-divergence] unexempted={} max={}",
+        unexempted_cell_count, MAX_UNEXEMPTED_DIVERGENCE_CELLS
     );
 }
 

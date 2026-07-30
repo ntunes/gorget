@@ -7,9 +7,15 @@ pub mod fault_participation;
 pub mod functions;
 pub mod generics;
 pub mod liveness;
+pub mod resolver_diag;
 pub mod stmts;
 pub mod traits;
 pub mod types;
+
+pub use resolver_diag::{
+    emit_resolver_report, expr_shape_chain, MissReason, ResolverDiag, ResolverId,
+    ResolverMissRecord, SHAPE_MAX_DEPTH,
+};
 
 use crate::ir::types::*;
 use crate::ir::{ExternDecl, Module};
@@ -79,6 +85,12 @@ pub struct LoweringOptions {
     /// + atexit `[clone-site]` report. Zero-cost when false: no instructions
     /// are emitted at all.
     pub clone_stats: bool,
+    /// `--resolvers[=hist|sites|…]`: arm place-resolver fall-through bookkeeping.
+    /// Worklist generator only — never a correctness gate (Core #13). Zero cost
+    /// when false: no shape walks, no counters.
+    pub resolver_hist: bool,
+    /// `--resolvers=sites`: also log per-site span+shape rows.
+    pub resolver_sites: bool,
 }
 
 /// Lower an AST module + analysis result into a GIR module.
@@ -536,6 +548,10 @@ pub fn lower_module(
     if options.no_strip_asserts { ctx.strip_asserts = false; }
     if options.snapshot_mode { ctx.snapshot_mode = true; }
     if options.clone_stats { ctx.clone_stats = true; }
+    if options.resolver_hist || options.resolver_sites {
+        ctx.resolver_diag.enabled = true;
+        ctx.resolver_diag.sites = options.resolver_sites;
+    }
     if let Some(m) = options.scheduler_mode { ctx.spawn.scheduler_mode = m; }
 
     // Snag #29 follow-up: PI/E/TAU/INT_MAX/INT_MIN auto-injection removed.
@@ -2222,6 +2238,15 @@ pub fn lower_module(
     // Transfer implicit clone warnings and move suggestions
     module.implicit_clone_warnings = ctx.implicit_clone_warnings;
     module.move_suggestions = ctx.move_suggestions;
+
+    // Transfer place-resolver fall-through worklist (`--resolvers`). Hist entries
+    // ride as aggregated records; main emits the ranked report after lower.
+    if ctx.resolver_diag.enabled() {
+        module.resolver_miss_hist = ctx.resolver_diag.hist_entries();
+        if ctx.resolver_diag.sites {
+            module.resolver_miss_sites = std::mem::take(&mut ctx.resolver_diag.site_log);
+        }
+    }
 
     // Transfer runtime callees table for LIR backend
     module.runtime_callees = ctx.runtime_callees;

@@ -732,7 +732,7 @@ pub(super) fn lower_field_assign(
     // statement is touched. Store-neutral: the store uses the Place, not the tag.
     ctx.untrack_transient_element_refs_in_range(builder, stmt_locals_start, builder.locals.len());
 
-    match resolve_ptr_field_place(ctx, builder, &obj, field_name) {
+    match resolve_ptr_field_place(ctx, builder, &obj, field_name, object) {
         PtrFieldPlace::Resolved(target_place, field_type) => {
             emit_field_store_with_cleanup(ctx, builder, &target_place, field_type, &rhs);
         }
@@ -840,6 +840,8 @@ fn resolve_ptr_field_place(
     builder: &mut FunctionBuilder,
     obj: &Operand,
     field_name: &str,
+    // AST object for `--resolvers` shape tagging (worklist only).
+    object_for_diag: &Spanned<Expr>,
 ) -> PtrFieldPlace {
     use crate::ir::types::TypeDefKind;
     if let Operand::Copy(ref place) | Operand::Move(ref place) = *obj {
@@ -854,6 +856,12 @@ fn resolve_ptr_field_place(
                 if let Some(info) = guard_of(ctx, local_type_id) {
                     if info.is_read_only() {
                         // ReadGuard: writes are forbidden — skip.
+                        ctx.resolver_miss(
+                            crate::ir::lowering::ResolverId::PtrField,
+                            Some(&object_for_diag.node),
+                            crate::ir::lowering::MissReason::ReadGuard,
+                            Some(object_for_diag.span),
+                        );
                         return PtrFieldPlace::ReadGuardSkip;
                     }
                     let (inner_ptr_local, inner_type) = emit_guard_get_ptr(ctx, builder, place, &info);
@@ -925,6 +933,12 @@ fn resolve_ptr_field_place(
             }
         }
     }
+    ctx.resolver_miss(
+        crate::ir::lowering::ResolverId::PtrField,
+        Some(&object_for_diag.node),
+        crate::ir::lowering::MissReason::Unresolved,
+        Some(object_for_diag.span),
+    );
     PtrFieldPlace::Unresolved
 }
 
@@ -1793,7 +1807,7 @@ pub(super) fn lower_compound_assign(
             // read AND the store, so the base `.get()` is evaluated exactly once
             // (no double-eval — TODO:282's class).
             let obj = lower_field_object_operand(ctx, builder, object);
-            match resolve_ptr_field_place(ctx, builder, &obj, &field.node) {
+            match resolve_ptr_field_place(ctx, builder, &obj, &field.node, object) {
                 PtrFieldPlace::Resolved(field_place, field_type) => {
                     // R-STRING: resource-safe read-modify-write via the shared
                     // helper (same String/overload/value split + cleanup-store
