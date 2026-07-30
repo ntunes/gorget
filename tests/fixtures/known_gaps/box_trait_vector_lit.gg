@@ -1,0 +1,22 @@
+# KNOWN GAP (Round XIX Track N2 cell F): formation = vector-lit element,
+# type = Box[Trait], backend = C+LLVM.
+# Array lit types elem_local from inferred first-elem Box[Concrete], not
+# expected Vector[Box[Trait]] etype → concrete Box drop free-helper collides
+# (Box__Robot__drop redefinition) / wrong slot size.
+# Intended: Vector[Box[Speaker]] v = [Box.new(Robot("R2"))]; v[0].speak() → R2.
+#
+# RED-verify (pre-fix, 2026-07-30): `gg build` → CC-FAIL
+# `redefinition of 'Box__Robot__drop'` (concrete etype path).
+# Primary fix: pack + force etype from expected. Residual free-helper
+# collision (if any) → TODO 133 / box sibling #1 class.
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+void main():
+    Vector[Box[Speaker]] v = [Box.new(Robot("R2"))]
+    print(v[0].speak())

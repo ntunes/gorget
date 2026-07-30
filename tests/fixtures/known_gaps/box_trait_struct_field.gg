@@ -1,0 +1,22 @@
+# KNOWN GAP (Round XIX Track N2 cell D / TODO:878): formation = struct-field,
+# type = Box[Trait], backend = C+LLVM.
+# Struct field of Box[Trait] C-emit-fails: early `typedef void* Box__Speaker`
+# then monomorphized `typedef TraitObj Box__Speaker` → conflicting types.
+# Intended: Holder(Box.new(Robot("R2"))).s.speak() prints R2.
+#
+# RED-verify (pre-fix, 2026-07-30): `gg build` → CC-FAIL
+# `conflicting types for 'Box__Speaker'` (void* then TraitObj).
+# Promote out of known_gaps when Class A emit + Class B pack land.
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+struct Holder:
+    Box[Speaker] s
+void main():
+    Holder h = Holder(Box.new(Robot("R2")))
+    print(h.s.speak())

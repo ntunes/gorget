@@ -1,0 +1,25 @@
+# KNOWN GAP (Round XIX Track N2 cell E / TODO:878): formation = Option/Some
+# enum-variant payload, type = Box[Trait], backend = C+LLVM.
+# Same Class A typedef collision as struct-field, plus Class C clone path
+# emits `__gorget_box_alloc_Speaker` (trait name, undeclared).
+# Intended: Some(Box.new(Robot("R2"))) match → print R2.
+#
+# RED-verify (pre-fix, 2026-07-30): `gg build` → CC-FAIL
+# `conflicting types for 'Box__Speaker'` + `__gorget_box_alloc_Speaker`
+# / `Speaker undeclared` in Option__Box__Speaker__clone.
+# Promote when Class A + B pack chokepoint + Class C clone gate land.
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+void main():
+    Option[Box[Speaker]] o = Some(Box.new(Robot("R2")))
+    match o:
+        case Some(b):
+            print(b.speak())
+        else:
+            print("none")
