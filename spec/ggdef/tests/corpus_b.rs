@@ -446,5 +446,5 @@ fn corpus_b_all_match() {
     // elaborate_expr) and the pre-existing `combinator_unwrap_or_else_str.gg`
     // uses a free-function `len(x)` call. So the ratchet refreshes 162→164
     // to accompany the two the oracle actually adjudicates.
-    assert_eq!(fixtures.len(), 164, "B2 gate set drifted from 164 fixtures");
+    assert_eq!(fixtures.len(), 165, "B2 gate set drifted from 165 fixtures");
 }

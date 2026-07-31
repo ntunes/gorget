@@ -70,7 +70,34 @@ pub(super) fn lower_array_literal(
     let elem_type = if !elems.is_empty() {
         let first = lower_expr(ctx, builder, &elems[0]);
         let inferred_etype = infer_operand_type_full(ctx, &first, builder);
-        let etype = nonempty_expected_override.unwrap_or(inferred_etype);
+        // ⚠ NARROW to the trait-box destination (cell F's stated intent). Taking
+        // the context override UNCONDITIONALLY mis-sizes elem slots whenever the
+        // surrounding expected type is less precise than the real element — e.g.
+        // a `Vector[(int, int)]` literal, where the wrong slot width makes
+        // `&v[i].0` read uninitialized memory (garbage pointer, both backends,
+        // non-deterministic). The override exists solely so
+        // `Vector[Box[Trait]] = [Box.new(Concrete)]` sizes for the 16B TraitObj
+        // instead of the 8B void*; outside that case the inferred first-element
+        // type is authoritative. Predicate mirrors
+        // `pack_trait_object_for_smart_ptr_ctor`'s own guard: `Box__<X>` whose
+        // `<X>_TraitObj` is registered.
+        let override_is_trait_box = nonempty_expected_override.is_some_and(|ov| {
+            match ctx.type_registry.get(ov) {
+                Some(GirType::Named(n)) => n
+                    .strip_prefix("Box__")
+                    .is_some_and(|inner| {
+                        ctx.type_registry
+                            .get_type_def(&format!("{inner}_TraitObj"))
+                            .is_some()
+                    }),
+                _ => false,
+            }
+        });
+        let etype = if override_is_trait_box {
+            nonempty_expected_override.unwrap_or(inferred_etype)
+        } else {
+            inferred_etype
+        };
         // Type the fresh local as the monomorphized `Vector__<elem>` (carries
         // the element type for a downstream `v[i]` / `for x in v` / element-drop)
         // rather than the bare `GorgetArray`. Mirrors `lower_dict_literal`'s
