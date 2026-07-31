@@ -1505,8 +1505,12 @@ impl Elaborator {
         // value IS the literal directly. Any other node between the destination
         // and a literal (a call whose ARG is a literal — the p5 leak —, a binary
         // op, a method call, …) kills it, so a `Set[T]` annotation can never
-        // dedupe a literal nested in an unrelated position.
-        if !matches!(&expr.node, ast::Expr::ArrayLiteral(_)) {
+        // dedupe a literal nested in an unrelated position. `Closure` joins the
+        // whitelist so `elaborate_closure` can read the destination's
+        // `Ty::Callable { consuming }` and reject an `is_move` mismatch (the
+        // production `E_ClosureKindMismatch` shape); the closure arm `.take()`s
+        // the hint before recursing into its own body.
+        if !matches!(&expr.node, ast::Expr::ArrayLiteral(_) | ast::Expr::Closure { .. }) {
             self.dest_ty_hint = None;
         }
         match &expr.node {
@@ -1628,8 +1632,8 @@ impl Elaborator {
                 Ok(Expr::Cast { expr: Box::new(inner), target })
             }
 
-            ast::Expr::Closure { is_async, params, body, .. } => {
-                self.elaborate_closure(*is_async, params, body, span)
+            ast::Expr::Closure { is_move, is_async, params, body } => {
+                self.elaborate_closure(*is_move, *is_async, params, body, span)
             }
 
             ast::Expr::Match { scrutinee, arms, else_arm } => {
@@ -2499,13 +2503,40 @@ impl Elaborator {
     /// its capture set (free enclosing-locals referenced in the body).
     fn elaborate_closure(
         &mut self,
+        is_move: bool,
         is_async: bool,
         params: &[Spanned<ast::ClosureParam>],
         body: &Spanned<ast::Expr>,
         span: Span,
     ) -> ElabResult<Expr> {
+        // Take the destination hint set at the enclosing VarDecl/Assign BEFORE
+        // recursing into the body — a stale callable-destination hint would
+        // only confuse the `ArrayLiteral` set-vs-vector disambiguation nested
+        // inside the body.
+        let dest_hint = self.dest_ty_hint.take();
         if is_async {
             return Err(ElabError::new("async closures are phase 3", span));
+        }
+        // A `!(...)` (move-closure) literal bound to a non-consuming
+        // `Callable`/`MutCallable` destination is a ratified reject in
+        // production (`src/semantic/typecheck.rs:331-338` →
+        // `E_ClosureKindMismatch`). ggdef was silently dropping `is_move` and
+        // running the program (`fixtures/closure_move_kind_error.gg` printed
+        // "should not reach here"); mirror the reject as a coded elaboration
+        // error, not a codeless `IllFormed` (contract at `lib.rs:113-124`).
+        // `ConsumeCallable[..]` destination (`consuming: true`) still accepts
+        // `!(...)` — the ratified ADJ-MATCH shape (`consume_callable_once.gg`).
+        // An absent / non-Callable hint stays silent: without the destination
+        // in view, ggdef falls back to eval-side defense-in-depth downstream.
+        if is_move {
+            if let Some(Ty::Callable { consuming: false, .. }) = dest_hint {
+                return Err(ElabError::new(
+                    "error[E_ClosureKindMismatch]: consume-callable literal `!(...)` bound to \
+                     a non-consuming `Callable`/`MutCallable` destination — declare the \
+                     destination as `ConsumeCallable[...]` or remove the `!`",
+                    span,
+                ));
+            }
         }
         let mut cparams = Vec::with_capacity(params.len());
         for p in params {

@@ -1890,6 +1890,56 @@ fn elab_rejects(src: &str, needle: &str, hint: &str) {
     }
 }
 
+// ── D5 kind axis: `!(...)` move-closure classification against destination ──
+//
+// `elaborate/mod.rs` was destructuring `ast::Expr::Closure { .. }` and dropping
+// `is_move`. Production reject (`typecheck.rs:331-338` → `E_ClosureKindMismatch`)
+// then never landed in ggdef, which silently ran the program (measured live at
+// HEAD on `fixtures/closure_move_kind_error.gg` → printed "should not reach
+// here"). The reject now fires as a coded ElabError; ConsumeCallable
+// destination still accepts the move-closure — the ratified ADJ-MATCH shape.
+
+#[test]
+fn closure_move_kind_mismatch_rejected() {
+    // MutCallable destination + `!(...)` = E_ClosureKindMismatch. Mirrors
+    // `tests/fixtures/closure_move_kind_error.gg`; without this reject ggdef
+    // ran the program and printed "should not reach here" (exit 0) where
+    // production rejected at check time.
+    let src = r#"
+void main():
+    int x = 42
+    MutCallable[int(int)] f = !(n): n + x
+    print("should not reach here")
+"#;
+    elab_rejects(src, "E_ClosureKindMismatch", "MutCallable dest + `!(...)` closure");
+}
+
+#[test]
+fn closure_move_kind_mismatch_rejected_plain_callable() {
+    // Same rule with a plain `Callable[..]` destination (also `consuming: false`).
+    let src = r#"
+void main():
+    int x = 42
+    Callable[int(int)] f = !(int n): n + x
+    print("should not reach here")
+"#;
+    elab_rejects(src, "E_ClosureKindMismatch", "Callable dest + `!(...)` closure");
+}
+
+#[test]
+fn closure_move_ok_when_dest_is_consume_callable() {
+    // ConsumeCallable destination (`consuming: true`) ACCEPTS `!(...)` — the
+    // ratified ADJ-MATCH shape (`spectests/run/consume_callable_once.gg`). If
+    // this ever flips to a reject, `GGDEF_ADJUDICATED_FLOOR` drops by 1.
+    let src = r#"
+void main():
+    ConsumeCallable[int(int)] doubler = !(n): n * 2
+    int r = doubler(5)
+    print(f"{r}")
+"#;
+    assert_eq!(out(src), "10");
+}
+
 #[test]
 fn s103_vardecl_captures_in_throws_fn() {
     // The R1 falsifying repro: `Result[int, String] r = risky(x)` inside a

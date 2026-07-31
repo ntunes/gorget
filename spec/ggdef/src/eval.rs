@@ -501,10 +501,12 @@ fn drop_scope(ctx: &Ctx, state: &mut State, mark: usize) -> Result<(), Halt> {
 
 /// If `val`'s type has an `equip T with Drop` custom drop, run it with `val`
 /// moved in as `self` (D4: `drop(!self)`). `self` is killed before the drop
-/// body's own scope exits, so a value's custom drop never recurses on itself
-/// (phase-0 tainted types have scalar/loop-free fields, so transitive
-/// field-drop is a no-op and is left to phase 1). Body-declared locals inside
-/// the drop DO drop transitively (they route back through `drop_scope`).
+/// body's own scope exits, so a value's custom drop never recurses on itself.
+/// Body-declared locals inside the drop DO drop transitively (they route back
+/// through `drop_scope`). Transitive FIELD/ELEMENT drops of `val` are NOT
+/// invoked here — the value-discard axis is filed as an open track (see the
+/// TODO.md entry for `run_custom_drop` transitive drops and the 3 remaining
+/// `drop_*` `EXPECTED_BOTH_WRONG` rows).
 fn run_custom_drop(ctx: &Ctx, state: &mut State, val: Value, span: Span) -> Result<(), Halt> {
     let tyname = match &val {
         Value::Struct { name, .. } => name.clone(),
@@ -2146,9 +2148,12 @@ fn cmp(a: &Value, b: &Value, f: impl Fn(std::cmp::Ordering) -> bool) -> Result<V
 /// Format a value for `print` / f-string interpolation.
 ///
 /// Float formatting is provisional (D8 mandates shortest round-trip; Rust's
-/// `{}` is shortest-round-trip already, and no phase-0 fixture prints a float —
-/// RFC §8.2). Composite values are formatted defensively; the A corpus prints
-/// only scalars and strings.
+/// `{}` is shortest-round-trip already). Composite values are rendered with a
+/// fixed default shape (`Type{k: v}` / `Type(payload)` / `[elems]` / etc); this
+/// function does NOT currently dispatch an equipped `Displayable.display(self)`
+/// user method, so a type with a hand-written or `@derive(Displayable)` impl
+/// disagrees with `gg` on the observable — filed in TODO as the render-site
+/// Displayable dispatch track.
 fn format_value(v: &Value) -> String {
     match v {
         Value::Unit => "()".to_string(),
