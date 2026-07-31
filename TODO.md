@@ -11,112 +11,11 @@
 **XIX residuals, still open:** `snag#53` SH · W2 Layering DEFER · Track Y's VarDecl/Assign-RHS residual + SH lag.
 
 
-**⛔ ROUND XX — GAUNTLET STOPPED 2026-07-31 (owner call): THRASHING, NOT CONVERGING. RE-SCOPE BEFORE EXECUTION.**
-Scout + **6 sequential fresh brief-reviews**, 34 blocking findings. **No executor was launched; no production
-code changed.** The reviews earned their cost — they proved the round's own premise wrong — but the artifact
-got *worse* (executability ~4 → ~14 open questions), so the brief was abandoned rather than folded a seventh
-time. ⚠ **All durable findings are inlined here; the `/tmp` brief + review notes are exhaust and evaporate.**
+**✅ ROUND XX CLOSED 2026-07-31** — RE-SCOPED (from the abandoned 6-pass gauntlet at `34599be0`): Track M oracle-defect close (`is_move` coded reject in ggdef elaborate — `828fe7e3`) + K subset (2 load-bearing false Core #14 comments retired in `eval.rs`) + F1-F5 filings (`da8e451e`). Fresh output-review SIGN OFF (Opus). Battery green: lib **1139/0** · lints **81/0** · spec_conformance **3/0** · security **128/0/22** · ggdef all binaries · C **1971/0/62** · LLVM **1971/0/62**. Parity **1291/1394 = 92.6%** · ADJ **389** · BOTH-WRONG **8** (floors held). **Convergence: known_gaps 93→93 · TODO items 520→524 · net +4** (named-intentional — round's primary deliverable was filing F1-F5 owed defects surfaced by the abandoned scout + this session's review; XVIII precedent for measurement-heavy rounds). Detail: DONE.md.
 
-⚠ **THE PREMISE WAS WRONG FOR THE RENDER AXIS — the round's main result.** It assumed *"ggdef returns a wrong
-value for constructs it does not model, so make it DECLINE."* Pass 6 opened the fixtures (nobody had, in six
-passes): **3 of the 4 composite cases are `Displayable`-equipped LEGAL programs**, and ggdef **already models
-`Displayable`** (`equip_methods`, `elaborate/mod.rs:2305-2308`) — it just never calls it at the render site.
-Declining would swap a wrong answer for a **refusal on legal programs**.
+⚠ **Parity GATE carries the same red as XIX close:** the two F4 SH-lane hangs (`mutex_seq_lock_expr_stmt` + `rwlock_seq_lock_scope_deadlock`) trip `NEW self-host hangs` (`integration.rs:25937`); not introduced by XX, filed as F4 for a follow-up.
 
-| fixture | `gg run` | `ggdef run` | equipped? |
-|---|---|---|---|
-| `core_traits` | `Point` | `Point{x: 1, y: 2}` | yes |
-| `print_display_temp_leak` | `Point(3, 4)` / `lit` | `Point{x: 3, y: 4}` / `Lit{n: 1}` | yes |
-| `derive` | `Point(x=1.000000…)` | `Point{x: 1, y: 2}` | yes (`@derive`) |
-| `non_printable_interpolation_error` | *(rejected)* | exit 0 | **no — the only true out-of-subset row** |
-
-**Measured: dispatching through the equip table beats declining on BOTH axes — BOTH-WRONG 8→3 AND ADJ-MATCH
-389→391**, vs 389→389 with +2 UNADJ for the decline. **Invoke what ggdef models; do not decline it.**
-
-**RE-SCOPED ROUND XX — re-scout before briefing:**
-1. **Implement `Displayable` dispatch at the render site** (`format_value`, `eval.rs:2152`, 5 call sites).
-   ⚠ Thread `ctx` — it currently takes none. ⚠ **Do NOT blanket-raise:** `eval.rs:677` (`Stmt::Assert` msg)
-   and `:1097` (`Expr::Panic` msg) render a **trap detail**; raising there turns a Trap (exit 101, code
-   recorded) into IllFormed (exit 1) for zero gain.
-2. **Decline only the genuinely-unmodelled remainder** — far smaller than the 8 rows first assumed.
-3. **`is_move`** — separate, live, different shape; filed below.
-4. **NOT the value-discard axis** — split out, below.
-
-⚠ **VERDICT CHANNEL — a decision I made in-brief and got WRONG.** I ruled "uncoded `Halt::IllFormed` decline".
-ggdef's contract (`spec/ggdef/src/lib.rs:113-124`) says a codeless `IllFormed` is *"not a generatable
-conformance outcome … would brick EVERY conformance lane"*; `gen` hard-errors on it. The designed decline
-channel is an **elaborate** error → "out of subset".
-
-**MEASURED (by execution 2026-07-31; re-verify before acting):**
-- `EXPECTED_BOTH_WRONG` (`tests/integration.rs:25753`) shrinks **8 → 3, UNADJ +5**. Removable: `core_traits`,
-  `print_display_temp_leak` (render) + `fstring_binary_spec_leak`, `print_builtin`, `print_terminator`
-  (elaborate). **The 3 drop rows need the value-discard round.** ⚠ Emptying to `&[]` closes the round RED
-  (`:25769`/`:25782`). The `fixed` assert handles a partial shrink; demonstrate its red by running with the
-  list **UNCHANGED**, not by removing a row.
-- Render-arm reachability over 1787 fixtures: Struct 4 · Enum 1 · Unit 2 · **Vector/Tuple/Dict/Set/Closure
-  ZERO** (Dict unreachable — dict literals out of subset). Blast radius **6 fixtures, none ADJ-MATCH**.
-- The **220 `spectests/run/*.gg` reach ZERO render arms** → this work cannot flip `--test spec_conformance`.
-  ⚠ "`cargo test -p ggdef` is not your signal" was measured on the *discard* prototype — do not
-  over-generalise; it IS the gate `is_move` needs.
-- **True BOTH-WRONG is 10, not 8** — `fstring_format` + `derive` masked by the `has_decimal_number` float
-  HOLD (`:24794`).
-- **D9 (ratified, `decisions.md:310`) is unimplemented on BOTH sides**: `print(3.0)` → ggdef `3`, `gg`
-  `3.000000`, spec `"3.0"`. ⚠ Fixing ggdef's half ALONE makes `core_traits` trip the float HOLD, routing a
-  tracked BOTH-WRONG row to UNADJ — **more permissive, inverting the purpose**. D9 + a HOLD narrowing land
-  together or not at all.
-
-⚠ **PROCESS FAILURE, MINE:** a fold used `str.replace` without asserting its targets matched, silently dropped
-three edits, and I reported success from a grep matching the unchanged header. Pass 6 spent a cycle
-rediscovering unfolded pass-5 findings. AGENTS.md already forbids exactly this — use the Edit tool or a
-`must_replace` helper, and grep for a fragment of the NEW text.
-
-**🔒 SPLIT OUT — VALUE-DISCARD (drop) AXIS: own round, own scout.** **SIX** class-guards proposed, all dead:
-arm-count · `#[must_use] Displaced` · `navigate_write`+`mem::replace` · a "no other `*v =`" lint · a
-drop-obligation ledger (pass 4 **implemented** it, swept 1787 fixtures) · an `ast::` `..`-discard allowlist.
-⚠ **Root cause — and it is NOT "give `Value` identity":** the language attaches drops to **owners/places**,
-not values (`language-reference.md:2512` *"when the owner goes out of scope"*, `:1394`, `:3268`), and Gorget's
-`is` is a **pattern test** (`§7.17`, `expr "is" [not] pattern`), not reference equality — so there is no
-observable value identity to model and adding it would define a different language. What breaks the linkage
-is that **`apply_mut` clones the collection and writes it back**, severing place↔value at the six sites that
-matter — an evaluator artifact, arguably an infidelity (Gorget mutates in place via CoW).
-**Scout owes three DESIGN answers, not another site list:** (a) a **site-level census with a command** — the
-frame was wrong 3× (a 14th site in an unsearched function; a 15th *inside* a listed one,
-`run_custom_drop:514-516`, which is what makes `drop wrapped len=1` go missing and is **required** to clear
-the drop rows); (b) the **place↔value linkage decision** (model mutation in-place?) — ⚠ unverified
-hypothesis, prototype it; (c) **transitive-gap scoping** (`drop_struct_collection_fields` has **five** missing
-drops across **three** mechanisms; its two *emitted* drops are accidents of `.get().unwrap()` copies).
-**Interim guard worth landing there:** `drop_obligation_balance_ratchet`, shrink-only, seeded at **3** (only
-11 of 1787 fixtures have a nonzero balance, 3 run to completion, all already in `EXPECTED_BOTH_WRONG`; zero
-ADJ cost) — name it for what it measures, and file the class question with the root cause above.
-
-**🆕 DEFECTS FOUND BY THE GAUNTLET (own entries; all measured at HEAD 2026-07-31):**
-- **`is_move` discarded → ggdef runs a program `gg` rejects.** `elaborate/mod.rs:1631` is
-  `ast::Expr::Closure { is_async, params, body, .. }`; the `..` drops **`is_move`** (`src/parser/ast.rs:703`),
-  which production **consumes** (`src/semantic/typecheck.rs:331-338`). ⚠ The scout dispositioned this "NEVER —
-  production drops it too"; that was **wrong**. Measured: `Callable[int(int)] f = !(int x): x * 2` →
-  `gg check` rejects (`E_ClosureKindMismatch`, exit 1), **ggdef prints `42`, exit 0**. Second live divergence
-  on the same site: committed `closure_move_kind_error.gg` → `gg` rejects, **ggdef prints `should not reach
-  here`, exit 0**. ⚠ Verdict channel here is the **opposite** of the render axis: `gg` already emits a coded
-  error, so ggdef is **lagging a ratified decision** → **coded reject**, not decline. ⚠ A blanket reject costs
-  an ADJ row (`consume_callable_once.gg` is live ADJ-MATCH, both lanes `10/101/done`) — classify against the
-  destination type. ⚠ `self_host_runtime_diff` is **structurally blind** to this (needs an `agreed_out`); pin
-  via `spectests/run/` + the committed fixture.
-- **`gg` prints a RAW ADDRESS for `print(<composite>)` while rejecting the f-string sibling.** `gg check`
-  accepts `print(p)` and `gg run` printed `281473914789680`; `print(f"{p}")` is correctly rejected
-  (`E_NonPrintableInterpolation`). Measured family: **struct, enum, Vector, Tuple, Set** (Dict too on `gg`).
-  ⚠ `TODO.md:158` files only "struct/enum" — a **selection**; widen it, and its "durable repro owed" has been
-  outstanding since 2026-07-25 on the exact surface this round touches. Core #8 + a Core #9 lane divergence.
-- **ggdef ACCEPTS 3 programs the language REJECTS** — `non_printable_interpolation_error.gg`,
-  `missing_return_error.gg`, `missing_return_no_return_error.gg` run to a clean `Value`. **Invisible to
-  adjudication by construction** (negative fixtures are not in the MATCH set). The missing-return pair needs a
-  definite-return check — a *write*-site defect; a render-site raise only cures the two fixtures, not the class.
-- **Four false Core #14 comments in `eval.rs`** — `:1072` (*"print is normally lowered to Stmt::Print"* —
-  false, every kwarg print reaches it) · `:505-507` (*"phase-0 tainted types have scalar/loop-free fields"* —
-  false, and directly above the discard sites) · the `Value::Closure {captured}` one · and `:2148-2151`, which
-  carries **six** claims, at least three measured false.
-- **Probe owed: does ggdef model `is` (pattern test, `§7.17`) correctly, including bindings?** Round XII's only
-  BOTH-WRONG fix was a missing `match_pattern` arm for structs; an `is`-with-bindings gap would be the same
-  class in a new costume. Nobody checked this path.
+**Deferred (not touched this session):** Track R (Displayable dispatch — signature ripple, needs Track E to co-land for the measured 8→3 metric) · Track E (elaborate rejects for `:b` + print kwargs) · Track G (drop-obligation ratchet — belongs to the value-discard round). Value-discard axis remains split-out (its own round, its own scout).
 
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
@@ -127,7 +26,7 @@ ADJ cost) — name it for what it measures, and file the class question with the
 - **✅ ROUND XVIII CLOSED (2026-07-30) — AIM THE METER:** Gate0+sweep+partition+Family-3. Detail: DONE.md. Former open: calibrate B (Gate 0, blocking) → aggregate corpus + self-host self-compile → partition BY-DESIGN vs SUSPICIOUS (the RESOLVE/REJECT ledger) → fix top 2–3 suspicious roots the histogram names. Not residual-defect pack.
 - **✅ ROUND XVIII DETAIL (closed):** AIM THE METER — GATE 0 calibrate B (blocking) → aggregate corpus + self-host self-compile → partition BY-DESIGN vs SUSPICIOUS (RESOLVE/REJECT ledger = thesis reading) → fix top 2–3 suspicious roots the histogram names. Known overlaps the meter will rank (not a target list): cow_amp_projection_base_shapes WRONG-OUTPUT · snag#53 · X nested-store. Instrument C AFTER this reading. Convergence risk: Steps 0–2 are measurement (net +0 possible); name it.
 - **✅ ROUND XIX CLOSED (2026-07-31):** RESIDUAL-DEFECT PACK (Y self-deadlock · N2 Box[Trait] · hygiene). Stalled on token exhaustion before its gate; orchestrator ran the battery, found it RED, bisected + fixed both defects (tuple write-through garbage read from `5165965b`; ggdef gate-drift, a class of 2), re-ran green. Parity 1291/1394. ⚠ Parity GATE still red on 2 SH-lane hangs — see the XIX close correction in DONE.md.
-- **⛔ ROUND XX — GAUNTLET STOPPED, RE-SCOPE NEEDED (headline in the handover above):** scout + 6 brief-reviews, 34 blocking, **no executor launched, no production code changed**. The reviews proved the round's premise WRONG: ggdef already models `Displayable` and just doesn't call it — **invoking it beats declining on BOTH axes** (BOTH-WRONG 8→3 AND ADJ 389→391). Re-scoped to: implement render-site dispatch · decline only the true remainder · `is_move` coded reject (separate) · value-discard axis SPLIT to its own round (6 dead guards; root cause is place↔value linkage lost by `apply_mut`'s clone, NOT missing value identity). All durable findings inlined above.
+- **✅ ROUND XX CLOSED (2026-07-31, RE-SCOPED):** Track M (`is_move` coded reject in ggdef closure elaborate — closes the highest-severity Round XX scout finding, `828fe7e3`) + K subset (2 load-bearing false Core #14 comments in `eval.rs`) + F1-F5 filings (composite-print widen · ggdef-accepts-rejects · `is`-pattern probe · SH-lane parity hangs · call-arg sibling of E_ClosureKindMismatch). Parity stable at 1291/1394 = 92.6%, ADJ 389 (floors held). Track R (Displayable dispatch) + Track E (elaborate rejects for `:b`/print kwargs) + Track G (drop-obligation ratchet) DEFERRED per owner scope-selection; value-discard axis remains its own round. Detail: DONE.md.
 - **🔒 LATER, HIGHEST VALUE PER ROW — the 8 BOTH-WRONG parity rows** (`core_traits` · `drop_collection_custom_elem_leak` · `drop_reassign` · `drop_struct_collection_fields` · `fstring_binary_spec_leak` · `print_builtin` +2): by Core #8 each is ≥1 real bug in BOTH compilers; ggdef contradicts. Own round, own scout.
 - **THEN:** MaterializePlan campaign follow-up (auto-move for post-materialize params) · Round XI Track J follow-up: typed `borrow_read: bool` · Track K class-siblings · SH-lane `W_*` parity port · `lower_tuple_field_assign` silent-drop fallback · Instrument C (cell matrix) · #13 perf reclaim · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first). (Family-3 getchain **closed in XVIII**.)
 
