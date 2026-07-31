@@ -330,5 +330,5 @@ fn corpus_b1_all_match() {
     // round (the other four are EXCLUDEd above with per-row citations).
     // +1 (same round): `cow_amp_ref_field_forward`, in-subset, MATCH (3/4/3) —
     // the already-a-pointer FIELD cell where the producer must decline.
-    assert_eq!(fixtures.len(), 127, "B1 gate set drifted from 127 fixtures");
+    assert_eq!(fixtures.len(), 128, "B1 gate set drifted from 128 fixtures");
 }
