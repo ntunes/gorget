@@ -11,75 +11,113 @@
 **XIX residuals, still open:** `snag#53` SH · W2 Layering DEFER · Track Y's VarDecl/Assign-RHS residual + SH lag.
 
 
-**🔓 ROUND XX OPEN 2026-07-31 — theme: MAKE THE ORACLE HONEST (ggdef conformance).** ⚠ **Phase 1 (clear the XIX red) is DISCHARGED** — battery green on `82404dc3`, see the XIX close. What remains is phase 2, restated as the round's actual shape:
+**⛔ ROUND XX — GAUNTLET STOPPED 2026-07-31 (owner call): THRASHING, NOT CONVERGING. RE-SCOPE BEFORE EXECUTION.**
+Scout + **6 sequential fresh brief-reviews**, 34 blocking findings. **No executor was launched; no production
+code changed.** The reviews earned their cost — they proved the round's own premise wrong — but the artifact
+got *worse* (executability ~4 → ~14 open questions), so the brief was abandoned rather than folded a seventh
+time. ⚠ **All durable findings are inlined here; the `/tmp` brief + review notes are exhaust and evaporate.**
 
-**TRACK ORDER IS LOAD-BEARING — A GATES B.** Track A (lower-or-reject) changes what Track B has to implement: once an unimplemented case raises a loud `ElabError`, some of the 8 BOTH-WRONG rows reclassify to UNADJ and stop needing a feature at all. Running B first would implement things the discipline would have excused. Same shape as Round XVIII's Gate 0.
-- **TRACK A (first, gates B) — lower-or-reject in the evaluator.** Every `_ =>` / fallback in `spec/ggdef/src/eval.rs` that returns a plausible value for an unmodelled construct becomes a loud `ElabError`, routing the row to UNADJ. This is Core #10 applied to the oracle and it is the root cause ABOVE the four roots. **Deliverable includes a re-measure**: which of the 8 BOTH-WRONG rows become UNADJ, and what ADJ drops to once the oracle stops answering questions it cannot.
-- **TRACK B (after A) — implement the roots still worth implementing**, chosen from A's re-measure, not pre-committed. Candidates in priority order: `print` kwargs/multi-arg · user `Display`/`to_string` dispatch · drop semantics (reassign · collection elements · the `drop_struct_collection_fields` ordering bug that emits a drop BEFORE the first statement) · f-string format specs.
-- **TRACK C (parallel, independent) — the two owner-approved guards.** `ggdef_size_ratchet` capping `spec/ggdef` line count (now **12,435** vs compiler `src/` **182,971** = 6.8%; "ggdef stays small" is a stated succession value, make it executable) + the **spec-citation-per-evaluator-arm** convention, seeded by citing §-refs on the arms Tracks A/B touch rather than a repo-wide sweep.
-⚠ **SCOUT-CORRECTED 2026-07-31 — the round's opening premises were wrong in four places; measured findings supersede them.**
-- ❌ *"every `_ =>` in `eval.rs`"* — WRONG LOCATION. `eval.rs` has **8** `_ =>` arms, **6 already loud or benign**; the top-level dispatchers already reject (`elaborate/mod.rs:1665`/`:1098`/`:2343`/`:125`) and ggdef has **51** `ElabError::new` sites. **Coarse lower-or-reject already exists.**
-- ❌ *"four roots, one shape"* — they are **THREE shapes** (Core #15e Q4, a case with no subject): **field-drop inside a HANDLED arm** (`print` kwargs `:1725`/`:3127`; f-string spec `:1685`, pattern `Interpolation(_, _)` over `Interpolation(String, Option<String>)`) — no `_ =>` exists to fix · **missing behaviour, NO ARM AT ALL** (drop-on-reassign `eval.rs:605` just overwrites; `values_eq` is literally `a == b`; `format_value` never consults `Displayable`) · **exactly ONE genuine silent `_ =>`** (`run_custom_drop` `eval.rs:512`).
-- ❌ *"ADJ will fall, and that is the point"* — **NOT BORNE OUT. Measured ADJ 389 → 389, unchanged**, BOTH-WRONG 8 → 0, UNADJ 894 → 902. Every silenced row was already answering WRONG, and a wrong answer was never in ADJ-MATCH. **`GGDEF_ADJUDICATED_FLOOR` needs no owner decision at this scope.** (Extending to trait dispatch / `Ty::Unknown` WOULD cost ADJ — explicitly out of scope.)
-- ❌ *"`drop_struct_collection_fields` drops before the first statement"* — it fires at that fixture's line-33 `push(make_container(...))`.
+⚠ **THE PREMISE WAS WRONG FOR THE RENDER AXIS — the round's main result.** It assumed *"ggdef returns a wrong
+value for constructs it does not model, so make it DECLINE."* Pass 6 opened the fixtures (nobody had, in six
+passes): **3 of the 4 composite cases are `Displayable`-equipped LEGAL programs**, and ggdef **already models
+`Displayable`** (`equip_methods`, `elaborate/mod.rs:2305-2308`) — it just never calls it at the render site.
+Declining would swap a wrong answer for a **refusal on legal programs**.
 
-⚠ **BOTH-WRONG IS A SELECTION, NOT A TOTAL — the true count is 10, not 8.** `fstring_format` and `derive` are real disagreements masked by the `has_decimal_number` float HOLD. Every prior handover quoting "8" understated it.
+| fixture | `gg run` | `ggdef run` | equipped? |
+|---|---|---|---|
+| `core_traits` | `Point` | `Point{x: 1, y: 2}` | yes |
+| `print_display_temp_leak` | `Point(3, 4)` / `lit` | `Point{x: 3, y: 4}` / `Lit{n: 1}` | yes |
+| `derive` | `Point(x=1.000000…)` | `Point{x: 1, y: 2}` | yes (`@derive`) |
+| `non_printable_interpolation_error` | *(rejected)* | exit 0 | **no — the only true out-of-subset row** |
 
-**TRACK A RESHAPED — three axes, two chokepoints and a lint:**
-- **Render axis — CHOKEPOINT EXISTS.** `format_value` (`eval.rs:2152`) funnels all 5 render sites; change its return to `Result<String, Halt>` and the axis closes in one function.
-- **Drop axis — NO chokepoint; one must be BUILT.** Six value-discard sites, only `drop_scope` runs drops; `Stmt::Assign`, `M::Set`×2, `M::Clear`×2, `M::Fill` are all silent. ⚠ Fixing only `Stmt::Assign` is the instance-fix Core #4 forbids — **and the sibling it misses (`v.set`) is in the SAME fixture**.
-- **Elaboration field-drop axis — genuinely NO chokepoint.** The class answer is a lint, not a refactor.
+**Measured: dispatching through the equip table beats declining on BOTH axes — BOTH-WRONG 8→3 AND ADJ-MATCH
+389→391**, vs 389→389 with +2 UNADJ for the decline. **Invoke what ggdef models; do not decline it.**
 
-⚠ **SCOPING RULE THE BRIEF MUST STATE: raise iff the unmodelled obligation is OBSERVABLE (stdout, RFC §2.1).** 60 adjudicable fixtures overwrite a droppable-but-plain `String`/`Vector`; raising there costs **60 rows for zero truth**.
+**RE-SCOPED ROUND XX — re-scout before briefing:**
+1. **Implement `Displayable` dispatch at the render site** (`format_value`, `eval.rs:2152`, 5 call sites).
+   ⚠ Thread `ctx` — it currently takes none. ⚠ **Do NOT blanket-raise:** `eval.rs:677` (`Stmt::Assert` msg)
+   and `:1097` (`Expr::Panic` msg) render a **trap detail**; raising there turns a Trap (exit 101, code
+   recorded) into IllFormed (exit 1) for zero gain.
+2. **Decline only the genuinely-unmodelled remainder** — far smaller than the 8 rows first assumed.
+3. **`is_move`** — separate, live, different shape; filed below.
+4. **NOT the value-discard axis** — split out, below.
 
-⚠ **The existing Core #10 ratchet CANNOT catch this class.** `ratchet_a_lowering_dispatch_silent_fallthrough` scopes to `src/ir/lowering/stmts/*` and its detector matches only **empty** `_ => {}` arms — pointing it at `spec/ggdef` would green-light every defect here (Core #15e Q2). The right guard is an **AST-field-coverage ratchet** (56 lossy `..` patterns to burn down).
+⚠ **VERDICT CHANNEL — a decision I made in-brief and got WRONG.** I ruled "uncoded `Halt::IllFormed` decline".
+ggdef's contract (`spec/ggdef/src/lib.rs:113-124`) says a codeless `IllFormed` is *"not a generatable
+conformance outcome … would brick EVERY conformance lane"*; `gen` hard-errors on it. The designed decline
+channel is an **elaborate** error → "out of subset".
 
-**Scout artefacts:** report `/tmp/scoutXX_report.md`; measured prototype `/tmp/scoutXX_raise.patch` (reverted). Core #13 red demonstrated: `tests/integration.rs:25782` fires naming all 8 — while `cargo test -p ggdef` stays **entirely green**, i.e. ggdef's own suite is blind to this class.
+**MEASURED (by execution 2026-07-31; re-verify before acting):**
+- `EXPECTED_BOTH_WRONG` (`tests/integration.rs:25753`) shrinks **8 → 3, UNADJ +5**. Removable: `core_traits`,
+  `print_display_temp_leak` (render) + `fstring_binary_spec_leak`, `print_builtin`, `print_terminator`
+  (elaborate). **The 3 drop rows need the value-discard round.** ⚠ Emptying to `&[]` closes the round RED
+  (`:25769`/`:25782`). The `fixed` assert handles a partial shrink; demonstrate its red by running with the
+  list **UNCHANGED**, not by removing a row.
+- Render-arm reachability over 1787 fixtures: Struct 4 · Enum 1 · Unit 2 · **Vector/Tuple/Dict/Set/Closure
+  ZERO** (Dict unreachable — dict literals out of subset). Blast radius **6 fixtures, none ADJ-MATCH**.
+- The **220 `spectests/run/*.gg` reach ZERO render arms** → this work cannot flip `--test spec_conformance`.
+  ⚠ "`cargo test -p ggdef` is not your signal" was measured on the *discard* prototype — do not
+  over-generalise; it IS the gate `is_move` needs.
+- **True BOTH-WRONG is 10, not 8** — `fstring_format` + `derive` masked by the `has_decimal_number` float
+  HOLD (`:24794`).
+- **D9 (ratified, `decisions.md:310`) is unimplemented on BOTH sides**: `print(3.0)` → ggdef `3`, `gg`
+  `3.000000`, spec `"3.0"`. ⚠ Fixing ggdef's half ALONE makes `core_traits` trip the float HOLD, routing a
+  tracked BOTH-WRONG row to UNADJ — **more permissive, inverting the purpose**. D9 + a HOLD narrowing land
+  together or not at all.
 
-**🆕 FILED BY THE SCOUT (own entries owed):**
-- **ggdef ACCEPTS 3 programs the language REJECTS** — `non_printable_interpolation_error.gg`, `missing_return_error.gg`, `missing_return_no_return_error.gg` are `check_gg_fails` fixtures ggdef runs to a clean `Value`. **Invisible to adjudication by construction** (negative fixtures are not in MATCH), so no gate has ever seen them. A whole blind class beside the front-end blind spot.
-- **Two false Core #14 comments in `eval.rs`** — `:1072` *"Defensive: print is normally lowered to Stmt::Print"* (false — every kwarg print hits it) and `:2150` *"the A corpus prints only scalars and strings"* (false — 4 fixtures print structs).
-- **SH-lane hang: `mutex_seq_lock_expr_stmt` + `rwlock_seq_lock_scope_deadlock` time out at 600s in the PARITY harness, both runs.** ⚠ Orchestrator-corrected: these are **not** a round-close blocker — both PASS in the Rust integration sweep and neither is ignored. It is a self-host-lane hang on the two seq-lock fixtures Track Y just landed. Owed a census row per the lifecycle hang rule (lane · spin-vs-block · minimal probe · mechanism).
-- **PHASE 1 — clear the red** (RED 1 + RED 2 above). Until this lands the tree has no valid sign-off and no round can close.
-- **PHASE 2 — ggdef conformance: the 8 BOTH-WRONG rows are FOUR ggdef roots, not eight compiler bugs.** ⚠ **Direction correction (2026-07-31):** earlier handovers framed this as "≥1 real bug in BOTH compilers, highest value per row". Measured: in 7 of 8 rows **the compilers are right and ggdef is the defective party**. Roots: (a) **ggdef ignores `print` kwargs / multi-arg** — `print_terminator` (compilers `a, b, c` honouring `terminator=", "`; ggdef `a⏎b⏎c`, kwarg discarded), `print_builtin`; (b) **no user `Display`/`to_string` dispatch** — ggdef prints structural `Point{x: 3, y: 4}` where the compilers print the user's `Point(3, 4)` — `core_traits`, `print_display_temp_leak`; (c) **drop semantics** — no drop-on-reassign (`drop_reassign`: compilers `drop first / alive: second / drop second`, ggdef omits `drop first` and LEAKS it), no collection-element drops (`drop_collection_custom_elem_leak`), and `drop_struct_collection_fields` emits `drop third len=1` BEFORE the program's first statement; (d) **f-string format specs ignored** — `fstring_binary_spec_leak` renders `10` for `{n:b}` instead of `1010`. **Burden of proof: changing COMPILER behaviour needs a language-reference citation** — the compilers are two independent witnesses, the definition is one. Precedent: the only BOTH-WRONG closure on record (`03134151`, Round XII Track Q) fixed ggdef's missing `Value::Struct` match arm citing §8.4 and touched **zero** compiler files.
-- **PHASE 2 root cause, above the four roots: ggdef has no lower-or-reject discipline.** A `_ =>` that returns a plausible value instead of erroring is Core #10 unapplied to the oracle, and it is why every gap is silent. **Deliverable: unimplemented ⇒ loud `ElabError`**, routing the row to UNADJ instead of a wrong value. This alone restores the ADJ number's integrity.
-- **⚠ `GGDEF_ADJUDICATED_FLOOR = 388` ratchets a number of UNKNOWN INTEGRITY** until (a)–(d) close: some of those 388 are ggdef agreeing on programs whose features it does not model, where the gap happened not to change the output. Do not treat 388 as settled truth; re-derive after the ElabError discipline lands.
-- **Owner-approved 2026-07-31, same round:** **`ggdef_size_ratchet`** — cap `spec/ggdef` line count the way `agents_md_size_ratchet` caps AGENTS.md ("ggdef stays small" is a stated succession value; make it executable). Current: ggdef **12,435** lines vs compiler `src/` **182,971** (6.8%). And the **spec-citation-per-evaluator-arm convention** — every evaluator arm names the language-reference section it implements, as Track Q's fix does; that is the readability lever, and it is style, not language choice.
-- **Owner-decided, NOT work:** ggdef stays in Rust. The observed failure mode is under-implementation, not contamination (a captured oracle would AGREE with the compilers, driving BOTH-WRONG to zero); the `ggdef_import_ratchet` fence is fatal at budget 0; and Rust's exhaustive `match` is an ALLY against the silent-gap class once the catch-alls are removed. The shared-front-end blind spot (path dep on the root crate for lexer/parser/AST/span ⇒ parse defects are inherited identically and can never surface as disagreement) is **accepted and documented**, not fixed — see `docs/devbook/27` § Adjudication.
-- **Ride-alongs (cheap, from the XVI/XIX reviews):** unguarded `Box__` sibling at `src/backend/llvm/mod.rs:5528` — routes on `name.contains("__get") && name.starts_with("Box__")`, a meaning-decision by name, left bare when N2 typed the two siblings at `:74`/`:1051`; reachability for trait boxes unconfirmed, so audit then guard-or-document · `:1051` re-derives the struct by linear name lookup where `:74` uses the `sid` index — unify.
+⚠ **PROCESS FAILURE, MINE:** a fold used `str.replace` without asserting its targets matched, silently dropped
+three edits, and I reported success from a grep matching the unchanged header. Pass 6 spent a cycle
+rediscovering unfolded pass-5 findings. AGENTS.md already forbids exactly this — use the Edit tool or a
+`must_replace` helper, and grep for a fragment of the NEW text.
 
-**Landed (integrated on session branch):**
-- **Y** statement-end GuardKind drop — `4ec42e30` (graduate hang fixture + Mutex sibling + named POS; residual: VarDecl/Assign RHS + SH lag).
-- **N2** Box[Trait] D/E/F/H **all** live C+LLVM — Class A/B/C + `llvm_type_full` honors `is_trait_box` (was `Box__*` → always `ptr`).
-- **X** nested-store residual CLOSED + promote pin — `6fd688a6`.
-- **W1** SH `emit_overload_call` arm-count lint — same commit.
+**🔒 SPLIT OUT — VALUE-DISCARD (drop) AXIS: own round, own scout.** **SIX** class-guards proposed, all dead:
+arm-count · `#[must_use] Displaced` · `navigate_write`+`mem::replace` · a "no other `*v =`" lint · a
+drop-obligation ledger (pass 4 **implemented** it, swept 1787 fixtures) · an `ast::` `..`-discard allowlist.
+⚠ **Root cause — and it is NOT "give `Value` identity":** the language attaches drops to **owners/places**,
+not values (`language-reference.md:2512` *"when the owner goes out of scope"*, `:1394`, `:3268`), and Gorget's
+`is` is a **pattern test** (`§7.17`, `expr "is" [not] pattern`), not reference equality — so there is no
+observable value identity to model and adding it would define a different language. What breaks the linkage
+is that **`apply_mut` clones the collection and writes it back**, severing place↔value at the six sites that
+matter — an evaluator artifact, arguably an infidelity (Gorget mutates in place via CoW).
+**Scout owes three DESIGN answers, not another site list:** (a) a **site-level census with a command** — the
+frame was wrong 3× (a 14th site in an unsearched function; a 15th *inside* a listed one,
+`run_custom_drop:514-516`, which is what makes `drop wrapped len=1` go missing and is **required** to clear
+the drop rows); (b) the **place↔value linkage decision** (model mutation in-place?) — ⚠ unverified
+hypothesis, prototype it; (c) **transitive-gap scoping** (`drop_struct_collection_fields` has **five** missing
+drops across **three** mechanisms; its two *emitted* drops are accidents of `.get().unwrap()` copies).
+**Interim guard worth landing there:** `drop_obligation_balance_ratchet`, shrink-only, seeded at **3** (only
+11 of 1787 fixtures have a nonzero balance, 3 run to completion, all already in `EXPECTED_BOTH_WRONG`; zero
+ADJ cost) — name it for what it measures, and file the class question with the root cause above.
 
-**Still open this round:**
-- snag#53 SH (CC-FAIL Dict get_or void* typing — not mere place-copy).
-- Y residual: VarDecl/Assign sequential hangs; SH statement-end drop port.
-- W2 Layering `is_local_registered_for_drop` DEFER.
-- N2 SH call-arg Box[Trait] coercion lag (TODO ~880 area).
+**🆕 DEFECTS FOUND BY THE GAUNTLET (own entries; all measured at HEAD 2026-07-31):**
+- **`is_move` discarded → ggdef runs a program `gg` rejects.** `elaborate/mod.rs:1631` is
+  `ast::Expr::Closure { is_async, params, body, .. }`; the `..` drops **`is_move`** (`src/parser/ast.rs:703`),
+  which production **consumes** (`src/semantic/typecheck.rs:331-338`). ⚠ The scout dispositioned this "NEVER —
+  production drops it too"; that was **wrong**. Measured: `Callable[int(int)] f = !(int x): x * 2` →
+  `gg check` rejects (`E_ClosureKindMismatch`, exit 1), **ggdef prints `42`, exit 0**. Second live divergence
+  on the same site: committed `closure_move_kind_error.gg` → `gg` rejects, **ggdef prints `should not reach
+  here`, exit 0**. ⚠ Verdict channel here is the **opposite** of the render axis: `gg` already emits a coded
+  error, so ggdef is **lagging a ratified decision** → **coded reject**, not decline. ⚠ A blanket reject costs
+  an ADJ row (`consume_callable_once.gg` is live ADJ-MATCH, both lanes `10/101/done`) — classify against the
+  destination type. ⚠ `self_host_runtime_diff` is **structurally blind** to this (needs an `agreed_out`); pin
+  via `spectests/run/` + the committed fixture.
+- **`gg` prints a RAW ADDRESS for `print(<composite>)` while rejecting the f-string sibling.** `gg check`
+  accepts `print(p)` and `gg run` printed `281473914789680`; `print(f"{p}")` is correctly rejected
+  (`E_NonPrintableInterpolation`). Measured family: **struct, enum, Vector, Tuple, Set** (Dict too on `gg`).
+  ⚠ `TODO.md:158` files only "struct/enum" — a **selection**; widen it, and its "durable repro owed" has been
+  outstanding since 2026-07-25 on the exact surface this round touches. Core #8 + a Core #9 lane divergence.
+- **ggdef ACCEPTS 3 programs the language REJECTS** — `non_printable_interpolation_error.gg`,
+  `missing_return_error.gg`, `missing_return_no_return_error.gg` run to a clean `Value`. **Invisible to
+  adjudication by construction** (negative fixtures are not in the MATCH set). The missing-return pair needs a
+  definite-return check — a *write*-site defect; a render-site raise only cures the two fixtures, not the class.
+- **Four false Core #14 comments in `eval.rs`** — `:1072` (*"print is normally lowered to Stmt::Print"* —
+  false, every kwarg print reaches it) · `:505-507` (*"phase-0 tainted types have scalar/loop-free fields"* —
+  false, and directly above the discard sites) · the `Value::Closure {captured}` one · and `:2148-2151`, which
+  carries **six** claims, at least three measured false.
+- **Probe owed: does ggdef model `is` (pattern test, `§7.17`) correctly, including bindings?** Round XII's only
+  BOTH-WRONG fix was a missing `match_pattern` arm for structs; an `is`-with-bindings gap would be the same
+  class in a new costume. Nobody checked this path.
 
-
-**INSTRUMENT C (later, after XVIII reading used):** generated cell matrix + build-and-run classification. XVIII histogram is the cross-check on C's axes.
-
-**ALSO AVAILABLE (do not pre-warm during XIX):**
-- **Round XVI residuals (Self-host Medium):** Guard.get View double-free after R-GET · Result combinator field passthrough DEFER · 3B next-layer (ExecResult fields / X25519 phi / Guard trait SIGBUS).
-- **R-MISS / UDEF monomorph emission** (~23 CC-FAIL disguised as typing) — own wave.
-- **8 BOTH-WRONG rows** (drop/leak cluster highest value per row) — own round.
-- **Hygiene ride-alongs:** AGENTS.md compaction (ratchet 59k→58k) · TODO stale-scan · `map_err` accidentally-correct trace.
-
-Tracks should be scoped so projected net-close is ≥ 1. Orchestrator worktree = launch worktree (rule 0).
-
-⚠ **ORCHESTRATOR IS BRANCH-AGNOSTIC (AGENTS.md Multi-agent rule 0).** Stay in the launch worktree. Subagents always get `isolation: "worktree"`. Never hardcode a branch name.
-
-⚠ **THE FULL BATTERY IS THE ROUND-CLOSE GATE, RUN ONCE**, after every track's commits are integrated. Per track: `cargo build` + `cargo test --lib` + targeted integration only. **C and LLVM sweeps SEQUENTIALLY.** Short-gate batch may parallelise within itself.
-
-⚠ **VOCABULARY:** *committed* = on a track branch · *at the gate* = output-review running · *landed* = reviewed AND merged into the orchestrator worktree · *closed* = round-close battery green over all landed tracks.
-
-### ROUND-CLOSE GATE (once, over all landed tracks)
-
-Full C sweep AND LLVM sweep · `cargo test --lib` · `-p ggdef` · `--test spec_conformance` · `--test security` · `--test lints` · `self_host_bootstrap_fixed_point` **SERIALLY** · parity re-measure. Local-green IS the sign-off.
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
 
@@ -88,7 +126,8 @@ Full C sweep AND LLVM sweep · `cargo test --lib` · `-p ggdef` · `--test spec_
 - **✅ ROUND XVII CLOSED (2026-07-30) — RESOLVER-TOTALITY INSTRUMENTS (A + B):** arms G1=6 G2=4 G3=6/6 · divergence=0 · scripts/resolver_totality.sh. Parity stable 93.1%. Former open text was: static arm census + cross-resolver parity lint over the five `Option`-returning place resolvers, and a fall-through histogram tagged by AST shape, run over the corpus AND a self-host self-compile for a usage-weighted worklist. Ships `scripts/resolver_totality.sh` + a tracked line beside `Convergence:`. ⚠ Both instruments measure the resolver's OPINION OF ITSELF (`Some(wrong_root)` reads as resolved) — worklist generators, never correctness gates; instrument C (generated cell matrix, build-and-run classification) is the eventual gate and is NOT in this round. Rationale: ~525 filed items and none measures whether the model is getting more total.
 - **✅ ROUND XVIII CLOSED (2026-07-30) — AIM THE METER:** Gate0+sweep+partition+Family-3. Detail: DONE.md. Former open: calibrate B (Gate 0, blocking) → aggregate corpus + self-host self-compile → partition BY-DESIGN vs SUSPICIOUS (the RESOLVE/REJECT ledger) → fix top 2–3 suspicious roots the histogram names. Not residual-defect pack.
 - **✅ ROUND XVIII DETAIL (closed):** AIM THE METER — GATE 0 calibrate B (blocking) → aggregate corpus + self-host self-compile → partition BY-DESIGN vs SUSPICIOUS (RESOLVE/REJECT ledger = thesis reading) → fix top 2–3 suspicious roots the histogram names. Known overlaps the meter will rank (not a target list): cow_amp_projection_base_shapes WRONG-OUTPUT · snag#53 · X nested-store. Instrument C AFTER this reading. Convergence risk: Steps 0–2 are measurement (net +0 possible); name it.
-- **🔓 ROUND XIX OPEN — RESIDUAL-DEFECT PACK:** Y statement-end drop · N2 Box[Trait] 4 cells · X nested-store residual CLOSED (hygiene pin) · snag#53 SH · W1 lint LANDED / W2 Layering DEFER. See handover OPEN block.
+- **✅ ROUND XIX CLOSED (2026-07-31):** RESIDUAL-DEFECT PACK (Y self-deadlock · N2 Box[Trait] · hygiene). Stalled on token exhaustion before its gate; orchestrator ran the battery, found it RED, bisected + fixed both defects (tuple write-through garbage read from `5165965b`; ggdef gate-drift, a class of 2), re-ran green. Parity 1291/1394. ⚠ Parity GATE still red on 2 SH-lane hangs — see the XIX close correction in DONE.md.
+- **⛔ ROUND XX — GAUNTLET STOPPED, RE-SCOPE NEEDED (headline in the handover above):** scout + 6 brief-reviews, 34 blocking, **no executor launched, no production code changed**. The reviews proved the round's premise WRONG: ggdef already models `Displayable` and just doesn't call it — **invoking it beats declining on BOTH axes** (BOTH-WRONG 8→3 AND ADJ 389→391). Re-scoped to: implement render-site dispatch · decline only the true remainder · `is_move` coded reject (separate) · value-discard axis SPLIT to its own round (6 dead guards; root cause is place↔value linkage lost by `apply_mut`'s clone, NOT missing value identity). All durable findings inlined above.
 - **🔒 LATER, HIGHEST VALUE PER ROW — the 8 BOTH-WRONG parity rows** (`core_traits` · `drop_collection_custom_elem_leak` · `drop_reassign` · `drop_struct_collection_fields` · `fstring_binary_spec_leak` · `print_builtin` +2): by Core #8 each is ≥1 real bug in BOTH compilers; ggdef contradicts. Own round, own scout.
 - **THEN:** MaterializePlan campaign follow-up (auto-move for post-materialize params) · Round XI Track J follow-up: typed `borrow_read: bool` · Track K class-siblings · SH-lane `W_*` parity port · `lower_tuple_field_assign` silent-drop fallback · Instrument C (cell matrix) · #13 perf reclaim · SH bare-arg CoW residual · D30+C1 · class-A/B ggdef · RV-C/E/H + R6 realloc UAF · D6 refcount params (design first). (Family-3 getchain **closed in XVIII**.)
 
