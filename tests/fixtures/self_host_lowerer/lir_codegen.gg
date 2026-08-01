@@ -5356,11 +5356,18 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # a `memcpy(&dst, src, sizeof(dst))` lands garbage in dst.Error_0
             # (and over-reads when dst is larger), crashing at drop. Copy the
             # surviving Error_0 by typed field assignment at the correct offset.
-            # DEFER (Round XVI SH residual): resource Error_0 field passthrough
-            # is still a shallow assign — clone when drop_to_clone_fn non-empty
-            # (no open Money Result keep-path stem in the SH-4/5 matrix).
+            # Round XXII Track γ: resource Error_0 field passthrough routes
+            # through `combinator_owned_copy_stmt` (the Core #4 chokepoint every
+            # other keep/copy-out arm already uses) — for a Money-typed Error
+            # field this emits `Money__clone(&src->Error_0)`, for a POD field it
+            # falls through to `memcpy` (byte-identical to the pre-fix shallow
+            # assign). Pre-fix aliased the src heap → double-free at drop.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + dst_pay_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; } }"
+                String rm_err_dst = "((" + dst_c + "*)&" + v(dst) + ")->Error_0"
+                String rm_err_src = "&((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0"
+                int rm_err_ty = combinator_field_lir_type(src_ty, 2, m)
+                String rm_err_copy = combinator_owned_copy_stmt(rm_err_dst, rm_err_src, rm_err_ty, m)
+                return "{ if ((*(int32_t*)" + src + ") == 0) { *(int32_t*)&" + v(dst) + " = 0; " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + dst_pay_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; " + rm_err_copy + " } }"
             return ";"
         case "__result_map_err":
             # if tag!=0: dst = Error(fn(error_payload)); else: keep Ok. The Ok
@@ -5368,10 +5375,17 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # struct memcpy): `map_err` changes the Error type, so src/dst differ
             # in size; a memcpy would over-read past the smaller source. Ok_0 is
             # at offset 8 in both, but the field-copy is the principled form.
-            # DEFER (Round XVI SH residual): resource Ok_0 field passthrough
-            # still shallow — same class as map's Error_0 above.
+            # Round XXII Track γ: resource Ok_0 field passthrough routes through
+            # `combinator_owned_copy_stmt` (Core #4 chokepoint) — for a Money-
+            # typed Ok field this emits `Money__clone(&src->Ok_0)`, for a POD
+            # field it falls through to `memcpy` (byte-identical to the pre-fix
+            # shallow assign). Pre-fix aliased the src heap → double-free at drop.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; " + src_err_c + " __pay = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + dst_err_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Ok_0; } }"
+                String rme_ok_dst = "((" + dst_c + "*)&" + v(dst) + ")->Ok_0"
+                String rme_ok_src = "&((" + c_type_name(src_ty, sn) + "*)" + src + ")->Ok_0"
+                int rme_ok_ty = combinator_field_lir_type(src_ty, 1, m)
+                String rme_ok_copy = combinator_owned_copy_stmt(rme_ok_dst, rme_ok_src, rme_ok_ty, m)
+                return "{ if ((*(int32_t*)" + src + ") != 0) { *(int32_t*)&" + v(dst) + " = 1; " + src_err_c + " __pay = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + dst_err_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); " + rme_ok_copy + " } }"
             return ";"
         case "__result_and_then" | "__result_flat_map":
             # SH-2 sibling: Result.flat_map ≡ and_then. if tag==0: dst =
@@ -5380,20 +5394,34 @@ String emit_option_result_combinator(int dst, String name, Vector[int] args,
             # whole-struct memcpy: `and_then` changes the Ok type (T->U), so src
             # and dst have different layouts and the Error_0 offset shifts —
             # the memcpy form was a latent drop-time crash (same class as map).
-            # DEFER (Round XVI SH residual): resource Error_0 field passthrough
-            # still shallow — same class as map/map_err.
+            # Round XXII Track γ: resource Error_0 field passthrough routes
+            # through `combinator_owned_copy_stmt` (Core #4 chokepoint) — for a
+            # Money-typed Error field this emits `Money__clone(&src->Error_0)`,
+            # for a POD field it falls through to `memcpy` (byte-identical to
+            # the pre-fix shallow assign). Same class as map/map_err.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; ((" + dst_c + "*)&" + v(dst) + ")->Error_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; } }"
+                String ra_err_dst = "((" + dst_c + "*)&" + v(dst) + ")->Error_0"
+                String ra_err_src = "&((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0"
+                int ra_err_ty = combinator_field_lir_type(src_ty, 2, m)
+                String ra_err_copy = combinator_owned_copy_stmt(ra_err_dst, ra_err_src, ra_err_ty, m)
+                return "{ if ((*(int32_t*)" + src + ") == 0) { " + src_pay_c + " __pay = *(" + src_pay_c + "*)((char*)" + src + " + 8); " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_pay_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); *(int32_t*)&" + v(dst) + " = 1; " + ra_err_copy + " } }"
             return ";"
         case "__result_or_else":
             # if tag!=0: dst = fn(error_payload) (fn returns Result); else: keep ok.
             # Ok passthrough copies Ok_0 by typed field assignment, NOT a whole-
             # struct memcpy: `or_else` changes the Error type, so src/dst differ
             # in size and the memcpy would over-read past the smaller source.
-            # DEFER (Round XVI SH residual): resource Ok_0 field passthrough
-            # still shallow — same class as map/map_err.
+            # Round XXII Track γ: resource Ok_0 field passthrough routes through
+            # `combinator_owned_copy_stmt` (Core #4 chokepoint) — for a Money-
+            # typed Ok field this emits `Money__clone(&src->Ok_0)`, for a POD
+            # field it falls through to `memcpy` (byte-identical to the pre-fix
+            # shallow assign). Same class as map/map_err.
             if dst >= 0:
-                return "{ if ((*(int32_t*)" + src + ") != 0) { " + src_err_c + " __pay = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); ((" + dst_c + "*)&" + v(dst) + ")->Ok_0 = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Ok_0; } }"
+                String roe_ok_dst = "((" + dst_c + "*)&" + v(dst) + ")->Ok_0"
+                String roe_ok_src = "&((" + c_type_name(src_ty, sn) + "*)" + src + ")->Ok_0"
+                int roe_ok_ty = combinator_field_lir_type(src_ty, 1, m)
+                String roe_ok_copy = combinator_owned_copy_stmt(roe_ok_dst, roe_ok_src, roe_ok_ty, m)
+                return "{ if ((*(int32_t*)" + src + ") != 0) { " + src_err_c + " __pay = ((" + c_type_name(src_ty, sn) + "*)" + src + ")->Error_0; " + v(dst) + " = ((" + dst_c + "(*)(void*, " + src_err_c + "))((void**)" + closure + ")[0])(((void**)" + closure + ")[1], __pay); } else { memset(&" + v(dst) + ", 0, sizeof(" + v(dst) + ")); " + roe_ok_copy + " } }"
             return ";"
         case "__result_or":
             # alt (arg[1]) is already a POINTER to the alternative Result (the

@@ -2464,11 +2464,14 @@ fn self_host_combinator_template_arms_count() {
     );
     let owned_copy_calls = window.matches("combinator_owned_copy_stmt").count();
     assert!(
-        owned_copy_calls >= 4,
+        owned_copy_calls >= 12,
         "HOF combinator window only has {owned_copy_calls} combinator_owned_copy_stmt \
-         call(s); expected ≥4 (filter keep, or_else/or keep, flatten, uoe Some, \
-         plus result_or / result_uoe class twins). A keep path regressed to \
-         bare memcpy of a resource Option/payload.",
+         call(s); expected ≥12 (Option side: filter keep, or_else/or keep-and-alt, \
+         flatten, uoe Some — 5306/5322/5326/5337/5348; Result side: or keep-and-alt \
+         + uoe Ok — 5407/5408/5427; Round XXII Track γ: map/map_err/and_then/or_else \
+         Ok_0/Error_0 field passthrough — the 4 new call sites at 5363/5374/5386/5396). \
+         A keep or passthrough regressed to bare memcpy of a resource Option/Result \
+         payload — the exact class this ceiling was ratcheted to retire (Core #6).",
     );
     assert!(
         !window.contains("void* __pay"),

@@ -1,0 +1,50 @@
+# CELL: `.or_else()` × Ok passthrough × Result[Money, int] (heap Money)
+# Round XXII Track γ (2026-08-01) — final wave of the combinator field
+# passthrough double-free class. The SH lane's `__result_or_else` arm at
+# `tests/fixtures/self_host_lowerer/lir_codegen.gg:5396` shallow-copied the
+# unchanged Ok_0 field into the mapped Result — src's Ok_0 (a heap-resource
+# Money) got aliased into dst, so at scope exit both dropped the same
+# Vector heap → `free(): double free detected in tcache 2`, exit 134. Rust
+# C+LLVM lanes were already correct (scrut-CLONE + field-MOVE via
+# `src/backend/c/lir/emit_hof.rs:100-198`). Fix routes the field passthrough
+# through the existing `combinator_owned_copy_stmt(dst, "&"+src,
+# field_lir_ty, m)` chokepoint (Core #4), which emits `Money__clone` for a
+# resource field and `memcpy` for POD. Sibling of the map / map_err /
+# and_then fixtures in this family (Round XXII Track γ, 4 arms).
+#
+# PRE-FIX RED (Round XXII Track γ scout `/tmp/round_xxii_trackGamma_scout_1.md`):
+#   SH lane: `driver --emit-c | cc | run` → exit 134 (double-free).
+#   Rust  C+LLVM: exit 0, prints `10\nor-else-end`.
+# POST-FIX GREEN: SH matches Rust output (both lanes clone the Money field).
+#
+# HEAP-FORCED Money (per `combinator_and_then_money_local.gg` pattern): a
+# literal `Money(Vector[int]())` would drop `.len() == 0` and not stress
+# the heap allocator's tcache — the double-free requires a real heap buffer.
+# Pinned by the `combinator_owned_copy_stmt >= 12` ceiling ratchet in
+# `tests/lints.rs` AND this runtime fixture (Core #6 executable guard).
+
+struct Money:
+    Vector[int] cents
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Result[Money, int] make_ok(int n):
+    return Ok(Money(heap_cents(n)))
+
+void main():
+    # Ok passthrough: `.or_else` transforms Error, keeps Ok unchanged.
+    # SH pre-fix ALIASED the Money Vector across src+dst → double-free.
+    Result[Money, int] r = make_ok(10)
+    Result[Money, int] mapped = r.or_else((int e): Error(e + 1))
+    if mapped is Ok(m):
+        print(size_of(m))
+    print("or-else-end")
