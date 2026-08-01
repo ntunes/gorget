@@ -1399,17 +1399,12 @@ fn retborrow_no_over_clone_controls_no_leak() {
 // committed artifact. They fail loudly when the reject lands.
 
 #[test]
-fn retborrow_valuepos_amp_return_known_unsafe() {
-    security_known_unsafe(
-        "retborrow_valuepos_amp_return",
-        KnownBug::SilentlyProduces("4\n4"),
-        "a value-position `&` (`return &v`) is ruled to be REJECTED at check time, \
-         but the compiler still accepts it and runs it to completion. The DOUBLE-FREE \
-         it used to produce is closed (the return now routes through the boundary \
-         chokepoint, whose pointee test covers MutPtr); the remaining defect is the \
-         accept/reject polarity. Reclassify to `security_rejected` when the \
-         value-position-`&` reject lands",
-    );
+fn retborrow_valuepos_amp_return_rejected() {
+    // Round XXIII Track β (2026-08-01) landed `E_AmpInOperandPosition`; the
+    // value-position `&`-at-`return` case is now correctly REJECTED at check
+    // time. Reclassified from `security_known_unsafe(SilentlyProduces)` to
+    // `security_rejected` per the prior entry's own instruction.
+    security_rejected("retborrow_valuepos_amp_return", "E_AmpInOperandPosition");
 }
 
 /// KNOWN GAP (filed 2026-07-25 by the Track-B1 output-review). Re-assigning
@@ -1433,16 +1428,12 @@ fn reassign_amp_param_leaks_old_value() {
 }
 
 #[test]
-fn retborrow_valuepos_amp_return_throws_known_unsafe() {
-    security_known_unsafe(
-        "retborrow_valuepos_amp_return_throws",
-        KnownBug::SanitizerTrips,
-        "`return &v` in a THROWS fn is ruled to be REJECTED, and is additionally \
-         still memory-unsafe: the throws return keeps its own hand-rolled \
-         `GirType::Ptr(inner)`-only clone, blind to the MutPtr an `&`-param is, so \
-         the caller's buffer is forwarded raw and double-freed. Reclassify when \
-         either the reject or the throws-leg materialize lands",
-    );
+fn retborrow_valuepos_amp_return_throws_rejected() {
+    // Round XXIII Track β (2026-08-01) landed `E_AmpInOperandPosition`; the
+    // value-position `&`-at-`return` case in a `throws` fn is also correctly
+    // REJECTED at check time (the reject fires before the throws-leg materialize
+    // ever runs). Reclassified per the prior entry's own instruction.
+    security_rejected("retborrow_valuepos_amp_return_throws", "E_AmpInOperandPosition");
 }
 
 // ════════════════════════════════════════════════════════════════════════════

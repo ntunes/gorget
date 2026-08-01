@@ -222,6 +222,19 @@ const EXCLUDE: &[&str] = &[
     "combinator_result_map_err_money_passthrough.gg",
     "combinator_result_and_then_money_passthrough.gg",
     "combinator_result_or_else_money_passthrough.gg",
+    // Round XXIII Track α positive-runtime fixture pinning the cross-type
+    // or_else fix (was SBO pre-fix; now GREEN on C+LLVM). Out of phase-0
+    // subset per elaborator ("expression `unsupported` is outside phase 0").
+    // Same disposition as the Money-passthrough sibs above.
+    "combinator_result_or_else_error_cross_type.gg",
+    // Round XXIII Track α NEG reject fixtures (`check_gg_fails` on Rust lane):
+    // ggdef doesn't have α's `unify_closure_ret_axis` helper yet, so these
+    // programs still elaborate + run on the ggdef side (Core #9 lane gap —
+    // filed as SH-lane companion follow-up per α scout + brief). Excluding
+    // here until the ggdef port lands. NOT a semantic issue with α's fix.
+    "combinator_result_or_else_ok_cross_type_reject.gg",
+    "combinator_result_and_then_error_cross_type_reject.gg",
+    "combinator_option_or_else_cross_type_reject.gg",
 ];
 
 fn ws_root() -> PathBuf {
