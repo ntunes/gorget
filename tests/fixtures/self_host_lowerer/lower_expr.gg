@@ -4589,16 +4589,24 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             #     else → peel(receiver)                     # Inc-4c same-type bare None/Ok
             # `map`/`map_err` CHANGE the wrapper via Inc-4e-1 and stay excluded.
             int _combinator_et = -1
-            if mname == "or_else" or mname == "or":
+            if mname == "or":
+                # `or` takes a VALUE arg (not a callable) — no closure return
+                # to bias; keep the force-recv rule so a bare `Ok`/`Some`/…
+                # in the value slot infers the receiver wrapper.
                 int _recv_tid = ctx.locals.get(recv).unwrap().type_id
                 EnumCategory _recv_ec = enum_category_of(&gmod, _recv_tid)
                 if _recv_ec.category == ENUM_CAT_RESULT or _recv_ec.category == ENUM_CAT_OPTION:
                     _combinator_et = peel_ptr_tid(&gmod, _recv_tid)
-            elif mname == "and_then" or mname == "flat_map":
+            elif mname == "and_then" or mname == "flat_map" or mname == "or_else":
                 int _recv_tid_at = ctx.locals.get(recv).unwrap().type_id
                 EnumCategory _recv_ec_at = enum_category_of(&gmod, _recv_tid_at)
                 if _recv_ec_at.category == ENUM_CAT_RESULT or _recv_ec_at.category == ENUM_CAT_OPTION:
-                    if ctx.expected_type >= 0:
+                    # Match Rust's split (methods.rs:3709-3724): `and_then` and
+                    # `or_else` get the DUAL rule (outer Option/Result annotation
+                    # wins over recv-forced hint — cross-type is legit); `flat_map`
+                    # stays in force-recv (Option-only, legitimately cross-type by
+                    # design).
+                    if mname != "flat_map" and ctx.expected_type >= 0:
                         EnumCategory _outer_ec = enum_category_of(&gmod, ctx.expected_type)
                         if _outer_ec.category == ENUM_CAT_RESULT or _outer_ec.category == ENUM_CAT_OPTION:
                             _combinator_et = peel_ptr_tid(&gmod, ctx.expected_type)
@@ -4606,7 +4614,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                             # outer present but not Option/Result — same-type fallback
                             _combinator_et = peel_ptr_tid(&gmod, _recv_tid_at)
                     else:
-                        # no outer annotation — Inc-4c same-type bare None()/Ok/Error
+                        # `flat_map` OR no outer annotation — Inc-4c same-type
+                        # bare None()/Ok/Error path.
                         _combinator_et = peel_ptr_tid(&gmod, _recv_tid_at)
             elif mname == "unwrap_or_else":
                 # SH-5: uoe returns the PAYLOAD (Some_0 / Ok_0), not the wrapper.
@@ -4937,7 +4946,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             # closure yields Option[int] → emit cast + match as Money (empty/
             # wrong print). Gate is TYPED on enum_category (Vector.and_then
             # falls through). Same-type and_then re-reads the identical tid.
-            if mname == "and_then" or mname == "flat_map":
+            if mname == "and_then" or mname == "flat_map" or mname == "or_else":
                 int _at_recv_tid = ctx.locals.get(recv).unwrap().type_id
                 EnumCategory _at_ec = enum_category_of(&gmod, _at_recv_tid)
                 if (_at_ec.category == ENUM_CAT_OPTION or _at_ec.category == ENUM_CAT_RESULT) and margs.len() == 1:
