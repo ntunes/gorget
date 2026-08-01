@@ -25768,7 +25768,7 @@ fn self_host_runtime_diff() {
     // Track X's nested-place mut-method-receiver fixture (`Vector[Holder]` + `Vector[Wrap]`
     // with a mutating equip method + `Struct-Field`+`Vector-Index` projections) is in
     // ggdef's subset and adjudicates the write-through counts, adding ADJ rows.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 389;
+    const GGDEF_ADJUDICATED_FLOOR: usize = 390;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -25944,7 +25944,7 @@ fn self_host_runtime_diff() {
     // `is Error(m):` and land in `ggdef-frontend-error (out of subset)`, so they
     // enter UNADJ, not ADJ — same class as the 13 existing `combinator_*_money_*.gg`
     // fixtures excluded in `spec/ggdef/tests/corpus_b.rs`). Floor 1293 → 1297.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1301;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1306;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
