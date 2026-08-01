@@ -1688,6 +1688,72 @@ fn sound_amp_array_literal_duplicate_drop_control_safe() {
     security_safe("sound_amp_array_literal_duplicate_drop_control", "1\nclose 9");
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Round XXII β — Option/Result combinator adapter payload-registration class
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Pre-fix (scout `/tmp/round_xxii_trackBeta_scout_79000.md`), the combinator
+// adapter's extracted payload (`try_lower_option_result_combinator` at
+// `src/ir/lowering/exprs/methods.rs:3795-3922`) was `set_owned` but never
+// `drops.register_local(...)`. Arms whose closure only BORROWED the payload
+// (map · flat_map · and_then · map_err · unwrap_or_else-Result-Error with a
+// mapped-away return type) leaked 24-56B of the payload's heap bytes per
+// call — no owner registered, no scope-exit `DropIfAlive` fired. Class-fix
+// (Track β, 2026-08-01): route all 5 extraction sites through the shared
+// `extract_enum_payload_owned` helper (Core #3 birth-registration + Core #4
+// producer); pair the 4 currently-clean aliasing wrap sites with
+// `mov(payload) + move_zero(payload)` to avoid a new double-free (Core #10;
+// the LIR does not zero the source slot on a Move operand).
+//
+// Every fixture below RED-verified against the pre-fix compiler (Track β
+// executor, 2026-08-01, HEAD 0aa3f5a6 with methods.rs helper reverted):
+//   combinator_leak_map_money_param                → 24B / 1 alloc  → clean
+//   combinator_leak_flat_map_money_param           → 32B / 1 alloc  → clean
+//   combinator_leak_and_then_money_param           → 40B / 1 alloc  → clean
+//   combinator_leak_map_err_money_param            → 48B / 1 alloc  → clean
+//   combinator_leak_unwrap_or_else_result_money_param → 56B / 1 alloc → clean
+// A future regression that removes the birth-registration OR the b1 pairing
+// re-leaks the payload and trips `exitcode=99` here.
+
+#[test]
+fn combinator_leak_map_money_param_no_leak() {
+    // AXIS: Option[Money].map((Money m): int) — mapped-away return type;
+    // closure only borrows payload. Pre-fix: `Direct leak of 24 byte(s)
+    // in 1 object(s)` via `Option__Money__clone → Money__clone →
+    // gorget_array_clone` on the extracted payload.
+    security_safe_no_leak("combinator_leak_map_money_param", "3");
+}
+
+#[test]
+fn combinator_leak_flat_map_money_param_no_leak() {
+    // AXIS: Option[Money].flat_map((Money m): Option[int]) — sibling arm
+    // (closure returns Option[U]). Pre-fix: `32 byte(s) in 1 object(s)`.
+    security_safe_no_leak("combinator_leak_flat_map_money_param", "4");
+}
+
+#[test]
+fn combinator_leak_and_then_money_param_no_leak() {
+    // AXIS: Option[Money].and_then((Money m): Option[int]) — cross-type
+    // sibling. Pre-fix: `40 byte(s) in 1 object(s)`.
+    security_safe_no_leak("combinator_leak_and_then_money_param", "5");
+}
+
+#[test]
+fn combinator_leak_map_err_money_param_no_leak() {
+    // AXIS: Result[int, Money].map_err((Money m): int) — Error-branch
+    // sibling; err_val extraction had the same missing-registration hole.
+    // Pre-fix: `48 byte(s) in 1 object(s)`.
+    security_safe_no_leak("combinator_leak_map_err_money_param", "6");
+}
+
+#[test]
+fn combinator_leak_unwrap_or_else_result_money_param_no_leak() {
+    // AXIS: Result[int, Money].unwrap_or_else((Money m): int) — Error
+    // branch err_val borrowed into closure; Ok branch keeps original int.
+    // Pre-fix: `56 byte(s) in 1 object(s)`.
+    security_safe_no_leak("combinator_leak_unwrap_or_else_result_money_param", "7");
+}
+
 // ── B5: the Option/Result combinator skips the payload's user Drop ──────────
 
 /// Measured at HEAD under `--sanitize` + `detect_leaks=1`:
