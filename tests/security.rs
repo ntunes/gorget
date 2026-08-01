@@ -1513,19 +1513,53 @@ fn consume_callee_moves_on_stash_safe() {
     security_safe("consume_callee_moves_on_stash", "1\n3\ndone");
 }
 
-/// KNOWN GAP — `&`-of-a-projection in an OPERAND position DUPLICATES the user
-/// `Drop`. Measured at HEAD: prints `1 / close 9 / close 9`, while the control
-/// with the sigil removed prints `1 / close 9`. `&` alone is the cause.
-///
-/// Same root as the array-literal costume: `reject_tainted_formation_arg` is
-/// wired only at `check_expr.rs:116` and `:757`, both `CallArg` positions — so
-/// the documented characterisation "literal-element positions escape 2T"
-/// undercounts it. EVERY non-`CallArg` position escapes, operands included.
+/// GRADUATED Round XXIII Track β — `&`-of-a-projection in an OPERAND position
+/// (tainted-twin double-Drop facet) is now REJECTED at `gg check` with
+/// `E_AmpInOperandPosition` via the one-producer chokepoint at
+/// `src/semantic/safety/check_expr.rs:276`. This graduation re-purposes the
+/// pre-existing DURABLE security repro (no new file — Core #12 durable-repro
+/// rule) as a check-fails assertion. Same underlying root as the
+/// silent-wrong-output twin (`known_gaps/sound_amp_operand_position_scrutinee.gg`);
+/// the class reject retires BOTH facets in one arm.
 #[test]
-#[ignore = "KNOWN GAP: `&`-of-a-place in an operand position runs the owner's Drop twice \
-(control runs it once). Asserts the INTENDED single drop; TODO.md."]
-fn sound_amp_operand_position_duplicate_drop_safe() {
-    security_safe("sound_amp_operand_position_duplicate_drop", "1\nclose 9");
+fn sound_amp_operand_position_duplicate_drop_rejected() {
+    security_rejected(
+        "sound_amp_operand_position_duplicate_drop",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+/// Round XXIII Track β — TAINTED-TWIN class-breadth pin (Core #11 wide
+/// coverage): match scrutinee sibling of the `if`-cond twin, same class
+/// reject collapses both. Scout confirmed EVERY operand costume duplicates
+/// the user Drop (`0\nclose 9\nclose 9`), not just `if`.
+#[test]
+fn sound_amp_operand_drop_scrutinee_rejected() {
+    security_rejected(
+        "sound_amp_operand_drop_scrutinee",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+/// Round XXIII Track β — TAINTED-TWIN binop-RHS sibling: same class reject.
+/// Pre-fix: prints `<address>\nclose 9\nclose 9`.
+#[test]
+fn sound_amp_operand_drop_binop_rev_rejected() {
+    security_rejected(
+        "sound_amp_operand_drop_binop_rev",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+/// Round XXIII Track β — TAINTED-TWIN augassign sibling. Third of three
+/// representative shape samples (Core #12: three-cell axis coverage rather
+/// than 15 near-duplicates).
+#[test]
+fn sound_amp_operand_drop_augassign_rejected() {
+    security_rejected(
+        "sound_amp_operand_drop_augassign",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
 /// REGRESSION — A2 cell of the callable-indirection axis: a PROJECTION arg

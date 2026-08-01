@@ -156,6 +156,54 @@ impl<'a> BorrowChecker<'a> {
         }
     }
 
+    /// Round XXIII Track β — mirror the `for_loops.rs:150-193` strip preambles
+    /// at the SAFETY-PASS entry to `Stmt::For` and the three comprehension
+    /// arms. `for x in &coll` / `for i, x in &coll.enumerate()` / `[expr for x
+    /// in &coll]` are LEGIT write-through-iterable spellings that MUST reach
+    /// this arm with the outer `Expr::MutableBorrow` stripped, so the new
+    /// `E_AmpInOperandPosition` reject at the `Expr::MutableBorrow` arm does
+    /// not false-flag them.
+    ///
+    /// Cases (same as `for_loops.rs`):
+    ///   1. iterable = `Expr::MutableBorrow{coll}`                 → walk coll.
+    ///   2. iterable = `(&coll).enumerate()` (MethodCall receiver
+    ///      is `Expr::MutableBorrow`, no args, method = "enumerate") → walk
+    ///      the receiver's inner. No `.enumerate()` args exist, so no other
+    ///      MethodCall bookkeeping is skipped.
+    ///   3. anything else                                          → normal walk.
+    ///
+    /// NOTE: the scout's blast-radius grep missed comprehensions (Core #12 Q6:
+    /// accidentally-correct control). The comprehension parser at
+    /// `parser/expr.rs:1754` places `parse_ownership_modifier` BEFORE the
+    /// `in` keyword (unlike the stmt-for parser at :287 which places it AFTER
+    /// `in`), so a comprehension `for x in &a` lands `&a` as
+    /// `Expr::MutableBorrow` on the iterable — exactly what this strip
+    /// handles.
+    pub(super) fn check_iterable_maybe_amp(&mut self, iterable: &Spanned<Expr>) {
+        match &iterable.node {
+            Expr::MutableBorrow { expr: inner } => {
+                self.check_expr(inner);
+            }
+            Expr::MethodCall {
+                receiver,
+                method,
+                args,
+                generic_args,
+            } if method.node == "enumerate"
+                && args.is_empty()
+                && generic_args.is_none()
+                && matches!(&receiver.node, Expr::MutableBorrow { .. }) =>
+            {
+                if let Expr::MutableBorrow { expr: recv_inner } = &receiver.node {
+                    self.check_expr(recv_inner);
+                }
+            }
+            _ => {
+                self.check_expr(iterable);
+            }
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             // Literals — no ownership concerns
@@ -274,8 +322,31 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::MutableBorrow { expr: inner } => {
-                // The `&` operator: mutable borrow
-                // Check that the inner expression is still usable
+                // Round XXIII Track β — ONE-PRODUCER chokepoint (Core #4):
+                // reaching this arm means `&` escaped into an OPERAND (read)
+                // context. Every legit `&` position pre-strips before we get
+                // here:
+                //   - `f(&x)` call-arg → `parse_ownership_modifier` strips.
+                //   - VarDecl/Assign RHS → D10(a) `E_LocalBorrowBind` rejects
+                //     via the option-D direct-`Expr::MutableBorrow` intercept
+                //     at `check_stmt::VarDecl`/`::Assign` (which SKIPS this
+                //     descent for the direct case, letting D10(a) own the
+                //     rejection message).
+                //   - `for x in (&coll)` and `.enumerate()`-receiver → the
+                //     mirror strip preambles in `check_stmt::Stmt::For` (see
+                //     `for_loops.rs:150-193`).
+                // Everything else is an operand (match scrutinee, binop /
+                // comparison operand, if/while cond, index-index, f-string
+                // interp, closure body, return, augassign RHS, throw, send,
+                // range endpoint, tuple/array elem, `as`-cast, deref,
+                // propagate, spawn/await, comprehension body, expr-stmt).
+                //
+                // Pre-fix: C silently miscompiled (address arithmetic /
+                // address-vs-value comparisons / raw-address prints /
+                // out-of-bounds indexing on an address); LLVM `llc` rejected
+                // with `i64 but expected ptr`. Tainted-twin duplicated the
+                // user `Drop` on EVERY operand costume (`close 9` twice).
+                self.error(SemanticErrorKind::AmpInOperandPosition, expr.span);
                 self.check_expr(inner);
             }
 
@@ -1267,7 +1338,8 @@ impl<'a> BorrowChecker<'a> {
                 condition,
                 ..
             } => {
-                self.check_expr(iterable);
+                // Round XXIII Track β — iterable-position `&` strip preamble.
+                self.check_iterable_maybe_amp(iterable);
                 let saved_in_return = self.in_return_expr;
                 self.in_return_expr = false;
                 self.loop_depth += 1;
@@ -1288,7 +1360,8 @@ impl<'a> BorrowChecker<'a> {
                 condition,
                 ..
             } => {
-                self.check_expr(iterable);
+                // Round XXIII Track β — iterable-position `&` strip preamble.
+                self.check_iterable_maybe_amp(iterable);
                 let saved_in_return = self.in_return_expr;
                 self.in_return_expr = false;
                 self.loop_depth += 1;
@@ -1309,7 +1382,8 @@ impl<'a> BorrowChecker<'a> {
                 condition,
                 ..
             } => {
-                self.check_expr(iterable);
+                // Round XXIII Track β — iterable-position `&` strip preamble.
+                self.check_iterable_maybe_amp(iterable);
                 let saved_in_return = self.in_return_expr;
                 self.in_return_expr = false;
                 self.loop_depth += 1;
@@ -1504,6 +1578,19 @@ impl<'a> BorrowChecker<'a> {
             }
             Expr::UnaryOp { operand, .. } => {
                 self.check_interpolation_expr(operand, fstring_span);
+            }
+            // Round XXIII Track β — f-string interpolation `f"{&x}"` is an
+            // OPERAND position (the interp body is re-parsed via `parse_expr`
+            // at `check_expr.rs:184`, which yields `Expr::MutableBorrow` for
+            // a leading `&`). The re-parsed body has synthetic spans that
+            // don't match the resolution map, so emit at `fstring_span`
+            // (mirroring how `check_use` is invoked in this walker). Sibling
+            // of the `Expr::MutableBorrow` arm at `check_expr.rs:276` — same
+            // class, same error kind, different span source. Recurses so
+            // aliasing walk still happens on the inner place.
+            Expr::MutableBorrow { expr: inner } => {
+                self.error(SemanticErrorKind::AmpInOperandPosition, fstring_span);
+                self.check_interpolation_expr(inner, fstring_span);
             }
             _ => {}
         }

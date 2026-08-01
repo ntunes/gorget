@@ -1,0 +1,18 @@
+# Round XXIII Track β — `&`-of-a-place on the RHS of a binary op.
+# Costume 3/13; the UNLUCKY spelling in the operand-order axis. Pre-fix
+# (measured at HEAD): `gg check` clean; C BUILDS AND RUNS, printing a raw
+# address (`281474629239145`-like) — a Core #8 silent miscompile. LLVM `llc`
+# hard-fails. This asymmetry (LHS is caught by the C compiler, RHS silently
+# miscompiles) is exactly why an operand-order-agnostic REJECT at check-time
+# is required — the LUCKY spelling has been hiding this whole family.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    int y = 1 + &c.fd
+    print(y)

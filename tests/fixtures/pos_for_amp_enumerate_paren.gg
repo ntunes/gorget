@@ -1,0 +1,17 @@
+# Round XXIII Track β — POSITIVE CONTROL: parenthesized
+# `for i, x in (&a).enumerate():` — the receiver-wrap variant of the
+# for-enumerate write-through mode (§3.1 "same unbroken `&` chain, spelled
+# with parens"). The `check_iterable_maybe_amp` strip preamble at
+# `check_stmt::Stmt::For` unwraps the `Expr::MutableBorrow` around the
+# `.enumerate()` receiver so the new `E_AmpInOperandPosition` reject does
+# not false-flag it. Live corpus companion:
+# `cow_for_enumerate_amp_recv_wrap.gg`.
+
+struct Cell:
+    int v
+
+void main():
+    Vector[Cell] a = [Cell(1)]
+    for i, x in (&a).enumerate():
+        x.v = x.v + 100 + i
+    print(a.get(0).unwrap().v)

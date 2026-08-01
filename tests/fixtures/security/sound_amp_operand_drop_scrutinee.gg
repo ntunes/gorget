@@ -1,0 +1,34 @@
+# Round XXIII Track β — TAINTED-TWIN pin: `&`-of-a-place in a MATCH SCRUTINEE
+# duplicates the user Drop. Same class-wide root as the `if`-cond twin
+# (`security/sound_amp_operand_position_duplicate_drop.gg`), different
+# operand costume — confirmed at scout that EVERY operand costume duplicates
+# the user Drop, not just `if`.
+#
+# WRONG TODAY (measured at HEAD, C backend): `0\nclose 9\nclose 9`
+# (`else` runs because the address isn't 9, plus the owner's `drop` runs
+# TWICE). The control with the sigil removed prints a single `close 9`.
+#
+# INTENDED: REJECT at `gg check` with `E_AmpInOperandPosition` — the class
+# reject retires both the silent-wrong-output AND the double-Drop
+# memory-safety failure in ONE chokepoint.
+
+struct FH:
+    int fd
+
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+
+int seed():
+    return 9
+
+void pokep(FH p):
+    match &p.fd:
+        case 9:
+            print(1)
+        else:
+            print(0)
+
+void main():
+    FH h = FH(seed())
+    pokep(h)

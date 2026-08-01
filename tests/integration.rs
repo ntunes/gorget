@@ -37884,26 +37884,192 @@ fn closure_amp_method_arg_body_reject() {
     );
 }
 
-/// KNOWN GAP — `&`-of-a-projection in an OPERAND position is silently wrong.
-/// A costume family with no home in either filed census: not an OWNING position
-/// and not a value/RESTING position, so the rules written for those two have no
-/// subject covering it (Core #15e-Q4 — a case with no subject).
+/// GRADUATED Round XXIII Track β — `&`-of-a-projection in an OPERAND position
+/// is now REJECTED at `gg check` with `E_AmpInOperandPosition` via the
+/// one-producer chokepoint at `src/semantic/safety/check_expr.rs:276`. This
+/// graduation re-purposes the pre-existing DURABLE known_gaps repro (no new
+/// file — Core #12 durable-repro rule) as a check-fails assertion.
 ///
-/// Measured at HEAD, `gg check` clean for every row: match scrutinee prints 0
-/// (correct 1) · binary operand fails the C compile with `void*`+`void*` and
-/// emits `add ptr` on LLVM · comparison compares the address · index expression
-/// traps out-of-bounds on a raw address · closure body yields garbage.
-/// This pins the match-scrutinee row, the cleanest silent wrong-output.
-///
-/// ⚠ ggdef CANNOT adjudicate this family (outside the phase-0 subset), so
-/// C/LLVM agreement means nothing here. The tainted twin duplicates a user
-/// `Drop` — `security/sound_amp_operand_position_duplicate_drop.gg`.
+/// Class-wide reject: the same chokepoint covers match scrutinee, binop /
+/// comparison operand (either order), if/while cond, index / f-string /
+/// closure body / return / augassign RHS / throw / select-send value /
+/// range endpoint / tuple/array elem / as-cast (13 costumes are pinned as
+/// their own NEG fixtures at `tests/fixtures/sound_amp_operand_*_error.gg`;
+/// see also the tainted-twin `security/sound_amp_operand_drop_*.gg`).
 #[test]
-#[ignore = "KNOWN GAP: `&`-of-a-place in an operand position lowers the address, so a match \
-scrutinee compares a pointer and never matches. Asserts the INTENDED value semantics (or a \
-check-time reject); TODO.md."]
-fn sound_amp_operand_position_scrutinee() {
-    run_gg("known_gaps/sound_amp_operand_position_scrutinee.gg", "1");
+fn sound_amp_operand_position_scrutinee_rejected() {
+    check_gg_fails(
+        "known_gaps/sound_amp_operand_position_scrutinee.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+// ── Round XXIII Track β — 13 costume NEG fixtures for the operand-position
+// `&` reject class. One-producer chokepoint at
+// `src/semantic/safety/check_expr.rs:276`; each costume was RED-verified
+// pre-fix (see per-fixture header for the C / LLVM failure mode). Plus 2
+// Pass-1 additions (throw, select-send) and 3 positive controls that must
+// stay green (for-iterable via strip preamble, `.enumerate()` receiver-wrap,
+// call-arg unchanged) + 1 durable SH-lane companion `#[ignore]`d until the
+// SH-typechecker port lands (Core #9 lane parity).
+
+#[test]
+fn sound_amp_operand_scrutinee_error() {
+    check_gg_fails(
+        "sound_amp_operand_scrutinee_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_binop_lhs_error() {
+    check_gg_fails(
+        "sound_amp_operand_binop_lhs_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_binop_rhs_error() {
+    check_gg_fails(
+        "sound_amp_operand_binop_rhs_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_augassign_error() {
+    check_gg_fails(
+        "sound_amp_operand_augassign_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_cmp_error() {
+    check_gg_fails(
+        "sound_amp_operand_cmp_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_cmp_rev_error() {
+    check_gg_fails(
+        "sound_amp_operand_cmp_rev_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_index_error() {
+    check_gg_fails(
+        "sound_amp_operand_index_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_fstring_error() {
+    check_gg_fails(
+        "sound_amp_operand_fstring_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_closure_error() {
+    check_gg_fails(
+        "sound_amp_operand_closure_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_return_error() {
+    check_gg_fails(
+        "sound_amp_operand_return_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_if_cond_error() {
+    check_gg_fails(
+        "sound_amp_operand_if_cond_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_range_error() {
+    check_gg_fails(
+        "sound_amp_operand_range_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_as_error() {
+    check_gg_fails(
+        "sound_amp_operand_as_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_throw_error() {
+    check_gg_fails(
+        "sound_amp_operand_throw_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_send_error() {
+    check_gg_fails(
+        "sound_amp_operand_send_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+// ── Positive controls (must stay green) — Core #12 axis-completeness for
+// the operand-vs-legit-`&` axis. Iterable-position `&` in for-stmt and
+// comprehensions strips at `check_iterable_maybe_amp`; call-arg `&` strips
+// at the parser (`parse_ownership_modifier`) and never reaches the safety
+// pass's `Expr::MutableBorrow` arm.
+
+#[test]
+fn pos_for_amp_iter_paren() {
+    run_gg("pos_for_amp_iter_paren.gg", "3\n2\n4\n6");
+}
+
+#[test]
+fn pos_for_amp_enumerate_paren() {
+    run_gg("pos_for_amp_enumerate_paren.gg", "101");
+}
+
+#[test]
+fn pos_call_arg_amp_unchanged() {
+    run_gg("pos_call_arg_amp_unchanged.gg", "101");
+}
+
+/// Round XXIII Track β — DURABLE SH-lane companion (Core #9 + owner rule
+/// 2026-07-24). Currently `#[ignore]`d: the SH-typechecker at
+/// `tests/fixtures/self_host_typechecker/typecheck.gg:713-719`
+/// (`check_local_borrow_bind`) rejects only VarDecl/Assign RHS, so an
+/// operand-position `&`-of-a-place silently ACCEPTS on SH. Un-ignore when
+/// the SH-lane port lands (see fixture header for the port spec + owed
+/// `check_amp_operand` walker sketch).
+#[test]
+#[ignore = "SH-LANE GAP: operand-position `&`-of-a-place still silently accepts on SH-typechecker; \
+port a mirror `check_amp_operand` walker + strip preambles for for-iter/enumerate/comprehension. \
+Asserts the intended SH reject; TODO.md."]
+fn sh_amp_operand_reject() {
+    check_gg_fails(
+        "known_gaps/sh_amp_operand_reject.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
 /// GRADUATED Round XIV — `.or_else()` receiver-emptying regression pin, third

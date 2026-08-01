@@ -1,0 +1,18 @@
+# Round XXIII Track β — `&`-of-a-place as a return expression.
+# Costume 10/13. Pre-fix (measured at HEAD): `gg check` clean; C prints raw
+# address; LLVM `llc` hard-fails. Distinct from D10(b) owning-position
+# return (a NAMED `&`-bind that is then returned) — this is a bare
+# `return &c.fd` at operand position. INTENDED: reject at check-time.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+int leak_addr():
+    Counter c = Counter(seed())
+    return &c.fd
+
+void main():
+    print(leak_addr())

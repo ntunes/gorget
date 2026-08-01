@@ -1,0 +1,23 @@
+# Round XXIII Track β — POSITIVE CONTROL: parenthesized `for x in (&coll):`.
+# Currently blocked by the parser's `looks_like_closure()` heuristic (which
+# reads `(v):` as a closure-param position); the un-parenthesized
+# `for x in &coll:` is the practical spelling. This control instead pins the
+# comprehension iterable form `[x for x in &a]` — the same underlying strip
+# preamble (`check_iterable_maybe_amp`) covers it — because the comprehension
+# parser DOES land `&a` as `Expr::MutableBorrow` on the iterable (unlike
+# stmt-for, which the parser's `parse_ownership_modifier` consumes into the
+# `Stmt::For.ownership` field before the iterable is parsed).
+#
+# Sibling live-corpus regression: `cow_comprehension_amp_source.gg` (whose
+# `[x * 2 for x in &a]` shape would false-reject without the strip).
+# Core #12 axis-completeness: this is one of the 3 positive controls;
+# `pos_for_amp_enumerate_paren.gg` covers `.enumerate()` receiver-wrap;
+# `pos_call_arg_amp_unchanged.gg` covers the CallArg strip.
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [x * 2 for x in &a]
+    print(b.len())
+    print(b.get(0).unwrap())
+    print(b.get(1).unwrap())
+    print(b.get(2).unwrap())

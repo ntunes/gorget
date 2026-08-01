@@ -1,0 +1,21 @@
+# Round XXIII Track β — `&`-of-a-place as a `throw` payload.
+# NEG 14/18 (Pass-1 addition — scout's 20-position list omitted `Stmt::Throw`;
+# it flows through `check_expr` so is FUNCTIONALLY caught by the chokepoint
+# but this NEG-pins the position explicitly per Core #15e Q3
+# selection-vs-enumeration).
+#
+# Pre-fix (measured): `gg check` clean; the raw address becomes the thrown
+# int payload. INTENDED: reject at check-time.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+int leak_addr() throws int:
+    Counter c = Counter(seed())
+    throw &c.fd
+
+int main() throws int:
+    return leak_addr()!

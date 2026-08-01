@@ -1,0 +1,16 @@
+# Round XXIII Track β — `&`-of-a-place in an f-string interpolation.
+# Costume 8/13. Pre-fix (measured at HEAD): `gg check` clean; C prints `10`
+# (benign today by a lucky deref path in the interpolation lowering). LLVM
+# `llc` hard-fails. The benign C output does NOT license this shape: the
+# same `&` in any other operand costume miscompiles, and a lowering tweak
+# elsewhere could regress this one silently. Chokepoint reject.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    print(f"{&c.fd}")

@@ -1,0 +1,14 @@
+# Round XXIII Track β — `&`-of-a-place as a closure body tail.
+# Costume 9/13. Pre-fix (measured at HEAD): `gg check` clean; C prints a raw
+# address; LLVM `llc` hard-fails. INTENDED: reject at check-time.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Callable[int()] f = (): &c.fd
+    print(f())

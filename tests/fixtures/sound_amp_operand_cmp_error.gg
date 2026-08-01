@@ -1,0 +1,20 @@
+# Round XXIII Track β — `&`-of-a-place on the LHS of a comparison.
+# Costume 5/13. Pre-fix (measured at HEAD): `gg check` clean; C prints `1`
+# — but ONLY BY ASLR COINCIDENCE (the address happens to be > 5, so the
+# `then` branch runs). Under a different heap layout the `else` branch would
+# fire (Core #15e Q6: accidentally-correct control). LLVM `llc` hard-fails.
+# INTENDED: reject at check-time; the reject sidesteps the entire
+# nondeterminism axis.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    if &c.fd > 5:
+        print(1)
+    else:
+        print(0)

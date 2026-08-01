@@ -1,0 +1,15 @@
+# Round XXIII Track β — `&`-of-a-place as the operand of an `as`-cast.
+# Costume 13/13. Pre-fix: `gg check` clean; C reinterprets the address
+# under whatever the cast target dictates (silent miscompile). LLVM `llc`
+# hard-fails. INTENDED: reject at check-time.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    float f = &c.fd as float
+    print(f)

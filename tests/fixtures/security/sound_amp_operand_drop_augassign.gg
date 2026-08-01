@@ -1,0 +1,27 @@
+# Round XXIII Track β — TAINTED-TWIN pin: `&`-of-a-place on the RHS of a
+# compound assign (`x += &p.fd`) duplicates the user Drop. Third of three
+# representative twin costumes (scrutinee, binop-rev, augassign) — per Core
+# #12 axis-completeness we sample three shapes of the class rather than
+# spraying 15 near-duplicate security fixtures; the chokepoint reject
+# collapses them all.
+#
+# INTENDED: REJECT at `gg check` with `E_AmpInOperandPosition`.
+
+struct FH:
+    int fd
+
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+
+int seed():
+    return 9
+
+void pokep(FH p):
+    int x = 1
+    x += &p.fd
+    print(x)
+
+void main():
+    FH h = FH(seed())
+    pokep(h)
