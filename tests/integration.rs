@@ -38512,6 +38512,16 @@ fn combinator_result_or_else_error_cross_type() {
     run_gg("combinator_result_or_else_error_cross_type.gg", "5");
 }
 
+/// Round XXIV Track C — graduated STRENGTHEN-B fixture: cross-type `.or_else`
+/// with a large Error payload (Vector[int]+3 ints in BigErr ≈ 88B vs 16B
+/// recv-forced dest) — pre-fix SH mis-sized `result_local` from receiver
+/// type, truncating the closure's return and producing garbage `.cents.len()`.
+/// Post-fix SH sizes `result_local` from the closure's declared return.
+#[test]
+fn combinator_result_or_else_error_axis_sbo() {
+    run_gg("combinator_result_or_else_error_axis_sbo.gg", "5");
+}
+
 /// Round XXIII Track α NEG — cross-type `.or_else` Ok-axis (T' != T) rejected
 /// at typecheck. Pre-fix accepted (then SBO'd at runtime); post-fix rejected
 /// by `unify_closure_ret_axis(ClosureCombinatorCell::ResultOrElse)`.
