@@ -1,0 +1,13 @@
+# Round XXII Track δ regression: `take_int(None())` — the CALL form of the
+# NoneLiteral at a function-argument position — must REJECT at check time.
+# Same class as `int a = None()`, different position on the class-fix's axis.
+# Runtime observed at HEAD 0aa3f5a6 pre-fix: `take_int` prints `got 0`, both
+# backends agreeing on wrong output (Core #8 both-wrong).
+#
+# POSITION AXIS: fn-arg. Sibling `sound_bare_none_call_in_vardecl_rejected.gg`
+# covers the var-decl position.
+
+void take_int(int x): print(f"got {x}")
+
+void main():
+    take_int(None())

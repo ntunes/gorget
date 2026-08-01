@@ -1,0 +1,20 @@
+# Round XXII Track δ regression: `int a = None()` — the CALL form of the
+# NoneLiteral — must REJECT at check time. Pre-fix the typechecker's Expr::Call
+# arm had no special-case for `Call { callee: NoneLiteral }`; the callee typed
+# as Option[?T], fell through the wildcard at `typecheck.rs:2410` and returned
+# `error_id`, which unified silently against any dest type (`unify` fast-path
+# at :953). Runtime observed at HEAD 0aa3f5a6 pre-fix: prints `a = 0`, both
+# backends agreeing on wrong output (Core #8 both-wrong).
+#
+# Post-fix: the Expr::Call arm mirrors the IR lowerer at
+# `src/ir/lowering/exprs/mod.rs:263` and delegates to `Expr::NoneLiteral`'s
+# `decl_type_hint` logic. Here decl_type_hint = int, which is NOT Option, so
+# NoneLiteral produces Option[fresh]; the surrounding unify then rejects
+# Option[?T] against int cleanly (E_TypeMismatch).
+#
+# POSITION AXIS: var-decl. Sibling `sound_bare_none_call_in_fnarg_rejected.gg`
+# covers the fn-arg position.
+
+void main():
+    int a = None()
+    print(f"a = {a}")

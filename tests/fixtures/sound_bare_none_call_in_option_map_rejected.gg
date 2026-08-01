@@ -1,0 +1,19 @@
+# Round XXII Track δ regression: `Some(3).map((int x): None())` — bare `None()`
+# inside an Option.map closure body — must REJECT at check time. Same class as
+# `int a = None()`; the combinator axis is the highest-value probe because the
+# closure body's expected_type is set to the OUTER var-decl's `Option[int]`,
+# which hides the mis-typing (Track δ scout §.map). Runtime observed at HEAD
+# 0aa3f5a6 pre-fix: prints `Some: 1`, both backends agreeing on wrong output
+# (Core #8 both-wrong).
+#
+# Post-fix: Expr::NoneLiteral inside the closure sees decl_type_hint =
+# Option[int] and produces Option[int]; .map's `infer_closure_method_type`
+# (`typecheck.rs:7531`) wraps the closure return as Option[Option[int]], which
+# then fails to unify with the outer Option[int] dest → E_TypeMismatch.
+#
+# COMBINATOR AXIS: .map (Option). Sibling
+# `sound_bare_none_call_in_result_map_rejected.gg` covers Result.map.
+
+void main():
+    Option[int] result = Some(3).map((int x): None())
+    if result is Some(v): print(f"Some: {v}") else: print("None")

@@ -1645,6 +1645,41 @@ impl<'a> TypeChecker<'a> {
                 // struct field callable `h.f`, an IIFE closure literal).
                 self.expr_types.insert(callee.span, callee_type);
 
+                // Round XXII Track δ: bare `None()` — mirror the IR lowerer at
+                // `src/ir/lowering/exprs/mod.rs:263` where `Call { callee:
+                // NoneLiteral }` delegates to the bare `NoneLiteral` arm's
+                // `materialise_none_for_expected_type`. Without a check-time
+                // parallel, the callee typed as `Option[?T]`, fell through the
+                // wildcard at :2410, and returned `error_id` at :2469, which
+                // then unified silently with any dest type (see
+                // `unify` fast-path at :953). That was a silent-wrong-output
+                // CLASS: `int a = None()` bound 0, `Some(3).map((int x): None())`
+                // printed `Some: 1`, `Result[int,int]` `Ok(3).map((int x): None())`
+                // printed `Ok: 0` — both backends agreeing on the wrong answer
+                // (Core #8). Reads the typed `Expr::NoneLiteral` variant
+                // discriminator, not a name (Core #2). The infer_expr(callee)
+                // call above already produced the correct `Option[T]` via the
+                // NoneLiteral arm's `decl_type_hint` logic (:1375-1398), so we
+                // just return callee_type; the surrounding unify then rejects
+                // the non-Option destination cleanly. Extra args (`None(1)`,
+                // `None(x, y)`) reject as WrongArgCount — Core #10 lower-or-
+                // reject: don't silently drop the call.
+                if matches!(callee.node, Expr::NoneLiteral) {
+                    if !args.is_empty() {
+                        for arg in args {
+                            self.infer_expr(&arg.node.value);
+                        }
+                        self.error(
+                            SemanticErrorKind::WrongArgCount {
+                                expected: 0,
+                                found: args.len(),
+                            },
+                            expr.span,
+                        );
+                    }
+                    return callee_type;
+                }
+
                 // Track R (owner Q1 2026-07-28): NonDerefContainer[BareTrait]
                 // reject at CALL-EXPRESSION generic-arg position (7th user-facing
                 // surface — Track P covered the 6 annotation-shaped surfaces via

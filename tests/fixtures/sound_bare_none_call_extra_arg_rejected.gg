@@ -1,0 +1,15 @@
+# Round XXII Track δ regression: `None(1)` — the NoneLiteral CALL form with
+# spurious positional args — must REJECT with E_WrongArgCount at check time.
+# Pre-fix `None(1)` silently accepted and typed as Option[int] (via the same
+# error_id fall-through); the "1" was evaluated and discarded (Core #10
+# silently-dropped-user-syntax class). Runtime at HEAD 0aa3f5a6 pre-fix: the
+# program builds and prints `built`.
+#
+# Post-fix: the Expr::Call NoneLiteral branch checks args.is_empty() first
+# and emits E_WrongArgCount { expected: 0, found: args.len() } when the user
+# passes anything. The Core #10 arm keeps the callee's type for recovery so
+# downstream typing does not cascade into a spam of secondary errors.
+
+void main():
+    Option[int] a = None(1)
+    print(f"is_some={a.is_some()}")

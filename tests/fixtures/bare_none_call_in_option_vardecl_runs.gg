@@ -1,0 +1,14 @@
+# Round XXII Track δ positive control: `Option[int] r = None()` — the CALL
+# form of NoneLiteral with an Option-shaped decl hint — must CONTINUE to
+# type-check and run correctly after the Track δ Expr::Call NoneLiteral
+# branch lands. The branch delegates to Expr::NoneLiteral's decl_type_hint
+# logic (`typecheck.rs:1375-1398`), which sees an Option hint and returns it
+# directly. Together with the same-shape bare `None` (no parens) form, this
+# is the ONE accept path the fix must preserve.
+#
+# Sibling of the reject fixtures — if the class-fix regresses the accept
+# path this fixture goes red BEFORE any parity user notices.
+
+void main():
+    Option[int] r = None()
+    if r is Some(v): print(f"Some: {v}") else: print("None")

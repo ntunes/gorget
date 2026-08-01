@@ -9353,6 +9353,70 @@ fn default_op_optional_result_runs() {
     run_gg("default_op_optional_result_runs.gg", "42\n5\n99\n7");
 }
 
+// Round XXII Track δ: retire the bare-`None()` (Expr::Call { callee:
+// NoneLiteral }) silent-wrong-output class at the typechecker chokepoint
+// (`src/semantic/typecheck.rs` Expr::Call arm). Pre-fix the callee typed as
+// Option[?T], fell through the wildcard at `typecheck.rs:2410`, and returned
+// `error_id`, which unified silently against ANY dest type — a Core #8
+// both-backend-wrong class: `int a = None()` bound 0, `Some(3).map((int x):
+// None())` printed `Some: 1`, `Result[int,int]` `Ok(3).map((int x): None())`
+// printed `Ok: 0`. Post-fix the branch mirrors the IR lowerer at
+// `src/ir/lowering/exprs/mod.rs:263` and delegates to Expr::NoneLiteral's
+// decl_type_hint logic; the surrounding unify then rejects the non-Option
+// destination cleanly. Fixtures span POSITION (var-decl · fn-arg) and
+// COMBINATOR (Option.map · Result.map) axes so a partial regression trips
+// the suite; a fifth pins the WrongArgCount arm (Core #10 no-silent-drop).
+// The `bare_none_call_in_option_vardecl_runs` positive control guards the
+// one accept path (`Option[int] r = None()`) against over-broad reject.
+#[test]
+fn sound_bare_none_call_in_vardecl_rejected() {
+    check_gg_fails(
+        "sound_bare_none_call_in_vardecl_rejected.gg",
+        "type mismatch: expected `int`, found `Option[",
+    );
+}
+
+#[test]
+fn sound_bare_none_call_in_fnarg_rejected() {
+    check_gg_fails(
+        "sound_bare_none_call_in_fnarg_rejected.gg",
+        "type mismatch: expected `int`, found `Option[",
+    );
+}
+
+#[test]
+fn sound_bare_none_call_in_option_map_rejected() {
+    check_gg_fails(
+        "sound_bare_none_call_in_option_map_rejected.gg",
+        "type mismatch: expected `int`, found `Option[",
+    );
+}
+
+#[test]
+fn sound_bare_none_call_in_result_map_rejected() {
+    check_gg_fails(
+        "sound_bare_none_call_in_result_map_rejected.gg",
+        "type mismatch: expected `int`, found `Option[",
+    );
+}
+
+#[test]
+fn sound_bare_none_call_extra_arg_rejected() {
+    check_gg_fails(
+        "sound_bare_none_call_extra_arg_rejected.gg",
+        "wrong number of arguments: expected 0, found 1",
+    );
+}
+
+#[test]
+fn bare_none_call_in_option_vardecl_runs() {
+    // Positive control: the ONE accept path the Track δ class-fix must
+    // preserve — `Option[int] r = None()` (the CALL form of NoneLiteral with
+    // an Option-shaped decl hint) delegates to Expr::NoneLiteral's decl-hint
+    // arm and binds correctly. Guards the fix against becoming over-broad.
+    run_gg("bare_none_call_in_option_vardecl_runs.gg", "None");
+}
+
 #[test]
 fn variable_initialization() {
     // Every variable declaration carries an explicit initializer (Gorget has no

@@ -1,0 +1,18 @@
+# Round XXII Track δ regression: `r.map((int x): None())` on `Result[int,int]`
+# — bare `None()` inside a Result.map closure body — must REJECT at check
+# time. Class-sibling of `Option.map`; the receiver family is different but
+# the underlying hole is the same NoneLiteral-call typechecker gap. Runtime
+# observed at HEAD 0aa3f5a6 pre-fix: prints `Ok: 0`, both backends agreeing
+# on wrong output (Core #8 both-wrong).
+#
+# Post-fix: same mechanism as the Option.map fixture — the closure typing at
+# `typecheck.rs:7548` wraps Option[int] into Result[Option[int], int], which
+# fails to unify with the outer Result[int, int] → E_TypeMismatch.
+#
+# COMBINATOR AXIS: .map (Result). Sibling
+# `sound_bare_none_call_in_option_map_rejected.gg` covers Option.map.
+
+void main():
+    Result[int, int] r = Ok(3)
+    Result[int, int] result = r.map((int x): None())
+    if result is Ok(v): print(f"Ok: {v}") else: print("Error")
