@@ -8087,15 +8087,36 @@ fn combinator_adapter_ownership_invariants() {
     );
 
     // P7 extract-site floors
-    let load_moves = adapter.matches("enum_field_load_move(").count();
+    //
+    // Round XXII Track β folded the 4-line `assert + enum_field_load_move +
+    // set_owned + move_zero(scrut) + drops.register_local` pattern into the
+    // helper `extract_enum_payload_owned` (Core #4 chokepoint + Core #3
+    // birth-registration). The site-count invariant is now carried by helper
+    // CALL SITES in the adapter, not by inline uses of `enum_field_load_move`
+    // / `assert_scrut_is_value_enum` (which now appear ONCE each, inside the
+    // helper). Count both: the helper invocations at the extraction chokepoints
+    // (5: Some/Ok + 4 Error mirrors), AND the underlying calls in-file (≥5:
+    // the helper body + any residual inline sites).
+    let extract_calls = adapter.matches("extract_enum_payload_owned(").count();
     assert!(
-        load_moves >= 5,
-        "P7: enum_field_load_move count in adapter is {load_moves} (want ≥ 5)."
+        extract_calls >= 5,
+        "P7: extract_enum_payload_owned call count in adapter is {extract_calls} (want ≥ 5 — \
+         Some/Ok + 4 Error mirrors; helper folded 2026-08-01 Round XXII β)."
     );
-    let assert_calls = adapter.matches("assert_scrut_is_value_enum(").count();
+    // The underlying `enum_field_load_move` + `assert_scrut_is_value_enum`
+    // calls now live in the helper's body (a SIBLING top-level fn), not in the
+    // adapter — count against the WHOLE file (`methods`), not the adapter body.
+    let load_moves = methods.matches("enum_field_load_move(").count();
     assert!(
-        assert_calls >= 5,
-        "P7b: assert_scrut_is_value_enum call count is {assert_calls} (want ≥ 5)."
+        load_moves >= 1,
+        "P7-underlying: enum_field_load_move count in methods.rs is {load_moves} (want ≥ 1 \
+         — helper body carries it; folded 2026-08-01)."
+    );
+    let assert_calls = methods.matches("assert_scrut_is_value_enum(").count();
+    assert!(
+        assert_calls >= 1,
+        "P7b: assert_scrut_is_value_enum count in methods.rs is {assert_calls} (want ≥ 1 — \
+         helper body carries it; folded 2026-08-01)."
     );
 
     // P8 assign_result_local_move
@@ -8110,13 +8131,18 @@ fn combinator_adapter_ownership_invariants() {
     );
 
     // P9 vacuous floor
+    //
+    // 2026-08-01 Round XXII β: `assert_scrut_is_value_enum(` moved to the new
+    // `extract_enum_payload_owned` helper (a sibling top-level fn). Swap the
+    // pin: the ADAPTER now shows the helper's call sites — same invariant
+    // (extraction chokepoint) via a different token.
     let pin_hits = [
         adapter.contains("GirType::Ptr(inner)"),
         adapter.contains("clone_fn_for_ptr(recv_type)"),
         adapter.contains("call_clone("),
         adapter.contains("is_resource_type(recv_type)"),
         adapter.contains("infer_closure_return_type"),
-        adapter.contains("assert_scrut_is_value_enum("),
+        adapter.contains("extract_enum_payload_owned("),
         adapter.contains("assign_result_local_move("),
     ]
     .iter()
