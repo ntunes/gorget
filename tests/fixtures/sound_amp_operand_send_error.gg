@@ -1,0 +1,30 @@
+# Round XXIII Track β — `&`-of-a-place NESTED in a `select: case
+# ch.send(...)` value. NEG 15/18.
+#
+# ⚠ Scout-premise correction (Core #12 Q6): a top-level `ch.send(&c.fd)`
+# argument STRIPS the `&` at the parser (`parse_ownership_modifier` in
+# `CallArg` parsing), so it never reaches the safety pass as
+# `Expr::MutableBorrow`; that shape is a call-arg, not an operand position.
+# What DOES land as an operand-position `&` inside a select-send is a
+# NESTED expression like `ch.send(1 + &c.fd)` — the outer `1 + _` is a
+# binop, and its RHS is a genuine operand-position `Expr::MutableBorrow`.
+# Pre-fix: `gg check` clean; the raw address gets added to 1 and the sum
+# gets sent. INTENDED: reject at check-time via the operand-position
+# chokepoint (the reject is emitted for the nested binop-RHS, not the
+# top-level send arg — same one-producer arm).
+
+from std.channel import Channel
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+async void main():
+    Counter c = Counter(seed())
+    Channel[int] ch = Channel[int](1)
+    select:
+        case ch.send(1 + &c.fd):
+            print(1)
+    ch.close()

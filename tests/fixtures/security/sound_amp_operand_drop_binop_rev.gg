@@ -1,0 +1,26 @@
+# Round XXIII Track β — TAINTED-TWIN pin: `&`-of-a-place on the RHS of a
+# binop duplicates the user Drop. Scout-confirmed on `int y = 1 + &p.fd`:
+# prints `<address>\nclose 9\nclose 9`. The control without the sigil
+# prints `10\nclose 9` (single Drop). Same operand-position class as the
+# scrutinee twin; same one-producer reject at
+# `src/semantic/safety/check_expr.rs:276` retires both.
+#
+# INTENDED: REJECT at `gg check` with `E_AmpInOperandPosition`.
+
+struct FH:
+    int fd
+
+equip FH with Drop:
+    void drop(!self):
+        print(f"close {self.fd}")
+
+int seed():
+    return 9
+
+void pokep(FH p):
+    int y = 1 + &p.fd
+    print(y)
+
+void main():
+    FH h = FH(seed())
+    pokep(h)

@@ -1,0 +1,18 @@
+# Round XXIII Track β — `&`-of-a-place used as an `if`-condition (via a
+# `!= 0` bool coercion). Costume 11/13. Pre-fix: `gg check` clean; C compares
+# the raw address to 0 (always non-null → always the `then` branch), which
+# looks correct here by accident (Core #15e Q6 — an accidentally-correct
+# result). LLVM `llc` hard-fails. INTENDED: reject at check-time.
+
+struct Flag:
+    int on
+
+int seed():
+    return 0
+
+void main():
+    Flag f = Flag(seed())
+    if &f.on != 0:
+        print(1)
+    else:
+        print(0)

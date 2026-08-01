@@ -1,0 +1,38 @@
+# Round XXIII Track β — DURABLE SH-lane COMPANION for the operand-position
+# `&` reject (Core #9 lane-parity + owner rule 2026-07-24: filed bugs get a
+# committed reproducer, never a `/tmp` scratch).
+#
+# STATUS: SH-lane still-open gap. The self-host typechecker at
+# `tests/fixtures/self_host_typechecker/typecheck.gg:713-719`
+# (`check_local_borrow_bind`) only rejects at VarDecl/Assign RHS (the D10(a)
+# mirror), so operand-position `&`-of-a-place silently ACCEPTS on SH — the
+# same silent-wrong-output / double-Drop class Rust gg now rejects at
+# `check_expr.rs:276`. Filed follow-up: port a mirror `check_amp_operand`
+# walker to the SH-typechecker, invoked from every non-VarDecl/Assign
+# operand recursion (match scrutinee, binop/cmp operands, if/while cond,
+# augassign RHS, index, f-string interp, closure body, return, throw,
+# select-send value, range endpoint, tuple/array elem, `as`-cast) — with
+# strip preambles at for-iterable + `.enumerate()` receiver + comprehension
+# iterable mirroring the Rust `check_iterable_maybe_amp` chokepoint.
+#
+# WIRING: the harness un-ignore lands the same round as the SH-lane port.
+# Until then, this file is a DURABLE repro (owner rule 2026-07-24) so a
+# future scout has a stable minimal case; the paired `#[ignore]`d test in
+# `tests/integration.rs` asserts the INTENDED SH driver reject.
+#
+# INTENDED SH behaviour: SH driver rejects with a diagnostic mirroring
+# `E_AmpInOperandPosition` (DkAmpInOperandPosition or equivalent).
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    match &c.fd:
+        case 10:
+            print(1)
+        else:
+            print(0)

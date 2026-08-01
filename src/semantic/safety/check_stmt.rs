@@ -17,8 +17,29 @@ impl<'a> BorrowChecker<'a> {
             Stmt::VarDecl {
                 pattern, value, type_, shared, ..
             } => {
-                // Check the value expression
-                self.check_expr(value);
+                // Round XXIII Track β — option-D intercept: for the DIRECT
+                // top-level `Expr::MutableBorrow` case (`auto x = &b`,
+                // `Vector[int] r = &b.data`), D10(a) `E_LocalBorrowBind` at
+                // the typechecker is the AUTHORITATIVE reject; skip the
+                // safety-pass MutableBorrow reject descent so we don't emit
+                // a duplicate `E_AmpInOperandPosition` for the same syntax.
+                // We still walk the INNER expression so aliasing/liveness
+                // bookkeeping happens.
+                //
+                // COMPOUND-shape D10(a) sites (`int x = if c: &a else: &b`,
+                // `match e: case P: &y`, `do: &a`, `{ ...; &a }`) STILL emit
+                // both messages — D10(a) fires first + is authoritative;
+                // documented follow-up: mirror-walker suppression in a later
+                // round. Deliberately does NOT call `expr_is_borrow_bind`
+                // (which would over-match those compound tails and swallow
+                // the operand-position reject for costumes that legitimately
+                // deserve it).
+                if let Expr::MutableBorrow { expr: inner } = &value.node {
+                    self.check_expr(inner);
+                } else {
+                    // Check the value expression
+                    self.check_expr(value);
+                }
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
                 // Destructuring patterns (Tuple) implicitly move the value,
@@ -409,7 +430,19 @@ impl<'a> BorrowChecker<'a> {
                         self.assignment_rebind_target = Some(did);
                     }
                 }
-                self.check_expr(value);
+                // Round XXIII Track β — option-D intercept: for the DIRECT
+                // top-level `Expr::MutableBorrow` RHS case (`r = &b`), D10(a)
+                // `E_LocalBorrowBind` at the typechecker owns the reject;
+                // skip the safety-pass MutableBorrow reject descent to avoid
+                // duplicating it. Still walk the inner for aliasing/liveness.
+                // Compound-shape wrappers (If/Match/Do/Block tail borrow-bind)
+                // remain both-messages (D10(a) authoritative, follow-up
+                // mirror-walker suppression filed).
+                if let Expr::MutableBorrow { expr: inner } = &value.node {
+                    self.check_expr(inner);
+                } else {
+                    self.check_expr(value);
+                }
                 self.assignment_rebind_target = prev_rebind;
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
@@ -997,7 +1030,10 @@ impl<'a> BorrowChecker<'a> {
                 else_body,
                 ..
             } => {
-                self.check_expr(iterable);
+                // Round XXIII Track β — MIRROR the pre-strip preambles from
+                // `for_loops.rs:150-193`. See `check_iterable_maybe_amp`
+                // (check_expr.rs) for the case enumeration and rationale.
+                self.check_iterable_maybe_amp(iterable);
 
                 // Track borrow origins for for-loop pattern bindings.
                 // The iterable origin propagates to pattern variables so that

@@ -1,0 +1,20 @@
+# Round XXIII Track β — `&`-of-a-place on the RHS of an augmented assign.
+# Costume 4/13. Pre-fix (measured at HEAD): `gg check` clean; C BUILDS,
+# `x += &c.fd` adds the RAW ADDRESS to `x` — silent miscompile, prints
+# garbage. LLVM `llc` hard-fails. INTENDED: reject at `gg check`.
+#
+# CompoundAssign is NOT affected by the option-D intercept (D10(a)
+# `E_LocalBorrowBind` does NOT run on `x += &y`), so the new
+# `E_AmpInOperandPosition` reject is the ONLY message here — single, clean.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    int x = 1
+    x += &c.fd
+    print(x)

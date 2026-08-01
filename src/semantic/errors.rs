@@ -426,6 +426,27 @@ pub enum SemanticErrorKind {
     /// `&` parameter); frame-scoped `&` params are unaffected.
     LocalBorrowBind,
 
+    /// Round XXIII Track β (ratified handover ruling): `&`-of-a-place used in
+    /// an OPERAND (READ) position — `match &c.fd:`, `1 + &c.fd`, `x += &c.fd`,
+    /// `if &c.fd > 5:`, `v[&c.fd]`, `f"{&c.fd}"`, closure body `(): &c.fd`,
+    /// `return &c.fd`, `throw &c.fd`, channel `send(&c.fd)`, etc. An operand
+    /// is a READ; `&` on a `&` parameter says "the callee writes through the
+    /// borrow", which is meaningless in a read position. Pre-reject: every
+    /// costume silently miscompiled on C (raw address arithmetic, garbage
+    /// prints, address comparisons masquerading as value compares) and
+    /// hard-failed the LLVM verifier (`i64 but expected ptr`); the tainted
+    /// twin duplicated the user `Drop` (`close 9` twice) on EVERY operand
+    /// costume, not just `if`. This one-producer chokepoint retires the
+    /// silent-wrong class + the double-Drop class in one arm.
+    ///
+    /// Legit operand-adjacent positions strip earlier: call-arg `f(&x)` is
+    /// stripped by `parse_ownership_modifier` (never reaches this arm),
+    /// `for x in (&coll)` and `.enumerate()`-receiver strip in
+    /// `check_stmt::Stmt::For` (mirroring `for_loops.rs`), and VarDecl/Assign
+    /// RHS is authoritatively rejected earlier by `E_LocalBorrowBind`
+    /// (D10(a)) via an option-D direct-`Expr::MutableBorrow` intercept.
+    AmpInOperandPosition,
+
     /// A method-level generic param couldn't be inferred from the
     /// call's arg types. Emitted by Phase 2c inference (see
     /// `docs/devbook/09-type-checking.md`, method-level generic inference)
@@ -870,6 +891,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::DerefNonBox { .. } => "E_DerefNonBox",
             SemanticErrorKind::DefaultOpNonOptional { .. } => "E_DefaultOpNonOptional",
             SemanticErrorKind::LocalBorrowBind => "E_LocalBorrowBind",
+            SemanticErrorKind::AmpInOperandPosition => "E_AmpInOperandPosition",
             SemanticErrorKind::MethodGenericInferenceFailed { .. } => "E_MethodGenericInferenceFailed",
             SemanticErrorKind::CannotInferType => "E_CannotInferType",
             SemanticErrorKind::NoFieldFound { .. } => "E_NoFieldFound",
@@ -1072,6 +1094,17 @@ impl std::fmt::Display for SemanticError {
                      alias a second writable path to it. Pass the borrow \
                      directly at a call site (`f(&x)`) or mutate the place \
                      itself (`x.push(..)`, `x.field = value`)"
+                )
+            }
+            SemanticErrorKind::AmpInOperandPosition => {
+                write!(
+                    f,
+                    "`&` is not valid in an operand (read) position — the \
+                     sigil means \"the callee writes through this borrow\" \
+                     and there is no callee here. Drop the `&` and read the \
+                     place directly (`match c.fd:`, `x += c.fd`, `if c.fd > 5:`); \
+                     use `&` only as a function/method argument (`f(&c.fd)`) \
+                     or on a `for` iterable (`for x in &coll:`)"
                 )
             }
             SemanticErrorKind::MethodGenericInferenceFailed { method, type_, unresolved, reason } => {

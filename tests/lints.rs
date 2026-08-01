@@ -1026,6 +1026,70 @@ fn pack_trait_object_call_sites_count() {
     );
 }
 
+/// Round XXIII Track β class-retirement guard (Core #6): the
+/// operand-position `&`-of-a-place reject
+/// (`SemanticErrorKind::AmpInOperandPosition`) is emitted from a small,
+/// enumerated set of walker arms in `src/semantic/safety/`. If a new safety
+/// walker gets added that recurses into `Expr::MutableBorrow` (a new
+/// re-parse path, a new pass), it MUST route the reject through the
+/// producer — this ratchet forces a review.
+///
+/// Enumerated emit sites (baseline 2026-08-01):
+///   - `check_expr.rs` main safety pass `Expr::MutableBorrow` arm (the
+///     ONE-PRODUCER chokepoint, hit by every operand-position `&` that isn't
+///     stripped by a pre-strip preamble).
+///   - `check_expr.rs::check_interpolation_expr` fstring interp walker arm.
+///     Sibling walker forced by the fact that f-string interpolation bodies
+///     are re-parsed via `parse_expr` with synthetic spans that don't match
+///     the resolution map, so it can't reuse `check_expr`'s recursion. Same
+///     class, same reject, different span source (`fstring_span`).
+///
+/// The complementary strip preambles (`for x in &coll`, `.enumerate()`
+/// receiver-wrap, comprehension iterable) are enforced structurally by the
+/// `check_iterable_maybe_amp` helper being the ONLY path used in the four
+/// iterable sites (Stmt::For + 3 comprehension arms) — see that helper's
+/// doc comment for the case enumeration.
+#[test]
+fn amp_in_operand_position_reject_sites_count() {
+    const EXPECTED: usize = 2;
+    let count = count_amp_in_operand_position_rejects();
+    assert_eq!(
+        count, EXPECTED,
+        "AmpInOperandPosition reject-emit-site count in \
+         `src/semantic/safety/**/*.rs` changed: {count} vs expected {EXPECTED}.\n\n\
+         If a NEW safety walker was added that recurses into \
+         `Expr::MutableBorrow` and needs to reject the operand-position class, \
+         verify it emits `SemanticErrorKind::AmpInOperandPosition` at the \
+         chokepoint (Core #4 one-producer) and bump EXPECTED. If a site was \
+         removed / centralized, lower EXPECTED. NEVER add a walker that \
+         silently accepts `&`-of-a-place in an operand position (Core #10).",
+    );
+}
+
+fn count_amp_in_operand_position_rejects() -> usize {
+    let mut count = 0;
+    for path in walkdir_rs("src/semantic/safety") {
+        let content = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            // The emit-site signature: `SemanticErrorKind::AmpInOperandPosition,`
+            // (comma indicates it's the first arg to `self.error(kind, span)`).
+            // Excludes textual mentions in comments (filtered above) and any
+            // future `matches!(..., AmpInOperandPosition)` classifier use.
+            if t.contains("SemanticErrorKind::AmpInOperandPosition,") {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 fn count_pack_trait_object_calls() -> usize {
     let mut count = 0;
     for path in walkdir_rs("src/ir/lowering") {

@@ -1,0 +1,23 @@
+# Round XXIII Track β — POSITIVE CONTROL: `f(&p.field)` call-arg `&` is
+# STRIPPED by the parser's `parse_ownership_modifier`
+# (`src/parser/expr.rs:2010-2055`) into `CallArg.ownership = MutableBorrow`,
+# so it NEVER reaches the safety pass's `Expr::MutableBorrow` arm — the new
+# `E_AmpInOperandPosition` reject cannot false-flag call-arg write-through.
+# The existing 2T `reject_tainted_formation_arg` gate at
+# `check_expr.rs:116` and `:784` (both `CallArg` loops) continues to enforce
+# the drop-tainted rejection at these positions.
+#
+# Core #12 axis-completeness: pins the CallArg cell of the operand-vs-arg
+# axis; siblings `pos_for_amp_iter_paren.gg` +
+# `pos_for_amp_enumerate_paren.gg` cover the for-iter and enumerate cells.
+
+struct Cell:
+    int v
+
+void bump(int &n):
+    n = n + 100
+
+void main():
+    Cell c = Cell(1)
+    bump(&c.v)
+    print(c.v)

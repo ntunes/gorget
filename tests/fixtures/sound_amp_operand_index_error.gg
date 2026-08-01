@@ -1,0 +1,16 @@
+# Round XXIII Track β — `&`-of-a-place as an index expression.
+# Costume 7/13. Pre-fix (measured at HEAD): `gg check` clean; C traps at
+# runtime with `trap[T_Bounds]: index 281474033510640, length 3` — the raw
+# address is treated as an index into `v` and blows past the bounds check.
+# LLVM `llc` hard-fails. INTENDED: reject at check-time.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Vector[int] v = [10, 20, 30]
+    print(v[&c.fd])

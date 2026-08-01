@@ -1,0 +1,16 @@
+# Round XXIII Track β — `&`-of-a-place on the RHS of a comparison
+# (operand-order mirror). Costume 6/13. Same silent-address-compare miscompile
+# as the LHS spelling; the reject retires the operand-order axis in one arm.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    if 5 < &c.fd:
+        print(1)
+    else:
+        print(0)

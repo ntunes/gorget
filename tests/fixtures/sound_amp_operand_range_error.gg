@@ -1,0 +1,17 @@
+# Round XXIII Track β — `&`-of-a-place as a range endpoint.
+# Costume 12/13. Pre-fix: `gg check` clean; C treats the address as the
+# range end, iterating over a garbage span or bounds-trapping. LLVM `llc`
+# hard-fails. INTENDED: reject at check-time.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 3
+
+void main():
+    Counter c = Counter(seed())
+    int sum = 0
+    for i in 0..&c.fd:
+        sum = sum + i
+    print(sum)
