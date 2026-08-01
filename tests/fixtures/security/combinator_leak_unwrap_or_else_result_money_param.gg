@@ -1,0 +1,34 @@
+# CELL: `.unwrap_or_else()` × bare-param recv × Result[int, Money] × Error
+# branch. Error err_val is only borrowed into the closure (which returns
+# `int`, the Ok payload type), so pre-fix the err_val's Money bytes leaked
+# with no owner registered. Class-fix (Track β): route err_val extraction
+# through the shared `extract_enum_payload_owned` helper (Core #3
+# birth-registration + Core #4 producer). See `combinator_leak_map_money_
+# param.gg` header for the class narrative.
+#
+# AXIS SAMPLE: payload=Money (in Error variant) · combinator=unwrap_or_else
+# · closure return=int · recv=bare-param.
+
+struct Money:
+    Vector[int] cents
+
+int size_of(Money m):
+    return m.cents.len()
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Result[int, Money] make_err(int n):
+    return Error(Money(heap_cents(n)))
+
+void call_it(Result[int, Money] p):
+    int r = p.unwrap_or_else((Money m): size_of(m))
+    print(r)
+
+void main():
+    call_it(make_err(7))

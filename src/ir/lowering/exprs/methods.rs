@@ -3479,6 +3479,55 @@ fn assert_scrut_is_value_enum(
     );
 }
 
+/// Round XXII β chokepoint (Core #3 birth-registration + Core #4 producer):
+/// destructively extract an owned payload from `scrut_local`'s enum variant.
+///
+/// Every combinator adapter branch that pulls out a Some/Ok/Error payload
+/// routes through here so the payload's ownership is registered at its
+/// BIRTH — not at its first Move (Core #3). Pre-fix, the 5 open-coded
+/// duplications of this 4-line pattern (`assert + enum_field_load_move +
+/// set_owned + move_zero(scrut)`) all skipped `drops.register_local`, so
+/// arms whose closure only BORROWED the payload (`map` / `flat_map` /
+/// `and_then` / `map_err` / `unwrap_or_else`-Result-Error with a
+/// mapped-away return type) leaked the payload's heap bytes on the
+/// happy path — the payload had no owner registered, no scope-exit
+/// `DropIfAlive` fired, ASan flagged 40B (headline: 3B on
+/// `combinator_map_string_to_int_param.gg`, 608B/6 objs on
+/// `combinator_map_money_param_and_field.gg`; scout
+/// `/tmp/round_xxii_trackBeta_scout_79000.md`).
+///
+/// Sibling arms that ALIAS payload into `result_local` (or_else Some,
+/// filter Some, unwrap_or_else Some, map_err Ok) get paired at their
+/// wrap site (Core #4): the wrap Move-consumes the payload and emits
+/// `move_zero(payload)` afterwards so scope-exit `DropIfAlive` sees a
+/// zeroed slot and skips — the LIR does NOT auto-zero the source slot
+/// on a Move operand (verified against `src/lir/lower/operands.rs:157,
+/// 175`; both operand variants share the same load path), so the
+/// explicit `move_zero` is load-bearing (skipping it ships a double-free).
+///
+/// `register_local` self-gates on `needs_drop(field_type, registry)`, so
+/// this is a no-op for trivial-copy payload types (int, bool, …).
+fn extract_enum_payload_owned(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    scrut_local: LocalId,
+    variant: &str,
+    field_type: TypeId,
+) -> LocalId {
+    assert_scrut_is_value_enum(ctx, builder, scrut_local);
+    let payload = builder.enum_field_load_move(Place::local(scrut_local), variant, 0, field_type);
+    // Tier 2a Phase 2B: tag Owned before zeroing scrut so tag_ownership
+    // infers Owned for payload (was: open-coded at every extraction site).
+    ctx.set_owned(builder, payload);
+    builder.move_zero(Place::local(scrut_local));
+    // Core #3: register at birth. Downstream aliasing wraps pair with
+    // `mov(payload) + move_zero(payload)` to avoid double-free; borrow-only
+    // arms (map/flat_map/and_then closures) rely on this scope-exit drop
+    // to free the extracted resource.
+    ctx.drops.register_local(payload, field_type, &ctx.type_registry);
+    payload
+}
+
 fn try_lower_option_result_combinator(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -3791,12 +3840,19 @@ fn try_lower_option_result_combinator(
 
     // === Some/Ok branch ===
     builder.switch_to(some_bb);
-    assert_scrut_is_value_enum(ctx, builder, scrut_local);
-    let payload = builder.enum_field_load_move(Place::local(scrut_local), if is_option { "Some" } else { "Ok" }, 0, some_ok_type);
-    // payload owns the extracted field; tag it and zero scrut so
-    // tag_ownership infers Owned for payload (Tier 2a Phase 2B).
-    ctx.set_owned(builder, payload);
-    builder.move_zero(Place::local(scrut_local));
+    // Round XXII β: route extraction through the shared helper (Core #4
+    // producer) so payload is registered at birth (Core #3). Aliasing wraps
+    // below (or_else / filter / unwrap_or_else Some, map_err Ok) pair with
+    // `mov(payload) + move_zero(payload)` at the wrap site to avoid
+    // double-free; borrow-only arms (map / flat_map / and_then) rely on
+    // this scope-exit drop to free the extracted resource.
+    let payload = extract_enum_payload_owned(
+        ctx,
+        builder,
+        scrut_local,
+        if is_option { "Some" } else { "Ok" },
+        some_ok_type,
+    );
 
     match method_name {
         "map" => {
@@ -3813,8 +3869,17 @@ fn try_lower_option_result_combinator(
             assign_result_local_move(builder, result_local, result);
         }
         "or_else" => {
-            // or_else: Some/Ok path → keep original
-            let wrapped = builder.enum_init(&result_type_name, if is_option { "Some" } else { "Ok" }, result_type, vec![FunctionBuilder::copy(payload)]);
+            // or_else: Some/Ok path → keep original.
+            // Round XXII β pairing (b1): Move-consume payload into the wrap
+            // and zero its slot so scope-exit `DropIfAlive(payload)` sees a
+            // zeroed slot and skips — otherwise result_local (which now owns
+            // payload's bytes via the alias) AND payload's registered drop
+            // would both free the same allocation. The LIR does NOT zero the
+            // source slot on a Move operand (operands.rs:157,175 handle Copy
+            // and Move identically at the value layer), so the explicit
+            // `move_zero(payload)` is load-bearing.
+            let wrapped = builder.enum_init(&result_type_name, if is_option { "Some" } else { "Ok" }, result_type, vec![FunctionBuilder::mov(payload)]);
+            builder.move_zero(Place::local(payload));
             assign_result_local_move(builder, result_local, FunctionBuilder::copy(wrapped));
         }
         "filter" if is_option => {
@@ -3825,7 +3890,17 @@ fn try_lower_option_result_combinator(
             let filter_else = builder.new_block();
             builder.branch(pred, filter_then, filter_else);
             builder.switch_to(filter_then);
-            let some_val = builder.enum_init(&result_type_name, "Some", result_type, vec![FunctionBuilder::copy(payload)]);
+            // Round XXII β pairing (b1, MANDATED at this CFG-conditional
+            // site): Move-consume payload into Some(...) and zero its slot.
+            // b2 (drops.unregister(payload)) is UNSAFE here — `unregister`
+            // (drops.rs:300-307) is not CFG-aware and would remove the entry
+            // globally, leaving the filter_else path with payload's
+            // registered-at-birth bytes NEVER freed → LEAK on the else path.
+            // b1 keeps the registration; only the consuming filter_then
+            // path zeros the slot (DropIfAlive is a no-op on zero), while
+            // the else path's untouched-payload slot drops normally.
+            let some_val = builder.enum_init(&result_type_name, "Some", result_type, vec![FunctionBuilder::mov(payload)]);
+            builder.move_zero(Place::local(payload));
             assign_result_local_move(builder, result_local, FunctionBuilder::copy(some_val));
             builder.jump(merge_bb);
             builder.switch_to(filter_else);
@@ -3841,11 +3916,17 @@ fn try_lower_option_result_combinator(
         }
         "unwrap_or_else" => {
             // unwrap_or_else(fn) → payload
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(payload));
+            // Round XXII β pairing (b1-form, adapted to the no-enum_init
+            // shape): direct assign uses `mov(payload)` + `move_zero(payload)`
+            // — same rationale as :3817 or_else, without the enum_init wrap.
+            assign_result_local_move(builder, result_local, FunctionBuilder::mov(payload));
+            builder.move_zero(Place::local(payload));
         }
         "map_err" if is_result => {
-            // map_err: Ok path → keep original Ok
-            let wrapped = builder.enum_init(&result_type_name, "Ok", result_type, vec![FunctionBuilder::copy(payload)]);
+            // map_err: Ok path → keep original Ok.
+            // Round XXII β pairing (b1): same shape as :3817 or_else.
+            let wrapped = builder.enum_init(&result_type_name, "Ok", result_type, vec![FunctionBuilder::mov(payload)]);
+            builder.move_zero(Place::local(payload));
             assign_result_local_move(builder, result_local, FunctionBuilder::copy(wrapped));
         }
         _ => return None,
@@ -3881,45 +3962,42 @@ fn try_lower_option_result_combinator(
             assign_result_local_move(builder, result_local, result);
         }
         "map" | "and_then" | "flat_map" if is_result => {
-            // Error → Error(err)
-            // MoveZero scrut_local after extraction so tag_ownership sees the
-            // base is consumed and tags err_val as Owned (Tier 2a Phase 2B).
-                    assert_scrut_is_value_enum(ctx, builder, scrut_local);
-                    let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
-            ctx.set_owned(builder, err_val);
-            builder.move_zero(Place::local(scrut_local));
+            // Error → Error(err). err_val extraction routes through the
+            // shared helper (Core #4 producer) — same shape as the Some/Ok
+            // extraction above. `emit_enum_init_owned` auto-transfers
+            // err_val's registration via its post-init unregister loop
+            // (`context.rs:1786-1803`; err_val is Owned+unnamed so
+            // `clone_resource_args_for_init` skips clone at :1848-1852 via
+            // the `is_owned_local && !is_named_local` continue), so no
+            // extra pairing at this err_val site.
+            let err_val = extract_enum_payload_owned(ctx, builder, scrut_local, "Error", none_err_type);
             let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)], None);
             assign_result_local_move(builder, result_local, FunctionBuilder::copy(wrapped));
         }
         "or_else" if is_result => {
-            // or_else: Error → fn(err)
-            // err_val owns the extracted payload — tag and zero scrut to propagate.
-                    assert_scrut_is_value_enum(ctx, builder, scrut_local);
-                    let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
-            ctx.set_owned(builder, err_val);
-            builder.move_zero(Place::local(scrut_local));
+            // or_else: Error → fn(err). err_val is only BORROWED into the
+            // closure via `FunctionBuilder::copy(err_val)` — the slot stays
+            // registered and scope-exit `DropIfAlive(err_val)` frees it.
+            // No extra pairing at this err_val site.
+            let err_val = extract_enum_payload_owned(ctx, builder, scrut_local, "Error", none_err_type);
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], result_type);
             assign_result_local_move(builder, result_local, result);
         }
         "unwrap_or_else" if is_result => {
-            // unwrap_or_else: Error → fn(err)
-            // err_val owns the extracted payload — tag and zero scrut to propagate.
-                    assert_scrut_is_value_enum(ctx, builder, scrut_local);
-                    let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
-            ctx.set_owned(builder, err_val);
-            builder.move_zero(Place::local(scrut_local));
+            // unwrap_or_else: Error → fn(err). Same err_val borrow-into-
+            // closure shape as or_else Error; no extra pairing.
+            let err_val = extract_enum_payload_owned(ctx, builder, scrut_local, "Error", none_err_type);
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], some_ok_type);
             assign_result_local_move(builder, result_local, result);
         }
         "map_err" if is_result => {
-            // map_err: Error → Error(fn(err))
-            // err_val owns the extracted payload — tag and zero scrut to propagate.
-                    assert_scrut_is_value_enum(ctx, builder, scrut_local);
-                    let err_val = builder.enum_field_load_move(Place::local(scrut_local), "Error", 0, none_err_type);
-            ctx.set_owned(builder, err_val);
-            builder.move_zero(Place::local(scrut_local));
+            // map_err: Error → Error(fn(err)). err_val is borrowed into the
+            // closure; the closure's return `mapped` flows into
+            // `emit_enum_init_owned` (which handles ownership). err_val's
+            // slot stays registered and scope-exit `DropIfAlive` frees it.
+            let err_val = extract_enum_payload_owned(ctx, builder, scrut_local, "Error", none_err_type);
             let mapped = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], none_err_type);
             let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![mapped], None);
