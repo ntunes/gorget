@@ -204,6 +204,24 @@ const EXCLUDE: &[&str] = &[
     "combinator_flat_map_string_to_int_param.gg",
     "combinator_result_ok_string_map_to_int_param.gg",
     "combinator_result_ok_string_and_then_to_int_param.gg",
+    // Round XXII Track γ — Result combinator field passthrough double-free
+    // class-fix (4 arms): map/map_err/and_then/or_else on a heap-Money passthrough
+    // field now clone via `combinator_owned_copy_stmt` at
+    // `tests/fixtures/self_host_lowerer/lir_codegen.gg:5363/5374/5386/5396` (Core #4
+    // chokepoint; SH-only fix — Rust C+LLVM already correct via scrut-CLONE +
+    // field-MOVE). The 4 fixtures below read the passthrough branch via
+    // `if mapped is Ok(m):` / `is Error(m):` — the `is`-pattern binding readback
+    // is not in `elaborate_expr` (same class as the 13 `combinator_*_money_*.gg`
+    // and `combinator_result_ok_money_map.gg` entries above), so ggdef falls
+    // through to the catch-all "expression `unsupported` is outside the phase-0
+    // subset". Class routing is via typed metadata (`combinator_field_lir_type` +
+    // `field_drop_fn_for_lir_type` → `drop_to_clone_fn`), not name-matching.
+    // MATCH ratchet in `self_host_runtime_diff` covers these; the corpus_b gate
+    // stays shape-stable via EXCLUDE + the +0 net delta to the fixture count.
+    "combinator_result_map_money_passthrough.gg",
+    "combinator_result_map_err_money_passthrough.gg",
+    "combinator_result_and_then_money_passthrough.gg",
+    "combinator_result_or_else_money_passthrough.gg",
 ];
 
 fn ws_root() -> PathBuf {

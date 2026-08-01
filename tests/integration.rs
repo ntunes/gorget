@@ -25931,7 +25931,20 @@ fn self_host_runtime_diff() {
     // receiver): +1 MATCH from `cow_value_index_nested_mut_recv_writethrough.gg`
     // (auto-enrolled via its runtime snapshot; SH pre-fix `0/5/0/0/7/0/1/0` → post-fix
     // `2/5/3/3/7/3/4/3` both-lane MATCH). Round XV remeasure: MATCH 1278/1383 = 92.4%, ADJ-MATCH 386; floor 1261→1273 (−5 jitter).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1293;
+    // Ratcheted 2026-08-01 (Round XXII Track γ — Result combinator field passthrough
+    // double-free class-fix at `lir_codegen.gg:5363/5374/5386/5396`, wiring
+    // `combinator_owned_copy_stmt` on the map/map_err/and_then/or_else Ok_0/Error_0
+    // passthrough — Core #4 chokepoint, Core #9 lane-parity with Rust's
+    // scrut-CLONE + field-MOVE): +4 MATCH from the 4 new
+    // `combinator_result_{map,map_err,and_then,or_else}_money_passthrough.gg`
+    // fixtures (heap-Money in the passthrough branch — pre-fix SH exit 134
+    // `free(): double free detected in tcache 2`; post-fix SH matches Rust C+LLVM's
+    // `10\n<verb>-end`). Force-rebuild remeasure: MATCH 1297 / 1398 = 92.8%, ADJ-MATCH
+    // 389 (unchanged — the 4 fixtures read the passthrough branch via `is Ok(m):` /
+    // `is Error(m):` and land in `ggdef-frontend-error (out of subset)`, so they
+    // enter UNADJ, not ADJ — same class as the 13 existing `combinator_*_money_*.gg`
+    // fixtures excluded in `spec/ggdef/tests/corpus_b.rs`). Floor 1293 → 1297.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1297;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -38038,6 +38051,58 @@ fn combinator_chain_map_filter() {
 10
 10
 chain-end",
+    );
+}
+
+// ---- Round XXII Track γ — Result combinator field passthrough class ----
+// The SH lane's `__result_{map,map_err,and_then,or_else}` arms shallow-copied
+// the unchanged Ok_0/Error_0 field into the mapped Result — a heap-resource
+// Money in the passthrough position aliased across src+dst → `free(): double
+// free detected in tcache 2`, exit 134 at drop. Rust C+LLVM lanes were
+// already correct (scrut-CLONE + field-MOVE via emit_hof.rs:100-198). SH fix
+// routes the field passthrough through the existing `combinator_owned_copy_stmt`
+// chokepoint at lir_codegen.gg:5363/5374/5386/5396 (Core #4 producer). Class
+// covers all 4 arms; the four fixtures below exercise one arm each. Rust-side
+// tests pin the reference-grade output; the SH-side gets swept in via
+// `runtime_parity_corpus` (auto-enrolls every `tests/fixtures/*.gg`).
+
+#[test]
+fn combinator_result_map_money_passthrough() {
+    run_gg(
+        "combinator_result_map_money_passthrough.gg",
+        "\
+10
+map-end",
+    );
+}
+
+#[test]
+fn combinator_result_map_err_money_passthrough() {
+    run_gg(
+        "combinator_result_map_err_money_passthrough.gg",
+        "\
+10
+map-err-end",
+    );
+}
+
+#[test]
+fn combinator_result_and_then_money_passthrough() {
+    run_gg(
+        "combinator_result_and_then_money_passthrough.gg",
+        "\
+10
+and-then-end",
+    );
+}
+
+#[test]
+fn combinator_result_or_else_money_passthrough() {
+    run_gg(
+        "combinator_result_or_else_money_passthrough.gg",
+        "\
+10
+or-else-end",
     );
 }
 
