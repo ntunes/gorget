@@ -25944,7 +25944,7 @@ fn self_host_runtime_diff() {
     // `is Error(m):` and land in `ggdef-frontend-error (out of subset)`, so they
     // enter UNADJ, not ADJ — same class as the 13 existing `combinator_*_money_*.gg`
     // fixtures excluded in `spec/ggdef/tests/corpus_b.rs`). Floor 1293 → 1297.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1297;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1298;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
