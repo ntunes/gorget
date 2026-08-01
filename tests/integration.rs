@@ -694,29 +694,38 @@ fn build_gg_expect_no_warning(fixture: &str, forbidden_substr: &str) {
     let _ = std::fs::remove_file(&exe_path);
 }
 
-/// KNOWN GAP — the "zero-cost move" suggestion advises code the compiler
-/// REJECTS, in 100% of the cases it can fire.
-///
-/// Build the fixture and the compiler says `pass as `!v` for zero-cost move`.
-/// Take that advice and it errors at the same span with `E_OwnershipMismatch
-/// ... help: remove the `!``.
-///
-/// It is total, not a corner case — single-writer chain: `move_suggestions` is
-/// pushed only at `exprs/calls.rs:1574`, gated on `fn_consumed_params`, which
-/// is written only at `context.rs:1196` inside `record_param_cloned`, which
-/// early-returns unless `is_bare_param` (`context.rs:1192`). So every
-/// suggestion names a bare param, and under ratified D31 full-strict `!` on a
-/// bare param is always `E_OwnershipMismatch`.
-///
-/// ⚠ Fires on `gg build`, NOT on `gg check` — a check-based assertion would be
-/// a false negative, which is why this uses the build-based helper.
+/// Regression (Round XXIV Track A): the "zero-cost move" advice mechanism
+/// was deleted because it emitted invalid advice 100% of the time. This
+/// test asserts no such advice fires on the canonical throws-Ptr axis
+/// (Caller #2 of the deleted `record_param_cloned`).
 #[test]
-#[ignore = "KNOWN GAP: the `zero-cost move` suggestion advises `!v`, which the compiler then \
-rejects with `help: remove the !`. Asserts the INTENDED absence of the suggestion; TODO.md. \
-Un-ignore when the suggestion stops firing for borrow-only params."]
-fn sound_move_suggestion_advises_rejected_code() {
+fn no_move_suggestion_throws_return() {
     build_gg_expect_no_warning(
-        "known_gaps/sound_move_suggestion_advises_rejected_code.gg",
+        "no_move_suggestion_throws_return.gg",
+        "zero-cost move",
+    );
+}
+
+/// Regression (Round XXIV Track A): pins the ctor-field-init axis (Caller #1
+/// of the deleted `record_param_cloned`, via `ensure_owned_at_boundary`'s
+/// Ptr(T) clone leg during struct-field ownership boundary).
+#[test]
+fn no_move_suggestion_ctor_field() {
+    build_gg_expect_no_warning(
+        "no_move_suggestion_ctor_field.gg",
+        "zero-cost move",
+    );
+}
+
+/// Regression (Round XXIV Track A): POSITIVE CONTROL — pins mechanism-
+/// absence, not defect-absence. `!` param + `!` at call site would not
+/// have tripped the deleted producer's `is_bare_param` guard pre-fix. A
+/// green here proves only that the deletion didn't over-suppress this
+/// shape; it does NOT cover a real defect class (see fixture header).
+#[test]
+fn no_move_suggestion_bang_param() {
+    build_gg_expect_no_warning(
+        "no_move_suggestion_bang_param.gg",
         "zero-cost move",
     );
 }

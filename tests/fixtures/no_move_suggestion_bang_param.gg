@@ -1,0 +1,30 @@
+# Regression (Round XXIV Track A):
+# The "zero-cost move" advice mechanism was deleted because it emitted
+# invalid advice 100% of the time (D31 full-strict rejects `!` at any
+# bare-param call site with E_OwnershipMismatch). This fixture is a
+# POSITIVE CONTROL: `!` param callee + `!` at call site. Pre AND post
+# fix: NO warning (verifies deletion didn't over-suppress a would-be-valid
+# case — which per class analysis doesn't exist, so this is a control).
+#
+# POSITIVE CONTROL: pins mechanism-absence, not defect-absence. By class
+# analysis this fixture cannot go RED against any real defect (no
+# bare-param means the deleted producer's guard would have early-returned
+# pre-fix). RED-verify path is artificial (add naked eprintln to any
+# deleted emit-site scaffold → RED even for this fixture). Do NOT read
+# a green as coverage of a real class.
+#
+# RED-verify: with the deletion applied, a temp `eprintln!("zero-cost move
+# probe")` added early in `src/main.rs` build path made this fixture go
+# RED (the helper detects the substring); removing the probe returned it
+# to GREEN.
+
+int sum(Vector[int] !xs):
+    int total = 0
+    for x in xs:
+        total = total + x
+    return total
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    int s = sum(!v)
+    print(s)

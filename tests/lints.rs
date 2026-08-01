@@ -8619,3 +8619,45 @@ fn unify_closure_ret_axis_class_enumeration() {
          call (bump down).",
     );
 }
+
+/// Class-guard (Core #6): the "zero-cost move" advice mechanism was DELETED
+/// in Round XXIV Track A because every possible suggestion it could emit
+/// named a bare Ptr param, which D31 full-strict rejects with
+/// E_OwnershipMismatch at the call site. The advice was 100% false-positive
+/// by construction. This lint prevents any accidental reintroduction of
+/// an emit path.
+///
+/// Grep `src/**/*.rs` for:
+///   (a) the diagnostic SUBSTRING `zero-cost move` (NOT quoted — the actual
+///       emit was `... for zero-cost move` embedded in a `format!()` literal
+///       with no surrounding quote chars adjacent to the phrase — an earlier
+///       `"zero-cost move"` predicate silently missed the real emit because
+///       it looked for adjacent quotes).
+///   (b) the deleted type name `MoveSuggestion`.
+/// Both must be 0 in src/. Test files may still mention the substring in
+/// fixture headers describing the retired mechanism — this lint scopes to
+/// src/.
+///
+/// SCOPE: this lint pins THIS SPECIFIC mechanism (by string + type name).
+/// Reintroducing the same false-advice CLASS under a different name (e.g.
+/// `MoveHint`) + rephrasing (e.g. `"prefer !x for last use"`) would evade.
+/// If the class RECURS under a different costume, expand the lint OR add a
+/// design-level check — do NOT read this lint's green as "no false-advice
+/// mechanism exists," only "no re-instantiation of the deleted symbols."
+#[test]
+fn move_suggestion_advice_absent_from_source() {
+    let src_files = walkdir_rs("src");
+    let mut hits = Vec::new();
+    for path in src_files {
+        let body = std::fs::read_to_string(&path).unwrap();
+        for (lineno, line) in body.lines().enumerate() {
+            if line.contains("zero-cost move") || line.contains("MoveSuggestion") {
+                hits.push(format!("{}:{}: {}", path.display(), lineno + 1, line.trim()));
+            }
+        }
+    }
+    assert!(hits.is_empty(),
+        "The zero-cost-move advice was DELETED in Round XXIV Track A because \
+         it emits invalid advice 100% of the time. Do not reintroduce it. \
+         Found: {:#?}", hits);
+}

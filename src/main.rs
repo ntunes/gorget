@@ -757,22 +757,6 @@ fn try_build_ir(
         eprintln!();
     }
 
-    // Display move suggestions: `!arg` for last-use arguments at call sites
-    // where the callee clones the param at an ownership boundary.
-    {
-        let reporter = ErrorReporter::new_multi(file_infos.clone());
-        let mut shown = std::collections::HashSet::new();
-        for suggest in &gir_module.move_suggestions {
-            if !reporter.is_entry_file(suggest.span) { continue; }
-            if !shown.insert(suggest.span.start) { continue; }
-            reporter.emit_warning_with_note(
-                suggest.span,
-                &format!("argument `{}` is last use — pass as `!{}` for zero-cost move", suggest.name, suggest.name),
-                &format!("`{}` is not used after this call; `!{}` avoids a deep clone of {}", suggest.name, suggest.name, suggest.type_name),
-            );
-        }
-    }
-
     // Run GIR optimization passes
     let opt_stats = gorget::ir::transforms::optimize::optimize_module(&mut gir_module);
     let _ = opt_stats; // available for --emit-gir stats or future --verbose

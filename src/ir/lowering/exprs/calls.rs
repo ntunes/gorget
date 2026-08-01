@@ -2043,47 +2043,6 @@ pub(super) fn lower_call(
             })
             .collect();
 
-        // Suggest `!arg` for last-use resource-type arguments where the callee
-        // clones the param at an ownership boundary. Both conditions must hold:
-        // (1) the callee actually clones this param (recorded in fn_consumed_params)
-        // (2) the caller's argument is the last use of a named resource-type local
-        // Resolve the callee name through extern_bindings (same as the call emission path).
-        let resolved_callee = ctx.extern_bindings.get(effective_name.as_str())
-            .cloned()
-            .unwrap_or_else(|| effective_name.clone());
-        if let Some(consumed) = ctx.fn_consumed_params.get(resolved_callee.as_str()).cloned() {
-            let param_names = ctx.fn_param_names.get(effective_name.as_str())
-                .or_else(|| ctx.fn_param_names.get(resolved_callee.as_str()))
-                .cloned();
-            if let Some(param_names) = param_names {
-                for (i, arg) in resolved_args.iter().enumerate() {
-                    if matches!(arg.node.ownership, Ownership::Move) { continue; } // already !
-                    if let Expr::Identifier(ref arg_name) = arg.node.value.node {
-                        if let Some(pname) = param_names.get(i) {
-                            if consumed.contains(pname) {
-                                if let Some((local_id, _)) = ctx.lookup_local(arg_name) {
-                                    let local_type = builder.local_type(local_id);
-                                    let is_resource = ctx.type_registry.is_resource_type(local_type)
-                                        || ctx.pointee_type(local_type)
-                                            .map_or(false, |inner| ctx.type_registry.is_resource_type(inner));
-                                    if is_resource && ctx.is_last_use_at(arg_name, arg.span) {
-                                        let type_name = ctx.type_registry.type_name(local_type)
-                                            .map(|n| crate::ir::lowering::context::demangle_type_name(&n))
-                                            .unwrap_or_else(|| "resource".to_string());
-                                        ctx.move_suggestions.push(crate::ir::MoveSuggestion {
-                                            span: arg.node.value.span,
-                                            name: arg_name.clone(),
-                                            type_name,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         let ret_type = if let Some((_, ret)) = ctx.fn_sigs.get(effective_name.as_str()) {
             *ret
         } else {

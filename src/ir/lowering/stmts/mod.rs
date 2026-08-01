@@ -1988,7 +1988,6 @@ fn lower_return(
                         // if the caller still needs the argument after the call.
                         if let Some(crate::ir::types::GirType::Ptr(inner)) = ctx.type_registry.get(src_type).cloned() {
                             if let Some(clone_fn) = ctx.clone_fn_for_ptr(inner) {
-                                ctx.record_param_cloned(builder, place.local);
                                 let cloned = ctx.emit_clone(
                                     builder,
                                     &clone_fn,
