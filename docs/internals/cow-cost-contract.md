@@ -127,7 +127,8 @@ the summary needs anyway).
 
 **The failure quadrant.** Gorget's runtime stack overflow is a bare `SIGSEGV`, no
 message (verify: build a `deep(100000000)` recursion and run the binary directly —
-`rc=139`; ⚠ never read this off `gg run`, which masks it). The clone bomb is worse
+`rc=139`; since Round XXIV Track B, `gg run` also propagates 128+signo as exit
+128+N with a stderr diagnostic, so `rc=139` reads off `gg run` too). The clone bomb is worse
 in one respect, because a SIGSEGV at least *stops*. Post-Track-I the clone bomb has
 left the silent quadrant for direct self-recursion; it remains there for **mutual
 recursion** (measured above) and for any non-recursive path whose multiplicity is
