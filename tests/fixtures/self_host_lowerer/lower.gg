@@ -69,9 +69,17 @@ from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 # `src/ir/lowering/drops.rs` — kept as int constants because the
 # self-host's typed-metadata story is GIR-level, not enum-shaped (the
 # Rust copy of the enum maps onto these ints 1:1 via match).
+#
+# `DSK_STATEMENT` is pushed around `Stmt::Expr` only (Round XXI Track A,
+# porting Rust `4ec42e30`). `pop_statement_guard_temps` drops typed
+# GuardKind entries at statement end (releases Mutex/RWLock guards so
+# sequential acquires do not self-deadlock) and re-homes every non-Guard
+# droppable into the parent scope. Named binds / VarDecl / Assign / `with`
+# deliberately do NOT push DSK_STATEMENT — MVP scope matches Rust's.
 const int DSK_FUNCTION = 0
 const int DSK_LOOP = 1
 const int DSK_BLOCK = 2
+const int DSK_STATEMENT = 3
 
 # One entry per local that needs to be dropped when its enclosing scope
 # exits. Fields mirror Rust's `DropEntry` in `src/ir/lowering/drops.rs`:

@@ -25867,7 +25867,7 @@ fn self_host_runtime_diff() {
     // receiver): +1 MATCH from `cow_value_index_nested_mut_recv_writethrough.gg`
     // (auto-enrolled via its runtime snapshot; SH pre-fix `0/5/0/0/7/0/1/0` → post-fix
     // `2/5/3/3/7/3/4/3` both-lane MATCH). Round XV remeasure: MATCH 1278/1383 = 92.4%, ADJ-MATCH 386; floor 1261→1273 (−5 jitter).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1291;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1293;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

@@ -17,9 +17,9 @@ from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from gir import CkAssign, CkReturn, CkCallArgBorrow, CkCallArgOwning, CkFieldWrite, CkBinOpArg, CkFormatArg, CkMatchPtr
 from gir import CkVector, CkDeque, CkHeap, CkDict, CkOrderedSet, CkHashSet, CkNotCollection
-from lir_lower import resource_meta_for
+from lir_lower import resource_meta_for, is_guard_struct_type
 from lower import LowerCtx, DropEntry, DropScope, DropElaborator, DropEmission
-from lower import DSK_FUNCTION, DSK_LOOP, DSK_BLOCK
+from lower import DSK_FUNCTION, DSK_LOOP, DSK_BLOCK, DSK_STATEMENT
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with
 
@@ -123,6 +123,78 @@ void pop_drop_scope_no_emit(LowerCtx &ctx):
     if ctx.drop_elab.scopes.len() == 0:
         return
     ctx.drop_elab.scopes.pop()
+
+# Round XXI Track A — pop a DSK_STATEMENT frame, dropping only typed
+# GuardKind entries at the statement end and re-homing every other
+# droppable into the parent scope. Mirror of Rust's
+# `DropElaborator::pop_statement_guard_temps` (`src/ir/lowering/drops.rs`
+# post-`4ec42e30`).
+#
+# Guard temps minted by `Mutex.lock` / `RWLock.read` / `RWLock.write`
+# under an expression statement must release at statement end so a
+# follow-up acquire on the same handle does not self-deadlock on a
+# non-reentrant pthread mutex (the mutex_seq_lock_expr_stmt and
+# rwlock_seq_lock_scope_deadlock fixtures). Non-Guard droppables (String
+# temps, collections, user resource structs) keep their enclosing
+# Function/Block lifetime — the re-home step is REQUIRED; skipping it
+# would leak.
+#
+# Guard classification goes through typed metadata (`is_guard_struct_type`
+# → `resource_meta_for` → `runtime_name == "Guard"`), never a
+# `Guard__`/`ReadGuard__`/`WriteGuard__` name prefix (Layering rule 2 /
+# CLAUDE.md No-name-matching).
+#
+# Callers whose block terminated (early exit already ran
+# `emit_drops_for_early_exit`) MUST use `pop_drop_scope_no_emit` instead —
+# same contract as Block scopes.
+void pop_statement_guard_temps(LowerCtx &ctx, GirModule &gmod):
+    if ctx.drop_elab.scopes.len() == 0:
+        return
+    int psgt_top = ctx.drop_elab.scopes.len() - 1
+    DropScope psgt_scope = ctx.drop_elab.scopes.get(psgt_top).unwrap()
+    # Partition in declaration order: guards emit LIFO at statement end;
+    # non-guards re-home to the parent scope (still in declaration order,
+    # so later parent LIFO drops preserve relative order among the re-homed
+    # entries — Rust mirror).
+    Vector[DropEntry] psgt_guards = []
+    Vector[DropEntry] psgt_non_guards = []
+    int psgt_i = 0
+    while psgt_i < psgt_scope.entries.len():
+        DropEntry psgt_entry = psgt_scope.entries.get(psgt_i).unwrap()
+        bool psgt_is_guard = false
+        if psgt_entry.type_id >= 0 and psgt_entry.type_id < gmod.type_table.len():
+            match gmod.type_table.get(psgt_entry.type_id).unwrap():
+                case GtNamed(psgt_n):
+                    if is_guard_struct_type(psgt_n, &gmod):
+                        psgt_is_guard = true
+                else:
+                    pass
+        if psgt_is_guard:
+            psgt_guards.push(psgt_entry)
+        else:
+            psgt_non_guards.push(psgt_entry)
+        psgt_i += 1
+    # Pop the statement frame BEFORE re-homing — the target parent is the
+    # NEW top of the stack.
+    ctx.drop_elab.scopes.pop()
+    # Emit guard drops in LIFO order at the current block. Reuses the
+    # existing emit_scope_drops helper (see `lower_drops.gg:88`); passes
+    # the partitioned Vector directly, per the Pass-3 clarification (no
+    # `.entries` field on a bare `Vector[DropEntry]`).
+    if psgt_guards.len() > 0:
+        emit_scope_drops(&ctx, psgt_guards)
+    # Re-home non-guards into the parent scope. SH `Vector` has no
+    # `.last_mut()` — use the get(top)/set(top) rebuild idiom (see the
+    # register_local_for_drop pattern at `:284-287` / register_owning_param
+    # at `:344-346`).
+    if psgt_non_guards.len() > 0 and ctx.drop_elab.scopes.len() > 0:
+        int psgt_parent_idx = ctx.drop_elab.scopes.len() - 1
+        DropScope psgt_parent = ctx.drop_elab.scopes.get(psgt_parent_idx).unwrap()
+        int psgt_j = 0
+        while psgt_j < psgt_non_guards.len():
+            psgt_parent.entries.push(psgt_non_guards.get(psgt_j).unwrap())
+            psgt_j += 1
+        ctx.drop_elab.scopes.set(psgt_parent_idx, psgt_parent)
 
 # Check whether a GIR type id refers to a droppable type. Used at every
 # SVarDecl / param-registration site to decide whether to add the local
