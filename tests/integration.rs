@@ -38106,6 +38106,55 @@ or-else-end",
     );
 }
 
+/// Round XXIII Track α — cross-type `.or_else` Error-axis, POS (heap Money).
+/// Pre-fix: stack-buffer-overflow READ of 80 bytes at the branch/merge memcpy
+/// (`try_lower_option_result_combinator`'s missing `or_else` arm mis-sized
+/// `result_local` to `recv_type` instead of the closure's declared return).
+/// RED-verified via scout `probe_sbo_exact.gg`. Fixed by extending the arm at
+/// `src/ir/lowering/exprs/methods.rs:3779` to include `"or_else"` and
+/// mirroring `and_then`'s dual `expected_type` rule at :3701-3715. The
+/// typecheck class-guard `unify_closure_ret_axis` in `src/semantic/typecheck.rs`
+/// pins Ok-unify (`T' == T`, `E' ≠ E` allowed — recovery axis).
+#[test]
+fn combinator_result_or_else_error_cross_type() {
+    run_gg("combinator_result_or_else_error_cross_type.gg", "5");
+}
+
+/// Round XXIII Track α NEG — cross-type `.or_else` Ok-axis (T' != T) rejected
+/// at typecheck. Pre-fix accepted (then SBO'd at runtime); post-fix rejected
+/// by `unify_closure_ret_axis(ClosureCombinatorCell::ResultOrElse)`.
+#[test]
+fn combinator_result_or_else_ok_cross_type_reject() {
+    check_gg_fails(
+        "combinator_result_or_else_ok_cross_type_reject.gg",
+        "E_TypeMismatch",
+    );
+}
+
+/// Round XXIII Track α NEG — cross-type `.and_then` Err-axis (E' != E) rejected
+/// at typecheck. Pre-fix accepted (Money leak on never-taken Error branch);
+/// post-fix rejected by `unify_closure_ret_axis(ClosureCombinatorCell::ResultAndThen)`.
+#[test]
+fn combinator_result_and_then_error_cross_type_reject() {
+    check_gg_fails(
+        "combinator_result_and_then_error_cross_type_reject.gg",
+        "E_TypeMismatch",
+    );
+}
+
+/// Round XXIII Track α NEG — cross-type `.or_else` on Option (T' != T) rejected
+/// at typecheck. Pre-fix `Option.or_else` typecheck discarded the closure return
+/// entirely and returned `Some(receiver_type)`; the mis-typed closure return
+/// leaked at runtime. Post-fix rejected by
+/// `unify_closure_ret_axis(ClosureCombinatorCell::OptionOrElse)`.
+#[test]
+fn combinator_option_or_else_cross_type_reject() {
+    check_gg_fails(
+        "combinator_option_or_else_cross_type_reject.gg",
+        "E_TypeMismatch",
+    );
+}
+
 /// KNOWN GAP — the STRUCT get-chain, `&`-FACE ONLY. The other cell that
 /// survives the `&`-of-projection fix, and narrower than the tuple get-chain
 /// above: here the assign face ALREADY WORKS.

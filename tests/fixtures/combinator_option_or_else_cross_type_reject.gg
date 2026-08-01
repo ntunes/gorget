@@ -1,0 +1,39 @@
+# NEG (Round XXIII Track α, class-fix sibling): Option[T].or_else(closure ->
+# Option[T']) where T' ≠ T must be REJECTED at typecheck (Some-unify: Option
+# has one payload; the recovery closure must produce the same T).
+#
+# Pre-fix: typecheck at `src/semantic/typecheck.rs` ("Option", "or_else")
+# discarded the closure return entirely and returned `Some(receiver_type)`.
+# A closure returning `Option[Money]` under an `Option[int]` receiver was
+# silently accepted; when the caller didn't over-constrain via an outer
+# annotation, the heap-live Money payload from the closure was misread as int
+# and leaked (LSan, see Round XXIII scout
+# `/tmp/xxiii_alpha_probes/cell3b_option_or_else_noannot.gg`).
+#
+# Post-fix: `unify_closure_ret_axis(ClosureCombinatorCell::OptionOrElse)` in
+# `src/semantic/typecheck.rs` rejects at check time with `E_TypeMismatch`.
+
+struct Money:
+    Vector[int] cents
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+# Closure return: Option[Money]. Receiver: Option[int]. T'≠T → REJECT.
+Option[Money] make_opt_money():
+    return Some(Money(heap_cents(3)))
+
+void via_param(Option[int] p):
+    match p.or_else((): make_opt_money()):
+        case Some(v):
+            print(v)
+        case None():
+            print(-1)
+
+void main():
+    via_param(None())

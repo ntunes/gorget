@@ -1,0 +1,59 @@
+# CELL: `.or_else()` × Error-axis CROSS-TYPE × Result[int, Money] → Result[int, int]
+# Round XXIII Track α (2026-08-01) — SBO class-fix on cross-type Result.or_else.
+#
+# Pre-fix bug: `src/ir/lowering/exprs/methods.rs::try_lower_option_result_combinator`
+# had NO `or_else` arm in the `result_type = match method_name { … }` block at
+# ~:3746; `or_else` fell through to `_ => recv_type`. When the closure returned
+# `Result[T, E']` with `E' ≠ E`, `result_local` was born as `Result[T, E]`
+# (recv_type, mis-sized). Both branch memcpys at :3985 and the merge memcpy at
+# :4022 then read/wrote the wrong number of bytes → AddressSanitizer trip:
+# `stack-buffer-overflow READ of size 80 at 0x… (24-byte src)` inside
+# `__interceptor_memcpy` at the `via_param` merge. Both C and LLVM SBOd. RED-
+# verified pre-fix (Round XXIII scout `/tmp/round_xxiii_trackAlpha_scout_1.md`
+# `probe_sbo_exact.gg`).
+#
+# Fix (single arm extension, Core #1 write-site + Core #4 class-fix):
+#   - `methods.rs:3779` — add `"or_else"` to the `"and_then" | "flat_map"` arm
+#     so `result_type` is derived from `infer_closure_return_type(closure_op)`,
+#     sizing `result_local` from the closure's DECLARED return.
+#   - `methods.rs:3701-3715` — mirror `and_then`'s dual `expected_type` rule
+#     for `or_else` (outer Option/Result annotation wins over recv-forced hint)
+#     so annotated cross-type shapes coerce the closure body correctly.
+#   - `typecheck.rs::unify_closure_ret_axis` (new shared helper) — enforces
+#     `Result.or_else` Ok-unify (`T' == T`, allow `E' ≠ E` — that IS the
+#     recovery axis), `Result.and_then` Err-unify (`E' == E`, allow `U ≠ T`),
+#     and `Option.or_else` Some-unify (`T' == T`). 3-cell class, ratcheted
+#     by `tests/lints.rs::unify_closure_ret_axis_class_enumeration`.
+#
+# POST-FIX GREEN: ASan-clean on both C and LLVM lanes. Recovery closure
+# translates the heap-live Money error into an int summary.
+#
+# HEAP-FORCED Money (same pattern as `combinator_result_or_else_money_passthrough.gg`):
+# a literal `Money(Vector[int]())` would drop `.len() == 0` and not stress the
+# heap allocator — the SBO required a real heap buffer through the branch memcpy.
+# The recovery function `.cents.len()` reads the Money's Vector length to prove
+# the buffer stays live across the branch (no premature drop).
+
+struct Money:
+    Vector[int] cents
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Result[int, int] recover(Money m):
+    return Ok(m.cents.len())
+
+void via_param(Result[int, Money] p):
+    # E-axis cross: recv Result[int, Money], closure returns Result[int, int].
+    # Under Ok-unify T'==T (int==int) ✓; E'≠E (int≠Money) is the recovery axis.
+    Result[int, int] r = p.or_else((Money m): recover(m))
+    if r is Ok(v):
+        print(v)
+
+void main():
+    via_param(Error(Money(heap_cents(5))))
