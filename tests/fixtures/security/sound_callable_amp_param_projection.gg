@@ -16,10 +16,9 @@
 # `callable_param_ownerships` for the parameter and routes each user arg through
 # `lower_call_arg`.
 #
-# ⚠ `gg run` masks the pre-fix crash as exit 1 with no output — it does not
-# propagate the child's signal status. Reproduce a regression by BUILDING and
-# running the binary directly, or the failure looks like an ordinary build
-# error.
+# `gg run` propagates 128+signo as exit 128+N (Round XXIV Track B); a pre-fix
+# regression here would surface as exit 139 with a `terminated by SIGSEGV`
+# stderr line, not silent exit 1.
 #
 # INTENDED: the indirect call is an ordinary write-through call, so `bumpret`
 # increments the caller's `c.fd` and the program prints 11 then 11. The seed is

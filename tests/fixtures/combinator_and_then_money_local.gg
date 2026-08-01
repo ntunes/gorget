@@ -16,8 +16,8 @@
 # RESOURCE-PAYLOAD-SPECIFIC — the identical program with an `int` payload
 # printed 42 and exited 0, so a trivial-payload fixture would be a false
 # negative. `Money` wraps a BUILT (heap-forced) `Vector[int]`, not a literal.
-# `gg run` MASKS the C failure as exit 1 with no output (does not propagate
-# the child's signal status — separate filed issue). Build and run directly.
+# `gg run` propagates 128+signo as exit 128+N since Round XXIV Track B; a
+# pre-fix SIGSEGV here surfaces as exit 139 with a stderr diagnostic.
 # INTENDED (asserted): both legs print their element count, `11` then `12`.
 # Pinned by Core #6 guard (`combinator_adapter_ownership_invariants` +
 # `assert_scrut_is_value_enum`) AND this runtime fixture; fixtures stay

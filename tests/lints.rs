@@ -1066,6 +1066,80 @@ fn amp_in_operand_position_reject_sites_count() {
     );
 }
 
+/// Round XXIV Track B: `gg run` / `gg test` masked SIGSEGV as exit 1 because
+/// `ExitStatus::code()` returns `None` on Unix for signal-death, and both
+/// `.code().unwrap_or(1)` and `process::exit(if any_failed { 1 } else { 0 })`
+/// silently folded signal-death into the same 1 emitted for a compile error.
+/// Fix routes ALL child-process exit propagation through
+/// `propagate_child_status` (chokepoint) OR through an aggregation loop that
+/// reads `ExitStatusExt::signal()` and exits `128 + signo`. This lint prevents
+/// any new site from re-instantiating either syntactic costume.
+#[test]
+fn child_exit_status_propagation_chokepoint() {
+    let src = std::fs::read_to_string("src/main.rs").unwrap();
+    let mut hits = Vec::new();
+    let lines: Vec<&str> = src.lines().collect();
+
+    // Costume 1: the direct pattern. Broaden to any `.code().unwrap_or(` or
+    // `.code().unwrap()` so a future evasion via `unwrap_or(2)` or `unwrap()`
+    // cannot silently pass an exact-literal check. Skip comment lines and the
+    // helper's own chokepoint fallback (marked `LINT-CHOKEPOINT-FALLBACK`).
+    for (lineno, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("///") {
+            continue;
+        }
+        if line.contains("LINT-CHOKEPOINT-FALLBACK") {
+            continue;
+        }
+        if line.contains(".code().unwrap_or(") || line.contains(".code().unwrap()") {
+            hits.push(format!(
+                "src/main.rs:{}: DIRECT COSTUME — must route through propagate_child_status(): {}",
+                lineno + 1,
+                line.trim()
+            ));
+        }
+    }
+
+    // Costume 2: the aggregation pattern. It MAY appear in the tree, but only
+    // when immediately preceded (within 25 lines above) by a signal-aware
+    // guard block that reads `ExitStatusExt::signal()` and exits `128+signo`.
+    // We enforce this positionally: for every `process::exit(if any_failed`
+    // line, require an `ExitStatusExt::signal()` mention within the preceding
+    // 25 lines. (A novel THIRD costume would bypass both arms; this lint
+    // guards the EXISTING syntactic costumes from silent regression.)
+    for (lineno, line) in lines.iter().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        if line.contains("process::exit(if any_failed") {
+            let window_start = lineno.saturating_sub(25);
+            let window: String = lines[window_start..lineno].join("\n");
+            // The signal-guarded exit block (`process::exit(128 + signo);`
+            // within `if let Some((.., signo)) = first_signal { ... }`) must
+            // appear immediately before the aggregation exit. The raw
+            // `ExitStatusExt::signal()` call may live further up the function
+            // (in the collection loop), but the guarded-exit block itself is
+            // load-bearing at this position.
+            let has_guarded_exit = window.contains("process::exit(128 + signo)");
+            if !has_guarded_exit {
+                hits.push(format!(
+                    "src/main.rs:{}: AGGREGATION COSTUME without signal-guard — must be immediately preceded (within 25 lines) by an `if let Some((_, signo)) = first_signal {{ ... process::exit(128 + signo); }}` block that surfaces signal-death: {}",
+                    lineno + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        hits.is_empty(),
+        "child-exit status must route through propagate_child_status() or a \
+         signal-guarded aggregation (Round XXIV Track B). Found: {:#?}",
+        hits
+    );
+}
+
 fn count_amp_in_operand_position_rejects() -> usize {
     let mut count = 0;
     for path in walkdir_rs("src/semantic/safety") {

@@ -7,8 +7,9 @@
 # `Box.new(Robot(…))` argument's slot holds only `Box[Concrete]` (8 bytes,
 # `void*`). Pre-fix, the ctor call's memcpy(16) read 8 bytes of stack garbage
 # as the vtable pointer → SIGBUS at the first method dispatch through the
-# guard. `gg run` masked the SIGBUS as a silent exit 1 (Core #15(d)); the
-# `sound_` naming convention was the tell.
+# guard. The `sound_` naming convention was the tell (Core #15(d)). Since
+# Round XXIV Track B, `gg run` propagates 128+signo as exit 128+N with a
+# stderr diagnostic, so a regression here would surface directly.
 #
 # FIX (Round XII Track N2): the call-arg boundary now packs the concrete Box
 # into a `Box[Trait]`-typed temp via `pack_trait_object_for_smart_ptr_ctor`

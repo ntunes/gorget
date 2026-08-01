@@ -2233,6 +2233,39 @@ fn gg_run_command() {
     let _ = std::fs::remove_file(dir.join("hello"));
 }
 
+/// Regression (Round XXIV Track B): a `.gg` program that dies from a signal
+/// must surface `128 + signo` from `gg run`, NOT silently exit 1. Otherwise a
+/// memory-safety bug is indistinguishable from a compile error at the
+/// `gg run` UX (has misled triage rounds — see TODO.md, Round XXIV Track B).
+#[test]
+fn gg_run_propagates_signal_death() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/sound_comprehension_nested_vector_segv.gg");
+    let output = build_with_timeout(
+        gg_command("run").arg(&fixture_path),
+        "sound_comprehension_nested_vector_segv.gg",
+    );
+    // Post-fix: 128 + SIGSEGV(11) = 139. Pre-fix: 1 silent.
+    assert_eq!(
+        output.status.code(),
+        Some(139),
+        "gg run must propagate 128+SIGSEGV as exit 139, got {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("SIGSEGV") || stderr.contains("signal 11"),
+        "gg run must emit a stderr diagnostic on signal death; got: {stderr:?}",
+    );
+    // Clean up build artifacts left next to the fixture.
+    let dir = fixture_path.parent().unwrap();
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let _ = std::fs::remove_file(dir.join(format!("{stem}.c")));
+    let _ = std::fs::remove_file(dir.join(stem));
+}
+
 #[test]
 fn operators() {
     run_gg(
@@ -38101,9 +38134,9 @@ fn combinator_unwrap_or_else_money_field() {
 /// memcpy at the join point interpreted an integer as a pointer downstream.
 /// Fix (Edit C) uses `infer_closure_return_type` for and_then/flat_map.
 ///
-/// `gg run` MASKS the C failure as exit 1 (does not propagate the child's
-/// signal status — separate filed issue); build the binary and run it
-/// directly to observe the true SIGSEGV pre-fix.
+/// Since Round XXIV Track B, `gg run` propagates 128+signo as exit 128+N
+/// with a stderr diagnostic, so a regression here surfaces as exit 139
+/// directly rather than the historical silent exit 1.
 #[test]
 fn combinator_and_then_money_local() {
     run_gg(
@@ -38783,8 +38816,9 @@ fn sound_fstring_suppresses_sigil_reject() {
 /// element expression produces a value.
 #[test]
 #[ignore = "KNOWN GAP: a comprehension over a nested Vector segfaults (exit 139) though gg check \
-passes and no sigil is involved. gg run masks it as exit 1. Asserts the INTENDED output; TODO.md. \
-Un-ignore when the nested-collection comprehension lowering is fixed."]
+passes and no sigil is involved. Asserts the INTENDED output; TODO.md. Un-ignore when the \
+nested-collection comprehension lowering is fixed. (Since Round XXIV Track B, `gg run` propagates \
+128+signo as exit 128+N with a stderr diagnostic — no longer silent exit 1.)"]
 fn sound_comprehension_nested_vector_segv() {
     run_gg("known_gaps/sound_comprehension_nested_vector_segv.gg", "1");
 }
@@ -39347,8 +39381,9 @@ fn mutex_bare_trait_get_call_reject() {
 /// Track M Guard[Trait] family; the memory-safety close for the round.
 /// CHAINED `m.lock().get().greet()` on `Mutex[Box[Speaker]]`. Pre-fix, the
 /// ctor call's memcpy(16) read 8 bytes of stack garbage as the vtable
-/// pointer → SIGBUS at method dispatch (Core #15(d): `gg run` masked the
-/// signal as exit 1; the sound_ naming convention was the tell). N2 packs
+/// pointer → SIGBUS at method dispatch (Core #15(d): the sound_ naming
+/// convention was the tell — since Round XXIV Track B, `gg run` also
+/// propagates 128+signo as exit 128+N with a stderr diagnostic). N2 packs
 /// `Box[Concrete]` → `Box[Trait]` at the call-arg boundary via
 /// `pack_trait_object_for_smart_ptr_ctor` (IR helper in
 /// `src/ir/lowering/exprs/calls.rs`), routing through the same LIR

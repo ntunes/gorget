@@ -5,8 +5,8 @@
 # semantic errors", `gg build` succeeds, and the binary exits **139 (SIGSEGV)**
 # with no output.
 #
-# ⚠ `gg run` MASKS this as exit 1 with no output — reproduce by BUILDING and
-# running the binary directly, or it looks like an ordinary build error.
+# `gg run` propagates 128+signo as exit 128+N (Round XXIV Track B); a SIGSEGV
+# victim exits 139 with a `terminated by SIGSEGV (signal 11)` stderr line.
 #
 # ⚠ NOT SIGIL-RELATED, and that is the whole point of this fixture. It was
 # first surfaced while probing `&`-iterable element write-through, where the

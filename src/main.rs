@@ -13,6 +13,64 @@ use gorget::manifest::{self, DepSpec, Manifest};
 use gorget::parser::Parser;
 use gorget::resolver;
 
+/// Propagate a child process's exit status to `gg`'s own exit, preserving
+/// signal-death information the naive `status.code().unwrap_or(1)` pattern
+/// erases. Follows the Bash/`cargo run`/`timeout(1)` convention:
+/// - signal death → exit `128 + signo`, with a stderr diagnostic naming the
+///   signal so an interactive user sees a real error message instead of the
+///   silent exit-1 (memory-safety bugs used to be indistinguishable from
+///   compile errors at the `gg run` UX — Round XXIV Track B).
+/// - normal exit → propagate the child's exit code.
+/// - unknown state → exit 1.
+fn propagate_child_status(status: std::process::ExitStatus, exe_hint: &str) -> ! {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signo) = status.signal() {
+            let name = signal_name(signo);
+            eprintln!("gg: {exe_hint} terminated by {name} (signal {signo})");
+            process::exit(128 + signo);
+        }
+    }
+    let _ = exe_hint; // silence unused warning on non-Unix
+    process::exit(status.code().unwrap_or(1)); // LINT-CHOKEPOINT-FALLBACK: this IS the chokepoint (non-signal fallback), lint exempts this line
+}
+
+// Signal-number → name mapping is Linux-specific for numbers > ~6.
+// macOS/BSDs disagree (signal 7 = SIGEMT vs Linux SIGBUS; signal 10 = SIGBUS
+// vs Linux SIGUSR1). We bifurcate per target_os so the diagnostic names the
+// right signal wherever gg runs. Exit CODE is 128+signo everywhere (that's
+// the POSIX contract).
+#[cfg(all(unix, target_os = "linux"))]
+fn signal_name(signo: i32) -> &'static str {
+    match signo {
+        1 => "SIGHUP", 2 => "SIGINT", 3 => "SIGQUIT", 4 => "SIGILL",
+        5 => "SIGTRAP", 6 => "SIGABRT", 7 => "SIGBUS", 8 => "SIGFPE",
+        9 => "SIGKILL", 10 => "SIGUSR1", 11 => "SIGSEGV", 12 => "SIGUSR2",
+        13 => "SIGPIPE", 14 => "SIGALRM", 15 => "SIGTERM",
+        24 => "SIGXCPU", 25 => "SIGXFSZ",
+        _ => "signal",
+    }
+}
+
+#[cfg(all(unix, any(target_os = "macos", target_os = "freebsd",
+                    target_os = "openbsd", target_os = "netbsd")))]
+fn signal_name(signo: i32) -> &'static str {
+    match signo {
+        1 => "SIGHUP", 2 => "SIGINT", 3 => "SIGQUIT", 4 => "SIGILL",
+        5 => "SIGTRAP", 6 => "SIGABRT", 7 => "SIGEMT", 8 => "SIGFPE",
+        9 => "SIGKILL", 10 => "SIGBUS", 11 => "SIGSEGV", 12 => "SIGSYS",
+        13 => "SIGPIPE", 14 => "SIGALRM", 15 => "SIGTERM",
+        24 => "SIGXCPU", 25 => "SIGXFSZ",
+        _ => "signal",
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos",
+                        target_os = "freebsd", target_os = "openbsd",
+                        target_os = "netbsd"))))]
+fn signal_name(_signo: i32) -> &'static str { "signal" }
+
 /// File info for multi-file error reporting: (display_name, source, base_offset).
 type FileInfo = (String, String, usize);
 
@@ -2515,7 +2573,7 @@ fn real_main() {
                 eprintln!("Failed to execute {}: {e}", exe_path.display());
                 process::exit(1);
             });
-        process::exit(status.code().unwrap_or(1));
+        propagate_child_status(status, &exe_path.display().to_string());
     }
 
     // `gg report <file>.trace.jsonl` — generate HTML report from trace
@@ -2732,6 +2790,8 @@ fn real_main() {
         let mut total_skipped = 0u64;
         let mut any_failed = false;
         let mut files_with_tests = 0u64;
+        #[cfg(unix)]
+        let mut first_signal: Option<(PathBuf, i32)> = None;
 
         for file in &test_files {
             let rel = file.strip_prefix(dir).unwrap_or(file);
@@ -2746,6 +2806,15 @@ fn real_main() {
                 eprintln!("Failed to run tests for {}: {e}", file.display());
                 process::exit(1);
             });
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt;
+                if first_signal.is_none() {
+                    if let Some(signo) = output.status.signal() {
+                        first_signal = Some((file.clone(), signo));
+                    }
+                }
+            }
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -2844,6 +2913,15 @@ fn real_main() {
             println!("{total_passed} passed, {total_failed} failed, {total_skipped} skipped ({files_with_tests} file(s))");
         } else {
             println!("{total_passed} passed, {total_failed} failed ({files_with_tests} file(s))");
+        }
+        #[cfg(unix)]
+        if let Some((who, signo)) = first_signal {
+            eprintln!(
+                "gg: test file {} terminated by {} (signal {signo})",
+                who.display(),
+                signal_name(signo)
+            );
+            process::exit(128 + signo);
         }
         process::exit(if any_failed { 1 } else { 0 });
     }
@@ -3083,7 +3161,7 @@ fn real_main() {
                             eprintln!("Failed to execute {}: {e}", exe_path.display());
                             process::exit(1);
                         });
-                    process::exit(status.code().unwrap_or(1));
+                    propagate_child_status(status, &exe_path.display().to_string());
                 }
                 Err(e) => {
                     eprintln!("{e}");
@@ -3336,15 +3414,34 @@ fn real_main() {
                     children.push(child);
                 }
                 let mut any_failed = false;
-                for mut child in children {
+                #[cfg(unix)]
+                let mut first_signal: Option<(usize, i32)> = None;
+                for (worker_id, mut child) in children.into_iter().enumerate() {
                     let status = child.wait().unwrap_or_else(|e| {
                         eprintln!("Failed to wait for worker: {e}");
                         process::exit(1);
                     });
                     if !status.success() { any_failed = true; }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::process::ExitStatusExt;
+                        if first_signal.is_none() {
+                            if let Some(signo) = status.signal() {
+                                first_signal = Some((worker_id, signo));
+                            }
+                        }
+                    }
                 }
                 // Merge worker result files
                 merge_parallel_results(&results_path, n);
+                #[cfg(unix)]
+                if let Some((who, signo)) = first_signal {
+                    eprintln!(
+                        "gg: test worker {who} terminated by {} (signal {signo})",
+                        signal_name(signo)
+                    );
+                    process::exit(128 + signo);
+                }
                 process::exit(if any_failed { 1 } else { 0 });
             }
 
@@ -3412,7 +3509,7 @@ fn real_main() {
                 }
             }
             // tmp_dir is dropped here, cleaning up .c, binary, and trace
-            process::exit(status.code().unwrap_or(1));
+            propagate_child_status(status, &exe_path.display().to_string());
         }
         "fmt" => {
             let in_place = args.iter().any(|a| a == "--in-place" || a == "-i");

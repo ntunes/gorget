@@ -1,0 +1,53 @@
+# Round XXIV Track B — DURABLE SH-lane COMPANION for `gg run` signal-death
+# propagation (Core #9 lane parity + owner rule 2026-07-24: filed bugs get a
+# committed reproducer, never a `/tmp` scratch).
+#
+# STATUS: SH-lane still-open gap. The Rust lane's Track B routed all four
+# child-exit sites through `propagate_child_status` which reads
+# `ExitStatusExt::signal()` on Unix and exits `128 + signo` with a stderr
+# diagnostic (Bash / cargo-run / timeout(1) convention). The SH driver at
+# `tests/fixtures/self_host_lowerer/driver.gg:735-744` still does:
+#
+#     if do_run:
+#         String run_path = path_absolute(output_path)
+#         int run_exit = exec(run_path)
+#         exit(run_exit)
+#
+# and `src/backend/c/runtime/process_runtime.c:5-13`'s `gorget_exec` returns
+# `-1` on signal-death (`WIFEXITED` false), which `exit(-1)` passes to the
+# shell as exit **255** — a different masked value from the Rust lane's
+# historical exit 1, but the same masking class: a memory-safety bug in a
+# user's `.gg` program is indistinguishable from a compile / runtime error
+# at the SH `gg run` UX.
+#
+# INTENDED SH behaviour (matching the Rust lane, Round XXIV Track B):
+#   • `gg run` propagates 128+signo as exit 128+N when the child dies from
+#     a signal; for a SIGSEGV victim, exit 139 with a stderr diagnostic
+#     `gg: <exe> terminated by SIGSEGV (signal 11)`.
+#
+# SCOPE OF FIX (deferred, filed): a new runtime API `gorget_exec_status`
+# returning a struct with (exit_code, signal, exited) and a driver.gg
+# consumer that mirrors `propagate_child_status`. The runtime API addition
+# + driver.gg consumer + parity check together are bigger scope than the
+# Rust-lane fix and belong in their own track.
+#
+# WIRING: the harness un-ignore lands the same round as the SH-lane port.
+# Until then, this file is a DURABLE repro so a future scout has a stable
+# minimal case. This program is a Vector-of-Vector comprehension — the same
+# shape as `sound_comprehension_nested_vector_segv.gg` — which is known to
+# segfault under BOTH backends. Running it under the SH driver's `gg run`
+# path must one day surface 139 + stderr diagnostic; today it surfaces 255
+# silent (the mask the Rust lane used to have).
+#
+# INTENDED (asserted when un-ignored): SH `gg run` exits 139 with a stderr
+# line naming SIGSEGV; NOT the current silent exit 255.
+
+int seed():
+    return 1
+
+void main():
+    Vector[int] inner0 = [seed()]
+    Vector[int] inner1 = [seed() + 1]
+    Vector[Vector[int]] a = [inner0, inner1]
+    Vector[int] r = [x.len() for x in a]
+    print(r.get(0).unwrap())

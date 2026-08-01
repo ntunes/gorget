@@ -5233,6 +5233,13 @@ Modes combine: `--clones=sites,stats`. The pre-unification spellings
 `--show-clones` and `--clone-stats` were removed — use `--clones=sites` and
 `--clones=stats` respectively (the old flags now error with the replacement).
 
+### Exit codes
+
+- **Normal exit:** `gg run` propagates the child program's exit code (0-255).
+- **Signal death (Unix):** `gg run` prints `gg: <exe> terminated by <SIGNAL> (signal N)` to stderr and exits `128 + N`, following the Bash / `cargo run` / `timeout(1)` convention. A SIGSEGV victim exits 139, SIGABRT 134, etc. `gg test` (both sequential and `--parallel`) and the directory-form `gg test <dir>` use the same convention when a test worker or a per-file test child dies from a signal.
+- **Spawn failure:** exits 1 with a diagnostic on stderr.
+- **Windows:** signal death has no equivalent; `gg run` propagates the child's exit code as reported by the OS.
+
 ---
 
 ## 18. Testing
