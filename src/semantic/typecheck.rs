@@ -180,6 +180,33 @@ fn type_mentions_name(ty: &Type, target: &str) -> bool {
     }
 }
 
+/// Round XXIII Track α: exhaustive enumeration of the 3 closure-returning
+/// Option/Result combinator cells whose closure return must be unified
+/// against a specific receiver payload axis. See
+/// `TypeChecker::unify_closure_ret_axis` for the per-cell rule table,
+/// exclusions, and the arm-count class-guard in `tests/lints.rs`.
+///
+/// Explicitly OUT-OF-CLASS (do NOT extend to these — the exclusion is
+/// load-bearing, see the helper's doc-comment):
+/// - `.map` / `.map_err` — scalar-returning closures, outer type
+///   reconstructed from the scalar (no axis to unify).
+/// - `Result.flat_map` — deliberately unregistered in `builtins.rs`
+///   (assertion at ~:1425 forbids it).
+/// - `Option.and_then` / `Option.flat_map` — legitimate cross-type
+///   map (`T → Option[U]` where `U ≠ T` is the intended shape).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClosureCombinatorCell {
+    /// `Result[T, E].or_else((E) -> Result[T', E'])` — unify T' == T (Ok-axis).
+    /// The Error axis IS the recovery axis; E' ≠ E is legitimate.
+    ResultOrElse,
+    /// `Result[T, E].and_then((T) -> Result[U, E'])` — unify E' == E (Err-axis).
+    /// The Ok axis IS the mapped axis; U ≠ T is legitimate.
+    ResultAndThen,
+    /// `Option[T].or_else(() -> Option[T'])` — unify T' == T (Some-axis).
+    /// Option has one payload; the recovery closure must produce the same T.
+    OptionOrElse,
+}
+
 /// RV-A: whether a builtin wrapper's inner type (`Box[T]` → `T`) carries the
 /// accessed field. Drives the 3-way field-access diagnostic — see
 /// `TypeChecker::wrapper_inner_field_status`.
@@ -7535,15 +7562,32 @@ impl<'a> TypeChecker<'a> {
                 Some(self.types.intern_generic(def_id, vec![u_type]))
             }
             ("Option", "and_then") => {
-                // (T) -> Option[U], returns Option[U] directly
+                // (T) -> Option[U], returns Option[U] directly.
+                // Legitimate cross-type map (T → Option[U] where U ≠ T is
+                // intended); NOT in `unify_closure_ret_axis`'s enumeration.
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let ret_type = self.extract_fn_return_type(closure_type)?;
                 Some(ret_type)
             }
             ("Option", "or_else") => {
-                // () -> Option[T], returns Option[T]
-                let _ = args.first().map(|a| self.infer_expr(&a.node.value));
-                Some(receiver_type)
+                // () -> Option[T'], must return Option[T]. Track α write-site
+                // fix: previously discarded the closure return entirely and
+                // returned `Some(receiver_type)`, silently allowing an
+                // Option[Money] closure return under an Option[int] receiver
+                // — the mis-typed payload then leaked at runtime. Now the
+                // closure's declared return type flows through, and the
+                // shared `unify_closure_ret_axis` helper enforces T' == T.
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let ret_type = self.extract_fn_return_type(closure_type)?;
+                let arg_span = args.first().map(|a| a.span).unwrap_or_else(Span::dummy);
+                self.unify_closure_ret_axis(
+                    ClosureCombinatorCell::OptionOrElse,
+                    receiver_type,
+                    &type_args,
+                    ret_type,
+                    arg_span,
+                );
+                Some(ret_type)
             }
             ("Result", "map") => {
                 // (T) -> U, returns Result[U, E]
@@ -7553,15 +7597,46 @@ impl<'a> TypeChecker<'a> {
                 Some(self.types.intern_generic(def_id, vec![u_type, e_type]))
             }
             ("Result", "and_then") => {
-                // (T) -> Result[U, E], returns Result[U, E] directly
+                // (T) -> Result[U, E'], returns Result[U, E'] directly.
+                // Track α unify enforcement: E' must equal receiver's E
+                // (Error-axis is a passthrough for and_then; only the Ok
+                // axis is legitimately mapped). Without the unify a
+                // closure returning `Result[U, int]` under a receiver
+                // `Result[T, Money]` mis-sized the never-taken Error
+                // slot and leaked heap Money.
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let ret_type = self.extract_fn_return_type(closure_type)?;
+                let arg_span = args.first().map(|a| a.span).unwrap_or_else(Span::dummy);
+                self.unify_closure_ret_axis(
+                    ClosureCombinatorCell::ResultAndThen,
+                    receiver_type,
+                    &type_args,
+                    ret_type,
+                    arg_span,
+                );
                 Some(ret_type)
             }
             ("Result", "or_else") => {
-                // (E) -> Result[T, F], returns Result[T, F] directly
+                // (E) -> Result[T', F], returns Result[T', F] directly.
+                // Track α write-site fix (Core #1 / Core #4): the lowerer
+                // used to fall through to `_ => recv_type` at `result_local`
+                // birth, mis-sizing the branch memcpys → stack-buffer-
+                // overflow READ of size 80 at the merge (both Ok- and
+                // Err-axis cross-type shapes triggered it). Enforcing
+                // T' == T here rejects the ill-typed Ok-axis at check time
+                // (recovery is the Error axis only); the lowerer's new
+                // `or_else` arm at methods.rs:3779 sizes the result from
+                // the closure's declared return so E' ≠ E is safe.
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let ret_type = self.extract_fn_return_type(closure_type)?;
+                let arg_span = args.first().map(|a| a.span).unwrap_or_else(Span::dummy);
+                self.unify_closure_ret_axis(
+                    ClosureCombinatorCell::ResultOrElse,
+                    receiver_type,
+                    &type_args,
+                    ret_type,
+                    arg_span,
+                );
                 Some(ret_type)
             }
             ("Result", "map_err") => {
@@ -7872,6 +7947,106 @@ impl<'a> TypeChecker<'a> {
             ResolvedType::Function { return_type, .. } => Some(*return_type),
             _ => None,
         }
+    }
+
+    /// Round XXIII Track α (Core #4 class-fix, Core #2 typed metadata):
+    /// closure-returning Option/Result combinators must unify a specific
+    /// payload axis between the closure's declared return and the receiver.
+    /// This helper is the SINGLE PRODUCER for that axis check across the
+    /// 3 unify-eligible cells enumerated by `ClosureCombinatorCell`:
+    ///
+    /// | Cell               | Receiver          | Closure return         | Axis      |
+    /// |--------------------|-------------------|------------------------|-----------|
+    /// | `Result.or_else`   | `Result[T, E]`    | `Result[T', E']`       | Ok  (T'==T) |
+    /// | `Result.and_then`  | `Result[T, E]`    | `Result[U, E']`        | Err (E'==E) |
+    /// | `Option.or_else`   | `Option[T]`       | `Option[T']`           | Some (T'==T) |
+    ///
+    /// Cells intentionally EXCLUDED (Core #12 axis rationale, in the
+    /// enumeration's doc-comment for the reviewer):
+    /// - `.map` / `.map_err` — closures return SCALARS, not nested
+    ///   Option/Result; the outer type is reconstructed from the scalar
+    ///   return. No axis to unify (Core #15e Q3: enumeration is TOTAL over
+    ///   the class of closures returning Option[…]/Result[…]).
+    /// - `Result.flat_map` — deliberately UNREGISTERED in
+    ///   `src/ir/lowering/builtins.rs::RESULT` (assertion at ~:1425
+    ///   forbids it). DO NOT register: registering would invalidate the
+    ///   assertion and reintroduce a runtime dispatch path with no
+    ///   fixture coverage.
+    /// - `Option.and_then` / `Option.flat_map` — legitimate cross-type
+    ///   map: `T → Option[U]` where `U ≠ T` is the intended shape (that
+    ///   IS the map). No unify.
+    ///
+    /// The exhaustive enumeration is ratcheted by
+    /// `tests/lints.rs::unify_closure_ret_axis_class_enumeration` — a
+    /// class-guard that mirrors the `container_literal_arms_count`
+    /// precedent (Core #6). If a new closure-returning combinator gets
+    /// added to `builtins.rs`, the lint fires and forces the author
+    /// through this helper or documents the exemption alongside its
+    /// sibling exclusions above.
+    ///
+    /// Emits `E_TypeMismatch` at `span` on axis mismatch. Silently
+    /// accepts fresh Vars, error types, and shape-mismatches (the outer
+    /// caller has already emitted a shape error).
+    fn unify_closure_ret_axis(
+        &mut self,
+        cell: ClosureCombinatorCell,
+        receiver_type: TypeId,
+        receiver_type_args: &[TypeId],
+        closure_ret_type: TypeId,
+        span: Span,
+    ) {
+        // Skip when the closure return didn't resolve to a concrete
+        // Option/Result — the outer caller's shape-mismatch path (or an
+        // upstream inference failure) will surface any real error, and
+        // we don't want a cascading TypeMismatch on top of a Var/error.
+        let closure_resolved = self.resolve_type(closure_ret_type);
+        if closure_resolved == self.types.error_id
+            || matches!(self.types.get(closure_resolved), ResolvedType::Var(_))
+        {
+            return;
+        }
+        let ResolvedType::Generic(_, closure_args) = self.types.get(closure_resolved) else {
+            return;
+        };
+        let closure_args = closure_args.clone();
+        let (recv_payload, closure_payload) = match cell {
+            ClosureCombinatorCell::ResultOrElse => {
+                // Ok-unify: T' == T (index 0), E' free.
+                (receiver_type_args.first().copied(), closure_args.first().copied())
+            }
+            ClosureCombinatorCell::ResultAndThen => {
+                // Err-unify: E' == E (index 1), U free.
+                (receiver_type_args.get(1).copied(), closure_args.get(1).copied())
+            }
+            ClosureCombinatorCell::OptionOrElse => {
+                // Some-unify: T' == T (index 0), Option has one payload.
+                (receiver_type_args.first().copied(), closure_args.first().copied())
+            }
+        };
+        let (Some(recv_payload), Some(closure_payload)) = (recv_payload, closure_payload) else {
+            return;
+        };
+        // Only report on fully-concrete payloads — otherwise a Var can
+        // still be unified against the receiver's payload downstream, and
+        // an eager report would cascade.
+        if !self.is_fully_concrete(recv_payload) || !self.is_fully_concrete(closure_payload) {
+            return;
+        }
+        let recv_resolved = self.resolve_type(recv_payload);
+        let closure_payload_resolved = self.resolve_type(closure_payload);
+        if recv_resolved == closure_payload_resolved {
+            return;
+        }
+        // Mismatch: describe using the FULL receiver / closure-return
+        // types so the diagnostic points the reader at the shape they
+        // wrote, not just an anonymous payload TypeId.
+        self.error(
+            SemanticErrorKind::TypeMismatch {
+                expected: self.describe_resolved_type(receiver_type),
+                found: self.describe_resolved_type(closure_resolved),
+            },
+            span,
+        );
     }
 
     /// Resolve static method calls on type names (e.g. `int.parse("42")`, `float.default()`).

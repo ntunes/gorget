@@ -1754,6 +1754,22 @@ fn combinator_leak_unwrap_or_else_result_money_param_no_leak() {
     security_safe_no_leak("combinator_leak_unwrap_or_else_result_money_param", "7");
 }
 
+/// Round XXIII Track α — SBO guard for cross-type Result.or_else with an
+/// Error-axis-cross closure return. Pre-fix (scout
+/// `/tmp/round_xxiii_trackAlpha_scout_1.md`): AddressSanitizer:
+/// stack-buffer-overflow READ of size 80 at the merge memcpy in
+/// `try_lower_option_result_combinator`; `result_local` was mis-sized to
+/// recv_type (24B) while the closure wrote 80B. Fixed by extending the
+/// `and_then | flat_map` arm at `src/ir/lowering/exprs/methods.rs:3779` to
+/// include `"or_else"` (sizes `result_local` from the closure's declared
+/// return). The typecheck class-guard `unify_closure_ret_axis` in
+/// `src/semantic/typecheck.rs` pins the Ok-payload unify (T'==T; E'≠E is
+/// the recovery axis).
+#[test]
+fn combinator_sbo_or_else_result_error_cross_type_asan_clean() {
+    security_safe_no_leak("combinator_sbo_or_else_result_error_cross_type", "5");
+}
+
 // ── B5: the Option/Result combinator skips the payload's user Drop ──────────
 
 /// Measured at HEAD under `--sanitize` + `detect_leaks=1`:

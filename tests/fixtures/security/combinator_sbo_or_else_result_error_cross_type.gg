@@ -1,0 +1,45 @@
+# CELL: `.or_else()` × Error-axis CROSS-TYPE × Result[int, Money] → Result[int, int]
+# Round XXIII Track α — SBO class-fix on cross-type Result.or_else.
+#
+# Pre-fix (scout `/tmp/round_xxiii_trackAlpha_scout_1.md` + reconstructed probe
+# `probe_sbo_exact.gg` at HEAD `aedb60eb`): a call-body closure returning a
+# differently-sized `Result[T, E']` tripped `AddressSanitizer: stack-buffer-
+# overflow READ of size 80` inside `__interceptor_memcpy` at the `via_param`
+# merge memcpy. The lowerer's `try_lower_option_result_combinator` at
+# `src/ir/lowering/exprs/methods.rs:3746-3816` had NO `or_else` arm in the
+# `result_type = match method_name { … }` block; `or_else` fell through to
+# `_ => recv_type`, so `result_local` was born as `Result[T, E]` (recv-sized)
+# while the branch memcpys wrote the closure's `Result[T, E']` (80 bytes).
+#
+# POST-FIX: `.or_else` joined the `and_then | flat_map` arm at
+# `src/ir/lowering/exprs/methods.rs:3779` — `result_local` now sizes from the
+# closure's declared return; branch and merge memcpys agree. ASan-clean.
+#
+# AXIS SAMPLE: payload=Money (resource, Vector[int] field, heap-forced) ·
+# combinator=or_else · closure return type=`Result[int, int]` (E' ≠ E) · recv=
+# bare-param. Money is HEAP-FORCED (built Vector[int], not literal) so the
+# 80-byte memcpy over the branch was observably OOB.
+
+struct Money:
+    Vector[int] cents
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Result[int, int] recover(Money m):
+    return Ok(m.cents.len())
+
+void via_param(Result[int, Money] p):
+    # E-axis cross: recv Result[int, Money], closure returns Result[int, int].
+    # Ok-unify passes (T'==T=int); E'≠E is the recovery axis (allowed).
+    Result[int, int] r = p.or_else((Money m): recover(m))
+    if r is Ok(v):
+        print(v)
+
+void main():
+    via_param(Error(Money(heap_cents(5))))

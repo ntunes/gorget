@@ -3689,20 +3689,29 @@ fn try_lower_option_result_combinator(
     // Set expected_type for the closure body so bare Ok/Error/Some/None
     // constructors resolve to a full wrapper (not int64_t fallback).
     //
-    // and_then is CROSS-TYPE capable (Option[T]→Option[U], Result[T,E]→Result[U,E]).
+    // and_then and or_else are CROSS-TYPE capable
+    //   (Option[T]→Option[U] / Result[T,E]→Result[U,E] for and_then;
+    //    Option[T]→Option[T] / Result[T,E]→Result[T,F] for or_else).
     // Always-forcing recv made Result Ok(u) build Result[T,E] with a size-
-    // mismatched Ok payload (Track B silent-wrong). Never-forcing broke bare
-    // `None()` in same-type Option chains (`test_option_chaining` → mangled
+    // mismatched Ok payload (Track B silent-wrong; Round XXIII Track α:
+    // same class for cross-type or_else where a call-body closure returned
+    // a differently-sized Result). Never-forcing broke bare `None()` in
+    // same-type Option chains (`test_option_chaining` → mangled
     // `int64_t__and_then`). Dual rule (mirrors SH-3 RSV-1):
-    //   and_then: if outer expected is Option/Result → keep outer (annotated
-    //             cross-type); else → recv (bare None/Ok same-type chains).
-    //   or_else / flat_map: force recv.
+    //   and_then / or_else: if outer expected is Option/Result → keep outer
+    //                       (annotated cross-type); else → recv (bare
+    //                       None/Ok same-type chains).
+    //   flat_map: force recv (Option-only; the type is Option[U] which is
+    //             legitimately cross-type but the expected-type hint here
+    //             only affects bare-literal-body coercion, and same-type
+    //             chains without an outer annotation still need the recv
+    //             hint for `Some`/`None` resolution).
     let prev_expected = ctx.func_state.expected_type;
-    if matches!(method_name, "or_else" | "flat_map") {
+    if method_name == "flat_map" {
         if let Some(type_id) = ctx.lookup_type_by_name(type_name) {
             ctx.func_state.expected_type = Some(type_id);
         }
-    } else if method_name == "and_then" {
+    } else if matches!(method_name, "and_then" | "or_else") {
         let outer_is_opt_res = prev_expected
             .and_then(|tid| ctx.type_registry.enum_category(tid))
             .is_some();
@@ -3711,7 +3720,7 @@ fn try_lower_option_result_combinator(
                 ctx.func_state.expected_type = Some(type_id);
             }
         }
-        // outer_is_opt_res: leave prev_expected (annotated Result[U,E]/Option[U])
+        // outer_is_opt_res: leave prev_expected (annotated Result[T,F]/Option[T])
     }
 
     // Lower the closure argument
@@ -3776,15 +3785,33 @@ fn try_lower_option_result_combinator(
                 recv_type
             }
         }
-        "and_then" | "flat_map" => {
+        "and_then" | "flat_map" | "or_else" => {
             // Closure returns Option[U] or Result[U, E] — that IS the result type.
-            // Previously fell through to `_ => recv_type`, which for Option[Money]
-            // → Option[int] produced an Option[Money]-typed result_local that the
-            // closure's Option[int] return got Move-assigned into — LLVM verifier
-            // caught the i64-vs-ptr phi; the C backend silently emitted the
-            // memcpy and dereffed an int as a Vector[int] handle → SIGSEGV.
+            // Previously (before Round XXIII Track α, `or_else` was in this arm's
+            // fall-through `_ => recv_type` branch) Option[Money]→Option[int]
+            // produced an Option[Money]-typed result_local that the closure's
+            // Option[int] return got Move-assigned into — LLVM verifier caught
+            // the i64-vs-ptr phi; the C backend silently emitted the memcpy and
+            // dereffed an int as a Vector[int] handle → SIGSEGV.
             // (Core #1 write-site fix: the wrong type was chosen when result_local
             // was allocated, not at the assign.)
+            //
+            // Track α extended this arm to `or_else`: cross-type `.or_else`
+            // (Result[T,E]→Result[T,E'] and Option[T]→Option[T]) previously
+            // SBOd on both branches at the merge memcpy — the pre-Track-α
+            // `_ => recv_type` fall-through mis-sized `result_local` at birth
+            // and downstream memcpys read/wrote the wrong number of bytes.
+            // Under the new sigil semantics or_else is the same closure-return
+            // shape as and_then/flat_map: the closure DECLARES the result type;
+            // the typechecker (`unify_closure_ret_axis`) enforces the axis rule
+            // (Ok-unify for Result.or_else, Error-unify for Result.and_then,
+            // Some-unify for Option.or_else) so the ill-typed shapes that used
+            // to reach here get rejected at check time.
+            //
+            // Class registry — every closure-returning-Result/Option combinator
+            // arm belongs here. `tests/lints.rs::result_type_closure_return_arms`
+            // ratchets the exhaustive list so the next combinator addition
+            // cannot silently escape.
             let closure_ret = infer_closure_return_type(ctx, &closure_op, builder);
             if closure_ret != UNIT_TYPE {
                 closure_ret
