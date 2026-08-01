@@ -610,12 +610,6 @@ pub struct LoweringContext<'a> {
     /// funnels through) — so this genuinely IS per-function, not module-wide
     /// accumulation.
     pub materialize_plan: MaterializePlan,
-    /// Suggestions to pass arguments with `!` (move) for last-use optimization.
-    pub move_suggestions: Vec<crate::ir::MoveSuggestion>,
-    /// Functions that clone a bare-param at a return/ownership boundary.
-    /// Maps fn_name → set of param names that are cloned.
-    /// Populated during callee lowering, queried at caller call sites.
-    pub fn_consumed_params: FxHashMap<String, rustc_hash::FxHashSet<String>>,
     /// Maps monomorphized method name → runtime callee metadata.
     /// Populated from BuiltinTypeProtocol declarations during module setup.
     /// Used by the LIR backend to replace `map_monomorphized_to_runtime()`.
@@ -764,8 +758,6 @@ impl<'a> LoweringContext<'a> {
             resolver_diag: super::resolver_diag::ResolverDiag::default(),
             cow_reason: crate::ir::ImplicitCloneReason::CoWMaterialization,
             materialize_plan: MaterializePlan::default(),
-            move_suggestions: Vec::new(),
-            fn_consumed_params: FxHashMap::default(),
             runtime_callees: FxHashMap::default(),
             call_resolved_names: FxHashMap::default(),
             heap_alloc_consumer_externs: rustc_hash::FxHashSet::default(),
@@ -1258,26 +1250,6 @@ impl<'a> LoweringContext<'a> {
     ) -> crate::ir::types::LocalId {
         self.warn_clone_and_hit(builder, span, type_id, reason);
         builder.call_clone(clone_fn, args, type_id, reason)
-    }
-
-    /// Record that the current function clones a bare-param at an ownership boundary.
-    /// Called alongside warn_implicit_clone when the clone source is a Ptr(T) param.
-    /// Used by call-site analysis to suggest `!arg` for last-use arguments.
-    pub fn record_param_cloned(
-        &mut self,
-        builder: &crate::ir::builder::FunctionBuilder,
-        local: LocalId,
-    ) {
-        if !self.is_bare_param(builder, local) { return; }
-        if let Some(name) = builder.local_name(local).map(|s| s.to_string()) {
-            let fn_name = self.func_state.current_fn_name.clone();
-            if !fn_name.is_empty() {
-                self.fn_consumed_params
-                    .entry(fn_name)
-                    .or_default()
-                    .insert(name);
-            }
-        }
     }
 
 }
@@ -2490,8 +2462,7 @@ impl<'a> LoweringContext<'a> {
 
         // Case 1: Ptr(T) → clone inner.
         // Cannot move through Ptr: the callee doesn't know if the caller still
-        // needs the argument. Record the param as consumed so the caller can
-        // suggest `!` at last-use call sites.
+        // needs the argument.
         //
         // NOTE: auto-deref for non-resource pointees (Ref[T] → T) does NOT
         // live here because this function doesn't know the target slot's type.
@@ -2502,7 +2473,6 @@ impl<'a> LoweringContext<'a> {
         // (via `auto_clone_if_ptr`).
         if let Some(inner) = self.pointee_type(local_type) {
             if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
-                self.record_param_cloned(builder, local);
                 self.warn_clone_and_hit(builder, span, inner, reason);
                 let cloned = builder.call_clone(
                     &clone_fn,

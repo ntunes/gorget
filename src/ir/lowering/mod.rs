@@ -2235,9 +2235,8 @@ pub fn lower_module(
     // Thread purity data to the module
     module.fn_purity = ctx.analysis.fn_purity.clone();
 
-    // Transfer implicit clone warnings and move suggestions
+    // Transfer implicit clone warnings
     module.implicit_clone_warnings = ctx.implicit_clone_warnings;
-    module.move_suggestions = ctx.move_suggestions;
 
     // Transfer place-resolver fall-through worklist (`--resolvers`). Hist entries
     // ride as aggregated records; main emits the ranked report after lower.

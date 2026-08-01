@@ -468,16 +468,6 @@ impl ErrorReporter {
         }
     }
 
-    /// Emit a warning with a primary span and a note string.
-    pub fn emit_warning_with_note(&self, span: Span, message: &str, note: &str) {
-        let label = self.primary_label(span);
-        let diag = diagnostic::Diagnostic::warning()
-            .with_message(message)
-            .with_labels(vec![label])
-            .with_notes(vec![note.to_string()]);
-        self.emit(&diag);
-    }
-
     fn emit(&self, diag: &diagnostic::Diagnostic<usize>) {
         let writer = StandardStream::stderr(ColorChoice::Auto);
         let config = term::Config::default();

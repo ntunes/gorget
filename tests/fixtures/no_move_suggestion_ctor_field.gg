@@ -1,0 +1,24 @@
+# Regression (Round XXIV Track A):
+# The "zero-cost move" advice mechanism was deleted because it emitted
+# invalid advice 100% of the time (D31 full-strict rejects `!` at any
+# bare-param call site with E_OwnershipMismatch). This fixture pins the
+# AXIS: bare Vector[int] param passed as an owned struct-field init arg
+# at last-use (Caller #1 of the deleted `record_param_cloned`, via
+# `ensure_owned_at_boundary`'s Ptr(T) clone leg during ctor field init).
+# Asserts NO warning fires on `gg build`.
+#
+# RED-verify: with the deletion applied, a temp `eprintln!("zero-cost move
+# probe")` added early in `src/main.rs` build path made this fixture go
+# RED (the helper detects the substring); removing the probe returned it
+# to GREEN.
+
+struct Bag:
+    Vector[int] items
+
+Bag wrap(Vector[int] xs):
+    return Bag(xs)
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    Bag b = wrap(v)
+    print(b.items.len())

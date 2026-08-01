@@ -147,9 +147,7 @@ regardless. Its decision tree:
 - **`Ptr(T)` / `MutPtr(T)`** → clone the pointee via `clone_fn_for_ptr(T)`. The
   test is `pointee_type`, so a `&`-param's `MutPtr` resolves here exactly like a
   bare param's `Ptr`. Cannot move through a pointer (the callee can't know
-  whether the caller still needs it); the param is recorded via
-  `record_param_cloned` so the caller can later suggest `!` at last-use sites
-  (`context.rs:2372`).
+  whether the caller still needs it).
 - **By-value resource that is a borrow** (`is_ref_local || is_bare_param ||
   is_cow_borrow`, or an `Untracked` resource) → clone via `clone_fn_for_ptr`
   (`context.rs:2420`). The one escape is the `!`-param deref-temp, which MOVES

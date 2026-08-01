@@ -163,19 +163,6 @@ pub struct ImplicitCloneWarning {
     pub runtime_fn: String,
 }
 
-/// Suggestion to pass an argument with `!` (move) instead of by borrow,
-/// because the argument is the last use of the variable and the callee
-/// would otherwise deep-clone it.
-#[derive(Debug, Clone)]
-pub struct MoveSuggestion {
-    /// Span of the argument expression at the call site.
-    pub span: crate::span::Span,
-    /// Name of the variable being passed.
-    pub name: String,
-    /// Human-readable type name.
-    pub type_name: String,
-}
-
 /// Why the compiler inserted an implicit clone.
 ///
 /// G3 note: this is the `MaterializeReason` carrier. It is `Copy` so it can
@@ -311,8 +298,6 @@ pub struct Module {
     pub resolver_miss_hist: Vec<(String, String, String, u64)>,
     /// Per-site fall-through log when `--resolvers=sites` was armed.
     pub resolver_miss_sites: Vec<crate::ir::lowering::ResolverMissRecord>,
-    /// Suggestions to use `!arg` (move) for last-use arguments.
-    pub move_suggestions: Vec<MoveSuggestion>,
     /// Maps monomorphized method name → runtime callee metadata.
     /// Populated from BuiltinTypeProtocol declarations; `self_by_ptr` is set
     /// from `SelfConvention` so LIR lowering never re-derives it by name.
@@ -404,7 +389,6 @@ impl Module {
             implicit_clone_warnings: Vec::new(),
             resolver_miss_hist: Vec::new(),
             resolver_miss_sites: Vec::new(),
-            move_suggestions: Vec::new(),
             runtime_callees: rustc_hash::FxHashMap::default(),
             fn_extern_abi_kinds: rustc_hash::FxHashMap::default(),
             yield_point_fns: rustc_hash::FxHashSet::default(),

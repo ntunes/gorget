@@ -159,6 +159,8 @@ C-without-stack-probes position, not the Rust guard-page-plus-probe position.
 
 ### 1. The signature summary (the missing layer)
 
+> **Update (Round XXIV Track A):** the `MoveSuggestion` advice + `fn_consumed_params` sidecar are DELETED per this doc's own ruling at §2. Future elision consumer builds fresh typed signature metadata per this section — no inherited substrate.
+
 Two facts must cross the function boundary, per param, on the **signature**:
 
 | fact | direction | today |
@@ -183,6 +185,8 @@ Three consumers, one substrate — the pattern the `MaterializePlan` round used
 ("substrate built with a real consumer").
 
 ### 2. Arg-side elision (consumer 1 — inferred, no syntax)
+
+> **Update (Round XXIV Track A):** the `MoveSuggestion` advice + `fn_consumed_params` sidecar are DELETED per this doc's own ruling at §2 (paragraphs below). Future elision consumer builds fresh typed signature metadata per §1 — no inherited substrate.
 
 At a call site where the arg is an owned local at its last use and the callee
 materializes that param, **transfer ownership instead of borrowing**; the callee
