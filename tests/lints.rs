@@ -8366,3 +8366,73 @@ fn combinator_assign_result_discipline(adapter: &str) -> (usize, Vec<String>) {
     }
     (call_count, bare)
 }
+
+/// Round XXIII γδ arm-count ratchet (Core #4 "one fix, all siblings" + Core #6
+/// "convert a recurring bug class into an executable guard"): every collection
+/// family whose `try_resolve_index_element_ptr` kind-gate ADMITS it must have
+/// an element-type arm in `infer_collection_element_type`, and every arm added
+/// there must correspond to a family the kind-gate admits — or the missing arm
+/// silently falls to `I64_TYPE` and produces a `gg check`-clean, C-SIGSEGV /
+/// LLVM-llc-reject miscompile (the exact class this ratchet was born to
+/// retire; see the Round XXIII γδ commit).
+///
+/// The admitted-collection member set is the union of `strip_prefix` arms in
+/// `infer_collection_element_type` (`src/ir/lowering/exprs/methods.rs`).
+/// Round XXIII γδ landed at 5: `Vector__` · `Deque__` · `Dict__` · `Map__` ·
+/// `HashMap__`.
+///
+/// ⚠ Set/HashSet are DELIBERATELY EXCLUDED from this set today: neither has a
+/// positional index, so `set_index_returns_garbage.gg` (`known_gaps/`, TODO.md)
+/// asserts a check-time REJECTION rather than an arm here. If Set/HashSet
+/// iteration acquires a struct-payload silent-`0/0` symptom of its own (a
+/// distinct Core #15e Q3 gap filed by Round XXIII γδ TODO follow-up), the fix
+/// may or may not extend this arm set — verify the actual code path first.
+///
+/// **If this fails:**
+///   - A NEW collection family got a `strip_prefix` arm → verify the kind-gate
+///     at `src/ir/lowering/exprs/mod.rs`'s `try_resolve_index_element_ptr` also
+///     admits its `CollectionKind` (or REJECTS the family at check time). Bump
+///     EXPECTED with a justification citing the sibling.
+///   - An arm was REMOVED → the family now silently falls to `I64_TYPE`; a
+///     `gg check`-clean SIGSEGV / llc-reject class re-opens. RESTORE it, do
+///     NOT lower EXPECTED. If the family was retired from the language, delete
+///     the fixture pins too.
+#[test]
+fn infer_collection_element_type_arms_count() {
+    let src = fs::read_to_string("src/ir/lowering/exprs/methods.rs")
+        .expect("read src/ir/lowering/exprs/methods.rs");
+    let sig = "pub(in crate::ir::lowering) fn infer_collection_element_type(";
+    let start = src.find(sig).expect("locate infer_collection_element_type");
+    let after_sig = start + sig.len();
+    // Body ends at the next top-level `fn ` after the fn signature.
+    let end = src[after_sig..]
+        .find("\nfn ")
+        .map(|i| after_sig + i)
+        .unwrap_or(src.len());
+    // Strip line comments so the ratchet reasons about EXECUTABLE code only —
+    // the arm-comment prose legitimately mentions prefix strings.
+    let body: String = src[start..end]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // 5 arms: Vector__ · Deque__ · Dict__ · Map__ · HashMap__. Each spelled
+    // as a `.strip_prefix("<Prefix>__")` call in the fn body; count the
+    // literal appearances of the prefixes (each MUST appear exactly once).
+    const EXPECTED: usize = 5;
+    let count: usize = ["Vector__", "Deque__", "Dict__", "Map__", "HashMap__"]
+        .iter()
+        .map(|p| body.matches(&format!(".strip_prefix(\"{p}\")")).count())
+        .sum();
+    assert_eq!(
+        count, EXPECTED,
+        "`infer_collection_element_type` arm count changed: {count} vs \
+         expected {EXPECTED}. Admitted-collection member set at Round XXIII γδ \
+         close: {{Vector, Deque, Dict, Map, HashMap}}. If a family was ADDED, \
+         verify the `try_resolve_index_element_ptr` kind-gate at \
+         `src/ir/lowering/exprs/mod.rs` also admits its CollectionKind, then \
+         bump EXPECTED. If REMOVED, RESTORE the arm — the family now silently \
+         falls to `I64_TYPE` (a gg-check-clean SIGSEGV / llc-reject class).",
+    );
+}

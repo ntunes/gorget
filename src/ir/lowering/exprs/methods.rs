@@ -4317,8 +4317,31 @@ pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringC
             let elem_name = elem_name.to_string();
             return resolve_type_name_to_id(ctx, &elem_name);
         }
-        // Dict__K__V → V is the value type (for indexing)
-        if let Some(rest) = name.strip_prefix("Dict__").or_else(|| name.strip_prefix("Map__")) {
+        // Deque__T → T is the element type (sibling of Vector__T; the LIR
+        // layer at `insts.rs:1905` already strips `Deque__` alongside
+        // `Vector__` — this is the missing IR-layer sibling that was
+        // dropping `Deque[S]` element types to `I64_TYPE`, producing a
+        // `gg check`-clean SIGSEGV (C) / llc-reject (LLVM) on `&d[i].fd`
+        // and a `for s in d:` silent `0/0` miscompile.
+        //
+        // Grows the TODO.md:1063 rule-2 debt (`infer_collection_element_type`
+        // name-strip): 3 prefixes → 5. Does NOT close the debt; the typed-
+        // field-on-TypeDef fix remains queued as filed.
+        if let Some(elem_name) = name.strip_prefix("Deque__") {
+            let elem_name = elem_name.to_string();
+            return resolve_type_name_to_id(ctx, &elem_name);
+        }
+        // Dict__K__V or HashMap__K__V → V is the value type (for indexing).
+        // HashMap is the sibling missed at the IR layer; the LIR layer at
+        // `insts.rs:1905`/method dispatchers all split `HashMap__` correctly.
+        // Adding this arm ALSO admits `&hm[k]` at the kind-gate below
+        // (change (b)) and retires the TODO.md:1064 `HashMap[int,Point].x`
+        // silent-`0` read (same root, one edit).
+        if let Some(rest) = name
+            .strip_prefix("Dict__")
+            .or_else(|| name.strip_prefix("Map__"))
+            .or_else(|| name.strip_prefix("HashMap__"))
+        {
             if let Some(pos) = rest.find("__") {
                 let val_name = &rest[pos + 2..];
                 // Callable value types → FnPtr TypeId so the local is declared as GorgetClosure

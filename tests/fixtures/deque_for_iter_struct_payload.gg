@@ -1,0 +1,25 @@
+# CORE #11/#12 REGRESSION — `for s in d:` over a struct-payload `Deque[S]`.
+#
+# AXIS PIN: `for`-loop iterable · Deque[S] struct payload · elem-type
+# `Deque__S` → resolved via `infer_collection_element_type` (methods.rs).
+#
+# RED-VERIFIED PRE-FIX (Round XXIII γ scout 2026-08-01): printed
+# `0 / 0` on BOTH backends — `infer_collection_element_type` had no
+# `Deque__` arm, so the element type fell through to `I64_TYPE`, the
+# struct-field walk found nothing, and the loop body read zeros.
+# `Deque[int]` iteration was accidentally correct (Core #15e Q6:
+# green for a reason unrelated to what it tests) because the
+# `I64_TYPE` fallback matches `int`.
+#
+# INTENDED post-fix: `10 / 20`, matching the Vector twin.
+from std.collections import Deque
+
+struct S:
+    int fd
+
+void main():
+    Deque[S] d = Deque[S]()
+    d.push(S(10))
+    d.push(S(20))
+    for s in d:
+        print(s.fd)
