@@ -1,0 +1,45 @@
+# GRADUATED FROM `known_gaps/` in Round XXIII (γδ 2026-08-01) — closed
+# by the `infer_collection_element_type` class fix (adds `Deque__` arm)
+# + kind-gate admitting `Map`.
+#
+# CORE #11/#12 REGRESSION — `&d[i].fd` write-through on struct-payload
+# Deque + single-evaluation of the index.
+#
+# AXIS PIN: Deque[S] struct payload · `&d[idx()].fd` call-arg amp ·
+# elem-type `Deque__S` → resolved via `infer_collection_element_type`
+# (methods.rs). Kind-gate at `try_resolve_index_element_ptr` already
+# admitted Deque via `CollectionKind::Array` (builtins.rs).
+#
+# RED-VERIFIED PRE-FIX (Round XXIII γ scout 2026-08-01):
+#   - C: SIGSEGV, exit 139, no output (cc1 warned
+#     `expected 'void *' but argument is of type 'int32_t'`).
+#   - LLVM: NO BINARY — `llc` hard-fails
+#     `'%v22' defined with type 'i32' but expected 'ptr'`.
+# Same shape both backends. Post-fix both lanes produce a binary and
+# print `IDX / 11` — the LLVM-lane caveat that the earlier known_gaps
+# header carried is dropped.
+#
+# The `IDX`-once half also pins the reachable emit-then-`None` row:
+# pre-fix the resolver emitted the collection lowering, the index
+# lowering AND the `index_load` BEFORE returning `None`, then the
+# caller re-lowered the base — visible on the assign-face twin as
+# `d[idx()].fd = 7` printing `IDX/IDX/0`. The assign-face DOUBLE-EVAL
+# is a separate Family-1 disposition (see TODO.md) and is NOT closed
+# by this fix.
+from std.collections import Deque
+
+struct S:
+    int fd
+
+int idx():
+    print("IDX")
+    return 0
+
+void inc(int &n):
+    n = n + 1
+
+void main():
+    Deque[S] d = Deque[S]()
+    d.push(S(10))
+    inc(&d[idx()].fd)
+    print(d[0].fd)

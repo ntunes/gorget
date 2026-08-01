@@ -2974,11 +2974,13 @@ fn index_base_kind_type_only(
 ///
 /// TYPE-ONLY pre-check (`index_base_kind_type_only`) gates admission before any
 /// lowering so a side-effecting collection producer is evaluated at most once.
-/// Only `Array` (Vector/Deque) and `OrderedMap` (Dict) are addressable today —
-/// Set/HashMap/user Index return `None` without lowering (see the Index arm of
-/// `try_resolve_field_place` for the HashMap exclusion rationale). Module-level
-/// `static` bases (GlobalRef) materialize into an addressable local (Borrow for
-/// resource collections, Copy for value).
+/// `Array` (Vector/Deque), `OrderedMap` (Dict), and `Map` (HashMap) are
+/// addressable today — Set/user Index return `None` without lowering. HashMap
+/// is admitted alongside Dict because `Instruction::IndexLoad` at
+/// `src/lir/lower/insts.rs:1082-1084` already dispatches BOTH `OrderedMap` and
+/// `Map` to `gorget_map_get`. Module-level `static` bases (GlobalRef)
+/// materialize into an addressable local (Borrow for resource collections,
+/// Copy for value).
 pub(super) fn try_resolve_index_element_ptr(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -2986,10 +2988,25 @@ pub(super) fn try_resolve_index_element_ptr(
     index: &Spanned<Expr>,
 ) -> Option<(Place, TypeId)> {
     let kind = index_base_kind_type_only(ctx, coll);
+    // Admit `Array` (Vector/Deque), `OrderedMap` (Dict), and `Map` (HashMap).
+    // LIR runtime is already ready: `Instruction::IndexLoad` at
+    // `src/lir/lower/insts.rs:1082-1084` dispatches both `OrderedMap` and
+    // `Map` to `gorget_map_get`, which returns a real pointer into the
+    // value buffer. The IR-layer element-typing arm for `HashMap__` is
+    // added in `infer_collection_element_type` (methods.rs) — without
+    // it, admitting HashMap here would route the callee's write into an
+    // `int`-typed local used as a struct pointer.
+    //
+    // Rehash-invalidation aliasing shares Vector's realloc invariant —
+    // the D10(b) exclusivity chokepoint (TODO.md:121 High) is intended to
+    // cover it uniformly (see commit message: verified live, D10(b) is
+    // structural-not-yet-shipped, so both `&v[i]` and `&hm[k]` share the
+    // same "chokepoint owed" state).
     let is_addressable = matches!(
         kind,
         Some(crate::ir::types::CollectionKind::Array)
             | Some(crate::ir::types::CollectionKind::OrderedMap)
+            | Some(crate::ir::types::CollectionKind::Map)
     );
     if !is_addressable {
         return None;

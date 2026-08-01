@@ -25944,7 +25944,7 @@ fn self_host_runtime_diff() {
     // `is Error(m):` and land in `ggdef-frontend-error (out of subset)`, so they
     // enter UNADJ, not ADJ — same class as the 13 existing `combinator_*_money_*.gg`
     // fixtures excluded in `spec/ggdef/tests/corpus_b.rs`). Floor 1293 → 1297.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1298;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1301;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -33760,35 +33760,75 @@ fn cow_amp_projection_base_shapes() {
     );
 }
 
-/// KNOWN GAP — `Deque` is ADMITTED to the addressable-element path but has no
-/// element-type arm, so `&d[i].fd` is `gg check`-clean and MEMORY-UNSAFE.
-/// `infer_collection_element_type` strips `Vector__`/`Dict__`/`Map__` but has no
-/// `Deque__` arm, so the element type falls back to `I64_TYPE` and an `int` local
-/// is used as a struct pointer.
+/// Round XXIII γδ REGRESSION (graduated from `known_gaps/` 2026-08-01) —
+/// `&d[i].fd` write-through on struct-payload Deque + single evaluation of
+/// `idx()`. Closed by adding the `Deque__` arm to
+/// `infer_collection_element_type` (`src/ir/lowering/exprs/methods.rs`).
 ///
-/// 🚨 BACKEND DIVERGENCE, measured and UNCHANGED by the Family-1 chokepoint:
-/// C SIGSEGVs (exit 139, no output); LLVM produces NO BINARY at all — `llc`
-/// hard-fails with `'%v17' defined with type 'i32' but expected 'ptr'`.
-/// ⚠ THIS FIXTURE THEREFORE HAS NO LLVM LANE (documented, not overlooked — same
-/// shape as `sound_amp_owning_position_return`'s C/LLVM split).
+/// Post-fix BOTH lanes produce a binary and print `IDX / 11` — the earlier
+/// "NO LLVM LANE" caveat is dropped.
 ///
-/// Also pins single evaluation: `Deque` is a REACHABLE emit-then-`None` row, so
-/// the base is evaluated TWICE after the resolver falls through. Asserts `IDX`
-/// exactly ONCE. Accepting that double evaluation is the chokepoint's deliberate
-/// disposition — the remedy would edit the SHARED resolvers and change the assign
-/// and method-receiver faces' `None`-path emission too.
+/// Also pins single evaluation of the base: pre-fix the resolver emitted
+/// collection lowering, index lowering AND `index_load` BEFORE returning
+/// `None`, then the caller re-lowered the base. The assign-face
+/// double-eval (`d[idx()].fd = 7` printing `IDX/IDX/0`) is a SEPARATE
+/// Family-1 disposition and is NOT closed by this fix.
 #[test]
-#[ignore = "KNOWN GAP: `Deque` is admitted to the addressable-element path with no `Deque__` arm \
-in `infer_collection_element_type`, so `&d[i].fd` SIGSEGVs on C and hard-fails `llc` on LLVM, \
-`gg check` clean. Asserts the INTENDED single evaluation + write-through; TODO.md. Un-ignore when \
-the element-type arm lands (or the kind-gate stops admitting Deque)."]
 fn sound_amp_deque_element_field() {
     run_gg(
-        "known_gaps/sound_amp_deque_element_field.gg",
+        "sound_amp_deque_element_field.gg",
         "\
 IDX
 11",
     );
+}
+
+/// Round XXIII γδ REGRESSION (new 2026-08-01) — `for s in d:` over a
+/// struct-payload `Deque[S]`. Closed by the same `Deque__` arm added to
+/// `infer_collection_element_type`. Pre-fix printed `0 / 0` on BOTH
+/// backends because the elem-type fell to `I64_TYPE` and the struct-field
+/// walk read zeros. `Deque[int]` iteration was accidentally correct
+/// (Core #15e Q6) because `I64_TYPE` matches `int`.
+#[test]
+fn deque_for_iter_struct_payload() {
+    run_gg(
+        "deque_for_iter_struct_payload.gg",
+        "\
+10
+20",
+    );
+}
+
+/// Round XXIII γδ REGRESSION (new 2026-08-01) — `HashMap[int, Point].x`
+/// value-read (TODO.md:1064). Closed by the `HashMap__` arm added to
+/// `infer_collection_element_type` — the same class fix that admits
+/// `Map` at the `try_resolve_index_element_ptr` kind-gate. Pre-fix
+/// `hm[0].x` printed `0` on BOTH backends because
+/// `HashMap__int64_t__Point` fell to `I64_TYPE`.
+#[test]
+fn hashmap_int_point_field_read() {
+    run_gg(
+        "hashmap_int_point_field_read.gg",
+        "\
+5
+7",
+    );
+}
+
+/// Round XXIII γδ REGRESSION (new 2026-08-01) — `&hm["k"]` call-arg
+/// write-through on `HashMap[String, int]`. Closed by admitting
+/// `CollectionKind::Map` at the `try_resolve_index_element_ptr`
+/// kind-gate + the `HashMap__` arm in `infer_collection_element_type`.
+/// Pre-fix printed `10` on BOTH backends because the kind-gate returned
+/// `None` and the callee's `&` write hit a value-copy throwaway.
+///
+/// D10(b) syntactic call-arg overlap covers HashMap uniformly (verified
+/// live 2026-08-01 — `f(&hm[k], &hm[k])` trips `E_BorrowConflict`); the
+/// deeper D10 structural chokepoint (TODO.md:121 High) covers Map under
+/// the same regime as Vector realloc.
+#[test]
+fn hashmap_amp_element_writethrough() {
+    run_gg("hashmap_amp_element_writethrough.gg", "11");
 }
 
 /// KNOWN GAP — the SPAWN argument face never reads `arg.node.ownership`

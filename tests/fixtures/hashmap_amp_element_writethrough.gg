@@ -1,0 +1,33 @@
+# CORE #11/#12 REGRESSION — `&hm["k"]` write-through on
+# `HashMap[String, int]` (call-arg amp face).
+#
+# AXIS PIN: HashMap[String, int] · scalar-value · `&hm[k]` call-arg
+# amp · elem-type `HashMap__GorgetString__int64_t` → resolved via
+# `infer_collection_element_type` (methods.rs). Kind-gate at
+# `try_resolve_index_element_ptr` must ADMIT `CollectionKind::Map`.
+#
+# RED-VERIFIED PRE-FIX (Round XXIII δ scout 2026-08-01): printed
+# `10` on BOTH backends (should be `11`). Two blockers:
+#   (a) `infer_collection_element_type` no `HashMap__` arm → falls
+#       to `I64_TYPE`.
+#   (b) `try_resolve_index_element_ptr` kind-gate admitted only
+#       `Array | OrderedMap` → HashMap (kind `Map`) returned `None`
+#       before any lowering, falling through to a value-copy
+#       `hm[k]`, so the callee's `&` write hit a throwaway.
+#
+# INTENDED post-fix: `11`, matching the Dict/Vector controls.
+#
+# Rehash-invalidation aliasing shares Vector's realloc invariant —
+# the D10(b) syntactic call-arg overlap check trips uniformly on
+# `f(&hm[k], &hm[k])` (verified live 2026-08-01, `E_BorrowConflict`);
+# the deeper D10 structural chokepoint (TODO.md:121 High) is owed.
+from std.collections import HashMap
+
+void bump(int &n):
+    n = n + 1
+
+void main():
+    HashMap[String, int] hm = HashMap[String, int]()
+    hm["k"] = 10
+    bump(&hm["k"])
+    print(hm["k"])

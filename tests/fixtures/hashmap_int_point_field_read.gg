@@ -1,0 +1,24 @@
+# CORE #11/#12 REGRESSION — `HashMap[int, Point].x` value-read.
+#
+# AXIS PIN: HashMap[int, Point] · struct-value · field READ via
+# `hm[k].x` · elem-type `HashMap__int64_t__Point` → resolved via
+# `infer_collection_element_type` (methods.rs).
+#
+# RED-VERIFIED PRE-FIX (Round XXIII δ scout 2026-08-01 + TODO.md:1064
+# from 1C brief-review pass-1 2026-07-16): `hm[0].x` printed `0`
+# because `infer_collection_element_type` stripped `Dict__`/`Map__`
+# but NOT `HashMap__` → `HashMap__int64_t__Point` resolved to
+# `I64_TYPE`. Whole-element read `Point p = hm[0]` was C-COMPILE-FAIL.
+#
+# INTENDED post-fix: `5 / 7`, matching the Dict twin.
+from std.collections import HashMap
+
+struct Point:
+    int x
+    int y
+
+void main():
+    HashMap[int, Point] hm = HashMap[int, Point]()
+    hm[0] = Point(5, 7)
+    print(hm[0].x)
+    print(hm[0].y)
