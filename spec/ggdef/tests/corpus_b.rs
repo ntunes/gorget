@@ -235,6 +235,15 @@ const EXCLUDE: &[&str] = &[
     "combinator_result_or_else_ok_cross_type_reject.gg",
     "combinator_result_and_then_error_cross_type_reject.gg",
     "combinator_option_or_else_cross_type_reject.gg",
+    // Round XXIV Track C — SH-lane companion for cross-type or_else fix
+    // (STRENGTHEN-B graduated from known_gaps/sound_sh_or_else_result_cross_type_sbo.gg
+    // to `combinator_result_or_else_error_axis_sbo.gg`). Reads the Error branch
+    // via `if r is Error(be):` — same `is`-pattern binding readback the
+    // elaborator has no arm for ("expression `unsupported` is outside the
+    // phase-0 subset"). Same disposition as the Round XXIII α sibs above.
+    // The SH-lane oracle for this fixture is `self_host_runtime_diff` (MATCH
+    // ratchet), not corpus_b.
+    "combinator_result_or_else_error_axis_sbo.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -477,5 +486,12 @@ fn corpus_b_all_match() {
     // elaborate_expr) and the pre-existing `combinator_unwrap_or_else_str.gg`
     // uses a free-function `len(x)` call. So the ratchet refreshes 162→164
     // to accompany the two the oracle actually adjudicates.
+    // Round XXIV Track C, 2026-08-01: SH-lane port of Rust XXIII α's cross-type
+    // or_else fix graduated `known_gaps/sound_sh_or_else_result_cross_type_sbo.gg` to
+    // top-level `combinator_result_or_else_error_axis_sbo.gg` (STRENGTHEN-B: pins the
+    // Error-axis SBO cell — RED-verified `1` on SH pre-fix from a truncated
+    // `.cents.len()`, `5` post-fix matching Rust). Landed EXCLUDEd above with citation
+    // (`is Error(be):` binding readback is out of phase-0 subset), so the shape count
+    // is UNCHANGED — the fixture is enumerated then filtered out by EXCLUDE.
     assert_eq!(fixtures.len(), 165, "B2 gate set drifted from 165 fixtures");
 }

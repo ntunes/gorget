@@ -21867,6 +21867,142 @@ fn self_host_driver_rejects_field_on_string() {
     );
 }
 
+// ── Round XXIV Track C: three `#[ignore]`d SH-driver NEG tests pinning the
+// intended SH-typechecker reject for cross-type Option/Result combinator
+// closure returns. Rust rejects all three via `unify_closure_ret_axis` at
+// `src/semantic/typecheck.rs:7583/7610/7633` (E_TypeMismatch); the SH
+// typechecker has NO Option/Result combinator method-arm surface today
+// (verified: all `method_name == "..."` arms in `tests/fixtures/
+// self_host_typechecker/typecheck.gg` are Vector-only at :3182/3189/3196/
+// 3968; method resolution goes through generic `resolve_method_full`).
+// Porting the axis-unify to SH is a substantial new subsystem (its own
+// round, "Edit C") and is DEFERRED per Round XXIV Track C's PASS-1 MF-1
+// rescope. Pre-Edit-C behaviour on the SH driver, verified by the
+// executor 2026-08-01:
+//   - `combinator_result_or_else_ok_cross_type_reject.gg`: silent accept,
+//     driver exit 0, emitted C compiles + runs, prints `3` (silent-wrong).
+//   - `combinator_option_or_else_cross_type_reject.gg`: silent accept,
+//     driver exit 0, emitted C compiles + runs, prints a garbage pointer
+//     (post-Edit-A/B; pre-Edit-A/B was SIGSEGV exit 139). Memory-unsafe.
+//   - `combinator_result_and_then_error_cross_type_reject.gg`: silent
+//     accept, driver exit 0, emitted C FAILS to compile
+//     (`incompatible types when assigning to type 'int64_t' from type
+//     '__gg_Money'`).
+// Un-ignore + assert stderr contains `E_TypeMismatch` when the Edit-C
+// round lands (SH typechecker mirrors `unify_closure_ret_axis`).
+//
+// Follows the `sh_amp_operand_reject` precedent (Round XXIII β, filed as
+// `#[ignore]` and un-ignoring when SH-lane port lands). ⚠ HYGIENE: that
+// precedent uses `check_gg_fails` (Rust `gg check`), NOT the SH driver —
+// its assertion is against RUST's reject, so a silent-accept on SH would
+// green it. These three tests invoke the SH driver directly to assert SH's
+// own reject, which is the correct pattern; filed as Core #14 follow-up.
+
+#[test]
+#[ignore = "SH-LANE GAP: SH typechecker lacks unify_closure_ret_axis mirror; \
+    Edit C DEFERRED to its own round (Round XXIV Track C scope: lowerer only). \
+    Un-ignore + drop the `#[ignore]` when the SH typechecker mirror lands."]
+#[serial(self_host_lowerer_driver)]
+fn sh_combinator_result_or_else_ok_cross_type_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/combinator_result_or_else_ok_cross_type_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_combinator_result_or_else_ok_cross_type_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT cross-type Result.or_else Ok-axis (closure return \
+         Result[bool, F] vs receiver Result[int, E]); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_TypeMismatch"),
+        "SH driver must emit E_TypeMismatch on cross-type Ok-axis reject; \
+         got stderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[ignore = "SH-LANE GAP: SH typechecker lacks unify_closure_ret_axis mirror; \
+    Edit C DEFERRED to its own round (Round XXIV Track C scope: lowerer only). \
+    Un-ignore + drop the `#[ignore]` when the SH typechecker mirror lands."]
+#[serial(self_host_lowerer_driver)]
+fn sh_combinator_option_or_else_cross_type_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/combinator_option_or_else_cross_type_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_combinator_option_or_else_cross_type_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT cross-type Option.or_else (closure return \
+         Result[T, E] vs receiver Option[T]); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_TypeMismatch"),
+        "SH driver must emit E_TypeMismatch on cross-type Option.or_else reject; \
+         got stderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[ignore = "SH-LANE GAP: SH typechecker lacks unify_closure_ret_axis mirror; \
+    Edit C DEFERRED to its own round (Round XXIV Track C scope: lowerer only). \
+    Un-ignore + drop the `#[ignore]` when the SH typechecker mirror lands."]
+#[serial(self_host_lowerer_driver)]
+fn sh_combinator_result_and_then_error_cross_type_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/combinator_result_and_then_error_cross_type_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_combinator_result_and_then_error_cross_type_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT cross-type Result.and_then Error-axis (closure \
+         return Result[U, F] vs receiver Result[T, E]); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_TypeMismatch"),
+        "SH driver must emit E_TypeMismatch on cross-type Error-axis reject; \
+         got stderr:\n{stderr}",
+    );
+}
+
 // ── D4/D12 drop-purity: the self-host driver REJECTS an implicit copy of a
 // live drop-tainted place at all six ownership boundaries (A2-S), exactly as
 // Rust gg (A2-R1 `b72ef446`) + ggdef do. Before A2-S the self-host silently
@@ -25986,7 +26122,15 @@ fn self_host_runtime_diff() {
     // `is Error(m):` and land in `ggdef-frontend-error (out of subset)`, so they
     // enter UNADJ, not ADJ — same class as the 13 existing `combinator_*_money_*.gg`
     // fixtures excluded in `spec/ggdef/tests/corpus_b.rs`). Floor 1293 → 1297.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1306;
+    // Ratcheted 2026-08-01 (Round XXIV Track C — SH-lane port of the cross-type
+    // or_else DUAL rule + ret_tid write-site at `lower_expr.gg:4589-4617` and
+    // `:4949`; mirror of Rust XXIII α at `methods.rs:3709-3724`/`:3788`): +1 MATCH
+    // from the graduated STRENGTHEN-B fixture `combinator_result_or_else_error_axis_sbo.gg`
+    // (SH pre-fix printed `1` from a truncated `.cents.len()`; SH post-fix prints
+    // `5`, matching Rust). Excluded from ggdef corpus_b (out-of-subset `is Error(be):`
+    // binding readback — same disposition as `combinator_result_or_else_error_cross_type.gg`
+    // in corpus_b's exclusion list); enters UNADJ, not ADJ. Floor 1306 → 1307.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1307;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

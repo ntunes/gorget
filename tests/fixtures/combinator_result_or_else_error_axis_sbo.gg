@@ -1,0 +1,60 @@
+# GRADUATED SH-lane companion for the Round XXIII Track α cross-type
+# `.or_else` fix (Rust lane) + the Round XXIV Track C mirror (SH-lowerer
+# lane: DUAL rule + ret_tid write-site).
+#
+# CROSS-TYPE Error-axis `.or_else` where the closure returns a
+# `Result[int, BigErr]` (~88 B on the Error branch: 64-B Vector + 3 int64
+# ~= 88 B, verified `src/lir/runtime.rs:68`, `runtime_array.c:6`) but the
+# receiver is `Result[int, int]` (16 B). Pre-fix SH sized the closure's
+# `_combinator_et` from the receiver (16 B) so the emitted `result_local`
+# only carried 16 B of the ~88 B closure return — the `Vector.cents`
+# field was read from the wrong slot offset and `.cents.len()` returned
+# GARBAGE (measured `1` on pre-fix SH; correct value is `5`).
+#
+# Post-fix (Round XXIV Track C):
+#   - `lower_expr.gg` DUAL rule folds `or_else` into the outer-annotation
+#     -wins branch alongside `and_then` (`flat_map` stays in force-recv;
+#     `or` — value-arg, no closure — stays in force-recv). Mirror of
+#     `src/ir/lowering/exprs/methods.rs:3709-3724`.
+#   - `lower_expr.gg` ret_tid write-site extends `and_then | flat_map` to
+#     include `or_else`, sizing the destination from the closure's
+#     declared return type (~88 B). Mirror of `src/ir/lowering/exprs/
+#     methods.rs:3788`.
+# Both lanes now print `5`.
+#
+# RED-VERIFIED (Round XXIV Track C executor, 2026-08-01):
+#   - SH pre-fix (revert Edit A/B, rebuild driver): prints `1` (garbage
+#     `.cents.len()` from truncated BigErr) — visible RED.
+#   - SH post-fix (Edit A/B applied): prints `5` — GREEN.
+#   - Rust post-fix (Round XXIII Track α landed): prints `5` — GREEN.
+#
+# CORE #12 net: exercises the Error-axis SBO cell of the cross-type
+# `.or_else` axis. Sibling `combinator_result_or_else_error_cross_type.gg`
+# pins the Rust-lane runtime case at smaller sizes.
+
+struct BigErr:
+    Vector[int] cents
+    int a
+    int b
+    int c
+
+Vector[int] heap_cents(int n):
+    Vector[int] c = Vector[int]()
+    int i = 0
+    while i < n:
+        c.push(i)
+        i = i + 1
+    return c
+
+Result[int, BigErr] recover(int e):
+    return Error(BigErr(heap_cents(5), 100, 200, 300))
+
+void via_param(Result[int, int] p):
+    Result[int, BigErr] r = p.or_else((int e): recover(e))
+    if r is Error(be):
+        print(be.cents.len())
+    elif r is Ok(v):
+        print(v)
+
+void main():
+    via_param(Error(7))
