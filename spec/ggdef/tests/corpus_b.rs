@@ -236,6 +236,16 @@ const EXCLUDE: &[&str] = &[
     // The SH-lane oracle for this fixture is `self_host_runtime_diff` (MATCH
     // ratchet), not corpus_b.
     "combinator_result_or_else_error_axis_sbo.gg",
+    // Round XXV Track B — one-sided-combinator class-fix (see the four
+    // other `combinator_*_rejected.gg` sibling fixtures which corpus_b DOES
+    // adjudicate as CheckFails). Result.flatten reaches the arm-picker's
+    // `other =>` catch-all in ggdef ("method `.flatten()` is outside the
+    // phase-0 subset") — a DIFFERENT reject path from the {flat_map, filter,
+    // map_err, unwrap_error} siblings that hit the receiver-gate. The
+    // catch-all's message will drift once Rust ships the paired class-fix
+    // with different lane phrasing; the sibling fixtures adjudicate the
+    // class. EXCLUDE with citation.
+    "combinator_result_flatten_rejected.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -492,5 +502,14 @@ fn corpus_b_all_match() {
     // `combinator_option_or_else_cross_type_reject.gg`) removed from EXCLUDE
     // above; they now REJECT with `error[E_TypeMismatch]` at the elaborator
     // and adjudicate via `Provenance::CheckFails` in corpus_b. Count +3 → 168.
-    assert_eq!(fixtures.len(), 168, "B2 gate set drifted from 168 fixtures");
+    // Round XXV Track B, 2026-08-02: one-sided combinator receiver-gate
+    // reject landed at `spec/ggdef/src/elaborate/mod.rs` — 5 new NEG
+    // fixtures (`combinator_result_{flat_map,filter,flatten}_rejected.gg`
+    // + `combinator_option_{map_err,unwrap_error}_rejected.gg`). Four of
+    // them adjudicate via `CheckFails` (the receiver-gate emits
+    // `error[E_NoMethodFound]:`); the fifth (`_flatten_rejected`) is
+    // EXCLUDEd above (Flatten reaches the arm-picker catch-all — a
+    // different reject path with a drift-prone message). Count +5 additions
+    // − 1 EXCLUDE = +4 net → 172.
+    assert_eq!(fixtures.len(), 172, "B2 gate set drifted from 172 fixtures");
 }

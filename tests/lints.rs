@@ -8602,13 +8602,18 @@ fn infer_collection_element_type_arms_count() {
 /// Explicitly out-of-class (see the helper's doc-comment for the
 /// rationale — the exclusion is load-bearing and reviewed):
 ///   - `.map` / `.map_err` — scalar-returning closures (no axis).
-///   - `Result.flat_map`   — deliberately UNREGISTERED in production
-///     `src/ir/lowering/builtins.rs::RESULT` (assertion at ~:1425). NB:
-///     ggdef currently ACCEPTS `Result.flat_map` at its `elaborate_method`
-///     arm-picker — Core #9 lane divergence, own port owed. If that port
-///     ships, either the mirror needs a new `ResultFlatMap` variant (and
-///     `EXPECTED_GGDEF_VARIANTS` must bump — coupled by construction) OR
-///     the ggdef arm gets rejected and the constants stay pinned.
+///   - `Result.{flat_map, filter}` + `Option.{map_err, unwrap_error}` —
+///     one-sided combinators on the wrong-shape receiver. Result methods
+///     are unregistered in production `src/ir/lowering/builtins.rs::RESULT`
+///     (assertion at ~:1425); MapErr/UnwrapError are Result-only there.
+///     ggdef `elaborate_method` REJECTS all four at the receiver-gate
+///     with `error[E_NoMethodFound]:` (Round XXV Track B) — "method
+///     doesn't exist" reject, not an axis-unify cell (there is no axis
+///     to unify when the method is not part of the receiver's protocol).
+///     Constants below stay pinned (Option B taken over Option A —
+///     adding a `ResultFlatMap` variant would be a category error).
+///     Rust-side class-fix is owed follow-up (Rust silently accepts
+///     these shapes and crashes at C-compile).
 ///   - `Option.and_then` / `Option.flat_map` — legitimate cross-type map.
 ///
 /// Twin invariant (Round XXV Track D — Core #15e Q2 fold):
@@ -8735,9 +8740,12 @@ fn unify_closure_ret_axis_class_enumeration() {
              corresponding arm in `infer_closure_method_type`, and bump \
              `EXPECTED_VARIANTS` / `EXPECTED_CALLERS` here; OR\n\
          (b) document the exclusion in the helper's doc-comment alongside \
-             `.map` / `.map_err` / `Result.flat_map` / `Option.and_then` / \
-             `Option.flat_map` and explain why the new combinator does \
-             NOT need axis-unify.\n\n\
+             `.map` / `.map_err` / `Result.{{flat_map, filter}}` / \
+             `Option.{{map_err, unwrap_error}}` (all one-sided combinators \
+             rejected at elaborate as `error[E_NoMethodFound]`) / \
+             `Option.and_then` / `Option.flat_map` (legitimate cross-type \
+             map) and explain why the new combinator does NOT need \
+             axis-unify.\n\n\
          Silently letting the class grow without one of those actions is \
          a Core #4 / Core #10 violation — the next combinator's cross-type \
          shape would escape the class-guard.",
@@ -8760,12 +8768,15 @@ fn unify_closure_ret_axis_class_enumeration() {
          changed: {ggdef_variants} vs expected {EXPECTED_GGDEF_VARIANTS}.\n\n\
          Round XXIV Track D twin-ratchet: the ggdef mirror MUST track \
          production's `src/semantic/typecheck.rs` class shape. If a NEW \
-         cell is being ported (e.g. `ResultFlatMap` after the ggdef \
-         `Result.flat_map` follow-up ships), add the variant + a match arm \
-         in `Elaborator::unify_closure_ret_axis` + a mapping in \
-         `Elaborator::combinator_cell`, then bump `EXPECTED_GGDEF_VARIANTS` \
-         (and `EXPECTED_VARIANTS` on the production side if that ships \
-         together). A drift-only bump on one side is a Core #9 lane gap.",
+         axis-unify cell legitimately joins the class, add the variant + \
+         a match arm in `Elaborator::unify_closure_ret_axis` + a mapping \
+         in `Elaborator::combinator_cell`, then bump \
+         `EXPECTED_GGDEF_VARIANTS` (and `EXPECTED_VARIANTS` on the \
+         production side if that ships together). (Post-Round-XXV-Track-B: \
+         `Result.{{flat_map, filter}}` + `Option.{{map_err, unwrap_error}}` \
+         are now REJECTED at `elaborate_method` — a category-error, not \
+         an axis-unify cell — so they contribute nothing to this count.) \
+         A drift-only bump on one side is a Core #9 lane gap.",
     );
 
     let ggdef_callers = count_callers(&ggdef_src);

@@ -1,0 +1,25 @@
+# NEG (Round XXV Track B — one-sided-combinator class, catch-all path):
+# Result.flatten does NOT exist in the phase-0 subset. Ratified Option-only
+# per `docs/language-reference.md:3861-3891`; there is no
+# `BuiltinMethod::Flatten` variant in `spec/ggdef/src/ggc.rs`.
+#
+# Pre-fix (RED-verified 2026-08-02): Rust `gg check` prints "OK: no semantic
+# errors" then `gg build` crashes at C-compile with `incompatible types`;
+# ggdef `run` REJECTED at elaborate-time via the arm-picker's `other =>`
+# catch-all ("method `.flatten()` is outside the phase-0 subset"). Core #8
+# both-wrong class.
+#
+# Post-fix (unchanged for ggdef): still rejects via the catch-all — no
+# BuiltinMethod::Flatten variant exists so it never reaches the receiver-
+# gate that catches its {flat_map, filter, map_err, unwrap_error} siblings.
+# Corpus_b EXCLUDEs this fixture because the catch-all's message will drift
+# once Rust ships flatten reject with different lane phrasing; sibling
+# fixtures adjudicate the class.
+#
+# Rust-side class-fix owed as HIGH follow-up (test #[ignore]d until Rust
+# ships reject at semantic layer).
+
+void main():
+    Result[Result[int, int], int] r = Ok(Ok(5))
+    Result[int, int] r2 = r.flatten()
+    print(0)

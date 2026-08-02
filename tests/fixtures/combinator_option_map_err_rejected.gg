@@ -1,0 +1,21 @@
+# NEG (Round XXV Track B — one-sided-combinator class): Option.map_err does
+# NOT exist in the phase-0 subset. Ratified Result-only per
+# `docs/language-reference.md:3861-3891` (Option has one payload; there is
+# no Error axis for `.map_err` to apply to).
+#
+# Pre-fix (RED-verified 2026-08-02): Rust `gg check` prints "OK: no semantic
+# errors" then `gg build` crashes at C-compile with `incompatible types`;
+# ggdef `run` REJECTED at eval-time with `IllFormed` "`.map_err()` on
+# Option is outside the phase-0 subset (Result-only)" (eval.rs:1731-1733)
+# — too late for corpus_b `CheckFails` adjudication. Core #8 both-wrong
+# class.
+#
+# Post-fix: ggdef `elaborate_method` REJECTS at elaborate-time with
+# `error[E_NoMethodFound]: `.map_err()` on Option is outside the phase-0
+# subset (Result-only)`. Rust-side class-fix owed as HIGH follow-up
+# (test #[ignore]d until Rust ships reject at semantic layer).
+
+void main():
+    Option[int] o = Some(5)
+    Option[int] o2 = o.map_err((int x): x + 1)
+    print(0)

@@ -38871,6 +38871,86 @@ fn combinator_option_or_else_cross_type_reject() {
     );
 }
 
+// ── Round XXV Track B — one-sided-combinator receiver-gate rejects ────────
+//
+// Class-fix (Core #4) for four combinator methods that don't exist on the
+// wrong receiver shape: Result.{flat_map, filter} + Option.{map_err,
+// unwrap_error}, plus Result.flatten via the arm-picker's catch-all. All
+// five are ratified Option-only / Result-only per
+// `docs/language-reference.md:3861-3891` and mirrored by
+// `src/ir/lowering/builtins.rs`.
+//
+// **Current status (RED-verified 2026-08-02):** Rust production SILENTLY
+// ACCEPTS all five shapes at `gg check` then crashes at C-compile with
+// `incompatible types` errors — Core #8 both-wrong. This track fixes ggdef
+// (which now REJECTS at `elaborate_method` with `error[E_NoMethodFound]:`
+// for the four receiver-gate cells; Flatten via the pre-existing catch-all)
+// and files the Rust-side class-fix as HIGH follow-up TODO. The tests
+// below are `#[ignore]`d until the Rust-side reject lands — corpus_b
+// already adjudicates the four non-Flatten fixtures as CheckFails on the
+// ggdef side (Flatten EXCLUDEd — catch-all message drift risk).
+
+/// Round XXV Track B NEG — `Result.flat_map()` is Option-only. Rejects at
+/// ggdef `elaborate_method`. #[ignore]d until Rust production also rejects
+/// at semantic layer (currently silent-accept + C-compile crash).
+#[test]
+#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
+fn combinator_result_flat_map_rejected() {
+    check_gg_fails(
+        "combinator_result_flat_map_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
+/// Round XXV Track B NEG — `Result.filter()` is Option-only. Rejects at
+/// ggdef `elaborate_method`. #[ignore]d until Rust production also rejects
+/// at semantic layer (currently silent-accept + C-compile crash).
+#[test]
+#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
+fn combinator_result_filter_rejected() {
+    check_gg_fails(
+        "combinator_result_filter_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
+/// Round XXV Track B NEG — `Result.flatten()` has no BuiltinMethod variant
+/// in ggdef; rejects via the arm-picker's `other =>` catch-all. Corpus_b
+/// EXCLUDEs this fixture (message-drift risk). #[ignore]d until Rust
+/// production also rejects at semantic layer.
+#[test]
+#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
+fn combinator_result_flatten_rejected() {
+    check_gg_fails(
+        "combinator_result_flatten_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
+/// Round XXV Track B NEG — `Option.map_err()` is Result-only. Rejects at
+/// ggdef `elaborate_method`. #[ignore]d until Rust production also rejects
+/// at semantic layer (currently silent-accept + C-compile crash).
+#[test]
+#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
+fn combinator_option_map_err_rejected() {
+    check_gg_fails(
+        "combinator_option_map_err_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
+/// Round XXV Track B NEG — `Option.unwrap_error()` is Result-only. Rejects
+/// at ggdef `elaborate_method`. #[ignore]d until Rust production also
+/// rejects at semantic layer (currently silent-accept + C-compile crash).
+#[test]
+#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
+fn combinator_option_unwrap_error_rejected() {
+    check_gg_fails(
+        "combinator_option_unwrap_error_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
 /// KNOWN GAP — the STRUCT get-chain, `&`-FACE ONLY. The other cell that
 /// survives the `&`-of-projection fix, and narrower than the tuple get-chain
 /// above: here the assign face ALREADY WORKS.

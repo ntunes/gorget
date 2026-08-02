@@ -2869,3 +2869,116 @@ void main():
         "f-string {x:spec} must be a LOUD ElabError",
     );
 }
+
+// ── Round XXV Track B — one-sided-combinator receiver-gate rejects ────────
+//
+// The receiver-gate at `elaborate/mod.rs` after the arm-picker rejects four
+// (BuiltinMethod, receiver-type) cells with `error[E_NoMethodFound]:` —
+// method doesn't exist on that receiver shape:
+//   - (FlatMap, Result)
+//   - (Filter, Result)
+//   - (MapErr, Option)
+//   - (UnwrapError, Option)
+//
+// Result.flatten (the 5th class member) reaches the arm-picker's `other =>`
+// catch-all instead (no BuiltinMethod::Flatten variant exists); the fifth
+// unit test below asserts that catch-all path.
+//
+// RED-verify (Core #12(a)): comment out the receiver-gate `match (bm,
+// &receiver_type)` block in `elaborate_method` → the four receiver-gated
+// tests below fail (ggdef accepts on the reset, silently dispatches, and
+// either runs to a wrong value or eval-late `IllFormed`s without a coded
+// reject); the flatten test stays green via the catch-all (documented as
+// expected — the catch-all is not the receiver-gate).
+
+#[test]
+fn result_flat_map_rejected_at_elaborate() {
+    // (BuiltinMethod::FlatMap, Ty::Result) receiver-gate arm.
+    let src = r#"
+void main():
+    Result[int, int] r = Ok(5)
+    Result[int, int] r2 = r.flat_map((int x): Ok(x + 1))
+    print(0)
+"#;
+    elab_rejects(
+        src,
+        "error[E_NoMethodFound]: `.flat_map()` on Result",
+        "Result.flat_map is Option-only",
+    );
+}
+
+#[test]
+fn result_filter_rejected_at_elaborate() {
+    // (BuiltinMethod::Filter, Ty::Result) receiver-gate arm — promoted
+    // from eval-time reject at eval.rs:1613 to elaborate-time so
+    // corpus_b's `CheckFails` adjudication picks it up.
+    let src = r#"
+void main():
+    Result[int, int] r = Ok(5)
+    Result[int, int] r2 = r.filter((int x): x > 0)
+    print(0)
+"#;
+    elab_rejects(
+        src,
+        "error[E_NoMethodFound]: `.filter()` on Result",
+        "Result.filter is Option-only",
+    );
+}
+
+#[test]
+fn option_map_err_rejected_at_elaborate() {
+    // (BuiltinMethod::MapErr, Ty::Option) receiver-gate arm — promoted
+    // from eval-time reject at eval.rs:1731.
+    let src = r#"
+void main():
+    Option[int] o = Some(5)
+    Option[int] o2 = o.map_err((int x): x + 1)
+    print(0)
+"#;
+    elab_rejects(
+        src,
+        "error[E_NoMethodFound]: `.map_err()` on Option",
+        "Option.map_err is Result-only",
+    );
+}
+
+#[test]
+fn option_unwrap_error_rejected_at_elaborate() {
+    // (BuiltinMethod::UnwrapError, Ty::Option) receiver-gate arm — promoted
+    // from a WEAKER eval-time generic fallthrough (didn't carry the ratified
+    // reject code) to elaborate-time.
+    let src = r#"
+void main():
+    Option[int] o = Some(5)
+    int x = o.unwrap_error()
+    print(x)
+"#;
+    elab_rejects(
+        src,
+        "error[E_NoMethodFound]: `.unwrap_error()` on Option",
+        "Option.unwrap_error is Result-only",
+    );
+}
+
+#[test]
+fn result_flatten_rejected_at_elaborate() {
+    // Result.flatten reaches the arm-picker's `other =>` catch-all — NOT
+    // the receiver-gate above (no BuiltinMethod::Flatten variant exists in
+    // `spec/ggdef/src/ggc.rs`, so `flat_map` / `filter` / `map_err` /
+    // `unwrap_error` are the four receiver-gated cells). RED-verify note
+    // (Core #12(a)): commenting out the receiver-gate leaves this test
+    // GREEN because it takes a different reject path — that is the
+    // designed behaviour; the four sibling tests above are the ones the
+    // receiver-gate guards.
+    let src = r#"
+void main():
+    Result[Result[int, int], int] r = Ok(Ok(5))
+    Result[int, int] r2 = r.flatten()
+    print(0)
+"#;
+    elab_rejects(
+        src,
+        "method `.flatten()` is outside the phase-0 subset",
+        "Result.flatten reaches the arm-picker catch-all",
+    );
+}
