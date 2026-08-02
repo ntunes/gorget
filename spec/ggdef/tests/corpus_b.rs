@@ -227,14 +227,6 @@ const EXCLUDE: &[&str] = &[
     // subset per elaborator ("expression `unsupported` is outside phase 0").
     // Same disposition as the Money-passthrough sibs above.
     "combinator_result_or_else_error_cross_type.gg",
-    // Round XXIII Track α NEG reject fixtures (`check_gg_fails` on Rust lane):
-    // ggdef doesn't have α's `unify_closure_ret_axis` helper yet, so these
-    // programs still elaborate + run on the ggdef side (Core #9 lane gap —
-    // filed as SH-lane companion follow-up per α scout + brief). Excluding
-    // here until the ggdef port lands. NOT a semantic issue with α's fix.
-    "combinator_result_or_else_ok_cross_type_reject.gg",
-    "combinator_result_and_then_error_cross_type_reject.gg",
-    "combinator_option_or_else_cross_type_reject.gg",
     // Round XXIV Track C — SH-lane companion for cross-type or_else fix
     // (STRENGTHEN-B graduated from known_gaps/sound_sh_or_else_result_cross_type_sbo.gg
     // to `combinator_result_or_else_error_axis_sbo.gg`). Reads the Error branch
@@ -493,5 +485,12 @@ fn corpus_b_all_match() {
     // `.cents.len()`, `5` post-fix matching Rust). Landed EXCLUDEd above with citation
     // (`is Error(be):` binding readback is out of phase-0 subset), so the shape count
     // is UNCHANGED — the fixture is enumerated then filtered out by EXCLUDE.
-    assert_eq!(fixtures.len(), 165, "B2 gate set drifted from 165 fixtures");
+    // Round XXIV Track D, 2026-08-01: ggdef mirror of XXIII α's
+    // `unify_closure_ret_axis` landed — 3 NEG cross-type reject fixtures
+    // (`combinator_result_or_else_ok_cross_type_reject.gg`,
+    // `combinator_result_and_then_error_cross_type_reject.gg`,
+    // `combinator_option_or_else_cross_type_reject.gg`) removed from EXCLUDE
+    // above; they now REJECT with `error[E_TypeMismatch]` at the elaborator
+    // and adjudicate via `Provenance::CheckFails` in corpus_b. Count +3 → 168.
+    assert_eq!(fixtures.len(), 168, "B2 gate set drifted from 168 fixtures");
 }

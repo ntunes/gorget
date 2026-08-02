@@ -8579,6 +8579,16 @@ fn infer_collection_element_type_arms_count() {
 /// arm-count ratchet for the closure-returning Option/Result combinator
 /// class in `src/semantic/typecheck.rs::TypeChecker::unify_closure_ret_axis`.
 ///
+/// **Round XXIV Track D twin-scan extension:** the ggdef elaborator now
+/// carries the mirror class at `spec/ggdef/src/elaborate/mod.rs`
+/// (`enum ClosureCombinatorCell` + `Elaborator::unify_closure_ret_axis`).
+/// This lint scans BOTH files: production carries 3 variants + 3 callers
+/// (one per per-cell arm in `infer_closure_method_type`); ggdef carries
+/// 3 variants + 1 caller (ggdef's `elaborate_method` consolidates the
+/// three cells into a single match, so the caller is the Core #4
+/// chokepoint — one classifying helper + one call site). A drift on
+/// either side fires the lint.
+///
 /// The helper's `ClosureCombinatorCell` enum is the SINGLE PRODUCER for
 /// the axis-unify decision across the 3 unify-eligible cells:
 ///   - `Result.or_else`  — Ok-unify  (T' == T, E' free)
@@ -8588,8 +8598,13 @@ fn infer_collection_element_type_arms_count() {
 /// Explicitly out-of-class (see the helper's doc-comment for the
 /// rationale — the exclusion is load-bearing and reviewed):
 ///   - `.map` / `.map_err` — scalar-returning closures (no axis).
-///   - `Result.flat_map`   — deliberately UNREGISTERED in
-///     `src/ir/lowering/builtins.rs::RESULT` (assertion at ~:1425).
+///   - `Result.flat_map`   — deliberately UNREGISTERED in production
+///     `src/ir/lowering/builtins.rs::RESULT` (assertion at ~:1425). NB:
+///     ggdef currently ACCEPTS `Result.flat_map` at its `elaborate_method`
+///     arm-picker — Core #9 lane divergence, own port owed. If that port
+///     ships, either the mirror needs a new `ResultFlatMap` variant (and
+///     `EXPECTED_GGDEF_VARIANTS` must bump — coupled by construction) OR
+///     the ggdef arm gets rejected and the constants stay pinned.
 ///   - `Option.and_then` / `Option.flat_map` — legitimate cross-type map.
 ///
 /// If a NEW closure-returning combinator gets added to `builtins.rs`,
@@ -8598,11 +8613,6 @@ fn infer_collection_element_type_arms_count() {
 /// and a match arm in the helper) or document the exemption alongside its
 /// siblings. Mirrors the `container_literal_arms_count` /
 /// `pack_trait_object_call_sites_count` precedents.
-///
-/// **Twin ratchet — `unify_closure_ret_axis` call-site count** covers the
-/// callers in `infer_closure_method_type`: exactly 3 call sites (one per
-/// registered cell). If a new call site appears, the reviewer must add a
-/// `ClosureCombinatorCell` variant AND wire the call.
 #[test]
 fn unify_closure_ret_axis_class_enumeration() {
     /// The 3-cell class. Bump when a NEW combinator legitimately joins the
@@ -8615,42 +8625,69 @@ fn unify_closure_ret_axis_class_enumeration() {
     /// callers elsewhere would signal a duplicate check or a leak into
     /// non-combinator paths — force the reviewer to explain.
     const EXPECTED_CALLERS: usize = 3;
+    /// ggdef mirror: 3 variants (same class shape as production).
+    const EXPECTED_GGDEF_VARIANTS: usize = 3;
+    /// ggdef mirror: 1 caller. ggdef's `elaborate_method` consolidates the
+    /// per-cell arms into a single match, so the check runs at ONE
+    /// chokepoint after `combinator_cell` classifies. Additional callers
+    /// would signal a duplicate check (Core #4 chokepoint violation).
+    const EXPECTED_GGDEF_CALLERS: usize = 1;
 
     let typecheck_src = fs::read_to_string("src/semantic/typecheck.rs")
         .expect("read src/semantic/typecheck.rs");
+    let ggdef_src = fs::read_to_string("spec/ggdef/src/elaborate/mod.rs")
+        .expect("read spec/ggdef/src/elaborate/mod.rs");
 
-    // Count ClosureCombinatorCell variants (skip the enum decl line
-    // itself). Variants are the lines whose trim ends with a `,` AND
-    // is preceded by a doc-comment inside the enum block. Simpler
-    // approach: find `enum ClosureCombinatorCell {`, count top-level
-    // identifier-followed-by-comma lines until the closing `}`.
-    let mut in_enum = false;
-    let mut variants = 0usize;
-    for line in typecheck_src.lines() {
-        let t = line.trim();
-        if t.starts_with("enum ClosureCombinatorCell") {
-            in_enum = true;
-            continue;
+    fn count_variants(src: &str) -> usize {
+        let mut in_enum = false;
+        let mut variants = 0usize;
+        for line in src.lines() {
+            let t = line.trim();
+            if t.starts_with("enum ClosureCombinatorCell") {
+                in_enum = true;
+                continue;
+            }
+            if !in_enum {
+                continue;
+            }
+            if t == "}" {
+                in_enum = false;
+                continue;
+            }
+            // Skip comments and blank lines.
+            if t.is_empty() || t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            // A variant line looks like `Ident,` (with optional trailing
+            // comment or generics — we don't emit those in this enum).
+            if t.ends_with(',')
+                && t.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+            {
+                variants += 1;
+            }
         }
-        if !in_enum {
-            continue;
-        }
-        if t == "}" {
-            in_enum = false;
-            continue;
-        }
-        // Skip comments and blank lines.
-        if t.is_empty() || t.starts_with("//") || t.starts_with("///") {
-            continue;
-        }
-        // A variant line looks like `Ident,` (with optional trailing
-        // comment or generics — we don't emit those in this enum).
-        if t.ends_with(',')
-            && t.chars().next().map_or(false, |c| c.is_ascii_uppercase())
-        {
-            variants += 1;
-        }
+        variants
     }
+
+    fn count_callers(src: &str) -> usize {
+        let mut callers = 0usize;
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            // Match either the fn definition itself (skip) or a call site.
+            if t.starts_with("fn unify_closure_ret_axis") {
+                continue;
+            }
+            if t.contains("self.unify_closure_ret_axis(") {
+                callers += 1;
+            }
+        }
+        callers
+    }
+
+    let variants = count_variants(&typecheck_src);
     assert_eq!(
         variants, EXPECTED_VARIANTS,
         "ClosureCombinatorCell variant count in src/semantic/typecheck.rs changed: \
@@ -8670,20 +8707,7 @@ fn unify_closure_ret_axis_class_enumeration() {
          shape would escape the class-guard.",
     );
 
-    let mut callers = 0usize;
-    for line in typecheck_src.lines() {
-        let t = line.trim_start();
-        if t.starts_with("//") || t.starts_with("///") {
-            continue;
-        }
-        // Match either the fn definition itself (skip) or a call site.
-        if t.starts_with("fn unify_closure_ret_axis") {
-            continue;
-        }
-        if t.contains("self.unify_closure_ret_axis(") {
-            callers += 1;
-        }
-    }
+    let callers = count_callers(&typecheck_src);
     assert_eq!(
         callers, EXPECTED_CALLERS,
         "unify_closure_ret_axis call-site count in src/semantic/typecheck.rs \
@@ -8691,6 +8715,34 @@ fn unify_closure_ret_axis_class_enumeration() {
          as EXPECTED_VARIANTS above: either wire a NEW cell (bump both \
          constants) or reduce the caller count by removing an over-eager \
          call (bump down).",
+    );
+
+    let ggdef_variants = count_variants(&ggdef_src);
+    assert_eq!(
+        ggdef_variants, EXPECTED_GGDEF_VARIANTS,
+        "ClosureCombinatorCell variant count in spec/ggdef/src/elaborate/mod.rs \
+         changed: {ggdef_variants} vs expected {EXPECTED_GGDEF_VARIANTS}.\n\n\
+         Round XXIV Track D twin-ratchet: the ggdef mirror MUST track \
+         production's `src/semantic/typecheck.rs` class shape. If a NEW \
+         cell is being ported (e.g. `ResultFlatMap` after the ggdef \
+         `Result.flat_map` follow-up ships), add the variant + a match arm \
+         in `Elaborator::unify_closure_ret_axis` + a mapping in \
+         `Elaborator::combinator_cell`, then bump `EXPECTED_GGDEF_VARIANTS` \
+         (and `EXPECTED_VARIANTS` on the production side if that ships \
+         together). A drift-only bump on one side is a Core #9 lane gap.",
+    );
+
+    let ggdef_callers = count_callers(&ggdef_src);
+    assert_eq!(
+        ggdef_callers, EXPECTED_GGDEF_CALLERS,
+        "unify_closure_ret_axis call-site count in \
+         spec/ggdef/src/elaborate/mod.rs changed: {ggdef_callers} vs \
+         expected {EXPECTED_GGDEF_CALLERS}. ggdef's `elaborate_method` \
+         consolidates the per-cell arms into a single match, so the check \
+         runs at ONE chokepoint (Core #4). An extra caller signals a \
+         duplicate check or a leak into a non-combinator path; a missing \
+         caller signals the check was dropped — force the reviewer to \
+         explain and update the constant deliberately.",
     );
 }
 

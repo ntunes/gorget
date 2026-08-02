@@ -220,6 +220,58 @@ enum BindMode {
     Move,
 }
 
+/// Round XXIV Track D — mirror of `src/semantic/typecheck.rs:197-208`
+/// `ClosureCombinatorCell`. Classifies which payload axis to unify a
+/// closure return type against for the 3 unify-eligible closure-returning
+/// combinators. See the twin lint
+/// `tests/lints.rs::unify_closure_ret_axis_class_enumeration` — it pins
+/// this enum's variant count in lockstep with the production twin.
+///
+/// Deliberately out-of-class (mirroring the production doc-comment):
+///   - `.map` / `.map_err` — scalar-returning closures (no axis).
+///   - `Result.flat_map` — deliberately UNREGISTERED in production
+///     `src/ir/lowering/builtins.rs`; ggdef currently ACCEPTS
+///     `Result.flat_map` at `elaborate_method` (Core #9 lane divergence,
+///     own port owed — filed as follow-up).
+///   - `Option.and_then` / `Option.flat_map` — legitimate cross-type map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClosureCombinatorCell {
+    /// `Result[T, E].or_else((E) -> Result[T', E'])` — unify T' == T (Ok-axis).
+    /// The Error axis IS the recovery axis; E' ≠ E is legitimate.
+    ResultOrElse,
+    /// `Result[T, E].and_then((T) -> Result[U, E'])` — unify E' == E (Err-axis).
+    /// The Ok axis IS the mapped axis; U ≠ T is legitimate.
+    ResultAndThen,
+    /// `Option[T].or_else(() -> Option[T'])` — unify T' == T (Some-axis).
+    /// Option has one payload; the recovery closure must produce the same T.
+    OptionOrElse,
+}
+
+/// Render a `Ty` for a diagnostic message. Mirrors production's
+/// `describe_resolved_type` shape (`Result[Money, int]`, `Option[int]`, etc.).
+/// `Ty::Prim` collapses int/bool/float/unsigned — see
+/// `unify_closure_ret_axis`'s precision-gap doc.
+fn ty_display(t: &Ty) -> String {
+    match t {
+        Ty::Prim => "<prim>".to_string(),
+        Ty::Str => "String".to_string(),
+        Ty::Unknown => "<unknown>".to_string(),
+        Ty::Vector(el) => format!("Vector[{}]", ty_display(el)),
+        Ty::Set(el) => format!("Set[{}]", ty_display(el)),
+        Ty::Dict(k, v) => format!("Dict[{}, {}]", ty_display(k), ty_display(v)),
+        Ty::Tuple(ts) => {
+            let inner: Vec<_> = ts.iter().map(ty_display).collect();
+            format!("({})", inner.join(", "))
+        }
+        Ty::Option(el) => format!("Option[{}]", ty_display(el)),
+        Ty::Result(ok, err) => format!("Result[{}, {}]", ty_display(ok), ty_display(err)),
+        Ty::Named(n) => n.clone(),
+        Ty::Callable { consuming, .. } => {
+            if *consuming { "ConsumeCallable[..]".to_string() } else { "Callable[..]".to_string() }
+        }
+    }
+}
+
 /// A resolved `equip` method: its GGC function name (`Type__method`) and the
 /// mode its `self` param binds under (D2: plain `self` = Borrow).
 #[derive(Clone, Debug)]
@@ -2262,6 +2314,102 @@ impl Elaborator {
             .map(|(_, a)| *a)
     }
 
+    /// Round XXIV Track D — mirror of `src/semantic/typecheck.rs:7990-8050`
+    /// `unify_closure_ret_axis`. Picks the payload axis per cell; emits
+    /// `error[E_TypeMismatch]` on mismatch. Non-Option/Result closure returns,
+    /// `Ty::Unknown` (unresolved) payloads, and same-payload cases all no-op
+    /// — they either can't cause the cross-type SBO or will surface via a
+    /// separate diagnostic upstream.
+    ///
+    /// **Known precision gap:** ggdef's `Ty::Prim` collapses int/bool/float/
+    /// unsigned to a single tag, so a bool-vs-int mismatch in the same axis
+    /// slips through this check. This is a shared elaborator limit (all `Ty`
+    /// consumers are Prim-blind), orthogonal to the `ClosureCombinatorCell`
+    /// class. The three α NEG fixtures contrast struct-vs-Prim (Money vs int),
+    /// which `Ty::Named` distinguishes cleanly.
+    fn unify_closure_ret_axis(
+        &self,
+        cell: ClosureCombinatorCell,
+        receiver_type: &Ty,
+        closure_ret_type: &Ty,
+        span: Span,
+    ) -> ElabResult<()> {
+        // Extract the closure's payload types (must be a concrete Option/Result
+        // to unify against). A bare `Ty::Unknown` means the closure's return
+        // couldn't be inferred (free-form callee, unregistered fn, etc.); the
+        // ill-typed shape would surface as a distinct diagnostic elsewhere, so
+        // no-op here rather than cascade a TypeMismatch on top.
+        let (closure_ok, closure_err) = match closure_ret_type {
+            Ty::Option(t) => (Some((**t).clone()), None),
+            Ty::Result(ok, err) => (Some((**ok).clone()), Some((**err).clone())),
+            _ => return Ok(()),
+        };
+        let (recv_ok, recv_err) = match receiver_type {
+            Ty::Option(t) => (Some((**t).clone()), None),
+            Ty::Result(ok, err) => (Some((**ok).clone()), Some((**err).clone())),
+            _ => return Ok(()),
+        };
+        // Pick the axis per cell (mirrors production's indexed lookup):
+        //   ResultOrElse: closure's Ok must match receiver's Ok (recovery is Error-axis).
+        //   ResultAndThen: closure's Err must match receiver's Err (map is Ok-axis).
+        //   OptionOrElse: closure's Some must match receiver's Some (single payload).
+        let (recv_payload, closure_payload) = match cell {
+            ClosureCombinatorCell::ResultOrElse => (recv_ok, closure_ok),
+            ClosureCombinatorCell::ResultAndThen => (recv_err, closure_err),
+            ClosureCombinatorCell::OptionOrElse => (recv_ok, closure_ok),
+        };
+        let (Some(recv_payload), Some(closure_payload)) = (recv_payload, closure_payload) else {
+            return Ok(());
+        };
+        // Bail on `Unknown` — the mirror of production's `is_fully_concrete`
+        // gate. A later inference pass (or an upstream error) will resolve or
+        // report the miss.
+        if matches!(recv_payload, Ty::Unknown) || matches!(closure_payload, Ty::Unknown) {
+            return Ok(());
+        }
+        if recv_payload == closure_payload {
+            return Ok(());
+        }
+        Err(ElabError::new(
+            format!(
+                "error[E_TypeMismatch]: type mismatch: expected `{}`, found `{}`",
+                ty_display(receiver_type),
+                ty_display(closure_ret_type),
+            ),
+            span,
+        ))
+    }
+
+    /// Round XXIV Track D — classify the axis-unify cell from `(builtin_method,
+    /// receiver_type)`. Returns `None` when the pair is not one of the 3
+    /// unify-eligible closure-returning combinators — mirrors production's
+    /// per-method arms in `infer_closure_method_type` collapsed into a single
+    /// mapping (ggdef consolidates the arms via `elaborate_method`'s single
+    /// match).
+    fn combinator_cell(
+        bm: BuiltinMethod,
+        receiver_type: &Ty,
+    ) -> Option<ClosureCombinatorCell> {
+        match (bm, receiver_type) {
+            (BuiltinMethod::OrElse, Ty::Result(_, _)) => Some(ClosureCombinatorCell::ResultOrElse),
+            (BuiltinMethod::OrElse, Ty::Option(_)) => Some(ClosureCombinatorCell::OptionOrElse),
+            (BuiltinMethod::AndThen, Ty::Result(_, _)) => Some(ClosureCombinatorCell::ResultAndThen),
+            _ => None,
+        }
+    }
+
+    /// Round XXIV Track D — infer a closure's return type from its AST body,
+    /// as needed by `unify_closure_ret_axis`. `infer_ast_ty` has no
+    /// `Expr::Closure` arm, so we descend to the body and infer that. Returns
+    /// `Ty::Unknown` on shapes the inferrer can't classify — the caller then
+    /// no-ops (never cascade a false TypeMismatch on top of an inference miss).
+    fn infer_closure_arg_ret_ty(&self, arg: &ast::CallArg) -> Ty {
+        match &arg.value.node {
+            ast::Expr::Closure { body, .. } => self.infer_ast_ty(&body.node),
+            _ => Ty::Unknown,
+        }
+    }
+
     fn elaborate_method(
         &mut self,
         receiver: &Spanned<ast::Expr>,
@@ -2354,6 +2502,22 @@ impl Elaborator {
         if let Some(n) = argn {
             if args.len() != n {
                 return Err(ElabError::new(format!("`.{method}` takes {n} arg(s)"), span));
+            }
+        }
+        // Round XXIV Track D — closure-returning combinator axis-unify.
+        // Mirror of `src/semantic/typecheck.rs:7583/7610/7633`, collapsed into
+        // ONE call site because ggdef's arm-picker consolidates the per-cell
+        // arms into a single match (production has one arm per cell). See the
+        // twin lint's `EXPECTED_GGDEF_CALLERS = 1` — this is the Core #4
+        // chokepoint. `combinator_cell` returns `None` for `.map` / `.map_err`
+        // / `flat_map` / `unwrap_or_else` (out-of-class); the check no-ops
+        // there. Runs before the write-materialize check because these are
+        // read-only combinators (they never trip the D4-6 gate).
+        let receiver_type = self.infer_ast_ty(&receiver.node);
+        if let Some(cell) = Self::combinator_cell(bm, &receiver_type) {
+            if let Some(closure_arg) = args.first() {
+                let closure_ret = self.infer_closure_arg_ret_ty(&closure_arg.node);
+                self.unify_closure_ret_axis(cell, &receiver_type, &closure_ret, closure_arg.span)?;
             }
         }
         // A mutating builtin on a tainted Borrow root would materialize it (D4
