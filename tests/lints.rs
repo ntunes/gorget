@@ -9022,66 +9022,83 @@ fn move_suggestion_advice_absent_from_source() {
 /// Class-guard (Core #4 "one fix, all siblings" + Core #6 "convert a recurring
 /// bug class into an executable guard"): pin the arm-count of the
 /// `reject_wrong_receiver_combinator` chokepoint in
-/// `src/semantic/typecheck.rs` so a new one-sided combinator cannot silently
-/// skip Rust-side receiver-gating.
+/// `src/semantic/typecheck.rs` so a new one-sided combinator or tag-check
+/// cannot silently skip Rust-side receiver-gating.
 ///
 /// The reject fn was added in Round XXVI Track A as the Rust-side mirror of
 /// XXV Track B's ggdef receiver-gate (production `elaborate_method` at
-/// `spec/ggdef/src/elaborate/mod.rs:2551-2574`). The 5 cells are ratified
-/// per `docs/language-reference.md:3861-3891`:
+/// `spec/ggdef/src/elaborate/mod.rs:2551-2574`) and extended in Round XXVIII
+/// Track A to cover the 4 tag-check cells. The 9 cells are ratified per
+/// `docs/language-reference.md:3861-3891`:
 ///   - (Result, flat_map)      — Option-only
 ///   - (Result, filter)        — Option-only
 ///   - (Result, flatten)       — Option-only
 ///   - (Option, map_err)       — Result-only
 ///   - (Option, unwrap_error)  — Result-only
+///   - (Result, is_some)       — Option-only
+///   - (Result, is_none)       — Option-only
+///   - (Option, is_ok)         — Result-only
+///   - (Option, is_error)      — Result-only
 ///
 /// The count MUST NOT drift silently. A whole-file `matches!()` count would
 /// false-hit the 7 pre-existing `("Option", "…") | ("Result", "…")` arms in
 /// `infer_closure_method_type` — this lint keys off a distinctive
-/// `R26A_ARM_MARKER` comment placed on each of the 5 arms in the reject fn
+/// `R26A_ARM_MARKER` comment placed on each of the 9 arms in the reject fn
 /// so the count is unambiguous (precedent: `consuming_position_name_match_is_gir_gated`
 /// at the top of this file).
 ///
-/// **What to do if this trips.** If you added a new one-sided combinator
-/// (a builtin `.foo()` that is legitimate on Option XOR Result), wire BOTH
-/// sides per Core #9 (both-lane semantic change lands the same round):
+/// **What to do if this trips.** If you added a new one-sided combinator or
+/// tag-check (a builtin `.foo()` that is legitimate on Option XOR Result),
+/// wire ALL THREE lanes per Core #9 (all-lane semantic change lands the
+/// same round):
 ///   (a) add the receiver-gate arm here (+ the `R26A_ARM_MARKER` comment)
 ///       and bump `EXPECTED`;
 ///   (b) add the matching arm to the ggdef production receiver-gate at
 ///       `spec/ggdef/src/elaborate/mod.rs::elaborate_method` (NOT a lint —
 ///       ggdef's guard is the production reject itself);
-///   (c) add a `combinator_<recv>_<method>_rejected.gg` reject fixture
+///   (c) add the matching arm to the SH mirror at
+///       `tests/fixtures/self_host_typechecker/typecheck.gg` (+ its
+///       `R27C_ARM_MARKER` comment) and bump the SH lint's EXPECTED;
+///   (d) add a `combinator_<recv>_<method>_rejected.gg` reject fixture
 ///       (RED-verify against the pre-fix compiler per Core #12).
 /// If you REMOVED a cell, the reference tables in
-/// `docs/language-reference.md:3861-3891` and the ggdef gate must move too.
-/// Do NOT lower `EXPECTED` without matching all three lanes.
+/// `docs/language-reference.md:3861-3891` and the ggdef + SH gates must move
+/// too. Do NOT lower `EXPECTED` without matching all three lanes.
 #[test]
 fn reject_wrong_receiver_combinator_arms_count() {
     let src = std::fs::read_to_string("src/semantic/typecheck.rs")
         .expect("read src/semantic/typecheck.rs");
     const MARKER: &str = "R26A_ARM_MARKER";
     let arm_count = src.matches(MARKER).count();
-    // One MARKER PER cell in the reject fn (Result.{flat_map,filter,flatten}
-    // + Option.{map_err,unwrap_error}) = 5. The doc reference in the fn's
-    // header uses the string "R26A_ARM_MARKER" only inside `assert!` /
-    // rustdoc — the marker appears exclusively as a trailing comment on
-    // each of the 5 match arms.
-    const EXPECTED: usize = 5;
+    // One MARKER PER cell in the reject fn: the 5 combinator cells
+    // (Result.{flat_map, filter, flatten} + Option.{map_err, unwrap_error})
+    // plus the 4 tag-check cells added by Round XXVIII Track A
+    // (Result.{is_some, is_none} + Option.{is_ok, is_error}) = 9. The doc
+    // reference in the fn's header uses the string "R26A_ARM_MARKER" only
+    // inside `assert!` / rustdoc — the marker appears exclusively as a
+    // trailing comment on each of the 9 match arms.
+    const EXPECTED: usize = 9;
     assert_eq!(
         arm_count, EXPECTED,
-        "Round XXVI Track A class-guard: `R26A_ARM_MARKER` occurrences in \
-         `src/semantic/typecheck.rs` changed: {arm_count} vs expected \
-         {EXPECTED}. The 5 markers pin the Result.{{flat_map, filter, \
-         flatten}} + Option.{{map_err, unwrap_error}} receiver-gate arms \
-         in `reject_wrong_receiver_combinator`. If you added a new \
-         one-sided combinator, wire BOTH the ggdef production receiver-gate \
-         (`spec/ggdef/src/elaborate/mod.rs::elaborate_method`) AND this \
-         Rust arm in the SAME round (Core #9 two-lane semantic change), \
-         land a `combinator_<recv>_<method>_rejected.gg` reject fixture \
-         (RED-verified per Core #12), and bump EXPECTED. If you removed \
-         one, move the reference table in \
-         `docs/language-reference.md:3861-3891` and the ggdef gate too — \
-         do NOT lower EXPECTED without both lanes moving with it.",
+        "Round XXVI Track A + Round XXVIII Track A class-guard: \
+         `R26A_ARM_MARKER` occurrences in `src/semantic/typecheck.rs` \
+         changed: {arm_count} vs expected {EXPECTED}. The 9 markers pin the \
+         Result.{{flat_map, filter, flatten, is_some, is_none}} + \
+         Option.{{map_err, unwrap_error, is_ok, is_error}} receiver-gate \
+         arms in `reject_wrong_receiver_combinator` (combinators + \
+         tag-checks). If you added a new one-sided cell, wire ALL THREE \
+         lanes in the SAME round (Core #9 all-lanes semantic change): the \
+         ggdef production receiver-gate \
+         (`spec/ggdef/src/elaborate/mod.rs::elaborate_method`), this Rust \
+         arm, AND the SH mirror at \
+         `tests/fixtures/self_host_typechecker/typecheck.gg::reject_wrong_receiver_combinator` \
+         (+ its `R27C_ARM_MARKER` arm-count lint). Land a \
+         `combinator_<recv>_<method>_rejected.gg` reject fixture \
+         (RED-verified per Core #12) plus its `check_gg_fails` Rust + \
+         `self_host_lowerer_driver_rejects_combinator_*` SH integration \
+         tests, and bump EXPECTED. If you removed one, move the reference \
+         table in `docs/language-reference.md:3861-3891` and the ggdef gate \
+         too — do NOT lower EXPECTED without all lanes moving with it.",
     );
 }
 
@@ -9327,16 +9344,23 @@ fn fn_body_end(lines: &[&str], fn_start: usize) -> usize {
 }
 
 /// SH-lane sibling of `reject_wrong_receiver_combinator_arms_count` (Round
-/// XXVII Track C class-guard). Pins the SH typechecker's chokepoint arm
-/// count for the SAME 5 one-sided combinator cells the Rust chokepoint
-/// covers, so a new one-sided combinator FORCES the SH lane's REJECT to
-/// move in lockstep with Rust + ggdef (Core #9 all-lanes semantic change).
+/// XXVII Track C class-guard + Round XXVIII Track A tag-check extension).
+/// Pins the SH typechecker's chokepoint arm count for the SAME 9 one-sided
+/// combinator + tag-check cells the Rust chokepoint covers, so a new
+/// one-sided cell FORCES the SH lane's REJECT to move in lockstep with
+/// Rust + ggdef (Core #9 all-lanes semantic change).
 ///
-/// The 5 arms live in `reject_wrong_receiver_combinator` at
+/// The 9 arms live in `reject_wrong_receiver_combinator` at
 /// `tests/fixtures/self_host_typechecker/typecheck.gg`, each tagged with a
 /// distinctive `R27C_ARM_MARKER` trailing comment. A bare match on the
 /// function name would false-hit the surrounding SH walker's method-name
 /// checks; the per-arm marker is the same discipline the Rust sibling uses.
+///
+/// Ratified per `docs/language-reference.md:3861-3891`:
+///   - (Result, flat_map / filter / flatten)      — Option-only combinators
+///   - (Option, map_err / unwrap_error)           — Result-only combinators
+///   - (Result, is_some / is_none)                — Option-only tag-checks
+///   - (Option, is_ok / is_error)                 — Result-only tag-checks
 ///
 /// **What to do if this trips.** Same three-lane rule as the Rust sibling:
 ///   (a) add the receiver-gate arm here (+ the `R27C_ARM_MARKER` comment)
@@ -9358,27 +9382,32 @@ fn sh_reject_wrong_receiver_combinator_arms_count() {
     .expect("read tests/fixtures/self_host_typechecker/typecheck.gg");
     const MARKER: &str = "R27C_ARM_MARKER";
     let arm_count = src.matches(MARKER).count();
-    // One MARKER PER cell in the SH reject fn (Result.{flat_map,filter,
-    // flatten} + Option.{map_err,unwrap_error}) = 5. The doc reference in
-    // the fn's header paraphrases (does NOT spell the marker string) so
-    // the count is unambiguous.
-    const EXPECTED: usize = 5;
+    // One MARKER PER cell in the SH reject fn: the 5 combinator cells
+    // (Result.{flat_map, filter, flatten} + Option.{map_err, unwrap_error})
+    // plus the 4 tag-check cells added by Round XXVIII Track A
+    // (Result.{is_some, is_none} + Option.{is_ok, is_error}) = 9. The doc
+    // reference in the fn's header paraphrases (does NOT spell the marker
+    // string) so the count is unambiguous.
+    const EXPECTED: usize = 9;
     assert_eq!(
         arm_count, EXPECTED,
-        "Round XXVII Track C SH-lane class-guard: `R27C_ARM_MARKER` \
-         occurrences in `tests/fixtures/self_host_typechecker/typecheck.gg` \
-         changed: {arm_count} vs expected {EXPECTED}. The 5 markers pin \
-         the Result.{{flat_map, filter, flatten}} + Option.{{map_err, \
-         unwrap_error}} receiver-gate arms in the SH-lane \
-         `reject_wrong_receiver_combinator`. If you added a new one-sided \
-         combinator, wire ALL THREE lanes in the SAME round (Core #9): \
-         Rust chokepoint (+`R26A_ARM_MARKER`, bump its lint), ggdef \
-         `elaborate_method`, and this SH arm — plus land a \
+        "Round XXVII Track C + Round XXVIII Track A SH-lane class-guard: \
+         `R27C_ARM_MARKER` occurrences in \
+         `tests/fixtures/self_host_typechecker/typecheck.gg` changed: \
+         {arm_count} vs expected {EXPECTED}. The 9 markers pin the \
+         Result.{{flat_map, filter, flatten, is_some, is_none}} + \
+         Option.{{map_err, unwrap_error, is_ok, is_error}} receiver-gate \
+         arms in the SH-lane `reject_wrong_receiver_combinator` \
+         (combinators + tag-checks). If you added a new one-sided cell, \
+         wire ALL THREE lanes in the SAME round (Core #9): Rust chokepoint \
+         (+`R26A_ARM_MARKER`, bump its lint), ggdef `elaborate_method`, \
+         and this SH arm — plus land a \
          `combinator_<recv>_<method>_rejected.gg` fixture (RED-verified \
-         per Core #12) and a matching `sh_lowerer_driver_rejects_\
-         combinator_*` integration test. If you removed one, move the \
-         reference table in `docs/language-reference.md:3861-3891` and \
-         the ggdef + Rust chokepoints too — do NOT lower EXPECTED without \
-         all lanes moving with it.",
+         per Core #12) and a matching \
+         `self_host_lowerer_driver_rejects_combinator_*` integration test. \
+         If you removed one, move the reference table in \
+         `docs/language-reference.md:3861-3891` and the ggdef + Rust \
+         chokepoints too — do NOT lower EXPECTED without all lanes moving \
+         with it.",
     );
 }

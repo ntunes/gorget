@@ -1,0 +1,18 @@
+# NEG (Round XXVIII Track A — tag-check cell of the one-sided combinator
+# class): `Result.is_none()` does NOT exist in the phase-0 subset. Ratified
+# Option-only per `docs/language-reference.md:3861-3891`.
+#
+# Pre-fix (RED-verified 2026-08-02): both `gg check` (silent-accept, exit 0)
+# and `gg run` (silent-wrong: prints "false", the Ok tag inverted — Core #8
+# both-wrong: Option/Result share the two-variant discriminant layout so the
+# tag check "happens to work" on the wrong receiver).
+#
+# Post-fix: Rust `typecheck` REJECTS at the `reject_wrong_receiver_combinator`
+# chokepoint with `error[E_NoMethodFound]: no method `is_none` found on
+# Result[int, int] — `.is_none()` is outside the phase-0 subset (Option-only)`;
+# SH lane mirrors the reject. ggdef LAG separate follow-up.
+
+void main():
+    Result[int, int] r = Ok(42)
+    bool b = r.is_none()
+    print(b)

@@ -7474,15 +7474,16 @@ impl<'a> TypeChecker<'a> {
         Some(out)
     }
 
-    /// Round XXVI Track A — reject the 5 wrong-receiver one-sided combinators
-    /// BEFORE dispatch (Core #4 chokepoint, mirror of ggdef XXV Track B at
+    /// Round XXVI Track A + Round XXVIII Track A — reject the 9 wrong-receiver
+    /// one-sided combinator + tag-check cells BEFORE dispatch (Core #4
+    /// chokepoint, mirror of ggdef XXV Track B at
     /// `spec/ggdef/src/elaborate/mod.rs:2551-2574`). Rust silently accepted
-    /// these then crashed at C-compile — Result cases with `incompatible
-    /// types when assigning to type '__gg_Result...' from type 'int32_t'`,
-    /// Option cases with `'__gg_Option__int64_t' has no member named
-    /// 'None_0'`.
+    /// these then crashed at C-compile (combinators) or emitted silently-wrong
+    /// output (tag-checks — Option/Result share the two-variant discriminant
+    /// layout so `.is_some()` on Result etc. "happens to work" for the wrong
+    /// reason — Core #8 both-wrong).
     ///
-    /// The 5 cells are ratified per `docs/language-reference.md:3861-3891`
+    /// The 9 cells are ratified per `docs/language-reference.md:3861-3891`
     /// (Option/Result method tables); each is EITHER Option-only OR
     /// Result-only:
     ///   - (Result, flat_map)      — Option-only (`Result` uses `and_then`)
@@ -7490,6 +7491,13 @@ impl<'a> TypeChecker<'a> {
     ///   - (Result, flatten)       — Option-only (no `Result[Result[T,E],E]`)
     ///   - (Option, map_err)       — Result-only (no Error axis to map)
     ///   - (Option, unwrap_error)  — Result-only (no Error payload to unwrap)
+    ///   - (Result, is_some)       — Option-only (Result uses `is_ok/is_error`)
+    ///   - (Result, is_none)       — Option-only (Result uses `is_ok/is_error`)
+    ///   - (Option, is_ok)         — Result-only (Option uses `is_some/is_none`)
+    ///   - (Option, is_error)      — Result-only (Option uses `is_some/is_none`)
+    ///
+    /// Covers BOTH combinator (Result/Option HOF-taking methods) and tag-check
+    /// (`.is_*()` inspectors) shapes — rename out of scope for XXVIII Track A.
     ///
     /// Emits the existing `SemanticErrorKind::NoMethodFound` (whose Display
     /// prints "no method `X` found on type `Y`" tagged `E_NoMethodFound`);
@@ -7504,15 +7512,18 @@ impl<'a> TypeChecker<'a> {
     /// override exists in the current corpus (grep-verified 2026-08-02).
     ///
     /// Class-guard: `tests/lints.rs::reject_wrong_receiver_combinator_arms_count`
-    /// pins the arm count (EXPECTED=5) via a distinctive per-arm marker
+    /// pins the arm count (EXPECTED=9) via a distinctive per-arm marker
     /// (see the arm comments below — the marker string is spelled ONLY
-    /// on the 5 arms, so this doc-line and the call-site comment at
+    /// on the 9 arms, so this doc-line and the call-site comment at
     /// `:2799` deliberately paraphrase it to avoid inflating the count).
     /// A new one-sided combinator MUST land in ggdef's `elaborate_method`
-    /// (production receiver-gate — not a lint) AND here (Core #9 both-lane
-    /// semantic change). SH lane
-    /// (`tests/fixtures/self_host_typechecker/typecheck.gg`) still silently
-    /// accepts the same class — filed as owed follow-up.
+    /// (production receiver-gate — not a lint) AND here AND in the SH
+    /// chokepoint at `tests/fixtures/self_host_typechecker/typecheck.gg`
+    /// (Core #9 all-lanes semantic change). ggdef LAG for tag-checks is
+    /// filed as a separate follow-up: the elaborate arm-picker currently
+    /// blanket-rejects `.is_some()/.is_none()/.is_ok()/.is_error()` for any
+    /// receiver, so the wrong-cell case is already blocked, but the
+    /// right-cell case is not yet subset-accepted (Core #13 subset-expansion).
     fn reject_wrong_receiver_combinator(
         &mut self,
         receiver_type: TypeId,
@@ -7532,6 +7543,14 @@ impl<'a> TypeChecker<'a> {
             ("Result", "flatten")      => "Option-only", // R26A_ARM_MARKER
             ("Option", "map_err")      => "Result-only", // R26A_ARM_MARKER
             ("Option", "unwrap_error") => "Result-only", // R26A_ARM_MARKER
+            // Round XXVIII Track A — tag-check cells. Option/Result share
+            // the two-variant discriminant layout so `.is_some()` on Result
+            // (etc.) silently "worked" for the wrong reason (Core #8
+            // both-wrong: silent-accept + silent-wrong-output).
+            ("Result", "is_some")      => "Option-only", // R26A_ARM_MARKER
+            ("Result", "is_none")      => "Option-only", // R26A_ARM_MARKER
+            ("Option", "is_ok")        => "Result-only", // R26A_ARM_MARKER
+            ("Option", "is_error")     => "Result-only", // R26A_ARM_MARKER
             _ => return,
         };
         let type_desc = self.describe_resolved_type(resolved);
