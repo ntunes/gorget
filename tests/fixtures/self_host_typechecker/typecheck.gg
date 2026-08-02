@@ -36,7 +36,7 @@ from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from std.conv import int_to_str
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -3107,6 +3107,57 @@ void walk_expr_closures_with_type(SpannedExpr sexpr, int expected_type, int scop
 void walk_expr_closures(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     walk_expr_closures_with_type(sexpr, -1, scope_id, &scopes, &types, &ctx)
 
+# ── Class-fix (Round XXVII Track C): SH-lane REJECT for one-sided
+# Result/Option combinators on the wrong receiver — mirror of the Rust
+# chokepoint at `src/semantic/typecheck.rs::reject_wrong_receiver_combinator`
+# (which pins the SAME 5 cells via R26A_ARM_MARKER). Wired from the
+# EMethodCall arm of `walk_expr_closures_inner` BEFORE the existing
+# resolve/inference logic — a wrong-receiver call currently resolves via
+# the receiver's method table (or silently misses), lowers, and then
+# either C-compile-crashes or silently produces wrong output; this reject
+# fires at typecheck time so the driver's `has_errors` gate halts BEFORE
+# lowering.
+#
+# Void return + push-to-diagnostics matches the SH neighbour convention
+# (`PositionalAfterNamed` at :3155, `NoFieldFound` in infer.gg:273 —
+# both void, no caller short-circuits on bool).
+#
+# Class-guard: `tests/lints.rs::sh_reject_wrong_receiver_combinator_arms_count`
+# pins the arm count (EXPECTED=5) via a distinctive per-arm marker
+# spelled only on the 5 arms below (see the trailing `# R…_ARM_MARKER`
+# comments — this doc line and the lint assert-message deliberately
+# paraphrase to avoid inflating the count). A new one-sided combinator MUST land in the Rust chokepoint AND
+# here AND in ggdef's `elaborate_method` (Core #9 all-lanes semantic
+# change) with a `combinator_<recv>_<method>_rejected.gg` fixture
+# RED-verified per Core #12.
+void reject_wrong_receiver_combinator(int receiver_type, String method_name, Span span, ScopeTable scopes, TypeTable types, ResolveContext &ctx):
+    if receiver_type < 0 or receiver_type >= types.types.len():
+        return
+    String base_name = ""
+    ResolvedType obj_rt = get_rtype_at(types.types, receiver_type)
+    match obj_rt:
+        case RTDefined(rdef):
+            base_name = scopes.get_def(rdef).name
+        case RTGeneric(rdef, _):
+            base_name = scopes.get_def(rdef).name
+        else:
+            return
+    String hint = ""
+    if base_name == "Result" and method_name == "flat_map":
+        hint = "Option-only"                                 # R27C_ARM_MARKER
+    elif base_name == "Result" and method_name == "filter":
+        hint = "Option-only"                                 # R27C_ARM_MARKER
+    elif base_name == "Result" and method_name == "flatten":
+        hint = "Option-only"                                 # R27C_ARM_MARKER
+    elif base_name == "Option" and method_name == "map_err":
+        hint = "Result-only"                                 # R27C_ARM_MARKER
+    elif base_name == "Option" and method_name == "unwrap_error":
+        hint = "Result-only"                                 # R27C_ARM_MARKER
+    else:
+        return
+    String msg = "`." + method_name + "()` on " + base_name + " is outside the phase-0 subset (" + hint + ")"
+    ctx.diagnostics.push(Diagnostic.error(span, DkNoMethodFound(), msg))
+
 void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
         case ECall(callee, args, targs):
@@ -3155,6 +3206,12 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
                     ctx.diagnostics.push(Diagnostic.error(marg.value.span, DkPositionalAfterNamed(), "positional argument cannot follow named argument"))
             # Infer receiver element type for collection higher-order methods
             int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
+            # Round XXVII Track C — class-fix chokepoint: REJECT one-sided
+            # Result/Option combinators used on the wrong receiver BEFORE
+            # the existing resolve/inference does anything with them. See
+            # `reject_wrong_receiver_combinator` above for the ratified 5
+            # cells and the ggdef/Rust cross-lane pins.
+            reject_wrong_receiver_combinator(obj_type, method_name, sexpr.span, scopes, types, &ctx)
             int elem_type = extract_element_type(obj_type, scopes, types).unwrap_or(-1)
             # Resolve full method signature for closure-arg type propagation.
             # This lets (r): body get its param typed when passed to a method
