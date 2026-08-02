@@ -1,0 +1,25 @@
+# Round XXV Track C — `&`-of-a-place as a list-comprehension body.
+# NEG 19/20 of the operand-position class; retired by the ONE-PRODUCER
+# chokepoint at `src/semantic/safety/check_expr.rs:349`. List-comp
+# reaches the chokepoint via the `Expr::ListComprehension` arm at
+# `:1335/1347` recursing through `self.check_expr(comp_expr)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single `E_AmpInOperandPosition`
+# — the list-comp chokepoint route emits no co-emit companions (single,
+# clean error).
+#
+# Sibling arms Dict/Set (`:1356`/`:1379`) share the same walker pattern;
+# filed as ride-along cells for a future Core #12 round.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Vector[int] ns = [1, 2, 3]
+    Vector[int] ys = [&c.fd for n in ns]
+    print(ys.len())

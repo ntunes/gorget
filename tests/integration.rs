@@ -38205,9 +38205,11 @@ fn closure_amp_method_arg_body_reject() {
 /// Class-wide reject: the same chokepoint covers match scrutinee, binop /
 /// comparison operand (either order), if/while cond, index / f-string /
 /// closure body / return / augassign RHS / throw / select-send value /
-/// range endpoint / tuple/array elem / as-cast (13 costumes are pinned as
-/// their own NEG fixtures at `tests/fixtures/sound_amp_operand_*_error.gg`;
-/// see also the tainted-twin `security/sound_amp_operand_drop_*.gg`).
+/// range endpoint / as-cast / deref (Round XXV) / propagate (Round XXV) /
+/// spawn (Round XXV) / list-comprehension body (Round XXV) / expression-
+/// statement (Round XXV) — 20 costumes pinned as their own NEG fixtures
+/// at `tests/fixtures/sound_amp_operand_*_error.gg`; see also the
+/// tainted-twin `security/sound_amp_operand_drop_*.gg`.
 #[test]
 fn sound_amp_operand_position_scrutinee_rejected() {
     check_gg_fails(
@@ -38216,14 +38218,18 @@ fn sound_amp_operand_position_scrutinee_rejected() {
     );
 }
 
-// ── Round XXIII Track β — 13 costume NEG fixtures for the operand-position
-// `&` reject class. One-producer chokepoint at
-// `src/semantic/safety/check_expr.rs:276`; each costume was RED-verified
-// pre-fix (see per-fixture header for the C / LLVM failure mode). Plus 2
-// Pass-1 additions (throw, select-send) and 3 positive controls that must
-// stay green (for-iterable via strip preamble, `.enumerate()` receiver-wrap,
-// call-arg unchanged) + 1 durable SH-lane companion `#[ignore]`d until the
-// SH-typechecker port lands (Core #9 lane parity).
+// ── Round XXIII Track β + Round XXV Track C — 20 costume NEG fixtures for
+// the operand-position `&` reject class. One-producer chokepoint at
+// `src/semantic/safety/check_expr.rs:349`; each XXIII costume was
+// RED-verified pre-fix (see per-fixture header for the C / LLVM failure
+// mode). Round XXIII β shipped 13 initial costumes + 2 Pass-1 additions
+// (throw, select-send); Round XXV Track C fills the 5 remaining operand
+// contexts (deref, propagate, spawn, list-comprehension body, expression-
+// statement) — pure Core #12 fixture-net, no source change. Plus 3
+// positive controls that must stay green (for-iterable via strip preamble,
+// `.enumerate()` receiver-wrap, call-arg unchanged) + 1 durable SH-lane
+// companion `#[ignore]`d until the SH-typechecker port lands (Core #9
+// lane parity).
 
 #[test]
 fn sound_amp_operand_scrutinee_error() {
@@ -38341,6 +38347,55 @@ fn sound_amp_operand_throw_error() {
 fn sound_amp_operand_send_error() {
     check_gg_fails(
         "sound_amp_operand_send_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+// Round XXV Track C — 5 additional operand-context costumes (pure Core #12
+// fixture-net, no source change). All 5 route through the ONE-PRODUCER
+// chokepoint at `check_expr.rs:349` via `self.check_expr(inner)` recursion
+// in their respective walker arms (Deref:353, Propagate:296, Spawn:1048,
+// ListComprehension:1335, Stmt::Expr:323 in check_stmt.rs). Propagate +
+// spawn structurally co-emit companion diagnostics (`E_MissingFallibleMark`
+// for `(&x)!`; `E_SpawnNonFuture` + `E_SpawnRequiresDirectCall` for
+// `spawn (&x)`) — `check_gg_fails` substring match is unaffected.
+
+#[test]
+fn sound_amp_operand_deref_error() {
+    check_gg_fails(
+        "sound_amp_operand_deref_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_propagate_error() {
+    check_gg_fails(
+        "sound_amp_operand_propagate_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_spawn_error() {
+    check_gg_fails(
+        "sound_amp_operand_spawn_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_comprehension_error() {
+    check_gg_fails(
+        "sound_amp_operand_comprehension_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_exprstmt_error() {
+    check_gg_fails(
+        "sound_amp_operand_exprstmt_error.gg",
         "error[E_AmpInOperandPosition]",
     );
 }

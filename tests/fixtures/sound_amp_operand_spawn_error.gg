@@ -1,0 +1,22 @@
+# Round XXV Track C — `&`-of-a-place inside a `spawn` operand.
+# NEG 18/20 of the operand-position class; retired by the ONE-PRODUCER
+# chokepoint at `src/semantic/safety/check_expr.rs:349`. Spawn reaches
+# the chokepoint via the `Expr::Spawn` arm at `:1048/1049` recursing
+# through `self.check_expr(inner)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with `E_AmpInOperandPosition`.
+# CO-EMITS (structural, unavoidable — `check_gg_fails` substring match
+# is fine): `E_SpawnNonFuture` + `E_SpawnRequiresDirectCall`. `spawn`
+# inspects `inner.node` for a Call/MethodCall pattern; a MutableBorrow
+# inner never matches, so both spawn diagnostics fire.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+async void main():
+    Counter c = Counter(seed())
+    spawn (&c.fd)
