@@ -1345,7 +1345,17 @@ impl<'a> BorrowChecker<'a> {
                     if let Some(guard) = &arm.guard {
                         self.check_expr(guard);
                     }
+                    // XXVIII Track C hotfix: match arm body is a RESTING
+                    // position per D32 (value flows out of the arm, like
+                    // VarDecl/Return RHS). Suppress E_MoveInOperandPosition
+                    // for direct-top-level `!x` in arm body OR for `!x` at
+                    // the tail of a Block-wrapped multi-line arm body.
+                    let prev_move = self.suppress_move_in_operand_position;
+                    if crate::semantic::safety::check_expr::arm_body_is_direct_move(&arm.body) {
+                        self.suppress_move_in_operand_position = true;
+                    }
                     self.check_expr(&arm.body);
+                    self.suppress_move_in_operand_position = prev_move;
                     branch_states.push(self.save_branch_state());
                 }
 

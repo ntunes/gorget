@@ -20343,7 +20343,16 @@ fn self_host_bootstrap() {
 // → measured 12,766,424. PROVISIONAL — not attribution-proven; charter is
 // hand-optimal clone count (TODO.md Perf HIGH). Optimization pass must
 // reclaim and re-seed DOWN. Ceiling = measured + ~1%.
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_895_000;
+//
+// Re-pinned UP 2026-08-02 (Round XXVIII SH-typecheck surface growth): 3 new
+// SH-lane REJECT chokepoints added helpers + arms (Track A tag-check 4 arms
+// + Track C container-literal walker suppress + Track D expr_is_borrow_bind
+// helper family ~46 LOC + Track E combinator_axis_cell + unify_closure_ret_
+// axis ~70 LOC + walker recursion into EMatch/SMatch scrutinees). Additional
+// SH source = additional self-compile clones. Measured array_clone=12,939,495
+// (+0.35% vs prior ceiling). Ceiling = measured + ~1%. String stayed under
+// prior ceiling. PROVISIONAL — reclaim same rules apply.
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_070_000;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -20576,7 +20585,13 @@ fn self_host_clone_ceiling() {
 // double-free (exit 134) on Money stems; stage-1 self-compile pays the
 // clone whenever the SH lowerer itself keeps a resource Option. Ceiling =
 // measured + ~1%.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_058_600_000;
+//
+// Re-pinned UP 2026-08-02 (Round XXVIII SH-typecheck surface growth, same
+// citation as stage-0): measured stage-1 array_clone=1,066,485,057
+// (+0.75% vs prior). Justified — new SH REJECT chokepoint helpers (Track
+// A/C/D/E ~200 LOC) compile through the SH lowerer at stage-1 too.
+// Ceiling = measured + ~1%.
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_077_150_000;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -20592,7 +20607,11 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_058_600_000;
 //
 // Re-pinned UP 2026-07-30 (Round XVI SH-4 owned-copy, same citation as array):
 // measured string_clone=1,949,556,622. Ceiling = measured + ~1%.
-const STAGE1_STRING_CLONE_CEILING: u64 = 1_969_100_000;
+//
+// Re-pinned UP 2026-08-02 (Round XXVIII SH-typecheck surface growth, same
+// citation as stage-1 array ceiling): measured stage-1 string_clone=
+// 1,981,307,669 (+0.62% vs prior). Ceiling = measured + ~1%.
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_001_130_000;
 
 #[test]
 #[serial(self_host_lowerer_driver)]

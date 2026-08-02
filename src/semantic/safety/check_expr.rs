@@ -10,6 +10,32 @@ use crate::semantic::scope::DefKind;
 use super::{BorrowChecker, BorrowOrigin, FallibleState, VarState};
 use super::type_utils::needs_explicit_move;
 
+/// XXVIII Track C hotfix — match arm body direct-Move detection.
+///
+/// Match arm bodies are RESTING positions per D32 (their value flows to the
+/// match expression's value, same as VarDecl/Return RHS). But arm bodies can
+/// be either single Expr (single-line arm `case P: !x`) or Block-wrapped
+/// (multi-line `case P:\n    !x` — see parser/mod.rs:parse_arm_body). This
+/// helper detects direct-top-level Move in either shape so the reject can
+/// be suppressed the same way `check_stmt` suppresses for VarDecl/Return.
+///
+/// Only DIRECT top-level Move (single-stmt block with just `!x`) counts —
+/// nested `!` inside a multi-statement block is a real operand-position use
+/// and stays rejected.
+pub(crate) fn arm_body_is_direct_move(body: &Spanned<Expr>) -> bool {
+    match &body.node {
+        Expr::Move { .. } => true,
+        Expr::Block(block) => {
+            block.stmts.len() == 1
+                && matches!(
+                    &block.stmts[0].node,
+                    Stmt::Expr(inner) if matches!(&inner.node, Expr::Move { .. })
+                )
+        }
+        _ => false,
+    }
+}
+
 impl<'a> BorrowChecker<'a> {
     /// At a constructor / struct-literal / enum-variant init boundary, a bare
     /// (non-`!`) identifier arg of a CoW-eligible type is fine — the lowering
@@ -1256,13 +1282,33 @@ impl<'a> BorrowChecker<'a> {
                     if let Some(guard) = &arm.guard {
                         self.check_expr(guard);
                     }
+                    // XXVIII Track C hotfix: match arm body is a RESTING
+                    // position per D32 (value flows to match expr's value,
+                    // same as VarDecl/Return RHS). Suppress
+                    // E_MoveInOperandPosition for direct-top-level `!x` in
+                    // arm body OR for `!x` at the tail of a Block-wrapped
+                    // multi-line arm body (parser wraps `case P:\n    !x`
+                    // in Expr::Block per parser/mod.rs:parse_arm_body).
+                    // Nested/operand-position `!` inside the arm body still
+                    // rejects.
+                    let prev_move = self.suppress_move_in_operand_position;
+                    if arm_body_is_direct_move(&arm.body) {
+                        self.suppress_move_in_operand_position = true;
+                    }
                     self.check_expr(&arm.body);
+                    self.suppress_move_in_operand_position = prev_move;
                     branch_states.push(self.save_branch_state());
                 }
 
                 if let Some(else_arm) = else_arm {
                     self.restore_branch_state(&before);
+                    // XXVIII Track C hotfix: match else arm is also RESTING.
+                    let prev_move = self.suppress_move_in_operand_position;
+                    if arm_body_is_direct_move(else_arm) {
+                        self.suppress_move_in_operand_position = true;
+                    }
                     self.check_expr(else_arm);
+                    self.suppress_move_in_operand_position = prev_move;
                     branch_states.push(self.save_branch_state());
                 } else {
                     branch_states.push(before);
