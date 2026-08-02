@@ -459,6 +459,22 @@ pub enum SemanticErrorKind {
     /// (D10(a)) via an option-D direct-`Expr::MutableBorrow` intercept.
     AmpInOperandPosition,
 
+    /// Round XXVIII Track C — D32:1278-1281 sibling of `AmpInOperandPosition`:
+    /// prefix `!` in an OPERAND (read) position is not valid. `!expr` is a
+    /// boundary modifier — it says "consume the source at this ownership
+    /// boundary". At an operand position (binop / comparison / cond / match
+    /// scrutinee / index / f-string interp / range endpoint / as-cast /
+    /// propagate / augassign RHS / unary operand), there is NO boundary — the
+    /// value is READ into the operation, not consumed. `!s + "b"` was measured
+    /// silent-accept-but-source-moving (result inert, source dead) — a class of
+    /// user typos with no useful semantic, symmetric to `&`-in-operand-position
+    /// which D32 rejects on both lanes. Reject at every operand-position site
+    /// via the ONE-PRODUCER chokepoint at `check_expr::Expr::Move`, gated by
+    /// the `suppress_move_in_operand_position` flag which VarDecl/Assign/
+    /// Return/Throw/Send set for their DIRECT top-level `Expr::Move` RHS (the
+    /// RESTING/consuming-boundary path where `!x` is legit).
+    MoveInOperandPosition,
+
     /// A method-level generic param couldn't be inferred from the
     /// call's arg types. Emitted by Phase 2c inference (see
     /// `docs/devbook/09-type-checking.md`, method-level generic inference)
@@ -905,6 +921,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::DefaultOpNonOptional { .. } => "E_DefaultOpNonOptional",
             SemanticErrorKind::LocalBorrowBind => "E_LocalBorrowBind",
             SemanticErrorKind::AmpInOperandPosition => "E_AmpInOperandPosition",
+            SemanticErrorKind::MoveInOperandPosition => "E_MoveInOperandPosition",
             SemanticErrorKind::MethodGenericInferenceFailed { .. } => "E_MethodGenericInferenceFailed",
             SemanticErrorKind::CannotInferType => "E_CannotInferType",
             SemanticErrorKind::NoFieldFound { .. } => "E_NoFieldFound",
@@ -1127,6 +1144,18 @@ impl std::fmt::Display for SemanticError {
                      place directly (`match c.fd:`, `x += c.fd`, `if c.fd > 5:`); \
                      use `&` only as a function/method argument (`f(&c.fd)`) \
                      or on a `for` iterable (`for x in &coll:`)"
+                )
+            }
+            SemanticErrorKind::MoveInOperandPosition => {
+                write!(
+                    f,
+                    "`!` is not valid in an operand (read) position — the \
+                     sigil consumes the source at an ownership boundary and \
+                     there is no boundary here. Drop the `!` and read the \
+                     place directly (`s + \"b\"`, `if b:`, `match x:`, `v[i]`); \
+                     use `!` only at a boundary (RHS of a bind/assign/return/throw/send, \
+                     call argument `f(!x)`, container element `[!x]`, iterable \
+                     `for x in !coll:`)"
                 )
             }
             SemanticErrorKind::MethodGenericInferenceFailed { method, type_, unresolved, reason } => {

@@ -1,0 +1,12 @@
+# Round XXVIII Track C — `!` in an AUGMENTED-ASSIGN RHS operand position
+# (`y += !x` — RHS of `+=` is an operand of the binop the compound assign
+# expands to). D32:1278-1281 REJECT class. INTENDED: reject at `gg check`.
+
+int pick():
+    return 5
+
+void main():
+    int x = pick()
+    int y = 1
+    y += !x
+    print(y)

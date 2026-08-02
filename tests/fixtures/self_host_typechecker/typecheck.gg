@@ -36,7 +36,7 @@ from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from std.conv import int_to_str
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition, DkMoveInOperandPosition
 from format_types import describe_type
 
 # ── Fallback def lookup by name ──────────────────────────────
@@ -2114,7 +2114,27 @@ void check_safety_stmts(Vector[Stmt] stmts, int scope_id, SafetyState &state, Sc
                     d29_reject_if_bare_fallible(sexpr, &ctx)
             else:
                 pass
+        # Round XXVIII Track C — a TAIL `SExpr(EMove(_))` in a VALUE block
+        # (closure body / EBlock / EDo / expr-match-arm — `d29_tail_dropped` is
+        # false) is the block's RETURN value at a RESTING boundary. Suppress
+        # E_MoveInOperandPosition for that tail-stmt walk so `(): !s` (closure
+        # tail Move) legit-moves at the closure return boundary. Direct-Move
+        # only (matches Rust `check_stmt::Return`-style direct suppress); a
+        # tail `!x + y` compound REJECTS through the recursive descent.
+        bool saved_supp_tail_move = ctx.suppress_move_in_operand_position
+        bool is_last_stmt = i == n - 1
+        if is_last_stmt and not ctx.d29_tail_dropped:
+            match s:
+                case SExpr(tail_e):
+                    match tail_e.expr:
+                        case EMove(_move_inner):
+                            ctx.suppress_move_in_operand_position = true
+                        else:
+                            pass
+                else:
+                    pass
         check_safety_stmt(s, scope_id, &state, &scopes, &types, &ctx)
+        ctx.suppress_move_in_operand_position = saved_supp_tail_move
 
 void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match s:
@@ -2146,7 +2166,18 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             bool saved_supp_vd = ctx.suppress_amp_in_operand_position
             if expr_is_borrow_bind(init_expr):
                 ctx.suppress_amp_in_operand_position = true
+            # Round XXVIII Track C — SVarDecl RHS is D32 RESTING /
+            # consuming-boundary; suppress E_MoveInOperandPosition for the
+            # DIRECT top-level EMove RHS (mirrors Rust check_stmt VarDecl and
+            # the sibling MutableBorrow intercept above).
+            bool saved_supp_vd_move = ctx.suppress_move_in_operand_position
+            match init_expr.expr:
+                case EMove(_move_inner):
+                    ctx.suppress_move_in_operand_position = true
+                else:
+                    pass
             check_safety_expr(init_expr, scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_move_in_operand_position = saved_supp_vd_move
             ctx.suppress_amp_in_operand_position = saved_supp_vd
             ctx.d29_in_result_capture = saved_rcap
             # Liveness: a fresh binding makes its DefId live again (Rust mark_live);
@@ -2195,9 +2226,19 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             bool saved_supp_as = ctx.suppress_amp_in_operand_position
             if expr_is_borrow_bind(value):
                 ctx.suppress_amp_in_operand_position = true
+            # Round XXVIII Track C — SAssign RHS is D32 RESTING /
+            # consuming-boundary; suppress E_MoveInOperandPosition for the
+            # DIRECT top-level EMove RHS (mirrors SVarDecl).
+            bool saved_supp_as_move = ctx.suppress_move_in_operand_position
+            match value.expr:
+                case EMove(_move_inner):
+                    ctx.suppress_move_in_operand_position = true
+                else:
+                    pass
             # Liveness: read the RHS (source still live) BEFORE re-initialising the
             # target, so `x = f(x)` reads the old `x` then rebinds it.
             check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_move_in_operand_position = saved_supp_as_move
             ctx.suppress_amp_in_operand_position = saved_supp_as
             state.rebind = saved_rebind
             match target.expr:
@@ -2229,9 +2270,30 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
                 reject_tainted_place(sexpr, scopes, &types, &ctx)
                 # D29 residual (e): dest-aware bare-fallible on return/expr-body.
                 d29_reject_bare_on_return(sexpr, &ctx)
+                # Round XXVIII Track C — SReturn value is D32 RESTING /
+                # consuming-boundary; suppress E_MoveInOperandPosition for the
+                # DIRECT top-level EMove RHS (mirrors SVarDecl/SAssign; mirror
+                # of Rust check_stmt::Return direct-Move suppress).
+                bool saved_supp_ret_move = ctx.suppress_move_in_operand_position
+                match sexpr.expr:
+                    case EMove(_move_inner):
+                        ctx.suppress_move_in_operand_position = true
+                    else:
+                        pass
                 check_safety_expr(sexpr, scope_id, &state, &scopes, &types, &ctx)
+                ctx.suppress_move_in_operand_position = saved_supp_ret_move
         case SThrow(sexpr):
+            # Round XXVIII Track C — SThrow value is D32 RESTING /
+            # consuming-boundary (per scout: handler consumes at boundary;
+            # filed as owner sub-question, default ALLOW).
+            bool saved_supp_throw_move = ctx.suppress_move_in_operand_position
+            match sexpr.expr:
+                case EMove(_move_inner):
+                    ctx.suppress_move_in_operand_position = true
+                else:
+                    pass
             check_safety_expr(sexpr, scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_move_in_operand_position = saved_supp_throw_move
         case SBreak():
             pass
         case SContinue():
@@ -2362,10 +2424,21 @@ void check_iterable_maybe_amp(SpannedExpr iter_e, int scope_id, SafetyState &sta
     match iter_e.expr:
         case EMutableBorrow(inner):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
+        # Round XXVIII Track C R3 — `[expr for x in !coll]` (comprehension):
+        # the comprehension parser places the ownership modifier before `in`
+        # so a `!` in a comprehension iterable lands as `EMove` on the
+        # iterable. Drain iterables are a BOUNDARY position (D32 RESTING;
+        # the container consumes) — peel EMove here so `check_safety_expr`'s
+        # `EMove` arm does not false-flag as an operand-position reject.
+        case EMove(inner):
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EMethodCall(recv, mname, args, targs):
             if mname == "enumerate" and args.len() == 0 and targs.len() == 0:
                 match (*recv).expr:
                     case EMutableBorrow(recv_inner):
+                        check_safety_expr(*recv_inner, scope_id, &state, &scopes, &types, &ctx)
+                    case EMove(recv_inner):
+                        # R3 sibling: `.enumerate()` on `!coll` — same strip.
                         check_safety_expr(*recv_inner, scope_id, &state, &scopes, &types, &ctx)
                     else:
                         check_safety_expr(iter_e, scope_id, &state, &scopes, &types, &ctx)
@@ -2615,15 +2688,32 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
         case EImplicitClosure(inner):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EArrayLiteral(elements):
+            # Round XXVIII Track C R1 (walker-driven, per pass-2 reference-
+            # grade fold) — container-literal ELEMENTS are D32 consuming init
+            # boundaries; a `!x` element is RESTING at the boundary, not an
+            # operand reject. Suppress E_MoveInOperandPosition for the whole
+            # element walk. Save/restore prev so the flag never leaks past.
+            # Mirrors Rust check_expr::Expr::ArrayLiteral bracket.
+            bool saved_supp_arr = ctx.suppress_move_in_operand_position
+            ctx.suppress_move_in_operand_position = true
             for e in elements:
                 check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_move_in_operand_position = saved_supp_arr
         case ETupleLiteral(elements):
+            # R1: tuple elements same as array elements.
+            bool saved_supp_tup = ctx.suppress_move_in_operand_position
+            ctx.suppress_move_in_operand_position = true
             for e in elements:
                 check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_move_in_operand_position = saved_supp_tup
         case EDictLiteral(keys, values):
+            # R1: dict values/keys same as array elements.
+            bool saved_supp_dict = ctx.suppress_move_in_operand_position
+            ctx.suppress_move_in_operand_position = true
             for (di, k) in keys.enumerate():
                 check_safety_expr(k, scope_id, &state, &scopes, &types, &ctx)
                 check_safety_expr(values.get(di).unwrap(), scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_move_in_operand_position = saved_supp_dict
         case EStructLiteral(_name, _fields, args):
             # D12 position 2 (struct field-init): every struct-literal arg is a
             # consuming init boundary. A bare `!x` arg is an EMove (marked below)
@@ -2645,11 +2735,17 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # where `cbref` is a borrow-typed field. Over-reject-only (never UAF)
             # and unreachable in today's corpus; the heavier per-field ref-flag
             # mirror is deliberately deferred.
+            # R1: struct-literal args are consuming init boundaries; blanket-
+            # suppress E_MoveInOperandPosition for the whole element walk
+            # (mirrors Rust check_expr::Expr::StructLiteral bracket).
+            bool saved_supp_str = ctx.suppress_move_in_operand_position
+            ctx.suppress_move_in_operand_position = true
             for a in args:
                 reject_tainted_place(a, scopes, &types, &ctx)
                 # Single-owner init class (struct-literal field): NO param exempt.
                 reject_single_owner_init(a, false, scopes, types, &ctx)
                 check_safety_expr(a, scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_move_in_operand_position = saved_supp_str
         case EDotShorthand(_variant, args):
             # D12 position 2 (enum variant init): `.Variant(x)` args are a
             # consuming init boundary — IDENTICAL to the longhand `E.Variant(x)`
@@ -2679,6 +2775,26 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             d29_check_propagate(expr, *inner, &ctx)
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EMove(inner):
+            # Round XXVIII Track C — D32:1278-1281 `!`-in-operand-position
+            # reject (SH lane; mirror of Rust `check_expr::Expr::Move` arm
+            # chokepoint and ggdef `elaborate_expr::Expr::Move` arm).
+            # ONE-PRODUCER chokepoint (Core #4): every operand-position `!`-of-
+            # a-place reaches here via its containing walker arm (binop, cond,
+            # match scrutinee, index, augassign RHS, f-string interp, `as`-
+            # cast, comprehension body, ...). Legit `!`-BOUNDARY spellings
+            # never reach this arm with the suppress flag false: call args
+            # pre-strip via ownership sigil; SFor iterable ownership pre-
+            # strips at parser; comprehension iterable / `.enumerate()`
+            # receivers pre-strip via `check_iterable_maybe_amp` (extended in
+            # R3 to peel EMove alongside EMutableBorrow); SVarDecl/SAssign/
+            # SReturn/SThrow/Send direct top-level `!x` RHS + container-
+            # literal element walks set `suppress_move_in_operand_position`
+            # for the walk (see the sibling `EMutableBorrow` arm below for the
+            # `AmpInOperandPosition` twin pattern). `!f()` (a non-place move)
+            # is also gated by the suppress flag because it is a computed
+            # rvalue in the same operand position.
+            if not ctx.suppress_move_in_operand_position:
+                ctx.diagnostics.push(Diagnostic.error(expr.span, DkMoveInOperandPosition(), "`!` in an operand position is not valid — `!` is a boundary modifier that consumes the source at an ownership boundary, not an expression operator"))
             # `S y = !x` / `return !x` — mark the move (or, for a non-place `!f()`,
             # recurse for nested reads).
             live_move_operand(*inner, scope_id, &state, &scopes, &types, &ctx)

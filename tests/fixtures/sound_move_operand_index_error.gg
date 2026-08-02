@@ -1,0 +1,11 @@
+# Round XXVIII Track C — `!` in an INDEX EXPRESSION operand position.
+# D32:1278-1281 REJECT class. INTENDED: reject at `gg check`.
+
+int pick():
+    return 0
+
+void main():
+    int i = pick()
+    Vector[String] v = ["a", "b"]
+    String r = v[!i]
+    print(r)

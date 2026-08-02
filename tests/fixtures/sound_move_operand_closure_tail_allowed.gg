@@ -1,0 +1,15 @@
+# Round XXVIII Track C POS fixture — verify ALLOW list is real (Core #15e Q3).
+# Closure body tail with a direct top-level `!s` is a RESTING /
+# consuming-boundary position (mirrors an expression-body fn tail). Must
+# ACCEPT and RUN, printing "hello".
+#
+# Baseline for the "verify closure body tail suppresses" claim in the brief
+# (Rust check_expr Closure arm now brackets `suppress_move_in_operand_position`
+# when the body is a direct top-level `Expr::Move`; SH normalizes via the tail
+# `SExpr(EMove(_))` suppress in `check_safety_stmts` — see the Round XXVIII
+# Track C comment there).
+
+void main():
+    String s = "hello"
+    Callable[String()] f = (): !s
+    print(f())

@@ -1,0 +1,10 @@
+# Round XXVIII Track C — `!` under a DEREF (`*!bx`).
+# D32:1278-1281 REJECT class. INTENDED: reject at `gg check`.
+
+int pick():
+    return 42
+
+void main():
+    Box[int] bx = Box[int](pick())
+    int v = *!bx
+    print(v)

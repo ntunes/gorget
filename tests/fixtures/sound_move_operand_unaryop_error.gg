@@ -1,0 +1,13 @@
+# Round XXVIII Track C — `!` under a UNARY OP (`not !b`).
+# D32:1278-1281 REJECT class. INTENDED: reject at `gg check`.
+
+bool pick():
+    return true
+
+void main():
+    bool b = pick()
+    bool r = not !b
+    if r:
+        print(1)
+    else:
+        print(0)

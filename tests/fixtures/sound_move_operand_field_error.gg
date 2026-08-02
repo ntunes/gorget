@@ -1,0 +1,15 @@
+# Round XXVIII Track C — `!` on FIELD ACCESS OBJECT position (`!c.fd + 1`).
+# D32:1278-1281 REJECT class — the `!` here is in the binop LHS operand
+# position; measured pre-fix as silent-accept + inert result but source c.fd
+# marked as moved (partial move class). INTENDED: reject at `gg check`.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    int y = !c.fd + 1
+    print(y)

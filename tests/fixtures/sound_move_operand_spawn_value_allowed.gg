@@ -1,0 +1,16 @@
+# Round XXVIII Track C POS fixture — a function CALL ARG `!x` (parser pre-
+# strips the `!` into `CallArg.ownership = Move`, so it never reaches the
+# EMove chokepoint) is a RESTING / consuming-boundary position; must ACCEPT
+# and run. This is the closest single-fixture we can ship for the "spawn/
+# await value" and "capture-list" ALLOW-list cells: the mechanism is the
+# same parser-pre-strip through `parse_ownership_modifier`
+# (`src/parser/mod.rs:267`). Spawn end-to-end tests exist elsewhere and are
+# gated by C-backend spawn work.
+
+int consume(String !name):
+    print(!name)
+    return 0
+
+void main():
+    String s = "hello"
+    int _r = consume(!s)

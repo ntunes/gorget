@@ -82,6 +82,7 @@ enum DiagKind:
     DkDoubleMove           # liveness: second move of a place already moved (E_DoubleMove)
     DkMoveInLoop           # liveness: move of an enclosing-scope place inside a loop (E_MoveInLoop) — re-moved next iteration
     DkAmpInOperandPosition # D32: prefix `&` in an operand/read position (E_AmpInOperandPosition)
+    DkMoveInOperandPosition # D32:1278-1281: prefix `!` in an operand/read position (E_MoveInOperandPosition)
 
     # Reserved for future migrators (kept so the type doesn't churn
     # when lowerer sites migrate).
@@ -187,6 +188,8 @@ String diag_kind_str(DiagKind kind):
             return "move-in-loop"
         case DkAmpInOperandPosition():
             return "amp-in-operand-position"
+        case DkMoveInOperandPosition():
+            return "move-in-operand-position"
         case DkMoveWithoutOperator():
             return "move-without-operator"
         case DkBorrowConflict():
@@ -215,6 +218,8 @@ String diag_kind_code(DiagKind kind):
             return "E_MoveInLoop"
         case DkAmpInOperandPosition():
             return "E_AmpInOperandPosition"
+        case DkMoveInOperandPosition():
+            return "E_MoveInOperandPosition"
         case DkMoveWithoutOperator():
             return "E_MoveWithoutOperator"
         case DkBorrowConflict():

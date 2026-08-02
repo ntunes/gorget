@@ -40886,3 +40886,69 @@ fn guard_boxed_trait_dispatch() {
         "beep R2",
     );
 }
+
+// ── Round XXVIII Track C SH-lane companions for D32:1278-1281 (Core #9 lane parity).
+// Mirrors the `sh_amp_operand_*_reject` pattern: invoke the SH driver directly and
+// assert reject + `E_MoveInOperandPosition` on stderr.
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_move_operand_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_move_operand_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_move_operand_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT operand-position `!`-of-a-place \
+         (`match !s:`); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_MoveInOperandPosition"),
+        "SH driver must emit E_MoveInOperandPosition on operand-position \
+         `!`-of-a-place reject; got stderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_move_operand_binop_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_move_operand_binop_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_move_operand_binop_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT binop-operand `!`-of-a-place \
+         (`!s + \"b\"`); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_MoveInOperandPosition"),
+        "SH driver must emit E_MoveInOperandPosition on binop-operand \
+         `!`-of-a-place reject; got stderr:\n{stderr}",
+    );
+}

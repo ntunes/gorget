@@ -1,0 +1,23 @@
+# Round XXVIII Track C — DURABLE SH-lane axis-cell NEG for D32:1278-1281 `!`
+# in a BINOP OPERAND position. Second cell alongside `sh_move_operand_reject.gg`
+# (match-scrutinee costume): here the `!` is a BINOP OPERAND, a different
+# operand context.
+#
+# Rust rejects at `src/semantic/safety/check_expr.rs::Expr::Move` (the
+# ONE-PRODUCER chokepoint) regardless of which walker arm reached it. SH
+# mirrors this via `EMove` in `check_safety_expr`. This fixture pins the
+# binop-operand axis cell so a regression that narrows the chokepoint to only
+# match-scrutinees trips here.
+#
+# INTENDED SH behaviour: driver REJECTS with `E_MoveInOperandPosition` on
+# stderr. Wired as a NEG at `tests/integration.rs::sh_move_operand_binop_reject`.
+
+String pick():
+    return "hello"
+
+void main():
+    String s = pick()
+    # `!s + "b"` as a binop LHS operand — an operand-position `!`, not a
+    # boundary position. Must reject with `E_MoveInOperandPosition`.
+    String r = !s + "b"
+    print(r)

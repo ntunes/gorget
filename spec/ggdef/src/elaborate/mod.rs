@@ -419,6 +419,21 @@ struct Elaborator {
     /// bare fallible call in an arg (`parse(g())!`) still takes the bare-mark
     /// path — the mark binds to the call it directly wraps.
     fallible_marked: bool,
+    /// Round XXVIII Track C — D32:1278-1281 `!`-in-operand-position reject
+    /// (ggdef lane, sibling of Rust `suppress_move_in_operand_position` and SH
+    /// `DkMoveInOperandPosition`). Set to `true` when about to elaborate an
+    /// expression at a RESTING / consuming-boundary position where a direct
+    /// top-level `Expr::Move` is legit: Stmt::Return value, Stmt::Throw value,
+    /// closure body tail (line 523), match arm bodies + else (propagate from
+    /// enclosing owning context). The `elaborate_expr::Expr::Move` arm
+    /// REJECTS unless this flag is set. Reset to `false` on entry to every
+    /// operand-position recursion (binop operands, unop operand, index, as-
+    /// cast, propagate inner, match scrutinee, if/while cond, f-string interp,
+    /// field access object, method receiver) via `elaborate_expr` bracketing
+    /// helpers; match arm bodies / else propagate via `elaborate_expr_ctx`.
+    /// This mirrors what the Rust safety pass does with per-arm suppress and
+    /// what the SH walker will mirror by threading a bool on ResolveContext.
+    in_owning_context: bool,
     gensym: usize,
 }
 
@@ -520,7 +535,10 @@ impl Elaborator {
                 {
                     self.capture_ctx = CaptureCtx::TypedDest;
                 }
-                let tail = self.elaborate_expr(e)?;
+                // Round XXVIII Track C — an expression-body fn's tail IS its
+                // return value (implicit SReturn lowering below). Treat as
+                // RESTING so a direct top-level `!x` tail is legit.
+                let tail = self.elaborate_expr_direct_move_owning(e)?;
                 self.capture_ctx = CaptureCtx::None;
                 // A `throws` expression-body fn wraps its captured tail in
                 // `Ok(...)` exactly once — the tail captured the callee's full
@@ -1091,7 +1109,14 @@ impl Elaborator {
                                 }
                             }
                         }
-                        let inner = self.elaborate_expr(e)?;
+                        // Round XXVIII Track C — return value is D32 RESTING /
+                        // consuming-boundary; `return !x` legit-moves x at the
+                        // return boundary. Use owning-context elaboration so
+                        // the `Expr::Move` arm ALLOWs a direct top-level `!x`
+                        // (and compound-shape tails via match arm-body
+                        // propagation). Nested `!x` inside a binop or scrutinee
+                        // still rejects because those recursions reset the flag.
+                        let inner = self.elaborate_expr_direct_move_owning(e)?;
                         self.capture_ctx = CaptureCtx::None;
                         // A `throws` fn returns `Result[T, E]`: wrap the value in
                         // `Ok(...)`. A throws-call inside `e` already auto-
@@ -1117,7 +1142,10 @@ impl Elaborator {
                         span,
                     ));
                 }
-                let inner = self.elaborate_expr(e)?;
+                // Round XXVIII Track C — throw value is D32 RESTING /
+                // consuming-boundary (per scout: handler consumes at boundary).
+                // Filed as owner sub-question; default ALLOW.
+                let inner = self.elaborate_expr_direct_move_owning(e)?;
                 Ok(vec![Stmt::Return { value: Some(error_wrap(inner)), span }])
             }
 
@@ -1569,8 +1597,41 @@ impl Elaborator {
 
     // ── Expressions ────────────────────────────────────────────────────────
 
+    /// Round XXVIII Track C helper — elaborate an expression at a RESTING /
+    /// consuming-boundary position when the RHS is a DIRECT top-level
+    /// `Expr::Move` (mirrors Rust safety `check_stmt`'s direct-Move suppress
+    /// bracket at VarDecl/Assign/Return/Throw/Send). Used at Stmt::Return
+    /// value, Stmt::Throw value, closure body tail. For a NON-direct RHS
+    /// (compound: match/if/binop enclosing the Move), the flag stays false
+    /// and any nested `!` in operand position rejects — matching Rust's
+    /// behavior (verified: `return match c: case: !y` rejects on Rust).
+    fn elaborate_expr_direct_move_owning(&mut self, expr: &Spanned<ast::Expr>) -> ElabResult<Expr> {
+        if matches!(&expr.node, ast::Expr::Move { .. }) {
+            let prev = self.in_owning_context;
+            self.in_owning_context = true;
+            let r = self.elaborate_expr(expr);
+            self.in_owning_context = prev;
+            r
+        } else {
+            self.elaborate_expr(expr)
+        }
+    }
+
     fn elaborate_expr(&mut self, expr: &Spanned<ast::Expr>) -> ElabResult<Expr> {
         let span = expr.span;
+        // Round XXVIII Track C — the `in_owning_context` flag PROPAGATES
+        // through recursive `elaborate_expr` calls unchanged (mirrors Rust's
+        // `suppress_move_in_operand_position` design). Owning-context
+        // callers bracket it TRUE around their call: Stmt::Return / Stmt::Throw
+        // / closure body tail use `elaborate_expr_direct_move_owning` (direct
+        // top-level `Expr::Move` only, matching Rust check_stmt suppress
+        // semantics); container-literal walker arms
+        // (ArrayLiteral/TupleLiteral/DictLiteral/StructLiteral) set the flag
+        // TRUE for the WHOLE element walk (walker-driven blanket suppress,
+        // matching Rust R1 pass-2). The `Expr::Move` arm below rejects when
+        // the flag is false at Move-arm entry. Enum-init lowers through
+        // `owning_source_from_arg` which peels `Move` at the ownership sigil
+        // — no arm here needed.
         // `dest_ty_hint` scope rule: the hint applies ONLY when the destination's
         // value IS the literal directly. Any other node between the destination
         // and a literal (a call whose ARG is a literal — the p5 leak —, a binary
@@ -1624,9 +1685,33 @@ impl Elaborator {
             }
 
             ast::Expr::Move { expr } => {
-                // Bare `!x` in a read position (e.g. `print(!x)`): read the
-                // moved value. Faithful move-kill is applied only at binding /
-                // owning positions, which route through the `Source` helpers.
+                // Round XXVIII Track C — D32:1278-1281 `!`-in-operand-position
+                // reject (ggdef lane; sibling of Rust
+                // `E_MoveInOperandPosition` and SH `DkMoveInOperandPosition`).
+                // A Move reaching this arm is legit only when
+                // `in_owning_context` is true: bracketed TRUE by Stmt::Return /
+                // Stmt::Throw / closure body tail (direct top-level Move only,
+                // via `elaborate_expr_direct_move_owning`) and by container-
+                // literal walker arms (ArrayLiteral/TupleLiteral/DictLiteral/
+                // StructLiteral element walks, blanket for the whole subtree).
+                // Legit `!` in owning positions that PEEL Move (bind_source /
+                // owning_source_from_expr / call_arg_source) never reach this
+                // arm at all. A Move here with the flag false is the silent-
+                // inert operand-`!` class D32 rejects.
+                if !self.in_owning_context {
+                    return Err(ElabError::new(
+                        "`!` in an operand (read) position is not valid (D32:1278-1281) — \
+                         the sigil consumes the source at an ownership boundary and there is \
+                         no boundary here. Drop the `!` and read the place directly \
+                         (`s + \"b\"`, `if b:`, `match x:`, `v[i]`); use `!` only at a \
+                         boundary (RHS of a bind/assign/return/throw/send, call argument \
+                         `f(!x)`, container element `[!x]`, iterable `for x in !coll:`)",
+                        span,
+                    ));
+                }
+                // Owning context: elaborate the inner. Faithful move-kill is
+                // applied only at binding / owning positions, which route
+                // through the `Source` helpers.
                 self.elaborate_expr(expr)
             }
 
@@ -1670,27 +1755,44 @@ impl Elaborator {
                     Some(Ty::Vector(el)) => (ConstructKind::Vector, Some(*el)),
                     _ => (ConstructKind::Vector, None),
                 };
+                // Round XXVIII Track C R1 — container-literal ELEMENTS are D32
+                // consuming init boundaries; suppress `!`-in-operand rejection
+                // for the WHOLE element walk (walker-driven blanket, matching
+                // Rust `check_expr::Expr::ArrayLiteral` bracket).
+                let prev_owning = self.in_owning_context;
+                self.in_owning_context = true;
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
                     self.dest_ty_hint = elem_hint.clone();
                     out.push(self.owning_source_from_expr(e)?);
                 }
+                self.in_owning_context = prev_owning;
                 self.dest_ty_hint = None;
                 Ok(Expr::Construct { kind, args: out })
             }
             ast::Expr::TupleLiteral(elems) => {
+                // R1: same as ArrayLiteral — tuple elements are consuming init
+                // boundaries; blanket-suppress operand-`!` rejection.
+                let prev_owning = self.in_owning_context;
+                self.in_owning_context = true;
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
                     out.push(self.owning_source_from_expr(e)?);
                 }
+                self.in_owning_context = prev_owning;
                 Ok(Expr::Construct { kind: ConstructKind::Tuple, args: out })
             }
             ast::Expr::StructLiteral { name, args, .. } => {
+                // R1: struct-literal args are consuming init boundaries;
+                // blanket-suppress operand-`!` rejection.
+                let prev_owning = self.in_owning_context;
+                self.in_owning_context = true;
                 let mut out = Vec::with_capacity(args.len());
                 for e in args {
                     self.reject_if_single_owner_callable_init(&e.node, e.span, "ctor-init", false)?;
                     out.push(self.owning_source_from_expr(e)?);
                 }
+                self.in_owning_context = prev_owning;
                 Ok(Expr::Construct { kind: ConstructKind::Struct(name.node.clone()), args: out })
             }
 
@@ -1717,20 +1819,44 @@ impl Elaborator {
                 let has_result_arm =
                     arms.iter().any(|a| pattern_consumes_result(&a.pattern.node));
                 self.reject_marked_match_result_arms(scrutinee, has_result_arm);
+                // Round XXVIII Track C — SCRUTINEE is OPERAND: reset the
+                // owning flag around the scrutinee walk so `match !x:` rejects
+                // (matches Rust: brief NEG fixture `sound_move_operand_matchsc_
+                // error.gg`). Arm bodies + else are elaborated with the flag
+                // in its current state — for a boundary-enclosed match this
+                // does NOT propagate to arm bodies (matches Rust behavior:
+                // `return match c: case: !y` rejects the arm-body `!y`).
+                let prev_owning_scrut = self.in_owning_context;
+                self.in_owning_context = false;
                 let scrut = self.elaborate_expr(scrutinee)?;
+                self.in_owning_context = prev_owning_scrut;
                 self.capture_ctx = CaptureCtx::None;
                 let mut ggc_arms = Vec::with_capacity(arms.len());
                 for arm in arms {
                     if arm.guard.is_some() {
                         return Err(ElabError::new("match guards are outside the phase-0 subset", arm.span));
                     }
+                    // Arm body walked with flag reset (mirrors Rust — a
+                    // match arm body is treated as operand for `!` unless the
+                    // arm body itself is a direct-Move ROUTED through some
+                    // owning bracket at its own site).
+                    let prev_owning_body = self.in_owning_context;
+                    self.in_owning_context = false;
+                    let body_expr = self.elaborate_expr(&arm.body)?;
+                    self.in_owning_context = prev_owning_body;
                     ggc_arms.push(ExprArm {
                         pattern: self.elaborate_pattern(&arm.pattern)?,
-                        body: self.elaborate_expr(&arm.body)?,
+                        body: body_expr,
                     });
                 }
                 let else_arm = match else_arm {
-                    Some(e) => Some(Box::new(self.elaborate_expr(e)?)),
+                    Some(e) => {
+                        let prev_owning_else = self.in_owning_context;
+                        self.in_owning_context = false;
+                        let r = self.elaborate_expr(e)?;
+                        self.in_owning_context = prev_owning_else;
+                        Some(Box::new(r))
+                    }
                     None => None,
                 };
                 Ok(Expr::Match { scrutinee: Box::new(scrut), arms: ggc_arms, else_arm, span })

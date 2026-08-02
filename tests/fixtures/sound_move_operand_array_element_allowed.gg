@@ -1,0 +1,14 @@
+# Round XXVIII Track C POS fixture — container-literal ELEMENT is a D32
+# consuming init boundary; a direct `!x` element must ACCEPT (walker-driven
+# blanket suppress per R1 pass-2). Prints "aa" then "bb".
+#
+# Substitutes for the capture-list POS fixture (capture-list syntax does not
+# exist yet — filed follow-up). Covers a critical RESTING position that the
+# operand-reject class MUST NOT false-flag.
+
+void main():
+    String a = "aa"
+    String b = "bb"
+    Vector[String] v = [!a, !b]
+    print(v[0])
+    print(v[1])

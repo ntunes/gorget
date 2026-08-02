@@ -104,6 +104,17 @@ struct ResolveContext:
     # `as`-cast, etc.) leaves it false so the reject fires. Mirrors Rust
     # `src/semantic/safety/mod.rs` `suppress_amp_in_operand_position`.
     bool suppress_amp_in_operand_position
+    # Round XXVIII Track C (D32:1278-1281 sibling of
+    # `suppress_amp_in_operand_position`) — set true at the RESTING /
+    # consuming-boundary positions where a top-level `EMove` is legit:
+    # SVarDecl / SAssign / SReturn / SThrow / Send DIRECT top-level `!x` RHS,
+    # and container-literal element walker arms
+    # (EArrayLiteral/ETupleLiteral/EDictLiteral/EStructLiteral) which are
+    # consuming init boundaries per D32. The `check_safety_expr::EMove` arm
+    # SKIPS the `E_MoveInOperandPosition` emit when this flag is set. Call
+    # args pre-strip via ownership sigil; iterables pre-strip via
+    # `check_iterable_maybe_amp` (extended to EMove alongside EMutableBorrow).
+    bool suppress_move_in_operand_position
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -179,7 +190,7 @@ bool is_compiler_intrinsic_name(String name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false, false, false, false, false, -1, false)
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false, false, false, false, false, -1, false, false)
 
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()
