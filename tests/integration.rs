@@ -39273,6 +39273,55 @@ fn combinator_option_unwrap_error_rejected() {
     );
 }
 
+// ── Round XXVIII Track A — tag-check cells of the one-sided combinator
+// class (siblings of the XXV Track B / XXVI Track A five). Option/Result
+// share the two-variant discriminant layout so `.is_some()` on Result etc.
+// silently produced the wrong answer for the wrong reason (Core #8
+// both-wrong: silent-accept at check + silent-wrong-output at run).
+// Rejected at the R26A chokepoint alongside the combinator cells.
+// RED-verified pre-fix (2026-08-02): all 4 fixtures printed "true"/"false"
+// via `gg run` and passed `gg check` silently.
+
+/// Round XXVIII Track A NEG — `Result.is_some()` is Option-only. Rejects at
+/// the Rust `reject_wrong_receiver_combinator` chokepoint before dispatch.
+#[test]
+fn combinator_result_is_some_rejected() {
+    check_gg_fails(
+        "combinator_result_is_some_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
+/// Round XXVIII Track A NEG — `Result.is_none()` is Option-only. Rejects at
+/// the Rust `reject_wrong_receiver_combinator` chokepoint before dispatch.
+#[test]
+fn combinator_result_is_none_rejected() {
+    check_gg_fails(
+        "combinator_result_is_none_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
+/// Round XXVIII Track A NEG — `Option.is_ok()` is Result-only. Rejects at
+/// the Rust `reject_wrong_receiver_combinator` chokepoint before dispatch.
+#[test]
+fn combinator_option_is_ok_rejected() {
+    check_gg_fails(
+        "combinator_option_is_ok_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
+/// Round XXVIII Track A NEG — `Option.is_error()` is Result-only. Rejects at
+/// the Rust `reject_wrong_receiver_combinator` chokepoint before dispatch.
+#[test]
+fn combinator_option_is_error_rejected() {
+    check_gg_fails(
+        "combinator_option_is_error_rejected.gg",
+        "E_NoMethodFound",
+    );
+}
+
 // ── Round XXVII Track C — SH-lane REJECT for the same 5 one-sided
 // combinator cells. Ports the R26A class-fix to the SH typechecker via
 // the chokepoint `reject_wrong_receiver_combinator` at
@@ -39451,6 +39500,152 @@ fn self_host_lowerer_driver_rejects_combinator_option_unwrap_error() {
         !out.status.success(),
         "SH driver accepted `Option.unwrap_error()` — SH chokepoint \
          stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound`.\n\
+         stderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+// ── Round XXVIII Track A — SH-lane REJECT for the 4 tag-check cells of
+// the one-sided combinator class (Result.{is_some, is_none}, Option.{is_ok,
+// is_error}). Extends the R27C chokepoint arms 5 → 9 (Core #4/#9). Shape
+// mirrors the XXVII Track C tests above. RED-verified pre-fix (2026-08-02):
+// all 4 fixtures silently accepted (rc=0, C emitted, no stderr diagnostic).
+
+/// Round XXVIII Track A — SH-lane REJECT for `Result.is_some()` (Option-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_result_is_some() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/combinator_result_is_some_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_result_is_some",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Result.is_some()` — SH chokepoint stopped \
+         firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound`.\n\
+         stderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+/// Round XXVIII Track A — SH-lane REJECT for `Result.is_none()` (Option-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_result_is_none() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/combinator_result_is_none_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_result_is_none",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Result.is_none()` — SH chokepoint stopped \
+         firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound`.\n\
+         stderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+/// Round XXVIII Track A — SH-lane REJECT for `Option.is_ok()` (Result-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_option_is_ok() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/combinator_option_is_ok_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_option_is_ok",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Option.is_ok()` — SH chokepoint stopped \
+         firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound`.\n\
+         stderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+/// Round XXVIII Track A — SH-lane REJECT for `Option.is_error()` (Result-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_option_is_error() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/combinator_option_is_error_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_option_is_error",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Option.is_error()` — SH chokepoint stopped \
+         firing. exit={:?}\nstderr:\n{stderr}",
         out.status.code(),
     );
     assert!(
