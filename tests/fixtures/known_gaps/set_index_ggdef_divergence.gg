@@ -1,0 +1,36 @@
+# DESIGN DECISION: ggdef/language divergence on Set positional index. ggdef
+# eval.rs:944-948 accepts + returns insertion-ordered element; Rust/SH
+# silently accept and return garbage (already-filed
+# set_index_returns_garbage.gg); filed intent is REJECT. Core #8 gate — ≥1
+# bug in one of the two. Track E filing 2026-08-02 owner-visible.
+#
+# WRONG TODAY (measured at HEAD): three lanes disagree on `s[0]` over a Set:
+#   - Rust gg (C+LLVM): silently accepts, prints a raw address (garbage).
+#   - Self-host (SH): mirrors Rust gg (silent-accept, garbage).
+#   - ggdef spec (`spec/ggdef/src/eval.rs:944-948`): accepts and returns the
+#     insertion-ordered element (well-defined behaviour).
+#
+# INTENDED per language design intent (see `set_index_returns_garbage.gg`):
+# a check-time REJECTION. A Set has no positional index in Gorget, so `s[0]`
+# should never accept. That makes ggdef's current well-defined semantics a
+# SPEC DEFECT (adopt-and-reject the spec's positional accept), OR — if the
+# owner reverses the language intent — Rust gg + SH silently returning
+# garbage becomes the ≥1 real bug on each lane (Core #8).
+#
+# DESIGN DECISION owed: owner picks (a) keep intent = REJECT (spec fix on
+# ggdef) OR (b) accept + return insertion-order like ggdef (Rust/SH fix).
+# The fixture asserts the REJECT (per filed intent); flip when the owner
+# rules.
+#
+# Set REQUIRES `@derive(Equatable, Hashable)` on the struct payload.
+@derive(Equatable, Hashable)
+struct P:
+    int x
+
+int main():
+    Set[P] s = {}
+    s.add(P(1))
+    s.add(P(2))
+    P p = s[0]
+    print(f"{p.x}")
+    return 0

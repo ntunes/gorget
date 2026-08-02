@@ -1,0 +1,12 @@
+# Regression: `Set[String] s = {}` (empty literal) — String-payload cell of
+# the Round XXIV Track E axis matrix. This is why the fix routes through
+# `resolve_type_name_to_id` (which special-cases "GorgetString" →
+# `owned_string_type`) rather than `lookup_type_by_name` — a
+# `lookup_type_by_name` variant would silently regress here.
+int main():
+    Set[String] s = {}
+    s.add("a")
+    s.add("b")
+    for x in s:
+        print(f"{x}")
+    return 0

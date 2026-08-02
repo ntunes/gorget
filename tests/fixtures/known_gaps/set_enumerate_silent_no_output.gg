@@ -1,0 +1,33 @@
+# KNOWN GAP: set.enumerate() is shape-wrong through lower_for_enumerate
+# (array-index scaffold used against Set's hash-table layout). Silent zero
+# output + C `void*←int32_t` warning. Design question deferred: (a) check-time
+# REJECT (Set has no positional index → no meaningful `i`) OR (b) Set-specific
+# enumerate lowering. Track E filing 2026-08-02.
+#
+# WRONG TODAY (measured at HEAD, C backend): `gg check` reports "OK: no
+# semantic errors", the program builds (with a C `void*←int32_t` warning),
+# runs, and prints NOTHING — the iterator's counter loop terminates before
+# emitting any entry because `iter.Field(2)` reads a Set-layout field as if
+# it were an array header.
+#
+# INTENDED (per Option (a) — the reference-grade answer): a check-time
+# REJECTION. A Set has no positional index, so the `i` from `.enumerate()`
+# would carry no defensible meaning. (Under Option (b) — a Set-specific
+# enumerate lowering — this fixture would instead assert `0:1/2\n1:3/4` in
+# insertion order for an OrderedSet.) The fixture asserts the REJECT.
+#
+# Set REQUIRES `@derive(Equatable, Hashable)` on the struct payload.
+@derive(Equatable, Hashable)
+struct P:
+    int x
+    int y
+
+int main():
+    Set[P] s = {}
+    s.add(P(1, 2))
+    s.add(P(3, 4))
+    # gg check accepts; run silently prints nothing (should print 0:1/2 and
+    # 1:3/4 if supported OR reject at check).
+    for i, p in s.enumerate():
+        print(f"{i}:{p.x}/{p.y}")
+    return 0

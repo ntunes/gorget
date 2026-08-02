@@ -1,0 +1,29 @@
+# Regression: `Set[P] s = {}` (empty literal) failed C-compile pre-Round XXIV
+# Track E with "incompatible types when assigning to type 'GorgetSet' from
+# type 'int32_t'". Root: `collections.rs:277`'s
+# `elem_size = infer_collection_element_type(ctx, Set__P)` fell back to
+# `I64_TYPE` because `infer_collection_element_type` had no `Set__`/`HashSet__`
+# arm — the empty-literal path handed a wrong-typed `SizeOf` operand to
+# `gorget_set_new`, and the C-emit typed the returned local as `int32_t`
+# instead of `GorgetSet`.
+#
+# Fix: extend `infer_collection_element_type` (Round XXIV Track E) with
+# Set__/HashSet__ arms (arm-count lint bumped 5 → 7). Struct-payload cell.
+# See TODO.md layering rule-2 debt entry for the reference-grade typed-field
+# fix that remains queued.
+#
+# Set/HashSet REQUIRE `@derive(Equatable, Hashable)` on the payload
+# (`E_UnsatisfiedTraitBound` otherwise).
+@derive(Equatable, Hashable)
+struct P:
+    int x
+    int y
+    int z
+
+int main():
+    Set[P] s = {}
+    s.add(P(1, 2, 3))
+    s.add(P(4, 5, 6))
+    for p in s:
+        print(f"{p.x}/{p.y}/{p.z}")
+    return 0
