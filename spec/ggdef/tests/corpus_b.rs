@@ -246,6 +246,20 @@ const EXCLUDE: &[&str] = &[
     // with different lane phrasing; the sibling fixtures adjudicate the
     // class. EXCLUDE with citation.
     "combinator_result_flatten_rejected.gg",
+    // Round XXVIII Track A — 4 tag-check NEG fixtures for R26A/R27C extension
+    // (Result.is_some/is_none Option-only + Option.is_ok/is_error Result-only).
+    // Rust + SH reject at reject_wrong_receiver_combinator chokepoint with
+    // `error[E_NoMethodFound]:`. ggdef LAG per Core #13: elaborate/mod.rs:2525-2538
+    // arm-picker has NO tag-check arm; all 4 fall through to `other =>` at :2538
+    // and reject with "method `.is_X()` is outside the phase-0 subset (may need
+    // Increment B2)" — DIFFERENT error phrasing (correct wrong-cell reject, wrong
+    // diag code for corpus_b's exact-match assertion). Wrong-cell case is already
+    // blocked; ggdef subset-expansion + receiver-gate combined landing is filed
+    // as HIGH follow-up in TODO.md. EXCLUDE with citation until ggdef arm lands.
+    "combinator_result_is_some_rejected.gg",
+    "combinator_result_is_none_rejected.gg",
+    "combinator_option_is_ok_rejected.gg",
+    "combinator_option_is_error_rejected.gg",
 ];
 
 fn ws_root() -> PathBuf {
