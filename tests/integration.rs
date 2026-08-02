@@ -38891,10 +38891,10 @@ fn combinator_option_or_else_cross_type_reject() {
 // ggdef side (Flatten EXCLUDEd — catch-all message drift risk).
 
 /// Round XXV Track B NEG — `Result.flat_map()` is Option-only. Rejects at
-/// ggdef `elaborate_method`. #[ignore]d until Rust production also rejects
-/// at semantic layer (currently silent-accept + C-compile crash).
+/// ggdef `elaborate_method`. Round XXVI Track A paired the Rust-side
+/// class-fix at `src/semantic/typecheck.rs::reject_wrong_receiver_combinator`
+/// (fires before `infer_closure_method_type` at `:2799`); un-ignored.
 #[test]
-#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
 fn combinator_result_flat_map_rejected() {
     check_gg_fails(
         "combinator_result_flat_map_rejected.gg",
@@ -38903,10 +38903,10 @@ fn combinator_result_flat_map_rejected() {
 }
 
 /// Round XXV Track B NEG — `Result.filter()` is Option-only. Rejects at
-/// ggdef `elaborate_method`. #[ignore]d until Rust production also rejects
-/// at semantic layer (currently silent-accept + C-compile crash).
+/// ggdef `elaborate_method`. Round XXVI Track A paired the Rust-side
+/// class-fix at `src/semantic/typecheck.rs::reject_wrong_receiver_combinator`
+/// (fires before `infer_closure_method_type` at `:2799`); un-ignored.
 #[test]
-#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
 fn combinator_result_filter_rejected() {
     check_gg_fails(
         "combinator_result_filter_rejected.gg",
@@ -38916,10 +38916,11 @@ fn combinator_result_filter_rejected() {
 
 /// Round XXV Track B NEG — `Result.flatten()` has no BuiltinMethod variant
 /// in ggdef; rejects via the arm-picker's `other =>` catch-all. Corpus_b
-/// EXCLUDEs this fixture (message-drift risk). #[ignore]d until Rust
-/// production also rejects at semantic layer.
+/// EXCLUDEs this fixture (message-drift risk). Round XXVI Track A paired
+/// the Rust-side class-fix at
+/// `src/semantic/typecheck.rs::reject_wrong_receiver_combinator` (fires
+/// before `infer_closure_method_type` at `:2799`); un-ignored.
 #[test]
-#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
 fn combinator_result_flatten_rejected() {
     check_gg_fails(
         "combinator_result_flatten_rejected.gg",
@@ -38928,10 +38929,10 @@ fn combinator_result_flatten_rejected() {
 }
 
 /// Round XXV Track B NEG — `Option.map_err()` is Result-only. Rejects at
-/// ggdef `elaborate_method`. #[ignore]d until Rust production also rejects
-/// at semantic layer (currently silent-accept + C-compile crash).
+/// ggdef `elaborate_method`. Round XXVI Track A paired the Rust-side
+/// class-fix at `src/semantic/typecheck.rs::reject_wrong_receiver_combinator`
+/// (fires before `infer_closure_method_type` at `:2799`); un-ignored.
 #[test]
-#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
 fn combinator_option_map_err_rejected() {
     check_gg_fails(
         "combinator_option_map_err_rejected.gg",
@@ -38940,10 +38941,10 @@ fn combinator_option_map_err_rejected() {
 }
 
 /// Round XXV Track B NEG — `Option.unwrap_error()` is Result-only. Rejects
-/// at ggdef `elaborate_method`. #[ignore]d until Rust production also
-/// rejects at semantic layer (currently silent-accept + C-compile crash).
+/// at ggdef `elaborate_method`. Round XXVI Track A paired the Rust-side
+/// class-fix at `src/semantic/typecheck.rs::reject_wrong_receiver_combinator`
+/// (fires before `infer_closure_method_type` at `:2799`); un-ignored.
 #[test]
-#[ignore = "Rust production silently accepts; awaits paired class-fix (TODO Round XXV Track B follow-up)"]
 fn combinator_option_unwrap_error_rejected() {
     check_gg_fails(
         "combinator_option_unwrap_error_rejected.gg",
