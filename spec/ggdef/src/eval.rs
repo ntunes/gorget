@@ -960,7 +960,47 @@ fn resolve_write(ctx: &Ctx, state: &mut State, place: &Place, newval: Value, spa
             Ok(())
         }
         Action::WriteOwned => {
-            if let Slot::Owned(v) = &mut state.frames[place.frame].locals[place.local].slot {
+            // Round XXVI Track E — drop the OLD value on WHOLE-LOCAL reassignment
+            // (D4 semantics + RFC §2.1 "drop on rebind"). Pre-fix, whole-local
+            // reassignment silently overwrote the old binding, missing the user
+            // `equip T with Drop` body on struct/enum values (the `drop_reassign`
+            // BOTH-WRONG row: ggdef emitted `"alive: second\ndrop second"` where
+            // production emitted `"drop first\nalive: second\ndrop second"`).
+            //
+            // SCOPE GUARD (Core #4 — fix the class, not the instance's siblings):
+            // gate on `place.proj.is_empty()` so a PROJECTED field-write
+            // (`container.tracked_field = new`) is left alone. Projected pre-drop
+            // is row 3's territory (transitive-drop + apply_mut `M::Set` +
+            // return-`!expr` kill — filed separately). Row 1 stays strictly
+            // whole-local so the ripple is bounded.
+            //
+            // The `Slot::Moved` → `Action::Revive` path is untouched (the slot
+            // has no old value to drop; `reinit_after_move_revives_the_slot`
+            // stays safe).
+            //
+            // Row 1 does NOT recurse into transitive drop; the immediate user
+            // Drop of the old value is dispatched via `run_custom_drop`, which
+            // itself no-ops on Vector/Dict/Set/Tuple/Str (§comment above
+            // `run_custom_drop`). Container-of-droppable transitivity is row 2's
+            // scope.
+            if place.proj.is_empty() {
+                let local = &mut state.frames[place.frame].locals[place.local];
+                if let Slot::Owned(cur) = &mut local.slot {
+                    let name = local.name.clone();
+                    let old_span = local.span;
+                    let old = std::mem::replace(cur, newval);
+                    if is_droppable(&old) {
+                        // Trace-symmetry with `drop_scope:494`: emit `Drop`
+                        // BEFORE `run_custom_drop` so a trace-asserting test
+                        // sees the same event shape as a scope-exit drop.
+                        state.trace.push(TraceEvent::Drop { place: name, span: old_span });
+                        run_custom_drop(ctx, state, old, span)?;
+                    }
+                    Ok(())
+                } else {
+                    unreachable!("slot changed under WriteOwned")
+                }
+            } else if let Slot::Owned(v) = &mut state.frames[place.frame].locals[place.local].slot {
                 navigate_write(v, &place.proj, newval)
             } else {
                 unreachable!("slot changed under WriteOwned")

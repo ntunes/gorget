@@ -1411,6 +1411,146 @@ void main():
     assert_eq!(out(src), "ok");
 }
 
+// ── Reassign-drop: WriteOwned on a whole local drops the OLD value ──────────
+// Round XXVI Track E — pins the four cells of the reassign×droppability axis
+// against `resolve_write`'s `Action::WriteOwned` fix:
+//   (whole-local, droppable-with-user-Drop) → drop the old value
+//   (whole-local, MOVED slot)               → revive, DO NOT drop
+//   (whole-local, scalar/Copy)              → no drop event at all
+//   (PROJECTED,   droppable-with-user-Drop) → NOT dropped (row 3's scope)
+// The projected-write test PROVES the `place.proj.is_empty()` guard is
+// present — without the guard, projected field-writes would fire drops too
+// (row-3-scope creep), and the test would go RED.
+
+#[test]
+fn reassign_of_droppable_local_drops_old() {
+    // Whole-local reassignment of a `equip T with Drop` value drops the OLD
+    // binding BEFORE the new value takes over — mirror of the live
+    // `tests/fixtures/drop_reassign.gg` regression fixture.
+    let src = r#"
+struct Tracked:
+    String label
+equip Tracked with Drop:
+    void drop(!self):
+        String l = self.label
+        print(f"drop {l}")
+void main():
+    Tracked t = Tracked("first")
+    t = Tracked("second")
+    String alive = t.label
+    print(f"alive: {alive}")
+"#;
+    // "drop first" runs at the rebind; "alive: second" prints from the fresh
+    // binding; the scope-exit drop then fires on the fresh binding.
+    assert_eq!(out(src), "drop first\nalive: second\ndrop second");
+}
+
+#[test]
+fn reassign_of_moved_slot_does_not_drop() {
+    // The `Slot::Moved` → `Action::Revive` path stays UNTOUCHED: the slot
+    // holds no live value at the point of reassignment, so the revive itself
+    // synthesises NO drop of a non-existent old value. Reassign-drop must be
+    // gated on `Action::WriteOwned` — pinning `Action::Revive` here catches a
+    // regression that would double-drop the moved-out value.
+    let src = r#"
+struct R:
+    int id
+equip R with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+void sink(R !r):
+    pass
+void main():
+    R x = R(1)
+    sink(!x)
+    x = R(2)
+    print("mid")
+"#;
+    // `sink` correctly drops `r` (the moved-in R(1)) at its own scope exit —
+    // that "drop 1" is a scope drop, NOT a reassign drop. Then `x = R(2)`
+    // takes the Revive path (no old value to drop). Then main's scope exits
+    // and the revived `x` (R(2)) drops.
+    //
+    // Regression to catch: if the fix ever leaked into the Revive path and
+    // synthesised a spurious drop of the moved-out value, `x` would be
+    // dropped TWICE (once by sink, once again by the bad revive-drop) — the
+    // output would contain two "drop 1" lines.
+    let run = go(src);
+    assert_eq!(run.stdout.trim_end(), "drop 1\nmid\ndrop 2");
+    let stdout = run.stdout.trim_end();
+    let drop1_count = stdout.matches("drop 1").count();
+    assert_eq!(drop1_count, 1, "Revive path must NOT double-drop the moved value, got {stdout:?}");
+    let drop2_count = stdout.matches("drop 2").count();
+    assert_eq!(drop2_count, 1, "Revived value must drop exactly once at scope exit, got {stdout:?}");
+}
+
+#[test]
+fn reassign_of_scalar_local_no_drop_event() {
+    // Scalars are Copy — `is_droppable` returns false for `Value::Int` — so
+    // scalar reassignment emits ZERO drop events. Trace-symmetry: matches
+    // scope exit of a scalar local, which also emits no drop.
+    let src = r#"
+void main():
+    int i = 3
+    i = 4
+    print(i)
+"#;
+    let run = go(src);
+    assert_eq!(run.stdout.trim_end(), "4");
+    let drops: Vec<&str> = run
+        .trace
+        .iter()
+        .filter_map(|e| if e.kind() == "drop" { Some(e.place()) } else { None })
+        .collect();
+    assert!(drops.is_empty(), "scalar reassignment must emit no drop, got {drops:?}");
+}
+
+#[test]
+fn projected_assign_of_droppable_user_drop_field_does_not_drop() {
+    // Guard-proving test: PROJECTED field-write on a droppable-user-Drop
+    // field must NOT fire the reassign-drop — that is row 3's scope
+    // (transitive drop + `apply_mut::M::Set` pre-drop). Row 1's fix guards on
+    // `place.proj.is_empty()` precisely so this stays out of scope.
+    //
+    // Core #12(a) RED-verify: dropping the `place.proj.is_empty()` guard makes
+    // THIS test RED (it starts asserting a `drop old` output) while
+    // `reassign_of_droppable_local_drops_old` stays GREEN — so the guard's
+    // presence is provably load-bearing here, not accidental.
+    //
+    // Uses a struct WITH a user `Drop` impl (not a plain `String` field —
+    // that would be Q6 accidentally-correct, since `run_custom_drop` no-ops on
+    // Value::Str anyway).
+    let src = r#"
+struct Inner:
+    String tag
+equip Inner with Drop:
+    void drop(!self):
+        String t = self.tag
+        print(f"drop {t}")
+struct Outer:
+    Inner inner
+void main():
+    Outer o = Outer(Inner("first"))
+    o.inner = Inner("second")
+    print("mid")
+"#;
+    let run = go(src);
+    // "drop first" MUST NOT appear at the projected write. Only the scope-exit
+    // drop of `o` at main() end fires, which today does NOT recurse into
+    // fields (that's row 2's transitive-drop scope). So the current expected
+    // output is "mid" alone (a "drop second" would appear once transitive
+    // drop lands in a future round; a "drop first" would prove row-1 leaked
+    // into row-3 scope).
+    let stdout = run.stdout.trim_end();
+    assert!(
+        !stdout.contains("drop first"),
+        "projected field-write must NOT fire reassign-drop of the old field \
+         (row 3's scope, not row 1's) — got {stdout:?}"
+    );
+    // Pins current (row-2-deferred) behavior: no field drop at scope exit.
+    assert_eq!(stdout, "mid");
+}
+
 // ── with <expr> as name: — scoped bind + drop-at-block-exit ────────────────
 
 #[test]

@@ -26078,10 +26078,14 @@ fn self_host_runtime_diff() {
     // propagate + C SH α port + D α ggdef port + E Set/HashSet empty-literal):
     // ADJ-MATCH 392 (of MATCH 1310, BOTH-WRONG 8). Track D's ggdef `unify_closure_ret_axis`
     // mirror + Track E's Set/HashSet empty-literal fix ratcheted ggdef adjudication +2.
-    // Round XXVI Track B (2026-08-02): +2 for the two Displayable-render rows
-    // (core_traits + print_display_temp_leak) moving BOTH-WRONG → ADJ-MATCH after
-    // `eval::format_for_print` gained user-Displayable dispatch.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 394;
+    // Ratcheted 2026-08-02 (Round XXVI close: Track B Displayable dispatch +2
+    // (core_traits + print_display_temp_leak) + Track E drop_reassign +1 =
+    // +3 total via `format_for_print` user-Displayable dispatch AND
+    // `resolve_write` `Action::WriteOwned` old-value drop). ADJ-MATCH 395
+    // (of MATCH 1310, BOTH-WRONG 2 remaining). 3 BOTH-WRONG rows moved to
+    // ADJ-MATCH; container-of-Drop transitivity + apply_mut pre-drop +
+    // return-`!expr` kill remain filed as HIGH TODOs.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 395;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -26134,19 +26138,22 @@ fn self_host_runtime_diff() {
     //       `elaborate_call:1781`, `as_print_call:3325` (name-guard falls
     //       through to elaborate_call), and `eval.rs:1072` (defensive,
     //       unreachable post-fix — documented). Positive-controls (Core #12(a))
-    //       pin the three rejects in spec/ggdef/src/tests.rs. Round XXVI Track B
-    //       (2026-08-02) BURNED DOWN the two Displayable-render cells
-    //       (core_traits + print_display_temp_leak): `eval::format_for_print`
-    //       now dispatches `equip T with Displayable` via a `Program::display_fns`
-    //       + `Ctx::display_fns` HashMap and a `run_display_method` sibling of
-    //       `run_custom_drop`; every composite arm recurses through the wrapper
-    //       so `Vector[Point]` etc. also dispatch per-element. Positive-controls
-    //       (Core #12(a)) pin the three dispatch shapes in
-    //       spec/ggdef/src/tests.rs (struct + enum-via-f-string + vector-
-    //       composite-recurse). Remaining Class-B cells: 3 (all drop-transitive).
+    //       pin the three rejects in spec/ggdef/src/tests.rs. Round XXVI (2026-08-02)
+    //       BURNED DOWN 3 more cells: Track B closed the two Displayable-render
+    //       cells (core_traits + print_display_temp_leak) via `eval::format_for_print`
+    //       user-Displayable dispatch (Program::display_fns + Ctx::display_fns +
+    //       run_display_method sibling of run_custom_drop; every composite arm
+    //       recurses so Vector[Point] etc. dispatch per-element; positive-
+    //       controls pin struct + enum-via-f-string + vector-composite-recurse).
+    //       Track E closed the whole-local reassign-drop cell (drop_reassign,
+    //       row 1 of G-class): `resolve_write::Action::WriteOwned` now mem::replaces
+    //       the OLD value and dispatches run_custom_drop (guarded on
+    //       place.proj.is_empty() so projected field-writes stay row-3 scope).
+    //       G-class rows remaining: 2 (rows 2+3 filed as own-round HIGH TODOs
+    //       — transitive drop + apply_mut M::Set pre-drop + return-`!expr` kill).
+    //       Remaining Class-B cells: 2.
     const EXPECTED_BOTH_WRONG: &[&str] = &[
         "drop_collection_custom_elem_leak",
-        "drop_reassign",
         "drop_struct_collection_fields",
     ];
     if !cfg!(debug_assertions) && parity_floor_active("self_host_runtime_diff") {
