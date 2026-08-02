@@ -426,7 +426,7 @@ Because this is open thinking, it binds nothing: a round that needs a decision
 in this area asks the owner (Round lifecycle step 7) rather than treating this
 section as settled policy.
 
-## 10. Convergence gate — the ratchet that keeps the ledger shrinking (owner 2026-07-28)
+## 10. Convergence gate — the ratchet that keeps the ledger shrinking (owner 2026-07-28 + STRICTENED 2026-08-02)
 
 The compact rule (in `AGENTS.md` Round lifecycle steps 1 and 5):
 
@@ -435,9 +435,16 @@ The compact rule (in `AGENTS.md` Round lifecycle steps 1 and 5):
   tracks over instance-fixes-with-follow-ups. A projected-positive round is
   reshaped (bundle a class-fix track into it) or split so the additions land
   in a dedicated later round.
-- **Step 5 gate.** Every `DONE.md` round entry MUST carry:
-  `Convergence: known_gaps A→B · TODO items C→D · net ±N`. A net ≥ 0 round
-  does NOT close on paper — either land more closures OR name the reason.
+- **Step 5 gate — STRICT 2× RULE (binding from Round XXVIII inclusive, owner 2026-08-02).**
+  Every `DONE.md` round entry MUST carry `Convergence: known_gaps A→B · TODO
+  items C→D · net ±N` and satisfy: **(a)** ratio of CLOSED to FILED ≥ 2:1 —
+  files N ⇒ closes ≥ 2N; **(b)** all own-follow-ups filed during the round
+  fix same-round (if the fix isn't in scope, RESCOPE the track at scout stage
+  rather than land partial + file follow-up); **(c)** net strictly DECREASES.
+  First thing after all planned tracks complete: measure the net; if any of
+  (a)/(b)/(c) fails, ADD tracks / launch closes UNTIL the rule is met.
+  Never close on paper with debt. The old "net ≥ 0 acceptable when named
+  intentional" exemption is RETIRED.
 
 **Why the rule.** Round XI added four `known_gaps/` (Track M) plus three
 follow-up TODOs while graduating three; retrospectively, +2 net. Left
@@ -447,21 +454,31 @@ the counter after that round: measurement is cheap (one `find` + one
 or open a dedicated pruning round: BOTH-WRONG hunt, `known_gaps` triage,
 TODO stale-scan).
 
-**When a positive-net closure is legitimate.** Two shapes recur, both must
-be named explicitly in the DONE entry rather than glossed over:
+**Positive-net closures no longer permitted (owner 2026-08-02).** The two
+"legitimate positive-net" shapes below are retained for HISTORICAL context
+only — from XXVIII inclusive, both are handled by ADDING more closes in
+the same round rather than accepting the positive net:
 
-1. **Class-hunt discovery.** A track's Core #4 class-hunt uncovers filed-
-   worthy adjacent defects the round did NOT know about at open. Filing
-   them openly is Core #8 hygiene — an unfiled defect the round could have
-   filed is silently-wrong-output at the meta level. Round XII Track N2's
-   9-cell class-hunt discovered four adjacent defects (struct-lit field /
-   enum-variant field / vector-lit element / closure-body return SIGILL);
-   filing them raised the round's net by four, and the DONE entry names
-   this cause instead of showing the round as convergent-by-omission.
-2. **Wrong-direction alternative rejected.** A round would ship faster
-   with net-negative if it took a shortcut that violates Core #8
-   ("shipping a known defect"). Naming the reason ("declined to sharpen
-   the reject because D36 mandates accept") protects the discipline.
+1. **Class-hunt discovery.** A Core #4 class-hunt uncovering adjacent
+   defects the round didn't know about: file them AND land ≥ 2× closes
+   for them same-round (or rescope). Round XII Track N2's 9-cell hunt
+   surfaced four adjacent defects (struct-lit field / enum-variant field
+   / vector-lit element / closure-body return SIGILL); under the new
+   rule that round would OWE 8 additional closes elsewhere.
+2. **Wrong-direction alternative rejected.** A round that would otherwise
+   ship a Core #8 defect for a positive net stops the shortcut ("declined
+   to sharpen the reject because D36 mandates accept") — but still owes
+   the closes elsewhere.
+
+**Round XXVIII precedent (2026-08-02).** Own follow-ups filed by Track A
+(ggdef tag-check LAG) and Track D (SH liveness-diff pass reconstruction)
+were both fixed same-round rather than filed for a later round: Track A
+LAG closed via string-based receiver-gate in ggdef `elaborate_method`
+(commit `77b92fc0`); Track D SH liveness-diff was fixed via a narrow
+strip of `[warn] gir_liveness_diff:` lines from the bootstrap C-body
+comparison (same commit), reverting the 2→4 global ceiling raise that
+would have blinded three additional stages of future convergence-drift
+detection to accommodate one instrumentation warning.
 
 **How the numbers avoid gaming.** Both counts are regen commands, not
 values: `find tests/fixtures/known_gaps -name '*.gg' | wc -l` and a
