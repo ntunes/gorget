@@ -215,6 +215,13 @@ pub(super) fn is_unmonomorphized_wrapper(type_name: &str) -> bool {
             }
             // Also check Vector__T etc.
             if rest.starts_with("Vector__") {
+                // vector-only-by-design: `is_unmonomorphized_wrapper` guards
+                // against un-monomorphized `Shared[Vector[T]]`-style inner-bare-
+                // T wrappers reaching code-emit. Historical scout for the sibling
+                // Deque case (Round XXVII Track B Site 3) found the wrapper
+                // path is already blocked upstream for `Shared[Deque[T]]`, so
+                // no live repro exists here — the Vector arm was retained as a
+                // defensive fossil for the specific Shared__Vector path.
                 let inner = rest.strip_prefix("Vector__").unwrap_or("");
                 if inner == "T" || inner == "U" || inner == "V" {
                     return true;

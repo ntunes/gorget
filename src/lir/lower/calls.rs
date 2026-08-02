@@ -318,9 +318,16 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             //   Vector__double__sort  → gorget_array_sort_float
             //   Vector__Str__sort     → gorget_array_sort_str
             //   Vector__Foo__sort     → gorget_array_sort_generic
+            // Deque shares Vector's underlying gorget_array runtime, so
+            // `Deque__T__sort` MUST route to the same typed comparator
+            // (Round XXVII Track B — Core #4 sibling arm-add; pre-fix the
+            // Deque__-prefixed name fell to `generic` (memcmp) and produced
+            // wrong-order output on int (negatives sort after positives)
+            // and String (heap-address ordering)).
             "sort" | "sorted" | "unique" => {
                 let elem = name
                     .strip_prefix("Vector__")
+                    .or_else(|| name.strip_prefix("Deque__"))
                     .and_then(|rest| {
                         rest.strip_suffix(&format!("__{method}"))
                     });

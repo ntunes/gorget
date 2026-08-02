@@ -1,0 +1,17 @@
+# Round XXVII Track B Site 5 REGRESSION — `Deque[String].each((x): ...)`
+# with an UNTYPED closure param. Pre-fix, `extract_elem_type_id_from_type_name`
+# (methods.rs:4589) has no `Deque__` arm, so the closure-param
+# type-hint falls back to `I64_TYPE` → the (x): param is inferred as
+# `int` while the actual element is `String` → wrong body execution
+# (type mismatch / garbage prints).
+#
+# AXIS PIN: element type = String (non-int → wrong-default detectable).
+# RED-VERIFIED PRE-FIX (Round XXVII scout).
+# INTENDED post-fix: `alpha / beta`, matching an explicitly-typed `(String x)`.
+from std.collections import Deque
+
+void main():
+    Deque[String] d = Deque[String]()
+    d.push("alpha")
+    d.push("beta")
+    d.each((x): print(x))
