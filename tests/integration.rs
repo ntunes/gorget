@@ -39239,6 +39239,198 @@ fn combinator_option_unwrap_error_rejected() {
     );
 }
 
+// ── Round XXVII Track C — SH-lane REJECT for the same 5 one-sided
+// combinator cells. Ports the R26A class-fix to the SH typechecker via
+// the chokepoint `reject_wrong_receiver_combinator` at
+// `tests/fixtures/self_host_typechecker/typecheck.gg` (5 R27C_ARM_MARKER
+// arms, pinned by `tests/lints.rs::sh_reject_wrong_receiver_combinator_arms_count`).
+// Closes the Core #9 all-lanes obligation (SH was the third reject lane
+// still missing after R25B ggdef + R26A Rust). Each test invokes the SH
+// driver on the SAME 5 R26A fixtures, asserting the SH-lane REJECT fires
+// with `error[E_NoMethodFound]` before lowering (empty stdout, exit != 0).
+// Shape mirrors `self_host_driver_rejects_field_on_string` (:21901).
+// RED-verify pre-fix (2026-08-02): all 5 fixtures silently accepted (rc=0,
+// C emitted, no stderr diagnostic); post-fix: all 5 reject with the
+// expected diagnostic and empty stdout.
+
+/// Round XXVII Track C — SH-lane REJECT for `Result.flat_map()` (Option-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_result_flat_map() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/combinator_result_flat_map_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_result_flat_map",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Result.flat_map()` — SH chokepoint \
+         `reject_wrong_receiver_combinator` (typecheck.gg) stopped firing. \
+         exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound` — the \
+         SH-lane chokepoint must render the ratified code.\nstderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program — gate must halt \
+         BEFORE lowering. stdout bytes={}\nhead:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
+/// Round XXVII Track C — SH-lane REJECT for `Result.filter()` (Option-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_result_filter() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/combinator_result_filter_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_result_filter",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Result.filter()` — SH chokepoint stopped \
+         firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound`.\n\
+         stderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+/// Round XXVII Track C — SH-lane REJECT for `Result.flatten()` (Option-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_result_flatten() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/combinator_result_flatten_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_result_flatten",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Result.flatten()` — SH chokepoint stopped \
+         firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound`.\n\
+         stderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+/// Round XXVII Track C — SH-lane REJECT for `Option.map_err()` (Result-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_option_map_err() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/combinator_option_map_err_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_option_map_err",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Option.map_err()` — SH chokepoint stopped \
+         firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound`.\n\
+         stderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
+/// Round XXVII Track C — SH-lane REJECT for `Option.unwrap_error()` (Result-only).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_lowerer_driver_rejects_combinator_option_unwrap_error() {
+    let (driver_exe, _driver_c) =
+        build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/combinator_option_unwrap_error_rejected.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_lowerer_driver_rejects_combinator_option_unwrap_error",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "SH driver accepted `Option.unwrap_error()` — SH chokepoint \
+         stopped firing. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_NoMethodFound"),
+        "SH driver rejected but did not emit `E_NoMethodFound`.\n\
+         stderr:\n{stderr}",
+    );
+    assert!(
+        stdout.trim().is_empty(),
+        "SH driver emitted C for a rejected program. stdout bytes={}",
+        stdout.len(),
+    );
+}
+
 /// KNOWN GAP — the STRUCT get-chain, `&`-FACE ONLY. The other cell that
 /// survives the `&`-of-projection fix, and narrower than the tuple get-chain
 /// above: here the assign face ALREADY WORKS.
