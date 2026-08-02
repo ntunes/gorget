@@ -38893,6 +38893,228 @@ fn sh_amp_operand_binop_reject() {
     );
 }
 
+// ── Round XXVIII Track D — SH-lane pins for compound-shape borrow-bind +
+// module-level static miscompile. XXVII Track E ported the direct-shape
+// `E_AmpInOperandPosition` walker; the pre-XXVIII SH `check_local_borrow_bind`
+// matched only direct top-level `EMutableBorrow`, so compound shapes
+// (`if c: &a else: &b`, `match … case P: &y`, `do: &a`) reached the mirror
+// walker and emitted `E_AmpInOperandPosition` per branch/arm instead of a
+// single authoritative `E_LocalBorrowBind` at the outer decl — divergence
+// from Rust and from the ratified D10(a) message.
+//
+// Worse still, `IStaticDecl` didn't call `check_local_borrow_bind` at all
+// AND didn't route the initializer through the safety pass, so a module-
+// level `Vector[int] G = &BASE` SILENTLY ACCEPTED and produced C emit
+// (Core #10 miscompile-class defect — a real user-visible defect, not a
+// duplicate diagnostic).
+//
+// Round XXVIII Track D adds `expr_is_borrow_bind` + `stmts_tail_is_borrow_bind`
+// helpers (mirroring Rust `src/semantic/type_utils.rs`), widens
+// `check_local_borrow_bind` + both `suppress_amp_in_operand_position`
+// brackets to use them, and adds `check_local_borrow_bind` to `IStaticDecl`.
+// The five tests below pin each axis-cell on the SH driver:
+//
+//   * ternary (`auto r = if c: &a else: &b`)          — expr-if
+//   * match-expr (`auto r = match n: case 1: &a ...`) — expr-match
+//   * do-expr tail (`auto r = do: &a`)                — expr-do
+//   * do-tail stmt-match (`do:` newline stmt-match)   — block-tail stmt
+//   * static (`Vector[int] G = &BASE`)                — module-scope IStaticDecl
+//
+// Each was RED pre-fix (four with `E_AmpInOperandPosition`, one with
+// silent-accept + C emit). Post-fix each emits exactly one
+// `E_LocalBorrowBind`, matching Rust. Break-and-watch: commenting out the
+// `expr_is_borrow_bind` widen at `check_local_borrow_bind` regresses the
+// four compound shapes to `E_AmpInOperandPosition` and the static shape
+// to silent-accept, so the class is now guarded (Core #12 axis-completeness).
+//
+// Invokes the SH driver directly (mirror of `sh_amp_operand_reject` shape
+// at `tests/integration.rs`) so the assertion binds against SH's decision,
+// not Rust's — a silent-accept on SH would have green-lit `check_gg_fails`.
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_amp_bind_ternary_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/amp_bind_ternary_error.gg");
+    assert!(fixture.exists(), "amp_bind fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_amp_bind_ternary_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT compound-shape ternary borrow-bind \
+         (`auto r = if c: &a else: &b`); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_LocalBorrowBind"),
+        "SH driver must emit E_LocalBorrowBind on compound-shape ternary \
+         borrow-bind (not E_AmpInOperandPosition); got stderr:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("E_AmpInOperandPosition"),
+        "SH driver must NOT double-emit E_AmpInOperandPosition on compound-shape \
+         ternary borrow-bind — suppress bracket at SVarDecl covers compound \
+         shapes via expr_is_borrow_bind; got stderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_amp_bind_matchexpr_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/amp_bind_matchexpr_error.gg");
+    assert!(fixture.exists(), "amp_bind fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_amp_bind_matchexpr_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT compound-shape match-expr borrow-bind; \
+         accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_LocalBorrowBind"),
+        "SH driver must emit E_LocalBorrowBind on compound-shape match-expr \
+         borrow-bind; got stderr:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("E_AmpInOperandPosition"),
+        "SH driver must NOT double-emit E_AmpInOperandPosition on compound-shape \
+         match-expr borrow-bind; got stderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_amp_bind_doexpr_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/amp_bind_doexpr_error.gg");
+    assert!(fixture.exists(), "amp_bind fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_amp_bind_doexpr_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT compound-shape do-expr tail borrow-bind; \
+         accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_LocalBorrowBind"),
+        "SH driver must emit E_LocalBorrowBind on compound-shape do-expr \
+         tail borrow-bind (stmts_tail_is_borrow_bind); got stderr:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("E_AmpInOperandPosition"),
+        "SH driver must NOT double-emit E_AmpInOperandPosition on compound-shape \
+         do-expr tail borrow-bind; got stderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_amp_bind_do_stmtmatch_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/amp_bind_do_stmtmatch_error.gg");
+    assert!(fixture.exists(), "amp_bind fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_amp_bind_do_stmtmatch_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT do-tail stmt-match borrow-bind; \
+         accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_LocalBorrowBind"),
+        "SH driver must emit E_LocalBorrowBind on do-tail stmt-match borrow-bind \
+         (stmts_tail_is_borrow_bind recurses SMatch arms); got stderr:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("E_AmpInOperandPosition"),
+        "SH driver must NOT double-emit E_AmpInOperandPosition on do-tail \
+         stmt-match borrow-bind; got stderr:\n{stderr}",
+    );
+}
+
+/// Round XXVIII Track D — Core #10 miscompile close. Pre-fix, SH
+/// `IStaticDecl` didn't call `check_local_borrow_bind` at all and didn't
+/// route the initializer through the safety pass, so `Vector[int] G = &BASE`
+/// SILENTLY ACCEPTED and produced C emit — a real miscompile-class defect
+/// distinct from the compound-shape divergence above. Now `IStaticDecl`
+/// calls `check_local_borrow_bind`, matching Rust `Item::StaticDecl`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_amp_bind_static_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/amp_bind_static_error.gg");
+    assert!(fixture.exists(), "amp_bind fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_amp_bind_static_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT `static Vector[int] G = &BASE` — Core #10 \
+         miscompile pre-fix (silent-accept + C emit); accepted with exit {:?}\n\
+         stderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_LocalBorrowBind"),
+        "SH driver must emit E_LocalBorrowBind on module-level static \
+         borrow-bind (IStaticDecl now calls check_local_borrow_bind); \
+         got stderr:\n{stderr}",
+    );
+}
+
 /// GRADUATED Round XIV — `.or_else()` receiver-emptying regression pin, third
 /// costume of the map/filter/or_else silent write-drop mode. Uses field-access
 /// receiver (`h.slot.or_else(...)`) with an Option[Money] payload. Was WRONG 0
