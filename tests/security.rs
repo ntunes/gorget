@@ -1506,8 +1506,8 @@ fn consume_callee_moves_on_stash_safe() {
 
 /// GRADUATED Round XXIII Track β — `&`-of-a-projection in an OPERAND position
 /// (tainted-twin double-Drop facet) is now REJECTED at `gg check` with
-/// `E_AmpInOperandPosition` via the one-producer chokepoint at
-/// `src/semantic/safety/check_expr.rs:276`. This graduation re-purposes the
+/// `E_AmpInOperandPosition` via the one-producer chokepoint at the
+/// `check_expr::Expr::MutableBorrow` arm. This graduation re-purposes the
 /// pre-existing DURABLE security repro (no new file — Core #12 durable-repro
 /// rule) as a check-fails assertion. Same underlying root as the
 /// silent-wrong-output twin (`known_gaps/sound_amp_operand_position_scrutinee.gg`);

@@ -1,0 +1,21 @@
+# Round XXVI Track C — `&`-of-a-place as the operand of a unary op.
+# One costume of the operand-position class; retired by the
+# ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow`
+# arm. UnaryOp reaches the chokepoint via the `Expr::UnaryOp` arm
+# recursing through `self.check_expr(operand)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single
+# `E_AmpInOperandPosition` — the unary-op chokepoint route emits
+# no co-emit companions (single, clean error).
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    int y = -&c.fd
+    print(y)

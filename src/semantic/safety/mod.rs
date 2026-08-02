@@ -502,8 +502,9 @@ pub(super) struct BorrowChecker<'a> {
     /// the typechecker owns the authoritative `E_LocalBorrowBind` on the
     /// SAME syntax, so the safety-pass mirror-walker `E_AmpInOperandPosition`
     /// on the branch/arm/tail `&`s would be a DUPLICATE. The
-    /// `MutableBorrow` arms at `check_expr.rs:349` (statement position) +
-    /// `:1592` (f-string interp) SKIP their emit when this flag is set.
+    /// `check_expr::Expr::MutableBorrow` arm (statement position) + the
+    /// f-string-interp `Expr::MutableBorrow` arm inside
+    /// `check_interpolation_expr` SKIP their emit when this flag is set.
     /// RESET to `false` after each statement so it never leaks to siblings.
     pub(super) suppress_amp_in_operand_position: bool,
 }

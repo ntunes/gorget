@@ -1,6 +1,6 @@
 # Round XXIII Track β — `&`-of-a-place in a MATCH SCRUTINEE operand position.
-# One of 13 costumes; produced by one chokepoint at the safety pass's
-# `Expr::MutableBorrow` arm (`src/semantic/safety/check_expr.rs:276`).
+# One costume of the operand-position class; produced by the ONE-PRODUCER
+# chokepoint at the safety pass's `check_expr::Expr::MutableBorrow` arm.
 #
 # Pre-fix (measured at HEAD): `gg check` clean; C prints `0` (the address is
 # NOT 10, so `else` runs); LLVM `llc` hard-fails with `%v8: i64 but expected

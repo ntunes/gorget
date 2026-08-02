@@ -38388,18 +38388,14 @@ fn closure_amp_method_arg_body_reject() {
 
 /// GRADUATED Round XXIII Track β — `&`-of-a-projection in an OPERAND position
 /// is now REJECTED at `gg check` with `E_AmpInOperandPosition` via the
-/// one-producer chokepoint at `src/semantic/safety/check_expr.rs:276`. This
-/// graduation re-purposes the pre-existing DURABLE known_gaps repro (no new
-/// file — Core #12 durable-repro rule) as a check-fails assertion.
+/// one-producer chokepoint at the `check_expr::Expr::MutableBorrow` arm.
+/// This graduation re-purposes the pre-existing DURABLE known_gaps repro
+/// (no new file — Core #12 durable-repro rule) as a check-fails assertion.
 ///
-/// Class-wide reject: the same chokepoint covers match scrutinee, binop /
-/// comparison operand (either order), if/while cond, index / f-string /
-/// closure body / return / augassign RHS / throw / select-send value /
-/// range endpoint / as-cast / deref (Round XXV) / propagate (Round XXV) /
-/// spawn (Round XXV) / list-comprehension body (Round XXV) / expression-
-/// statement (Round XXV) — 20 costumes pinned as their own NEG fixtures
-/// at `tests/fixtures/sound_amp_operand_*_error.gg`; see also the
-/// tainted-twin `security/sound_amp_operand_drop_*.gg`.
+/// Class-wide reject: the same chokepoint covers every operand-position
+/// costume pinned by the `sound_amp_operand_*` suite (see the enumeration
+/// on the block preamble below); see also the tainted-twin
+/// `security/sound_amp_operand_drop_*.gg`.
 #[test]
 fn sound_amp_operand_position_scrutinee_rejected() {
     check_gg_fails(
@@ -38408,18 +38404,22 @@ fn sound_amp_operand_position_scrutinee_rejected() {
     );
 }
 
-// ── Round XXIII Track β + Round XXV Track C — 20 costume NEG fixtures for
-// the operand-position `&` reject class. One-producer chokepoint at
-// `src/semantic/safety/check_expr.rs:349`; each XXIII costume was
-// RED-verified pre-fix (see per-fixture header for the C / LLVM failure
-// mode). Round XXIII β shipped 13 initial costumes + 2 Pass-1 additions
-// (throw, select-send); Round XXV Track C fills the 5 remaining operand
-// contexts (deref, propagate, spawn, list-comprehension body, expression-
-// statement) — pure Core #12 fixture-net, no source change. Plus 3
-// positive controls that must stay green (for-iterable via strip preamble,
-// `.enumerate()` receiver-wrap, call-arg unchanged) + 1 durable SH-lane
-// companion `#[ignore]`d until the SH-typechecker port lands (Core #9
-// lane parity).
+// ── Round XXIII Track β + Round XXV Track C + Round XXVI Track C — the
+// `sound_amp_operand_*` suite pins the enumerated set of operand-position
+// contexts routing through the ONE-PRODUCER chokepoint at the
+// `check_expr::Expr::MutableBorrow` arm (each XXIII costume was
+// RED-verified pre-fix — see per-fixture header for the C / LLVM failure
+// mode). Contexts covered: match-scrutinee, binop LHS/RHS, augassign RHS,
+// comparison (either order), index, f-string interp, closure body, return,
+// if-cond, range endpoint, `as`-cast, throw, select-send (XXIII Track β) +
+// deref, propagate `!`, spawn, list-comprehension body, expression-
+// statement (XXV Track C) + await, spawn-blocking, unary-op, while-cond,
+// tuple/array literal, dict-comp, set-comp, optional-chain, default-op
+// `??`, field-access, dict-literal, `is` (XXVI Track C) — pure Core #12
+// fixture-net, no source change. Plus 3 positive controls that must stay
+// green (for-iterable via strip preamble, `.enumerate()` receiver-wrap,
+// call-arg unchanged) + 1 durable SH-lane companion `#[ignore]`d until
+// the SH-typechecker port lands (Core #9 lane parity).
 
 #[test]
 fn sound_amp_operand_scrutinee_error() {
@@ -38543,12 +38543,14 @@ fn sound_amp_operand_send_error() {
 
 // Round XXV Track C — 5 additional operand-context costumes (pure Core #12
 // fixture-net, no source change). All 5 route through the ONE-PRODUCER
-// chokepoint at `check_expr.rs:349` via `self.check_expr(inner)` recursion
-// in their respective walker arms (Deref:353, Propagate:296, Spawn:1048,
-// ListComprehension:1335, Stmt::Expr:323 in check_stmt.rs). Propagate +
-// spawn structurally co-emit companion diagnostics (`E_MissingFallibleMark`
-// for `(&x)!`; `E_SpawnNonFuture` + `E_SpawnRequiresDirectCall` for
-// `spawn (&x)`) — `check_gg_fails` substring match is unaffected.
+// chokepoint at the `check_expr::Expr::MutableBorrow` arm via
+// `self.check_expr(inner)` recursion in their respective walker arms
+// (`Expr::Deref`, `Expr::Propagate`, `Expr::Spawn`,
+// `Expr::ListComprehension`, and `Stmt::Expr` in `check_stmt`).
+// Propagate + spawn structurally co-emit companion diagnostics
+// (`E_MissingFallibleMark` for `(&x)!`; `E_SpawnNonFuture` +
+// `E_SpawnRequiresDirectCall` for `spawn (&x)`) — `check_gg_fails`
+// substring match is unaffected.
 
 #[test]
 fn sound_amp_operand_deref_error() {
@@ -38586,6 +38588,115 @@ fn sound_amp_operand_comprehension_error() {
 fn sound_amp_operand_exprstmt_error() {
     check_gg_fails(
         "sound_amp_operand_exprstmt_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+// Round XXVI Track C — 12 additional operand-context costumes (pure
+// Core #12 fixture-net, no source change). All route through the
+// ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow` arm
+// via `self.check_expr(inner)` recursion in their respective walker arms
+// (`Expr::Await`, `Expr::SpawnBlocking`, `Expr::UnaryOp`, `Stmt::While`,
+// `Expr::ArrayLiteral`/`TupleLiteral`, `Expr::DictComprehension`,
+// `Expr::SetComprehension`, `Expr::OptionalChain`, `Expr::DefaultOp`,
+// `Expr::FieldAccess`, `Expr::DictLiteral`, and the shared
+// `Expr::As | Expr::Is` arm). Await + spawn-blocking + while-cond
+// structurally co-emit companion diagnostics (`E_AwaitNonFuture`,
+// `E_SpawnRequiresDirectCall`, `E_TypeMismatch` respectively) —
+// `check_gg_fails` substring match is unaffected.
+
+#[test]
+fn sound_amp_operand_await_error() {
+    check_gg_fails(
+        "sound_amp_operand_await_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_spawn_blocking_error() {
+    check_gg_fails(
+        "sound_amp_operand_spawn_blocking_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_unary_op_error() {
+    check_gg_fails(
+        "sound_amp_operand_unary_op_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_while_cond_error() {
+    check_gg_fails(
+        "sound_amp_operand_while_cond_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_tuple_literal_error() {
+    check_gg_fails(
+        "sound_amp_operand_tuple_literal_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_dict_comp_error() {
+    check_gg_fails(
+        "sound_amp_operand_dict_comp_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_set_comp_error() {
+    check_gg_fails(
+        "sound_amp_operand_set_comp_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_optional_chain_error() {
+    check_gg_fails(
+        "sound_amp_operand_optional_chain_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_default_op_error() {
+    check_gg_fails(
+        "sound_amp_operand_default_op_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_field_access_error() {
+    check_gg_fails(
+        "sound_amp_operand_field_access_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_dict_literal_error() {
+    check_gg_fails(
+        "sound_amp_operand_dict_literal_error.gg",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_amp_operand_is_error() {
+    check_gg_fails(
+        "sound_amp_operand_is_error.gg",
         "error[E_AmpInOperandPosition]",
     );
 }

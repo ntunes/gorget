@@ -7,7 +7,8 @@
 # (`check_local_borrow_bind`) only rejects at VarDecl/Assign RHS (the D10(a)
 # mirror), so operand-position `&`-of-a-place silently ACCEPTS on SH — the
 # same silent-wrong-output / double-Drop class Rust gg now rejects at
-# `check_expr.rs:276`. Filed follow-up: port a mirror `check_amp_operand`
+# the `check_expr::Expr::MutableBorrow` chokepoint arm. Filed follow-up:
+# port a mirror `check_amp_operand`
 # walker to the SH-typechecker, invoked from every non-VarDecl/Assign
 # operand recursion (match scrutinee, binop/cmp operands, if/while cond,
 # augassign RHS, index, f-string interp, closure body, return, throw,

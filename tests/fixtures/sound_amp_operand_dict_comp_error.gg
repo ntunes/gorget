@@ -1,0 +1,27 @@
+# Round XXVI Track C — `&`-of-a-place inside a dict-comprehension
+# value expression. One costume of the operand-position class;
+# retired by the ONE-PRODUCER chokepoint at the
+# `check_expr::Expr::MutableBorrow` arm. Dict-comp reaches the
+# chokepoint via the `Expr::DictComprehension` arm recursing
+# through `self.check_expr(value_expr)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single
+# `E_AmpInOperandPosition` — the dict-comp chokepoint route emits
+# no co-emit companions (single, clean error).
+#
+# Sibling costumes: list-comp (`sound_amp_operand_comprehension_error.gg`,
+# XXV Track C) and set-comp (`sound_amp_operand_set_comp_error.gg`,
+# XXVI Track C) share the same walker pattern.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Vector[int] ks = [1, 2, 3]
+    Dict[int, int] d = {k: &c.fd for k in ks}
+    print(d.len())

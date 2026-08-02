@@ -1,0 +1,26 @@
+# Round XXVI Track C — `&`-of-a-place as a `spawn blocking` operand.
+# One costume of the operand-position class; retired by the
+# ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow`
+# arm. `spawn blocking` reaches the chokepoint via the
+# `Expr::SpawnBlocking` arm recursing through
+# `self.check_expr(inner)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with `E_AmpInOperandPosition`.
+# CO-EMITS (structural, unavoidable — `check_gg_fails` substring
+# match is fine): `E_SpawnRequiresDirectCall`. `spawn blocking`
+# requires an immediate `Call` inner; a `MutableBorrow`-wrapped
+# inner never matches, so the direct-call diagnostic fires
+# alongside the operand-position reject.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+async void main():
+    Counter c = Counter(seed())
+    Task[int] t = spawn blocking &c.fd
+    int r = t.await()
+    print(r)

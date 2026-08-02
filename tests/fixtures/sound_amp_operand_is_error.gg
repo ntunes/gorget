@@ -1,0 +1,26 @@
+# Round XXVI Track C — `&`-of-a-place as the LHS of an `is`
+# pattern-check. One costume of the operand-position class;
+# retired by the ONE-PRODUCER chokepoint at the
+# `check_expr::Expr::MutableBorrow` arm. `is` reaches the
+# chokepoint via the shared `Expr::As | Expr::Is` arm recursing
+# through `self.check_expr(inner)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single
+# `E_AmpInOperandPosition` — the `is` chokepoint route emits no
+# co-emit companions (single, clean error).
+#
+# Sibling costume: `as`-cast (`sound_amp_operand_as_error.gg`,
+# XXIII Track β) shares the same arm.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Option[int] o = Some(c.fd)
+    bool b = &o is Some(_)
+    print(b)

@@ -1,0 +1,24 @@
+# Round XXVI Track C — `&`-of-a-place as a bare `while`-condition.
+# One costume of the operand-position class; retired by the
+# ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow`
+# arm. While-cond reaches the chokepoint via the `Stmt::While` arm
+# in `check_stmt` recursing through `self.check_expr(cond)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with `E_AmpInOperandPosition`.
+# CO-EMITS (structural, unavoidable — `check_gg_fails` substring
+# match is fine): `E_TypeMismatch` (`while` expects `bool`; the
+# operand-position `&` typechecks as an int-ish value). Same-arm
+# family with `sound_amp_operand_if_cond_error.gg` for `if`.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 0
+
+void main():
+    Counter c = Counter(seed())
+    while &c.fd:
+        break
+    print(c.fd)

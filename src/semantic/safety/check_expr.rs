@@ -1592,17 +1592,19 @@ impl<'a> BorrowChecker<'a> {
             }
             // Round XXIII Track β — f-string interpolation `f"{&x}"` is an
             // OPERAND position (the interp body is re-parsed via `parse_expr`
-            // at `check_expr.rs:184`, which yields `Expr::MutableBorrow` for
-            // a leading `&`). The re-parsed body has synthetic spans that
-            // don't match the resolution map, so emit at `fstring_span`
-            // (mirroring how `check_use` is invoked in this walker). Sibling
-            // of the `Expr::MutableBorrow` arm at `check_expr.rs:276` — same
+            // inside `check_interpolation_expr`, which yields
+            // `Expr::MutableBorrow` for a leading `&`). The re-parsed body
+            // has synthetic spans that don't match the resolution map, so
+            // emit at `fstring_span` (mirroring how `check_use` is invoked
+            // in this walker). Sibling of the top-level
+            // `check_expr::Expr::MutableBorrow` chokepoint arm — same
             // class, same error kind, different span source. Recurses so
             // aliasing walk still happens on the inner place.
             Expr::MutableBorrow { expr: inner } => {
                 // Round XXV Track D §D-3: mirror-walker suppression when
                 // D10(a) has fired on an enclosing compound-shape borrow-
-                // bind (see the sibling emit at `check_expr.rs:~349`).
+                // bind (see the sibling emit at the top-level
+                // `check_expr::Expr::MutableBorrow` arm).
                 if !self.suppress_amp_in_operand_position {
                     self.error(SemanticErrorKind::AmpInOperandPosition, fstring_span);
                 }

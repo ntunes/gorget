@@ -33,8 +33,10 @@ impl<'a> BorrowChecker<'a> {
                 // `type_utils::expr_is_borrow_bind` matches, and resets it
                 // right after. D10(a) at the typechecker owns the
                 // authoritative reject; the mirror-walker emit sites at
-                // `check_expr.rs:349` + `:1592` observe the flag and skip
-                // the duplicate `E_AmpInOperandPosition`.
+                // the `check_expr::Expr::MutableBorrow` arm (statement
+                // position) + the f-string-interp `Expr::MutableBorrow`
+                // arm inside `check_interpolation_expr` observe the flag
+                // and skip the duplicate `E_AmpInOperandPosition`.
                 if let Expr::MutableBorrow { expr: inner } = &value.node {
                     self.check_expr(inner);
                 } else {

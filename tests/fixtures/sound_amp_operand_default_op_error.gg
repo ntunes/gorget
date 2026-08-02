@@ -1,0 +1,23 @@
+# Round XXVI Track C — `&`-of-a-place as the LHS of a
+# default-operator `??`. One costume of the operand-position class;
+# retired by the ONE-PRODUCER chokepoint at the
+# `check_expr::Expr::MutableBorrow` arm. DefaultOp reaches the
+# chokepoint via the `Expr::DefaultOp` arm recursing through
+# `self.check_expr(lhs)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single
+# `E_AmpInOperandPosition` — the default-op chokepoint route emits
+# no co-emit companions (single, clean error).
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Option[int] o = Some(c.fd)
+    int y = (&o) ?? 0
+    print(y)

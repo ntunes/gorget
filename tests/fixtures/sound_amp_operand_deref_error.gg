@@ -1,8 +1,8 @@
 # Round XXV Track C — `&`-of-a-place inside a `*` (deref) operand.
-# NEG 16/20 of the operand-position class; retired by the ONE-PRODUCER
-# chokepoint at `src/semantic/safety/check_expr.rs:349`. Deref reaches
-# the chokepoint via the `Expr::Deref` arm at `:353` recursing through
-# `self.check_expr(inner)`.
+# One costume of the operand-position class; retired by the
+# ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow`
+# arm. Deref reaches the chokepoint via the `Expr::Deref` arm
+# recursing through `self.check_expr(inner)`.
 #
 # Pre-fix (measured at HEAD via scout probe): `gg check` clean; the `&`
 # was silently allowed as the deref's inner. INTENDED: reject at
