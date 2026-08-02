@@ -38811,13 +38811,13 @@ fn pos_call_arg_amp_unchanged() {
     run_gg("pos_call_arg_amp_unchanged.gg", "101");
 }
 
-/// Round XXIII Track β — DURABLE SH-lane companion (Core #9 + owner rule
-/// 2026-07-24). Currently `#[ignore]`d: the SH-typechecker at
-/// `tests/fixtures/self_host_typechecker/typecheck.gg:713-719`
-/// (`check_local_borrow_bind`) rejects only VarDecl/Assign RHS, so an
-/// operand-position `&`-of-a-place silently ACCEPTS on SH. Un-ignore when
-/// the SH-lane port lands (see fixture header for the port spec + owed
-/// `check_amp_operand` walker sketch).
+/// Round XXVII Track E — GRADUATED SH-lane reject (D32 all-lanes, Core #9).
+/// Pre-graduation: `#[ignore]`d durable NEG at `known_gaps/` while SH still
+/// silently accepted operand-position `&`-of-a-place. Round XXVII Track E
+/// ported the `check_iterable_maybe_amp` helper + `EMutableBorrow` chokepoint
+/// arm + `suppress_amp_in_operand_position` SVarDecl/SAssign bracket to SH
+/// (mirrors Rust `src/semantic/safety/check_expr.rs:349` + `:182-205`), so SH
+/// is now the 3rd REJECT lane alongside Rust + ggdef.
 ///
 /// Round XXV Track D hygiene fold: invokes the SH driver directly (mirror
 /// of the `sh_combinator_*` NEG-triplet at `tests/integration.rs:21937/
@@ -38826,9 +38826,6 @@ fn pos_call_arg_amp_unchanged() {
 /// green-lit this test. Now the assertion runs against the SH driver
 /// itself.
 #[test]
-#[ignore = "SH-LANE GAP: operand-position `&`-of-a-place still silently accepts on SH-typechecker; \
-port a mirror `check_amp_operand` walker + strip preambles for for-iter/enumerate/comprehension. \
-Asserts the intended SH reject; TODO.md. Un-ignore when the SH-lane port lands."]
 #[serial(self_host_lowerer_driver)]
 fn sh_amp_operand_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
@@ -38855,6 +38852,43 @@ fn sh_amp_operand_reject() {
     assert!(
         stderr.contains("E_AmpInOperandPosition"),
         "SH driver must emit E_AmpInOperandPosition on operand-position \
+         `&`-of-a-place reject; got stderr:\n{stderr}",
+    );
+}
+
+/// Round XXVII Track E — second axis-cell NEG for D32 operand-position `&` reject:
+/// BINOP-OPERAND `&` (`int y = &c.fd + 1`). Complements the match-scrutinee cell in
+/// `sh_amp_operand_reject`. Both reach the SH `EMutableBorrow` chokepoint arm — this
+/// pins the binop path so a regression that narrows the reject to only match
+/// scrutinees (or only direct VarDecl RHS) trips here. Core #12 axis-completeness for
+/// SH's flat topology (one shared chokepoint regardless of operand context).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_amp_operand_binop_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_amp_operand_binop_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_amp_operand_binop_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT binop-operand `&`-of-a-place \
+         (`&c.fd + 1`); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_AmpInOperandPosition"),
+        "SH driver must emit E_AmpInOperandPosition on binop-operand \
          `&`-of-a-place reject; got stderr:\n{stderr}",
     );
 }

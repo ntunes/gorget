@@ -1164,6 +1164,80 @@ fn count_amp_in_operand_position_rejects() -> usize {
     count
 }
 
+/// Round XXVII Track E — SH-lane mirror of `amp_in_operand_position_reject_sites_count`.
+/// D32 all-lanes: SH is the 3rd REJECT lane alongside Rust and ggdef. This ratchet
+/// pins two SH counts in `tests/fixtures/self_host_typechecker/typecheck.gg`:
+///
+/// (1) EMIT sites — `DkAmpInOperandPosition(),` (comma indicates it's the
+///     `Diagnostic.error(span, kind, msg)` kind arg). Baseline = 1: the ONE-PRODUCER
+///     chokepoint at `check_safety_expr`'s `case EMutableBorrow(inner):` arm. SH's
+///     f-string interpolation is pre-parsed into `EFString.exprs` (not re-parsed with
+///     synthetic spans like Rust), so SH does not need an interpolation-specific
+///     sibling emit — one arm suffices for all operand contexts.
+///
+/// (2) STRIP CALL SITES — `check_iterable_maybe_amp(` (excluding the `void ... (`
+///     definition line). Baseline = 4: SFor + EListComp + ESetComp + EDictComp
+///     iterables. Every iterable site (a legit `&`-BOUNDARY position that must not
+///     be false-flagged by the emit-arm chokepoint) MUST route through this ONE
+///     helper — a 5th iterable site added inline (bypassing the helper) would
+///     silently re-open the false-positive class.
+///
+/// **If this fails:**
+///   - EMIT count changed → verify at the SH chokepoint arm (Core #4 one-producer).
+///     A new emit site added inline is a class-split — reroute through the arm and
+///     revert; a legitimate new sibling (a new re-parse walker) needs the arm-count
+///     bumped with justification.
+///   - STRIP count changed → verify a new iterable site was added via the helper,
+///     not inlined; bump/lower EXPECTED accordingly. NEVER add an iterable site
+///     that walks its iterable inline without the strip — a `for x in &coll` there
+///     would false-flag the boundary `&` as an operand.
+#[test]
+fn sh_amp_operand_reject_sites_count() {
+    let src = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("read self_host_typechecker/typecheck.gg");
+    // Strip line comments so prose mentions of the marker don't count.
+    let body: String = src
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    const EXPECTED_EMIT: usize = 1;
+    let emit_count = body.matches("DkAmpInOperandPosition(),").count();
+    assert_eq!(
+        emit_count, EXPECTED_EMIT,
+        "SH `DkAmpInOperandPosition()` emit-site count in \
+         `tests/fixtures/self_host_typechecker/typecheck.gg` changed: {emit_count} vs \
+         expected {EXPECTED_EMIT}.\n\n\
+         The ONE-PRODUCER chokepoint (Core #4) is the `case EMutableBorrow(inner):` \
+         arm of `check_safety_expr` — every operand-position `&` reaches there via \
+         its containing walker arm. If a NEW re-parse walker was added, verify it \
+         emits `DkAmpInOperandPosition()` at the chokepoint (do not open-code) and \
+         bump EXPECTED. If a site was removed, verify it centralized upward and \
+         lower EXPECTED. NEVER add a walker that silently accepts operand `&` \
+         (Core #10).",
+    );
+
+    const EXPECTED_STRIP: usize = 4;
+    // Count call sites (`check_iterable_maybe_amp(`) but EXCLUDE the definition
+    // line (`void check_iterable_maybe_amp(`).
+    let strip_calls = body
+        .lines()
+        .filter(|l| l.contains("check_iterable_maybe_amp("))
+        .filter(|l| !l.trim_start().starts_with("void check_iterable_maybe_amp("))
+        .count();
+    assert_eq!(
+        strip_calls, EXPECTED_STRIP,
+        "SH `check_iterable_maybe_amp` call-site count changed: {strip_calls} vs \
+         expected {EXPECTED_STRIP}. Every iterable position (SFor + 3 comprehension \
+         arms) must route through this ONE helper — a new iterable site that walks \
+         its iterable inline (bypassing the strip) would false-flag a legit \
+         `&`-BOUNDARY iterable as an operand-position reject. If a legitimate new \
+         iterable arm was added, wire it through the helper and bump EXPECTED. If \
+         an arm was removed, lower EXPECTED — do NOT inline the strip.",
+    );
+}
+
 fn count_pack_trait_object_calls() -> usize {
     let mut count = 0;
     for path in walkdir_rs("src/ir/lowering") {

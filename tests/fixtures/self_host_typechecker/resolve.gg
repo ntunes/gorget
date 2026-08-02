@@ -93,6 +93,17 @@ struct ResolveContext:
     # closure-body walk (a closure captures self BY VALUE — D5 — so an ESelfExpr
     # write inside it targets the closure's own copy, not the method's self).
     int self_mode
+    # D32 (`decisions.md` 2026-07-26): the safety walker's `EMutableBorrow` arm
+    # emits `E_AmpInOperandPosition` at every operand-position `&`-of-a-place.
+    # Suppressed only for the DIRECT top-level `EMutableBorrow` walked as the
+    # RHS of a `SVarDecl` / `SAssign` init — there `check_local_borrow_bind`
+    # emits the authoritative `E_LocalBorrowBind` (D10(a)) and a second message
+    # would be UX noise. Set true before that direct walk, restored after; every
+    # other check_safety_expr recursion (match scrutinee, binop operands, cond,
+    # index, f-string, closure, return, throw, augassign RHS, tuple/array elem,
+    # `as`-cast, etc.) leaves it false so the reject fires. Mirrors Rust
+    # `src/semantic/safety/mod.rs` `suppress_amp_in_operand_position`.
+    bool suppress_amp_in_operand_position
 
 # ── Built-in check ──────────────────────────────────────────
 
@@ -168,7 +179,7 @@ bool is_compiler_intrinsic_name(String name):
 # ═══════════════════════════════════════════════════════════
 
 ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable types):
-    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false, false, false, false, false, -1)
+    ResolveContext ctx = ResolveContext(Dict[int, int](), Dict[String, int](), Vector[String](), Vector[int](), Vector[Diagnostic](), 0, false, false, Dict[String, bool](), Dict[int, int](), false, false, false, false, false, -1, false)
 
     # Register built-in core traits
     Vector[String] trait_names = Vector[String]()

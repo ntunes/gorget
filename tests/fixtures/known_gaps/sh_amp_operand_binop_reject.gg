@@ -1,0 +1,25 @@
+# Round XXVII Track E — DURABLE SH-lane axis-cell NEG for D32 operand-position
+# `&` reject. Second cell alongside `sh_amp_operand_reject.gg` (match-scrutinee
+# costume): here the `&` is a BINOP OPERAND, a different operand context.
+#
+# Rust rejects at `src/semantic/safety/check_expr.rs:349` (the
+# `Expr::MutableBorrow` one-producer chokepoint) regardless of which walker arm
+# reached it. SH mirrors this via `EMutableBorrow` in `check_safety_expr`. This
+# fixture pins the binop-operand axis cell so a regression that narrows the
+# chokepoint to only match-scrutinees (or only VarDecl/Assign RHS) trips here.
+#
+# INTENDED SH behaviour: driver REJECTS with `E_AmpInOperandPosition` on
+# stderr. Wired as a NEG at `tests/integration.rs::sh_amp_operand_binop_reject`.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    # `&c.fd` as a binop LHS operand — an operand-position `&`, not a boundary
+    # position. Must reject with `E_AmpInOperandPosition`.
+    int y = &c.fd + 1
+    print(y)

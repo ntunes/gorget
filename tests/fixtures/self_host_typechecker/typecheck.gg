@@ -36,7 +36,7 @@ from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from std.conv import int_to_str
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -2078,7 +2078,25 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             bool saved_rcap = ctx.d29_in_result_capture
             if d29_stype_is_result(stype):
                 ctx.d29_in_result_capture = true
+            # D32 (mirrors Rust `src/semantic/safety/check_stmt.rs` Option-D
+            # pivot): a direct top-level `&`-init (`S x = &b`) is D10(a) territory
+            # — `check_local_borrow_bind` above owns the `E_LocalBorrowBind`
+            # message. Suppress the operand-position emit on THIS walk so it
+            # doesn't double-message; the inner-place recursion still runs so
+            # aliasing/liveness bookkeeping is unaffected. Compound-shape
+            # borrow-binds (`int x = if c: &a else: &b`) reach EMutableBorrow
+            # via a non-direct init path — those still emit
+            # AmpInOperandPosition on SH (Rust emits E_LocalBorrowBind for the
+            # same shape via `expr_is_borrow_bind`; SH's `check_local_borrow_bind`
+            # matches only the direct top-level shape, filed follow-up).
+            bool saved_supp_vd = ctx.suppress_amp_in_operand_position
+            match init_expr.expr:
+                case EMutableBorrow(_amp_inner):
+                    ctx.suppress_amp_in_operand_position = true
+                else:
+                    pass
             check_safety_expr(init_expr, scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_amp_in_operand_position = saved_supp_vd
             ctx.d29_in_result_capture = saved_rcap
             # Liveness: a fresh binding makes its DefId live again (Rust mark_live);
             # inside a loop it is a loop-local (re-created each iteration → moving it
@@ -2118,9 +2136,20 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
                     pass
             if target_def >= 0:
                 state.rebind = target_def
+            # D32: direct top-level `&`-assign — D10(a) owns the reject
+            # message (see SVarDecl comment above; mirrors Rust safety
+            # `suppress_amp_in_operand_position` bracket around a direct
+            # assignment RHS walk).
+            bool saved_supp_as = ctx.suppress_amp_in_operand_position
+            match value.expr:
+                case EMutableBorrow(_amp_inner):
+                    ctx.suppress_amp_in_operand_position = true
+                else:
+                    pass
             # Liveness: read the RHS (source still live) BEFORE re-initialising the
             # target, so `x = f(x)` reads the old `x` then rebinds it.
             check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
+            ctx.suppress_amp_in_operand_position = saved_supp_as
             state.rebind = saved_rebind
             match target.expr:
                 case EIdentifier(_nm):
@@ -2198,7 +2227,9 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             SafetyState mwc = safety_snapshot(state)
             check_safety_stmts(body, scope_id, &mwc, &scopes, &types, &ctx)
         case SFor(_pat, iter_e, body, _flags, else_body):
-            check_safety_expr(iter_e, scope_id, &state, &scopes, &types, &ctx)
+            # D32 strip: `for x in &coll` / `for i, x in &coll.enumerate()` —
+            # the `&` is a BOUNDARY, not an operand.
+            check_iterable_maybe_amp(iter_e, scope_id, &state, &scopes, &types, &ctx)
             # PART C precise loop body (the for-pattern binding is NOT loop-local —
             # moving the loop variable IS a MoveInLoop, matching production).
             safety_loop_body(body, scope_id, &state, &scopes, &types, &ctx)
@@ -2266,6 +2297,33 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             pass
         case SSnapshot(_name, _kind, e):
             check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
+
+# D32 iterable-strip chokepoint (Core #4 one-producer; mirrors Rust
+# `src/semantic/safety/check_expr.rs:182-205` `check_iterable_maybe_amp`).
+# `for x in &coll` / `for i, x in &coll.enumerate()` / `[expr for x in &coll]`
+# are legit write-through-iterable spellings — the `&` here is a BOUNDARY
+# (opens the collection for write-through), not an operand. Peel the outer
+# `EMutableBorrow` wrapper (and its `.enumerate()`-receiver costume) BEFORE
+# recursing so `check_safety_expr`'s `EMutableBorrow` arm does not false-flag.
+# Called from SFor + all 3 comprehension iterable sites; a 5th iterable site
+# added without going through this helper would silently re-open the false-
+# positive class — the `sh_amp_operand_reject_sites_count` lint counts these
+# call sites to prevent drift.
+void check_iterable_maybe_amp(SpannedExpr iter_e, int scope_id, SafetyState &state, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match iter_e.expr:
+        case EMutableBorrow(inner):
+            check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
+        case EMethodCall(recv, mname, args, targs):
+            if mname == "enumerate" and args.len() == 0 and targs.len() == 0:
+                match (*recv).expr:
+                    case EMutableBorrow(recv_inner):
+                        check_safety_expr(*recv_inner, scope_id, &state, &scopes, &types, &ctx)
+                    else:
+                        check_safety_expr(iter_e, scope_id, &state, &scopes, &types, &ctx)
+            else:
+                check_safety_expr(iter_e, scope_id, &state, &scopes, &types, &ctx)
+        else:
+            check_safety_expr(iter_e, scope_id, &state, &scopes, &types, &ctx)
 
 # Exhaustive expression walker — mirrors resolve.gg's `resolve_expr` enumeration.
 # Visits EVERY sub-expression so no reject/liveness site escapes via an
@@ -2576,6 +2634,20 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # recurse for nested reads).
             live_move_operand(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EMutableBorrow(inner):
+            # D32 chokepoint (Core #4 one-producer; mirrors Rust
+            # `src/semantic/safety/check_expr.rs:349` `Expr::MutableBorrow` arm).
+            # Every operand-position `&`-of-a-place reaches here via its
+            # containing walker arm (match sc, binop, cond, index, augassign RHS,
+            # f-string interp, closure body, return, throw, tuple/array elem,
+            # `as`-cast, comprehension body, ...). Legit `&`-BOUNDARY spellings
+            # never reach this arm: call-args are pre-consumed by
+            # `parse_ownership_modifier`; for-iterable / comprehension-iterable /
+            # `.enumerate()` receivers pre-strip via `check_iterable_maybe_amp`;
+            # SVarDecl/SAssign direct top-level `&`-init suppresses so D10(a)
+            # `E_LocalBorrowBind` (`check_local_borrow_bind`) owns the reject
+            # message (still recurse so inner-place aliasing bookkeeping runs).
+            if not ctx.suppress_amp_in_operand_position:
+                ctx.diagnostics.push(Diagnostic.error(expr.span, DkAmpInOperandPosition(), "`&` in an operand position is not valid — `&` is a boundary modifier, not an expression operator"))
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case EDeref(inner):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
@@ -2607,7 +2679,9 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # production ListComprehension (check_expr.rs:1073-1091):
             # loop_depth+1 + push(empty loop_locals). The iterable is evaluated
             # ONCE before the loop, so it is checked in the enclosing state.
-            check_safety_expr(*iterable, scope_id, &state, &scopes, &types, &ctx)
+            # D32 iterable strip: `&coll` on a comprehension iterable is a
+            # BOUNDARY, not an operand — mirror the SFor peel.
+            check_iterable_maybe_amp(*iterable, scope_id, &state, &scopes, &types, &ctx)
             SafetyState lc = safety_snapshot(state)
             lc.loop_depth = lc.loop_depth + 1
             lc.loop_locals = Dict[int, int]()
@@ -2615,7 +2689,7 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             if opt_cond is Some(b):
                 check_safety_expr(*b, scope_id, &lc, &scopes, &types, &ctx)
         case ESetComp(comp_e, _var, iterable, opt_cond):
-            check_safety_expr(*iterable, scope_id, &state, &scopes, &types, &ctx)
+            check_iterable_maybe_amp(*iterable, scope_id, &state, &scopes, &types, &ctx)
             SafetyState sc = safety_snapshot(state)
             sc.loop_depth = sc.loop_depth + 1
             sc.loop_locals = Dict[int, int]()
@@ -2623,7 +2697,7 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             if opt_cond is Some(b):
                 check_safety_expr(*b, scope_id, &sc, &scopes, &types, &ctx)
         case EDictComp(key, value, _var, iterable, opt_cond):
-            check_safety_expr(*iterable, scope_id, &state, &scopes, &types, &ctx)
+            check_iterable_maybe_amp(*iterable, scope_id, &state, &scopes, &types, &ctx)
             SafetyState dc = safety_snapshot(state)
             dc.loop_depth = dc.loop_depth + 1
             dc.loop_locals = Dict[int, int]()
