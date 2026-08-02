@@ -1,0 +1,18 @@
+# Round XXVIII Track C — `!` in a BINOP OPERAND position.
+# D32:1278-1281 REJECT class — mirror of `sound_amp_operand_binop_lhs_error.gg`.
+# Produced by the ONE-PRODUCER chokepoint at the safety pass's
+# `check_expr::Expr::Move` arm.
+#
+# Pre-fix (measured at HEAD): `gg check` clean; `s + "b"` computes but source
+# `s` becomes UseAfterMove on subsequent read — silent-inert-but-source-moving.
+# INTENDED: reject at `gg check` with `E_MoveInOperandPosition`.
+#
+# The RHS is COMPUTED (not a literal fold-away) so no const-fold can elide it.
+
+String pick():
+    return "hello"
+
+void main():
+    String s = pick()
+    String r = !s + "b"
+    print(r)

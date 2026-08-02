@@ -44,8 +44,19 @@ impl<'a> BorrowChecker<'a> {
                     if crate::semantic::type_utils::expr_is_borrow_bind(&value.node) {
                         self.suppress_amp_in_operand_position = true;
                     }
+                    // Round XXVIII Track C — VarDecl RHS is D32 RESTING /
+                    // consuming-boundary: `int x = !y` legit-moves y at the
+                    // bind boundary. Set `suppress_move_in_operand_position`
+                    // for the DIRECT top-level `Expr::Move` RHS (mirrors the
+                    // MutableBorrow direct intercept above). Save/restore prev
+                    // so the flag never leaks past this arm.
+                    let prev_move = self.suppress_move_in_operand_position;
+                    if matches!(&value.node, Expr::Move { .. }) {
+                        self.suppress_move_in_operand_position = true;
+                    }
                     // Check the value expression
                     self.check_expr(value);
+                    self.suppress_move_in_operand_position = prev_move;
                     self.suppress_amp_in_operand_position = prev;
                 }
 
@@ -458,7 +469,15 @@ impl<'a> BorrowChecker<'a> {
                     if crate::semantic::type_utils::expr_is_borrow_bind(&value.node) {
                         self.suppress_amp_in_operand_position = true;
                     }
+                    // Round XXVIII Track C — Assign RHS is D32 RESTING /
+                    // consuming-boundary; suppress `E_MoveInOperandPosition` for
+                    // the DIRECT top-level `Expr::Move` RHS (mirrors VarDecl).
+                    let prev_move = self.suppress_move_in_operand_position;
+                    if matches!(&value.node, Expr::Move { .. }) {
+                        self.suppress_move_in_operand_position = true;
+                    }
                     self.check_expr(value);
+                    self.suppress_move_in_operand_position = prev_move;
                     self.suppress_amp_in_operand_position = prev;
                 }
                 self.assignment_rebind_target = prev_rebind;
@@ -908,7 +927,20 @@ impl<'a> BorrowChecker<'a> {
                 if let Some(expr) = expr {
                     let saved_in_return = self.in_return_expr;
                     self.in_return_expr = true;
+                    // Round XXVIII Track C — return value is D32 RESTING /
+                    // consuming-boundary; suppress `E_MoveInOperandPosition`
+                    // for the DIRECT top-level `Expr::Move` RHS (mirrors
+                    // VarDecl/Assign). Nested `!` inside e.g. `return f(!x)`
+                    // stays legit via the parser pre-strip of call args; a
+                    // NESTED `return !x + y` (Move inside binop) is still an
+                    // operand-position reject because only the DIRECT
+                    // top-level Move gets the suppress.
+                    let prev_move = self.suppress_move_in_operand_position;
+                    if matches!(&expr.node, Expr::Move { .. }) {
+                        self.suppress_move_in_operand_position = true;
+                    }
                     self.check_expr(expr);
+                    self.suppress_move_in_operand_position = prev_move;
                     self.in_return_expr = saved_in_return;
 
                     // D4/D12 position 4 (return): a bare return of a live
@@ -1027,7 +1059,17 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Stmt::Throw(expr) => {
+                // Round XXVIII Track C — throw value is D32 RESTING /
+                // consuming-boundary (per scout: handler consumes the thrown
+                // value at boundary); suppress `E_MoveInOperandPosition` for
+                // the DIRECT top-level `Expr::Move` RHS. Filed sub-question
+                // for owner ratification; default ALLOW per scout reasoning.
+                let prev_move = self.suppress_move_in_operand_position;
+                if matches!(&expr.node, Expr::Move { .. }) {
+                    self.suppress_move_in_operand_position = true;
+                }
                 self.check_expr(expr);
+                self.suppress_move_in_operand_position = prev_move;
                 self.diverged = true;
             }
 
@@ -1334,7 +1376,16 @@ impl<'a> BorrowChecker<'a> {
                         }
                         SelectOp::Send { channel, value } => {
                             self.check_expr(channel);
+                            // Round XXVIII Track C — send value is D32 RESTING
+                            // / consuming-boundary (channel consumes at send);
+                            // suppress `E_MoveInOperandPosition` for the DIRECT
+                            // top-level `Expr::Move` value (mirrors Return/Throw).
+                            let prev_move = self.suppress_move_in_operand_position;
+                            if matches!(&value.node, Expr::Move { .. }) {
+                                self.suppress_move_in_operand_position = true;
+                            }
                             self.check_expr(value);
+                            self.suppress_move_in_operand_position = prev_move;
                         }
                     }
                     self.check_block(&arm.body);

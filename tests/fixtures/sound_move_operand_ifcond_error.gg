@@ -1,0 +1,12 @@
+# Round XXVIII Track C — `!` in an IF CONDITION operand position.
+# D32:1278-1281 REJECT class. INTENDED: reject at `gg check`.
+
+bool pick():
+    return true
+
+void main():
+    bool b = pick()
+    if !b:
+        print(1)
+    else:
+        print(0)

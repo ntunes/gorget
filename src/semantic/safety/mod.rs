@@ -507,6 +507,24 @@ pub(super) struct BorrowChecker<'a> {
     /// `check_interpolation_expr` SKIP their emit when this flag is set.
     /// RESET to `false` after each statement so it never leaks to siblings.
     pub(super) suppress_amp_in_operand_position: bool,
+
+    /// Round XXVIII Track C (D32:1278-1281 sibling of
+    /// `suppress_amp_in_operand_position`) — set to `true` at the RESTING /
+    /// consuming-boundary positions where a top-level `Expr::Move` is legit:
+    /// VarDecl / Assign / Return / Throw / Send DIRECT top-level `!x` RHS, and
+    /// the recursive descent into container-literal ELEMENTS (`[!a, !b]`,
+    /// `(!a, !b)`, `{k: !v}`, `S(!f)` via the StructLiteral walker) which are
+    /// consuming init boundaries per D32. The `check_expr::Expr::Move` arm
+    /// (main safety walker) AND the sibling `check_interpolation_expr::
+    /// Expr::Move` arm SKIP the `E_MoveInOperandPosition` emit when this
+    /// flag is set. Call args pre-strip via `parse_ownership_modifier`
+    /// (`f(!x)` is `CallArg { ownership: Move }`, never reaches the walker as
+    /// `Expr::Move`); iterables pre-strip via `check_iterable_maybe_amp`
+    /// (extended in R3 to strip `Expr::Move` alongside `Expr::MutableBorrow`);
+    /// closure-body tail and spawn/await/capture-list route through SReturn
+    /// implicit lowering or parser pre-strip. RESET to `false` after each
+    /// bracketed walk so it never leaks to a sibling operand context.
+    pub(super) suppress_move_in_operand_position: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -611,6 +629,7 @@ impl<'a> BorrowChecker<'a> {
             in_destructuring_bind: false,
             live_guards: FxHashMap::default(),
             suppress_amp_in_operand_position: false,
+            suppress_move_in_operand_position: false,
         }
     }
 

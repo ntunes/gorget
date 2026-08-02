@@ -1,0 +1,14 @@
+# Round XXVIII Track C — `!` in a MATCH SCRUTINEE operand position.
+# D32:1278-1281 REJECT class — mirror of `sound_amp_operand_scrutinee_error.gg`.
+# INTENDED: reject at `gg check` with `E_MoveInOperandPosition`.
+
+String pick():
+    return "hello"
+
+void main():
+    String s = pick()
+    match !s:
+        case "hello":
+            print(1)
+        else:
+            print(0)

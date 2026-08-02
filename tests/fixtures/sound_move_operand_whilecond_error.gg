@@ -1,0 +1,12 @@
+# Round XXVIII Track C — `!` in a WHILE CONDITION operand position.
+# D32:1278-1281 REJECT class. INTENDED: reject at `gg check`.
+
+bool pick():
+    return false
+
+void main():
+    bool b = pick()
+    while !b:
+        print(1)
+        b = true
+    print(0)

@@ -1164,6 +1164,113 @@ fn count_amp_in_operand_position_rejects() -> usize {
     count
 }
 
+/// Round XXVIII Track C class-retirement guard (Core #6): D32:1278-1281
+/// sibling of `amp_in_operand_position_reject_sites_count`. `!`-in-
+/// operand-position reject (`SemanticErrorKind::MoveInOperandPosition`) is
+/// emitted from a small, enumerated set of walker arms in
+/// `src/semantic/safety/`. If a new safety walker gets added that recurses
+/// into `Expr::Move` (a new re-parse path, a new pass), it MUST route the
+/// reject through the producer — this ratchet forces a review.
+///
+/// Enumerated emit sites (baseline 2026-08-02):
+///   - `check_expr.rs` main safety pass `Expr::Move` arm (the ONE-PRODUCER
+///     chokepoint, hit by every operand-position `!` that isn't stripped
+///     by a pre-strip preamble or bracketed by a
+///     `suppress_move_in_operand_position` boundary set).
+///   - `check_expr.rs::check_interpolation_expr` fstring interp walker arm.
+///     Sibling walker forced by the fact that f-string interpolation bodies
+///     are re-parsed via `parse_expr` with synthetic spans that don't match
+///     the resolution map, so it can't reuse `check_expr`'s recursion. Same
+///     class, same reject, different span source (`fstring_span`).
+///
+/// The complementary suppress sites (VarDecl/Assign/Return/Throw/Send DIRECT
+/// top-level `Expr::Move` RHS + container-literal-element walker arms
+/// (ArrayLiteral/TupleLiteral/DictLiteral/StructLiteral) + iterable-strip
+/// via `check_iterable_maybe_amp`) are enforced structurally at their call
+/// sites. Enum-init is EXCLUDED (parser pre-strips call args, no walker arm
+/// to modify).
+#[test]
+fn move_in_operand_position_reject_sites_count() {
+    const EXPECTED: usize = 2;
+    let count = count_move_in_operand_position_rejects();
+    assert_eq!(
+        count, EXPECTED,
+        "MoveInOperandPosition reject-emit-site count in \
+         `src/semantic/safety/**/*.rs` changed: {count} vs expected {EXPECTED}.\n\n\
+         If a NEW safety walker was added that recurses into \
+         `Expr::Move` and needs to reject the operand-position class, \
+         verify it emits `SemanticErrorKind::MoveInOperandPosition` at the \
+         chokepoint (Core #4 one-producer) and bump EXPECTED. If a site was \
+         removed / centralized, lower EXPECTED. NEVER add a walker that \
+         silently accepts `!`-of-a-place in an operand position (Core #10).",
+    );
+}
+
+fn count_move_in_operand_position_rejects() -> usize {
+    let mut count = 0;
+    for path in walkdir_rs("src/semantic/safety") {
+        let content = match fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            if t.contains("SemanticErrorKind::MoveInOperandPosition,") {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Round XXVIII Track C — SH-lane mirror of `move_in_operand_position_reject_sites_count`.
+/// D32:1278-1281 all-lanes: SH is the 3rd REJECT lane alongside Rust and ggdef.
+/// This ratchet pins two SH counts in `tests/fixtures/self_host_typechecker/typecheck.gg`:
+///
+/// (1) EMIT sites — `DkMoveInOperandPosition(),` (comma indicates it's the
+///     `Diagnostic.error(span, kind, msg)` kind arg). Baseline = 1: the ONE-PRODUCER
+///     chokepoint at `check_safety_expr`'s `case EMove(inner):` arm. SH's f-string
+///     interpolation is pre-parsed into `EFString.exprs` (not re-parsed with
+///     synthetic spans like Rust), so SH does not need an interpolation-specific
+///     sibling emit — one arm suffices for all operand contexts.
+///
+/// (2) STRIP CALL SITES — same `check_iterable_maybe_amp(` count as the `&`
+///     sibling (baseline 4: SFor + EListComp + ESetComp + EDictComp iterables).
+///     The helper is extended in R3 to peel `EMove` alongside `EMutableBorrow`
+///     inline — one helper, both sigils. So the call-site count doesn't grow;
+///     the `sh_amp_operand_reject_sites_count` lint already pins it to 4.
+///     This lint therefore only pins the EMIT axis for Move.
+#[test]
+fn sh_move_operand_reject_sites_count() {
+    let src = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("read self_host_typechecker/typecheck.gg");
+    // Strip line comments so prose mentions of the marker don't count.
+    let body: String = src
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    const EXPECTED_EMIT: usize = 1;
+    let emit_count = body.matches("DkMoveInOperandPosition(),").count();
+    assert_eq!(
+        emit_count, EXPECTED_EMIT,
+        "SH `DkMoveInOperandPosition()` emit-site count in \
+         `tests/fixtures/self_host_typechecker/typecheck.gg` changed: {emit_count} vs \
+         expected {EXPECTED_EMIT}.\n\n\
+         The ONE-PRODUCER chokepoint (Core #4) is the `case EMove(inner):` \
+         arm of `check_safety_expr` — every operand-position `!` reaches there via \
+         its containing walker arm. If a NEW re-parse walker was added, verify it \
+         emits `DkMoveInOperandPosition()` at the chokepoint (do not open-code) and \
+         bump EXPECTED. If a site was removed, verify it centralized upward and \
+         lower EXPECTED. NEVER add a walker that silently accepts operand `!` \
+         (Core #10).",
+    );
+}
+
 /// Round XXVII Track E — SH-lane mirror of `amp_in_operand_position_reject_sites_count`.
 /// D32 all-lanes: SH is the 3rd REJECT lane alongside Rust and ggdef. This ratchet
 /// pins two SH counts in `tests/fixtures/self_host_typechecker/typecheck.gg`:

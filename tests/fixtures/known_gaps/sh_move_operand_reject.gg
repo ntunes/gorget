@@ -1,0 +1,19 @@
+# Round XXVIII Track C — DURABLE SH-lane companion for the operand-position
+# `!` reject (Core #9 lane parity; owner rule 2026-07-24: filed bugs get a
+# committed reproducer). Mirror of `sh_amp_operand_reject.gg` for the
+# D32:1278-1281 `!`-in-operand-position class.
+#
+# INTENDED SH behaviour: SH driver rejects with `E_MoveInOperandPosition`
+# via the `case EMove(inner):` arm in `check_safety_expr`
+# (typecheck.gg:2632-2660).
+
+String pick():
+    return "hello"
+
+void main():
+    String s = pick()
+    match !s:
+        case "hello":
+            print(1)
+        else:
+            print(0)

@@ -184,6 +184,18 @@ impl<'a> BorrowChecker<'a> {
             Expr::MutableBorrow { expr: inner } => {
                 self.check_expr(inner);
             }
+            // Round XXVIII Track C R3 — `[expr for x in !coll]` (comprehension):
+            // the comprehension parser at `parser/expr.rs:1754` places
+            // `parse_ownership_modifier` BEFORE `in`, so the comprehension
+            // form `for x in !a` lands `!a` as `Expr::Move` on the iterable
+            // (unlike the stmt-for form at `parser/stmt.rs:287` which places
+            // it AFTER `in`, stripping to `Stmt::For.ownership`). Drain
+            // iterables are a BOUNDARY position (D32 RESTING; the container
+            // consumes) — peel `Expr::Move` here so `check_expr::Expr::Move`
+            // does not false-flag as an operand-position reject.
+            Expr::Move { expr: inner } => {
+                self.check_expr(inner);
+            }
             Expr::MethodCall {
                 receiver,
                 method,
@@ -192,10 +204,14 @@ impl<'a> BorrowChecker<'a> {
             } if method.node == "enumerate"
                 && args.is_empty()
                 && generic_args.is_none()
-                && matches!(&receiver.node, Expr::MutableBorrow { .. }) =>
+                && matches!(&receiver.node, Expr::MutableBorrow { .. } | Expr::Move { .. }) =>
             {
-                if let Expr::MutableBorrow { expr: recv_inner } = &receiver.node {
-                    self.check_expr(recv_inner);
+                match &receiver.node {
+                    Expr::MutableBorrow { expr: recv_inner }
+                    | Expr::Move { expr: recv_inner } => {
+                        self.check_expr(recv_inner);
+                    }
+                    _ => unreachable!(),
                 }
             }
             _ => {
@@ -298,6 +314,41 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::Move { expr: inner } => {
+                // Round XXVIII Track C — ONE-PRODUCER chokepoint (Core #4) for
+                // D32:1278-1281's `!`-in-operand-position reject. Sibling of
+                // the `Expr::MutableBorrow` arm below (`AmpInOperandPosition`,
+                // Round XXIII Track β). Reaching this arm means `!` is being
+                // walked in an OPERAND (read) context — every legit RESTING /
+                // consuming-boundary `!x` pre-suppresses BEFORE we get here:
+                //   - `f(!x)` call-arg → `parse_ownership_modifier` strips.
+                //   - VarDecl/Assign/Return/Throw/Send DIRECT top-level `!x`
+                //     RHS → `check_stmt` sets `suppress_move_in_operand_position`
+                //     for the duration of the walk.
+                //   - Container-literal element (`[!a]`, `(!a, !b)`, `{k: !v}`,
+                //     `S(!f)`) → the container-literal walker arms
+                //     (ArrayLiteral/TupleLiteral/DictLiteral/StructLiteral)
+                //     bracket the recursive descent with the suppress flag —
+                //     one-line per arm, save/restore prev. (Enum-init lowers
+                //     to `Call { is_constructor }` with parser-pre-stripped
+                //     args — no walker arm to modify.)
+                //   - `for x in !coll` (statement) → `parse_ownership_modifier`
+                //     at `parser/stmt.rs:287` strips to `Stmt::For.ownership`.
+                //   - `[expr for x in !coll]` (comprehension) → the
+                //     `check_iterable_maybe_amp` helper (R3-extended to
+                //     `Expr::Move` alongside `Expr::MutableBorrow`) strips.
+                //   - Closure body tail / spawn / await / capture list →
+                //     route through SReturn implicit lowering or parser
+                //     pre-strip; no additional suppress needed (verified via
+                //     the POS fixtures shipped this round).
+                // Everything else is an operand position and rejects here.
+                //
+                // Pre-fix: `!s + "b"` measured silent-accept-but-source-moving
+                // (source `s` becomes UseAfterMove on next read, result is
+                // inert) — the "silently useless" typo class D32 rejects,
+                // symmetric with the `&` operand reject.
+                if !self.suppress_move_in_operand_position {
+                    self.error(SemanticErrorKind::MoveInOperandPosition, expr.span);
+                }
                 // The `!` operator: move the value. `check_move` itself
                 // marks the variable as used (a move IS a use), so no extra
                 // bookkeeping needed here.
@@ -1314,7 +1365,17 @@ impl<'a> BorrowChecker<'a> {
                 self.arena_depth = 0;
                 self.in_return_expr = false;
                 self.current_function_is_async = false; // closures are not async (async closures deferred)
+                // Round XXVIII Track C — closure body tail is a RESTING /
+                // consuming-boundary position (mirrors a fn's expression-body
+                // tail which lowers to SReturn). A direct top-level `Expr::Move`
+                // as the closure body (`(): !s`) legit-moves the source at the
+                // closure's return boundary; suppress `E_MoveInOperandPosition`.
+                let prev_move = self.suppress_move_in_operand_position;
+                if matches!(&body.node, Expr::Move { .. }) {
+                    self.suppress_move_in_operand_position = true;
+                }
                 self.check_expr(body);
+                self.suppress_move_in_operand_position = prev_move;
                 self.restore_branch_state(&saved);
                 self.loop_depth = saved_loop_depth;
                 self.loop_local_defs = saved_loop_locals;
@@ -1334,7 +1395,13 @@ impl<'a> BorrowChecker<'a> {
                 self.arena_depth = 0;
                 self.in_return_expr = false;
                 self.current_function_is_async = false;
+                // Same RESTING treatment as Closure above.
+                let prev_move = self.suppress_move_in_operand_position;
+                if matches!(&body.node, Expr::Move { .. }) {
+                    self.suppress_move_in_operand_position = true;
+                }
                 self.check_expr(body);
+                self.suppress_move_in_operand_position = prev_move;
                 self.restore_branch_state(&saved);
                 self.loop_depth = saved_loop_depth;
                 self.loop_local_defs = saved_loop_locals;
@@ -1409,16 +1476,35 @@ impl<'a> BorrowChecker<'a> {
             }
 
             Expr::ArrayLiteral(elements) | Expr::TupleLiteral(elements) => {
+                // Round XXVIII Track C R1 (walker-driven, per pass-2 reference-
+                // grade fold): container-literal ELEMENTS are D32 consuming init
+                // boundaries — a `!x` element (`[!a, !b]`, `(!a, !b)`) is
+                // RESTING at the element boundary, not an operand-position
+                // reject. Suppress `E_MoveInOperandPosition` for the recursive
+                // descent into each element, save/restore prev so the flag
+                // never leaks past this arm. Uniform across nested containers
+                // (`if [!a] contains !b:` — inner `!a` is a container element,
+                // outer `!b` is an operand). Enum-init lowers to
+                // `Call { is_constructor }` with parser-pre-stripped args, so
+                // no arm here — deliberate.
+                let prev = self.suppress_move_in_operand_position;
+                self.suppress_move_in_operand_position = true;
                 for elem in elements {
                     self.check_expr(elem);
                 }
+                self.suppress_move_in_operand_position = prev;
             }
 
             Expr::DictLiteral(pairs) => {
+                // R1: dict values are consuming init boundaries; keys likewise
+                // (a `{!k: v}` moves the key). Suppress uniformly.
+                let prev = self.suppress_move_in_operand_position;
+                self.suppress_move_in_operand_position = true;
                 for (k, v) in pairs {
                     self.check_expr(k);
                     self.check_expr(v);
                 }
+                self.suppress_move_in_operand_position = prev;
             }
 
             Expr::StructLiteral { name, args, .. } => {
@@ -1439,6 +1525,12 @@ impl<'a> BorrowChecker<'a> {
                 // fields so we can enforce exclusivity *before* the new struct
                 // becomes part of `var_origins`.
                 let mut mut_ref_sources: Vec<(DefId, Span)> = Vec::new();
+                // Round XXVIII Track C R1 — struct-literal args are D32
+                // consuming init boundaries; suppress `E_MoveInOperandPosition`
+                // uniformly across the recursive descent (mirrors the
+                // ArrayLiteral/TupleLiteral/DictLiteral arms). Save/restore prev.
+                let prev = self.suppress_move_in_operand_position;
+                self.suppress_move_in_operand_position = true;
                 for (i, arg) in args.iter().enumerate() {
                     let target_is_ref = field_ref_flags.get(i).copied().unwrap_or(false);
                     let target_is_mut_ref = field_mut_ref_flags.get(i).copied().unwrap_or(false);
@@ -1465,6 +1557,7 @@ impl<'a> BorrowChecker<'a> {
                     }
                     self.check_expr(arg);
                 }
+                self.suppress_move_in_operand_position = prev;
                 // MutRef[T] exclusivity: for each source taken as a `MutRef[T]`
                 // field, no other live borrow-field struct may already borrow
                 // from it (shared OR exclusive). Conservative — disallows any
@@ -1607,6 +1700,23 @@ impl<'a> BorrowChecker<'a> {
                 // `check_expr::Expr::MutableBorrow` arm).
                 if !self.suppress_amp_in_operand_position {
                     self.error(SemanticErrorKind::AmpInOperandPosition, fstring_span);
+                }
+                self.check_interpolation_expr(inner, fstring_span);
+            }
+            // Round XXVIII Track C — f-string interpolation `f"{!s}"` is an
+            // OPERAND position (the interp body is re-parsed via `parse_expr`
+            // inside `check_interpolation_expr`, which yields `Expr::Move` for
+            // a leading `!`). Sibling of the top-level `check_expr::Expr::Move`
+            // chokepoint arm — same class, same error kind, different span
+            // source (re-parsed body has synthetic spans that don't match the
+            // resolution map, so emit at `fstring_span`). No RESTING f-string
+            // interp position exists (interps are always operand), so the
+            // suppress flag is not gated here — but the flag guard is retained
+            // to mirror the sibling arm's shape and to keep the two lint-
+            // counted emit sites symmetric.
+            Expr::Move { expr: inner } => {
+                if !self.suppress_move_in_operand_position {
+                    self.error(SemanticErrorKind::MoveInOperandPosition, fstring_span);
                 }
                 self.check_interpolation_expr(inner, fstring_span);
             }

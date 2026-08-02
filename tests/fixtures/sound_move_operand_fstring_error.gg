@@ -1,0 +1,12 @@
+# Round XXVIII Track C — `!` in an F-STRING INTERPOLATION operand position.
+# D32:1278-1281 REJECT class. Emitted via the sibling walker
+# `check_interpolation_expr::Expr::Move` (mirror of MutableBorrow sibling).
+# INTENDED: reject at `gg check` with `E_MoveInOperandPosition`.
+
+String pick():
+    return "hello"
+
+void main():
+    String s = pick()
+    String r = f"got {!s}"
+    print(r)

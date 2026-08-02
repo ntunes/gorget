@@ -1,0 +1,14 @@
+# Round XXVIII Track C — `!` in a RANGE ENDPOINT operand position.
+# D32:1278-1281 REJECT class. Parens force `!` to be parsed as an EXPRESSION
+# prefix (rather than the `for x in !coll:` iterable-modifier form which
+# `parser/stmt.rs:287::parse_ownership_modifier` intercepts before the
+# iterable expression is parsed). INTENDED: reject at `gg check`.
+
+int pick():
+    return 0
+
+void main():
+    int start = pick()
+    int end = 3
+    for i in (!start)..end:
+        print(i)

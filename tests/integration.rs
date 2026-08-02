@@ -38893,6 +38893,199 @@ fn sh_amp_operand_binop_reject() {
     );
 }
 
+// ── Round XXVIII Track C — `!`-in-operand-position REJECT class
+// (D32:1278-1281 sibling of the `&` operand reject above). One NEG fixture
+// per operand-context cell (Core #12 axis-completeness). All fire the
+// ONE-PRODUCER chokepoint at `src/semantic/safety/check_expr.rs::Expr::Move`
+// (or the sibling f-string interp arm). Pre-fix: silent-accept with inert
+// result but source-moving (measured on ggdef).
+
+#[test]
+fn sound_move_operand_binop_error() {
+    check_gg_fails(
+        "sound_move_operand_binop_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_matchsc_error() {
+    check_gg_fails(
+        "sound_move_operand_matchsc_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_ifcond_error() {
+    check_gg_fails(
+        "sound_move_operand_ifcond_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_whilecond_error() {
+    check_gg_fails(
+        "sound_move_operand_whilecond_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_index_error() {
+    check_gg_fails(
+        "sound_move_operand_index_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_fstring_error() {
+    check_gg_fails(
+        "sound_move_operand_fstring_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_range_error() {
+    check_gg_fails(
+        "sound_move_operand_range_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_ascast_error() {
+    check_gg_fails(
+        "sound_move_operand_ascast_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_augassign_error() {
+    check_gg_fails(
+        "sound_move_operand_augassign_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_unaryop_error() {
+    check_gg_fails(
+        "sound_move_operand_unaryop_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_deref_error() {
+    check_gg_fails(
+        "sound_move_operand_deref_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+#[test]
+fn sound_move_operand_field_error() {
+    check_gg_fails(
+        "sound_move_operand_field_error.gg",
+        "error[E_MoveInOperandPosition]",
+    );
+}
+
+// ── POS fixtures: verify the ALLOW list (Core #15e Q3). Each RESTING /
+// consuming-boundary position where a direct top-level `!x` MUST accept
+// and run correctly.
+
+#[test]
+fn sound_move_operand_closure_tail_allowed() {
+    run_gg("sound_move_operand_closure_tail_allowed.gg", "hello");
+}
+
+#[test]
+fn sound_move_operand_array_element_allowed() {
+    run_gg("sound_move_operand_array_element_allowed.gg", "aa\nbb");
+}
+
+// spawn_value_allowed is wired below (the C backend needs coordination on
+// spawn — the fixture only asserts `gg check` accepts + prints "hello" via
+// the child task).
+#[test]
+fn sound_move_operand_spawn_value_allowed() {
+    run_gg("sound_move_operand_spawn_value_allowed.gg", "hello");
+}
+
+// SH-lane companions for D32:1278-1281 (Core #9 lane parity). Mirrors the
+// `sh_amp_operand_*_reject` pattern: invoke the SH driver directly and
+// assert reject + `E_MoveInOperandPosition` on stderr. The SH walker port
+// (typecheck.gg `EMove` arm + iterable strip + container-literal suppress)
+// is the parity gate.
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_move_operand_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_move_operand_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_move_operand_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT operand-position `!`-of-a-place \
+         (`match !s:`); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_MoveInOperandPosition"),
+        "SH driver must emit E_MoveInOperandPosition on operand-position \
+         `!`-of-a-place reject; got stderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_move_operand_binop_reject() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_move_operand_binop_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_move_operand_binop_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT binop-operand `!`-of-a-place \
+         (`!s + \"b\"`); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_MoveInOperandPosition"),
+        "SH driver must emit E_MoveInOperandPosition on binop-operand \
+         `!`-of-a-place reject; got stderr:\n{stderr}",
+    );
+}
+
 /// GRADUATED Round XIV — `.or_else()` receiver-emptying regression pin, third
 /// costume of the map/filter/or_else silent write-drop mode. Uses field-access
 /// receiver (`h.slot.or_else(...)`) with an Option[Money] payload. Was WRONG 0
