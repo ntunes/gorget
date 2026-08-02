@@ -26298,7 +26298,7 @@ fn self_host_runtime_diff() {
     // drop_reassign moved BOTH-WRONG → ADJ), BOTH-WRONG 5→2 (remaining: drop_
     // collection_custom_elem_leak + drop_struct_collection_fields = row 2+3 of
     // G-class Drop transitive, filed as own-round HIGH TODOs).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1313;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1314;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
