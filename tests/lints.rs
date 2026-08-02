@@ -8516,15 +8516,16 @@ fn combinator_assign_result_discipline(adapter: &str) -> (usize, Vec<String>) {
 ///
 /// The admitted-collection member set is the union of `strip_prefix` arms in
 /// `infer_collection_element_type` (`src/ir/lowering/exprs/methods.rs`).
-/// Round XXIII γδ landed at 5: `Vector__` · `Deque__` · `Dict__` · `Map__` ·
-/// `HashMap__`.
+/// Round XXIII γδ landed at 5; Round XXIV Track E grew to 7: `Vector__` ·
+/// `Deque__` · `Dict__` · `Map__` · `HashMap__` · `Set__` · `HashSet__`.
 ///
-/// ⚠ Set/HashSet are DELIBERATELY EXCLUDED from this set today: neither has a
-/// positional index, so `set_index_returns_garbage.gg` (`known_gaps/`, TODO.md)
-/// asserts a check-time REJECTION rather than an arm here. If Set/HashSet
-/// iteration acquires a struct-payload silent-`0/0` symptom of its own (a
-/// distinct Core #15e Q3 gap filed by Round XXIII γδ TODO follow-up), the fix
-/// may or may not extend this arm set — verify the actual code path first.
+/// Set/HashSet arms cover the SIZE-DERIVATION face (empty-literal path at
+/// `collections.rs:277`, plus value-arg hints via `methods.rs:2517`). They
+/// do NOT open the POSITIONAL-INDEX face — `try_resolve_index_element_ptr`
+/// at `src/ir/lowering/exprs/mod.rs` still excludes Set/HashSet (Set has no
+/// positional index; `set_index_returns_garbage.gg` pins that unsound
+/// check-time accept as a separate filed defect pending a DESIGN DECISION on
+/// ggdef divergence).
 ///
 /// **If this fails:**
 ///   - A NEW collection family got a `strip_prefix` arm → verify the kind-gate
@@ -8555,23 +8556,26 @@ fn infer_collection_element_type_arms_count() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // 5 arms: Vector__ · Deque__ · Dict__ · Map__ · HashMap__. Each spelled
-    // as a `.strip_prefix("<Prefix>__")` call in the fn body; count the
-    // literal appearances of the prefixes (each MUST appear exactly once).
-    const EXPECTED: usize = 5;
-    let count: usize = ["Vector__", "Deque__", "Dict__", "Map__", "HashMap__"]
+    // 7 arms: Vector__ · Deque__ · Dict__ · Map__ · HashMap__ · Set__ ·
+    // HashSet__. Each spelled as a `.strip_prefix("<Prefix>__")` call in the
+    // fn body; count the literal appearances of the prefixes (each MUST
+    // appear exactly once).
+    const EXPECTED: usize = 7;
+    let count: usize = ["Vector__", "Deque__", "Dict__", "Map__", "HashMap__", "Set__", "HashSet__"]
         .iter()
         .map(|p| body.matches(&format!(".strip_prefix(\"{p}\")")).count())
         .sum();
     assert_eq!(
         count, EXPECTED,
         "`infer_collection_element_type` arm count changed: {count} vs \
-         expected {EXPECTED}. Admitted-collection member set at Round XXIII γδ \
-         close: {{Vector, Deque, Dict, Map, HashMap}}. If a family was ADDED, \
-         verify the `try_resolve_index_element_ptr` kind-gate at \
-         `src/ir/lowering/exprs/mod.rs` also admits its CollectionKind, then \
-         bump EXPECTED. If REMOVED, RESTORE the arm — the family now silently \
-         falls to `I64_TYPE` (a gg-check-clean SIGSEGV / llc-reject class).",
+         expected {EXPECTED}. Admitted-collection member set at Round XXIV \
+         Track E close: {{Vector, Deque, Dict, Map, HashMap, Set, HashSet}}. \
+         If a family was ADDED, verify the `try_resolve_index_element_ptr` \
+         kind-gate at `src/ir/lowering/exprs/mod.rs` also admits its \
+         CollectionKind (or that the family stays index-rejected like \
+         Set/HashSet — size-derivation only), then bump EXPECTED. If REMOVED, \
+         RESTORE the arm — the family now silently falls to `I64_TYPE` (a \
+         gg-check-clean SIGSEGV / llc-reject / C-emit-type-mismatch class).",
     );
 }
 

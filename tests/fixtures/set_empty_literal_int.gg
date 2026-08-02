@@ -1,0 +1,15 @@
+# Regression: `Set[int] s = {}` (empty literal) — int-payload cell of the
+# Round XXIV Track E axis matrix (companion to
+# set_empty_literal_struct_payload.gg + set_empty_literal_string.gg +
+# hashset_empty_literal_struct_payload.gg). Pre-fix: same C-emit
+# "incompatible types when assigning to type 'GorgetSet' from type 'int32_t'"
+# because `infer_collection_element_type` had no `Set__` arm. Scout initially
+# thought this passed accidentally at I64_TYPE; pass-1 RE-verified and found
+# `Set[int] s = {}` also fails at HEAD.
+int main():
+    Set[int] s = {}
+    s.add(1)
+    s.add(2)
+    for x in s:
+        print(f"{x}")
+    return 0

@@ -374,12 +374,28 @@ pub(super) fn lower_dict_literal(
 ) -> Operand {
     if pairs.is_empty() {
         // Use expected type from VarDecl context to determine dict type.
-        // Read typed `collection_kind` (Phase A) — Dict (OrderedMap) and
-        // HashMap (Map) both qualify; Set/HashSet/Vector don't have
-        // pair-element constructors.
+        // The parser produces `Expr::DictLiteral(vec![])` for `{}` — it
+        // cannot know from syntax alone whether the target is a Dict/HashMap
+        // (pair store) or a Set/HashSet (single-value store), so this branch
+        // routes by the expected type's `collection_kind` (Phase A typed
+        // metadata, not name-matching).
+        use crate::ir::types::CollectionKind;
         if let Some(expected_type) = ctx.func_state.expected_type {
-            use crate::ir::types::CollectionKind;
-            let is_map = matches!(ctx.type_registry.collection_kind(expected_type),
+            let kind = ctx.type_registry.collection_kind(expected_type);
+            // Set / HashSet empty `{}` — dispatch to the Set producer so the
+            // slot receives a `GorgetSet` allocated via `gorget_set_new`
+            // (with the element-type-derived elem_size). Before this arm the
+            // empty branch below fell to `Constant::Unit` (int32_t 0), which
+            // the C-emit assigned into a `GorgetSet` slot ("incompatible
+            // types when assigning to type 'GorgetSet' from type 'int32_t'")
+            // and the LLVM backend rejected on the same shape. Same producer
+            // as non-empty `{a, b}` (dispatched from `lower_array_literal`);
+            // `lower_set_literal_from_array` reads `is_ordered` from the same
+            // `expected_type` we just read here.
+            if matches!(kind, Some(CollectionKind::OrderedSet) | Some(CollectionKind::Set)) {
+                return lower_set_literal_from_array(ctx, builder, &[]);
+            }
+            let is_map = matches!(kind,
                 Some(CollectionKind::OrderedMap) | Some(CollectionKind::Map));
             if is_map {
                 if let Some(type_name) = ctx.type_registry.type_name(expected_type) {

@@ -4358,6 +4358,28 @@ pub(in crate::ir::lowering) fn infer_collection_element_type(ctx: &mut LoweringC
             let elem_name = elem_name.to_string();
             return resolve_type_name_to_id(ctx, &elem_name);
         }
+        // Set__T / HashSet__T → T is the element type. Covers the
+        // SIZE-DERIVATION face — the sole caller today is the empty-literal
+        // path at `collections.rs:277` (`Set[T] s = {}` computes
+        // `elem_size = infer_collection_element_type(ctx, Set__T)` and
+        // hands it to `gorget_set_new(sizeof(elem))`). Without this arm the
+        // fall-through to `I64_TYPE` produced a `gg check`-clean C-emit
+        // failure ("incompatible types when assigning to type 'GorgetSet'
+        // from type 'int32_t'") on `Set[P] s = {}` for struct P.
+        //
+        // Set/HashSet do NOT open the POSITIONAL-INDEX face — the kind-gate
+        // at `mod.rs`'s `try_resolve_index_element_ptr` still excludes them
+        // (Set has no positional index; `set_index_returns_garbage.gg` pins
+        // the unsound check-time accept as a separate filed defect pending a
+        // ggdef DESIGN DECISION). Also no Callable-alias signature-recovery
+        // hoist (closures are not Hashable+Equatable, so they cannot be
+        // Set/HashSet elements).
+        if let Some(elem_name) = name.strip_prefix("Set__")
+            .or_else(|| name.strip_prefix("HashSet__"))
+        {
+            let elem_name = elem_name.to_string();
+            return resolve_type_name_to_id(ctx, &elem_name);
+        }
         // Dict__K__V or HashMap__K__V → V is the value type (for indexing).
         // HashMap is the sibling missed at the IR layer; the LIR layer at
         // `insts.rs:1905`/method dispatchers all split `HashMap__` correctly.

@@ -1,0 +1,27 @@
+# Regression: `HashSet[P] s = {}` (empty literal) — HashSet struct-payload
+# cell of the Round XXIV Track E axis matrix (Set/HashSet share the arm, so
+# HashSet coverage keeps the axis matrix honest against a partial regression).
+# Pre-fix: same C-emit "incompatible types when assigning to type 'GorgetSet'
+# from type 'int32_t'" as the Set__ cells because `infer_collection_element_type`
+# had no `HashSet__` arm either.
+#
+# HashSet REQUIRES `@derive(Equatable, Hashable)` on the payload
+# (`E_UnsatisfiedTraitBound` otherwise). HashSet iteration order is unordered
+# (hash-table), so only membership / count is asserted — a `for` sum keeps it
+# deterministic.
+@derive(Equatable, Hashable)
+struct P:
+    int x
+    int y
+    int z
+
+int main():
+    HashSet[P] s = {}
+    s.add(P(1, 2, 3))
+    s.add(P(4, 5, 6))
+    print(s.len())
+    int total = 0
+    for p in s:
+        total = total + p.x + p.y + p.z
+    print(f"{total}")
+    return 0

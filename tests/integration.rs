@@ -3789,6 +3789,42 @@ false",
 }
 
 #[test]
+fn set_empty_literal_struct_payload() {
+    // Round XXIV Track E: `Set[P] s = {}` empty-literal cell (struct payload).
+    // Pre-fix `infer_collection_element_type` had no `Set__` arm, so
+    // `collections.rs:277`'s `elem_size = infer_collection_element_type(ctx,
+    // Set__P)` fell to `I64_TYPE` and the C-emit failed with "incompatible
+    // types when assigning to type 'GorgetSet' from type 'int32_t'". Fixed
+    // by adding Set__/HashSet__ arms (arm-count lint bumped 5 → 7).
+    run_gg("set_empty_literal_struct_payload.gg", "1/2/3\n4/5/6");
+}
+
+#[test]
+fn set_empty_literal_int() {
+    // Round XXIV Track E: `Set[int] s = {}` empty-literal cell (int payload).
+    // Companion to set_empty_literal_struct_payload.gg — axis matrix.
+    run_gg("set_empty_literal_int.gg", "1\n2");
+}
+
+#[test]
+fn set_empty_literal_string() {
+    // Round XXIV Track E: `Set[String] s = {}` empty-literal cell (String
+    // payload). Pins that the fix routes through `resolve_type_name_to_id`
+    // (special-cases "GorgetString" → `owned_string_type`) rather than
+    // `lookup_type_by_name` (would silently regress here).
+    run_gg("set_empty_literal_string.gg", "a\nb");
+}
+
+#[test]
+fn hashset_empty_literal_struct_payload() {
+    // Round XXIV Track E: `HashSet[P] s = {}` empty-literal cell (HashSet
+    // struct payload). Set/HashSet share the arm; HashSet cell keeps the
+    // axis matrix honest against a partial regression. HashSet iteration is
+    // unordered — only count + sum-over-fields are asserted.
+    run_gg("hashset_empty_literal_struct_payload.gg", "2\n21");
+}
+
+#[test]
 fn set_comprehension_iter() {
     // Set[int] comprehension over a range → gorget_ordered_set_new → iterates
     // in insertion order. Locks in the lower_set_comprehension ordered dispatch.
@@ -37998,6 +38034,35 @@ fn sound_tupstruct_field_writethrough() {
 INTENDED rejection; TODO.md."]
 fn set_index_returns_garbage_rejected() {
     check_gg_fails("known_gaps/set_index_returns_garbage.gg", "error[E_");
+}
+
+/// KNOWN GAP — `set.enumerate()` is shape-wrong through `lower_for_enumerate`
+/// (array-index scaffold used against Set's hash-table layout). Filed by
+/// Round XXIV Track E scout Finding #2. Silent zero output + C
+/// `void*←int32_t` warning today (both backends). The fixture asserts the
+/// INTENDED check-time REJECT (Option (a): Set has no positional index →
+/// `i` from `.enumerate()` has no meaningful value). Flip to a run-value
+/// assertion if the owner picks Option (b) (Set-specific enumerate lowering).
+#[test]
+#[ignore = "KNOWN GAP: `set.enumerate()` silent-zero-output; TODO.md. Asserts INTENDED reject."]
+fn set_enumerate_silent_no_output() {
+    check_gg_fails("known_gaps/set_enumerate_silent_no_output.gg", "error[E_");
+}
+
+/// KNOWN GAP + DESIGN DECISION — ggdef/language divergence on `s[i]` over a
+/// Set. Filed by Round XXIV Track E scout Finding #3. Three lanes disagree:
+/// ggdef (`spec/ggdef/src/eval.rs:944-948`) accepts + returns the
+/// insertion-ordered element; Rust gg (C+LLVM) + SH silently accept and
+/// return garbage (already pinned by `set_index_returns_garbage.gg`).
+/// Language design intent per filed TODO is REJECT — DESIGN DECISION owed
+/// to owner (Core #8: ≥1 bug on one of the two — either the ggdef spec
+/// accept is a defect or Rust/SH silent-garbage is the defect). The fixture
+/// asserts the INTENDED reject; flip when the owner rules.
+#[test]
+#[ignore = "KNOWN GAP + DESIGN DECISION: ggdef accepts set[i] + returns ordered elem, Rust/SH \
+silently accept + return garbage. Asserts INTENDED reject; TODO.md."]
+fn set_index_ggdef_divergence() {
+    check_gg_fails("known_gaps/set_index_ggdef_divergence.gg", "error[E_");
 }
 
 /// KNOWN GAP — `&`-capture exclusivity is SCOPE-based in production, while the
