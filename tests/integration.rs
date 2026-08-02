@@ -26078,7 +26078,13 @@ fn self_host_runtime_diff() {
     // propagate + C SH α port + D α ggdef port + E Set/HashSet empty-literal):
     // ADJ-MATCH 392 (of MATCH 1310, BOTH-WRONG 8). Track D's ggdef `unify_closure_ret_axis`
     // mirror + Track E's Set/HashSet empty-literal fix ratcheted ggdef adjudication +2.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 392;
+    // Ratcheted 2026-08-02 (Round XXVI Track E close: `drop_reassign` BOTH-WRONG
+    // → ADJ-MATCH via `resolve_write` `Action::WriteOwned` old-value drop). ADJ-MATCH
+    // 393 (of MATCH 1310, BOTH-WRONG 4). One G-class row moved from BOTH-WRONG to
+    // ADJ-MATCH (whole-local reassign-of-Drop-value now matches production);
+    // container-of-Drop transitivity + apply_mut pre-drop + return-`!expr` kill
+    // remain filed as HIGH TODOs.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 393;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -26131,12 +26137,21 @@ fn self_host_runtime_diff() {
     //       `elaborate_call:1781`, `as_print_call:3325` (name-guard falls
     //       through to elaborate_call), and `eval.rs:1072` (defensive,
     //       unreachable post-fix — documented). Positive-controls (Core #12(a))
-    //       pin the three rejects in spec/ggdef/src/tests.rs. Remaining
-    //       Class-B cells: 5.
+    //       pin the three rejects in spec/ggdef/src/tests.rs. Round XXVI Track
+    //       E (2026-08-02) BURNED DOWN the whole-local reassign-drop cell (row
+    //       1 of the 3-row G-class): `spec/ggdef/src/eval.rs` `resolve_write`
+    //       `Action::WriteOwned` now `mem::replace`s the OLD value and dispatches
+    //       `run_custom_drop` on it (guarded on `place.proj.is_empty()` so
+    //       projected field-writes stay row-3's scope). 4 unit tests pin the
+    //       fix (`reassign_of_droppable_local_drops_old`, `reassign_of_moved_
+    //       slot_does_not_drop`, `reassign_of_scalar_local_no_drop_event`,
+    //       `projected_assign_of_droppable_user_drop_field_does_not_drop`).
+    //       G-class rows remaining: 2 (rows 2+3 filed as own-round HIGH TODOs
+    //       — transitive drop + apply_mut `M::Set` pre-drop + return-`!expr`
+    //       kill). Remaining Class-B cells: 4.
     const EXPECTED_BOTH_WRONG: &[&str] = &[
         "core_traits",
         "drop_collection_custom_elem_leak",
-        "drop_reassign",
         "drop_struct_collection_fields",
         "print_display_temp_leak",
     ];
