@@ -43,7 +43,7 @@ fn ws_root() -> PathBuf {
 // Regenerate with:
 //   cargo test -p ggdef --test converter_agreement -- --nocapture
 // and read the "AGREE" count. NEVER lower it without a cited reason.
-const AGREE_FLOOR: usize = 182;
+const AGREE_FLOOR: usize = 184;
 
 #[test]
 fn converter_agreement() {

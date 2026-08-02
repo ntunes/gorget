@@ -268,6 +268,11 @@ struct Ctx<'a> {
     structs: HashMap<&'a str, usize>,
     /// `type-name → drop-fn index` for `equip T with Drop` custom drops.
     drop_fns: HashMap<&'a str, usize>,
+    /// `type-name → display-fn index` for `equip T with Displayable`.
+    /// Round XXVI Track B: `format_for_print` looks up here and dispatches
+    /// the user's `display(self) -> String` (D20 + docs/language-reference.md:3291);
+    /// misses fall back to the default `Type{k: v}` shape.
+    display_fns: HashMap<&'a str, usize>,
 }
 
 impl<'a> Ctx<'a> {
@@ -280,7 +285,15 @@ impl<'a> Ctx<'a> {
             .iter()
             .filter_map(|(ty, fname)| funcs.get(fname.as_str()).map(|&idx| (ty.as_str(), idx)))
             .collect();
-        Ctx { prog, funcs, structs, drop_fns }
+        // Round XXVI Track B: mirror of drop_fns population — resolve each
+        // registered Displayable method-name to its function index for O(1)
+        // dispatch in `format_for_print`.
+        let display_fns = prog
+            .display_fns
+            .iter()
+            .filter_map(|(ty, fname)| funcs.get(fname.as_str()).map(|&idx| (ty.as_str(), idx)))
+            .collect();
+        Ctx { prog, funcs, structs, drop_fns, display_fns }
     }
 
     fn struct_fields(&self, name: &str) -> Option<&'a [String]> {
@@ -557,6 +570,45 @@ fn is_droppable(v: &Value) -> bool {
     !matches!(v, Value::Unit | Value::Int(_) | Value::Bool(_) | Value::Float(_))
 }
 
+/// Round XXVI Track B: dispatch a user `equip T with Displayable`'s
+/// `display(self) -> String` when rendering a Struct / Enum value at print /
+/// f-string interpolation. Returns `Some(rendered)` on hit, `None` for values
+/// whose type has no registered display (caller falls back to the default
+/// `Type{k: v}` shape). `self` is passed BY OWNED CLONE — the print pipeline
+/// only ever holds a `&Value`, so the dispatched body's own scope-exit drop of
+/// its `self` local acts on the clone, never on the caller's value (D2 plain
+/// `self` = borrow-view semantically; ggdef materialises that as an owned copy
+/// on the callee frame, mirroring the existing `Slot::Owned` param setup).
+///
+/// A non-String return is `IllFormed` — the Displayable contract at
+/// `docs/language-reference.md:3291` mandates `String display(self)`, so any
+/// other return type is a bug in an out-of-subset elaborator (the AST->GGC
+/// pipeline would normally reject it before reaching eval).
+fn run_display_method(
+    ctx: &Ctx,
+    state: &mut State,
+    v: &Value,
+) -> Result<Option<String>, Halt> {
+    let type_name: &str = match v {
+        Value::Struct { name, .. } => name.as_str(),
+        Value::Enum { type_name, .. } => type_name.as_str(),
+        _ => return Ok(None),
+    };
+    let Some(&fn_idx) = ctx.display_fns.get(type_name) else {
+        return Ok(None);
+    };
+    // `call_function` handles Flow::Return + drop_scope + fuel; the `self`
+    // slot rides as a fresh Owned clone (see fn-level doc).
+    let result = call_function(ctx, state, fn_idx, vec![Slot::Owned(v.clone())])?;
+    match result {
+        Value::Str(s) => Ok(Some(s)),
+        other => Err(Halt::IllFormed(format!(
+            "Displayable.display() must return String, got {}",
+            other.kind_name()
+        ))),
+    }
+}
+
 // ── Statements ─────────────────────────────────────────────────────────────
 
 fn exec_block(ctx: &Ctx, state: &mut State, block: &[Stmt]) -> Result<Flow, Halt> {
@@ -620,7 +672,8 @@ fn exec_stmt(ctx: &Ctx, state: &mut State, stmt: &Stmt) -> Result<Flow, Halt> {
         Stmt::Print { expr, span } => {
             state.cur_span = *span;
             let v = eval_expr(ctx, state, expr)?;
-            state.stdout.push_str(&format_value(&v));
+            let rendered = format_for_print(ctx, state, &v)?;
+            state.stdout.push_str(&rendered);
             state.stdout.push('\n');
             Ok(Flow::Normal)
         }
@@ -676,7 +729,10 @@ fn exec_stmt(ctx: &Ctx, state: &mut State, stmt: &Stmt) -> Result<Flow, Halt> {
             } else {
                 // The message is evaluated ONLY on failure (short-circuit).
                 let detail = match message {
-                    Some(m) => format_value(&eval_expr(ctx, state, m)?),
+                    Some(m) => {
+                        let msg_val = eval_expr(ctx, state, m)?;
+                        format_for_print(ctx, state, &msg_val)?
+                    }
                     None => "assertion failed".to_string(),
                 };
                 Err(Halt::Trap(TrapKind::AssertFailed(detail)))
@@ -1021,7 +1077,8 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
                     FPart::Lit(s) => out.push_str(s),
                     FPart::Interp(e) => {
                         let v = eval_expr(ctx, state, e)?;
-                        out.push_str(&format_value(&v));
+                        let rendered = format_for_print(ctx, state, &v)?;
+                        out.push_str(&rendered);
                     }
                 }
             }
@@ -1081,7 +1138,8 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
                 // E's scope.
                 if let Some(a) = args.first() {
                     let v = eval_source_to_value(ctx, state, a, state.cur_span)?;
-                    state.stdout.push_str(&format_value(&v));
+                    let rendered = format_for_print(ctx, state, &v)?;
+                    state.stdout.push_str(&rendered);
                     state.stdout.push('\n');
                 }
                 return Ok(Value::Unit);
@@ -1103,7 +1161,8 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
             // `panic(msg)` is noreturn: it unwinds as an uncatchable trap and
             // never yields a value. The message is rendered as the human detail.
             let v = eval_expr(ctx, state, msg)?;
-            Err(Halt::Trap(TrapKind::Panic(format_value(&v))))
+            let rendered = format_for_print(ctx, state, &v)?;
+            Err(Halt::Trap(TrapKind::Panic(rendered)))
         }
 
         Expr::Method { recv, method, args } => eval_method(ctx, state, recv, *method, args),
@@ -2156,47 +2215,74 @@ fn cmp(a: &Value, b: &Value, f: impl Fn(std::cmp::Ordering) -> bool) -> Result<V
 ///
 /// Float formatting is provisional (D8 mandates shortest round-trip; Rust's
 /// `{}` is shortest-round-trip already). Composite values are rendered with a
-/// fixed default shape (`Type{k: v}` / `Type(payload)` / `[elems]` / etc); this
-/// function does NOT currently dispatch an equipped `Displayable.display(self)`
-/// user method, so a type with a hand-written or `@derive(Displayable)` impl
-/// disagrees with `gg` on the observable — filed in TODO as the render-site
-/// Displayable dispatch track.
-fn format_value(v: &Value) -> String {
+/// fixed default shape (`Type{k: v}` / `Type(payload)` / `[elems]` / etc).
+///
+/// Round XXVI Track B: dispatches an equipped user `Displayable.display(self)`
+/// via `run_display_method` when the value's type has one registered in
+/// `Ctx::display_fns`; falls back to the default `Type{k: v}` shape on
+/// non-Struct/Enum values or unregistered types. Composite arms (Vector,
+/// Tuple, Struct fields, Enum payload, Dict, Set) recurse through this
+/// wrapper so elements inside a container also get their `display` dispatched
+/// (a `Vector[Point]` prints `[P, P]`, not `[Point{x:_,y:_}, ...]`, when `Point`
+/// equips `Displayable`).
+fn format_for_print(ctx: &Ctx, state: &mut State, v: &Value) -> Result<String, Halt> {
+    if let Some(rendered) = run_display_method(ctx, state, v)? {
+        return Ok(rendered);
+    }
     match v {
-        Value::Unit => "()".to_string(),
-        Value::Int(i) => i.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Float(f) => format!("{f}"),
-        Value::Str(s) => s.clone(),
+        Value::Unit => Ok("()".to_string()),
+        Value::Int(i) => Ok(i.to_string()),
+        Value::Bool(b) => Ok(b.to_string()),
+        Value::Float(f) => Ok(format!("{f}")),
+        Value::Str(s) => Ok(s.clone()),
         Value::Vector(items) => {
-            let inner: Vec<String> = items.iter().map(format_value).collect();
-            format!("[{}]", inner.join(", "))
+            let mut inner = Vec::with_capacity(items.len());
+            for it in items {
+                inner.push(format_for_print(ctx, state, it)?);
+            }
+            Ok(format!("[{}]", inner.join(", ")))
         }
         Value::Tuple(items) => {
-            let inner: Vec<String> = items.iter().map(format_value).collect();
-            format!("({})", inner.join(", "))
+            let mut inner = Vec::with_capacity(items.len());
+            for it in items {
+                inner.push(format_for_print(ctx, state, it)?);
+            }
+            Ok(format!("({})", inner.join(", ")))
         }
         Value::Struct { name, fields } => {
-            let inner: Vec<String> = fields.iter().map(|(n, vv)| format!("{n}: {}", format_value(vv))).collect();
-            format!("{name}{{{}}}", inner.join(", "))
+            let mut inner = Vec::with_capacity(fields.len());
+            for (n, vv) in fields {
+                inner.push(format!("{n}: {}", format_for_print(ctx, state, vv)?));
+            }
+            Ok(format!("{name}{{{}}}", inner.join(", ")))
         }
         Value::Enum { variant, payload, .. } => {
             if payload.is_empty() {
-                variant.clone()
+                Ok(variant.clone())
             } else {
-                let inner: Vec<String> = payload.iter().map(format_value).collect();
-                format!("{variant}({})", inner.join(", "))
+                let mut inner = Vec::with_capacity(payload.len());
+                for p in payload {
+                    inner.push(format_for_print(ctx, state, p)?);
+                }
+                Ok(format!("{variant}({})", inner.join(", ")))
             }
         }
         Value::Dict(entries) => {
-            let inner: Vec<String> =
-                entries.iter().map(|(k, v)| format!("{}: {}", format_value(k), format_value(v))).collect();
-            format!("{{{}}}", inner.join(", "))
+            let mut inner = Vec::with_capacity(entries.len());
+            for (k, val) in entries {
+                let ks = format_for_print(ctx, state, k)?;
+                let vs = format_for_print(ctx, state, val)?;
+                inner.push(format!("{ks}: {vs}"));
+            }
+            Ok(format!("{{{}}}", inner.join(", ")))
         }
         Value::Set(items) => {
-            let inner: Vec<String> = items.iter().map(format_value).collect();
-            format!("{{{}}}", inner.join(", "))
+            let mut inner = Vec::with_capacity(items.len());
+            for it in items {
+                inner.push(format_for_print(ctx, state, it)?);
+            }
+            Ok(format!("{{{}}}", inner.join(", ")))
         }
-        Value::Closure { .. } => "<closure>".to_string(),
+        Value::Closure { .. } => Ok("<closure>".to_string()),
     }
 }

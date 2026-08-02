@@ -2982,3 +2982,73 @@ void main():
         "Result.flatten reaches the arm-picker catch-all",
     );
 }
+
+// ── Round XXVI Track B: Displayable dispatch at print / f-string ────────────
+//
+// Positive-controls for `format_for_print`'s user-`display` dispatch. The
+// evaluator registered the `equip T with Displayable`'s `display(self) -> String`
+// into `Program::display_fns` and `Ctx::display_fns`; `run_display_method`
+// looks it up per-value at every `print`/interp site and every composite arm
+// (Vector/Tuple/Struct-fields/Enum-payload/Dict/Set).
+//
+// RED-verify: commenting out the `run_display_method` call in `format_for_print`
+// (spec/ggdef/src/eval.rs) reverts to the default `Type{k: v}` shape, and each
+// of the three tests below fails with the default output.
+
+#[test]
+fn struct_displayable_dispatched() {
+    // Top-level struct print goes through user Displayable.display(self),
+    // not the default `Point{x: 1, y: 2}` shape.
+    let src = r#"
+struct Point:
+    int x
+    int y
+equip Point with Displayable:
+    String display(self):
+        return "Point"
+void main():
+    Point p = Point(1, 2)
+    print(p)
+"#;
+    assert_eq!(out(src), "Point");
+}
+
+#[test]
+fn enum_displayable_via_fstring() {
+    // A user enum's display dispatches inside an f-string interpolation
+    // (the FString arm of eval_expr) — not just at Stmt::Print.
+    let src = r#"
+enum Color:
+    Red()
+    Green()
+    Blue()
+equip Color with Displayable:
+    String display(self):
+        return "col"
+void main():
+    Color c = Color.Green()
+    print(f"[{c}]")
+"#;
+    assert_eq!(out(src), "[col]");
+}
+
+#[test]
+fn vector_of_displayable_dispatched() {
+    // Composite-recurse cell: the Vector arm inside `format_for_print` MUST
+    // itself call `format_for_print` on each element (not the raw default
+    // shape) so `[P, P]` beats `[Point{x:1,y:2}, Point{x:3,y:4}]`. This RED-
+    // verifies the 7 internal recursion swaps (Vector/Tuple/Struct-fields/
+    // Enum-payload/Dict/Set) at once.
+    let src = r#"
+struct Point:
+    int x
+    int y
+equip Point with Displayable:
+    String display(self):
+        return "P"
+void main():
+    Vector[Point] v = [Point(1, 2), Point(3, 4)]
+    print(v)
+"#;
+    assert_eq!(out(src), "[P, P]");
+}

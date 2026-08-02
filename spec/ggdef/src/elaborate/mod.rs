@@ -156,6 +156,7 @@ pub fn elaborate(module: &ast::Module) -> ElabResult<Program> {
         enums: el.enums,
         closures: el.closures,
         drop_fns: el.drop_fns,
+        display_fns: el.display_fns,
         // D29: the first bare-fallible-mark violation (if any), surfaced by `run`
         // as an `IllFormed` + `E_MissingFallibleMark` reject BEFORE eval.
         d29_reject: el.d29_reject,
@@ -356,6 +357,11 @@ struct Elaborator {
     equip_methods: HashMap<(String, String), MethodInfo>,
     /// `equip T with Drop` registry: `(type-name, drop-fn-name)`.
     drop_fns: Vec<(String, String)>,
+    /// `equip T with Displayable` registry: `(type-name, display-fn-name)`.
+    /// Round XXVI Track B: `eval::format_for_print` reads this via
+    /// `Ctx::display_fns` and dispatches the user's `display(self) -> String`
+    /// instead of the default `Type{k: v}` render.
+    display_fns: Vec<(String, String)>,
     /// Transitively drop-tainted NAMED types (D4): a type with a custom `Drop`
     /// anywhere in its field/payload graph.
     tainted: HashSet<String>,
@@ -552,6 +558,8 @@ impl Elaborator {
         }
         let type_name = equip_type_name(eq)?;
         let is_drop = eq.trait_.as_ref().is_some_and(|t| trait_is_drop(&t.trait_name.node));
+        let is_displayable =
+            eq.trait_.as_ref().is_some_and(|t| trait_is_displayable(&t.trait_name.node));
         for m in &eq.items {
             let mname = m.node.name.node.clone();
             let mangled = format!("{type_name}__{mname}");
@@ -590,7 +598,12 @@ impl Elaborator {
                 MethodInfo { mangled: mangled.clone(), self_mode },
             );
             if is_drop && mname == "drop" {
-                self.drop_fns.push((type_name.clone(), mangled));
+                self.drop_fns.push((type_name.clone(), mangled.clone()));
+            }
+            if is_displayable && mname == "display" {
+                // Round XXVI Track B: register the user's Displayable impl so
+                // `format_for_print` dispatches it instead of the default shape.
+                self.display_fns.push((type_name.clone(), mangled));
             }
         }
         if is_drop {
@@ -3193,6 +3206,14 @@ fn equip_type_name(eq: &ast::EquipBlock) -> ElabResult<String> {
 /// Whether an `equip … with <trait>` trait is `Drop`.
 fn trait_is_drop(t: &ast::Type) -> bool {
     matches!(t, ast::Type::Named { name, .. } if name.node == "Drop")
+}
+
+/// Whether an `equip … with <trait>` trait is `Displayable`. Round XXVI Track B:
+/// used by `register_equip` to record the user's `display(self) -> String` into
+/// `Program::display_fns`, which `eval::format_for_print` dispatches at print /
+/// f-string interpolation.
+fn trait_is_displayable(t: &ast::Type) -> bool {
+    matches!(t, ast::Type::Named { name, .. } if name.node == "Displayable")
 }
 
 /// Whether a param is the method receiver `self`.

@@ -33,6 +33,14 @@ pub struct Program {
     /// drop of a value of that type (RFC §2.2 D4: custom drops run in reverse
     /// declaration order). `eval::Ctx` resolves the fn-name to its index.
     pub drop_fns: Vec<(String, String)>,
+    /// `equip T with Displayable` user-`display` functions: `(type-name,
+    /// display-fn-name)`. Round XXVI Track B: `format_for_print` dispatches
+    /// the named function (borrow of self) when rendering a `Value::Struct{name}`
+    /// / `Value::Enum{type_name}` whose type registered a `display` method here
+    /// (D20 + docs/language-reference.md:3291). `eval::Ctx` resolves the fn-name
+    /// to its index. Falls back to the default `Type{k: v}` shape when absent.
+    /// Mirrors `drop_fns` verbatim in registration + Ctx-lookup shape.
+    pub display_fns: Vec<(String, String)>,
     /// D29 (visible error propagation): the FIRST bare-fallible-mark violation
     /// the elaborator saw, if any — a fallible call whose outcome is neither
     /// marked (`f()!`), captured (`Result[T,E] r = f()`), nor handled. Recorded

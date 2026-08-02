@@ -26078,7 +26078,10 @@ fn self_host_runtime_diff() {
     // propagate + C SH α port + D α ggdef port + E Set/HashSet empty-literal):
     // ADJ-MATCH 392 (of MATCH 1310, BOTH-WRONG 8). Track D's ggdef `unify_closure_ret_axis`
     // mirror + Track E's Set/HashSet empty-literal fix ratcheted ggdef adjudication +2.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 392;
+    // Round XXVI Track B (2026-08-02): +2 for the two Displayable-render rows
+    // (core_traits + print_display_temp_leak) moving BOTH-WRONG → ADJ-MATCH after
+    // `eval::format_for_print` gained user-Displayable dispatch.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 394;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -26131,14 +26134,20 @@ fn self_host_runtime_diff() {
     //       `elaborate_call:1781`, `as_print_call:3325` (name-guard falls
     //       through to elaborate_call), and `eval.rs:1072` (defensive,
     //       unreachable post-fix — documented). Positive-controls (Core #12(a))
-    //       pin the three rejects in spec/ggdef/src/tests.rs. Remaining
-    //       Class-B cells: 5.
+    //       pin the three rejects in spec/ggdef/src/tests.rs. Round XXVI Track B
+    //       (2026-08-02) BURNED DOWN the two Displayable-render cells
+    //       (core_traits + print_display_temp_leak): `eval::format_for_print`
+    //       now dispatches `equip T with Displayable` via a `Program::display_fns`
+    //       + `Ctx::display_fns` HashMap and a `run_display_method` sibling of
+    //       `run_custom_drop`; every composite arm recurses through the wrapper
+    //       so `Vector[Point]` etc. also dispatch per-element. Positive-controls
+    //       (Core #12(a)) pin the three dispatch shapes in
+    //       spec/ggdef/src/tests.rs (struct + enum-via-f-string + vector-
+    //       composite-recurse). Remaining Class-B cells: 3 (all drop-transitive).
     const EXPECTED_BOTH_WRONG: &[&str] = &[
-        "core_traits",
         "drop_collection_custom_elem_leak",
         "drop_reassign",
         "drop_struct_collection_fields",
-        "print_display_temp_leak",
     ];
     if !cfg!(debug_assertions) && parity_floor_active("self_host_runtime_diff") {
         let new_both_wrong: Vec<&str> = both_wrong
