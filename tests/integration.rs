@@ -21945,18 +21945,18 @@ fn self_host_driver_rejects_field_on_string() {
     );
 }
 
-// ── Round XXIV Track C: three `#[ignore]`d SH-driver NEG tests pinning the
-// intended SH-typechecker reject for cross-type Option/Result combinator
-// closure returns. Rust rejects all three via `unify_closure_ret_axis` at
-// `src/semantic/typecheck.rs:7583/7610/7633` (E_TypeMismatch); the SH
-// typechecker has NO Option/Result combinator method-arm surface today
-// (verified: all `method_name == "..."` arms in `tests/fixtures/
-// self_host_typechecker/typecheck.gg` are Vector-only at :3182/3189/3196/
-// 3968; method resolution goes through generic `resolve_method_full`).
-// Porting the axis-unify to SH is a substantial new subsystem (its own
-// round, "Edit C") and is DEFERRED per Round XXIV Track C's PASS-1 MF-1
-// rescope. Pre-Edit-C behaviour on the SH driver, verified by the
-// executor 2026-08-01:
+// ── Round XXVIII Track E (Round XXIV Track C DEFER closed): three
+// SH-driver NEG tests pinning SH-typechecker reject for cross-type
+// Option/Result combinator closure returns. Rust rejects all three via
+// `unify_closure_ret_axis` at `src/semantic/typecheck.rs`; ggdef mirrors
+// via `spec/ggdef/src/elaborate/mod.rs:2373` (Round XXIV Track D); SH
+// mirrors via `combinator_axis_cell` + `unify_closure_ret_axis` in
+// `tests/fixtures/self_host_typechecker/typecheck.gg` (Round XXVIII Track E)
+// wired from the EMethodCall arm of `walk_expr_closures_inner` at the R28E
+// chokepoint after `reject_wrong_receiver_combinator`. All three reject
+// at check-time with `E_TypeMismatch`; the driver's `has_errors` gate
+// halts BEFORE lowering. Pre-fix behaviour (measured 2026-08-01,
+// RED-verified from the ignored tests):
 //   - `combinator_result_or_else_ok_cross_type_reject.gg`: silent accept,
 //     driver exit 0, emitted C compiles + runs, prints `3` (silent-wrong).
 //   - `combinator_option_or_else_cross_type_reject.gg`: silent accept,
@@ -21966,20 +21966,10 @@ fn self_host_driver_rejects_field_on_string() {
 //     accept, driver exit 0, emitted C FAILS to compile
 //     (`incompatible types when assigning to type 'int64_t' from type
 //     '__gg_Money'`).
-// Un-ignore + assert stderr contains `E_TypeMismatch` when the Edit-C
-// round lands (SH typechecker mirrors `unify_closure_ret_axis`).
-//
-// Follows the `sh_amp_operand_reject` precedent (Round XXIII β, filed as
-// `#[ignore]` and un-ignoring when SH-lane port lands). ⚠ HYGIENE: that
-// precedent uses `check_gg_fails` (Rust `gg check`), NOT the SH driver —
-// its assertion is against RUST's reject, so a silent-accept on SH would
-// green it. These three tests invoke the SH driver directly to assert SH's
-// own reject, which is the correct pattern; filed as Core #14 follow-up.
+// Class-guard: `tests/lints.rs::unify_closure_ret_axis_class_enumeration`
+// pins the 3-lane twin-count invariant (production + ggdef + SH).
 
 #[test]
-#[ignore = "SH-LANE GAP: SH typechecker lacks unify_closure_ret_axis mirror; \
-    Edit C DEFERRED to its own round (Round XXIV Track C scope: lowerer only). \
-    Un-ignore + drop the `#[ignore]` when the SH typechecker mirror lands."]
 #[serial(self_host_lowerer_driver)]
 fn sh_combinator_result_or_else_ok_cross_type_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
@@ -22012,9 +22002,6 @@ fn sh_combinator_result_or_else_ok_cross_type_reject() {
 }
 
 #[test]
-#[ignore = "SH-LANE GAP: SH typechecker lacks unify_closure_ret_axis mirror; \
-    Edit C DEFERRED to its own round (Round XXIV Track C scope: lowerer only). \
-    Un-ignore + drop the `#[ignore]` when the SH typechecker mirror lands."]
 #[serial(self_host_lowerer_driver)]
 fn sh_combinator_option_or_else_cross_type_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
@@ -22047,9 +22034,6 @@ fn sh_combinator_option_or_else_cross_type_reject() {
 }
 
 #[test]
-#[ignore = "SH-LANE GAP: SH typechecker lacks unify_closure_ret_axis mirror; \
-    Edit C DEFERRED to its own round (Round XXIV Track C scope: lowerer only). \
-    Un-ignore + drop the `#[ignore]` when the SH typechecker mirror lands."]
 #[serial(self_host_lowerer_driver)]
 fn sh_combinator_result_and_then_error_cross_type_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");

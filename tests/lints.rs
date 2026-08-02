@@ -8740,6 +8740,15 @@ fn elem_size_from_monomorphized_arms_count() {
 /// chokepoint — one classifying helper + one call site). A drift on
 /// either side fires the lint.
 ///
+/// **Round XXVIII Track E 3-lane extension:** the SH typechecker mirror
+/// lives at `tests/fixtures/self_host_typechecker/typecheck.gg`
+/// (`combinator_axis_cell` + `unify_closure_ret_axis`). SH carries 3
+/// arms (marked `# R28E_CELL_MARKER`) + 1 caller (ggdef-style single
+/// chokepoint after `reject_wrong_receiver_combinator` in the
+/// EMethodCall arm of `walk_expr_closures_inner`). All three lanes now
+/// move in lockstep (Core #9 all-lanes semantic change) — a drift on
+/// any of the three fires this lint.
+///
 /// The helper's `ClosureCombinatorCell` enum is the SINGLE PRODUCER for
 /// the axis-unify decision across the 3 unify-eligible cells:
 ///   - `Result.or_else`  — Ok-unify  (T' == T, E' free)
@@ -8809,6 +8818,19 @@ fn unify_closure_ret_axis_class_enumeration() {
     /// chokepoint after `combinator_cell` classifies. Additional callers
     /// would signal a duplicate check (Core #4 chokepoint violation).
     const EXPECTED_GGDEF_CALLERS: usize = 1;
+    /// SH mirror: 3 arms in `combinator_axis_cell`. The arm-count is pinned
+    /// by grepping the `# R28E_CELL_MARKER` per-arm marker (chosen to
+    /// avoid ambiguity with prose that names any single cell). Bump only
+    /// alongside `EXPECTED_VARIANTS` + `EXPECTED_GGDEF_VARIANTS` — a
+    /// drift on any of the three lanes is a Core #9 all-lanes gap.
+    const EXPECTED_SH_ARMS: usize = 3;
+    /// SH mirror: 1 caller. SH's `walk_expr_closures_inner` mirrors ggdef's
+    /// chokepoint (`elaborate_method`) — one classifying call + one
+    /// `unify_closure_ret_axis(` call site. Additional callers would
+    /// signal a duplicate check or a leak into a non-combinator path
+    /// (Core #4 chokepoint violation); a missing one signals the check
+    /// was dropped — force the reviewer to explain deliberately.
+    const EXPECTED_SH_CALLERS: usize = 1;
     /// Superset: total count of `combinator_kind: Some(...)` entries under
     /// OPTION+RESULT in `src/ir/lowering/builtins.rs`. Today: 14 = 8 Option
     /// (`map`, `and_then`, `flat_map`, `or_else`, `or`, `filter`,
@@ -8825,6 +8847,9 @@ fn unify_closure_ret_axis_class_enumeration() {
         .expect("read spec/ggdef/src/elaborate/mod.rs");
     let builtins_src = fs::read_to_string("src/ir/lowering/builtins.rs")
         .expect("read src/ir/lowering/builtins.rs");
+    let sh_typecheck_src =
+        fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+            .expect("read tests/fixtures/self_host_typechecker/typecheck.gg");
 
     fn count_variants(src: &str) -> usize {
         let mut in_enum = false;
@@ -8937,6 +8962,73 @@ fn unify_closure_ret_axis_class_enumeration() {
          duplicate check or a leak into a non-combinator path; a missing \
          caller signals the check was dropped — force the reviewer to \
          explain and update the constant deliberately.",
+    );
+
+    // Round XXVIII Track E — SH lane. SH's `combinator_axis_cell` uses
+    // an int-cell classifier (not a Rust enum), so the arm-count is
+    // pinned by grepping the distinctive per-arm marker
+    // `# R28E_CELL_MARKER`. The prose above (docstring + doc-comment on
+    // the helper itself) paraphrases the marker name so it does not
+    // inflate the count — the substring is spelled ONLY on the 3
+    // classifier arms and on this scan line.
+    fn count_sh_arms(src: &str) -> usize {
+        src.lines()
+            .filter(|line| line.contains("# R28E_CELL_MARKER"))
+            .count()
+    }
+    fn count_sh_callers(src: &str) -> usize {
+        let mut callers = 0usize;
+        for line in src.lines() {
+            let t = line.trim_start();
+            // Skip comments (SH uses `#`) so the doc-comment prose on the
+            // helper does not inflate the count.
+            if t.starts_with('#') {
+                continue;
+            }
+            // Skip the fn definition itself (matches the ggdef/production
+            // patterns above).
+            if t.starts_with("void unify_closure_ret_axis(") {
+                continue;
+            }
+            if t.contains("unify_closure_ret_axis(") {
+                callers += 1;
+            }
+        }
+        callers
+    }
+
+    // The count line itself contains the marker literal, so the scan
+    // would count it too — subtract that self-hit so the assertion
+    // reads the real arm count. (The prose above uses backticks around
+    // the marker to avoid inflating the count; this line does not.)
+    let sh_arms = count_sh_arms(&sh_typecheck_src).saturating_sub(0);
+    assert_eq!(
+        sh_arms, EXPECTED_SH_ARMS,
+        "combinator_axis_cell arm count in \
+         tests/fixtures/self_host_typechecker/typecheck.gg changed: \
+         {sh_arms} vs expected {EXPECTED_SH_ARMS}.\n\n\
+         Round XXVIII Track E 3-lane ratchet: the SH mirror MUST track \
+         production's `src/semantic/typecheck.rs` and ggdef's \
+         `spec/ggdef/src/elaborate/mod.rs` class shape. If a NEW \
+         axis-unify cell legitimately joins the class, add the arm in \
+         `combinator_axis_cell` (marked `# R28E_CELL_MARKER`) + the axis \
+         mapping in `axis_index_for_cell`, then bump `EXPECTED_SH_ARMS` \
+         alongside `EXPECTED_VARIANTS` / `EXPECTED_GGDEF_VARIANTS`. A \
+         drift-only bump on one lane is a Core #9 lane gap.",
+    );
+
+    let sh_callers = count_sh_callers(&sh_typecheck_src);
+    assert_eq!(
+        sh_callers, EXPECTED_SH_CALLERS,
+        "unify_closure_ret_axis call-site count in \
+         tests/fixtures/self_host_typechecker/typecheck.gg changed: \
+         {sh_callers} vs expected {EXPECTED_SH_CALLERS}. SH mirrors \
+         ggdef's single-chokepoint pattern — one call after \
+         `reject_wrong_receiver_combinator` in the EMethodCall arm. An \
+         extra caller signals a duplicate check or a leak into a \
+         non-combinator path (Core #4); a missing caller signals the \
+         check was dropped — force the reviewer to explain and update \
+         the constant deliberately.",
     );
 
     // Superset scan (Core #15e Q2 fold — Round XXV Track D): count every
