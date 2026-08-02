@@ -1215,6 +1215,14 @@ pub(super) fn lower_method_call(
                     }
                     // Shared[Vector[T]] element access — at/set_at/slen
                     "at" if elem_suffix.starts_with("Vector__") => {
+                        // vector-only-by-design: the outer arm gate matches
+                        // `elem_suffix.starts_with("Vector__")`, so this is
+                        // reached ONLY for `Shared[Vector[T]]` receivers.
+                        // Deque is not currently a receiver kind at this
+                        // Shared-wrapped element-access path (no
+                        // `Shared[Deque[T]].at/set_at` API surface today);
+                        // if that surface is added, add a sibling
+                        // `Shared__Deque__` branch alongside this block.
                         let inner_elem = elem_suffix.strip_prefix("Vector__").unwrap_or("int64_t");
                         // Must use correct primitive types — lookup_named misses "double"/"float"
                         let elem_type = match inner_elem {
@@ -1232,6 +1240,12 @@ pub(super) fn lower_method_call(
                         return FunctionBuilder::copy(dst);
                     }
                     "set_at" if elem_suffix.starts_with("Vector__") => {
+                        // vector-only-by-design: symmetric sibling of the
+                        // Shared[Vector[T]].at arm above — same Shared-wrapped
+                        // Vector-only surface. No `strip_prefix("Vector__")`
+                        // on this line but the Vector-only condition IS the
+                        // one that gates the sibling `unwrap_or` at :1218,
+                        // so keeping the guard-comment style here for parity.
                         let idx = lower_expr(ctx, builder, &args[0].node.value);
                         let val = lower_expr(ctx, builder, &args[1].node.value);
                         let set_fn = format!("{stn}__set_at");
@@ -2673,12 +2687,21 @@ pub(super) fn lower_method_call(
 
         // For Vector.zip(other_vec), register tuple and result vector types
         if method_name == "zip" && recv_is_array {
+            // vector-only-by-design: `.zip()` is currently a Vector-only
+            // method surface (no `Deque.zip()` user-facing API today). The
+            // `recv_is_array` gate is broader (includes Deque per
+            // CollectionKind::Array — see src/ir/types.rs) but no Deque zip
+            // fixture reaches this arm. When Deque.zip is added, mirror
+            // this whole block with a `Deque__` strip alongside the
+            // Vector__ one and drop this comment.
             let self_elem = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             // Get the other vector's element type from the first explicit arg
             let other_elem_name = if let Some(arg_op) = lowered_method_args.first() {
                 if let Operand::Copy(p) | Operand::Move(p) = arg_op {
                     let type_id = builder.local_type(p.local);
                     let type_str = crate::ir::types::format_type_for_mangle(type_id, &ctx.type_registry);
+                    // vector-only-by-design: sibling of the self_elem strip
+                    // just above; same Vector.zip-specific surface.
                     type_str.strip_prefix("Vector__").unwrap_or(&type_str).to_string()
                 } else { "int64_t".to_string() }
             } else { "int64_t".to_string() };
@@ -2714,6 +2737,13 @@ pub(super) fn lower_method_call(
             | Some(crate::ir::types::CollectionKind::Set));
         if matches!(method_name, "get" | "first" | "last" | "remove" | "pop") && recv_is_array
         {
+            // vector-only-by-design: Deque's `get/first/last/remove/pop` do
+            // not currently exist as user-facing methods (only Vector uses
+            // this Option[Ref[T]] return-type registration path). The
+            // `recv_is_array` gate is broader (includes Deque) but no
+            // Deque get/first/... fixture reaches this arm. When those
+            // methods are added to Deque, mirror this block with a
+            // `Deque__` strip.
             let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             let inner_type = resolve_inner_type(ctx, elem_type_name);
             let is_borrowing = matches!(method_name, "get" | "first" | "last");
@@ -2783,6 +2813,10 @@ pub(super) fn lower_method_call(
         }
         let ret_type = if let Some(ret) = fn_sig_ret {
             if matches!(method_name, "get" | "first" | "last" | "remove" | "pop") && recv_is_array {
+                // vector-only-by-design: return-type resolver sibling of the
+                // Option registration at :2741 above. Same Vector-only
+                // get/first/last/remove/pop surface — see :2741 for the
+                // full note.
                 let elem_type_name = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
                 let _inner_type = resolve_inner_type(ctx, elem_type_name);
                 let is_borrowing = matches!(method_name, "get" | "first" | "last");
@@ -2822,12 +2856,17 @@ pub(super) fn lower_method_call(
                 ret
             }
         } else if method_name == "zip" && recv_is_array {
+            // vector-only-by-design: zip return-type-lookup sibling of the
+            // zip type-registration block at :2690 above; same Vector.zip-
+            // only surface.
             // zip return type: look up the Vector__Tuple__A__B type we just registered
             let self_elem = type_name.strip_prefix("Vector__").unwrap_or("int64_t");
             let other_elem_name = if let Some(arg_op) = lowered_method_args.first() {
                 if let Operand::Copy(p) | Operand::Move(p) = arg_op {
                     let type_id = builder.local_type(p.local);
                     let type_str = crate::ir::types::format_type_for_mangle(type_id, &ctx.type_registry);
+                    // vector-only-by-design: nested sibling of self_elem
+                    // strip just above; same Vector.zip-only surface.
                     type_str.strip_prefix("Vector__").unwrap_or(&type_str).to_string()
                 } else { "int64_t".to_string() }
             } else { "int64_t".to_string() };
@@ -3081,6 +3120,11 @@ pub(super) fn lower_method_call(
                     .and_then(|rest| rest.find("__").map(|pos| rest[pos + 2..].to_string()))
                     .unwrap_or_else(|| "int64_t".to_string())
             } else {
+                // vector-only-by-design: this arm is reached only when
+                // `is_option_void_ptr_vector`, which is set at :3097 gated
+                // on `recv_is_array && method_name ∈ {get, first, last,
+                // remove, pop}` — the SAME Vector-only get/first/... surface
+                // allowlisted at :2741 / :2821 above.
                 type_name.strip_prefix("Vector__").unwrap_or("int64_t").to_string()
             };
             let inner_type = resolve_inner_type(ctx, &elem_type_name);
@@ -4585,8 +4629,19 @@ fn resolve_inner_type(ctx: &mut LoweringContext, inner_name: &str) -> TypeId {
 
 /// Extract the element TypeId from a collection type name like "Vector__Str", "Set__int64_t".
 /// Returns None if the type name doesn't match a known collection pattern.
+///
+/// Deque shares Vector's element-type-in-suffix mangling and its
+/// element-typed HOF (each/map/filter/fold/reduce/…) + push_back/
+/// push_front value-arg hints. Round XXVII Track B added the `Deque__`
+/// arm (Core #4 sibling arm-add): pre-fix, `Deque[T].each((x): ...)` with
+/// an UNTYPED closure param fell through to `None`, so the closure-
+/// param type hint (see caller at methods.rs:2438) defaulted to
+/// `I64_TYPE` and non-int Deque elements executed the body with a
+/// wrong-typed parameter (runtime type-mismatch / garbage prints).
 fn extract_elem_type_id_from_type_name(ctx: &LoweringContext, type_name: &str) -> Option<TypeId> {
     let elem_str = if let Some(rest) = type_name.strip_prefix("Vector__") {
+        Some(rest)
+    } else if let Some(rest) = type_name.strip_prefix("Deque__") {
         Some(rest)
     } else if let Some(rest) = type_name.strip_prefix("Set__") {
         Some(rest)

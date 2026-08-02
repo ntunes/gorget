@@ -194,8 +194,16 @@ fn c_func_name(name: &str) -> String {
 
 /// Parse a monomorphized name like `Vector__int64_t__map` into (elem_c_name, method).
 /// Returns None if not a vector higher-order operation.
+///
+/// Deque shares Vector's underlying gorget_array runtime; a
+/// `Deque__T__map/fold/each/...` mangled name is the same HOF class and
+/// must resolve through the same inline dispatch (Round XXVII Track B —
+/// Core #4 sibling arm-add; pre-fix the Deque__ variant bailed via `?`
+/// here, leaving an undefined `Deque__T__each` reference at link time).
 fn parse_vector_hof(name: &str) -> Option<(&str, &str)> {
-    let rest = name.strip_prefix("Vector__")?;
+    let rest = name
+        .strip_prefix("Vector__")
+        .or_else(|| name.strip_prefix("Deque__"))?;
     let sep = rest.rfind("__")?;
     let method = &rest[sep + 2..];
     match method {

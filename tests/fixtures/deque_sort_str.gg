@@ -1,0 +1,18 @@
+# Round XXVII Track B Site 1 REGRESSION (String axis) — `Deque[String].sort()`
+# routes to the memcmp-generic comparator pre-fix, which compares
+# `GorgetString*` POINTER bytes (heap addresses), not string content.
+# Post-fix routes to the typed `gorget_array_sort_str` comparator.
+#
+# NOTE: pre-fix output is UNPREDICTABLE (heap-address ordering);
+# RED-verified during Round XXVII scout.
+# INTENDED post-fix: alphabetical `apple / banana / cherry`.
+from std.collections import Deque
+
+void main():
+    Deque[String] d = Deque[String]()
+    d.push("banana")
+    d.push("apple")
+    d.push("cherry")
+    d.sort()
+    for s in d:
+        print(s)

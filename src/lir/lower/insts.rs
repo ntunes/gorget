@@ -3349,7 +3349,15 @@ impl<'a> FuncLowering<'a> {
         lir_args: &[ValueId],
         bb: BlockId,
     ) -> Option<BlockId> {
-        let rest = original_name.strip_prefix("Vector__")?;
+        // Deque shares Vector's underlying gorget_array runtime; a
+        // `Deque__T__each/map/fold/...` name is the same HOF class and must
+        // route through the same closure-wrap path. Pre-fix (Round XXVII
+        // Track B) the Deque__-prefix bailed via `?`, leaving the caller
+        // to emit an undefined `Deque__T__each` stub (C: implicit-decl
+        // error; LLVM: unresolved link).
+        let rest = original_name
+            .strip_prefix("Vector__")
+            .or_else(|| original_name.strip_prefix("Deque__"))?;
         let sep = rest.rfind("__")?;
         let method = &rest[sep + 2..];
         // `closure_ret_ty` for result-producing variants is derived from the

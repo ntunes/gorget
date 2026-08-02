@@ -9010,3 +9010,244 @@ fn reject_wrong_receiver_combinator_arms_count() {
          do NOT lower EXPECTED without both lanes moving with it.",
     );
 }
+
+/// Round XXVII Track B class-retirement guard (Core #6 executable
+/// guard + Core #4 sibling arm-add). Deque and Vector share the same
+/// underlying `gorget_array_*` runtime AND the same monomorphized
+/// name-mangling shape (`{Family}__T__method`) at every consuming site.
+/// Historically the LIR/backend/IR dispatchers were spelled as
+/// `strip_prefix("Vector__")` and silently dropped `Deque__` on the
+/// floor — producing silent-wrong-output on `Deque[T].sort()` (memcmp-
+/// generic instead of typed comparator), undefined HOF stubs for
+/// `Deque__T__each/map/…`, and wrong closure-param type inference on
+/// untyped HOF closure params (falling back to `I64_TYPE`). This class
+/// has surfaced across at least Round XXVI Track D (`elem_size_from_
+/// monomorphized`) and Round XXVII Track B (calls.rs sort, insts.rs
+/// HOF, llvm/mod.rs HOF, methods.rs elem-type inference).
+///
+/// **Rule.** Every `strip_prefix("Vector__")` in `src/lir/**`,
+/// `src/backend/**`, and `src/ir/lowering/**` must EITHER:
+///   1. carry an adjacent `strip_prefix("Deque__")` in the SAME enclosing
+///      function scope (either `.or_else(|| ...)` in the same statement,
+///      an `else if let Some(...) = ...strip_prefix("Deque__")` arm, or a
+///      sibling `if let Some(...) = ...strip_prefix("Deque__")` block).
+///   2. OR carry an explicit `// vector-only-by-design: <reason>` allowlist
+///      comment on the line IMMEDIATELY above the strip_prefix call.
+///
+/// **Why the function-scope predicate (not strict adjacency).** Some
+/// paired arms sit tens of lines apart within the same function body —
+/// e.g. `infer_collection_element_type` in `methods.rs` has the
+/// `Vector__` and `Deque__` arms 43 lines apart because a Callable-alias
+/// carve-out sits between them. Strict "same statement" would fire
+/// spuriously; the intended reading of "same block" is "same enclosing
+/// function body". The lint enforces exactly that.
+///
+/// **Why the allowlist comment.** A handful of sites are genuinely
+/// Vector-only-by-design — Shared[Vector[T]] element access (`at`/
+/// `set_at`/`slen` gated on `elem_suffix.starts_with("Vector__")`),
+/// `is_unmonomorphized_wrapper`'s Shared__Vector inner-T check, the
+/// diagnostic pretty-printer's `Vector[T]` case, and Vector-only-by-
+/// receiver-kind paths gated on `recv_is_array`. The comment states the
+/// reason so a future reader (and this lint) can distinguish "deliberately
+/// Vector-only" from "silently missing the Deque sibling".
+///
+/// **If this fails**: a new `strip_prefix("Vector__")` site was added
+/// without a Deque__ arm alongside it. Either add the Deque__ arm
+/// (Core #4 — Deque shares Vector's element-in-suffix mangling and
+/// gorget_array runtime, so most sites need both) OR add a
+/// `// vector-only-by-design: <reason>` comment on the line above and
+/// explain why Deque is genuinely not a valid receiver here.
+#[test]
+fn vector_deque_arm_symmetry() {
+    // Directories in scope. Site 5 (Round XXVII Track B) lives at
+    // `src/ir/lowering/exprs/methods.rs:4589` (extract_elem_type_id_from_
+    // type_name), so the scope MUST include `src/ir/lowering/` — not just
+    // LIR/backend.
+    const ROOTS: &[&str] = &[
+        "src/lir",
+        "src/backend",
+        "src/ir/lowering",
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+
+    for root in ROOTS {
+        visit(root, &mut |path| {
+            if path.extension().map_or(true, |e| e != "rs") {
+                return;
+            }
+            let content = match fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            let lines: Vec<&str> = content.lines().collect();
+
+            // Precompute function boundaries: for each line index, the
+            // [start, end] of its enclosing function body (or the whole
+            // file if not inside a function). Uses a simple `fn `-line
+            // scan-up and brace-count scan-down, sufficient for Rust
+            // source that follows rustfmt conventions.
+            for (i, line) in lines.iter().enumerate() {
+                // Match `strip_prefix("Vector__")` and exclude any line
+                // whose LEADING non-whitespace is `//` (a comment) so
+                // doc comments that mention the pattern don't trip.
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                if !line.contains(r#"strip_prefix("Vector__")"#) {
+                    continue;
+                }
+
+                // ---- Sanction B: the contiguous comment BLOCK immediately
+                // above the strip_prefix line contains the allowlist
+                // marker. Scan upward through consecutive `//` lines (a
+                // multi-line comment block) until we hit a non-comment
+                // line, and pass if any line in the block contains
+                // `vector-only-by-design`. Author intent lives in the
+                // comment block; requiring the marker on the ONE
+                // immediately-adjacent line reads too literally when the
+                // reason legitimately spans several lines.
+                {
+                    let mut found = false;
+                    let mut k = i;
+                    while k > 0 {
+                        k -= 1;
+                        let prev = lines[k].trim_start();
+                        if prev.starts_with("//") {
+                            if prev.contains("vector-only-by-design") {
+                                found = true;
+                                break;
+                            }
+                            continue;
+                        }
+                        // First non-comment line — comment block ended.
+                        break;
+                    }
+                    if found {
+                        continue;
+                    }
+                }
+
+                // ---- Sanction A: the same enclosing function body
+                // contains a `strip_prefix("Deque__")` (also excluding
+                // comment-line matches).
+                let (fn_start, fn_end) = enclosing_fn_range(&lines, i);
+                let mut paired = false;
+                for j in fn_start..=fn_end {
+                    let l = lines[j];
+                    let t = l.trim_start();
+                    if t.starts_with("//") {
+                        continue;
+                    }
+                    if l.contains(r#"strip_prefix("Deque__")"#) {
+                        paired = true;
+                        break;
+                    }
+                }
+                if paired {
+                    continue;
+                }
+
+                failures.push(format!(
+                    "{}:{}: `strip_prefix(\"Vector__\")` is UNPAIRED — no \
+                     adjacent `strip_prefix(\"Deque__\")` in the enclosing \
+                     function body (lines {}..={}) AND no \
+                     `// vector-only-by-design: <reason>` allowlist \
+                     comment on the line above. \
+                     Deque shares Vector's element-in-suffix mangling and \
+                     the gorget_array runtime — most sites need the Deque__ \
+                     sibling arm (Round XXVII Track B class fix). Either \
+                     add `.or_else(|| ...strip_prefix(\"Deque__\"))` (or an \
+                     equivalent else-if / sibling if-let block) or add the \
+                     allowlist comment explaining why Deque is not a valid \
+                     receiver here.",
+                    path.display(),
+                    i + 1,
+                    fn_start + 1,
+                    fn_end + 1,
+                ));
+            }
+        });
+    }
+
+    assert!(
+        failures.is_empty(),
+        "vector_deque_arm_symmetry: {} unpaired `strip_prefix(\"Vector__\")` \
+         site(s) found:\n\n{}",
+        failures.len(),
+        failures.join("\n\n"),
+    );
+}
+
+/// Given `lines` and a line index `i`, return `(fn_start, fn_end)` — the
+/// inclusive line range of the enclosing function body. Falls back to
+/// `(0, lines.len() - 1)` when `i` is at module scope (outside any fn).
+///
+/// Heuristic: scan up from `i` looking for a `fn <name>(...)` signature
+/// line (accepting the `pub`/`pub(crate)`/`pub(super)`/`async`/`unsafe`/
+/// `const` modifier prefixes rustfmt emits at any indentation). For each
+/// candidate, compute its brace-balanced end line; if `i` falls inside
+/// [candidate_start, candidate_end], return that pair. If `i` is BEYOND
+/// candidate_end (meaning the candidate was a NESTED inner `fn` that
+/// closed before `i`), skip past it and keep scanning up for an outer
+/// function. This matters for e.g. `insts.rs:2214`, where a nested
+/// `fn strip_ctor_suffix` at :2207-2212 sits inside the outer method
+/// body that actually contains the Vector__/Deque__ arm pair.
+///
+/// Used only by `vector_deque_arm_symmetry`; kept local to that lint's
+/// scope so unrelated tests don't accidentally depend on it.
+fn enclosing_fn_range(lines: &[&str], i: usize) -> (usize, usize) {
+    let fn_sig_re = regex::Regex::new(
+        r"^(\s*)(pub(\([^)]*\))?\s+)?(async\s+)?(unsafe\s+)?(const\s+)?fn\s+\w+",
+    ).unwrap();
+
+    let mut k = i;
+    loop {
+        if fn_sig_re.is_match(lines[k]) {
+            let end = fn_body_end(lines, k);
+            if end >= i {
+                // `i` is inside this function's body — this is our
+                // enclosing scope.
+                return (k, end);
+            }
+            // `i` is beyond this fn's closing brace, so this was a
+            // nested inner fn that closed before `i`. Skip past it and
+            // keep scanning upward for the OUTER fn.
+        }
+        if k == 0 { break; }
+        k -= 1;
+    }
+    (0, lines.len().saturating_sub(1))
+}
+
+/// Given the line index of a `fn <name>(...)` signature, return the line
+/// index of the matching closing brace (the last line of the function
+/// body). Falls back to end-of-file when unbalanced (malformed source).
+fn fn_body_end(lines: &[&str], fn_start: usize) -> usize {
+    let mut depth: i32 = 0;
+    let mut opened = false;
+    for (j, line) in lines.iter().enumerate().skip(fn_start) {
+        // Strip line comments (`// ...`) before counting braces so a
+        // comment-embedded `{`/`}` doesn't skew the count. Not perfect
+        // (block comments / string literals with braces would fool it),
+        // but our source tree doesn't have those inside fn signatures /
+        // in a shape that would matter here.
+        let code = match line.find("//") {
+            Some(idx) => &line[..idx],
+            None => line,
+        };
+        for ch in code.chars() {
+            if ch == '{' {
+                depth += 1;
+                opened = true;
+            } else if ch == '}' {
+                depth -= 1;
+                if opened && depth == 0 {
+                    return j;
+                }
+            }
+        }
+    }
+    lines.len().saturating_sub(1)
+}

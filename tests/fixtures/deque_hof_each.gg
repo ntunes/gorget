@@ -1,0 +1,18 @@
+# Round XXVII Track B Site 2/4 REGRESSION — `Deque[int].each((int x): ...)`
+# pre-fix bails via `?` in `try_emit_vector_each_hof` (LIR insts.rs) AND
+# in `parse_vector_hof` (LLVM mod.rs), each keyed to
+# `strip_prefix("Vector__")` with no `Deque__` alternate. Fall-through
+# emits monomorphized-name call `Deque__int64_t__each` with no
+# generated stub → C: implicit-declaration/linker error.
+#
+# RED-VERIFIED PRE-FIX (Round XXVII scout): C compile error
+# (`undefined reference to Deque__int64_t__each`); LLVM analogous.
+# INTENDED post-fix: `2 / 4 / 6`.
+from std.collections import Deque
+
+void main():
+    Deque[int] d = Deque[int]()
+    d.push(1)
+    d.push(2)
+    d.push(3)
+    d.each((int x): print(x * 2))

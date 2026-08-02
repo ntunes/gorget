@@ -1306,6 +1306,13 @@ pub(crate) fn demangle_type_name(name: &str) -> String {
         }
     }
 
+    // vector-only-by-design: this is the diagnostic pretty-printer that maps
+    // mangled C-form names back to Gorget-form for error messages. Deque
+    // does not currently have a Gorget-form pretty-print arm here; adding
+    // it is a separate diagnostic-parity task (a `Deque[T]` printer arm)
+    // and does NOT belong to this Vector__ site's semantic dispatch. If
+    // the diagnostic parity is added later, the arm gets `.or_else` here
+    // and this comment can be removed.
     // Vector__int64_t → Vector[int]
     if let Some(elem) = name.strip_prefix("Vector__") {
         return format!("Vector[{}]", c_to_gorget(elem));

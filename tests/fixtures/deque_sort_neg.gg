@@ -1,0 +1,22 @@
+# Round XXVII Track B Site 1 REGRESSION — `Deque[int].sort()` routes to
+# a memcmp-generic comparator pre-fix (`name.strip_prefix("Vector__")` in
+# `src/lir/lower/calls.rs` had no `Deque__` alternate) → wrong-order
+# output. Negative ints DIFFERENTIATE memcmp vs signed-int: memcmp on
+# little-endian two's-complement makes negatives (high bit set) sort
+# AFTER positives.
+#
+# RED-VERIFIED PRE-FIX (Round XXVII scout): output was
+# `2 / 3 / 4 / -5 / -1` on both C and LLVM.
+# INTENDED post-fix: `-5 / -1 / 2 / 3 / 4` (numeric sort, matching Vector).
+from std.collections import Deque
+
+void main():
+    Deque[int] d = Deque[int]()
+    d.push(3)
+    d.push(-1)
+    d.push(4)
+    d.push(-5)
+    d.push(2)
+    d.sort()
+    for x in d:
+        print(x)

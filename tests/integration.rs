@@ -34279,6 +34279,74 @@ fn deque_int_control() {
     );
 }
 
+/// Round XXVII Track B REGRESSION (Core #4 sibling arm-add + Core #11/#12
+/// axis-complete RED-verified). Four `strip_prefix("Vector__")` dispatch
+/// sites had no `Deque__` alternate → silent wrong-output on
+/// `Deque[T].sort()` and undefined `Deque__T__each/map/…` HOF stubs and
+/// wrong closure-param type on untyped Deque HOF params. Sites:
+///   - `src/lir/lower/calls.rs`   sort / sorted / unique dispatch
+///   - `src/lir/lower/insts.rs`   `try_emit_vector_each_hof` HOF entry
+///   - `src/backend/llvm/mod.rs`  `parse_vector_hof` (LLVM twin)
+///   - `src/ir/lowering/exprs/methods.rs`  `extract_elem_type_id_from_type_name`
+///     (closure-param type hint + push_back/push_front value-arg hint)
+///
+/// AXIS PIN: (element type ∈ {int, String}) × (method ∈ {sort, each}) ×
+/// (typed-vs-untyped closure param) × (C, LLVM). RED-verified on all four
+/// fixtures pre-fix on both backends:
+///   deque_sort_neg          : `2/3/4/-5/-1`  (memcmp-generic; ints)
+///   deque_sort_str          : `banana/apple/cherry`  (pointer-order; strings)
+///   deque_hof_each          : compile/link error `undefined Deque__int64_t__each`
+///   deque_each_untyped_closure_str : compile/link error
+///     `undefined Deque__GorgetString__each` (+ Site 5's wrong-type hint)
+///
+/// Extends XXVI Track D (ab5c3bc7) which added the `Deque__` arm to
+/// `elem_size_from_monomorphized`. The arm-symmetry lint at
+/// `tests/lints.rs:vector_deque_arm_symmetry` retires the class per Core #6.
+#[test]
+fn deque_sort_neg() {
+    run_gg(
+        "deque_sort_neg.gg",
+        "\
+-5
+-1
+2
+3
+4",
+    );
+}
+
+#[test]
+fn deque_sort_str() {
+    run_gg(
+        "deque_sort_str.gg",
+        "\
+apple
+banana
+cherry",
+    );
+}
+
+#[test]
+fn deque_hof_each() {
+    run_gg(
+        "deque_hof_each.gg",
+        "\
+2
+4
+6",
+    );
+}
+
+#[test]
+fn deque_each_untyped_closure_str() {
+    run_gg(
+        "deque_each_untyped_closure_str.gg",
+        "\
+alpha
+beta",
+    );
+}
+
 /// Round XXIII γδ REGRESSION (new 2026-08-01) — `HashMap[int, Point].x`
 /// value-read (TODO.md:1064). Closed by the `HashMap__` arm added to
 /// `infer_collection_element_type` — the same class fix that admits
