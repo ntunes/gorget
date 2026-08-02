@@ -2,28 +2,30 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**ROUND XVIII CLOSED 2026-07-30** — theme AIM THE METER. Landed: Gate0 B calibrate 1/0/1 · `--sweep` corpus+self-host · partition BY-DESIGN vs SUSPICIOUS · Family-3 get-chain field/tuple fix · fixtures graduated. Battery: lib 1138 · lints 79 · ggdef · security 128 · conformance 3/3 · C/LLVM **1962**/0/63 · parity **1288**/1385 = **93.0%** (floors MATCH 1288 · ADJ 388 hold). **Convergence: known_gaps 95→94 · TODO 521→521 · net −1** (regen: `scripts/convergence.sh 95 521`). Detail: DONE.md. Dashboard: `scripts/resolver_totality.sh --sweep`.
-
-**✅ ROUND XIX CLOSED 2026-07-31** — RESIDUAL-DEFECT PACK (Y self-deadlock · N2 Box[Trait] cells · hygiene), **recovered from a red battery by the orchestrator**. XIX stalled on token exhaustion before its close gate; the battery was RED and both defects are now fixed. Green on tip `82404dc3`: lib 1137/0 · lints 81/0 · security 128/0/22 · conformance 3/3 · ggdef all green · C **1971/0/62** · LLVM **1971/0/62**. Parity **1291**/1394 = 92.6% (ADJ 389, BOTH-WRONG 8); floors reseeded 1288→1291 / 388→389. **Convergence: known_gaps 94→93 · TODO 521→520 · net −2.** Detail + the two defects: DONE.md.
-
-⚠ **STANDING RULE ADOPTED (2026-07-31): a stalled round's landed tracks are *committed*, not *landed*, until a battery certifies them.** XIX's memory-safety regression lived a day because the round never reached its close gate — "run the battery at close" does not cover a round that never closes. A session recovering a stalled round runs the full battery FIRST, before any new work.
+**✅ ROUND XXIV CLOSED 2026-08-02** — theme USER-FACING SOUNDNESS + XXIII LANE-DEBT. First round exercising [[feedback-batch-more-tracks-per-round]] (owner 2026-08-01 — bigger rounds amortize battery cost). 5 tracks: A delete zero-cost-move advice mechanism (`94ad2250` merge `76fd6c0e`) · B propagate SIGSEGV as 128+signo across gg run/test (`d704603a` merge `6cffcafd`) · C SH-lane α port lowerer half (`b81756f6` merge `e290aeff`, hygiene `963b18c9`) · D α ggdef port `unify_closure_ret_axis` mirror (`4d2687ef` merge `68bd2d11`) · E Set/HashSet empty-literal + Q3 stale close (`4de74d79` merge `9e5b7c52`) + floor reseeds (`84d7f5ba`). 5 scouts + 20+ brief-review passes + 5 executors + 5 output-reviews. All SIGN OFF. Battery green: lib **1139/0** · lints **86/0** · spec_conformance **3/0** · security **138/0/21** · ggdef all binaries · C **2017/0/65** · LLVM **2017/0/65** · bootstrap 684s. **Parity re-measured:** MATCH **1310/1415 = 92.6%** (+3), ADJ **392** (+2), BOTH-WRONG **8** unchanged. Floors reseeded 1307→1310, 390→392. **Convergence: known_gaps 94→95 · TODO items 526→529 · net +4** (regen: `scripts/convergence.sh 94 526`) — named intentional (5-track batch amortizing battery; 3 lane-parity tracks each surface 1-2 follow-ups per Core #12 discipline). Detail: DONE.md.
 
 **XIX residuals, still open:** `snag#53` SH · W2 Layering DEFER · Track Y's VarDecl/Assign-RHS residual + SH lag.
 
-
-**✅ ROUND XXIII CLOSED 2026-08-01** — theme MEMORY-SAFETY CLASS SWEEP. 3 real tracks integrated (α cross-type or_else SBO + 5-cell class fix `27bf9172` merge `4a7ea8d7` · β `E_AmpInOperandPosition` reject `62d129c5` merge `c2ed844a` · γδ CONSOLIDATED `infer_collection_element_type` HashMap+Deque arms `14214c77` merge `f714e9e5`) + hygiene commit `89a3ff4f` (2 retborrow reclassifications + corpus_b EXCLUDE for α's 4 cross-type fixtures). Extensive Opus gauntlets: α 6 pass folds (Pass-2/3/4 widened class 1→5 cells; Pass-6 SIGN OFF) · β 6 pass folds (Pass-3 option-b′-unimplementable → Pass-4 option-D pragmatic scope) · γδ 3 pass folds. All 3 fresh output-reviews SIGN OFF. Battery green: lib **1139/0** · lints **84/0** (+3 lints from α+β+γδ) · spec_conformance **3/0** · security **138/0/21** (β +5 leak fixtures - 2 reclassifications) · ggdef all binaries · C **2008/0/61** (+27 fixtures) · LLVM **2008/0/61**. **Parity re-measured GREEN:** MATCH **1306/1407 = 92.8%** (+8 from 1298), ADJ **390** (+1), BOTH-WRONG **8** unchanged. Floors reseeded 1298→1301 (γδ) → **1306** (round-close), ADJ 389→**390**. **Convergence: known_gaps 93→94 · TODO items 522→526 · net +5** (regen: `scripts/convergence.sh 93 522`) — named intentional (memory-safety-class round of this depth surfaces 2nd-order follow-ups at scale; class-fix per track is reference-grade). Detail: DONE.md.
-
 **Follow-ups filed this round (queued for next):**
-- **α SH typechecker mirror (was: α SH-lane port; LOWERER HALF LANDED Round XXIV Track C)** — SH typechecker lacks unify_closure_ret_axis mirror; 3 silent-accepts remain (see TODO body).
-- **α ggdef port** (via corpus_b EXCLUDE) — ggdef needs `unify_closure_ret_axis` mirror.
-- **β SH-lane port** — SH typechecker `check_amp_operand` walker. Durable repro committed.
+- **SH `gg run` masks signal-death as exit 255** (Track B ride-along; MED; `known_gaps/sh_gg_run_masks_signal_as_255.gg`; port `propagate_child_status` shape to `driver.gg` + new `gorget_exec_status` runtime API).
+- **SH typechecker `unify_closure_ret_axis` mirror** (Track C DEFERRED Edit C; HIGH; SH typechecker has ZERO Option/Result combinator method-arm surface — substantial new subsystem, 3 silent-accepts remain captured by `#[ignore]`d SH-driver NEG tests).
+- **Core #14 hygiene for `sh_amp_operand_reject`** (Track C; uses Rust `check_gg_fails` — should invoke SH driver).
+- **ggdef `Result.flat_map` divergence** (Track D; Rust rejects unregistered method per `builtins.rs:1425-1428`; ggdef accepts at `elaborate/mod.rs:2338`; class-guard variant-count coupling noted — if flat_map ported, bump `EXPECTED_GGDEF_VARIANTS`).
+- **Set `set.enumerate()` silent zero-output** (Track E Finding #2; `known_gaps/set_enumerate_silent_no_output.gg`; design question: check-time reject vs Set-specific enumerate lowering).
+- **Core #8 ggdef `set[i]` divergence — ⚖️ DESIGN DECISION owed** (Track E Finding #3; `known_gaps/set_index_ggdef_divergence.gg`; ggdef `eval.rs:944-948` accepts + returns ordered element; filed intent per `set_index_returns_garbage.gg` is REJECT; one is wrong per Core #8).
+
+**Still-open from XXIII (not addressed by XXIV):**
+- **β SH-lane port** — SH typechecker `check_amp_operand` walker. Durable repro committed at XXIII close.
 - **β compound-shape mirror-walker suppression** — UX-only; D10(a) fires first.
 - **β 5 un-fixtured operand contexts** (Core #12) — deref/propagate/spawn/comprehension/expr-stmt.
-- **γδ Set/HashSet Q3 totality gap** — struct-payload sets iterate via same producer.
 - **γδ Deque assign-face DOUBLE-EVAL** — separate Family-1 disposition.
 - **α Core #14/#15e-Q2 nits** — stale lint-name comment + lint doc overpromise.
 
-**Still-deferred from XX/XXI/XXII:** Track R (Displayable dispatch) · Track E (elaborate rejects for `:b` + print kwargs) · Track G (drop-obligation ratchet) · Value-discard axis · Track XXII β's `builder.move_into_wrap` collapse helper · δ `.filter`/`.unwrap_or_else` closure-fallback at typecheck.rs:8229-8244. **Transient/CoW-model implementation** (ratified 2026-07-22 but not yet implemented — high-value architectural round; recommend after 1-2 more tactical burn-down rounds to avoid XX-shaped stall risk).
+**Still-deferred from XX/XXI/XXII:** Track R (Displayable dispatch) · Track E (elaborate rejects for `:b` + print kwargs) · Track G (drop-obligation ratchet) · Value-discard axis · Track XXII β's `builder.move_into_wrap` collapse helper · δ `.filter`/`.unwrap_or_else` closure-fallback at typecheck.rs:8229-8244. **Transient/CoW-model implementation** (ratified 2026-07-22, high-value architectural round).
+
+⚠ **STANDING RULE (2026-07-31):** a stalled round's landed tracks are *committed*, not *landed*, until a battery certifies them. Session recovering a stalled round runs the full battery FIRST.
+
+⚠ **STANDING RULE (2026-08-01):** batch **4-6 tracks per round** (was 3) to amortize the expensive round-close battery. Continue round-after-round without asking permission — stop only for genuine design decisions.
 
 
 ## ⏱ NEXT 1–3 ROUNDS (hot-list)
