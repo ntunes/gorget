@@ -2804,3 +2804,68 @@ fn gen_output_always_parses_round_trip() {
         Outcome::IllFormed(_) => {}
     }
 }
+
+// ── Round XXV Track E: Class-B close positive-controls (Core #12(a)) ──
+//
+// The three fixtures `print_builtin`, `print_terminator`, `fstring_binary_spec_leak`
+// were BOTH-WRONG (ggdef silently mis-modeled ratified surface: `print` kwargs
+// `terminator=`/`file=` and f-string format specs like `{x:b}`). classify.rs
+// invariant #8 says out-of-model surface must become a LOUD ElabError — these
+// three tests pin that.
+//
+// RED-verified 2026-08-02 by commenting the reject arms at
+// `elaborate/mod.rs:1781` (`reject_named_args`) and the
+// `Interpolation(_, Some(_spec))` arm — each test failed (frontend accepted +
+// eval ran silently), then the reject was restored and all three pass.
+
+#[test]
+fn print_kwarg_terminator_rejected() {
+    // The `print_terminator` fixture shape: `print("a", terminator=", ")`.
+    // Pre-fix, ggdef silently dropped the name and printed `a\n` (Python-print
+    // default) — production honors the kwarg and prints `a, `. Reject at
+    // elaborate rather than mis-evaluate.
+    let src = r#"
+void main():
+    print("a", terminator=", ")
+"#;
+    elab_rejects(
+        src,
+        "named argument `terminator` is not supported at a print builtin",
+        "print(x, terminator=...) must be a LOUD ElabError",
+    );
+}
+
+#[test]
+fn print_kwarg_file_rejected() {
+    // The `print_builtin` fixture shape: `print(x, file=stderr)`. ggdef has no
+    // `stderr` binding — but `reject_named_args` fires BEFORE name resolution,
+    // so the ElabError is the named-arg reject (not "unknown identifier
+    // stderr"). Pin that specific message so a later refactor cannot flip the
+    // reject to a resolution error and re-open silent evaluation of `file=`.
+    let src = r#"
+void main():
+    print("x", file=stderr)
+"#;
+    elab_rejects(
+        src,
+        "named argument `file` is not supported at a print builtin",
+        "print(x, file=...) must be a LOUD ElabError",
+    );
+}
+
+#[test]
+fn fstring_format_spec_rejected() {
+    // The `fstring_binary_spec_leak` fixture shape: `f"bin={x:b}"`. Pre-fix
+    // ggdef dropped the `:b` and printed `bin=10` (decimal) — production
+    // formats as binary. Reject at elaborate rather than mis-evaluate.
+    let src = r#"
+void main():
+    int x = 10
+    print(f"bin={x:b}")
+"#;
+    elab_rejects(
+        src,
+        "f-string format spec is outside the phase-A subset",
+        "f-string {x:spec} must be a LOUD ElabError",
+    );
+}

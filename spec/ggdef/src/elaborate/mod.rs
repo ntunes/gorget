@@ -1738,7 +1738,21 @@ impl Elaborator {
                 for seg in &lit.segments {
                     match seg {
                         StringSegment::Literal(s) => parts.push(FPart::Lit(s.clone())),
-                        StringSegment::Interpolation(_, _) => {
+                        StringSegment::Interpolation(_, Some(_spec)) => {
+                            // Round XXV Track E (Class-B close): `{x:b}`,
+                            // `{x:#b}`, `{x:.2f}`, etc. — format specs are
+                            // ratified surface (docs/language-reference.md
+                            // §3171) but the phase-A subset does NOT model
+                            // them; silently dropping the spec printed the
+                            // wrong value (`fstring_binary_spec_leak`
+                            // BOTH-WRONG pre-fix). Reject as a LOUD ElabError,
+                            // matching classify.rs invariant #8.
+                            return Err(ElabError::new(
+                                "f-string format spec is outside the phase-A subset",
+                                span,
+                            ));
+                        }
+                        StringSegment::Interpolation(_, None) => {
                             let e = interps.get(next_interp).ok_or_else(|| {
                                 ElabError::new("f-string interpolation without a parsed expr", span)
                             })?;
@@ -1779,6 +1793,17 @@ impl Elaborator {
         // `print(...)` in expression position (e.g. a closure body). In
         // statement position it is lowered to `Stmt::Print` upstream.
         if name == "print" {
+            // Round XXV Track E (Class-B close, Core #4 print-dispatch class):
+            // `print(x, terminator=..., file=...)` are ratified surface (docs/
+            // language-reference.md §3247/3291) — but the phase-A subset does
+            // NOT model those kwargs, so silently dropping the name would
+            // mis-evaluate (BOTH-WRONG rows `print_builtin` + `print_terminator`
+            // pre-fix). Reject as a LOUD ElabError, matching classify.rs
+            // invariant #8. Sibling call sites: `as_print_call:3325` (rejects
+            // via `args[0].node.name.is_none()` guard → falls through to here);
+            // `eval.rs:1072` defensive path — the ElabError here fires BEFORE
+            // eval runs, so no runtime observation of a named-arg print.
+            self.reject_named_args(args, "print builtin")?;
             let mut out = Vec::with_capacity(args.len());
             for a in args {
                 out.push(self.call_arg_source(&a.node, None)?);
@@ -3318,11 +3343,17 @@ fn block_tail_is_borrow_bind(block: &ast::Block) -> bool {
     }
 }
 
-/// If `e` is a `print(arg)` call, return the single argument expression.
+/// If `e` is a `print(arg)` call, return the single POSITIONAL argument
+/// expression. A single NAMED arg (e.g. `print(terminator=", ")` — nonsensical
+/// but syntactically parseable) is NOT recognized here: returning None lets it
+/// fall through to `Stmt::Expr → elaborate_call`, where `:1781`'s
+/// `reject_named_args` fires a LOUD ElabError. This is the Core #4 sibling of
+/// the print-dispatch class (Round XXV Track E) — the name-guard here + the
+/// `reject_named_args` at `:1781` together close the class.
 fn as_print_call(e: &Spanned<ast::Expr>) -> Option<&Spanned<ast::Expr>> {
     if let ast::Expr::Call { callee, args, .. } = &e.node {
         if let ast::Expr::Identifier(name) = &callee.node {
-            if name == "print" && args.len() == 1 {
+            if name == "print" && args.len() == 1 && args[0].node.name.is_none() {
                 return Some(&args[0].node.value);
             }
         }

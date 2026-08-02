@@ -26081,16 +26081,22 @@ fn self_host_runtime_diff() {
     //       were BURNED DOWN 2026-07-28 (round XII Track Q): `eval.rs::match_pattern`
     //       grew a `Value::Struct` arm mirroring the enum arm, closing
     //       struct_value_match_bind + struct_value_match_bind3 (both moved to
-    //       ADJ-MATCH). Remaining Class-B cells: 8.
+    //       ADJ-MATCH). Round XXV Track E (2026-08-02) BURNED DOWN the print-
+    //       kwarg + f-string format-spec cells: `elaborate/mod.rs:1781` now
+    //       calls `reject_named_args(args, "print builtin")`, and the f-string
+    //       `Interpolation(_, Some(spec))` arm returns a LOUD ElabError. The
+    //       print-dispatch class was closed at 3 sibling sites (Core #4):
+    //       `elaborate_call:1781`, `as_print_call:3325` (name-guard falls
+    //       through to elaborate_call), and `eval.rs:1072` (defensive,
+    //       unreachable post-fix — documented). Positive-controls (Core #12(a))
+    //       pin the three rejects in spec/ggdef/src/tests.rs. Remaining
+    //       Class-B cells: 5.
     const EXPECTED_BOTH_WRONG: &[&str] = &[
         "core_traits",
         "drop_collection_custom_elem_leak",
         "drop_reassign",
         "drop_struct_collection_fields",
-        "fstring_binary_spec_leak",
-        "print_builtin",
         "print_display_temp_leak",
-        "print_terminator",
     ];
     if !cfg!(debug_assertions) && parity_floor_active("self_host_runtime_diff") {
         let new_both_wrong: Vec<&str> = both_wrong
