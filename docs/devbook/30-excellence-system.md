@@ -487,6 +487,44 @@ the round entry lets the next round re-run identically. A round that
 manually edits the count without regenerating trips the gauntlet's
 "re-verify every premise" rule as soon as the next round tries to diff.
 
+**The blind spot the first strict round walked into (2026-08-02).** Round
+XXVIII, the first measured under the strict rule, reported `known_gaps
+94→92 · TODO items 533→533 · net −2` and a DONE entry claiming *"TODO
+strictly decreases."* Both halves of that sentence were wrong in
+instructive ways.
+
+First, **the two counters are not one counter.** The −2 came entirely from
+`known_gaps` graduations; the TODO count was flat. The rule's two
+statements had drifted apart during the same commit that introduced them —
+`AGENTS.md` step 1 said *"TODO must strictly DECREASE"* while step 5 said
+*"net must strictly decrease"* — so the round could satisfy one reading
+and fail the other, and the entry quoted whichever it satisfied. The rule
+now names one number: **the combined net the script prints**, with a
+`known_gaps` graduation counting as a closure.
+
+Second, and worse, **four of the round's five convergence-relevant moves
+were invisible to the meter.** `scripts/convergence.sh` deliberately skips
+prose sections — the handover block included — because the mandatory
+close-time rewrite churns those bullets (that skip is itself the fix for an
+earlier drift, where a rewrite inflated the count by +7 while real items
+fell by 1). But the round *filed* its one new follow-up into the handover
+block and *closed* three items there too. Neither the filed side nor the
+closed side reached the counter; they cancelled, and the flat 533→533 read
+as "no change" when nine things had happened. A gate that cannot see the
+work it governs is not a gate.
+
+The fix is a filing-location rule with an executable guard rather than a
+prose reminder (Core #6): filed work lives in a **categorized** section,
+the handover carries state and pointers only, and `convergence.sh` now
+FAILS when a `🆕`-marked bullet — the project's own "filed this round"
+marker — appears inside a prose section. Verified red on the three items
+standing in the handover when the guard landed. Note the one-time
+accounting consequence: moving genuinely-filed items out of the handover
+*raises* the visible count, because they were never counted before. That
+is an undercount being corrected, not a regression, and the round that
+does it says so in its entry rather than letting the next round read it as
+backsliding.
+
 **What the rule does not cover.** Rules like this are for the *ledger*
 (what's tracked as pending); they do NOT displace parity ratchets
 (`RUNTIME_DIFF_MATCH_FLOOR`, `GGDEF_ADJUDICATED_FLOOR`), which are code-

@@ -14,9 +14,12 @@
 #   scripts/convergence.sh                      # current counts
 #   scripts/convergence.sh <prev_kg> <prev_todo> # full `Convergence:` line
 #
-# Convention: net = Δknown_gaps + Δtodo_items. NEGATIVE is convergent. Per the
-# gate, net >= 0 does not close on paper — land more closures or name the reason
-# in the DONE entry.
+# Convention: net = Δknown_gaps + Δtodo_items. NEGATIVE is convergent. This
+# combined net is THE number the gate reads (AGENTS.md Round lifecycle step 5):
+# a `known_gaps` graduation counts as a closure, and "TODO alone fell" is a
+# different claim. Under the STRICT 2× RULE (owner 2026-08-02, binding from
+# Round XXVIII) net >= 0 does not close, full stop — the old "name the reason in
+# the DONE entry" exemption is RETIRED; add tracks until the net is negative.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -39,6 +42,26 @@ for section in "${PROSE_SECTIONS[@]}"; do
   fi
 done
 
+# Guard: filed work items must live in a CATEGORIZED section, never in a prose
+# section. The count above deliberately skips prose, so an item filed there is
+# INVISIBLE to the gate — it inflates neither the filed side nor the closed
+# side. Round XXVIII filed 1 and closed 3 inside the handover block and the
+# counter read 533→533 flat while the DONE entry claimed a strict decrease.
+# `🆕` is the project's "filed this round" marker, so its presence in a prose
+# section is exactly the defect. Fail loudly rather than report a wrong gate.
+stray_filings=$(awk -v prose_re="$PROSE_RE" '
+  /^## /  { in_prose = ($0 ~ prose_re); sub_admit = 0; next }
+  /^### / { sub_admit = ($0 ~ /UNOWNED, HIGH SEVERITY/); next }
+  (in_prose && !sub_admit) && /^- \*\*/ && /🆕/ { printf "  TODO.md:%d  %.90s\n", NR, $0 }
+' TODO.md)
+if [ -n "$stray_filings" ]; then
+  echo "convergence.sh: filed work item(s) inside a PROSE section — invisible to this gate:" >&2
+  echo "$stray_filings" >&2
+  echo "  Move them into a categorized section (## CoW … / ## Semantics … / etc.)." >&2
+  echo "  The handover block carries STATE and pointers, never filed work (AGENTS.md step 5)." >&2
+  exit 1
+fi
+
 known_gaps=$(find tests/fixtures/known_gaps -name '*.gg' | wc -l | tr -d ' ')
 
 todo_items=$(awk -v prose_re="$PROSE_RE" '
@@ -57,7 +80,7 @@ if [ $# -eq 2 ]; then
   printf 'Convergence: known_gaps %s→%s · TODO items %s→%s · net %s (regen: `scripts/convergence.sh %s %s`)\n' \
     "$prev_kg" "$known_gaps" "$prev_todo" "$todo_items" "$net_str" "$prev_kg" "$prev_todo"
   if [ "$net" -ge 0 ]; then
-    echo "  ⚠ net >= 0 — the round does not close on paper. Land more closures or name the reason in the DONE entry." >&2
+    echo "  ⚠ net >= 0 — the round does NOT close (STRICT 2× RULE, owner 2026-08-02). Add tracks / land more closures until the net is negative; the 'name the reason' exemption is RETIRED." >&2
   fi
 else
   printf 'known_gaps=%s todo_items=%s\n' "$known_gaps" "$todo_items"

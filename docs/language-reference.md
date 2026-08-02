@@ -3372,6 +3372,16 @@ with Connection(open_fd("db")) as conn:
 
 When multiple values go out of scope simultaneously (e.g. at the end of a block), drops are called in **reverse declaration order** (LIFO). This matches Rust's drop semantics and ensures that values declared later — which may reference earlier values — are cleaned up first.
 
+The elements *inside* one container drop in **forward order** (D37): index order for `Vector` and `Deque`, insertion order for `Dict`, `Set`, and their unordered counterparts. The two rules sit on different axes and compose. Reverse order exists for locals because a later declaration may depend on an earlier one, and unwinding backwards releases the dependent first; container elements are peers that cannot reference each other, so there is no dependency to unwind and forward order is the natural reading. A block holding two vectors therefore drops the second vector first, and drops each vector's elements front to back:
+
+```gorget
+void main():
+    Vector[Noisy] a = Vector[Noisy]()   # holds 1, 2
+    Vector[Noisy] b = Vector[Noisy]()   # holds 3, 4
+    # scope exit: b before a (reverse declaration),
+    # and within each, low index first → drop 3, 4, 1, 2
+```
+
 #### Iterator[T]
 
 Enables `for` loop iteration (§6.11). The type parameter `T` is the element type. The `&self` parameter means `next` takes a mutable borrow, allowing the iterator to advance its internal state.
@@ -3811,6 +3821,8 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 **`Set[T]`** — Ordered set (insertion-order preserving)
 
 Iteration yields elements in insertion order. Adding a duplicate does not change order. Removing an element and re-adding it places it at the end.
+
+A set is **not positionally indexable** (D38) — `s[0]` is a compile error, on `Set` and `HashSet` alike. Ordering and indexing are separate capabilities: `Dict` is insertion-ordered too, yet `d[k]` looks a key up rather than reaching a position. A set's elements *are* its keys, so `s[0]` over a `Set[int]` could not be told apart from a lookup of the element `0`, and the operator is left undefined rather than given an arbitrary reading. To reach an element by ordinal position, materialise first — `s.items()[i]` — or iterate.
 
 | Method | Signature | Description |
 |---|---|---|

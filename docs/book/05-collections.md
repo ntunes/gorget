@@ -333,7 +333,16 @@ int age = ages.get("Alice") ?? 0         # 30, or 0 if missing
 
 ## Sets
 
-`Set[T]` is an unordered collection of unique elements.
+`Set[T]` is a collection of unique elements that remembers insertion order — the
+same pairing as `Dict` and `HashMap`, one step down: `Set` keeps order, `HashSet`
+trades it for speed. If you are coming from Python, note the difference: Python's
+`dict` is ordered but its `set` is not, and Gorget closes that gap so the ordered
+and unordered choice is yours for both maps and sets.
+
+Order is not the same as indexing, though. `s[0]` does not compile, because a
+set's elements *are* its keys — over a `Set[int]`, `s[0]` could equally mean "the
+first element" or "the element `0`", so Gorget declines to guess. Reach for
+`s.items()[0]` when you want a position.
 
 ```gorget
 from std.collections import Set
