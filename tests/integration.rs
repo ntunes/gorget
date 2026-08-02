@@ -25982,7 +25982,11 @@ fn self_host_runtime_diff() {
     // Track X's nested-place mut-method-receiver fixture (`Vector[Holder]` + `Vector[Wrap]`
     // with a mutating equip method + `Struct-Field`+`Vector-Index` projections) is in
     // ggdef's subset and adjudicates the write-through counts, adding ADJ rows.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 390;
+    // Reseeded 2026-08-02 (Round XXIV close: A move-suggestion delete + B SIGSEGV
+    // propagate + C SH α port + D α ggdef port + E Set/HashSet empty-literal):
+    // ADJ-MATCH 392 (of MATCH 1310, BOTH-WRONG 8). Track D's ggdef `unify_closure_ret_axis`
+    // mirror + Track E's Set/HashSet empty-literal fix ratcheted ggdef adjudication +2.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 392;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -26166,7 +26170,14 @@ fn self_host_runtime_diff() {
     // `5`, matching Rust). Excluded from ggdef corpus_b (out-of-subset `is Error(be):`
     // binding readback — same disposition as `combinator_result_or_else_error_cross_type.gg`
     // in corpus_b's exclusion list); enters UNADJ, not ADJ. Floor 1306 → 1307.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1307;
+    // Ratcheted 2026-08-02 (Round XXIV close: full-round re-measure after A/B/C/D/E
+    // landed): MATCH 1310 / 1415 = 92.6% (WRONG 19, CC-FAIL 54, CRASH 30, EXCLUDED 89,
+    // RUST-REJECTED 327; BOTH-WRONG 8 unchanged). +3 MATCH from XXIII baseline: Track D's
+    // ggdef port didn't affect runtime_diff numerator directly (it flipped 3 EXCLUDEs to
+    // adjudicated NEG rejects, +2 ADJ); Track E's Set/HashSet empty-literal fix + collections.rs
+    // dispatch enables previously-broken Set-shape usage paths; C's α SH lowerer port fixes
+    // additional shapes now agreeing across lanes.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1310;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
