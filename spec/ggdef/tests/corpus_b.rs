@@ -246,20 +246,6 @@ const EXCLUDE: &[&str] = &[
     // with different lane phrasing; the sibling fixtures adjudicate the
     // class. EXCLUDE with citation.
     "combinator_result_flatten_rejected.gg",
-    // Round XXVIII Track A — 4 tag-check NEG fixtures for R26A/R27C extension
-    // (Result.is_some/is_none Option-only + Option.is_ok/is_error Result-only).
-    // Rust + SH reject at reject_wrong_receiver_combinator chokepoint with
-    // `error[E_NoMethodFound]:`. ggdef LAG per Core #13: elaborate/mod.rs:2525-2538
-    // arm-picker has NO tag-check arm; all 4 fall through to `other =>` at :2538
-    // and reject with "method `.is_X()` is outside the phase-0 subset (may need
-    // Increment B2)" — DIFFERENT error phrasing (correct wrong-cell reject, wrong
-    // diag code for corpus_b's exact-match assertion). Wrong-cell case is already
-    // blocked; ggdef subset-expansion + receiver-gate combined landing is filed
-    // as HIGH follow-up in TODO.md. EXCLUDE with citation until ggdef arm lands.
-    "combinator_result_is_some_rejected.gg",
-    "combinator_result_is_none_rejected.gg",
-    "combinator_option_is_ok_rejected.gg",
-    "combinator_option_is_error_rejected.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -525,5 +511,12 @@ fn corpus_b_all_match() {
     // EXCLUDEd above (Flatten reaches the arm-picker catch-all — a
     // different reject path with a drift-prone message). Count +5 additions
     // − 1 EXCLUDE = +4 net → 172.
-    assert_eq!(fixtures.len(), 172, "B2 gate set drifted from 172 fixtures");
+    //
+    // Round XXVIII Track A + follow-up 2026-08-02: 4 tag-check NEG fixtures
+    // added (`combinator_{result_is_some,result_is_none,option_is_ok,
+    // option_is_error}_rejected.gg`). ggdef LAG closed in-round via the
+    // string-based receiver-gate at `elaborate/mod.rs` (intercepts BEFORE
+    // the arm-picker catch-all with `error[E_NoMethodFound]:` matching
+    // Rust+SH lanes). All 4 adjudicate via CheckFails. Count +4 → 176.
+    assert_eq!(fixtures.len(), 176, "B2 gate set drifted from 176 fixtures");
 }

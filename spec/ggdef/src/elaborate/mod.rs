@@ -2630,6 +2630,40 @@ impl Elaborator {
         }
 
         let recv = Box::new(self.elaborate_expr(receiver)?);
+
+        // Round XXVIII Track A ggdef LAG close: tag-checks (is_ok/is_some/
+        // is_none/is_error) fall through to the arm-picker's `other =>`
+        // catch-all at :2664 with the generic "outside phase-0 subset"
+        // message. Rust + SH both reject wrong-cell tag-checks with the
+        // more informative `error[E_NoMethodFound]:` (R26A+R27C 9-arm
+        // chokepoints). This gate intercepts BEFORE the catch-all so the
+        // WRONG-cell case (Result.is_some/is_none Option-only, Option.is_ok/
+        // is_error Result-only) rejects with the same `error[E_NoMethodFound]:`
+        // shape all 3 lanes agree on. Right-cell (Result.is_ok / Option.is_some)
+        // remains outside phase-0 subset and reaches the catch-all — its
+        // subset-expansion is separate work (needs BuiltinMethod::IsOk etc.
+        // variants + eval-side impls).
+        let receiver_ty_for_tagcheck = self.infer_ast_ty(&receiver.node);
+        match (method, &receiver_ty_for_tagcheck) {
+            ("is_some" | "is_none", Ty::Result(_, _)) => {
+                return Err(ElabError::new(
+                    format!(
+                        "error[E_NoMethodFound]: `.{method}()` on Result is outside the phase-0 subset (Option-only)"
+                    ),
+                    span,
+                ));
+            }
+            ("is_ok" | "is_error", Ty::Option(_)) => {
+                return Err(ElabError::new(
+                    format!(
+                        "error[E_NoMethodFound]: `.{method}()` on Option is outside the phase-0 subset (Result-only)"
+                    ),
+                    span,
+                ));
+            }
+            _ => {}
+        }
+
         // `(method, expected-arg-count)` for the fixed-arity builtins.
         let (bm, argn): (BuiltinMethod, Option<usize>) = match method {
             "push" => (BuiltinMethod::Push, Some(1)),
