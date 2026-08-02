@@ -1,0 +1,21 @@
+# Round XXV Track C — `&`-of-a-place as a bare expression-statement.
+# NEG 20/20 of the operand-position class; retired by the ONE-PRODUCER
+# chokepoint at `src/semantic/safety/check_expr.rs:349`. Expr-stmt
+# reaches the chokepoint via `Stmt::Expr` in `check_stmt.rs:323`
+# recursing through `self.check_expr(expr)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single `E_AmpInOperandPosition`
+# — the expr-stmt chokepoint route emits no co-emit companions (single,
+# clean error).
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    &c.fd
+    print(c.fd)
