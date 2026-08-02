@@ -34194,6 +34194,77 @@ fn deque_for_iter_struct_payload() {
     );
 }
 
+/// Round XXVI Track D REGRESSION (Core #4 sibling-drift class-fix +
+/// Core #11/#12 axis-complete RED-verified). `Deque[S]` where `S` has
+/// ≥2 fields silently TRUNCATES to 8 bytes per element on both C and
+/// LLVM. Closed by the `Deque__` arm added to
+/// `elem_size_from_monomorphized` (`src/lir/lower/types.rs`) — pre-fix
+/// the caller at `insts.rs:3857` fell to `.unwrap_or(8)` and
+/// `gorget_array_new(8)` under-sized every slot. Single-int-field
+/// structs (see `deque_for_iter_struct_payload`) were accidentally
+/// correct via the 8-byte fallback (Core #15e Q6); the three
+/// multi-field fixtures below are the axis cells that expose the
+/// truncation on the push, index-assign and for-iter faces.
+///
+/// `deque_int_control` pins the accidentally-correct `Deque[int]`
+/// path so a future edit that breaks it fires alongside the graduation.
+#[test]
+fn deque_multifield_struct_push_read() {
+    run_gg(
+        "deque_multifield_struct_push_read.gg",
+        "\
+1
+2
+3
+4
+5
+6",
+    );
+}
+
+#[test]
+fn deque_multifield_struct_index_assign() {
+    run_gg(
+        "deque_multifield_struct_index_assign.gg",
+        "\
+10
+20
+30
+40
+50
+60",
+    );
+}
+
+#[test]
+fn deque_multifield_struct_for_iter() {
+    run_gg(
+        "deque_multifield_struct_for_iter.gg",
+        "\
+100
+200
+300
+400
+500
+600",
+    );
+}
+
+#[test]
+fn deque_int_control() {
+    run_gg(
+        "deque_int_control.gg",
+        "\
+3
+11
+22
+33
+11
+22
+33",
+    );
+}
+
 /// Round XXIII γδ REGRESSION (new 2026-08-01) — `HashMap[int, Point].x`
 /// value-read (TODO.md:1064). Closed by the `HashMap__` arm added to
 /// `infer_collection_element_type` — the same class fix that admits

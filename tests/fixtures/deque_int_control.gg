@@ -1,0 +1,18 @@
+# NEG-CONTROL — `Deque[int]` (accidentally correct via the 8-byte
+# fallback, per Core #15e Q6) must remain green after Round XXVI Track
+# D's `Deque__` arm is added to `elem_size_from_monomorphized`. Guards
+# against a regression that would break the pre-existing accidentally-
+# correct path while fixing the multi-field truncation class.
+from std.collections import Deque
+
+void main():
+    Deque[int] d = Deque[int]()
+    d.push(11)
+    d.push(22)
+    d.push(33)
+    print(d.len())
+    print(d[0])
+    print(d[1])
+    print(d[2])
+    for x in d:
+        print(x)

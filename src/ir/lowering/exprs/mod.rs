@@ -3078,22 +3078,9 @@ pub(super) fn try_resolve_index_element_ptr(
 /// | `try_resolve_field_place` Index recursion (`?`) | inherits the index rows | yes |
 /// | `try_resolve_field_place` head `_ =>` | no | yes — method chains, temps |
 /// | `try_resolve_field_place` ReadGuard early-out | only if the OBJECT arm emitted | yes, when combined with an emitting base |
-/// | `try_resolve_field_place` field-lookup fall-off | only if the OBJECT arm emitted | yes — see the `Deque` row below |
+/// | `try_resolve_field_place` field-lookup fall-off | only if the OBJECT arm emitted | yes — method chains, temps |
 /// | `try_resolve_tuple_field_place` Identifier / SelfExpr / FieldAccess+TupleFieldAccess recursions / Deref / Index recursion (`?`) / head `_ =>` | mirrors the field resolver row-for-row (enforced by tests/lints.rs::field_and_tuple_place_resolvers_cover_the_same_object_forms) | yes |
 /// | `try_resolve_tuple_field_place` non-place obj / out-of-range local / walk fall-off | only if the OBJECT arm emitted | yes |
-///
-/// A REACHABLE emit-then-`None` row exists and is measured: a `Deque[S]` element
-/// base. `Deque` is ADMITTED by the kind-gate (`builtins.rs` gives it
-/// `CollectionKind::Array`) but `infer_collection_element_type` has no `Deque__`
-/// arm, so the element type falls to `I64_TYPE`, the field walk finds nothing,
-/// and control falls off the field resolver AFTER `lower_expr(coll)`,
-/// `lower_expr(index)` and `index_load` have all emitted. The double evaluation
-/// is ACCEPTED here rather than remedied: the remedy ("never emit before you can
-/// return `None`") edits the SHARED resolvers, which would change assign-face
-/// and method-receiver emission on their `None` paths too — a semantic change on
-/// faces this chokepoint deliberately leaves byte-identical. The `Deque` shape
-/// is filed with a committed `known_gaps` repro; see
-/// `known_gaps/sound_amp_deque_element_field.gg`.
 ///
 /// # `None` means FALL THROUGH, never DROP
 ///

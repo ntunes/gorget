@@ -8579,6 +8579,79 @@ fn infer_collection_element_type_arms_count() {
     );
 }
 
+/// Round XXVI Track D (Core #4 sibling-drift / Core #6 executable guard):
+/// arm-count ratchet for `elem_size_from_monomorphized` at
+/// `src/lir/lower/types.rs`. That helper resolves a monomorphized collection
+/// constructor name (`Vector__T__new`, `Deque__T__new`, …) to `sizeof(T)` for
+/// the runtime allocator's `elem_size` argument. A missing family arm makes
+/// the helper return `None`; the caller at `src/lir/lower/insts.rs:3857`
+/// substitutes `.unwrap_or(8)`, silently truncating every element of
+/// `Deque[S]` / `Vector[S]` where `sizeof(S)` != 8. This lint pins the
+/// parallel-arm invariant across the Vector/Deque/Set/HashSet/Heap family
+/// (Dict/HashMap go through the sibling `dict_elem_sizes_from_monomorphized`).
+/// The scope is intentionally that ONE fn — legitimate Vector-only sites in
+/// helpers.rs / methods.rs / calls.rs (positional-index, sort-variant, HOF
+/// dispatch) are NOT sibling-drift candidates and would only add noise here.
+///
+/// **If this fails:**
+///   - A collection family gained a `__new` constructor arm → verify each
+///     admitted prefix in the array-family (`Vector__`, `Deque__`, `Set__`,
+///     `HashSet__`, `Heap__`) still has ONE arm here. Bump EXPECTED.
+///   - An arm was REMOVED → the family now returns `None` → `unwrap_or(8)`
+///     truncates every element of `Family[S]` where `sizeof(S)` != 8 on both
+///     C and LLVM. RESTORE it, do NOT lower EXPECTED. If the family was
+///     retired, delete the corresponding fixtures too.
+#[test]
+fn elem_size_from_monomorphized_arms_count() {
+    let src = fs::read_to_string("src/lir/lower/types.rs")
+        .expect("read src/lir/lower/types.rs");
+    let sig = "pub(super) fn elem_size_from_monomorphized(";
+    let start = src.find(sig).expect("locate elem_size_from_monomorphized");
+    let after_sig = start + sig.len();
+    // Body ends at the next top-level fn — bare `fn `, `pub fn `, or
+    // `pub(super) fn ` (or `pub(crate) fn `). The FIRST of these markers
+    // after the signature wins, so combine via min() rather than fallback —
+    // the following item is `pub(super) fn concurrency_elem_size`, and a
+    // naive `find("\nfn ")` would skip past it and pull in later siblings
+    // that redundantly use the same prefixes (Round XXVI Track D bring-up).
+    let end = ["\nfn ", "\npub fn ", "\npub(super) fn ", "\npub(crate) fn "]
+        .iter()
+        .filter_map(|marker| src[after_sig..].find(marker))
+        .min()
+        .map(|i| after_sig + i)
+        .unwrap_or(src.len());
+    // Strip line comments so the ratchet reasons about EXECUTABLE code only —
+    // the arm-comment prose legitimately mentions prefix strings.
+    let body: String = src[start..end]
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // 5 arms in the array-family: Vector__ · Deque__ · Set__ · HashSet__ ·
+    // Heap__. Each spelled as a `.strip_prefix("<Prefix>__")` call in the
+    // fn body; count the literal appearances of the prefixes (each MUST
+    // appear exactly once). Dict/HashMap constructors take the sibling
+    // dict_elem_sizes_from_monomorphized path and are counted there.
+    const EXPECTED: usize = 5;
+    let count: usize = ["Vector__", "Deque__", "Set__", "HashSet__", "Heap__"]
+        .iter()
+        .map(|p| body.matches(&format!(".strip_prefix(\"{p}\")")).count())
+        .sum();
+    assert_eq!(
+        count, EXPECTED,
+        "`elem_size_from_monomorphized` arm count changed: {count} vs \
+         expected {EXPECTED}. Array-family constructor member set at Round \
+         XXVI Track D close: {{Vector, Deque, Set, HashSet, Heap}}. If a \
+         family was ADDED, verify it belongs to the gorget_array family (via \
+         `compiler/data/resources.gg`'s `method_prefix`) and bump EXPECTED. \
+         If REMOVED, RESTORE the arm — the family now returns `None` and \
+         `unwrap_or(8)` at `insts.rs:3857` truncates every element of \
+         `Family[S]` where `sizeof(S)` != 8 on both C and LLVM \
+         (Round XXVI Track D bug class).",
+    );
+}
+
 /// Round XXIII Track α (Core #4 class-fix / Core #6 executable guard):
 /// arm-count ratchet for the closure-returning Option/Result combinator
 /// class in `src/semantic/typecheck.rs::TypeChecker::unify_closure_ret_axis`.

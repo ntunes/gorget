@@ -1,0 +1,34 @@
+# CORE #11/#12 REGRESSION — index-assign to `Deque[S]` where `S` has
+# ≥2 fields also silently TRUNCATES to 8 bytes per element.
+#
+# AXIS PIN: Deque[S] multi-field struct payload · `d[i] = S(...)`
+# whole-element index write · elem-size derivation via
+# `elem_size_from_monomorphized` (src/lir/lower/types.rs). Same
+# `Deque__` arm miss as push-face — `gorget_array_new(8)` under-sizes
+# every slot.
+#
+# RED-VERIFIED PRE-FIX (Round XXVI Track D scout 2026-08-02): the
+# whole-element assign copies 8 bytes into an 8-byte slot; readback of
+# `d[0].y` and `d[0].z` returned garbage (either 0 or bleed-through
+# from the next slot). BOTH backends.
+#
+# INTENDED post-fix: `10 / 20 / 30` then `40 / 50 / 60`.
+from std.collections import Deque
+
+struct Point:
+    int x
+    int y
+    int z
+
+void main():
+    Deque[Point] d = Deque[Point]()
+    d.push(Point(0, 0, 0))
+    d.push(Point(0, 0, 0))
+    d[0] = Point(10, 20, 30)
+    d[1] = Point(40, 50, 60)
+    print(d[0].x)
+    print(d[0].y)
+    print(d[0].z)
+    print(d[1].x)
+    print(d[1].y)
+    print(d[1].z)

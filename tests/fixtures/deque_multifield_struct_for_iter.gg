@@ -1,0 +1,32 @@
+# CORE #11/#12 REGRESSION — `for p in d:` over a `Deque[S]` where `S`
+# has ≥2 fields silently TRUNCATES to 8 bytes per iteration.
+#
+# AXIS PIN: Deque[S] multi-field struct payload · `for` iteration ·
+# elem-size derivation via `elem_size_from_monomorphized`
+# (src/lir/lower/types.rs). Same `Deque__` arm miss as the push /
+# index-assign faces.
+#
+# RED-VERIFIED PRE-FIX (Round XXVI Track D scout 2026-08-02): the
+# iterator reads 8 bytes per slot, so `p.x` returns the correct low
+# int64 of the FIRST field but `p.y` / `p.z` return bleed-through
+# from the next slot (or zero on the last iteration). BOTH backends.
+# `deque_for_iter_struct_payload.gg` covers the single-int-field
+# sibling — accidentally correct via the 8-byte fallback (Core #15e
+# Q6); this fixture is the multi-field axis cell.
+#
+# INTENDED post-fix: `100 / 200 / 300` then `400 / 500 / 600`.
+from std.collections import Deque
+
+struct Point:
+    int x
+    int y
+    int z
+
+void main():
+    Deque[Point] d = Deque[Point]()
+    d.push(Point(100, 200, 300))
+    d.push(Point(400, 500, 600))
+    for p in d:
+        print(p.x)
+        print(p.y)
+        print(p.z)

@@ -17,6 +17,8 @@ pub(super) fn elem_size_from_monomorphized(name: &str, structs: &[StructDef], al
     // Extract the type portion between the collection prefix and the method name.
     let type_str = if let Some(rest) = name.strip_prefix("Vector__") {
         rest.strip_suffix("__new")?
+    } else if let Some(rest) = name.strip_prefix("Deque__") {
+        rest.strip_suffix("__new")?
     } else if let Some(rest) = name.strip_prefix("Set__") {
         rest.strip_suffix("__new")?
     } else if let Some(rest) = name.strip_prefix("HashSet__") {
