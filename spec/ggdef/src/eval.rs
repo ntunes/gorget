@@ -1072,6 +1072,13 @@ fn eval_expr(ctx: &Ctx, state: &mut State, expr: &Expr) -> Result<Value, Halt> {
         Expr::Call { func, args } => {
             if func == "print" {
                 // Defensive: `print` is normally lowered to `Stmt::Print`.
+                // Round XXV Track E: `elaborate/mod.rs:1781` rejects
+                // `print(..., name=...)` at elaboration via
+                // `reject_named_args`, so this path CANNOT observe a named-arg
+                // print (Core #4 print-dispatch class, sibling site). The one
+                // remaining silent-drop (`print("a","b")` positional — bare
+                // extra args) is a separate class and out of Round XXV Track
+                // E's scope.
                 if let Some(a) = args.first() {
                     let v = eval_source_to_value(ctx, state, a, state.cur_span)?;
                     state.stdout.push_str(&format_value(&v));
