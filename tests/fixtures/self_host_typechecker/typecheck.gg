@@ -37,6 +37,7 @@ from infer import infer_expr_type, infer_closure_return_type
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from std.conv import int_to_str
 from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition
+from format_types import describe_type
 
 # ── Fallback def lookup by name ──────────────────────────────
 # Scans all definitions for a matching name (and optionally DkFunction kind).
@@ -3299,6 +3300,134 @@ void reject_wrong_receiver_combinator(int receiver_type, String method_name, Spa
     String msg = "`." + method_name + "()` on " + base_name + " is outside the phase-0 subset (" + hint + ")"
     ctx.diagnostics.push(Diagnostic.error(span, DkNoMethodFound(), msg))
 
+# ── Round XXVIII Track E: SH mirror of production's
+# `src/semantic/typecheck.rs::TypeChecker::unify_closure_ret_axis` and
+# ggdef's `spec/ggdef/src/elaborate/mod.rs:2373`. Enforces closure-return
+# payload-axis unification for the 3 unify-eligible closure-returning
+# combinators. Cell mapping (mirrors ggdef `ClosureCombinatorCell`):
+#   1 = ResultOrElse  — `Result[T,E].or_else((E) -> Result[T',E'])`  → axis 0 (T'==T)
+#   2 = ResultAndThen — `Result[T,E].and_then((T) -> Result[U,E'])`  → axis 1 (E'==E)
+#   3 = OptionOrElse  — `Option[T].or_else(() -> Option[T'])`        → axis 0 (T'==T)
+#
+# Explicitly out-of-class (mirrors production's helper doc-comment):
+#   - `.map` / `.map_err` — scalar-returning closures (no axis).
+#   - `Result.{flat_map, filter}` + `Option.{map_err, unwrap_error}` —
+#     one-sided combinators rejected at `reject_wrong_receiver_combinator`
+#     as `E_NoMethodFound` (category error, not an axis-unify cell).
+#   - `Option.and_then` / `Option.flat_map` — legitimate cross-type map.
+#
+# Class-guard: `tests/lints.rs::unify_closure_ret_axis_class_enumeration`
+# is the 3-lane twin-count invariant (production + ggdef + THIS SH port).
+# The 3 arms below carry a distinctive per-arm trailing marker (see the
+# `# R…_CELL_MARKER` comments — this doc line and the lint assert-message
+# deliberately paraphrase to avoid inflating the count). A new
+# closure-returning combinator MUST land in the Rust chokepoint AND
+# ggdef's `combinator_cell` AND HERE (Core #9 all-lanes semantic change)
+# with a `combinator_*_cross_type_reject.gg` fixture RED-verified per
+# Core #12.
+int combinator_axis_cell(String base_name, String method_name):
+    if base_name == "Result" and method_name == "or_else":
+        return 1                                                 # R28E_CELL_MARKER
+    if base_name == "Result" and method_name == "and_then":
+        return 2                                                 # R28E_CELL_MARKER
+    if base_name == "Option" and method_name == "or_else":
+        return 3                                                 # R28E_CELL_MARKER
+    return -1
+
+# Payload index within `type_args` for the axis this cell unifies.
+# `axis` here is the position that must be a PASSTHROUGH from receiver
+# to closure — the OTHER axis is the recovery/map axis and may differ.
+int axis_index_for_cell(int cell):
+    if cell == 1:
+        return 0  # Result.or_else: Ok-axis passthrough
+    if cell == 2:
+        return 1  # Result.and_then: Err-axis passthrough
+    if cell == 3:
+        return 0  # Option.or_else: Some-axis passthrough
+    return -1
+
+# Extract the payload TypeId at `axis` for an RTGeneric receiver of
+# `Option` or `Result`. Returns -1 for non-Option/Result shapes,
+# unresolved types (-1 sentinel), or axis out of range — the caller
+# no-ops in those cases (mirrors ggdef's `Ty::Unknown` bail).
+int option_or_result_payload(int type_id, int axis, ScopeTable scopes, TypeTable types):
+    if type_id < 0 or type_id >= types.types.len():
+        return -1
+    if axis < 0:
+        return -1
+    ResolvedType rt = get_rtype_at(types.types, type_id)
+    match rt:
+        case RTGeneric(def_id, type_args):
+            String name = scopes.get_def(def_id).name
+            if name != "Option" and name != "Result":
+                return -1
+            if axis >= type_args.len():
+                return -1
+            return get_int_at(type_args, axis)
+        else:
+            return -1
+    return -1
+
+# Extract the base type name (e.g. "Result", "Option", "Vector") from a
+# receiver TypeId's RTDefined/RTGeneric wrapper. Returns "" for
+# non-nominal shapes. Mirrors `reject_wrong_receiver_combinator`'s
+# inline extraction (kept as a helper because this arm-picker also
+# needs it — one shared shape rather than two copies).
+String combinator_receiver_base_name(int receiver_type, ScopeTable scopes, TypeTable types):
+    if receiver_type < 0 or receiver_type >= types.types.len():
+        return ""
+    ResolvedType rt = get_rtype_at(types.types, receiver_type)
+    match rt:
+        case RTDefined(def_id):
+            return scopes.get_def(def_id).name
+        case RTGeneric(def_id, _targs):
+            return scopes.get_def(def_id).name
+        else:
+            return ""
+    return ""
+
+# Infer a closure-arg's declared return type by descending into an
+# `EClosure` body's last stmt. Returns -1 on non-closure args
+# (already-typed identifier / free-fn ref) — the caller then skips the
+# check (we cannot adjudicate what we cannot read). Empty `param_types`
+# is deliberate: this runs BEFORE the closure body's typecheck walk,
+# so param types are Unknown; the axis extractor bails on Unknown
+# (mirrors production's `is_fully_concrete` gate + ggdef's `Ty::Unknown`
+# no-op).
+int closure_arg_ret_ty(SpannedExpr arg_expr, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    match arg_expr.expr:
+        case EClosure(_params, body):
+            if body.len() == 0:
+                return -1
+            Stmt last = body.get(body.len() - 1).unwrap()
+            Dict[String, int] empty_pt = Dict[String, int]()
+            return infer_closure_return_type(last, empty_pt, scopes, &types, &ctx)
+        else:
+            return -1
+    return -1
+
+# The axis-unify helper — SH mirror of production
+# `src/semantic/typecheck.rs::TypeChecker::unify_closure_ret_axis` and
+# ggdef `Elaborator::unify_closure_ret_axis`. Emits `E_TypeMismatch`
+# (`DkTypeMismatch` → `diag_kind_code`) when the passthrough axis
+# differs between receiver and closure return, so the driver's
+# `has_errors` gate halts BEFORE lowering.
+void unify_closure_ret_axis(int cell, int receiver_type, int closure_ret_type, Span span, ScopeTable scopes, TypeTable types, ResolveContext &ctx):
+    if cell < 1 or cell > 3:
+        return
+    int axis = axis_index_for_cell(cell)
+    int recv_payload = option_or_result_payload(receiver_type, axis, scopes, types)
+    int closure_payload = option_or_result_payload(closure_ret_type, axis, scopes, types)
+    # Bail on non-Option/Result on either side, unresolved payloads, or
+    # missing axis slot — the mismatch (if real) surfaces via a distinct
+    # upstream diagnostic, never cascade a TypeMismatch on top.
+    if recv_payload < 0 or closure_payload < 0:
+        return
+    if recv_payload == closure_payload:
+        return
+    String msg = "type mismatch: expected `" + describe_type(receiver_type, scopes, types) + "`, found `" + describe_type(closure_ret_type, scopes, types) + "`"
+    ctx.diagnostics.push(Diagnostic.error(span, DkTypeMismatch(), msg))
+
 void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
         case ECall(callee, args, targs):
@@ -3353,6 +3482,20 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # `reject_wrong_receiver_combinator` above for the ratified 5
             # cells and the ggdef/Rust cross-lane pins.
             reject_wrong_receiver_combinator(obj_type, method_name, sexpr.span, scopes, types, &ctx)
+            # Round XXVIII Track E — closure-returning combinator axis-unify.
+            # SH mirror of `src/semantic/typecheck.rs::unify_closure_ret_axis`
+            # + ggdef `spec/ggdef/src/elaborate/mod.rs:2373`. Collapsed into
+            # ONE call site (Core #4 chokepoint) like ggdef; production has
+            # one arm per cell. `combinator_axis_cell` returns -1 for
+            # out-of-class (`.map` / `.map_err` / one-sided rejected above);
+            # closure_arg_ret_ty returns -1 for non-closure args; both cases
+            # skip the check without diagnostic (mirrors production/ggdef).
+            int _cell = combinator_axis_cell(combinator_receiver_base_name(obj_type, scopes, types), method_name)
+            if _cell >= 1 and args.len() >= 1:
+                SpannedExpr _clo_arg = args.get(0).unwrap().value
+                int _clo_ret = closure_arg_ret_ty(_clo_arg, scopes, &types, &ctx)
+                if _clo_ret >= 0:
+                    unify_closure_ret_axis(_cell, obj_type, _clo_ret, sexpr.span, scopes, types, &ctx)
             int elem_type = extract_element_type(obj_type, scopes, types).unwrap_or(-1)
             # Resolve full method signature for closure-arg type propagation.
             # This lets (r): body get its param typed when passed to a method
@@ -3479,6 +3622,13 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
 
         case EMatch(scrutinee, arms):
             # Match-as-expression: assign pattern binding types and walk arm bodies.
+            # Round XXVIII Track E — WALK the scrutinee too (not just infer):
+            # a match scrutinee may be a method call carrying a closure arg
+            # (`match p.or_else((): body): ...`), and the axis-unify chokepoint
+            # (`unify_closure_ret_axis` in the EMethodCall arm) only fires
+            # from the walker. Without this recurse, a cross-type closure
+            # return inside a match scrutinee slips past the check.
+            walk_expr_closures(*scrutinee, scope_id, &scopes, &types, &ctx)
             int scrut_type = infer_expr_type(SpannedExpr((*scrutinee).expr, (*scrutinee).span), scopes, &types, &ctx)
             for arm in arms:
                 if scrut_type >= 0:
@@ -4196,7 +4346,16 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             ctx.loop_depth = ctx.loop_depth - 1
 
         case SMatch(expr, arms):
-            # Infer scrutinee type and assign to pattern bindings
+            # Infer scrutinee type and assign to pattern bindings.
+            # Round XXVIII Track E — WALK the scrutinee too (not just infer):
+            # a statement match's scrutinee may be a method call carrying a
+            # closure arg (`match p.or_else((): body): case Some(v): …`), and
+            # the axis-unify chokepoint (`unify_closure_ret_axis` in the
+            # EMethodCall arm) only fires from the walker. Without this
+            # recurse, a cross-type closure return inside a statement-match
+            # scrutinee slips past the check — mirror of the EMatch
+            # expression-form fix at :3556.
+            walk_expr_closures(expr, scope_id, &scopes, &types, &ctx)
             int scrutinee_type = infer_expr_type(expr, scopes, &types, &ctx)
             for arm in arms:
                 if scrutinee_type >= 0:
