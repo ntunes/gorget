@@ -270,7 +270,11 @@ pub enum BuiltinMethod {
     /// `o.and_then(f)` — apply f to the payload; f RETURNS the wrapped
     /// Option/Result (no auto-wrap). None/Error passes through.
     AndThen,
-    /// `o.flat_map(f)` — alias of `and_then` at the phase-0 semantic level.
+    /// `o.flat_map(f)` — Option-only alias of `and_then` at the phase-0
+    /// semantic level. On Result, elaboration is `error[E_NoMethodFound]`
+    /// (Round XXV Track B — mirrors `src/ir/lowering/builtins.rs:1425-1429`
+    /// asserting `RESULT.flat_map` is unregistered). Uses `.and_then()`
+    /// on Result instead.
     FlatMap,
     /// `o.unwrap_or_else(f)` — payload on success, else the value f()
     /// returns. On Result f receives the Error payload; on Option it takes

@@ -1,0 +1,25 @@
+# NEG (Round XXV Track B — one-sided-combinator class): Result.flat_map does
+# NOT exist in the phase-0 subset. Ratified Option-only per
+# `docs/language-reference.md:3861-3891` (Result's method table lists
+# `and_then` and `or_else`, not `flat_map`). `src/ir/lowering/builtins.rs:
+# 1425-1429` asserts `RESULT.flat_map` is unregistered.
+#
+# Pre-fix (RED-verified 2026-08-02): Rust `gg check` prints "OK: no semantic
+# errors" then `gg build` crashes at C-compile with `incompatible types when
+# assigning to '__gg_Result__int64_t__GorgetString' from 'int32_t'`; ggdef
+# `run` silently ACCEPTS (BuiltinMethod::FlatMap dispatches to
+# eval_combinator_and_then at eval.rs:1508 regardless of receiver shape) and
+# prints `0`. Core #8 both-wrong class.
+#
+# Post-fix: ggdef `elaborate_method` REJECTS with
+# `error[E_NoMethodFound]: `.flat_map()` on Result is outside the phase-0
+# subset (Option-only)`. Rust-side class-fix owed as HIGH follow-up
+# (test #[ignore]d until Rust ships reject at semantic layer).
+#
+# Reject-fixtures live at `tests/fixtures/` (check-only, never enter runtime-
+# diff corpus). corpus_b picks up as CheckFails.
+
+void main():
+    Result[int, int] r = Ok(5)
+    Result[int, int] r2 = r.flat_map((int x): Ok(x + 1))
+    print(0)

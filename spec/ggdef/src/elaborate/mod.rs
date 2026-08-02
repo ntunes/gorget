@@ -229,10 +229,15 @@ enum BindMode {
 ///
 /// Deliberately out-of-class (mirroring the production doc-comment):
 ///   - `.map` / `.map_err` — scalar-returning closures (no axis).
-///   - `Result.flat_map` — deliberately UNREGISTERED in production
-///     `src/ir/lowering/builtins.rs`; ggdef currently ACCEPTS
-///     `Result.flat_map` at `elaborate_method` (Core #9 lane divergence,
-///     own port owed — filed as follow-up).
+///   - `Result.{flat_map, filter}` + `Option.{map_err, unwrap_error}` —
+///     one-sided combinators on the wrong-shape receiver. Ratified
+///     Option-only / Result-only per `docs/language-reference.md:3861-3891`.
+///     Rejected at `elaborate_method` (Round XXV Track B) with
+///     `error[E_NoMethodFound]:` — a "method doesn't exist" reject, not
+///     an axis-unify cell (there is no axis to unify when the method is
+///     not part of the receiver's protocol). Result.flatten reaches the
+///     `other =>` catch-all in the arm-picker (no `BuiltinMethod::Flatten`
+///     variant exists).
 ///   - `Option.and_then` / `Option.flat_map` — legitimate cross-type map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClosureCombinatorCell {
@@ -2504,6 +2509,45 @@ impl Elaborator {
                 return Err(ElabError::new(format!("`.{method}` takes {n} arg(s)"), span));
             }
         }
+        let receiver_type = self.infer_ast_ty(&receiver.node);
+        // Round XXV Track B — one-sided combinators on the wrong-shape
+        // receiver: {FlatMap, Filter} on Result; {MapErr, UnwrapError} on
+        // Option. All 4 are ratified Option-only or Result-only per
+        // `docs/language-reference.md:3861-3891` (surface method tables)
+        // and mirrored by `src/ir/lowering/builtins.rs:915-939` +
+        // `:1425-1429` (RESULT protocol has no `flat_map`/`filter`/
+        // `flatten`; MAP_ERR/UNWRAP_ERROR are Result-only). ggdef must
+        // reject at elaborate (Rust production silently accepts and
+        // crashes at C-compile with `incompatible types`; ggdef's eval-side
+        // reject fires too late for corpus_b CheckFails adjudication).
+        // Result.flatten reaches this path via the `other =>` catch-all
+        // in the arm-picker (no BuiltinMethod::Flatten variant exists),
+        // so no arm here. Core #4 class-fix at the elaborate chokepoint;
+        // Rust-side class-fix is owed follow-up (TODO Round XXV Track B).
+        match (bm, &receiver_type) {
+            (BuiltinMethod::FlatMap, Ty::Result(_, _))
+            | (BuiltinMethod::Filter, Ty::Result(_, _)) => {
+                return Err(ElabError::new(
+                    format!(
+                        "error[E_NoMethodFound]: `.{method}()` on Result is outside the phase-0 subset (Option-only)"
+                    ),
+                    span,
+                ));
+            }
+            (BuiltinMethod::MapErr, Ty::Option(_)) => {
+                return Err(ElabError::new(
+                    "error[E_NoMethodFound]: `.map_err()` on Option is outside the phase-0 subset (Result-only)".to_string(),
+                    span,
+                ));
+            }
+            (BuiltinMethod::UnwrapError, Ty::Option(_)) => {
+                return Err(ElabError::new(
+                    "error[E_NoMethodFound]: `.unwrap_error()` on Option is outside the phase-0 subset (Result-only)".to_string(),
+                    span,
+                ));
+            }
+            _ => {}
+        }
         // Round XXIV Track D — closure-returning combinator axis-unify.
         // Mirror of `src/semantic/typecheck.rs:7583/7610/7633`, collapsed into
         // ONE call site because ggdef's arm-picker consolidates the per-cell
@@ -2513,7 +2557,6 @@ impl Elaborator {
         // / `flat_map` / `unwrap_or_else` (out-of-class); the check no-ops
         // there. Runs before the write-materialize check because these are
         // read-only combinators (they never trip the D4-6 gate).
-        let receiver_type = self.infer_ast_ty(&receiver.node);
         if let Some(cell) = Self::combinator_cell(bm, &receiver_type) {
             if let Some(closure_arg) = args.first() {
                 let closure_ret = self.infer_closure_arg_ret_ty(&closure_arg.node);
