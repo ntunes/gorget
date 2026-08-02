@@ -1,0 +1,41 @@
+# Regression (Round XXV Track A subsumed at scout stage 2026-08-02):
+# SH driver's `gg run` already propagates signal-death — verified live.
+#
+# The Round XXIV Track B follow-up filed this as a defect (SH exits 255 silent
+# on SIGSEGV), but the filing was source-read (Core #12 / #15d violation):
+# the scout inspected `gorget_exec` and saw the `-1 → exit(-1) → 255` branch
+# but never actually built + ran. That branch fires only if the SHELL ITSELF
+# is signal-killed, never for a signal-killed user program.
+#
+# MEASURED at HEAD: `gorget_exec` uses `system()`, which invokes `/bin/sh -c
+# <cmd>`. When the child dies from SIGSEGV, /bin/sh translates the signal to
+# 128+signo = 139 (with a "Segmentation fault" stderr line) before exiting;
+# `system()` reports WIFEXITED=true, WEXITSTATUS=139. `gorget_exec` returns
+# 139. `exit(139)` gives 139. Both lanes are UX-distinguishable from a
+# compile error.
+#
+# Difference (nice-to-have, NOT a defect):
+#   • Rust `gg run` emits BRANDED stderr: `gg: <exe> terminated by SIGSEGV
+#     (signal 11)` (via `propagate_child_status` reading ExitStatusExt::signal).
+#   • SH driver emits SHELL stderr: `Segmentation fault` (via /bin/sh's own
+#     signal-translation on system()).
+#
+# Both are non-empty stderr + exit 139. Getting branded parity requires a
+# fork/execvp-based new runtime API (system() can't distinguish "shell
+# exited 139 because child SEGV'd" from "child intentionally exited 139").
+# Cost: medium; value: cosmetic. Not filed unless asked.
+#
+# This fixture is a LIVE regression pin: SH `driver run` propagates the
+# child's exit code (139) with signal-indicating stderr. Also a worked
+# example of Core #15d MIND-THE-PROBE (source-reading vs build-and-run) and
+# Core #15e Q1 (asymmetry vs ratified — verify before filing).
+
+int seed():
+    return 1
+
+void main():
+    Vector[int] inner0 = [seed()]
+    Vector[int] inner1 = [seed() + 1]
+    Vector[Vector[int]] a = [inner0, inner1]
+    Vector[int] r = [x.len() for x in a]
+    print(r.get(0).unwrap())

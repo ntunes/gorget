@@ -24026,6 +24026,56 @@ fn self_host_cli_pipeline() {
     let _ = std::fs::remove_dir_all(&tmp_root);
 }
 
+/// Round XXV Track A (subsumed at scout stage 2026-08-02): SH driver's `gg run`
+/// already propagates signal-death (exit 139 + signal-indicating stderr). The
+/// XXIV Track B follow-up filing was a Core #12/#15d violation — source-read
+/// diagnosis missed the `system()` → /bin/sh → shell-signal-translation chain.
+///
+/// This LIVE regression pin (previously `known_gaps/sh_gg_run_masks_signal_as_255.gg`,
+/// now graduated to `tests/fixtures/sh_gg_run_propagates_signal_death.gg`) asserts
+/// the SH driver behaviour: SH `driver run` on a SIGSEGV program exits 139 with
+/// non-empty stderr containing signal indication ("Segmentation fault" from
+/// /bin/sh; branded `SIGSEGV` from Rust would be nice-to-have but requires a
+/// fork/execvp-based new runtime API — not filed unless asked).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_gg_run_propagates_signal_death() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let lib_dir = manifest_dir.join("stdlib");
+    let fixture = manifest_dir.join("tests/fixtures/sh_gg_run_propagates_signal_death.gg");
+
+    let output = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg("run")
+            .arg(&fixture)
+            .arg(format!("--runtime-dir={}", runtime_dir.display()))
+            .arg(format!("--lib-dir={}", lib_dir.display())),
+        "sh driver run sh_gg_run_propagates_signal_death.gg",
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(139),
+        "SH `driver run` on a SIGSEGV program must propagate 128+11=139, not mask it.\
+         \nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.to_lowercase().contains("segmentation") || stderr.contains("SIGSEGV"),
+        "SH `driver run` must emit signal-indicating stderr on signal death; got: {stderr:?}",
+    );
+
+    // Cleanup: remove build artifacts left next to the fixture.
+    let dir = fixture.parent().unwrap();
+    let stem = fixture.file_stem().unwrap().to_str().unwrap();
+    let _ = std::fs::remove_file(dir.join(format!("{stem}.c")));
+    let _ = std::fs::remove_file(dir.join(stem));
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // GG_IMPL Inc-2 gate: a built `gg-selfhost` is RELOCATABLE — it carries its
 // runtime (the 62 `src/backend/c/runtime/*.c` files embedded into driver.gg via

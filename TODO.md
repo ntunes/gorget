@@ -7,7 +7,6 @@
 **XIX residuals, still open:** `snag#53` SH · W2 Layering DEFER · Track Y's VarDecl/Assign-RHS residual + SH lag.
 
 **Follow-ups filed this round (queued for next):**
-- **SH `gg run` masks signal-death as exit 255** (Track B ride-along; MED; `known_gaps/sh_gg_run_masks_signal_as_255.gg`; port `propagate_child_status` shape to `driver.gg` + new `gorget_exec_status` runtime API).
 - **SH typechecker `unify_closure_ret_axis` mirror** (Track C DEFERRED Edit C; HIGH; SH typechecker has ZERO Option/Result combinator method-arm surface — substantial new subsystem, 3 silent-accepts remain captured by `#[ignore]`d SH-driver NEG tests).
 - **Core #14 hygiene for `sh_amp_operand_reject`** (Track C; uses Rust `check_gg_fails` — should invoke SH driver).
 - **ggdef `Result.flat_map` divergence** (Track D; Rust rejects unregistered method per `builtins.rs:1425-1428`; ggdef accepts at `elaborate/mod.rs:2338`; class-guard variant-count coupling noted — if flat_map ported, bump `EXPECTED_GGDEF_VARIANTS`).
