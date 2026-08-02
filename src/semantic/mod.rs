@@ -10,6 +10,7 @@ pub mod resolve;
 pub mod rewrite;
 pub mod scope;
 pub mod traits;
+pub mod type_utils;
 pub mod typecheck;
 pub mod types;
 

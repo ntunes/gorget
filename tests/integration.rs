@@ -8976,6 +8976,48 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     );
 }
 
+/// Like `check_gg_fails` but asserts BOTH that `present` appears in stderr
+/// AND that `forbidden` does NOT. Round XXV Track D §D-3: pins the
+/// single-diagnostic contract on compound-shape borrow-bind fixtures — the
+/// authoritative `E_LocalBorrowBind` must fire, the redundant mirror-walker
+/// `E_AmpInOperandPosition` on the branch/arm/tail `&`s must NOT.
+///
+/// A plain `check_gg_fails` that only asserts `present` would green even
+/// with the pre-fix double-diagnostic — the point of the exclusive form is
+/// to make the mirror-walker suppression executable.
+fn check_gg_fails_exclusive(fixture: &str, present: &str, forbidden: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    let output = build_with_timeout(
+        gg_command("check")
+            .arg(&fixture_path),
+        fixture,
+    );
+
+    assert!(
+        !output.status.success(),
+        "Expected `gg check` to fail for {fixture}, but it succeeded.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(present),
+        "Expected stderr to contain '{present}' for {fixture}, got:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains(forbidden),
+        "Expected stderr to NOT contain '{forbidden}' for {fixture}, but it did.\nstderr:\n{stderr}",
+    );
+}
+
 /// The exact D23 diagnostic-code pin shared by `check_gg_fails_no_desugar` and
 /// `check_gg_fails_dir_no_desugar`. `report_semantic_error` renders
 /// `.with_code(kind.code())` (src/errors.rs) and codespan-reporting wraps the
@@ -33185,6 +33227,61 @@ fn amp_bind_do_stmtmatch_error() {
     check_gg_fails("amp_bind_do_stmtmatch_error.gg", "error[E_LocalBorrowBind]");
 }
 
+// ── Round XXV Track D §D-3 — compound-shape single-diagnostic pins.
+// Pre-fix these fixtures each emitted TWO diagnostics on the same syntax:
+// the authoritative D10(a) `E_LocalBorrowBind` at the outer decl AND a
+// redundant safety-pass mirror-walker `E_AmpInOperandPosition` on each
+// branch/arm/tail `&`. Post-fix `suppress_amp_in_operand_position` on
+// `BorrowChecker` gates the mirror-walker emit when the outer decl walk
+// classified the RHS as a compound borrow-bind (via
+// `type_utils::expr_is_borrow_bind`). Each test uses
+// `check_gg_fails_exclusive` — asserts E_LocalBorrowBind present AND
+// E_AmpInOperandPosition ABSENT. Sibling-diagnostic operand-`&` fixtures
+// (if-cond, match-scrutinee, binop, augassign, index, f-string interp,
+// closure, comprehension, throw, send, spawn, propagate, `as`-cast, deref,
+// range, tuple/array elem) still emit E_AmpInOperandPosition — the flag is
+// scoped to the borrow-bind RHS walk.
+
+/// D-3 single-diagnostic axis 1/4: if-tail borrow-bind.
+#[test]
+fn sound_amp_operand_if_tail_error_single() {
+    check_gg_fails_exclusive(
+        "sound_amp_operand_if_tail_error_single.gg",
+        "error[E_LocalBorrowBind]",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+/// D-3 single-diagnostic axis 2/4: match-expression-tail borrow-bind.
+#[test]
+fn sound_amp_operand_match_tail_error_single() {
+    check_gg_fails_exclusive(
+        "sound_amp_operand_match_tail_error_single.gg",
+        "error[E_LocalBorrowBind]",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+/// D-3 single-diagnostic axis 3/4: do-expression-tail borrow-bind.
+#[test]
+fn sound_amp_operand_do_tail_error_single() {
+    check_gg_fails_exclusive(
+        "sound_amp_operand_do_tail_error_single.gg",
+        "error[E_LocalBorrowBind]",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
+/// D-3 single-diagnostic axis 4/4: do-tail stmt-match borrow-bind.
+#[test]
+fn sound_amp_operand_do_stmtmatch_error_single() {
+    check_gg_fails_exclusive(
+        "sound_amp_operand_do_stmtmatch_error_single.gg",
+        "error[E_LocalBorrowBind]",
+        "error[E_AmpInOperandPosition]",
+    );
+}
+
 /// CoW G2 site 3 (projected `&s.field` call-arg): the projection ROOT is a bare
 /// alias, so `&b.data` materializes the root before the borrow — the push
 /// reaches the copy's field, not the shared source's. Pre-fix both printed 4.
@@ -38373,14 +38470,44 @@ fn pos_call_arg_amp_unchanged() {
 /// operand-position `&`-of-a-place silently ACCEPTS on SH. Un-ignore when
 /// the SH-lane port lands (see fixture header for the port spec + owed
 /// `check_amp_operand` walker sketch).
+///
+/// Round XXV Track D hygiene fold: invokes the SH driver directly (mirror
+/// of the `sh_combinator_*` NEG-triplet at `tests/integration.rs:21937/
+/// 21972/22007`). The pre-fold form called `check_gg_fails` (Rust `gg
+/// check`), which pinned RUST's reject — a silent-accept on SH would have
+/// green-lit this test. Now the assertion runs against the SH driver
+/// itself.
 #[test]
 #[ignore = "SH-LANE GAP: operand-position `&`-of-a-place still silently accepts on SH-typechecker; \
 port a mirror `check_amp_operand` walker + strip preambles for for-iter/enumerate/comprehension. \
-Asserts the intended SH reject; TODO.md."]
+Asserts the intended SH reject; TODO.md. Un-ignore when the SH-lane port lands."]
+#[serial(self_host_lowerer_driver)]
 fn sh_amp_operand_reject() {
-    check_gg_fails(
-        "known_gaps/sh_amp_operand_reject.gg",
-        "error[E_AmpInOperandPosition]",
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_amp_operand_reject.gg");
+    assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "sh_amp_operand_reject",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver must REJECT operand-position `&`-of-a-place \
+         (`match &c.fd:`); accepted with exit {:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_AmpInOperandPosition"),
+        "SH driver must emit E_AmpInOperandPosition on operand-position \
+         `&`-of-a-place reject; got stderr:\n{stderr}",
     );
 }
 

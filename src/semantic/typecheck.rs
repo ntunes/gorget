@@ -4647,80 +4647,15 @@ impl<'a> TypeChecker<'a> {
     /// Deliberately NOT a deep walk: `&x` nested in a call (`f(&x)`) is the
     /// legal call-arg form and is never visited here — this helper is only
     /// invoked on VarDecl inits, assignment RHS, and static initializers.
-    fn expr_is_borrow_bind(expr: &Expr) -> bool {
-        match expr {
-            Expr::MutableBorrow { .. } => true,
-            Expr::If {
-                then_branch,
-                elif_branches,
-                else_branch,
-                ..
-            } => {
-                Self::expr_is_borrow_bind(&then_branch.node)
-                    || elif_branches
-                        .iter()
-                        .any(|(_, b)| Self::expr_is_borrow_bind(&b.node))
-                    || else_branch
-                        .as_ref()
-                        .map_or(false, |b| Self::expr_is_borrow_bind(&b.node))
-            }
-            Expr::Match { arms, else_arm, .. } => {
-                arms.iter()
-                    .any(|arm| Self::expr_is_borrow_bind(&arm.body.node))
-                    || else_arm
-                        .as_ref()
-                        .map_or(false, |b| Self::expr_is_borrow_bind(&b.node))
-            }
-            Expr::Do { body } => Self::block_tail_is_borrow_bind(body),
-            Expr::Block(block) => Self::block_tail_is_borrow_bind(block),
-            _ => false,
-        }
-    }
-
-    /// The value of a `do:` / block expression is its TAIL statement (Gorget
-    /// blocks have no separate tail field — the value is the last statement
-    /// when it produces one). A tail whose value is a `&expr` makes the block
-    /// a borrow-bind. The tail may be a plain expression (`Stmt::Expr`) OR a
-    /// STATEMENT-FORM `if`/`match` used in value position (`do:` newline
-    /// `if c: &a else: &b`) — those still yield the block's value through
-    /// their branches/arms, so recurse them too (else `do: <stmt-match &a>`
-    /// dodges the check and garbage-links, `undefined reference to
-    /// int64_t__push`). A block whose last statement is not value-producing
-    /// (`return`, an assignment, a loop, …) yields no bindable borrow → false.
-    fn block_tail_is_borrow_bind(block: &Block) -> bool {
-        match block.stmts.last() {
-            Some(last) => match &last.node {
-                Stmt::Expr(e) => Self::expr_is_borrow_bind(&e.node),
-                Stmt::If {
-                    then_body,
-                    elif_branches,
-                    else_body,
-                    ..
-                } => {
-                    Self::block_tail_is_borrow_bind(then_body)
-                        || elif_branches
-                            .iter()
-                            .any(|(_, b)| Self::block_tail_is_borrow_bind(b))
-                        || else_body
-                            .as_ref()
-                            .map_or(false, |b| Self::block_tail_is_borrow_bind(b))
-                }
-                Stmt::Match { arms, else_arm, .. } => {
-                    arms.iter().any(|item| {
-                        let arm = match item {
-                            MatchItem::Arm(a) => a,
-                            MatchItem::MetaFor { arm_template, .. } => arm_template,
-                        };
-                        Self::expr_is_borrow_bind(&arm.body.node)
-                    }) || else_arm
-                        .as_ref()
-                        .map_or(false, |b| Self::block_tail_is_borrow_bind(b))
-                }
-                _ => false,
-            },
-            None => false,
-        }
-    }
+    // `expr_is_borrow_bind` + `block_tail_is_borrow_bind` were lifted to
+    // `src/semantic/type_utils.rs` (Round XXV Track D §D-3, path (a)) so
+    // both the typechecker (authoritative D10(a) rejector) and the
+    // borrow-checker (mirror-walker suppressor) read the same predicate.
+    // Call sites here go through
+    // `crate::semantic::type_utils::expr_is_borrow_bind` — 3 sites at
+    // `Stmt::VarDecl`, `Stmt::Assign`, `Item::StaticDecl` retained; the
+    // borrow-checker adds a fourth (mirror-walker suppression flag set
+    // from `check_stmt.rs`).
 
     fn check_stmt(&mut self, stmt: &Spanned<Stmt>) -> Option<TypeId> {
         match &stmt.node {
@@ -4732,7 +4667,7 @@ impl<'a> TypeChecker<'a> {
                 // the `name = &expr` init form). Emit and continue checking
                 // so downstream type output stays intact (one clean error,
                 // no cascade).
-                if Self::expr_is_borrow_bind(&value.node) {
+                if crate::semantic::type_utils::expr_is_borrow_bind(&value.node) {
                     self.error(SemanticErrorKind::LocalBorrowBind, value.span);
                 }
                 // Resolve declared type first so we can set the hint for literal coercion
@@ -4875,8 +4810,8 @@ impl<'a> TypeChecker<'a> {
             Stmt::Assign { target, value } => {
                 // D10(a): `name = &expr` re-binds a mutable borrow to a
                 // name — same class as the VarDecl-init form, same
-                // rejection (see `expr_is_borrow_bind`).
-                if Self::expr_is_borrow_bind(&value.node) {
+                // rejection (see `type_utils::expr_is_borrow_bind`).
+                if crate::semantic::type_utils::expr_is_borrow_bind(&value.node) {
                     self.error(SemanticErrorKind::LocalBorrowBind, value.span);
                 }
                 self.check_assign_target_lvalue(target);
@@ -9981,8 +9916,8 @@ fn check_items_recursive_tc(checker: &mut TypeChecker, items: &[Spanned<Item>]) 
             Item::StaticDecl(s) => {
                 // D10(a): a module-level `static G = &BASE` is the same
                 // named-`&`-bind class as the local form — rejected (see
-                // `expr_is_borrow_bind`).
-                if TypeChecker::expr_is_borrow_bind(&s.value.node) {
+                // `type_utils::expr_is_borrow_bind`).
+                if crate::semantic::type_utils::expr_is_borrow_bind(&s.value.node) {
                     checker.error(SemanticErrorKind::LocalBorrowBind, s.value.span);
                 }
                 let value_ty = checker.infer_expr(&s.value);

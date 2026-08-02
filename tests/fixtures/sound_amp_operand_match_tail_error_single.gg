@@ -1,0 +1,19 @@
+# Round XXV Track D §D-3: match-EXPRESSION variant of the compound-tail
+# borrow-bind. `auto r = match n: case 1: &a else: &b` — D10(a)
+# `E_LocalBorrowBind` fires at the outer decl (authoritative). Pre-fix the
+# safety-pass mirror-walker also emitted `E_AmpInOperandPosition` on each
+# arm-body `&a`/`&b`; post-fix the flag gates the mirror-walker emit, so
+# the fixture asserts single-diagnostic (E_LocalBorrowBind present,
+# E_AmpInOperandPosition ABSENT).
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+    int n = 1
+    auto r = match n:
+        case 1:
+            &a
+        else:
+            &b
+    r.push(9)
+    print(r.len())
