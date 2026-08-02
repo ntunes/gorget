@@ -4943,9 +4943,30 @@ impl<'a> TypeChecker<'a> {
                         ResolvedType::Generic(def_id, args) => {
                             let name = self.scopes.get_def(def_id).name.clone();
                             match name.as_str() {
-                                "Vector" | "Set" | "HashSet" => {
+                                "Vector" => args.first().copied(),
+                                // Round XXVII Track D: Set/HashSet impl
+                                // `Iterable[T]` (they expose `.iter()`), NOT
+                                // `Iterator[T]`. `.enumerate()` is an
+                                // Iterator adapter (`lib/std/iter.gg:307/814`,
+                                // `docs/book/05-collections.md:198-207`).
+                                // Pre-D27 the enumerate scaffold at
+                                // `for_loops.rs:lower_for_enumerate` read a
+                                // Vector-shaped `iter.Field(2)` against the
+                                // hash-table layout — silent zero output on
+                                // both C+LLVM (Core #10 lower-or-reject). The
+                                // reject fires ONLY in the `is_enumerate`
+                                // path; a plain `for x in s:` still lowers
+                                // through the collection-iter protocol.
+                                "Set" | "HashSet" if is_enumerate => {
+                                    self.error(
+                                        SemanticErrorKind::EnumerateOnNonIterator {
+                                            type_: name.clone(),
+                                        },
+                                        iterable.span,
+                                    );
                                     args.first().copied()
                                 }
+                                "Set" | "HashSet" => args.first().copied(),
                                 _ => None,
                             }
                         }
