@@ -8944,3 +8944,69 @@ fn move_suggestion_advice_absent_from_source() {
          it emits invalid advice 100% of the time. Do not reintroduce it. \
          Found: {:#?}", hits);
 }
+
+/// Class-guard (Core #4 "one fix, all siblings" + Core #6 "convert a recurring
+/// bug class into an executable guard"): pin the arm-count of the
+/// `reject_wrong_receiver_combinator` chokepoint in
+/// `src/semantic/typecheck.rs` so a new one-sided combinator cannot silently
+/// skip Rust-side receiver-gating.
+///
+/// The reject fn was added in Round XXVI Track A as the Rust-side mirror of
+/// XXV Track B's ggdef receiver-gate (production `elaborate_method` at
+/// `spec/ggdef/src/elaborate/mod.rs:2551-2574`). The 5 cells are ratified
+/// per `docs/language-reference.md:3861-3891`:
+///   - (Result, flat_map)      — Option-only
+///   - (Result, filter)        — Option-only
+///   - (Result, flatten)       — Option-only
+///   - (Option, map_err)       — Result-only
+///   - (Option, unwrap_error)  — Result-only
+///
+/// The count MUST NOT drift silently. A whole-file `matches!()` count would
+/// false-hit the 7 pre-existing `("Option", "…") | ("Result", "…")` arms in
+/// `infer_closure_method_type` — this lint keys off a distinctive
+/// `R26A_ARM_MARKER` comment placed on each of the 5 arms in the reject fn
+/// so the count is unambiguous (precedent: `consuming_position_name_match_is_gir_gated`
+/// at the top of this file).
+///
+/// **What to do if this trips.** If you added a new one-sided combinator
+/// (a builtin `.foo()` that is legitimate on Option XOR Result), wire BOTH
+/// sides per Core #9 (both-lane semantic change lands the same round):
+///   (a) add the receiver-gate arm here (+ the `R26A_ARM_MARKER` comment)
+///       and bump `EXPECTED`;
+///   (b) add the matching arm to the ggdef production receiver-gate at
+///       `spec/ggdef/src/elaborate/mod.rs::elaborate_method` (NOT a lint —
+///       ggdef's guard is the production reject itself);
+///   (c) add a `combinator_<recv>_<method>_rejected.gg` reject fixture
+///       (RED-verify against the pre-fix compiler per Core #12).
+/// If you REMOVED a cell, the reference tables in
+/// `docs/language-reference.md:3861-3891` and the ggdef gate must move too.
+/// Do NOT lower `EXPECTED` without matching all three lanes.
+#[test]
+fn reject_wrong_receiver_combinator_arms_count() {
+    let src = std::fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+    const MARKER: &str = "R26A_ARM_MARKER";
+    let arm_count = src.matches(MARKER).count();
+    // One MARKER PER cell in the reject fn (Result.{flat_map,filter,flatten}
+    // + Option.{map_err,unwrap_error}) = 5. The doc reference in the fn's
+    // header uses the string "R26A_ARM_MARKER" only inside `assert!` /
+    // rustdoc — the marker appears exclusively as a trailing comment on
+    // each of the 5 match arms.
+    const EXPECTED: usize = 5;
+    assert_eq!(
+        arm_count, EXPECTED,
+        "Round XXVI Track A class-guard: `R26A_ARM_MARKER` occurrences in \
+         `src/semantic/typecheck.rs` changed: {arm_count} vs expected \
+         {EXPECTED}. The 5 markers pin the Result.{{flat_map, filter, \
+         flatten}} + Option.{{map_err, unwrap_error}} receiver-gate arms \
+         in `reject_wrong_receiver_combinator`. If you added a new \
+         one-sided combinator, wire BOTH the ggdef production receiver-gate \
+         (`spec/ggdef/src/elaborate/mod.rs::elaborate_method`) AND this \
+         Rust arm in the SAME round (Core #9 two-lane semantic change), \
+         land a `combinator_<recv>_<method>_rejected.gg` reject fixture \
+         (RED-verified per Core #12), and bump EXPECTED. If you removed \
+         one, move the reference table in \
+         `docs/language-reference.md:3861-3891` and the ggdef gate too — \
+         do NOT lower EXPECTED without both lanes moving with it.",
+    );
+}

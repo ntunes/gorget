@@ -4,16 +4,20 @@
 # no Error axis for `.map_err` to apply to).
 #
 # Pre-fix (RED-verified 2026-08-02): Rust `gg check` prints "OK: no semantic
-# errors" then `gg build` crashes at C-compile with `incompatible types`;
-# ggdef `run` REJECTED at eval-time with `IllFormed` "`.map_err()` on
-# Option is outside the phase-0 subset (Result-only)" (eval.rs:1731-1733)
-# — too late for corpus_b `CheckFails` adjudication. Core #8 both-wrong
-# class.
+# errors" then `gg build` crashes at C-compile with
+# `'__gg_Option__int64_t' has no member named 'None_0'; did you mean
+# 'Some_0'?` (the lowerer materialises a bogus `None_0` axis for map_err
+# on Option); ggdef `run` REJECTED at eval-time with `IllFormed`
+# "`.map_err()` on Option is outside the phase-0 subset (Result-only)"
+# (eval.rs:1731-1733) — too late for corpus_b `CheckFails` adjudication.
+# Core #8 both-wrong class.
 #
 # Post-fix: ggdef `elaborate_method` REJECTS at elaborate-time with
 # `error[E_NoMethodFound]: `.map_err()` on Option is outside the phase-0
-# subset (Result-only)`. Rust-side class-fix owed as HIGH follow-up
-# (test #[ignore]d until Rust ships reject at semantic layer).
+# subset (Result-only)` (XXV Track B). Rust `typecheck` REJECTS with
+# `error[E_NoMethodFound]: no method `map_err` found on type `Option[int]
+# — `.map_err()` is outside the phase-0 subset (Result-only)`` via the
+# `reject_wrong_receiver_combinator` chokepoint (Round XXVI Track A).
 
 void main():
     Option[int] o = Some(5)

@@ -2795,6 +2795,14 @@ impl<'a> TypeChecker<'a> {
                         return ret;
                     }
 
+                    // Round XXVI Track A — reject the 5 wrong-receiver one-sided
+                    // combinators (Result.{flat_map, filter, flatten} +
+                    // Option.{map_err, unwrap_error}) BEFORE dispatch. Class-fix
+                    // (Core #4) at the chokepoint; mirrors XXV Track B's ggdef
+                    // receiver-gate. Class-guard is the per-arm marker (5 total)
+                    // in the reject fn — see its doc-comment.
+                    self.reject_wrong_receiver_combinator(resolved_receiver, &method.node, expr.span);
+
                     // Check for closure-returning Option/Result methods (map, and_then, or_else)
                     if let Some(ret_type) = self.infer_closure_method_type(resolved_receiver, &method.node, args) {
                         // D29 kind-2: a builtin combinator whose declared return
@@ -7443,6 +7451,78 @@ impl<'a> TypeChecker<'a> {
             out.push(ast);
         }
         Some(out)
+    }
+
+    /// Round XXVI Track A — reject the 5 wrong-receiver one-sided combinators
+    /// BEFORE dispatch (Core #4 chokepoint, mirror of ggdef XXV Track B at
+    /// `spec/ggdef/src/elaborate/mod.rs:2551-2574`). Rust silently accepted
+    /// these then crashed at C-compile — Result cases with `incompatible
+    /// types when assigning to type '__gg_Result...' from type 'int32_t'`,
+    /// Option cases with `'__gg_Option__int64_t' has no member named
+    /// 'None_0'`.
+    ///
+    /// The 5 cells are ratified per `docs/language-reference.md:3861-3891`
+    /// (Option/Result method tables); each is EITHER Option-only OR
+    /// Result-only:
+    ///   - (Result, flat_map)      — Option-only (`Result` uses `and_then`)
+    ///   - (Result, filter)        — Option-only (no Error-side predicate)
+    ///   - (Result, flatten)       — Option-only (no `Result[Result[T,E],E]`)
+    ///   - (Option, map_err)       — Result-only (no Error axis to map)
+    ///   - (Option, unwrap_error)  — Result-only (no Error payload to unwrap)
+    ///
+    /// Emits the existing `SemanticErrorKind::NoMethodFound` (whose Display
+    /// prints "no method `X` found on type `Y`" tagged `E_NoMethodFound`);
+    /// the "outside phase-0 subset (Option-only)"/"(Result-only)" hint is
+    /// folded into the `type_` slot since the kind has no separate hint
+    /// field.
+    ///
+    /// Call site is at `:2799` — AFTER trait-registry resolution
+    /// (`:2652`) and default-fallback (`:2755-2796`) so a hypothetical
+    /// user `equip Result: fn flat_map(...)` shadows the reject (correct
+    /// semantics: user override beats built-in class-fix). No such user
+    /// override exists in the current corpus (grep-verified 2026-08-02).
+    ///
+    /// Class-guard: `tests/lints.rs::reject_wrong_receiver_combinator_arms_count`
+    /// pins the arm count (EXPECTED=5) via a distinctive per-arm marker
+    /// (see the arm comments below — the marker string is spelled ONLY
+    /// on the 5 arms, so this doc-line and the call-site comment at
+    /// `:2799` deliberately paraphrase it to avoid inflating the count).
+    /// A new one-sided combinator MUST land in ggdef's `elaborate_method`
+    /// (production receiver-gate — not a lint) AND here (Core #9 both-lane
+    /// semantic change). SH lane
+    /// (`tests/fixtures/self_host_typechecker/typecheck.gg`) still silently
+    /// accepts the same class — filed as owed follow-up.
+    fn reject_wrong_receiver_combinator(
+        &mut self,
+        receiver_type: TypeId,
+        method: &str,
+        span: Span,
+    ) {
+        let resolved = self.resolve_type(receiver_type);
+        let base_name = match self.types.get(resolved) {
+            ResolvedType::Generic(def_id, _) | ResolvedType::Defined(def_id) => {
+                self.scopes.get_def(*def_id).name.clone()
+            }
+            _ => return,
+        };
+        let hint = match (base_name.as_str(), method) {
+            ("Result", "flat_map")     => "Option-only", // R26A_ARM_MARKER
+            ("Result", "filter")       => "Option-only", // R26A_ARM_MARKER
+            ("Result", "flatten")      => "Option-only", // R26A_ARM_MARKER
+            ("Option", "map_err")      => "Result-only", // R26A_ARM_MARKER
+            ("Option", "unwrap_error") => "Result-only", // R26A_ARM_MARKER
+            _ => return,
+        };
+        let type_desc = self.describe_resolved_type(resolved);
+        self.error(
+            SemanticErrorKind::NoMethodFound {
+                method: method.to_string(),
+                type_: format!(
+                    "{type_desc} \u{2014} `.{method}()` is outside the phase-0 subset ({hint})"
+                ),
+            },
+            span,
+        );
     }
 
     /// Infer the return type of closure-taking methods like .map(), .and_then(), .or_else()
