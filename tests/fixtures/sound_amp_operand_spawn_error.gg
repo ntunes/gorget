@@ -1,8 +1,8 @@
 # Round XXV Track C — `&`-of-a-place inside a `spawn` operand.
-# NEG 18/20 of the operand-position class; retired by the ONE-PRODUCER
-# chokepoint at `src/semantic/safety/check_expr.rs:349`. Spawn reaches
-# the chokepoint via the `Expr::Spawn` arm at `:1048/1049` recursing
-# through `self.check_expr(inner)`.
+# One costume of the operand-position class; retired by the
+# ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow`
+# arm. Spawn reaches the chokepoint via the `Expr::Spawn` arm
+# recursing through `self.check_expr(inner)`.
 #
 # Pre-fix (measured at HEAD via scout probe): `gg check` clean.
 # INTENDED: reject at check-time with `E_AmpInOperandPosition`.

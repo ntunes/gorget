@@ -3,7 +3,7 @@
 # prints `<address>\nclose 9\nclose 9`. The control without the sigil
 # prints `10\nclose 9` (single Drop). Same operand-position class as the
 # scrutinee twin; same one-producer reject at
-# `src/semantic/safety/check_expr.rs:276` retires both.
+# the `check_expr::Expr::MutableBorrow` chokepoint arm retires both.
 #
 # INTENDED: REJECT at `gg check` with `E_AmpInOperandPosition`.
 

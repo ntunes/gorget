@@ -1,0 +1,27 @@
+# Round XXVI Track C — `&`-of-a-place inside a set-comprehension
+# body expression. One costume of the operand-position class;
+# retired by the ONE-PRODUCER chokepoint at the
+# `check_expr::Expr::MutableBorrow` arm. Set-comp reaches the
+# chokepoint via the `Expr::SetComprehension` arm recursing
+# through `self.check_expr(elem_expr)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single
+# `E_AmpInOperandPosition` — the set-comp chokepoint route emits
+# no co-emit companions (single, clean error).
+#
+# Sibling costumes: list-comp (`sound_amp_operand_comprehension_error.gg`,
+# XXV Track C) and dict-comp (`sound_amp_operand_dict_comp_error.gg`,
+# XXVI Track C) share the same walker pattern.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Vector[int] ks = [1, 2, 3]
+    Set[int] s = {&c.fd for k in ks}
+    print(s.len())

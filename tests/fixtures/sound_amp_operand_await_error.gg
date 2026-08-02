@@ -1,0 +1,23 @@
+# Round XXVI Track C — `&`-of-a-place as an `await` operand.
+# One costume of the operand-position class; retired by the
+# ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow`
+# arm. Await reaches the chokepoint via the `Expr::Await` arm
+# recursing through `self.check_expr(inner)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with `E_AmpInOperandPosition`.
+# CO-EMITS (structural, unavoidable — `check_gg_fails` substring
+# match is fine): `E_AwaitNonFuture`. `await` inspects the inner
+# for a `Future[T]`; a `MutableBorrow`-wrapped place is not a
+# future, so the non-future diagnostic fires alongside the
+# operand-position reject.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+async void main():
+    Counter c = Counter(seed())
+    await &c.fd

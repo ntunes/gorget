@@ -1,0 +1,26 @@
+# Round XXVI Track C — `&`-of-a-place as a value inside a dict
+# literal `{k: v}`. One costume of the operand-position class;
+# retired by the ONE-PRODUCER chokepoint at the
+# `check_expr::Expr::MutableBorrow` arm. DictLiteral reaches the
+# chokepoint via the `Expr::DictLiteral` arm recursing through
+# `self.check_expr(value)` on each entry.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single
+# `E_AmpInOperandPosition` — the dict-literal chokepoint route
+# emits no co-emit companions (single, clean error).
+#
+# Sibling costumes: array-literal / tuple-literal
+# (`sound_amp_operand_tuple_literal_error.gg`) share the same
+# walker-recurse pattern.
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Dict[int, int] d = {1: &c.fd, 2: 3}
+    print(d.len())

@@ -1,8 +1,8 @@
 # Round XXV Track C — `&`-of-a-place inside a `!` (propagate) operand.
-# NEG 17/20 of the operand-position class; retired by the ONE-PRODUCER
-# chokepoint at `src/semantic/safety/check_expr.rs:349`. Propagate reaches
-# the chokepoint via the `Expr::Propagate` arm at `:296` recursing through
-# `self.check_expr(inner)`.
+# One costume of the operand-position class; retired by the
+# ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow`
+# arm. Propagate reaches the chokepoint via the `Expr::Propagate`
+# arm recursing through `self.check_expr(inner)`.
 #
 # Pre-fix (measured at HEAD via scout probe): `gg check` clean.
 # INTENDED: reject at check-time with `E_AmpInOperandPosition`.

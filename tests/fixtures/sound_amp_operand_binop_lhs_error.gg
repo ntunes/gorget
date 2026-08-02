@@ -1,6 +1,6 @@
 # Round XXIII Track β — `&`-of-a-place on the LHS of a binary op.
-# Costume 2/13 of the operand-position class; retired by the ONE-PRODUCER
-# chokepoint at `src/semantic/safety/check_expr.rs:276`.
+# One costume of the operand-position class; retired by the ONE-PRODUCER
+# chokepoint at the `check_expr::Expr::MutableBorrow` arm.
 #
 # Pre-fix (measured at HEAD): `gg check` clean; C build FAILS with `invalid
 # operands to binary + (void */void *)` — the LUCKY spelling in the

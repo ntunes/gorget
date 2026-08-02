@@ -1,16 +1,17 @@
 # Round XXV Track C — `&`-of-a-place as a list-comprehension body.
-# NEG 19/20 of the operand-position class; retired by the ONE-PRODUCER
-# chokepoint at `src/semantic/safety/check_expr.rs:349`. List-comp
-# reaches the chokepoint via the `Expr::ListComprehension` arm at
-# `:1335/1347` recursing through `self.check_expr(comp_expr)`.
+# One costume of the operand-position class; retired by the
+# ONE-PRODUCER chokepoint at the `check_expr::Expr::MutableBorrow`
+# arm. List-comp reaches the chokepoint via the
+# `Expr::ListComprehension` arm recursing through
+# `self.check_expr(comp_expr)`.
 #
 # Pre-fix (measured at HEAD via scout probe): `gg check` clean.
 # INTENDED: reject at check-time with a single `E_AmpInOperandPosition`
 # — the list-comp chokepoint route emits no co-emit companions (single,
 # clean error).
 #
-# Sibling arms Dict/Set (`:1356`/`:1379`) share the same walker pattern;
-# filed as ride-along cells for a future Core #12 round.
+# Sibling arms `Expr::DictComprehension` / `Expr::SetComprehension`
+# share the same walker pattern (fixtured in Round XXVI Track C).
 
 struct Counter:
     int fd

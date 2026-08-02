@@ -1,0 +1,25 @@
+# Round XXVI Track C — `&`-of-a-place as the object of an
+# optional-chain `?.`. One costume of the operand-position class;
+# retired by the ONE-PRODUCER chokepoint at the
+# `check_expr::Expr::MutableBorrow` arm. OptionalChain reaches the
+# chokepoint via the `Expr::OptionalChain` arm recursing through
+# `self.check_expr(object)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single
+# `E_AmpInOperandPosition` — the optional-chain chokepoint route
+# emits no co-emit companions (single, clean error).
+
+struct Counter:
+    int fd
+
+struct Wrapper:
+    Option[Counter] c
+
+int seed():
+    return 10
+
+void main():
+    Wrapper w = Wrapper(Some(Counter(seed())))
+    Option[int] r = (&w.c)?.fd
+    print(r)

@@ -1,0 +1,23 @@
+# Round XXVI Track C — `&`-of-a-place as an element inside an
+# array/tuple literal. One costume of the operand-position class;
+# retired by the ONE-PRODUCER chokepoint at the
+# `check_expr::Expr::MutableBorrow` arm. Array/tuple-literal
+# reaches the chokepoint via the `Expr::ArrayLiteral` (`[..]`) /
+# `Expr::TupleLiteral` arm recursing over each element via
+# `self.check_expr(elem)`.
+#
+# Pre-fix (measured at HEAD via scout probe): `gg check` clean.
+# INTENDED: reject at check-time with a single
+# `E_AmpInOperandPosition` — the array/tuple-literal chokepoint
+# route emits no co-emit companions (single, clean error).
+
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Vector[int] xs = [&c.fd, 1, 2]
+    print(xs.len())
