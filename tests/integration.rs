@@ -26291,7 +26291,14 @@ fn self_host_runtime_diff() {
     // adjudicated NEG rejects, +2 ADJ); Track E's Set/HashSet empty-literal fix + collections.rs
     // dispatch enables previously-broken Set-shape usage paths; C's α SH lowerer port fixes
     // additional shapes now agreeing across lanes.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1310;
+    // Ratcheted 2026-08-02 (Round XXVI close: 5-track batch — A Rust class-fix for
+    // 5 one-sided combinators + B ggdef Displayable dispatch + C 12 operand-context
+    // fixtures + D Deque__ arm elem-size fix + E drop_reassign pre-drop dispatch).
+    // MATCH 1313 / 1419 = 92.5% (+3 from XXV 1310), ADJ 395 (+3 = 2 Displayable + 1
+    // drop_reassign moved BOTH-WRONG → ADJ), BOTH-WRONG 5→2 (remaining: drop_
+    // collection_custom_elem_leak + drop_struct_collection_fields = row 2+3 of
+    // G-class Drop transitive, filed as own-round HIGH TODOs).
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1313;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
