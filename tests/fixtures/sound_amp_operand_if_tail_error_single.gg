@@ -1,0 +1,17 @@
+# Round XXV Track D §D-3: `int x = if c: &a else: &b` (an if-EXPRESSION whose
+# branches yield a `&`-borrow of a place) — D10(a) `E_LocalBorrowBind` at the
+# typechecker is the AUTHORITATIVE reject. The safety-pass mirror-walker
+# `E_AmpInOperandPosition` on each branch `&a`/`&b` used to fire redundantly
+# (3 diagnostics total pre-fix); post-fix, `suppress_amp_in_operand_position`
+# on `BorrowChecker` gates the mirror-walker emit when D10(a) has fired on
+# the enclosing compound-shape borrow-bind — this fixture pins the
+# SINGLE-diagnostic contract (E_LocalBorrowBind present, E_AmpInOperandPosition
+# ABSENT).
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+    bool c = true
+    auto r = if c: &a else: &b
+    r.push(9)
+    print(r.len())

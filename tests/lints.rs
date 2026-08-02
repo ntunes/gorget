@@ -8611,11 +8611,28 @@ fn infer_collection_element_type_arms_count() {
 ///     the ggdef arm gets rejected and the constants stay pinned.
 ///   - `Option.and_then` / `Option.flat_map` — legitimate cross-type map.
 ///
-/// If a NEW closure-returning combinator gets added to `builtins.rs`,
-/// this lint fires and forces the author to either route it through
-/// `unify_closure_ret_axis` (by adding a variant to `ClosureCombinatorCell`
-/// and a match arm in the helper) or document the exemption alongside its
-/// siblings. Mirrors the `container_literal_arms_count` /
+/// Twin invariant (Round XXV Track D — Core #15e Q2 fold):
+///   (a) axis-unify CELL count in `ClosureCombinatorCell` matches
+///       `EXPECTED_VARIANTS`; whole-file caller count of
+///       `self.unify_closure_ret_axis(` matches `EXPECTED_CALLERS`; ggdef
+///       mirror shape matches its own two constants.
+///   (b) SUPERSET registration count — ALL `combinator_kind: Some(...)`
+///       entries under OPTION+RESULT in `src/ir/lowering/builtins.rs` —
+///       matches `EXPECTED_BUILTIN_REGISTRATIONS`. Pre-fold the docstring
+///       claimed the lint fires "when a new combinator is added to
+///       builtins.rs" but the `read_to_string` calls never opened
+///       `builtins.rs`, so a non-axis-unify combinator (`Option.replace`
+///       hypothetical) would have added a `combinator_kind: Some(...)`
+///       entry and left this lint silent. The (b) scan closes that gap:
+///       even a NEW non-axis-unify entry trips it. If a new combinator
+///       lands the author must either:
+///         - route it through `unify_closure_ret_axis` (add a variant to
+///           `ClosureCombinatorCell` + a match arm) AND bump both
+///           `EXPECTED_VARIANTS` and `EXPECTED_BUILTIN_REGISTRATIONS`; OR
+///         - document the exclusion (like `Or`/`Flatten` today — value-arg
+///           / zero-arg, no closure return) AND bump only
+///           `EXPECTED_BUILTIN_REGISTRATIONS`.
+/// Mirrors `container_literal_arms_count` /
 /// `pack_trait_object_call_sites_count` precedents.
 #[test]
 fn unify_closure_ret_axis_class_enumeration() {
@@ -8624,10 +8641,14 @@ fn unify_closure_ret_axis_class_enumeration() {
     /// which axis + which sibling exclusion is being overridden, and update
     /// the helper doc-comment alongside.
     const EXPECTED_VARIANTS: usize = 3;
-    /// Every unify-eligible cell has EXACTLY ONE caller of the helper
-    /// inside `infer_closure_method_type` (one per arm). Additional
-    /// callers elsewhere would signal a duplicate check or a leak into
-    /// non-combinator paths — force the reviewer to explain.
+    /// Every unify-eligible cell has EXACTLY ONE caller of the helper.
+    /// `count_callers` scans the whole `src/semantic/typecheck.rs` (not
+    /// scoped to `infer_closure_method_type`), so any additional
+    /// `self.unify_closure_ret_axis(` anywhere in the file bumps this
+    /// count. Extra callers signal a duplicate check or a leak into a
+    /// non-combinator path (Core #4 chokepoint violation); a missing one
+    /// signals the check was dropped — force the reviewer to explain and
+    /// update the constant deliberately.
     const EXPECTED_CALLERS: usize = 3;
     /// ggdef mirror: 3 variants (same class shape as production).
     const EXPECTED_GGDEF_VARIANTS: usize = 3;
@@ -8636,11 +8657,22 @@ fn unify_closure_ret_axis_class_enumeration() {
     /// chokepoint after `combinator_cell` classifies. Additional callers
     /// would signal a duplicate check (Core #4 chokepoint violation).
     const EXPECTED_GGDEF_CALLERS: usize = 1;
+    /// Superset: total count of `combinator_kind: Some(...)` entries under
+    /// OPTION+RESULT in `src/ir/lowering/builtins.rs`. Today: 14 = 8 Option
+    /// (`map`, `and_then`, `flat_map`, `or_else`, `or`, `filter`,
+    /// `flatten`, `unwrap_or_else`) + 6 Result (`map`, `and_then`,
+    /// `or_else`, `or`, `map_err`, `unwrap_or_else`). Includes non-axis-
+    /// unify siblings (`Or`, `Flatten`) so a NEW `combinator_kind` entry
+    /// of ANY shape trips this lint even when it does not touch the
+    /// axis-unify cell count.
+    const EXPECTED_BUILTIN_REGISTRATIONS: usize = 14;
 
     let typecheck_src = fs::read_to_string("src/semantic/typecheck.rs")
         .expect("read src/semantic/typecheck.rs");
     let ggdef_src = fs::read_to_string("spec/ggdef/src/elaborate/mod.rs")
         .expect("read spec/ggdef/src/elaborate/mod.rs");
+    let builtins_src = fs::read_to_string("src/ir/lowering/builtins.rs")
+        .expect("read src/ir/lowering/builtins.rs");
 
     fn count_variants(src: &str) -> usize {
         let mut in_enum = false;
@@ -8747,6 +8779,43 @@ fn unify_closure_ret_axis_class_enumeration() {
          duplicate check or a leak into a non-combinator path; a missing \
          caller signals the check was dropped — force the reviewer to \
          explain and update the constant deliberately.",
+    );
+
+    // Superset scan (Core #15e Q2 fold — Round XXV Track D): count every
+    // `combinator_kind: Some(...)` entry in the OPTION+RESULT builtins.
+    // The scan is deliberately BROAD (grep-simple, one substring) so a new
+    // registration of ANY combinator shape trips this lint even when it
+    // does not touch the axis-unify cell set.
+    fn count_builtin_registrations(src: &str) -> usize {
+        src.lines()
+            .filter(|line| {
+                let t = line.trim_start();
+                if t.starts_with("//") || t.starts_with("///") {
+                    return false;
+                }
+                t.contains("combinator_kind: Some(")
+            })
+            .count()
+    }
+    let builtin_regs = count_builtin_registrations(&builtins_src);
+    assert_eq!(
+        builtin_regs, EXPECTED_BUILTIN_REGISTRATIONS,
+        "combinator_kind: Some(...) registration count in \
+         src/ir/lowering/builtins.rs changed: {builtin_regs} vs expected \
+         {EXPECTED_BUILTIN_REGISTRATIONS}.\n\n\
+         A new combinator was registered in builtins.rs. Either:\n\
+         (a) route it through `unify_closure_ret_axis` — add a variant to \
+             `ClosureCombinatorCell`, a match arm in \
+             `TypeChecker::unify_closure_ret_axis`, and a call site — then \
+             bump BOTH `EXPECTED_VARIANTS` and \
+             `EXPECTED_BUILTIN_REGISTRATIONS`; OR\n\
+         (b) document the exclusion in the helper doc-comment alongside \
+             `Or`/`Flatten` (value-arg / zero-arg, no closure return) and \
+             bump only `EXPECTED_BUILTIN_REGISTRATIONS`.\n\n\
+         The (b) path is legitimate when the new combinator is not \
+         closure-returning; the point of the twin-count invariant is to \
+         make silent additions impossible even when they don't touch the \
+         axis-unify class.",
     );
 }
 

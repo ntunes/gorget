@@ -494,6 +494,18 @@ pub(super) struct BorrowChecker<'a> {
     /// deadlock at runtime (locks are non-reentrant). Entries are removed
     /// on block exit (see `check_block`).
     pub(super) live_guards: FxHashMap<DefId, (DefId, String, Span)>,
+
+    /// Round XXV Track D §D-3 — set to `true` at the option-D intercepts in
+    /// `check_stmt::VarDecl` / `Stmt::Assign` when the RHS is a COMPOUND-
+    /// shape borrow-bind (an `if` / `match` / `do` / block whose tail is a
+    /// `&`-of-a-place, per `type_utils::expr_is_borrow_bind`). D10(a) at
+    /// the typechecker owns the authoritative `E_LocalBorrowBind` on the
+    /// SAME syntax, so the safety-pass mirror-walker `E_AmpInOperandPosition`
+    /// on the branch/arm/tail `&`s would be a DUPLICATE. The
+    /// `MutableBorrow` arms at `check_expr.rs:349` (statement position) +
+    /// `:1592` (f-string interp) SKIP their emit when this flag is set.
+    /// RESET to `false` after each statement so it never leaks to siblings.
+    pub(super) suppress_amp_in_operand_position: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -597,6 +609,7 @@ impl<'a> BorrowChecker<'a> {
             warn_const: false,
             in_destructuring_bind: false,
             live_guards: FxHashMap::default(),
+            suppress_amp_in_operand_position: false,
         }
     }
 

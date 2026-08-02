@@ -27,18 +27,24 @@ impl<'a> BorrowChecker<'a> {
                 // bookkeeping happens.
                 //
                 // COMPOUND-shape D10(a) sites (`int x = if c: &a else: &b`,
-                // `match e: case P: &y`, `do: &a`, `{ ...; &a }`) STILL emit
-                // both messages — D10(a) fires first + is authoritative;
-                // documented follow-up: mirror-walker suppression in a later
-                // round. Deliberately does NOT call `expr_is_borrow_bind`
-                // (which would over-match those compound tails and swallow
-                // the operand-position reject for costumes that legitimately
-                // deserve it).
+                // `match e: case P: &y`, `do: &a`, `{ ...; &a }`) — the
+                // Round XXV Track D fold sets `suppress_amp_in_operand_position`
+                // for the DURATION of the RHS walk when
+                // `type_utils::expr_is_borrow_bind` matches, and resets it
+                // right after. D10(a) at the typechecker owns the
+                // authoritative reject; the mirror-walker emit sites at
+                // `check_expr.rs:349` + `:1592` observe the flag and skip
+                // the duplicate `E_AmpInOperandPosition`.
                 if let Expr::MutableBorrow { expr: inner } = &value.node {
                     self.check_expr(inner);
                 } else {
+                    let prev = self.suppress_amp_in_operand_position;
+                    if crate::semantic::type_utils::expr_is_borrow_bind(&value.node) {
+                        self.suppress_amp_in_operand_position = true;
+                    }
                     // Check the value expression
                     self.check_expr(value);
+                    self.suppress_amp_in_operand_position = prev;
                 }
 
                 // Check: if value is a bare identifier of non-Copy type, needs `!`
@@ -435,13 +441,23 @@ impl<'a> BorrowChecker<'a> {
                 // `E_LocalBorrowBind` at the typechecker owns the reject;
                 // skip the safety-pass MutableBorrow reject descent to avoid
                 // duplicating it. Still walk the inner for aliasing/liveness.
-                // Compound-shape wrappers (If/Match/Do/Block tail borrow-bind)
-                // remain both-messages (D10(a) authoritative, follow-up
-                // mirror-walker suppression filed).
+                //
+                // Compound-shape wrappers (If/Match/Do/Block tail
+                // borrow-bind) — the Round XXV Track D fold sets
+                // `suppress_amp_in_operand_position` for the RHS walk when
+                // `type_utils::expr_is_borrow_bind` matches, mirroring the
+                // VarDecl arm above. D10(a) at the typechecker owns the
+                // authoritative reject; the mirror-walker emit sites skip
+                // the duplicate `E_AmpInOperandPosition`.
                 if let Expr::MutableBorrow { expr: inner } = &value.node {
                     self.check_expr(inner);
                 } else {
+                    let prev = self.suppress_amp_in_operand_position;
+                    if crate::semantic::type_utils::expr_is_borrow_bind(&value.node) {
+                        self.suppress_amp_in_operand_position = true;
+                    }
                     self.check_expr(value);
+                    self.suppress_amp_in_operand_position = prev;
                 }
                 self.assignment_rebind_target = prev_rebind;
 

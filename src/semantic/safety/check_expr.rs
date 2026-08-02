@@ -346,7 +346,18 @@ impl<'a> BorrowChecker<'a> {
                 // out-of-bounds indexing on an address); LLVM `llc` rejected
                 // with `i64 but expected ptr`. Tainted-twin duplicated the
                 // user `Drop` on EVERY operand costume (`close 9` twice).
-                self.error(SemanticErrorKind::AmpInOperandPosition, expr.span);
+                //
+                // Round XXV Track D §D-3: when a compound-shape borrow-bind
+                // is being walked (`int x = if c: &a else: &b`, etc.), the
+                // typechecker's D10(a) `E_LocalBorrowBind` on the outer
+                // decl/assign is the authoritative reject. Skip the
+                // mirror-walker emit here to avoid the duplicate
+                // `E_AmpInOperandPosition` on each branch/arm `&`. Still
+                // recurse so aliasing/liveness bookkeeping on the inner
+                // place happens.
+                if !self.suppress_amp_in_operand_position {
+                    self.error(SemanticErrorKind::AmpInOperandPosition, expr.span);
+                }
                 self.check_expr(inner);
             }
 
@@ -1589,7 +1600,12 @@ impl<'a> BorrowChecker<'a> {
             // class, same error kind, different span source. Recurses so
             // aliasing walk still happens on the inner place.
             Expr::MutableBorrow { expr: inner } => {
-                self.error(SemanticErrorKind::AmpInOperandPosition, fstring_span);
+                // Round XXV Track D §D-3: mirror-walker suppression when
+                // D10(a) has fired on an enclosing compound-shape borrow-
+                // bind (see the sibling emit at `check_expr.rs:~349`).
+                if !self.suppress_amp_in_operand_position {
+                    self.error(SemanticErrorKind::AmpInOperandPosition, fstring_span);
+                }
                 self.check_interpolation_expr(inner, fstring_span);
             }
             _ => {}

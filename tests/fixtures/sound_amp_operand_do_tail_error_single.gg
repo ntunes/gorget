@@ -1,0 +1,15 @@
+# Round XXV Track D §D-3: do-EXPRESSION variant of the compound-tail
+# borrow-bind. `auto r = do:` newline `&a` — D10(a) `E_LocalBorrowBind`
+# fires at the outer decl (authoritative). ⚠ The multi-line `do:` form is
+# mandatory — the inline `do: &a` shorthand is a parse error and would
+# "pass" for the wrong reason. Pre-fix the safety-pass mirror-walker also
+# emitted `E_AmpInOperandPosition` on the tail `&a`; post-fix the flag
+# gates the mirror-walker emit, so the fixture asserts single-diagnostic
+# (E_LocalBorrowBind present, E_AmpInOperandPosition ABSENT).
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    auto r = do:
+        &a
+    r.push(9)
+    print(r.len())

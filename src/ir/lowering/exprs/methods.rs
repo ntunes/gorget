@@ -3809,9 +3809,12 @@ fn try_lower_option_result_combinator(
             // to reach here get rejected at check time.
             //
             // Class registry — every closure-returning-Result/Option combinator
-            // arm belongs here. `tests/lints.rs::result_type_closure_return_arms`
-            // ratchets the exhaustive list so the next combinator addition
-            // cannot silently escape.
+            // arm belongs here. `tests/lints.rs::unify_closure_ret_axis_class_enumeration`
+            // ratchets the exhaustive list (axis-unify cell count in
+            // `ClosureCombinatorCell` + call-site count + a superset
+            // `EXPECTED_BUILTIN_REGISTRATIONS` scan of `combinator_kind: Some(...)`
+            // entries in `src/ir/lowering/builtins.rs`) so the next combinator
+            // addition cannot silently escape.
             let closure_ret = infer_closure_return_type(ctx, &closure_op, builder);
             if closure_ret != UNIT_TYPE {
                 closure_ret
