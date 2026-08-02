@@ -711,14 +711,66 @@ void check_deref_operand(SpannedExpr operand, int scope_id, ScopeTable scopes, T
 # bound to a name — `auto r = &b`, `r = &b`. A named `&`-binding would alias
 # a second writable path to the place (one exclusive writer). Mirrors Rust
 # gg's `E_LocalBorrowBind` (`src/semantic/typecheck.rs`, `expr_is_borrow_bind`).
-# Top-level shape only — `&x` nested inside a call is the legal call-arg form
-# and is never visited here (this fires on VarDecl inits / assignment RHS).
-void check_local_borrow_bind(SpannedExpr init, ResolveContext &ctx):
-    match init.expr:
+# Compound-shape sites (`int x = if c: &a else: &b`, `match e: case P: &y`,
+# `do: &a`, `{ ...; &a }`) recurse into branches/arms/tails via
+# `expr_is_borrow_bind` + `stmts_tail_is_borrow_bind` (Round XXVIII Track D
+# port from Rust `src/semantic/type_utils.rs`).
+#
+# Deliberately NOT a deep walk: `&x` nested in a call (`f(&x)`) is the legal
+# call-arg form and is never visited here — this helper is only invoked on
+# VarDecl inits, assignment RHS, and static initializers.
+bool expr_is_borrow_bind(SpannedExpr expr):
+    match expr.expr:
         case EMutableBorrow(_inner):
-            ctx.diagnostics.push(Diagnostic.error(init.span, DkLocalBorrowBind(), "cannot bind a mutable borrow (`&`) to a name — pass the borrow at a call site (`f(&x)`) or mutate the place directly"))
+            return true
+        case EIf(_c, then_body, elses):
+            if stmts_tail_is_borrow_bind(then_body):
+                return true
+            for eb in elses:
+                if stmts_tail_is_borrow_bind(eb.body):
+                    return true
+            return false
+        case EMatch(_sc, arms):
+            for arm in arms:
+                if stmts_tail_is_borrow_bind(arm.body):
+                    return true
+            return false
+        case EDo(body):
+            return stmts_tail_is_borrow_bind(body)
+        case EBlock(body):
+            return stmts_tail_is_borrow_bind(body)
         else:
-            pass
+            return false
+
+# The value of a `do:` / block expression is its TAIL statement (Gorget
+# blocks have no separate tail field — the value is the last statement when
+# it produces one). A tail whose value is a `&expr` makes the block a
+# borrow-bind. Mirrors Rust `block_tail_is_borrow_bind`.
+bool stmts_tail_is_borrow_bind(Vector[Stmt] stmts):
+    if stmts.len() == 0:
+        return false
+    Stmt last = stmts.get(stmts.len() - 1).unwrap()
+    match last:
+        case SExpr(e):
+            return expr_is_borrow_bind(e)
+        case SIf(_c, then_body, elses):
+            if stmts_tail_is_borrow_bind(then_body):
+                return true
+            for eb in elses:
+                if stmts_tail_is_borrow_bind(eb.body):
+                    return true
+            return false
+        case SMatch(_sc, arms):
+            for arm in arms:
+                if stmts_tail_is_borrow_bind(arm.body):
+                    return true
+            return false
+        else:
+            return false
+
+void check_local_borrow_bind(SpannedExpr init, ResolveContext &ctx):
+    if expr_is_borrow_bind(init):
+        ctx.diagnostics.push(Diagnostic.error(init.span, DkLocalBorrowBind(), "cannot bind a mutable borrow (`&`) to a name — pass the borrow at a call site (`f(&x)`) or mutate the place directly"))
 
 # ── D4/D12 drop-purity enforcement (mirrors Rust A2-R1 + A2-R2) ────────
 #
@@ -2084,17 +2136,15 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
             # message. Suppress the operand-position emit on THIS walk so it
             # doesn't double-message; the inner-place recursion still runs so
             # aliasing/liveness bookkeeping is unaffected. Compound-shape
-            # borrow-binds (`int x = if c: &a else: &b`) reach EMutableBorrow
-            # via a non-direct init path — those still emit
-            # AmpInOperandPosition on SH (Rust emits E_LocalBorrowBind for the
-            # same shape via `expr_is_borrow_bind`; SH's `check_local_borrow_bind`
-            # matches only the direct top-level shape, filed follow-up).
+            # borrow-binds (`int x = if c: &a else: &b`, `match … case P: &y`,
+            # `do: &a`, `{ ...; &a }`) reach EMutableBorrow via branches / arms /
+            # block tails — the same `expr_is_borrow_bind` predicate covers them
+            # here so the operand-position walker doesn't double-message either
+            # (Round XXVIII Track D; mirrors Rust safety
+            # `suppress_amp_in_operand_position` bracket).
             bool saved_supp_vd = ctx.suppress_amp_in_operand_position
-            match init_expr.expr:
-                case EMutableBorrow(_amp_inner):
-                    ctx.suppress_amp_in_operand_position = true
-                else:
-                    pass
+            if expr_is_borrow_bind(init_expr):
+                ctx.suppress_amp_in_operand_position = true
             check_safety_expr(init_expr, scope_id, &state, &scopes, &types, &ctx)
             ctx.suppress_amp_in_operand_position = saved_supp_vd
             ctx.d29_in_result_capture = saved_rcap
@@ -2136,16 +2186,14 @@ void check_safety_stmt(Stmt s, int scope_id, SafetyState &state, ScopeTable &sco
                     pass
             if target_def >= 0:
                 state.rebind = target_def
-            # D32: direct top-level `&`-assign — D10(a) owns the reject
-            # message (see SVarDecl comment above; mirrors Rust safety
-            # `suppress_amp_in_operand_position` bracket around a direct
-            # assignment RHS walk).
+            # D32: `&`-assign RHS — D10(a) owns the reject message (see SVarDecl
+            # comment above). `expr_is_borrow_bind` covers direct top-level +
+            # compound-shape (`x = if c: &a else: &b`, match/do/block tails);
+            # mirrors Rust safety `suppress_amp_in_operand_position` bracket
+            # (Round XXVIII Track D).
             bool saved_supp_as = ctx.suppress_amp_in_operand_position
-            match value.expr:
-                case EMutableBorrow(_amp_inner):
-                    ctx.suppress_amp_in_operand_position = true
-                else:
-                    pass
+            if expr_is_borrow_bind(value):
+                ctx.suppress_amp_in_operand_position = true
             # Liveness: read the RHS (source still live) BEFORE re-initialising the
             # target, so `x = f(x)` reads the old `x` then rebinds it.
             check_safety_expr(value, scope_id, &state, &scopes, &types, &ctx)
@@ -4438,6 +4486,14 @@ void type_check_item(Item item, int scope_id, ScopeTable &scopes, TypeTable &typ
                 scopes.set_def_type(alias_def, binding_type_id)
 
         case IStaticDecl(stype, name, init_expr):
+            # D10(a) at module scope — mirrors Rust `typecheck.rs`
+            # Item::StaticDecl `expr_is_borrow_bind`. Without this,
+            # `Vector[int] G = &BASE` silently accepts on SH and
+            # falls through to C-emit (Core #10 miscompile — Round XXVIII
+            # Track D). No suppress bracket needed here: the module-item
+            # walk does NOT route static initializers through the safety
+            # pass, so there's no mirror-walker to double-message.
+            check_local_borrow_bind(init_expr, &ctx)
             bool is_inferred = false
             match stype.ty:
                 case TInferred():
