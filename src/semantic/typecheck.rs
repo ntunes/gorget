@@ -4633,20 +4633,6 @@ impl<'a> TypeChecker<'a> {
 
     // ─── Statement Checking ────────────────────────────────
 
-    /// D10(a) (docs/define-gorget/decisions.md, ratified 2026-07-06):
-    /// does this initializer / assignment RHS bind a mutable borrow to a
-    /// name? True for a top-level `&expr` and for any value-position
-    /// expression whose result is such a borrow: an if-expression branch
-    /// (`&a if c else &b` must not dodge the check), a match-expression arm
-    /// (or its `else`), and the TAIL of a `do:` / block expression. Each is
-    /// a place where the whole expression's value *is* the branch/arm/tail
-    /// value, so a `&expr` there is the same named-`&`-bind — pass-1 measured
-    /// `auto r = do: &a` write-through-aliasing (`4/4`) and the match-expr
-    /// form garbage-linking (`undefined reference to int64_t__push`), both
-    /// dodging the if-only helper.
-    /// Deliberately NOT a deep walk: `&x` nested in a call (`f(&x)`) is the
-    /// legal call-arg form and is never visited here — this helper is only
-    /// invoked on VarDecl inits, assignment RHS, and static initializers.
     // `expr_is_borrow_bind` + `block_tail_is_borrow_bind` were lifted to
     // `src/semantic/type_utils.rs` (Round XXV Track D §D-3, path (a)) so
     // both the typechecker (authoritative D10(a) rejector) and the
