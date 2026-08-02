@@ -1,0 +1,16 @@
+# Round XXVII Track D (Core #12 axis coverage — collection-kind axis):
+# `HashSet[T].enumerate()` in a `for` loop is a check-time REJECT, mirror of
+# the Set fixture. Same rationale: `.enumerate()` is `Iterator[T]`-only per
+# `lib/std/iter.gg:307/814`, and HashSet impls `Iterable[T]`. Pre-D27 same
+# silent-zero-output miscompile as Set (both hit `lower_for_enumerate` with
+# a Vector-shaped `iter.Field(2)` read against the hash-table layout).
+#
+# The Set + HashSet pair pins both cells of the collection-kind axis so a
+# future arm that re-adds only ONE of the two silently regresses the other.
+int main():
+    HashSet[int] h = {1, 2, 3}
+    # Rejected at check-time: `.enumerate()` requires Iterator[T]; HashSet
+    # is Iterable[T] only. Fix: `h.iter().enumerate()`.
+    for i, x in h.enumerate():
+        print(f"{i}={x}")
+    return 0

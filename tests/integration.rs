@@ -38294,17 +38294,31 @@ fn set_index_returns_garbage_rejected() {
     check_gg_fails("known_gaps/set_index_returns_garbage.gg", "error[E_");
 }
 
-/// KNOWN GAP — `set.enumerate()` is shape-wrong through `lower_for_enumerate`
-/// (array-index scaffold used against Set's hash-table layout). Filed by
-/// Round XXIV Track E scout Finding #2. Silent zero output + C
-/// `void*←int32_t` warning today (both backends). The fixture asserts the
-/// INTENDED check-time REJECT (Option (a): Set has no positional index →
-/// `i` from `.enumerate()` has no meaningful value). Flip to a run-value
-/// assertion if the owner picks Option (b) (Set-specific enumerate lowering).
+/// Round XXVII Track D: `Set[T].enumerate()` in a `for` loop is a
+/// check-time REJECT (Core #10 lower-or-reject class). Graduated from
+/// `known_gaps/set_enumerate_silent_no_output.gg` (filed Round XXIV Track E
+/// scout Finding #2). Pre-D27 silent-zero output on BOTH C+LLVM; D27
+/// narrows the `Vector | Set | HashSet` name-match arm at
+/// `src/semantic/typecheck.rs:4946` to reject Set/HashSet when
+/// `is_enumerate`, pointing users at `.iter().enumerate()`.
 #[test]
-#[ignore = "KNOWN GAP: `set.enumerate()` silent-zero-output; TODO.md. Asserts INTENDED reject."]
-fn set_enumerate_silent_no_output() {
-    check_gg_fails("known_gaps/set_enumerate_silent_no_output.gg", "error[E_");
+fn set_enumerate_rejects_at_check() {
+    check_gg_fails(
+        "set_enumerate_rejects_at_check.gg",
+        "error[E_EnumerateOnNonIterator]",
+    );
+}
+
+/// Round XXVII Track D (Core #12 collection-kind axis): HashSet sibling of
+/// `set_enumerate_rejects_at_check`. HashSet and Set are separate
+/// collection kinds sharing the same iterator-adapter reject path; pinning
+/// both cells guards against a future arm that re-adds only ONE.
+#[test]
+fn hashset_enumerate_rejects_at_check() {
+    check_gg_fails(
+        "hashset_enumerate_rejects_at_check.gg",
+        "error[E_EnumerateOnNonIterator]",
+    );
 }
 
 /// KNOWN GAP + DESIGN DECISION — ggdef/language divergence on `s[i]` over a

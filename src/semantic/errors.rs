@@ -392,6 +392,18 @@ pub enum SemanticErrorKind {
     /// here makes the failure a clean type error at `gg check`.
     UnwrapOnNonOptional { method: String, type_: String },
 
+    /// Round XXVII Track D: `for (i, x) in <collection>.enumerate():` where
+    /// the collection is `Set[T]` or `HashSet[T]`. Per `docs/book/05-collections.md`
+    /// and `lib/std/iter.gg`, `.enumerate()` is an `Iterator[T]` adapter; Set
+    /// and HashSet impl `Iterable[T]` (they expose `.iter()`) but are not
+    /// themselves `Iterator[T]`. Pre-D27 the enumerate scaffold at
+    /// `for_loops.rs:lower_for_enumerate` read `iter.Field(2)` (Vector/Str's
+    /// length slot) against the Set's hash-table layout, terminating the
+    /// counter loop before any entry emitted — silent zero output on both
+    /// backends (Core #10 lower-or-reject class). Pointer at
+    /// `.iter().enumerate()` gives the reference-grade fix.
+    EnumerateOnNonIterator { type_: String },
+
     /// `*expr` (dereference) applied to a value whose type is not a smart
     /// pointer (`Box[T]`). On any other type the type checker used to return
     /// the inner type unchanged (a silent no-op), and the IR lowering then
@@ -888,6 +900,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::AutoDerefWriteThroughReadGuard { .. } => "E_AutoDerefWriteThroughReadGuard",
             SemanticErrorKind::AutoDerefConsumingThroughGuard { .. } => "E_AutoDerefConsumingThroughGuard",
             SemanticErrorKind::UnwrapOnNonOptional { .. } => "E_UnwrapOnNonOptional",
+            SemanticErrorKind::EnumerateOnNonIterator { .. } => "E_EnumerateOnNonIterator",
             SemanticErrorKind::DerefNonBox { .. } => "E_DerefNonBox",
             SemanticErrorKind::DefaultOpNonOptional { .. } => "E_DefaultOpNonOptional",
             SemanticErrorKind::LocalBorrowBind => "E_LocalBorrowBind",
@@ -1070,6 +1083,15 @@ impl std::fmt::Display for SemanticError {
                     f,
                     "method `{method}` requires an `Option` or `Result` receiver, \
                      but `{type_}` is neither"
+                )
+            }
+            SemanticErrorKind::EnumerateOnNonIterator { type_ } => {
+                write!(
+                    f,
+                    "`.enumerate()` requires an `Iterator[T]` receiver, but \
+                     `{type_}` is `Iterable[T]` only (see `docs/book/05-collections.md` \
+                     and `lib/std/iter.gg`). Use `.iter().enumerate()` — \
+                     `.iter()` returns an iterator, which `.enumerate()` can then adapt"
                 )
             }
             SemanticErrorKind::DerefNonBox { type_ } => {
