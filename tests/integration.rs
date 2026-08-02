@@ -38852,7 +38852,7 @@ fn sh_amp_operand_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_amp_operand_reject.gg");
+    let fixture = manifest_dir.join("tests/fixtures/sh_amp_operand_reject.gg");
     assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
 
     let out = run_with_timeout(
@@ -38889,7 +38889,7 @@ fn sh_amp_operand_binop_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_amp_operand_binop_reject.gg");
+    let fixture = manifest_dir.join("tests/fixtures/sh_amp_operand_binop_reject.gg");
     assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
 
     let out = run_with_timeout(
@@ -40916,7 +40916,7 @@ fn sh_move_operand_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_move_operand_reject.gg");
+    let fixture = manifest_dir.join("tests/fixtures/sh_move_operand_reject.gg");
     assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
 
     let out = run_with_timeout(
@@ -40947,7 +40947,7 @@ fn sh_move_operand_binop_reject() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir.join("tests/fixtures/known_gaps/sh_move_operand_binop_reject.gg");
+    let fixture = manifest_dir.join("tests/fixtures/sh_move_operand_binop_reject.gg");
     assert!(fixture.exists(), "SH-driver NEG fixture missing: {}", fixture.display());
 
     let out = run_with_timeout(
