@@ -1,0 +1,16 @@
+# Round XXIX Track C output-review fold — `HashMap.enumerate()` (DIRECT,
+# no `.iter()`) rejects at check with `E_EnumerateOnNonIterator`. HashMap
+# impls `Iterable[T]`, NOT `Iterator[T]` — `.enumerate()` is an Iterator
+# adapter (`lib/std/iter.gg`). Sibling of `dict_direct_enumerate_rejects.gg`
+# guarding the SECOND type-name in the extended arm at
+# `src/semantic/typecheck.rs::is_enumerate` (now `"Set" | "HashSet" | "Dict"
+# | "HashMap"`). Without this fixture, a regression dropping "HashMap" from
+# that arm would go undetected. Post-fix: rejects at check; the fix-it
+# advice `.iter().enumerate()` is the reference-grade spelling.
+int main():
+    HashMap[String, int] d = HashMap[String, int]()
+    d.put("a", 1)
+    d.put("b", 2)
+    for (i, kv) in d.enumerate():
+        print(f"{i}: {kv._0}={kv._1}")
+    return 0

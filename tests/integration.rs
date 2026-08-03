@@ -4626,6 +4626,14 @@ fn dict_direct_enumerate_rejects() {
     check_gg_fails("dict_direct_enumerate_rejects.gg", "E_EnumerateOnNonIterator");
 }
 
+/// Round XXIX Track C output-review fold — sibling of `dict_direct_enumerate_rejects`
+/// pinning the second type-name in the extended `is_enumerate` arm; a regression
+/// dropping `HashMap` from the arm would otherwise go undetected.
+#[test]
+fn hashmap_direct_enumerate_rejects() {
+    check_gg_fails("hashmap_direct_enumerate_rejects.gg", "E_EnumerateOnNonIterator");
+}
+
 /// Round XXIX Track C — adapter-chain shape `xs.iter().map(f).enumerate()`.
 #[test]
 fn iter_map_enumerate() {

@@ -10491,4 +10491,70 @@ fn advice_diagnostic_registration() {
              `Display` scope-detection above is stale."
         );
     }
+
+    // Round XXIX Track C output-review fold — step 4 cross-lint.
+    // Every FIX_IT_ADVICE_ROWS entry MUST be EITHER paired with a
+    // before/after fixture in `tests/integration.rs::advice_fixtures_have_working_remedy::ROWS`
+    // OR explicitly listed in `OK_UNPAIRED` below (the filed follow-up scope).
+    // A new row here without adding it to one of those two lists FAILS this
+    // test — forcing the contributor to make the pairing decision, which is
+    // what makes 2b + 2c together retire the class (per the brief).
+    //
+    // OK_UNPAIRED is the consolidated 18-row follow-up filed at Round XXIX
+    // Track C close (see TODO.md fix-it-validity consolidated entry). When
+    // a row here graduates to paired, DELETE it here and ADD it to
+    // integration.rs ROWS in the same commit.
+    const OK_UNPAIRED: &[(&str, &str)] = &[
+        // MoveWithoutOperator sub-cases
+        ("MoveWithoutOperator", "Whole+write_through"),
+        ("MoveWithoutOperator", "Whole"),
+        ("MoveWithoutOperator", "FieldIndex"),
+        ("MoveWithoutOperator", "Capture"),
+        ("OwnershipMismatch", ""),
+        ("NonConstantConstInitializer", ""),
+        ("UnsafeIntegerConversion", ""),
+        ("UnloweredBuiltinCall", "str"),
+        ("UnloweredBuiltinCall", "other"),
+        ("SpawnRequiresDirectCall", ""),
+        ("SpawnClosureCaptureShared", ""),
+        ("ArenaEscape", "insert"),
+        ("AutoDerefWriteThroughReadGuard", ""),
+        ("MissingFallibleMark", "Bare"),
+        ("MissingFallibleMark", "RedundantOnCapture"),
+        ("MissingFallibleMark", "MarkOnInfallible"),
+        ("UnhandledThrows", ""),
+        ("ThrowInNonThrowingFunction", ""),
+    ];
+
+    let integration_src = fs::read_to_string("tests/integration.rs")
+        .expect("cannot read tests/integration.rs");
+    // Extract the ROWS table body inside advice_fixtures_have_working_remedy.
+    let rows_start = integration_src
+        .find("fn advice_fixtures_have_working_remedy(")
+        .expect("advice_fixtures_have_working_remedy test not found");
+    let rows_scope = &integration_src[rows_start..];
+    let rows_table_start = rows_scope
+        .find("const ROWS:")
+        .expect("ROWS const inside advice_fixtures_have_working_remedy not found");
+    // Bound to the const block; simple close-bracket balance.
+    let rows_end = (rows_table_start + 4000).min(rows_scope.len());
+    let rows_table = &rows_scope[rows_table_start..rows_end];
+
+    for (variant, disc) in FIX_IT_ADVICE_ROWS {
+        let in_unpaired = OK_UNPAIRED.iter().any(|(v, d)| v == variant && d == disc);
+        // A "paired" row lists the E_code (E_ prefix + variant name) in ROWS.
+        let e_code_needle = format!("\"E_{variant}\"");
+        let in_paired = rows_table.contains(&e_code_needle);
+        assert!(
+            in_paired || in_unpaired,
+            "FIX_IT_ADVICE_ROWS entry `({variant}, {disc:?})` is NEITHER \
+             paired with a working-remedy fixture (via `E_{variant}` in \
+             `tests/integration.rs::advice_fixtures_have_working_remedy::ROWS`) \
+             NOR listed as filed-follow-up in this test's `OK_UNPAIRED`. \
+             Add it to ONE of them — pairing means writing a before/after \
+             fixture that RED-verifies + GREEN-verifies the advice; \
+             OK_UNPAIRED means filing it as a categorized TODO follow-up \
+             (see the Round XXIX Track C consolidated entry)."
+        );
+    }
 }
