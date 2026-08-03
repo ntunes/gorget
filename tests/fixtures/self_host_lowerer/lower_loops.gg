@@ -34,7 +34,7 @@ from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, dec
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
 from lower import cow_lazy_materialize_slot, materialize_loop_carried_bare_params
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
-from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
+from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
@@ -1320,33 +1320,28 @@ void lower_while(LowerCtx &ctx, SpannedExpr cond_expr, Vector[Stmt] body, Vector
 # reused verbatim by the closure-call synthesis in `lower_closure_body`,
 # mirroring why Rust gg shares its single body path
 # across normal functions and `emit_closure_call_function`). The boundary
-# is: pop the function-scope drop frame → compute_liveness +
-# liveness_instrumentation_diff/diag_warn → wire_liveness_into_modes →
-# flush_drop_queue → assemble `ctx.block_insts`/`block_terms` into
-# `Vector[BasicBlock]`. RETURNS the assembled blocks ONLY — the caller
-# owns naming + constructing + pushing/returning its own GirFunction, and
-# any caller-specific implicit-return synthesis (main's `return 0`, the
-# closure's tail-value→_0 funnel) runs BEFORE this call. Skipping these
-# post-passes leaves every consuming operand read at its DEFAULT mode →
-# a SILENT MISCOMPILE (UAF / double-free) for any body that touches a
-# resource, which is why this is mandatory shared reuse and not an inline
-# partial copy. `fn_name` is threaded purely for the gir_liveness_diff
-# diagnostic attribution (callers pass fdef.name / call_name / ic_call).
-Vector[BasicBlock] finalize_body_blocks(LowerCtx &ctx, GirModule &gmod, String fn_name):
+# is: pop the function-scope drop frame → compute_liveness →
+# wire_liveness_into_modes → flush_drop_queue → assemble
+# `ctx.block_insts`/`block_terms` into `Vector[BasicBlock]`. RETURNS the
+# assembled blocks ONLY — the caller owns naming + constructing +
+# pushing/returning its own GirFunction, and any caller-specific
+# implicit-return synthesis (main's `return 0`, the closure's
+# tail-value→_0 funnel) runs BEFORE this call. Skipping these post-passes
+# leaves every consuming operand read at its DEFAULT mode → a SILENT
+# MISCOMPILE (UAF / double-free) for any body that touches a resource,
+# which is why this is mandatory shared reuse and not an inline partial
+# copy.
+Vector[BasicBlock] finalize_body_blocks(LowerCtx &ctx, GirModule &gmod):
     # Pop the function-scope drop frame. If the natural exit was a
     # fall-through with no implicit-return synthesis, emit drops.
     # Otherwise the explicit return / break / continue / implicit-return
     # paths have already emitted theirs.
     pop_drop_scope(&ctx)
 
-    # GIR-liveness — backward-dataflow liveness on the BB CFG, then the
-    # CFG-aware operand-mode post-pass `wire_liveness_into_modes` which
-    # decides OpMove vs OpClone at every consuming operand read. The
-    # instrumentation diff vs the legacy linear pass is a regression net.
+    # GIR liveness feeds the CFG-aware operand-mode post-pass
+    # `wire_liveness_into_modes`, which decides OpMove vs OpClone at
+    # every consuming operand read.
     LivenessAnalysis liveness = compute_liveness(ctx)
-    int diff = liveness_instrumentation_diff(ctx, liveness)
-    if diff > 0:
-        diag_warn("gir_liveness_diff", fn_name + ": " + int_to_str(diff) + " sites")
     wire_liveness_into_modes(&ctx, &gmod, liveness)
 
     # Flush the deferred drop queue — `maybe_moved` is now populated by

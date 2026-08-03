@@ -23,7 +23,7 @@ from lower import LowerCtx
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with
 
-# ── GIR backward-dataflow liveness (Phase 1 of GIR-liveness redesign) ──
+# ── GIR backward-dataflow liveness ──
 #
 # Computes, for every owned-local operand READ at position (block, inst,
 # op_idx), whether that read is the **last use** of the source local —
@@ -31,16 +31,12 @@ from lower import add_local, add_local_with
 # Result is recorded in `LivenessAnalysis.last_use_of_op`, keyed by an
 # encoded (block, inst, op_idx) triple, value true = last use.
 #
-# This pass is the architectural successor to `tighten_owned_operand_modes`
-# (the linear-order, loop-blind post-hoc demoter at line ~790). Where the
-# old pass walks instructions in storage order and uses the highest-
-# numbered read as "last", this pass operates on the explicit BB CFG with
-# proper backward dataflow + fixpoint — correct for loops, branch merges,
+# The liveness result drives operand-mode selection via
+# `wire_liveness_into_modes` (below): every consuming operand read
+# becomes OpMove iff the source is owned AND the read is CFG-last,
+# else OpClone. The pass operates on the explicit BB CFG with proper
+# backward dataflow + fixpoint — correct for loops, branch merges,
 # and exception paths.
-#
-# **Phase 1 status (2026-05-20): pass computes decisions but nothing
-# consumes them yet.** `tighten_owned_operand_modes` still drives actual
-# OpMove → OpClone demotion. Phase 2 will wire the consumer.
 #
 # Architectural reference. Rust's GIR-level liveness lives in
 # `src/ir/liveness.rs` (~900 lines, used by Tier 2a consume-site
@@ -742,90 +738,12 @@ LivenessAnalysis compute_liveness(LowerCtx ctx):
     liveness_record_last_uses(ctx.block_insts, ctx.block_terms, nlocals, live_out_sets, &result.last_use_of_op)
     return result
 
-# ── Instrumentation diff: GIR-liveness vs tighten_owned_operand_modes ──
-#
-# Phase 1 validation. For each OpMove(lid) operand-read in the function,
-# compare:
-#   • Old pass (`tighten_owned_operand_modes`): keeps OpMove iff
-#     `last_pos[lid] == this_pos`, i.e. this is the storage-LAST read.
-#   • New pass (`compute_liveness`): keeps OpMove iff
-#     `last_use_of_op[encode(b, i, op_idx)] == true`, i.e. this is
-#     the CFG-LAST read across all paths.
-#
-# Discrepancies fall into:
-#   (A) New pass says "not last", old pass says "last" — old pass
-#       missed a downstream read because storage order disagrees with
-#       CFG order. Caller is typically in a loop body, or before an
-#       early-exit branch with a later use after the merge.
-#   (B) New pass says "last", old pass says "not last" — old pass
-#       found a later storage-position read that's NOT reachable in
-#       the CFG. Rare; happens when a block becomes unreachable mid-
-#       lowering and its instructions still sit in `block_insts`.
-#
-# Both shapes are "new pass more accurate." Phase 1 reports the count
-# via a diag_warn so the parent run captures it in stage-0 stdout.
-# After Phase 2 wires the consumer, the old pass is removed and this
-# instrumentation goes too.
-
-# Compute the discrepancy count. Defensive: bounded by total OpMove
-# operand-reads in the function (typically dozens, never millions).
-# We DO NOT mutate any state — purely an inspection pass.
-int liveness_instrumentation_diff(LowerCtx ctx, LivenessAnalysis liveness):
-    int n = ctx.block_insts.len()
-    if n == 0:
-        return 0
-    # Re-derive the old pass's last_pos table (mirrors
-    # `tighten_owned_operand_modes`'s Pass 1).
-    int MAX_PER_BB = 1000000
-    Dict[int, int] last_pos = {}
-    int bi = 0
-    while bi < n:
-        Vector[Instruction] insts = ctx.block_insts.get(bi).unwrap()
-        int ii = 0
-        while ii < insts.len():
-            int pos = bi * MAX_PER_BB + ii
-            update_last_pos_for_inst(insts.get(ii).unwrap(), pos, &last_pos)
-            ii += 1
-        int term_pos = bi * MAX_PER_BB + (MAX_PER_BB - 1)
-        update_last_pos_for_term(ctx.block_terms.get(bi).unwrap(), term_pos, &last_pos)
-        bi += 1
-    # Now walk each OpMove operand-read and compare verdicts.
-    int diff_count = 0
-    int bj = 0
-    while bj < n:
-        Vector[Instruction] insts2 = ctx.block_insts.get(bj).unwrap()
-        int ij = 0
-        while ij < insts2.len():
-            int pos = bj * MAX_PER_BB + ij
-            Instruction inst = insts2.get(ij).unwrap()
-            Vector[int] op_srcs = liveness_inst_operand_local_ids(inst)
-            int op_idx = 0
-            while op_idx < op_srcs.len():
-                int lid = op_srcs.get(op_idx).unwrap()
-                if lid >= 0:
-                    # Old pass verdict: lid is last-use here iff
-                    # last_pos[lid] == pos. (Storage-last test.)
-                    bool old_last = false
-                    if last_pos.contains(lid):
-                        old_last = (last_pos.get(lid).unwrap() == pos)
-                    # New pass verdict: encoded key in last_use_of_op?
-                    int key = liveness_encode_key(bj, ij, op_idx)
-                    bool new_last = liveness.last_use_of_op.contains(key)
-                    if old_last != new_last:
-                        diff_count += 1
-                op_idx += 1
-            ij += 1
-        bj += 1
-    return diff_count
-
 # ── CFG-aware operand-mode post-pass (Path A Phase 2a) ──────────
 #
 # Runs AFTER `compute_liveness` and consumes `LivenessAnalysis.
 # last_use_of_op` — the per-operand "last-use across the CFG" verdict
 # — to choose OpMove vs OpClone at every consuming operand read.
-# Replaces the legacy `tighten_owned_operand_modes` (retired below),
-# whose linear-storage-order criterion produced 52K disagreements
-# against the CFG-accurate verdict (Phase 1 instrumentation diff).
+# Sole driver of OpMove/OpClone demotion post-Phase-2 wiring.
 #
 # Scope. The pass is **pure label correctness**: every operand mode
 # in {OpMove, OpClone} today lowers to the same `ISlotLoad`
@@ -1041,70 +959,4 @@ Terminator rewrite_term_modes(LowerCtx &ctx, GirModule &gmod, Terminator term, i
             return GTBranch(wire_one_operand(&ctx, &gmod, op, b, i, 0, liveness, &moved_lids), t_bb, e_bb)
         else:
             return term
-
-# ── Legacy linear-storage-order helpers (retained for instrumentation
-# diff only) ──
-#
-# These three helpers used to back `tighten_owned_operand_modes`, the
-# linear-storage-order pass retired in Phase 2a. They are kept solely
-# so `liveness_instrumentation_diff` can reconstruct the OLD pass's
-# `last_pos[lid]` view at runtime and compare it against the new
-# CFG-accurate verdict. Once we've validated the diff stays at ~zero
-# for a few release cycles, these helpers + the diff function retire
-# together.
-
-# Update `last_pos[lid]` for every operand-read in this instruction
-# (positions are monotonic across the pass, so `.put` overwrites with
-# the larger position automatically).
-void update_last_pos_for_inst(Instruction inst, int pos, Dict[int, int] &last_pos):
-    match inst:
-        case GIAssign(_, op):
-            note_operand_pos(op, pos, &last_pos)
-        case GIBinOp(_, _, _, lhs, rhs):
-            note_operand_pos(lhs, pos, &last_pos)
-            note_operand_pos(rhs, pos, &last_pos)
-        case GIFaultCheck(_, _, _, lhs, rhs):
-            note_operand_pos(lhs, pos, &last_pos)
-            note_operand_pos(rhs, pos, &last_pos)
-        case GIUnOp(_, _, _, src):
-            note_operand_pos(src, pos, &last_pos)
-        case GICmp(_, _, _, lhs, rhs):
-            note_operand_pos(lhs, pos, &last_pos)
-            note_operand_pos(rhs, pos, &last_pos)
-        case GICall(_, _, args):
-            for a in args:
-                note_operand_pos(a, pos, &last_pos)
-        case GICallExtern(_, _, args):
-            for a in args:
-                note_operand_pos(a, pos, &last_pos)
-        else:
-            pass
-
-void update_last_pos_for_term(Terminator term, int pos, Dict[int, int] &last_pos):
-    match term:
-        case GTReturn(op):
-            note_operand_pos(op, pos, &last_pos)
-        case GTBranch(op, _, _):
-            note_operand_pos(op, pos, &last_pos)
-        else:
-            pass
-
-# Legacy linear-order helper for `liveness_instrumentation_diff` regression
-# net. Mirrors `liveness_operand_uses` — counts OpBorrow as a source read too
-# (a borrow reads its source), so the two passes stay in agreement at OpBorrow
-# positions. (The earlier H1 exclusion here mirrored that function's wrong
-# exclusion; both now correctly count the borrow read — see the header note on
-# `liveness_operand_uses`.) The `else: pass` drops only no-local-id variants.
-void note_operand_pos(Operand op, int pos, Dict[int, int] &last_pos):
-    match op:
-        case OpCopy(l):
-            last_pos.put(l, pos)
-        case OpMove(l):
-            last_pos.put(l, pos)
-        case OpClone(l):
-            last_pos.put(l, pos)
-        case OpBorrow(l):
-            last_pos.put(l, pos)
-        else:
-            pass
 

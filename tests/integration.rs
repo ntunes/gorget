@@ -20955,35 +20955,8 @@ fn self_host_bootstrap_fixed_point() {
         );
         let next_body = String::from_utf8_lossy(&next_out.stdout).to_string();
 
-        // Round XXVIII Track D follow-up: strip SH's `[warn] gir_liveness_diff:`
-        // instrumentation lines before comparing. Those are LEGACY-vs-CFG-aware
-        // pass DISAGREEMENT COUNTS emitted by `liveness_instrumentation_diff`
-        // (tests/fixtures/self_host_lowerer/lower_liveness.gg:773) — inspection
-        // only, mutates no state, and the LEGACY pass is scheduled for retirement
-        // once Phase 2 wires the consumer. Track D's `expr_is_borrow_bind` helper
-        // (typecheck.gg:723) shape (nested match + `for eb in elses: if X: return
-        // true`) causes the LEGACY reconstruction to report N vs N+1 sites across
-        // self-compile generations for `typecheck___check_local_borrow_bind`;
-        // the CFG-aware pass agrees across generations (executor verified the
-        // sole diff between stages was this one warning line). Stripping the
-        // NOISE keeps the C-emit comparison strict without blinding the ceiling
-        // globally. If the strip ever hides real emit drift, that's a bug in the
-        // strip (rare regex mismatch on the warning shape), not a real regression
-        // — the strip pattern is narrow. Filed follow-up: reference-grade fix is
-        // to retire the legacy pass OR reshape the helper so both agree at
-        // stage-2 (see TODO.md).
-        fn strip_liveness_diff_warnings(body: &str) -> String {
-            body.lines()
-                .filter(|l| !l.contains("[warn] gir_liveness_diff:"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-
-        if strip_liveness_diff_warnings(stages.last().unwrap())
-            == strip_liveness_diff_warnings(&next_body)
-        {
-            // Fixed point reached: stage(gn-1).c == stage(gn).c (modulo the
-            // liveness_diff instrumentation warnings — see strip above).
+        if stages.last().unwrap() == &next_body {
+            // Fixed point reached: stage(gn-1).c == stage(gn).c.
             converged_at = Some(gn - 1);
             stages.push(next_body);
             break;
@@ -21052,12 +21025,10 @@ fn self_host_bootstrap_fixed_point() {
     // Reverted 2026-08-02 back to 2 (from a briefly-landed 2→4 raise in
     // Round XXVIII Track D followup at 45fc99b1): raising the global
     // ceiling blinded ALL future convergence-drift detection to three
-    // additional stages, when the actual debt is scoped to ONE
-    // instrumentation warning line. The narrower fix — strip
-    // `[warn] gir_liveness_diff:` lines from the C-body comparison above —
-    // tolerates the specific SH legacy-pass reconstruction instability on
-    // Track D's `expr_is_borrow_bind` helper WITHOUT losing the global
-    // convergence-drift detector. Filed follow-up in TODO.md.
+    // additional stages, when the actual debt was scoped to ONE
+    // instrumentation warning line. Round XXIX Track D retired the
+    // legacy `liveness_instrumentation_diff` pass at its writer, so
+    // there is no interim strip to maintain.
     const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 2;
     if let Some(k) = converged_at {
         assert!(

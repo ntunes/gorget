@@ -125,7 +125,7 @@ Reasoning: Rust's borrow checker forbids move-after-borrow at compile time, but 
 - **Zero clones at regular bare function-call arguments** — confirmed via sampled site analysis
 
 Self-host operational OpClone count timeline (GIR layer, on the same input):
-- Pre-Path A (today's `tighten_owned_operand_modes` baseline): 0 (OpClone was no-op ISlotLoad placeholder)
+- Pre-Path A (the historical, since-retired `tighten_owned_operand_modes` baseline): 0 (OpClone was no-op ISlotLoad placeholder)
 - Path A first attempt (naive emission flip): ~51,000 predicted (DISPROVEN by /tmp/stage1_probe.c sampling — Rust emits 26× fewer)
 - Path A Phase 2a + 2b (label correctness only, no emission flip): 19,590 GIR-level OpClone (no runtime effect)
 - After CkCallArg refinement (commit `41c74285`): 15,330 GIR-level OpClone (-22%)

@@ -37,7 +37,7 @@ from lower import collection_kind_of, collection_kind_eq, int_vec_contains, meth
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
 from lower_drops import init_drop_elab, push_drop_scope, emit_scope_drops, pop_drop_scope, pop_drop_scope_no_emit, is_droppable_type, register_local_for_drop, register_owning_param, mark_local_moved, restore_moved, union_moved, emit_drops_for_early_exit, flush_drop_queue
-from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, liveness_instrumentation_diff, update_last_pos_for_inst, update_last_pos_for_term, note_operand_pos, empty_liveness
+from lower_liveness import LivenessAnalysis, compute_liveness, wire_liveness_into_modes, empty_liveness
 from lower_types import prim_name_to_type, spanned_type_to_name, mangle_type_name, all_return_nominals_registered, setup_concrete_trait_subs, prim_to_c_name, type_to_c_name, resolved_to_c_name, register_tuple_type, resolved_to_gir_type, lookup_expr_gir_type, bare_method_targ_c_name, map_ast_type, map_fn_return_type, type_id_to_name, binop_method_name, enum_variant_parent, is_type_constructor, allocator_constructor_runtime_name, sync_constructor_runtime_name, allocator_type_destroy_name, local_type_name, type_id_to_base_name, resolve_field_gir_type, record_field_enum_category, is_known_field_type_name, lower_float_const_ident, lower_fn_addr_ident, lower_static_ref_ident, lower_nullary_variant_ident, lower_metaop_ident, try_register_static_runtime_call, static_is_literal_init, static_is_scalar_literal_init, static_init_fn_name, scalar_static_c_literal, register_scalar_static, collection_ctor_init_expr, try_register_collection_ctor_static, try_register_struct_ctor_static, register_literal_static, build_static_init_fn, gmod_next_closure_id, infer_method_return_type, builtin_call_return_type, collection_element_type, is_cstr_returning_call, is_string_local, is_string_type_id, is_ptr_to_string_type_id, is_resource_field_type, register_optionlike_resource, is_resource_type_name, map_binop, map_compound_binop, emit_compound_arith, is_comparison, map_cmpop
 from lower_expr import block_terminated, lower_block_expr, lower_stmt_as_tail_value, lower_if_chain_expr, refine_local_type, lower_expr, lower_expr_inner, apply_container_hint_for_ctor_arg, lower_call
 from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_field_write_from_local, lower_stmts, lower_if, lower_index_assign
@@ -303,7 +303,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     # `finalize_body_blocks`. These post-passes are MANDATORY (they set
     # OpMove/OpClone modes + emit drops); skipping them is a silent
     # miscompile for any resource-touching body.
-    Vector[BasicBlock] blocks = finalize_body_blocks(&ctx, &gmod, fdef.name)
+    Vector[BasicBlock] blocks = finalize_body_blocks(&ctx, &gmod)
     # round-16 Phase-2: carry the with-refresh / inner-shared-spawn metadata the
     # body accumulated into the GirFunction so the `__shared_async_<f>` post-pass
     # can read it (typed field, not name-re-derived — Layering rule 2).
@@ -722,7 +722,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
         # the shared function-body tail. Same contract as `lower_function`;
         # deduped through `finalize_body_blocks` so the block-assembly idiom has
         # ONE source of truth (Core #4 / one source of truth).
-        Vector[BasicBlock] blocks = finalize_body_blocks(&ctx, &gmod, mangled)
+        Vector[BasicBlock] blocks = finalize_body_blocks(&ctx, &gmod)
 
         # Dup-def dedup (lazy-adapter pre-existing bug): an explicit
         # `MapIter[…]` annotation + the `.map()` chain both reach here for the
@@ -2148,6 +2148,6 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
         emit_drops_for_early_exit(&cctx, DSK_FUNCTION, Some(cexcl))
         set_terminator(&cctx, GTReturn(op_consume(cctx, &gmod, 0, CkReturn())))
 
-    Vector[BasicBlock] cblocks = finalize_body_blocks(&cctx, &gmod, call_name)
+    Vector[BasicBlock] cblocks = finalize_body_blocks(&cctx, &gmod)
     gmod.functions.push(GirFunction(call_name, !abi_param_types, ret_type, cctx.locals, !cblocks, [], []))
 
