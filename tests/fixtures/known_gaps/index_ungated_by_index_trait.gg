@@ -1,0 +1,42 @@
+# KNOWN GAP — MEMORY-UNSAFE, BOTH BACKENDS: `[]` is not gated on the `Index`
+# trait, so indexing a type that implements NO indexing trait is silently
+# accepted and lowered as an UNCHECKED RAW OFFSET READ.
+#
+# `Pair` equips nothing. `gg check` reports "OK: no semantic errors"; both
+# backends build and run.
+#
+# MEASURED AT HEAD (2026-08-03), `print(f"{p[0]} {p[1]} {p[5]}")`:
+#   C    : 11 22 281474539212408
+#   LLVM : 11 22 281473722332240
+#
+# So p[0]/p[1] read fields a/b by offset, and p[5] reads OUT OF BOUNDS past
+# the struct (the value is ASLR-dependent; the stable fact is that it is an
+# unchecked read of memory the program does not own).
+#
+# ROOT — and this is a CLASS, not an instance. `Index[K,V]` (`V get(self, K)`)
+# and `IndexMut[K,V]` exist as builtin traits (`src/semantic/traits.rs:754`,
+# `:765`), but the `[]` operator never consults them as a gate. Consequences
+# already filed separately are the SAME defect in other costumes:
+#   - `Set[int]` `s[0]` prints a raw address (known_gaps/set_index_returns_garbage.gg,
+#     and the D38 3-lane entry) — Set implements no indexing trait either.
+# Fixing at the operator (require an `Index` impl, per Layering discipline:
+# the trait IS the typed metadata, read it at one source of truth) closes
+# every costume at once. Adding a bespoke Set-index rejection would fix the
+# instance and leave this one live — Core #4.
+#
+# INTENDED: a check-time rejection naming the missing `Index` impl. The
+# expected output below is the diagnostic; the harness asserts a rejection,
+# so the exact wording is free to improve.
+#
+# ⚠ Probe discipline (AGENTS.md Core #15(d)): read the out-of-bounds value off
+# `gg build` + run, never off `gg run` alone, and check BOTH backends — this
+# reproduces identically on C and LLVM, which by Core #8 makes it >= 2 bugs,
+# not "benign because both agree".
+struct Pair:
+    int a
+    int b
+
+int main():
+    Pair p = Pair(11, 22)
+    print(f"{p[0]} {p[1]} {p[5]}")
+    return 0

@@ -4489,6 +4489,19 @@ fn box_element_drop_symbol_collision() {
     run_gg("known_gaps/box_element_drop_symbol_collision.gg", "done");
 }
 
+/// `[]` is not gated on the `Index` trait: indexing a struct that equips no
+/// indexing trait is silently accepted and lowered as an unchecked raw offset
+/// read, so `p[5]` on a 2-field struct reads OUT OF BOUNDS on both backends
+/// (C and LLVM). Root of the `Set[int]` garbage-index cell too — fixing at the
+/// operator closes every costume (Core #4). Asserts the INTENDED reject. TODO.md.
+#[test]
+#[ignore = "KNOWN GAP: `[]` is not gated on the Index trait — indexing a non-indexable \
+struct is accepted and lowered as an unchecked raw offset read (p[5] reads out of bounds, \
+both backends); should reject at check time naming the missing Index impl; TODO.md."]
+fn index_ungated_by_index_trait() {
+    check_gg_fails("known_gaps/index_ungated_by_index_trait.gg", "error[E_");
+}
+
 /// `.iter().enumerate()` over a Set panics lir-lowering ("field index 2 out of
 /// range for SetIter__int64_t (has 2 fields)") — and it is the exact remedy the
 /// `E_EnumerateOnNonIterator` reject advises, so the compiler advises code it
