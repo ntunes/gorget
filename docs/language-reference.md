@@ -3775,7 +3775,7 @@ These methods operate on individual characters within a `String`:
 
 **`Dict[K, V]`** — Ordered hash map (insertion-order preserving, like Python 3.7+ `dict`)
 
-Iteration, `keys()`, `values()`, and `items()` all return entries in insertion order. Removing a key and re-inserting it places it at the end.
+Iteration, `keys()`, `values()`, and `items()` all return entries in insertion order. Removing a key and re-inserting it places it at the end. Removing a key leaves the relative order of the remaining entries unchanged (D39) — `remove` preserves order; `swap_remove` is the explicit order-destroying alternative, exactly as on `Vector`.
 
 | Method | Signature | Description |
 |---|---|---|
