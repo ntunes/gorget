@@ -700,6 +700,24 @@ pub enum SemanticErrorKind {
     /// rebuild-based). See language-reference §Strings.
     StringIndexAssign,
 
+    /// `x[k]` on a receiver whose type does not implement `Index[K,V]`
+    /// (Round XXIX Track A). D39 ratifies `[]` as the collection's lookup
+    /// operator, so a type with no `Index` impl has no defined meaning for
+    /// `[]`. Prior to this gate, non-indexable receivers (Set, Tuple, Option,
+    /// enum, plain structs, primitive `int`) silently accepted at check-time
+    /// and lowered as unchecked raw offset reads on both C+LLVM backends —
+    /// a Layering rule 3 gap between the two `[]` decision paths (kind gate
+    /// at `ir/lowering/exprs/mod.rs:2984` and `Index`/`IndexMut` trait
+    /// dispatch at `traits.rs:754`/`:765`). Fixing at the check-site (single
+    /// source of truth = trait registry) closes every silent-accept costume
+    /// at once (Core #4). See `docs/devbook/24-layering-discipline.md`.
+    NotIndexable { type_: String },
+
+    /// `x[k] = v` / `x[k] += v` on a receiver whose type does not implement
+    /// `IndexMut[K,V]` (Round XXIX Track A). Sibling of `NotIndexable` on
+    /// the WRITE side. String is separately caught by `StringIndexAssign`.
+    NotIndexableMut { type_: String },
+
     /// Binary or compound operator applied to a type that does not support it
     /// (e.g. `s.name -= "x"`, `s - "x"`, `m -= r` where `Money` equips only
     /// `Add`). Arithmetic needs a numeric primitive or a matching operator
@@ -967,6 +985,8 @@ impl SemanticErrorKind {
             SemanticErrorKind::NoreturnBodyReturns { .. } => "E_NoreturnBodyReturns",
             SemanticErrorKind::NoreturnWithThrows { .. } => "E_NoreturnWithThrows",
             SemanticErrorKind::StringIndexAssign => "E_StringIndexAssign",
+            SemanticErrorKind::NotIndexable { .. } => "E_NotIndexable",
+            SemanticErrorKind::NotIndexableMut { .. } => "E_NotIndexableMut",
             SemanticErrorKind::UnsupportedOperator { .. } => "E_UnsupportedOperator",
             SemanticErrorKind::InvalidAssignTarget => "E_InvalidAssignTarget",
             SemanticErrorKind::UnloweredBuiltinCall { .. } => "E_UnloweredBuiltinCall",
@@ -1542,6 +1562,22 @@ impl std::fmt::Display for SemanticError {
                      `s.replace(...)`, slicing + concatenation)"
                 )
             }
+            SemanticErrorKind::NotIndexable { type_ } => {
+                write!(
+                    f,
+                    "type `{type_}` is not indexable — `[]` requires an \
+                     `Index[K,V]` implementation. Iterate with `for x in c:` \
+                     or use the collection's ratified named accessors \
+                     (see D38/D39)."
+                )
+            }
+            SemanticErrorKind::NotIndexableMut { type_ } => {
+                write!(
+                    f,
+                    "type `{type_}` is not IndexMut — `x[k] = v` requires an \
+                     `IndexMut[K,V]` implementation."
+                )
+            }
             SemanticErrorKind::UnsupportedOperator { op, type_name } => {
                 // Teaching messages: String only has concat; user types need equip.
                 if type_name == "String" {
@@ -1874,6 +1910,8 @@ mod code_tests {
             (SemanticErrorKind::CannotInferType, "E_CannotInferType"),
             (SemanticErrorKind::BreakOutsideLoop, "E_BreakOutsideLoop"),
             (SemanticErrorKind::StringIndexAssign, "E_StringIndexAssign"),
+            (SemanticErrorKind::NotIndexable { type_: "Pair".into() }, "E_NotIndexable"),
+            (SemanticErrorKind::NotIndexableMut { type_: "Grid".into() }, "E_NotIndexableMut"),
             (
                 SemanticErrorKind::UnsupportedOperator {
                     op: "-=".into(),

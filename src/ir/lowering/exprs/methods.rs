@@ -4320,6 +4320,18 @@ pub(super) fn lower_index_access(
         return FunctionBuilder::copy(dst);
     }
 
+    // Round XXIX Track A: with the check-site `Expr::Index` arm now
+    // gating on `has_trait_impl_by_name(type, "Index")`
+    // (`src/semantic/typecheck.rs`), a receiver reaching this fall-through
+    // has already been rejected with `E_NotIndexable` upstream — lowering
+    // is never invoked on error-tainted input. The `debug_assert!` locks
+    // the invariant: any future check-site regression trips at
+    // compile-time in debug; the release-mode `Unit` return keeps the
+    // build alive for an ICE upstream to catch.
+    debug_assert!(
+        false,
+        "typecheck must reject non-indexable receivers before lowering (E_NotIndexable)"
+    );
     Operand::Constant(Constant::Unit)
 }
 

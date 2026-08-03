@@ -1,0 +1,45 @@
+# Round XXIX Track A: MEMORY-UNSAFE class BEFORE FIX, REJECT AFTER FIX.
+# `[]` was not gated on the `Index[K,V]` trait, so indexing a type that
+# implements NO indexing trait was silently accepted and lowered as an
+# UNCHECKED RAW OFFSET READ on BOTH backends.
+#
+# PRE-FIX (measured 2026-08-03 at HEAD before this round with
+# `print(f"{p[0]} {p[1]} {p[5]}")` — the f-string form the original
+# repro used):
+#   C    : 11 22 281474539212408
+#   LLVM : 11 22 281473722332240
+#
+# So p[0]/p[1] read fields a/b by offset, and p[5] read OUT OF BOUNDS
+# past the struct (the value is ASLR-dependent; the stable fact is that
+# it is an unchecked read of memory the program does not own).
+#
+# ROOT — and this is a CLASS, not an instance. `Index[K,V]` (`V get(self, K)`)
+# and `IndexMut[K,V]` exist as builtin traits (`src/semantic/traits.rs:754`,
+# `:765`), but the `[]` operator never consulted them as a gate. The other
+# costumes of the SAME defect (Set/HashSet/Tuple/Option/enum/primitive int)
+# are all closed by the operator-level gate in this round — Core #4.
+#
+# POST-FIX: check-time rejection with `E_NotIndexable` naming the missing
+# `Index` impl. `Pair` must `equip Pair with Index[int, int]` to opt in;
+# other receivers get the same trait-registry answer through one path
+# (Layering rule 3: `Index[K,V]` is the typed metadata, `has_trait_impl_by_name`
+# is the ONE consultation site).
+#
+# ⚠ PROBE DISCIPLINE (AGENTS.md Core #15(d) / "MIND THE PROBE"): this
+# fixture asserts the reject with `int x = p[0]` — NEVER `print(f"{p[0]}")`,
+# because interpolation discards typecheck errors on its operands and a
+# rejected call reads as accepted (the exact trap that hid the CoW `&`
+# class for 5 months). Verified 2026-08-03: with THIS fix landed,
+# `print(f"{p[0]}")` still returns "OK: no semantic errors" — the f-string
+# swallows the reject. The bare-expression form below is the honest probe.
+struct Pair:
+    int a
+    int b
+
+int main():
+    Pair p = Pair(11, 22)
+    int x = p[0]
+    int y = p[5]
+    print(x)
+    print(y)
+    return 0

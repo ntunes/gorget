@@ -1668,6 +1668,38 @@ impl Elaborator {
                     let end = self.opt_expr(end.as_deref())?;
                     Ok(Expr::Slice { object, start, end, inclusive: *inclusive })
                 } else {
+                    // Round XXIX Track A (Core #9 lane parity with Rust
+                    // `E_NotIndexable`): reject `s[i]` on a `Set` (D38 — no
+                    // lookup key) and `t[i]` on a `Tuple` (D39 — dot-N is
+                    // the accessor). The reject fires at ELABORATE (user
+                    // AST), NOT at eval, because `desugar_for` synthesizes
+                    // an `Expr::Index(coll, __i)` for `for x in someSet:`
+                    // (this file :1319-1323): at eval the AST distinction
+                    // between user `s[i]` and desugared `s[__i]` is LOST
+                    // (both are `Expr::Index(_, _)`) and rejecting at eval
+                    // would break every `for x in Set:`. See Core #15(e)
+                    // Q4 — "rule subject": the subject is USER `[]`, not
+                    // any `Expr::Index` node in the elaborated tree.
+                    match self.infer_ast_ty(&object.node) {
+                        Ty::Set(_) => {
+                            return Err(ElabError::new(
+                                "type `Set` is not indexable — `[]` requires an \
+                                 `Index[K,V]` implementation. Iterate with \
+                                 `for x in c:` or use the collection's ratified \
+                                 named accessors (see D38/D39).",
+                                span,
+                            ));
+                        }
+                        Ty::Tuple(_) => {
+                            return Err(ElabError::new(
+                                "type `Tuple` is not indexable — use dot-N \
+                                 field access (`t.0`, `t.1`, ...) — the `[]` \
+                                 operator has no meaning on tuples (D39).",
+                                span,
+                            ));
+                        }
+                        _ => {}
+                    }
                     Ok(Expr::Index(
                         Box::new(self.elaborate_expr(object)?),
                         Box::new(self.elaborate_expr(index)?),

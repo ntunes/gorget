@@ -1,0 +1,16 @@
+# Round XXIX Track A: `c[0]` on an enum value REJECTS at check-time with
+# `E_NotIndexable`. Enum variants are pattern-matched (`match x: case
+# Color.Red(): ...`), not indexed.
+#
+# Pre-fix: silent-accept + unchecked offset read.
+# Post-fix: rejects — the enum def has no `Index` impl.
+enum Color:
+    Red
+    Green
+    Blue
+
+int main():
+    Color c = Color.Red()
+    int x = c[0]
+    print(x)
+    return 0

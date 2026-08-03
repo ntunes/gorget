@@ -61,6 +61,8 @@ enum DiagKind:
     DkMainThrowsNonInt     # `main()` throws a non-`int` (E_MainThrowsNonInt)
     DkValueOutOfRange      # integer literal out of the target type's range (E_ValueOutOfRange)
     DkStringIndexAssign    # `s[i] = x` on a read-only string view (E_StringIndexAssign)
+    DkNotIndexable         # Round XXIX Track A: `x[k]` on a type without `Index[K,V]` (E_NotIndexable)
+    DkNotIndexableMut      # Round XXIX Track A: `x[k] = v` on a type without `IndexMut[K,V]` (E_NotIndexableMut)
     DkUnsupportedOperator  # op not defined for operand type (E_UnsupportedOperator) — non-Add on String/Money, etc.
     DkInvalidAssignTarget  # non-lvalue assign/compound target (E_InvalidAssignTarget) — `foo() = 1`, `5 += 1`
     # Split out of the former coarse DkControlFlow — each 1:1 with its registry code:
@@ -152,6 +154,10 @@ String diag_kind_str(DiagKind kind):
             return "value-out-of-range"
         case DkStringIndexAssign():
             return "string-index-assign"
+        case DkNotIndexable():
+            return "not-indexable"
+        case DkNotIndexableMut():
+            return "not-indexable-mut"
         case DkUnsupportedOperator():
             return "unsupported-operator"
         case DkInvalidAssignTarget():
@@ -250,6 +256,10 @@ String diag_kind_code(DiagKind kind):
             return "E_ValueOutOfRange"
         case DkStringIndexAssign():
             return "E_StringIndexAssign"
+        case DkNotIndexable():
+            return "E_NotIndexable"
+        case DkNotIndexableMut():
+            return "E_NotIndexableMut"
         case DkUnsupportedOperator():
             return "E_UnsupportedOperator"
         case DkInvalidAssignTarget():

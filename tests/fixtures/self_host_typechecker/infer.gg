@@ -22,7 +22,7 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTNever, RTRef, RTVar
 from types import ast_type_to_resolved
 from types import FunctionSig, MethodSigShape, MethodResolution, ShapeResolution, EquipInfo
 from resolve import ResolveContext
-from diagnostic import Diagnostic, DkUndefinedName, DkNoFieldFound
+from diagnostic import Diagnostic, DkUndefinedName, DkNoFieldFound, DkNotIndexable
 from traits import resolve_method_by_name, resolve_method_shape
 from traits import resolve_method_full, resolve_method_for_generic_receiver
 from traits import infer_method_targs, substitute_return_type, type_name_of
@@ -807,21 +807,39 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             return NO_TYPE
 
         case EIndex(obj, index):
-            # Indexing: Vector[T][i] → T, Dict[K,V][k] → V
+            # Round XXIX Track A (Core #9 lane parity with Rust
+            # `E_NotIndexable`): `[]` is the language's `Index[K,V]`
+            # operator; a receiver without an `Index` impl rejects at
+            # check-time. Rust side lives at `src/semantic/typecheck.rs`
+            # `Expr::Index` arm and gates on `has_trait_impl_by_name`.
+            # The SH mirror below covers the builtin costumes:
+            # accept Vector/Deque/Dict/HashMap/RTArray/RTSlice/String,
+            # REJECT Set/HashSet (D38 — no lookup key) and RTTuple
+            # (D39 — dot-N accessor). Anything else falls through to
+            # NO_TYPE and downstream check will surface a mismatch.
             int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
             if obj_type >= 0 and obj_type < types.types.len():
                 ResolvedType ort = get_rtype_at(types.types, obj_type)
                 match ort:
                     case RTGeneric(def_id, type_args):
                         DefInfo d = scopes.get_def(def_id)
-                        if d.name == "Vector" and type_args.len() >= 1:
+                        # Vector[T][i] → T. Deque added Round XXIX Track A
+                        # for Core #9 lane parity — Rust's intrinsic set
+                        # includes Deque; without this line the SH lags.
+                        if (d.name == "Vector" or d.name == "Deque") and type_args.len() >= 1:
                             return get_int_at(type_args, 0)
                         if (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
                             return get_int_at(type_args, 1)
+                        if d.name == "Set" or d.name == "HashSet":
+                            ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNotIndexable(), "type `" + d.name + "` is not indexable — `[]` requires an `Index[K,V]` implementation. Iterate with `for x in c:` or use the collection's ratified named accessors (see D38/D39)."))
+                            return NO_TYPE
                     case RTArray(elem_id, size):
                         return elem_id
                     case RTSlice(elem_id):
                         return elem_id
+                    case RTTuple(elems):
+                        ctx.diagnostics.push(Diagnostic.error(sexpr.span, DkNotIndexable(), "type `Tuple` is not indexable — use dot-N field access (`t.0`, `t.1`, ...) — the `[]` operator has no meaning on tuples (D39)."))
+                        return NO_TYPE
                     else:
                         pass
                 # String indexing → String

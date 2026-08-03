@@ -1,0 +1,12 @@
+# Round XXIX Track A: `o[0]` on an `Option[T]` REJECTS at check-time with
+# `E_NotIndexable`. `Option` unwraps via `match` / `??` / `is Some(x)` —
+# it has no `Index` impl.
+#
+# Pre-fix: silent-accept + unchecked offset read into the Option payload.
+# Post-fix: rejects with E_NotIndexable via the trait-registry gate
+# (`has_trait_impl_by_name("Option", "Index") == false`).
+int main():
+    Option[int] o = Some(42)
+    int x = o[0]
+    print(x)
+    return 0

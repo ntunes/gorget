@@ -1,0 +1,14 @@
+# Round XXIX Track A: `t[5]` on a `Tuple` REJECTS at check-time with
+# `E_NotIndexable`. Tuples use the dot-N accessor `t.0`, `t.1`, etc. —
+# not the `[]` operator (D39; there is no dynamic-index-into-tuple
+# semantics today, so `Tuple` implements no `Index` impl).
+#
+# Pre-fix: silent-accept + unchecked offset read.
+# Post-fix: rejects with E_NotIndexable — `ResolvedType::Tuple` has no
+# registry key (`type_key_for_trait_lookup` returns `None`), the
+# `Expr::Index` arm's anonymous-type branch describes it and rejects.
+int main():
+    (int, int) t = (10, 20)
+    int x = t[5]
+    print(x)
+    return 0

@@ -1,0 +1,29 @@
+# Round XXIX Track A: the "accidentally-green" cell (Core #15e Q6). At
+# HEAD, `String s = g[0]` on a `Grid` with `Index[int, int]` was accepted
+# with `s` receiving the raw int bits reinterpreted as a String — silent
+# miscompile, because the check-arm returned `error_id` on the Index
+# fall-through and `error_id` unifies with anything.
+#
+# Post-fix: the arm resolves the element type from the trait_generic_args
+# (`Index[int, int]` → V = int), so `String s = g[0]` becomes a
+# type-mismatch (`E_TypeMismatch`) — the intended reject.
+#
+# Pre-fix state (documentation): `gg check` returned "OK: no semantic
+# errors". No runtime observation attempted because the C emit likely
+# produced UB — the whole point of the fix is to reject before that.
+struct Grid:
+    int a
+    int b
+
+equip Grid with Index[int, int]:
+    int get(self, int key):
+        if key == 0:
+            return self.a
+        else:
+            return self.b
+
+int main():
+    Grid g = Grid(1, 2)
+    String s = g[0]
+    print(s)
+    return 0

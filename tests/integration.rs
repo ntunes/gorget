@@ -4489,17 +4489,92 @@ fn box_element_drop_symbol_collision() {
     run_gg("known_gaps/box_element_drop_symbol_collision.gg", "done");
 }
 
-/// `[]` is not gated on the `Index` trait: indexing a struct that equips no
-/// indexing trait is silently accepted and lowered as an unchecked raw offset
-/// read, so `p[5]` on a 2-field struct reads OUT OF BOUNDS on both backends
-/// (C and LLVM). Root of the `Set[int]` garbage-index cell too — fixing at the
-/// operator closes every costume (Core #4). Asserts the INTENDED reject. TODO.md.
+/// Round XXIX Track A: `[]` was ungated on the `Index` trait — indexing a
+/// struct that equipped no indexing trait was silently accepted and lowered as
+/// an unchecked raw offset read (`p[5]` on a 2-field struct reads OUT OF
+/// BOUNDS on both backends). Root of the `Set[int]` garbage-index cell too —
+/// fixing at the operator closes every costume (Core #4). Now check-time
+/// rejects with `E_NotIndexable` naming the missing `Index[K,V]` impl.
 #[test]
-#[ignore = "KNOWN GAP: `[]` is not gated on the Index trait — indexing a non-indexable \
-struct is accepted and lowered as an unchecked raw offset read (p[5] reads out of bounds, \
-both backends); should reject at check time naming the missing Index impl; TODO.md."]
 fn index_ungated_by_index_trait() {
-    check_gg_fails("known_gaps/index_ungated_by_index_trait.gg", "error[E_");
+    check_gg_fails("index_ungated_by_index_trait.gg", "error[E_NotIndexable]");
+}
+
+/// Round XXIX Track A sibling: HashSet[T]. `HashSet` and `Set` are separate
+/// collection kinds (`CollectionKind::Set` vs `CollectionKind::OrderedSet`);
+/// pinning both cells guards against a future arm that re-adds only ONE.
+#[test]
+fn index_reject_hashset() {
+    check_gg_fails("index_reject_hashset.gg", "error[E_NotIndexable]");
+}
+
+/// Round XXIX Track A sibling: `Tuple` has no `Index` impl — dot-N access
+/// (`t.0`, `t.1`) is the ratified syntax (D39). Anonymous type: the arm's
+/// `type_key_for_trait_lookup == None` branch describes and rejects.
+#[test]
+fn index_reject_tuple() {
+    check_gg_fails("index_reject_tuple.gg", "error[E_NotIndexable]");
+}
+
+/// Round XXIX Track A sibling: `Option[T]` unwraps via `match` / `??` /
+/// `is Some(x)`, not `[]`.
+#[test]
+fn index_reject_option() {
+    check_gg_fails("index_reject_option.gg", "error[E_NotIndexable]");
+}
+
+/// Round XXIX Track A sibling: primitive `int` is a scalar — indexing is
+/// nonsensical; `is_indexable_intrinsic("int") == false`.
+#[test]
+fn index_reject_int() {
+    check_gg_fails("index_reject_int.gg", "error[E_NotIndexable]");
+}
+
+/// Round XXIX Track A sibling: enum values are pattern-matched, not indexed.
+#[test]
+fn index_reject_enum() {
+    check_gg_fails("index_reject_enum.gg", "error[E_NotIndexable]");
+}
+
+/// Round XXIX Track A: `g[0] = v` on a user type that equips ONLY
+/// `Index[K,V]` (no `IndexMut`) rejects at check-time with `E_NotIndexableMut`.
+/// Pre-fix: `gg check` returned OK and IR-lowering PANICKED at
+/// `assigns.rs:1475` ("BUG: index-assign found no setter … typecheck
+/// accepted an index-assign the lowering cannot dispatch"). The compiler's
+/// own error message named the fix site: check-time. Post-fix, the panic
+/// is `unreachable!(...)` — future check-site regressions ICE in debug.
+#[test]
+fn index_reject_grid_no_indexmut() {
+    check_gg_fails(
+        "index_reject_grid_no_indexmut.gg",
+        "error[E_NotIndexableMut]",
+    );
+}
+
+/// Round XXIX Track A: the "accidentally-green" cell (Core #15e Q6). At
+/// HEAD, `String s = g[0]` on Grid (which equips `Index[int, int]`) was
+/// accepted with `s` receiving the raw int bits reinterpreted as a
+/// String — a silent miscompile, because the check-arm returned
+/// `error_id` which unifies with any type. Post-fix, the arm resolves
+/// the element type from the impl's `trait_generic_args` (V = int) and
+/// this becomes `E_TypeMismatch`.
+#[test]
+fn index_string_from_grid_accidentally_green() {
+    check_gg_fails(
+        "index_string_from_grid_accidentally_green.gg",
+        "error[E_TypeMismatch]",
+    );
+}
+
+/// Round XXIX Track A Wave 2 POSITIVE-CONTROL CANARY: `for x in Set[int]:`
+/// stays green. The ggdef elaborate-layer reject on `Ty::Set` at
+/// `Expr::Index` is scoped to USER `[]` — `desugar_for` synthesizes an
+/// `Expr::Index(coll, __i)` for the `for`-over-Set body and that MUST NOT
+/// be caught. A future contributor moving the reject from elaborate to
+/// eval (or widening it to any `Expr::Index` node) will RED this fixture.
+#[test]
+fn ggdef_for_in_set_positive() {
+    run_gg("ggdef_for_in_set_positive.gg", "6");
 }
 
 /// `.iter().enumerate()` over a Set panics lir-lowering ("field index 2 out of
@@ -38388,15 +38463,14 @@ fn sound_tupstruct_field_writethrough() {
     run_gg("sound_tupstruct_field_writethrough.gg", "11\n42");
 }
 
-/// KNOWN GAP — indexing a `Set[T]` emits a raw ADDRESS. No `&` involved.
-/// `gg check` clean, builds, prints a pointer where an element was asked for.
-/// Asserts the intended CHECK-TIME REJECT: a Set has no positional index, so
-/// there is no defensible element to return.
+/// Round XXIX Track A: `s[0]` on a `Set[T]` previously emitted a raw address.
+/// D38 ratifies that a Set has no lookup key, so there is no defensible
+/// element to return. Now check-time rejects with `E_NotIndexable` via the
+/// same `Index[K,V]`-registry gate that closes the Pair / Tuple / Option
+/// costumes.
 #[test]
-#[ignore = "KNOWN GAP: `s[0]` on a Set passes `gg check` and prints a raw address. Asserts the \
-INTENDED rejection; TODO.md."]
 fn set_index_returns_garbage_rejected() {
-    check_gg_fails("known_gaps/set_index_returns_garbage.gg", "error[E_");
+    check_gg_fails("set_index_returns_garbage.gg", "error[E_NotIndexable]");
 }
 
 /// Round XXVII Track D: `Set[T].enumerate()` in a `for` loop is a
@@ -38426,20 +38500,14 @@ fn hashset_enumerate_rejects_at_check() {
     );
 }
 
-/// KNOWN GAP + DESIGN DECISION — ggdef/language divergence on `s[i]` over a
-/// Set. Filed by Round XXIV Track E scout Finding #3. Three lanes disagree:
-/// ggdef (`spec/ggdef/src/eval.rs:944-948`) accepts + returns the
-/// insertion-ordered element; Rust gg (C+LLVM) + SH silently accept and
-/// return garbage (already pinned by `set_index_returns_garbage.gg`).
-/// Language design intent per filed TODO is REJECT — DESIGN DECISION owed
-/// to owner (Core #8: ≥1 bug on one of the two — either the ggdef spec
-/// accept is a defect or Rust/SH silent-garbage is the defect). The fixture
-/// asserts the INTENDED reject; flip when the owner rules.
+/// Round XXIX Track A: 3-lane divergence on `s[i]` over a Set — Rust gg,
+/// SH, and the ggdef spec disagreed. Owner ratified D38: `[]` on a Set has
+/// no lookup key, so `s[0]` REJECTS. Rust/SH reject via the trait-registry
+/// gate on `Expr::Index` (this test); ggdef rejects at the elaborate layer
+/// on `Ty::Set` (same round, `spec/ggdef/src/elaborate/mod.rs`).
 #[test]
-#[ignore = "KNOWN GAP + DESIGN DECISION: ggdef accepts set[i] + returns ordered elem, Rust/SH \
-silently accept + return garbage. Asserts INTENDED reject; TODO.md."]
 fn set_index_ggdef_divergence() {
-    check_gg_fails("known_gaps/set_index_ggdef_divergence.gg", "error[E_");
+    check_gg_fails("set_index_ggdef_divergence.gg", "error[E_NotIndexable]");
 }
 
 /// KNOWN GAP — `&`-capture exclusivity is SCOPE-based in production, while the

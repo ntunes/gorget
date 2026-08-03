@@ -1,0 +1,38 @@
+# Round XXIX Track A: `g[0] = v` on a receiver that equips ONLY
+# `Index[K,V]` (no `IndexMut`) rejects at check-time with `E_NotIndexableMut`.
+#
+# Grid equips `Index[int,int]` for read (`g[0]` accepts, returns int). The
+# WRITE side requires `IndexMut[int,int]` — Grid does not equip it, so
+# `g[0] = 99` must reject.
+#
+# Pre-fix (measured at HEAD before this round): `gg check` returned
+# "OK: no semantic errors" and IR-lowering PANICKED at
+# `src/ir/lowering/stmts/assigns.rs:1475` with
+#   "BUG: index-assign on `Grid` found no setter (tried
+#    [Grid__set, IndexMut_for_Grid__set, Grid____setitem__]) —
+#    typecheck accepted an index-assign the lowering cannot dispatch"
+# The compiler's own error message named the fix site: check-time.
+#
+# Post-fix: `E_NotIndexableMut` on the assign; lowering never sees it.
+# The panic at assigns.rs:1475 is now `unreachable!(...)` — future
+# check-site regressions ICE at compile time in debug builds.
+#
+# ⚠ Probe discipline: the assign is a bare statement (not inside an
+# f-string), so the reject is observable.
+struct Grid:
+    int a
+    int b
+
+equip Grid with Index[int, int]:
+    int get(self, int key):
+        if key == 0:
+            return self.a
+        elif key == 1:
+            return self.b
+        else:
+            return 0
+
+int main():
+    Grid g = Grid(1, 2)
+    g[0] = 99
+    return 0

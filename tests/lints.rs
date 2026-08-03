@@ -696,7 +696,14 @@ fn count_container_literal_arms() -> usize {
 /// `E` via `auto_prop_error_gate(e, span)` — exactly the sanctioned bump case.
 #[test]
 fn snag11_auto_prop_gate_site_count() {
-    const EXPECTED_SKIPS_UNIFY: usize = 14;
+    // Round XXIX Track A (2026-08-03): 14 → 12. The `Expr::Index` arm
+    // rewrite consolidated three separate `auto_prop_skips_unify` calls
+    // (one per String / Vector / Dict-HashMap branch) into ONE call at
+    // the arm exit that covers every builtin AND user Index impl —
+    // functionally equivalent E-checking, fewer duplicate call sites.
+    // The choke point is preserved (unify runs only when the shared
+    // gate allows it); the count drop reflects the code consolidation.
+    const EXPECTED_SKIPS_UNIFY: usize = 12;
     const EXPECTED_ROUTE_A_GATE: usize = 2;
 
     let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
@@ -1002,6 +1009,89 @@ fn container_literal_arms_count() {
          `is_collection_assignment` permissiveness coerces), document the \
          exception in the bump comment.\n\n\
          If an arm was removed, lower EXPECTED in tests/lints.rs.",
+    );
+}
+
+/// Round XXIX Track A class-retirement guard (Core #6): the `Expr::Index`
+/// arm in `src/semantic/typecheck.rs` unified the two parallel `[]`
+/// decision paths (hardcoded kind gate + `Index`/`IndexMut` trait
+/// dispatch) into a SINGLE semantic gate through the trait registry
+/// (`has_trait_impl_by_name`). All dispatch on concrete builtin K/V
+/// shapes lives in ONE `match type_name.as_str() { … }` site inside the
+/// arm — the intentional "how to compute (K, V) from an
+/// intrinsic-satisfying receiver" arm.
+///
+/// This lint pins the number of `.as_str()`-driven type-name gates
+/// inside the `Expr::Index` arm to exactly ONE. Any future ad-hoc
+/// `if type_name == "MyType"` or `matches!(type_name.as_str(), "X"|"Y")`
+/// at that site trips the count — the exact regression shape the
+/// unification retired.
+///
+/// **If this fails**: the arm re-grew a name-match. Either
+///   1. Fold the new case into the existing single dispatch site (add
+///      to the `"Vector" | "Deque" | ...` etc. arms), or
+///   2. If a legitimate second dispatch axis appears, bump EXPECTED
+///      deliberately with a comment naming the invariant it guards.
+///
+/// See `docs/devbook/24-layering-discipline.md` Rule 3 (one source of
+/// truth per axis) — the trait registry is the axis for `[]`.
+fn count_index_arm_type_name_gates() -> usize {
+    let content = match fs::read_to_string("src/semantic/typecheck.rs") {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    // Scope to the `Expr::Index { object, index }` arm.
+    let mut in_arm = false;
+    let mut depth = 0i32;
+    let mut count = 0;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if trimmed.starts_with("Expr::Index { object, index }") {
+            in_arm = true;
+            depth = 0;
+            continue;
+        }
+        if !in_arm {
+            continue;
+        }
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+        // Count `.as_str()` uses inside the arm (proxy for name-match
+        // decisions). The single legitimate site is the K/V dispatch
+        // `match type_name.as_str() { "Vector" | "Deque" => ... }`.
+        if trimmed.contains(".as_str()") {
+            count += 1;
+        }
+        if depth < 0 {
+            in_arm = false;
+        }
+    }
+    count
+}
+
+#[test]
+fn index_arm_type_name_gates_count() {
+    /// Baseline 2026-08-03 (Round XXIX Track A close): 1 site — the
+    /// single `match type_name.as_str() { "Vector" | "Deque" | ... }`
+    /// dispatch that computes (K, V) from a builtin receiver.
+    const EXPECTED: usize = 1;
+    let count = count_index_arm_type_name_gates();
+    assert_eq!(
+        count, EXPECTED,
+        "Type-name gate count in the `Expr::Index` arm changed: {count} vs \
+         expected {EXPECTED}.\n\n\
+         Round XXIX Track A unified the two parallel `[]` decision paths \
+         (kind gate + trait dispatch) into ONE `has_trait_impl_by_name` \
+         gate, with ONE `match type_name.as_str() {{ ... }}` dispatch site \
+         for K/V shape. A new `.as_str()`-driven name-match at this arm \
+         is exactly the class the unification retired (Layering rule 3, \
+         one source of truth per axis).\n\n\
+         Fold new cases into the existing dispatch arm (add to \
+         `\"Vector\" | \"Deque\" | ...`), OR bump EXPECTED with a \
+         comment naming the invariant the new axis guards.",
     );
 }
 

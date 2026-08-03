@@ -1,0 +1,23 @@
+# Round XXIX Track A Wave 2: POSITIVE-CONTROL CANARY. `for x in Set[int]:`
+# must STAY GREEN after the ggdef elaborate-layer `Ty::Set` reject on
+# `Expr::Index` (see `spec/ggdef/src/elaborate/mod.rs::ast::Expr::Index`).
+#
+# Reason this canary exists: `spec/ggdef/src/elaborate/mod.rs::desugar_for`
+# synthesizes an `Expr::Index(coll_local, idx_local)` for `for x in someSet:`,
+# so an incorrect eval-layer reject would break this case (Core #15(e) Q4 —
+# rule subject is USER `[]`, not any elaborated `Expr::Index`). Elaborate is
+# the right layer because it sees the AST distinction; eval sees only
+# `Proj::Index` after desugar and cannot tell them apart.
+#
+# A future contributor tempted to move the reject from elaborate to eval will
+# RED this fixture — the intended failure mode.
+int main():
+    Set[int] s = Set[int]()
+    s.add(1)
+    s.add(2)
+    s.add(3)
+    int total = 0
+    for x in s:
+        total = total + x
+    print(total)
+    return 0

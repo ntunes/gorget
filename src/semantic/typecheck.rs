@@ -3649,6 +3649,19 @@ impl<'a> TypeChecker<'a> {
             }
 
             Expr::Index { object, index } => {
+                // Round XXIX Track A: `[]` is a SINGLE-SOURCE-OF-TRUTH gate on
+                // the `Index[K,V]` trait (Layering rule 3). Prior to this
+                // rewrite two parallel decision paths (hardcoded kind gate at
+                // `src/ir/lowering/exprs/mod.rs:2984` and the trait dispatch
+                // at `src/semantic/traits.rs:754`) left non-indexable receivers
+                // — plain structs, Set, Tuple, Option, primitive int, enum —
+                // falling through to an unchecked raw offset READ at both
+                // backends. The trait registry query below (`has_trait_impl_by_name`)
+                // is the sole semantic gate; builtins (Vector/Deque/Dict/HashMap/
+                // String) satisfy `Index` intrinsically via the pattern in
+                // `traits.rs::is_indexable_intrinsic` (same shape as
+                // `is_numeric_primitive` / `is_hashable_primitive`).
+                //
                 // A generic type application in a type-ref chain
                 // (`SparseSet[Health].new()` — the Index is the receiver of a
                 // static method call) must let BOTH its object AND its type-arg
@@ -3660,70 +3673,113 @@ impl<'a> TypeChecker<'a> {
                 self.type_name_position_ok = type_name_position_ok;
                 let index_type = self.infer_expr(index);
                 let resolved_obj = self.resolve_type(object_type);
-                // Snag #49 family: a `throws`-fn call returning `Result[K, E]`
-                // in index position should auto-propagate to the index type
-                // (str[int], Vector[T][int], Dict[K,V][K]) when the enclosing
-                // function can propagate. Skip the strict unify in that case
-                // so IR-lowering's centralized auto-prop hook handles the
-                // unwrap.
-                // Snag #11: the index-position auto-prop now routes through the
-                // shared E-checked gate (was a `&Self` closure; the gate needs
-                // `&mut self` to record/emit). Keyed on the index expr span —
-                // the producing call when `obj[throws_call()]` propagates.
-                // str[int] → str (codepoint view), str[Range] → str (codepoint range)
-                if resolved_obj == self.types.string_id {
-                    if matches!(&index.node, Expr::Range { .. }) {
-                        // Range bounds already inferred recursively
-                        self.types.string_id
-                    } else {
-                        if !self.auto_prop_skips_unify(self.types.int_id, index_type, index.span) {
-                            self.unify(index_type, self.types.int_id, expr.span);
-                        }
-                        self.types.string_id
+
+                // Silence cascading errors on inference variables / prior
+                // errors / divergent (`throw`/`return`) — matches the
+                // `UnwrapOnNonOptional` / `DefaultOp` suppression pattern.
+                if matches!(
+                    self.types.get(resolved_obj),
+                    ResolvedType::Var(_) | ResolvedType::Error | ResolvedType::Never
+                ) {
+                    return self.types.error_id;
+                }
+
+                let is_range_index = matches!(&index.node, Expr::Range { .. });
+
+                // Preserve the container-slice branches for the two receivers
+                // where `x[a..b]` returns the CONTAINER type (not the element):
+                // `v[a..b]` on Vector and `s[a..b]` on String. All other
+                // Index-implementing receivers fall through to the scalar-K
+                // unify below; a `Range` index against a scalar K trips
+                // `E_TypeMismatch`, which is the correct signal.
+                let obj_name = self.type_key_for_trait_lookup(resolved_obj);
+                if is_range_index {
+                    if resolved_obj == self.types.string_id {
+                        return self.types.string_id;
                     }
-                } else {
-                    // Check for Vector[T] indexing/slicing
-                    let vec_info = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved_obj) {
-                        let name = self.scopes.get_def(*def_id).name.clone();
-                        if matches!(name.as_str(), "Vector") {
-                            Some(args.first().copied().unwrap_or(self.types.int_id))
-                        } else {
-                            None
-                        }
+                    if obj_name.as_deref() == Some("Vector") {
+                        return resolved_obj;
+                    }
+                }
+
+                // Anonymous types with no registry key (Tuple, closure,
+                // function type) — reject by describe. `type_key_for_trait_lookup`
+                // returns `None` for these.
+                let Some(type_name) = obj_name else {
+                    let type_ = self.describe_resolved_type(resolved_obj);
+                    self.error(SemanticErrorKind::NotIndexable { type_ }, expr.span);
+                    return self.types.error_id;
+                };
+
+                // SINGLE SEMANTIC GATE: `[]` requires an `Index[K,V]` impl.
+                // Vector/Deque/Dict/HashMap/String satisfy intrinsically
+                // (`is_indexable_intrinsic`); user types via `equip T with
+                // Index[K,V]`. Set/HashSet/Tuple/plain struct/enum/primitive
+                // int all fail here — the ungated-`[]` memory-unsafety class.
+                if !self.traits.has_trait_impl_by_name(&type_name, "Index") {
+                    self.error(
+                        SemanticErrorKind::NotIndexable { type_: type_name.clone() },
+                        expr.span,
+                    );
+                    return self.types.error_id;
+                }
+
+                // Impl exists. Snag #49 family: a `throws`-fn call returning
+                // `Result[K, E]` in index position should auto-propagate to
+                // the index type (`str[int]`, `Vector[T][int]`, `Dict[K,V][K]`)
+                // when the enclosing function can propagate. Skip the strict
+                // unify in that case so IR-lowering's centralized auto-prop
+                // hook handles the unwrap (Snag #11: the index-position
+                // auto-prop now routes through the shared E-checked gate).
+                //
+                // Compute (K, V) — SINGLE dispatch site on `type_name`. The
+                // arm-count lint (`tests/lints.rs::index_arm_type_name_gates_count`)
+                // pins this to exactly one `.as_str()` occurrence so a
+                // future ad-hoc `if type_name == "Foo"` gate trips the count
+                // (Core #6). Element extraction is uniform: Generic-shape
+                // (Vector/Deque/Dict/HashMap) reads `args[0]` / `args[1]`;
+                // Array-shape (`ResolvedType::Array(elem, _)`) reads the
+                // fixed-size elem; String is a leaf.
+                let generic_args: Option<Vec<TypeId>> =
+                    if let ResolvedType::Generic(_, args) = self.types.get(resolved_obj) {
+                        Some(args.clone())
                     } else {
                         None
                     };
-                    if let Some(elem_tid) = vec_info {
-                        if matches!(&index.node, Expr::Range { .. }) {
-                            resolved_obj
-                        } else {
-                            if !self.auto_prop_skips_unify(self.types.int_id, index_type, index.span) {
-                                self.unify(index_type, self.types.int_id, expr.span);
-                            }
-                            elem_tid
-                        }
+                let array_elem: Option<TypeId> =
+                    if let ResolvedType::Array(elem, _) = self.types.get(resolved_obj) {
+                        Some(*elem)
                     } else {
-                        // Check for Dict[K,V] / HashMap[K,V] indexing
-                        let map_info = if let ResolvedType::Generic(def_id, args) = self.types.get(resolved_obj) {
-                            let name = self.scopes.get_def(*def_id).name.clone();
-                            if matches!(name.as_str(), "Dict" | "HashMap") && args.len() >= 2 {
-                                Some((args[0], args[1]))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        if let Some((key_tid, val_tid)) = map_info {
-                            if !self.auto_prop_skips_unify(key_tid, index_type, index.span) {
-                                self.unify(index_type, key_tid, index.span);
-                            }
-                            val_tid
-                        } else {
-                            self.types.error_id
-                        }
+                        None
+                    };
+                let (key_tid, val_tid) = match type_name.as_str() {
+                    "Vector" | "Deque" | "Array" => {
+                        let elem = generic_args
+                            .as_ref()
+                            .and_then(|a| a.first().copied())
+                            .or(array_elem)
+                            .unwrap_or(self.types.error_id);
+                        (self.types.int_id, elem)
                     }
+                    "Dict" | "HashMap" => {
+                        let a = generic_args.as_ref();
+                        let k = a
+                            .and_then(|a| a.first().copied())
+                            .unwrap_or(self.types.error_id);
+                        let v = a
+                            .and_then(|a| a.get(1).copied())
+                            .unwrap_or(self.types.error_id);
+                        (k, v)
+                    }
+                    "String" => (self.types.int_id, self.types.string_id),
+                    _ => self
+                        .user_index_key_value(&type_name, expr.span)
+                        .unwrap_or((self.types.error_id, self.types.error_id)),
+                };
+                if !self.auto_prop_skips_unify(key_tid, index_type, index.span) {
+                    self.unify(index_type, key_tid, index.span);
                 }
+                val_tid
             }
 
             Expr::Range { start, end, .. } => {
@@ -4810,6 +4866,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 self.check_assign_target_lvalue(target);
                 self.check_string_index_assign(target);
+                self.check_index_mut_assign(target);
                 let target_type = self.infer_expr(target);
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = Some(target_type);
@@ -4830,6 +4887,7 @@ impl<'a> TypeChecker<'a> {
             Stmt::CompoundAssign { target, value, op } => {
                 self.check_assign_target_lvalue(target);
                 self.check_string_index_assign(target);
+                self.check_index_mut_assign(target);
                 let target_type = self.infer_expr(target);
                 let prev_hint = self.decl_type_hint;
                 self.decl_type_hint = Some(target_type);
@@ -5984,6 +6042,71 @@ impl<'a> TypeChecker<'a> {
                 self.error(SemanticErrorKind::StringIndexAssign, target.span);
             }
         }
+    }
+
+    /// Round XXIX Track A: an assign-target `x[k] = v` requires the
+    /// receiver to implement `IndexMut[K,V]`. Fires **only** when `Index`
+    /// is present but `IndexMut` is missing (read-only user impls like
+    /// `equip Grid with Index[int, int]`) so we get the more specific
+    /// `E_NotIndexableMut` message. A receiver that lacks `Index`
+    /// altogether (`Pair`, `Set[int]`, `Tuple`, plain enum, primitive
+    /// `int`) is handled by the read-side `E_NotIndexable` reject in the
+    /// `Expr::Index` arm — that message is more actionable.
+    ///
+    /// String is skipped here — `check_string_index_assign` already
+    /// emits the more specific `E_StringIndexAssign`.
+    fn check_index_mut_assign(&mut self, target: &Spanned<Expr>) {
+        let Expr::Index { object, .. } = &target.node else {
+            return;
+        };
+        let obj_type = self.infer_expr(object);
+        let resolved = self.resolve_type(obj_type);
+        // Silence cascade — matches the `Expr::Index` arm's suppression.
+        if matches!(
+            self.types.get(resolved),
+            ResolvedType::Var(_) | ResolvedType::Error | ResolvedType::Never
+        ) {
+            return;
+        }
+        let Some(type_name) = self.type_key_for_trait_lookup(resolved) else {
+            return; // read-side NotIndexable will fire on anonymous type
+        };
+        if type_name == "String" {
+            return; // E_StringIndexAssign already covers this
+        }
+        // Only surface NotIndexableMut when the read side accepts (Index
+        // present) but the write side does not (IndexMut missing).
+        if self.traits.has_trait_impl_by_name(&type_name, "Index")
+            && !self.traits.has_trait_impl_by_name(&type_name, "IndexMut")
+        {
+            self.error(
+                SemanticErrorKind::NotIndexableMut { type_: type_name },
+                target.span,
+            );
+        }
+    }
+
+    /// Round XXIX Track A: resolve `(K, V)` from a user `equip T with
+    /// Index[K, V]` impl. Concrete impls (`equip Grid with Index[int,
+    /// int]`) resolve exactly; a generic impl (`equip [T] S[T] with
+    /// Index[int, T]`) resolves the free parameter to `error_id` (empty
+    /// substitution), matching the pre-fix behavior for user impls
+    /// (error_id unifies with anything — safe, not more permissive).
+    /// Full impl-generic substitution is orthogonal to the safety fix
+    /// and lives in the method-dispatch path
+    /// (`substitute_default_method_sig` at :7199+).
+    fn user_index_key_value(&mut self, type_name: &str, span: Span) -> Option<(TypeId, TypeId)> {
+        let args: Vec<Type> = self
+            .traits
+            .trait_generic_args_by_name(type_name, "Index")
+            .to_vec();
+        if args.len() < 2 {
+            return None;
+        }
+        let subst: FxHashMap<String, TypeId> = FxHashMap::default();
+        let k_tid = self.resolve_ast_type_with_subst(&args[0], span, &subst);
+        let v_tid = self.resolve_ast_type_with_subst(&args[1], span, &subst);
+        Some((k_tid, v_tid))
     }
 
     /// Bare def / primitive name used by the trait registry's

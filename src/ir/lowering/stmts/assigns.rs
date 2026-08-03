@@ -1472,10 +1472,20 @@ pub(super) fn lower_index_assign(
             // setter reaching this point means typecheck and lowering
             // disagree — dropping the write silently was how
             // `s[0] = "x"` compiled as a no-op.
-            panic!(
-                "BUG: index-assign on `{type_name}` found no setter \
-                 (tried {candidates:?}) — typecheck accepted an \
-                 index-assign the lowering cannot dispatch"
+            //
+            // Round XXIX Track A: with the check-site `Expr::Index` arm
+            // now gating on `has_trait_impl_by_name(type, "IndexMut")`
+            // (`src/semantic/typecheck.rs::check_index_mut_assign`), a
+            // receiver reaching this fall-through has already been
+            // rejected with `E_NotIndexableMut` upstream — lowering is
+            // never invoked on error-tainted input, so this arm is
+            // unreachable in practice. The `unreachable!` locks the
+            // invariant: any future check-site regression trips at
+            // compile-time in debug and shows as a clean ICE in release.
+            unreachable!(
+                "typecheck must reject non-IndexMut receivers before lowering \
+                 (E_NotIndexableMut): index-assign on `{type_name}` reached the \
+                 setter-dispatch fall-through (tried {candidates:?})"
             );
         }
     }

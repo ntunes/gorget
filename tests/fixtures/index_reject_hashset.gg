@@ -1,0 +1,15 @@
+# Round XXIX Track A: `s[0]` on a `HashSet[T]` REJECTS at check-time with
+# `E_NotIndexable`. Sibling of `set_index_returns_garbage.gg` — Set and
+# HashSet are separate collection kinds (`CollectionKind::OrderedSet` vs
+# `CollectionKind::Set`), pinning both cells guards against a future arm
+# that re-adds only ONE. D38 ratifies: no lookup key on a Set-family type.
+#
+# Pre-fix: silent-accept + garbage read (same class as Set[int]).
+# Post-fix: rejects with E_NotIndexable (HashSet is NOT in
+# `is_indexable_intrinsic`).
+int main():
+    HashSet[int] s = HashSet[int]()
+    s.add(42)
+    int x = s[0]
+    print(x)
+    return 0

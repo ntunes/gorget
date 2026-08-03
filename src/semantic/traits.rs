@@ -372,8 +372,26 @@ impl TraitRegistry {
         // Intrinsic satisfaction: all primitives (+ String) are Cloneable,
         // Displayable, and Debuggable. Cloning a POD is a copy; Display/Debug
         // route to runtime stringification helpers at IR lowering time.
-        is_copy_displayable_primitive(type_name)
+        if is_copy_displayable_primitive(type_name)
             && matches!(trait_name, "Cloneable" | "Displayable" | "Debuggable")
+        {
+            return true;
+        }
+        // Round XXIX Track A: Vector / Deque / Dict / HashMap / String
+        // satisfy `Index` intrinsically (String excluded from `IndexMut` —
+        // strings are read-only, caught separately by `E_StringIndexAssign`).
+        // Same pattern as numeric / hashable above; the check-site at
+        // `typecheck.rs::Expr::Index` queries the registry via this method
+        // and now becomes the single source of truth for `[]` (Layering
+        // rule 3). Sets / HashSets DELIBERATELY EXCLUDED (D38 — no lookup
+        // key). See `is_indexable_intrinsic` for the rationale.
+        if is_indexable_intrinsic(type_name) && trait_name == "Index" {
+            return true;
+        }
+        if is_indexable_mut_intrinsic(type_name) && trait_name == "IndexMut" {
+            return true;
+        }
+        false
     }
 
     /// Get the trait's generic AST type args for a specific trait impl on a type (by name).
@@ -455,6 +473,39 @@ fn is_hashable_trait(name: &str) -> bool {
 /// intrinsically (no derive needed).
 fn is_copy_displayable_primitive(name: &str) -> bool {
     is_numeric_primitive(name) || matches!(name, "str" | "bool" | "char" | "String")
+}
+
+/// Round XXIX Track A. Builtins that satisfy `Index[K,V]` intrinsically —
+/// UNMANGLED def-name keys, matching `type_key_for_trait_lookup`
+/// (`src/semantic/typecheck.rs:5994-6013`) and the existing intrinsic
+/// pattern for `is_numeric_primitive` / `is_hashable_primitive`.
+///
+/// `Deque` uses `CollectionKind::Array` and shares `VECTOR.methods` verbatim
+/// (`src/ir/lowering/builtins.rs:429-442`); it MUST be here or 4+ live
+/// Deque `d[i]` fixtures regress
+/// (`tests/integration.rs::deque_multifield_struct_push_read` /
+/// `deque_multifield_struct_index_assign` / `deque_multifield_struct_for_iter` /
+/// `deque_int_control` + `sound_amp_deque_element_field.gg`).
+///
+/// `Array` is `ResolvedType::Array(elem, size)` — the fixed-size array shape
+/// backing an array literal like `[[1,2],[3,4]]` (see `auto_nested_int_index.gg`
+/// and the spec_conformance corpus). `type_key_for_trait_lookup` returns
+/// `"Array"` for these (typecheck.rs:6008). Included in the intrinsic set
+/// because a live fixture exercises `v[0][1]` where `v` is a nested int
+/// array; without this the spec_conformance suite regressed pre-fix.
+///
+/// `Set` / `HashSet` DELIBERATELY EXCLUDED (D38 — no lookup key).
+fn is_indexable_intrinsic(name: &str) -> bool {
+    matches!(name, "Vector" | "Deque" | "Dict" | "HashMap" | "String" | "Array")
+}
+
+/// Sibling of `is_indexable_intrinsic` for `IndexMut`. String excluded —
+/// `s[i] = x` is caught separately by `E_StringIndexAssign` (strings are
+/// read-only codepoint views). `Array` included for parity with the read
+/// side — fixed-size arrays support `a[i] = v` where the lowering routes
+/// through the same array-element setter path as Vector.
+fn is_indexable_mut_intrinsic(name: &str) -> bool {
+    matches!(name, "Vector" | "Deque" | "Dict" | "HashMap" | "Array")
 }
 
 /// Build the trait and impl registry from the module.
