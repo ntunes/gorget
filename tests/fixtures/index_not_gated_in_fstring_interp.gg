@@ -1,8 +1,10 @@
-# KNOWN GAP — Round XXIX Track A RESIDUAL, MEMORY-UNSAFE, BOTH BACKENDS.
-# The `E_NotIndexable` gate does not cover F-STRING INTERPOLATION, so the
-# out-of-bounds read Track A retired everywhere else is still live here.
+# CLOSED — Round XXIX Track A residual (owner filing `17a3e342` 2026-08-03,
+# fix in follow-up chip). The `E_NotIndexable` gate now covers f-string
+# interpolation via the retention whitelist at `src/semantic/typecheck.rs`
+# (Expr::StringLiteral arm); ratcheted by
+# `tests/lints.rs::interp_error_retention_arms_count`.
 #
-# MEASURED AT HEAD (2026-08-03), post-`2edb9c06`:
+# HISTORICAL — MEASURED AT HEAD (2026-08-03), post-`2edb9c06` pre-residual-fix:
 #   int y = p[5]              -> error[E_NotIndexable]   (correctly rejected)
 #   int y = 0 + p[5]          -> error[E_NotIndexable]   (binop operand: ok)
 #   print(p[5])               -> error[E_NotIndexable]   (call arg: ok)

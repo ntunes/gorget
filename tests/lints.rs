@@ -10244,3 +10244,53 @@ fn equip_methods_for(type_name: &str) -> std::collections::BTreeSet<String> {
     }
     out
 }
+
+/// Round XXIX Track A residual guard (owner 2026-08-03 filing `17a3e342`).
+///
+/// The typecheck's f-string interpolation error filter at
+/// `src/semantic/typecheck.rs` (currently `:1352-1360`, in the
+/// `Expr::StringLiteral` arm) splits off ALL errors emitted while
+/// typechecking interpolation segments and retains ONLY a whitelist of
+/// error kinds. If a future gate emits a semantic error the user should
+/// see inside `f"{...}"`, it MUST be added to the whitelist or the error
+/// is silently swallowed and the defect ships — exactly what happened
+/// with `NotIndexable` post-Track-A (`print(f"{p[5]}")` accepted + OOB
+/// read on both backends until owner's residual filing).
+///
+/// This lint pins the WHITELIST arm count. Post-Track-A-residual-fix
+/// baseline: 5 arms (`NoMethodFound`, `MethodGenericInferenceFailed`,
+/// `UnwrapOnNonOptional`, `NotIndexable`, `NotIndexableMut`).
+///
+/// If the count changes, the contributor either (a) added a new gate
+/// whose error kind should also be preserved inside f-strings — add
+/// it here + bump this count — or (b) removed one; verify the removal
+/// is intentional + doesn't re-open a silent-swallow class.
+#[test]
+fn interp_error_retention_arms_count() {
+    let source = fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+    // Find the `Expr::StringLiteral` interp-error retention block by its
+    // load-bearing marker comment (added by Round XXIX Track A residual fix).
+    let marker = "ARM COUNT PINNED at tests/lints.rs::interp_error_retention_arms_count";
+    let start = source
+        .find(marker)
+        .expect("marker comment missing — did you delete the interp-error retention block?");
+    // The `matches!(...)` block follows within ~30 lines.
+    let scope = &source[start..start + 2000];
+    let matches_start = scope
+        .find("matches!(")
+        .expect("matches!(...) block not found after marker");
+    // Count the `SemanticErrorKind::` arms — each on its own line, joined by `|`.
+    let block_end = scope[matches_start..]
+        .find("))")
+        .expect("matches!(...) block not terminated");
+    let block = &scope[matches_start..matches_start + block_end];
+    let arm_count = block.matches("SemanticErrorKind::").count();
+    assert_eq!(
+        arm_count, 5,
+        "interp-error retention whitelist arm count changed ({arm_count} vs pinned 5). \
+         Add the new SemanticErrorKind arm here + bump the count if a new gate needs \
+         its error preserved inside `f\"{{...}}\"`. Removing an arm may re-open a \
+         silent-swallow class — see Round XXIX Track A residual `17a3e342`."
+    );
+}

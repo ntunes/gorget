@@ -1343,11 +1343,20 @@ impl<'a> TypeChecker<'a> {
                 // keeps `f"{abs(x)}"` green while surfacing `f"{s.str()}"`.
                 let interp_errs = self.errors.split_off(saved_err_len);
                 self.errors.extend(interp_errs.into_iter().filter(|e| {
+                    // ⚠ ARM COUNT PINNED at tests/lints.rs::interp_error_retention_arms_count.
+                    // If you add a new gate that emits a semantic error the user
+                    // should see inside `f"{...}"` too, ADD IT TO THIS WHITELIST
+                    // or the error is silently swallowed and the defect ships
+                    // (Round XXIX Track A residual: NotIndexable / NotIndexableMut
+                    // were missing here → `print(f"{p[5]}")` silent-accept + OOB
+                    // read on both backends until owner's `17a3e342` filing).
                     matches!(
                         e.kind,
                         SemanticErrorKind::NoMethodFound { .. }
                             | SemanticErrorKind::MethodGenericInferenceFailed { .. }
                             | SemanticErrorKind::UnwrapOnNonOptional { .. }
+                            | SemanticErrorKind::NotIndexable { .. }
+                            | SemanticErrorKind::NotIndexableMut { .. }
                     )
                 }));
                 for seg in &s.segments {

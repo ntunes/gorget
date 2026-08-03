@@ -4508,11 +4508,9 @@ fn index_ungated_by_index_trait() {
 /// `E_AmpInOperandPosition` reject needed both the main walker and the
 /// f-string interp walker (`check_expr.rs:349` + `:1592`). TODO.md.
 #[test]
-#[ignore = "KNOWN GAP (Track A residual): the Index gate misses f-string interpolation — \
-print(f\"{p[5]}\") is accepted and still reads out of bounds on both backends; TODO.md."]
 fn index_not_gated_in_fstring_interp() {
     check_gg_fails(
-        "known_gaps/index_not_gated_in_fstring_interp.gg",
+        "index_not_gated_in_fstring_interp.gg",
         "error[E_NotIndexable]",
     );
 }
