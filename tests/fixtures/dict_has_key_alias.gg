@@ -1,21 +1,15 @@
-# Round XXIX Track B — POS pin for the Dict.has_key / .contains_key
-# oracle-only aliases (they are NOT in DICT.methods at
-# src/ir/lowering/builtins.rs; only .has() / .contains() are). The
-# aliases live in the oracle at typecheck.rs and are whitelisted in
-# the ratchet via OK_ORACLE_ONLY. This fixture pins their continued
-# TYPE-CHECK resolution post-widening (the runtime alias-vs-canonical
-# discrepancy — has_key/contains_key print "0" instead of "true" — is
-# a pre-existing bug in the LIR alias routing at
-# src/lir/lower/calls.rs:364 and is filed as a follow-up separate
-# from this track's scope).
+# Round XXIX Track B POS pin (fold: Round XXIX close chip) — Dict.has_key /
+# .contains_key are now first-class protocol entries in DICT.methods at
+# src/ir/lowering/builtins.rs (mirroring the existing .has / .contains
+# aliases of gorget_map_contains). The pre-existing runtime "0" bug was
+# closed by adding the missing protocol entries — resolve_builtin_method_
+# return_type was returning None on aliases → UNIT_TYPE → call_void → C
+# emit dropped the return. Aliases now type + return correctly on both
+# backends.
 
 void main():
     Dict[String, int] m = {"a": 1, "b": 2}
-    # Compare .has (protocol method) vs .has_key (oracle alias): both
-    # resolve at type check. Runtime shape divergence is the pre-
-    # existing bug; the type resolution is what this track guards.
     print(m.has("a"))           # true
-    print(m.has_key("a"))       # pre-existing bug: prints "0"; the
-                                # POINT is it TYPES + LINKS.
+    print(m.has_key("a"))       # true (was "0" pre-fix)
     print(m.contains("b"))      # true
-    print(m.contains_key("b"))  # pre-existing bug: prints "0"
+    print(m.contains_key("b"))  # true (was "0" pre-fix)

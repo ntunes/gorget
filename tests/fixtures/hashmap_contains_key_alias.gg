@@ -1,13 +1,15 @@
-# Round XXIX Track B — POS pin for HashMap.contains_key / has_key
-# oracle-only aliases (mirrors dict_has_key_alias.gg — pre-existing
-# runtime bug printed as "0" for the aliases; the point is TYPE-
-# CHECK resolution post-widening).
+# Round XXIX Track B POS pin (fold: Round XXIX close chip) — HashMap
+# inherits DICT.methods at src/ir/lowering/builtins.rs, so the has_key/
+# contains_key protocol entries added for Dict cover HashMap too. The
+# pre-existing runtime "0" bug on HashMap aliases was closed by the same
+# fix (protocol entry → resolve_builtin_method_return_type → correct
+# ret_bool → call_tracked captures return).
 
 void main():
     HashMap[String, int] m = HashMap[String, int]()
     m.put("x", 10)
     m.put("y", 20)
     print(m.contains("x"))      # true (protocol method)
-    print(m.contains_key("x"))  # pre-existing bug: prints "0"; TYPES ok.
+    print(m.contains_key("x"))  # true (was "0" pre-fix)
     print(m.has("y"))           # true (protocol method)
-    print(m.has_key("y"))       # pre-existing bug: prints "0"; TYPES ok.
+    print(m.has_key("y"))       # true (was "0" pre-fix)

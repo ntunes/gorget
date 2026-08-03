@@ -41185,15 +41185,15 @@ fn set_items_ordinal() {
     run_gg("set_items_ordinal.gg", "3\n10\n20\n30");
 }
 
-// Only-in-oracle alias POS fixtures: verify has_key / contains_key
-// still TYPE-CHECK post-widening. The runtime alias-vs-canonical
-// discrepancy (aliases print "0" instead of "true") is a pre-existing
-// bug filed as a follow-up in TODO.md.
+// Round XXIX close chip: has_key / contains_key are now first-class
+// entries in DICT.methods (mirroring the existing has / contains aliases
+// of gorget_map_contains). The pre-existing "0" bug from Track B's filing
+// is closed; aliases now return the correct bool result on both backends.
 #[test]
 fn dict_has_key_alias() {
     run_gg(
         "dict_has_key_alias.gg",
-        "true\n0\ntrue\n0",
+        "true\ntrue\ntrue\ntrue",
     );
 }
 
@@ -41201,7 +41201,7 @@ fn dict_has_key_alias() {
 fn hashmap_contains_key_alias() {
     run_gg(
         "hashmap_contains_key_alias.gg",
-        "true\n0\ntrue\n0",
+        "true\ntrue\ntrue\ntrue",
     );
 }
 
