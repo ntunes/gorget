@@ -1,0 +1,9 @@
+# Round XXIX Track B NEG — silent-accept reject for HashSet. Pre-
+# fix, HashSet had ZERO equip blocks → same silent-accept-then-link-
+# fail as Deque/HashMap. Post-widened-gate: rejects.
+
+void main():
+    HashSet[int] s = HashSet[int]()
+    s.insert(1)
+    s.nonexistent_method(42)
+    print("unreachable")

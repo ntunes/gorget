@@ -1,0 +1,13 @@
+# Round XXIX Track B NEG — silent-accept CLASS reject for Vector.
+# Pre-fix (via `has_inherent_only_impls` returning FALSE because
+# Vector has `equip [T] Vector[T]: ...` trait impls at
+# lib/std/iter.gg): call passed `gg check` silently and failed at C
+# link-time as `implicit declaration of function
+# gorget_vector_nonexistent_method`.
+# Post-fix (widened gate treats every BuiltinTypeProtocol type as
+# authoritative): rejects at check time with E_NoMethodFound.
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    v.nonexistent_method(42)
+    print("unreachable")

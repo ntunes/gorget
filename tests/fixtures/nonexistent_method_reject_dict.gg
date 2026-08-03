@@ -1,0 +1,10 @@
+# Round XXIX Track B NEG — silent-accept reject for Dict. Pre-fix,
+# Dict has an equip block at lib/std/iter.gg:930 (keys_iter/
+# values_iter) that made `has_inherent_only_impls` return FALSE
+# (trait impls present). Silent-accept live: unknown methods link-
+# failed. Post-widened-gate: rejects at check time.
+
+void main():
+    Dict[String, int] m = {"a": 1}
+    m.nonexistent_method(42)
+    print("unreachable")

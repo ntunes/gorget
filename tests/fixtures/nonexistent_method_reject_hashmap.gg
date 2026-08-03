@@ -1,0 +1,8 @@
+# Round XXIX Track B NEG — silent-accept reject for HashMap. Pre-
+# fix, HashMap had ZERO equip blocks in lib/std → same silent-
+# accept-then-link-fail path as Deque. Post-widened-gate: rejects.
+
+void main():
+    HashMap[String, int] m = HashMap[String, int]()
+    m.nonexistent_method(42)
+    print("unreachable")

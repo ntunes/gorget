@@ -1,0 +1,10 @@
+# Round XXIX Track B NEG — silent-accept reject for Set. Pre-fix,
+# Set has multiple equip blocks (`equip [T] Set[T] with Iterable[T]`,
+# `equip [T] Set[T]:`, `equip [T] Set[T] with Drainable[T]`) so at
+# least one carries a trait_ → `has_inherent_only_impls` returned
+# FALSE → silent-accept live. Post-widened-gate: rejects.
+
+void main():
+    Set[int] s = {1, 2, 3}
+    s.nonexistent_method(42)
+    print("unreachable")

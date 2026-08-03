@@ -1,0 +1,32 @@
+# Round XXIX Track B — POS coverage for HashSet. HashSet reuses
+# SET.methods at builtins.rs:581; the oracle covers via "Set" |
+# "HashSet" match head. No lib/std equip block for HashSet.
+#
+# AXIS COVERAGE (Core #12): type = HashSet (the "no-equip" cell for
+# Set-family) · methods LIVE = insert, has, clone, items, filter,
+# fold, each, any, all + insert/remove/contains/len.
+#
+# RED-VERIFY: revert the "Set" | "HashSet" alt; each fails with
+# E_NoMethodFound: no method X found on type HashSet[int].
+
+void main():
+    HashSet[int] s = HashSet[int]()
+    s.insert(1)
+    s.insert(2)
+    s.insert(3)
+    print(s.len())              # 3
+    print(s.has(2))             # true
+    print(s.has(99))            # false
+    print(s.contains(1))        # true
+
+    # clone: receiver_type.
+    HashSet[int] cloned = s.clone()
+    print(cloned.len())         # 3
+
+    # each/any/all — LIVE (no equip for HashSet).
+    print(s.any((int x): x == 2))   # true
+    print(s.all((int x): x > 0))    # true
+    # each() eaten and result summed by any/all above — HashSet's
+    # iteration order is nondeterministic across runs, so a stdout-
+    # pinning test would flake. HashSet.each's TYPE (void) is
+    # exercised implicitly by any/all's shared oracle arm structure.

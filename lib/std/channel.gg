@@ -11,3 +11,8 @@ equip Channel:
     int capacity()
     bool is_closed()
     Option[T] recv_timeout(int ms)
+    # poll_recv(out): true iff a value was ready and moved into `out`.
+    # Registered in the CHANNEL protocol (`src/ir/lowering/builtins.rs`);
+    # this equip surfaces it at the semantic layer so the widened
+    # `has_inherent_only_impls` gate (Round XXIX Track B) accepts it.
+    bool poll_recv(T out)

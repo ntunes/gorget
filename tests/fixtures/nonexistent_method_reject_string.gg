@@ -1,0 +1,11 @@
+# Round XXIX Track B NEG — String is a PRIMITIVE at the semantic
+# layer (ResolvedType::Primitive), so `has_inherent_only_impls` never
+# runs for it (base_name = None at typecheck.rs:2749-2754). The
+# primitive-recv path emits E_NoMethodFound via its own reject. This
+# NEG fixture is a COMPLETENESS pin (Core #12 axis: string type cell)
+# — post-widening this path remains correct.
+
+void main():
+    String s = "hi"
+    s.nonexistent_method(42)
+    print("unreachable")

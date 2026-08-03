@@ -3,6 +3,6 @@ async int slow():
 
 async void main():
     Vector[int] v = [1, 2, 3]
-    String view = v.to_string()
+    String view = v.debug()
     int r = slow().await()
     print(view)

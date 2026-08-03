@@ -9700,3 +9700,547 @@ fn sh_reject_wrong_receiver_combinator_arms_count() {
          with it.",
     );
 }
+
+/// Round XXIX Track B — Core #6 executable guard for the METHOD SILENT-ACCEPT
+/// CLASS. `has_inherent_only_impls` at `src/semantic/traits.rs` was widened
+/// to treat every builtin `BuiltinTypeProtocol` type as authoritative — a
+/// method not in the protocol REJECTS with `E_NoMethodFound`. That widening
+/// is only safe when every protocol method is covered by one of three paths
+/// BEFORE the reject site fires (call resolution flow at
+/// `src/semantic/typecheck.rs:2652..2912`):
+///   1. Trait registry / equip block (`resolve_method` at :2652)
+///   2. `infer_closure_method_type` (:2807) — HOFs with closure args
+///   3. `builtin_method_type` (:2844) — the type-check oracle
+/// A protocol method with NO coverage regresses to `E_NoMethodFound` at every
+/// call site. This lint iterates ALL_PROTOCOLS at
+/// `src/ir/lowering/builtins.rs:1157-1165` and asserts, per protocol method:
+/// oracle arm OR closure-inference arm OR equip block registered for that
+/// specific method (via `equip <Type>:` / `equip [T] <Type>[T]:` in
+/// `lib/std/*.gg` with a matching method sig or extern-body).
+///
+/// The four Callable-family protocols carry empty `methods: &[]`; they go
+/// in `EMPTY_METHOD_PROTOCOLS` and skip the per-method check.
+///
+/// Whitelisted OK_ORACLE_ONLY methods are the user-facing aliases and
+/// intrinsic Option/Result methods that legitimately live only in the oracle
+/// (Option/Result `unwrap`-family; Dict/HashMap `has_key`/`contains_key`
+/// aliases). Adding a new alias requires bumping this whitelist.
+///
+/// **If this fails:**
+///   - A new protocol was added to `ALL_PROTOCOLS` without wiring its
+///     method surface → EITHER add oracle arms in `builtin_method_type`,
+///     OR (for HOFs) closure-inference arms in `infer_closure_method_type`,
+///     OR add a `equip <Type>:` block in `lib/std/*.gg` covering every
+///     method the protocol declares.
+///   - A protocol gained a NEW method → ensure it's covered by one of the
+///     three paths above.
+///   - A method is oracle-only (an alias with no protocol counterpart) →
+///     add it to `OK_ORACLE_ONLY` with a rationale line.
+#[test]
+fn builtin_oracle_covers_every_protocol_method() {
+    let builtins_src = fs::read_to_string("src/ir/lowering/builtins.rs")
+        .expect("read src/ir/lowering/builtins.rs");
+    let oracle_src = fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+
+    // ── Empty-method protocols exempted from per-method check ─────────
+    // These four carry `methods: &[]` at HEAD (Callable-family + closure
+    // singleton) — the pass_trait_object mono paths handle them.
+    const EMPTY_METHOD_PROTOCOLS: &[&str] = &[
+        "Callable", "MutCallable", "ConsumeCallable", "GorgetClosure",
+    ];
+
+    // ── Oracle-only aliases (whitelisted; NOT in protocol) ────────────
+    // User-facing methods that live only in `builtin_method_type` because
+    // they are aliases of protocol methods (Dict/HashMap.has_key ↔ .has())
+    // or intrinsic Option/Result surface (unwrap-family).
+    const OK_ORACLE_ONLY: &[(&str, &str)] = &[
+        ("Dict", "has_key"),
+        ("Dict", "contains_key"),
+        ("HashMap", "has_key"),
+        ("HashMap", "contains_key"),
+        ("Option", "unwrap"),
+        ("Option", "expect"),
+        ("Result", "unwrap"),
+        ("Result", "expect"),
+        // Set/HashSet.add-vs-insert both live in the oracle; add is
+        // protocol-registered, insert alias-only in some readings but
+        // both are in SET.methods so no whitelist entry needed.
+    ];
+
+    // ── Extract ALL_PROTOCOLS list ────────────────────────────────────
+    // The `static ALL_PROTOCOLS: &[&BuiltinTypeProtocol] = &[...]` block
+    // enumerates every protocol via its Rust static name (VECTOR, DEQUE,
+    // ...). Grab everything inside `= &[` ... `];` and pull out `&NAME,`.
+    let all_start = builtins_src
+        .find("static ALL_PROTOCOLS: &[&BuiltinTypeProtocol] = &[")
+        .expect("locate ALL_PROTOCOLS in src/ir/lowering/builtins.rs");
+    let all_end = builtins_src[all_start..]
+        .find("];")
+        .expect("close ALL_PROTOCOLS block")
+        + all_start;
+    let all_block = &builtins_src[all_start..all_end];
+    let protocol_static_names: Vec<&str> = all_block
+        .split(&[',', ' ', '\n', '['][..])
+        .filter_map(|t| t.strip_prefix('&'))
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+        .collect();
+    assert_eq!(
+        protocol_static_names.len(), 30,
+        "ALL_PROTOCOLS length changed to {} — Round XXIX Track B ratchet \
+         calibrated to 30 protocols. If you added/removed a protocol, verify \
+         its method surface is covered per the three-path rule (oracle / \
+         closure-inference / equip block) and bump this count.",
+        protocol_static_names.len(),
+    );
+
+    // ── Per-protocol: extract base_name + methods list ───────────────
+    // For each `pub static <STATIC>: BuiltinTypeProtocol = ...` block,
+    // extract `base_name: "<Name>"` and the method names (each method
+    // decl has `BuiltinMethodDecl { name: "<method>", ... }`).
+    let mut failures: Vec<String> = Vec::new();
+
+    for static_name in &protocol_static_names {
+        let decl_marker = format!("pub static {static_name}: BuiltinTypeProtocol = BuiltinTypeProtocol {{");
+        let Some(start) = builtins_src.find(&decl_marker) else {
+            failures.push(format!(
+                "protocol `{static_name}` from ALL_PROTOCOLS not found via \
+                 `pub static {static_name}: BuiltinTypeProtocol = ...`"
+            ));
+            continue;
+        };
+        // End of the static: find the matching `};` at brace depth 0. Use a
+        // simple depth counter over `{` / `}` starting from the opening `{`.
+        let mut depth = 0i32;
+        let mut end = start;
+        for (i, c) in builtins_src[start..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + i + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let body = &builtins_src[start..end];
+
+        // base_name
+        let bn_start = body.find("base_name: \"").expect("base_name field") + "base_name: \"".len();
+        let bn_end = body[bn_start..].find('"').expect("base_name close");
+        let base_name = &body[bn_start..bn_start + bn_end];
+
+        // Methods that may be aliased to another protocol via
+        // `methods: VECTOR.methods` / `methods: DICT.methods` / etc.
+        // Resolve those to the source protocol's method list.
+        let source_body = if let Some(alias_start) = body.find("methods: ") {
+            let alias_line = &body[alias_start + "methods: ".len()..];
+            let alias_tok = alias_line.split(',').next().unwrap_or("").trim();
+            if alias_tok.ends_with(".methods") {
+                // Aliased — find the source protocol's decl and use its body.
+                let src_name = &alias_tok[..alias_tok.len() - ".methods".len()];
+                let src_decl = format!(
+                    "pub static {src_name}: BuiltinTypeProtocol = BuiltinTypeProtocol {{"
+                );
+                if let Some(src_start) = builtins_src.find(&src_decl) {
+                    let mut d = 0i32;
+                    let mut src_end = src_start;
+                    for (i, c) in builtins_src[src_start..].char_indices() {
+                        match c {
+                            '{' => d += 1,
+                            '}' => {
+                                d -= 1;
+                                if d == 0 {
+                                    src_end = src_start + i + 1;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    builtins_src[src_start..src_end].to_string()
+                } else {
+                    body.to_string()
+                }
+            } else {
+                body.to_string()
+            }
+        } else {
+            body.to_string()
+        };
+
+        // Extract methods: `BuiltinMethodDecl { name: "<name>", ...`
+        let mut methods: Vec<String> = Vec::new();
+        let mut rest = source_body.as_str();
+        while let Some(idx) = rest.find("BuiltinMethodDecl { name: \"") {
+            let after = &rest[idx + "BuiltinMethodDecl { name: \"".len()..];
+            let close = after.find('"').expect("method name close");
+            methods.push(after[..close].to_string());
+            rest = &after[close + 1..];
+        }
+        methods.sort();
+        methods.dedup();
+
+        if methods.is_empty() {
+            // Empty-method protocol — must be in EMPTY_METHOD_PROTOCOLS.
+            if !EMPTY_METHOD_PROTOCOLS.contains(&base_name) {
+                failures.push(format!(
+                    "protocol `{base_name}` has empty methods but is NOT in \
+                     EMPTY_METHOD_PROTOCOLS. Add it to the exempt list at \
+                     `tests/lints.rs::builtin_oracle_covers_every_protocol_method` \
+                     with rationale, or add its method surface to \
+                     `src/ir/lowering/builtins.rs`."
+                ));
+            }
+            continue;
+        }
+
+        // ── Coverage check: per method, one of three paths ────────
+        // 1. Oracle arm in `builtin_method_type`: the block matches on
+        //    `type_name.as_str()` with `"<Name>"` cases; for aliased
+        //    protocols (Deque/HashMap/HashSet), the arm may be under the
+        //    alias source's name (Vector/Dict/Set). Coverage means the
+        //    method string appears within any type arm that includes the
+        //    protocol's base_name OR the alias source's base_name.
+        // 2. `infer_closure_method_type`: `("<Name>", "<method>")` tuple
+        //    match in the outer `match (type_name.as_str(), method)`.
+        // 3. Equip block registration in `lib/std/*.gg`: rough
+        //    approximation — any `equip <Base>` (or `equip [T] <Base>[T]`)
+        //    block with a body line naming the method.
+        let alias_name_map: &[(&str, &str)] = &[
+            ("Deque", "Vector"),
+            ("HashMap", "Dict"),
+            ("HashSet", "Set"),
+            // GorgetString is the def-name for the String type in the
+            // semantic layer (`src/semantic/cycle_check.rs:69`); the oracle
+            // arm heading is `"str" | "String"`. Alias so the ratchet
+            // recognizes String-oracle coverage as satisfying GorgetString
+            // protocol methods. Primitive-String receivers can't reach
+            // the reject site anyway (base_name = None for
+            // ResolvedType::Primitive).
+            ("GorgetString", "String"),
+        ];
+        let alias_source = alias_name_map
+            .iter()
+            .find(|(a, _)| *a == base_name)
+            .map(|(_, s)| *s);
+
+        // Precompute equip-block method sets per protocol name (once per test).
+        // Simple regex-free approach: read every `lib/std/*.gg` line, track
+        // which `equip <Base>` (or `equip [gens] <Base>[gens]`) block we're
+        // in, and collect method names from `<ret> <method>(` lines and
+        // `extern <ret> <method>(...)` lines. Good enough for authoritative
+        // registration; false-negatives fail with a clear diagnostic.
+        let equip_methods = equip_methods_for(base_name);
+
+        for method in &methods {
+            if OK_ORACLE_ONLY.iter().any(|(t, m)| *t == base_name && *m == method) {
+                continue;
+            }
+
+            // Path 1: oracle arm (search under base_name AND alias source).
+            let oracle_hit = oracle_has_method(&oracle_src, base_name, method)
+                || alias_source
+                    .map(|s| oracle_has_method(&oracle_src, s, method))
+                    .unwrap_or(false);
+
+            // Path 2: closure-inference arm.
+            let closure_hit = closure_infer_has(&oracle_src, base_name, method)
+                || alias_source
+                    .map(|s| closure_infer_has(&oracle_src, s, method))
+                    .unwrap_or(false);
+
+            // Path 3: equip block registration in lib/std/*.gg.
+            let equip_hit = equip_methods.contains(method);
+
+            if !oracle_hit && !closure_hit && !equip_hit {
+                failures.push(format!(
+                    "protocol `{base_name}` method `{method}` has NO coverage: \
+                     not in `builtin_method_type` oracle arm at \
+                     `src/semantic/typecheck.rs`, not in \
+                     `infer_closure_method_type` closure-inference arm, and \
+                     no `equip {base_name}` (or `equip [T] {base_name}[T]`) \
+                     block in `lib/std/*.gg` registers it. The widened \
+                     `has_inherent_only_impls` at `src/semantic/traits.rs` \
+                     will emit `E_NoMethodFound` at every call site. Add an \
+                     oracle arm (or closure-inference arm for HOFs, or an \
+                     equip block wrapper) — see Round XXIX Track B commit \
+                     for the reference pattern."
+                ));
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "builtin_oracle_covers_every_protocol_method: {} missing coverage:\n\n{}",
+        failures.len(),
+        failures.join("\n\n"),
+    );
+}
+
+/// Search the `builtin_method_type` oracle in `typecheck.rs` for an arm that
+/// covers `(type_name, method)`. Reasons about the fn body only: locate the
+/// `fn builtin_method_type(` signature, find the type-arm `match
+/// type_name.as_str() { ... }` block, and check whether any arm whose head
+/// includes `"<type_name>"` (possibly OR'd with siblings) contains `"<method>"`
+/// as a literal method-name token in its body up to the arm-close `},` (or
+/// the arm's `_ => None,` if it's a nested match).
+///
+/// Coarse-but-safe: uses simple substring hits on the arm body. False
+/// positives are acceptable (would only cause an arm to appear MORE covered
+/// than it is). False negatives would trip the ratchet spuriously — the
+/// design avoids them by counting a bare `"<method>"` token anywhere in the
+/// arm body.
+fn oracle_has_method(oracle_src: &str, type_name: &str, method: &str) -> bool {
+    let sig = "fn builtin_method_type(";
+    let Some(sig_pos) = oracle_src.find(sig) else { return false; };
+    // Body ends at the next top-level fn. Use the same heuristic as sibling
+    // arm-count lints.
+    let after = sig_pos + sig.len();
+    let end = oracle_src[after..]
+        .find("\n    fn ")
+        .or_else(|| oracle_src[after..].find("\n    pub fn "))
+        .or_else(|| oracle_src[after..].find("\n    pub(super) fn "))
+        .or_else(|| oracle_src[after..].find("\n    pub(crate) fn "))
+        .map(|i| after + i)
+        .unwrap_or(oracle_src.len());
+    let body = &oracle_src[sig_pos..end];
+
+    // Find every `"<TypeName>"` token in the body — each represents a
+    // possible arm head. For each, walk forward to the arm's `},` closer
+    // and check if `"<method>"` appears in that span. If the head is inside
+    // a comment, skip — but comment lines legitimately mention type names,
+    // so use a coarse rule: the head's arm head token is `<TN>" =>` or
+    // `<TN>" | "…"` etc. Look for the arrow after the string.
+    let quoted_type = format!("\"{type_name}\"");
+    let mut cursor = 0;
+    while let Some(pos_rel) = body[cursor..].find(&quoted_type) {
+        let pos = cursor + pos_rel;
+        cursor = pos + quoted_type.len();
+        // Confirm this is an arm head: the next non-whitespace token(s)
+        // should include `=>` (possibly after ` | "other" | ...`).
+        let after_str = &body[cursor..];
+        // Peek up to 200 chars for an arrow before a newline that terminates
+        // the arm head (arm heads for our arms are single-line).
+        let peek = after_str.get(..200.min(after_str.len())).unwrap_or("");
+        // Skip if the quoted type is inside a comment (line starts with `//`).
+        let line_start = body[..pos].rfind('\n').map(|n| n + 1).unwrap_or(0);
+        let line_prefix = body[line_start..pos].trim_start();
+        if line_prefix.starts_with("//") {
+            continue;
+        }
+        // Arm head heuristic: arrow appears in the peek, before a `{` that
+        // starts a new block (which would mean the string was inside an
+        // expression body).
+        let Some(arrow_pos) = peek.find("=>") else { continue; };
+        // We're now inside the arm body (starts after `=>`). Find the arm
+        // closer — the enclosing match's closing `},` at the same indent.
+        // Simpler: scan forward from arrow to the next `},\n` or `}\n`
+        // followed by a peer arm head or the outer match close.
+        let body_start = cursor + arrow_pos + 2;
+        let arm_body = &body[body_start..];
+        // Depth-track braces to find matching arm-close. The arm can be:
+        //   `X => Some(...)`     → ends at newline (no brace)
+        //   `X => match method { ... }` → depth-track
+        //   `X => {  ... }`      → depth-track
+        // For our purposes we can be conservative: read up to the LATER of
+        // (next `},` at depth 0) or (next `\n            "` at depth 0
+        // indicating a sibling arm head at 12-space indent, which is our
+        // convention).
+        let mut d = 0i32;
+        let mut close = arm_body.len();
+        for (i, c) in arm_body.char_indices() {
+            match c {
+                '{' => d += 1,
+                '}' => {
+                    d -= 1;
+                    if d < 0 {
+                        close = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let arm = &arm_body[..close];
+        // Method hit: look for `"<method>"` as a quoted string in the arm.
+        let quoted_method = format!("\"{method}\"");
+        if arm.contains(&quoted_method) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Search the `infer_closure_method_type` fn for a `("<type_name>", "<method>")`
+/// arm. Coarse substring match — the tuple appears literally in the source
+/// for every wired HOF (e.g. `("Vector", "map") =>`).
+fn closure_infer_has(oracle_src: &str, type_name: &str, method: &str) -> bool {
+    let sig = "fn infer_closure_method_type(";
+    let Some(sig_pos) = oracle_src.find(sig) else { return false; };
+    let after = sig_pos + sig.len();
+    let end = oracle_src[after..]
+        .find("\n    fn ")
+        .or_else(|| oracle_src[after..].find("\n    pub fn "))
+        .or_else(|| oracle_src[after..].find("\n    pub(super) fn "))
+        .map(|i| after + i)
+        .unwrap_or(oracle_src.len());
+    let body = &oracle_src[sig_pos..end];
+    // Look for `("<type>", "<method>")` — exact tuple, or `"<type>"` with
+    // `"<method>"` in a `"<type>" | "…"` OR arm (Vector/Dict|HashMap
+    // pair patterns exist).
+    let tuple = format!("(\"{type_name}\", \"{method}\")");
+    if body.contains(&tuple) {
+        return true;
+    }
+    // OR-arm shape: `("Dict" | "HashMap", "<method>")` or vice versa.
+    for or_shape in [
+        format!("(\"{type_name}\" | "),
+        format!(" | \"{type_name}\", "),
+    ] {
+        let mut cursor = 0;
+        while let Some(rel) = body[cursor..].find(or_shape.as_str()) {
+            let start = cursor + rel;
+            let peek = body.get(start..start + 200).unwrap_or("");
+            // Check the arm head contains `"<method>"`.
+            let Some(close) = peek.find(") =>") else { break; };
+            let head = &peek[..close];
+            if head.contains(&format!("\"{method}\"")) {
+                return true;
+            }
+            cursor = start + or_shape.len();
+        }
+    }
+    // Handle `("Option", "and_then") | ("Option", "flat_map")` shape.
+    let alt_tuple = format!("| (\"{type_name}\", \"{method}\")");
+    if body.contains(&alt_tuple) {
+        return true;
+    }
+    let alt_tuple2 = format!("(\"{type_name}\", \"{method}\") |");
+    if body.contains(&alt_tuple2) {
+        return true;
+    }
+    false
+}
+
+/// Collect the set of method names registered on `type_name` via `equip`
+/// blocks in `lib/std/*.gg`. Rough scan: for each equip block header
+/// matching `equip <TypeName>:` or `equip [gens] <TypeName>[gens]:` (with
+/// or without `with <Trait>` — the trait-impl variants also count for
+/// coverage since they add method bodies), read subsequent indented lines
+/// until block dedent, and pull out method names from `<RetType>
+/// <method_name>(` signature lines and from `extern <ret> <name>(...) = "..."`
+/// lines.
+fn equip_methods_for(type_name: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let lib_dir = Path::new("lib/std");
+    let Ok(entries) = fs::read_dir(lib_dir) else { return out; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map_or(true, |e| e != "gg") {
+            continue;
+        }
+        let Ok(src) = fs::read_to_string(&path) else { continue; };
+        let lines: Vec<&str> = src.lines().collect();
+        // Scan for `equip [gens?] <TypeName>[...]:` block headers, then
+        // read subsequent indented lines until dedent.
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with("equip ") {
+                continue;
+            }
+            // Header shapes accepted:
+            //   equip <TypeName>:
+            //   equip <TypeName> with <Trait>:
+            //   equip [T] <TypeName>[T]:
+            //   equip [T] <TypeName>[T] with <Trait[…]>:
+            //   equip [K, V] <TypeName>[K, V]:
+            // The <TypeName> appears as its own token. Simple test: the
+            // header contains ` <TypeName>` (with a space or `]` before)
+            // AND ends with `:`.
+            let ends_ok = trimmed.trim_end().ends_with(':');
+            if !ends_ok {
+                continue;
+            }
+            let matches_type = trimmed.contains(&format!(" {type_name}:"))
+                || trimmed.contains(&format!(" {type_name} "))
+                || trimmed.contains(&format!(" {type_name}["));
+            if !matches_type {
+                continue;
+            }
+            // Scan block body: while subsequent lines have deeper indent
+            // (or are blank/comment), collect method names.
+            let header_indent = line.len() - trimmed.len();
+            for line2 in lines.iter().skip(i + 1) {
+                let t2 = line2.trim_start();
+                if t2.is_empty() || t2.starts_with('#') {
+                    continue;
+                }
+                let ind = line2.len() - t2.len();
+                if ind <= header_indent {
+                    break;
+                }
+                // Method-sig line shapes:
+                //   <ret> <name>(...)
+                //   extern <ret> <name>(...) = "..."
+                //   <ret> <name>[gens](...):    ← method-level generics
+                //   Option[T] <name>(...):      ← generic return type
+                //   Vector[U] <name>[gens](...) ← both
+                // Extract the token that appears immediately before the
+                // opening `(` of the sig, skipping an optional trailing
+                // `[gens]` block (method-level generics).
+                let mut work = t2;
+                if let Some(rest) = work.strip_prefix("extern ") {
+                    work = rest;
+                }
+                let Some(p) = work.find('(') else { continue; };
+                let before_paren = work[..p].trim_end();
+                // Walk back over an optional `[gens]` block sitting between
+                // the method name and `(` (e.g. `each[F]` in `each[F](...)`).
+                // A generic on the RETURN TYPE (e.g. `Option[T] peek(`)
+                // doesn't sit right against `(` so this walk-back leaves
+                // the return-type generic in the leading tokens.
+                let name_part: &str = if before_paren.ends_with(']') {
+                    let mut depth = 0i32;
+                    let mut open_idx = before_paren.len();
+                    for (i, c) in before_paren.char_indices().rev() {
+                        match c {
+                            ']' => depth += 1,
+                            '[' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    open_idx = i;
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    before_paren[..open_idx].trim_end()
+                } else {
+                    before_paren
+                };
+                // The method name is the last identifier-shape token in
+                // `name_part`. Split on any non-identifier char and take
+                // the last non-empty ident.
+                let last = name_part
+                    .rsplit(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .find(|s| !s.is_empty())
+                    .unwrap_or("");
+                if last.is_empty()
+                    || !last.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    || last.chars().next().map_or(true, |c| c.is_ascii_digit())
+                {
+                    continue;
+                }
+                out.insert(last.to_string());
+            }
+        }
+    }
+    out
+}

@@ -1,0 +1,13 @@
+# Round XXIX Track B NEG — silent-accept reject for Deque. Pre-fix,
+# Deque had ZERO equip blocks → `impls_by_name.get("Deque")` returned
+# None → the narrow `has_inherent_only_impls` fell through to
+# `return false` → NoMethodFound was NEVER emitted for Deque. Post-
+# widened-gate (via `lookup_protocol("Deque").is_some()`): rejects.
+
+from std.collections import Deque
+
+void main():
+    Deque[int] d = Deque[int]()
+    d.push(1)
+    d.nonexistent_method(42)
+    print("unreachable")

@@ -2894,12 +2894,20 @@ impl<'a> TypeChecker<'a> {
                                     self.expr_types.insert(expr.span, ret);
                                     ret
                                 } else {
-                                    // Only emit NoMethodFound for types with inherent-only
-                                    // equip blocks (no trait impls, no via delegation).
-                                    // Types with trait impls may have default or via-forwarded
-                                    // methods that aren't in the equip's methods map.
-                                    // Stdlib/runtime types without equip blocks have methods
-                                    // only in the C backend, so we'd produce false positives.
+                                    // Emit NoMethodFound when EITHER the type is a builtin
+                                    // protocol type and the method is not in its protocol,
+                                    // OR the type has inherent-only equip blocks (no via-field
+                                    // delegation). Round XXIX Track B widened `has_inherent_only_impls`
+                                    // to treat every `BuiltinTypeProtocol` base name as
+                                    // authoritative — `BuiltinTypeProtocol` at
+                                    // `src/ir/lowering/builtins.rs` is the single source of
+                                    // truth, and the `builtin_oracle_covers_every_protocol_method`
+                                    // ratchet at `tests/lints.rs` (Core #6) enforces that
+                                    // every protocol method is covered by the oracle
+                                    // (`builtin_method_type` or `infer_closure_method_type`)
+                                    // OR by an equip block registered in `impls_by_name`.
+                                    // Via-forwarded methods still bypass the reject correctly
+                                    // through the `via_field` check.
                                     //
                                     // Auto-derivable methods (clone/debug/display/hash) are
                                     // intrinsic — every type has them, and they may be synthesized
@@ -7725,10 +7733,17 @@ impl<'a> TypeChecker<'a> {
                 let u_type = self.extract_fn_return_type(closure_type)?;
                 Some(self.types.intern_generic(def_id, vec![u_type]))
             }
-            ("Option", "and_then") => {
+            ("Option", "and_then") | ("Option", "flat_map") => {
                 // (T) -> Option[U], returns Option[U] directly.
                 // Legitimate cross-type map (T → Option[U] where U ≠ T is
                 // intended); NOT in `unify_closure_ret_axis`'s enumeration.
+                // Round XXIX Track B added `flat_map` (alias of `and_then`
+                // per Option protocol at src/ir/lowering/builtins.rs:896
+                // — combinator_kind::FlatMap). The gate widening at
+                // has_inherent_only_impls would silently reject
+                // cross-type `.flat_map()` calls without this LIVE arm
+                // (the oracle DEAD arm returns receiver_type, which is
+                // wrong for cross-type Option[T] → Option[U]).
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let ret_type = self.extract_fn_return_type(closure_type)?;
                 Some(ret_type)
@@ -7822,6 +7837,37 @@ impl<'a> TypeChecker<'a> {
                 let closure_type = self.infer_expr(&args.first()?.node.value);
                 let u_type = self.extract_fn_return_type(closure_type)?;
                 Some(self.types.intern_generic(def_id, vec![u_type]))
+            }
+            ("Vector", "flat_map") => {
+                // (T) -> Vector[U], returns Vector[U] directly (flattens).
+                // Round XXIX Track B added — Vector protocol has flat_map
+                // at src/ir/lowering/builtins.rs:404 with ret_self, but
+                // cross-type usage `Vector[String] ys = xs.flat_map((int
+                // x): [f"{x}"])` needs the closure return type (Vector[U])
+                // to flow through, not receiver_type. Mirrors Vector.map's
+                // LIVE cross-type elaboration; the oracle DEAD arm above
+                // returns receiver_type (wrong for cross-type) but is
+                // shadowed by this LIVE path.
+                let closure_type = self.infer_expr(&args.first()?.node.value);
+                let ret_type = self.extract_fn_return_type(closure_type)?;
+                Some(ret_type)
+            }
+            ("Vector", "zip") => {
+                // Vector[T].zip(Vector[U]) -> Vector[Tuple[T, U]] per Rust
+                // convention. Round XXIX Track B added — Vector protocol at
+                // src/ir/lowering/builtins.rs:425 says ret_self (Vector[T])
+                // erasing the U-axis; that's protocol-vs-convention
+                // mismatch filed as follow-up. This LIVE arm elaborates
+                // the correct cross-type shape from the arg's element type.
+                let arg_type = self.infer_expr(&args.first()?.node.value);
+                // Extract Vector[U]'s U from the arg.
+                let u_type = match self.types.get(arg_type) {
+                    ResolvedType::Generic(_, inner_args) => inner_args.first().copied(),
+                    _ => None,
+                }?;
+                let t_type = type_args.first().copied()?;
+                let tuple_tid = self.types.insert(ResolvedType::Tuple(vec![t_type, u_type]));
+                Some(self.types.intern_generic(def_id, vec![tuple_tid]))
             }
             ("Vector", "fold") => {
                 // args: initial_value, closure (U, T) -> U — returns U
@@ -8375,7 +8421,15 @@ impl<'a> TypeChecker<'a> {
         let val_type = || type_args.get(1).copied().unwrap_or(self.types.int_id);
 
         match type_name.as_str() {
-            "Vector" => match method {
+            // Deque reuses VECTOR.methods at src/ir/lowering/builtins.rs:441 —
+            // the oracle mirrors that by grouping Vector and Deque under one
+            // arm. Round XXIX Track B added Deque here (Deque had ZERO oracle
+            // coverage; every method silent-accepted through the reject site).
+            // Cross-type HOFs (map/flat_map with U ≠ T) on Deque are typed
+            // per-protocol (ret_self); infer_closure_method_type has NO Deque
+            // arm today — Deque cross-type HOF elaboration is filed as a
+            // follow-up (categorized TODO under Deque parity).
+            "Vector" | "Deque" => match method {
                 "push" => Some(self.types.void_id),
                 // Borrowing methods: get/first/last return Option[T &]
                 "get" | "first" | "last" => {
@@ -8417,6 +8471,56 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 "binary_search" => Some(self.types.int_id),
+                // Round XXIX Track B — full protocol coverage (see
+                // src/ir/lowering/builtins.rs:335-427 VECTOR.methods).
+                // swap_remove: protocol ret_void — Rust convention returns T
+                //   (filed follow-up); protocol wins for this track.
+                // swap/fill/clear/extend: void per protocol.
+                // clone: receiver_type (ret_self).
+                // count: int.
+                // find_index: protocol ret_int — Rust convention Option[int]
+                //   (filed follow-up); protocol wins for this track.
+                // zip: protocol ret_self — cross-type erased (filed
+                //   follow-up); protocol wins for this track.
+                // find: Option[T] — DEAD defense (equip block wraps this on
+                //   Vector via lib/std/iter.gg:425; Deque has no equip so
+                //   this arm is LIVE for Deque.find).
+                // filter/map/fold/reduce/flat_map: DEAD defense for Vector
+                //   (infer_closure_method_type LIVE); LIVE for Deque —
+                //   cross-type elaboration filed as follow-up.
+                // each/for_each: void — Vector has these via equip block
+                //   (lib/std/iter.gg:413), Deque has NO equip so this arm
+                //   is LIVE for Deque.each/for_each (deque_hof_each.gg,
+                //   deque_each_untyped_closure_str.gg).
+                "each" | "for_each" => Some(self.types.void_id),
+                "swap_remove" | "swap" | "fill" => Some(self.types.void_id),
+                "clone" => Some(receiver_type),
+                "count" => Some(self.types.int_id),
+                // find_index: `equip [T] Vector[T]:` at lib/std/iter.gg:428
+                // declares Option[int] (matches Rust convention). Protocol
+                // at builtins.rs:423 says ret_int (return -1 for miss) — a
+                // protocol-vs-equip disagreement. This oracle arm matches
+                // the equip contract so Vector/Deque callers agree.
+                "find_index" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.intern_generic(option_def_id, vec![self.types.int_id]))
+                    } else {
+                        Some(self.types.int_id)
+                    }
+                }
+                // zip: handled in infer_closure_method_type as LIVE
+                // cross-type Vector[Tuple[T, U]] elaboration. DEAD here
+                // matches protocol shape (Vector[T]) as defense.
+                "zip" => Some(receiver_type),
+                "find" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.intern_generic(option_def_id, vec![elem_type()]))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                "filter" | "map" | "flat_map" => Some(receiver_type),
+                "fold" | "reduce" => Some(self.types.int_id),
                 _ => None,
             },
             "Dict" | "HashMap" => match method {
@@ -8468,6 +8572,19 @@ impl<'a> TypeChecker<'a> {
                         Some(self.types.int_id)
                     }
                 }
+                // Round XXIX Track B — full protocol coverage (see
+                // src/ir/lowering/builtins.rs:444-501 DICT.methods).
+                // clone: receiver_type.
+                // filter/fold: DEAD defense (infer_closure_method_type LIVE
+                //   for Dict.filter/Dict.fold).
+                // each/any/all: LIVE (no equip block on Dict for these — the
+                //   lib/std/iter.gg equip [K, V] Dict[K, V] block deliberately
+                //   skips them per that file's comment at line 851-858).
+                "clone" => Some(receiver_type),
+                "filter" => Some(receiver_type),
+                "fold" => Some(self.types.int_id),
+                "each" => Some(self.types.void_id),
+                "any" | "all" => Some(self.types.bool_id),
                 _ => None,
             },
             "Set" | "HashSet" => match method {
@@ -8478,6 +8595,34 @@ impl<'a> TypeChecker<'a> {
                 "clear" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
                 "union" | "intersection" | "difference" | "symmetric_difference" => Some(receiver_type),
+                // Round XXIX Track B — full protocol coverage (see
+                // src/ir/lowering/builtins.rs:519-567 SET.methods).
+                // insert: void (alias of add per SET.methods:533).
+                // has: bool (alias of contains per SET.methods:536).
+                // clone: receiver_type.
+                // items: Vector[T] — MIRRORS Dict.values/Dict.keys pattern
+                //   above. items() is the book-mandated ordinal-Set-access
+                //   path (docs/book/05-collections.md:344 —
+                //   `s.items()[0]`). Writing `Some(receiver_type)` would
+                //   type items() as Set[T] → E_NotIndexable on `[0]`,
+                //   reversing book semantics.
+                // filter/fold: DEAD defense (infer_closure_method_type LIVE).
+                // each/any/all: DEAD defense (Set equip block in
+                //   lib/std/iter.gg:818 wraps them; resolve_method wins).
+                "insert" => Some(self.types.void_id),
+                "has" => Some(self.types.bool_id),
+                "clone" => Some(receiver_type),
+                "items" => {
+                    if let Some(vec_def_id) = self.scopes.lookup("Vector") {
+                        Some(self.types.intern_generic(vec_def_id, vec![elem_type()]))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                "filter" => Some(receiver_type),
+                "fold" => Some(self.types.int_id),
+                "each" => Some(self.types.void_id),
+                "any" | "all" => Some(self.types.bool_id),
                 _ => None,
             },
             "uint8" => match method {
@@ -8568,7 +8713,15 @@ impl<'a> TypeChecker<'a> {
             "Option" => match method {
                 "unwrap" | "unwrap_or" | "expect" | "unwrap_or_else" => Some(elem_type()),
                 "is_some" | "is_none" => Some(self.types.bool_id),
-                "map" | "and_then" | "or_else" | "or" | "filter" => Some(receiver_type),
+                // Round XXIX Track B — `flat_map` was missing (Option protocol
+                // has it at src/ir/lowering/builtins.rs:896 with
+                // combinator_kind: FlatMap; the widened gate at
+                // src/semantic/traits.rs:has_inherent_only_impls would
+                // reject `.flat_map()` calls without this arm). Cross-type
+                // LIVE elaboration is handled by infer_closure_method_type
+                // (Option.flat_map arm added below mirroring Option.and_then);
+                // this arm is DEAD defense — protocol shape is ret_self.
+                "map" | "and_then" | "or_else" | "or" | "filter" | "flat_map" => Some(receiver_type),
                 "flatten" => {
                     let inner = elem_type();
                     // For Option[Option[U]], elem_type() is Option[U] — return it directly
@@ -8685,11 +8838,101 @@ impl<'a> TypeChecker<'a> {
                 "set" => Some(self.types.void_id),
                 _ => None,
             },
+            "ReadGuard" => match method {
+                "get" => Some(elem_type()),
+                _ => None,
+            },
+            "WriteGuard" => match method {
+                "get" => Some(elem_type()),
+                "set" => Some(self.types.void_id),
+                _ => None,
+            },
             "TaskGroup" => match method {
                 // spawn(future) starts a child task, returns void
                 "spawn" => Some(self.types.void_id),
                 // join() returns void (blocks until all children complete)
                 "join" => Some(self.types.void_id),
+                _ => None,
+            },
+            // Round XXIX Track B — pre-registered protocol types (Channel/
+            // Heap/Thread/atomics/sync) whose equip blocks live in
+            // `lib/std/*.gg` but load ONLY when the user explicitly
+            // imports the sub-module. Many fixtures use e.g.
+            // `from std.async import Channel` — Channel is a compiler
+            // pre-registered type (see src/semantic/resolve.rs:21) so it
+            // resolves without loading std.channel, meaning the equip
+            // block's method registrations are absent. The widened
+            // `has_inherent_only_impls` (via `lookup_protocol`) turns
+            // those into E_NoMethodFound at check time; without oracle
+            // arms here, well-established fixtures regress.
+            "Channel" => match method {
+                "send" | "close" => Some(self.types.void_id),
+                "recv" => Some(elem_type()),
+                "poll_recv" => Some(self.types.bool_id),
+                "recv_timeout" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.intern_generic(option_def_id, vec![elem_type()]))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                "len" | "capacity" => Some(self.types.int_id),
+                "is_closed" => Some(self.types.bool_id),
+                _ => None,
+            },
+            "Heap" => match method {
+                "push" => Some(self.types.void_id),
+                // Heap.pop/peek return Option[T] per lib/std/heap.gg:33,38 equip
+                // block (Rust convention; the BuiltinTypeProtocol at
+                // src/ir/lowering/builtins.rs:803-804 says ret_elem, a
+                // protocol-vs-equip mismatch analogous to Vector.find_index).
+                "pop" | "peek" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        Some(self.types.intern_generic(option_def_id, vec![elem_type()]))
+                    } else {
+                        Some(elem_type())
+                    }
+                }
+                "len" => Some(self.types.int_id),
+                "is_empty" => Some(self.types.bool_id),
+                _ => None,
+            },
+            "Thread" => match method {
+                // Thread[T].join returns T per the equip block at
+                // `lib/std/thread.gg:7` (`T join(!self)`) — the
+                // BuiltinTypeProtocol at src/ir/lowering/builtins.rs:784
+                // says ret_void, a protocol-vs-equip mismatch filed as
+                // follow-up. Equip wins for correctness.
+                "join" => Some(elem_type()),
+                "id" => Some(self.types.int_id),
+                _ => None,
+            },
+            "AtomicInt" => match method {
+                "load" | "add" | "sub" => Some(self.types.int_id),
+                "store" => Some(self.types.void_id),
+                "compare_exchange" => Some(self.types.bool_id),
+                _ => None,
+            },
+            "AtomicBool" => match method {
+                "load" | "swap" | "compare_exchange" => Some(self.types.bool_id),
+                "store" => Some(self.types.void_id),
+                _ => None,
+            },
+            "Barrier" => match method {
+                "wait" => Some(self.types.void_id),
+                _ => None,
+            },
+            "WaitGroup" => match method {
+                "add" | "done" | "wait" => Some(self.types.void_id),
+                _ => None,
+            },
+            "Semaphore" => match method {
+                "acquire" | "release" => Some(self.types.void_id),
+                "try_acquire" => Some(self.types.bool_id),
+                _ => None,
+            },
+            "OnceFlag" => match method {
+                "do_once" | "is_done" => Some(self.types.bool_id),
                 _ => None,
             },
             "File" => match method {

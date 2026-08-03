@@ -1,0 +1,59 @@
+# Round XXIX Track B — POS coverage for Deque methods. Deque reuses
+# VECTOR.methods at `src/ir/lowering/builtins.rs:441` but had ZERO
+# oracle coverage at HEAD (`builtin_method_type` at typecheck.rs:8254
+# lacked a `"Deque" =>` arm entirely). Every Deque method silent-
+# accepted through the reject site. This track added `"Vector" |
+# "Deque"` to the oracle head so every Vector-oracle method now covers
+# Deque too. Deque has NO equip block, so oracle arms are the SOLE
+# source of typing for every Deque method — LIVE, not defense.
+#
+# AXIS COVERAGE (Core #12): type = Deque (the "no-equip" cell of the
+# collection-type × has-equip axis) · methods spanning mutators
+# (push/set/swap/fill/swap_remove/insert/reverse), reads (get/first/
+# last/len/count/is_empty/contains), and combinators (find/filter/map).
+#
+# RED-VERIFY: revert the "Vector" | "Deque" merge (drop " | "Deque"");
+# rebuild; ALL 13 asserts below fail as `E_NoMethodFound: no method
+# `<name>` found on type `Deque[int]`` (or the earlier silent-accept
+# regression re-manifests as link-time
+# `undefined reference to Deque__int64_t__push`).
+
+from std.collections import Deque
+
+void main():
+    Deque[int] d = Deque[int]()
+    d.push(10)
+    d.push(20)
+    d.push(30)
+    print(d.len())                  # 3
+    print(d.is_empty())             # false
+    print(d.contains(20))           # true
+    print(d.get(1).unwrap())        # 20
+    print(d.first().unwrap())       # 10
+    print(d.last().unwrap())        # 30
+
+    # count(closure): int — Deque-LIVE (no equip).
+    int gt5 = d.count((int x): x > 5)
+    print(gt5)                      # 3
+
+    # clone: receiver_type. Deque-LIVE (no equip).
+    Deque[int] cloned = d.clone()
+    print(cloned.len())             # 3
+
+    # each(closure): void. Deque-LIVE (no equip).
+    d.each((int x): print(x * 10))  # 100 / 200 / 300
+
+    # swap(i, j): void.
+    d.swap(0, 2)
+    print(d.get(0).unwrap())        # 30
+    print(d.get(2).unwrap())        # 10
+
+    # swap_remove(i): void (protocol shape).
+    d.swap_remove(0)
+    print(d.len())                  # 2
+
+    # fill(n, val): void — drops existing and refills with n copies.
+    d.fill(4, 7)
+    print(d.len())                  # 4
+    print(d.get(0).unwrap())        # 7
+    print(d.get(3).unwrap())        # 7

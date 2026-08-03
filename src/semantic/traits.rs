@@ -334,18 +334,43 @@ impl TraitRegistry {
             .is_some_and(|v| !v.is_empty())
     }
 
-    /// Check if a type has ONLY inherent impls (no trait impls, no via delegation).
-    /// Types with trait impls may have default or via-forwarded methods that aren't
-    /// in the equip's methods map, so we can't reliably detect missing methods.
+    /// Check if a type has an authoritative method surface — i.e. reading
+    /// "the type has no such method" is safe. Returns TRUE when the answer
+    /// is "yes, we own the truth of what methods this type has".
+    ///
+    /// Round XXIX Track B: WIDENED — every builtin protocol type is
+    /// authoritative because `BuiltinTypeProtocol` (single source of truth
+    /// at `src/ir/lowering/builtins.rs`) enumerates its full method surface.
+    /// Previously a builtin type with ZERO equip blocks (Deque/HashMap/HashSet)
+    /// or with a trait impl (Set via `equip [T] Set[T]: ...`) returned FALSE
+    /// here, so the reject site swallowed `NoMethodFound` and the miscall
+    /// leaked to link-time as `implicit declaration of function
+    /// gorget_<type>_<method>` (or, for zero-impl types like Deque, poisoned
+    /// the expression as `error_id` downstream — silent wrong output).
+    ///
+    /// `lookup_protocol` is the single source of truth (a hardcoded
+    /// `matches!` here would be a partition — missing Shared/Weak/Mutex/
+    /// Guard/RWLock/Thread/Heap/TaskGroup/Callable/MutCallable/
+    /// ConsumeCallable/GorgetClosure/Option/Result — 14+ protocols beyond
+    /// the collection types). Cross-lane precedent:
+    /// `src/semantic/safety/helpers.rs:729,748` uses the exact same
+    /// `lookup_protocol(name).is_some()` pattern.
+    ///
+    /// User types: preserve the original via_field-only narrowing — a
+    /// via-forwarded impl legitimately routes methods to the field's type,
+    /// so we can't claim authority.
     pub fn has_inherent_only_impls(&self, type_name: &str) -> bool {
+        if crate::ir::lowering::builtins::lookup_protocol(type_name).is_some() {
+            return true;
+        }
         let Some(indices) = self.impls_by_name.get(type_name) else {
             return false;
         };
         let mut has_inherent = false;
         for &idx in indices {
             let impl_info = &self.impls[idx];
-            if impl_info.trait_.is_some() || impl_info.via_field.is_some() {
-                return false; // has trait impl or via delegation
+            if impl_info.via_field.is_some() {
+                return false; // has via delegation → cannot claim authority
             }
             has_inherent = true;
         }

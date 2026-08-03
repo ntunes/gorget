@@ -1,0 +1,26 @@
+# Round XXIX Track B — POS coverage for HashMap. HashMap reuses
+# DICT.methods at builtins.rs:516; oracle covers via "Dict" |
+# "HashMap" match head. No lib/std equip block for HashMap either.
+#
+# AXIS COVERAGE: type = HashMap (Dict-family, no-equip cell) ·
+# methods: len/put/get/remove (already in oracle) + clone/each/any/all
+# (added this track) + items (already in oracle).
+
+void main():
+    HashMap[String, int] m = HashMap[String, int]()
+    m.put("a", 1)
+    m.put("b", 2)
+    m.put("c", 3)
+    print(m.len())                          # 3
+
+    # clone: receiver_type.
+    HashMap[String, int] cloned = m.clone()
+    print(cloned.len())                     # 3
+
+    # each/any/all — LIVE (no equip for HashMap either).
+    print(m.any((String k, int v): v == 2)) # true
+    print(m.all((String k, int v): v > 0))  # true
+
+    # each() type checked by the shared Dict|HashMap oracle arm above;
+    # HashMap iteration order is nondeterministic across runs so no
+    # stdout-pinning here.

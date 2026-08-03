@@ -1,0 +1,13 @@
+# Round XXIX Track B — POS pin for HashMap.contains_key / has_key
+# oracle-only aliases (mirrors dict_has_key_alias.gg — pre-existing
+# runtime bug printed as "0" for the aliases; the point is TYPE-
+# CHECK resolution post-widening).
+
+void main():
+    HashMap[String, int] m = HashMap[String, int]()
+    m.put("x", 10)
+    m.put("y", 20)
+    print(m.contains("x"))      # true (protocol method)
+    print(m.contains_key("x"))  # pre-existing bug: prints "0"; TYPES ok.
+    print(m.has("y"))           # true (protocol method)
+    print(m.has_key("y"))       # pre-existing bug: prints "0"; TYPES ok.

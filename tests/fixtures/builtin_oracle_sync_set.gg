@@ -1,0 +1,38 @@
+# Round XXIX Track B — POS coverage for Set methods synced into the
+# oracle. Set has lib/std/iter.gg:818 equip `[T] Set[T]:` covering
+# each/for_each/any/all/find/find_index/fold (7 methods) — those are
+# DEAD in the oracle. The oracle-LIVE additions are: insert (alias of
+# add), has (alias of contains), clone, items (Vector[T] — book-
+# mandated ordinal Set access at docs/book/05-collections.md:344).
+#
+# AXIS COVERAGE (Core #12): type = Set · methods = insert (alias),
+# has (alias), clone, items (book-mandated positional access).
+#
+# RED-VERIFY: revert Set oracle additions {insert, has, clone, items};
+# each fails with E_NoMethodFound. items()[0] additionally regresses
+# the book-mandated ordinal-Set-access semantics.
+
+void main():
+    Set[int] s = {1, 2, 3}
+    print(s.len())              # 3
+
+    # insert: void (alias of add per SET.methods:533).
+    s.insert(4)
+    print(s.len())              # 4
+
+    # has: bool (alias of contains per SET.methods:536).
+    print(s.has(2))             # true
+    print(s.has(99))            # false
+
+    # clone: receiver_type (Set[int]).
+    Set[int] cloned = s.clone()
+    print(cloned.len())         # 4
+
+    # items(): Vector[int] — book-mandated ordinal access
+    # `s.items()[0]`. Locked in as typed language surface —
+    # writing `Some(receiver_type)` in the oracle arm would type
+    # items() as Set[int], reversing docs/book/05-collections.md:344.
+    Vector[int] its = s.items()
+    print(its.len())            # 4
+    # Ordinal positional access:
+    print(its.get(0).unwrap())  # 1 (insertion order preserved)

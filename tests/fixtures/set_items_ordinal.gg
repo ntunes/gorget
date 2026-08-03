@@ -1,0 +1,18 @@
+# Round XXIX Track B — Set.items() ORDINAL-ACCESS POS. Book-mandated
+# path at docs/book/05-collections.md:344 (`s.items()[0]` for
+# positional Set access). Set.items was silent-accepted pre-track;
+# the oracle's `items: Vector[T]` arm added this track locks it in
+# as typed language surface with backend-coverage on C and LLVM.
+#
+# If Set.items() ever regresses to `Some(receiver_type)` (i.e. types
+# as Set[T]), `items()[0]` immediately becomes `E_NotIndexable`,
+# reversing book semantics. This fixture is the tripwire.
+
+void main():
+    Set[int] s = {10, 20, 30}
+    Vector[int] items = s.items()
+    print(items.len())              # 3
+    # Ordinal access — the book contract:
+    print(items.get(0).unwrap())    # 10 (insertion order preserved)
+    print(items.get(1).unwrap())    # 20
+    print(items.get(2).unwrap())    # 30

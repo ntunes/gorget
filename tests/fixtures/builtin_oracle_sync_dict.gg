@@ -1,0 +1,47 @@
+# Round XXIX Track B — POS coverage for Dict methods synced into the
+# oracle. Dict has a lib/std/iter.gg equip block for keys_iter /
+# values_iter only; each/any/all/fold are DELIBERATELY skipped
+# there (see lib/std/iter.gg:851-858 comment: iterator wrappers would
+# take a single tuple arg, incompatible with the direct-key/value
+# closure shape). So Dict.{each, any, all, clone} are ORACLE-LIVE.
+# Dict.{filter, fold} are DEAD (infer_closure_method_type covers).
+#
+# AXIS COVERAGE (Core #12): type = Dict (has-equip cell) · method
+# families = clone, each, any, all (LIVE oracle) + filter, fold (DEAD
+# defense, LIVE via infer_closure) + keys/values/items (already in
+# oracle) + get/put/contains/len/remove (already in oracle).
+#
+# RED-VERIFY: revert Dict oracle additions {clone, each, any, all};
+# these 4 lines fail as `E_NoMethodFound: no method X found on type
+# Dict[String, int]` post-widening.
+
+void main():
+    Dict[String, int] m = {"apple": 3, "banana": 5, "cherry": 7}
+    print(m.len())                          # 3
+
+    # clone: receiver_type (Dict[String, int]).
+    Dict[String, int] cloned = m.clone()
+    print(cloned.len())                     # 3
+
+    # any / all: bool (LIVE oracle).
+    print(m.any((String k, int v): v > 6))  # true
+    print(m.all((String k, int v): v > 0))  # true
+    print(m.all((String k, int v): v > 10)) # false
+
+    # each: void (LIVE oracle). Simply prints v (assignment inside
+    # closure bodies is a separate parser concern; a print exercises
+    # the type without needing a mutable capture).
+    m.each((String k, int v): print(v))     # 3 / 5 / 7
+
+    # fold: int (DEAD oracle; LIVE via infer_closure).
+    int sum = m.fold(0, (int acc, String k, int v): acc + v)
+    print(sum)                              # 15
+
+    # filter: receiver_type (DEAD oracle; LIVE via infer_closure).
+    Dict[String, int] big = m.filter((String k, int v): v > 4)
+    print(big.len())                        # 2 (banana, cherry)
+
+    # items: Vector[Tuple[K, V]] — already in oracle before this
+    # track; verified post-widening it still types.
+    Vector[Tuple[String, int]] items = m.items()
+    print(items.len())                      # 3
