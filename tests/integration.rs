@@ -4489,6 +4489,19 @@ fn box_element_drop_symbol_collision() {
     run_gg("known_gaps/box_element_drop_symbol_collision.gg", "done");
 }
 
+/// `.iter().enumerate()` over a Set panics lir-lowering ("field index 2 out of
+/// range for SetIter__int64_t (has 2 fields)") — and it is the exact remedy the
+/// `E_EnumerateOnNonIterator` reject advises, so the compiler advises code it
+/// then crashes on. Asserts the INTENDED output; un-ignore when the adapter
+/// stops assuming the 3-field ArrayIter shape. TODO.md.
+#[test]
+#[ignore = "KNOWN GAP: Set.iter().enumerate() panics lir-lowering (SetIter has 2 fields, \
+the enumerate adapter reads field 2) — and it is the fix-it the E_EnumerateOnNonIterator \
+reject prints; TODO.md."]
+fn set_iter_enumerate_lir_panic() {
+    run_gg("known_gaps/set_iter_enumerate_lir_panic.gg", "0->7\n1->8");
+}
+
 // KNOWN GAP — `equip` expression-body return of an OWNING `!` param
 // USE-AFTER-FREES (filed 2026-07-25, MEMORY-SAFETY). The statement-return path
 // move-zeroes a returned `!` param (`owning_param_returned`); the four
