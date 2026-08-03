@@ -1489,12 +1489,12 @@ by the SAssign drop-on-overwrite *before* the view aliased the source buffer
 `LoView()/BoNone()` so `op_consume` materializes at the owning position. That same tag site is also where a
 lazy family member's view results join the family (the returns_view
 derivation join described in the Phase-2 section above). There is also a
-fuller `decide_operand_at_consuming_arg` (`lower.gg:1809`) that splits the
+fuller `decide_operand_at_consuming_arg` (`lower.gg:2802`) that splits the
 decide/emit concerns. It is wired in: `wire_one_operand`
 (`lower_liveness.gg:859`) delegates to it, and that shim is driven by the
 live `wire_liveness_into_modes` pass (defined `lower_liveness.gg:787`, run
 from `lower_closures.gg` and `lower_loops.gg`). Its own header docstring
-(`lower.gg:1753`) still reads "dead code in this commit. No caller exists."
+(`lower.gg:2734`) still reads "dead code in this commit. No caller exists."
 but that status is **stale**: the caller exists, and the comment is a
 self-host cleanup target (see TODO).
 
