@@ -124,6 +124,12 @@
 # block below.
 !guard_trait_named_box_dispatch/
 !guard_trait_named_box_dispatch/*.gg
+# Round XXIX Track C: paired before/after fixtures for the
+# `advice_fixtures_have_working_remedy` class-retirement guard (each E_*
+# diagnostic with fix-it advice ships a RED-triggering before-fixture + a
+# GREEN-remedy after-fixture applying the advice literally). Sources only.
+!lints/
+!lints/*.gg
 
 # Re-ignore compiled/generated artifacts inside self-host subdirs
 self_host_*/driver

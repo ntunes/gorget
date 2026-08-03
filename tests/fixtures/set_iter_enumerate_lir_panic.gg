@@ -1,0 +1,20 @@
+# Round XXIX Track C — graduated from known_gaps/. `.iter().enumerate()` over
+# a Set now lowers correctly (fast-path gated on `collection_kind == Array` /
+# `is_string_type`; non-Array receivers fall through to `lower_for_iterable`
+# via synthetic-local substitution — see the sibling `vector_iter_enumerate`,
+# `dict_iter_enumerate`, `iter_map_enumerate` fixtures for the axis coverage).
+#
+# History: was `KNOWN GAP: SetIter has 2 fields, the enumerate adapter reads
+# field 2` — the exact spelling `E_EnumerateOnNonIterator`'s fix-it advice
+# recommends. RED at HEAD (`gg build`) with:
+#   `field index 2 out of range for SetIter__int64_t (has 2 fields)` (LIR
+#   validator panic).
+#
+# `Set[T]` is insertion-ordered (D38) — indices are meaningful + deterministic.
+int main():
+    Set[int] s = {}
+    s.add(7)
+    s.add(8)
+    for (i, x) in s.iter().enumerate():
+        print(f"{i}->{x}")
+    return 0

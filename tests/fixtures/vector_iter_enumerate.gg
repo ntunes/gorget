@@ -1,0 +1,14 @@
+# Round XXIX Track C — `Vector.iter().enumerate()` (chained, distinct from
+# the direct `v.enumerate()` fast-path). Exercises the class-fix: the outer
+# `.enumerate()`'s receiver is a `VectorIter[int]`, which the receiver-type
+# gate at `src/ir/lowering/stmts/for_loops.rs` classifies as non-Array
+# (`VectorIter` is an iter struct, not the array itself) and routes through
+# the general iterable protocol via synthetic-local substitution. Every user
+# Iter struct except the two size-4 root shapes (`GorgetArray`, `Str`) went
+# through this path — Vector's `.iter().enumerate()` was panicking too at
+# HEAD (`field index 2 out of range for VectorIter__int64_t (has 2 fields)`).
+int main():
+    Vector[int] v = [7, 8]
+    for (i, x) in v.iter().enumerate():
+        print(f"{i}->{x}")
+    return 0

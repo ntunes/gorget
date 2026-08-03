@@ -1,0 +1,12 @@
+# Round XXIX Track C — AFTER fixture for `E_EnumerateOnNonIterator`. The
+# fix-it advice from `_before.gg`'s diagnostic tells the user to write
+# `.iter().enumerate()`; this fixture applies that advice and asserts the
+# result actually compiles + runs. Guarded by
+# `tests/lints.rs::advice_fixtures_have_working_remedy`.
+int main():
+    Set[int] s = {}
+    s.add(7)
+    s.add(8)
+    for (i, x) in s.iter().enumerate():
+        print(f"{i}->{x}")
+    return 0

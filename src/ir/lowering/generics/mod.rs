@@ -58,6 +58,16 @@ pub struct GenericCollector {
     non_generic_enum_defs: FxHashMap<String, ast::EnumDef>,
     /// Generic function templates: base_name → AST FunctionDef.
     fn_templates: FxHashMap<String, ast::FunctionDef>,
+    /// Non-generic function definitions: fn_name → AST FunctionDef.
+    /// Round XXIX Track C: used by `infer_expr_ast_type` for `Expr::Call` so
+    /// a call-chain receiver like `foo().iter().enumerate()` (foo non-generic
+    /// returning `Set[int]`) can propagate the return type through the
+    /// discovery walker, driving `SetIter__int64_t__enumerate` monomorphization
+    /// the same way `s.iter().enumerate()` does when `s: Set[int]`. Without
+    /// this, `foo().iter().enumerate()` lowered to an unlinkable extern call
+    /// on the non-fast-shape enumerate fallthrough path (undefined reference
+    /// at link time).
+    non_generic_fn_defs: FxHashMap<String, ast::FunctionDef>,
     /// Generic equip templates: base_type_name → Vec<EquipBlock>.
     equip_templates: FxHashMap<String, Vec<ast::EquipBlock>>,
     /// Discovered instantiations: (base_name, concrete_type_args) → mangled_name.
@@ -92,6 +102,7 @@ impl GenericCollector {
             enum_templates: FxHashMap::default(),
             non_generic_enum_defs: FxHashMap::default(),
             fn_templates: FxHashMap::default(),
+            non_generic_fn_defs: FxHashMap::default(),
             equip_templates: FxHashMap::default(),
             instances: Vec::new(),
             registered: FxHashMap::default(),
@@ -158,6 +169,14 @@ impl GenericCollector {
                 }
                 Item::Function(f) if f.generic_params.is_some() => {
                     self.fn_templates.insert(f.name.node.clone(), f.clone());
+                }
+                Item::Function(f) if f.generic_params.is_none() => {
+                    // Round XXIX Track C: track non-generic fn return types so
+                    // `infer_expr_ast_type` for `Expr::Call` can propagate them
+                    // through method-chain receivers (`foo().iter().enumerate()`
+                    // triggers `SetIter__…__enumerate` mono, same as
+                    // `s.iter().enumerate()` when `s: Set[int]`).
+                    self.non_generic_fn_defs.insert(f.name.node.clone(), f.clone());
                 }
                 Item::ExternBlock(ext) => {
                     // Generic extern fns declared inside `extern "C":` / `extern "Gorget":`
@@ -1633,6 +1652,16 @@ impl GenericCollector {
                             }
                         }
                         return Some(substitute::substitute_type_pub(&tmpl.return_type.node, &subs));
+                    }
+                    // Round XXIX Track C: non-generic fn — return type is
+                    // static (no substitution). Enables chain-receiver
+                    // propagation for shapes like `foo().iter().enumerate()`
+                    // where `foo` is non-generic returning `Set[int]`.
+                    // Without this, the outer `.enumerate()` never triggers
+                    // `SetIter__int64_t__enumerate` mono on the trait-default
+                    // path; the lowering emits an unlinkable extern call.
+                    if let Some(def) = self.non_generic_fn_defs.get(name) {
+                        return Some(def.return_type.node.clone());
                     }
                 }
                 None

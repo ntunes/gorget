@@ -6763,8 +6763,19 @@ fn ratchet_b_materialize_site_count() {
     // clone-bomb. The site COUNT stays 5; the SCOPE of the invariant is now
     // narrower than the pre-F fold intended, correctly so. Future class
     // conversions may fold this call back through the planner.
+    //
+    // 2026-08-03 re-pin 15 → 16 (Round XXIX Track C):
+    // The enumerate fast-path receiver-type gate added a new caller-side
+    // alias-root sever in `src/ir/lowering/stmts/for_loops.rs` — necessarily
+    // called BEFORE the pre-lower of the receiver so the sever's rebind is
+    // visible to the read (see `lower_for_enumerate` on the callee side
+    // where the sever is now skipped when `pre_lowered.is_some()`, i.e. one
+    // sever moved from callee to caller; the count grew because the
+    // callee-side sever wasn't deleted — it still fires on any hypothetical
+    // caller that DOESN'T pre-lower, kept for API symmetry). Net Track C
+    // added ONE `cow_before_mutation` site to for_loops.rs.
 
-    const RUST_CEILING: usize = 15;
+    const RUST_CEILING: usize = 16;
     let mut rust_sites = 0usize;
     let mut per_file: Vec<(String, usize)> = Vec::new();
     for entry in walk_files("src/ir/lowering", "rs") {
@@ -10293,4 +10304,191 @@ fn interp_error_retention_arms_count() {
          its error preserved inside `f\"{{...}}\"`. Removing an arm may re-open a \
          silent-swallow class — see Round XXIX Track A residual `17a3e342`."
     );
+}
+
+// ============================================================================
+// Round XXIX Track C — enumerate fast-path receiver-type gate + fix-it validity.
+// Two class-retirement guards; the third (advice_fixtures_have_working_remedy)
+// lives in tests/integration.rs where `check_gg_fails` + `run_gg` are defined.
+// ============================================================================
+
+/// Round XXIX Track C — pins the number of AST-method-name-dispatched fast
+/// paths in the for-loop detection block at `src/ir/lowering/stmts/for_loops.rs`
+/// to exactly ONE (`enumerate`, per Round XXIX Track C's receiver-type-gated
+/// entry into `lower_for_enumerate`).
+///
+/// The Layering discipline rule 2 smell it retires: dispatching on the AST
+/// method NAME to make a semantic decision (`if method.node == "..."`). A
+/// second name-dispatched fast-path in this block (a hypothetical `.zip()`,
+/// `.chain()`, ...) would trip the count, forcing the author to either use
+/// typed metadata OR extend the count with an explicit justification.
+///
+/// **Scope note (Core #15(b) — candid):** this lint pins ONE block in ONE
+/// file. Similar `MethodCall`-name gates likely exist ELSEWHERE in the
+/// lowerer (not in `for_loops.rs`). A wider audit is filed under the
+/// consolidated fix-it-advice follow-up entry in TODO.md — one-block-pin is
+/// a floor, not the bar.
+///
+/// **If this fails:** the block re-grew a name-match. Either
+///   1. Fold the new case into typed metadata (add a field on the receiver's
+///      TypeDef.metadata + gate on it via the same `collection_kind` /
+///      `is_string_type` shape Track C uses for enumerate), or
+///   2. If a legitimate second name-dispatched fast-path appears, bump
+///      EXPECTED deliberately with a comment naming the invariant it guards.
+#[test]
+fn for_loop_fast_path_method_names_arms_count() {
+    /// Baseline 2026-08-03: 1 (`enumerate`).
+    const EXPECTED: usize = 1;
+
+    let content = fs::read_to_string("src/ir/lowering/stmts/for_loops.rs")
+        .expect("cannot read src/ir/lowering/stmts/for_loops.rs");
+    // Scope to the `fn lower_for(` body — the entry-point that dispatches
+    // to the per-shape lowerings. Method-name gates elsewhere in this file
+    // (inside lower_for_array/enumerate/etc.) are on already-typed operands
+    // and unrelated to the class this lint retires.
+    let start = content
+        .find("pub(super) fn lower_for(")
+        .expect("lower_for entry point not found");
+    // Balance braces from the fn body's opening `{` to find the fn body span.
+    let after_sig = &content[start..];
+    let body_open = after_sig
+        .find('{')
+        .expect("lower_for body open brace not found");
+    // Slice from `body_open` FIRST — `char_indices().skip(N)` skips N ITEMS
+    // (chars), not N bytes; multi-byte chars in doc comments (em-dashes etc.)
+    // would otherwise skip past the target brace. Byte-slicing works because
+    // `.find('{')` returns a char boundary.
+    let body_scan = &after_sig[body_open..];
+    let mut depth: i32 = 0;
+    let mut body_end_in_scan = None;
+    for (i, c) in body_scan.char_indices() {
+        if c == '{' { depth += 1; }
+        if c == '}' {
+            depth -= 1;
+            if depth == 0 { body_end_in_scan = Some(i + 1); break; }
+        }
+    }
+    let body_end = start + body_open + body_end_in_scan.expect("lower_for body close brace not found");
+    let body = &content[start..body_end];
+    // Count `method.node == "..."` name gates. Precisely the shape the
+    // brief §Verification `grep 'method\.node == \"' src/ir/lowering/stmts/for_loops.rs`
+    // enumerates — currently one hit (`enumerate`, line 190 in the fixed
+    // source), matching baseline.
+    let count = body.matches("method.node ==").count();
+    assert_eq!(
+        count, EXPECTED,
+        "for-loop fast-path method-name gate count in `lower_for` changed: {count} vs \
+         expected {EXPECTED}.\n\n\
+         Round XXIX Track C class-retirement guard: a new `if method.node == \"...\"` \
+         entry-point fast-path is a Layering rule 2 smell. Either\n\
+           1. Migrate to typed metadata (add a field on the receiver type-def's \
+              metadata + gate on it, mirror the `collection_kind == Array` gate \
+              Track C added for enumerate), or\n\
+           2. If a genuinely new name-dispatched fast-path shape is intended, \
+              bump EXPECTED with a comment naming the invariant it guards."
+    );
+}
+
+/// Round XXIX Track C — pins the SET of `SemanticErrorKind` variants whose
+/// `Display` arm emits fix-it advice (a concrete code snippet the user is
+/// told to write). Adding a new fix-it-advice variant requires either
+/// extending `FIX_IT_ADVICE_ROWS` here (and pairing a before/after fixture
+/// via `tests/integration.rs::advice_fixtures_have_working_remedy`) OR
+/// bumping the count with a `// TODO(Round XXX): pair fixture` comment + a
+/// filed follow-up.
+///
+/// This IS the class-retirement mechanism for "compiler emits fix-it advice
+/// that itself doesn't compile / crashes" (Round XXIX Track C landed
+/// `E_EnumerateOnNonIterator` with a working advice; 18 others pre-existing
+/// per the consolidated follow-up filed with the round).
+///
+/// **Discovery method:** variant-enumeration walk of `SemanticErrorKind`
+/// Display arms (per brief §2c). NOT the earlier grep pattern rejected as
+/// noisy — that returned 67 (any backticked-variable diagnostic), catching
+/// unrelated new diagnostics. This pin is authored from a manual read of
+/// each Display arm; the count is the trip-point.
+///
+/// **Sub-case granularity note (Core #15(e) Q2):** some variants (notably
+/// `MoveWithoutOperator` with `shape: MoveShape` + `write_through_available:
+/// bool` discriminators) emit MULTIPLE distinct fix-it messages via internal
+/// branches. This pin currently tracks the KNOWN MESSAGE-level count (19);
+/// adding a new sub-case within an existing variant WITHOUT bumping this
+/// pin is technically possible and would slip past the guard. A tighter
+/// variant+discriminator enumeration is filed in the consolidated follow-up.
+#[test]
+fn advice_diagnostic_registration() {
+    /// Baseline 2026-08-03 (Round XXIX Track C authoring).
+    /// Each entry: (variant name, discriminator or "" for whole-variant advice).
+    /// The `EnumerateOnNonIterator` row is the sole entry paired with a
+    /// working-remedy fixture at authoring time; the 18 others are the
+    /// filed follow-up scope. See TODO.md consolidated entry.
+    const FIX_IT_ADVICE_ROWS: &[(&str, &str)] = &[
+        // Landed with Round XXIX Track C — the fast-path receiver-type gate
+        // made the `.iter().enumerate()` advice actually WORK.
+        ("EnumerateOnNonIterator", ""),
+        // Consolidated follow-up (18 rows).
+        ("MoveWithoutOperator", "Whole+write_through"),
+        ("MoveWithoutOperator", "Whole"),
+        ("MoveWithoutOperator", "FieldIndex"),
+        ("MoveWithoutOperator", "Capture"),
+        ("OwnershipMismatch", ""),
+        ("NonConstantConstInitializer", ""),
+        ("UnsafeIntegerConversion", ""),
+        ("UnloweredBuiltinCall", "str"),
+        ("UnloweredBuiltinCall", "other"),
+        ("SpawnRequiresDirectCall", ""),
+        ("SpawnClosureCaptureShared", ""),
+        ("ArenaEscape", "insert"),
+        ("AutoDerefWriteThroughReadGuard", ""),
+        ("MissingFallibleMark", "Bare"),
+        ("MissingFallibleMark", "RedundantOnCapture"),
+        ("MissingFallibleMark", "MarkOnInfallible"),
+        ("UnhandledThrows", ""),
+        ("ThrowInNonThrowingFunction", ""),
+    ];
+    const EXPECTED_TOTAL: usize = 19;
+
+    assert_eq!(
+        FIX_IT_ADVICE_ROWS.len(),
+        EXPECTED_TOTAL,
+        "FIX_IT_ADVICE_ROWS length ({}) diverged from pinned EXPECTED_TOTAL ({}). \
+         Both must move together — this pair encodes the total known fix-it-advice \
+         message count; bump both when adding a new row, decrement both when \
+         retiring one.",
+        FIX_IT_ADVICE_ROWS.len(),
+        EXPECTED_TOTAL,
+    );
+
+    // Grep-verify each variant name appears at least once in the errors.rs
+    // Display impl. A rename to `SemanticErrorKind` variant names would
+    // otherwise leave stale entries here silently.
+    let errors_src = fs::read_to_string("src/semantic/errors.rs")
+        .expect("cannot read src/semantic/errors.rs");
+    // Scope to the Display impl.
+    let display_start = errors_src
+        .find("impl std::fmt::Display for SemanticError {")
+        .expect("Display for SemanticError impl not found");
+    let display_body = &errors_src[display_start..];
+    // Balance braces to find the impl's end.
+    let body_open = display_body.find('{').expect("impl body open not found");
+    let mut depth: i32 = 0;
+    let mut display_end = None;
+    for (i, c) in display_body.char_indices().skip(body_open) {
+        if c == '{' { depth += 1; }
+        if c == '}' {
+            depth -= 1;
+            if depth == 0 { display_end = Some(i + 1); break; }
+        }
+    }
+    let display_scope = &display_body[..display_end.expect("impl close not found")];
+    for (variant, _) in FIX_IT_ADVICE_ROWS {
+        let needle = format!("SemanticErrorKind::{variant}");
+        assert!(
+            display_scope.contains(&needle),
+            "FIX_IT_ADVICE_ROWS references `{variant}` but the Display impl at \
+             `src/semantic/errors.rs` has no arm for `SemanticErrorKind::{variant}`. \
+             Either the variant was renamed / removed (update this list) or the \
+             `Display` scope-detection above is stale."
+        );
+    }
 }

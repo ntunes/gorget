@@ -150,6 +150,33 @@ pub(super) fn lower_for(
     // field (or, parenthesized, as `Expr::MutableBorrow` around the call / the
     // receiver). Strip every shape and thread `write_through` so the element
     // binds as a write-through place (§3.1: an unbroken `&` chain writes through).
+    //
+    // Round XXIX Track C — receiver-type gate on the fast-path. The fast-path
+    // `lower_for_enumerate` reads `Field(2)` off the iter struct, which only
+    // holds the `len` slot on `GorgetArray`/`Str` — every other Iter struct has
+    // ≤2 fields, so the field read is genuinely OOB (LIR-validator panic on
+    // `SetIter__T` / `VectorIter__T` / `DictIter__K__V` / `MapIter__…` etc.).
+    // Class-fix (Core #1/#4): pre-lower the receiver ONCE, then dispatch on the
+    // typed `collection_kind == Array` OR the `is_string_type` flag; every other
+    // receiver type falls through to the general iterable protocol at :217.
+    //
+    // Mechanism (a1) — synthetic-local substitution — avoids the naive
+    // pre-lower-then-fall-through double-emit trap (`foo().enumerate()` would
+    // otherwise run `foo()` twice). Bind the pre-lowered receiver operand into
+    // a synthetic named local; substitute the `iterable` AST node with a bare
+    // `Identifier(synth).enumerate()` MethodCall; the fall-through's
+    // `lower_expr(iterable)` re-lowers a bare-identifier receiver as a no-op
+    // Copy/Move on the already-materialized local. Model: `tests/fixtures/
+    // self_host_lowerer/lower_loops.gg:184-218` (SH pre-lowers into
+    // `coll_local` and gates via `resource_meta_for` — reference-lags-Rust
+    // succession milestone; this brings Rust up to the SH shape).
+    //
+    // NOTE the alias-root SEVER + iter-source ident capture stay in
+    // `lower_for_enumerate` (the receiver AST it walks is unchanged when
+    // fast-path fires — pre-lowering happens INSIDE the callee still). The
+    // callee's own `lower_expr(receiver)` is skipped via the `Some((..))`
+    // pre-lowered pair passed by the caller.
+    let mut substituted_iterable: Option<Spanned<Expr>> = None;
     if let Pattern::Tuple(parts) = &pattern.node {
         if parts.len() == 2 {
             let (en_wt_stmt, en_iterable): (bool, &Spanned<Expr>) =
@@ -159,24 +186,118 @@ pub(super) fn lower_for(
                     (_, Expr::MutableBorrow { expr }) => (true, expr),
                     _ => (false, iterable),
                 };
-            if let Expr::MethodCall { receiver, method, args: call_args, .. } = &en_iterable.node {
+            if let Expr::MethodCall { receiver, method, args: call_args, generic_args } = &en_iterable.node {
                 if method.node == "enumerate" && call_args.is_empty() {
                     // `(&a).enumerate()`: the `&` lands on the RECEIVER instead.
-                    let (en_wt_recv, receiver): (bool, &Spanned<Expr>) =
+                    let (en_wt_recv, en_receiver): (bool, &Spanned<Expr>) =
                         if let Expr::MutableBorrow { expr } = &receiver.node {
                             (true, expr)
                         } else {
                             (false, receiver)
                         };
-                    lower_for_enumerate(
-                        ctx, builder, parts, receiver, body, else_arm,
-                        en_wt_stmt || en_wt_recv,
-                    );
-                    return;
+                    let write_through_en = en_wt_stmt || en_wt_recv;
+
+                    // Alias-root SEVER — must run BEFORE any read of the
+                    // receiver (pre-lower below). Sibling of the sever at
+                    // :208-214 for the general loop entry. No-op on non-
+                    // identifier receivers; the fallthrough re-tries via the
+                    // substituted identifier (still a no-op, since the sever
+                    // rebound the LOCAL, and the synthetic local we register
+                    // holds the post-sever operand).
+                    if write_through_en {
+                        if let Expr::Identifier(root_name) = &en_receiver.node {
+                            if let Some((root_local, _)) = ctx.lookup_local(root_name) {
+                                ctx.cow_before_mutation(builder, root_local, en_receiver.span);
+                            }
+                        }
+                    }
+
+                    // Pre-lower the receiver ONCE (Core #10 / §Verification
+                    // runs-once probe).
+                    let recv_op = lower_expr(ctx, builder, en_receiver);
+                    let raw_recv_ty = infer_operand_type_full(ctx, &recv_op, builder);
+
+                    // Typed gate: `collection_kind == Array` OR `is_string_type`.
+                    // Read metadata off the pointee-resolved type (a borrowed
+                    // parameter is `Ptr<Collection>` — the auto-deref in
+                    // `lower_for_enumerate` handles it, but the gate must see
+                    // through the Ptr to classify correctly).
+                    use crate::ir::types::{CollectionKind, GirType};
+                    let is_fast_shape = {
+                        let tid = ctx.pointee_type(raw_recv_ty).unwrap_or(raw_recv_ty);
+                        if ctx.type_mapper.is_string_type(tid) {
+                            true
+                        } else if let Some(GirType::Named(name)) = ctx.type_registry.get(tid) {
+                            ctx.type_registry.get_type_def(name)
+                                .and_then(|td| td.metadata.collection_kind)
+                                == Some(CollectionKind::Array)
+                        } else {
+                            false
+                        }
+                    };
+
+                    if is_fast_shape {
+                        lower_for_enumerate(
+                            ctx, builder, parts, en_receiver, body, else_arm,
+                            write_through_en,
+                            Some((recv_op, raw_recv_ty)),
+                        );
+                        return;
+                    }
+
+                    // Non-fast-shape: bind pre-lowered receiver into a
+                    // synthetic named local, substitute `iterable` with
+                    // `Identifier(synth).enumerate()`, and fall through to
+                    // the general iterable path at :217. The general path
+                    // re-lowers the substituted iterable — a bare-identifier
+                    // receiver on a MethodCall is emission-once (Copy/Move
+                    // on the existing local), so `foo().enumerate()` runs
+                    // `foo()` exactly once.
+                    //
+                    // Auto-deref Ptr-wrapped receivers (a MethodCall on a
+                    // borrowed param or on a chained call that returned a
+                    // resource-typed value can hand back a `Ptr<T>`). The
+                    // synthetic local must hold the VALUE-typed operand —
+                    // subsequent method dispatch on the substituted
+                    // identifier expects value-typed self. Mirrors the deref
+                    // in the general path (`deref_ptr_collection_iterable`
+                    // at :242-243).
+                    let (recv_op, recv_ty) =
+                        super::super::exprs::deref_ptr_collection_iterable(
+                            ctx, builder, recv_op, raw_recv_ty,
+                        );
+
+                    let synth_name = format!("__for_enum_recv_{}", en_receiver.span.start);
+                    let synth_local = builder.add_local(recv_ty, Some(&synth_name));
+                    // Bind mode mirrors `init_borrow_iter_local`: resources
+                    // (Ptr-wrapping collections) borrow; value types copy.
+                    let mode = if ctx.type_registry.is_resource_type(recv_ty) {
+                        AssignMode::Borrow
+                    } else {
+                        AssignMode::Copy
+                    };
+                    builder.assign_mode(mode, Place::local(synth_local), recv_op);
+                    ctx.register_local(&synth_name, synth_local, recv_ty);
+
+                    substituted_iterable = Some(Spanned {
+                        node: Expr::MethodCall {
+                            receiver: Box::new(Spanned {
+                                node: Expr::Identifier(synth_name),
+                                span: en_receiver.span,
+                            }),
+                            method: method.clone(),
+                            generic_args: generic_args.clone(),
+                            args: Vec::new(),
+                        },
+                        span: iterable.span,
+                    });
                 }
             }
         }
     }
+    // Rebind `iterable` to the substituted node when fallthrough took the
+    // synthetic-local path; else it points at the original AST unchanged.
+    let iterable: &Spanned<Expr> = substituted_iterable.as_ref().unwrap_or(iterable);
 
     // Track 1A: `for x in &coll` write-through mode. The `&` normally arrives in
     // the statement's `ownership` field (the `for_stmt` parser splits it off the
@@ -669,6 +790,23 @@ fn lower_for_array(
 /// `write_through` (Track 1A): true for `for i, x in &coll.enumerate()` — the element
 /// binds as a write-through place, exactly like the plain `for x in &coll` loop
 /// (the caller has already stripped the `&` off the receiver / statement ownership).
+///
+/// Round XXIX Track C — CALLER GATE (invariant enforcement): the fast-path
+/// reads `Field(2)` off the iter struct at :747-748 below, which is only
+/// valid for iters whose `len` slot lives at index 2 — `GorgetArray` and `Str`.
+/// The caller at `lower_for` (fast-path detection block above) gates on
+/// `collection_kind == Array` OR `is_string_type` BEFORE dispatching here;
+/// every other receiver type falls through to `lower_for_iterable`. Do not
+/// call this function without that gate — the LIR validator (`src/lir/
+/// validate.rs:112-121`) catches Field(2)-OOB in debug / `GG_VALIDATE_PASSES=1`
+/// release builds, but release-without-the-env-var silently miscompiles.
+///
+/// `pre_lowered` (Round XXIX Track C): when `Some((op, ty))` the caller has
+/// already pre-lowered the receiver (fast-path enters here after the caller
+/// has run the type-gate on the pre-lowered operand). Skip the alias-root
+/// sever + `lower_expr(receiver)` — the caller ran the sever before the
+/// pre-lower and passes the exact same operand semantics. `None` is unused
+/// today but kept for symmetry with the earlier no-caller-gate shape.
 fn lower_for_enumerate(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -677,6 +815,7 @@ fn lower_for_enumerate(
     body: &Block,
     else_arm: Option<&Block>,
     write_through: bool,
+    pre_lowered: Option<(Operand, TypeId)>,
 ) {
     // Alias-root SEVER — the enumerate sibling of the `lower_for` entry sever: a
     // write-through enumerate loop over a lazy borrow-alias root (`b = a;
@@ -684,7 +823,11 @@ fn lower_for_enumerate(
     // loop (`cow_before_mutation` Case 1) so through-writes land in b's PRIVATE
     // buffer; a no-op on an owned root. Before the receiver is lowered and
     // before `save_locals`, so the rebind survives.
-    if write_through {
+    //
+    // Round XXIX Track C: when `pre_lowered` is `Some(_)`, the caller ran the
+    // sever + pre-lower in the correct order — skip both here to avoid a
+    // re-emit of the receiver (`foo().enumerate()` would double-invoke).
+    if pre_lowered.is_none() && write_through {
         if let Expr::Identifier(root_name) = &receiver.node {
             if let Some((root_local, _)) = ctx.lookup_local(root_name) {
                 ctx.cow_before_mutation(builder, root_local, receiver.span);
@@ -692,9 +835,15 @@ fn lower_for_enumerate(
         }
     }
 
-    // Lower the receiver collection
-    let mut iter_op = lower_expr(ctx, builder, receiver);
-    let raw_iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+    // Lower the receiver collection (or take the caller's pre-lowered operand).
+    let (mut iter_op, raw_iter_type) = match pre_lowered {
+        Some((op, ty)) => (op, ty),
+        None => {
+            let op = lower_expr(ctx, builder, receiver);
+            let ty = infer_operand_type_full(ctx, &op, builder);
+            (op, ty)
+        }
+    };
     // Capture the iterable's collection identity from the AST — see the
     // sibling capture in lower_for (threaded to lower_for_array).
     let iter_source_coll: Option<crate::ir::lowering::context::CollectionId> =
@@ -746,6 +895,15 @@ fn lower_for_enumerate(
 
     // len = iter.len (field index 2 for both Str and GorgetArray under uniform layout)
     // Str: {data, cap, len, alloc}. GorgetArray: {data, cap, len, elem_size}.
+    //
+    // ⚠ INVARIANT (Core #14): this `Field(2)` read is valid ONLY because the
+    // caller at `lower_for` (fast-path detection block, §Round XXIX Track C)
+    // gates on `collection_kind == Array` OR `is_string_type` before dispatch —
+    // every other Iter struct has ≤2 fields and would trip
+    // `src/lir/validate.rs:112-121`'s LIR validator (which was the panic that
+    // motivated the gate). Enforcement: the LIR validator itself in debug /
+    // `GG_VALIDATE_PASSES=1` release runs, plus the caller-side gate; no
+    // `debug_assert!` here (would be redundant with the validator).
     let len = builder.add_local(I64_TYPE, None);
     let len_place = Place {
         local: iter_local,

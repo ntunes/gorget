@@ -5032,7 +5032,15 @@ impl<'a> TypeChecker<'a> {
                                 // reject fires ONLY in the `is_enumerate`
                                 // path; a plain `for x in s:` still lowers
                                 // through the collection-iter protocol.
-                                "Set" | "HashSet" if is_enumerate => {
+                                // Round XXIX Track C: extend the reject to
+                                // Dict/HashMap. `d.enumerate()` builds a
+                                // no-`Iterator[T]`-receiver `EnumerateIter`
+                                // wrapper and SIGSEGVs at runtime (Dict/
+                                // HashMap impl `Iterable`, not `Iterator`).
+                                // Same class as Set/HashSet — the fix-it
+                                // advice `.iter().enumerate()` stays the
+                                // reference-grade spelling on both lanes.
+                                "Set" | "HashSet" | "Dict" | "HashMap" if is_enumerate => {
                                     self.error(
                                         SemanticErrorKind::EnumerateOnNonIterator {
                                             type_: name.clone(),
@@ -5041,7 +5049,7 @@ impl<'a> TypeChecker<'a> {
                                     );
                                     args.first().copied()
                                 }
-                                "Set" | "HashSet" => args.first().copied(),
+                                "Set" | "HashSet" | "Dict" | "HashMap" => args.first().copied(),
                                 _ => None,
                             }
                         }

@@ -1,0 +1,11 @@
+# Round XXIX Track C — `Dict.iter().enumerate()` (chained). `DictIter[K,V]`
+# is a 2-field iter struct; the pre-fix fast-path read `Field(2)` and
+# panicked. Post-fix: the receiver-type gate sees `DictIter` as non-Array
+# and falls through to the general iterable protocol; iterating the
+# `EnumerateIter[DictIter[String, int], (String, int)]` prints the
+# insertion-ordered index-tagged entries.
+int main():
+    Dict[String, int] d = {"a": 1, "b": 2}
+    for (i, kv) in d.iter().enumerate():
+        print(f"{i}: {kv._0}={kv._1}")
+    return 0

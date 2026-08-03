@@ -1,0 +1,17 @@
+# Round XXIX Track C — BEFORE fixture for the
+# `advice_fixtures_have_working_remedy` lint's `E_EnumerateOnNonIterator` row.
+# The lint asserts this fixture trips the diagnostic (RED) at check-time; the
+# paired `enumerate_on_set_after.gg` (applying the fix-it advice) compiles
+# and runs. Together they retire the class "compiler emits fix-it advising
+# code that itself doesn't compile/crashes" — required same-round because
+# Round XXVII Track D added the reject but the advice was crashing (SetIter
+# had 2 fields; the fast-path read `Field(2)`). Track C landed the fast-path
+# gate AND this paired-fixture guard so future fix-its can't slip in without
+# an executable remedy.
+int main():
+    Set[int] s = {}
+    s.add(7)
+    s.add(8)
+    for (i, x) in s.enumerate():
+        print(f"{i}->{x}")
+    return 0

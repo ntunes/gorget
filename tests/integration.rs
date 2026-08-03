@@ -4592,17 +4592,44 @@ fn ggdef_for_in_set_positive() {
     run_gg("ggdef_for_in_set_positive.gg", "6");
 }
 
-/// `.iter().enumerate()` over a Set panics lir-lowering ("field index 2 out of
-/// range for SetIter__int64_t (has 2 fields)") — and it is the exact remedy the
-/// `E_EnumerateOnNonIterator` reject advises, so the compiler advises code it
-/// then crashes on. Asserts the INTENDED output; un-ignore when the adapter
-/// stops assuming the 3-field ArrayIter shape. TODO.md.
+/// Round XXIX Track C — `Set.iter().enumerate()` now lowers correctly. The
+/// fast-path at `src/ir/lowering/stmts/for_loops.rs` gates on typed
+/// `collection_kind == Array` / `is_string_type`; non-Array receivers fall
+/// through to `lower_for_iterable` via synthetic-local substitution.
+/// (Historical: the fast-path unconditionally read `Field(2)` off the iter
+/// struct — `SetIter__T` has only 2 fields, so the LIR validator panicked
+/// with `field index 2 out of range`. The advice from `E_EnumerateOnNonIterator`
+/// was correct in principle but crashed the compiler.)
 #[test]
-#[ignore = "KNOWN GAP: Set.iter().enumerate() panics lir-lowering (SetIter has 2 fields, \
-the enumerate adapter reads field 2) — and it is the fix-it the E_EnumerateOnNonIterator \
-reject prints; TODO.md."]
 fn set_iter_enumerate_lir_panic() {
-    run_gg("known_gaps/set_iter_enumerate_lir_panic.gg", "0->7\n1->8");
+    run_gg("set_iter_enumerate_lir_panic.gg", "0->7\n1->8");
+}
+
+/// Round XXIX Track C — `Vector.iter().enumerate()` (chained). Distinct
+/// from the direct-enumerate fast-path `v.enumerate()`.
+#[test]
+fn vector_iter_enumerate() {
+    run_gg("vector_iter_enumerate.gg", "0->7\n1->8");
+}
+
+/// Round XXIX Track C — `Dict.iter().enumerate()` (chained).
+#[test]
+fn dict_iter_enumerate() {
+    run_gg("dict_iter_enumerate.gg", "0: a=1\n1: b=2");
+}
+
+/// Round XXIX Track C — `Dict.enumerate()` (DIRECT, no `.iter()`) rejects
+/// at check with `E_EnumerateOnNonIterator`. Extended the Set/HashSet
+/// reject at `src/semantic/typecheck.rs` to Dict/HashMap this round.
+#[test]
+fn dict_direct_enumerate_rejects() {
+    check_gg_fails("dict_direct_enumerate_rejects.gg", "E_EnumerateOnNonIterator");
+}
+
+/// Round XXIX Track C — adapter-chain shape `xs.iter().map(f).enumerate()`.
+#[test]
+fn iter_map_enumerate() {
+    run_gg("iter_map_enumerate.gg", "0->14\n1->16");
 }
 
 // KNOWN GAP — `equip` expression-body return of an OWNING `!` param
@@ -41205,4 +41232,53 @@ fn nonexistent_method_reject_hashset() {
 #[test]
 fn nonexistent_method_reject_string() {
     check_gg_fails("nonexistent_method_reject_string.gg", "E_NoMethodFound");
+}
+
+// ============================================================================
+// Round XXIX Track C — fix-it advice validity guard.
+// Paired with `tests/lints.rs::advice_diagnostic_registration` (the census)
+// and `tests/lints.rs::for_loop_fast_path_method_names_arms_count` (the arm
+// count on the class-fix's write site).
+// ============================================================================
+
+/// Round XXIX Track C class-retirement guard (Core #6): for every `E_*`
+/// diagnostic that emits fix-it advice (a concrete code snippet the user
+/// is told to write), a paired (before, after) fixture must exist:
+/// - `before` — trips the diagnostic (`check_gg_fails` — RED at check).
+/// - `after` — applies the advice literally + compiles + runs to completion
+///   (`run_gg` with expected stdout).
+///
+/// This retires the CLASS "compiler emits fix-it advising code that itself
+/// doesn't compile / crashes" — which is exactly what Round XXVII Track D's
+/// `E_EnumerateOnNonIterator` reject was doing before Track C landed the
+/// fast-path receiver-type gate (the advice `.iter().enumerate()` panicked
+/// the LIR validator on `SetIter__T`).
+///
+/// **Initial row:** `E_EnumerateOnNonIterator` — the one Track C closes.
+/// The 18 other MESSAGE-level fix-it-advice diagnostics registered in
+/// `tests/lints.rs::advice_diagnostic_registration` are the consolidated
+/// follow-up scope: each future round adds ONE row here as it lands the
+/// paired fixtures for the next `E_*`.
+#[test]
+fn advice_fixtures_have_working_remedy() {
+    /// (E_code, before_fixture, after_fixture, expected_stdout_of_after).
+    /// Every row this table gains eventually corresponds to an entry in
+    /// `tests/lints.rs::FIX_IT_ADVICE_ROWS`. When the census overtakes this
+    /// table by too much (say, 3+ unpaired rows), file a rigor-round track
+    /// to close the gap.
+    const ROWS: &[(&str, &str, &str, &str)] = &[
+        (
+            "E_EnumerateOnNonIterator",
+            "lints/enumerate_on_set_before.gg",
+            "lints/enumerate_on_set_after.gg",
+            "0->7\n1->8",
+        ),
+    ];
+
+    for (code, before, after, expected) in ROWS {
+        // `check_gg_fails` asserts non-zero exit + stderr contains the code.
+        check_gg_fails(before, code);
+        // `run_gg` asserts build succeeds + binary exits 0 + stdout matches.
+        run_gg(after, expected);
+    }
 }

@@ -1,0 +1,10 @@
+# Round XXIX Track C — adapter-chain shape: `xs.iter().map(f).enumerate()`.
+# Receiver of `.enumerate()` is `MapIter[VectorIter[int], int, int, ...]` —
+# a 2-field iter (`inner`, closure); pre-fix fast-path panicked with
+# `field index 2 out of range for MapIter__…`. Verifies the fix generalizes
+# beyond single-adapter shapes to arbitrary iterator-chain receivers.
+int main():
+    Vector[int] v = [7, 8]
+    for (i, x) in v.iter().map((int y): y * 2).enumerate():
+        print(f"{i}->{x}")
+    return 0
