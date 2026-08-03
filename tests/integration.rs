@@ -32378,9 +32378,11 @@ fn spawn_non_future_error() {
 
 #[test]
 fn borrow_across_await_error() {
-    // After str→String unification, v.to_string() returns owned String.
+    // After str→String unification, v.debug() returns owned String.
     // Provenance classifies it as owned → no borrow-across-await.
     // Note: gg check passes; build has an unrelated async codegen issue.
+    // (Round XXIX Track B: `.to_string()` was never a real Vector method;
+    // switched to `.debug()` — same owned-String semantics the test asserts.)
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures/borrow_across_await_error.gg");
     let output = build_with_timeout(
