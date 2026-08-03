@@ -1,0 +1,44 @@
+# KNOWN GAP — Round XXIX Track A RESIDUAL, MEMORY-UNSAFE, BOTH BACKENDS.
+# The `E_NotIndexable` gate does not cover F-STRING INTERPOLATION, so the
+# out-of-bounds read Track A retired everywhere else is still live here.
+#
+# MEASURED AT HEAD (2026-08-03), post-`2edb9c06`:
+#   int y = p[5]              -> error[E_NotIndexable]   (correctly rejected)
+#   int y = 0 + p[5]          -> error[E_NotIndexable]   (binop operand: ok)
+#   print(p[5])               -> error[E_NotIndexable]   (call arg: ok)
+#   print(f"{p[5]}")          -> "OK: no semantic errors"  <-- THE HOLE
+#   String s = f"{p[5]}"      -> "OK: no semantic errors"  <-- same hole
+#
+# And it is not merely a missing diagnostic — the lowering still runs:
+#   C    : 11 22 281474067791448
+#   LLVM : 11 22 281473633924176
+# i.e. p[5] reads OUT OF BOUNDS past a 2-field struct, exactly as before the
+# fix. Identical on both backends => >= 2 bugs by Core #8, never "benign".
+#
+# ROOT: the gate lives at the typecheck `Expr::Index` arm; the f-string
+# interpolation path does not route through it. This is a known SIBLING SITE
+# in this tree, with precedent: `E_AmpInOperandPosition` had to be applied at
+# BOTH `src/semantic/safety/check_expr.rs:349` (main walker) AND `:1592` (the
+# f-string interp walker sibling). Track A applied one and missed the other —
+# Core #4: fix the class, and the class includes the interp walker.
+#
+# ⚠ WHY THIS WAS EASY TO MISS, recorded because it bit twice: an f-string
+# swallows typecheck errors, so AGENTS.md Core #15(d) says never probe
+# accept/reject inside one. That rule exists because the probe lies — but the
+# same property is ALSO a live compiler defect, and the rule's existence made
+# it read as a known testing artifact rather than a hole to close. The
+# graduated `index_ungated_by_index_trait.gg` header documents the swallow
+# while asserting only the non-f-string form, so the fixture set is honest
+# and the defect is still unguarded. This fixture is that guard.
+#
+# INTENDED: `error[E_NotIndexable]` here too. Graduate when the interp walker
+# is gated. A no-new-holes guard (an arm/site count over the positions that
+# must consult the Index gate) is what retires the class.
+struct Pair:
+    int a
+    int b
+
+int main():
+    Pair p = Pair(11, 22)
+    print(f"{p[0]} {p[1]} {p[5]}")
+    return 0

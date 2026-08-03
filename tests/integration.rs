@@ -4500,6 +4500,23 @@ fn index_ungated_by_index_trait() {
     check_gg_fails("index_ungated_by_index_trait.gg", "error[E_NotIndexable]");
 }
 
+/// Round XXIX Track A RESIDUAL: the `E_NotIndexable` gate does not cover
+/// f-string interpolation, so `print(f"{p[5]}")` still compiles and still
+/// reads OUT OF BOUNDS on both backends (C `11 22 281474067791448`, LLVM
+/// `11 22 281473633924176`) while `int y = p[5]`, `0 + p[5]` and `print(p[5])`
+/// all reject correctly. Known sibling site with precedent — the
+/// `E_AmpInOperandPosition` reject needed both the main walker and the
+/// f-string interp walker (`check_expr.rs:349` + `:1592`). TODO.md.
+#[test]
+#[ignore = "KNOWN GAP (Track A residual): the Index gate misses f-string interpolation — \
+print(f\"{p[5]}\") is accepted and still reads out of bounds on both backends; TODO.md."]
+fn index_not_gated_in_fstring_interp() {
+    check_gg_fails(
+        "known_gaps/index_not_gated_in_fstring_interp.gg",
+        "error[E_NotIndexable]",
+    );
+}
+
 /// Round XXIX Track A sibling: HashSet[T]. `HashSet` and `Set` are separate
 /// collection kinds (`CollectionKind::Set` vs `CollectionKind::OrderedSet`);
 /// pinning both cells guards against a future arm that re-adds only ONE.
