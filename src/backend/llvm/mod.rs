@@ -814,7 +814,7 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
                 }
                 // Typed read: `computed_c_size` is the canonical source of
                 // truth, set at registration for runtime singletons
-                // (GorgetArray = 64, GorgetMap = 152, GorgetClosure = 16,
+                // (GorgetArray = 64, GorgetMap = 192, GorgetClosure = 16,
                 // …) and populated by `compute_struct_sizes()` for
                 // user-defined structs / Box / Task / Guard at the end of
                 // LIR lowering. Replaces a former unconditional
@@ -855,9 +855,9 @@ fn sizeof_lir_type(ty: &LirType, structs: &[StructDef], snames: &HashMap<u32, St
         LirType::Resource { kind, .. } => match kind {
             crate::lir::ResourceKind::GorgetString => 32,
             crate::lir::ResourceKind::GorgetArray => 64,
-            crate::lir::ResourceKind::GorgetMap => 152,
+            crate::lir::ResourceKind::GorgetMap => 192,
             // GorgetSet aliases GorgetMap layout.
-            crate::lir::ResourceKind::GorgetSet => 152,
+            crate::lir::ResourceKind::GorgetSet => 192,
             crate::lir::ResourceKind::GorgetClosure => 16,
             // RefCounted handles are pointer-shaped.
             crate::lir::ResourceKind::RefCounted => 8,
@@ -2227,8 +2227,8 @@ fn emit_global_runtime_init(
         | "gorget_map_new"  | "gorget_map_new_str"
         | "gorget_set_new"  | "gorget_set_new_str"
         // Ordered Set ctors return GorgetSet (a `typedef GorgetMap` in C —
-        // same 152-byte layout). Without this arm a `static Set` init falls
-        // to the scalar `i64` path below → the 152-byte handle is truncated
+        // same 192-byte layout). Without this arm a `static Set` init falls
+        // to the scalar `i64` path below → the 192-byte handle is truncated
         // to a corrupt pointer-sized value → segfault on first `.add`.
         | "gorget_ordered_set_new" | "gorget_ordered_set_new_str"
     ) {
@@ -2296,7 +2296,7 @@ fn emit_global_init_arg_llvm(
             // `sizeof(Point)` resolved at cc-time). Compute the real size from
             // `module.structs` when the name resolves there; otherwise fall to
             // `c_sizeof_name` (primitives, and collection handle structs —
-            // `"GorgetMap"`/`"GorgetSet"` → 152, `"GorgetArray"` → 64 — owned
+            // `"GorgetMap"`/`"GorgetSet"` → 192, `"GorgetArray"` → 64 — owned
             // by Bug 1). The `t ∈ module.structs` gate routes ONLY user
             // structs here; no GorgetMap/Set exclusion is needed.
             let sz = if module.structs.iter().any(|s| s.name == *t) {
@@ -2358,12 +2358,14 @@ fn c_sizeof_name(name: &str) -> usize {
         // `collection_arg_sizeof_c_type`; without these arms the `_ => 8`
         // default truncates the handle to size 8 → bounds panic.
         "GorgetArray" => 64,
-        // 152 is the authoritative GorgetMap struct size (19 × 8-byte fields,
-        // `runtime_preamble.c:328-349`; GorgetSet is `typedef GorgetMap`), used
-        // everywhere on the C side (`src/lir/types.rs:150`
-        // `computed_c_size: Some(152)`). NOT 160 — `sizeof_struct_by_name`'s
-        // 160 (above) is a separate pre-existing over-size to be cleaned up.
-        "GorgetMap" | "GorgetSet" => 152,
+        // 192 is the authoritative GorgetMap struct size (24 × 8-byte fields:
+        // 19 legacy + 5 D39 dense-mode fields appended at struct END; see
+        // `runtime_preamble.c` GorgetMap; GorgetSet is `typedef GorgetMap`),
+        // used everywhere on the C side (`src/lir/types.rs`
+        // `computed_c_size: Some(192)`). Sibling `sizeof_struct_by_name`
+        // (below) matches — the pre-existing `160` over-size was cleaned up
+        // in the same D39 Phase A.1 landing.
+        "GorgetMap" | "GorgetSet" => 192,
         _ => 8, // default
     }
 }
@@ -2378,7 +2380,7 @@ fn sizeof_struct_by_name(name: &str, module: &LirModule, snames: &HashMap<u32, S
     match name {
         "GorgetString" => 32,
         "GorgetArray" => 64,
-        "GorgetMap" | "GorgetSet" => 160,
+        "GorgetMap" | "GorgetSet" => 192,
         _ => 64,
     }
 }
@@ -4307,7 +4309,7 @@ fn emit_inst(
             // a `PtrTo(SomeStruct)` (which is still pointer-typed at the wire).
             // Without this guard, a `StructInit` for a struct like
             // `DictIter { source: ptr; cursor: i64 }` lowers the
-            // `source <- &map` field-store into a 152-byte memcpy of the
+            // `source <- &map` field-store into a 192-byte memcpy of the
             // GorgetMap contents, blowing past the 16-byte slot and corrupting
             // the caller's stack.
             let dest_field_ty = func.blocks.iter().find_map(|b| {

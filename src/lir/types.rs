@@ -125,9 +125,12 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             elem_drop_fn: None, elem_clone_fn: None, materialize_fn: None, c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         },
         // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V].
-        // C layout: 20 fields × 8 = 160 bytes. cap at offset +8 matches the
-        // generic view-discriminator prefix shared with Str and GorgetArray.
-        // LIR models 13 fields; the extra 7 are runtime-internal function pointers.
+        // C layout: 24 fields × 8 = 192 bytes (see runtime_preamble.c GorgetMap
+        // — 19 legacy fields + 5 D39 dense-mode fields appended at struct END).
+        // cap at offset +8 matches the generic view-discriminator prefix shared
+        // with Str and GorgetArray. LIR models 13 layout/data fields; the
+        // trailing 11 slots (6 runtime function pointers + 5 D39 dense-mode
+        // fields NULL/0 in legacy mode) are covered by the c_size trailing pad.
         StructDef {
             name: "GorgetMap".into(),
             fields: vec![
@@ -147,14 +150,14 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(152), computed_c_align: Some(8),
+            computed_c_size: Some(192), computed_c_align: Some(8),
             elem_drop_fn: Some("gorget_map_free".into()),
             elem_clone_fn: Some("gorget_map_clone_inplace".into()),
             materialize_fn: None,
             c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         },
         // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T].
-        // Same C layout as GorgetMap: 160 bytes.
+        // Same C layout as GorgetMap: 192 bytes.
         StructDef {
             name: "GorgetSet".into(),
             fields: vec![
@@ -174,7 +177,7 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
-            computed_c_size: Some(152), computed_c_align: Some(8),
+            computed_c_size: Some(192), computed_c_align: Some(8),
             elem_drop_fn: Some("gorget_set_free".into()),
             elem_clone_fn: Some("gorget_set_clone_inplace".into()),
             materialize_fn: None,

@@ -375,6 +375,12 @@ typedef struct {
     __gorget_drop_fn key_clone;         // Full clone (always-clone). Same as val_clone but for keys.
     __gorget_drop_fn val_materialize;   // CoW materialize on insert (cap==0-only for strings). NULL = no-op.
     __gorget_drop_fn key_materialize;   // CoW materialize on insert. Symmetric with gorget_array's elem_materialize.
+    // D39 dense-mode fields (NULL/0 in legacy mode — Dict/Set STAY LEGACY until A.2)
+    void*      entries_keys;      // dense: contiguous key array, size = key_size * entries_cap
+    void*      entries_values;    // dense: contiguous value array, size = val_size * entries_cap
+    size_t     entries_len;       // == count when dense (invariant obvious)
+    size_t     entries_cap;
+    int32_t*   indices;           // hash-slot → entries-index; -1 empty, -2 tombstone
 } GorgetMap;
 
 typedef GorgetMap GorgetSet;

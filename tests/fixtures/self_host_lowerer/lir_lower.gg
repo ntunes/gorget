@@ -92,11 +92,13 @@ void register_builtin_structs(LirModule &m, Dict[String, int] &sr):
     int task_id = lir_mod_add_struct(&m, LirStructDef("TaskHandle", task_fields, 0, false, 16, -1, false))
     sr.put("TaskHandle", task_id)
 
-    # GorgetMap: 19 fields, 152 bytes (size from GORGET_MAP_STRUCT_SIZE;
-    # see runtime_preamble.c GorgetMap). The field list below names only the
+    # GorgetMap: 24 fields, 192 bytes (size from GORGET_MAP_STRUCT_SIZE;
+    # see runtime_preamble.c GorgetMap — 19 legacy fields + 5 D39 dense-mode
+    # fields appended at struct END). The field list below names only the
     # 13 layout/data fields the lowerer needs for member access; the trailing
-    # 6 function-pointer slots (drop/clone/materialize) are layout-only — the
-    # explicit struct size, not this list, is what backend allocation reads.
+    # 11 slots (6 function-pointer slots drop/clone/materialize + 5 D39
+    # dense-mode fields NULL/0 in legacy mode) are layout-only — the explicit
+    # struct size, not this list, is what backend allocation reads.
     Vector[StructField] map_fields = []
     map_fields.push(StructField("keys", LT_PTR))
     map_fields.push(StructField("cap", LT_I64))

@@ -338,14 +338,17 @@ struct LirStructDef:
 
 # Single source of truth for the GorgetMap / GorgetSet runtime struct size.
 # MUST match the real C struct in `src/backend/c/runtime/runtime_preamble.c`
-# (`typedef struct { ... } GorgetMap;` — 19 pointer/size_t fields × 8 bytes =
-# 152 bytes; `GorgetSet` is a typedef alias) and Rust gg's `src/lir/lower/
-# types.rs` (`GorgetMap | GorgetSet => 152`). Over-counting this size
-# inflates every enum/union/array layout that embeds a Dict/Set and overflows
-# the stack slot in `gorget_array_push` — keep all consumers reading THIS
-# constant (devbook/24 rule 3 "one source of truth"; pinned by
+# (`typedef struct { ... } GorgetMap;` — 24 pointer/size_t fields × 8 bytes =
+# 192 bytes: 19 legacy fields + 5 D39 dense-mode fields appended at struct
+# END; `GorgetSet` is a typedef alias) and Rust gg's `src/lir/lower/types.rs`
+# (`GorgetMap | GorgetSet => 192`). Over-counting this size inflates every
+# enum/union/array layout that embeds a Dict/Set and overflows the stack slot
+# in `gorget_array_push`; UNDER-counting it (e.g. reverting to the legacy 152
+# after the D39 append) truncates every Dict/Set alloca so the runtime's
+# stores off the tail walk into adjacent stack slots — keep all consumers
+# reading THIS constant (devbook/24 rule 3 "one source of truth"; pinned by
 # `tests/lints.rs::self_host_gorget_map_struct_size`).
-const int GORGET_MAP_STRUCT_SIZE = 152
+const int GORGET_MAP_STRUCT_SIZE = 192
 
 # ── Globals ─────────────────────────────────────────────────────
 

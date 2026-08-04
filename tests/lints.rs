@@ -5347,10 +5347,11 @@ fn self_host_safety_walker_is_exhaustive() {
 /// One-source-of-truth ratchet (CLAUDE.md Core invariant #6 / devbook/24 rule 3)
 /// for the GorgetMap / GorgetSet runtime struct size in the self-host lowerer.
 ///
-/// The real C `GorgetMap` (`src/backend/c/runtime/runtime_preamble.c`, 19
-/// pointer/size_t fields × 8 = 152 bytes; `GorgetSet` is a typedef alias) and
-/// Rust gg (`src/lir/lower/types.rs`, `GorgetMap | GorgetSet => 152`) both use
-/// **152**. The self-host previously hand-duplicated this size as the literal
+/// The real C `GorgetMap` (`src/backend/c/runtime/runtime_preamble.c`, 24
+/// pointer/size_t fields × 8 = 192 bytes: 19 legacy fields + 5 D39 dense-mode
+/// fields appended at struct END; `GorgetSet` is a typedef alias) and Rust gg
+/// (`src/lir/lower/types.rs`, `GorgetMap | GorgetSet => 192`) both use
+/// **192**. The self-host previously hand-duplicated this size as the literal
 /// `184` across 9 sites in `lir_lower.gg` (2 struct defs + 7 ResourceMetadata
 /// returns). That over-count (the size of an out-of-date 23-field layout)
 /// inflated every enum/union/array layout embedding a Dict/Set, so
@@ -5359,14 +5360,14 @@ fn self_host_safety_walker_is_exhaustive() {
 /// `GORGET_MAP_STRUCT_SIZE` constant in `lir.gg`.
 ///
 /// This lint pins three invariants so the divergent literal cannot creep back:
-///   (a) `GORGET_MAP_STRUCT_SIZE` is defined as `152` in `lir.gg`.
-///   (b) Rust gg still agrees (`GorgetMap | GorgetSet => 152` in types.rs).
+///   (a) `GORGET_MAP_STRUCT_SIZE` is defined as `192` in `lir.gg`.
+///   (b) Rust gg still agrees (`GorgetMap | GorgetSet => 192` in types.rs).
 ///   (c) No raw `184` literal lingers in `lir_lower.gg`, AND every GorgetMap /
 ///       GorgetSet `ResourceMetadata`/`LirStructDef` size site reads the named
 ///       constant rather than a bare integer (so all 9 stay single-sourced).
 #[test]
 fn self_host_gorget_map_struct_size() {
-    const EXPECTED_SIZE: usize = 152;
+    const EXPECTED_SIZE: usize = 192;
     // ≥9 single-sourced size sites: 2 LirStructDef + 7 ResourceMetadata.
     const MIN_CONSTANT_USE_SITES: usize = 9;
 
@@ -5381,9 +5382,13 @@ fn self_host_gorget_map_struct_size() {
         lir.lines().any(|l| l.trim_start().starts_with(&const_def)),
         "self-host `GORGET_MAP_STRUCT_SIZE` is not defined as `{EXPECTED_SIZE}` in \
          tests/fixtures/self_host_lowerer/lir.gg. The GorgetMap/GorgetSet runtime \
-         struct is 19 fields × 8 bytes = 152 (runtime_preamble.c). Do NOT change this \
-         to 184 (the stale 23-field over-count that overflowed gorget_array_push on the \
-         xml fixtures) without first changing the actual runtime struct AND Rust gg.",
+         struct is 24 fields × 8 bytes = 192 (19 legacy + 5 D39 dense-mode fields \
+         appended at struct END; runtime_preamble.c). Do NOT change this to 184 \
+         (the stale 23-field over-count that overflowed gorget_array_push on the \
+         xml fixtures) or back to 152 (the pre-D39 legacy size — truncates the \
+         alloca so runtime stores to entries_keys/values/len/cap/indices walk into \
+         adjacent stack slots) without first changing the actual runtime struct \
+         AND Rust gg.",
     );
 
     // (b) Rust gg agrees — the cross-compiler source of truth.

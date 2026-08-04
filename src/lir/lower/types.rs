@@ -156,7 +156,7 @@ pub(super) fn lir_type_sizeof(ty: &LirType) -> usize {
         LirType::Resource { kind, .. } => match kind {
             crate::lir::ResourceKind::GorgetString => 32,
             crate::lir::ResourceKind::GorgetArray => 64,
-            crate::lir::ResourceKind::GorgetMap | crate::lir::ResourceKind::GorgetSet => 152,
+            crate::lir::ResourceKind::GorgetMap | crate::lir::ResourceKind::GorgetSet => 192,
             crate::lir::ResourceKind::GorgetClosure => 16,
             crate::lir::ResourceKind::RefCounted => 8,
         },
@@ -362,7 +362,7 @@ pub fn opaque_runtime_size(name: &str) -> Option<usize> {
         // Core collections (layouts match c_runtime.rs typedefs).
         "GorgetString" | "Str" => 32,
         "GorgetArray" => 64,
-        "GorgetMap" | "GorgetSet" => 152,
+        "GorgetMap" | "GorgetSet" => 192,
         "GorgetClosure" => 16,
         "GorgetRange" => 24,
         // Concurrency opaque handles — pointer-sized.
@@ -486,7 +486,7 @@ pub fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
         LirType::Struct(sid) => {
             if let Some(sd) = structs.get(sid.0 as usize) {
                 // Typed read — `computed_c_size` is set at registration for
-                // runtime singletons (GorgetArray = 64, GorgetMap = 152, …)
+                // runtime singletons (GorgetArray = 64, GorgetMap = 192, …)
                 // and populated by `compute_struct_sizes()` for everyone
                 // else. Falls back to the singleton-name table for
                 // pre-compute calls (during `compute_struct_sizes` itself)
@@ -506,7 +506,7 @@ pub fn c_sizeof_lir_type(ty: &LirType, structs: &[StructDef]) -> usize {
         LirType::Resource { kind, .. } => match kind {
             crate::lir::ResourceKind::GorgetString => 32,
             crate::lir::ResourceKind::GorgetArray => 64,
-            crate::lir::ResourceKind::GorgetMap | crate::lir::ResourceKind::GorgetSet => 152,
+            crate::lir::ResourceKind::GorgetMap | crate::lir::ResourceKind::GorgetSet => 192,
             crate::lir::ResourceKind::GorgetClosure => 16,
             crate::lir::ResourceKind::RefCounted => 8,
         },
