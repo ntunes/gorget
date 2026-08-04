@@ -1847,6 +1847,53 @@ bool eval_meta_variant_names(SpannedExpr iter_e, Dict[String, String] tn_env, Gi
             pass
     return false
 
+# Resolve `variant_payloads(T)` to (variant-name, payload-inner-type) pairs
+# for the concrete enum T. Mirrors Rust `meta.rs:3091-3155`: for each
+# single-payload variant, derive the inner type from the field's registered
+# C-level name by stripping the generic-arg prefix (post-`__` suffix) and
+# demangling to the source-level spelling; when there is no `__`, use the
+# raw name with the `Str`/`GorgetString`→`String` normalisation. Unit or
+# multi-field variants get an empty inner type (Rust behaviour). Sets the
+# return to false (caller leaves the meta-for inert) if unrecognized or
+# not an enum.
+bool eval_meta_variant_payloads(SpannedExpr iter_e, Dict[String, String] tn_env, GirModule gmod, Vector[String] &out_names, Vector[String] &out_types):
+    match iter_e.expr:
+        case ECall(callee, args, _):
+            match (*callee).expr:
+                case EIdentifier(fname):
+                    if fname == "variant_payloads" and args.len() == 1:
+                        match args.get(0).unwrap().value.expr:
+                            case EIdentifier(tparam):
+                                String concrete = tparam
+                                if tn_env.contains(tparam):
+                                    concrete = tn_env.get(tparam).unwrap()
+                                if gmod.type_infos.contains(concrete):
+                                    GirTypeInfo ti = gmod.type_infos.get(concrete).unwrap()
+                                    if ti.is_enum:
+                                        for v in ti.variants:
+                                            out_names.push(v.name.clone())
+                                            String inner = ""
+                                            if v.fields.len() == 1:
+                                                String raw = v.fields.get(0).unwrap().type_name
+                                                int idx = raw.index_of("__").unwrap_or(-1)
+                                                if idx >= 0:
+                                                    String suffix = raw.slice(idx + 2, raw.len())
+                                                    inner = demangle_field_type_name(suffix)
+                                                else:
+                                                    if raw == "Str" or raw == "GorgetString":
+                                                        inner = "String"
+                                                    else:
+                                                        inner = raw
+                                            out_types.push(inner)
+                                        return true
+                            else:
+                                pass
+                else:
+                    pass
+        else:
+            pass
+    return false
+
 # Resolve `field_names(T)` to the list of struct field names (declaration
 # order) for the concrete struct T. Mirrors Rust meta.rs:2924 field_names
 # -> s.fields.map(|f| f.name). Sets the return to false (caller leaves the
@@ -2065,6 +2112,30 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                             for us in unrolled:
                                 out.push(us)
                             fi += 1
+                # `variant_payloads(T)` → (variant-name, payload-inner-type)
+                # pairs, two loop vars. Statement-level counterpart of the
+                # MatchItem-level `SMetaForMatch` expansion in
+                # `meta.gg:expand_meta_for_arms`; Round XXX Track E's
+                # `interp_meta_for_two_var_payloads` fixture exercises the
+                # bare-statement form.
+                if mf_vars.len() == 2 and not handled:
+                    Vector[String] vpnames = Vector[String]()
+                    Vector[String] vptypes = Vector[String]()
+                    if eval_meta_variant_payloads(mf_iter, tn_env, gmod, &vpnames, &vptypes):
+                        handled = true
+                        String vpvar_n = mf_vars.get(0).unwrap()
+                        String vpvar_t = mf_vars.get(1).unwrap()
+                        int vpi = 0
+                        while vpi < vpnames.len():
+                            Dict[String, String] sv = {}
+                            Dict[String, int] iv = {}
+                            sv.put(vpvar_n.clone(), vpnames.get(vpi).unwrap())
+                            sv.put(vpvar_t.clone(), vptypes.get(vpi).unwrap())
+                            Vector[Stmt] sub_body = subst_mf_stmts(mf_body, &sv, &iv)
+                            Vector[Stmt] unrolled = evaluate_delayed_meta_stmts(sub_body, &tn_env, &int_env, &gmod)
+                            for us in unrolled:
+                                out.push(us)
+                            vpi += 1
                 # `field_names(T)` → struct field names, one loop var.
                 if mf_vars.len() == 1 and not handled:
                     Vector[String] fonly = Vector[String]()
@@ -2144,9 +2215,9 @@ Vector[Stmt] evaluate_delayed_meta_stmts(Vector[Stmt] stmts, Dict[String, String
                         else:
                             pass
                 if not handled:
-                    # Unrecognized iterable (variant_payloads, or unevaluable
-                    # T): leave inert (Rust drops it too). The later lower_stmt
-                    # SMetaFor arm is a no-op.
+                    # Unrecognized iterable or unevaluable T: leave inert
+                    # (Rust drops it too). The later lower_stmt SMetaFor arm
+                    # is a no-op.
                     pass
             case SMetaMatch(mm_scrut, mm_arms, mm_else):
                 # PROTOTYPE (deep-meta): evaluate the scrutinee, find the first

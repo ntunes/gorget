@@ -26541,7 +26541,17 @@ fn self_host_runtime_diff() {
     // +3, Track G +4). D.A.2c-plus dense-mode activation with the drain vacate fix
     // holds the count at 1324 (2 drain-resource fixtures restored from CRASH → MATCH,
     // net-zero vs baseline). Lock in the gain to catch future regressions.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1324;
+    // Ratcheted 2026-08-04 (Round XXX Track H — SH lowerer statement-level
+    // `variant_payloads` port at `lower_generics.gg:evaluate_delayed_meta_stmts`
+    // + companion `eval_meta_variant_payloads` helper): +1 MATCH from
+    // `interp_meta_for_two_var_payloads.gg` (Track E's fixture, exercising the
+    // bare `meta for vname, T in variant_payloads(Shape):` at function-body
+    // level). Pre-fix SH lowerer left the statement inert → empty stdout vs
+    // Rust's `Circle\nSquare\nTag` (WRONG-OUTPUT non-MATCH row); post-fix SH
+    // splices the unrolled per-variant body just like Rust's
+    // `evaluate_delayed_meta_block`. Also restores the non-MATCH ceiling from
+    // 124 back to its Round XXX baseline of 123 (Track A guard).
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1325;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
