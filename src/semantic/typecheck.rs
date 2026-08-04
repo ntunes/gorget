@@ -1345,11 +1345,18 @@ impl<'a> TypeChecker<'a> {
                 self.errors.extend(interp_errs.into_iter().filter(|e| {
                     // ⚠ ARM COUNT PINNED at tests/lints.rs::interp_error_retention_arms_count.
                     // If you add a new gate that emits a semantic error the user
-                    // should see inside `f"{...}"` too, ADD IT TO THIS WHITELIST
-                    // or the error is silently swallowed and the defect ships
+                    // should see inside `f"{...}"`, ADD IT TO THIS WHITELIST or
+                    // the error is silently swallowed and the defect ships
                     // (Round XXIX Track A residual: NotIndexable / NotIndexableMut
-                    // were missing here → `print(f"{p[5]}")` silent-accept + OOB
-                    // read on both backends until owner's `17a3e342` filing).
+                    // missing → `print(f"{p[5]}")` silent-accept + OOB on both
+                    // backends until owner filing `17a3e342`. Sibling widening
+                    // for name/arg/field-resolution family closed by owner
+                    // filing `97cd5c01` same-round: `E_UndefinedName`,
+                    // `E_WrongArgCount`, `E_NotAFunction` + obvious siblings.)
+                    //
+                    // The whitelist DELIBERATELY EXCLUDES `TypeMismatch` — that's
+                    // the polymorphic-unify noise the truncation was originally
+                    // there to swallow (per the paragraph above).
                     matches!(
                         e.kind,
                         SemanticErrorKind::NoMethodFound { .. }
@@ -1357,6 +1364,21 @@ impl<'a> TypeChecker<'a> {
                             | SemanticErrorKind::UnwrapOnNonOptional { .. }
                             | SemanticErrorKind::NotIndexable { .. }
                             | SemanticErrorKind::NotIndexableMut { .. }
+                            // Round XXIX close sibling chip (owner filing 97cd5c01) —
+                            // name / arg / field-resolution family. All represent
+                            // "the identifier/field/function/arg genuinely doesn't
+                            // exist or the shape is wrong", never the unify-noise
+                            // TypeMismatch was the original swallow-reason for.
+                            | SemanticErrorKind::UndefinedName { .. }
+                            | SemanticErrorKind::WrongArgCount { .. }
+                            | SemanticErrorKind::NotAFunction { .. }
+                            | SemanticErrorKind::NoFieldFound { .. }
+                            | SemanticErrorKind::MissingRequiredArg { .. }
+                            | SemanticErrorKind::UnknownNamedArg { .. }
+                            | SemanticErrorKind::NotAType { .. }
+                            | SemanticErrorKind::NotAStruct { .. }
+                            | SemanticErrorKind::TupleIndexOutOfBounds { .. }
+                            | SemanticErrorKind::EnumerateOnNonIterator { .. }
                     )
                 }));
                 for seg in &s.segments {

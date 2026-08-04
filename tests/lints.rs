@@ -10286,8 +10286,10 @@ fn interp_error_retention_arms_count() {
     let start = source
         .find(marker)
         .expect("marker comment missing — did you delete the interp-error retention block?");
-    // The `matches!(...)` block follows within ~30 lines.
-    let scope = &source[start..start + 2000];
+    // The `matches!(...)` block follows within ~60 lines (the marker comment
+    // + the arm list itself, both expanded post-owner-filing 97cd5c01).
+    let scope_end = (start + 4000).min(source.len());
+    let scope = &source[start..scope_end];
     let matches_start = scope
         .find("matches!(")
         .expect("matches!(...) block not found after marker");
@@ -10298,11 +10300,15 @@ fn interp_error_retention_arms_count() {
     let block = &scope[matches_start..matches_start + block_end];
     let arm_count = block.matches("SemanticErrorKind::").count();
     assert_eq!(
-        arm_count, 5,
-        "interp-error retention whitelist arm count changed ({arm_count} vs pinned 5). \
+        arm_count, 15,
+        "interp-error retention whitelist arm count changed ({arm_count} vs pinned 15). \
          Add the new SemanticErrorKind arm here + bump the count if a new gate needs \
          its error preserved inside `f\"{{...}}\"`. Removing an arm may re-open a \
-         silent-swallow class — see Round XXIX Track A residual `17a3e342`."
+         silent-swallow class — see Round XXIX Track A residual `17a3e342` + \
+         sibling widening `97cd5c01` (name/arg/field-resolution family, closes \
+         non-UndefinedName cells; the UndefinedName cell still requires a \
+         resolve.rs fix — sink discarded at `src/semantic/resolve.rs:1526-1542` \
+         for meta-for-loop-variable safety, filed as follow-up)."
     );
 }
 
