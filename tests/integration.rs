@@ -26515,6 +26515,57 @@ fn self_host_runtime_diff() {
         );
     }
 
+    // ── PARITY-INFLOW guard: the non-MATCH backlog may never GROW ──
+    //
+    // The MATCH floor above catches parity going BACKWARDS. It does not catch
+    // the slope that actually eroded parity: MATCH rose +19 over rounds
+    // XXII→XXIX while the corpus rose +41, so the non-MATCH backlog grew
+    // 101→123 and the rate fell 92.8%→91.5%. Nothing was done wrong — Core
+    // #11/#12 mandate wide fixture nets, every new `tests/fixtures/*.gg` is
+    // auto-scanned into `runtime_parity_corpus`, and Core #9 obliges SEMANTIC
+    // changes to land on all lanes but says nothing about FIXTURES. So a round
+    // was required to grow the denominator and not required to port it. Round
+    // XXIX is the proof: corpus +14, MATCH +1 — thirteen of its own fixtures
+    // became non-MATCH rows, the largest single-round drop on record.
+    //
+    // This ceiling is that missing obligation, as a shrink-only ratchet (the
+    // shape AGENTS.md already prefers for no-new-hangs): add N fixtures and you
+    // port them to the self-host lane, or the gate goes red. Reseed DOWN in the
+    // same commit whenever the backlog shrinks. There is deliberately NO prose
+    // exemption for a fixture the self-host cannot run — that case is the
+    // step-5 OWNER ASK, so the judgement stays with the owner instead of
+    // becoming an agent-invocable carve-out.
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 123;
+    if cfg!(debug_assertions) {
+        eprintln!(
+            "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \
+             timeout-flip sensitivity as the MATCH floor; use the documented --release \
+             invocation for the gate)."
+        );
+    } else if parity_floor_active("self_host_runtime_diff") {
+        let non_match = non_excluded - matched.len();
+        assert!(
+            non_match <= RUNTIME_DIFF_NONMATCH_CEILING,
+            "self_host_runtime_diff PARITY-INFLOW regression: non-MATCH {non_match} > ceiling \
+             {RUNTIME_DIFF_NONMATCH_CEILING} (backlog GREW by {}).\n\n\
+             This round added parity-corpus fixtures without porting them to the self-host \
+             lane. Every `tests/fixtures/*.gg` is auto-scanned into the corpus, so a fixture \
+             the self-host cannot reproduce is a new non-MATCH row and permanent parity debt. \
+             The WRONG-OUTPUT / CC-FAIL / CRASH / DRIVER-FAIL backlogs above name them.\n\n\
+             Fix by PORTING them (that is the obligation this ceiling encodes), not by raising \
+             the number. If a fixture genuinely cannot run on the self-host lane, that is a \
+             step-5 OWNER ASK — there is no prose exemption here by design.\n\n\
+             Regenerate with:\n  \
+             rm tests/fixtures/self_host_lowerer/driver{{,.c}}\n  \
+             GG_RUNTIME_DIFF=1 GG_BUILD_TIMEOUT_SECS=600 cargo test --test integration \
+             --release self_host_runtime_diff -- --nocapture\n\n\
+             If the backlog SHRANK, lower RUNTIME_DIFF_NONMATCH_CEILING in the same commit to \
+             lock in the gain (lowering needs no sign-off; raising is the owner ask).\n\
+             Emergency escape hatch (loud, temporary): GG_PARITY_FLOOR_OFF=1.",
+            non_match - RUNTIME_DIFF_NONMATCH_CEILING,
+        );
+    }
+
     // ── NO-NEW-HANGS guard: the hang census's shrink-only allowlist ──
     //
     // Pins the *set* of self-host emitted-binary hangs — every CRASH whose
