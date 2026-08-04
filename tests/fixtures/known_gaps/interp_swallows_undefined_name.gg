@@ -1,0 +1,47 @@
+# KNOWN GAP — the f-string interpolation error-retention WHITELIST still
+# swallows most semantic errors. `E_NotIndexable` was added to it by XXIX-A's
+# residual fix (`8867be1a`); the arms around it are still dropped.
+#
+# This file is the UNDEFINED-NAME cell, which is the most user-visible: a
+# typo'd identifier inside an f-string is silently accepted AND LOWERED TO 0.
+#
+# MEASURED AT HEAD (2026-08-04), post-`8867be1a`:
+#   int x = nope              -> error[E_UndefinedName]      (rejects)
+#   print(f"{nope}")          -> "OK: no semantic errors"    <-- THIS FILE
+#                                builds, runs, prints `0`
+#
+# CONFIRMED SIBLING CELLS (same mechanism, same one-line-per-arm fix):
+#   helper(1) with arity 2    outside -> error[E_WrongArgCount]
+#                             inside  -> "OK: no semantic errors"
+#   no_such_fn(1)             inside  -> "OK: no semantic errors"
+# ⚠ This is a SAMPLE, not a total enumeration: the whitelist RETAINS 5 arms
+# (NoMethodFound, MethodGenericInferenceFailed, UnwrapOnNonOptional,
+# NotIndexable, NotIndexableMut) and DROPS everything else, so every other
+# typecheck error kind is a candidate cell. Whoever fixes this should enumerate
+# from the error enum, not from this list.
+#
+# NOT swallowed (different pass, correctly rejects inside f-strings):
+#   E_UseAfterMove  — the safety pass, not the typecheck interp path
+#   E_NoMethodFound — on the retention whitelist
+#
+# ROOT: `src/semantic/typecheck.rs` `Expr::StringLiteral` arm (~:1313)
+# typechecks each interpolation segment, then FILTERS the emitted errors
+# through the retain-whitelist. Anything not listed is discarded silently, so
+# the DEFAULT for a newly-added check is "invisible inside f-strings".
+#
+# ATTRIBUTION: pre-existing debt (the whitelist predates Round XXIX — it comes
+# from the round-31 primitive-method reject), SURFACED by XXIX-A's residual fix
+# which had to add two arms to it. Not owed by XXIX-A; it is one line per arm
+# in the site that fix already touched, and the new
+# `tests/lints.rs::interp_error_retention_arms_count` pin makes any change to
+# the list a reviewed action rather than a silent one.
+#
+# ⚠ This mechanism is ALSO why AGENTS.md Core #15(d) says never probe
+# accept/reject inside an f-string. The documented probe hazard and this
+# compiler defect are the same thing — which is why it reads as a testing
+# artifact and survived.
+#
+# INTENDED: `error[E_UndefinedName]` here, exactly as outside the f-string.
+int main():
+    print(f"{nope}")
+    return 0

@@ -4515,6 +4515,23 @@ fn index_not_gated_in_fstring_interp() {
     );
 }
 
+/// Sibling arm of the above, still open: the f-string interp error-retention
+/// whitelist keeps 5 arms and DROPS every other typecheck error, so a typo'd
+/// identifier inside `f"{...}"` is accepted, builds, and prints `0` — while
+/// `int x = nope` rejects with `E_UndefinedName`. Confirmed siblings:
+/// `E_WrongArgCount` and an undefined *function* are swallowed the same way.
+/// Fix is one line per arm at the site `8867be1a` already touched; the
+/// `interp_error_retention_arms_count` pin makes the change reviewed. TODO.md.
+#[test]
+#[ignore = "KNOWN GAP: f-string interp swallows E_UndefinedName (and E_WrongArgCount, \
+undefined-function) — print(f\"{nope}\") is accepted and prints 0; TODO.md."]
+fn interp_swallows_undefined_name() {
+    check_gg_fails(
+        "known_gaps/interp_swallows_undefined_name.gg",
+        "error[E_UndefinedName]",
+    );
+}
+
 /// Round XXIX Track A sibling: HashSet[T]. `HashSet` and `Set` are separate
 /// collection kinds (`CollectionKind::Set` vs `CollectionKind::OrderedSet`);
 /// pinning both cells guards against a future arm that re-adds only ONE.
