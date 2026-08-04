@@ -41,6 +41,26 @@
 # There is NO size, effort, or "big-ticket" exemption to any clause, and
 # none may be inferred. See AGENTS.md "Round lifecycle" step 5.
 #
+# ── PHASED WORK: ONE BULLET PER DECLARED PHASE ────────────────────────────
+# A single bullet describing N phases makes a landed phase INVISIBLE here: it
+# closes nothing, files nothing, reads `net +0`, and is indistinguishable from
+# a round that did nothing — even if the phase was a thousand lines of
+# measured, fixture-covered work. THAT, not size or difficulty, is the whole
+# reason architecture rounds looked like they needed an exemption. They do not:
+# encode each declared phase as its own bullet and every landing closes one
+# (`net −1`) and passes clause (c) on its merits.
+#
+# The accounting is NEUTRAL over the item's life: +(N−1) once when it is filed
+# as N bullets instead of 1, then −1 per phase landed = −1 total, identical to
+# the single-bullet encoding. Splitting manufactures no credit; it only changes
+# WHEN the credit lands, so intermediate progress stops reading as zero.
+#
+# ⚠ CORRECTING AN EXISTING FUSED ENTRY: do it BETWEEN rounds. The split is a
+# counting correction (NEITHER, above), but the raw count still moves, so a
+# round that splits an entry AND lands one of its phases nets +1 and fails.
+# Done in the interstitial, the one-time +(N−1) lands in the NEXT round's
+# BASELINE — which no round is claiming compliance against.
+#
 # Convention: net = Δknown_gaps + Δtodo_items. NEGATIVE is convergent. This
 # combined net is THE number the gate reads (AGENTS.md Round lifecycle step 5):
 # a `known_gaps` graduation counts as a closure, and "TODO alone fell" is a

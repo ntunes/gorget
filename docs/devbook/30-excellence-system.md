@@ -565,6 +565,50 @@ any clause and none may be inferred, that a clarification absent from
 rather than a precedent to follow. The XXIX entry carries an inline
 correction to that effect — history preserved, precedent neutralised.
 
+**Why architecture rounds needed no exemption after all (2026-08-04).** For
+roughly ten rounds every multi-round architectural item — the transient-view
+model, the CoW cost contract, the drop-order work — sat unstarted while
+defect rounds shipped. The obvious diagnosis was that the convergence rule
+penalised big work, and an exemption was drafted for "architecture rounds".
+
+Measuring it first killed the exemption. The arithmetic, for a round landing
+one phase of a phased item:
+
+| case | closed | filed | net | (a) | (c) |
+|---|---|---|---|---|---|
+| intermediate phase, nothing discovered | 0 | 0 | 0 | **pass** | fail by 1 |
+| intermediate phase, *k* defects found | 0 | *k* | +*k* | fail | fail |
+| final phase (item removed) | 1 | 0 | −1 | pass | pass |
+
+Clause (a) *passes* when you file nothing — `0 ≥ 2×0`. A round that
+*completes* an architecture item already passed unaided. The only real
+blocker was clause (c), and it missed **by exactly one unit**.
+
+The cause was not size and not difficulty: the metric counts *ledger
+movement* — TODO bullets and `known_gaps` fixtures — and architecture
+produces code and capability without moving either counter. A phase could be
+a thousand lines of measured, fixture-covered work and read `net +0`,
+indistinguishable from a round that did nothing. **Architecture was invisible
+to the instrument, not penalised by it.**
+
+Which made it an *encoding* problem, not a rule problem. The fix is one
+bullet per declared phase: each landing then closes one bullet, nets −1, and
+passes on its merits. It is accounting-neutral over the item's life —
+`+(N−1)` once at filing, then `−1` per phase, totalling the same `−1` as a
+single bullet — so it manufactures no credit and only changes *when* credit
+lands. One wrinkle worth knowing: correct an existing fused entry *between*
+rounds, because a round that splits an entry and then lands one of its phases
+nets `+1` and fails; done in the interstitial the one-time cost lands in the
+next round's baseline, which no round is claiming compliance against.
+
+The generalisable lesson is about instruments rather than convergence: when a
+gate reports "no progress" on work that plainly made progress, suspect the
+encoding before rewriting the rule. An exemption would have added a
+self-declared category — the same shape as the "big-ticket" carve-out revoked
+the same day — to solve a bookkeeping mismatch. What remains genuinely
+unresolved is only the discovery case: a phase that uncovers *k* defects
+still fails, and that is arguably correct, since the queue really did grow.
+
 **What the rule does not cover.** Rules like this are for the *ledger*
 (what's tracked as pending); they do NOT displace parity ratchets
 (`RUNTIME_DIFF_MATCH_FLOOR`, `GGDEF_ADJUDICATED_FLOOR`), which are code-
