@@ -2906,37 +2906,66 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     // single stub covers every element type.
     //
     // is_subset: every element of self is in other.
+    // D39 Phase A.2b (DORMANT): dense branch walks packed `entries_keys`
+    // directly (no tombstones, no state check); legacy branch keeps the
+    // cap+states scan. `__self.entries_keys` is NULL for every Dict/Set
+    // until A.2c flips the ctors → dense branch is unreachable in A.2b.
     if has_extern("gorget_set_is_subset") {
         writeln!(out, "static inline bool gorget_set_is_subset(void* __self_ptr, GorgetSet __other) {{ \
             GorgetSet __self = *(GorgetSet*)__self_ptr; \
-            for (size_t __i = 0; __i < __self.cap; __i++) {{ \
-                if (__self.states[__i] != 1) continue; \
-                void* __k = (char*)__self.keys + __i * __self.key_size; \
-                if (!gorget_set_contains(&__other, __k)) return false; \
+            if (__self.entries_keys) {{ \
+                for (size_t __i = 0; __i < __self.entries_len; __i++) {{ \
+                    void* __k = (char*)__self.entries_keys + __i * __self.key_size; \
+                    if (!gorget_set_contains(&__other, __k)) return false; \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __self.cap; __i++) {{ \
+                    if (__self.states[__i] != 1) continue; \
+                    void* __k = (char*)__self.keys + __i * __self.key_size; \
+                    if (!gorget_set_contains(&__other, __k)) return false; \
+                }} \
             }} \
             return true; \
         }}").unwrap();
     }
     // is_superset(self, other) ≡ is_subset(other, self).
+    // D39 Phase A.2b (DORMANT): dense branch on `__other.entries_keys`; see
+    // is_subset above for the invariant.
     if has_extern("gorget_set_is_superset") {
         writeln!(out, "static inline bool gorget_set_is_superset(void* __self_ptr, GorgetSet __other) {{ \
             GorgetSet* __self = (GorgetSet*)__self_ptr; \
-            for (size_t __i = 0; __i < __other.cap; __i++) {{ \
-                if (__other.states[__i] != 1) continue; \
-                void* __k = (char*)__other.keys + __i * __other.key_size; \
-                if (!gorget_set_contains(__self, __k)) return false; \
+            if (__other.entries_keys) {{ \
+                for (size_t __i = 0; __i < __other.entries_len; __i++) {{ \
+                    void* __k = (char*)__other.entries_keys + __i * __other.key_size; \
+                    if (!gorget_set_contains(__self, __k)) return false; \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __other.cap; __i++) {{ \
+                    if (__other.states[__i] != 1) continue; \
+                    void* __k = (char*)__other.keys + __i * __other.key_size; \
+                    if (!gorget_set_contains(__self, __k)) return false; \
+                }} \
             }} \
             return true; \
         }}").unwrap();
     }
     // is_disjoint: no element appears in both.
+    // D39 Phase A.2b (DORMANT): dense branch on `__self.entries_keys`; see
+    // is_subset above for the invariant.
     if has_extern("gorget_set_is_disjoint") {
         writeln!(out, "static inline bool gorget_set_is_disjoint(void* __self_ptr, GorgetSet __other) {{ \
             GorgetSet __self = *(GorgetSet*)__self_ptr; \
-            for (size_t __i = 0; __i < __self.cap; __i++) {{ \
-                if (__self.states[__i] != 1) continue; \
-                void* __k = (char*)__self.keys + __i * __self.key_size; \
-                if (gorget_set_contains(&__other, __k)) return false; \
+            if (__self.entries_keys) {{ \
+                for (size_t __i = 0; __i < __self.entries_len; __i++) {{ \
+                    void* __k = (char*)__self.entries_keys + __i * __self.key_size; \
+                    if (gorget_set_contains(&__other, __k)) return false; \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __self.cap; __i++) {{ \
+                    if (__self.states[__i] != 1) continue; \
+                    void* __k = (char*)__self.keys + __i * __self.key_size; \
+                    if (gorget_set_contains(&__other, __k)) return false; \
+                }} \
             }} \
             return true; \
         }}").unwrap();
@@ -2947,10 +2976,13 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     // drop/clone/materialize hooks). Used by the BIR expansion of
     // `Dict.filter` (see src/bir/lower.rs::expand_dict_filter) so the
     // result's per-element-type wiring matches the source exactly.
-    // Discriminates ordered vs unordered via `src->order != NULL`.
+    // Discriminates ordered vs unordered via the BOTH-DISCRIMINATOR form
+    // `(src->entries_keys || src->order)` (D39 Phase A.2b): under current
+    // (legacy Dict → `->order != NULL`) and future (dense Dict → post-A.2c
+    // `->entries_keys != NULL`) states both fire → correct Dict ctor picked.
     if has_extern("gorget_map_new_like") {
         writeln!(out, "static inline GorgetMap gorget_map_new_like(const GorgetMap* __src) {{ \
-            GorgetMap __dst = __src->order \
+            GorgetMap __dst = (__src->entries_keys || __src->order) \
                 ? gorget_dict_new(__src->key_size, __src->val_size) \
                 : gorget_map_new(__src->key_size, __src->val_size); \
             __dst.hash_fn = __src->hash_fn; \
@@ -2967,16 +2999,26 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
 
     // gorget_map_update(dst, src): merge src's entries into dst via
     // put_cloned. Type-independent: walks src by `cap`/`states` using
-    // its `key_size` / `val_size` fields. Used by `Dict.update(other)`
+    // its `key_size` / `val_size` fields (legacy) or by `entries_keys` /
+    // `entries_values` / `entries_len` (dense). Used by `Dict.update(other)`
     // / `HashMap.update(other)`.
+    // D39 Phase A.2b (DORMANT): dense branch on `__other.entries_keys`.
     if has_extern("gorget_map_update") {
         writeln!(out, "static inline void gorget_map_update(void* __dst_ptr, GorgetMap __other) {{ \
             GorgetMap* __dst = (GorgetMap*)__dst_ptr; \
-            for (size_t __i = 0; __i < __other.cap; __i++) {{ \
-                if (__other.states[__i] != 1) continue; \
-                void* __k = (char*)__other.keys + __i * __other.key_size; \
-                void* __v = (char*)__other.values + __i * __other.val_size; \
-                gorget_map_put_cloned(__dst, __k, __v); \
+            if (__other.entries_keys) {{ \
+                for (size_t __i = 0; __i < __other.entries_len; __i++) {{ \
+                    void* __k = (char*)__other.entries_keys + __i * __other.key_size; \
+                    void* __v = (char*)__other.entries_values + __i * __other.val_size; \
+                    gorget_map_put_cloned(__dst, __k, __v); \
+                }} \
+            }} else {{ \
+                for (size_t __i = 0; __i < __other.cap; __i++) {{ \
+                    if (__other.states[__i] != 1) continue; \
+                    void* __k = (char*)__other.keys + __i * __other.key_size; \
+                    void* __v = (char*)__other.values + __i * __other.val_size; \
+                    gorget_map_put_cloned(__dst, __k, __v); \
+                }} \
             }} \
         }}").unwrap();
     }
@@ -2999,8 +3041,11 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
         || has_extern("gorget_set_symmetric_difference")
     {
         // Fresh GorgetSet that mirrors `src`'s config fields.
+        // D39 Phase A.2b (DORMANT): BOTH-DISCRIMINATOR ternary picks the
+        // Set (ordered) ctor under both current (legacy Set → `->order != NULL`)
+        // and future (dense Set → post-A.2c `->entries_keys != NULL`) states.
         writeln!(out, "static inline GorgetSet gorget_set_new_like(const GorgetSet* __src) {{ \
-            GorgetSet __dst = __src->order \
+            GorgetSet __dst = (__src->entries_keys || __src->order) \
                 ? gorget_dict_new(__src->key_size, 0) \
                 : gorget_map_new(__src->key_size, 0); \
             __dst.hash_fn = __src->hash_fn; \
@@ -3011,11 +3056,18 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
             return __dst; \
         }}").unwrap();
     }
+    // D39 Phase A.2b (DORMANT): three-way discriminator on both self and
+    // other — dense (entries_keys) → walk entries_len; else ordered legacy
+    // (order[]) → walk order_len; else unordered legacy → walk cap+states.
     if has_extern("gorget_set_union") {
         writeln!(out, "static inline GorgetSet gorget_set_union(void* __self_ptr, GorgetSet __other) {{ \
             GorgetSet* __self = (GorgetSet*)__self_ptr; \
             GorgetSet __result = gorget_set_new_like(__self); \
-            if (__self->order) {{ \
+            if (__self->entries_keys) {{ \
+                for (size_t __i = 0; __i < __self->entries_len; __i++) {{ \
+                    gorget_map_put_cloned(&__result, (char*)__self->entries_keys + __i * __self->key_size, NULL); \
+                }} \
+            }} else if (__self->order) {{ \
                 for (size_t __j = 0; __j < __self->order_len; __j++) {{ \
                     size_t __i = __self->order[__j]; \
                     if (__self->states[__i] != 1) continue; \
@@ -3027,7 +3079,11 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
                     gorget_map_put_cloned(&__result, (char*)__self->keys + __i * __self->key_size, NULL); \
                 }} \
             }} \
-            if (__other.order) {{ \
+            if (__other.entries_keys) {{ \
+                for (size_t __i = 0; __i < __other.entries_len; __i++) {{ \
+                    gorget_map_put_cloned(&__result, (char*)__other.entries_keys + __i * __other.key_size, NULL); \
+                }} \
+            }} else if (__other.order) {{ \
                 for (size_t __j = 0; __j < __other.order_len; __j++) {{ \
                     size_t __i = __other.order[__j]; \
                     if (__other.states[__i] != 1) continue; \
@@ -3042,11 +3098,18 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
             return __result; \
         }}").unwrap();
     }
+    // D39 Phase A.2b (DORMANT): three-way discriminator on self.
     if has_extern("gorget_set_intersection") {
         writeln!(out, "static inline GorgetSet gorget_set_intersection(void* __self_ptr, GorgetSet __other) {{ \
             GorgetSet* __self = (GorgetSet*)__self_ptr; \
             GorgetSet __result = gorget_set_new_like(__self); \
-            if (__self->order) {{ \
+            if (__self->entries_keys) {{ \
+                for (size_t __i = 0; __i < __self->entries_len; __i++) {{ \
+                    void* __k = (char*)__self->entries_keys + __i * __self->key_size; \
+                    if (gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} else if (__self->order) {{ \
                 for (size_t __j = 0; __j < __self->order_len; __j++) {{ \
                     size_t __i = __self->order[__j]; \
                     if (__self->states[__i] != 1) continue; \
@@ -3065,11 +3128,18 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
             return __result; \
         }}").unwrap();
     }
+    // D39 Phase A.2b (DORMANT): three-way discriminator on self.
     if has_extern("gorget_set_difference") {
         writeln!(out, "static inline GorgetSet gorget_set_difference(void* __self_ptr, GorgetSet __other) {{ \
             GorgetSet* __self = (GorgetSet*)__self_ptr; \
             GorgetSet __result = gorget_set_new_like(__self); \
-            if (__self->order) {{ \
+            if (__self->entries_keys) {{ \
+                for (size_t __i = 0; __i < __self->entries_len; __i++) {{ \
+                    void* __k = (char*)__self->entries_keys + __i * __self->key_size; \
+                    if (!gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} else if (__self->order) {{ \
                 for (size_t __j = 0; __j < __self->order_len; __j++) {{ \
                     size_t __i = __self->order[__j]; \
                     if (__self->states[__i] != 1) continue; \
@@ -3088,11 +3158,18 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
             return __result; \
         }}").unwrap();
     }
+    // D39 Phase A.2b (DORMANT): three-way discriminator on both self and other.
     if has_extern("gorget_set_symmetric_difference") {
         writeln!(out, "static inline GorgetSet gorget_set_symmetric_difference(void* __self_ptr, GorgetSet __other) {{ \
             GorgetSet* __self = (GorgetSet*)__self_ptr; \
             GorgetSet __result = gorget_set_new_like(__self); \
-            if (__self->order) {{ \
+            if (__self->entries_keys) {{ \
+                for (size_t __i = 0; __i < __self->entries_len; __i++) {{ \
+                    void* __k = (char*)__self->entries_keys + __i * __self->key_size; \
+                    if (!gorget_set_contains(&__other, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} else if (__self->order) {{ \
                 for (size_t __j = 0; __j < __self->order_len; __j++) {{ \
                     size_t __i = __self->order[__j]; \
                     if (__self->states[__i] != 1) continue; \
@@ -3108,7 +3185,13 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
                         gorget_map_put_cloned(&__result, __k, NULL); \
                 }} \
             }} \
-            if (__other.order) {{ \
+            if (__other.entries_keys) {{ \
+                for (size_t __i = 0; __i < __other.entries_len; __i++) {{ \
+                    void* __k = (char*)__other.entries_keys + __i * __other.key_size; \
+                    if (!gorget_set_contains(__self, __k)) \
+                        gorget_map_put_cloned(&__result, __k, NULL); \
+                }} \
+            }} else if (__other.order) {{ \
                 for (size_t __j = 0; __j < __other.order_len; __j++) {{ \
                     size_t __i = __other.order[__j]; \
                     if (__other.states[__i] != 1) continue; \
