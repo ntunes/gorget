@@ -26273,7 +26273,7 @@ fn self_host_runtime_diff() {
     // (of MATCH 1310, BOTH-WRONG 2 remaining). 3 BOTH-WRONG rows moved to
     // ADJ-MATCH; container-of-Drop transitivity + apply_mut pre-drop +
     // return-`!expr` kill remain filed as HIGH TODOs.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 397;
+    const GGDEF_ADJUDICATED_FLOOR: usize = 398;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -26486,7 +26486,7 @@ fn self_host_runtime_diff() {
     // drop_reassign moved BOTH-WRONG → ADJ), BOTH-WRONG 5→2 (remaining: drop_
     // collection_custom_elem_leak + drop_struct_collection_fields = row 2+3 of
     // G-class Drop transitive, filed as own-round HIGH TODOs).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1316;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1317;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
