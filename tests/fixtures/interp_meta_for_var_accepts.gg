@@ -1,0 +1,17 @@
+# Round XXX Track E — Cell (b): positive control for meta-for iter-var binding.
+#
+# `meta for fname in field_names(T): print(f"{fname}")` must ACCEPT and print
+# each field name. Proves the fix (Stmt::MetaFor binds iter-vars) does not
+# regress legitimate meta-for iter-var interp usage.
+
+struct Vec3:
+    int x
+    int y
+    int z
+
+void list_fields[T]():
+    meta for fname in field_names(T):
+        print(f"{fname}")
+
+void main():
+    list_fields[Vec3]()

@@ -4515,21 +4515,71 @@ fn index_not_gated_in_fstring_interp() {
     );
 }
 
-/// Sibling arm of the above, still open: the f-string interp error-retention
-/// whitelist keeps 5 arms and DROPS every other typecheck error, so a typo'd
-/// identifier inside `f"{...}"` is accepted, builds, and prints `0` — while
-/// `int x = nope` rejects with `E_UndefinedName`. Confirmed siblings:
-/// `E_WrongArgCount` and an undefined *function* are swallowed the same way.
-/// Fix is one line per arm at the site `8867be1a` already touched; the
-/// `interp_error_retention_arms_count` pin makes the change reviewed. TODO.md.
+/// Round XXX Track E — graduated from `known_gaps/`. The f-string interp
+/// walker now shares the parent `errors` vec (was: local sink) so genuine
+/// undefined names inside `f"{...}"` reject just as they would outside a
+/// f-string. Ports SH resolver shape (`self_host_resolver/resolve.gg:668-676`)
+/// back to Rust — Core #8 succession win.
 #[test]
-#[ignore = "KNOWN GAP: f-string interp swallows E_UndefinedName (and E_WrongArgCount, \
-undefined-function) — print(f\"{nope}\") is accepted and prints 0; TODO.md."]
 fn interp_swallows_undefined_name() {
     check_gg_fails(
-        "known_gaps/interp_swallows_undefined_name.gg",
+        "interp_swallows_undefined_name.gg",
         "error[E_UndefinedName]",
     );
+}
+
+/// Round XXX Track E — Cell (b): positive control for meta-for iter-var
+/// binding. `meta for fname in field_names(T): print(f"{fname}")` must accept
+/// and print each field name; proves Edit 1a (Stmt::MetaFor binds iter-vars
+/// as DkVariable) does not regress legitimate usage.
+#[test]
+fn interp_meta_for_var_accepts() {
+    run_gg("interp_meta_for_var_accepts.gg", "x\ny\nz\n");
+}
+
+/// Round XXX Track E — Cell (c): genuine typo inside a meta-for scope. The
+/// iter-var `fname` resolves via Edit 1a; the undefined `nope` still rejects
+/// via Edit 2 (sink removed, errors surfaced).
+#[test]
+fn interp_undefined_inside_meta_for() {
+    check_gg_fails(
+        "interp_undefined_inside_meta_for.gg",
+        "error[E_UndefinedName]",
+    );
+}
+
+/// Round XXX Track E — Cell (d): undefined-FUNCTION sibling of the graduating
+/// known_gaps cell. `no_such_fn(1)` inside an f-string interpolation must
+/// reject with E_UndefinedName at check time, not silently accept and fail at
+/// the linker.
+#[test]
+fn interp_undefined_fn_call() {
+    check_gg_fails("interp_undefined_fn_call.gg", "error[E_UndefinedName]");
+}
+
+/// Round XXX Track E — Cell (e): integer-range single-var meta-for. Pins the
+/// int-range iterator form (distinct meta value type from string-range forms).
+#[test]
+fn interp_meta_for_int_range() {
+    run_gg("interp_meta_for_int_range.gg", "0\n1\n2\n");
+}
+
+/// Round XXX Track E — Cell (f): two-var STATEMENT-level meta-for. Every
+/// other in-tree two-var meta-for usage is at MatchItem-level; this is the
+/// ONLY exerciser of Stmt::MetaFor's two-var iter-var binding after the fix.
+#[test]
+fn interp_meta_for_two_var_payloads() {
+    run_gg("interp_meta_for_two_var_payloads.gg", "Circle\nSquare\nTag\n");
+}
+
+/// Round XXX Track E — Cell (g): positive control for Edit 1b (Stmt::MetaConst
+/// binds the const name). Without Edit 1b, removing the sink would REGRESS
+/// this shape: `meta const idx = enum_ordinal(T, vname)` then `f"{idx}"`
+/// would fail to resolve `idx`. With Edit 1b: `idx` binds as DkVariable and
+/// the f-string interp resolves.
+#[test]
+fn interp_meta_const_accepts() {
+    run_gg("interp_meta_const_accepts.gg", "Red=0\nGreen=1\nBlue=2\n");
 }
 
 /// Round XXIX Track A sibling: HashSet[T]. `HashSet` and `Set` are separate

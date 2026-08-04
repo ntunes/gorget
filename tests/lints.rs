@@ -10319,10 +10319,78 @@ fn interp_error_retention_arms_count() {
          Add the new SemanticErrorKind arm here + bump the count if a new gate needs \
          its error preserved inside `f\"{{...}}\"`. Removing an arm may re-open a \
          silent-swallow class — see Round XXIX Track A residual `17a3e342` + \
-         sibling widening `97cd5c01` (name/arg/field-resolution family, closes \
-         non-UndefinedName cells; the UndefinedName cell still requires a \
-         resolve.rs fix — sink discarded at `src/semantic/resolve.rs:1526-1542` \
-         for meta-for-loop-variable safety, filed as follow-up)."
+         sibling widening `97cd5c01` (name/arg/field-resolution family). Round XXX \
+         Track E closed the UndefinedName cell at the resolve layer (meta-for iter-vars \
+         + meta-const names now bind as DkVariable, so the sink in resolve's \
+         Expr::StringLiteral arm was retired; see \
+         `resolve_interp_arm_uses_shared_errors_vec`)."
+    );
+}
+
+/// Round XXX Track E — class-retiring guard for the resolver's f-string interp
+/// arm. Prevents future silent-swallow-inside-fstring reintroduction at the
+/// RESOLVE layer (Layering discipline: the sibling typecheck-layer guard above
+/// pins its own arm count).
+///
+/// The previous shape (retired 2026-08-04 by Track E) opened a local
+/// `let mut sink: Vec<SemanticError> = Vec::new();` inside the
+/// `Expr::StringLiteral(_, interp_exprs)` arm and discarded it after resolving
+/// each interpolation expression — swallowing E_UndefinedName silently, so
+/// `print(f"{nope}")` was accepted and lowered to `0`. The reference-grade
+/// shape (mirrored from `self_host_resolver/resolve.gg:668-676`) walks the
+/// interp expressions against the SHARED `errors` vec so undefined names
+/// surface just as they would outside a f-string. Meta-for iter-vars and
+/// meta-const names bind as DkVariable in their body scopes so legitimate
+/// interpolations continue to resolve.
+///
+/// This lint asserts (a) no `let mut sink` inside the resolver's
+/// `Expr::StringLiteral` arm and (b) that arm's body calls
+/// `resolve_expr(..., errors, ...)` with the SHARED errors param.
+#[test]
+fn resolve_interp_arm_uses_shared_errors_vec() {
+    let source = fs::read_to_string("src/semantic/resolve.rs")
+        .expect("read src/semantic/resolve.rs");
+    // Locate the arm by its match head — unique in this file.
+    let arm_head = "Expr::StringLiteral(_, interp_exprs) => {";
+    let start = source
+        .find(arm_head)
+        .expect("resolver Expr::StringLiteral arm not found — did the head change?");
+    // Scan forward for the matching close-brace of the arm body. Body is
+    // short (a handful of lines); scan a bounded window to keep the lint
+    // O(1) and immune to file growth elsewhere.
+    let window_end = (start + 2000).min(source.len());
+    let window = &source[start..window_end];
+    // The arm's closing `}` is the first at brace-depth zero after the head.
+    let mut depth: i32 = 0;
+    let mut arm_end: Option<usize> = None;
+    for (i, ch) in window.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    arm_end = Some(i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = arm_end.expect("resolver Expr::StringLiteral arm body braces not balanced");
+    let body = &window[..end];
+
+    assert!(
+        !body.contains("let mut sink"),
+        "resolver's Expr::StringLiteral arm regressed to a local sink discard — \
+         removing the sink was Round XXX Track E's fix (Core #8 succession from \
+         `self_host_resolver/resolve.gg:668-676`). Reintroducing it swallows \
+         E_UndefinedName inside `f\"{{...}}\"` silently. Arm body:\n{body}"
+    );
+    assert!(
+        body.contains("resolve_expr(interp, scopes, errors, resolution_map)"),
+        "resolver's Expr::StringLiteral arm no longer walks interpolation \
+         expressions against the shared `errors` vec. Expected the recursive \
+         call `resolve_expr(interp, scopes, errors, resolution_map)`. Arm body:\n{body}"
     );
 }
 

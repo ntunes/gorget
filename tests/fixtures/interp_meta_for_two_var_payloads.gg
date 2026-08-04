@@ -1,0 +1,22 @@
+# Round XXX Track E — Cell (f): two-var STATEMENT-level meta-for.
+#
+# Every other in-tree two-var meta-for usage sits at MatchItem-level
+# (parser/ast.rs:900); cell (f) is the ONLY exerciser of the STATEMENT-level
+# two-var Stmt::MetaFor after the fix. Both iter-vars (`vname`, `T`) get bound
+# as DkVariable at resolve time. `T` is used only in expression position here
+# (interpolated as its name); the type-position case is not exercised.
+
+struct Wrapper[T]:
+    T value
+
+enum Shape:
+    Circle(Wrapper[float])
+    Square(Wrapper[int])
+    Tag(Wrapper[String])
+
+void list_payload_names():
+    meta for vname, T in variant_payloads(Shape):
+        print(f"{vname}")
+
+void main():
+    list_payload_names()

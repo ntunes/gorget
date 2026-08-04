@@ -1,0 +1,17 @@
+# Round XXX Track E — Cell (c): genuine typo inside a meta-for scope.
+#
+# Post-fix: `fname` resolves (meta-for iter-var bound as DkVariable), but
+# `nope` is unresolved and rejects with E_UndefinedName. Pre-fix: sink swallows
+# the error and the fixture silently accepts, printing 0 per field.
+
+struct Vec3:
+    int x
+    int y
+    int z
+
+void list_typo[T]():
+    meta for fname in field_names(T):
+        print(f"{fname}={nope}")
+
+void main():
+    list_typo[Vec3]()

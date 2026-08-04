@@ -1,0 +1,21 @@
+# Round XXX Track E — Cell (g): positive control for Edit 1b (Stmt::MetaConst
+# binding). `meta const idx = ...` inside a meta-for must bind `idx` so the
+# subsequent f-string interp resolves it. Pre-Edit-2: sink swallows silently.
+# Post-Edit-2 WITHOUT Edit 1b: `idx` fails to resolve → hard reject → regression.
+# Post-full-fix: accepts and prints `<vname>=<ordinal>`.
+#
+# Mirrors the meta_enum_ordinal.gg shape but stands on its own so a future
+# arm-count regression on MetaConst still fails a dedicated fixture.
+
+enum Color:
+    Red
+    Green
+    Blue
+
+void print_ordinals[T]():
+    meta for vname in variant_names(T):
+        meta const idx = enum_ordinal(T, vname)
+        print(f"{vname}={idx}")
+
+void main():
+    print_ordinals[Color]()

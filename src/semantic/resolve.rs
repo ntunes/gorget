@@ -1449,10 +1449,21 @@ fn resolve_stmt(
             }
         }
 
-        Stmt::MetaFor { body, .. } => {
+        Stmt::MetaFor { vars, body, .. } => {
             // Range is a meta expression: skip resolve_expr on it.
-            // Body contains regular code that must be resolved.
+            // Body contains regular code that must be resolved. Iter-vars
+            // (single-var integer/string range; two-var variant_payloads
+            // destructure) are bound as DkVariable in the body's Block scope
+            // so `f"{fname}"` inside the body resolves rather than being
+            // swallowed by a sink. Materialisation happens per-mono at
+            // lowering; here we just register the names. Mirrors SH
+            // reference (`self_host_resolver/resolve.gg:618-627`).
             scopes.push_scope(super::scope::ScopeKind::Block);
+            for v in vars {
+                if let Err(e) = scopes.define(v.node.clone(), DefKind::Variable, v.span) {
+                    errors.push(e);
+                }
+            }
             resolve_block(body, scopes, types, errors, resolution_map);
             scopes.pop_scope();
         }
@@ -1480,8 +1491,17 @@ fn resolve_stmt(
             scopes.pop_scope();
         }
 
-        Stmt::MetaConst { .. } => {
-            // Entirely a meta expression — evaluated at monomorphization time; skip.
+        Stmt::MetaConst { name, .. } => {
+            // Value is entirely a meta expression — evaluated at monomorphization
+            // time; do NOT resolve it against scope. But BIND the const name so
+            // subsequent statements in the same block (e.g. `f"{idx}"` after
+            // `meta const idx = enum_ordinal(T, vname)`) resolve rather than
+            // being swallowed by a sink. Per language reference §19.11.1, the
+            // binding leaks to subsequent statements — no scope push/pop.
+            // Mirrors SH reference (`self_host_resolver/resolve.gg:610-616`).
+            if let Err(e) = scopes.define(name.node.clone(), DefKind::Variable, name.span) {
+                errors.push(e);
+            }
         }
 
         Stmt::MetaLog { .. } => {
@@ -1524,21 +1544,17 @@ fn resolve_expr(
         }
 
         Expr::StringLiteral(_, interp_exprs) => {
-            // Resolve each pre-parsed interpolation expression so closure
-            // parameters / lambda bindings inside `f"{...}"` segments get
-            // DefIds that the typecheck pass can look up. Errors are
-            // *suppressed* here — meta-for loop variables (`f"{fname}"`
-            // inside `meta for fname in fields(T)`) only materialise during
-            // delayed-meta expansion at monomorphisation time, and the
-            // resolver runs before that. Real undefined names are still
-            // reported when the same expression is used outside an f-string,
-            // and Pass 4 typecheck silently produces `error_id` for unresolved
-            // references inside interpolations.
-            let mut sink: Vec<SemanticError> = Vec::new();
+            // Resolve each pre-parsed interpolation expression against the
+            // SHARED errors vec so genuine undefined names inside `f"{...}"`
+            // reject just as they would outside a f-string. Meta-for iter-vars
+            // and meta-const names are bound as DkVariable in their body
+            // scopes (see `Stmt::MetaFor` / `Stmt::MetaConst` arms above), so
+            // interpolations like `f"{fname}"` inside `meta for fname in ...`
+            // continue to resolve. Mirrors SH reference
+            // (`self_host_resolver/resolve.gg:668-676`).
             for interp in interp_exprs {
-                resolve_expr(interp, scopes, &mut sink, resolution_map);
+                resolve_expr(interp, scopes, errors, resolution_map);
             }
-            // Discard sink — see above.
         }
 
         Expr::Identifier(name) => {

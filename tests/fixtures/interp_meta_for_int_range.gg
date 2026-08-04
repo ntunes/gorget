@@ -1,0 +1,12 @@
+# Round XXX Track E — Cell (e): integer-range single-var meta-for.
+#
+# `meta for i in 0..3: print(f"{i}")` — positive control for the integer-range
+# iterator form (distinct meta value type from string-range forms). Regression
+# pin: post-fix must still accept and print 0, 1, 2.
+
+void count_up():
+    meta for i in 0..3:
+        print(f"{i}")
+
+void main():
+    count_up()

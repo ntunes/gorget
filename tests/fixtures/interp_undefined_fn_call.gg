@@ -1,0 +1,7 @@
+# Round XXX Track E — Cell (d): undefined-function sibling of the graduating
+# known_gaps cell. `no_such_fn(1)` inside an f-string interpolation must
+# reject with E_UndefinedName, matching the same call outside the f-string.
+
+int main():
+    print(f"{no_such_fn(1)}")
+    return 0
