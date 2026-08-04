@@ -778,6 +778,44 @@ pub(super) fn lower_tuple_field_assign(
     }
 }
 
+/// Return the RAW MutPtr local for an `Identifier` object that names a
+/// unique-borrow (`&`/`!`) param. Sibling of the `is_param_borrow_unique`
+/// branch in `lower_field_object_operand` — extracted so the INDEX-assign
+/// class (`obj[k] = v` / `obj[i] OP= v`) can share the same "write THROUGH the
+/// caller's collection" fast-path as the field-assign class (Core #4).
+///
+/// Without this, `lower_expr(Identifier)` auto-derefs the MutPtr param
+/// (`exprs/mod.rs:151-227`) into a fresh stack local of the collection
+/// struct — the setter's `emit_borrow_mut` then borrows the STACK COPY, and
+/// writes to scalar-in-struct fields (`count` / `entries_len` /
+/// `entries_cap` / `tombstones`) are silently DISCARDED when the stack copy
+/// dies (pointer-array fields — `keys` / `values` / `indices` — share the
+/// underlying buffers with the caller, so writes THERE persist). Under the
+/// legacy sparse-table Dict/Set this was BENIGN (`.len()` returned a wrong
+/// scalar count but `get`/`put`/`remove` correctness lived in the shared
+/// pointer arrays). Under D39 dense mode it is FATAL: `entries_len` is the
+/// probe-loop bound + the value written into `indices[insert_slot]`, so a
+/// failed increment fills `indices[]` with stale `1`s and `gorget_map_get`
+/// spins forever. Surfaced by A.2c-plus bisect on `meta_fn_loops.gg`.
+///
+/// Returns `None` for non-Identifier objects and for Identifiers that are
+/// not unique-borrow params (locals, bare Shared-Ptr params — the latter
+/// route through `cow_before_mutation`'s Phase 1c rebind to owned).
+pub(in crate::ir::lowering) fn unique_borrow_param_ptr_operand(
+    ctx: &LoweringContext,
+    builder: &FunctionBuilder,
+    object: &Spanned<Expr>,
+) -> Option<Operand> {
+    if let Expr::Identifier(name) = &object.node {
+        if let Some((local_id, _)) = ctx.lookup_local(name) {
+            if ctx.is_param_borrow_unique(builder, local_id) {
+                return Some(Operand::Copy(Place::local(local_id)));
+            }
+        }
+    }
+    None
+}
+
 /// Compute the object OPERAND for the field-store fallback (`obj.field = v` /
 /// `obj.field OP= v` when `try_resolve_field_place` returned `None`). Faithful
 /// mirror of the branch that used to be open-coded in `lower_field_assign`: a
@@ -794,24 +832,19 @@ pub(in crate::ir::lowering) fn lower_field_object_operand(
     builder: &mut FunctionBuilder,
     object: &Spanned<Expr>,
 ) -> Operand {
-    if let Expr::Identifier(name) = &object.node {
-        if let Some((local_id, _)) = ctx.lookup_local(name) {
-            if ctx.is_param_borrow_unique(builder, local_id) {
-                // Return the raw pointer local (not deref'd)
-                Operand::Copy(Place::local(local_id))
-            } else {
-                lower_expr(ctx, builder, object)
-            }
-        } else if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
+    // Unique-borrow (`&`/`!`) param → raw MutPtr local (Core #4: sibling of the
+    // index-assign class, one helper).
+    if let Some(ptr_op) = unique_borrow_param_ptr_operand(ctx, builder, object) {
+        return ptr_op;
+    }
+    if let Expr::Identifier(_) = &object.node {
+        if let Some(global_ptr) = materialize_global_field_base(ctx, builder, object) {
             // Bug #1: a module-level static base — materialize into an addressable
             // MutPtr local so the field-store writes THROUGH to the global.
-            global_ptr
-        } else {
-            lower_expr(ctx, builder, object)
+            return global_ptr;
         }
-    } else {
-        lower_expr(ctx, builder, object)
     }
+    lower_expr(ctx, builder, object)
 }
 
 /// Result of resolving a field-store target reached through a POINTER operand
@@ -1317,7 +1350,15 @@ pub(super) fn lower_index_assign(
     // setter's `ensure_owned_at_consuming_arg` has cloned the stored value), so
     // the remaining handles are dead READ refs. (Sibling of lower_field_assign.)
     let stmt_locals_start = builder.locals.len();
-    let (obj, resolved_field_type) = if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
+    let (obj, resolved_field_type) = if let Some(ptr_op) = unique_borrow_param_ptr_operand(ctx, builder, object) {
+        // `env[k] = v` where `env` is a `&`/`!` unique-borrow param — pass the
+        // RAW MutPtr local so the setter writes THROUGH the caller's collection.
+        // See `unique_borrow_param_ptr_operand` for the full diagnosis (this
+        // silently discarded scalar-in-struct writes: `count` / `entries_len` /
+        // `entries_cap` / `tombstones` — benign on legacy Dict/Set, fatal under
+        // D39 dense mode). Mirrors the field-assign class (Core #4).
+        (ptr_op, None)
+    } else if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
         if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, inner_obj, &field.node) {
             (Operand::Copy(field_place), Some(field_type))
         } else {
@@ -1900,7 +1941,15 @@ pub(super) fn lower_compound_assign(
         let stmt_locals_start = builder.locals.len();
 
         // Resolve the object — handle field access (self.vec) by resolving in-place
-        let (obj, resolved_field_type) = if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
+        let (obj, resolved_field_type) = if let Some(ptr_op) = unique_borrow_param_ptr_operand(ctx, builder, object) {
+            // `env[k] OP= v` where `env` is a `&`/`!` unique-borrow param — pass
+            // the RAW MutPtr local so both the READ (`index_load` at read_place)
+            // and the WRITE-BACK (`__set` / `__put`) hit the caller's collection.
+            // Sibling of the plain-`=` arm above (Core #4, one class one helper);
+            // see `unique_borrow_param_ptr_operand` for the miscompile
+            // discussion.
+            (ptr_op, None)
+        } else if let Expr::FieldAccess { object: inner_obj, field } = &object.node {
             if let Some((field_place, field_type)) = try_resolve_field_place(ctx, builder, inner_obj, &field.node) {
                 (Operand::Copy(field_place), Some(field_type))
             } else {

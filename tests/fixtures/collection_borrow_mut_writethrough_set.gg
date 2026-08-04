@@ -1,0 +1,38 @@
+# COMPANION GUARD to the Dict/HashMap axis-fixtures for
+# `collection_borrow_mut_writethrough`. `Set` and `HashSet` have NO
+# subscript-assign (`s[k] = ()` is `E_NotIndexable`), so the same
+# "mutate the collection through a `&`-param" intent lands via
+# `.add()` — a METHOD call, which routes through
+# `lower_method_call`'s receiver ptr-through path (a DIFFERENT
+# compiler site from the one the sibling fixtures pin).
+#
+# AXIS PIN: Set[String] (kind OrderedSet) · `&`-param root ·
+# `.add()` method-call receiver · `.len()` observation.
+#
+# NOT RED-VERIFIED against the sibling fix (which touches
+# `lower_index_assign` only) — `.add()` already worked pre-fix on
+# baseline `d00e71a0` (verified Round XXX Track G, printed 3/3).
+# This fixture PINS the mutation-through-`&`-param class intent:
+# a caller must see every `.add()` the callee made. If the method-
+# call receiver path ever regresses in the same shape, `.len()` in
+# main would show `0`. Per Core #12 authoring rule, a fixture that
+# is not RED-verifiable against the specific fix under test states
+# what it pins instead.
+from std.collections import Set
+
+void mutate(Set[String] &env):
+    # env enters with "seed" already inserted by main (1 entry).
+    env.add("a")
+    env.add("b")
+    env.add("c")
+    print(env.len())      # 4  (seed + a + b + c)
+
+void main():
+    Set[String] s = Set[String]()
+    s.add("seed")
+    mutate(&s)
+    print(s.len())        # 4
+    print(s.contains("a"))
+    print(s.contains("b"))
+    print(s.contains("c"))
+    print(s.contains("seed"))

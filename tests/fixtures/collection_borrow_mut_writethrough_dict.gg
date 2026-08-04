@@ -1,0 +1,53 @@
+# CORE #11/#12 REGRESSION — `env[k] = v` and `env[k] OP= v` on a
+# `Dict[K, V] &` (unique-borrow) param write THROUGH the caller's
+# collection — every scalar-in-struct AND pointer-in-struct field
+# stays coherent, including `count` (visible as `.len()`).
+#
+# AXIS PIN: Dict[String, int] (kind OrderedMap) · `&`-param root ·
+# subscript-assign and compound `+=` · `.len()` observation of the
+# scalar `count` field · read-back of values from the caller.
+#
+# RED-VERIFIED PRE-FIX (Round XXX Track G scout 2026-08-04, base
+# `d00e71a0`): printed `0` for both `env.len()` and `d.len()` (should
+# be `3`), even though `d["a"]`, `d["b"]`, `d["c"]` all read back the
+# right values (1, 2, 3). Root: `lower_index_assign` and its compound
+# sibling fell to `lower_expr(Identifier("env"))`, which auto-derefs
+# a `&`-param MutPtr into a fresh stack local of the Dict struct;
+# `emit_borrow_mut` then borrowed the STACK COPY and every setter's
+# scalar-in-struct write (`count`, `entries_len`, `tombstones`) was
+# silently DISCARDED when the copy died. Pointer fields (`keys` /
+# `values` / `indices`) shared the caller's buffers, so writes THERE
+# persisted — masking the scalar-loss on the legacy sparse table
+# (correctness there depended only on the shared pointer arrays) and
+# turning FATAL under D39 dense mode (`entries_len` is the probe-loop
+# bound + the value written into `indices[insert_slot]`).
+#
+# Fix: `unique_borrow_param_ptr_operand` in `stmts/assigns.rs`
+# returns the RAW MutPtr local for a `&`/`!`-param identifier
+# object, so both the plain and compound index-assign arms pass the
+# caller's pointer straight to the setter (mirrors the field-assign
+# class — Core #4, one helper).
+
+void mutate(Dict[String, int] &env):
+    # env enters with "seed" already inserted by main (1 entry) —
+    # `.len()` here observes the CALLER's scalar `count` too.
+    env["a"] = 1
+    env["b"] = 2
+    env["c"] = 3
+    env["a"] += 10        # compound (uses the sibling compound arm)
+    print(env.len())      # 4  (seed + a + b + c) — pre-fix: 1
+    print(env["a"])       # 11
+    print(env["b"])       # 2
+    print(env["c"])       # 3
+
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d["seed"] = 99
+    mutate(&d)
+    # After returning, every scalar + pointer field must reflect
+    # what mutate() did — the caller sees the same state.
+    print(d.len())        # 4 — pre-fix: 1 (scalar `count` discarded)
+    print(d["seed"])      # 99
+    print(d["a"])         # 11
+    print(d["b"])         # 2
+    print(d["c"])         # 3

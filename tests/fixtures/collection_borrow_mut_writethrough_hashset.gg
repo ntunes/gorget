@@ -1,0 +1,29 @@
+# COMPANION GUARD to the Dict/HashMap axis-fixtures for
+# `collection_borrow_mut_writethrough` (HashSet sibling of the
+# Set fixture — kind HashSet vs OrderedSet).
+#
+# AXIS PIN: HashSet[String] (kind Set) · `&`-param root ·
+# `.add()` method-call receiver · `.len()` observation.
+#
+# NOT RED-VERIFIED against the sibling fix (which touches
+# `lower_index_assign` only) — `.add()` already worked pre-fix on
+# baseline `d00e71a0` (verified Round XXX Track G, printed 3/3).
+# Pins the mutation-through-`&`-param class intent for the HashSet
+# cell — see the Set fixture's header for the full rationale.
+from std.collections import HashSet
+
+void mutate(HashSet[String] &env):
+    env.add("a")
+    env.add("b")
+    env.add("c")
+    print(env.len())      # 4  (seed + a + b + c)
+
+void main():
+    HashSet[String] hs = HashSet[String]()
+    hs.add("seed")
+    mutate(&hs)
+    print(hs.len())       # 4
+    print(hs.contains("a"))
+    print(hs.contains("b"))
+    print(hs.contains("c"))
+    print(hs.contains("seed"))

@@ -1,0 +1,35 @@
+# CORE #11/#12 REGRESSION — HashMap axis-sibling of
+# collection_borrow_mut_writethrough_dict.gg. `env[k] = v` and
+# `env[k] OP= v` on a `HashMap[K, V] &` (unique-borrow) param must
+# write THROUGH the caller.
+#
+# AXIS PIN: HashMap[String, int] (kind Map, distinct from Dict's
+# OrderedMap) · `&`-param root · subscript-assign and compound `+=`
+# · `.len()` observation of the scalar `count` field. Pins the
+# HashMap cell for the compiler site fixed by
+# `unique_borrow_param_ptr_operand`.
+#
+# RED-VERIFIED PRE-FIX (Round XXX Track G, base `d00e71a0`): identical
+# symptom to the Dict fixture — `.len()` returned 0 (should be 3) even
+# though `hm["a"]`, `hm["b"]`, `hm["c"]` read back correctly. Same
+# root: `lower_index_assign` auto-derefd the MutPtr param into a
+# stack-copy of the HashMap struct.
+from std.collections import HashMap
+
+void mutate(HashMap[String, int] &env):
+    env["a"] = 1
+    env["b"] = 2
+    env["c"] = 3
+    env["a"] += 10        # compound arm
+    print(env.len())      # 4  (seed + a + b + c) — pre-fix: 1
+    print(env["a"])       # 11
+
+void main():
+    HashMap[String, int] hm = HashMap[String, int]()
+    hm["seed"] = 99
+    mutate(&hm)
+    print(hm.len())       # 4 — pre-fix: 1 (scalar `count` discarded)
+    print(hm["seed"])     # 99
+    print(hm["a"])        # 11
+    print(hm["b"])        # 2
+    print(hm["c"])        # 3

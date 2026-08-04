@@ -34670,6 +34670,108 @@ fn hashmap_amp_element_writethrough() {
     run_gg("hashmap_amp_element_writethrough.gg", "11");
 }
 
+/// Round XXX Track G REGRESSION (new 2026-08-04) — `env[k] = v` and
+/// `env[k] OP= v` on a `Dict[K, V] &` (unique-borrow) param write
+/// THROUGH the caller. Closes a pre-existing miscompile discovered
+/// by the A.2c-plus dense-mode bisect scout: `lower_index_assign`
+/// (and its compound sibling) fell to `lower_expr(Identifier)`,
+/// which auto-derefd the MutPtr param into a STACK COPY of the
+/// collection struct — the setter's `emit_borrow_mut` borrowed
+/// the stack copy and every scalar-in-struct write (`count` /
+/// `entries_len` / `entries_cap` / `tombstones`) was silently
+/// DISCARDED (pointer-in-struct fields — `keys` / `values` /
+/// `indices` — shared the caller's buffers, so writes THERE
+/// persisted, masking the bug on legacy sparse Dict/Set and
+/// making it FATAL under D39 dense mode where `entries_len` is
+/// the probe-loop bound).
+///
+/// RED-VERIFIED (Round XXX Track G, base `d00e71a0`): pre-fix
+/// printed `1`/`1` for both `env.len()` and `d.len()` on both
+/// backends (should be `4`). Values (11/2/3/99) still read
+/// correctly — pointer-array fields shared with the caller.
+///
+/// Fix: `unique_borrow_param_ptr_operand` in `stmts/assigns.rs`
+/// returns the raw MutPtr local for a `&`/`!`-param identifier
+/// object, so the setter's self-arg is the caller's pointer.
+/// Sibling of `lower_field_object_operand` (Core #4, one helper).
+#[test]
+fn collection_borrow_mut_writethrough_dict() {
+    run_gg(
+        "collection_borrow_mut_writethrough_dict.gg",
+        "\
+4
+11
+2
+3
+4
+99
+11
+2
+3",
+    );
+}
+
+/// Round XXX Track G REGRESSION — HashMap axis-sibling of
+/// `collection_borrow_mut_writethrough_dict`. Same compiler site
+/// (`unique_borrow_param_ptr_operand` in `stmts/assigns.rs`),
+/// distinct `CollectionKind` (Map vs OrderedMap). RED-verified
+/// pre-fix: `.len()` returned 1 (should be 4).
+#[test]
+fn collection_borrow_mut_writethrough_hashmap() {
+    run_gg(
+        "collection_borrow_mut_writethrough_hashmap.gg",
+        "\
+4
+11
+4
+99
+11
+2
+3",
+    );
+}
+
+/// Round XXX Track G COMPANION GUARD — `Set[T]` and `HashSet[T]`
+/// have no subscript-assign, so the same "mutate through a
+/// `&`-param" intent lands via the `.add()` method-call receiver
+/// path — a DIFFERENT compiler site from the one the Dict/HashMap
+/// siblings pin. Not RED-verifiable against the sibling fix (`.add()`
+/// already worked pre-fix on baseline `d00e71a0`); pins the
+/// class-INTENT (a caller sees every `.add()` a callee made). Per
+/// Core #12 authoring rule, a fixture that cannot RED-verify against
+/// the specific fix under test states what it pins instead.
+#[test]
+fn collection_borrow_mut_writethrough_set() {
+    run_gg(
+        "collection_borrow_mut_writethrough_set.gg",
+        "\
+4
+4
+true
+true
+true
+true",
+    );
+}
+
+/// Round XXX Track G COMPANION GUARD — HashSet sibling of
+/// `collection_borrow_mut_writethrough_set`. Same rationale: pins
+/// the class INTENT via `.add()` method-call receiver, not the
+/// specific `lower_index_assign` fix.
+#[test]
+fn collection_borrow_mut_writethrough_hashset() {
+    run_gg(
+        "collection_borrow_mut_writethrough_hashset.gg",
+        "\
+4
+4
+true
+true
+true
+true",
+    );
+}
+
 /// KNOWN GAP — the SPAWN argument face never reads `arg.node.ownership`
 /// (`spawn.rs` lowers args with a bare `lower_expr`), bypassing `lower_call_arg`
 /// and both `&`-formation faces, so `spawn f(&c.fd)` drops the write.
