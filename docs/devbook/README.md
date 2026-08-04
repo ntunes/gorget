@@ -16,7 +16,7 @@ This book is for *compiler developers*, not application programmers. It assumes 
 
 **Freshness.** Chapters describing fast-moving internals carry a "verified against `<commit>`" stamp. Treat an un-stamped fast-moving claim as suspect and re-verify against source.
 
-> This book was grown by folding the former `internals/` deep-dives into chapters and repointing their source citations here; the former `internals/` tree has since been deleted.
+> This book was grown by folding the `internals/` deep-dives into chapters and repointing their source citations here. What survives in `docs/internals/` is **designed-but-unbuilt** material only — owner rulings and design notes for work not yet in the tree, which this book's present-tense genre cannot carry. Anything describing what the compiler does *today* belongs in a chapter here, not there.
 
 ---
 
@@ -80,4 +80,4 @@ This book is for *compiler developers*, not application programmers. It assumes 
 
 ---
 
-*Chapters were folded in from the former `internals/` deep-dives as they reached reference quality; that tree has since been deleted.*
+*Chapters were folded in from the `internals/` deep-dives as they reached reference quality; what remains there is designed-but-unbuilt material only (see the note above).*

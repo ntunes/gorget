@@ -81,10 +81,12 @@ how much to trust it.
 
 ## The fold protocol
 
-This book was **grown by folding** the former `internals/` deep-dives
+This book was **grown by folding** the `internals/` deep-dives
 into chapters, repointing their source citations at each chapter's stable
-anchors, and then deleting the absorbed doc — the former `internals/` tree died
-of attrition once every doc had been folded
+anchors, and then deleting the absorbed doc. What survives in `docs/internals/`
+is designed-but-unbuilt material only — a chapter here describes what the
+compiler does today, a design note there describes what has been ruled but not
+yet built
 ([`README.md:19`](README.md),
 `devbook_plan.md:15` (devbook plan — git history)). Folding was **lazy**: no
 internals file was moved or deleted, and no source comment repointed, until the
@@ -160,9 +162,9 @@ from stale docs. The actual semantic pass order, read from
 ([`mod.rs:307`](../../src/semantic/mod.rs)) → 4.6 `suggest_throws` lint
 ([`mod.rs:317`](../../src/semantic/mod.rs)) → 5 borrow checking
 ([`mod.rs:336`](../../src/semantic/mod.rs)). There is **no** provenance pass and
-**no** `src/semantic/provenance.rs` — a "Pass 4.5 provenance.rs" that appeared in
-the former `internals/README.md` was stale (`devbook_plan.md:39` (devbook plan — git history));
-the file does not exist in the tree. This is exactly the kind of fact the book
+**no** `src/semantic/provenance.rs` — a "Pass 4.5 provenance.rs" that older
+pipeline diagrams carried is stale; the file does not exist in the tree. This
+is exactly the kind of fact the book
 cites to source rather than transcribes: [Chapter 1](01-pipeline-and-driver.md)
 folds a corrected diagram from `src/semantic/mod.rs`, not from the old README.
 
