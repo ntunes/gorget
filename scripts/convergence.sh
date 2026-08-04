@@ -11,8 +11,35 @@
 # the number reproducible.
 #
 # Usage:
-#   scripts/convergence.sh                      # current counts
-#   scripts/convergence.sh <prev_kg> <prev_todo> # full `Convergence:` line
+#   scripts/convergence.sh                              # current counts
+#   scripts/convergence.sh <prev_kg> <prev_todo>        # full `Convergence:` line
+#   scripts/convergence.sh <prev_kg> <prev_todo> <filed> # + STRICT 2x VERDICT
+#
+# ── THIS SCRIPT IS THE ARBITER OF THE STRICT 2x RULE ──────────────────────
+# Not prose in a DONE entry. A round that asserts compliance without quoting
+# this script's verdict line has not demonstrated it (measured twice: Round
+# XXVIII claimed "TODO strictly decreases" with TODO flat, and Round XXIX
+# claimed "STRICT 2x satisfied" at a 1.7:1 ratio).
+#
+# The rule's clause (a) — "close >= 2x what you file" — is EXACTLY the
+# inequality  net <= -filed.  Algebra: net = filed - closed, so
+# closed >= 2*filed  <=>  filed - net >= 2*filed  <=>  net <= -filed.
+# That matters because `filed` and `net` are both countable while `closed`
+# invites hand-counting, which is how the ratio drifted.
+#
+# WHAT COUNTS (no other reading is available):
+#   FILED   = a NEW TODO work item (a `- **` bullet in a categorized
+#             section) or a NEW tests/fixtures/known_gaps/*.gg fixture.
+#   CLOSED  = a TODO work item REMOVED, or a known_gaps fixture graduated
+#             out / deleted.
+#   NEITHER = rewriting, narrowing, or re-scoping an existing entry;
+#             splitting one fused bullet into several (a counting
+#             correction, not new work); amending an entry in place;
+#             anything in a prose section (see the stray-filing guard
+#             below — filing there is banned precisely because it is
+#             invisible here).
+# There is NO size, effort, or "big-ticket" exemption to any clause, and
+# none may be inferred. See AGENTS.md "Round lifecycle" step 5.
 #
 # Convention: net = Δknown_gaps + Δtodo_items. NEGATIVE is convergent. This
 # combined net is THE number the gate reads (AGENTS.md Round lifecycle step 5):
@@ -71,18 +98,45 @@ todo_items=$(awk -v prose_re="$PROSE_RE" '
   END { print items + 0 }
 ' TODO.md)
 
-if [ $# -eq 2 ]; then
+if [ $# -ge 2 ]; then
   prev_kg=$1
   prev_todo=$2
+  filed=${3:-}
   net=$(( (known_gaps - prev_kg) + (todo_items - prev_todo) ))
   # Match the ledger's typography: U+2212 for negatives, explicit + otherwise.
   if [ "$net" -lt 0 ]; then net_str="−${net#-}"; else net_str="+${net}"; fi
-  printf 'Convergence: known_gaps %s→%s · TODO items %s→%s · net %s (regen: `scripts/convergence.sh %s %s`)\n' \
-    "$prev_kg" "$known_gaps" "$prev_todo" "$todo_items" "$net_str" "$prev_kg" "$prev_todo"
+  printf 'Convergence: known_gaps %s→%s · TODO items %s→%s · net %s (regen: `scripts/convergence.sh %s %s%s`)\n' \
+    "$prev_kg" "$known_gaps" "$prev_todo" "$todo_items" "$net_str" "$prev_kg" "$prev_todo" \
+    "${filed:+ $filed}"
+
+  fail=0
+  # Clause (c): the combined net strictly decreases.
   if [ "$net" -ge 0 ]; then
-    echo "  ⚠ net >= 0 — the round does NOT close (STRICT 2× RULE, owner 2026-08-02). Add tracks / land more closures until the net is negative; the 'name the reason' exemption is RETIRED." >&2
+    echo "  ✗ CLAUSE (c) FAILS: net $net_str is not < 0. The round does not close. Add closures." >&2
+    fail=1
   fi
+  # Clause (a): closed >= 2x filed, i.e. net <= -filed. Needs the round's
+  # declared filing count — the ONE number a human supplies. Everything else
+  # here is measured, so a wrong declaration is the only way to fake this.
+  if [ -n "$filed" ]; then
+    closed=$(( filed - net ))
+    need=$(( -filed ))
+    if [ "$net" -le "$need" ]; then
+      printf '  ✓ CLAUSE (a) PASSES: filed %s, closed %s (net %s ≤ −%s) — ratio ≥ 2:1.\n' \
+        "$filed" "$closed" "$net_str" "$filed"
+    else
+      printf '  ✗ CLAUSE (a) FAILS: filed %s ⇒ net must be ≤ −%s, but net is %s (closed %s, ratio %s:%s < 2:1).\n' \
+        "$filed" "$filed" "$net_str" "$closed" "$closed" "$filed" >&2
+      echo "     Close $(( 2 * filed - closed )) more item(s), or file fewer. No size/effort exemption exists." >&2
+      fail=1
+    fi
+  else
+    echo "  ⚠ CLAUSE (a) NOT CHECKED — pass the round's filing count as a 3rd argument." >&2
+    echo "     A round close that does not quote a clause-(a) verdict has not demonstrated it." >&2
+    fail=1
+  fi
+  [ "$fail" -eq 0 ] || exit 1
 else
   printf 'known_gaps=%s todo_items=%s\n' "$known_gaps" "$todo_items"
-  echo "  (pass the previous round's two numbers to emit the DONE-entry line)"
+  echo "  (pass the previous round's two numbers + the round's filing count)"
 fi

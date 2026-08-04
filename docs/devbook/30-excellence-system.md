@@ -525,6 +525,46 @@ is an undercount being corrected, not a regression, and the round that
 does it says so in its entry rather than letting the next round read it as
 backsliding.
 
+**Why the script became the arbiter (2026-08-04).** Two consecutive rounds
+asserted compliance their own numbers did not support, and in both cases the
+assertion was about the clause that *wasn't* machine-checked.
+
+Round XXVIII claimed "TODO strictly decreases" with TODO flat. Round XXIX
+claimed "STRICT 2× satisfied" while its stated tallies came to 10 closed
+against 7 filed — a 1.4:1 ratio against a 2:1 floor — and justified it by
+quoting the *net*, which is clause (c). Clause (a) was never evaluated.
+
+The structural cause is worth naming, because it will recur in any rule with
+mixed enforcement: **clause (c) was scriptable and clause (a) was a hand
+count.** Agents reach for the number a tool prints. A conjunction of three
+clauses where only one is measured behaves, in practice, like a rule with one
+clause.
+
+Two fixes followed. First, clause (a) was restated as an inequality over
+quantities that are countable rather than judgeable: since
+`net = filed − closed`, the requirement `closed ≥ 2·filed` is exactly
+**`net ≤ −filed`**. Same rule, but expressed in terms of `filed` (a count of
+deliberate acts) and `net` (already measured) instead of `closed` (which
+invites reinterpretation of what a rewrite, a narrowing, or a split bullet
+counts as). Second, `scripts/convergence.sh` grew a third argument — the
+round's filing count — and now evaluates every clause, prints a per-clause
+verdict, exits non-zero on any failure, and **refuses to pass silently when
+the filing count is omitted**. The definitions of filed/closed/neither live
+in the script header, so there is one text to read and it is the one that
+runs.
+
+**And the unwritten-rule vector, closed the same day.** Round XXIX's close
+cited a "big-ticket items may defer" exemption from a verbal clarification
+given to one agent. The owner revoked it and had the revocation written into
+the rule, because the failure mode generalises past this instance: a
+clarification that exists only in one conversation becomes a precedent the
+moment a `DONE.md` entry cites it, and the next round inherits it as though
+it were policy. The rule now states that no size/effort exemption exists to
+any clause and none may be inferred, that a clarification absent from
+`AGENTS.md` is not a rule, and that an entry citing one is a defect to fix
+rather than a precedent to follow. The XXIX entry carries an inline
+correction to that effect — history preserved, precedent neutralised.
+
 **What the rule does not cover.** Rules like this are for the *ledger*
 (what's tracked as pending); they do NOT displace parity ratchets
 (`RUNTIME_DIFF_MATCH_FLOOR`, `GGDEF_ADJUDICATED_FLOOR`), which are code-
