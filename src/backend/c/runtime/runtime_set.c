@@ -51,12 +51,41 @@ static inline GorgetSet gorget_set_clone(const GorgetSet* src) {
     memset(&dst, 0, sizeof(dst));
     dst.key_size = src->key_size;
     dst.val_size = 0;
-    dst.count = src->count;
-    dst.cap = src->cap;
     dst.alloc = a;
-    dst.tombstones = src->tombstones;
     dst.hash_fn = src->hash_fn;
     dst.eq_fn = src->eq_fn;
+    dst.key_drop = src->key_drop;
+    // D39 DENSE MODE (dormant in A.2a): clone entries + indices; skip the
+    // legacy sparse-buckets path entirely. `dst` was memset above, so all
+    // legacy fields (keys/values/states/cap/order/tombstones) stay zero.
+    if (src->entries_keys) {
+        dst.count = src->count;
+        dst.entries_cap = src->entries_cap;
+        dst.entries_len = src->entries_len;
+        if (src->entries_cap > 0) {
+            dst.entries_keys = a->alloc(a->ctx, src->entries_cap * src->key_size);
+            memcpy(dst.entries_keys, src->entries_keys, src->entries_len * src->key_size);
+            size_t indices_cap = 2 * src->entries_cap;
+            if (src->indices) {
+                dst.indices = (int32_t*)a->alloc(a->ctx, indices_cap * sizeof(int32_t));
+                memcpy(dst.indices, src->indices, indices_cap * sizeof(int32_t));
+            }
+            // Deep-clone resource-typed keys so the copy is independent.
+            if (dst.key_drop) {
+                for (size_t i = 0; i < dst.entries_len; i++) {
+                    Str* key = (Str*)((char*)dst.entries_keys + i * dst.key_size);
+                    if (key->cap > 0 && key->data) {
+                        Str cloned = gorget_string_clone(key);
+                        *key = cloned;
+                    }
+                }
+            }
+        }
+        return dst;
+    }
+    dst.count = src->count;
+    dst.cap = src->cap;
+    dst.tombstones = src->tombstones;
     // Clone order array if present (ordered Set)
     if (src->order != NULL && src->order_len > 0) {
         dst.order = (size_t*)a->alloc(a->ctx, src->cap * sizeof(size_t));
@@ -72,7 +101,6 @@ static inline GorgetSet gorget_set_clone(const GorgetSet* src) {
     }
     dst.keys = a->alloc(a->ctx, src->cap * src->key_size);
     memcpy(dst.keys, src->keys, src->cap * src->key_size);
-    dst.key_drop = src->key_drop;
     dst.values = NULL;
     dst.states = (uint8_t*)a->alloc(a->ctx, src->cap);
     memcpy(dst.states, src->states, src->cap);

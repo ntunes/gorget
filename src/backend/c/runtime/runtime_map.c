@@ -32,6 +32,9 @@ static inline bool __gorget_key_eq_default(const void* a, const void* b, size_t 
 }
 #define __GORGET_MAP_HASH(m, key) ((m)->hash_fn ? (m)->hash_fn(key) : __gorget_fnv1a(key, (m)->key_size))
 #define __GORGET_MAP_EQ(m, idx, key) ((m)->eq_fn ? (m)->eq_fn((const char*)(m)->keys + (idx) * (m)->key_size, key) : __gorget_key_eq_default((const char*)(m)->keys + (idx) * (m)->key_size, key, (m)->key_size))
+// Dense-mode counterpart of __GORGET_MAP_EQ: `entries_i` addresses the packed
+// `entries_keys` array rather than the sparse `keys` bucket table.
+#define __GORGET_MAP_EQ_DENSE(m, entries_i, key) ((m)->eq_fn ? (m)->eq_fn((const char*)(m)->entries_keys + (entries_i) * (m)->key_size, key) : __gorget_key_eq_default((const char*)(m)->entries_keys + (entries_i) * (m)->key_size, key, (m)->key_size))
 
 static inline void __gorget_map_grow(GorgetMap* m) {
     GorgetAllocator* a = m->alloc;
@@ -104,6 +107,58 @@ static inline void __gorget_map_grow(GorgetMap* m) {
     if (old_order) a->dealloc(a->ctx, old_order, old_cap * sizeof(size_t));
 }
 
+// D39 dense-mode grow (coupled): doubles entries_cap AND rehashes indices in
+// one step. Invariant: `indices_cap == 2 * entries_cap` at all times (50% load
+// factor, no separate indices_cap field). Initial grow bumps 0→16 entries /
+// 0→32 indices; subsequent grows double both. Rehash rebuilds indices from
+// entries[0..entries_len] since the mask changed.
+//
+// DORMANT: never called in Phase A.2a — no ctor allocates entries_keys, so
+// `m->entries_keys` is NULL for every Dict/Set, and every dense branch that
+// would call this is unreachable. A.2c flips ctors and activates the path.
+static inline void __gorget_map_dense_grow(GorgetMap* m) {
+    GorgetAllocator* a = m->alloc;
+    size_t old_cap = m->entries_cap;
+    size_t old_indices_cap = 2 * old_cap;
+    size_t new_cap = old_cap == 0 ? 16 : old_cap * 2;
+    size_t new_indices_cap = 2 * new_cap;
+    size_t new_mask = new_indices_cap - 1;  // power-of-two: 32/64/128/...
+
+    // Realloc entries_keys (copy live prefix, drop old)
+    void* new_keys = a->alloc(a->ctx, new_cap * m->key_size);
+    if (m->entries_keys && m->entries_len > 0) {
+        memcpy(new_keys, m->entries_keys, m->entries_len * m->key_size);
+    }
+    if (m->entries_keys) a->dealloc(a->ctx, m->entries_keys, old_cap * m->key_size);
+    m->entries_keys = new_keys;
+
+    // Realloc entries_values (only when val_size > 0 — Sets skip this)
+    if (m->val_size > 0) {
+        void* new_values = a->alloc(a->ctx, new_cap * m->val_size);
+        if (m->entries_values && m->entries_len > 0) {
+            memcpy(new_values, m->entries_values, m->entries_len * m->val_size);
+        }
+        if (m->entries_values) a->dealloc(a->ctx, m->entries_values, old_cap * m->val_size);
+        m->entries_values = new_values;
+    }
+
+    // Realloc + rehash indices from scratch (mask changed → old positions invalid)
+    if (m->indices) a->dealloc(a->ctx, m->indices, old_indices_cap * sizeof(int32_t));
+    m->indices = (int32_t*)a->alloc(a->ctx, new_indices_cap * sizeof(int32_t));
+    for (size_t s = 0; s < new_indices_cap; s++) m->indices[s] = -1;
+    for (size_t i = 0; i < m->entries_len; i++) {
+        const void* key = (const char*)m->entries_keys + i * m->key_size;
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h & new_mask);
+        while (m->indices[idx] >= 0) {
+            idx = (idx + 1) & new_mask;
+        }
+        m->indices[idx] = (int32_t)i;
+    }
+
+    m->entries_cap = new_cap;
+}
+
 static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
     // Field order: { keys, cap, values, states, count, key_size, val_size, alloc, order, order_len, tombstones, hash_fn, eq_fn, val_drop, val_clone, key_drop, key_clone, val_materialize, key_materialize }
     return (GorgetMap){NULL, 0, NULL, NULL, 0, key_size, val_size, __gorget_current_alloc, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
@@ -111,7 +166,15 @@ static inline GorgetMap gorget_map_new(size_t key_size, size_t val_size) {
 
 // Pre-allocate hash table to hold at least `new_cap` entries without growing.
 static inline void gorget_map_reserve(GorgetMap* m, int64_t new_cap) {
-    if (new_cap <= 0 || (size_t)new_cap <= m->cap) return;
+    if (new_cap <= 0) return;
+    // Dense mode: grow entries_cap (coupled indices doubling handled by dense_grow).
+    if (m->entries_keys) {
+        if ((size_t)new_cap <= m->entries_cap) return;
+        while (m->entries_cap < (size_t)new_cap) __gorget_map_dense_grow(m);
+        return;
+    }
+    // Legacy mode.
+    if ((size_t)new_cap <= m->cap) return;
     while (m->cap < (size_t)new_cap) __gorget_map_grow(m);
 }
 
@@ -124,6 +187,16 @@ static inline GorgetMap gorget_dict_new(size_t key_size, size_t val_size) {
     GorgetAllocator* a = __gorget_current_alloc;
     size_t init_cap = 16;
     GorgetMap m;
+    // Defensive zero-fill: gorget_dict_new uses field-by-field assignment on an
+    // automatic variable, which is NOT zero-initialised in C. A.1 appended 5
+    // dense fields (entries_keys / entries_values / entries_len / entries_cap /
+    // indices) that this ctor does NOT explicitly set → those slots would hold
+    // stack garbage. A.2a's dense-mode discriminator (`m->entries_keys != NULL`)
+    // would then randomly fire on a stale non-NULL stack pointer, silently
+    // routing legacy Dicts through the dense branch and segfaulting on the
+    // fake pointer. memset preserves the LEGACY-only invariant for Dicts in
+    // this phase (A.2c is the phase that flips to dense).
+    memset(&m, 0, sizeof(m));
     m.keys = GORGET_CALLOC(init_cap, key_size);
     m.values = val_size > 0 ? GORGET_CALLOC(init_cap, val_size) : NULL;
     m.states = (uint8_t*)GORGET_CALLOC(init_cap, 1);
@@ -177,18 +250,70 @@ static inline GorgetMap gorget_dict_new_str(size_t val_size) {
 // `*_clone` (full always-clone) is kept separately for dict.clone() and the
 // gorget_map_put_cloned helper used by filter/map/update when deliberately
 // duplicating entries from another map.
+// idx semantics is caller-dictated: hash-slot-index in legacy mode, packed
+// entries-index in dense mode. The mode branch picks the right base array.
 static inline void __gorget_map_materialize_key(GorgetMap* m, size_t idx) {
     if (m->key_materialize) {
-        m->key_materialize((char*)m->keys + idx * m->key_size);
+        if (m->entries_keys) {
+            m->key_materialize((char*)m->entries_keys + idx * m->key_size);
+        } else {
+            m->key_materialize((char*)m->keys + idx * m->key_size);
+        }
     }
 }
 static inline void __gorget_map_materialize_value(GorgetMap* m, size_t idx) {
     if (m->val_materialize) {
-        m->val_materialize((char*)m->values + idx * m->val_size);
+        if (m->entries_keys) {
+            m->val_materialize((char*)m->entries_values + idx * m->val_size);
+        } else {
+            m->val_materialize((char*)m->values + idx * m->val_size);
+        }
     }
 }
 
 static inline void gorget_map_put(GorgetMap* m, const void* key, const void* value) {
+    // D39 DENSE MODE (dormant in A.2a — reachable only after A.2c flips ctors):
+    // append to entries[entries_len] on miss, overwrite in place on hit. Grow
+    // when entries_len == entries_cap. Insertion order is naturally preserved
+    // by the append; no separate order array.
+    if (m->entries_keys) {
+        if (m->entries_cap == 0 || m->entries_len >= m->entries_cap) {
+            __gorget_map_dense_grow(m);
+        }
+        size_t indices_cap = 2 * m->entries_cap;
+        size_t mask = indices_cap - 1;  // power-of-two
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h & mask);
+        for (;;) {
+            int32_t ei = m->indices[idx];
+            if (ei == -1) {
+                // Empty slot: append new entry, point indices[idx] at it.
+                size_t new_i = m->entries_len;
+                memcpy((char*)m->entries_keys + new_i * m->key_size, key, m->key_size);
+                __gorget_map_materialize_key(m, new_i);
+                if (m->val_size > 0 && value != NULL) {
+                    memcpy((char*)m->entries_values + new_i * m->val_size, value, m->val_size);
+                    __gorget_map_materialize_value(m, new_i);
+                }
+                m->indices[idx] = (int32_t)new_i;
+                m->entries_len++;
+                m->count++;
+                return;
+            }
+            if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
+                // Hit: overwrite value in place; key stays.
+                if (m->val_size > 0 && value != NULL) {
+                    if (m->val_drop) {
+                        m->val_drop((char*)m->entries_values + (size_t)ei * m->val_size);
+                    }
+                    memcpy((char*)m->entries_values + (size_t)ei * m->val_size, value, m->val_size);
+                    __gorget_map_materialize_value(m, (size_t)ei);
+                }
+                return;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
     // Ordered mode (order != NULL): count tombstones in load factor to force grow,
     // and never reuse tombstone slots. This ensures stale order-array entries
     // pointing to tombstoned slots are correctly skipped during iteration.
@@ -284,6 +409,45 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
 // were already cloned by gorget_string_materialize_inplace via key_materialize.
 static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const void* value) {
     gorget_map_put(m, key, value);
+    // D39 DENSE MODE (dormant in A.2a): re-probe indices to locate the entries
+    // index of the just-inserted key, then deep-clone key/value in place.
+    if (m->entries_keys) {
+        size_t indices_cap = 2 * m->entries_cap;
+        size_t mask = indices_cap - 1;
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h & mask);
+        for (;;) {
+            int32_t ei = m->indices[idx];
+            if (ei == -1) return;  // shouldn't happen — we just put
+            if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
+                size_t entries_i = (size_t)ei;
+                if (m->key_clone) {
+                    void* kp = (char*)m->entries_keys + entries_i * m->key_size;
+                    if (m->key_materialize == (__gorget_drop_fn)gorget_string_materialize_inplace) {
+                        Str* ks = (Str*)kp;
+                        if (ks->cap > 0 && ks->len > 0) {
+                            *ks = gorget_string_clone_to_owned(ks);
+                        }
+                    } else {
+                        m->key_clone(kp);
+                    }
+                }
+                if (m->val_size > 0 && m->val_clone) {
+                    void* vp = (char*)m->entries_values + entries_i * m->val_size;
+                    if (m->val_materialize == (__gorget_drop_fn)gorget_string_materialize_inplace) {
+                        Str* vs = (Str*)vp;
+                        if (vs->cap > 0 && vs->len > 0) {
+                            *vs = gorget_string_clone_to_owned(vs);
+                        }
+                    } else {
+                        m->val_clone(vp);
+                    }
+                }
+                return;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
     size_t mask = m->cap - 1;  // cap is power-of-two (see __gorget_map_grow)
     uint64_t h = __GORGET_MAP_HASH(m, key);
     size_t idx = (size_t)(h & mask);
@@ -320,6 +484,23 @@ static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const vo
 }
 
 static inline void* gorget_map_get(const GorgetMap* m, const void* key) {
+    // D39 DENSE MODE (dormant in A.2a).
+    if (m->entries_keys) {
+        if (m->entries_cap == 0) return NULL;
+        size_t indices_cap = 2 * m->entries_cap;
+        size_t mask = indices_cap - 1;
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h & mask);
+        for (;;) {
+            int32_t ei = m->indices[idx];
+            if (ei == -1) return NULL;
+            if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
+                if (m->val_size == 0) return (void*)1;
+                return (char*)m->entries_values + (size_t)ei * m->val_size;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
     if (m->cap == 0) return NULL;
     size_t mask = m->cap - 1;  // cap is power-of-two (see __gorget_map_grow)
     uint64_t h = __GORGET_MAP_HASH(m, key);
@@ -344,6 +525,48 @@ static inline size_t gorget_map_len(const GorgetMap* m) {
 }
 
 static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
+    // D39 DENSE MODE (dormant in A.2a): locate entries index i; memmove
+    // entries[i+1..entries_len] down by 1; decrement any indices[j] > i; -1
+    // the freed indices slot. O(n) but order-preserving.
+    if (m->entries_keys) {
+        if (m->entries_cap == 0) return false;
+        size_t indices_cap = 2 * m->entries_cap;
+        size_t mask = indices_cap - 1;
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h & mask);
+        for (;;) {
+            int32_t ei = m->indices[idx];
+            if (ei == -1) return false;
+            if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
+                size_t entries_i = (size_t)ei;
+                if (m->val_drop && m->entries_values) {
+                    m->val_drop((char*)m->entries_values + entries_i * m->val_size);
+                }
+                if (m->key_drop) {
+                    m->key_drop((char*)m->entries_keys + entries_i * m->key_size);
+                }
+                size_t tail = m->entries_len - entries_i - 1;
+                if (tail > 0) {
+                    memmove((char*)m->entries_keys + entries_i * m->key_size,
+                            (char*)m->entries_keys + (entries_i + 1) * m->key_size,
+                            tail * m->key_size);
+                    if (m->entries_values) {
+                        memmove((char*)m->entries_values + entries_i * m->val_size,
+                                (char*)m->entries_values + (entries_i + 1) * m->val_size,
+                                tail * m->val_size);
+                    }
+                }
+                m->entries_len--;
+                m->count--;
+                m->indices[idx] = -1;
+                for (size_t j = 0; j < indices_cap; j++) {
+                    if (m->indices[j] > (int32_t)entries_i) m->indices[j]--;
+                }
+                return true;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
     if (m->cap == 0) return false;
     size_t mask = m->cap - 1;  // cap is power-of-two (see __gorget_map_grow)
     uint64_t h = __GORGET_MAP_HASH(m, key);
@@ -375,6 +598,59 @@ static inline void* gorget_map_remove_opt(GorgetMap* m, const void* key) {
     static _Thread_local char __map_remove_buf[4096];
     static _Thread_local char* __map_remove_heap = NULL;
     static _Thread_local size_t __map_remove_heap_cap = 0;
+    // D39 DENSE MODE (dormant in A.2a): mirror gorget_map_remove but transfer
+    // the value bytes to the TLS buffer for Option[V] return before memmove.
+    if (m->entries_keys) {
+        if (m->entries_cap == 0) return NULL;
+        size_t indices_cap = 2 * m->entries_cap;
+        size_t mask = indices_cap - 1;
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h & mask);
+        for (;;) {
+            int32_t ei = m->indices[idx];
+            if (ei == -1) return NULL;
+            if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
+                size_t entries_i = (size_t)ei;
+                char* buf;
+                if (m->val_size <= sizeof(__map_remove_buf)) {
+                    buf = __map_remove_buf;
+                } else {
+                    if (m->val_size > __map_remove_heap_cap) {
+                        free(__map_remove_heap);
+                        __map_remove_heap = (char*)malloc(m->val_size);
+                        __map_remove_heap_cap = m->val_size;
+                    }
+                    buf = __map_remove_heap;
+                }
+                if (m->val_size > 0 && m->entries_values) {
+                    memcpy(buf, (char*)m->entries_values + entries_i * m->val_size, m->val_size);
+                }
+                // Drop key; value ownership transfers to caller (no val_drop).
+                if (m->key_drop) {
+                    m->key_drop((char*)m->entries_keys + entries_i * m->key_size);
+                }
+                size_t tail = m->entries_len - entries_i - 1;
+                if (tail > 0) {
+                    memmove((char*)m->entries_keys + entries_i * m->key_size,
+                            (char*)m->entries_keys + (entries_i + 1) * m->key_size,
+                            tail * m->key_size);
+                    if (m->entries_values) {
+                        memmove((char*)m->entries_values + entries_i * m->val_size,
+                                (char*)m->entries_values + (entries_i + 1) * m->val_size,
+                                tail * m->val_size);
+                    }
+                }
+                m->entries_len--;
+                m->count--;
+                m->indices[idx] = -1;
+                for (size_t j = 0; j < indices_cap; j++) {
+                    if (m->indices[j] > (int32_t)entries_i) m->indices[j]--;
+                }
+                return m->val_size > 0 ? (void*)buf : (void*)1;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
     if (m->cap == 0) return NULL;
     size_t mask = m->cap - 1;  // cap is power-of-two (see __gorget_map_grow)
     uint64_t h = __GORGET_MAP_HASH(m, key);
@@ -410,6 +686,25 @@ static inline void* gorget_map_remove_opt(GorgetMap* m, const void* key) {
 }
 
 static inline void gorget_map_clear(GorgetMap* m) {
+    // D39 DENSE MODE (dormant in A.2a): drop each live entry, reset entries_len
+    // and count, and re-init indices to -1. Retain allocations.
+    if (m->entries_keys) {
+        for (size_t i = 0; i < m->entries_len; i++) {
+            if (m->val_drop && m->entries_values) {
+                m->val_drop((char*)m->entries_values + i * m->val_size);
+            }
+            if (m->key_drop) {
+                m->key_drop((char*)m->entries_keys + i * m->key_size);
+            }
+        }
+        m->entries_len = 0;
+        m->count = 0;
+        if (m->indices) {
+            size_t indices_cap = 2 * m->entries_cap;
+            for (size_t s = 0; s < indices_cap; s++) m->indices[s] = -1;
+        }
+        return;
+    }
     if (m->states) memset(m->states, 0, m->cap);
     m->count = 0;
     m->order_len = 0;
@@ -418,6 +713,29 @@ static inline void gorget_map_clear(GorgetMap* m) {
 
 static inline void gorget_map_free(GorgetMap* m) {
     if (!m->alloc) return;
+    // D39 DENSE MODE (dormant in A.2a): drop entries[0..entries_len), free the
+    // three dense arrays, null them.
+    if (m->entries_keys) {
+        for (size_t i = 0; i < m->entries_len; i++) {
+            if (m->val_drop && m->entries_values) {
+                m->val_drop((char*)m->entries_values + i * m->val_size);
+            }
+            if (m->key_drop) {
+                m->key_drop((char*)m->entries_keys + i * m->key_size);
+            }
+        }
+        GorgetAllocator* a = m->alloc;
+        a->dealloc(a->ctx, m->entries_keys, m->entries_cap * m->key_size);
+        if (m->entries_values) a->dealloc(a->ctx, m->entries_values, m->entries_cap * m->val_size);
+        if (m->indices) a->dealloc(a->ctx, m->indices, 2 * m->entries_cap * sizeof(int32_t));
+        m->entries_keys = NULL;
+        m->entries_values = NULL;
+        m->indices = NULL;
+        m->entries_len = 0;
+        m->entries_cap = 0;
+        m->count = 0;
+        return;
+    }
     if (m->states) {
         for (size_t i = 0; i < m->cap; i++) {
             if (m->states[i] == 1) {
@@ -461,6 +779,45 @@ static inline GorgetMap gorget_map_clone(const GorgetMap* src) {
     dst.val_materialize = src->val_materialize;
     dst.key_materialize = src->key_materialize;
     dst.alloc = a;
+    // D39 DENSE MODE (dormant in A.2a): clone entries + indices; skip the
+    // legacy sparse-buckets path entirely. `dst` was memset above, so all
+    // legacy fields stay zero. Preserves order via the packed entries array.
+    if (src->entries_keys) {
+        dst.entries_cap = src->entries_cap;
+        dst.entries_len = src->entries_len;
+        dst.count = src->count;
+        if (src->entries_cap > 0) {
+            dst.entries_keys = a->alloc(a->ctx, src->entries_cap * src->key_size);
+            memcpy(dst.entries_keys, src->entries_keys, src->entries_len * src->key_size);
+            if (src->val_size > 0 && src->entries_values) {
+                dst.entries_values = a->alloc(a->ctx, src->entries_cap * src->val_size);
+                memcpy(dst.entries_values, src->entries_values, src->entries_len * src->val_size);
+            }
+            size_t indices_cap = 2 * src->entries_cap;
+            if (src->indices) {
+                dst.indices = (int32_t*)a->alloc(a->ctx, indices_cap * sizeof(int32_t));
+                memcpy(dst.indices, src->indices, indices_cap * sizeof(int32_t));
+            }
+            // Deep-clone resource-typed values so the copy is independent.
+            if (dst.val_clone && dst.entries_values) {
+                for (size_t i = 0; i < dst.entries_len; i++) {
+                    dst.val_clone((char*)dst.entries_values + i * dst.val_size);
+                }
+            }
+            // Deep-clone resource-typed keys so the copy is independent.
+            if (dst.key_clone) {
+                for (size_t i = 0; i < dst.entries_len; i++) {
+                    dst.key_clone((char*)dst.entries_keys + i * dst.key_size);
+                }
+            } else if (dst.key_drop) {
+                for (size_t i = 0; i < dst.entries_len; i++) {
+                    Str* key = (Str*)((char*)dst.entries_keys + i * dst.key_size);
+                    if (key->len > 0) *key = gorget_string_clone(key);
+                }
+            }
+        }
+        return dst;
+    }
     if (src->cap > 0) {
         dst.keys = a->alloc(a->ctx, src->cap * src->key_size);
         dst.values = a->alloc(a->ctx, src->cap * src->val_size);
@@ -536,6 +893,18 @@ static inline GorgetArray gorget_map_keys(const GorgetMap* m) {
     if (m->key_clone) {
         result.elem_clone = m->key_clone;
     }
+    // D39 DENSE MODE (dormant in A.2a): entries[] is packed and already in
+    // insertion order — walk it directly.
+    if (m->entries_keys) {
+        for (size_t i = 0; i < m->entries_len; i++) {
+            gorget_array_push(&result, (char*)m->entries_keys + i * m->key_size);
+            if (m->key_drop) {
+                Str* key = (Str*)gorget_array_get(&result, result.len - 1);
+                if (key->len > 0) *key = gorget_string_clone(key);
+            }
+        }
+        return result;
+    }
     if (m->order != NULL) {
         for (size_t oi = 0; oi < m->order_len; oi++) {
             size_t i = m->order[oi];
@@ -564,6 +933,13 @@ static inline GorgetArray gorget_map_keys(const GorgetMap* m) {
 // Ordered iteration: values → GorgetArray
 static inline GorgetArray gorget_map_values(const GorgetMap* m) {
     GorgetArray result = gorget_array_new(m->val_size);
+    // D39 DENSE MODE (dormant in A.2a).
+    if (m->entries_keys) {
+        for (size_t i = 0; i < m->entries_len; i++) {
+            gorget_array_push(&result, (char*)m->entries_values + i * m->val_size);
+        }
+        return result;
+    }
     if (m->order != NULL) {
         for (size_t oi = 0; oi < m->order_len; oi++) {
             size_t i = m->order[oi];
@@ -587,6 +963,15 @@ static inline GorgetArray gorget_map_items(const GorgetMap* m) {
     GorgetArray result = gorget_array_new(item_size);
     // Allocate a temporary buffer for assembling each item
     char* tmp = (char*)alloca(item_size);
+    // D39 DENSE MODE (dormant in A.2a).
+    if (m->entries_keys) {
+        for (size_t i = 0; i < m->entries_len; i++) {
+            memcpy(tmp, (char*)m->entries_keys + i * m->key_size, m->key_size);
+            memcpy(tmp + m->key_size, (char*)m->entries_values + i * m->val_size, m->val_size);
+            gorget_array_push(&result, tmp);
+        }
+        return result;
+    }
     if (m->order != NULL) {
         for (size_t oi = 0; oi < m->order_len; oi++) {
             size_t i = m->order[oi];
@@ -612,21 +997,41 @@ static inline GorgetArray gorget_map_items(const GorgetMap* m) {
 // InlineC. All accessors are trivial field reads that the C
 // compiler will inline to zero overhead.
 
+// Iterator accessors — dormant dense-mode branches (A.2a).
+//
+// Dense mode collapses the "iterate the sparse bucket table skipping empty
+// slots via `order`" pattern to a straight [0..entries_len) walk over the
+// packed entries arrays. Under dense: `iter_cap` and `iter_order_len` both
+// return entries_len; `iter_state` is always 1 (all in-range indices are
+// live); `iter_order` is identity; key/value reads pull from
+// entries_keys/entries_values.
 static inline int64_t gorget_map_iter_cap(const void* m) {
-    return (int64_t)((const GorgetMap*)m)->cap;
+    const GorgetMap* mm = (const GorgetMap*)m;
+    if (mm->entries_keys) return (int64_t)mm->entries_len;
+    return (int64_t)mm->cap;
 }
 static inline int64_t gorget_map_iter_state(const void* m, int64_t idx) {
-    return (int64_t)((const GorgetMap*)m)->states[(size_t)idx];
+    const GorgetMap* mm = (const GorgetMap*)m;
+    if (mm->entries_keys) return 1;
+    return (int64_t)mm->states[(size_t)idx];
 }
 static inline int64_t gorget_map_iter_order_len(const void* m) {
-    return (int64_t)((const GorgetMap*)m)->order_len;
+    const GorgetMap* mm = (const GorgetMap*)m;
+    if (mm->entries_keys) return (int64_t)mm->entries_len;
+    return (int64_t)mm->order_len;
 }
 static inline int64_t gorget_map_iter_order(const void* m, int64_t idx) {
-    return (int64_t)((const GorgetMap*)m)->order[(size_t)idx];
+    const GorgetMap* mm = (const GorgetMap*)m;
+    if (mm->entries_keys) return idx;
+    return (int64_t)mm->order[(size_t)idx];
 }
 static inline void gorget_map_iter_key(const void* m, int64_t idx, void* out) {
     const GorgetMap* mm = (const GorgetMap*)m;
-    memcpy(out, (const char*)mm->keys + (size_t)idx * mm->key_size, mm->key_size);
+    if (mm->entries_keys) {
+        memcpy(out, (const char*)mm->entries_keys + (size_t)idx * mm->key_size, mm->key_size);
+    } else {
+        memcpy(out, (const char*)mm->keys + (size_t)idx * mm->key_size, mm->key_size);
+    }
     // Resource-typed keys (String, Vector, …) need an independent owned
     // copy at the caller — the memcpy above produces a shallow alias of
     // the map's storage. `key_clone` is the in-place clone wrapper
@@ -638,7 +1043,11 @@ static inline void gorget_map_iter_key(const void* m, int64_t idx, void* out) {
 }
 static inline void gorget_map_iter_value(const void* m, int64_t idx, void* out) {
     const GorgetMap* mm = (const GorgetMap*)m;
-    memcpy(out, (const char*)mm->values + (size_t)idx * mm->val_size, mm->val_size);
+    if (mm->entries_keys) {
+        memcpy(out, (const char*)mm->entries_values + (size_t)idx * mm->val_size, mm->val_size);
+    } else {
+        memcpy(out, (const char*)mm->values + (size_t)idx * mm->val_size, mm->val_size);
+    }
     // Same rationale as `gorget_map_iter_key`: clone resource-typed values.
     if (mm->val_clone) {
         mm->val_clone(out);
@@ -666,6 +1075,22 @@ static inline void gorget_map_iter_value(const void* m, int64_t idx, void* out) 
 static inline int64_t gorget_map_drain_entry(const void* m, int64_t phys_idx, void* out_key, void* out_val) {
     GorgetMap* mm = (GorgetMap*)m;  // cast away const — see comment above
     size_t idx = (size_t)phys_idx;
+    // D39 DENSE MODE (dormant in A.2a): `phys_idx` is the packed entries index
+    // (iter accessors return identity above). Bounds-check against entries_len;
+    // move key/value bytes to out params; decrement count without memmoving
+    // (drain callers walk indices in one shot then the whole map is dropped —
+    // the iter accessors treat all in-range slots as live regardless, and this
+    // path is dead until A.2c anyway). Refinement (proper per-slot drained
+    // marker) is A.2c/A.2b scope.
+    if (mm->entries_keys) {
+        if (idx >= mm->entries_len) return 0;
+        memcpy(out_key, (const char*)mm->entries_keys + idx * mm->key_size, mm->key_size);
+        if (mm->val_size > 0 && mm->entries_values && out_val) {
+            memcpy(out_val, (const char*)mm->entries_values + idx * mm->val_size, mm->val_size);
+        }
+        if (mm->count > 0) mm->count--;
+        return 1;
+    }
     if (mm->states[idx] != 1) return 0;  // already drained or never occupied
     memcpy(out_key, (const char*)mm->keys + idx * mm->key_size, mm->key_size);
     if (mm->val_size > 0 && mm->values && out_val) {
