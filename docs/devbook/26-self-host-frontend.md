@@ -234,11 +234,11 @@ a resource entry or a runtime-function entry, no expression-level helpers
 
 The self-host imports these directly (`gir.gg:8-11`:
 `from compiler.data.schema import ResourceMetadata, CopySemantics, …`). The Rust
-compiler consumes a **hand-written mirror** at `src/ir/resource_schema.rs`,
+compiler consumes a **hand-written mirror** at `src/resource_schema.rs`,
 whose header states *"the Gorget side is the source of truth — this Rust file
-exists so that the loader at `src/ir/resources.rs` can produce typed values for
+exists so that the loader at `src/resources.rs` can produce typed values for
 Rust consumers"* and that *"any field change here MUST bump `SCHEMA_VERSION`"*
-(`src/ir/resource_schema.rs:1-10`). `SCHEMA_VERSION` lives in
+(`src/resource_schema.rs:1-10`). `SCHEMA_VERSION` lives in
 `compiler/data/resources.gg:36`. The duplication retires when the self-host
 replaces Rust as the canonical compiler. This is the layering discipline
 (chapter 24) applied across the language boundary: one source of truth per axis,

@@ -1324,7 +1324,7 @@ the backend anymore.
 The runtime side of CoW is a single shared convention: the field at **offset +8**
 of every resource struct is `cap`, and `cap == 0` means **view** (non-owning),
 `cap > 0` means **owned**. This is uniform across `GorgetString`/`Str`
-(`src/backend/c/c_runtime.rs:1440`), `GorgetArray` (`c_runtime.rs:309`), and
+(`src/backend/c/runtime/runtime_string.c:22`), `GorgetArray` (`runtime_preamble.c:345`), and
 `GorgetMap`/`GorgetSet` (`c_runtime.rs:322`). The generic check is
 `gorget_is_view` (`c_runtime.rs:1458`): `((const size_t*)resource)[1] == 0`.
 

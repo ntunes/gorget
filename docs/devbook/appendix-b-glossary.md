@@ -182,7 +182,7 @@ The non-owning state of a resource struct, signalled by a `cap` field of zero at
 the shared offset +8: `cap == 0` ⟺ the struct's `data` *borrows* a buffer it
 does not own (a `.rodata` literal or a slice into another buffer) and its drop
 is a no-op; `cap > 0` ⟺ owned, and drop frees `data`
-([`src/backend/c/c_runtime.rs:1429`](../../src/backend/c/c_runtime.rs),
+([`src/backend/c/runtime/runtime_string.c:7`](../../src/backend/c/runtime/runtime_string.c),
 [`18-runtime-abi.md:54`](18-runtime-abi.md)). This is the runtime's only
 participation in CoW — a cheap discriminator check, with no reference counting in
 the CoW path. (The single-owner concurrency types — `Channel`/`Shared`/`Weak` —

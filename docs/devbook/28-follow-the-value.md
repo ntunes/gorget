@@ -208,7 +208,7 @@ array operand into `v`'s slot (the assign-mode tree is `lower_var_decl_assign_mo
 
 ## Hop 6 — GIR → LIR & SSA
 
-LIR lowering (`src/lir/lower.rs`, [Chapter 14](14-lir-ssa.md)) consumes the GIR
+LIR lowering (`src/lir/lower/mod.rs`, [Chapter 14](14-lir-ssa.md)) consumes the GIR
 and produces SSA-form `LirModule`. The four `CallExtern` calls become LIR
 `Inst::CallExtern { dst, name, args, arg_abis }` (`src/lir/mod.rs:856-861`),
 emitted by the GIR→LIR instruction lowering in `src/lir/lower/insts.rs` (the
@@ -285,7 +285,7 @@ Hop 5. The runtime, ABI, and drop contract those calls obey are
 | 5 | GIR | `gorget_array_new` + 3× `gorget_array_push`; array `Owned`; per-elem move/clone | `src/ir/lowering/exprs/collections.rs:13` |
 | 6 | LIR/SSA | 4× `Inst::CallExtern` w/ `arg_abis`, SSA `ValueId`s | `src/lir/lower/insts.rs:85`; `src/lir/mod.rs:856`; `src/lir/runtime.rs:611` |
 | 7 | BIR | unchanged (already primitive) | `src/bir/mod.rs:77` |
-| 8 | C backend | `gorget_array_new(...)` / `gorget_array_push(&arr, &e)` | `src/backend/c_lir/emit_call_extern.rs:6`; runtime `src/backend/c/c_runtime.rs:5233,5244` |
+| 8 | C backend | `gorget_array_new(...)` / `gorget_array_push(&arr, &e)` | `src/backend/c_lir/emit_call_extern.rs:6`; runtime `src/backend/c/runtime/runtime_array.c:4`, `:15` |
 
 ## What the trace teaches
 

@@ -10651,3 +10651,153 @@ fn advice_diagnostic_registration() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// DOC CITATION GUARD — every `path:line` a doc cites must actually resolve.
+//
+// Core #6 applied to documentation: prose rots, guards don't. This tree's most
+// repeated doc defect is a citation that survives the move it describes — the
+// runtime text-move (`765cbfc6`) left 17 `c_runtime.rs:NNN` citations pointing
+// into a file that had shrunk from ~15k lines to 255, and the
+// `src/{ir => }/resources.rs` hoist (`c55b7e53`) left 13 pointing at a path
+// that no longer existed. Both survived the doc edits that came AFTER them,
+// because nothing mechanical was checking.
+//
+// A reader who follows a broken citation concludes the doc is stale and stops
+// trusting the chapter; a scout briefed off one designs around a phantom.
+// ---------------------------------------------------------------------------
+
+/// Minimal recursive .md walk (mirrors `walkdir_rs`).
+fn walkdir_md(root: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::from(root)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().and_then(|e| e.to_str()) == Some("md") {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Paths a doc names *deliberately* while they do not exist. Two legitimate
+/// kinds only:
+///   (a) NEGATIVE mentions — prose whose whole point is "this file does not
+///       exist" (the `provenance.rs` correction, repeated in three chapters);
+///   (b) FORWARD references — a ratified-but-unbuilt artifact named by the
+///       ledger or a design note (D39 Phase B's `stablemap.gg`).
+/// Anything else is a defect. This list is shrink-only: a path that starts
+/// existing must be REMOVED from here, not left to rot.
+const DOC_CITATION_ABSENT_BY_DESIGN: &[&str] = &[
+    // (a) negative mentions — "there is no provenance pass"
+    "src/semantic/provenance.rs",
+    // (b) forward references to ratified-but-unbuilt artifacts
+    "lib/std/stablemap.gg",
+];
+
+/// Repo-rooted prefixes. A citation that does not start with one of these is
+/// prose shorthand (`generics/mod.rs` after the full path was established) and
+/// is deliberately NOT checked — resolving shorthand by basename would make
+/// the lint guess, and a guessing lint reports defects that aren't there.
+const DOC_CITATION_ROOTS: &[&str] = &[
+    "src/", "tests/", "lib/", "docs/", "spec/", "compiler/", "scripts/",
+    "benchmarks/", "examples/", "tools/", "fuzz/", "demo/",
+];
+
+#[test]
+fn doc_source_citations_resolve() {
+    let cite = regex::Regex::new(r"`([A-Za-z0-9_./-]+\.(?:rs|gg|c|h|toml))(?::(\d+))?`?")
+        .expect("citation regex");
+
+    let mut missing: Vec<String> = Vec::new();
+    let mut out_of_range: Vec<String> = Vec::new();
+    let mut scanned = 0usize;
+
+    for doc in walkdir_md("docs") {
+        let Ok(text) = fs::read_to_string(&doc) else { continue };
+        for (lineno, line) in text.lines().enumerate() {
+            for caps in cite.captures_iter(line) {
+                let path = &caps[1];
+                if !DOC_CITATION_ROOTS.iter().any(|r| path.starts_with(r)) {
+                    continue;
+                }
+                scanned += 1;
+                let target = Path::new(path);
+                if !target.is_file() {
+                    if !DOC_CITATION_ABSENT_BY_DESIGN.contains(&path) {
+                        missing.push(format!(
+                            "{}:{} → `{}` (no such file)",
+                            doc.display(),
+                            lineno + 1,
+                            path
+                        ));
+                    }
+                    continue;
+                }
+                let Some(num) = caps.get(2) else { continue };
+                let Ok(cited) = num.as_str().parse::<usize>() else { continue };
+                let have = fs::read_to_string(target)
+                    .map(|s| s.lines().count())
+                    .unwrap_or(0);
+                if cited > have {
+                    out_of_range.push(format!(
+                        "{}:{} → `{}:{}` (file has {} lines)",
+                        doc.display(),
+                        lineno + 1,
+                        path,
+                        cited,
+                        have
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        scanned > 500,
+        "doc citation scan found only {scanned} repo-rooted citations — the \
+         citation format or the docs tree moved and this lint reads almost \
+         nothing. Fix the scanner, don't lower the floor."
+    );
+
+    // FATAL AT ZERO. Every out-of-range citation was burned down when this
+    // guard landed; a new one means a doc edit or a source move outran its
+    // write-through. There is no budget on purpose — the whole failure mode
+    // is a citation quietly surviving the change it describes.
+    assert!(
+        out_of_range.is_empty(),
+        "doc citation(s) point past the end of the file they cite ({}):\n  {}\n\n\
+         The cited line no longer exists. Re-read the source, repoint the \
+         citation at the symbol it means, and prefer citing a stable anchor \
+         (a symbol name plus file) over a line number in fast-moving code.",
+        out_of_range.len(),
+        out_of_range.join("\n  ")
+    );
+
+    // Shrink-only. SIX of the seven sit in `docs/internals/` files that are
+    // pending deletion and name artifacts of abandoned plans that were never
+    // built (`src/backend/shared.rs`, `src/backend/llvm/{types,runtime}.rs`,
+    // `src/lir/lower.rs`, `src/semantic/borrow_check.rs`,
+    // `lib/std/gen/resources.gg`); they go to zero when those files go. The
+    // SEVENTH is a real defect and does not: `decisions.md` cites a
+    // `known_gaps` repro that was never committed, which the "every filed
+    // bug ships a durable repro" rule requires to exist. Lower this as each
+    // is closed.
+    const MISSING_BUDGET: usize = 7;
+    assert!(
+        missing.len() <= MISSING_BUDGET,
+        "doc(s) cite {} nonexistent path(s) (budget {}):\n  {}\n\n\
+         Either the path moved (repoint it), the file was deleted (drop or \
+         reword the citation), or the doc names an artifact that was planned \
+         and never built (add it to DOC_CITATION_ABSENT_BY_DESIGN with the \
+         reason). If the count went DOWN, lower MISSING_BUDGET to lock it.",
+        missing.len(),
+        MISSING_BUDGET,
+        missing.join("\n  ")
+    );
+}

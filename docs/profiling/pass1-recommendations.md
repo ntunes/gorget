@@ -172,7 +172,7 @@ Leverage scoring: `(estimated speedup) × (frequency in real workloads)`. Self-h
 
 ### 3. **Runtime: Dict / Set / String-heavy loops slower than Python (0.23–0.52× ratio)**
 - **Axis**: C.
-- **Source location**: `src/backend/c/c_runtime.rs:5752+` (`__GORGET_MAP_HASH` macro, `__gorget_map_grow`, `gorget_map_put`, `gorget_map_get`) and the codegen for `.len()` / slicing in hot loops.
+- **Source location**: `src/backend/c/runtime/runtime_map.c:33`+ (`__GORGET_MAP_HASH` macro, `__gorget_map_grow`, `gorget_map_put`, `gorget_map_get`) and the codegen for `.len()` / slicing in hot loops.
 - **Root-cause hypothesis** (Dict/Set):
   - Default hash is FNV-1a (`__gorget_fnv1a` `:226`) — **way slower than CPython's SipHash + per-cell optimization** for short keys (CPython's dict hot path is hand-rolled assembly-ish C, beats FNV by ~2×). For non-string keys, the `hash_fn` / `eq_fn` function-pointer indirection (`:5753-5754`) is also unavoidably worse than CPython's specialized int-hash inlining.
   - Linear probing on `% new_cap` (`:5783, :5803`) — `%` on a non-compile-time-known cap is a 20-cycle divide; CPython uses bit-masking on a power-of-two capacity.

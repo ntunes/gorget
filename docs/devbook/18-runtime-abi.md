@@ -20,22 +20,22 @@ The four heap-backed runtime types are plain C structs defined together in
 out so the first two machine words coincide:
 
 - `GorgetArray` — `{ void* data; size_t cap; size_t len; size_t elem_size; ... }`
-  (`src/backend/c/c_runtime.rs:309`). The struct carries three trailing function
+  (`src/backend/c/runtime/runtime_preamble.c:345`). The struct carries three trailing function
   pointers (`elem_drop`, `elem_clone`, `elem_materialize`) for resource-typed
   elements.
 - `GorgetMap` — `{ void* keys; size_t cap; void* values; ... }`
-  (`src/backend/c/c_runtime.rs:322`). `GorgetSet` is a typedef alias of
-  `GorgetMap` (`src/backend/c/c_runtime.rs:344`).
+  (`src/backend/c/runtime/runtime_preamble.c:358`). `GorgetSet` is a typedef alias of
+  `GorgetMap` (`src/backend/c/runtime/runtime_preamble.c:386`).
 - `Str` / `GorgetString` — `{ char* data; size_t cap; size_t len; GorgetAllocator* alloc; }`
-  (`src/backend/c/c_runtime.rs:1440`, with `typedef Str GorgetString;` at
-  `:1447`). `data` is `char*` rather than `void*` so it can be used directly as a
+  (`src/backend/c/runtime/runtime_string.c:22`, with `typedef Str GorgetString;` at
+  `:30`). `data` is `char*` rather than `void*` so it can be used directly as a
   C string.
 
 The common invariant is: the pointer/handle is at offset 0, and **`cap` is the
 field at offset +8** (word index 1) in every one of them. The runtime header
 calls this out explicitly at each definition ("offset +8: generic view
 discriminator (0 = view)") and the `Str` block spells out the byte offsets
-(`data`@0, `cap`@8, `len`@16, `alloc`@24 — `src/backend/c/c_runtime.rs:1420`–`1438`).
+(`data`@0, `cap`@8, `len`@16, `alloc`@24 — `src/backend/c/runtime/runtime_string.c:6`–`9`).
 
 ### Why the abstract type is narrow
 
@@ -61,11 +61,11 @@ capacity. For `Str`:
 - `cap > 0` ⟺ **owned** — drop frees `data` via `alloc->dealloc(data, cap)`.
 - `len` is authoritative in both cases.
 
-(`src/backend/c/c_runtime.rs:1429`–`1432`.) String literals lower to static
+(`src/backend/c/runtime/runtime_string.c:7`–`13`.) String literals lower to static
 view structs — `gorget_string_free` short-circuits on a view
-(`if (s->cap == 0) { *s = (Str){0}; return; }`, `src/backend/c/c_runtime.rs:1538`),
+(`if (s->cap == 0) { *s = (Str){0}; return; }`, `src/backend/c/runtime/runtime_string.c:121`),
 and the `GORGET_SLIT` macro builds a zero-alloc compound literal with `.cap = 0`
-(`src/backend/c/c_runtime.rs:1477`).
+(`src/backend/c/runtime/runtime_string.c:60`).
 
 Because the field is at the *same* offset across all four types, the runtime can
 test view-ness generically without knowing which struct it holds:
@@ -79,7 +79,7 @@ static inline bool gorget_is_view(const void* resource) {
 
 This is the layout fact the backend depends on, and the reason the field order
 was chosen — `{data, cap, len, alloc}` puts `cap` where `GorgetArray`/`GorgetMap`
-already had it (`src/backend/c/c_runtime.rs:1437`).
+already had it (`src/backend/c/runtime/runtime_string.c:20`).
 
 ## Cover structs: under-declared Gorget layout over a larger C struct
 
@@ -147,20 +147,20 @@ of this contract (all take a `const T*` or `void*` pointer to the in-slot value)
   because they always return an independently-allocated value that aliases no
   input (`src/lir/runtime.rs:366`, `:405`, `:431`). The string clones
   `gorget_string_clone` / `gorget_string_clone_to_owned`
-  (`src/backend/c/c_runtime.rs:1609`, `:1623`) are tagged with **plain `sig`**
+  (`src/backend/c/runtime/runtime_string.c:192`, `:206`) are tagged with **plain `sig`**
   (`returns_fresh: false` — `src/lir/runtime.rs:349`–`350`): for non-empty input
   they `str_alloc_copy` a fresh owned buffer, but for empty input they return the
   shared static `GORGET_EMPTY_STR` view (`if (src->len == 0) return
-  GORGET_EMPTY_STR;`, `:1610`), and `GORGET_EMPTY_STR` is a `cap == 0` static
-  (`src/backend/c/c_runtime.rs:1473`) — so the result can alias a static rather
+  GORGET_EMPTY_STR;`, `src/backend/c/runtime/runtime_string.c:193`), and `GORGET_EMPTY_STR` is a `cap == 0` static
+  (`src/backend/c/runtime/runtime_string.c:56`) — so the result can alias a static rather
   than always being a fresh non-aliasing buffer, which is exactly why these are
   not `sig_fresh`.
-- **copy-on-write** — `gorget_string_copy_cow` (`src/backend/c/c_runtime.rs:1631`)
+- **copy-on-write** — `gorget_string_copy_cow` (`src/backend/c/runtime/runtime_string.c:215`)
   branches on the discriminator: a view (`cap == 0`) is a 32-byte struct copy
   with **zero allocation**; an owned string is deep-cloned. This is the runtime
   half of the `String t = s` Copy path.
 - **materialize** — `gorget_string_materialize_inplace`
-  (`src/backend/c/c_runtime.rs:1653`) upgrades an in-slot *view* to owned
+  (`src/backend/c/runtime/runtime_string.c:250`) upgrades an in-slot *view* to owned
   in-place (`if (s->cap == 0 && s->len > 0) { ... str_alloc_copy ... }`), and is
   a no-op on an already-owned value. It is invoked through the per-element
   function-pointer hooks (`elem_materialize` / `val_materialize` /
@@ -260,24 +260,24 @@ The *type*-side companion to `RuntimeFn` is a declarative table written in
 idiomatic Gorget at `compiler/data/resources.gg`, baked into the binary via
 `include_str!` (`src/compiler_data.rs:14`). At first use the loader parses it
 *with the compiler's own parser*, walks the literal-only AST, and produces a
-typed `ResourceTable` (`src/ir/resources.rs:38`–`73`); subsequent calls are O(1)
+typed `ResourceTable` (`src/resources.rs:38`–`73`); subsequent calls are O(1)
 through a `OnceLock`. A `GORGET_RESOURCES_PATH` env var overrides the embedded
 copy so the table can be edited without recompiling Rust
-(`src/ir/resources.rs:44`).
+(`src/resources.rs:44`).
 
 The schema is declared in `compiler/data/schema.gg` and mirrored, by hand, into
-typed Rust structs in `src/ir/resource_schema.rs`. The two are kept in lockstep
+typed Rust structs in `src/resource_schema.rs`. The two are kept in lockstep
 by a `SCHEMA_VERSION` integer that the loader asserts against
-`SCHEMA_VERSION_EXPECTED` (`src/ir/resources.rs:28`, `:65`) — a field-shape change
+`SCHEMA_VERSION_EXPECTED` (`src/resources.rs:28`, `:65`) — a field-shape change
 that forgets to bump the version fails the build loudly rather than corrupting
 silently. The Rust mirror exists only so Rust consumers get typed values; it is
 documented to retire when self-host replaces Rust as the canonical compiler
-(`src/ir/resource_schema.rs:7`).
+(`src/resource_schema.rs:8`).
 
-Each `ResourceEntry` (`src/ir/resource_schema.rs:75`) is a list of `MatchKind`
+Each `ResourceEntry` (`src/resource_schema.rs:79`) is a list of `MatchKind`
 keys (`Exact` / `Prefix`) plus a `ResourceMetadata` payload. `lookup(name)`
 returns the first entry whose `match_on` list matches, in declaration order
-(`src/ir/resource_schema.rs:141`). The metadata is the type-axis truth:
+(`src/resource_schema.rs:144`). The metadata is the type-axis truth:
 `runtime_name`, `size_bytes`, `drop_fn`/`clone_fn`/`materialize_fn`,
 `copy_semantics`, `collection_kind`, `box_kind`, `opaque_handle`,
 `method_prefix`, `c_typedef_name`, `is_typed_constructor`. For example
@@ -312,7 +312,7 @@ unshipped** — `RUNTIME_DECLS`, `resources.toml`, and the `build.rs` emitters d
 not exist in the tree: there is no `build.rs`, no `RUNTIME_DECLS` const in `src/`,
 and no `resources.toml` file. (`RUNTIME_DECLS` appears only in docs; the string
 `resources.toml` appears as a plan-name reference in a few source comments —
-`src/compiler_data.rs:11`, `src/ir/resources.rs:428`,
+`src/compiler_data.rs:11`, `src/resources.rs:428`,
 `compiler/data/resources.gg:13` — but no such file is ever read or written.)
 
 What ships *today* is strictly the better half of that idea, just split across
@@ -325,7 +325,7 @@ work — tracked as a `TODO.md` roadmap item, not a gap in the shipped code — 
 unify both axes under one hand-edited canonical source that *also* generates the
 C header and the self-host form, closing the latent "frontend/runtime/self-host
 signature drift" bug class and de-duplicating the hand-written Rust mirror in
-`src/ir/resource_schema.rs`. The design lived in the former
+`src/resource_schema.rs`. The design lived in the former
 `unified-resource-model.md` §3.6 / §9.2 / §13, now folded into this chapter.
 
 > Note: the citation in `src/lir/runtime.rs:6` formerly pointed at a
@@ -343,5 +343,5 @@ counterpart to compare against today. The `compiler/data/schema.gg` /
 `resources.gg` files are written so the self-host *could* consume them directly
 (`from compiler.data.schema import …`, `compiler/data/schema.gg:5`), which is the
 long-term plan in §9.2 of the unified-resource-model doc — but that consumption
-is not wired up. The Rust mirror at `src/ir/resource_schema.rs` is the only live
+is not wired up. The Rust mirror at `src/resource_schema.rs` is the only live
 reader.
