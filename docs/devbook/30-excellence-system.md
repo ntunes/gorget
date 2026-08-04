@@ -609,6 +609,35 @@ the same day — to solve a bookkeeping mismatch. What remains genuinely
 unresolved is only the discovery case: a phase that uncovers *k* defects
 still fails, and that is arguably correct, since the queue really did grow.
 
+**The escape hatch is a person, not a category (owner 2026-08-04).** Some
+rounds will genuinely be unable to meet a clause — most obviously the
+discovery case, where a phase uncovers *k* real defects and the queue
+honestly grew. Two ways to handle that, and only one survives contact with
+agents.
+
+The tempting one is a *category*: architecture rounds, big-ticket items,
+discovery rounds. Every such category is self-declared, so within a round or
+two it is being invoked for work that merely resembles the category. That is
+not speculation — "big-ticket items may defer" was granted verbally to one
+agent and was load-bearing in a `DONE.md` entry the same week, cited as
+though it were policy.
+
+The one that survives is an **owner ask**. A blocked round stops and asks for
+permission to close, carrying the script's verdict verbatim, which clause
+failed and by how much, what closures were attempted, and why closing beats
+continuing. Three properties make it robust where a category is not: it
+cannot be self-invoked; it is per-instance, so it grants nothing about the
+next round; and the round *stays open* until answered, so there is no
+optimistic-close path for an autonomous loop to take.
+
+Two guards on it. The waiver covers the **convergence clauses only** — a red
+battery is never waivable, and conflating "the gates" would have made it so.
+And the override deliberately does **not** live in the instrument: there is
+no `--waive` flag, so `convergence.sh` stays red and the failure remains
+visible in the record forever, with the waiver recorded beside it *as a
+waiver rather than as compliance*. An override the tool can express is an
+override the tool will eventually grant itself.
+
 **What the rule does not cover.** Rules like this are for the *ledger*
 (what's tracked as pending); they do NOT displace parity ratchets
 (`RUNTIME_DIFF_MATCH_FLOOR`, `GGDEF_ADJUDICATED_FLOOR`), which are code-
