@@ -1,12 +1,18 @@
 # CoW Transient-View Model — making the mutation resolver total
 
-> **STATUS: DESIGN NOTE — owner-led brainstorm, 2026-07-22.** Parts ruled, parts
-> leaning, parts open (see the status ledger at the end). **NOT ratified as a
-> whole and NOT implemented.** Do not treat any of this as shipped behavior.
-> When ratified + shipped it graduates to `docs/language-design.md` §3 and
-> `docs/book/12-borrowing.md`; until then this file is the single durable record
-> of the design so far. Pairs with the return-view (#13) ruling in
-> [`unified-resource-model.md`](unified-resource-model.md) §6.
+> **Status: `RATIFIED-UNBUILT`** — owner-led brainstorm, 2026-07-22. **NOT
+> implemented**: the place-gate extension and the typed view axis do not exist
+> at HEAD. Do not treat any of this as shipped behavior.
+>
+> **The ratified part is `D41`** (views internal to builtins only, no
+> user-visible `Ref[T]`, user methods return owned, closures are the sanctioned
+> mutate-through path), recorded in
+> [`docs/define-gorget/decisions.md`](../define-gorget/decisions.md). That entry
+> is the ruling; this note elaborates it, and the user-`Ref[T]` material below is
+> retained as rejected-alternative context. The rest is leaning or open — see the
+> status ledger at the end. When shipped it graduates to
+> `docs/language-design.md` §3 and `docs/book/12-borrowing.md`. Pairs with `D40`
+> (return-view lazy materialization).
 >
 > **Scope split (2026-07-28):** this note owns the **legality** axis — what is a
 > place, what may be mutated through, accept/reject. The **cost** axis (the

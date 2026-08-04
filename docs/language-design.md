@@ -423,6 +423,17 @@ charter. This is the acceptance bar for all materialization work: judged
 against the hand-written ideal, never merely against the previous
 release or the other compiler lane.
 
+**Making the cost assertable (ruled, not shipped — D42).** The charter is a
+promise the compiler makes; an author who needs it *checked* on a particular
+function gets `implicit_clones`, an annotation that changes no semantics and
+only makes the compiler prove a property or error. It takes `allow` (the
+default), `warn`, or `deny`, at three scopes — `--implicit-clones=deny` for a
+project, `directive implicit-clones=deny` for a module, `@implicit_clones(deny)`
+for one function. An explicit `.clone()` is exempt: only *implicit* clones are
+diagnosed, so the fix for a violation is to write the clone, making the cost
+visible exactly where its author asked to see it. **Not implemented** — do not
+expect the attribute to parse today.
+
 **The cost side — when to reach for `&`.** Because a bare mutation
 *copies*, mutating through a bare binding can pay a clone (the
 copy-on-write), whereas an `&` mutation writes **in place** with no copy.
@@ -753,12 +764,14 @@ Gorget provides the same memory safety guarantees as Rust but requires **zero li
 |--------|------|--------|
 | Lifetime annotations | Required on signatures (`'a`, `'b`) | None — never written by the user |
 | Inference source | Signature-only elision rules | Ownership model + body analysis |
-| Borrowed return values | Allowed — annotated with `'a` | **No user-visible borrowed-return type.** **Today:** resource returns are owned at the boundary (move or clone). **Intended (not shipped):** compiler-internal view-return when static provenance proves it; still no `'a` in source |
+| Borrowed return values | Allowed — annotated with `'a` | **No user-visible borrowed-return type** (D41 — views stay internal to builtins; there is no user-spellable `Ref[T]`). **Today:** resource returns are owned at the boundary (move or clone). **Intended (not shipped):** compiler-internal view-return when static provenance proves it (D40); still no `'a` in source |
 | Use-after-move | Checked | Checked |
 | Dangling references | Prevented by lifetime bounds | Prevented by ownership + origin tracking (reject or force own; planned: prove-or-materialize for return views) |
 | User-facing syntax | `'a`, `'b`, `'static`, `where 'a: 'b` | No lifetime syntax — the compiler handles everything internally |
 
-**Why no annotations are needed:** Rust needs lifetime annotations because it exposes borrowed return types in the surface language — the caller must know *which* input the return value borrows from. Gorget never exposes that type: the user always writes ordinary return types (`String`, `SpannedToken`, …). **Today** the implementation keeps that contract by materializing ownership at the return boundary when the source is a live borrow. **Intended later** is the same surface contract with fewer clones when provenance can prove a view is safe — still without any lifetime syntax. Provenance is internal (`BorrowOrigin`); see §3.6's today/intended table and the return-view ruling in `docs/internals/unified-resource-model.md` §6.
+**Why no annotations are needed:** Rust needs lifetime annotations because it exposes borrowed return types in the surface language — the caller must know *which* input the return value borrows from. Gorget never exposes that type: the user always writes ordinary return types (`String`, `SpannedToken`, …). **Today** the implementation keeps that contract by materializing ownership at the return boundary when the source is a live borrow. **Intended later** is the same surface contract with fewer clones when provenance can prove a view is safe — still without any lifetime syntax. Provenance is internal (`BorrowOrigin`); see §3.6's today/intended table and the return-view ruling **D40** (static provenance, never a runtime refcount; materialize-when-unsure, never reject).
+
+Because views never surface as a type, mutating *through* the result of a user method is not a borrow the user can hold: user methods return owned, and a write through such a result is rejected as a non-place rather than silently lost. The sanctioned way to mutate an element in place is a closure — `grid.update(x, y, (Cell &c): c.mark())` — which writes through today. One correct way, no borrow-type concept added for call-site sugar (**D41**; the reject is ruled, not yet shipped).
 
 ```gorget
 # Gorget: no annotation — surface type is String either way

@@ -1,16 +1,22 @@
 # CoW Cost Contract — making the copy cost legible, elidable, and assertable
 
-> **STATUS: DESIGN NOTE — owner-led brainstorm, 2026-07-28.** The knob spelling is
-> owner-chosen; the rest is proposed/leaning. **NOT ratified as a whole and NOT
-> implemented.** Do not treat any of this as shipped behavior. When ratified +
-> shipped, the guaranteed-elision set graduates to `docs/language-reference.md`
-> and the knob to `docs/language-reference.md` §5.11 + §"Directives"; until then
-> this file is the single durable record of the design.
+> **Status: `RATIFIED-UNBUILT`** — owner-led brainstorm, 2026-07-28. **NOT
+> implemented**: no code exists for the summary layer, either elision direction,
+> the specified elision set, or the knob. Do not treat any of this as shipped
+> behavior.
+>
+> **The ratified part is `D42`** (the `implicit_clones` knob — one name, three
+> scopes, `allow`/`warn`/`deny`, explicit `.clone()` exempt), recorded in
+> [`docs/define-gorget/decisions.md`](../define-gorget/decisions.md). That entry
+> is the ruling; this note elaborates it. The rest of this file is proposed or
+> leaning — see the status ledger at the end. When shipped, the
+> guaranteed-elision set graduates to `docs/language-reference.md` and the knob
+> to §5.11 + §"Directives".
 >
 > **Pairs with** [`cow-transient-view-model.md`](cow-transient-view-model.md) (the
-> *legality* axis — place-gate, `returns_view`, no user `Ref[T]`) and
-> [`unified-resource-model.md`](unified-resource-model.md) §6 (#13, the
-> return-boundary elision, which this note absorbs — see § Articulation).
+> *legality* axis — place-gate, `returns_view`, no user `Ref[T]`; ruled as `D41`)
+> and `D40` (return-view lazy materialization, the return-boundary elision this
+> note absorbs — see § Articulation).
 > This note owns the **cost** axis: nothing here changes accept/reject.
 
 ## The problem

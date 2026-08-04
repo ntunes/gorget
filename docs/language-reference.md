@@ -2830,10 +2830,14 @@ function-local that dies with the frame is rejected or forced to own.
 static provenance proves the result is a short-lived projection of a live
 parameter or receiver, the compiler may keep an internal view across the call
 and materialize only if a conflicting mutation of the source is reachable while
-the view is live. Materialize-when-unsure, never reject; no runtime refcount.
-Ruled in `docs/internals/unified-resource-model.md` §6; user-facing contract
-unchanged (still zero annotations). **Do not assume this is live** — `peek()`
-and similar still clone today.
+the view is live. Two properties are guaranteed and do not change as this lands
+(**D40**): provenance is tracked **statically, never by a runtime refcount** —
+mutation carries no shared-check and no buffer is pinned alive; and where the
+analysis cannot *prove* the view stays valid it **materializes, never rejects**
+— conservatism can only add a clone, never refuse a valid program and never
+admit a dangling view. The user-facing contract is unchanged either way (still
+zero annotations). **Do not assume this is live** — `peek()` and similar still
+clone today.
 
 Internally (today and as the planned path grows), the compiler may trace which
 parameters contribute to a return for diagnostics and provenance:
