@@ -2430,48 +2430,67 @@ fn expand_flat_map(
 
 /// Scaffold for Dict (`GorgetMap`) HOF loops.
 ///
-/// Dict iteration walks all `cap` slots of the hash table and skips
-/// non-occupied slots (`states[i] != 1`). Per-iteration blocks:
+/// Dict iteration walks either the LEGACY sparse table (`cap` slots
+/// with an occupancy filter on `states[i] == 1`) or the DENSE packed
+/// entries array (`entries_len` slots, no state check). The runtime
+/// discriminator is `m->entries_keys != NULL` — set at ctor time and
+/// invariant for the map's lifetime — so we dispatch ONCE at loop
+/// entry and emit two independent loops that both funnel into a shared
+/// `done_bb`. Per-iteration blocks:
 ///
 /// ```text
 ///   current_bb:
 ///     <pre-HofExpand insts>
-///     jmp check_bb(0_i64, extras...)
-///   check_bb(i: i64, extras...):
+///     disc = Load(FieldPtr(coll, 19))   # entries_keys
+///     is_dense = Cmp(Ne, disc, NULL)
+///     branch is_dense, dense.check_bb(0, extras...), legacy.check_bb(0, extras...)
+///
+///   ── LEGACY branch (sparse hash table walk) ──
+///   legacy.check_bb(i: i64, extras...):
 ///     cap = Load(FieldPtr(coll, 1))
 ///     cond = Cmp(Lt, i, cap)
-///     branch cond, state_bb, done_bb
-///   state_bb:
+///     branch cond, legacy_state_bb, done_bb
+///   legacy_state_bb:
 ///     states = Load(FieldPtr(coll, 3))
 ///     state_i = Load(ElemPtr(states, i, 1), U8)
 ///     occupied = Cmp(Eq, state_i, 1_u8)
-///     branch occupied, body_bb, advance_bb
-///   body_bb:
+///     branch occupied, legacy.body_bb, legacy.advance_bb
+///   legacy.body_bb:
 ///     keys = Load(FieldPtr(coll, 0))
 ///     key_ptr = ElemPtr(keys, i, key_size)
 ///     values = Load(FieldPtr(coll, 2))
 ///     val_ptr = ElemPtr(values, i, val_size)
-///     (optional Load for scalar key/val → key_arg, val_arg)
 ///     <variant appends CallClosure + terminator>
-///   advance_bb:
-///     next_i = Add(i, 1)
-///     jmp check_bb(next_i, carried-extras...)
-///   done_bb:
-///     (variant fills insts + terminator)
+///   legacy.advance_bb:
+///     next_i = Add(i, 1); jmp legacy.check_bb(next_i, carried-extras...)
+///
+///   ── DENSE branch (packed entries array walk) ──
+///   dense.check_bb(i: i64, extras...):
+///     len = Load(FieldPtr(coll, 21))   # entries_len
+///     cond = Cmp(Lt, i, len)
+///     branch cond, dense.body_bb, done_bb
+///   dense.body_bb:
+///     ek = Load(FieldPtr(coll, 19))    # entries_keys
+///     key_ptr = ElemPtr(ek, i, key_size)
+///     ev = Load(FieldPtr(coll, 20))    # entries_values
+///     val_ptr = ElemPtr(ev, i, val_size)
+///     <variant appends CallClosure + terminator>
+///   dense.advance_bb:
+///     next_i = Add(i, 1); jmp dense.check_bb(next_i, carried-extras...)
+///
+///   done_bb: (variant fills insts + terminator)
 /// ```
 ///
-/// `body_bb` terminator is NOT set — the caller extends it (each's
-/// variant jumps to `advance_bb` after `CallClosure`; other variants
-/// may branch differently). `advance_bb`'s terminator IS set to the
-/// back-edge; the caller fills in carried-extras via
-/// `ctx.advance_jump_extras`.
+/// `body_bb` terminators are NOT set — the caller extends each (each's
+/// variant jumps to the matching advance_bb after `CallClosure`; other
+/// variants may branch differently). Both `advance_bb`s' terminators
+/// ARE set to the back-edge; the caller fills carried-extras via each
+/// branch's `advance_extra_params`.
 #[allow(dead_code)]
-struct DictHofLoopCtx {
+struct DictHofLoopBranch {
     check_bb: BlockId,
-    state_bb: BlockId,
     body_bb: BlockId,
     advance_bb: BlockId,
-    done_bb: BlockId,
     i_val: ValueId,
     next_i: ValueId,
     cap_cond: ValueId,
@@ -2481,10 +2500,18 @@ struct DictHofLoopCtx {
     val_arg: ValueId,
     key_abi: crate::ir::abi::AbiKind,
     val_abi: crate::ir::abi::AbiKind,
-    /// Block-param ValueIds on `check_bb` (for each entry in
-    /// `extra_check_inits`). Read from body_bb / state_bb to access
-    /// the current iteration's accumulator.
+    /// Block-param ValueIds on this branch's `check_bb` (for each entry in
+    /// `extra_check_inits`). Read from body_bb to access the current
+    /// iteration's accumulator.
     extra_check_params: Vec<ValueId>,
+}
+
+#[allow(dead_code)]
+struct DictHofLoopCtx {
+    legacy: DictHofLoopBranch,
+    legacy_state_bb: BlockId,
+    dense: DictHofLoopBranch,
+    done_bb: BlockId,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2501,133 +2528,320 @@ fn emit_dict_hof_loop_scaffold(
     extra_check_inits: Vec<(LirType, ValueId)>,
 ) -> DictHofLoopCtx {
     let gmap_sid = lookup_struct_id(structs, "GorgetMap").unwrap_or(StructId(0));
+    let key_size = c_sizeof_lir_type(key_ty, structs) as u32;
+    let val_size = c_sizeof_lir_type(val_ty, structs) as u32;
 
-    let check_bb = func.add_block();
-    let state_bb = func.add_block();
-    let body_bb = func.add_block();
-    let advance_bb = func.add_block();
+    // ── LEGACY loop blocks ──
+    let l_check_bb = func.add_block();
+    let l_state_bb = func.add_block();
+    let l_body_bb = func.add_block();
+    let l_advance_bb = func.add_block();
+    // ── DENSE loop blocks (no state_bb — packed) ──
+    let d_check_bb = func.add_block();
+    let d_body_bb = func.add_block();
+    let d_advance_bb = func.add_block();
+    // Shared exit.
     let done_bb = func.add_block();
 
-    // check_bb params: counter + extras.
-    let i_val = alloc_value(next);
-    func.block_mut(check_bb).params.push((i_val, LirType::I64));
-    let mut extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    // ─────────────── Per-branch block params ───────────────
+    // LEGACY check_bb params: counter + extras.
+    let l_i_val = alloc_value(next);
+    func.block_mut(l_check_bb).params.push((l_i_val, LirType::I64));
+    let mut l_extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
     for (ty, _) in &extra_check_inits {
         let p = alloc_value(next);
-        func.block_mut(check_bb).params.push((p, ty.clone()));
-        extra_check_params.push(p);
+        func.block_mut(l_check_bb).params.push((p, ty.clone()));
+        l_extra_check_params.push(p);
     }
-
-    // advance_bb mirrors the extras — variants pass "the value to
-    // carry into the next iteration" when they jump in. On the state-
-    // skip path the scaffold carries the check_bb block-param values
-    // unchanged; on the body path the variant decides.
-    let mut advance_extra_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    let mut l_advance_extra_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
     for (ty, _) in &extra_check_inits {
         let p = alloc_value(next);
-        func.block_mut(advance_bb).params.push((p, ty.clone()));
-        advance_extra_params.push(p);
+        func.block_mut(l_advance_bb).params.push((p, ty.clone()));
+        l_advance_extra_params.push(p);
+    }
+    // DENSE check_bb params.
+    let d_i_val = alloc_value(next);
+    func.block_mut(d_check_bb).params.push((d_i_val, LirType::I64));
+    let mut d_extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(d_check_bb).params.push((p, ty.clone()));
+        d_extra_check_params.push(p);
+    }
+    let mut d_advance_extra_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(d_advance_bb).params.push((p, ty.clone()));
+        d_advance_extra_params.push(p);
     }
 
-    // Entry: jmp check_bb(0, init0, init1, ...)
+    // ─────────────── Entry: discriminator dispatch ───────────────
+    // `disc = Load(FieldPtr(coll, 19 /* entries_keys */)); is_dense = disc != NULL`
+    // Field 19 is beyond the LIR StructDef's tracked slots (13 fields),
+    // so FieldPtr emits the byte-offset fallback (field * sizeof(void*) = 152B),
+    // which matches the C struct layout (all fields 8 bytes, no padding).
+    let disc_ptr = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::FieldPtr {
+        dst: disc_ptr,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 19, // entries_keys
+    });
+    let disc = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::Load {
+        dst: disc,
+        ptr: disc_ptr,
+        ty: LirType::Ptr,
+    });
+    let null_ptr = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::IConst {
+        dst: null_ptr,
+        ty: LirType::Ptr,
+        value: 0,
+    });
+    let is_dense = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::Cmp {
+        dst: is_dense,
+        op: CmpOp::Ne,
+        lhs: disc,
+        rhs: null_ptr,
+    });
+    // Entry args: (0, init0, init1, ...) for both branches.
     let zero = alloc_value(next);
-    func.block_mut(BlockId(current_bb as u32))
-        .push_synthetic(Inst::IConst {
-            dst: zero,
-            ty: LirType::I64,
-            value: 0,
-        });
-    let mut entry_args = Vec::with_capacity(1 + extra_check_inits.len());
-    entry_args.push(zero);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::IConst {
+        dst: zero,
+        ty: LirType::I64,
+        value: 0,
+    });
+    let mut entry_args_dense: Vec<ValueId> = Vec::with_capacity(1 + extra_check_inits.len());
+    entry_args_dense.push(zero);
     for (_, init) in &extra_check_inits {
-        entry_args.push(*init);
+        entry_args_dense.push(*init);
     }
-    func.block_mut(BlockId(current_bb as u32)).terminator =
-        Term::Jump(check_bb, entry_args);
+    let entry_args_legacy = entry_args_dense.clone();
+    func.block_mut(BlockId(current_bb as u32)).terminator = Term::Branch {
+        cond: is_dense,
+        then_block: d_check_bb,
+        then_args: entry_args_dense,
+        else_block: l_check_bb,
+        else_args: entry_args_legacy,
+    };
 
+    // ─────────────── LEGACY branch ───────────────
     // check_bb: cap load + bounds.
     let cap_ptr = alloc_value(next);
-    func.block_mut(check_bb).push_synthetic(Inst::FieldPtr {
+    func.block_mut(l_check_bb).push_synthetic(Inst::FieldPtr {
         dst: cap_ptr,
         base: coll,
         struct_id: gmap_sid,
         field: 1, // GorgetMap.cap
     });
     let cap = alloc_value(next);
-    func.block_mut(check_bb).push_synthetic(Inst::Load {
+    func.block_mut(l_check_bb).push_synthetic(Inst::Load {
         dst: cap,
         ptr: cap_ptr,
         ty: LirType::I64,
     });
-    let cap_cond = alloc_value(next);
-    func.block_mut(check_bb).push_synthetic(Inst::Cmp {
-        dst: cap_cond,
+    let l_cap_cond = alloc_value(next);
+    func.block_mut(l_check_bb).push_synthetic(Inst::Cmp {
+        dst: l_cap_cond,
         op: CmpOp::Lt,
-        lhs: i_val,
+        lhs: l_i_val,
         rhs: cap,
     });
-    // Caller sets `check_bb.terminator` — usually
-    // `Branch(cap_cond, state_bb, done_bb)`.
+    // Caller sets l_check_bb.terminator to Branch(l_cap_cond, l_state_bb, done_bb, ...).
 
     // state_bb: read states[i], check == 1.
     let states_ptr_field = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::FieldPtr {
+    func.block_mut(l_state_bb).push_synthetic(Inst::FieldPtr {
         dst: states_ptr_field,
         base: coll,
         struct_id: gmap_sid,
-        field: 3, // GorgetMap.states
+        field: 3,
     });
     let states_ptr = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::Load {
+    func.block_mut(l_state_bb).push_synthetic(Inst::Load {
         dst: states_ptr,
         ptr: states_ptr_field,
         ty: LirType::Ptr,
     });
     let state_i_ptr = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::ElemPtr {
+    func.block_mut(l_state_bb).push_synthetic(Inst::ElemPtr {
         dst: state_i_ptr,
         base: states_ptr,
-        index: i_val,
-        elem_size: 1, // U8 state byte
+        index: l_i_val,
+        elem_size: 1,
     });
     let state_val = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::Load {
+    func.block_mut(l_state_bb).push_synthetic(Inst::Load {
         dst: state_val,
         ptr: state_i_ptr,
         ty: LirType::U8,
     });
     let one_u8 = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::IConst {
+    func.block_mut(l_state_bb).push_synthetic(Inst::IConst {
         dst: one_u8,
         ty: LirType::U8,
         value: 1,
     });
     let occupied = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::Cmp {
+    func.block_mut(l_state_bb).push_synthetic(Inst::Cmp {
         dst: occupied,
         op: CmpOp::Eq,
         lhs: state_val,
         rhs: one_u8,
     });
-    // State-skip path: carry check_bb's block-param extras through
-    // advance_bb unchanged — the accumulator (or any carried state)
-    // passes through since the element was skipped.
-    let skip_args: Vec<ValueId> = extra_check_params.iter().copied().collect();
-    func.block_mut(state_bb).terminator = Term::Branch {
+    let l_skip_args: Vec<ValueId> = l_extra_check_params.iter().copied().collect();
+    func.block_mut(l_state_bb).terminator = Term::Branch {
         cond: occupied,
-        then_block: body_bb,
+        then_block: l_body_bb,
         then_args: vec![],
-        else_block: advance_bb,
-        else_args: skip_args,
+        else_block: l_advance_bb,
+        else_args: l_skip_args,
     };
 
-    // body_bb: key + val load/pointer.
+    // legacy body_bb: keys[i] + values[i].
+    let (l_key_ptr, l_val_ptr, l_key_arg, l_val_arg, l_key_abi, l_val_abi) =
+        emit_dict_body_prelude(
+            func,
+            next,
+            l_body_bb,
+            coll,
+            gmap_sid,
+            l_i_val,
+            key_ty,
+            val_ty,
+            key_size,
+            val_size,
+            key_abi_hint,
+            val_abi_hint,
+            /* dense */ false,
+        );
+
+    // legacy advance_bb: next_i, jump back.
+    let l_next_i = emit_advance_backedge(
+        func, next, l_advance_bb, l_check_bb, l_i_val, &l_advance_extra_params,
+    );
+
+    // ─────────────── DENSE branch ───────────────
+    // check_bb: entries_len (field 21) as bound.
+    let elen_ptr = alloc_value(next);
+    func.block_mut(d_check_bb).push_synthetic(Inst::FieldPtr {
+        dst: elen_ptr,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 21, // entries_len
+    });
+    let elen = alloc_value(next);
+    func.block_mut(d_check_bb).push_synthetic(Inst::Load {
+        dst: elen,
+        ptr: elen_ptr,
+        ty: LirType::I64,
+    });
+    let d_cap_cond = alloc_value(next);
+    func.block_mut(d_check_bb).push_synthetic(Inst::Cmp {
+        dst: d_cap_cond,
+        op: CmpOp::Lt,
+        lhs: d_i_val,
+        rhs: elen,
+    });
+    // Caller sets d_check_bb.terminator to Branch(d_cap_cond, d_body_bb, done_bb, ...).
+
+    // dense body_bb: entries_keys[i] + entries_values[i]. Dense is
+    // packed — no state_bb needed.
+    let (d_key_ptr, d_val_ptr, d_key_arg, d_val_arg, d_key_abi, d_val_abi) =
+        emit_dict_body_prelude(
+            func,
+            next,
+            d_body_bb,
+            coll,
+            gmap_sid,
+            d_i_val,
+            key_ty,
+            val_ty,
+            key_size,
+            val_size,
+            key_abi_hint,
+            val_abi_hint,
+            /* dense */ true,
+        );
+
+    // dense advance_bb.
+    let d_next_i = emit_advance_backedge(
+        func, next, d_advance_bb, d_check_bb, d_i_val, &d_advance_extra_params,
+    );
+
+    DictHofLoopCtx {
+        legacy: DictHofLoopBranch {
+            check_bb: l_check_bb,
+            body_bb: l_body_bb,
+            advance_bb: l_advance_bb,
+            i_val: l_i_val,
+            next_i: l_next_i,
+            cap_cond: l_cap_cond,
+            key_ptr: l_key_ptr,
+            val_ptr: l_val_ptr,
+            key_arg: l_key_arg,
+            val_arg: l_val_arg,
+            key_abi: l_key_abi,
+            val_abi: l_val_abi,
+            extra_check_params: l_extra_check_params,
+        },
+        legacy_state_bb: l_state_bb,
+        dense: DictHofLoopBranch {
+            check_bb: d_check_bb,
+            body_bb: d_body_bb,
+            advance_bb: d_advance_bb,
+            i_val: d_i_val,
+            next_i: d_next_i,
+            cap_cond: d_cap_cond,
+            key_ptr: d_key_ptr,
+            val_ptr: d_val_ptr,
+            key_arg: d_key_arg,
+            val_arg: d_val_arg,
+            key_abi: d_key_abi,
+            val_abi: d_val_abi,
+            extra_check_params: d_extra_check_params,
+        },
+        done_bb,
+    }
+}
+
+/// Shared body prelude for Dict HOF loops. Emits key_ptr / val_ptr
+/// (and, per ABI hint, key_arg / val_arg loads) for the given loop
+/// mode. `dense=false` reads the legacy sparse `keys` / `values`
+/// pointers (fields 0 / 2); `dense=true` reads the packed
+/// `entries_keys` / `entries_values` pointers (fields 19 / 20).
+#[allow(clippy::too_many_arguments)]
+fn emit_dict_body_prelude(
+    func: &mut LirFunction,
+    next: &mut u32,
+    body_bb: BlockId,
+    coll: ValueId,
+    gmap_sid: StructId,
+    i_val: ValueId,
+    key_ty: &LirType,
+    val_ty: &LirType,
+    key_size: u32,
+    val_size: u32,
+    key_abi_hint: Option<crate::ir::abi::AbiKind>,
+    val_abi_hint: Option<crate::ir::abi::AbiKind>,
+    dense: bool,
+) -> (
+    ValueId,
+    ValueId,
+    ValueId,
+    ValueId,
+    crate::ir::abi::AbiKind,
+    crate::ir::abi::AbiKind,
+) {
+    let (keys_field_idx, vals_field_idx) = if dense { (19, 20) } else { (0, 2) };
     let keys_field = alloc_value(next);
     func.block_mut(body_bb).push_synthetic(Inst::FieldPtr {
         dst: keys_field,
         base: coll,
         struct_id: gmap_sid,
-        field: 0,
+        field: keys_field_idx,
     });
     let keys_ptr = alloc_value(next);
     func.block_mut(body_bb).push_synthetic(Inst::Load {
@@ -2635,7 +2849,6 @@ fn emit_dict_hof_loop_scaffold(
         ptr: keys_field,
         ty: LirType::Ptr,
     });
-    let key_size = c_sizeof_lir_type(key_ty, structs) as u32;
     let key_ptr = alloc_value(next);
     func.block_mut(body_bb).push_synthetic(Inst::ElemPtr {
         dst: key_ptr,
@@ -2648,7 +2861,7 @@ fn emit_dict_hof_loop_scaffold(
         dst: vals_field,
         base: coll,
         struct_id: gmap_sid,
-        field: 2,
+        field: vals_field_idx,
     });
     let vals_ptr = alloc_value(next);
     func.block_mut(body_bb).push_synthetic(Inst::Load {
@@ -2656,7 +2869,6 @@ fn emit_dict_hof_loop_scaffold(
         ptr: vals_field,
         ty: LirType::Ptr,
     });
-    let val_size = c_sizeof_lir_type(val_ty, structs) as u32;
     let val_ptr = alloc_value(next);
     func.block_mut(body_bb).push_synthetic(Inst::ElemPtr {
         dst: val_ptr,
@@ -2709,17 +2921,19 @@ fn emit_dict_hof_loop_scaffold(
     } else {
         crate::ir::abi::AbiKind::Scalar
     };
+    (key_ptr, val_ptr, key_arg, val_arg, key_abi, val_abi)
+}
 
-    // advance_bb: next_i = i + 1, then Jump back to check_bb with
-    // (next_i + carried-extras). The extras are advance_bb's block
-    // params — they flow from whichever predecessor (state-skip or
-    // body) jumped in with its "value to carry forward."
-    //
-    // Note: `next_i` is computed in advance_bb for a subtle reason —
-    // `i_val` is check_bb's block param and is dominated by check_bb,
-    // and advance_bb is reachable from check_bb (via state_bb and
-    // body_bb, both dominated by check_bb). So advance_bb can
-    // reference `i_val` directly.
+/// Emit `next_i = i + 1; jmp check_bb(next_i, carried-extras...)`
+/// in the given advance block. Returns the `next_i` ValueId.
+fn emit_advance_backedge(
+    func: &mut LirFunction,
+    next: &mut u32,
+    advance_bb: BlockId,
+    check_bb: BlockId,
+    i_val: ValueId,
+    advance_extra_params: &[ValueId],
+) -> ValueId {
     let next_i = alloc_value(next);
     let one_i64 = alloc_value(next);
     func.block_mut(advance_bb).push_synthetic(Inst::IConst {
@@ -2738,24 +2952,7 @@ fn emit_dict_hof_loop_scaffold(
     back_args.push(next_i);
     back_args.extend(advance_extra_params.iter().copied());
     func.block_mut(advance_bb).terminator = Term::Jump(check_bb, back_args);
-
-    DictHofLoopCtx {
-        check_bb,
-        state_bb,
-        body_bb,
-        advance_bb,
-        done_bb,
-        i_val,
-        next_i,
-        cap_cond,
-        key_ptr,
-        val_ptr,
-        key_arg,
-        val_arg,
-        key_abi,
-        val_abi,
-        extra_check_params,
-    }
+    next_i
 }
 
 /// Expand `HofExpand { hof_op: Each }` for Dict — call closure
@@ -2791,27 +2988,44 @@ fn expand_dict_each(
         vec![],
     );
 
-    // check_bb: cap_cond ? state_bb : done_bb.
-    func.block_mut(ctx.check_bb).terminator = Term::Branch {
-        cond: ctx.cap_cond,
-        then_block: ctx.state_bb,
+    // LEGACY: check_bb: cap_cond ? state_bb : done_bb.
+    func.block_mut(ctx.legacy.check_bb).terminator = Term::Branch {
+        cond: ctx.legacy.cap_cond,
+        then_block: ctx.legacy_state_bb,
         then_args: vec![],
         else_block: ctx.done_bb,
         else_args: vec![],
     };
-    // body_bb: CallClosure(closure, [key, val]) → void, then jump to advance.
-    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
+    // LEGACY body_bb: CallClosure, then jump to advance.
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::CallClosure {
         dst: None,
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
-        args: vec![ctx.key_arg, ctx.val_arg],
-        arg_abis: vec![ctx.key_abi, ctx.val_abi],
+        args: vec![ctx.legacy.key_arg, ctx.legacy.val_arg],
+        arg_abis: vec![ctx.legacy.key_abi, ctx.legacy.val_abi],
         ret_ty: LirType::Void,
     });
-    // each has no carried extras — empty list for advance_bb's block args.
-    func.block_mut(ctx.body_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
-    // advance_bb terminator is set by the scaffold (Jump(check_bb, [next_i]));
-    // no extras to forward for `each`.
+    func.block_mut(ctx.legacy.body_bb).terminator = Term::Jump(ctx.legacy.advance_bb, vec![]);
+
+    // DENSE: check_bb: cap_cond ? body_bb : done_bb (no state check — packed).
+    func.block_mut(ctx.dense.check_bb).terminator = Term::Branch {
+        cond: ctx.dense.cap_cond,
+        then_block: ctx.dense.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+    // DENSE body_bb: CallClosure, then jump to advance.
+    func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::CallClosure {
+        dst: None,
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.dense.key_arg, ctx.dense.val_arg],
+        arg_abis: vec![ctx.dense.key_abi, ctx.dense.val_abi],
+        ret_ty: LirType::Void,
+    });
+    func.block_mut(ctx.dense.body_bb).terminator = Term::Jump(ctx.dense.advance_bb, vec![]);
+
     // done_bb: remaining + orig_term.
     let done = ctx.done_bb;
     let pre_len = func.block(done).insts.len();
@@ -2866,7 +3080,6 @@ fn expand_dict_fold(
         val_abi_hint,
         vec![(closure_ret_ty.clone(), init)],
     );
-    let acc_val = ctx.extra_check_params[0];
 
     // Acc passing: closure expects either by-ptr or by-value.
     let acc_by_ptr = match acc_abi_hint {
@@ -2875,49 +3088,78 @@ fn expand_dict_fold(
         Some(crate::ir::abi::AbiKind::Scalar) => false,
         _ => closure_ret_ty.is_aggregate(),
     };
-    let acc_arg = if acc_by_ptr {
-        let p = alloc_value(next);
-        func.block_mut(ctx.body_bb).push_synthetic(Inst::AddressOf {
-            dst: p,
-            value: acc_val,
-            ty: closure_ret_ty.clone(),
-        });
-        p
-    } else {
-        acc_val
-    };
     let acc_abi = if acc_by_ptr {
         crate::ir::abi::AbiKind::Ptr
     } else {
         crate::ir::abi::AbiKind::Scalar
     };
 
-    // check_bb: cond ? state_bb : done_bb(acc).
-    func.block_mut(ctx.check_bb).terminator = Term::Branch {
-        cond: ctx.cap_cond,
-        then_block: ctx.state_bb,
+    // done_bb receives the final acc (from whichever branch ran).
+    func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty.clone()));
+
+    // ── LEGACY branch ──
+    let l_acc_val = ctx.legacy.extra_check_params[0];
+    let l_acc_arg = if acc_by_ptr {
+        let p = alloc_value(next);
+        func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::AddressOf {
+            dst: p,
+            value: l_acc_val,
+            ty: closure_ret_ty.clone(),
+        });
+        p
+    } else {
+        l_acc_val
+    };
+    func.block_mut(ctx.legacy.check_bb).terminator = Term::Branch {
+        cond: ctx.legacy.cap_cond,
+        then_block: ctx.legacy_state_bb,
         then_args: vec![],
         else_block: ctx.done_bb,
-        else_args: vec![acc_val],
+        else_args: vec![l_acc_val],
     };
-    // body_bb: call closure(acc, key, val) → new_acc, then jump to
-    // advance_bb(new_acc) — advance_bb's block param receives the
-    // updated accumulator and forwards it to check_bb.
-    let new_acc = alloc_value(next);
-    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
-        dst: Some(new_acc),
+    let l_new_acc = alloc_value(next);
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(l_new_acc),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
-        args: vec![acc_arg, ctx.key_arg, ctx.val_arg],
-        arg_abis: vec![acc_abi, ctx.key_abi, ctx.val_abi],
+        args: vec![l_acc_arg, ctx.legacy.key_arg, ctx.legacy.val_arg],
+        arg_abis: vec![acc_abi, ctx.legacy.key_abi, ctx.legacy.val_abi],
         ret_ty: closure_ret_ty.clone(),
     });
-    func.block_mut(ctx.body_bb).terminator =
-        Term::Jump(ctx.advance_bb, vec![new_acc]);
-    // advance_bb terminator is already set by scaffold (forwards the
-    // block-param extras back to check_bb).
-    // done_bb: dst param = acc carried out.
-    func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
+    func.block_mut(ctx.legacy.body_bb).terminator =
+        Term::Jump(ctx.legacy.advance_bb, vec![l_new_acc]);
+
+    // ── DENSE branch ──
+    let d_acc_val = ctx.dense.extra_check_params[0];
+    let d_acc_arg = if acc_by_ptr {
+        let p = alloc_value(next);
+        func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::AddressOf {
+            dst: p,
+            value: d_acc_val,
+            ty: closure_ret_ty.clone(),
+        });
+        p
+    } else {
+        d_acc_val
+    };
+    func.block_mut(ctx.dense.check_bb).terminator = Term::Branch {
+        cond: ctx.dense.cap_cond,
+        then_block: ctx.dense.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![d_acc_val],
+    };
+    let d_new_acc = alloc_value(next);
+    func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(d_new_acc),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![d_acc_arg, ctx.dense.key_arg, ctx.dense.val_arg],
+        arg_abis: vec![acc_abi, ctx.dense.key_abi, ctx.dense.val_abi],
+        ret_ty: closure_ret_ty.clone(),
+    });
+    func.block_mut(ctx.dense.body_bb).terminator =
+        Term::Jump(ctx.dense.advance_bb, vec![d_new_acc]);
     let done = ctx.done_bb;
     let pre_len = func.block(done).insts.len();
     let pre_spans_len = func.block(done).span_map.len();
@@ -2981,11 +3223,12 @@ fn expand_dict_any_all(
     // Constants for true/false in the dst's declared type. For Bool
     // dst we emit BoolConst; otherwise IConst (matches the Vector
     // any/all convention where Bool can be lifted into i64 slots at
-    // some call sites).
-    let early = alloc_value(next);
-    let fall = alloc_value(next);
+    // some call sites). One pair of consts per branch: `early` parks
+    // in the branch's body_bb (after the CallClosure, its only user);
+    // `fall` parks in the branch's check_bb (the exhaustion branch
+    // reads it).
     let (early_value, fall_value) = if is_any { (1, 0) } else { (0, 1) };
-    let const_inst = |d, v| match &dst_ty {
+    let const_inst = |d, v, dst_ty: &LirType| match dst_ty {
         LirType::Bool => Inst::BoolConst {
             dst: d,
             value: v != 0,
@@ -2996,17 +3239,9 @@ fn expand_dict_any_all(
             value: v,
         },
     };
-    // `early` parks in body_bb (after the CallClosure, its only user);
-    // `fall` parks in check_bb (the exhaustion branch reads it).
-    func.block_mut(ctx.body_bb)
-        .push_synthetic(const_inst(early, early_value));
-    func.block_mut(ctx.check_bb)
-        .push_synthetic(const_inst(fall, fall_value));
 
-    // done_bb(result: dst_ty)
-    func.block_mut(ctx.done_bb)
-        .params
-        .push((dst, dst_ty.clone()));
+    // done_bb(result: dst_ty) — shared exit; either branch feeds it.
+    func.block_mut(ctx.done_bb).params.push((dst, dst_ty.clone()));
     {
         let done = ctx.done_bb;
         let pre_len = func.block(done).insts.len();
@@ -3020,39 +3255,72 @@ fn expand_dict_any_all(
         func.block_mut(done).terminator_span = orig_term_span;
     }
 
-    // check_bb: cond ? state_bb : done_bb(fall).
-    func.block_mut(ctx.check_bb).terminator = Term::Branch {
-        cond: ctx.cap_cond,
-        then_block: ctx.state_bb,
+    // ── LEGACY branch ──
+    let l_early = alloc_value(next);
+    let l_fall = alloc_value(next);
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(const_inst(l_early, early_value, &dst_ty));
+    func.block_mut(ctx.legacy.check_bb).push_synthetic(const_inst(l_fall, fall_value, &dst_ty));
+    func.block_mut(ctx.legacy.check_bb).terminator = Term::Branch {
+        cond: ctx.legacy.cap_cond,
+        then_block: ctx.legacy_state_bb,
         then_args: vec![],
         else_block: ctx.done_bb,
-        else_args: vec![fall],
+        else_args: vec![l_fall],
     };
-
-    // body_bb: CallClosure(closure, [key, val]) → pred.
-    let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
-        dst: Some(pred),
+    let l_pred = alloc_value(next);
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(l_pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
-        args: vec![ctx.key_arg, ctx.val_arg],
-        arg_abis: vec![ctx.key_abi, ctx.val_abi],
+        args: vec![ctx.legacy.key_arg, ctx.legacy.val_arg],
+        arg_abis: vec![ctx.legacy.key_abi, ctx.legacy.val_abi],
         ret_ty: LirType::Bool,
     });
-    // body_bb terminator:
-    //   any: pred ? done_bb(early) : advance_bb
-    //   all: pred ? advance_bb    : done_bb(early)
-    let (then_block, then_args, else_block, else_args) = if is_any {
-        (ctx.done_bb, vec![early], ctx.advance_bb, vec![])
+    let (l_then_block, l_then_args, l_else_block, l_else_args) = if is_any {
+        (ctx.done_bb, vec![l_early], ctx.legacy.advance_bb, vec![])
     } else {
-        (ctx.advance_bb, vec![], ctx.done_bb, vec![early])
+        (ctx.legacy.advance_bb, vec![], ctx.done_bb, vec![l_early])
     };
-    func.block_mut(ctx.body_bb).terminator = Term::Branch {
-        cond: pred,
-        then_block,
-        then_args,
-        else_block,
-        else_args,
+    func.block_mut(ctx.legacy.body_bb).terminator = Term::Branch {
+        cond: l_pred,
+        then_block: l_then_block,
+        then_args: l_then_args,
+        else_block: l_else_block,
+        else_args: l_else_args,
+    };
+
+    // ── DENSE branch ──
+    let d_early = alloc_value(next);
+    let d_fall = alloc_value(next);
+    func.block_mut(ctx.dense.body_bb).push_synthetic(const_inst(d_early, early_value, &dst_ty));
+    func.block_mut(ctx.dense.check_bb).push_synthetic(const_inst(d_fall, fall_value, &dst_ty));
+    func.block_mut(ctx.dense.check_bb).terminator = Term::Branch {
+        cond: ctx.dense.cap_cond,
+        then_block: ctx.dense.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![d_fall],
+    };
+    let d_pred = alloc_value(next);
+    func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(d_pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.dense.key_arg, ctx.dense.val_arg],
+        arg_abis: vec![ctx.dense.key_abi, ctx.dense.val_abi],
+        ret_ty: LirType::Bool,
+    });
+    let (d_then_block, d_then_args, d_else_block, d_else_args) = if is_any {
+        (ctx.done_bb, vec![d_early], ctx.dense.advance_bb, vec![])
+    } else {
+        (ctx.dense.advance_bb, vec![], ctx.done_bb, vec![d_early])
+    };
+    func.block_mut(ctx.dense.body_bb).terminator = Term::Branch {
+        cond: d_pred,
+        then_block: d_then_block,
+        then_args: d_then_args,
+        else_block: d_else_block,
+        else_args: d_else_args,
     };
 }
 
@@ -3118,53 +3386,89 @@ fn expand_dict_filter(
         vec![],
     );
 
-    // body_bb: call closure(key, val) → pred.
-    let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
-        dst: Some(pred),
+    // ── LEGACY branch ──
+    let l_pred = alloc_value(next);
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(l_pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
-        args: vec![ctx.key_arg, ctx.val_arg],
-        arg_abis: vec![ctx.key_abi, ctx.val_abi],
+        args: vec![ctx.legacy.key_arg, ctx.legacy.val_arg],
+        arg_abis: vec![ctx.legacy.key_abi, ctx.legacy.val_abi],
         ret_ty: LirType::Bool,
     });
-
-    // check_bb: cond ? state_bb : done_bb.
-    func.block_mut(ctx.check_bb).terminator = Term::Branch {
-        cond: ctx.cap_cond,
-        then_block: ctx.state_bb,
+    func.block_mut(ctx.legacy.check_bb).terminator = Term::Branch {
+        cond: ctx.legacy.cap_cond,
+        then_block: ctx.legacy_state_bb,
         then_args: vec![],
         else_block: ctx.done_bb,
         else_args: vec![],
     };
-
-    // body_bb: pred ? push_bb : advance_bb.
-    let push_bb = func.add_block();
-    func.block_mut(ctx.body_bb).terminator = Term::Branch {
-        cond: pred,
-        then_block: push_bb,
+    let l_push_bb = func.add_block();
+    func.block_mut(ctx.legacy.body_bb).terminator = Term::Branch {
+        cond: l_pred,
+        then_block: l_push_bb,
         then_args: vec![],
-        else_block: ctx.advance_bb,
+        else_block: ctx.legacy.advance_bb,
         else_args: vec![],
     };
-
-    // push_bb: gorget_map_put_cloned(&result, key_ptr, val_ptr).
-    let result_addr = alloc_value(next);
-    func.block_mut(push_bb).push_synthetic(Inst::SlotAddr {
-        dst: result_addr,
+    let l_result_addr = alloc_value(next);
+    func.block_mut(l_push_bb).push_synthetic(Inst::SlotAddr {
+        dst: l_result_addr,
         slot: result_slot,
     });
-    func.block_mut(push_bb).push_synthetic(Inst::CallExtern {
+    func.block_mut(l_push_bb).push_synthetic(Inst::CallExtern {
         dst: None,
         name: "gorget_map_put_cloned".to_string(),
-        args: vec![result_addr, ctx.key_ptr, ctx.val_ptr],
+        args: vec![l_result_addr, ctx.legacy.key_ptr, ctx.legacy.val_ptr],
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
         ],
     });
-    func.block_mut(push_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
+    func.block_mut(l_push_bb).terminator = Term::Jump(ctx.legacy.advance_bb, vec![]);
+
+    // ── DENSE branch ──
+    let d_pred = alloc_value(next);
+    func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(d_pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.dense.key_arg, ctx.dense.val_arg],
+        arg_abis: vec![ctx.dense.key_abi, ctx.dense.val_abi],
+        ret_ty: LirType::Bool,
+    });
+    func.block_mut(ctx.dense.check_bb).terminator = Term::Branch {
+        cond: ctx.dense.cap_cond,
+        then_block: ctx.dense.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+    let d_push_bb = func.add_block();
+    func.block_mut(ctx.dense.body_bb).terminator = Term::Branch {
+        cond: d_pred,
+        then_block: d_push_bb,
+        then_args: vec![],
+        else_block: ctx.dense.advance_bb,
+        else_args: vec![],
+    };
+    let d_result_addr = alloc_value(next);
+    func.block_mut(d_push_bb).push_synthetic(Inst::SlotAddr {
+        dst: d_result_addr,
+        slot: result_slot,
+    });
+    func.block_mut(d_push_bb).push_synthetic(Inst::CallExtern {
+        dst: None,
+        name: "gorget_map_put_cloned".to_string(),
+        args: vec![d_result_addr, ctx.dense.key_ptr, ctx.dense.val_ptr],
+        arg_abis: vec![
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+        ],
+    });
+    func.block_mut(d_push_bb).terminator = Term::Jump(ctx.dense.advance_bb, vec![]);
 
     // done_bb: SlotLoad the result map into dst + remaining + orig_term.
     func.block_mut(ctx.done_bb).push_synthetic(Inst::SlotLoad {
@@ -3214,12 +3518,10 @@ fn expand_dict_filter(
 /// scaffold (advance_bb carries extras forward on both skip and
 /// body paths).
 #[allow(dead_code)]
-struct SetHofLoopCtx {
+struct SetHofLoopBranch {
     check_bb: BlockId,
-    state_bb: BlockId,
     body_bb: BlockId,
     advance_bb: BlockId,
-    done_bb: BlockId,
     counter_val: ValueId,
     next_counter: ValueId,
     cap_cond: ValueId,
@@ -3227,6 +3529,14 @@ struct SetHofLoopCtx {
     elem_arg: ValueId,
     elem_abi: crate::ir::abi::AbiKind,
     extra_check_params: Vec<ValueId>,
+}
+
+#[allow(dead_code)]
+struct SetHofLoopCtx {
+    legacy: SetHofLoopBranch,
+    legacy_state_bb: BlockId,
+    dense: SetHofLoopBranch,
+    done_bb: BlockId,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3243,160 +3553,329 @@ fn emit_set_hof_loop_scaffold(
 ) -> SetHofLoopCtx {
     // GorgetSet aliases GorgetMap — reuse its struct id / field layout.
     let gmap_sid = lookup_struct_id(structs, "GorgetMap").unwrap_or(StructId(0));
+    let elem_size = c_sizeof_lir_type(elem_ty, structs) as u32;
 
-    let check_bb = func.add_block();
-    let state_bb = func.add_block();
-    let body_bb = func.add_block();
-    let advance_bb = func.add_block();
+    // ── LEGACY loop blocks ──
+    let l_check_bb = func.add_block();
+    let l_state_bb = func.add_block();
+    let l_body_bb = func.add_block();
+    let l_advance_bb = func.add_block();
+    // ── DENSE loop blocks (no state_bb — packed, no ordering distinction) ──
+    let d_check_bb = func.add_block();
+    let d_body_bb = func.add_block();
+    let d_advance_bb = func.add_block();
     let done_bb = func.add_block();
 
-    // check_bb params: counter + extras.
-    let counter_val = alloc_value(next);
-    func.block_mut(check_bb).params.push((counter_val, LirType::I64));
-    let mut extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    // ─────────────── Per-branch block params ───────────────
+    // LEGACY.
+    let l_counter_val = alloc_value(next);
+    func.block_mut(l_check_bb).params.push((l_counter_val, LirType::I64));
+    let mut l_extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
     for (ty, _) in &extra_check_inits {
         let p = alloc_value(next);
-        func.block_mut(check_bb).params.push((p, ty.clone()));
-        extra_check_params.push(p);
+        func.block_mut(l_check_bb).params.push((p, ty.clone()));
+        l_extra_check_params.push(p);
     }
-
-    // advance_bb mirrors the extras (same forwarding pattern as Dict).
-    let mut advance_extra_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    let mut l_advance_extra_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
     for (ty, _) in &extra_check_inits {
         let p = alloc_value(next);
-        func.block_mut(advance_bb).params.push((p, ty.clone()));
-        advance_extra_params.push(p);
+        func.block_mut(l_advance_bb).params.push((p, ty.clone()));
+        l_advance_extra_params.push(p);
+    }
+    // DENSE.
+    let d_counter_val = alloc_value(next);
+    func.block_mut(d_check_bb).params.push((d_counter_val, LirType::I64));
+    let mut d_extra_check_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(d_check_bb).params.push((p, ty.clone()));
+        d_extra_check_params.push(p);
+    }
+    let mut d_advance_extra_params: Vec<ValueId> = Vec::with_capacity(extra_check_inits.len());
+    for (ty, _) in &extra_check_inits {
+        let p = alloc_value(next);
+        func.block_mut(d_advance_bb).params.push((p, ty.clone()));
+        d_advance_extra_params.push(p);
     }
 
-    // Entry: jmp check_bb(0, init0, init1, ...)
+    // ─────────────── Entry: discriminator dispatch ───────────────
+    let disc_ptr = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::FieldPtr {
+        dst: disc_ptr,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 19, // entries_keys
+    });
+    let disc = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::Load {
+        dst: disc,
+        ptr: disc_ptr,
+        ty: LirType::Ptr,
+    });
+    let null_ptr = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::IConst {
+        dst: null_ptr,
+        ty: LirType::Ptr,
+        value: 0,
+    });
+    let is_dense = alloc_value(next);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::Cmp {
+        dst: is_dense,
+        op: CmpOp::Ne,
+        lhs: disc,
+        rhs: null_ptr,
+    });
     let zero = alloc_value(next);
-    func.block_mut(BlockId(current_bb as u32))
-        .push_synthetic(Inst::IConst {
-            dst: zero,
-            ty: LirType::I64,
-            value: 0,
-        });
-    let mut entry_args = Vec::with_capacity(1 + extra_check_inits.len());
-    entry_args.push(zero);
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::IConst {
+        dst: zero,
+        ty: LirType::I64,
+        value: 0,
+    });
+    let mut entry_args_dense: Vec<ValueId> = Vec::with_capacity(1 + extra_check_inits.len());
+    entry_args_dense.push(zero);
     for (_, init) in &extra_check_inits {
-        entry_args.push(*init);
+        entry_args_dense.push(*init);
     }
-    func.block_mut(BlockId(current_bb as u32)).terminator =
-        Term::Jump(check_bb, entry_args);
+    let entry_args_legacy = entry_args_dense.clone();
+    func.block_mut(BlockId(current_bb as u32)).terminator = Term::Branch {
+        cond: is_dense,
+        then_block: d_check_bb,
+        then_args: entry_args_dense,
+        else_block: l_check_bb,
+        else_args: entry_args_legacy,
+    };
 
+    // ─────────────── LEGACY branch ───────────────
     // check_bb: load bound (order_len for ordered, cap for unordered).
-    let bound_field_idx: u32 = if is_ordered { 9 } else { 1 }; // order_len | cap
+    let bound_field_idx: u32 = if is_ordered { 9 } else { 1 };
     let bound_ptr = alloc_value(next);
-    func.block_mut(check_bb).push_synthetic(Inst::FieldPtr {
+    func.block_mut(l_check_bb).push_synthetic(Inst::FieldPtr {
         dst: bound_ptr,
         base: coll,
         struct_id: gmap_sid,
         field: bound_field_idx,
     });
     let bound = alloc_value(next);
-    func.block_mut(check_bb).push_synthetic(Inst::Load {
+    func.block_mut(l_check_bb).push_synthetic(Inst::Load {
         dst: bound,
         ptr: bound_ptr,
         ty: LirType::I64,
     });
-    let cap_cond = alloc_value(next);
-    func.block_mut(check_bb).push_synthetic(Inst::Cmp {
-        dst: cap_cond,
+    let l_cap_cond = alloc_value(next);
+    func.block_mut(l_check_bb).push_synthetic(Inst::Cmp {
+        dst: l_cap_cond,
         op: CmpOp::Lt,
-        lhs: counter_val,
+        lhs: l_counter_val,
         rhs: bound,
     });
 
-    // state_bb: resolve `i` (either `order[j]` or `counter` directly)
-    // and check `states[i] == 1`.
-    let i_val = if is_ordered {
-        // i = load(order + j * 8)
+    // state_bb: resolve `i` (either `order[j]` or `counter`) and check states[i] == 1.
+    let l_i_val = if is_ordered {
         let order_field = alloc_value(next);
-        func.block_mut(state_bb).push_synthetic(Inst::FieldPtr {
+        func.block_mut(l_state_bb).push_synthetic(Inst::FieldPtr {
             dst: order_field,
             base: coll,
             struct_id: gmap_sid,
-            field: 8, // order
+            field: 8,
         });
         let order_ptr = alloc_value(next);
-        func.block_mut(state_bb).push_synthetic(Inst::Load {
+        func.block_mut(l_state_bb).push_synthetic(Inst::Load {
             dst: order_ptr,
             ptr: order_field,
             ty: LirType::Ptr,
         });
         let order_j_ptr = alloc_value(next);
-        func.block_mut(state_bb).push_synthetic(Inst::ElemPtr {
+        func.block_mut(l_state_bb).push_synthetic(Inst::ElemPtr {
             dst: order_j_ptr,
             base: order_ptr,
-            index: counter_val,
-            elem_size: 8, // size_t
+            index: l_counter_val,
+            elem_size: 8,
         });
         let i = alloc_value(next);
-        func.block_mut(state_bb).push_synthetic(Inst::Load {
+        func.block_mut(l_state_bb).push_synthetic(Inst::Load {
             dst: i,
             ptr: order_j_ptr,
             ty: LirType::I64,
         });
         i
     } else {
-        counter_val
+        l_counter_val
     };
 
     let states_field = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::FieldPtr {
+    func.block_mut(l_state_bb).push_synthetic(Inst::FieldPtr {
         dst: states_field,
         base: coll,
         struct_id: gmap_sid,
         field: 3,
     });
     let states_ptr = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::Load {
+    func.block_mut(l_state_bb).push_synthetic(Inst::Load {
         dst: states_ptr,
         ptr: states_field,
         ty: LirType::Ptr,
     });
     let state_i_ptr = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::ElemPtr {
+    func.block_mut(l_state_bb).push_synthetic(Inst::ElemPtr {
         dst: state_i_ptr,
         base: states_ptr,
-        index: i_val,
+        index: l_i_val,
         elem_size: 1,
     });
     let state_val = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::Load {
+    func.block_mut(l_state_bb).push_synthetic(Inst::Load {
         dst: state_val,
         ptr: state_i_ptr,
         ty: LirType::U8,
     });
     let one_u8 = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::IConst {
+    func.block_mut(l_state_bb).push_synthetic(Inst::IConst {
         dst: one_u8,
         ty: LirType::U8,
         value: 1,
     });
     let occupied = alloc_value(next);
-    func.block_mut(state_bb).push_synthetic(Inst::Cmp {
+    func.block_mut(l_state_bb).push_synthetic(Inst::Cmp {
         dst: occupied,
         op: CmpOp::Eq,
         lhs: state_val,
         rhs: one_u8,
     });
-    let skip_args: Vec<ValueId> = extra_check_params.iter().copied().collect();
-    func.block_mut(state_bb).terminator = Term::Branch {
+    let l_skip_args: Vec<ValueId> = l_extra_check_params.iter().copied().collect();
+    func.block_mut(l_state_bb).terminator = Term::Branch {
         cond: occupied,
-        then_block: body_bb,
+        then_block: l_body_bb,
         then_args: vec![],
-        else_block: advance_bb,
-        else_args: skip_args,
+        else_block: l_advance_bb,
+        else_args: l_skip_args,
     };
 
-    // body_bb: keys[i] load.
+    // legacy body_bb: keys[i] load.
+    let (l_elem_ptr, l_elem_arg, l_elem_abi) = emit_set_body_prelude(
+        func,
+        next,
+        l_body_bb,
+        coll,
+        gmap_sid,
+        l_i_val,
+        elem_ty,
+        elem_size,
+        elem_abi_hint,
+        /* dense */ false,
+    );
+
+    // legacy advance_bb.
+    let l_next_counter = emit_advance_backedge(
+        func,
+        next,
+        l_advance_bb,
+        l_check_bb,
+        l_counter_val,
+        &l_advance_extra_params,
+    );
+
+    // ─────────────── DENSE branch ───────────────
+    // check_bb: entries_len (field 21) as bound.
+    let elen_ptr = alloc_value(next);
+    func.block_mut(d_check_bb).push_synthetic(Inst::FieldPtr {
+        dst: elen_ptr,
+        base: coll,
+        struct_id: gmap_sid,
+        field: 21, // entries_len
+    });
+    let elen = alloc_value(next);
+    func.block_mut(d_check_bb).push_synthetic(Inst::Load {
+        dst: elen,
+        ptr: elen_ptr,
+        ty: LirType::I64,
+    });
+    let d_cap_cond = alloc_value(next);
+    func.block_mut(d_check_bb).push_synthetic(Inst::Cmp {
+        dst: d_cap_cond,
+        op: CmpOp::Lt,
+        lhs: d_counter_val,
+        rhs: elen,
+    });
+
+    // dense body_bb: entries_keys[i]. Packed — no state check, no order
+    // indirection (insertion order is naturally preserved).
+    let (d_elem_ptr, d_elem_arg, d_elem_abi) = emit_set_body_prelude(
+        func,
+        next,
+        d_body_bb,
+        coll,
+        gmap_sid,
+        d_counter_val,
+        elem_ty,
+        elem_size,
+        elem_abi_hint,
+        /* dense */ true,
+    );
+
+    // dense advance_bb.
+    let d_next_counter = emit_advance_backedge(
+        func,
+        next,
+        d_advance_bb,
+        d_check_bb,
+        d_counter_val,
+        &d_advance_extra_params,
+    );
+
+    SetHofLoopCtx {
+        legacy: SetHofLoopBranch {
+            check_bb: l_check_bb,
+            body_bb: l_body_bb,
+            advance_bb: l_advance_bb,
+            counter_val: l_counter_val,
+            next_counter: l_next_counter,
+            cap_cond: l_cap_cond,
+            elem_ptr: l_elem_ptr,
+            elem_arg: l_elem_arg,
+            elem_abi: l_elem_abi,
+            extra_check_params: l_extra_check_params,
+        },
+        legacy_state_bb: l_state_bb,
+        dense: SetHofLoopBranch {
+            check_bb: d_check_bb,
+            body_bb: d_body_bb,
+            advance_bb: d_advance_bb,
+            counter_val: d_counter_val,
+            next_counter: d_next_counter,
+            cap_cond: d_cap_cond,
+            elem_ptr: d_elem_ptr,
+            elem_arg: d_elem_arg,
+            elem_abi: d_elem_abi,
+            extra_check_params: d_extra_check_params,
+        },
+        done_bb,
+    }
+}
+
+/// Shared body prelude for Set HOF loops. `dense=false` reads sparse
+/// `keys[i]` (field 0); `dense=true` reads packed `entries_keys[i]`
+/// (field 19). `elem_ptr` = ElemPtr(base, i, elem_size), with an
+/// optional Load producing `elem_arg` per the closure ABI hint.
+#[allow(clippy::too_many_arguments)]
+fn emit_set_body_prelude(
+    func: &mut LirFunction,
+    next: &mut u32,
+    body_bb: BlockId,
+    coll: ValueId,
+    gmap_sid: StructId,
+    i_val: ValueId,
+    elem_ty: &LirType,
+    elem_size: u32,
+    elem_abi_hint: Option<crate::ir::abi::AbiKind>,
+    dense: bool,
+) -> (ValueId, ValueId, crate::ir::abi::AbiKind) {
+    let keys_field_idx: u32 = if dense { 19 } else { 0 };
     let keys_field = alloc_value(next);
     func.block_mut(body_bb).push_synthetic(Inst::FieldPtr {
         dst: keys_field,
         base: coll,
         struct_id: gmap_sid,
-        field: 0,
+        field: keys_field_idx,
     });
     let keys_ptr = alloc_value(next);
     func.block_mut(body_bb).push_synthetic(Inst::Load {
@@ -3404,13 +3883,12 @@ fn emit_set_hof_loop_scaffold(
         ptr: keys_field,
         ty: LirType::Ptr,
     });
-    let key_size = c_sizeof_lir_type(elem_ty, structs) as u32;
     let elem_ptr = alloc_value(next);
     func.block_mut(body_bb).push_synthetic(Inst::ElemPtr {
         dst: elem_ptr,
         base: keys_ptr,
         index: i_val,
-        elem_size: key_size,
+        elem_size,
     });
 
     let pass_by_ptr = match elem_abi_hint {
@@ -3435,41 +3913,7 @@ fn emit_set_hof_loop_scaffold(
     } else {
         crate::ir::abi::AbiKind::Scalar
     };
-
-    // advance_bb: next_counter = counter + 1, Jump back to check_bb.
-    let next_counter = alloc_value(next);
-    let one_i64 = alloc_value(next);
-    func.block_mut(advance_bb).push_synthetic(Inst::IConst {
-        dst: one_i64,
-        ty: LirType::I64,
-        value: 1,
-    });
-    func.block_mut(advance_bb).push_synthetic(Inst::Add {
-        dst: next_counter,
-        ty: LirType::I64,
-        lhs: counter_val,
-        rhs: one_i64,
-        overflow: Overflow::Wrap,
-    });
-    let mut back_args = Vec::with_capacity(1 + advance_extra_params.len());
-    back_args.push(next_counter);
-    back_args.extend(advance_extra_params.iter().copied());
-    func.block_mut(advance_bb).terminator = Term::Jump(check_bb, back_args);
-
-    SetHofLoopCtx {
-        check_bb,
-        state_bb,
-        body_bb,
-        advance_bb,
-        done_bb,
-        counter_val,
-        next_counter,
-        cap_cond,
-        elem_ptr,
-        elem_arg,
-        elem_abi,
-        extra_check_params,
-    }
+    (elem_ptr, elem_arg, elem_abi)
 }
 
 /// Expand `HofExpand { hof_op: SetEach }` — call closure `(elem)` for
@@ -3503,22 +3947,41 @@ fn expand_set_each(
         is_ordered,
     );
 
-    func.block_mut(ctx.check_bb).terminator = Term::Branch {
-        cond: ctx.cap_cond,
-        then_block: ctx.state_bb,
+    // ── LEGACY ──
+    func.block_mut(ctx.legacy.check_bb).terminator = Term::Branch {
+        cond: ctx.legacy.cap_cond,
+        then_block: ctx.legacy_state_bb,
         then_args: vec![],
         else_block: ctx.done_bb,
         else_args: vec![],
     };
-    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::CallClosure {
         dst: None,
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
-        args: vec![ctx.elem_arg],
-        arg_abis: vec![ctx.elem_abi],
+        args: vec![ctx.legacy.elem_arg],
+        arg_abis: vec![ctx.legacy.elem_abi],
         ret_ty: LirType::Void,
     });
-    func.block_mut(ctx.body_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
+    func.block_mut(ctx.legacy.body_bb).terminator = Term::Jump(ctx.legacy.advance_bb, vec![]);
+    // ── DENSE ──
+    func.block_mut(ctx.dense.check_bb).terminator = Term::Branch {
+        cond: ctx.dense.cap_cond,
+        then_block: ctx.dense.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+    func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::CallClosure {
+        dst: None,
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.dense.elem_arg],
+        arg_abis: vec![ctx.dense.elem_abi],
+        ret_ty: LirType::Void,
+    });
+    func.block_mut(ctx.dense.body_bb).terminator = Term::Jump(ctx.dense.advance_bb, vec![]);
+
     let done = ctx.done_bb;
     let pre_len = func.block(done).insts.len();
     let pre_spans_len = func.block(done).span_map.len();
@@ -3570,7 +4033,6 @@ fn expand_set_fold(
         vec![(closure_ret_ty.clone(), init)],
         is_ordered,
     );
-    let acc_val = ctx.extra_check_params[0];
 
     let acc_by_ptr = match acc_abi_hint {
         Some(crate::ir::abi::AbiKind::Ptr) => true,
@@ -3578,42 +4040,78 @@ fn expand_set_fold(
         Some(crate::ir::abi::AbiKind::Scalar) => false,
         _ => closure_ret_ty.is_aggregate(),
     };
-    let acc_arg = if acc_by_ptr {
-        let p = alloc_value(next);
-        func.block_mut(ctx.body_bb).push_synthetic(Inst::AddressOf {
-            dst: p,
-            value: acc_val,
-            ty: closure_ret_ty.clone(),
-        });
-        p
-    } else {
-        acc_val
-    };
     let acc_abi = if acc_by_ptr {
         crate::ir::abi::AbiKind::Ptr
     } else {
         crate::ir::abi::AbiKind::Scalar
     };
 
-    func.block_mut(ctx.check_bb).terminator = Term::Branch {
-        cond: ctx.cap_cond,
-        then_block: ctx.state_bb,
+    // done_bb receives the final acc from whichever branch ran.
+    func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty.clone()));
+
+    // ── LEGACY ──
+    let l_acc_val = ctx.legacy.extra_check_params[0];
+    let l_acc_arg = if acc_by_ptr {
+        let p = alloc_value(next);
+        func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::AddressOf {
+            dst: p,
+            value: l_acc_val,
+            ty: closure_ret_ty.clone(),
+        });
+        p
+    } else {
+        l_acc_val
+    };
+    func.block_mut(ctx.legacy.check_bb).terminator = Term::Branch {
+        cond: ctx.legacy.cap_cond,
+        then_block: ctx.legacy_state_bb,
         then_args: vec![],
         else_block: ctx.done_bb,
-        else_args: vec![acc_val],
+        else_args: vec![l_acc_val],
     };
-    let new_acc = alloc_value(next);
-    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
-        dst: Some(new_acc),
+    let l_new_acc = alloc_value(next);
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(l_new_acc),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
-        args: vec![acc_arg, ctx.elem_arg],
-        arg_abis: vec![acc_abi, ctx.elem_abi],
+        args: vec![l_acc_arg, ctx.legacy.elem_arg],
+        arg_abis: vec![acc_abi, ctx.legacy.elem_abi],
         ret_ty: closure_ret_ty.clone(),
     });
-    func.block_mut(ctx.body_bb).terminator =
-        Term::Jump(ctx.advance_bb, vec![new_acc]);
-    func.block_mut(ctx.done_bb).params.push((dst, closure_ret_ty));
+    func.block_mut(ctx.legacy.body_bb).terminator =
+        Term::Jump(ctx.legacy.advance_bb, vec![l_new_acc]);
+
+    // ── DENSE ──
+    let d_acc_val = ctx.dense.extra_check_params[0];
+    let d_acc_arg = if acc_by_ptr {
+        let p = alloc_value(next);
+        func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::AddressOf {
+            dst: p,
+            value: d_acc_val,
+            ty: closure_ret_ty.clone(),
+        });
+        p
+    } else {
+        d_acc_val
+    };
+    func.block_mut(ctx.dense.check_bb).terminator = Term::Branch {
+        cond: ctx.dense.cap_cond,
+        then_block: ctx.dense.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![d_acc_val],
+    };
+    let d_new_acc = alloc_value(next);
+    func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(d_new_acc),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![d_acc_arg, ctx.dense.elem_arg],
+        arg_abis: vec![acc_abi, ctx.dense.elem_abi],
+        ret_ty: closure_ret_ty.clone(),
+    });
+    func.block_mut(ctx.dense.body_bb).terminator =
+        Term::Jump(ctx.dense.advance_bb, vec![d_new_acc]);
     let done = ctx.done_bb;
     let pre_len = func.block(done).insts.len();
     let pre_spans_len = func.block(done).span_map.len();
@@ -3670,10 +4168,8 @@ fn expand_set_any_all(
         is_ordered,
     );
 
-    let early = alloc_value(next);
-    let fall = alloc_value(next);
     let (early_value, fall_value) = if is_any { (1, 0) } else { (0, 1) };
-    let const_inst = |d, v| match &dst_ty {
+    let const_inst = |d, v, dst_ty: &LirType| match dst_ty {
         LirType::Bool => Inst::BoolConst {
             dst: d,
             value: v != 0,
@@ -3684,14 +4180,8 @@ fn expand_set_any_all(
             value: v,
         },
     };
-    func.block_mut(ctx.body_bb)
-        .push_synthetic(const_inst(early, early_value));
-    func.block_mut(ctx.check_bb)
-        .push_synthetic(const_inst(fall, fall_value));
 
-    func.block_mut(ctx.done_bb)
-        .params
-        .push((dst, dst_ty.clone()));
+    func.block_mut(ctx.done_bb).params.push((dst, dst_ty.clone()));
     {
         let done = ctx.done_bb;
         let pre_len = func.block(done).insts.len();
@@ -3705,34 +4195,72 @@ fn expand_set_any_all(
         func.block_mut(done).terminator_span = orig_term_span;
     }
 
-    func.block_mut(ctx.check_bb).terminator = Term::Branch {
-        cond: ctx.cap_cond,
-        then_block: ctx.state_bb,
+    // ── LEGACY ──
+    let l_early = alloc_value(next);
+    let l_fall = alloc_value(next);
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(const_inst(l_early, early_value, &dst_ty));
+    func.block_mut(ctx.legacy.check_bb).push_synthetic(const_inst(l_fall, fall_value, &dst_ty));
+    func.block_mut(ctx.legacy.check_bb).terminator = Term::Branch {
+        cond: ctx.legacy.cap_cond,
+        then_block: ctx.legacy_state_bb,
         then_args: vec![],
         else_block: ctx.done_bb,
-        else_args: vec![fall],
+        else_args: vec![l_fall],
     };
-
-    let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
-        dst: Some(pred),
+    let l_pred = alloc_value(next);
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(l_pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
-        args: vec![ctx.elem_arg],
-        arg_abis: vec![ctx.elem_abi],
+        args: vec![ctx.legacy.elem_arg],
+        arg_abis: vec![ctx.legacy.elem_abi],
         ret_ty: LirType::Bool,
     });
-    let (then_block, then_args, else_block, else_args) = if is_any {
-        (ctx.done_bb, vec![early], ctx.advance_bb, vec![])
+    let (l_then_block, l_then_args, l_else_block, l_else_args) = if is_any {
+        (ctx.done_bb, vec![l_early], ctx.legacy.advance_bb, vec![])
     } else {
-        (ctx.advance_bb, vec![], ctx.done_bb, vec![early])
+        (ctx.legacy.advance_bb, vec![], ctx.done_bb, vec![l_early])
     };
-    func.block_mut(ctx.body_bb).terminator = Term::Branch {
-        cond: pred,
-        then_block,
-        then_args,
-        else_block,
-        else_args,
+    func.block_mut(ctx.legacy.body_bb).terminator = Term::Branch {
+        cond: l_pred,
+        then_block: l_then_block,
+        then_args: l_then_args,
+        else_block: l_else_block,
+        else_args: l_else_args,
+    };
+
+    // ── DENSE ──
+    let d_early = alloc_value(next);
+    let d_fall = alloc_value(next);
+    func.block_mut(ctx.dense.body_bb).push_synthetic(const_inst(d_early, early_value, &dst_ty));
+    func.block_mut(ctx.dense.check_bb).push_synthetic(const_inst(d_fall, fall_value, &dst_ty));
+    func.block_mut(ctx.dense.check_bb).terminator = Term::Branch {
+        cond: ctx.dense.cap_cond,
+        then_block: ctx.dense.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![d_fall],
+    };
+    let d_pred = alloc_value(next);
+    func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(d_pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.dense.elem_arg],
+        arg_abis: vec![ctx.dense.elem_abi],
+        ret_ty: LirType::Bool,
+    });
+    let (d_then_block, d_then_args, d_else_block, d_else_args) = if is_any {
+        (ctx.done_bb, vec![d_early], ctx.dense.advance_bb, vec![])
+    } else {
+        (ctx.dense.advance_bb, vec![], ctx.done_bb, vec![d_early])
+    };
+    func.block_mut(ctx.dense.body_bb).terminator = Term::Branch {
+        cond: d_pred,
+        then_block: d_then_block,
+        then_args: d_then_args,
+        else_block: d_else_block,
+        else_args: d_else_args,
     };
 }
 
@@ -3798,55 +4326,93 @@ fn expand_set_filter(
         is_ordered,
     );
 
-    // body_bb: call closure(elem) → pred.
-    let pred = alloc_value(next);
-    func.block_mut(ctx.body_bb).push_synthetic(Inst::CallClosure {
-        dst: Some(pred),
+    // ── LEGACY ──
+    let l_pred = alloc_value(next);
+    func.block_mut(ctx.legacy.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(l_pred),
         kind: crate::lir::ClosureDispatchKind::EscapedClosure,
         closure,
-        args: vec![ctx.elem_arg],
-        arg_abis: vec![ctx.elem_abi],
+        args: vec![ctx.legacy.elem_arg],
+        arg_abis: vec![ctx.legacy.elem_abi],
         ret_ty: LirType::Bool,
     });
-
-    // check_bb: cond ? state_bb : done_bb.
-    func.block_mut(ctx.check_bb).terminator = Term::Branch {
-        cond: ctx.cap_cond,
-        then_block: ctx.state_bb,
+    func.block_mut(ctx.legacy.check_bb).terminator = Term::Branch {
+        cond: ctx.legacy.cap_cond,
+        then_block: ctx.legacy_state_bb,
         then_args: vec![],
         else_block: ctx.done_bb,
         else_args: vec![],
     };
-
-    // body_bb: pred ? push_bb : advance_bb.
-    let push_bb = func.add_block();
-    func.block_mut(ctx.body_bb).terminator = Term::Branch {
-        cond: pred,
-        then_block: push_bb,
+    let l_push_bb = func.add_block();
+    func.block_mut(ctx.legacy.body_bb).terminator = Term::Branch {
+        cond: l_pred,
+        then_block: l_push_bb,
         then_args: vec![],
-        else_block: ctx.advance_bb,
+        else_block: ctx.legacy.advance_bb,
         else_args: vec![],
     };
-
-    // push_bb: gorget_map_put_cloned(&result, elem_ptr, NULL).
-    let result_addr = alloc_value(next);
-    func.block_mut(push_bb).push_synthetic(Inst::SlotAddr {
-        dst: result_addr,
+    let l_result_addr = alloc_value(next);
+    func.block_mut(l_push_bb).push_synthetic(Inst::SlotAddr {
+        dst: l_result_addr,
         slot: result_slot,
     });
-    let null_val = alloc_value(next);
-    func.block_mut(push_bb).push_synthetic(Inst::NullPtr { dst: null_val });
-    func.block_mut(push_bb).push_synthetic(Inst::CallExtern {
+    let l_null_val = alloc_value(next);
+    func.block_mut(l_push_bb).push_synthetic(Inst::NullPtr { dst: l_null_val });
+    func.block_mut(l_push_bb).push_synthetic(Inst::CallExtern {
         dst: None,
         name: "gorget_map_put_cloned".to_string(),
-        args: vec![result_addr, ctx.elem_ptr, null_val],
+        args: vec![l_result_addr, ctx.legacy.elem_ptr, l_null_val],
         arg_abis: vec![
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
             crate::ir::abi::AbiKind::Ptr,
         ],
     });
-    func.block_mut(push_bb).terminator = Term::Jump(ctx.advance_bb, vec![]);
+    func.block_mut(l_push_bb).terminator = Term::Jump(ctx.legacy.advance_bb, vec![]);
+
+    // ── DENSE ──
+    let d_pred = alloc_value(next);
+    func.block_mut(ctx.dense.body_bb).push_synthetic(Inst::CallClosure {
+        dst: Some(d_pred),
+        kind: crate::lir::ClosureDispatchKind::EscapedClosure,
+        closure,
+        args: vec![ctx.dense.elem_arg],
+        arg_abis: vec![ctx.dense.elem_abi],
+        ret_ty: LirType::Bool,
+    });
+    func.block_mut(ctx.dense.check_bb).terminator = Term::Branch {
+        cond: ctx.dense.cap_cond,
+        then_block: ctx.dense.body_bb,
+        then_args: vec![],
+        else_block: ctx.done_bb,
+        else_args: vec![],
+    };
+    let d_push_bb = func.add_block();
+    func.block_mut(ctx.dense.body_bb).terminator = Term::Branch {
+        cond: d_pred,
+        then_block: d_push_bb,
+        then_args: vec![],
+        else_block: ctx.dense.advance_bb,
+        else_args: vec![],
+    };
+    let d_result_addr = alloc_value(next);
+    func.block_mut(d_push_bb).push_synthetic(Inst::SlotAddr {
+        dst: d_result_addr,
+        slot: result_slot,
+    });
+    let d_null_val = alloc_value(next);
+    func.block_mut(d_push_bb).push_synthetic(Inst::NullPtr { dst: d_null_val });
+    func.block_mut(d_push_bb).push_synthetic(Inst::CallExtern {
+        dst: None,
+        name: "gorget_map_put_cloned".to_string(),
+        args: vec![d_result_addr, ctx.dense.elem_ptr, d_null_val],
+        arg_abis: vec![
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+            crate::ir::abi::AbiKind::Ptr,
+        ],
+    });
+    func.block_mut(d_push_bb).terminator = Term::Jump(ctx.dense.advance_bb, vec![]);
 
     // done_bb: SlotLoad the result set into dst + remaining + orig_term.
     func.block_mut(ctx.done_bb).push_synthetic(Inst::SlotLoad {

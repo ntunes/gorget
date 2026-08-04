@@ -111,11 +111,12 @@ static inline void __gorget_map_grow(GorgetMap* m) {
 // one step. Invariant: `indices_cap == 2 * entries_cap` at all times (50% load
 // factor, no separate indices_cap field). Initial grow bumps 0→16 entries /
 // 0→32 indices; subsequent grows double both. Rehash rebuilds indices from
-// entries[0..entries_len] since the mask changed.
+// entries[0..entries_len] since the mask changed — tombstones (-2 sentinels
+// in the old indices array) are naturally dropped by the rebuild, since we
+// re-hash only from live entries.
 //
-// DORMANT: never called in Phase A.2a — no ctor allocates entries_keys, so
-// `m->entries_keys` is NULL for every Dict/Set, and every dense branch that
-// would call this is unreachable. A.2c flips ctors and activates the path.
+// LIVE after A.2c activation — ctors allocate entries_keys, so this path is
+// on the hot allocation road for every Dict/OrderedSet grow.
 static inline void __gorget_map_dense_grow(GorgetMap* m) {
     GorgetAllocator* a = m->alloc;
     size_t old_cap = m->entries_cap;
@@ -182,32 +183,48 @@ static inline void gorget_set_reserve(GorgetSet* s, int64_t new_cap) {
     gorget_map_reserve(s, new_cap);
 }
 
-// Ordered Dict: pre-allocates order array so put() tracks insertion order
+// Ordered Dict (D39 dense-index-map layout — ATOMIC ACTIVATION in Phase A.2c).
+//
+// Dict / OrderedSet allocate the dense entries[] + indices[] pair up front so
+// every put()/get()/remove() takes the dense branch that A.2a landed in the
+// runtime and A.2b landed in the C-emit + SH mirror. Insertion order is
+// preserved by the packed entries[] append (no sidecar `order` array), and
+// remove()'s in-place memmove keeps entries[] contiguous (entries_len == count
+// invariant is obvious). indices[] uses a two-sentinel protocol per
+// runtime_preamble.c:383 — -1 empty (end-of-probe-chain), -2 tombstone (keep
+// probing; put may reuse); rehash on grow compacts tombstones away. HashMap /
+// HashSet stay legacy (open-addressing + states[] tombstones — their reason to
+// exist); the two-way discriminator at runtime is `entries_keys != NULL`
+// (dense) vs `states != NULL` (legacy).
+//
+// Initial sizing: entries_cap=16, indices_cap=32 (=2·entries_cap, 50% load
+// factor, no separate indices_cap field). __gorget_map_dense_grow doubles
+// both in lockstep.
 static inline GorgetMap gorget_dict_new(size_t key_size, size_t val_size) {
     GorgetAllocator* a = __gorget_current_alloc;
-    size_t init_cap = 16;
+    size_t init_entries_cap = 16;
+    size_t init_indices_cap = 2 * init_entries_cap;  // 32; 50% load factor
     GorgetMap m;
     // Defensive zero-fill: gorget_dict_new uses field-by-field assignment on an
-    // automatic variable, which is NOT zero-initialised in C. A.1 appended 5
-    // dense fields (entries_keys / entries_values / entries_len / entries_cap /
-    // indices) that this ctor does NOT explicitly set → those slots would hold
-    // stack garbage. A.2a's dense-mode discriminator (`m->entries_keys != NULL`)
-    // would then randomly fire on a stale non-NULL stack pointer, silently
-    // routing legacy Dicts through the dense branch and segfaulting on the
-    // fake pointer. memset preserves the LEGACY-only invariant for Dicts in
-    // this phase (A.2c is the phase that flips to dense).
+    // automatic variable, which is NOT zero-initialised in C. Legacy fields
+    // (keys / values / states / order / cap / order_len) MUST stay NULL/0 so
+    // the runtime's dense/legacy discriminator (`entries_keys != NULL`) routes
+    // every Dict/Set op through the dense branch, and the legacy free-branch
+    // never fires on a Dict/Set (it would ULLONG_MAX·key_size the NULL keys ptr).
     memset(&m, 0, sizeof(m));
-    m.keys = GORGET_CALLOC(init_cap, key_size);
-    m.values = val_size > 0 ? GORGET_CALLOC(init_cap, val_size) : NULL;
-    m.states = (uint8_t*)GORGET_CALLOC(init_cap, 1);
-    m.count = 0;
-    m.cap = init_cap;
     m.key_size = key_size;
     m.val_size = val_size;
     m.alloc = a;
-    m.order = (size_t*)GORGET_CALLOC(init_cap, sizeof(size_t));
-    m.order_len = 0;
-    m.tombstones = 0;
+    // Dense allocation — ATOMIC ACTIVATION MOMENT of D39 Phase A.
+    m.entries_keys = a->alloc(a->ctx, init_entries_cap * key_size);
+    m.entries_values = val_size > 0 ? a->alloc(a->ctx, init_entries_cap * val_size) : NULL;
+    m.entries_cap = init_entries_cap;
+    m.entries_len = 0;
+    m.indices = (int32_t*)a->alloc(a->ctx, init_indices_cap * sizeof(int32_t));
+    for (size_t i = 0; i < init_indices_cap; i++) m.indices[i] = -1;  // empty sentinel
+    m.count = 0;
+    m.tombstones = 0;  // dense has no tombstones; kept 0 for legacy-branch guards
+    // Function-pointer sidecars — populated by _str variants + register_* hooks.
     m.hash_fn = NULL;
     m.eq_fn = NULL;
     m.val_drop = NULL;
@@ -272,10 +289,11 @@ static inline void __gorget_map_materialize_value(GorgetMap* m, size_t idx) {
 }
 
 static inline void gorget_map_put(GorgetMap* m, const void* key, const void* value) {
-    // D39 DENSE MODE (dormant in A.2a — reachable only after A.2c flips ctors):
-    // append to entries[entries_len] on miss, overwrite in place on hit. Grow
-    // when entries_len == entries_cap. Insertion order is naturally preserved
-    // by the append; no separate order array.
+    // D39 DENSE MODE (LIVE after A.2c activation): append to entries[entries_len]
+    // on miss, overwrite in place on hit. Grow when entries_len == entries_cap.
+    // Insertion order is naturally preserved by the append; no separate order
+    // array. Tombstone protocol: -1 empty (end of probe chain), -2 tombstone
+    // (removed — keep probing, may reuse for insert). See gorget_map_remove.
     if (m->entries_keys) {
         if (m->entries_cap == 0 || m->entries_len >= m->entries_cap) {
             __gorget_map_dense_grow(m);
@@ -284,10 +302,13 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
         size_t mask = indices_cap - 1;  // power-of-two
         uint64_t h = __GORGET_MAP_HASH(m, key);
         size_t idx = (size_t)(h & mask);
+        size_t first_tombstone = (size_t)-1;
         for (;;) {
             int32_t ei = m->indices[idx];
             if (ei == -1) {
-                // Empty slot: append new entry, point indices[idx] at it.
+                // End of probe chain: insert. Prefer reusing the earliest
+                // tombstone we passed so probe chains stay short.
+                size_t insert_slot = first_tombstone != (size_t)-1 ? first_tombstone : idx;
                 size_t new_i = m->entries_len;
                 memcpy((char*)m->entries_keys + new_i * m->key_size, key, m->key_size);
                 __gorget_map_materialize_key(m, new_i);
@@ -295,10 +316,17 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
                     memcpy((char*)m->entries_values + new_i * m->val_size, value, m->val_size);
                     __gorget_map_materialize_value(m, new_i);
                 }
-                m->indices[idx] = (int32_t)new_i;
+                m->indices[insert_slot] = (int32_t)new_i;
                 m->entries_len++;
                 m->count++;
                 return;
+            }
+            if (ei == -2) {
+                // Tombstone: remember earliest for possible reuse; keep probing
+                // in case the key exists further down the chain.
+                if (first_tombstone == (size_t)-1) first_tombstone = idx;
+                idx = (idx + 1) & mask;
+                continue;
             }
             if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
                 // Hit: overwrite value in place; key stays.
@@ -409,8 +437,11 @@ static inline void gorget_map_put(GorgetMap* m, const void* key, const void* val
 // were already cloned by gorget_string_materialize_inplace via key_materialize.
 static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const void* value) {
     gorget_map_put(m, key, value);
-    // D39 DENSE MODE (dormant in A.2a): re-probe indices to locate the entries
-    // index of the just-inserted key, then deep-clone key/value in place.
+    // D39 DENSE MODE (LIVE after A.2c activation): re-probe indices to locate
+    // the entries index of the just-inserted key, then deep-clone key/value in
+    // place. Skip past -2 tombstones (put may reuse a tombstone slot, so the
+    // insertion slot's original index_cap position can look like a tombstone
+    // when there's a later live entry).
     if (m->entries_keys) {
         size_t indices_cap = 2 * m->entries_cap;
         size_t mask = indices_cap - 1;
@@ -419,6 +450,7 @@ static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const vo
         for (;;) {
             int32_t ei = m->indices[idx];
             if (ei == -1) return;  // shouldn't happen — we just put
+            if (ei == -2) { idx = (idx + 1) & mask; continue; }
             if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
                 size_t entries_i = (size_t)ei;
                 if (m->key_clone) {
@@ -484,7 +516,8 @@ static inline void gorget_map_put_cloned(GorgetMap* m, const void* key, const vo
 }
 
 static inline void* gorget_map_get(const GorgetMap* m, const void* key) {
-    // D39 DENSE MODE (dormant in A.2a).
+    // D39 DENSE MODE (LIVE after A.2c activation): -1 empty ends the probe
+    // chain, -2 tombstone keeps probing (the key may exist further down).
     if (m->entries_keys) {
         if (m->entries_cap == 0) return NULL;
         size_t indices_cap = 2 * m->entries_cap;
@@ -494,6 +527,7 @@ static inline void* gorget_map_get(const GorgetMap* m, const void* key) {
         for (;;) {
             int32_t ei = m->indices[idx];
             if (ei == -1) return NULL;
+            if (ei == -2) { idx = (idx + 1) & mask; continue; }
             if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
                 if (m->val_size == 0) return (void*)1;
                 return (char*)m->entries_values + (size_t)ei * m->val_size;
@@ -525,9 +559,14 @@ static inline size_t gorget_map_len(const GorgetMap* m) {
 }
 
 static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
-    // D39 DENSE MODE (dormant in A.2a): locate entries index i; memmove
-    // entries[i+1..entries_len] down by 1; decrement any indices[j] > i; -1
-    // the freed indices slot. O(n) but order-preserving.
+    // D39 DENSE MODE (LIVE after A.2c activation): locate entries index i;
+    // memmove entries[i+1..entries_len] down by 1; decrement any indices[j] > i;
+    // MARK the freed indices slot as TOMBSTONE (-2), not empty (-1), so that
+    // any probe chain that ran PAST this slot when the removed key was live
+    // still continues probing to find its target. Writing -1 here would
+    // silently truncate every such chain (Bug #2 from A.2c executor report:
+    // dict_tombstone_stress observed 22 entries live where 21 expected). O(n)
+    // but order-preserving. Rehash on grow drops tombstones (compacts).
     if (m->entries_keys) {
         if (m->entries_cap == 0) return false;
         size_t indices_cap = 2 * m->entries_cap;
@@ -537,6 +576,7 @@ static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
         for (;;) {
             int32_t ei = m->indices[idx];
             if (ei == -1) return false;
+            if (ei == -2) { idx = (idx + 1) & mask; continue; }
             if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
                 size_t entries_i = (size_t)ei;
                 if (m->val_drop && m->entries_values) {
@@ -558,7 +598,7 @@ static inline bool gorget_map_remove(GorgetMap* m, const void* key) {
                 }
                 m->entries_len--;
                 m->count--;
-                m->indices[idx] = -1;
+                m->indices[idx] = -2;  // tombstone (protocol per runtime_preamble.c:383)
                 for (size_t j = 0; j < indices_cap; j++) {
                     if (m->indices[j] > (int32_t)entries_i) m->indices[j]--;
                 }
@@ -598,8 +638,9 @@ static inline void* gorget_map_remove_opt(GorgetMap* m, const void* key) {
     static _Thread_local char __map_remove_buf[4096];
     static _Thread_local char* __map_remove_heap = NULL;
     static _Thread_local size_t __map_remove_heap_cap = 0;
-    // D39 DENSE MODE (dormant in A.2a): mirror gorget_map_remove but transfer
-    // the value bytes to the TLS buffer for Option[V] return before memmove.
+    // D39 DENSE MODE (LIVE after A.2c activation): mirror gorget_map_remove but
+    // transfer the value bytes to the TLS buffer for Option[V] return before
+    // memmove. Tombstone (-2) protocol matches gorget_map_remove.
     if (m->entries_keys) {
         if (m->entries_cap == 0) return NULL;
         size_t indices_cap = 2 * m->entries_cap;
@@ -609,6 +650,7 @@ static inline void* gorget_map_remove_opt(GorgetMap* m, const void* key) {
         for (;;) {
             int32_t ei = m->indices[idx];
             if (ei == -1) return NULL;
+            if (ei == -2) { idx = (idx + 1) & mask; continue; }
             if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
                 size_t entries_i = (size_t)ei;
                 char* buf;
@@ -642,7 +684,7 @@ static inline void* gorget_map_remove_opt(GorgetMap* m, const void* key) {
                 }
                 m->entries_len--;
                 m->count--;
-                m->indices[idx] = -1;
+                m->indices[idx] = -2;  // tombstone (protocol per runtime_preamble.c:383)
                 for (size_t j = 0; j < indices_cap; j++) {
                     if (m->indices[j] > (int32_t)entries_i) m->indices[j]--;
                 }
@@ -1056,10 +1098,30 @@ static inline void gorget_map_iter_value(const void* m, int64_t idx, void* out) 
 
 // ── Dict/Set drain (consuming iteration) ──────────────────────
 // Move K (and V for Dict) out of the bucket at physical index
-// `phys_idx` and tombstone-mark the slot. Caller takes ownership;
-// no key_drop / val_drop is called here. The map's normal drop
-// path (`gorget_map_free`) checks `states[i] == 1` and skips
-// tombstones, so no double-free for drained entries.
+// `phys_idx` and mark the slot vacated so the map's drop path
+// doesn't double-drop. Caller takes ownership of the moved-out
+// bytes; no key_drop / val_drop is called here.
+//
+// Legacy sparse path: flip `states[idx] = 2` (tombstone) so
+// `gorget_map_free` skips the slot.
+//
+// Dense path: `entries[0..entries_len]` is a packed live array
+// with no per-slot state discriminator. Instead of tracking a
+// per-slot dead marker or shrinking `entries_len` mid-iteration
+// (which would break the drain iterator's `n = iter_order_len`
+// cursor loop — see `lib/std/iter.gg::DictDrain::next`), we
+// **memset the slot to zero after transfer**. All Gorget owned
+// types treat all-zero bytes as the empty/default state whose
+// drop is a no-op: `Str`/`GorgetString` (`cap == 0` → view →
+// free is no-op), `GorgetArray` (`data == NULL` → skips both
+// the per-element drop loop and the dealloc), `GorgetMap`
+// (`alloc == NULL` → free short-circuits), `GorgetClosure`
+// (`env == NULL` → free is no-op), and user structs recursively
+// via their zero'd fields. So `gorget_map_free` can iterate
+// `entries[0..entries_len]` unchanged; its per-slot key_drop
+// and val_drop calls on the memset-zeroed drained slots are
+// safe no-ops. This preserves the iterator's contract (n stays
+// stable across all `next()` calls) and needs no new field.
 //
 // Returns 1 if a value was extracted (slot was occupied), 0 if the
 // slot was empty or already tombstoned. Drainable callers can use
@@ -1075,18 +1137,17 @@ static inline void gorget_map_iter_value(const void* m, int64_t idx, void* out) 
 static inline int64_t gorget_map_drain_entry(const void* m, int64_t phys_idx, void* out_key, void* out_val) {
     GorgetMap* mm = (GorgetMap*)m;  // cast away const — see comment above
     size_t idx = (size_t)phys_idx;
-    // D39 DENSE MODE (dormant in A.2a): `phys_idx` is the packed entries index
-    // (iter accessors return identity above). Bounds-check against entries_len;
-    // move key/value bytes to out params; decrement count without memmoving
-    // (drain callers walk indices in one shot then the whole map is dropped —
-    // the iter accessors treat all in-range slots as live regardless, and this
-    // path is dead until A.2c anyway). Refinement (proper per-slot drained
-    // marker) is A.2c/A.2b scope.
     if (mm->entries_keys) {
         if (idx >= mm->entries_len) return 0;
         memcpy(out_key, (const char*)mm->entries_keys + idx * mm->key_size, mm->key_size);
         if (mm->val_size > 0 && mm->entries_values && out_val) {
             memcpy(out_val, (const char*)mm->entries_values + idx * mm->val_size, mm->val_size);
+        }
+        // VACATE the slot so gorget_map_free's per-slot drop-hook loop
+        // treats it as dead. See rationale in the block comment above.
+        memset((char*)mm->entries_keys + idx * mm->key_size, 0, mm->key_size);
+        if (mm->val_size > 0 && mm->entries_values) {
+            memset((char*)mm->entries_values + idx * mm->val_size, 0, mm->val_size);
         }
         if (mm->count > 0) mm->count--;
         return 1;

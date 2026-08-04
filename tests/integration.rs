@@ -26536,7 +26536,12 @@ fn self_host_runtime_diff() {
     // drop_reassign moved BOTH-WRONG → ADJ), BOTH-WRONG 5→2 (remaining: drop_
     // collection_custom_elem_leak + drop_struct_collection_fields = row 2+3 of
     // G-class Drop transitive, filed as own-round HIGH TODOs).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1317;
+    // Reseed by Round XXX Track D.A.2c-plus RETRY-2: prior floor 1317 was stale.
+    // At Track G's base (0d26e8c2) MATCH is 1324 (+7 from 6ff9a1a0 f-string interp
+    // +3, Track G +4). D.A.2c-plus dense-mode activation with the drain vacate fix
+    // holds the count at 1324 (2 drain-resource fixtures restored from CRASH → MATCH,
+    // net-zero vs baseline). Lock in the gain to catch future regressions.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1324;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -41370,7 +41375,10 @@ fn builtin_oracle_sync_dict() {
     // (equip block deliberately skips these per lib/std/iter.gg:851-858).
     run_gg(
         "builtin_oracle_sync_dict.gg",
-        "3\n3\ntrue\ntrue\nfalse\n3\n7\n5\n15\n2\n3",
+        // D39 Phase A.2c: `.each` on Dict now walks entries[] in INSERTION order
+        // (was hash order under legacy sparse-table iteration). Matches the
+        // fixture comment ("3 / 5 / 7").
+        "3\n3\ntrue\ntrue\nfalse\n3\n5\n7\n15\n2\n3",
     );
 }
 
