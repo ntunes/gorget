@@ -2802,6 +2802,23 @@ pub(super) fn lower_method_call(
                 }
             }
         }
+        // D39 Phase A.3: Dict.swap_remove has the same Option[V !] return
+        // shape as Dict.remove (DD#6) and shares the void*-returning runtime
+        // path (`gorget_map_swap_remove_opt`). Register Option[V] the same
+        // way so the LIR lift's `slot_kind == Option` guard matches.
+        if method_name == "swap_remove" && recv_is_map {
+            let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
+            if let Some(rest) = type_name.strip_prefix(prefix) {
+                if let Some(pos) = rest.find("__") {
+                    let val_name = &rest[pos + 2..];
+                    let option_name = format!("Option__{val_name}");
+                    if ctx.lookup_type_by_name(&option_name).is_none() {
+                        let inner_type = resolve_inner_type(ctx, val_name);
+                        ctx.ensure_option_type_registered(&option_name, inner_type);
+                    }
+                }
+            }
+        }
         // For index_of/find on strings/collections (NOT Regex or user-defined types), register Option[int] return type
         let sentinel_method_key = format!("{type_name}__{method_name}");
         let is_sentinel_wrapped = ctx.sentinel_to_option_methods.contains(&sentinel_method_key);
@@ -2837,8 +2854,10 @@ pub(super) fn lower_method_call(
                         ctx.lookup_type_by_name(&option_name).unwrap_or(ret)
                     } else { ret }
                 } else { ret }
-            } else if method_name == "remove" && recv_is_map {
-                // Dict/HashMap.remove(key) → Option[V !]
+            } else if (method_name == "remove" || method_name == "swap_remove") && recv_is_map {
+                // Dict/HashMap.remove(key) → Option[V !].
+                // D39 Phase A.3: Dict/HashMap.swap_remove(key) → Option[V !]
+                // per DD#6 — same Option[V] resolution.
                 let prefix = if type_name.starts_with("Dict__") { "Dict__" } else { "HashMap__" };
                 if let Some(rest) = type_name.strip_prefix(prefix) {
                     if let Some(pos) = rest.find("__") {
@@ -3106,7 +3125,10 @@ pub(super) fn lower_method_call(
         // the LIR lift's `slot_kind == EnumKind::Option` guard never matches,
         // and the raw `void*` lands directly in the unwrapped V slot — broken
         // for struct/enum V, silent garbage for primitive V.
-        let is_option_void_ptr_dict_remove = method_name == "remove"
+        // D39 Phase A.3: swap_remove shares the void*-returning Option-wrap
+        // shape with remove for Dict/HashMap (same runtime family:
+        // gorget_map_remove_opt / gorget_map_swap_remove_opt).
+        let is_option_void_ptr_dict_remove = (method_name == "remove" || method_name == "swap_remove")
             && recv_is_map
             && ret_type != UNIT_TYPE
             && ret_is_option;

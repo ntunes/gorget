@@ -364,6 +364,9 @@ pub(super) fn map_monomorphized_to_runtime(name: &str) -> Option<String> {
             "has" | "has_key" | "contains_key" => return Some("gorget_map_contains".into()),
             // Dict.remove(key) returns Option[V !] — use the opt variant (returns void*).
             "remove" => return Some("gorget_map_remove_opt".into()),
+            // Dict.swap_remove(key) returns Option[V !] — same TLS-buffer opt
+            // shape as remove, but O(1) via swap-out (order-destroying).
+            "swap_remove" => return Some("gorget_map_swap_remove_opt".into()),
             _ => return Some(format!("gorget_map_{method}")),
         }
     }

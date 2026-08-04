@@ -1,0 +1,24 @@
+# D39 Phase A.3 bench (#[ignore]d in integration.rs): Dict[int, int] lookup
+# under the dense-index-map layout. Micro-workload for RSS + clone-stats +
+# wall-clock measurements. Populated with 10k entries, then 100k lookups
+# (10 iterations × 10k) with the key held in a local — no clone per lookup.
+
+void main():
+    Dict[int, int] d = Dict[int, int]()
+    int i = 0
+    while i < 10000:
+        d.put(i, i * 3)
+        i += 1
+
+    int hits = 0
+    int iter = 0
+    while iter < 10:
+        int k = 0
+        while k < 10000:
+            if d.get(k).is_some():
+                hits += 1
+            k += 1
+        iter += 1
+
+    print(f"hits={hits}")
+    print(f"len={d.len()}")

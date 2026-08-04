@@ -1,0 +1,36 @@
+# D39 Phase A.3: Dict[int, int].swap_remove — O(1) opt-in order-destroying
+# removal. Per DD#6 returns Option[V !] (mirrors Dict's own `remove` shape).
+# Post-swap: last entry moves into the freed slot; iteration order therefore
+# shows the swapped-in element where the removed one used to be.
+#
+# Axis cell: int keys, int values (trivial value type); MIDDLE + LAST removals.
+from std.conv import int_to_str
+
+void main():
+    Dict[int, int] d = Dict[int, int]()
+    d.put(1, 10)
+    d.put(2, 20)
+    d.put(3, 30)
+    d.put(4, 40)
+    d.put(5, 50)
+    print(int_to_str(d.len()))
+
+    # Middle removal — key 2 (position 1). Post-swap, key 5 (was last)
+    # occupies position 1; keys traversal is 1,5,3,4.
+    Option[int] r_mid = d.swap_remove(2)
+    print(int_to_str(r_mid.unwrap()))
+    print(int_to_str(d.len()))
+
+    # Last removal — key 4 (currently last).  No swap needed.
+    Option[int] r_last = d.swap_remove(4)
+    print(int_to_str(r_last.unwrap()))
+    print(int_to_str(d.len()))
+
+    # Missing key — Option is None.
+    Option[int] r_absent = d.swap_remove(99)
+    print(int_to_str(r_absent.is_some() as int))
+    print(int_to_str(d.len()))
+
+    # Iteration order after swap-outs (dense entries: 1,5,3).
+    for k in d.keys():
+        print(f"k={k} v={d.get(k).unwrap()}")

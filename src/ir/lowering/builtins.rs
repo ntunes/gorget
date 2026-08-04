@@ -460,6 +460,10 @@ pub static DICT: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "get_or", runtime_callee: None, self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, combinator_kind: None, params: key_val_default, return_type: ret_val },
         BuiltinMethodDecl { name: "get_or_put", runtime_callee: None, self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, combinator_kind: None, params: key_val_default, return_type: ret_val },
         BuiltinMethodDecl { name: "remove", runtime_callee: Some("gorget_map_remove_opt"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, combinator_kind: None, params: key_param, return_type: ret_option_val },
+        // D39 Phase A.3: Dict.swap_remove(key) → Option[V !] — O(1) opt-in
+        // order-destroying counterpart to `remove` (per DD#6, matches Dict's
+        // own remove shape). Routes to `gorget_map_swap_remove_opt`.
+        BuiltinMethodDecl { name: "swap_remove", runtime_callee: Some("gorget_map_swap_remove_opt"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, combinator_kind: None, params: key_param, return_type: ret_option_val },
         BuiltinMethodDecl { name: "contains", runtime_callee: Some("gorget_map_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, combinator_kind: None, params: key_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "has", runtime_callee: Some("gorget_map_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, combinator_kind: None, params: key_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "has_key", runtime_callee: Some("gorget_map_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, combinator_kind: None, params: key_param, return_type: ret_bool },
@@ -534,6 +538,10 @@ pub static SET: BuiltinTypeProtocol = BuiltinTypeProtocol {
         BuiltinMethodDecl { name: "add", runtime_callee: Some("gorget_set_add"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, combinator_kind: None, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "insert", runtime_callee: Some("gorget_set_add"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, combinator_kind: None, params: elem_param, return_type: ret_void },
         BuiltinMethodDecl { name: "remove", runtime_callee: Some("gorget_set_remove"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, combinator_kind: None, params: elem_param, return_type: ret_bool },
+        // D39 Phase A.3: Set.swap_remove(elem) → bool — O(1) opt-in
+        // order-destroying counterpart to `remove` (per DD#6, matches Set's
+        // own remove shape).
+        BuiltinMethodDecl { name: "swap_remove", runtime_callee: Some("gorget_set_swap_remove"), self_conv: SelfConvention::MutBorrow, is_mutating: true, returns_view: false, returns_fresh: false, combinator_kind: None, params: elem_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "contains", runtime_callee: Some("gorget_set_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, combinator_kind: None, params: elem_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "has", runtime_callee: Some("gorget_set_contains"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, combinator_kind: None, params: elem_param, return_type: ret_bool },
         BuiltinMethodDecl { name: "len", runtime_callee: Some("gorget_set_len"), self_conv: SelfConvention::Borrow, is_mutating: false, returns_view: false, returns_fresh: false, combinator_kind: None, params: no_params, return_type: ret_int },

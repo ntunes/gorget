@@ -776,19 +776,27 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # .pop() / .remove() on Vector[T] → Option[T]; Dict[K,V].remove(k)
             # → Option[V] (mirrors Rust gg typecheck.rs:5458 — the removed
             # value transfers out, None when absent).
-            if method_name == "pop" or method_name == "remove":
+            #
+            # D39 Phase A.3: `swap_remove` joins this arm — same return shape
+            # per DD#6 (each receiver's OWN `remove` shape wins). Vector was
+            # already void per protocol; Dict/HashMap → Option[V], Set/HashSet
+            # → bool.
+            if method_name == "pop" or method_name == "remove" or method_name == "swap_remove":
                 int obj_type = infer_expr_type(SpannedExpr((*obj).expr, (*obj).span), scopes, &types, &ctx)
                 if obj_type >= 0 and obj_type < types.types.len():
                     ResolvedType ort = get_rtype_at(types.types, obj_type)
                     match ort:
                         case RTGeneric(def_id, type_args):
                             DefInfo d = scopes.get_def(def_id)
-                            if d.name == "Vector" and type_args.len() >= 1:
+                            # Vector.pop/remove → Option[T]; Vector.swap_remove
+                            # stays void per protocol (mirrors Rust gg
+                            # typecheck.rs:8535: swap_remove | swap | fill).
+                            if d.name == "Vector" and type_args.len() >= 1 and method_name != "swap_remove":
                                 if scopes.lookup("Option") is Some(option_def):
                                     Vector[int] opt_args = Vector[int]()
                                     opt_args.push(get_int_at(type_args, 0))
                                     return types.add_type(!RTGeneric(option_def, opt_args))
-                            if method_name == "remove" and (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
+                            if (method_name == "remove" or method_name == "swap_remove") and (d.name == "Dict" or d.name == "HashMap") and type_args.len() >= 2:
                                 if scopes.lookup("Option") is Some(dict_option_def):
                                     Vector[int] dict_opt_args = Vector[int]()
                                     dict_opt_args.push(get_int_at(type_args, 1))
@@ -800,7 +808,8 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                             # the result slot defaults to I64 and a
                             # `print(f"{s.remove(x)}")` prints 1/0 instead of
                             # true/false (the int-instead-of-bool symptom).
-                            if method_name == "remove" and (d.name == "Set" or d.name == "HashSet"):
+                            # swap_remove mirrors the same shape per DD#6.
+                            if (method_name == "remove" or method_name == "swap_remove") and (d.name == "Set" or d.name == "HashSet"):
                                 return types.bool_id
                         else:
                             pass

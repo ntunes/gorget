@@ -1,0 +1,51 @@
+# D39 Phase A.3: Set[int].swap_remove — O(1) opt-in, returns bool per DD#6.
+# Post-swap: last element moves into the freed slot.
+#
+# Axis cell: int elements; MIDDLE + LAST removals. Iteration via contains()
+# (not items()) so the parity harness's SH lane can reproduce — SH's
+# Set.items() type inference lacks the elem-typed Vector wrap that Dict
+# uses (set_items_ordinal already documents this).
+from std.conv import int_to_str
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(1)
+    s.add(2)
+    s.add(3)
+    s.add(4)
+    s.add(5)
+    print(int_to_str(s.len()))
+
+    # Middle removal — element 2 (position 1). Element 5 (was last) swaps in.
+    bool r_mid = s.swap_remove(2)
+    if r_mid: print("1")
+    else: print("0")
+    print(int_to_str(s.len()))
+
+    # Last removal — element 4 (currently last).
+    bool r_last = s.swap_remove(4)
+    if r_last: print("1")
+    else: print("0")
+    print(int_to_str(s.len()))
+
+    # Missing.
+    bool r_absent = s.swap_remove(99)
+    if r_absent: print("1")
+    else: print("0")
+
+    # Post-swap membership: {1,3,5} remain; {2,4,99} gone.
+    bool c1 = s.contains(1)
+    if c1: print("1")
+    else: print("0")
+    bool c2 = s.contains(2)
+    if c2: print("1")
+    else: print("0")
+    bool c3 = s.contains(3)
+    if c3: print("1")
+    else: print("0")
+    bool c4 = s.contains(4)
+    if c4: print("1")
+    else: print("0")
+    bool c5 = s.contains(5)
+    if c5: print("1")
+    else: print("0")

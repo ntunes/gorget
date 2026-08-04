@@ -1,0 +1,51 @@
+# D39 Phase A.3: Set[String].swap_remove — resource-typed elements.
+# key_drop fires on the removed slot; contains() checks pin post-swap.
+#
+# Axis cell: String elements; MIDDLE + LAST removals. Uses contains()
+# instead of items() iteration (SH set_items_ordinal is a filed gap
+# where Set.items() lacks the typed-Vector wrap Dict.items has).
+
+void main():
+    Set[String] s = Set[String]()
+    s.add("alpha")
+    s.add("beta")
+    s.add("gamma")
+    s.add("delta")
+    print(f"len={s.len()}")
+
+    # Middle removal.
+    bool r_mid = s.swap_remove("beta")
+    if r_mid:
+        print("mid=1")
+    else:
+        print("mid=0")
+    print(f"len={s.len()}")
+
+    # Last removal (after swap: alpha,delta,gamma → gamma is last).
+    bool r_last = s.swap_remove("gamma")
+    if r_last:
+        print("last=1")
+    else:
+        print("last=0")
+    print(f"len={s.len()}")
+
+    # Missing.
+    bool r_absent = s.swap_remove("zeta")
+    if r_absent:
+        print("absent=1")
+    else:
+        print("absent=0")
+
+    # Post-swap membership: {alpha, delta} remain.
+    bool has_alpha = s.contains("alpha")
+    bool has_beta = s.contains("beta")
+    bool has_gamma = s.contains("gamma")
+    bool has_delta = s.contains("delta")
+    if has_alpha: print("alpha_in=1")
+    else: print("alpha_in=0")
+    if has_beta: print("beta_in=1")
+    else: print("beta_in=0")
+    if has_gamma: print("gamma_in=1")
+    else: print("gamma_in=0")
+    if has_delta: print("delta_in=1")
+    else: print("delta_in=0")

@@ -3777,12 +3777,15 @@ These methods operate on individual characters within a `String`:
 
 Iteration, `keys()`, `values()`, and `items()` all return entries in insertion order. Removing a key and re-inserting it places it at the end. Removing a key leaves the relative order of the remaining entries unchanged (D39) — `remove` preserves order; `swap_remove` is the explicit order-destroying alternative, exactly as on `Vector`.
 
+Mutating a `Dict` during iteration (`put`, `remove`, `swap_remove`, `clear`) leaves the iteration in an unspecified state — the visitor may see the new state, the old state, or skip/duplicate elements. Collect the keys first (`for k in d.keys():`) and mutate outside the loop.
+
 | Method | Signature | Description |
 |---|---|---|
 | `put(key, value)` | `K, V → void` | Insert or update a key-value pair |
 | `get(key)` | `K → Option[V]` | Get value for key (`None` if missing) |
 | `contains(key)` | `K → bool` | True if key exists |
-| `remove(key)` | `K → Option[V]` | Remove key, return the value if it existed |
+| `remove(key)` | `K → Option[V]` | Remove key, return the value if it existed (order-preserving, O(n)) |
+| `swap_remove(key)` | `K → Option[V]` | Remove key, return the value if it existed (O(1), order-DESTROYING — swaps last entry into hole) |
 | `len()` | `→ int` | Number of entries |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all entries |
@@ -3806,6 +3809,7 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 | `get(key)` | `K → Option[V]` | Get value for key (`None` if missing) |
 | `contains(key)` | `K → bool` | True if key exists |
 | `remove(key)` | `K → Option[V]` | Remove key, return the value if it existed |
+| `swap_remove(key)` | `K → Option[V]` | Remove key, return the value if it existed (O(1), semantically equivalent to `remove` on `HashMap` since order is unspecified) |
 | `len()` | `→ int` | Number of entries |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all entries |
@@ -3820,7 +3824,9 @@ Same API as `Dict` but does not preserve insertion order. Use when order is irre
 
 **`Set[T]`** — Ordered set (insertion-order preserving)
 
-Iteration yields elements in insertion order. Adding a duplicate does not change order. Removing an element and re-adding it places it at the end.
+Iteration yields elements in insertion order. Adding a duplicate does not change order. Removing an element and re-adding it places it at the end. `remove` preserves the relative order of the remaining elements (D39, order-preserving O(n)); `swap_remove` is the explicit order-destroying O(1) alternative, exactly as on `Vector`.
+
+Mutating a `Set` during iteration (`add`, `remove`, `swap_remove`, `clear`) leaves the iteration in an unspecified state. Materialise first (`for e in s.items():`) and mutate outside the loop.
 
 A set is **not positionally indexable** (D38) — `s[0]` is a compile error, on `Set` and `HashSet` alike. Ordering and indexing are separate capabilities: `Dict` is insertion-ordered too, yet `d[k]` looks a key up rather than reaching a position. A set's elements *are* its keys, so `s[0]` over a `Set[int]` could not be told apart from a lookup of the element `0`, and the operator is left undefined rather than given an arbitrary reading. To reach an element by ordinal position, materialise first — `s.items()[i]` — or iterate.
 
@@ -3828,7 +3834,8 @@ A set is **not positionally indexable** (D38) — `s[0]` is a compile error, on 
 |---|---|---|
 | `add(item)` | `T → void` | Insert an element |
 | `contains(item)` | `T → bool` | True if element exists |
-| `remove(item)` | `T → bool` | Remove element, return whether it existed |
+| `remove(item)` | `T → bool` | Remove element, return whether it existed (order-preserving, O(n)) |
+| `swap_remove(item)` | `T → bool` | Remove element, return whether it existed (O(1), order-DESTROYING — swaps last element into hole) |
 | `len()` | `→ int` | Number of elements |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all elements |
@@ -3854,6 +3861,7 @@ Same API as `Set` but does not preserve insertion order. Use when order is irrel
 | `add(item)` | `T → void` | Insert an element |
 | `contains(item)` | `T → bool` | True if element exists |
 | `remove(item)` | `T → bool` | Remove element, return whether it existed |
+| `swap_remove(item)` | `T → bool` | Remove element, return whether it existed (O(1), semantically equivalent to `remove` on `HashSet` since order is unspecified) |
 | `len()` | `→ int` | Number of elements |
 | `is_empty()` | `→ bool` | True if length is zero |
 | `clear()` | `→ void` | Remove all elements |

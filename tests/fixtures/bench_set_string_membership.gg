@@ -1,0 +1,29 @@
+# D39 Phase A.3 bench: Set[String] membership — String-hash + Str-eq on
+# the dense-index-map layout.
+from std.conv import int_to_str
+
+void main():
+    Set[String] s = Set[String]()
+    int i = 0
+    while i < 5000:
+        s.add("k_" + int_to_str(i * 2))
+        i += 1
+
+    Vector[String] probe = Vector[String]()
+    int j = 0
+    while j < 10000:
+        probe.push("k_" + int_to_str(j))
+        j += 1
+
+    int hits = 0
+    int iter = 0
+    while iter < 3:
+        int k = 0
+        while k < 10000:
+            if s.contains(probe.get(k).unwrap()):
+                hits += 1
+            k += 1
+        iter += 1
+
+    print(f"hits={hits}")
+    print(f"len={s.len()}")

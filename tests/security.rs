@@ -605,6 +605,53 @@ fn sec_92_static_collection_reassign_uaf() {
     );
 }
 
+// D39 Phase A.3 R6 axis: interior-pointer UAF fixtures on the dense-index-map
+// layout. Decision-tree BRANCH 1: ASan CLEAN under `--sanitize
+// detect_leaks=1`. The fixtures ship as POSITIVE CONTROLS verifying the
+// transient-view discipline — the `.clone()` before a mutating call
+// materialises before swap_remove/remove runs the swap-out or shift, so the
+// interior pointer is dropped and no UAF can occur. The runtime's swap-out
+// (last-entry-into-hole memcpy + swapped indices rewrite) and the order-
+// preserving remove's O(n) memmove both stay memory-safe under this
+// discipline. The safety pass's `is_mutating_builtin_method` covers
+// swap_remove (populated from the `is_mutating: true` flag on the SET/DICT
+// BuiltinMethodDecls added same-round in src/ir/lowering/builtins.rs).
+#[test]
+fn sec_r6_dict_dense_swap_remove_interior_ptr() {
+    security_safe(
+        "dict_dense_swap_remove_interior_ptr_uaf",
+        "v1_padding_padding_padding_padding_padding\n\
+         v2_padding_padding_padding_padding_padding",
+    );
+}
+
+#[test]
+fn sec_r6_dict_dense_remove_interior_ptr() {
+    security_safe(
+        "dict_dense_remove_interior_ptr_uaf",
+        "v1_padding_padding_padding_padding_padding\n\
+         v2_padding_padding_padding_padding_padding",
+    );
+}
+
+#[test]
+fn sec_r6_set_dense_swap_remove_interior_ptr() {
+    security_safe(
+        "set_dense_swap_remove_interior_ptr_uaf",
+        "present=1\nabsent=0\nlen=3",
+    );
+}
+
+#[test]
+fn sec_r6_dict_dense_transient_view_positive_control() {
+    security_safe(
+        "dict_dense_transient_view_positive_control",
+        "v1_padding_padding_padding_padding\n\
+         v1_padding_padding_padding_padding\n\
+         len=1",
+    );
+}
+
 // ── Runtime traps that must use the Gorget panic path, not C UB ──
 
 #[test]

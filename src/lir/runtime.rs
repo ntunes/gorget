@@ -430,6 +430,11 @@ runtime_table! {
     MapPutCloned    => "gorget_map_put_cloned",   sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem), (T::Ptr, A::VoidElem)], T::Void, F::Mutates);
     MapRemove       => "gorget_map_remove",       sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Bool, F::Mutates);
     MapRemoveOpt    => "gorget_map_remove_opt",   sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Ptr, F::Mutates);
+    // D39 Phase A.3: O(1) swap-out removal for the dense-index-map layout.
+    // MapSwapRemove returns bool (was the key present?); MapSwapRemoveOpt
+    // returns the removed value via TLS (Dict[K,V].swap_remove → Option[V]).
+    MapSwapRemove    => "gorget_map_swap_remove",     sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Bool, F::Mutates);
+    MapSwapRemoveOpt => "gorget_map_swap_remove_opt", sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Ptr, F::Mutates);
     MapReserve      => "gorget_map_reserve",      sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);
     MapValues       => "gorget_map_values",       sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
 
@@ -450,6 +455,8 @@ runtime_table! {
     SetNewLike       => "gorget_set_new_like",        sig_fresh(&[(T::Ptr, A::Ptr)], T::Set, F::Allocates);
     SetNewStr        => "gorget_set_new_str",         sig_fresh(&[], T::Set, F::Allocates);
     SetRemove        => "gorget_set_remove",          sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Bool, F::Mutates);
+    // D39 Phase A.3: Set.swap_remove — O(1) opt-in, order-destroying counterpart.
+    SetSwapRemove    => "gorget_set_swap_remove",     sig(&[(T::Ptr, A::Ptr), (T::Ptr, A::VoidElem)], T::Bool, F::Mutates);
     SetReserve       => "gorget_set_reserve",         sig(&[(T::Ptr, A::Ptr), (T::I64, A::Scalar)], T::Void, F::Mutates);
     SetToArray       => "gorget_set_to_array",        sig(&[(T::Ptr, A::Ptr)], T::Array, F::Allocates);
 

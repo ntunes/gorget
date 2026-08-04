@@ -1,0 +1,23 @@
+# D39 Phase A.3 R6 axis: interior-pointer UAF probe on Set.swap_remove.
+# Set variant of dict_dense_swap_remove_interior_ptr_uaf. A Set's
+# `entries_keys[]` holds owned Strings that get moved via swap-out on
+# swap_remove; a live `contains` predicate cannot hold a pointer into the
+# entries[] array (Set has no `.get()`) so the attack shape is symbolic:
+# what we probe is the mutation-through-Set safety pass path.
+#
+# Under D39 Phase A `Set.swap_remove` is `is_mutating: true` in the SET
+# protocol, so any borrow-invalidator that keys off that flag treats it
+# identically to `Set.remove` / `Set.add`.
+#
+# Expected: build+run clean, ASan clean, prints the swap_remove outcomes.
+
+void main():
+    Set[String] s = {"a1_padding_padding_padding_padding",
+                     "a2_padding_padding_padding_padding",
+                     "a3_padding_padding_padding_padding",
+                     "a4_padding_padding_padding_padding"}
+    bool r1 = s.swap_remove("a2_padding_padding_padding_padding")
+    bool r2 = s.swap_remove("nonexistent_padding_padding_padding")
+    print(f"present={r1 as int}")
+    print(f"absent={r2 as int}")
+    print(f"len={s.len()}")

@@ -1,0 +1,41 @@
+# D39 Phase A.3: Pins the return type of Set.swap_remove — MUST be bool
+# per DD#6 (mirror Set's own `remove`, not `void`; DD#6 rejected `void`
+# as a silent-no-op footgun on key-based receivers). Uses `if` branching
+# on the bool (not an in-f-string `as int` cast) so both Rust gg and the
+# self-host lane agree — SH's f-string `{b as int}` cast on a bool-typed
+# method result prints the raw `true`/`false` rendering.
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(10)
+    s.add(20)
+    s.add(30)
+
+    bool present = s.swap_remove(20)
+    if present:
+        print("present=1")
+    else:
+        print("present=0")
+
+    bool absent = s.swap_remove(999)
+    if absent:
+        print("absent=1")
+    else:
+        print("absent=0")
+
+    # Type contract: both further swap_removes succeed → 2 removed.
+    bool got_10 = s.swap_remove(10)
+    bool got_30 = s.swap_remove(30)
+    int c10 = 0
+    if got_10:
+        c10 = 1
+    int c30 = 0
+    if got_30:
+        c30 = 1
+    int count = c10 + c30
+    print(f"count={count}")
+    bool is_empty = s.is_empty()
+    if is_empty:
+        print("empty=1")
+    else:
+        print("empty=0")

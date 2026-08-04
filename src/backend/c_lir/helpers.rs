@@ -701,8 +701,10 @@ pub(super) fn collection_void_param_indices(name: &str) -> &'static [usize] {
         "gorget_array_extend" => &[1],
         "gorget_array_fill" => &[2],      // arg 2: element value (by void*)
         "gorget_map_put" => &[1, 2],
-        "gorget_map_get" | "gorget_map_contains" | "gorget_map_remove" | "gorget_map_remove_opt" => &[1],
-        "gorget_set_add" | "gorget_set_contains" | "gorget_set_remove" => &[1],
+        "gorget_map_get" | "gorget_map_contains" | "gorget_map_remove" | "gorget_map_remove_opt"
+        | "gorget_map_swap_remove" | "gorget_map_swap_remove_opt" => &[1],
+        "gorget_set_add" | "gorget_set_contains" | "gorget_set_remove"
+        | "gorget_set_swap_remove" => &[1],
         "gorget_heap_push" => &[1],
         // Dict/Set iteration output-parameter: arg 2 is void* out buffer
         "gorget_map_iter_key" | "gorget_map_iter_value" => &[2],

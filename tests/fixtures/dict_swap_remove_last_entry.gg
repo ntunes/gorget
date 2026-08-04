@@ -1,0 +1,24 @@
+# D39 Phase A.3: Dict.swap_remove of the ONLY entry — self-move edge case.
+# When entries_i == last_i the runtime must skip the swap memcpy AND skip the
+# rewrite-swapped-indices loop; without that guard we'd memcpy a slot to
+# itself (harmless) or worse rewrite a stale indices slot.
+
+void main():
+    Dict[int, int] d = Dict[int, int]()
+    d.put(5, 50)
+    print(f"len={d.len()}")
+
+    Option[int] r = d.swap_remove(5)
+    print(f"got={r.unwrap()}")
+    print(f"len={d.len()}")
+    bool is_empty = d.is_empty()
+    if is_empty:
+        print("is_empty=1")
+    else:
+        print("is_empty=0")
+
+    # Repeat pattern — insert 3, then swap_remove 3 (still ONLY entry).
+    d.put(3, 30)
+    Option[int] r2 = d.swap_remove(3)
+    print(f"got2={r2.unwrap()}")
+    print(f"len={d.len()}")

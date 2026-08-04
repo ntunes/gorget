@@ -30,6 +30,12 @@ static inline bool gorget_set_remove(GorgetSet* s, const void* elem) {
     return gorget_map_remove(s, elem);
 }
 
+// D39 Phase A.3: O(1) swap_remove — moves the last element into the freed
+// slot (order-destroying). Thin wrapper over gorget_map_swap_remove.
+static inline bool gorget_set_swap_remove(GorgetSet* s, const void* elem) {
+    return gorget_map_swap_remove(s, elem);
+}
+
 static inline void gorget_set_clear(GorgetSet* s) {
     gorget_map_clear(s);
 }

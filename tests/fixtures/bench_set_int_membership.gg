@@ -1,0 +1,22 @@
+# D39 Phase A.3 bench: Set[int] membership — dense-mode `contains` under
+# insertion-order iteration semantics.
+
+void main():
+    Set[int] s = Set[int]()
+    int i = 0
+    while i < 10000:
+        s.add(i * 2)
+        i += 1
+
+    int hits = 0
+    int iter = 0
+    while iter < 5:
+        int k = 0
+        while k < 20000:
+            if s.contains(k):
+                hits += 1
+            k += 1
+        iter += 1
+
+    print(f"hits={hits}")
+    print(f"len={s.len()}")

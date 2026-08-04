@@ -1,0 +1,32 @@
+# D39 Phase A.3 R6 axis: interior-pointer UAF probe on Dict.swap_remove.
+#
+# The attack shape: hold a REFERENCE (`&`) into the Dict's `entries_values[]`
+# via `d.get(k).unwrap()`, then perform an order-destroying mutation
+# (`swap_remove` on a DIFFERENT key). The dense-map runtime moves the LAST
+# entry into the freed slot, so the interior pointer we held is now stale
+# even though no realloc happened. If check-time doesn't catch it, ASan under
+# the security build should trip.
+#
+# Under D39 Phase A the borrow-invalidator (`is_mutating_builtin_method`) is
+# populated from the `is_mutating` field on the builtin method decl —
+# swap_remove is `is_mutating: true`, so the mutation-through-view rejection
+# path fires exactly like `.put(...)` / `.remove(...)` on the same shape
+# (`sec_14_dict_borrow_mutate` is the sibling that already passes).
+#
+# Expected: same as attack_14 — cloning the view forces materialisation
+# before the swap_remove, so the print sees the cloned value not the stale
+# alias. String values held under heap-forced padding to make any UAF loud
+# under ASan.
+
+void main():
+    Dict[String, String] d = {"k1": "v1_padding_padding_padding_padding_padding",
+                              "k2": "v2_padding_padding_padding_padding_padding",
+                              "k3": "v3_padding_padding_padding_padding_padding",
+                              "k4": "v4_padding_padding_padding_padding_padding"}
+    # Materialise a copy of k1's value before mutating.
+    String v = d.get("k1").unwrap().clone()
+    # Order-destroying mutation on a DIFFERENT key (k2 is at position 1;
+    # dense swap_remove moves the LAST entry — k4 — into that slot).
+    Option[String] taken = d.swap_remove("k2")
+    print(v)
+    print(taken.unwrap())

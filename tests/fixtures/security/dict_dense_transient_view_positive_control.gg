@@ -1,0 +1,23 @@
+# D39 Phase A.3 R6 axis: positive control — the transient-view discipline
+# ("View bounded by call") is what makes the sibling swap_remove /
+# remove interior-pointer fixtures ASan-clean. This fixture pins the
+# convention itself: `d.get("k").unwrap().clone()` materialises the view
+# BEFORE any mutation, so the mutation sees no interior pointer to
+# invalidate.
+#
+# Without the `.clone()` the safety pass rejects the shape at CHECK time
+# (`is_mutating_builtin_method` covers the whole Dict/Set mutation
+# family: put/set/insert/add/remove/swap_remove/clear/reserve/…). This
+# fixture asserts the SAFE shape builds and runs clean.
+
+void main():
+    Dict[String, String] d = {"k1": "v1_padding_padding_padding_padding",
+                              "k2": "v2_padding_padding_padding_padding",
+                              "k3": "v3_padding_padding_padding_padding"}
+    String v = d.get("k1").unwrap().clone()
+    d.put("k2", "v2_replaced_padding_padding_padding")
+    d.remove("k3")
+    Option[String] taken = d.swap_remove("k1")
+    print(v)
+    print(taken.unwrap())
+    print(f"len={d.len()}")

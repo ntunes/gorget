@@ -8584,6 +8584,18 @@ impl<'a> TypeChecker<'a> {
                         Some(val_type())
                     }
                 }
+                // D39 Phase A.3: Dict.swap_remove(key) mirrors Dict.remove's
+                // return shape per DD#6 (each type's own `remove` shape wins;
+                // Dict returns Option[V !], so swap_remove does too). O(1)
+                // opt-in order-destroying variant.
+                "swap_remove" => {
+                    if let Some(option_def_id) = self.scopes.lookup("Option") {
+                        let owned_val = self.types.insert(ResolvedType::Owned(val_type()));
+                        Some(self.types.intern_generic(option_def_id, vec![owned_val]))
+                    } else {
+                        Some(val_type())
+                    }
+                }
                 "clear" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
                 "keys" => {
@@ -8631,6 +8643,10 @@ impl<'a> TypeChecker<'a> {
                 "contains" | "is_subset" | "is_superset" | "is_disjoint" => Some(self.types.bool_id),
                 "len" => Some(self.types.int_id),
                 "remove" => Some(self.types.bool_id),
+                // D39 Phase A.3: Set.swap_remove(elem) → bool — mirrors Set's
+                // own `remove` shape per DD#6 (was the elem present?). O(1)
+                // opt-in, order-destroying.
+                "swap_remove" => Some(self.types.bool_id),
                 "clear" => Some(self.types.void_id),
                 "is_empty" => Some(self.types.bool_id),
                 "union" | "intersection" | "difference" | "symmetric_difference" => Some(receiver_type),

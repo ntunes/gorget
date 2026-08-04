@@ -18,7 +18,7 @@ pub(super) fn is_collection_void_return_lir(name: &str) -> bool {
     matches!(name,
         "gorget_array_get" | "gorget_array_pop" | "gorget_array_first" | "gorget_array_last"
         | "gorget_array_safe_pop" | "gorget_array_remove_opt"
-        | "gorget_map_get" | "gorget_map_remove_opt"
+        | "gorget_map_get" | "gorget_map_remove_opt" | "gorget_map_swap_remove_opt"
         | "gorget_heap_pop" | "gorget_heap_peek"
         | "gorget_shared_get" | "gorget_shared_get_ptr"
         | "gorget_channel_recv"
@@ -65,6 +65,7 @@ fn is_consuming_method(name: &str) -> bool {
     matches!(name,
         "gorget_array_safe_pop" | "gorget_array_remove_opt"
         | "gorget_map_remove" | "gorget_map_remove_opt" | "gorget_set_remove"
+        | "gorget_map_swap_remove" | "gorget_map_swap_remove_opt" | "gorget_set_swap_remove"
     )
 }
 

@@ -1,0 +1,39 @@
+# D39 Phase A.3: Dict[String, int].swap_remove — resource-typed keys, int
+# values. Verifies drop tracking (key_drop fires on removed slot; the int
+# value transfers via Option[int]). Post-swap ordering exercised via
+# keys() iteration.
+#
+# Axis cell: String keys, int values (resource key, trivial value);
+# MIDDLE + LAST removals. Option[String]-value variant lives in a
+# known_gaps entry because SH's Option[String] payload from
+# gorget_map_swap_remove_opt is broken (mirrors an existing SH gap on
+# Option-of-resource payloads — filed follow-up).
+
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("alpha", 10)
+    d.put("beta", 20)
+    d.put("gamma", 30)
+    d.put("delta", 40)
+    print(f"len={d.len()}")
+
+    # Middle removal — "beta" (position 1). Expects 40 to swap in.
+    Option[int] r_mid = d.swap_remove("beta")
+    print(f"mid={r_mid.unwrap()}")
+    print(f"len={d.len()}")
+
+    # Last removal — "gamma" (position 2 after swap: alpha,delta,gamma).
+    Option[int] r_last = d.swap_remove("gamma")
+    print(f"last={r_last.unwrap()}")
+    print(f"len={d.len()}")
+
+    # Missing key — None.
+    Option[int] r_absent = d.swap_remove("zeta")
+    bool absent_some = r_absent.is_some()
+    if absent_some:
+        print("absent_some=1")
+    else:
+        print("absent_some=0")
+
+    for k in d.keys():
+        print(f"k={k} v={d.get(k).unwrap()}")

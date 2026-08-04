@@ -1,0 +1,29 @@
+# D39 Phase A.3 bench: Dict[String, int] lookup — String keys stress
+# gorget_string hashing + __GORGET_MAP_EQ_DENSE's Str-key comparison path.
+from std.conv import int_to_str
+
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    int i = 0
+    while i < 5000:
+        d.put("key_" + int_to_str(i), i * 3)
+        i += 1
+
+    Vector[String] probe = Vector[String]()
+    int j = 0
+    while j < 5000:
+        probe.push("key_" + int_to_str(j))
+        j += 1
+
+    int hits = 0
+    int iter = 0
+    while iter < 4:
+        int k = 0
+        while k < 5000:
+            if d.get(probe.get(k).unwrap()).is_some():
+                hits += 1
+            k += 1
+        iter += 1
+
+    print(f"hits={hits}")
+    print(f"len={d.len()}")

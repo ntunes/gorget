@@ -727,6 +727,147 @@ static inline void* gorget_map_remove_opt(GorgetMap* m, const void* key) {
     return NULL;
 }
 
+// D39 Phase A.3: O(1) `swap_remove` for the dense-index-map layout.
+//
+// swap_remove locates the entries[] slot for `key`; if the slot is the LAST
+// live entry, drops-and-pops; otherwise moves the last entry's key+value bytes
+// into the freed slot, rewrites the SWAPPED entry's indices[] slot to point
+// at its new position, tombstones the removed key's indices[] slot (-2, same
+// protocol as `gorget_map_remove`), and decrements entries_len + count.
+//
+// Order-DESTROYING (unlike `gorget_map_remove`, which is O(n) shift). Callers
+// opt in at the method name (`Dict.swap_remove` / `Set.swap_remove`).
+//
+// Returns true iff the key was present.
+static inline bool gorget_map_swap_remove(GorgetMap* m, const void* key) {
+    if (m->entries_keys) {
+        if (m->entries_cap == 0) return false;
+        size_t indices_cap = 2 * m->entries_cap;
+        size_t mask = indices_cap - 1;
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h & mask);
+        for (;;) {
+            int32_t ei = m->indices[idx];
+            if (ei == -1) return false;
+            if (ei == -2) { idx = (idx + 1) & mask; continue; }
+            if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
+                size_t entries_i = (size_t)ei;
+                size_t last_i = m->entries_len - 1;
+                // Drop the removed slot's value and key.
+                if (m->val_drop && m->entries_values) {
+                    m->val_drop((char*)m->entries_values + entries_i * m->val_size);
+                }
+                if (m->key_drop) {
+                    m->key_drop((char*)m->entries_keys + entries_i * m->key_size);
+                }
+                if (entries_i != last_i) {
+                    // Swap the LAST entry's key+value bytes into the freed slot.
+                    memcpy((char*)m->entries_keys + entries_i * m->key_size,
+                           (char*)m->entries_keys + last_i * m->key_size,
+                           m->key_size);
+                    if (m->entries_values) {
+                        memcpy((char*)m->entries_values + entries_i * m->val_size,
+                               (char*)m->entries_values + last_i * m->val_size,
+                               m->val_size);
+                    }
+                    // Rewrite the SWAPPED entry's indices[] slot to point at
+                    // its new position (entries_i). Walk the probe chain for
+                    // the swapped key; the slot currently holds `last_i`.
+                    for (size_t j = 0; j < indices_cap; j++) {
+                        if (m->indices[j] == (int32_t)last_i) {
+                            m->indices[j] = (int32_t)entries_i;
+                            break;
+                        }
+                    }
+                }
+                m->entries_len--;
+                m->count--;
+                // Tombstone (-2) so probe chains that ran PAST this slot when
+                // the removed key was live still continue to their target.
+                // Same protocol as gorget_map_remove.
+                m->indices[idx] = -2;
+                return true;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+    // Legacy sparse-buckets path (present when dense mode never activated for
+    // this map — e.g. a HashMap ctor). Delegates to gorget_map_remove: the
+    // sparse path is unordered so remove and swap_remove are semantically
+    // equivalent (both tombstone the slot).
+    return gorget_map_remove(m, key);
+}
+
+// D39 Phase A.3: O(1) swap_remove_opt — mirrors gorget_map_swap_remove but
+// transfers the value bytes to a thread-local buffer for Option[V] return
+// before the swap. Ownership of the returned value transfers to the caller
+// (no val_drop on the removed slot). Pointer validity: until the next
+// gorget_map_swap_remove_opt / gorget_map_remove_opt call on this thread.
+static inline void* gorget_map_swap_remove_opt(GorgetMap* m, const void* key) {
+    static _Thread_local char __map_swap_remove_buf[4096];
+    static _Thread_local char* __map_swap_remove_heap = NULL;
+    static _Thread_local size_t __map_swap_remove_heap_cap = 0;
+    if (m->entries_keys) {
+        if (m->entries_cap == 0) return NULL;
+        size_t indices_cap = 2 * m->entries_cap;
+        size_t mask = indices_cap - 1;
+        uint64_t h = __GORGET_MAP_HASH(m, key);
+        size_t idx = (size_t)(h & mask);
+        for (;;) {
+            int32_t ei = m->indices[idx];
+            if (ei == -1) return NULL;
+            if (ei == -2) { idx = (idx + 1) & mask; continue; }
+            if (ei >= 0 && __GORGET_MAP_EQ_DENSE(m, (size_t)ei, key)) {
+                size_t entries_i = (size_t)ei;
+                size_t last_i = m->entries_len - 1;
+                char* buf;
+                if (m->val_size <= sizeof(__map_swap_remove_buf)) {
+                    buf = __map_swap_remove_buf;
+                } else {
+                    if (m->val_size > __map_swap_remove_heap_cap) {
+                        free(__map_swap_remove_heap);
+                        __map_swap_remove_heap = (char*)malloc(m->val_size);
+                        __map_swap_remove_heap_cap = m->val_size;
+                    }
+                    buf = __map_swap_remove_heap;
+                }
+                // Transfer value to TLS buffer BEFORE the swap overwrites it.
+                if (m->val_size > 0 && m->entries_values) {
+                    memcpy(buf, (char*)m->entries_values + entries_i * m->val_size, m->val_size);
+                }
+                // Drop key; value ownership transfers to caller.
+                if (m->key_drop) {
+                    m->key_drop((char*)m->entries_keys + entries_i * m->key_size);
+                }
+                if (entries_i != last_i) {
+                    memcpy((char*)m->entries_keys + entries_i * m->key_size,
+                           (char*)m->entries_keys + last_i * m->key_size,
+                           m->key_size);
+                    if (m->entries_values) {
+                        memcpy((char*)m->entries_values + entries_i * m->val_size,
+                               (char*)m->entries_values + last_i * m->val_size,
+                               m->val_size);
+                    }
+                    for (size_t j = 0; j < indices_cap; j++) {
+                        if (m->indices[j] == (int32_t)last_i) {
+                            m->indices[j] = (int32_t)entries_i;
+                            break;
+                        }
+                    }
+                }
+                m->entries_len--;
+                m->count--;
+                m->indices[idx] = -2;  // tombstone
+                return m->val_size > 0 ? (void*)buf : (void*)1;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+    // Legacy sparse-buckets path: delegates to gorget_map_remove_opt (sparse
+    // is unordered → semantically equivalent).
+    return gorget_map_remove_opt(m, key);
+}
+
 static inline void gorget_map_clear(GorgetMap* m) {
     // D39 DENSE MODE (dormant in A.2a): drop each live entry, reset entries_len
     // and count, and re-init indices to -1. Retain allocations.

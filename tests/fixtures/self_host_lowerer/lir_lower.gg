@@ -2043,6 +2043,13 @@ String map_dict_method(String method):
             # bool-returning `gorget_map_remove` is NOT used: it cannot back an
             # `Option[V]` binding (`d.remove(k).unwrap()` → garbage).
             return "gorget_map_remove_opt"
+        case "swap_remove":
+            # D39 Phase A.3: `Dict[K,V].swap_remove(k)` → `Option[V]` per DD#6
+            # (mirrors Dict's own `remove` shape). O(1) opt-in, order-destroying:
+            # moves the last entry into the freed slot. Routes to
+            # `gorget_map_swap_remove_opt` for the TLS-buffer Option[V] path,
+            # same shape as `remove` above.
+            return "gorget_map_swap_remove_opt"
         case "len":
             return "gorget_map_len"
         case "keys":
@@ -2071,6 +2078,12 @@ String map_set_method(String method):
             return "gorget_set_contains"
         case "remove":
             return "gorget_set_remove"
+        case "swap_remove":
+            # D39 Phase A.3: `Set[T].swap_remove(elem)` → `bool` per DD#6
+            # (mirror Set's own `remove` shape; DD#6 rejected `void` as a
+            # silent-no-op footgun on key-based receivers). O(1) opt-in,
+            # order-destroying.
+            return "gorget_set_swap_remove"
         case "len":
             return "gorget_set_len"
         case "clone":
@@ -2580,6 +2593,11 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
             return true
         if fn_name == "gorget_map_put" or fn_name == "gorget_map_remove" or fn_name == "gorget_map_remove_opt":
             return true
+        # D39 Phase A.3: swap_remove pair mirrors remove_opt's arg-0-by-ptr
+        # convention (mutating map, self must be a pointer). Rust ABI:
+        # `legacy_self_by_ptr` covers every non-`_new` gorget_map_*.
+        if fn_name == "gorget_map_swap_remove" or fn_name == "gorget_map_swap_remove_opt":
+            return true
         if fn_name == "gorget_map_clear" or fn_name == "gorget_map_free":
             return true
         # `gorget_map_update(void* __dst_ptr, GorgetMap __other)` MUTATES the
@@ -2591,6 +2609,9 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         if fn_name == "gorget_map_update":
             return true
         if fn_name == "gorget_set_add" or fn_name == "gorget_set_remove":
+            return true
+        # D39 Phase A.3: Set.swap_remove mirrors Set.remove — self by ptr.
+        if fn_name == "gorget_set_swap_remove":
             return true
         if fn_name == "gorget_set_clear" or fn_name == "gorget_set_free":
             return true
@@ -2807,11 +2828,17 @@ bool needs_ptr_arg(String fn_name, int arg_idx):
         return true
     if (fn_name == "gorget_map_remove" or fn_name == "gorget_map_remove_opt") and arg_idx == 1:
         return true
+    # D39 Phase A.3: swap_remove pair takes the key by pointer (arg 1),
+    # mirroring the remove_opt convention (`&key`).
+    if (fn_name == "gorget_map_swap_remove" or fn_name == "gorget_map_swap_remove_opt") and arg_idx == 1:
+        return true
     if fn_name == "gorget_set_add" and arg_idx == 1:
         return true
     if fn_name == "gorget_set_contains" and arg_idx == 1:
         return true
     if fn_name == "gorget_set_remove" and arg_idx == 1:
+        return true
+    if fn_name == "gorget_set_swap_remove" and arg_idx == 1:
         return true
     if fn_name == "gorget_channel_send" and arg_idx == 1:
         return true
@@ -2933,7 +2960,7 @@ bool returns_ptr_to_element(String name):
         return true
     if name == "gorget_array_safe_last" or name == "gorget_array_safe_first" or name == "gorget_array_safe_pop":
         return true
-    if name == "gorget_map_remove_opt" or name == "gorget_array_remove_opt":
+    if name == "gorget_map_remove_opt" or name == "gorget_array_remove_opt" or name == "gorget_map_swap_remove_opt":
         return true
     # `gorget_guard_get(g)` returns `g->ptr` — a `void*` AT the guarded data,
     # not the value. A scalar `g.get()` dst slot needs ONE deref (`*(T*)ptr`)
@@ -2958,6 +2985,9 @@ bool is_collection_void_return(String name):
         return true
     if name == "gorget_map_get" or name == "gorget_map_remove_opt":
         return true
+    # D39 Phase A.3: swap_remove_opt returns nullable void* like remove_opt.
+    if name == "gorget_map_swap_remove_opt":
+        return true
     if name == "gorget_heap_pop" or name == "gorget_heap_peek":
         return true
     if name == "gorget_shared_get" or name == "gorget_shared_get_ptr":
@@ -2972,6 +3002,11 @@ bool is_consuming_collection_method(String name):
     if name == "gorget_map_remove" or name == "gorget_map_remove_opt":
         return true
     if name == "gorget_set_remove":
+        return true
+    # D39 Phase A.3: swap_remove pair joins the consuming-method set.
+    if name == "gorget_map_swap_remove" or name == "gorget_map_swap_remove_opt":
+        return true
+    if name == "gorget_set_swap_remove":
         return true
     return false
 

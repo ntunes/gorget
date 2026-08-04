@@ -4968,6 +4968,212 @@ fn dict_remove() {
     );
 }
 
+// D39 Phase A.3: Dict.swap_remove — O(1) opt-in order-destroying counterpart
+// to `remove` (per DD#6 returns Option[V !], mirrors Dict's own remove shape).
+// 10 axis-cell regression fixtures below; each RED-verified against pre-fix.
+#[test]
+fn dict_swap_remove_int() {
+    run_gg(
+        "dict_swap_remove_int.gg",
+        "\
+5
+20
+4
+40
+3
+0
+3
+k=1 v=10
+k=5 v=50
+k=3 v=30",
+    );
+}
+
+#[test]
+fn dict_swap_remove_string() {
+    run_gg(
+        "dict_swap_remove_string.gg",
+        "\
+len=4
+mid=20
+len=3
+last=30
+len=2
+absent_some=0
+k=alpha v=10
+k=delta v=40",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP: SH lane returns None from gorget_map_swap_remove_opt \
+   when Option[V] payload is a resource type (Vector[T], String). Rust gg \
+   (C+LLVM) passes. Symptom: T_UnwrapNone from a swap_remove on a present \
+   key. Root cause is SH's Option[Resource] payload lifting from void*, \
+   filed follow-up in TODO.md; graduate to non-ignored once the SH lift \
+   handles Option[Vector[T]]. Fixture lives at \
+   tests/fixtures/known_gaps/dict_swap_remove_vector_value.gg"]
+fn dict_swap_remove_vector_value() {
+    // Ignored — pinned only as intent; the fixture in known_gaps/ asserts
+    // the CORRECT output (SH is expected to reproduce Rust here).
+}
+
+#[test]
+#[ignore = "KNOWN GAP (sibling of dict_swap_remove_vector_value): SH's \
+   Option[Vector[T]] payload lift is broken; runs correctly on Rust gg. \
+   Fixture: tests/fixtures/known_gaps/dict_swap_remove_nested_resource.gg"]
+fn dict_swap_remove_nested_resource() {
+    // Ignored — see sibling above.
+}
+
+#[test]
+fn dict_swap_remove_empty() {
+    run_gg(
+        "dict_swap_remove_empty.gg",
+        "\
+len=0
+is_none=1
+len=0
+got=700
+len=0
+is_none2=1",
+    );
+}
+
+#[test]
+fn dict_swap_remove_last_entry() {
+    run_gg(
+        "dict_swap_remove_last_entry.gg",
+        "\
+len=1
+got=50
+len=0
+is_empty=1
+got2=30
+len=0",
+    );
+}
+
+#[test]
+fn dict_swap_remove_return_option() {
+    run_gg(
+        "dict_swap_remove_return_option.gg",
+        "\
+hit.is_some=1
+hit.unwrap=90
+miss.is_none=1
+miss.is_some=0
+folded=150",
+    );
+}
+
+#[test]
+fn set_swap_remove_int() {
+    run_gg(
+        "set_swap_remove_int.gg",
+        "\
+5
+1
+4
+1
+3
+0
+1
+0
+1
+0
+1",
+    );
+}
+
+#[test]
+fn set_swap_remove_string() {
+    run_gg(
+        "set_swap_remove_string.gg",
+        "\
+len=4
+mid=1
+len=3
+last=1
+len=2
+absent=0
+alpha_in=1
+beta_in=0
+gamma_in=0
+delta_in=1",
+    );
+}
+
+#[test]
+fn set_swap_remove_return_bool() {
+    run_gg(
+        "set_swap_remove_return_bool.gg",
+        "\
+present=1
+absent=0
+count=2
+empty=1",
+    );
+}
+
+// D39 Phase A.3 benches — mark #[ignore]d; run via
+// `cargo test --test integration --release bench_ -- --ignored --nocapture`
+// for RSS/clone-stats measurements.
+#[test]
+#[ignore]
+fn bench_dict_int_lookup() {
+    run_gg(
+        "bench_dict_int_lookup.gg",
+        "\
+hits=100000
+len=10000",
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_dict_string_lookup() {
+    run_gg(
+        "bench_dict_string_lookup.gg",
+        "\
+hits=20000
+len=5000",
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_set_int_membership() {
+    run_gg(
+        "bench_set_int_membership.gg",
+        "\
+hits=50000
+len=10000",
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_set_string_membership() {
+    run_gg(
+        "bench_set_string_membership.gg",
+        "\
+hits=15000
+len=5000",
+    );
+}
+
+#[test]
+#[ignore]
+fn bench_dict_remove_reinsert() {
+    run_gg(
+        "bench_dict_remove_reinsert.gg",
+        "\
+hits=5000
+len=2000",
+    );
+}
+
 #[test]
 fn default_trait() {
     run_gg(
@@ -26551,7 +26757,7 @@ fn self_host_runtime_diff() {
     // splices the unrolled per-variant body just like Rust's
     // `evaluate_delayed_meta_block`. Also restores the non-MATCH ceiling from
     // 124 back to its Round XXX baseline of 123 (Track A guard).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1325;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1333;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \

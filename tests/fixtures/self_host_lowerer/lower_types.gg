@@ -1893,13 +1893,51 @@ int infer_method_return_type(String method, int recv, LowerCtx ctx, GirModule &g
         return UNIT_TYPE
     if method == "sort" or method == "swap":
         return UNIT_TYPE
-    # `Vector[T].swap_remove(i)` — O(1) removal (moves last into the hole);
-    # void return (runtime `gorget_array_swap_remove`, Rust builtins.rs
-    # `ret_void`). Sibling of swap above. Without this the call falls through
-    # to the I64 default, creating a bogus destination → cc errors "void value
-    # not ignored as it ought to be".
+    # `swap_remove` is receiver-aware per D39 Phase A.3 DD#6 (each type's OWN
+    # `remove` shape wins): Vector/Deque → void (protocol); Set/HashSet → bool;
+    # Dict/HashMap → Option[V] (fall through to the consuming-getter path
+    # below). Mirrors the `remove` arm above (~line 1838).
     if method == "swap_remove":
-        return UNIT_TYPE
+        String swrn_n = ""
+        if recv >= 0 and recv < ctx.locals.len():
+            int swrn_t = ctx.locals.get(recv).unwrap().type_id
+            if swrn_t >= 0 and swrn_t < gmod.type_table.len():
+                GirType swrn_gt0 = gmod.type_table.get(swrn_t).unwrap()
+                match swrn_gt0:
+                    case GtPtr(inner):
+                        swrn_t = inner
+                    case GtMutPtr(inner):
+                        swrn_t = inner
+                    else:
+                        pass
+            if swrn_t >= 0 and swrn_t < gmod.type_table.len():
+                GirType swrn_gt = gmod.type_table.get(swrn_t).unwrap()
+                match swrn_gt:
+                    case GtNamed(rname):
+                        swrn_n = rname
+                    else:
+                        pass
+        match resource_meta_for(&gmod, swrn_n):
+            case Some(swrn_meta):
+                match swrn_meta.collection_kind:
+                    case CkOrderedSet():
+                        return BOOL_TYPE
+                    case CkHashSet():
+                        return BOOL_TYPE
+                    case CkVector():
+                        # Vector protocol: void (matches Rust builtins.rs
+                        # `ret_void`; the swap_remove | swap | fill row).
+                        return UNIT_TYPE
+                    case CkDeque():
+                        return UNIT_TYPE
+                    else:
+                        # CkDict → fall through to the receiver-aware
+                        # Option[V]-minting path below (line ~2425, shared
+                        # with `remove`).
+                        pass
+            case None:
+                # No metadata (e.g., unresolved receiver) — default to void.
+                return UNIT_TYPE
     # Int-returning methods
     if method == "len" or method == "capacity" or method == "find_index":
         return I64_TYPE
@@ -2387,7 +2425,11 @@ int infer_method_return_type(String method, int recv, LowerCtx ctx, GirModule &g
     # didn't type as RTRef (first/last/safe_get have no infer arm); the
     # typed-path (.get()) already produced Option__Ref__T upstream so it never
     # reaches here. Kept for parity/robustness.
-    if method == "get" or method == "first" or method == "last" or method == "safe_get" or method == "pop" or method == "remove":
+    if method == "get" or method == "first" or method == "last" or method == "safe_get" or method == "pop" or method == "remove" or method == "swap_remove":
+        # D39 Phase A.3: `swap_remove` joins the consuming-getter set for
+        # Dict/HashMap (Option[V !] return, same TLS-buffer void* runtime
+        # path). Vector/Deque and Set/HashSet are short-circuited above
+        # (void / bool respectively) — only Dict/HashMap reach this arm.
         bool borrowing_getter = method == "get" or method == "first" or method == "last" or method == "safe_get"
         String recv_name = ""
         if recv >= 0 and recv < ctx.locals.len():

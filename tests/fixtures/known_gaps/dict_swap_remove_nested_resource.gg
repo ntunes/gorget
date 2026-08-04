@@ -1,0 +1,39 @@
+# D39 Phase A.3: Dict[int, Vector[String]].swap_remove — nested resource
+# type (Vector holding owned Strings). Both the outer Vector and its inner
+# String slots must transfer cleanly to the caller with no leaks/double-drops.
+#
+# Axis cell: int key, Vector[String] value; MIDDLE + LAST removals.
+
+void main():
+    Dict[int, Vector[String]] d = Dict[int, Vector[String]]()
+
+    Vector[String] a = Vector[String]()
+    a.push("a1")
+    a.push("a2")
+    d.put(1, a)
+
+    Vector[String] b = Vector[String]()
+    b.push("b1")
+    b.push("b2")
+    b.push("b3")
+    d.put(2, b)
+
+    Vector[String] c = Vector[String]()
+    c.push("c1")
+    d.put(3, c)
+
+    print(f"len={d.len()}")
+
+    # Remove key 2 — get its Vector[String] back.
+    Option[Vector[String]] taken = d.swap_remove(2)
+    Vector[String] out = taken.unwrap()
+    print(f"taken_len={out.len()}")
+    print(f"taken0={out.get(0).unwrap().clone()}")
+    print(f"taken1={out.get(1).unwrap().clone()}")
+    print(f"taken2={out.get(2).unwrap().clone()}")
+
+    print(f"len={d.len()}")
+    for k in d.keys():
+        Option[Vector[String]] gvo = d.get(k)
+        Vector[String] gv = gvo.unwrap().clone()
+        print(f"k={k} first={gv.get(0).unwrap().clone()}")

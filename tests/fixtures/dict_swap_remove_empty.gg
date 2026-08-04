@@ -1,0 +1,30 @@
+# D39 Phase A.3: Dict.swap_remove on an EMPTY dict — must return None,
+# never crash. Guards the entries_cap == 0 early-return in
+# gorget_map_swap_remove_opt.
+
+void main():
+    Dict[int, int] d = Dict[int, int]()
+    print(f"len={d.len()}")
+
+    Option[int] r = d.swap_remove(42)
+    bool r_none = r.is_none()
+    if r_none:
+        print("is_none=1")
+    else:
+        print("is_none=0")
+    print(f"len={d.len()}")
+
+    # Add + swap_remove the only entry — self-move edge case
+    # (entries_i == last_i so no memcpy of last→i is done).
+    d.put(7, 700)
+    Option[int] r2 = d.swap_remove(7)
+    print(f"got={r2.unwrap()}")
+    print(f"len={d.len()}")
+
+    # And now missing again (chain of insert/remove).
+    Option[int] r3 = d.swap_remove(7)
+    bool r3_none = r3.is_none()
+    if r3_none:
+        print("is_none2=1")
+    else:
+        print("is_none2=0")

@@ -1,0 +1,33 @@
+# D39 Phase A.3: Pins the return type of Dict.swap_remove — MUST be
+# Option[V !] (DD#6), not `void` or `bool`. Exercises the two Option
+# combinator sides explicitly (is_some / is_none / unwrap).
+
+void main():
+    Dict[String, int] scores = Dict[String, int]()
+    scores.put("alice", 90)
+    scores.put("bob", 75)
+
+    Option[int] hit = scores.swap_remove("alice")
+    bool hit_some = hit.is_some()
+    if hit_some:
+        print("hit.is_some=1")
+    else:
+        print("hit.is_some=0")
+    print(f"hit.unwrap={hit.unwrap()}")
+
+    Option[int] miss = scores.swap_remove("zorak")
+    bool miss_none = miss.is_none()
+    if miss_none:
+        print("miss.is_none=1")
+    else:
+        print("miss.is_none=0")
+    bool miss_some = miss.is_some()
+    if miss_some:
+        print("miss.is_some=1")
+    else:
+        print("miss.is_some=0")
+
+    # Type contract also observable via chained combinator use.
+    Option[int] hit2 = scores.swap_remove("bob")
+    int folded = hit2.map((int v): v * 2).unwrap_or(-1)
+    print(f"folded={folded}")

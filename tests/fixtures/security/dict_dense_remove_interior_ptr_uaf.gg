@@ -1,0 +1,27 @@
+# D39 Phase A.3 R6 axis: interior-pointer UAF probe on order-preserving
+# `Dict.remove`. Sibling of dict_dense_swap_remove_interior_ptr_uaf: the
+# order-preserving `remove` runs an O(n) shift-down instead of a swap-out,
+# but ANY interior pointer we held into `entries_values[]` past the removed
+# slot is stale afterwards, and everything after it moves.
+#
+# Attack: `&d.get("k1")` (interior pointer into entries_values[0]) then
+# `d.remove("k2")` shifts entries[2..] down by 1. If we didn't `.clone()`
+# first ASan should trip.
+#
+# Under D39 Phase A the safety pass sees `remove` as
+# `is_mutating: true` in the SET/DICT protocol and rejects the interior
+# alias at check time before the shift even runs — same class as
+# `sec_14_dict_borrow_mutate` (attack_14).
+#
+# Expected: build+run clean, ASan clean, prints the cloned value and the
+# removed one.
+
+void main():
+    Dict[String, String] d = {"k1": "v1_padding_padding_padding_padding_padding",
+                              "k2": "v2_padding_padding_padding_padding_padding",
+                              "k3": "v3_padding_padding_padding_padding_padding",
+                              "k4": "v4_padding_padding_padding_padding_padding"}
+    String v = d.get("k1").unwrap().clone()
+    Option[String] taken = d.remove("k2")
+    print(v)
+    print(taken.unwrap())
