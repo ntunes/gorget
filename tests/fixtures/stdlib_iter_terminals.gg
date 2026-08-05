@@ -94,21 +94,14 @@ int main():
         case None:
             print("empty_min=none")
 
-    # any / all / count / sum / fold via method form.
-    # NOTE: bind to locals first — f-string interpolation re-parses
-    # the segment text at IR-lowering time, bypassing the typecheck-
-    # side AST rewriter that syncs inferred method-targs into the AST.
-    # Inlining `v.iter().any(p)` inside `f"…={…}"` would link-fail
-    # against the un-mangled `VectorIter__T__any` symbol.
-    bool any_gt5 = v.iter().any(gt_five)
-    bool all_gt5 = v.iter().all(gt_five)
-    int count_v = v.iter().count()
-    int fold_v = v.iter().fold(0, add)
-    int sum_v = v.iter().sum()
-    print(f"any_gt5={any_gt5}")
-    print(f"all_gt5={all_gt5}")
-    print(f"count={count_v}")
-    print(f"sum={sum_v}")
-    print(f"fold={fold_v}")
+    # any / all / count / sum / fold via method form, called INLINE inside the
+    # interpolation. This shape once had to be bound to locals first; it is
+    # exercised directly now so a regression in interpolated method-generic
+    # inference shows up here rather than passing silently.
+    print(f"any_gt5={v.iter().any(gt_five)}")
+    print(f"all_gt5={v.iter().all(gt_five)}")
+    print(f"count={v.iter().count()}")
+    print(f"sum={v.iter().sum()}")
+    print(f"fold={v.iter().fold(0, add)}")
 
     return 0

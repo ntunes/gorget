@@ -2558,35 +2558,20 @@ fn monomorphize_enum(
         "Result" => Some(EnumCategory::Result),
         _ => None,
     };
-    // Tier 1c: compute drop metadata at construction for USER
-    // generic enums. Option/Result skip the helper here —
-    // upgrading them surfaces 17 runtime regressions in Option/Result
-    // combinator fixtures (e.g., result_map.gg's map_err: a buffer
-    // overread when a cross-type adapter result is byte-copied into a
-    // wrongly-sized destination slot). The lowering's type inference
-    // at the cross-type adapter result site needs to propagate the
-    // NEW Result type (e.g., Result__int__int from map_err) to the
-    // VarDecl's destination local — currently the dst local is
-    // allocated with the OLD type. See
-    // `docs/devbook/17-c-backend.md` (the Tier 1c cross-type adapter bug).
+    // Tier 1c: drop metadata is computed at construction for every generic
+    // enum, Option/Result included — the carve-out that once skipped them is
+    // gone, which is why this call is unconditional.
     //
-    // After view-awareness was added to `validate_resource_moves`
-    // (2026-05-11, this commit), the GIR-level validator probe shows
-    // ONLY 2 genuine violations across the full suite when the
-    // carve-out is removed — the other 15,632 prior "violations"
-    // were SELF-HOST validator output (pre-existing Phase C
-    // burn-down baseline, ~89k), not Rust validator output.
-    // So Cluster 1 is far more tractable than initial estimates:
-    // ~2 GIR violations + 17 runtime regressions = days of work,
-    // not weeks.
+    // Most types are already covered before reaching here: the post-hoc
+    // `upgrade_types_from_fields` runs earlier for non-monomorphic types, and
+    // `make_option_type_def` / `make_result_type_def` cover the AST
+    // pre-registration paths via `wrapper_metadata_for_payloads`. What this
+    // call catches is the rare case where `monomorphize_enum` sees the type
+    // first.
     //
-    // The post-hoc `upgrade_types_from_fields` runs before this pass
-    // for non-monomorphic types, and Snag #27's
-    // `make_option_type_def`/`make_result_type_def` cover the AST
-    // pre-registration paths via `wrapper_metadata_for_payloads`.
-    // Only the rare `monomorphize_enum`-first-sees-it case is left
-    // stale here.
-    // Tier 1c burn-down in progress — carve-out removed.
+    // The cross-type adapter shape this interacts with (a `map_err` result
+    // byte-copied into a wrongly-sized destination slot) is documented in
+    // `docs/devbook/17-c-backend.md`.
     let (drop_strategy, copy_semantics) = registry.compute_drop_strategy_for_enum(&variants);
     let metadata = TypeMetadata {
         enum_category,

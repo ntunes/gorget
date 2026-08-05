@@ -153,10 +153,9 @@ impl SynthPool {
     /// keys from both elements per compare and branches on `K`'s natural
     /// ordering.
     ///
-    /// Scalar keys only (K is not aggregate) — if K is a struct (e.g.
-    /// `Str`), this returns `None` via the emit-time guard in
-    /// `try_emit_vector_each_hof`, and the call falls through to the TLS
-    /// trampoline until a follow-up commit adds aggregate-key support.
+    /// Handles scalar AND aggregate keys. Comparison is chosen by `K`: a
+    /// direct `Cmp Le` for scalars, `gorget_str_cmp` for `Str`/`GorgetString`,
+    /// and `memcmp` over `sizeof(K)` for any other struct key.
     pub fn get_or_emit_sort_by_key_impl(
         &mut self,
         structs: &[StructDef],
