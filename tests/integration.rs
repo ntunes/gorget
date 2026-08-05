@@ -41326,6 +41326,42 @@ fn guard_get_dict_no_leak() {
     run_gg("guard_get_dict_no_leak.gg", "1");
 }
 
+// ── DESTINATION-axis cells for `Guard.get()` (added 2026-08-05) ────────────
+// 1d892511 fixed the Rust lane for `return` and ctor-field and shipped with
+// ZERO coverage for either — the same shape as the five-month &-write-through
+// regression (Core #12). These three close that hole and pin the self-host
+// side of the View tag. All three RED-verified on the SELF-HOST lane against
+// a pre-fix self-host compiler: exit 134, `free(): double free detected in
+// tcache 2`. A `cargo test` RED-verify would have been green before AND after,
+// because the Rust lane was already fixed.
+//
+// NOTE the two DEFECT cells of this axis are deliberately NOT here: the temp
+// forms `sink.push(g.get())` (check-time consume-site panic) and
+// `d.put("k", g.get())` (runtime double-free on BOTH backends) live in
+// known_gaps/ asserting intended behaviour. The discriminator is TEMP vs
+// NAMED LOCAL, not the destination.
+
+/// Destination cell: `return g.get()`.
+#[test]
+fn guard_get_return_no_leak() {
+    run_gg("guard_get_return_no_leak.gg", "hello world-forced");
+}
+
+/// Destination cell: ctor field, `Holder(g.get())`.
+#[test]
+fn guard_get_ctor_field_no_leak() {
+    run_gg("guard_get_ctor_field_no_leak.gg", "hello world-forced");
+}
+
+/// Inner-type cell: a USER STRUCT with a droppable field. Reaches droppability
+/// through `gmod.resource_types` rather than `resource_meta_for` — the other
+/// arm of lower_drops.gg's join, so it is a genuinely different channel from
+/// the String/Vector/Dict inners the other fixtures sample.
+#[test]
+fn guard_get_user_struct_no_leak() {
+    run_gg("guard_get_user_struct_no_leak.gg", "hello world-forced");
+}
+
 /// Track J sibling: `ReadGuard[String].get()` — same class as
 /// `Guard.get`, uniform fix (routing intercept fires on all three guard
 /// families via `guard_of` typed metadata).

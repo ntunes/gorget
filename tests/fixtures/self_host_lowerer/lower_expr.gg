@@ -5020,6 +5020,19 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if ctx.cow_lazy_members.len() > 0:
                     if cow_lazy_join_view_result(&ctx, recv, mdst, ret_tid):
                         register_lazy_slot_for_drop(&ctx, mdst, ret_tid)
+            elif mname == "get" and margs.len() == 0 and is_guard_struct_type(recv_type_name, &gmod):
+                # Guard/ReadGuard/WriteGuard `.get()` returns a pointer INTO the
+                # mutex-owned payload, so the loaded value is a VIEW, not an
+                # owned value. Tagging LoView does two things that both matter:
+                # drop-insertion skips it (lower_drops.gg — `case LoView(): return`),
+                # so we no longer free a buffer the mutex still owns; and
+                # op_consume materializes it with OpClone at an owning consume
+                # position instead of moving the shallow alias in.
+                # Mirrors Rust's emit_guard_get_ptr + set_view_of
+                # (src/ir/lowering/exprs/methods.rs). The arity guard mirrors
+                # Rust's `args.is_empty()` — a `get(k)` on a user type must not
+                # be caught here.
+                mdst = add_local_with(&ctx, ret_tid, None, LoView(), BoRuntimeView(recv))
             else:
                 mdst = add_local(&ctx, ret_tid, None)
             # FRESH-OWNED-TEMP drop registration (#19, sibling of #17 at the

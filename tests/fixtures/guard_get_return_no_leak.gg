@@ -1,0 +1,40 @@
+# DESTINATION-AXIS coverage — `return g.get()`.
+#
+# The Rust lane fixed this cell in 1d892511 (2026-07-28) and shipped ZERO
+# coverage for it; this fixture closes that hole, and the self-host lane
+# double-freed here until `Guard.get()` was tagged a View at the SH mint site.
+#
+# The mutex is a LOCAL of `take()`, so it is dropped at `take()`'s scope exit.
+# `g.get()` yields a view INTO the mutex-owned buffer, so the return position
+# MUST clone: handing the caller a shallow Str header that aliases a buffer the
+# mutex is about to free is a use-after-free, and dropping both is a
+# double-free.
+#
+# SCOPE — exactly one cell of each axis:
+#   destination  = RETURN (siblings: assign / ctor-field / put / push)
+#   root shape   = LOCAL mutex (NOT a `&`-param mutex: that root is a filed,
+#                  separate defect -- see known_gaps/
+#                  mutex_amp_param_lost_writes_and_segv.gg -- and putting it
+#                  here would make this fixture fail for an unrelated reason)
+#   inner type   = String (siblings: Vector / Dict / user struct / Box)
+#   guard family = Guard (siblings: ReadGuard / WriteGuard)
+#
+# RED-VERIFIED on the SELF-HOST lane: built with the pre-fix self-host
+# compiler (`GG_IMPL=selfhost scripts/gg_impl.sh`) the binary aborts with
+# `free(): double free detected in tcache 2`, exit 134. A `cargo test`
+# RED-verify would be green before AND after -- the Rust lane was already
+# fixed -- which is exactly the coverage-shaped-nothing Core #12 forbids.
+#
+# HEAP-FORCED VALUE (never a literal -- a rodata String has cap=0, so
+# `gorget_string_free` short-circuits and the bug reads as absent).
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+String take():
+    Mutex[String] m = Mutex[String](heaped())
+    Guard[String] g = m.lock()
+    return g.get()
+
+void main():
+    print(take())

@@ -1,0 +1,37 @@
+# DESTINATION-AXIS coverage — `Holder(g.get())`, a CONSTRUCTOR FIELD position.
+#
+# Constructor / struct-field init is an OWNING destination (AGENTS.md,
+# "Ownership at Consuming Positions"), so a view source must be cloned there.
+# The Rust lane fixed this cell in 1d892511 (2026-07-28) with ZERO coverage;
+# this fixture closes that hole, and the self-host lane double-freed here until
+# `Guard.get()` was tagged a View at the SH mint site.
+#
+# `h` and `m` are both live to end of scope, so a missing clone gives the
+# Holder a shallow Str header aliasing the mutex-owned buffer and BOTH free it.
+#
+# SCOPE — exactly one cell of each axis:
+#   destination  = CTOR FIELD (siblings: assign / return / put / push)
+#   root shape   = LOCAL mutex (the `&`-param root is a separate filed defect,
+#                  known_gaps/mutex_amp_param_lost_writes_and_segv.gg)
+#   inner type   = String (siblings: Vector / Dict / user struct / Box)
+#   guard family = Guard (siblings: ReadGuard / WriteGuard)
+#
+# RED-VERIFIED on the SELF-HOST lane: built with the pre-fix self-host
+# compiler (`GG_IMPL=selfhost scripts/gg_impl.sh`) the binary aborts with
+# `free(): double free detected in tcache 2`, exit 134. The Rust lane was
+# already fixed, so a `cargo test` RED-verify would be green before AND after.
+#
+# HEAP-FORCED VALUE (never a literal -- a rodata String has cap=0, so
+# `gorget_string_free` short-circuits and the bug reads as absent).
+
+struct Holder:
+    String s
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    Mutex[String] m = Mutex[String](heaped())
+    Guard[String] g = m.lock()
+    Holder h = Holder(g.get())
+    print(h.s)
