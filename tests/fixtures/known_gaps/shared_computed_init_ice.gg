@@ -15,10 +15,13 @@
 #
 # INTENDED: `ab`, exit 0.
 #
-# THE TRIGGER IS A *COMPUTED* INITIALIZER, and that is why no existing fixture
-# catches it. Measured 2026-08-05:
-#     shared String s = "a" + "b"    <-- ICE   (computed / heap)
-#     shared String s = "hello"      <-- exit 0 (rodata literal, cap=0)
+# THE TRIGGER IS **DROPPABLE INNER x COMPUTED INITIALIZER**. Both axes measured
+# 2026-08-05, and neither `async` nor `spawn` nor `&` is required -- the repro
+# above is a plain `void main()`, minimized from an earlier over-specified
+# `async` form:
+#     shared String s = "a" + "b"    <-- ICE 101  (droppable + computed)
+#     shared String s = "hello"      <-- exit 0   (rodata literal, cap=0)
+#     shared int    n = 1 + 2        <-- exit 0   (scalar inner, computed)
 # Every `shared` fixture in the corpus uses the literal form. Core #12
 # axis-incompleteness on the INITIALIZER axis: one value sampled, and it is
 # the one that happens to work.
@@ -31,6 +34,6 @@
 #
 # Graduate out of known_gaps/ (un-ignore + move) the round this is fixed.
 
-async void main():
+void main():
     shared String s = "a" + "b"
     print(s)
