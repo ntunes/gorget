@@ -58,6 +58,8 @@ instead; the file survives only until its pending fold/repoint work lands.
 | [layering-discipline.md](layering-discipline.md) | [devbook/24 — Layering discipline](../devbook/24-layering-discipline.md) |
 | [shared-keyword-design.md](shared-keyword-design.md) | [devbook/10 — Ownership & safety](../devbook/10-ownership-safety.md) |
 | [method-level-inference.md](method-level-inference.md) | [devbook/09 — Type checking](../devbook/09-type-checking.md) |
+| [meta.md](meta.md) | [devbook/06 — Meta & derive](../devbook/06-meta-derive.md) |
+| [lir-backend-lift-plan.md](lir-backend-lift-plan.md) | [devbook/16 — BIR](../devbook/16-bir.md) |
 
 ### Mixed — partly superseded, partly unbuilt
 
@@ -69,9 +71,7 @@ shipped half folds into the named chapter, the unbuilt half stays here.
 | [unified-resource-model.md](unified-resource-model.md) | devbook [12](../devbook/12-gir-lowering.md) / [13](../devbook/13-ownership-in-ir.md) / [14](../devbook/14-lir-ssa.md) / [15](../devbook/15-drop-elaboration.md) / [18](../devbook/18-runtime-abi.md) / [25](../devbook/25-structural-guards.md) | Phase B (deferred view/owner discrimination); the `SlotProvenance` unified-enum ruling; contract-evolution discipline; four open design questions |
 | [lir-design.md](lir-design.md) | [devbook/14 — LIR & SSA](../devbook/14-lir-ssa.md) | The WASM backend design (Relooper/Stackifier, slots→locals vs linear memory); the IR research base (why not Sea of Nodes / MLIR dialects) |
 | [llvm-backend-plan.md](llvm-backend-plan.md) | [devbook/19 — The LLVM backend](../devbook/19-llvm-backend.md) | WASM via `--target=wasm32` — a second, distinct route from `lir-design.md`'s |
-| [lir-backend-lift-plan.md](lir-backend-lift-plan.md) | [devbook/16 — BIR](../devbook/16-bir.md) | Why-not records (MLIR dialects, Sea of Nodes, stack bytecode); the "why BIR" naming rationale |
-| [stdlib-design.md](stdlib-design.md) | [devbook/23 — The stdlib](../devbook/23-stdlib.md) | The six iterator algebraic laws (property-test targets); the `spawn unchecked` discipline rules |
-| [meta.md](meta.md) | [devbook/06 — Meta & derive](../devbook/06-meta-derive.md) | Why `[]` type application over parens; diamond inference |
+| [stdlib-design.md](stdlib-design.md) | [devbook/23 — The stdlib](../devbook/23-stdlib.md) | The `spawn unchecked` discipline rules (per-spawn opt-out, no implicit propagation, document-why) |
 
 ## Conventions
 

@@ -176,6 +176,27 @@ which recognises primitive keywords and falls back to a named user type). This
 is how `meta type Word = sized_int(arch_word_bits())` resolves to a concrete
 integer type at compile time.
 
+### Why type application keeps its own brackets
+
+Because `meta type` makes types first-class compile-time values, it is tempting
+to conclude that type arguments and value arguments should share one set of
+parentheses. They deliberately do not. Collapsing them makes the boundary
+unreadable at exactly the sites where it matters most:
+
+```
+# Hypothetical — types in parens alongside values
+Vector(int) items = Vector(int)()   # two paren groups, neither self-evident
+Pair(int, String, 10, "hello")      # where do the types stop?
+max(int, 3, 5)                      # is `int` a type, or a variable named int?
+```
+
+Parentheses already mean "constructor or call arguments". Square brackets carry
+the separate job of marking type application, and every language that keeps the
+distinction — Scala's `[]`, the `<>` of C++/Kotlin/TypeScript — keeps it for
+readability, not tradition. So `[]` stays: the `meta type` system **complements**
+generics rather than replacing them, and a `meta type` alias resolves to an
+ordinary type that is then applied with the ordinary bracket syntax.
+
 ## The `field_value` / `field_set` / `make_variant` rewrites
 
 These are **compile-time AST rewrites**, not runtime functions. They let

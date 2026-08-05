@@ -48,6 +48,30 @@ mutate module-level metadata (see [Pipeline placement](#pipeline-placement));
 `into_lir()` (`mod.rs:98`) unwraps and is documented "use sparingly — the whole
 point of the newtype is to preserve the invariant."
 
+### The shapes this layer deliberately is not
+
+Four alternatives were weighed and set aside, recorded here so they are not
+re-proposed on their surface appeal:
+
+- **MLIR-style dialects.** Gorget is one language, not a compiler framework;
+  dialect infrastructure buys extensibility the project has no use for.
+- **Sea of Nodes.** V8 abandoned it — harder to debug, slower to compile, and
+  it discards the block structure the backends and the validators rely on.
+- **Stack-based bytecode.** The targets are LLVM and native code, not a VM.
+- **Same-datatype phases policed by runtime validators (the SIL model).** This
+  works for teams with the headcount to maintain deep invariant-checking
+  infrastructure. Here, a type-level error is dramatically cheaper than a
+  runtime validator error — which is exactly why BIR is a newtype whose
+  *construction* proves the invariant, rather than a flag on `LirModule` that a
+  pass is trusted to check.
+
+The name follows the same logic. "BIR" describes a **role** — this is what
+backends eat — rather than its content, so adding a stage beneath it later
+(a machine-specific IR, say) would not shift its meaning. The alternatives all
+collided with established names or described content that could drift: `CIR`
+(overloaded with GHC's Core), `MIR` (rustc), `TIR` (Zig), `PIR` (Parrot), plus
+`EIR` and `FIR`, whose expansions are ambiguous.
+
 ## The canonical ops
 
 A *canonical op* is a high-level `Inst` variant that LIR is allowed to carry but

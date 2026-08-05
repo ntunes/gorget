@@ -412,6 +412,26 @@ populated by the pass that computes it (exactly the shape of `box_inner_type`).
 The discipline is not "everything must be known up front"; it is "once known, it
 propagates as a typed field."
 
+*"This makes the structs bigger."* It does. Carrying full ownership state on a
+`Local` costs on the order of a couple of machine words over a bare
+`type_id + name_hint` — compile-time only, with no runtime footprint. The
+trade is decisively worth it because the two costs are of different kinds: the
+memory cost is **bounded**, linear in IR size, while the cost of fragmentation
+is **unbounded** — every new resource type or builtin is another chance to
+silently miss a sidecar that nobody remembered to update.
+
+*"This makes lowering more verbose."* Slightly, since each lowering site must
+populate every invariant. But the verbosity lands at the source-of-truth site,
+which is exactly where the context needed to populate it correctly already
+exists. Paying it once at the writer is far cheaper than reverse-engineering
+the same fact at every consumer — which is the read-side complexity the
+debugging heuristic above teaches you to distrust.
+
+*"What about layer-bridging concerns like spans?"* Spans are an invariant too —
+every IR node has a source location, modulo compiler-generated nodes — and they
+already propagate this way, through `BasicBlock.span_map` (`src/lir/ssa.rs:189`).
+Same pattern, no exception needed.
+
 ## In the self-host
 
 Not applicable as a *standalone* subsystem: layering discipline is a contract
