@@ -3142,7 +3142,7 @@ impl<'a> LoweringContext<'a> {
     /// Tag `local` as the source for element `index` of tuple temp `tuple`.
     /// Recorded at `Inst::TupleInit` emission so the return path can
     /// MoveZero element sources when the tuple is returned. Replaces the
-    /// `tuple_element_locals` sidecar — see unified-resource-model.md §6.3.
+    /// `tuple_element_locals` sidecar — see `docs/devbook/13-ownership-in-ir.md` (BorrowOrigin).
     ///
     /// Self-host snag #6: do NOT clobber an existing Owned / FreshOwned /
     /// SharedHeap state. If the element local owned its data at TupleInit
@@ -4466,7 +4466,7 @@ impl<'a> LoweringContext<'a> {
     pub fn ensure_option_type_registered(&mut self, option_name: &str, inner_type: TypeId) {
         use super::types::make_option_type_def;
         use crate::ir::types::GirType;
-        // Coherence-at-construction (Tier 1c, structural-guards.md):
+        // Coherence-at-construction (Tier 1c, `docs/devbook/25-structural-guards.md`):
         // make_option_type_def now reads the inner type's drop status from
         // the registry and writes Recursive + Resource into the wrapper's
         // metadata directly, so the post-hoc fix-up that lived here is no

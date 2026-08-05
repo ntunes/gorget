@@ -35,7 +35,7 @@ impl std::fmt::Display for LirError {
 /// The SSA invariants are required post-`construct_ssa`; the critical-edge
 /// invariant is also required pre-SSA so `construct_ssa` (Braun et al.)
 /// and a future WASM backend (structured CFG) both have what they need.
-/// See unified-resource-model.md Tier E §8.2.
+/// See `docs/devbook/25-structural-guards.md` (the CFG/SSA tier).
 pub fn validate_module(module: &LirModule) -> Vec<LirError> {
     let mut errors = Vec::new();
 
@@ -63,7 +63,7 @@ pub type ValidatorFn = fn(&LirModule) -> Vec<LirError>;
 /// `assert_module_valid` is active (debug builds or `GG_VALIDATE_PASSES` set).
 ///
 /// Adding a new shape invariant: append a `fn(&LirModule) -> Vec<LirError>`
-/// here. Phase C's `validate_resource_moves` (§5.8 of unified-resource-model.md)
+/// here. Phase C's `validate_resource_moves` (`docs/devbook/13-ownership-in-ir.md`)
 /// plugs in via this exact registry — same shape, same per-pass invocation.
 ///
 /// Tier 1d (`validate_box_inner_type`): every regular Box StructDef must carry
@@ -107,7 +107,7 @@ const VALIDATORS: &[ValidatorFn] = &[validate_module, validate_box_inner_type, v
 /// integration runs opt in to catching shape regressions without paying the
 /// cost on the default release path.
 ///
-/// See unified-resource-model.md §8.3 (Tier E).
+/// See `docs/devbook/14-lir-ssa.md` (validator after every pass).
 #[inline]
 pub fn assert_module_valid(module: &LirModule, after: &str) {
     // The fast path is "debug build, no allocation" — but we still want
@@ -765,7 +765,7 @@ pub fn validate_ssa_dominance(func: &LirFunction) -> Vec<LirError> {
 /// must carry typed `box_inner_type: Some(<T>)` metadata.
 ///
 /// Recognition step (registrar boundary — name pattern is the legitimate
-/// allowlisted use per layering-discipline.md / structural-guards.md Tier 3a):
+/// allowlisted use per `docs/devbook/24-layering-discipline.md` / `docs/devbook/25-structural-guards.md` Tier 3a):
 /// a "regular Box" is a `StructDef` whose name starts with `Box__` AND has the
 /// single-pointer `_0` field shape produced by `lir/lower/mod.rs:790` (the
 /// `is_regular_box` registration site). Trait boxes (`Box[dyn Trait]`) share

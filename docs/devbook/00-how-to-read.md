@@ -117,9 +117,9 @@ caught, because the check runs on every sentence, not against a list.
 Why so aggressive? Because a "which docs are stale" list is itself a piece of
 hand-maintained state whose completeness is load-bearing and drift-prone — the
 exact anti-pattern this book exists to fight. The universal check is *"re-verify;
-most will pass"*, not *"rewrite everything"*: of the planning audit, for
-example, `safety-checker.md` verified clean while several others were flagged
-IMPL-AHEAD (`devbook_plan.md:30` (devbook plan — git history)).
+most will pass"*, not *"rewrite everything"*: in the planning audit, some
+deep-dives verified clean on re-reading while others were flagged
+IMPL-AHEAD — described behaviour the implementation had already moved past.
 
 ### The honesty gate
 

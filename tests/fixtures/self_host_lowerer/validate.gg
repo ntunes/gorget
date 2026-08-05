@@ -6,7 +6,7 @@
 # get called by `driver.gg` immediately after `lower_module`, gated on
 # per-validator `GG_VALIDATE_<NAME>=<log-path>` env vars.
 #
-# Migration framework (mirror of `structural-guards.md`):
+# Migration framework (mirror of `docs/devbook/25-structural-guards.md`):
 #   1. Write the validator.
 #   2. Gate behind `GG_VALIDATE_<NAME>` → log per-class counts; build
 #      doesn't panic.
@@ -277,7 +277,7 @@ void check_call_args(String callee, Vector[Operand] args, GirFunction func, GirM
 #     behaviour; when Phase 5 codegen lands real OpClone/OpMove
 #     emission, the labels become the contract.
 #
-# Per `structural-guards.md`'s framework step 5, once a class hits
+# Per `docs/devbook/25-structural-guards.md`'s framework step 5, once a class hits
 # zero it's promoted to fatal: the env gate is removed and the build
 # halts on the first violation. All three run unconditionally below.
 #

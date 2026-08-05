@@ -398,6 +398,27 @@ the diagnostic can suggest a `shared` declaration. `check_spawn_closure_captures
 emits `SpawnClosureCaptureShared`, `SpawnClosureCaptureBorrowed`, and
 `SpawnClosureCaptureMutable` per offending capture.
 
+The opt-out exists because the check is necessarily conservative: a programmer
+who has already synchronized access by hand — a hand-rolled mutex, an external
+lock, a lock-free scheme, a single-reader/single-writer invariant, or a task
+pinned to a thread — has discharged the obligation in a way the compiler cannot
+see. `shared` is the right answer nearly always; `unchecked` exists so that
+specialised code (async runtimes, lock-free structures, pinned workers, FFI
+callbacks) need not contort its types to satisfy a check it has already met.
+
+Three properties make that escape hatch reviewable rather than corrosive:
+
+- **It is per-spawn, never per-function or per-module.** The opt-out attaches to
+  one spawn site, so it stays local, greppable, and visible in review. There is
+  deliberately no file-level or project-level switch.
+- **It does not propagate.** A function called from an `unchecked` spawn does
+  not inherit the exemption; if that function spawns internally without
+  `shared`, the inner spawn needs its own `unchecked`. The suppression covers
+  exactly the capture checks at the site that wrote it.
+- **It shifts a proof obligation onto the author.** Reaching for `unchecked`
+  means taking responsibility for a correctness property the compiler cannot
+  verify, so the site should say which invariant discharges it.
+
 ### Mutable-capture aliasing
 
 `mut_captured_vars` / `mut_capture_owners` (`mod.rs:351-359`) track variables mutably

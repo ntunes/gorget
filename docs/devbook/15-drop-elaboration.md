@@ -4,7 +4,7 @@ Drop elaboration is the LIR pass that turns conservatively-emitted, always-condi
 
 ## Why the pass exists
 
-The conditional guard is materialized in two layers. The GIR drop accountant (`src/ir/lowering/drops.rs`) emits every resource-typed scope-exit drop as an **unconditional `DropIfAlive`** — it never decides statically whether the slot still owns a value, because the GIR-level `maybe_moved` analysis is *not* a sound CFG-aware move analysis (see `structural-guards.md` and `unified-resource-model.md` §8.1). The GIR→LIR lowering then turns each `DropIfAlive` into the actual guard shape: `Instruction::DropIfAlive` lowers via `lower_drop(place, bb, /*conditional=*/true)` (`src/lir/lower/insts.rs:1426`), and with `conditional == true` that materializes a `DropGuardOpen { kind: NonZero { size } }` … `DropGuardClose` pair wrapping the `T__drop` call — emitted at `src/lir/lower/drops.rs:142` and several sibling sites, always with `DropGuardKind::NonZero`. This is "defensive by default": GIR always emits the runtime check and lets a real dataflow pass downstream remove it.
+The conditional guard is materialized in two layers. The GIR drop accountant (`src/ir/lowering/drops.rs`) emits every resource-typed scope-exit drop as an **unconditional `DropIfAlive`** — it never decides statically whether the slot still owns a value, because the GIR-level `maybe_moved` analysis is *not* a sound CFG-aware move analysis (see `docs/devbook/25-structural-guards.md`). The GIR→LIR lowering then turns each `DropIfAlive` into the actual guard shape: `Instruction::DropIfAlive` lowers via `lower_drop(place, bb, /*conditional=*/true)` (`src/lir/lower/insts.rs:1426`), and with `conditional == true` that materializes a `DropGuardOpen { kind: NonZero { size } }` … `DropGuardClose` pair wrapping the `T__drop` call — emitted at `src/lir/lower/drops.rs:142` and several sibling sites, always with `DropGuardKind::NonZero`. This is "defensive by default": GIR always emits the runtime check and lets a real dataflow pass downstream remove it.
 
 The runtime check is not free. The C backend lowers `NonZero { size }` to an inline `memcmp` against a zeroed stack buffer (`src/backend/c_lir/mod.rs:2883`):
 
@@ -249,7 +249,10 @@ ensures the name reaches `module.structs`.
 
 ## The optimizer fixpoint loop
 
-> **Correction to the internals doc.** `unified-resource-model.md` §8.4 (line 761) claims the optimizer "runs three iterations and stops, regardless of whether it would have converged in four." **This is stale.** The current code runs a snapshot/change-counter fixpoint with a generous safety cap, exactly the convergence behavior §8.4 proposed as future work.
+> **The loop converges; it does not run a fixed number of passes.** Older
+> descriptions had the optimizer run three iterations and stop regardless of
+> whether a fourth would have changed anything. The current code runs a
+> snapshot/change-counter fixpoint with a generous safety cap.
 
 `optimize_function` (`src/lir/optimize.rs:104`) iterates the intra-block passes — `fold_constants`, `simplify_algebraic`, CSE, `fold_constant_branches`, `eliminate_dead_blocks`, `merge_linear_blocks`, `eliminate_dead_code`, `propagate_copies` — to a fixpoint. The loop bound is `const MAX_ITERS: usize = 32` (`optimize.rs:110`), a safety cap; the *primary* termination signal is the sum of every pass's "changes made" counter:
 

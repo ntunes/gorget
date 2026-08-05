@@ -273,11 +273,9 @@ terminator targets) and then, for every function, the three CFG/SSA invariants:
 (`src/lir/validate.rs:485`), and `validate_ssa_dominance`
 (`src/lir/validate.rs:605`) — all wired in at `src/lir/validate.rs:50`–`52`.
 
-> **Note on a stale doc claim.** `unified-resource-model.md` §8.2 states the
-> dominance check "exists in debug builds (`ssa.rs:32-36`) but isn't called from
-> `validate_module`." That is now **false** — `validate_ssa_dominance` *is*
-> called from `validate_module` at `src/lir/validate.rs:52` (alongside the
-> critical-edge and reducibility checks, lines 50–51). The §8.2 work shipped.
+> `validate_ssa_dominance` *is* wired into `validate_module` (`src/lir/validate.rs:52`),
+> alongside the critical-edge and reducibility checks on lines 50–51 — it is not a
+> debug-only helper.
 
 Both `check_reducible_cfg` and `validate_ssa_dominance` compute dominators with
 the Cooper-Harvey-Kennedy iterative algorithm over RPO numbering (the two share
@@ -330,12 +328,11 @@ drop elaboration, etc. — to a **fixpoint**: `optimize_function`
 (`src/lir/optimize.rs:104`) loops until an iteration makes no change, with a
 hard cap of `MAX_ITERS = 32` as a safety net (`src/lir/optimize.rs:110`–`131`).
 
-> The fixpoint loop is the *shipped* form of `unified-resource-model.md` §8.4
-> ("optimizer fixpoint"), which described the old behaviour ("runs three
-> iterations and stops"). Re-derive from `optimize.rs`, not the doc.
+> Re-derive the loop's shape from `optimize.rs`. Older descriptions had it run a
+> fixed three iterations and stop; that is not what the code does.
 
 Cross-block passes — global constant propagation, GVN, LICM — are explicitly
-**deferred** (`unified-resource-model.md` §8.5): the LIR optimizer is intra-block
+**deferred**: the LIR optimizer is intra-block
 today, on the reasoning that `clang -O2` (C backend) and LLVM's own optimizer
 (LLVM backend) do most cross-block work downstream. Cross-block LIR optimization
 matters most for WASM, where downstream optimization is weaker, so it is deferred
@@ -350,7 +347,7 @@ until WASM ships. This is a roadmap item, not a chapter fact.
 C/LLVM ABI — it lowers to `void*` / LLVM `ptr` and `CallByRef` is treated
 exactly like `CallPtr` — but it is **semantically distinct** from `Ptr`: it
 references *code*, not *data*, and never aliases data. Two reasons the distinct
-type exists (`unified-resource-model.md` §8.6):
+type exists:
 
 - A future WASM backend can lower `FuncRef` to a **table index** and `CallByRef`
   to `call_indirect`, rather than an opaque indirect-pointer call — WASM has no

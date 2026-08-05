@@ -5,7 +5,7 @@ between the type-checked AST and the SSA-based LIR backend. Lowering is
 the pass that consumes the resolved + type-checked AST and produces a
 `Module` of `Function`s, each a CFG of `BasicBlock`s over a flat
 `Vec<Local>` slot array. This is where the language's *abstractions
-evaporate and its invariants accumulate* (per `layering-discipline.md`):
+evaporate and its invariants accumulate*:
 generics get monomorphized into concrete instances, methods/traits get
 resolved to free functions, closures get lifted into structs + call
 functions, and ownership decisions (drops, moves, clones, borrows) get
@@ -195,9 +195,8 @@ Every `Local` carries a typed `ownership: LocalOwnership` field
 defined at `src/ir/mod.rs:450`). This is the single field that replaced
 a 7-variant `LocalOwnershipState` and a 3-variant `OwnershipState` plus
 roughly six parallel sidecar `FxHashMap`s in the lowering context (the
-consolidation that `unified-resource-model.md` §6 calls "Phase D" — that
-doc proposes it in the future tense; **it shipped**, and the enum at
-`src/ir/mod.rs:450` is the result). The variants:
+consolidation known as **Phase D**; the enum at `src/ir/mod.rs:450` is the
+result). The variants:
 
 - `Untracked` (the `#[default]`) — "no ownership decision recorded yet",
   preserving the legacy "absent from the hashmap" semantics so readers
@@ -222,7 +221,7 @@ doc proposes it in the future tense; **it shipped**, and the enum at
 that lets the compiler answer "if I mutate collection X, which borrows
 must I materialize first?" without lifetime annotations — it is, per the
 design note, the actual Gorget invention that buys "no lifetimes" without
-losing the safety guarantee (`unified-resource-model.md` §6.5).
+losing the safety guarantee.
 
 `SlotKind` (`src/ir/mod.rs:641`) is the orthogonal *layout* axis read by
 the LIR slot-routing sites: `Value` (slot holds the value),

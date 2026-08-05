@@ -160,7 +160,7 @@ pub enum Instruction {
         base: Place,
         index: Operand,
         /// How the element flows out of the collection. Typed view of
-        /// [`ReadMode`] (Phase D5 / unified-resource-model.md §6.4):
+        /// [`ReadMode`] (Phase D5 / `docs/devbook/13-ownership-in-ir.md`):
         /// * `Borrow` — zero-copy view (e.g. `gorget_string_borrow`),
         ///   used by for-loop iteration over string-typed elements.
         /// * `Clone` — deep clone via the element type's clone fn

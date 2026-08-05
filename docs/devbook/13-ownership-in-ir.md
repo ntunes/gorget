@@ -38,8 +38,7 @@ read of a resource, whether that read is a bitwise copy, an ownership
 transfer, a deep clone, or a non-owning borrow — and a downstream pass
 must reject any read that would shallow-copy a resource.
 
-The historical failure mode (catalogued in the former
-`unified-resource-model.md` deep-dive, §1) was that this decision was
+The historical failure mode was that this decision was
 spread across a dozen parallel name-based lookup tables and half a dozen
 sidecar `HashMap`s keyed by `LocalId`, which drifted relative to each
 other — "every use-after-move that escaped the borrow checker in the last
@@ -199,7 +198,7 @@ pub enum BorrowOrigin {
 }
 ```
 
-The design rationale (`unified-resource-model.md` §6.5) is worth
+The design rationale is worth
 restating: `BorrowOrigin` is deliberately *not* a `Place` (LocalId +
 projection path). A `Place` says where the borrow *points*; `BorrowOrigin`
 says which mutation *triggers materialization* — a coarser concept. An
@@ -255,7 +254,7 @@ pointer — every borrow setter). `lower_place_addr` and the downstream LIR
 readers route on `SlotKind`, not on the rich enum directly — this is the
 D6-partial state: ownership flows GIR→LIR via `slot_kind`, but a typed
 `Slot.origin: Option<BorrowOrigin>` for borrow-aware codegen has not yet
-landed (`unified-resource-model.md` §6.6 Stage D6).
+landed.
 
 ### `is_owning_param` — distinguishing `!` from `&`
 
@@ -274,7 +273,7 @@ heuristic at the reader.
 ## The clone-vs-move-vs-borrow decision tree
 
 There are two distinct decision sites, because the two questions are
-independent (`clone-emission-at-calls.md`): *consume vs borrow* is a
+independent: *consume vs borrow* is a
 position-class question; *clone vs move* (within a consume) is a
 liveness/ownership question.
 
@@ -284,7 +283,7 @@ liveness/ownership question.
 value-alias, clone, or move. `lower_var_decl_assign_mode`
 (`src/ir/lowering/stmts/mod.rs:1081-1273`) is the seven-branch tree that
 answers it. It is the cleaned-up descendant of the "smoking gun" ~100-line
-predicate-soup the design doc cited (`unified-resource-model.md` §6.1);
+predicate-soup the design doc cited;
 every branch now reads typed predicates (`source_live`, the source's
 typed `LocalOwnership`) — the `is_named_local` proxy has been fully retired
 from this function:
@@ -320,7 +319,7 @@ premise" discipline in `CLAUDE.md`.
 
 ### At a call argument: callee-driven dispatch
 
-The key asymmetry (`clone-emission-at-calls.md` TL;DR): **bare function
+The key asymmetry: **bare function
 call arguments are NOT a materialization point.** A bare `f(x)` propagates
 the caller's `Ptr` alias to the callee at zero cost — no clone, no move.
 Clones happen only at the ownership boundaries where the destination must
@@ -375,8 +374,7 @@ declaration (param index 0). `has_consuming_self` reads
 (`Ownership::Move`) (`src/ir/lowering/exprs/methods.rs:1757-1761`); a `!self`
 method gets a post-call `MoveZero` on the receiver, a `&self`/bare-`self`
 method leaves the receiver live. This closed the "hardcoded `OpMove`
-without callee-signature consultation" class that
-`clone-emission-at-calls.md` flagged as in-progress; it has shipped.
+without callee-signature consultation" class.
 
 ### Liveness
 
@@ -391,7 +389,7 @@ regardless of mode (borrow or consume). That conservatism is
 *semantically correct*, not a limitation: the borrow checker (Pass 5,
 Chapter 10) forbids borrow-after-move at compile time, so a consume at
 position P that has any later read — borrow or consume — is correctly not
-a last use (`clone-emission-at-calls.md`).
+a last use.
 
 ## The Phase C validator — shallow copy of a resource is fatal
 
@@ -435,8 +433,8 @@ inline `assign_read_site` extractor (`validate.rs:1076-1084`) — and each non-e
 positions; it reads the typed `Module::consume_externs` registry (plus the
 runtime collection mutators) to recognise consuming runtime calls
 (`validate.rs:2974-2994`) rather than name-matching. The net guarantee:
-**the IR cannot express a shallow alias of an owned resource** — what
-`unified-resource-model.md` §5.1 set out to make structurally impossible.
+**the IR cannot express a shallow alias of an owned resource** — which is
+exactly what the resource-move validators exist to guarantee.
 
 ## Move-vs-borrow on enum payload extraction
 
@@ -535,9 +533,8 @@ or cloning a borrowed receiver that names a real element in place would be
 wrong — while every other receiver ownership goes through `op_consume` on
 `classify_call_arg(&gmod, full_name, 0)`, so `!self` → `CkCallArgOwning` →
 `OpMove` and `&self`/bare `self` → `CkCallArgBorrow` → `OpBorrow`. The
-receiver-dispatch fix that `clone-emission-at-calls.md` listed as
-in-progress (replacing a hardcoded `OpMove` with callee-signature
-consultation) has shipped.
+receiver-dispatch fix — replacing a hardcoded `OpMove` with
+callee-signature consultation — has shipped.
 
 One divergence to note in the self-host's LIR layer (`lower_operand`,
 `lir_lower.gg:2403-2533`): `OpCopy`, `OpMove`, and `OpBorrow` all lower to
@@ -550,8 +547,7 @@ pointer) a resource (`lir_lower.gg:2453-2521`). So the "Phase 2c emission
 flip" for `OpClone` has partly landed — clone-on-borrow and Ptr-to-resource
 sources materialise end-to-end; raw `LT_PTR` slots with no pointee-struct
 signal still fall through to a plain load, and `OpMove`'s move-zero
-codegen is the remaining deferred piece (see the timeline in
-`clone-emission-at-calls.md`). The in-tree comment at `lower.gg:1338-1342`
+codegen is the remaining deferred piece. The in-tree comment at `lower.gg:1338-1342`
 still claims all four modes produce no clone codegen; that comment is
 itself stale.
 

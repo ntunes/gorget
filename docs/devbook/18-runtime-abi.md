@@ -329,8 +329,7 @@ signature drift" bug class and de-duplicating the hand-written Rust mirror in
 `unified-resource-model.md` §3.6 / §9.2 / §13, now folded into this chapter.
 
 > Note: the citation in `src/lir/runtime.rs:6` formerly pointed at a
-> `lir-correctness-roadmap.md` that never existed — its content was
-> superseded by the `unified-resource-model.md` deep-dive. The `RuntimeFn`-enum
+> `lir-correctness-roadmap.md` that never existed. The `RuntimeFn`-enum
 > design that comment describes is documented in this chapter, where the
 > citation now points.
 

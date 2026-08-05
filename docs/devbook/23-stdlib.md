@@ -431,8 +431,7 @@ remain TODOs:
 - **Const-borrow iterator tier** (`Iterator[T]` with bare `T`) and sigils at
   type-argument positions as a fully-landed grammar feature (§23.6).
 - **Advanced adapters** — `scan`, `intersperse`, `cycle`, `peekable`,
-  `DoubleEndedIterator` — deferred, demand-driven (`stdlib-design.md` §10
-  Phase 2d).
+  `DoubleEndedIterator` — deferred, demand-driven.
 - **Lifting `chain`/`zip`/`lazy_windows`/`lazy_chunks` off `VectorIter`**
   to all iterators — these stay `VectorIter`-specific (`lib/std/iter.gg:449-460`)
   because their `other` parameter is iterator-typed and the current

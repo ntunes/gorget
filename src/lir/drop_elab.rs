@@ -597,7 +597,7 @@ fn insert_drop_flags(
     //   param-SlotStore at bb0 (lir/lower::lower) flipped param flags to
     //   true at first sight. Seeding from dataflow makes the param case
     //   work without that explicit fix-up — the flag is correct at bb0
-    //   entry by construction. See unified-resource-model §8.1.
+    //   entry by construction. See `docs/devbook/15-drop-elaboration.md`.
     //
     //   The loop-reinit pattern (iter N moves slot, iter N+1 re-stores) is
     //   handled by step 3's SlotStore arm — see `drop_loop_reinit.gg`.

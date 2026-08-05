@@ -667,7 +667,7 @@ pub enum BorrowOrigin {
     /// heap data. `tuple` is the tuple temp's local; `index` is the
     /// 0-based position of this local inside that tuple. Replaces the
     /// legacy `tuple_element_locals: FxHashMap<LocalId, Vec<LocalId>>`
-    /// sidecar — see unified-resource-model.md §6.3.
+    /// sidecar — see `docs/devbook/13-ownership-in-ir.md` (BorrowOrigin).
     TupleElement { tuple: LocalId, index: u32 },
 }
 
@@ -683,7 +683,7 @@ pub enum Mutability {
 ///
 /// `lower_place_addr` and the downstream LIR readers (`insts.rs:786`,
 /// `LoadRef`, `IndexLoad`) make different routing decisions per kind.
-/// See `unified-resource-model.md` §6.8.
+/// See `docs/devbook/14-lir-ssa.md` (per-value origin tags).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SlotKind {
     /// Slot holds the value directly (size = sizeof(type)). Address-of is

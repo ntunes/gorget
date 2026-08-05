@@ -20,7 +20,7 @@
 //! - No values, slots, or phis are introduced — the pass runs pre-SSA and
 //!   only touches the CFG skeleton.
 //!
-//! See `unified-resource-model.md` Tier E §8.2.
+//! See `docs/devbook/25-structural-guards.md` (the CFG/SSA tier).
 
 use super::*;
 

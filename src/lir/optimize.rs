@@ -106,7 +106,7 @@ fn optimize_function(func: &mut LirFunction, stats: &mut OptStats) {
     // termination signal. Bumped from a tight 3 (which silently stopped
     // before convergence on some functions) to a generous bound; the
     // per-pass change counters mean we exit as soon as no pass made
-    // progress. Tier E §8.4 of unified-resource-model.md.
+    // progress. See `docs/devbook/14-lir-ssa.md` (the fixpoint loop).
     const MAX_ITERS: usize = 32;
     for _ in 0..MAX_ITERS {
         let folded = stats.time("fold_constants", || fold_constants(func));

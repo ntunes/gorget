@@ -1214,7 +1214,7 @@ fn assign_read_site<'a>(
 }
 
 // ── Phase C extension: read-site validators ──────────────────────────
-// Phase D5 collapse (unified-resource-model.md §6.4 / §6.6):
+// Phase D5 collapse (`docs/devbook/13-ownership-in-ir.md`):
 // the four read-site classes (FieldLoad, IndexLoad, EnumFieldLoad,
 // Call/CallExtern args) and the original Assign-Copy class share one
 // underlying rule:
@@ -1379,7 +1379,7 @@ enum ReadSiteClass<'a> {
 /// The unified rule. Returns `Some(warning)` when the site is a shallow
 /// alias of an owned resource, `None` when sound or out-of-scope.
 ///
-/// Per unified-resource-model.md §6.4 the rule is:
+/// Per `docs/devbook/13-ownership-in-ir.md` the rule is:
 /// * If `source_ty` is non-resource → sound (any mode is fine).
 /// * `Borrow` → sound (destination is a reference / view).
 /// * `Move`   → sound (ownership transfer; source becomes dead).

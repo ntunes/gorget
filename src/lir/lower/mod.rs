@@ -336,7 +336,7 @@ impl<'a> LoweringContext<'a> {
             for (ext_idx, ext) in self.module.externs.iter().enumerate() {
                 // Extract the method suffix from the extern name (the C symbol IS
                 // the contract with the runtime — name parsing is acceptable here
-                // per layering-discipline.md, only at this boundary).
+                // per `docs/devbook/24-layering-discipline.md`, only at this boundary).
                 let sep_pos = match ext.name.rfind("__") { Some(p) => p, None => continue };
                 let method = &ext.name[sep_pos + 2..];
                 if !CROSS_TYPE_METHODS.contains(&method) { continue; }

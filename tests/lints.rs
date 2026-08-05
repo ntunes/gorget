@@ -239,7 +239,7 @@ fn no_growth_in_name_prefix_routing() {
     assert!(
         count <= BUDGET,
         "Name-prefix routing count grew beyond budget: {count} > {BUDGET}.\n\n\
-         The layering-discipline ratchet (Tier 3a per structural-guards.md) \
+         The layering-discipline ratchet (Tier 3a per docs/devbook/25-structural-guards.md) \
          bars new `starts_with(\"X__\")` sites where X is a mangled-type prefix. \
          Either migrate the new site to typed metadata (read a typed flag on \
          StructDef / TypeMetadata / LirExtern instead of pattern-matching the \

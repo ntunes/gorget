@@ -958,7 +958,7 @@ pub fn compute_function_pointee_types_at(module: &mut LirModule, fi: usize) {
 
 /// Populate `func.value_origins` for every function in the module.
 ///
-/// Phase D6 (`unified-resource-model.md` §6.8): the LIR-side per-value
+/// Phase D6 (`docs/devbook/14-lir-ssa.md`): the LIR-side per-value
 /// provenance. Each value gets at most one `ValueOrigin` tag, set at the
 /// instruction that produced it. Backends read this via typed match instead
 /// of reconstructing origin information from instruction shapes.

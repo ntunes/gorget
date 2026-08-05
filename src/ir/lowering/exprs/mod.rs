@@ -3904,7 +3904,7 @@ pub fn resolve_none_tag(ctx: &LoweringContext, type_id: TypeId) -> i32 {
 /// avoiding mismatches like passing String to a function taking str.
 
 /// Single-source-of-truth for "arm value crosses the match-result boundary"
-/// (Snag #28; consume-site discipline, structural-guards.md Tier 2a).
+/// (Snag #28; consume-site discipline, `docs/devbook/25-structural-guards.md` Tier 2a).
 ///
 /// Three semantic gates fire here, in order:
 /// 1. **Borrow → owned clone** (`ensure_owned_at_boundary`): when the arm

@@ -119,7 +119,7 @@ pub enum LirType {
 
     /// Resource type with parametric element / key / value types.
     ///
-    /// Item 7e of the unified-resource-model plan: generalises the
+    /// Per `docs/devbook/14-lir-ssa.md`: generalises the
     /// `ElemMeta` shape from `Inst::CollectionCtor` (single construction
     /// site) to operand types globally, so consumers read element / key /
     /// value types from typed metadata instead of re-parsing mangled
@@ -545,7 +545,7 @@ pub enum DropGuardKind {
 
 /// Origin tag for an SSA value — what kind of producer created it.
 ///
-/// Phase D6 of the unified resource model (`unified-resource-model.md` §6.8):
+/// Phase D6 (`docs/devbook/14-lir-ssa.md`):
 /// the LIR-side counterpart to GIR's `BorrowOrigin`. Replaces the parallel
 /// per-value bitmaps the C backend used to reconstruct (`str_lit_vals`,
 /// `null_vals`, `cstr_vals` / `extern_cstr_return_vals`, `func_addr_targets`,
@@ -1439,7 +1439,7 @@ pub struct LirFunction {
     /// from a borrowed param it means "stay by-pointer"; see the LLVM
     /// `Inst::CallClosure` handler).
     pub pointee_types: Vec<Option<LirType>>,
-    /// Per-value origin tag (Phase D6 — `unified-resource-model.md` §6.8).
+    /// Per-value origin tag (Phase D6 — `docs/devbook/14-lir-ssa.md`).
     /// Indexed by `ValueId.0`. Populated by `compute_module_value_origins`
     /// after function lowering; backends read this via typed match instead
     /// of reconstructing origin information from instruction shapes.

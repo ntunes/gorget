@@ -138,7 +138,7 @@ When the fix you sketch for a localized bug is *intrinsically complex* (save/res
 
 ## In the self-host
 
-The self-host lowerer ports the writer-side structural guards, not just the frontend. `tests/fixtures/self_host_lowerer/validate.gg` (a 497-line, ~25KB independent copy — not symlinked from any other self-host dir) is the self-host instance of the migration framework, and its header says so explicitly: *"Migration framework (mirror of `structural-guards.md`)"* (`validate.gg:9`).
+The self-host lowerer ports the writer-side structural guards, not just the frontend. `tests/fixtures/self_host_lowerer/validate.gg` (a 497-line, ~25KB independent copy — not symlinked from any other self-host dir) is the self-host instance of the migration framework, and its header says so explicitly, naming this chapter as the framework it mirrors (`validate.gg:9`).
 
 It reimplements both the GIR resource guards and the LIR structural checks:
 

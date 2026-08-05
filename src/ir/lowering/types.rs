@@ -310,7 +310,7 @@ impl TypeMapper {
                         }
                     }
                     // Auto-register Option[T] and Result[T, E] types.
-                    // Coherence-at-construction (Tier 1c, structural-guards.md):
+                    // Coherence-at-construction (Tier 1c, `docs/devbook/25-structural-guards.md`):
                     // make_option_type_def / make_result_type_def take the
                     // registry so they read the inner type's drop-strategy
                     // and propagate Recursive + Resource into the wrapper's
@@ -1362,7 +1362,7 @@ pub fn make_opaque_type_def(name: &str, copy_semantics: CopySemantics, drop_stra
 }
 
 /// Create an Option[T] enum TypeDef (Some(_0: T) | None).
-/// Coherence-at-construction (Tier 1c, structural-guards.md): if any payload
+/// Coherence-at-construction (Tier 1c, `docs/devbook/25-structural-guards.md`): if any payload
 /// type already needs dropping, the wrapper enum's metadata reflects that
 /// at registration time — no reliance on the post-hoc `upgrade_types_from_fields`
 /// pass, which only runs once at module-start and misses lazily-registered

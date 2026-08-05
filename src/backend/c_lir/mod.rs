@@ -19,7 +19,7 @@ use self::emit_types::*;
 
 /// Per-function analysis context for instruction emission.
 ///
-/// Phase D6 (`unified-resource-model.md` §6.8): per-value origin info
+/// Phase D6 (`docs/devbook/14-lir-ssa.md`): per-value origin info
 /// (StrLit / NullPtr / CStr / FuncAddr / SpawnSource) is read directly
 /// from `func.value_origins` via the typed accessors below — no parallel
 /// per-value bitmaps in this struct.
@@ -1286,7 +1286,7 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
                     }
                 }
             }
-            // Phase D6 (`unified-resource-model.md` §6.8): origin info for
+            // Phase D6 (`docs/devbook/14-lir-ssa.md`): origin info for
             // this value lives in `func.value_origins` (typed `ValueOrigin`).
             // Backend reads it via `EmitContext::is_str_lit / is_null /
             // is_cstr / spawn_source`. The only side-effect we still need

@@ -1310,10 +1310,10 @@ The consuming-call lowering tracks any clone temps it emits (the
 right after the call so the scope-exit drop pass doesn't double-free the
 freshly-cloned temp.
 
-**A layering correction over the internals doc.** `copy-on-write.md:359` states
-that the C backend emits the post-call source zero via a `zero_arg_indices`
-table in `emit_call_extern.rs`. That is **stale**: the table is gone. The
-post-call zero is now emitted as a GIR `MoveZero` at the lowering layer, and the
+**Where the post-call zero is emitted.** It is a GIR `MoveZero` at the lowering
+layer — *not* a backend concern. Older descriptions placed it in the C backend
+behind a `zero_arg_indices` table in `emit_call_extern.rs`; no such table
+exists. The
 C backend's old per-runtime-fn zero was removed because it duplicated the same
 bytes — see the comment block at
 `src/backend/c_lir/emit_call_extern.rs:900`. There is no `zero_arg_indices` in
