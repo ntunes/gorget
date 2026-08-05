@@ -13,7 +13,8 @@
 # specialised. `join` remains as a free function in `std.iter`
 # for a separate reason — Displayable.display() dispatch through
 # abstract `T` not yet threaded through default-method emission.
-# See iter.gg and stdlib-design.md §10.
+# See iter.gg; the remaining iterator-surface gaps (including this
+# one) are filed in TODO.md as the iterator-surface residue.
 
 from std.iter import VectorIter
 from std.collections import Vector

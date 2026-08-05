@@ -3064,7 +3064,7 @@ fn emit_function(
                     Inst::Div { ty, .. } if ty.is_integer() => {
                         // div0 guard always bumps + sets exit. For SIGNED, the
                         // `TYPE_MIN/-1` overflow guard (emit_div_overflow_trap,
-                        // error-model.md §11 (E)) bumps again and moves the exit
+                        // spec/prose/trap-codes.md) bumps again and moves the exit
                         // to its own `ok` block — mirror BOTH counter bumps and
                         // the final label exactly (layering: this pre-pass twins
                         // the emit).
@@ -3856,7 +3856,7 @@ fn emit_inst(
                 *current_label = ok_label;
                 // Signed `TYPE_MIN/-1` overflow is UB (C-Div traps it; LLVM
                 // bare `sdiv` was silent UB) — TRAP it unconditionally, like
-                // div0 (error-model.md §11 (E)). Unsigned never overflows.
+                // div0 (spec/prose/trap-codes.md). Unsigned never overflows.
                 if is_signed(ty) {
                     emit_div_overflow_trap(out, "div", dst, lhs, rhs, ty, block_id, trap_counter, current_label, str_globals, loc);
                     let op = "sdiv";
@@ -3890,7 +3890,7 @@ fn emit_inst(
                 *current_label = ok_label;
                 // Signed `TYPE_MIN % -1` overflow is UB (C-Div traps `/`; LLVM
                 // bare `srem` was silent UB) — TRAP it unconditionally, like
-                // div0 (error-model.md §11 (E)). Unsigned never overflows.
+                // div0 (spec/prose/trap-codes.md). Unsigned never overflows.
                 if is_signed(ty) {
                     emit_div_overflow_trap(out, "rem", dst, lhs, rhs, ty, block_id, trap_counter, current_label, str_globals, loc);
                     writeln!(out, "  %v{} = srem {lty} %v{}, %v{}", dst.0, lhs.0, rhs.0).unwrap();
@@ -4015,7 +4015,7 @@ fn emit_inst(
                 }
                 None if matches!(op, FaultOp::DivOverflow) => {
                     // Signed `TYPE_MIN/-1` overflow of a Div/Rem — its OWN
-                    // condition (split out of div0, error-model.md §11 (C)):
+                    // condition (split out of div0 — spec/prose/trap-codes.md):
                     // flag = (lhs == TYPE_MIN && rhs == -1). Unsigned never
                     // overflows this way → constant false.
                     if signed {
@@ -7538,7 +7538,7 @@ fn emit_overflow_check(
 }
 
 /// Emit the signed `TYPE_MIN / -1` (or `TYPE_MIN % -1`) overflow trap for a
-/// plain Div/Rem (error-model.md §11 (E)). Mirrors C-Div's unconditional guard:
+/// plain Div/Rem (spec/prose/trap-codes.md). Mirrors C-Div's unconditional guard:
 /// `if (lhs == TYPE_MIN && rhs == -1) panic("integer overflow")`. Branches to a
 /// trap block on overflow, else falls through to a fresh ok block (updating
 /// `current_label`) where the bare `sdiv`/`srem` is then emitted (statically

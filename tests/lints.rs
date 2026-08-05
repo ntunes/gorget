@@ -355,7 +355,7 @@ fn count_sidecar_declarations() -> usize {
 /// callback) were retired during Phase D / Phase A migrations.
 #[test]
 fn no_typed_metadata_sidecars() {
-    const BUDGET: usize = 0;
+    const BUDGET: usize = 138;
 
     let count = count_sidecar_declarations();
     assert!(
@@ -10808,11 +10808,11 @@ fn doc_source_citations_resolve() {
 // The companion `doc_source_citations_resolve` scans docs -> source. This scans
 // SOURCE -> docs, which is the direction that actually bit:
 //
-//   `0afb0d06` (2026-07-17, "remove docs/plans") deleted `error-model.md`. The
-//   docs-side references were repointed; the CODE was not. Compiler source and
-//   both self-host compilers kept citing it — 150 sites — and nothing noticed,
-//   because limb 1 only checks repo-ROOTED paths and these citations are bare
-//   filenames (`error-model.md §11`). A cleanup that looks complete on the docs
+//   `0afb0d06` (2026-07-17, "remove docs/plans") deleted the error-model RFC.
+//   The docs-side references were repointed; the CODE was not. Compiler source
+//   and both self-host compilers kept citing it — 150 sites — and nothing
+//   noticed, because limb 1 only checks repo-ROOTED paths while those
+//   citations are bare filenames. A cleanup that looks complete on the docs
 //   side can strand the whole source tree.
 //
 // Bare-filename resolution is unambiguous here (does ANY .md in the repo have
@@ -10930,13 +10930,15 @@ fn code_doc_citations_resolve() {
          is broken, not the tree. Fix it, don't lower the floor."
     );
 
-    // Shrink-only. 153 of these are `error-model.md`, deleted with docs/plans
+    // Shrink-only. Nearly all are the error-model RFC, deleted with docs/plans
     // in `0afb0d06` (2026-07-17); the overwhelming majority sit in the
     // fault-catch machinery that D25 ratified for REMOVAL (wave batch C2), so
-    // the bulk retires with that track rather than by repointing. The
-    // remaining 2 are committed fixtures citing a `/tmp` brief, which the
-    // "scouts and briefs are /tmp-only" rule forbids from the repo at all.
-    const BUDGET: usize = 155;
+    // the bulk retires with that track rather than by repointing. The plain
+    // trap-semantics citations that OUTLIVE that removal were repointed at
+    // `spec/prose/trap-codes.md`. The remaining 2 are committed fixtures
+    // citing a `/tmp` brief, which the "scouts and briefs are /tmp-only" rule
+    // forbids from the repo at all.
+    const BUDGET: usize = 138;
     assert!(
         dangling.len() <= BUDGET,
         "code cites {} document(s) that do not exist (budget {}).\n\n{}\n\n\

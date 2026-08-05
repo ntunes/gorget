@@ -4246,9 +4246,9 @@ fn vector_userspace_hofs() {
     // to `self.iter().method().collect()` (or terminal). Per-call-site
     // mono produces a dedicated specialised symbol per wrapper
     // instance; the builtin HofExpand variants stay as fallbacks for
-    // now (deletion in a separate cleanup commit per stdlib-design.md
-    // Phase 2c row 2 + method-level-inference.md "Sequencing After
-    // This Lands" §1).
+    // now. Deleting them is item (a) of the iterator-surface residue
+    // filed in TODO.md — this fixture is what pins both paths
+    // coexisting, so it changes when that lands.
     run_gg(
         "vector_userspace_hofs.gg",
         "true\nfalse\n2\n1\n1\n2\n3\n4\n10\n4\n2\n8\n4\ni1\ni4\n2\n2\n4",

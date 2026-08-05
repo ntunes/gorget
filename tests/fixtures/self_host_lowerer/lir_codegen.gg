@@ -4339,8 +4339,8 @@ String emit_field_store(String target_v, int struct_id, int field, int value, Li
 # The C `<stdint.h>` INT*_MIN macro for a SIGNED LIR integer width, or "" for
 # any non-signed-integer type (unsigned never overflows on `/ -1`, floats/ptrs
 # never reach here). Drives the `INT_MIN / -1` overflow trap shared by the
-# IDiv/IRem plain-op guards (error-model.md §11 (E)) and the IFaultCheck
-# OP_DIV_OVERFLOW discriminator (§11 (C)). Mirrors Rust gg's per-width MIN.
+# IDiv/IRem plain-op guards (spec/prose/trap-codes.md) and the IFaultCheck
+# OP_DIV_OVERFLOW discriminator (fault-catch; pending removal per D25). Mirrors Rust gg's per-width MIN.
 String signed_int_min_literal(int ty):
     if ty == LT_I8:
         return "INT8_MIN"
@@ -4504,7 +4504,7 @@ String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
             if lir_is_integer(ty):
                 String ct = c_type_name(ty, sn)
                 # Div0 guard + the unconditional signed `INT_MIN / -1` overflow
-                # trap (error-model.md §11 (E)): `INT_MIN / -1` is signed-overflow
+                # trap (spec/prose/trap-codes.md): `INT_MIN / -1` is signed-overflow
                 # UB (SIGFPE on x86_64). A caught Div never reaches here (the
                 # GIFaultCheck branched away); an UNCAUGHT one panics uniformly.
                 String dmin = signed_int_min_literal(ty)
@@ -4519,7 +4519,7 @@ String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
                 return v(dst) + " = fmod(" + v(lhs) + ", " + v(rhs) + ");"
             String ct = c_type_name(ty, sn)
             # Rem mirrors Div: the (previously MISSING) div0 guard + the signed
-            # `INT_MIN % -1` overflow trap (error-model.md §11 (E)). `INT_MIN %
+            # `INT_MIN % -1` overflow trap (spec/prose/trap-codes.md). `INT_MIN %
             # -1` is signed-overflow UB too (C-Rem used to silently return 0).
             String rmin = signed_int_min_literal(ty)
             String rovf = ""
@@ -4530,7 +4530,7 @@ String emit_inst(LirInst inst, LirModule m, LirFunction func, Vector[String] sn,
         case IMod(dst, ty, lhs, rhs):
             if lir_is_float(ty):
                 return "{ double __t = fmod(" + v(lhs) + ", " + v(rhs) + "); " + v(dst) + " = __t + (__t != 0.0 && ((__t < 0) != (" + v(rhs) + " < 0)) ? " + v(rhs) + " : 0.0); }"
-            # Euclidean `.mod()` (error-model.md §11 (E), Rust `4020e01e`): div0
+            # Euclidean `.mod()` (spec/prose/trap-codes.md, Rust `4020e01e`): div0
             # TRAPS, and signed `INT_MIN.mod(-1)` is genuinely 0 (Euclidean — it
             # does NOT panic, unlike Div/Rem which overflow). Use `__typeof__`,
             # NOT GNU `typeof` (not a `-std=c11` keyword → a non-constant

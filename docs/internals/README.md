@@ -56,6 +56,8 @@ instead; the file survives only until its pending fold/repoint work lands.
 | [structural-guards.md](structural-guards.md) | [devbook/25 — Structural guards](../devbook/25-structural-guards.md) |
 | [self-host-resource-model.md](self-host-resource-model.md) | [devbook/26 — The self-host frontend](../devbook/26-self-host-frontend.md) |
 | [layering-discipline.md](layering-discipline.md) | [devbook/24 — Layering discipline](../devbook/24-layering-discipline.md) |
+| [shared-keyword-design.md](shared-keyword-design.md) | [devbook/10 — Ownership & safety](../devbook/10-ownership-safety.md) |
+| [method-level-inference.md](method-level-inference.md) | [devbook/09 — Type checking](../devbook/09-type-checking.md) |
 
 ### Mixed — partly superseded, partly unbuilt
 
@@ -69,9 +71,7 @@ shipped half folds into the named chapter, the unbuilt half stays here.
 | [llvm-backend-plan.md](llvm-backend-plan.md) | [devbook/19 — The LLVM backend](../devbook/19-llvm-backend.md) | WASM via `--target=wasm32` — a second, distinct route from `lir-design.md`'s |
 | [lir-backend-lift-plan.md](lir-backend-lift-plan.md) | [devbook/16 — BIR](../devbook/16-bir.md) | Why-not records (MLIR dialects, Sea of Nodes, stack bytecode); the "why BIR" naming rationale |
 | [stdlib-design.md](stdlib-design.md) | [devbook/23 — The stdlib](../devbook/23-stdlib.md) | The six iterator algebraic laws (property-test targets); the `spawn unchecked` discipline rules |
-| [shared-keyword-design.md](shared-keyword-design.md) | [devbook/10 — Ownership & safety](../devbook/10-ownership-safety.md) | The token-semantics model (acquire on entering a sync region, release at suspension, reacquire on resume; multi-token ascending-declaration order with reverse release) |
 | [meta.md](meta.md) | [devbook/06 — Meta & derive](../devbook/06-meta-derive.md) | Why `[]` type application over parens; diamond inference |
-| [method-level-inference.md](method-level-inference.md) | [devbook/09 — Type checking](../devbook/09-type-checking.md) | The post-landing sequencing: retire the builtin `HofExpand` fallbacks and the `_iter` free functions |
 
 ## Conventions
 

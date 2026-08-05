@@ -333,9 +333,32 @@ bindings never decided at a spawn site: written-and-spawned ⇒ `ArcMutex` (main
 writes + spawned-thread reads = race without a mutex); never-spawned ⇒ `ArcMutex` if
 written else `ArcOnly`. A shared binding that never crosses a concurrency boundary
 gets an `UnnecessaryShared` warning. The resulting `shared_out` map is returned and
-flows into IR lowering, which inserts the actual ARC/Mutex/Atomic wrapping. (The
-`shared`-keyword design doc's "Implementation Status / DONE" list is a historical
-record — the live behavior is whatever this map and the IR lowering produce.)
+flows into IR lowering, which inserts the actual ARC/Mutex/Atomic wrapping — that
+map plus the lowering *are* the live behaviour, and any status list elsewhere is a
+historical record rather than a description of what runs.
+
+### Token semantics — why multi-token code cannot deadlock
+
+A **token** is the lock a shared binding carries. It is acquired on entering a
+synchronous execution region that touches shared mutable bindings, released at
+every suspension point (an `.await()`, or task/thread completion), and reacquired
+when execution resumes. Between suspension points a region holds its tokens
+continuously — which is what makes transparent access sound: reading or writing a
+`shared` binding needs no explicit lock in user code.
+
+With more than one shared binding in scope, the *order* is the load-bearing part.
+`inject_shared_token_management` (`src/ir/transforms/shared_async.rs:106`) acquires
+tokens in **ascending declaration order**, sorting by `decl_order` (`:177-179`,
+whose comment states the reason: "Sort by decl_order for deadlock-free ordering").
+`build_release_sequence` (`:380`) releases them in the **reverse** of that order,
+and `build_reacquire_sequence` (`:400`) re-locks forward on resume.
+
+A single global acquisition order with strictly-reverse release is the classic
+deadlock-freedom argument: two regions can never hold tokens in opposite order, so
+no cycle can form in the wait-for graph. The guarantee is **structural rather than
+checked** — there is no deadlock detector at runtime, because the emission order
+makes the cycle unconstructible in the first place. This is what the yield-point
+analysis below means when it talks about a call "releasing the token".
 
 ### Stale-shared-condition detection
 

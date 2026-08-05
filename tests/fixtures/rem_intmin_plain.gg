@@ -1,7 +1,7 @@
 # (E) Plain-op INT_MIN % -1 cross-backend trap: an UNCAUGHT `INT_MIN % -1` is
 # signed-overflow UB. C-Rem silently returned 0 and LLVM-Rem was a bare `srem`
 # (silent UB). Now BOTH backends PANIC `integer overflow`, unconditionally like
-# div0 (error-model.md §11 (E)).
+# div0 (spec/prose/trap-codes.md).
 void main():
     int imin = -9223372036854775807 - 1
     int neg1 = -1

@@ -266,6 +266,27 @@ iterator-typed — lifting them to `Iterator[T]` needs threading a second
 iterator's concrete type through the adapter field, which the current
 method-generic inference doesn't do.
 
+### The adapter contract — laws, not hand-checked invariants
+
+Every implementor and every adapter chain preserves a small set of algebraic
+identities. They are stated as laws rather than prose because they are meant to
+be *property-test* targets: a chain that breaks one is wrong even when each
+adapter looks right in isolation.
+
+- `iter().count() == len()` for sized iterables — an adapter may not lose or
+  invent elements.
+- `iter().filter(f).all(f)` holds — filtering is total, not best-effort.
+- `iter().map(f).collect()` preserves order for ordered containers, so a
+  `Vector` round-trips through a map chain in the same sequence.
+- `a.iter().chain(b).count() == a.len() + b.len()` — concatenation is additive
+  (`VectorIter`-scoped today, per the note above).
+
+Two further laws are stated but not yet testable, because the operations they
+quantify over do not exist: an involution law for `rev()` (which needs a
+double-ended iterator concept) and a sortedness law pairing `sort()` with an
+`is_sorted()` predicate. Both are recorded with the iterator-surface work in
+`TODO.md` rather than here, since this chapter describes what ships.
+
 ### Lazy by default — no eager interim
 
 Adapters are lazy from day one. There is deliberately *no* eager

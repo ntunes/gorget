@@ -1097,7 +1097,12 @@ shared(rwlock) Dict[String, String] cache = Dict()   # user override: ARC + RwLo
 shared(atomic) int flags = 0                   # user override: ARC + Atomic
 ```
 
-See [Concurrency — Shared Bindings](#shared-bindings) for details on token semantics and CFA.
+Several `shared` bindings in scope never deadlock against one another: their locks are
+acquired in declaration order and released in reverse, so no two execution regions can
+ever hold them in opposite order. The guarantee is structural — the compiler emits the
+ordering, and there is no runtime deadlock check. See
+[Shared variable access](#shared-variable-access-with-name) for the `with` form, and
+`docs/devbook/10-ownership-safety.md` §"Token semantics" for the mechanism.
 
 The pattern on the left side may be a simple binding or a destructuring pattern (see [Patterns](#8-patterns)).
 

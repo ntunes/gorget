@@ -2550,7 +2550,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                 // compilers silently return 0 — a cross-backend defect since
                 // LLVM-Rem and C-Div TRAP it). Match the Div guard: TRAP with
                 // `integer overflow`, unconditionally, like the div0 guard
-                // (error-model.md §11 (E)).
+                // (spec/prose/trap-codes.md).
                 let ct = c_type_named(ty, sn);
                 let tmin = match ty {
                     LirType::I64 => "INT64_MIN",
@@ -2622,7 +2622,7 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                     d = v(*dst), l = v(*lhs), r = v(*rhs)).unwrap();
             } else if matches!(op, FaultOp::DivOverflow) {
                 // Signed `TYPE_MIN/-1` overflow of a Div/Rem — its OWN condition
-                // (split out of div0, error-model.md §11 (C)). Only signed
+                // (split out of div0 — spec/prose/trap-codes.md). Only signed
                 // integer types can overflow this way; unsigned never does.
                 if matches!(ty, LirType::I64 | LirType::I32 | LirType::I16 | LirType::I8) {
                     let tmin = match ty {

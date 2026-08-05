@@ -353,7 +353,8 @@ pub(super) fn lower_binary_op(
 /// AND the op is one of the five integer faultable ops AND `operand_type` is an
 /// integer. Add/Sub/Mul populate only the overflow handler; Div/Rem populate
 /// BOTH (a single signed Div has two fault categories — `rhs == 0` → DivByZero
-/// AND `TYPE_MIN/-1` → Overflow, error-model.md §11 Increment 2 (C) split). Each
+/// AND `TYPE_MIN/-1` → Overflow — the `T_Overflow`/`T_DivByZero` split, see
+/// `spec/prose/trap-codes.md`). Each
 /// returned slot is `Some` only when the scope catches that category; a slot
 /// left `None` panics by default. `None` for the whole result → the op stays the
 /// panic-by-default form (typed gate, never a name check).
