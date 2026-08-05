@@ -20812,7 +20812,15 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_070_000;
 //
 // Re-pinned UP 2026-07-21 (lag-close Wave 2, same citation as array ceiling):
 // measured string_clone=30,385,755. Ceiling = measured + ~1%.
-const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 30_690_000;
+//
+// Re-pinned UP 2026-08-05 (Round XXX close, D39 Phase A cumulative cost):
+// measured string_clone=30,699,081 (+9,081 above prior ceiling). D39 Phase A
+// landed dense-mode Dict/Set (A.2c-plus RETRY-2), the `unique_borrow_param_ptr_operand`
+// helper (Track G's env[k]=v miscompile fix), swap_remove method on all lanes
+// (A.3), and the SH statement-level meta-for port (Track H). Each contributes
+// small per-call clone overhead — cumulative +0.03% on self-compile is
+// justified semantic cost. Ceiling = measured + ~1% headroom.
+const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_000_000;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
