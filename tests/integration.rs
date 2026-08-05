@@ -17823,6 +17823,21 @@ fn guard_get_into_dict_put_double_free() {
 }
 
 #[test]
+#[ignore = "KNOWN GAP (filed 2026-08-05): the WORST cell of the opaque-handle \
+receiver-ABI class -- no `&` sigil anywhere, gg check clean, no crash, and it prints \
+a heap pointer as an integer (187650740445858 instead of 2). An opaque handle IS a \
+pointer and these 12 protocols take self ByValue, so any route handing such a callee \
+a pointer-typed receiver passes one indirection too many. Three measured routes: \
+struct field (this, silent garbage), collection element v[0].add(1) (SEGV), and `&` \
+param (silently prints 0). The BARE param is correct -- these types have interior \
+mutability, so mutation needs no `&`. Rejecting `&` would fix ZERO of the two \
+sigil-free routes. Un-ignore and move out of known_gaps/ when fixed, together with \
+its sibling cells."]
+fn opaque_handle_struct_field_silent_garbage() {
+    run_gg("known_gaps/opaque_handle_struct_field_silent_garbage.gg", "2");
+}
+
+#[test]
 #[ignore = "KNOWN GAP (filed 2026-08-05): a Mutex[T] behind an explicitly-mutable \
 `&` borrow param loses writes made through its Guard and then dangles. C prints 40 \
 (increments vanish) then SIGSEGV; LLVM SIGSEGVs with no output; gg check ACCEPTS it. \
