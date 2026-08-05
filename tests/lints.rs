@@ -10801,3 +10801,158 @@ fn doc_source_citations_resolve() {
         missing.join("\n  ")
     );
 }
+
+// ---------------------------------------------------------------------------
+// DOC CITATION GUARD, LIMB 2 — code must not cite a document that is gone.
+//
+// The companion `doc_source_citations_resolve` scans docs -> source. This scans
+// SOURCE -> docs, which is the direction that actually bit:
+//
+//   `0afb0d06` (2026-07-17, "remove docs/plans") deleted `error-model.md`. The
+//   docs-side references were repointed; the CODE was not. Compiler source and
+//   both self-host compilers kept citing it — 150 sites — and nothing noticed,
+//   because limb 1 only checks repo-ROOTED paths and these citations are bare
+//   filenames (`error-model.md §11`). A cleanup that looks complete on the docs
+//   side can strand the whole source tree.
+//
+// Bare-filename resolution is unambiguous here (does ANY .md in the repo have
+// this basename?), so unlike limb 1's shorthand case there is no guessing.
+// ---------------------------------------------------------------------------
+
+/// Documents named by code that legitimately do not live in the repo.
+/// Shrink-only: a name that becomes resolvable must be REMOVED from here.
+const CODE_DOC_CITATION_EXTERNAL: &[&str] = &[
+    // The agent-memory index, kept outside the repo by design.
+    "MEMORY.md",
+];
+
+/// Vendored third-party sources cite their upstream's docs; not ours to fix.
+const CODE_DOC_CITATION_VENDORED: &[&str] =
+    &["src/backend/c/sqlite3/", "src/backend/c/stb_image.h"];
+
+/// Recursive walk over the source extensions that carry doc citations.
+fn walkdir_srcish(root: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::from(root)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if matches!(
+                p.extension().and_then(|e| e.to_str()),
+                Some("rs") | Some("gg") | Some("c") | Some("h")
+            ) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn code_doc_citations_resolve() {
+    // Every markdown basename that exists ANYWHERE in the tree — a citation to
+    // `spec/prose/diagnostic-codes.md` resolves just as well as one to a
+    // devbook chapter, so scoping this to docs/ would invent defects.
+    let mut have: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut md_stack = vec![PathBuf::from(".")];
+    while let Some(dir) = md_stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for ent in entries.flatten() {
+            let p = ent.path();
+            let name = ent.file_name().to_string_lossy().into_owned();
+            if p.is_dir() {
+                if !matches!(
+                    name.as_str(),
+                    "target" | ".git" | ".claude" | ".worktrees" | "node_modules"
+                ) {
+                    md_stack.push(p);
+                }
+            } else if name.ends_with(".md") {
+                have.insert(name);
+            }
+        }
+    }
+    assert!(
+        have.len() > 20,
+        "found only {} markdown files — the docs tree moved and this lint would \
+         report every citation as dangling. Fix the scanner.",
+        have.len()
+    );
+
+    // Join hyphen-wrapped names split across comment lines. A citation whose
+    // hyphen falls at a line break is ONE name, not a dangling tail — without
+    // this, the second half of every wrapped filename reads as a missing doc.
+    let unwrap = regex::Regex::new(r"-\\?[ \t]*\n[ \t]*(?://[/!]?|#|\*)?[ \t]*")
+        .expect("unwrap regex");
+    let cite = regex::Regex::new(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\.md").expect("md regex");
+
+    let mut dangling: Vec<String> = Vec::new();
+    let mut scanned = 0usize;
+
+    for root in ["src", "tests"] {
+        for file in walkdir_srcish(root) {
+            let rel = file.to_string_lossy().replace("./", "");
+            if CODE_DOC_CITATION_VENDORED.iter().any(|v| rel.starts_with(v)) {
+                continue;
+            }
+            let Ok(raw) = fs::read_to_string(&file) else { continue };
+            let text = unwrap.replace_all(&raw, "-");
+            for m in cite.find_iter(&text) {
+                // Skip matches that are part of a longer path (`docs/x/y.md`)
+                // or of a longer word — limb 1 owns rooted paths.
+                if let Some(prev) = text[..m.start()].chars().last() {
+                    if prev.is_alphanumeric()
+                        || prev == '/'
+                        || prev == '.'
+                        || prev == '-'
+                        || prev == '_'
+                        || prev == '\\'
+                    {
+                        continue;
+                    }
+                }
+                scanned += 1;
+                let name = m.as_str();
+                if !have.contains(name) && !CODE_DOC_CITATION_EXTERNAL.contains(&name) {
+                    let line = text[..m.start()].lines().count();
+                    dangling.push(format!("{rel}:{line} → `{name}`"));
+                }
+            }
+        }
+    }
+
+    assert!(
+        scanned > 200,
+        "scanned only {scanned} bare doc citations in src/ + tests/ — the scan \
+         is broken, not the tree. Fix it, don't lower the floor."
+    );
+
+    // Shrink-only. 153 of these are `error-model.md`, deleted with docs/plans
+    // in `0afb0d06` (2026-07-17); the overwhelming majority sit in the
+    // fault-catch machinery that D25 ratified for REMOVAL (wave batch C2), so
+    // the bulk retires with that track rather than by repointing. The
+    // remaining 2 are committed fixtures citing a `/tmp` brief, which the
+    // "scouts and briefs are /tmp-only" rule forbids from the repo at all.
+    const BUDGET: usize = 155;
+    assert!(
+        dangling.len() <= BUDGET,
+        "code cites {} document(s) that do not exist (budget {}).\n\n{}\n\n\
+         A source comment pointing at a deleted design doc is worse than no \
+         comment: it reads as a citation and resolves to nothing. Either \
+         repoint it at the chapter that absorbed the content, inline the fact \
+         it was citing, or delete the reference. If the doc genuinely lives \
+         outside the repo, add it to CODE_DOC_CITATION_EXTERNAL.\n\n\
+         If the count went DOWN, lower BUDGET here to lock the new floor.",
+        dangling.len(),
+        BUDGET,
+        dangling
+            .iter()
+            .take(15)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
