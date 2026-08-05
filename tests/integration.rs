@@ -17762,7 +17762,24 @@ fn mutex_basic() {
 }
 
 #[test]
+#[ignore = "KNOWN GAP (filed 2026-08-05): a Mutex[T] behind an explicitly-mutable \
+`&` borrow param loses writes made through its Guard and then dangles. C prints 40 \
+(increments vanish) then SIGSEGV; LLVM SIGSEGVs with no output; gg check ACCEPTS it. \
+Core #8 -- both backends wrong is >=2 bugs, not a wash. Note the sibling gate \
+mutex_alias() below covers only the BARE-param cell, and 0 of 43 Mutex fixtures used \
+a `&` param before this one. Un-ignore and move out of known_gaps/ when fixed."]
+fn mutex_amp_param_lost_writes_and_segv() {
+    run_gg("known_gaps/mutex_amp_param_lost_writes_and_segv.gg", "42");
+}
+
+#[test]
 fn mutex_alias() {
+    // AXIS NOTE (2026-08-05): this gate covers the BARE-param cell only. A bare
+    // param is already a borrow under CoW default-borrow and propagates writes
+    // correctly (40 -> 42 below). The explicitly-mutable `&` form is BROKEN --
+    // see mutex_amp_param_lost_writes_and_segv() above. The name "alias" reads
+    // wider than what this actually exercises (Core #12).
+    //
     // Core #8 borrow-param gate: a single-owner Mutex passed by borrow then
     // locked/used after the call must be freed exactly once by the OWNER on
     // scope exit, never by the borrow-param at fn-exit. The naive

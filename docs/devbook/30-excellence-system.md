@@ -646,6 +646,41 @@ parity are orthogonal: a round can raise parity while opening a filed
 class of new defects (that is what a bulk-fix + class-hunt round looks
 like), and the DONE entry carries both.
 
+## 11. Probe hygiene — and a rule that decayed into a false premise
+
+MIND THE PROBE exists because a probe that lies costs more than no probe:
+the wrong verdict is *believed*, and it propagates into briefs.
+
+**The pipeline is the masker, not the tool.** `cmd | tail`, `cmd | grep`,
+`cmd | head` all report the *last* stage's exit status. A probe that is
+killed, crashes, or never runs still reads as exit 0 through a pipe. Every
+crash verdict comes from invoking the binary directly and reading its own
+unmasked `$?`. The failure mode is not hypothetical: a killed bootstrap in
+one round reported `tail`'s exit 0 with no result line, and was briefly
+read as a pass.
+
+**The clause that decayed.** This rule used to read *"never read a crash
+off `gg run` (it masks SIGSEGV as a silent exit 1)"*. That was true when
+written and is **false now**: Round XXIV Track B made `gg run` propagate
+`128 + signo`, and `gg_run_propagates_signal_death`
+(`tests/integration.rs:2250`) is the guard pinning it. Re-verified
+2026-08-05 — `gg run` on a known-SEGV fixture returns 139.
+
+The episode is the Core #15e rider in miniature — *is this premise still
+TRUE, or a filed fact that decayed?* — and it bit in the most instructive
+possible way: the stale clause was used to *explain* a scout's bad
+measurements, and the explanation was itself wrong. Masking would produce
+**missed** crashes; the scout reported **phantom** ones, which masking
+cannot cause. A mechanism that does not fit the evidence is not an
+explanation, however authoritative its source. When the real cause is
+unknown, the honest record says so.
+
+Two rules survive the correction, and they are the durable ones:
+**re-measure, never inherit** (Core #5), and **a rule justified by a
+mechanism is only as live as that mechanism** — when you lean on one, check
+it still exists (Core #14's logic applied to process rules, not just code
+comments).
+
 ---
 
 *The rules this chapter explains live in `AGENTS.md`/`CLAUDE.md`; if this

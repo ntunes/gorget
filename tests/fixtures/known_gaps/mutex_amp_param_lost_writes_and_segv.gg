@@ -1,0 +1,52 @@
+# KNOWN GAP — Core #8, BOTH BACKENDS WRONG (≥2 bugs), plus a Core #10 accept.
+#
+# A `Mutex[T]` reached through an EXPLICITLY-MUTABLE `&` borrow param loses
+# writes made through its Guard, then dangles. MEASURED 2026-08-05, binaries
+# invoked directly (never through a pipe):
+#
+#   C backend    : prints `40`  (the two increments VANISH) then SIGSEGV (139)
+#   LLVM backend : no output at all,                              SIGSEGV (139)
+#   gg check     : "OK: no semantic errors"  <-- ACCEPTED
+#
+# INTENDED: `42`, exit 0. `bump` takes a mutable borrow of the caller's Mutex,
+# so both increments must be observable by the caller's own `.lock()`.
+#
+# HYPOTHESIS (unconfirmed -- do not treat as root cause): the `&` param binds a
+# COPY of the Mutex, so the guard locks the copy, writes land on the copy, and
+# the copy's guard dangles. Confirm against the IR before fixing.
+#
+# SCOPE -- exactly ONE cell, and the discriminator is the SIGIL, not mutability
+# of intent and not the inner type:
+#   sigil axis      : `&` (explicit mutable borrow) <-- BROKEN (this fixture)
+#                     bare param                    <-- OK; a bare param is
+#                     ALREADY a borrow under CoW default-borrow, and it
+#                     propagates writes correctly (tests/fixtures/mutex_alias.gg
+#                     bumps 40 -> 42 through two bare-param calls). So the
+#                     EXPLICITLY-mutable form is the broken one, which is the
+#                     opposite of the intuitive reading.
+#   inner-type axis : NOT the discriminator. Measured: `Mutex[String]` + BARE
+#                     param is exit 0 / correct; `Mutex[int]` + `&` param is
+#                     broken. The fault follows the sigil, not droppability.
+#
+# COVERAGE HOLE THIS RECORDS: 43 fixtures use `Mutex[`; ZERO pass one by `&`.
+# `mutex_alias.gg` was written as the Core #8 gate for this very family and
+# samples only the bare-param cell -- a Core #12 axis-incompleteness in a
+# fixture whose NAME ("alias") reads as if it covered borrows.
+#
+# Distinct from the filed Mutex drop-strategy family (TODO.md, Inc-A/B/C/D):
+# that class is about WHO FREES a sync handle. This is about the borrow not
+# being a borrow at all -- writes are lost even before anything is freed.
+#
+# Graduate out of known_gaps/ (un-ignore + move) the round this is fixed.
+
+void bump(Mutex[int] &m):
+    Guard[int] g = m.lock()
+    int v = g.get()
+    g.set(v + 1)
+
+void main():
+    Mutex[int] m = Mutex[int](40)
+    bump(&m)
+    bump(&m)
+    Guard[int] g = m.lock()
+    print(g.get())
