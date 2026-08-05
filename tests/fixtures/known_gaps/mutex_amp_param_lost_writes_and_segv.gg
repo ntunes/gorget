@@ -11,22 +11,36 @@
 # INTENDED: `42`, exit 0. `bump` takes a mutable borrow of the caller's Mutex,
 # so both increments must be observable by the caller's own `.lock()`.
 #
-# HYPOTHESIS (unconfirmed -- do not treat as root cause): the `&` param binds a
-# COPY of the Mutex, so the guard locks the copy, writes land on the copy, and
-# the copy's guard dangles. Confirm against the IR before fixing.
+# ROOT CAUSE (measured, not hypothesised -- an earlier "binds a COPY" guess and a
+# later "release is not emitted" guess were BOTH WRONG): a RECEIVER-ABI mismatch.
+# `Mutex[int]` is itself a pointer -- `typedef GorgetMutex* Mutex__int64_t` -- so
+# a `&` param lowers to `GorgetMutex**` while the runtime wants `GorgetMutex*` by
+# value. The callee reinterprets the CALLER'S STACK FRAME as a GorgetMutex.
+# Proof: patching one line of the emitted C (`__v0 = *(void**)__p0;`) gives 42,
+# exit 0. The release IS emitted -- it releases a fake mutex.
 #
-# SCOPE -- exactly ONE cell, and the discriminator is the SIGIL, not mutability
-# of intent and not the inner type:
-#   sigil axis      : `&` (explicit mutable borrow) <-- BROKEN (this fixture)
-#                     bare param                    <-- OK; a bare param is
-#                     ALREADY a borrow under CoW default-borrow, and it
-#                     propagates writes correctly (tests/fixtures/mutex_alias.gg
-#                     bumps 40 -> 42 through two bare-param calls). So the
-#                     EXPLICITLY-mutable form is the broken one, which is the
-#                     opposite of the intuitive reading.
-#   inner-type axis : NOT the discriminator. Measured: `Mutex[String]` + BARE
-#                     param is exit 0 / correct; `Mutex[int]` + `&` param is
-#                     broken. The fault follows the sigil, not droppability.
+# Lost writes, SEGV and deadlock are ONE mechanism reading different offsets of
+# that fake struct, so WHICH face you see is stack-layout dependent. Trust the
+# mechanism, not this file's recorded symptom, if they ever disagree.
+#
+# The real axis is `SelfConvention::ByValue` (12 protocols: Shared, Weak, Mutex,
+# RWLock, Thread, AtomicInt, AtomicBool, Barrier, WaitGroup, Semaphore, OnceFlag,
+# TaskGroup) -- NOT the `&` sigil, which is only one route to it. See TODO.md.
+#
+# SCOPE -- one cell of a wider class. Two statements, both true, do not confuse
+# them:
+#   WITHIN THIS SHAPE the sigil is what flips it, measured:
+#     `Mutex[int] &m`  -> broken (this fixture)
+#     `Mutex[int] m`   -> CORRECT; a bare param is already a borrow under CoW
+#                         default-borrow, and mutex_alias.gg bumps 40 -> 42
+#                         through two bare-param calls. So the EXPLICITLY
+#                         mutable form is the broken one -- counter-intuitive,
+#                         and worth keeping in the record.
+#     inner type is NOT it: Mutex[String]+bare is correct, Mutex[int]+& breaks.
+#   BUT THE CLASS AXIS IS NOT THE SIGIL. It is `SelfConvention::ByValue`. The
+#   sigil is merely one way a pointer-typed receiver reaches a by-value callee;
+#   a scout reports sigil-free routes (struct field, collection element) that
+#   fail the same way. Fixing only the sigil would leave those live.
 #
 # COVERAGE HOLE THIS RECORDS: 43 fixtures use `Mutex[`; ZERO pass one by `&`.
 # `mutex_alias.gg` was written as the Core #8 gate for this very family and

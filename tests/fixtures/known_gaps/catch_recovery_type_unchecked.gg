@@ -30,10 +30,15 @@
 # backstop. Core #8: agreement between backends on the wrong answer is >=2
 # bugs, and here they agree on producing a working binary for ill-typed code.
 #
-# LIKELY MECHANISM (unverified -- confirm before fixing): the sibling defect
-# `index_string_from_grid_accidentally_green` (tests/integration.rs) is the
-# same class and its note reads "the check-arm returned `error_id` which
-# unifies with any type". Check whether the catch-recovery arm does the same.
+# ROOT CAUSE (traced; an earlier `error_id` guess was FALSIFIED -- `int v = ""`
+# is rejected with a type error, so no error type is involved): typecheck.rs:4652
+# calls `self.infer_expr(recovery)` and DISCARDS the return value, then :4656-4659
+# returns the Result's `T` slot as the expression's type regardless. Nothing is
+# dropped -- a type is FABRICATED, without ever comparing.
+#
+# SIBLING ARM, must ship in the SAME diff (Core #4): FaultCatch at
+# typecheck.rs:4710 is broken identically -- `int v = a * b catch f: ""` is also
+# accepted. Two arms, one class.
 #
 # PROVENANCE NOTE: the report cites gorget HEAD 9a42a638 as where D29's
 # fallible-mark model "introduced/exposed" this. 9a42a638 is only the HEAD the
