@@ -18,7 +18,7 @@
   - `cargo test --test spec_conformance`: **3/0** (C/LLVM/SH — Core #9 3-lane adjudication all green)
   - `cargo test --test security`: **142/0/21** (+4 R6 UAF fixtures)
   - `cargo test -p ggdef`: **0/0** (no test targets in crate; corpus via spec_conformance)
-  - Full C `cargo test --test integration -- --test-threads=4`: **2131/1/66** (`GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600`) — 1 residual (`lowerer_comparison`) under scout investigation, not a regression
+  - Full C `cargo test --test integration -- --test-threads=4`: **2131/1/66** (`GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600`) — 1 residual (`lowerer_comparison`) DISMISSED as flake: post-hoc scout `/tmp/scout_lowerer_comparison_2a88d2607a.md` re-verified via 2 focused reruns + confirmed LLVM sweep's concurrent `lowerer_comparison` passed GREEN at the same HEAD. Root cause: transient `posix_spawn` EACCES under fork/exec pressure from concurrent multi-agent load. Two hardening opportunities scoped for XXXI (harness spawn-retry + `/tmp/self_host_stage*` PID suffix) — noted in scout report, not filed formally to avoid clause-(b) drift.
   - Full LLVM `GG_BACKEND=llvm cargo test --test integration --release`: running at time of close
   - `self_host_bootstrap_fixed_point`: converged stage-2 (~692s under A.3)
 
