@@ -2577,9 +2577,9 @@ fn emit_dict_hof_loop_scaffold(
 
     // ─────────────── Entry: discriminator dispatch ───────────────
     // `disc = Load(FieldPtr(coll, 19 /* entries_keys */)); is_dense = disc != NULL`
-    // Field 19 is beyond the LIR StructDef's tracked slots (13 fields),
-    // so FieldPtr emits the byte-offset fallback (field * sizeof(void*) = 152B),
-    // which matches the C struct layout (all fields 8 bytes, no padding).
+    // Field 19 (entries_keys) is a first-class typed slot in the LIR
+    // StructDef (see `src/lir/types.rs` — 24 explicit fields matching the
+    // C runtime layout), so FieldPtr uses the typed-offset path.
     let disc_ptr = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::FieldPtr {
         dst: disc_ptr,
@@ -2593,11 +2593,12 @@ fn emit_dict_hof_loop_scaffold(
         ptr: disc_ptr,
         ty: LirType::Ptr,
     });
+    // Use NullPtr for the null-pointer comparand — `IConst { ty: Ptr, value: 0 }`
+    // lowers to `add ptr 0, 0` under LLVM, which LLVM rejects
+    // ("integer constant must have integer type").
     let null_ptr = alloc_value(next);
-    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::IConst {
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::NullPtr {
         dst: null_ptr,
-        ty: LirType::Ptr,
-        value: 0,
     });
     let is_dense = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::Cmp {
@@ -3599,6 +3600,9 @@ fn emit_set_hof_loop_scaffold(
     }
 
     // ─────────────── Entry: discriminator dispatch ───────────────
+    // Mirror of the Dict-side scaffold — see `emit_dict_hof_loop_scaffold`
+    // for the shared rationale (typed `entries_keys` FieldPtr + `NullPtr`
+    // comparand for LLVM safety).
     let disc_ptr = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::FieldPtr {
         dst: disc_ptr,
@@ -3613,10 +3617,8 @@ fn emit_set_hof_loop_scaffold(
         ty: LirType::Ptr,
     });
     let null_ptr = alloc_value(next);
-    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::IConst {
+    func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::NullPtr {
         dst: null_ptr,
-        ty: LirType::Ptr,
-        value: 0,
     });
     let is_dense = alloc_value(next);
     func.block_mut(BlockId(current_bb as u32)).push_synthetic(Inst::Cmp {

@@ -126,14 +126,19 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
         },
         // GorgetMap — hash map backing Dict[K,V] and HashMap[K,V].
         // C layout: 24 fields × 8 = 192 bytes (see runtime_preamble.c GorgetMap
-        // — 19 legacy fields + 5 D39 dense-mode fields appended at struct END).
-        // cap at offset +8 matches the generic view-discriminator prefix shared
-        // with Str and GorgetArray. LIR models 13 layout/data fields; the
-        // trailing 11 slots (6 runtime function pointers + 5 D39 dense-mode
-        // fields NULL/0 in legacy mode) are covered by the c_size trailing pad.
+        // — 13 core layout/data fields + 6 runtime hook fn-ptrs + 5 D39
+        // dense-mode fields appended at struct END). cap at offset +8 matches
+        // the generic view-discriminator prefix shared with Str and GorgetArray.
+        // All 24 fields are modeled explicitly here so FieldPtr, pointee
+        // inference, and the LLVM struct-type layout all agree with the C ABI.
+        // Field indexes: LLVM `SetCollectionBridge` hardcodes 11=hash_fn,
+        // 12=eq_fn; BIR dense scaffolds hardcode 19=entries_keys,
+        // 20=entries_values, 21=entries_len — preserving these positions is
+        // load-bearing (DD#7 lock: new fields APPEND, never insert).
         StructDef {
             name: "GorgetMap".into(),
             fields: vec![
+                // 0-12: core layout/data fields
                 ("keys".into(), LirType::Ptr),
                 ("cap".into(), LirType::I64),
                 ("values".into(), LirType::Ptr),
@@ -147,6 +152,19 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("tombstones".into(), LirType::I64),
                 ("hash_fn".into(), LirType::Ptr),
                 ("eq_fn".into(), LirType::Ptr),
+                // 13-18: runtime hook function pointers
+                ("val_drop".into(), LirType::Ptr),
+                ("val_clone".into(), LirType::Ptr),
+                ("key_drop".into(), LirType::Ptr),
+                ("key_clone".into(), LirType::Ptr),
+                ("val_materialize".into(), LirType::Ptr),
+                ("key_materialize".into(), LirType::Ptr),
+                // 19-23: D39 dense-mode fields (NULL/0 in legacy mode)
+                ("entries_keys".into(), LirType::Ptr),
+                ("entries_values".into(), LirType::Ptr),
+                ("entries_len".into(), LirType::I64),
+                ("entries_cap".into(), LirType::I64),
+                ("indices".into(), LirType::Ptr),
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
@@ -157,10 +175,11 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
             c_runtime_alias: None, box_inner_type: None, is_trait_box: false, expects_drop_fn: false,
         },
         // GorgetSet — typedef alias for GorgetMap, backs Set[T] and HashSet[T].
-        // Same C layout as GorgetMap: 192 bytes.
+        // Same C layout as GorgetMap: 24 fields × 8 = 192 bytes.
         StructDef {
             name: "GorgetSet".into(),
             fields: vec![
+                // 0-12: core layout/data fields
                 ("keys".into(), LirType::Ptr),
                 ("cap".into(), LirType::I64),
                 ("values".into(), LirType::Ptr),
@@ -174,6 +193,19 @@ pub fn builtin_struct_defs() -> Vec<StructDef> {
                 ("tombstones".into(), LirType::I64),
                 ("hash_fn".into(), LirType::Ptr),
                 ("eq_fn".into(), LirType::Ptr),
+                // 13-18: runtime hook function pointers (Set: only key_drop/key_clone used)
+                ("val_drop".into(), LirType::Ptr),
+                ("val_clone".into(), LirType::Ptr),
+                ("key_drop".into(), LirType::Ptr),
+                ("key_clone".into(), LirType::Ptr),
+                ("val_materialize".into(), LirType::Ptr),
+                ("key_materialize".into(), LirType::Ptr),
+                // 19-23: D39 dense-mode fields (NULL/0 in legacy mode)
+                ("entries_keys".into(), LirType::Ptr),
+                ("entries_values".into(), LirType::Ptr),
+                ("entries_len".into(), LirType::I64),
+                ("entries_cap".into(), LirType::I64),
+                ("indices".into(), LirType::Ptr),
             ],
             enum_kind: EnumKind::NotEnum,
             is_union_layout: false,
