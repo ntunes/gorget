@@ -2736,8 +2736,8 @@ Operand op_consume(LowerCtx ctx, GirModule &gmod, int lid, ConsumeKind kind):
 # (`src/ir/lowering/context.rs:1913`). Where Rust both DECIDES the
 # operand mode AND emits the clone call inline, this self-host port
 # splits the two concerns: this function returns the OperandMode label
-# only; Phase 2c clone-emission (deferred — see `flush_drop_queue`
-# docstring + `clone-emission-at-calls.md`) will produce the actual
+# only; Phase 2c clone-emission (deferred — see the `flush_drop_queue`
+# docstring and devbook 13, "Ownership in the IR") will produce the actual
 # `GICall(<T>__clone, ...)` at the receiving sites. The function name
 # is `decide_operand_at_consuming_arg` rather than Rust's
 # `ensure_owned_*` to reflect that split: this layer decides the mode,
@@ -2767,7 +2767,8 @@ Operand op_consume(LowerCtx ctx, GirModule &gmod, int lid, ConsumeKind kind):
 #                  provides this — the parameter exists in the
 #                  signature so Phase 2.3.a wire-ups don't reshape it.
 #
-# **Decision tree** (matches Rust + `clone-emission-at-calls.md`):
+# **Decision tree** (matches Rust; the canonical clone-vs-move-vs-borrow
+# tree is devbook 13, "Ownership in the IR"):
 #   1. Primitive / non-resource source        → OpCopy (byte-copy sound)
 #   2. Ptr(T) where T is a resource type      → OpClone (deref +
 #                                                 materialize through the
