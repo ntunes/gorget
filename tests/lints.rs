@@ -10779,16 +10779,13 @@ fn doc_source_citations_resolve() {
         out_of_range.join("\n  ")
     );
 
-    // Shrink-only. SIX of the seven sit in `docs/internals/` files that are
-    // pending deletion and name artifacts of abandoned plans that were never
-    // built (`src/backend/shared.rs`, `src/backend/llvm/{types,runtime}.rs`,
-    // `src/lir/lower.rs`, `src/semantic/borrow_check.rs`,
-    // `lib/std/gen/resources.gg`); they go to zero when those files go. The
-    // SEVENTH is a real defect and does not: `decisions.md` cites a
-    // `known_gaps` repro that was never committed, which the "every filed
-    // bug ships a durable repro" rule requires to exist. Lower this as each
-    // is closed.
-    const MISSING_BUDGET: usize = 7;
+    // Shrink-only, and down to its last entry: the six that named artifacts of
+    // abandoned plans went with the `docs/internals/` files that cited them.
+    // What remains is a real defect — `decisions.md` cites a `known_gaps`
+    // repro that was never committed, which the "every filed bug ships a
+    // durable repro" rule requires to exist. Commit the repro (or reword the
+    // citation) and this reaches ZERO; lower the budget when it does.
+    const MISSING_BUDGET: usize = 1;
     assert!(
         missing.len() <= MISSING_BUDGET,
         "doc(s) cite {} nonexistent path(s) (budget {}):\n  {}\n\n\

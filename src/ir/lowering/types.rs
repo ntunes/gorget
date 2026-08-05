@@ -920,8 +920,9 @@ pub fn ensure_generic_field_type_registered(
 /// Register a monomorphized Option[T] type (built-in: Some(T) | None).
 ///
 /// Routes through `make_option_type_def` so payload drop-strategy propagates
-/// into the wrapper's metadata at registration time (Tier 1c, structural-
-/// guards.md). Until 2026-05-10 this site inlined the TypeDef literal with
+/// into the wrapper's metadata at registration time (Tier 1c,
+/// `docs/devbook/25-structural-guards.md`). Until 2026-05-10 this site inlined
+/// the TypeDef literal with
 /// `..Default::default()` metadata — a parallel registration path that
 /// silently bypassed the `make_option_type_def` helper. The result was
 /// `Option__Box__T` registered with `drop: None, copy: Trivial` even when

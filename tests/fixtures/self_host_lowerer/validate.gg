@@ -344,8 +344,8 @@ void write_violations(String path, String name, Vector[String] vs):
 #
 # Catches mid-pipeline regressions (e.g. a pass that leaves the IR in
 # a malformed state, even if downstream passes happen to mask the bug)
-# the same way the Rust side has used `assert_module_valid` since
-# unified-resource-model.md §8.3 shipped.
+# the same way the Rust side has used `assert_module_valid` since the
+# validator-after-every-pass work shipped (docs/devbook/14-lir-ssa.md).
 
 # Read the GG_VALIDATE_PASSES env var. Set (any value) → true.
 bool validate_passes_enabled():
