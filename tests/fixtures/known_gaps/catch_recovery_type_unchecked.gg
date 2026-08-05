@@ -1,0 +1,62 @@
+# KNOWN GAP — TYPE-CHECKER SOUNDNESS HOLE. A `catch` recovery expression's
+# type is never checked against the binding's declared type, so ill-typed code
+# reaches codegen. Reported by the gorget-js project (snag #14); the severe
+# cell below was found while verifying that report.
+#
+# INTENDED: `gg check` REJECTS this with a type error, e.g.
+#   "catch recovery type Vector[String] does not match expected Vector[int]".
+#
+# TWO CELLS, and the severity depends entirely on C-level layout:
+#
+#   (a) REPORTED CELL -- recovery `""` (Str) into a `Vector[int]` binding:
+#       gg check : exit 0, "OK: no semantic errors"
+#       gg build : C rejects it --
+#           error: incompatible types when assigning to type 'GorgetArray'
+#                  from type 'Str'
+#       Ill-typed, but the C compiler happens to catch it.
+#
+#   (b) SEVERE CELL (this fixture) -- recovery `Vector[String]` into a
+#       `Vector[int]` binding. BOTH are `GorgetArray` at the C level, so
+#       NOTHING catches it:
+#           gg check : exit 0
+#           gg build : exit 0        <-- on C *and* --backend=llvm
+#           run      : exit 0, prints `2` then `187650900857504`
+#       That second number is a `Str` header's data POINTER read as an
+#       int64_t. Silent type confusion on both backends -- no diagnostic at
+#       any stage. Using that value as an index or in arithmetic is arbitrary
+#       memory access.
+#
+# So the reported "the C compiler catches it" is an accident of layout, not a
+# backstop. Core #8: agreement between backends on the wrong answer is >=2
+# bugs, and here they agree on producing a working binary for ill-typed code.
+#
+# LIKELY MECHANISM (unverified -- confirm before fixing): the sibling defect
+# `index_string_from_grid_accidentally_green` (tests/integration.rs) is the
+# same class and its note reads "the check-arm returned `error_id` which
+# unifies with any type". Check whether the catch-recovery arm does the same.
+#
+# PROVENANCE NOTE: the report cites gorget HEAD 9a42a638 as where D29's
+# fallible-mark model "introduced/exposed" this. 9a42a638 is only the HEAD the
+# reporter was building at (it is an unrelated known_gaps commit); D29 landed
+# earlier. Treat the provenance as "observed at", not "caused by", until
+# bisected.
+#
+# Graduate out of known_gaps/ (un-ignore + move to a NEG fixture) when fixed.
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+Vector[String] strs():
+    Vector[String] s = Vector[String]()
+    s.push("hello " + "world")
+    s.push("second " + "elem")
+    return s
+
+void main():
+    Vector[int] toks = make_vec(-1)! catch (_): strs()
+    print(toks.len())
+    print(toks[0])

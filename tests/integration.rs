@@ -17762,6 +17762,24 @@ fn mutex_basic() {
 }
 
 #[test]
+#[ignore = "KNOWN GAP (filed 2026-08-05, reported by gorget-js snag #14; severe cell \
+found while verifying it): a `catch` recovery expression's type is NEVER checked \
+against the binding's declared type. Reported cell (recovery `\"\"` into a \
+Vector[int] binding) is caught by the C compiler by accident of layout. SEVERE cell \
+(this fixture): a Vector[String] recovery into a Vector[int] binding shares the C \
+representation GorgetArray, so NOTHING catches it -- gg check exit 0, gg build \
+exit 0 on C AND llvm, runs and prints a Str header's data pointer as an int64_t. \
+Silent type confusion on both backends. Likely same mechanism as \
+index_string_from_grid_accidentally_green (a check-arm returning error_id, which \
+unifies with any type). Un-ignore and convert to a NEG fixture when fixed."]
+fn catch_recovery_type_unchecked() {
+    check_gg_fails(
+        "known_gaps/catch_recovery_type_unchecked.gg",
+        "error[E_TypeMismatch]",
+    );
+}
+
+#[test]
 #[ignore = "KNOWN GAP (filed 2026-08-05): `gg check` ACCEPTS this 3-line program, \
 then BOTH Rust backends ICE at exit 101 (move-follow-through violation, \
 src/ir/lowering/mod.rs:1872). The self-host compiles and runs it correctly -- the \
