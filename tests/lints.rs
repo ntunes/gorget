@@ -10955,3 +10955,84 @@ fn code_doc_citations_resolve() {
             .join("\n")
     );
 }
+
+// ---------------------------------------------------------------------------
+// DESIGN-NOTE STATUS GUARD — `docs/internals/` holds designed-but-UNBUILT work
+// only, and its index must be complete.
+//
+// Both halves of this were live defects before the tree was retired:
+//   * files described shipped behaviour in present tense while their headers
+//     said "Proposed", so readers could not tell which sections were current
+//     (that ambiguity is what made the whole tree untrustworthy); and
+//   * the index listed ELEVEN of twenty-four files, so thirteen were reachable
+//     only by `ls` — including two carrying owner rulings recorded nowhere else.
+//
+// Prose in the README cannot hold either invariant. This can.
+// ---------------------------------------------------------------------------
+
+/// The only statuses a design note may carry. `SHIPPED` is deliberately ABSENT:
+/// once work lands, the content belongs in a devbook chapter and the note is
+/// deleted. Allowing a `SHIPPED` status is how the tree re-accumulates the
+/// superseded pile it was cleaned out of.
+const DESIGN_NOTE_STATUSES: &[&str] = &["RATIFIED-UNBUILT", "PROPOSED", "IN-PROGRESS"];
+
+#[test]
+fn design_notes_carry_a_status_and_the_index_is_complete() {
+    let dir = Path::new("docs/internals");
+    if !dir.is_dir() {
+        return; // the tree may be retired entirely one day; that is not a failure
+    }
+
+    let mut notes: Vec<String> = fs::read_dir(dir)
+        .expect("read docs/internals")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".md") && n != "README.md")
+        .collect();
+    notes.sort();
+
+    // ── limb 1: every note declares exactly one recognised status ──
+    let mut bad: Vec<String> = Vec::new();
+    for n in &notes {
+        let body = fs::read_to_string(dir.join(n)).unwrap_or_default();
+        // the status must be in the header block, not buried mid-file
+        let head: String = body.lines().take(12).collect::<Vec<_>>().join("\n");
+        let found: Vec<&&str> = DESIGN_NOTE_STATUSES
+            .iter()
+            .filter(|s| head.contains(**s))
+            .collect();
+        if head.contains("SHIPPED") {
+            bad.push(format!(
+                "{n}: declares SHIPPED — shipped content belongs in a devbook \
+                 chapter and this note should be DELETED, not relabelled"
+            ));
+        } else if found.is_empty() {
+            bad.push(format!(
+                "{n}: no status in its first 12 lines (expected one of {DESIGN_NOTE_STATUSES:?})"
+            ));
+        } else if found.len() > 1 {
+            bad.push(format!("{n}: declares {} statuses; exactly one is allowed", found.len()));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "design note(s) in docs/internals/ with a bad status header:\n  {}\n\n\
+         Every note states whether it is ratified, proposed, or partly landed, \
+         because a reader cannot otherwise tell which sentences describe the \
+         compiler and which describe an intention. Add the header, or — if the \
+         work has shipped — fold the content into its devbook chapter and \
+         delete the note.",
+        bad.join("\n  ")
+    );
+
+    // ── limb 2: the index lists every note that exists ──
+    let readme = fs::read_to_string(dir.join("README.md")).unwrap_or_default();
+    let unindexed: Vec<&String> = notes.iter().filter(|n| !readme.contains(*n)).collect();
+    assert!(
+        unindexed.is_empty(),
+        "design note(s) not listed in docs/internals/README.md: {unindexed:?}\n\n\
+         An unindexed note is reachable only by `ls`. The index listed 11 of 24 \
+         files before this tree was retired, and two of the thirteen omissions \
+         carried owner rulings recorded nowhere else. Add a row.",
+    );
+}
