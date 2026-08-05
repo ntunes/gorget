@@ -41742,3 +41742,62 @@ fn advice_fixtures_have_working_remedy() {
         run_gg(after, expected);
     }
 }
+
+/// `--backend=<unknown>` must be REJECTED, not silently served by the C backend.
+///
+/// The dispatch is `match effective_backend { "llvm" => …, _ => CLirBackend }`,
+/// so before the parse-time check an unrecognised value — `wasm`, `cranelift`,
+/// or a typo like `llvmm` — produced a C binary and reported success. A first
+/// experiment with a not-yet-existing backend would "work", which is the worst
+/// possible answer.
+///
+/// Deliberately does not exercise `--backend=llvm`: that needs `llc` on PATH,
+/// and this test is about flag VALIDATION, not codegen.
+#[test]
+fn unknown_backend_flag_is_rejected() {
+    let dir = std::env::temp_dir().join(format!("gg_backend_flag_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = dir.join("probe.gg");
+    std::fs::write(&src, "void main():\n    print(\"hi\")\n").expect("write probe");
+
+    // Every unknown value fails, and says what IS accepted.
+    for bad in ["wasm", "cranelift", "llvmm", "C"] {
+        let out = Command::new(gg_binary())
+            .arg("build")
+            .arg(format!("--backend={bad}"))
+            .arg(&src)
+            .arg("-o")
+            .arg(dir.join("out"))
+            .output()
+            .expect("run gg build");
+        assert!(
+            !out.status.success(),
+            "`--backend={bad}` should be rejected, but the build SUCCEEDED — \
+             the unknown value silently fell through to the C backend."
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains("unknown backend") && err.contains("llvm") && err.contains("c-lir"),
+            "`--backend={bad}` must name the accepted set in its diagnostic.\nstderr: {err}"
+        );
+    }
+
+    // The legal C-backend spellings still build (no llc required).
+    for good in ["c", "c-lir"] {
+        let out = Command::new(gg_binary())
+            .arg("build")
+            .arg(format!("--backend={good}"))
+            .arg(&src)
+            .arg("-o")
+            .arg(dir.join(format!("ok_{good}")))
+            .output()
+            .expect("run gg build");
+        assert!(
+            out.status.success(),
+            "`--backend={good}` must still build.\nstderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

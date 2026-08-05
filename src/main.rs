@@ -13,6 +13,20 @@ use gorget::manifest::{self, DepSpec, Manifest};
 use gorget::parser::Parser;
 use gorget::resolver;
 
+/// Every legal `--backend` value. This is the ONE source of truth for the
+/// accepted set: the parse-time check rejects anything not listed here, and the
+/// dispatch in `build` must have an arm for each entry.
+///
+/// `c` and `c-lir` both select the C backend (`c-lir` is the default and the
+/// name the pipeline uses internally; `c` is the shorter alias, also what the
+/// hot-reload path substitutes when LLVM cannot serve a shared-library build).
+///
+/// Adding a backend means adding it here AND giving it a dispatch arm —
+/// `backend_flag_set_matches_dispatch` (`tests/lints.rs`) fails if the two
+/// disagree, because the failure mode is silent: an unmatched value falls
+/// through to C and builds successfully.
+const BACKENDS: &[&str] = &["c", "c-lir", "llvm"];
+
 /// Propagate a child process's exit status to `gg`'s own exit, preserving
 /// signal-death information the naive `status.code().unwrap_or(1)` pattern
 /// erases. Follows the Bash/`cargo run`/`timeout(1)` convention:
@@ -2672,6 +2686,19 @@ fn real_main() {
         .map(|s| s.as_str())
         .or_else(|| args.iter().find_map(|a| a.strip_prefix("--backend=")))
         .unwrap_or("c-lir");
+    // Reject an unknown backend instead of silently falling through to C.
+    // The dispatch below is `match { "llvm" => …, _ => CLir }`, so without this
+    // check `--backend=wasm` (or any typo) built a C binary and reported
+    // success — user input discarded rather than rejected.
+    if !BACKENDS.contains(&backend_name) {
+        eprintln!(
+            "error: unknown backend `{backend_name}`\n  \
+             expected one of: {}\n  \
+             (the default is `c-lir`; `c` is an accepted alias for it)",
+            BACKENDS.join(", ")
+        );
+        process::exit(1);
+    }
     let shared_mode = args.iter().any(|a| a == "--shared");
     let show_borrows = args.iter().any(|a| a == "--show-borrows");
     let clone_modes = parse_clone_modes(&args).unwrap_or_else(|e| {

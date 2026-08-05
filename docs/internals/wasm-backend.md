@@ -70,10 +70,12 @@ rather than pending:
   hermetic-core-versus-extended split that a native backend needs applies here
   too, and probably more sharply.
 
-## ⚠ Caveat for whoever starts this
+## The flag is reserved, not accepted
 
-`--backend=wasm` **does not error today — it silently builds C**. The dispatch
-at `src/main.rs` matches `"llvm"` and falls through to the C backend for every
-other value, and the flag is never validated. A first WASM experiment that
-"works" may simply be a C binary. This is filed as a defect in `TODO.md`; fix
-it before trusting any `--backend=wasm` result.
+`--backend=wasm` is **rejected** with a diagnostic naming the accepted set
+(`c`, `c-lir`, `llvm`). It did not always: the dispatch matches `"llvm"` and
+falls through to the C backend for everything else, so before the parse-time
+check an unrecognised value silently produced a C binary and reported success.
+Route A's first milestone is therefore an honest one — add `wasm` to the
+accepted set at the same time as a dispatch arm, which
+`backend_flag_set_matches_dispatch` requires anyway.

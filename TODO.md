@@ -1481,7 +1481,6 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 ## Tooling / CLI / formatter / LSP
 
 ### High
-- **🆕🐛 [HIGH — Core #10 on the CLI surface; found 2026-08-05] `gg build --backend=<anything-but-llvm>` SILENTLY BUILDS C and exits 0.** `src/main.rs:996-999` dispatches `match effective_backend { "llvm" => LlvmBackend, _ => CLirBackend }`, and the flag value is never validated (it is only extracted, `:2670-2673`). So `--backend=wasm`, `--backend=cranelift`, and typos like `--backend=llvmm` all silently produce a C binary and report success — user input discarded rather than rejected. Fix: reject unknown values at parse time, naming the accepted set. ~3 lines. Repro: `gg build --backend=wasm x.gg` → C binary, exit 0, no diagnostic.
 
 - **📋 [gorget-sheets snag #57 — tooling/UX, 2026-07-07] Import path model: file-relative, no package `src/` root.** Same-dir imports only (`from errors import` inside `engine/`); entry-relative reachability; no `src_roots` in manifest. Blocks natural `from engine.sheet import` from arbitrary entries. Document in reference/book and/or add `src_roots`. Writeup: `the gorget-sheets snag report (git history)`. Own scout (design) → owner decision.
 

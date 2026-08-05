@@ -11036,3 +11036,64 @@ fn design_notes_carry_a_status_and_the_index_is_complete() {
          carried owner rulings recorded nowhere else. Add a row.",
     );
 }
+
+// ---------------------------------------------------------------------------
+// BACKEND-FLAG GUARD — the accepted `--backend` set and the dispatch must agree.
+//
+// The dispatch is `match effective_backend { "llvm" => …, _ => CLirBackend }`.
+// A wildcard arm means a value nobody handles does not error — it BUILDS, as C,
+// and reports success. That is how `--backend=wasm` silently produced a C binary
+// for as long as the flag existed. The parse-time check closes it, but only
+// while `BACKENDS` and the dispatch stay in sync, and nothing about a `match`
+// with a `_` arm forces that.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn backend_flag_set_matches_dispatch() {
+    let main = fs::read_to_string("src/main.rs").expect("read src/main.rs");
+
+    // The declared set.
+    let decl = regex::Regex::new(r#"const BACKENDS: &\[&str\] = &\[([^\]]*)\]"#)
+        .expect("BACKENDS regex");
+    let caps = decl.captures(&main).expect(
+        "`const BACKENDS: &[&str]` not found in src/main.rs — it is the single \
+         source of truth for the accepted --backend values; if it moved or was \
+         renamed, update this lint rather than deleting it.",
+    );
+    let lit = regex::Regex::new(r#""([^"]+)""#).expect("literal regex");
+    let declared: Vec<String> =
+        lit.captures_iter(&caps[1]).map(|c| c[1].to_string()).collect();
+    assert!(
+        declared.len() >= 2 && declared.iter().any(|b| b == "llvm"),
+        "BACKENDS parsed as {declared:?} — that does not look right; the scan is \
+         broken, not the tree."
+    );
+
+    // The parse-time rejection must still be wired to that set.
+    assert!(
+        main.contains("BACKENDS.contains(&backend_name)"),
+        "the --backend parse-time check is gone. Without it an unknown value \
+         falls through the dispatch's `_` arm and builds as C, reporting \
+         success — user input silently discarded (Core #10)."
+    );
+
+    // Every explicitly-matched backend literal must be a declared value.
+    let disp = regex::Regex::new(r"match effective_backend \{([^}]*)\}")
+        .expect("dispatch regex");
+    let body = disp
+        .captures(&main)
+        .map(|c| c[1].to_string())
+        .expect("`match effective_backend { … }` not found in src/main.rs");
+    let arms: Vec<String> = lit
+        .captures_iter(&body)
+        .map(|c| c[1].to_string())
+        .collect();
+    let unknown: Vec<&String> = arms.iter().filter(|a| !declared.contains(a)).collect();
+    assert!(
+        unknown.is_empty(),
+        "backend(s) dispatched but not accepted by the flag: {unknown:?}\n\n\
+         `BACKENDS` is {declared:?}. A backend with a dispatch arm but no entry \
+         in BACKENDS is unreachable — the parse-time check rejects it before \
+         dispatch ever runs. Add it to BACKENDS."
+    );
+}
