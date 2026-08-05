@@ -17762,6 +17762,36 @@ fn mutex_basic() {
 }
 
 #[test]
+#[ignore = "KNOWN GAP (filed 2026-08-05): `gg check` ACCEPTS this 3-line program, \
+then BOTH Rust backends ICE at exit 101 (move-follow-through violation, \
+src/ir/lowering/mod.rs:1872). The self-host compiles and runs it correctly -- the \
+reference lags the self-host, a succession milestone. Trigger is a COMPUTED \
+initializer: `shared String s = \"a\" + \"b\"` ICEs, `shared String s = \"hello\"` \
+(rodata literal) is exit 0 -- and every `shared` fixture in the corpus uses the \
+literal form, which is why nothing caught it. Un-ignore and move out of \
+known_gaps/ when fixed."]
+fn shared_computed_init_ice() {
+    run_gg("known_gaps/shared_computed_init_ice.gg", "ab");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-05): BOTH LANES broken, differently. gg check \
+accepts; Rust ICEs at exit 101 on both backends; the SELF-HOST compiles and then \
+double-frees (exit 134). This is the measured answer to Track B's reachability \
+question -- a droppable inner DOES reach the shared lock-chain. Discriminator is \
+NOT the owning destination (the non-owning read fails identically): the trigger is \
+the spawn/&-param task-facade path (__get_ptr + GIDeref(wr_binding) re-seed), which \
+unlike the plain lock-chain reads IS registered for drop. Without the spawn the \
+self-host is clean on the same shape. Un-ignore and move out of known_gaps/ when \
+fixed."]
+fn shared_spawn_amp_param_double_free() {
+    run_gg(
+        "known_gaps/shared_spawn_amp_param_double_free.gg",
+        "hello world-forced!",
+    );
+}
+
+#[test]
 #[ignore = "KNOWN GAP (filed 2026-08-05): `d.put(\"k\", g.get())` double-frees at \
 runtime -- prints, then `free(): double free detected in tcache 2`, SIGABRT, \
 identically on C and --backend=llvm. Core #8: both backends agreeing on the wrong \
