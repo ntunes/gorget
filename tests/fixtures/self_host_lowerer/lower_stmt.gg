@@ -56,12 +56,19 @@ void lower_stmt(LowerCtx &ctx, Stmt stmt, GirModule &gmod, bool is_main):
             # mint a hidden sync carrier + a facade local; reads/writes of
             # `x` route through the carrier per kind. Mirrors Rust gg's four
             # strategy arms (`src/ir/lowering/stmts/mod.rs:1449-1640`).
-            # Gated to a SCALAR inner (the only shape the chains handle;
-            # a non-scalar `shared` falls through to the plain var-decl
-            # path — a live gap, filed).
+            # The `< PRIM_COUNT` gate that used to silently fall a non-scalar
+            # `shared T x = ...` through to the plain var-decl path has been
+            # RETIRED (Track D+E D′): `lower_shared_var_decl` builds the
+            # carrier via a runtime `gorget_mutex_new(sizeof(T), &init)` /
+            # `gorget_rwlock_new` chain that is size-driven, so it handles
+            # arbitrary inner types. Retiring the gate is what plugs the
+            # `shared String s = ...; spawn f(&s)` double-free: without the
+            # gate, `s` enters `ctx.shared_locals` and `lower_shared_spawn`
+            # (lower_expr.gg:1596-1793) fires -- the caller no longer falls
+            # through to `lower_named_fn_spawn`'s shallow `GorgetString` copy.
             if shared_kind >= 1 and shared_kind <= 3:
                 int shc_inner_ty = map_ast_type(stype, &gmod)
-                if shc_inner_ty < PRIM_COUNT and shc_inner_ty != UNIT_TYPE:
+                if shc_inner_ty != UNIT_TYPE:
                     lower_shared_var_decl(&ctx, name, init_expr, shc_inner_ty, shared_kind, &gmod)
                     return
             # Facet 2 — tuple destructure VarDecl. The parser packs a tuple
