@@ -1,0 +1,25 @@
+# NEG · Track A · Result-catch · recovery `Vector[String]` (from strs()) · binding
+# `Vector[int]` · VarDecl shape · non-literal recovery so const-fold cannot elide it.
+#
+# The `catch` recovery expression's inferred type is silently discarded and the
+# outer VarDecl unifies against the fabricated OK-slot type — so an ill-typed
+# recovery reaches codegen and both backends (C, LLVM) share `GorgetArray` at the
+# C level, producing silent type confusion (a Str header's data pointer read as
+# int64_t). INTENDED: `gg check` rejects with E_TypeMismatch.
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+Vector[String] strs():
+    Vector[String] s = Vector[String]()
+    s.push("hello " + "world")
+    s.push("second " + "elem")
+    return s
+
+void main():
+    Vector[int] toks = make_vec(-1)! catch (_): strs()
+    print(toks.len())

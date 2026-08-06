@@ -1,0 +1,18 @@
+# POS · Track A canary · Result-catch in method-arg position: `takes_vec(
+# risky()! catch (_): [])` where `void takes_vec(Vector[int] v)`. Arg-pass has
+# no ambient VarDecl hint (pass-2 review NB5 fold), so this cell precisely
+# isolates the hint the writer helper installs at the recovery slot — the
+# empty-array literal must consume it and coerce to `Vector[int]`.
+
+Vector[int] risky(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+void takes_vec(Vector[int] v):
+    print(v.len())
+
+void main():
+    takes_vec(risky(-1)! catch (_): [])

@@ -1,0 +1,15 @@
+# POS · Track A canary · Result-catch · recovery `[]` (array literal) · binding
+# `Vector[int]` · VarDecl shape. Exercises the `is_collection_assignment`
+# carve-out mirrored from VarDecl — the empty-array literal must consume the
+# hint the fix installs at the recovery slot.
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+void main():
+    Vector[int] toks = make_vec(-1)! catch (_): []
+    print(toks.len())

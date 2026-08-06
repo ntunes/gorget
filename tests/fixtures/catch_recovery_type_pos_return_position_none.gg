@@ -1,0 +1,21 @@
+# POS · Track A canary · Result-catch · RETURN-position · recovery is `None`
+# into an `Option[int]` return slot. The RETURN slot has no `decl_type_hint`
+# ambient bleed-through (pass-2 review NB5 fold), so this cell precisely
+# isolates the hint-set the writer helper installs at the recovery slot: `None`
+# must coerce to `Option[int]` at the RECOVERY position, not by accident of
+# outer VarDecl hint.
+
+Option[int] risky(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return Some(x)
+
+Option[int] top(int x):
+    return risky(x)! catch (_): None
+
+void main():
+    Option[int] o = top(-1)
+    if o is Some(v):
+        print(v)
+    else:
+        print(-1)

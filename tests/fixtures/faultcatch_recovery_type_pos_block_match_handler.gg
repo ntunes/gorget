@@ -1,0 +1,15 @@
+# POS · Track A canary · Fault-catch · block-form `catch f: match f: …` all arms
+# yield the correct type `int` · binding `int` · VarDecl shape. Mirrors the
+# fault_catch_binding fixture's shape (canonical multi-arm handler).
+
+void main():
+    int big = 9223372036854775807
+    int r = (big * 2) catch f: match f:
+        case Fault.Overflow(): 111
+        case Fault.DivByZero(): 222
+    print(r)
+    int z = 0
+    int d = (10 / z) catch f: match f:
+        case Fault.Overflow(): 111
+        case Fault.DivByZero(): 222
+    print(d)

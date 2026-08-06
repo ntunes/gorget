@@ -1,0 +1,24 @@
+# NEG · Track A · Result-catch · recovery `Vector[String]` (from strs()) ·
+# RETURN position (fn returns `Vector[int]`) · non-VarDecl binding, so this cell
+# proves the writer-site check must fire at the recovery slot regardless of the
+# outer binding shape (no ambient VarDecl `decl_type_hint` bleed-through would
+# rescue it). INTENDED: `gg check` rejects with E_TypeMismatch.
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+Vector[String] strs():
+    Vector[String] s = Vector[String]()
+    s.push("aa")
+    return s
+
+Vector[int] top(int x):
+    return make_vec(x)! catch (_): strs()
+
+void main():
+    Vector[int] r = top(-1)
+    print(r.len())

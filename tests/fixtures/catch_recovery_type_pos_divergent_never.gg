@@ -1,0 +1,24 @@
+# POS · Track A canary · Result-catch · recovery is divergent (`return
+# default_val()`) · binding `Vector[int]` · VarDecl shape. Divergent recoveries
+# type as `Never` and must pass via `unify`'s Never rule at typecheck.rs:985-990.
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+Vector[int] default_val():
+    Vector[int] r = Vector[int]()
+    r.push(0)
+    return r
+
+Vector[int] top(int x):
+    Vector[int] toks = make_vec(x)! catch (_): return default_val()
+    return toks
+
+void main():
+    Vector[int] r = top(-1)
+    print(r.len())
+    print(r[0])

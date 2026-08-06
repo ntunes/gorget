@@ -703,7 +703,13 @@ fn snag11_auto_prop_gate_site_count() {
     // functionally equivalent E-checking, fewer duplicate call sites.
     // The choke point is preserved (unify runs only when the shared
     // gate allows it); the count drop reflects the code consolidation.
-    const EXPECTED_SKIPS_UNIFY: usize = 12;
+    // Round XXXII Track A (2026-08-06): 12 → 13. The `check_recovery_type`
+    // helper adds site #13 at `src/semantic/typecheck.rs` — `Expr::Catch`
+    // and `Expr::FaultCatch` recovery/handler slots now route through the
+    // helper, which consults `auto_prop_skips_unify` per the canonical
+    // VarDecl three-carve-out pattern (E-check preserved: an ill-typed
+    // recovery still triggers the shared gate).
+    const EXPECTED_SKIPS_UNIFY: usize = 13;
     const EXPECTED_ROUTE_A_GATE: usize = 2;
 
     let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
@@ -11251,4 +11257,55 @@ fn opaque_handle_route_fixtures_exist() {
          source in builtins.rs) or the entry is a stale carryover from a \
          graduation — delete it."
     );
+}
+
+/// Track A · MEMORY-SAFETY round · CLASS-RETIRING GUARD (Core #6).
+///
+/// Every silent-drop of a sub-expression's inferred type in the checker is
+/// a Core #10 hazard. `Expr::Catch` (`src/semantic/typecheck.rs:4624`) and
+/// `Expr::FaultCatch` (`:4663`) previously called `self.infer_expr(recovery)`
+/// / `self.infer_expr(handler)` and DISCARDED the returned TypeId — the
+/// outer VarDecl then unified a fabricated OK type against itself, so an
+/// ill-typed recovery reached codegen (silent heap-ptr-as-int64 on
+/// same-C-layout mismatches like Vector[String] → Vector[int]).
+///
+/// This lint asserts both arms route through the shared helper
+/// `check_recovery_type` and neither carries a bare `self.infer_expr(recovery)`
+/// / `self.infer_expr(handler)` call. A new recovery/handler-yielding arm
+/// added to `impl_typecheck_expr` must join this whitelist consciously
+/// (grepping for `check_recovery_type` to see how, or adding the
+/// justification here if the new arm legitimately doesn't need it).
+#[test]
+fn recovery_arms_route_through_check_recovery_type() {
+    let src = std::fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+    for pat in &["Expr::Catch {", "Expr::FaultCatch {"] {
+        let start = src
+            .find(pat)
+            .unwrap_or_else(|| panic!("missing arm {pat} in src/semantic/typecheck.rs"));
+        let end = src[start + pat.len()..]
+            .find("\n            Expr::")
+            .map(|off| start + pat.len() + off)
+            .unwrap_or(src.len());
+        let arm = &src[start..end];
+        assert!(
+            arm.contains("check_recovery_type("),
+            "{pat}: must route through check_recovery_type — see \
+             tests/fixtures/known_gaps/catch_recovery_type_unchecked.gg for \
+             the class this guard retires. New recovery/handler-yielding arms \
+             must call check_recovery_type(recovery_or_handler, expected) at \
+             the writer site so ill-typed recoveries reject with E_TypeMismatch \
+             instead of reaching codegen (Core #10 lower-or-reject)."
+        );
+        assert!(
+            !arm.contains("self.infer_expr(recovery)"),
+            "{pat}: bare `self.infer_expr(recovery)` — Core #10 silent-drop \
+             class. Route through check_recovery_type instead."
+        );
+        assert!(
+            !arm.contains("self.infer_expr(handler)"),
+            "{pat}: bare `self.infer_expr(handler)` — Core #10 silent-drop \
+             class. Route through check_recovery_type instead."
+        );
+    }
 }

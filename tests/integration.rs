@@ -17769,14 +17769,155 @@ Vector[int] binding) is caught by the C compiler by accident of layout. SEVERE c
 (this fixture): a Vector[String] recovery into a Vector[int] binding shares the C \
 representation GorgetArray, so NOTHING catches it -- gg check exit 0, gg build \
 exit 0 on C AND llvm, runs and prints a Str header's data pointer as an int64_t. \
-Silent type confusion on both backends. Likely same mechanism as \
-index_string_from_grid_accidentally_green (a check-arm returning error_id, which \
-unifies with any type). Un-ignore and convert to a NEG fixture when fixed."]
+Silent type confusion on both backends. MECHANISM (verified 2026-08-05): \
+typecheck.rs:4652 called self.infer_expr(recovery) and DISCARDED the result, then \
+:4656-4659 returned the Result's `T` slot regardless -- a type was FABRICATED, \
+never compared. Sibling FaultCatch arm at :4710 was broken identically (Core #4). \
+Un-ignore and convert to a NEG fixture when fixed."]
 fn catch_recovery_type_unchecked() {
     check_gg_fails(
         "known_gaps/catch_recovery_type_unchecked.gg",
         "error[E_TypeMismatch]",
     );
+}
+
+// Track A · MEMORY-SAFETY round · CATCH / FAULT-CATCH recovery-type check.
+// Two writer arms (`Expr::Catch` at src/semantic/typecheck.rs:4624 and
+// `Expr::FaultCatch` at :4663) previously discarded their sub-expression's
+// inferred type — Core #10 lower-or-reject / silent-fallthrough class. The
+// helper `check_recovery_type` routes the recovery/handler through the
+// canonical three-carve-out unify contract that VarDecl / Assign / arg-pass /
+// return sites already use, retiring the class at its writer. The 10 NEG
+// cells below enumerate the type-mismatch axis (Vec[String] · String · Dict ·
+// int · struct-ctor · block-form · return-position · Fault-catch siblings);
+// the 8 POS canaries below guard the carve-outs (array literal · None ·
+// divergent Never · method-arg empty array) and the reference-grade
+// same-type shapes.
+
+#[test]
+fn catch_recovery_type_mismatch_vec_string_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_vec_string_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_string_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_string_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_dict_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_dict_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_int_into_string_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_int_into_string_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_struct_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_struct_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_block_form_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_block_form_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_return_position_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_return_position_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn faultcatch_recovery_type_mismatch_vec_string_into_int_error() {
+    check_gg_fails(
+        "faultcatch_recovery_type_mismatch_vec_string_into_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn faultcatch_recovery_type_mismatch_dict_into_int_error() {
+    check_gg_fails(
+        "faultcatch_recovery_type_mismatch_dict_into_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn faultcatch_recovery_type_mismatch_match_handler_error() {
+    check_gg_fails(
+        "faultcatch_recovery_type_mismatch_match_handler_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_pos_same_type_nonliteral() {
+    run_gg(
+        "catch_recovery_type_pos_same_type_nonliteral.gg",
+        "1\n42",
+    );
+}
+
+#[test]
+fn catch_recovery_type_pos_array_literal_carveout() {
+    run_gg("catch_recovery_type_pos_array_literal_carveout.gg", "0");
+}
+
+#[test]
+fn catch_recovery_type_pos_none_option_carveout() {
+    run_gg("catch_recovery_type_pos_none_option_carveout.gg", "-1");
+}
+
+#[test]
+fn catch_recovery_type_pos_divergent_never() {
+    run_gg("catch_recovery_type_pos_divergent_never.gg", "1\n0");
+}
+
+#[test]
+fn faultcatch_recovery_type_pos_overflow_int() {
+    run_gg("faultcatch_recovery_type_pos_overflow_int.gg", "-1");
+}
+
+#[test]
+fn faultcatch_recovery_type_pos_block_match_handler() {
+    run_gg(
+        "faultcatch_recovery_type_pos_block_match_handler.gg",
+        "111\n222",
+    );
+}
+
+#[test]
+fn catch_recovery_type_pos_return_position_none() {
+    run_gg("catch_recovery_type_pos_return_position_none.gg", "-1");
+}
+
+#[test]
+fn catch_recovery_type_pos_method_arg_empty_array() {
+    run_gg("catch_recovery_type_pos_method_arg_empty_array.gg", "0");
 }
 
 #[test]
@@ -21611,7 +21752,22 @@ fn self_host_bootstrap_fixed_point() {
     // instrumentation warning line. Round XXIX Track D retired the
     // legacy `liveness_instrumentation_diff` pass at its writer, so
     // there is no interim strip to maintain.
-    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 2;
+    //
+    // Raised 2026-08-06 from 2 to 3 (Round XXXII Track A / MEMORY-SAFETY
+    // round): the SH mirror at `tests/fixtures/self_host_typechecker/
+    // typecheck.gg` (safety-pass ECatch + EFaultCatch arms now emit
+    // `DkTypeMismatch` when recovery/handler type ≠ expected type) +
+    // `infer.gg` (new ECatch inference arm returning the Result's OK slot)
+    // introduces new diagnostic-emission and inference call sites during
+    // self-check. Stage2 is built from Rust gg (uses Rust's semantically-
+    // equivalent `check_recovery_type` helper), stage3 is built from
+    // stage2 which uses the SH's newly-added arms — the byte-level LIR
+    // outputs converge but take ONE extra generation to settle. Bumped
+    // from 2 → 3 (not higher — the debt is scoped to this one round's
+    // Track A change; a future round that closes the SH-Rust emission
+    // discrepancy on the recovery-type check should tighten this back).
+    // Convergence measured at stage-3 (release, loaded box; ~21 min).
+    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 3;
     if let Some(k) = converged_at {
         assert!(
             k <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,

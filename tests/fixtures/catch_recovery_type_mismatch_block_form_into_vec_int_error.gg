@@ -1,0 +1,23 @@
+# NEG · Track A · Result-catch · recovery multi-line block whose tail expression
+# is `Vector[String]` · binding `Vector[int]` · VarDecl shape. Multi-line
+# recovery body (block-form): the tail expression drives the recovery type but
+# the current arm never checks it against the expected OK type. INTENDED:
+# `gg check` rejects with E_TypeMismatch on the recovery tail.
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+Vector[String] strs():
+    Vector[String] s = Vector[String]()
+    s.push("aa")
+    return s
+
+void main():
+    Vector[int] toks = make_vec(-1)! catch (_):
+        int _ignored = 1
+        strs()
+    print(toks.len())

@@ -11,7 +11,7 @@ from ast import EIndex, EClosure, EArrayLiteral, ETupleLiteral
 from ast import EStructLiteral, EDotShorthand, ETry, EAs, EMove, EPropagate
 from ast import EMutableBorrow, EDeref, EIs, EAwait, ESpawn
 from ast import EDictLiteral, EDefaultOp, EBlock, EDo, EFString
-from ast import EFaultCatch, FaultCatchPattern, FcpVariant, FcpBinding
+from ast import ECatch, EFaultCatch, FaultCatchPattern, FcpVariant, FcpBinding
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
@@ -1087,6 +1087,29 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                     pass
             int fc_handler_ty = infer_expr_type(SpannedExpr((*fc_handler).expr, (*fc_handler).span), scopes, &types, &ctx)
             return fc_inner_ty
+
+        case ECatch(ec_inner, _ec_name, _ec_recovery):
+            # Track A · SH mirror of Rust `Expr::Catch` at
+            # `src/semantic/typecheck.rs:4624`. `catch` resolves the inner
+            # `Result[T, E]`; the whole catch expression's type is the OK
+            # slot `T`. Extract via `option_or_result_payload(inner_ty, 0)`
+            # (axis 0 = Ok, defined at `typecheck.gg:3469`). Inference is
+            # diagnostic-free in the SH — the recovery-vs-expected diagnostic
+            # emission lives in `typecheck.gg`'s safety-pass ECatch arm.
+            int ec_inner_ty = infer_expr_type(SpannedExpr((*ec_inner).expr, (*ec_inner).span), scopes, &types, &ctx)
+            if ec_inner_ty < 0:
+                return NO_TYPE
+            if ec_inner_ty >= types.types.len():
+                return NO_TYPE
+            ResolvedType ec_rt = get_rtype_at(types.types, ec_inner_ty)
+            match ec_rt:
+                case RTGeneric(ec_def_id, ec_args):
+                    String ec_name = scopes.get_def(ec_def_id).name
+                    if ec_name == "Result" and ec_args.len() == 2:
+                        return get_int_at(ec_args, 0)
+                else:
+                    pass
+            return ec_inner_ty
 
         else:
             return NO_TYPE
