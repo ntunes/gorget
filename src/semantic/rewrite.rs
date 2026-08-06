@@ -8,11 +8,134 @@
 
 use crate::lexer::token::StringSegment;
 use crate::parser::ast::*;
+use crate::parser::visitor::{walk_expr, ExprVisitor};
 use crate::span::{Span, Spanned};
 
 use super::errors::SemanticErrorKind;
 use super::resolve::ResolutionMap;
 use super::scope::{DefKind, ScopeTable};
+
+/// D26 (Round XXXIII Batch C1) — pre-`collect_top_level` auto-infer of
+/// `throws ArithError` for every fn whose body contains a fallible-arith op
+/// (`+! -! *! /! %! <<! >>!`). Silent (owner ruling 2026-08-06).
+///
+/// Runs BEFORE `collect_top_level` so `FunctionInfo.throws_type_id` picks up
+/// the auto-inferred throws, AND before the IR lowering (which reads
+/// `func.throws.declares_throws()` directly at ten+ sites) — mutating the AST
+/// makes both readers see the same signature the user could have written by
+/// hand as `throws ArithError`.
+///
+/// Explicit `throws E` (any E) wins over auto-infer — the walk skips a fn
+/// whose `throws` is `ThrowsSpec::Explicit(_)` unchanged, matching how the
+/// D29 disposition table's `explicit-throws-wins` rule reads. `Inferred(!)`
+/// remains as-is (A31's inferred-error-set spelling is a distinct feature).
+///
+/// Extern fns and Declarations have no body — skipped by construction.
+/// Nested item bodies (`Stmt::Item`) are walked by the outer `walk_module_items`
+/// recursion, so a nested fn with a fallible op also auto-infers.
+pub fn rewrite_d26_auto_infer_throws(module: &mut Module) {
+    for item in &mut module.items {
+        walk_item_for_auto_infer(&mut item.node);
+    }
+}
+
+fn walk_item_for_auto_infer(item: &mut Item) {
+    match item {
+        Item::Function(f) => {
+            auto_infer_fn(f);
+        }
+        Item::Equip(e) => {
+            for method in &mut e.items {
+                auto_infer_fn(&mut method.node);
+            }
+        }
+        Item::Module { items, .. } => {
+            for it in items {
+                walk_item_for_auto_infer(&mut it.node);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn auto_infer_fn(f: &mut FunctionDef) {
+    // Explicit `throws E` (any E) wins — user's declaration is untouched.
+    if f.throws.explicit_type().is_some() {
+        return;
+    }
+    // `main()` can only throw `int` (per D26 spec + E_MainThrowsNonInt);
+    // auto-inferring `throws ArithError` on it would be immediately rejected
+    // by the check-lane. Users must capture (`Result[int, ArithError] r = ...`)
+    // or `catch`-handle every fallible op in `main` — never propagate. This
+    // matches the D29 discipline: `main` is the top-level; there is no
+    // caller to propagate to.
+    if f.name.node == "main" {
+        return;
+    }
+    if !body_contains_fallible_arith(&f.body) {
+        return;
+    }
+    // Synthesize `throws ArithError` at the fn's return-type span so a
+    // downstream diagnostic points somewhere non-crazy. This mutates the AST
+    // — the checker (`current_function_throws` via `FunctionInfo`) and the
+    // lowering (`func.throws.declares_throws()` direct reads) both see the
+    // same signature after this pass runs.
+    let synth_span = f.return_type.span;
+    f.throws = ThrowsSpec::Explicit(Spanned {
+        node: Type::Named {
+            name: Spanned {
+                node: "ArithError".to_string(),
+                span: synth_span,
+            },
+            generic_args: Vec::new(),
+        },
+        span: synth_span,
+    });
+}
+
+/// Body-walker helper: true iff any `Expr::BinaryOp` in the body has an
+/// `is_fallible_arith()` op. Skips closures (a fallible op inside a closure
+/// belongs to that closure's own signature — filed follow-up for closure
+/// auto-infer). Skips nested item bodies (`Stmt::Item`) — those are walked
+/// separately by `walk_item_for_auto_infer`.
+fn body_contains_fallible_arith(body: &FunctionBody) -> bool {
+    struct Scanner {
+        found: bool,
+    }
+    impl ExprVisitor for Scanner {
+        fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+            if self.found {
+                return;
+            }
+            if let Expr::BinaryOp { op, .. } = &expr.node {
+                if op.is_fallible_arith() {
+                    self.found = true;
+                    return;
+                }
+            }
+            if matches!(&expr.node, Expr::Closure { .. } | Expr::ImplicitClosure { .. }) {
+                return;
+            }
+            walk_expr(self, expr);
+        }
+    }
+    let mut scanner = Scanner { found: false };
+    match body {
+        FunctionBody::Block(block) => {
+            for stmt in &block.stmts {
+                scanner.visit_stmt(stmt);
+                if scanner.found {
+                    return true;
+                }
+            }
+        }
+        FunctionBody::Expression(expr) => {
+            scanner.visit_expr(expr);
+        }
+        FunctionBody::Declaration | FunctionBody::Extern(_) => {}
+    }
+    scanner.found
+}
 
 /// Rewrite struct constructor calls to `Expr::StructLiteral`.
 ///

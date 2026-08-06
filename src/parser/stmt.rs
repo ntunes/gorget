@@ -832,6 +832,36 @@ impl Parser {
             ));
         }
 
+        // D26: compound-fallible-assign forms (`+!=` etc) are v1-EXCLUDED per
+        // `decisions.md:945`. Reject at parse-time with a precise span before
+        // trying to parse as compound-assign. The lexer already produces a
+        // distinct token per glyph so the reject fires at the operator's exact
+        // span (not the surrounding expression).
+        if matches!(
+            self.peek(),
+            Token::PlusBangEq | Token::MinusBangEq | Token::StarBangEq
+            | Token::SlashBangEq | Token::PercentBangEq
+            | Token::LtLtBangEq | Token::GtGtBangEq
+        ) {
+            let bad_span = self.peek_span();
+            let glyph = match self.peek() {
+                Token::PlusBangEq => "+!=",
+                Token::MinusBangEq => "-!=",
+                Token::StarBangEq => "*!=",
+                Token::SlashBangEq => "/!=",
+                Token::PercentBangEq => "%!=",
+                Token::LtLtBangEq => "<<!=",
+                Token::GtGtBangEq => ">>!=",
+                _ => unreachable!(),
+            };
+            return Err(ParseError {
+                kind: crate::errors::ParseErrorKind::CompoundFallibleAssignExcluded {
+                    op: glyph.to_string(),
+                },
+                span: bad_span,
+            });
+        }
+
         // Check for compound assignment
         let compound_op = match self.peek() {
             Token::PlusEq => Some(BinaryOp::Add),

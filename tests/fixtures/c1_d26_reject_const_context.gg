@@ -1,0 +1,6 @@
+# D26 NEG — fallible arithmetic in a `const` initializer rejects at
+# `check_module_const_foldability` with E_FallibleOpInConst.
+const int C = 5 +! 3
+
+void main():
+    print(C)

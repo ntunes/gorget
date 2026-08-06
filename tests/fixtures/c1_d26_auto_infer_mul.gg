@@ -1,0 +1,12 @@
+# D26 axis: op=Mul · route=A (throws-propagate via auto-infer) · POS + NEG.
+# Success cell (6*7=42) + overflow cell (3037000500*3037000500 → Overflow).
+int identity(int x): x
+
+int mul_or_throw(int a, int b):
+    return a *! b
+
+void main():
+    int ok = mul_or_throw(identity(6), identity(7))! catch (e): -1
+    print(ok)
+    int ov = mul_or_throw(identity(3037000500), identity(3037000500))! catch (e): -2
+    print(ov)

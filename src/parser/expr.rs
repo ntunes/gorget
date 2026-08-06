@@ -772,11 +772,18 @@ impl Parser {
 
     fn infix_bp(&self) -> Option<InfixBP> {
         Some(match self.peek() {
-            // Assignment operators are handled as statements, not expressions
+            // Assignment operators are handled as statements, not expressions.
+            // D26: compound fallible-assign forms (`+!=` etc) are v1-EXCLUDED
+            // per `decisions.md:945`; treated as assignment tokens here so
+            // expression parsing stops — the actual reject fires in the
+            // stmt-parser via E_CompoundFallibleAssignExcluded.
             Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq
             | Token::PercentEq | Token::PlusPercentEq | Token::MinusPercentEq
             | Token::StarPercentEq | Token::StarStarEq | Token::AmpersandEq | Token::PipeEq
-            | Token::CaretEq | Token::LtLtEq | Token::GtGtEq => {
+            | Token::CaretEq | Token::LtLtEq | Token::GtGtEq
+            | Token::PlusBangEq | Token::MinusBangEq | Token::StarBangEq
+            | Token::SlashBangEq | Token::PercentBangEq
+            | Token::LtLtBangEq | Token::GtGtBangEq => {
                 return None;
             }
 
@@ -907,6 +914,17 @@ impl Parser {
                 right: 26,
                 op: InfixOp::Binary(BinaryOp::Shr),
             },
+            // D26 fallible shifts (same precedence as base).
+            Token::LtLtBang => InfixBP {
+                left: 25,
+                right: 26,
+                op: InfixOp::Binary(BinaryOp::ShlFallible),
+            },
+            Token::GtGtBang => InfixBP {
+                left: 25,
+                right: 26,
+                op: InfixOp::Binary(BinaryOp::ShrFallible),
+            },
 
             // Additive
             Token::Plus => InfixBP {
@@ -929,6 +947,17 @@ impl Parser {
                 right: 28,
                 op: InfixOp::Binary(BinaryOp::SubWrap),
             },
+            // D26 fallible additive (same precedence as base).
+            Token::PlusBang => InfixBP {
+                left: 27,
+                right: 28,
+                op: InfixOp::Binary(BinaryOp::AddFallible),
+            },
+            Token::MinusBang => InfixBP {
+                left: 27,
+                right: 28,
+                op: InfixOp::Binary(BinaryOp::SubFallible),
+            },
 
             // Multiplicative
             Token::Star => InfixBP {
@@ -950,6 +979,22 @@ impl Parser {
                 left: 29,
                 right: 30,
                 op: InfixOp::Binary(BinaryOp::Rem),
+            },
+            // D26 fallible multiplicative (same precedence as base).
+            Token::StarBang => InfixBP {
+                left: 29,
+                right: 30,
+                op: InfixOp::Binary(BinaryOp::MulFallible),
+            },
+            Token::SlashBang => InfixBP {
+                left: 29,
+                right: 30,
+                op: InfixOp::Binary(BinaryOp::DivFallible),
+            },
+            Token::PercentBang => InfixBP {
+                left: 29,
+                right: 30,
+                op: InfixOp::Binary(BinaryOp::RemFallible),
             },
             // as (cast)
             Token::Keyword(Keyword::As) => InfixBP {

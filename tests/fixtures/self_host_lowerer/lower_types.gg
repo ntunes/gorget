@@ -2971,6 +2971,27 @@ int map_binop(String op):
             return OP_MUL_WRAP
         case "**":
             return OP_POW
+        # D26 (Round XXXIII Batch C1): fallible arithmetic operators.
+        # SH's Route-A MINIMUM shape — same as their base op (trap-on-fault).
+        # This matches the Rust foundation-slice behaviour BEFORE F1 landed
+        # its dedicated Route-A (early-return Error) and Route-B (Result
+        # capture) lowering. Sound for Route A inside a `throws ArithError`
+        # fn on values that don't fault; incomplete for the fault path and
+        # for Result-capture. Follow-up: SH F1 mirror (own scout+brief).
+        case "+!":
+            return OP_ADD
+        case "-!":
+            return OP_SUB
+        case "*!":
+            return OP_MUL
+        case "/!":
+            return OP_DIV
+        case "%!":
+            return OP_REM
+        case "<<!":
+            return OP_SHL
+        case ">>!":
+            return OP_SHR
         case "&":
             return OP_BITAND
         case "|":

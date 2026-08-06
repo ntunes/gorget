@@ -238,6 +238,15 @@ int ok = (3 * 4) catch Fault.Overflow: -1      # ok == 12 (no fault)
 
 Recovery is **local and lexical** — the catch covers only the faultable ops emitted directly into the wrapped expression, and an uncaught overflow still panics exactly as above. See §6 for the full `Fault` model.
 
+There is a THIRD discipline for arithmetic: the **fallible arithmetic operators** `+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` (D26). They neither trap nor wrap — they surface the failure into the ordinary `throws` / `Result` channel via the prelude enum `ArithError { Overflow, DivByZero }`. A function body that contains any fallible-arith op auto-infers `throws ArithError`, so callers see the fallibility through the normal `!`-propagate + `catch` machinery. Explicit `throws E` declarations win over auto-inference. Integer-only in v1; compound forms (`+!=`) are excluded.
+
+```gorget
+int add_or_throw(int a, int b): return a +! b       # auto-throws ArithError
+Result[int, ArithError] r = 9223372036854775807 +! 1 # Error(Overflow) at capture
+```
+
+Prior art: Zig's `std.math` error unions (semantics) and Pony's partial arithmetic (per-operator opt-in). The typed + auto-propagating combination is novel to Gorget D26 — no other language surveyed combines a per-glyph fallible arithmetic operator with silent function-signature inference of the error type. Full authoritative rationale in the ledger `docs/define-gorget/decisions.md:939-948` (D26 entry); the language-reference §10.9 disposition table gives the check-lane behavior.
+
 ### 2.3 Functions
 
 C/Java-style: return type before name, typed parameters.

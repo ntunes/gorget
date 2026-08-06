@@ -15522,6 +15522,23 @@ fn describe_token_canonical_rust(token: &Token) -> String {
         Token::PlusPercentEq => "+%=".into(),
         Token::MinusPercentEq => "-%=".into(),
         Token::StarPercentEq => "*%=".into(),
+        // D26 (Round XXXIII Batch C1): fallible arithmetic tokens.
+        Token::PlusBang => "+!".into(),
+        Token::MinusBang => "-!".into(),
+        Token::StarBang => "*!".into(),
+        Token::SlashBang => "/!".into(),
+        Token::PercentBang => "%!".into(),
+        Token::LtLtBang => "<<!".into(),
+        Token::GtGtBang => ">>!".into(),
+        // D26 compound-fallible-assign reject tokens (v1-excluded but still
+        // lexed to give a distinct diagnostic span).
+        Token::PlusBangEq => "+!=".into(),
+        Token::MinusBangEq => "-!=".into(),
+        Token::StarBangEq => "*!=".into(),
+        Token::SlashBangEq => "/!=".into(),
+        Token::PercentBangEq => "%!=".into(),
+        Token::LtLtBangEq => "<<!=".into(),
+        Token::GtGtBangEq => ">>!=".into(),
         Token::DotDot => "..".into(),
         Token::DotDotEq => "..=".into(),
         Token::QuestionDot => "?.".into(),
@@ -15905,6 +15922,14 @@ fn format_binop_canonical(op: &BinaryOp) -> &'static str {
         BinaryOp::And => "and",
         BinaryOp::Or => "or",
         BinaryOp::In => "in",
+        // D26 (Round XXXIII Batch C1): fallible arithmetic operators.
+        BinaryOp::AddFallible => "+!",
+        BinaryOp::SubFallible => "-!",
+        BinaryOp::MulFallible => "*!",
+        BinaryOp::DivFallible => "/!",
+        BinaryOp::RemFallible => "%!",
+        BinaryOp::ShlFallible => "<<!",
+        BinaryOp::ShrFallible => ">>!",
     }
 }
 
@@ -42489,4 +42514,446 @@ fn xor_large_exp_no_warn() {
 #[test]
 fn xor_canonical_no_warn() {
     build_gg_expect_no_warning("xor_canonical_no_warn.gg", "W_XorLikelyPower");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// D26 — fallible arithmetic operators (Round XXXIII Batch C1)
+// ═══════════════════════════════════════════════════════════════
+//
+// C1 ships 7 new operators (`+! -! *! /! %! <<! >>!`) producing
+// `Result[T, ArithError]` on integer operands (D29 auto-propagate).
+//
+// Current-session executor scope-limit (documented for the follow-up track):
+// - Rust vertical: lexer + parser + AST + Pratt + prelude enum + basic
+//   check-arm + const-context reject + compound-fallible-assign reject
+//   LANDED.
+// - IR lowering emits plain BinOp for the fallible variants (correct trap
+//   behaviour when peeled to T in a propagating context — see the smoke
+//   fixture below). The FaultableBinOp handler that constructs
+//   `ArithError.Overflow` / `.DivByZero` Result-Error values for the
+//   Result-capture path is FOLLOW-UP work.
+// - Auto-infer `throws ArithError` on functions containing fallible ops
+//   (owner ruling Q1) is FOLLOW-UP — users must currently declare
+//   `throws ArithError` explicitly.
+// - Self-host mirror, ggdef mirror, and the full 32-cell fixture net are
+//   FOLLOW-UP work as well.
+//
+// The three NEG fixtures below prove the check-lane rejects fire; the smoke
+// POS fixture proves the peel-to-T + propagate path works end-to-end via C.
+#[test]
+fn c1_d26_smoke_propagate() {
+    // `+!` inside a `throws ArithError` fn peels to `int` per D29 route A;
+    // the caller catches the (never-fired for 1+2) error into `-1`.
+    run_gg("c1_d26_smoke_propagate.gg", "3");
+}
+
+#[test]
+fn c1_d26_reject_float_operand() {
+    // N1: float operand rejects with E_FallibleArithmeticOnNonInt.
+    check_gg_fails(
+        "c1_d26_reject_float_operand.gg",
+        "E_FallibleArithmeticOnNonInt",
+    );
+}
+
+#[test]
+fn c1_d26_reject_compound_assign() {
+    // N2: `+!=` is v1-EXCLUDED per amendment `decisions.md:945`; rejected at
+    // parse-time with a precise glyph span (CompoundFallibleAssignExcluded).
+    check_gg_fails(
+        "c1_d26_reject_compound_assign.gg",
+        "compound fallible operators",
+    );
+}
+
+#[test]
+fn c1_d26_reject_const_context() {
+    // N3: fallible arithmetic in a `const` initializer rejects at
+    // `check_module_const_foldability` with E_FallibleOpInConst.
+    check_gg_fails(
+        "c1_d26_reject_const_context.gg",
+        "E_FallibleOpInConst",
+    );
+}
+
+// D26 F1/F1a/F3/F4 follow-up fixture pack — axis-covered Route B (capture)
+// tests for each of the 5 arithmetic fallible variants at their success +
+// fault boundaries, plus Route A auto-infer end-to-end + the auto-infer
+// discipline (explicit `throws E` wins). All RED-verified against the
+// foundation slice (5ee28211) at authoring time — see per-fixture headers.
+
+#[test]
+fn c1_d26_capture_add_ok() {
+    // Route B success: `5 +! 3` at Result[int, ArithError] destination →
+    // Result.Ok(8). Match Ok arm prints 8.
+    run_gg("c1_d26_capture_add_ok.gg", "8");
+}
+
+#[test]
+fn c1_d26_capture_add_overflow() {
+    // Route B fault: INT64_MAX +! 1 → Result.Error(ArithError.Overflow).
+    // Match Error arm prints -99.
+    run_gg("c1_d26_capture_add_overflow.gg", "-99");
+}
+
+#[test]
+fn c1_d26_capture_sub_underflow() {
+    // Route B fault: -INT64_MAX -! 2 underflows → Error(Overflow).
+    // Match Error arm prints -3.
+    run_gg("c1_d26_capture_sub_underflow.gg", "-3");
+}
+
+#[test]
+fn c1_d26_capture_mul_overflow() {
+    // Route B fault: (3037000500 *! 3037000500) overflows → Error(Overflow).
+    // Match Error arm prints -2.
+    run_gg("c1_d26_capture_mul_overflow.gg", "-2");
+}
+
+#[test]
+fn c1_d26_capture_div_zero() {
+    // Route B fault (divzero): 10 /! 0 → Error(DivByZero). Div/Rem's
+    // second fault category (spec/prose/trap-codes.md). Match arm → -1.
+    run_gg("c1_d26_capture_div_zero.gg", "-1");
+}
+
+#[test]
+fn c1_d26_capture_rem_zero() {
+    // Route B fault (divzero): 10 %! 0 → Error(DivByZero). Twin of /!
+    // since Div and Rem share both fault categories.
+    run_gg("c1_d26_capture_rem_zero.gg", "-1");
+}
+
+#[test]
+fn c1_d26_auto_infer_propagate() {
+    // F1a auto-infer end-to-end: `add_or_throw` has NO explicit `throws
+    // ArithError` declaration, yet auto-infer promotes it. Two calls
+    // demonstrate both Ok-peel (2+3=5) and Error-propagate (INT64_MAX+1
+    // → catch -1) through the auto-inferred throws channel.
+    // Expected stdout: two lines, "5" then "-1".
+    run_gg("c1_d26_auto_infer_propagate.gg", "5\n-1");
+}
+
+#[test]
+fn c1_d26_explicit_throws_declared_wins() {
+    // F1a discipline (NEG): the user's explicit `throws MyError` is NOT
+    // overridden by auto-infer. The resulting `+!` (Result[int,
+    // ArithError]) can't propagate into a MyError-throws fn — the
+    // diagnostic names BOTH types, proving the user's declaration is
+    // preserved (auto-infer would have made this silently work under
+    // ArithError; the discipline rejects that).
+    check_gg_fails(
+        "c1_d26_explicit_throws_declared_wins.gg",
+        "E_UnconvertibleErrorPropagation",
+    );
+}
+
+// ── D26 F4 fixture-depth completion (Route B success + Route A per-op) ──
+//
+// Fills the axis matrix that F1's initial 8-fixture net left open: Route B
+// (Result-capture) success cells for the 4 remaining arith ops (Sub / Mul /
+// Div / Rem); Route A (auto-infer propagate) success + fault paths for
+// those same 4; shift-fallible smoke fixtures pinning the CURRENT trap-on-
+// oob (Route-A minimum) behavior — the shift fallible-arith lowering is a
+// filed follow-up and will flip these expectations when it lands.
+
+#[test]
+fn c1_d26_capture_sub_ok() {
+    // Route B success cell for `-!`: `10 -! 3 = 7` at Result-capture dest.
+    run_gg("c1_d26_capture_sub_ok.gg", "7");
+}
+
+#[test]
+fn c1_d26_capture_mul_ok() {
+    // Route B success cell for `*!`: `6 *! 7 = 42`.
+    run_gg("c1_d26_capture_mul_ok.gg", "42");
+}
+
+#[test]
+fn c1_d26_capture_div_ok() {
+    // Route B success cell for `/!`: `20 /! 4 = 5`. Div's two-fault
+    // sequence (overflow_bb + divzero_bb) both false-flag → success path.
+    run_gg("c1_d26_capture_div_ok.gg", "5");
+}
+
+#[test]
+fn c1_d26_capture_rem_ok() {
+    // Route B success cell for `%!`: `23 %! 5 = 3`.
+    run_gg("c1_d26_capture_rem_ok.gg", "3");
+}
+
+#[test]
+fn c1_d26_auto_infer_sub() {
+    // Route A auto-infer both cells for `-!`: 10-3=7 (success), then
+    // `-INT64_MAX - 2` underflow → catch -1. Two stdout lines "7\n-1".
+    run_gg("c1_d26_auto_infer_sub.gg", "7\n-1");
+}
+
+#[test]
+fn c1_d26_auto_infer_mul() {
+    // Route A auto-infer both cells for `*!`: 6*7=42 (success), then
+    // 3037000500*3037000500 overflow → catch -2. Two stdout lines.
+    run_gg("c1_d26_auto_infer_mul.gg", "42\n-2");
+}
+
+#[test]
+fn c1_d26_auto_infer_div() {
+    // Route A auto-infer both cells for `/!`: 20/4=5 (success), then
+    // 10/0 divzero → catch -99. Two stdout lines.
+    run_gg("c1_d26_auto_infer_div.gg", "5\n-99");
+}
+
+#[test]
+fn c1_d26_auto_infer_rem() {
+    // Route A auto-infer both cells for `%!`: 23%5=3 (success), then
+    // 10%0 divzero → catch -42. Two stdout lines.
+    run_gg("c1_d26_auto_infer_rem.gg", "3\n-42");
+}
+
+#[test]
+fn c1_d26_shift_shl_ok() {
+    // Route A shift-fallible smoke: `4 <<! 2 = 16` inside auto-inferred
+    // throws-fn. PINS CURRENT (Route-A minimum) trap-on-oob behavior —
+    // when the shift-fallible lowering follow-up lands (extends
+    // `lower_fallible_arith_binop` to route Shl/Shr through a new
+    // FaultOp category), the shift-out-of-range fault path flips from
+    // trap to Result.Error(Overflow); the success cell keeps this stdout.
+    run_gg("c1_d26_shift_shl_ok.gg", "16");
+}
+
+#[test]
+fn c1_d26_shift_shr_ok() {
+    // Route A shift-fallible smoke: `16 >>! 2 = 4`. Same PIN as shl_ok.
+    run_gg("c1_d26_shift_shr_ok.gg", "4");
+}
+
+#[test]
+fn c1_d26_shift_capture_rejects() {
+    // Core #10 same-round compliance for the Core #8 silent-SIGSEGV
+    // miscompile the review flagged: `<<!` / `>>!` at a `Result[T,
+    // ArithError]` capture destination now rejects at CHECK with
+    // `E_ShiftFallibleRouteBNotYetImplemented`. Route A still works —
+    // `c1_d26_shift_shl_ok` / `c1_d26_shift_shr_ok` above prove that path
+    // stays green. Retires when the shift-fallible Route B lowering
+    // follow-up lands (TODO "D26 shift-fallible Route B lowering gap"),
+    // at which point the `known_gaps/c1_d26_shift_capture_type_mismatch.gg`
+    // sibling graduates to a positive Route-B fixture.
+    //
+    // RED-verify (pre-fix behavior): the same source SIGSEGV'd at run —
+    // the emitted C stored a plain-int shift result into a
+    // `Result[int, ArithError]` slot, the caller's match read garbage
+    // bytes as the discriminant, exit 139 on both backends. That was the
+    // exact defect the review's concrete repro named.
+    check_gg_fails(
+        "c1_d26_shift_capture_rejects.gg",
+        "E_ShiftFallibleRouteBNotYetImplemented",
+    );
+}
+
+// ── D26 known_gaps repros (Task Continuity 2026-07-24 binding) ───────────
+//
+// Each `#[ignore]`d test below pairs a durable `tests/fixtures/known_gaps/*.gg`
+// repro with an assertion of the INTENDED behavior — the fixture graduates
+// (un-ignore + move out of known_gaps/) in the round that lands the
+// corresponding fix. Filed alongside the TODO.md follow-up entries under
+// "Semantics / reference-grade rejection".
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06, D26 F1 executor discovery): qualified match \
+arm patterns `case Result.Ok(v):` / `case Result.Error(e):` on a Result[T, E] \
+scrutinee generate C that reads .Ok_0 UNCONDITIONALLY without checking the \
+discriminant tag. Every arm falls to the Ok branch regardless of the actual \
+variant — silent WRONG OUTPUT on both backends (this fixture prints `0` \
+instead of `-42`). The UNQUALIFIED form `case Ok(v):` / `case Error(e):` \
+works correctly and is the workaround the D26 fixture pack uses. Sibling \
+class suspected: `Option.Some(v)` / `Option.None()` qualified. Un-ignore \
+and graduate this fixture out of known_gaps/ when the match-lowering \
+qualified-form tag-check gap is fixed."]
+fn qualified_result_match_arm_wrong_output() {
+    run_gg(
+        "known_gaps/qualified_result_match_arm_wrong_output.gg",
+        "-42",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06, D26 F4 review-fold): D26 shift-fallible \
+Route B (Result-capture) is not yet lowered to Result construction. The \
+Rust check-lane REJECTS this shape today with \
+E_ShiftFallibleRouteBNotYetImplemented (see c1_d26_shift_capture_rejects.gg) \
+so the SIGSEGV miscompile is blocked. This fixture pins the INTENDED \
+behavior: `4 <<! 2 = 16` at a `Result[int, ArithError]` destination → \
+Result.Ok(16), match prints `16`. FIX SHAPE: extend FaultableBinOp LIR + \
+lower_fallible_arith_binop base_op map to route Shl/Shr with a new FaultOp \
+category. Un-ignore and graduate this fixture out of known_gaps/ (rename to \
+c1_d26_shift_capture_shl_ok.gg) when the shift-fallible Route B lowering \
+lands. A sibling _overflow.gg fixture will cover Error(Overflow) construction."]
+fn c1_d26_shift_capture_type_mismatch_intended() {
+    run_gg(
+        "known_gaps/c1_d26_shift_capture_type_mismatch.gg",
+        "16",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06, D26 F1a executor scope-note): a closure \
+whose body contains a fallible-arith operator does NOT auto-infer \
+`throws ArithError` on the closure's signature. The F1a pre-collect_top_level \
+walker in src/semantic/rewrite.rs deliberately skips Expr::Closure / \
+Expr::ImplicitClosure to avoid false-positive promotion of the enclosing fn. \
+Consequence: a closure using +! requires the user to declare `throws ArithError` \
+explicitly (an asymmetry with fn-body auto-infer). Current behavior is a SOUND \
+E_UnhandledThrows reject (not a miscompile) — this is an ERGONOMIC gap. FIX \
+SHAPE: mirror the F1a body-walker at the closure signature-resolution site. \
+Un-ignore and graduate when the closure auto-infer lands."]
+fn c1_d26_closure_body_no_auto_infer_intended() {
+    run_gg(
+        "known_gaps/c1_d26_closure_body_no_auto_infer.gg",
+        "5",
+    );
+}
+
+// ── D26 F2 self-host lane parity (Core #9) ───────────────────────────────
+//
+// Cross-lane fixture: the self-host driver runs the shared c1_d26_* fixtures
+// end-to-end (parse → lower → emit-C) so the SH mirror stays honest. The
+// MINIMUM SH mirror shipped in this round covers: lex + parse the 7 fallible
+// operators (Pratt binding at base-op precedence); reject the 7 compound
+// forms via `panic()` at the parser (SH gap TODO.md:784 — parser errors
+// are discarded, so `panic()` is the observable channel, mirroring D28 R1);
+// lowerer's `map_binop` routes `"+!"`/etc as their base op (Route-A trap-
+// on-fault minimum — matches Rust foundation-slice shape). Deeper items
+// (Route-B capture, float-operand reject at SH typecheck, const-context
+// reject, auto-infer) are `#[ignore]`d below with a citation, per Core #9's
+// allowed `#[ignore]+citation` shape for a lane genuinely lagging behind.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_accepts_d26_smoke_propagate() {
+    // SH must LEX + PARSE + LOWER the smoke fixture (an explicit `throws
+    // ArithError` fn using `+!` at Route-A shape). Success = SH emits C
+    // (parse+lower succeeded); we don't compile the C here — that path is
+    // exercised by the `self_host_bootstrap_fixed_point` battery when
+    // driver.gg itself uses `+!` (which it doesn't today; the round's
+    // acceptance is the cross-lane fixture matching Rust's stdout).
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_smoke_propagate.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_accepts_d26_smoke_propagate",
+    );
+    assert!(
+        out.status.success(),
+        "self-host driver REJECTED c1_d26_smoke_propagate.gg — the SH lex/\
+         parse/lower mirror for `+!` inside `throws ArithError` is broken. \
+         exit={:?}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "self-host driver exited 0 but produced no C for the smoke fixture — \
+         lex/parse succeeded but lowering emitted nothing.\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_d26_compound_assign() {
+    // SH must REJECT `+!=` (v1-EXCLUDED per amendment `decisions.md:945`).
+    // The SH reject is via panic() (parse_source discards parser.errors —
+    // TODO.md:784 systemic gap; same pattern D28 R1 used). Exits 101 with
+    // a T_Panic message naming the D26 tag and the glyph.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_reject_compound_assign.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_d26_compound_assign",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "self-host driver ACCEPTED `+!=` — the D26 compound-fallible-assign \
+         reject in self_host_typechecker/parser.gg is broken. exit={:?}\n\
+         stderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("D26") && stderr.contains("compound fallible operators")
+            && stderr.contains("+!="),
+        "self-host rejected but not with the ratified D26 panic message.\n\
+         stderr:\n{stderr}",
+    );
+}
+
+// ── D26 F2 SH lane-lag `#[ignore]+citation` set (Core #9 sanctioned) ─────
+//
+// The following cross-lane fixture runners require the SH mirror to grow
+// beyond the MINIMUM landed in this round. Each ignore has a filed
+// follow-up in TODO.md under "Semantics / reference-grade rejection" that
+// captures the exact SH file zone + shape needed. Un-ignore in the round
+// that lands the corresponding SH extension.
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "D26 F2 lane-lag: SH typechecker doesn't yet reject float-operand at fallible-arith \
+    (needs `check_fallible_arith_binop` mirror in self_host_typechecker/typecheck.gg); \
+    the RUST lane rejects with E_FallibleArithmeticOnNonInt at check time (see \
+    c1_d26_reject_float_operand). Un-ignore when the SH typecheck arm lands."]
+fn self_host_driver_rejects_d26_float_operand() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_reject_float_operand.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_d26_float_operand",
+    );
+    assert!(!out.status.success(), "SH accepted float operand at +!");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "D26 F2 lane-lag: SH doesn't yet reject fallible-arith in a const initializer \
+    (needs `find_fallible_arith` const-fold walker mirror in self_host_typechecker/\
+    typecheck.gg or the SH's const-check pass). The RUST lane rejects with \
+    E_FallibleOpInConst. Un-ignore when the SH const-check arm lands."]
+fn self_host_driver_rejects_d26_const_context() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_reject_const_context.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_d26_const_context",
+    );
+    assert!(!out.status.success(), "SH accepted +! in const initializer");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "D26 F2 lane-lag: SH's map_binop routes `+!` etc as base-op trap-on-fault (Route A \
+    minimum, matches Rust foundation-slice shape); Route B (Result-capture with \
+    ArithError.Overflow / .DivByZero construction) needs the SH mirror of \
+    `lower_fallible_arith_binop` in self_host_lowerer/lower_expr.gg. Un-ignore when \
+    the SH Route-B lowering lands. Rust-lane test: c1_d26_capture_add_overflow."]
+fn self_host_driver_captures_d26_add_overflow() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_capture_add_overflow.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_captures_d26_add_overflow",
+    );
+    // When the SH lands Route-B, this should succeed and the emitted C should
+    // print "-99" (the Error arm's print). Today the SH lowering routes
+    // `a +! b` as plain `a + b` (trap on overflow) so the run WOULD abort at
+    // execution, not produce -99. The check + build stage still succeed.
+    assert!(out.status.success(), "SH failed to compile Route B fixture");
 }

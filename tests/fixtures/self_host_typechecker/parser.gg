@@ -74,9 +74,26 @@ const int TOK_STARPERCENT = 63
 const int TOK_PLUSPERCENTEQ = 64
 const int TOK_MINUSPERCENTEQ = 65
 const int TOK_STARPERCENTEQ = 66
-# D28 power operator.
-const int TOK_STARSTAR = 67
-const int TOK_STARSTAREQ = 68
+# D26 (Round XXXIII Batch C1): fallible arithmetic operators + their
+# compound-assign reject-token siblings (v1-EXCLUDED per amendment
+# `decisions.md:945`). Rust mirror: `src/lexer/token.rs:73-100`.
+const int TOK_PLUSBANG = 67
+const int TOK_MINUSBANG = 68
+const int TOK_STARBANG = 69
+const int TOK_SLASHBANG = 70
+const int TOK_PERCENTBANG = 71
+const int TOK_LTLTBANG = 72
+const int TOK_GTGTBANG = 73
+const int TOK_PLUSBANGEQ = 74
+const int TOK_MINUSBANGEQ = 75
+const int TOK_STARBANGEQ = 76
+const int TOK_SLASHBANGEQ = 77
+const int TOK_PERCENTBANGEQ = 78
+const int TOK_LTLTBANGEQ = 79
+const int TOK_GTGTBANGEQ = 80
+# D28 power operator (post-D26 IDs).
+const int TOK_STARSTAR = 81
+const int TOK_STARSTAREQ = 82
 
 # ── Keyword tag constants ────────────────────────────────────
 
@@ -320,6 +337,36 @@ int token_tag(Token tok):
             return TOK_STARSTAR
         case TkStarStarEq:
             return TOK_STARSTAREQ
+        # D26 fallible arithmetic operator tokens (5 arith + 2 shift) +
+        # compound-fallible-assign reject tokens (7).
+        case TkPlusBang:
+            return TOK_PLUSBANG
+        case TkMinusBang:
+            return TOK_MINUSBANG
+        case TkStarBang:
+            return TOK_STARBANG
+        case TkSlashBang:
+            return TOK_SLASHBANG
+        case TkPercentBang:
+            return TOK_PERCENTBANG
+        case TkLtLtBang:
+            return TOK_LTLTBANG
+        case TkGtGtBang:
+            return TOK_GTGTBANG
+        case TkPlusBangEq:
+            return TOK_PLUSBANGEQ
+        case TkMinusBangEq:
+            return TOK_MINUSBANGEQ
+        case TkStarBangEq:
+            return TOK_STARBANGEQ
+        case TkSlashBangEq:
+            return TOK_SLASHBANGEQ
+        case TkPercentBangEq:
+            return TOK_PERCENTBANGEQ
+        case TkLtLtBangEq:
+            return TOK_LTLTBANGEQ
+        case TkGtGtBangEq:
+            return TOK_GTGTBANGEQ
         else:
             return 0
 
@@ -830,6 +877,25 @@ String op_str(int tag):
         return ".."
     elif tag == TOK_DOUBLEQUESTION:
         return "??"
+    # D26 fallible arithmetic — the operator glyph itself. Downstream
+    # `EBinaryOp` consumers dispatch on the string; the SH's Route-A
+    # minimum treats these identically to their base op at lower time
+    # (trap-on-overflow shape; matches the Rust foundation slice, before
+    # F1's dedicated Route-A/Route-B handling).
+    elif tag == TOK_PLUSBANG:
+        return "+!"
+    elif tag == TOK_MINUSBANG:
+        return "-!"
+    elif tag == TOK_STARBANG:
+        return "*!"
+    elif tag == TOK_SLASHBANG:
+        return "/!"
+    elif tag == TOK_PERCENTBANG:
+        return "%!"
+    elif tag == TOK_LTLTBANG:
+        return "<<!"
+    elif tag == TOK_GTGTBANG:
+        return ">>!"
     return ""
 
 String compound_op_str(int tag):
@@ -894,6 +960,44 @@ bool is_compound_assign(int tag):
         return true
     return false
 
+# D26 (Round XXXIII Batch C1): compound-fallible-assign detection. These 7
+# operators (`+!=`, `-!=`, `*!=`, `/!=`, `%!=`, `<<!=`, `>>!=`) are
+# v1-EXCLUDED per amendment `decisions.md:945` — the parser rejects them
+# at the compound-assign statement site with a precise glyph diagnostic.
+bool is_compound_fallible_assign(int tag):
+    if tag == TOK_PLUSBANGEQ:
+        return true
+    elif tag == TOK_MINUSBANGEQ:
+        return true
+    elif tag == TOK_STARBANGEQ:
+        return true
+    elif tag == TOK_SLASHBANGEQ:
+        return true
+    elif tag == TOK_PERCENTBANGEQ:
+        return true
+    elif tag == TOK_LTLTBANGEQ:
+        return true
+    elif tag == TOK_GTGTBANGEQ:
+        return true
+    return false
+
+String compound_fallible_glyph(int tag):
+    if tag == TOK_PLUSBANGEQ:
+        return "+!="
+    elif tag == TOK_MINUSBANGEQ:
+        return "-!="
+    elif tag == TOK_STARBANGEQ:
+        return "*!="
+    elif tag == TOK_SLASHBANGEQ:
+        return "/!="
+    elif tag == TOK_PERCENTBANGEQ:
+        return "%!="
+    elif tag == TOK_LTLTBANGEQ:
+        return "<<!="
+    elif tag == TOK_GTGTBANGEQ:
+        return ">>!="
+    return ""
+
 # ── Binding power for Pratt parser ──────────────────────────
 
 int infix_left_bp(int tag):
@@ -939,6 +1043,22 @@ int infix_left_bp(int tag):
         # D28 amendment R2: right-associative. Binds tighter than unary
         # prefix; `2 ** 3 ** 2` = 512.
         return 34
+    # D26 fallible arithmetic — same left-BP as their base op (precedence
+    # pinned by D26 spec).
+    elif tag == TOK_PLUSBANG:
+        return 27
+    elif tag == TOK_MINUSBANG:
+        return 27
+    elif tag == TOK_STARBANG:
+        return 29
+    elif tag == TOK_SLASHBANG:
+        return 29
+    elif tag == TOK_PERCENTBANG:
+        return 29
+    elif tag == TOK_LTLTBANG:
+        return 25
+    elif tag == TOK_GTGTBANG:
+        return 25
     return 0
 
 int infix_right_bp(int tag):
@@ -983,6 +1103,21 @@ int infix_right_bp(int tag):
     elif tag == TOK_STARSTAR:
         # D28 R2 right-assoc: right BP < left BP (33 < 34).
         return 33
+    # D26 fallible arithmetic — right-BP mirrors the base op's + 1.
+    elif tag == TOK_PLUSBANG:
+        return 28
+    elif tag == TOK_MINUSBANG:
+        return 28
+    elif tag == TOK_STARBANG:
+        return 30
+    elif tag == TOK_SLASHBANG:
+        return 30
+    elif tag == TOK_PERCENTBANG:
+        return 30
+    elif tag == TOK_LTLTBANG:
+        return 26
+    elif tag == TOK_GTGTBANG:
+        return 26
     return 0
 
 # ── Expression helpers ───────────────────────────────────────
@@ -3350,6 +3485,19 @@ equip Parser:
             self.advance()
             SpannedExpr rhs = self.parse_expr()
             return SCompoundAssign(expr, cop, rhs)
+
+        # D26 (Round XXXIII Batch C1): compound fallible-assign operators
+        # (`+!=`, `-!=`, `*!=`, `/!=`, `%!=`, `<<!=`, `>>!=`) are
+        # v1-EXCLUDED per amendment `decisions.md:945`. The lexer emits them
+        # as distinct tokens (see `lex_scan_operator`) so we can point at
+        # the whole glyph here. panic() rather than push_error because the
+        # SH's parse_source() at typechecker/parser.gg:4832 discards the
+        # parser's `errors` Vector (systemic gap, TODO.md:784) — this
+        # follows the same pattern D28's R1 landing used. Exits the SH
+        # driver non-zero with a precise message.
+        if is_compound_fallible_assign(op_tag):
+            String glyph = compound_fallible_glyph(op_tag)
+            panic("D26: compound fallible operators (" + glyph + ") are v1-EXCLUDED")
 
         return SExpr(expr)
 

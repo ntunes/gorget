@@ -1,0 +1,13 @@
+# D26 axis: op=Mul · route=B (Result-capture) · NEG (overflow) · int64.
+# `*!` at (large * large) overflows; branches to the overflow_bb handler.
+# Constructs `Error(ArithError.Overflow)` — same shape as Add/Sub since
+# all three share the single overflow fault category.
+int identity(int x): x
+
+void main():
+    int a = identity(3037000500)
+    int b = identity(3037000500)
+    Result[int, ArithError] r = a *! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-2)

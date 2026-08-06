@@ -1,0 +1,24 @@
+# D26 axis: op=Shl · route=B (Result-capture) · NEG (rejected at check) · int64.
+# The check-lane rejects shift-fallible at a `Result[T, ArithError]` capture
+# destination with `E_ShiftFallibleRouteBNotYetImplemented`. Route A (throws-
+# propagate via auto-infer) still works for shifts — see
+# `c1_d26_shift_shl_ok.gg` / `c1_d26_shift_shr_ok.gg` — so the reject is
+# scoped to Route B only. The follow-up in TODO.md (D26 shift-fallible Route
+# B lowering gap) extends `FaultableBinOp` LIR + `lower_fallible_arith_binop`
+# to accept Shl/Shr with a new FaultOp category, at which point this reject
+# retires and the sibling `known_gaps/c1_d26_shift_capture_type_mismatch.gg`
+# graduates to a positive fixture.
+#
+# RED-verify: BEFORE the check-lane reject landed, this fixture compiled +
+# ran and SIGSEGV'd (exit 139) because the lowering emitted plain-int shift
+# result stored into a `Result[int, ArithError]` slot; the caller's match
+# read garbage bytes as the discriminant. Silent type-confusion miscompile,
+# both backends. AFTER: check-lane refuses with the intended diagnostic;
+# nothing lowers.
+void main():
+    int a = 4
+    int b = 2
+    Result[int, ArithError] r = a <<! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)

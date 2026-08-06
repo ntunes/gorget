@@ -2345,10 +2345,18 @@ fn compound_op_to_gir(op: ast::BinaryOp) -> BinOp {
         // this arm is defence-in-depth for a shape that slips.
         ast::BinaryOp::Eq | ast::BinaryOp::Neq | ast::BinaryOp::Lt | ast::BinaryOp::Gt
         | ast::BinaryOp::LtEq | ast::BinaryOp::GtEq | ast::BinaryOp::And | ast::BinaryOp::Or
-        | ast::BinaryOp::In => unreachable!(
+        | ast::BinaryOp::In
+        // D26 fallible-arith: compound `+!=`/`-!=`/... are v1-EXCLUDED per
+        // amendment `decisions.md:945`, rejected at parse with
+        // E_CompoundFallibleAssignExcluded — they can't reach this chokepoint.
+        | ast::BinaryOp::AddFallible | ast::BinaryOp::SubFallible
+        | ast::BinaryOp::MulFallible | ast::BinaryOp::DivFallible
+        | ast::BinaryOp::RemFallible | ast::BinaryOp::ShlFallible
+        | ast::BinaryOp::ShrFallible => unreachable!(
             "compound_op_to_gir: {op:?} is not a valid compound-assignment operator \
              (parser stmt.rs restricts the compound-op token set; comparison / logical / \
-             membership ops have no `op=` form)"
+             membership ops have no `op=` form; fallible-arith compound forms are \
+             v1-EXCLUDED and parse-rejected)"
         ),
     }
 }

@@ -1,0 +1,20 @@
+# D26 axis: op=Add · route=A (throws-propagate) · POS + NEG (both) · int64.
+# The `add_or_throw` fn has NO explicit `throws ArithError` declaration —
+# the pre-`collect_top_level` rewrite pass (F1a auto-infer) sees `+!` in
+# the body and mutates the AST's throws-spec to `Explicit(ArithError)`.
+# Downstream: check-lane treats it as throws; lowering wraps returns in
+# Result; caller's `!` propagates. Two overflow-boundary values
+# demonstrate both Ok-peel and Error-propagate paths through the auto-
+# inferred signature.
+# RED-verify: at foundation slice (5ee28211), `add_or_throw` (no explicit
+# throws) rejects at check with `E_UnhandledThrows` — F1a makes it work.
+int identity(int x): x
+
+int add_or_throw(int a, int b):
+    return a +! b
+
+void main():
+    int ok = add_or_throw(identity(2), identity(3))! catch (e): -1
+    print(ok)
+    int overflow = add_or_throw(identity(9223372036854775807), identity(1))! catch (e): -1
+    print(overflow)

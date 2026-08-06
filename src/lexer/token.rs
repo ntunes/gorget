@@ -68,6 +68,40 @@ pub enum RawToken {
     MinusPercent,
     #[token("*%")]
     StarPercent,
+    // D26 fallible arithmetic operators (Round XXXIII Batch C1). Each `!`-suffixed
+    // form converts a would-be-trap into `Result[T, ArithError]`; auto-propagates
+    // via D29 disposition. Precedence mirrors the plain operator.
+    // Compound-fallible-assign forms (`+!=`, etc.) are v1-EXCLUDED per amendment
+    // `decisions.md:945`; the reject-tokens below give them a distinct diagnostic
+    // span instead of a maximal-munch ambiguity trap (they never reach parser).
+    #[token("+!=")]
+    PlusBangEq,
+    #[token("-!=")]
+    MinusBangEq,
+    #[token("*!=")]
+    StarBangEq,
+    #[token("/!=")]
+    SlashBangEq,
+    #[token("%!=")]
+    PercentBangEq,
+    #[token("<<!=")]
+    LtLtBangEq,
+    #[token(">>!=")]
+    GtGtBangEq,
+    #[token("<<!")]
+    LtLtBang,
+    #[token(">>!")]
+    GtGtBang,
+    #[token("+!")]
+    PlusBang,
+    #[token("-!")]
+    MinusBang,
+    #[token("*!")]
+    StarBang,
+    #[token("/!")]
+    SlashBang,
+    #[token("%!")]
+    PercentBang,
     #[token("<<=")]
     LtLtEq,
     #[token(">>=")]
@@ -174,6 +208,20 @@ impl fmt::Display for RawToken {
             RawToken::PlusPercentEq => write!(f, "'+%='"),
             RawToken::MinusPercentEq => write!(f, "'-%='"),
             RawToken::StarPercentEq => write!(f, "'*%='"),
+            RawToken::PlusBang => write!(f, "'+!'"),
+            RawToken::MinusBang => write!(f, "'-!'"),
+            RawToken::StarBang => write!(f, "'*!'"),
+            RawToken::SlashBang => write!(f, "'/!'"),
+            RawToken::PercentBang => write!(f, "'%!'"),
+            RawToken::LtLtBang => write!(f, "'<<!'"),
+            RawToken::GtGtBang => write!(f, "'>>!'"),
+            RawToken::PlusBangEq => write!(f, "'+!='"),
+            RawToken::MinusBangEq => write!(f, "'-!='"),
+            RawToken::StarBangEq => write!(f, "'*!='"),
+            RawToken::SlashBangEq => write!(f, "'/!='"),
+            RawToken::PercentBangEq => write!(f, "'%!='"),
+            RawToken::LtLtBangEq => write!(f, "'<<!='"),
+            RawToken::GtGtBangEq => write!(f, "'>>!='"),
             RawToken::Plus => write!(f, "'+'"),
             RawToken::Minus => write!(f, "'-'"),
             RawToken::Star => write!(f, "'*'"),
@@ -614,6 +662,24 @@ pub enum Token {
     PlusPercentEq,
     MinusPercentEq,
     StarPercentEq,
+    // D26 fallible arithmetic operators (Round XXXIII Batch C1).
+    PlusBang,
+    MinusBang,
+    StarBang,
+    SlashBang,
+    PercentBang,
+    LtLtBang,
+    GtGtBang,
+    // D26 compound-fallible-assign reject tokens (v1-EXCLUDED per
+    // `decisions.md:945`) — kept as distinct tokens so lexer/parser can
+    // produce E_CompoundFallibleAssignExcluded with a precise span.
+    PlusBangEq,
+    MinusBangEq,
+    StarBangEq,
+    SlashBangEq,
+    PercentBangEq,
+    LtLtBangEq,
+    GtGtBangEq,
     DotDot,
     DotDotEq,
     QuestionDot,
@@ -698,6 +764,20 @@ impl fmt::Display for Token {
             Token::PlusPercentEq => write!(f, "'+%='"),
             Token::MinusPercentEq => write!(f, "'-%='"),
             Token::StarPercentEq => write!(f, "'*%='"),
+            Token::PlusBang => write!(f, "'+!'"),
+            Token::MinusBang => write!(f, "'-!'"),
+            Token::StarBang => write!(f, "'*!'"),
+            Token::SlashBang => write!(f, "'/!'"),
+            Token::PercentBang => write!(f, "'%!'"),
+            Token::LtLtBang => write!(f, "'<<!'"),
+            Token::GtGtBang => write!(f, "'>>!'"),
+            Token::PlusBangEq => write!(f, "'+!='"),
+            Token::MinusBangEq => write!(f, "'-!='"),
+            Token::StarBangEq => write!(f, "'*!='"),
+            Token::SlashBangEq => write!(f, "'/!='"),
+            Token::PercentBangEq => write!(f, "'%!='"),
+            Token::LtLtBangEq => write!(f, "'<<!='"),
+            Token::GtGtBangEq => write!(f, "'>>!='"),
             Token::DotDot => write!(f, "'..'"),
             Token::DotDotEq => write!(f, "'..='"),
             Token::QuestionDot => write!(f, "'?.'"),

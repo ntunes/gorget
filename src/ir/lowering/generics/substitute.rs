@@ -384,6 +384,34 @@ pub fn builtin_fault_enum() -> ast::EnumDef {
     }
 }
 
+/// D26 (Round XXXIII Batch C1): payload-free prelude enum thrown by the seven
+/// fallible arithmetic operators (`+! -! *! /! %! <<! >>!`). Variants are
+/// QUALIFIED-ONLY (`ArithError.Overflow`), mirroring `Fault` — a plain trap
+/// becomes a value in the ONE error channel (D23). Single source of truth for
+/// both the check-lane resolve.rs registration AND the concrete TypeDef
+/// registration in `ir/lowering/mod.rs`.
+pub fn builtin_arith_error_enum() -> ast::EnumDef {
+    use crate::parser::ast::*;
+    ast::EnumDef {
+        attributes: vec![],
+        visibility: Visibility::Public,
+        name: Spanned::dummy("ArithError".to_string()),
+        generic_params: None,
+        variants: vec![
+            Spanned::dummy(Variant {
+                name: Spanned::dummy("Overflow".to_string()),
+                fields: VariantFields::Unit,
+            }),
+            Spanned::dummy(Variant {
+                name: Spanned::dummy("DivByZero".to_string()),
+                fields: VariantFields::Unit,
+            }),
+        ],
+        doc_comment: None,
+        span: crate::span::Span::dummy(),
+    }
+}
+
 /// Inject built-in Option[T] and Result[T, E] enum templates if not present.
 pub(super) fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::EnumDef>) {
     use crate::parser::ast::*;
@@ -418,6 +446,12 @@ pub(super) fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::E
     // `builtin_fault_enum`.
     if !enum_templates.contains_key("Fault") {
         enum_templates.insert("Fault".to_string(), builtin_fault_enum());
+    }
+
+    // ArithError: D26 (Round XXXIII Batch C1) prelude enum thrown by the seven
+    // fallible arithmetic operators. See `builtin_arith_error_enum`.
+    if !enum_templates.contains_key("ArithError") {
+        enum_templates.insert("ArithError".to_string(), builtin_arith_error_enum());
     }
 
     if !enum_templates.contains_key("Result") {

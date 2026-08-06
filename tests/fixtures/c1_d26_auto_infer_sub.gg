@@ -1,0 +1,14 @@
+# D26 axis: op=Sub · route=A (throws-propagate via auto-infer) · POS + NEG.
+# `sub_or_throw` has no explicit `throws` decl — auto-infer promotes it
+# via the pre-`collect_top_level` rewrite pass. Two calls demonstrate
+# both success (10-3=7) and underflow (`-INT64_MAX - 2` → Overflow, caught).
+int identity(int x): x
+
+int sub_or_throw(int a, int b):
+    return a -! b
+
+void main():
+    int ok = sub_or_throw(identity(10), identity(3))! catch (e): -1
+    print(ok)
+    int uf = sub_or_throw(identity(-9223372036854775807), identity(2))! catch (e): -1
+    print(uf)

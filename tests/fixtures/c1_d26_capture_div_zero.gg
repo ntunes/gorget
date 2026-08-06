@@ -1,0 +1,16 @@
+# D26 axis: op=Div · route=B (Result-capture) · NEG (div-by-zero) · int64.
+# `/!` at rhs=0 branches to the divzero_bb handler (F1 emits both
+# overflow_bb and divzero_bb for Div/Rem — the two fault categories per
+# spec/prose/trap-codes.md). Constructs `Error(ArithError.DivByZero)`.
+# RED-verify: at foundation slice (5ee28211), plain `/` would trap-abort
+# with T_DivByZero; F1 constructs a Result.Error value so the match arm
+# fires and prints -1.
+int identity(int x): x
+
+void main():
+    int a = identity(10)
+    int b = identity(0)
+    Result[int, ArithError] r = a /! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)

@@ -261,6 +261,35 @@ Type: `Option[T]` for some inferred `T`.
 | `%`    | Remainder (sign follows dividend) |
 | `.mod(n)` | Euclidean modulo (sign follows divisor) — method on numeric types |
 
+**Fallible arithmetic (D26):** the mark `!` fused into an arithmetic
+operator produces a `Result[T, ArithError]` instead of trapping on fault.
+
+| Symbol | Name                       | Faults raised |
+|--------|----------------------------|---------------|
+| `+!`   | Fallible addition          | `Overflow`    |
+| `-!`   | Fallible subtraction       | `Overflow`    |
+| `*!`   | Fallible multiplication    | `Overflow`    |
+| `/!`   | Fallible division          | `Overflow` (signed `TYPE_MIN/-1`), `DivByZero` |
+| `%!`   | Fallible remainder         | `Overflow`, `DivByZero` |
+| `<<!`  | Fallible left shift        | `Overflow` (shift range) |
+| `>>!`  | Fallible right shift       | `Overflow` (shift range) |
+
+Integer operands only (`E_FallibleArithmeticOnNonInt` on a float operand).
+Compound forms (`+!=`, ...) are v1-EXCLUDED. In a `const` initializer they
+reject with `E_FallibleOpInConst` (a Result is not a foldable Constant).
+
+**Auto-propagation.** A fn body containing any fallible-arith op
+auto-infers `throws ArithError` on its signature — silent, no diagnostic.
+The `+!` inside such a fn either produces the plain `T` (Route A: fault
+becomes `Error(ArithError.*)` early-returned via the fn's Result slot)
+or, at a Result-capture destination, produces a raw `Result[T,
+ArithError]` value (Route B). An explicit `throws E` declaration WINS
+over auto-infer — the user's contract is preserved (see D26 spec + F1a).
+
+`main()` is not auto-inferred (it can only throw `int` per
+`E_MainThrowsNonInt`); every `+!` in `main` must be captured
+(`Result[int, ArithError] r = a +! b`) or catch-handled at the use site.
+
 **Bitwise:**
 
 | Symbol | Name            |
@@ -1563,6 +1592,7 @@ unary_expr = ( "-" | "not" | "~" | "*" ) expr ;
 ```ebnf
 binary_expr = expr op expr ;
 op = "+" | "-" | "*" | "/" | "%" | "+%" | "-%" | "*%" | "**"
+   | "+!" | "-!" | "*!" | "/!" | "%!" | "<<!" | ">>!"
    | "==" | "!=" | "<" | ">" | "<=" | ">=" | "and" | "or" | "in"
    | "&" | "|" | "^" | "<<" | ">>" ;
 ```
@@ -1574,6 +1604,8 @@ Arithmetic operators require matching numeric types. Comparison operators produc
 **Exponentiation `**`** — `x ** y` raises `x` to the power `y`. Right-associative (Fortran/Python convention: `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, NOT `(2 ** 3) ** 2` = 64). Binds tighter than unary prefix, so `-x ** 2` is a **compile REJECT** (the JS/TC39 guardrail) — write `-(x ** 2)` (negation of the result) or `(-x) ** 2` (base is negated) to disambiguate. The compound form `**=` is also available. No type-switching: `int ** int → int`, `float ** float → float`; mixed operands are rejected (`E_TypeMismatchInPow`). Integer overflow AND negative exponent both trap `Fault.Overflow` (a fallible `**!` is not yet available; use explicit width checks for now). `**` replaces the earlier `pow()` free function per the one-canonical-way rule.
 
 > **`^` is XOR, not power.** `2 ^ 10` produces 8 (XOR of 0b010 and 0b1010), not 1024. The compiler emits a `W_XorLikelyPower` fix-it warning on the narrow shape `{2 | 10} ^ N` where `N` looks like an exponent — write `2 ** 10` if you meant power.
+
+**Fallible arithmetic operators (D26)** (`+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!`) produce `Result[T, ArithError]` values instead of trapping on fault. Integer operands only (float operands reject at check with `E_FallibleArithmeticOnNonInt`); the fault categories are `Overflow` (Add/Sub/Mul/shift range, plus signed Div/Rem `TYPE_MIN/-1`) and `DivByZero` (Div/Rem on `rhs == 0`). Compound forms (`+!=`, `-!=`, …) are v1-EXCLUDED per amendment (`decisions.md:945`); the parser rejects them with `E_CompoundFallibleAssignExcluded`. See §10.9 for the `throws E` disposition table.
 
 The `+` and `+=` operators also work on strings, producing a new concatenated string:
 
@@ -3050,6 +3082,29 @@ Faults panic by default; a fault `catch` (§10.5) is the only way to recover one
 - **`Fault.Bounds`** — an out-of-bounds index read of an indexed array-backed collection (`Vector`, `Deque`). A negative index is a catchable `Bounds` inside a fault `catch` (and a panic outside one). Dict lookups, string indexing, and range slices are not covered.
 
 Faults are **out of the function signature** — a plain `int sum(...)` does not become a `Result`-returning function because it does arithmetic — so they never appear in a `throws` type or on the API surface.
+
+**Fallible arithmetic operators (D26) — opting IN to `throws`.** The fallible arithmetic operators `+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` (§7.5) are the opposite discipline: they surface the arithmetic failure into the ordinary `throws` / `Result[T, E]` channel via the prelude-registered enum:
+
+```gorget
+enum ArithError:
+    Overflow
+    DivByZero
+```
+
+The `!` glyph is FUSED into the operator (there is no un-marked variant); the expression's semantic type is `Result[T, ArithError]` at a Result-capture destination and peels to `T` inside a propagating context (per the D29 disposition table below). A function body that syntactically contains any fallible-arith op auto-infers `throws ArithError` on its signature — silent, no diagnostic; an explicit `throws E` declaration by the user WINS over auto-infer. `main()` is not auto-inferred (it can only throw `int` per E_MainThrowsNonInt); every `+!` in `main` must be captured or catch-handled at the use site.
+
+Compound forms (`+!=`, `-!=`, …) are v1-EXCLUDED per amendment (`decisions.md:945`); the parser rejects them with `E_CompoundFallibleAssignExcluded`. Fallible-arith inside a `const` initializer is likewise rejected (a `Result[T, ArithError]` value is not a compile-time `Constant`); the diagnostic is `E_FallibleOpInConst`. Non-integer operands reject at check with `E_FallibleArithmeticOnNonInt` (floats and user types).
+
+Disposition table (D26 `+!` reuses D29's `resolve_throws_call_type`, with the flag `mark_is_operator_inherent = true` because the `!` glyph is not optional):
+
+| Destination                          | Behavior of `a +! b`                                                     |
+|--------------------------------------|---------------------------------------------------------------------------|
+| `Result[T, ArithError] r = …`        | Route B: expression yields the raw `Result[T, ArithError]` value.        |
+| Inside `throws ArithError` fn body   | Route A: expression yields `T`; on fault, the fn early-returns `Error`.  |
+| `(a +! b) catch (e): recovery`       | Standard `catch` disposition (§10) recovers Error into a T value.        |
+| Bare in a non-propagating fn         | `E_UnhandledThrows` (auto-infer skipped only for `main`).                |
+
+Prior art: Zig's `std.math` error unions; Pony's partial arithmetic. The typed + auto-propagating combination is novel to Gorget D26.
 
 ### 10.10 Toolchain Exit Codes
 

@@ -55,23 +55,56 @@ fn check_module_const_foldability(checker: &mut TypeChecker, items: &[Spanned<It
     let mut known: rustc_hash::FxHashMap<String, Constant> = rustc_hash::FxHashMap::default();
     for item in items {
         match &item.node {
-            Item::ConstDecl(c) => match eval_const_expr(&c.value.node, &known) {
-                Some(val) => {
-                    known.insert(c.name.node.clone(), val);
+            Item::ConstDecl(c) => {
+                // D26: reject fallible arithmetic in a const initializer BEFORE
+                // eval_const_expr — the operator produces `Result[T, ArithError]`
+                // which is not a foldable Constant. Recursive walk covers nested
+                // shapes like `const int c = 5 + (1 +! 2)`.
+                if let Some(bad_op) = find_fallible_arith(&c.value.node) {
+                    checker.error(
+                        SemanticErrorKind::FallibleOpInConst {
+                            op: op_glyph_str(bad_op).to_string(),
+                        },
+                        c.value.span,
+                    );
+                    continue;
                 }
-                None => checker.error(
-                    SemanticErrorKind::NonConstantConstInitializer {
-                        name: c.name.node.clone(),
-                    },
-                    c.value.span,
-                ),
-            },
+                match eval_const_expr(&c.value.node, &known) {
+                    Some(val) => {
+                        known.insert(c.name.node.clone(), val);
+                    }
+                    None => checker.error(
+                        SemanticErrorKind::NonConstantConstInitializer {
+                            name: c.name.node.clone(),
+                        },
+                        c.value.span,
+                    ),
+                }
+            }
             Item::MetaConst(mc) => {
+                if let Some(bad_op) = find_fallible_arith(&mc.value.node) {
+                    checker.error(
+                        SemanticErrorKind::FallibleOpInConst {
+                            op: op_glyph_str(bad_op).to_string(),
+                        },
+                        mc.value.span,
+                    );
+                    continue;
+                }
                 if let Some(val) = eval_const_expr(&mc.value.node, &known) {
                     known.insert(mc.name.node.clone(), val);
                 }
             }
             Item::MetaIf(meta_if) => {
+                if let Some(bad_op) = find_fallible_arith(&meta_if.condition.node) {
+                    checker.error(
+                        SemanticErrorKind::FallibleOpInConst {
+                            op: op_glyph_str(bad_op).to_string(),
+                        },
+                        meta_if.condition.span,
+                    );
+                    continue;
+                }
                 let active = matches!(
                     eval_const_expr(&meta_if.condition.node, &known),
                     Some(Constant::Bool(true))
@@ -79,6 +112,15 @@ fn check_module_const_foldability(checker: &mut TypeChecker, items: &[Spanned<It
                 if active {
                     for sub in &meta_if.then_items {
                         if let Item::MetaConst(mc) = &sub.node {
+                            if let Some(bad_op) = find_fallible_arith(&mc.value.node) {
+                                checker.error(
+                                    SemanticErrorKind::FallibleOpInConst {
+                                        op: op_glyph_str(bad_op).to_string(),
+                                    },
+                                    mc.value.span,
+                                );
+                                continue;
+                            }
                             if let Some(val) = eval_const_expr(&mc.value.node, &known) {
                                 known.insert(mc.name.node.clone(), val);
                             }
@@ -88,6 +130,41 @@ fn check_module_const_foldability(checker: &mut TypeChecker, items: &[Spanned<It
             }
             _ => {}
         }
+    }
+}
+
+/// D26 (Round XXXIII Batch C1): recursively walk an expression AST looking for
+/// a fallible-arithmetic binary op (`+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!`).
+/// Returns the offending `BinaryOp` on the first hit, so the caller can render
+/// its glyph in the diagnostic. Const contexts can't hold `Result[T, ArithError]`
+/// so any occurrence rejects; the walk covers nested shapes like
+/// `5 + (1 +! 2)` (the fallible op sits inside a plain binop node).
+fn find_fallible_arith(expr: &Expr) -> Option<BinaryOp> {
+    match expr {
+        Expr::BinaryOp { op, left, right } => {
+            if op.is_fallible_arith() {
+                return Some(*op);
+            }
+            find_fallible_arith(&left.node).or_else(|| find_fallible_arith(&right.node))
+        }
+        Expr::UnaryOp { operand, .. } => find_fallible_arith(&operand.node),
+        _ => None,
+    }
+}
+
+/// D26 (Round XXXIII Batch C1): plain-name glyph for a fallible-arithmetic
+/// BinaryOp, used by `E_FallibleOpInConst` (const-context reject) and any
+/// other site that needs the printed spelling without a `TypeChecker` in scope.
+fn op_glyph_str(op: BinaryOp) -> &'static str {
+    match op {
+        BinaryOp::AddFallible => "+!",
+        BinaryOp::SubFallible => "-!",
+        BinaryOp::MulFallible => "*!",
+        BinaryOp::DivFallible => "/!",
+        BinaryOp::RemFallible => "%!",
+        BinaryOp::ShlFallible => "<<!",
+        BinaryOp::ShrFallible => ">>!",
+        _ => "<binop>",
     }
 }
 
@@ -1777,6 +1854,20 @@ impl<'a> TypeChecker<'a> {
                         );
                         result
                     }
+                    // D26 fallible arithmetic (Round XXXIII Batch C1). The `+!`
+                    // / `-!` / `*!` / `/!` / `%!` / `<<!` / `>>!` operators
+                    // are integer-only and produce `Result[T, ArithError]`.
+                    // Auto-propagation is D29 (D29 disposition table via
+                    // `resolve_throws_call_type`), with the `!` glyph counting
+                    // as the fallible mark. Non-integer operands reject with
+                    // `E_FallibleArithmeticOnNonInt`. See docs/language-reference.md.
+                    _ if op.is_fallible_arith() => {
+                        self.check_fallible_arith_binop(left_type, right_type, *op, expr.span)
+                    }
+                    _ => unreachable!(
+                        "op {:?} should have matched an earlier arm — new BinaryOp variant missing a match arm?",
+                        op
+                    ),
                 }
             }
 
@@ -2445,6 +2536,7 @@ impl<'a> TypeChecker<'a> {
                                 err_ty,
                                 suppress_auto_prop,
                                 fallible_call_marked,
+                                /*mark_is_operator_inherent=*/ false,
                                 expr.span,
                             )
                         } else if self.type_is_result(return_type) {
@@ -6349,6 +6441,16 @@ impl<'a> TypeChecker<'a> {
                 BinaryOp::And => "and",
                 BinaryOp::Or => "or",
                 BinaryOp::In => "in",
+                // D26 compound-fallible-assign forms are v1-EXCLUDED, but the
+                // diagnostic spelling still names the compound glyph so
+                // op_display remains total (no `_` fall-through per Core #10).
+                BinaryOp::AddFallible => "+!=",
+                BinaryOp::SubFallible => "-!=",
+                BinaryOp::MulFallible => "*!=",
+                BinaryOp::DivFallible => "/!=",
+                BinaryOp::RemFallible => "%!=",
+                BinaryOp::ShlFallible => "<<!=",
+                BinaryOp::ShrFallible => ">>!=",
             }
         } else {
             match op {
@@ -6376,6 +6478,14 @@ impl<'a> TypeChecker<'a> {
                 BinaryOp::And => "and",
                 BinaryOp::Or => "or",
                 BinaryOp::In => "in",
+                // D26 fallible arithmetic — the `!` suffix IS the fallible mark.
+                BinaryOp::AddFallible => "+!",
+                BinaryOp::SubFallible => "-!",
+                BinaryOp::MulFallible => "*!",
+                BinaryOp::DivFallible => "/!",
+                BinaryOp::RemFallible => "%!",
+                BinaryOp::ShlFallible => "<<!",
+                BinaryOp::ShrFallible => ">>!",
             }
         }
     }
@@ -6497,6 +6607,97 @@ impl<'a> TypeChecker<'a> {
             },
             span,
         );
+    }
+
+    /// D26 (Round XXXIII Batch C1): type-rule for the seven fallible arithmetic
+    /// operators (`+!` / `-!` / `*!` / `/!` / `%!` / `<<!` / `>>!`). Integer-only
+    /// in v1; result is `Result[T, ArithError]` with D29-auto-propagation.
+    ///
+    /// The `!` glyph on the operator itself counts as the fallible mark (`marked=true`
+    /// on `resolve_throws_call_type`), mirroring `f()!`'s postfix mark — so the same
+    /// disposition table decides bare / capture / propagate / unhandled.
+    ///
+    /// Non-integer operands reject with `E_FallibleArithmeticOnNonInt` (unifies
+    /// float/String/user-type operand cases under one diagnostic). Both operands
+    /// must be integer; a mismatched-kind pair inherits the caller `unify`'s
+    /// diagnostic separately.
+    fn check_fallible_arith_binop(
+        &mut self,
+        left_type: TypeId,
+        right_type: TypeId,
+        op: BinaryOp,
+        span: Span,
+    ) -> TypeId {
+        // Unify the two operand types first (both must be the same integer type).
+        let operand_type = self.unify(left_type, right_type, span);
+        let resolved_operand = self.resolve_type(operand_type);
+        // Reject non-integer operands (float, String, user-defined types).
+        let is_int = matches!(
+            self.types.get(resolved_operand),
+            ResolvedType::Primitive(p) if is_integer_type(p)
+        );
+        if !is_int
+            // Don't cascade if unify already produced Error (upstream diagnostic).
+            && !matches!(self.types.get(resolved_operand), ResolvedType::Error)
+        {
+            self.error(
+                SemanticErrorKind::FallibleArithmeticOnNonInt {
+                    op: Self::op_display(op, /*compound=*/ false).to_string(),
+                    found: self.describe_resolved_type(resolved_operand),
+                },
+                span,
+            );
+            return self.types.error_id;
+        }
+        // Look up ArithError. Prelude-registered at `resolve.rs`; if lookup
+        // fails (test with prelude disabled), fall back to operand_type so we
+        // don't cascade error IDs. Uses the interned `defined_id` helper so
+        // repeated lookups return the same TypeId — critical for the
+        // `auto_prop_error_gate`'s TypeId-equality fast-path (a fresh
+        // `types.insert` each call would false-positive `E_UnconvertibleErrorPropagation`
+        // when propagating `ArithError` into a caller declared `throws ArithError`).
+        let err_ty = match self.scopes.lookup("ArithError") {
+            Some(def_id) => self.types.defined_id(def_id),
+            None => return operand_type,
+        };
+        // D26 shift-fallible Route B guard (Core #10, Core #8): the check-lane
+        // types `<<!` / `>>!` as `Result[T, ArithError]` uniformly, but the
+        // lowering's `lower_fallible_arith_binop` only handles the 5 arith
+        // fallible ops — shift-fallible falls through to the plain `Shl`/`Shr`
+        // trap-on-oob path (an int result). At a Route-B (Result-capture)
+        // destination that mismatch is a silent type-confusion miscompile:
+        // the emitted C stores an int in a `Result[int, ArithError]` slot,
+        // the caller's match reads garbage bytes as the discriminant, and
+        // the program SIGSEGVs. Reject here at check-time until the shift-
+        // fallible lowering follow-up lands. Route A (throws-propagate /
+        // auto-infer) still works — the base-op trap-on-oob path in a
+        // throws context is a sound minimum for now (pins the same shape the
+        // `c1_d26_shift_shl_ok`/`c1_d26_shift_shr_ok` fixtures exercise).
+        let is_shift_fallible = matches!(op, BinaryOp::ShlFallible | BinaryOp::ShrFallible);
+        let dest_is_result_capture = self
+            .decl_type_hint
+            .map_or(false, |h| self.type_is_result(h));
+        if is_shift_fallible && dest_is_result_capture {
+            self.error(
+                SemanticErrorKind::ShiftFallibleRouteBNotYetImplemented {
+                    op: Self::op_display(op, /*compound=*/ false).to_string(),
+                },
+                span,
+            );
+            return self.types.error_id;
+        }
+        // Route through D29 disposition table. The `!` glyph IS the mark, and
+        // for D26 fallible-arith it is INHERENT to the operator (no un-marked
+        // variant exists) — so the capture-position redundant-mark reject is
+        // skipped (`Result[int, ArithError] r = a +! b` is legal).
+        self.resolve_throws_call_type(
+            operand_type,
+            err_ty,
+            /*suppress_auto_prop=*/ false,
+            /*marked=*/ true,
+            /*mark_is_operator_inherent=*/ true,
+            span,
+        )
     }
 
     fn is_collection_assignment(&self, declared: TypeId, value: TypeId) -> bool {
@@ -6849,12 +7050,21 @@ impl<'a> TypeChecker<'a> {
     /// | explicit `Result[T,E]` dest (capture)| capture (legal)  | E_MissingFallibleMark (redundant) |
     /// | propagating context                 | E_MissingFallibleMark | peel to `T` (Route A) |
     /// | non-propagating, no disposition     | E_MissingFallibleMark | E_UnhandledThrows     |
+    ///
+    /// `mark_is_operator_inherent` (D26): when true, the mark is fused INTO the
+    /// operator itself (`+! -! *!` etc — no un-marked variant of the operator
+    /// exists), not an optional postfix. Skips the RedundantOnCapture reject at
+    /// (2): `Result[int, ArithError] r = a +! b` is the canonical D26 capture
+    /// spelling, since plain `+` produces `int`, not `Result[int, ArithError]`.
+    /// Fallible-fn-calls pass `false` (the `!` is optional on capture); the
+    /// D26 fallible-arith check-arm passes `true`.
     fn resolve_throws_call_type(
         &mut self,
         return_type: TypeId,
         err_ty: TypeId,
         suppress_auto_prop: bool,
         marked: bool,
+        mark_is_operator_inherent: bool,
         span: Span,
     ) -> TypeId {
         if marked {
@@ -6883,8 +7093,12 @@ impl<'a> TypeChecker<'a> {
                 // (2) Explicit `Result[T,E]` capture position. LEGAL UNMARKED (the
                 //     annotation carries the visibility — 2026-07-17 amendment);
                 //     marking it too is the redundant-mark error (remove the `!`).
+                //     D26 exception: when the mark IS the operator (`+!` etc), the
+                //     capture spelling is `Result[T, ArithError] r = a +! b` — no
+                //     un-marked variant exists, so the redundant-mark reject does
+                //     not apply. The raw Result flows through as the expr type.
                 if dest_is_result {
-                    if marked {
+                    if marked && !mark_is_operator_inherent {
                         self.emit_missing_fallible_mark(
                             err_ty,
                             FallibleMarkReason::RedundantOnCapture,
@@ -7036,7 +7250,7 @@ impl<'a> TypeChecker<'a> {
         }
         match err_ty {
             Some(e) => {
-                self.resolve_throws_call_type(return_type, e, suppress_auto_prop, marked, span)
+                self.resolve_throws_call_type(return_type, e, suppress_auto_prop, marked, /*mark_is_operator_inherent=*/ false, span)
             }
             // Kind-2: a non-throws method whose DECLARED return is `Result[T,E]`
             // is fallible too (D29 one-mark-for-both-kinds). NO combinator
@@ -9436,6 +9650,9 @@ impl<'a> TypeChecker<'a> {
         // auto-propagation chokepoints can gate cross-error propagation. The
         // boolean `current_function_throws` is not enough — we need the
         // resolved TypeId of E to compare against the callee's error type.
+        // D26 auto-infer is transparent here: the pre-`collect_top_level`
+        // rewrite pass mutated `func.throws` to `Explicit(ArithError)`, so
+        // `explicit_type()` returns Some as if the user had written it.
         self.current_fn_throws_type_id = func.throws.explicit_type().and_then(|t| {
             super::types::ast_type_to_resolved(&t.node, t.span, self.scopes, self.types).ok()
         });

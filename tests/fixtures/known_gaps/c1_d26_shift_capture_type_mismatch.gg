@@ -1,0 +1,39 @@
+# KNOWN GAP — D26 shift-fallible Route B (Result-capture) is not yet lowered
+# to Result construction. The Rust check-lane REJECTS this shape today with
+# `E_ShiftFallibleRouteBNotYetImplemented` (see
+# `tests/fixtures/c1_d26_shift_capture_rejects.gg` for the currently-live
+# reject), so the SIGSEGV miscompile that used to happen at this shape is
+# now blocked by the check-lane. This fixture pins the INTENDED behavior for
+# when the follow-up lands.
+#
+# INTENDED: `gg check` accepts; `gg build` compiles; run prints `16`.
+# `4 <<! 2 = 16` → `Result[int, ArithError].Ok(16)` at the capture destination;
+# the match's Ok arm fires.
+#
+# CURRENT: `gg check` rejects with `E_ShiftFallibleRouteBNotYetImplemented`
+# (Core #10 same-round compliance for the Core #8 miscompile — the SIGSEGV
+# was the specific defect the check reject retires). Route A (throws-
+# propagate via auto-infer) already works for shift-fallible via the base-op
+# trap-on-oob path — see `c1_d26_shift_shl_ok.gg`.
+#
+# FIX SHAPE: extend the `FaultableBinOp` LIR variant to accept Shl/Shr with a
+# new `FaultOp::ShlOverflow`/`ShrOverflow` category (a shift amount >= operand
+# width is the fault trigger), then extend `lower_fallible_arith_binop`'s
+# `base_op` match in `src/ir/lowering/exprs/operators.rs` to route the 2
+# shift-fallible variants through the same Route-A / Route-B machinery the 5
+# arith fallible ops use. When it lands, the check-lane reject retires and
+# this fixture graduates to `tests/fixtures/c1_d26_shift_capture_shl_ok.gg`
+# (a positive Route-B test); a sibling `_overflow.gg` fixture then covers
+# the overflow-branch construction of `Error(ArithError.Overflow)`.
+#
+# Filed at TODO.md "Semantics / reference-grade rejection > High" as the
+# "D26 shift-fallible Route B lowering gap" entry. Un-ignore
+# `c1_d26_shift_capture_type_mismatch_intended` in `tests/integration.rs`
+# when the follow-up lands and this fixture graduates.
+void main():
+    int a = 4
+    int b = 2
+    Result[int, ArithError] r = a <<! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)

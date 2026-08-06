@@ -634,6 +634,34 @@ pub enum SemanticErrorKind {
     /// redundant-capture reason.
     MissingFallibleMark { throws_type: String, reason: FallibleMarkReason },
 
+    /// D26 (Round XXXIII Batch C1): a D26 fallible arithmetic operator
+    /// (`+!` / `-!` / `*!` / `/!` / `%!` / `<<!` / `>>!`) applied to an
+    /// operand that isn't an integer primitive (float, String, user type).
+    /// v1 is integer-only; the fix-it steers users to plain `+`/`-`/etc for
+    /// float arithmetic (which trap on overflow) or to file a follow-up if
+    /// float-fallible is load-bearing.
+    FallibleArithmeticOnNonInt { op: String, found: String },
+
+    /// D26: a D26 fallible arithmetic operator used inside a `const`
+    /// initializer / `meta const` / `meta if` predicate / array-size /
+    /// generic const arg. Constant contexts cannot hold `Result[T, ArithError]`.
+    /// Rejected at `check_module_const_foldability` (chokepoint).
+    FallibleOpInConst { op: String },
+
+    /// D26 shift-fallible Route B: `<<!` / `>>!` at a `Result[T, ArithError]`
+    /// capture destination. The check-lane types the shape as
+    /// `Result[T, ArithError]` (via `check_fallible_arith_binop`), but
+    /// `lower_fallible_arith_binop` only handles the 5 arith fallible ops —
+    /// shift fallible falls through to plain `Shl`/`Shr` (int result), causing
+    /// a silent type-confusion miscompile that SIGSEGVs at run when the
+    /// caller reads the int as a `Result` scrutinee. Rejected at check with
+    /// this diagnostic; Route A (throws-propagate + auto-infer) still works
+    /// for shift-fallible via the base-op trap-on-oob path. Filed follow-up:
+    /// extend `FaultableBinOp` LIR + `lower_fallible_arith_binop`'s base_op
+    /// match to route Shl/Shr through a new `FaultOp::ShlOverflow`/
+    /// `ShrOverflow` category; when it lands, this reject retires.
+    ShiftFallibleRouteBNotYetImplemented { op: String },
+
     /// D29/A31: a bare `!` signature (`int f()!:`) — the reserved spelling for
     /// A31 inferred error sets — used before A31 is implemented. The grammar
     /// locks now (parses); the checker teaching-rejects until A31 lands, steering
@@ -996,6 +1024,9 @@ impl SemanticErrorKind {
             SemanticErrorKind::UnconvertibleErrorPropagation { .. } => "E_UnconvertibleErrorPropagation",
             SemanticErrorKind::UnhandledThrows { .. } => "E_UnhandledThrows",
             SemanticErrorKind::MissingFallibleMark { .. } => "E_MissingFallibleMark",
+            SemanticErrorKind::FallibleArithmeticOnNonInt { .. } => "E_FallibleArithmeticOnNonInt",
+            SemanticErrorKind::FallibleOpInConst { .. } => "E_FallibleOpInConst",
+            SemanticErrorKind::ShiftFallibleRouteBNotYetImplemented { .. } => "E_ShiftFallibleRouteBNotYetImplemented",
             SemanticErrorKind::InferredThrowsUnsupported => "E_InferredThrowsUnsupported",
             SemanticErrorKind::AwaitOutsideAsync => "E_AwaitOutsideAsync",
             SemanticErrorKind::SelectOutsideAsync => "E_SelectOutsideAsync",
@@ -1371,6 +1402,36 @@ impl std::fmt::Display for SemanticError {
                      `Result[T, E]`, exactly one mark per call; remove it"
                 ),
             },
+            SemanticErrorKind::FallibleArithmeticOnNonInt { op, found } => write!(
+                f,
+                "the fallible arithmetic operator `{op}` is integer-only in v1 \
+                 (operand type is `{found}`); \
+                 help: for float arithmetic use `+`/`-`/`*`/`/` and check for \
+                 overflow manually — or file a follow-up if float-fallible is \
+                 load-bearing"
+            ),
+            SemanticErrorKind::FallibleOpInConst { op } => write!(
+                f,
+                "the fallible arithmetic operator `{op}` is not permitted in a \
+                 `const` initializer (v1); constant contexts cannot hold \
+                 `Result[T, ArithError]`; \
+                 help: compute the value at runtime, or use plain arithmetic \
+                 (`{plain}`) and rely on compile-time overflow trapping",
+                plain = op.trim_end_matches('!')
+            ),
+            SemanticErrorKind::ShiftFallibleRouteBNotYetImplemented { op } => write!(
+                f,
+                "the shift-fallible operator `{op}` does not yet support the \
+                 `Result[T, ArithError]` capture destination (Route B); \
+                 help: use the auto-infer / throws-propagate shape instead — \
+                 `int f(int a, int b) throws ArithError: return a {op} b` and \
+                 recover with `catch (e)` at the call site — that path works \
+                 today. Rooted at TODO.md `Semantics / reference-grade rejection > \
+                 High` \"D26 shift-fallible Route B lowering gap\": extending \
+                 FaultableBinOp LIR + `lower_fallible_arith_binop` base_op map \
+                 to accept Shl/Shr with a new FaultOp category will retire \
+                 this reject."
+            ),
             SemanticErrorKind::InferredThrowsUnsupported => write!(
                 f,
                 "inferred error sets (a bare `!` on the signature) are not yet \

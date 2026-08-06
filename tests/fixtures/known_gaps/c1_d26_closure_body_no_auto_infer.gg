@@ -1,0 +1,36 @@
+# KNOWN GAP — MED ergonomic: a closure whose body contains a D26 fallible-
+# arith operator does NOT auto-infer `throws ArithError` on the closure's
+# signature. The F1a pre-`collect_top_level` rewrite pass deliberately
+# skips closure bodies (`Expr::Closure` / `Expr::ImplicitClosure`) to avoid
+# false-positive promotion of the enclosing fn's signature — the enclosing
+# fn's auto-infer walker steps into the closure only if the fallible op is
+# in a NON-closure position. Consequence: a closure using `+!` requires the
+# user to declare `throws ArithError` on the closure explicitly, which is
+# an asymmetry with the fn-body auto-infer.
+#
+# INTENDED: the closure's body-scan detects `+!` and auto-infers
+# `throws ArithError` on the closure's own signature. This fixture then
+# compiles + runs, printing `5` (2 + 3 through the closure).
+#
+# CURRENT: `gg check` REJECTS with `E_UnhandledThrows` at the `+!` inside
+# the closure body, because the closure has no explicit `throws` declaration
+# and the F1a walker skips closures. The reject is SOUND (not a miscompile,
+# not a runtime hazard) — it's an ergonomic gap.
+#
+# FIX SHAPE: mirror the F1a body-walker at the closure signature-resolution
+# site so a closure body containing a fallible-arith op auto-infers
+# `throws ArithError` on the closure's signature. Same pattern as the fn-body
+# walker in `src/semantic/rewrite.rs::auto_infer_fn`; the differences are the
+# storage (closure signature, not `FunctionDef.throws`) and the pass timing
+# (closures are resolved lazily during type-check, not at
+# `collect_top_level`).
+#
+# Filed at TODO.md "Semantics / reference-grade rejection > High" as the
+# "D26 auto-infer refinement (closure body + smarter capture-vs-propagate
+# context detection)" entry. Un-ignore
+# `c1_d26_closure_body_no_auto_infer_intended` in `tests/integration.rs`
+# when the closure auto-infer lands.
+void main():
+    Callable[int(int, int)] adder = (int a, int b): a +! b
+    int r = adder(2, 3)! catch (e): -1
+    print(r)

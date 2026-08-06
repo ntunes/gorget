@@ -1,0 +1,20 @@
+# D26 axis: auto-infer discipline (NEG) — an explicit `throws MyError`
+# declaration WINS over auto-infer. The user declared `throws MyError`;
+# even though the body contains a `+!` (which would auto-infer
+# ArithError), the rewrite pass leaves the throws-spec alone. The
+# resulting `+!` (which produces `Result[int, ArithError]`) then fails
+# to auto-propagate into a `MyError`-throws fn — proving the user's
+# declaration was preserved (the auto-infer would have made it silently
+# work, which is exactly what the discipline rejects).
+# Expected diagnostic: `E_UnconvertibleErrorPropagation` naming BOTH
+# `ArithError` (the fallible-op's error) and `MyError` (the user's
+# explicit throws-spec).
+enum MyError:
+    Bad()
+
+int add_or_throw(int a, int b) throws MyError:
+    return a +! b
+
+void main():
+    int r = add_or_throw(2, 3)! catch (e): -1
+    print(r)

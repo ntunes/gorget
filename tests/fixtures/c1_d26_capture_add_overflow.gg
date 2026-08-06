@@ -1,0 +1,17 @@
+# D26 axis: op=Add · route=B (Result-capture) · NEG (overflow fault) · int64.
+# `+!` at INT64_MAX + 1 traps at the FaultCheck overflow branch; the F1
+# lowering constructs `Result.Error(ArithError.Overflow)` and merges into
+# the Result-capture slot. Match reads the Error arm → prints -99.
+# RED-verify: at foundation slice (5ee28211), C-emit type mismatch (as
+# c1_d26_capture_add_ok.gg); at F1 without the FaultCheck branch, the
+# plain trap-on-overflow would abort with a T_Overflow panic instead of
+# constructing Error.
+int identity(int x): x
+
+void main():
+    int a = identity(9223372036854775807)
+    int b = identity(1)
+    Result[int, ArithError] r = a +! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-99)

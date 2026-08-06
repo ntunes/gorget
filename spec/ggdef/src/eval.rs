@@ -2142,6 +2142,56 @@ fn push_pattern_bindings(state: &mut State, scrut_place: &Place, binds: Vec<(Str
 
 // ── Operators ──────────────────────────────────────────────────────────────
 
+/// D26 (Round XXXIII Batch C1): the two `ArithError` variants the fallible
+/// arithmetic ops can produce. Payload-free (matches the prelude enum
+/// declared in `resolve.rs`).
+#[derive(Debug, Clone, Copy)]
+enum ArithErr {
+    Overflow,
+    DivByZero,
+}
+
+impl ArithErr {
+    fn variant_name(self) -> &'static str {
+        match self {
+            ArithErr::Overflow => "Overflow",
+            ArithErr::DivByZero => "DivByZero",
+        }
+    }
+}
+
+/// Construct `Result[T, ArithError].Ok(v)` for a fallible-op success.
+fn ok_result(v: i64) -> Value {
+    Value::Enum {
+        type_name: "Result".to_string(),
+        variant: "Ok".to_string(),
+        payload: vec![Value::Int(v)],
+    }
+}
+
+/// Construct `Result[T, ArithError].Error(ArithError.<variant>)` for a
+/// fallible-op fault.
+fn arith_error_result(err: ArithErr) -> Value {
+    let inner = Value::Enum {
+        type_name: "ArithError".to_string(),
+        variant: err.variant_name().to_string(),
+        payload: Vec::new(),
+    };
+    Value::Enum {
+        type_name: "Result".to_string(),
+        variant: "Error".to_string(),
+        payload: vec![inner],
+    }
+}
+
+/// D26 helper: `checked_*` returned `Some(v)` → `Ok(v)`; `None` → `Error(err)`.
+fn result_from_checked(v: Option<i64>, err: ArithErr) -> Value {
+    match v {
+        Some(x) => ok_result(x),
+        None => arith_error_result(err),
+    }
+}
+
 fn eval_binary(ctx: &Ctx, state: &mut State, op: BinOp, l: &Expr, r: &Expr) -> Result<Value, Halt> {
     // Short-circuit boolean operators.
     if matches!(op, BinOp::And | BinOp::Or) {
@@ -2207,6 +2257,35 @@ fn eval_binary(ctx: &Ctx, state: &mut State, op: BinOp, l: &Expr, r: &Expr) -> R
             a.checked_pow(*b as u32)
                 .map(Value::Int)
                 .ok_or(Halt::Trap(TrapKind::Overflow))
+        }
+
+        // D26 fallible arithmetic — produce `Result[T, ArithError]` values
+        // instead of trapping. `Overflow` (Add/Sub/Mul, and Div/Rem's
+        // `TYPE_MIN/-1` case) and `DivByZero` (Div/Rem on zero divisor) are
+        // the two ArithError variants (payload-free prelude enum, D26 spec).
+        (BinOp::AddFallible, Value::Int(a), Value::Int(b)) => {
+            Ok(result_from_checked(a.checked_add(*b), ArithErr::Overflow))
+        }
+        (BinOp::SubFallible, Value::Int(a), Value::Int(b)) => {
+            Ok(result_from_checked(a.checked_sub(*b), ArithErr::Overflow))
+        }
+        (BinOp::MulFallible, Value::Int(a), Value::Int(b)) => {
+            Ok(result_from_checked(a.checked_mul(*b), ArithErr::Overflow))
+        }
+        (BinOp::DivFallible, Value::Int(a), Value::Int(b)) => {
+            if *b == 0 {
+                Ok(arith_error_result(ArithErr::DivByZero))
+            } else {
+                // Signed `TYPE_MIN / -1` still overflows on checked_div → Overflow.
+                Ok(result_from_checked(a.checked_div(*b), ArithErr::Overflow))
+            }
+        }
+        (BinOp::RemFallible, Value::Int(a), Value::Int(b)) => {
+            if *b == 0 {
+                Ok(arith_error_result(ArithErr::DivByZero))
+            } else {
+                Ok(result_from_checked(a.checked_rem(*b), ArithErr::Overflow))
+            }
         }
 
         // Float arithmetic — IEEE, no trap (matches hardware; D8 governs print).

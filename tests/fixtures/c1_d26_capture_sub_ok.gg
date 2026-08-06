@@ -1,0 +1,15 @@
+# D26 axis: op=Sub · route=B (Result-capture) · POS (success) · int64.
+# Symmetric with c1_d26_capture_add_ok — same shape, subtraction operator.
+# RED-verify: at foundation slice (5ee28211), the check-lane REJECTED this
+# as RedundantOnCapture (`+!` etc. mark treated as optional postfix); F1's
+# `mark_is_operator_inherent` flag flips the accept. Post-F1, lowering
+# builds Result.Ok(value) at the capture destination.
+int identity(int x): x
+
+void main():
+    int a = identity(10)
+    int b = identity(3)
+    Result[int, ArithError] r = a -! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)

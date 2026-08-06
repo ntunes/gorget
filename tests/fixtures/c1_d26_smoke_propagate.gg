@@ -1,0 +1,8 @@
+# D26 canary — `+!` inside a `throws ArithError` fn peels to `int` (D29 route A).
+# Non-overflowing values so the plain-BinOp lowering traps correctly.
+int add_or_throw(int a, int b) throws ArithError:
+    return a +! b
+
+void main():
+    int r = add_or_throw(1, 2)! catch (e): -1
+    print(r)
