@@ -703,7 +703,13 @@ fn snag11_auto_prop_gate_site_count() {
     // functionally equivalent E-checking, fewer duplicate call sites.
     // The choke point is preserved (unify runs only when the shared
     // gate allows it); the count drop reflects the code consolidation.
-    const EXPECTED_SKIPS_UNIFY: usize = 12;
+    // Round XXXII Track A (2026-08-06): 12 → 13. The `check_recovery_type`
+    // helper adds site #13 at `src/semantic/typecheck.rs` — `Expr::Catch`
+    // and `Expr::FaultCatch` recovery/handler slots now route through the
+    // helper, which consults `auto_prop_skips_unify` per the canonical
+    // VarDecl three-carve-out pattern (E-check preserved: an ill-typed
+    // recovery still triggers the shared gate).
+    const EXPECTED_SKIPS_UNIFY: usize = 13;
     const EXPECTED_ROUTE_A_GATE: usize = 2;
 
     let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
