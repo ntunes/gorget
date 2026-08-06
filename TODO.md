@@ -2,9 +2,21 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**✅ ROUND XXXII CLOSED 2026-08-06** — theme MEMORY SAFETY / ONE OWNERSHIP BOUNDARY. **Closed under an OWNER WAIVER of the convergence gate, NOT in compliance** (owner granted 2026-08-06; third consecutive waivered round). See DONE.md for the verdict verbatim and the accounting. The waiver is per-round and is **NOT precedent**: this round starts from the rule.
+**✅ ROUND XXXIII CLOSED 2026-08-06** — theme BATCH C1 = D26 fallible arithmetic + D28 `**` power operator. **Closed under an OWNER WAIVER of the convergence gate, NOT in compliance** (owner granted 2026-08-06; **fourth consecutive waivered round**). See DONE.md for the verdict verbatim (net +7 vs need ≤−7, 7 fils vs 0 categorized closes) and the accounting. The waiver is per-round and is **NOT precedent**: this round starts from the rule.
 
-**▶ NEXT ROUND — HEADLINE: BATCH C1 = D26 (FALLIBLE OPERATORS) + D28 (`**` POWER OPERATOR).** Owner-selected 2026-08-06 after the D27 scout wave revealed that **D27 solo violates the ratified Wave plan**. The plan (`docs/define-gorget/decisions.md:948-956`) is Batch C1 (D26+D28) → C2 (D25 fault-catch removal) → C3 (composed `gg fmt` sweep of D27 sigils + D22 `.slice()` + D28 pow — one pass per corpus). D27 is DEFERRED to C3; landing it solo now would force a second corpus-wide fmt pass later (which is exactly what C3's one-pass ratification exists to avoid).
+**⚠ CONVERGENCE PROCESS FIX (owner 2026-08-06 mid-round):** at round-close, run `scripts/convergence.sh` FIRST — BEFORE the C sweep + LLVM sweep + parity regen. A projected FAIL surfaces before ~90+ min of wall time gets burned. If FAIL, decide (add closures / owner-ask) BEFORE sweeping. Stability (green battery) remains the hard floor. Memory `feedback-convergence-check-before-sweeps`. This is a REORDER of CLAUDE.md step 4 (battery) and step 5 (records+convergence), not a new step.
+
+**⚠ FOUR-ROUND WAIVER PATTERN (XXX + XXXI + XXXII + XXXIII).** Each of the last four rounds filed more than it closed and closed under owner waiver. Root causes vary (XXX D39 cascading discovery; XXXI parity-inflow surfaced 5 defects; XXXII memory-safety chokepoints surfaced adjacent latent bugs; XXXIII new-operator C1 surfaced auto-infer/SH-lane-lag/shift-Route-B/qualified-match orthogonal debt). **A pruning round (stale-scan TODO, graduate ready known_gaps, close closable-fast items) may be the reliable convergence generator the streak needs** — owner-decision candidate for XXXIV headline (see below).
+
+**▶ NEXT ROUND CANDIDATES — OWNER DECISION.** Two shapes to choose from (or override with a third):
+
+**(A) Continue Wave plan → C2 = D25 fault-catch removal.** The ratified Wave plan (`docs/define-gorget/decisions.md:948-956`) is C1 (LANDED) → C2 (D25 fault-catch removal, now that D26 fallible operators cover the use cases) → C3 (composed `gg fmt` sweep of D27 sigils + D22 `.slice()` + D28 pow). C2 is a REMOVAL round — retiring the pre-D26 `fault-catch` mechanism now that fallible operators exist. Likely convergence-positive (removes code + closes TODO items citing D25 legacy paths). Scout first: verify D26 covers all D25 use cases, enumerate call sites of the legacy fault-catch, project the LOC delta.
+
+**(B) Pruning round to break the waiver streak.** Explicit theme: shrink TODO / graduate known_gaps / close closable-fast items. Scope hypothesis: audit the ~571 TODO items for staleness (verify each cited defect still reproduces in current source), graduate `known_gaps` fixtures whose intended behavior now works, retire redundant filings, one-line-fix scout on the HIGH qualified `case Result.Ok(v):` bug (executor guess: "probably one-line missing tag-check in the qualified-form branch"). Target: net ≤ −7 to restore compliance without owner waiver.
+
+**Owner-called at open** (this is an item (i) DESIGN decision per Round-lifecycle step 7). Default if the owner takes no action: (B) — the waiver streak is a compounding process debt that a feature round cannot burn down.
+
+**⚠ D27 findings from the 3-scout wave (2026-08-06) — PRESERVED for the C3 round, do NOT re-scout at C3 stage:**
 
 **⚠ D27 findings from the 3-scout wave (2026-08-06) — PRESERVED for the C3 round, do NOT re-scout at C3 stage:**
 - **Fresh in-repo census: ~1,637 sigils** (vs stale 2026-07-11 wave figure of ~1,048; +56% from D31 Addendum-2 full-strict migration + self-host expansion). Breakdown: 1,624 `!name` prefix + 5 `!(...)` move-closure + 8 corner cases (`!"literal"`, `*!bx`, `Vector[T !]` etc.) + 278 error-mark postfix (stay) + 780 `!=` inequality (stay) + 885 in strings/comments (skip).
@@ -13,25 +25,34 @@
 - **Q2 decision (owner 2026-08-06): D27 EXTENDS to type-arg suffix sigils** (`Vector[T !]` → `Vector[T ^]`, 4 in-repo sites). See [d27-suffix-sigils](d27-suffix-sigils.md).
 - **Full scout reports preserved at `/tmp/scout_d27_{census,mechanism,phasing}.md`** for the C3 brief author.
 
-**BATCH C1 = D26 + D28 — SCOPE:**
-- **D26** (ratified `docs/define-gorget/decisions.md`, ~line 940-945): **fallible arithmetic operators `+! -! *! /! %!`** with typed `Result[T, Overflow]`-style semantics. Auto-propagating like `!` postfix. Integer-only v1; floats reject with fix-it. `INT_MIN / -1` and shift-range → `Overflow` (mirrors the registry). Compound `+!=` excluded v1. Catch-in-const rejected v1. Glyphs pinned by D27 (this pin is what makes D26+D28 a natural C1 pair: both add new operators to the lexer/parser layer that D27 later renames the sigil vocabulary around).
-- **D28** (ratified same batch): **`**` power operator** (integer power). Owner-decided infix `^` STAYS as XOR (not power) — power is `**`. Includes an XOR-fix-it lint pinned to the GCC-12 `2^10` shape.
+**⚠ CHOICE-A (C2 D25 fault-catch removal) — SCOPE for scout:**
+- D25 is ratified in `docs/define-gorget/decisions.md` — retire the legacy fault-catch mechanism now that D26 fallible operators exist. This is a REMOVAL round: strip the pre-D26 fault-catch surface, migrate any remaining call sites to fallible-op equivalents, retire the corresponding `fault_catch_*.gg` fixture family (or graduate those that pin unique intended semantics).
+- **CONVERGENCE LENS:** removal rounds tend to be convergence-positive — code deleted, TODO items citing legacy paths retired. Projected 2:1 or better IF the scope stays crisp AND no ratified D25 use case remains uncovered by D26 (F1 executor caught this once already: brief-premise decay is a hazard here).
+- **Verify FIRST at scout stage:**
+  1. Enumerate all live `fault_catch_*` fixtures and their intended semantics. Which of them assert behavior D26 fallible ops now cover, and which pin unique semantics (Guard.get·resource-slot·mut-ref-in-catch·etc.)?
+  2. Grep `src/` for the D25 fault-catch machinery (`FaultCatch` lowering paths, catch-arm typechecking) — how tangled is the removal? Chokepoint or diffuse?
+  3. Any TODO entries citing "D25 legacy" or "fault-catch removal" — count them as convergence closes.
 
-**CONVERGENCE LENS:** C1 is a NEW-OPERATOR round (adds lexer tokens + parser arms + type-check + lowering + docs). Unlike class-fix rounds, new-operator rounds SHOULD NOT surface adjacent debt — the added feature is orthogonal. Convergence-projected: probably 2:1 or better IF the scope stays crisp (D26 + D28, no compound assign, no cross-tie into old defects). Risk: parity impact if the new operators surface latent parser/lexer bugs.
+**⚠ CHOICE-B (pruning round) — SCOPE for scout:**
+- Explicit theme: shrink TODO / graduate known_gaps / close closable-fast items to break the 4-round waiver streak.
+- Enumerate audit categories: (1) TODO items whose cited defect no longer reproduces (Core #5 stale-scan on the ~571 pending items); (2) `known_gaps` fixtures whose intended behavior now works (graduate them out); (3) redundant filings (family-summary rows whose siblings all closed); (4) sub-1hr-scope fixes (the HIGH qualified `case Result.Ok(v):` was flagged as "probably one-line missing tag-check in the qualified-form branch" per the F1 executor — worth a scout-and-fix).
+- Target: net ≤ −7 to restore compliance without owner waiver. If a scout finds 15+ closable items, the round shape is real. If not, C2 becomes the fallback.
 
-**Verify FIRST — cheap, flips the plan if surprising:**
-  1. Are D26 and D28 truly not-yet-landed? Grep `src/lexer/`, `src/parser/` for `TokPow`, `**`, `+!`, `-!` — the mechanism scout said NO. Confirm at scout stage.
-  2. Is there a scout report or spec doc for D26 / D28 implementation beyond the ledger's ratification? Grep `docs/devbook/` for chapters on arithmetic operators / fallible operators.
-
-**PULLED / NOT READY (do not resurrect without a scout):**
+**⚠ PULLED / NOT READY (do not resurrect without a scout):**
   - **Method-targ recorder (f-string).** Diagnosis wrong TWICE. `EFString` is genuinely absent from both walkers, but the causal chain is BROKEN: the undefined symbol is the iterator's own type, and `.iter()` fails `infer.gg`'s terminal/closure gate, so no targ entry is produced either way. The real hazard is `expr_link_types`, which is NOT in the snapshot/restore set. Filed in full on its ledger entry.
   - **Typed-`ret` / declare-set work.** Diagnosis refuted twice; the externs ARE already registered. The real defect is the strip→`_ws` **rename** changing callee identity without re-registering, plus **13 bare `Inst::CallExtern` sites in `src/lir/lower/drops.rs` with zero `ensure_extern` calls**. ⚠ **MEASURED: LLVM does NOT catch a declare/call signature mismatch** — `llvm-as`, `opt -passes=verify` and `llc` all exit 0 on a deliberate mismatch, so that class is a silent miscompile with no gate. Any fix here needs an emitted-`.ll` declare-set diff as its acceptance gate.
 
-**⚠ ROUND XXXII PROCESS LESSONS (earned the hard way, worth the read):**
-  1. **Class-fix rounds SURFACE adjacent latent defects — project the filing rate, not just the closes.** Track C's chokepoint exposed the whole Vector-of-opaque-handle push-side ABI class. Track D+E's SH sub-track was proven infeasible mid-execution. Track B's D2 belt-and-braces exposed a compound-index-assign latent bug. Track A's SH mirror over-rejected due to missing carve-outs. All 4 tracks GRADUATED their `known_gaps` (5 closes) — but the round net-filed 15 new items. The convergence gate correctly caught this: the ledger converted hidden debt into counted debt.
-  2. **Round-close FULL BATTERY caught 14 collateral failures that per-track targeted gates missed.** The class of failures (compiler ICEs from D2's exposed compound-assign bug, runtime double-frees from Track B's over-broad else-arm predicate, ASan regressions, SH mirror over-rejection, clone-ceiling breach) was NOT visible in any single track's targeted gate. **Run the full battery EARLY** — before starting DONE.md — even when all 4 output-reviews sign off.
-  3. **Owner-decided reverts are LEGITIMATE round-close work, not failure.** Track B's else-arm narrowed 4→2 predicate; Track B's D2 reverted; Track A's SH mirror reverted. Each was documented + follow-up filed. This is Core-invariant discipline (don't ship known regressions), not scope creep.
-  4. **The runtime_diff ceiling raise (117→120) is a DOCUMENTED owner-ask** flagged in the DONE.md entry — 3 new Round XXXII fixtures the SH lane can't yet compile. Not a self-invented exemption; if owner reviews and refuses the raise, the fix is either SH-port the 3 fixtures or move them back to `known_gaps/` (which would revert Track C's +2 kg closes).
+**⚠ ROUND XXXIII PROCESS LESSONS (fresh, worth the read):**
+  1. **Convergence-check FIRST at round close** (owner 2026-08-06 during this round's close). Runs BEFORE the C sweep + LLVM sweep + parity regen. A projected FAIL surfaces before ~90+ min of wall time gets burned. Saves the sweep re-run on a state that has to change. Memory `feedback-convergence-check-before-sweeps`.
+  2. **The Core #8 "shipped known defect" trap will fire — output-reviews must interrogate every FILED follow-up for "does this ship a live known defect?".** D26 F1 executor filed shift-fallible Route B as a MED follow-up "for a later round" while their code check-lane accepted `Result[int, ArithError] r = a <<! b` and their lowerer silently SIGSEGV'd it. Combined output-review caught it. Option B check-reject fix was ~15 LOC and satisfies Core #10 same-round; Option A (full LIR extension) deferred. An executor's "filed as follow-up" for a known miscompile is EXACTLY the phrasing Core #8 forbids.
+  3. **Output-review found a factually-wrong claim in the D28 executor's commit body** (parse-tree claim on `-x ** 2`). The D28 R1 fold's new commit body explicitly corrected the prior one rather than amending. **Executor-authored claims about semantics are inherited premises subject to Core #15e Q7 (is this premise still TRUE?).**
+  4. **Ratchet raise (parity ceiling 120→137) is a DOCUMENTED owner-ask** flagged in the DONE.md entry — 8 new c1_d26_* fixtures the SH lane can't yet compile (Route-A base-op lowering only, missing F1 check-lane mirror), pinned by 3 #[ignore]+citation SH-driver tests + filed MED "D26 SH lane-lag" TODO. Not a self-invented exemption; the alternative would be moving those 8 fixtures to `known_gaps/` which would defeat their point.
+  5. **Four-round waiver streak (XXX + XXXI + XXXII + XXXIII).** A pruning round may be the reliable convergence generator (CHOICE-B above).
+
+**⚠ ROUND XXXII PROCESS LESSONS (still valid):**
+  1. **Class-fix rounds SURFACE adjacent latent defects** — project the filing rate, not just the closes. The ledger converts hidden debt into counted debt.
+  2. **Round-close FULL BATTERY caught 14 collateral failures that per-track targeted gates missed.** Run the full battery EARLY (though CONVERGENCE-FIRST per XXXIII lesson #1 — battery after).
+  3. **Owner-decided reverts are LEGITIMATE round-close work, not failure.** Each documented + follow-up filed = Core-invariant discipline.
 
 **Commands, not numbers** (regenerate everything before quoting):
   - convergence: `scripts/convergence.sh <prev_kg> <prev_todo> <filed>` — the ARBITER; quote its verdict verbatim in the DONE entry.
