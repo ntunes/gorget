@@ -102,6 +102,15 @@ impl<'a> FuncLowering<'a> {
                 } else {
                     let result = self.lir_func.next_value();
                     let ty = self.map_type(type_id);
+                    // D28: when `lower_binop` returns a runtime `CallExtern`
+                    // (currently only `**` → `gorget_pow{_checked_iN,f,}`),
+                    // register the extern up front so `infer_call_extern_type`
+                    // returns the correct return type instead of the
+                    // I64 fallback (which would silently reinterpret the
+                    // double result — measured on the fixture pow_float_positive).
+                    if let Some(ext_name) = super::calls::runtime_extern_name_for_binop(*op, &ty) {
+                        self.ensure_extern(ext_name, &[ty.clone(), ty.clone()], &ty);
+                    }
                     let inst = lower_binop(result, *op, l, r, ty);
                     self.push_inst(bb, inst);
                     self.store_to_local(*dst, result, bb);
@@ -133,6 +142,9 @@ impl<'a> FuncLowering<'a> {
                     // bug — fall back to a non-faulting compute so the build is
                     // still well-formed.
                     let result = self.lir_func.next_value();
+                    if let Some(ext_name) = super::calls::runtime_extern_name_for_binop(*op, &ty) {
+                        self.ensure_extern(ext_name, &[ty.clone(), ty.clone()], &ty);
+                    }
                     let inst = lower_binop(result, *op, l, r, ty);
                     self.push_inst(bb, inst);
                     self.store_to_local(*dst, result, bb);

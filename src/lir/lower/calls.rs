@@ -78,6 +78,35 @@ pub fn fix_printf_format(fmt: &str, arg_kinds: &[PrintfArgKind]) -> String {
     result
 }
 
+/// GirBinOp arms that lower to a runtime `CallExtern` (not a plain arithmetic
+/// `Inst`). Currently only `Pow` — the extern's declaration must be registered
+/// via `ensure_extern` before the LIR->C emit sees it (or else
+/// `infer_call_extern_type` defaults to `LirType::I64` and the C emit stores
+/// the double-typed pow result into an int64-typed slot; measured 2026-08-06
+/// on `2.0 ** ten_f()` → printed 0.000000 instead of 1024.0 because the printf
+/// %f arg was the bit-pattern of int64 1024 reinterpreted as double).
+///
+/// Callers of `lower_binop` in `insts.rs` route through this to register the
+/// extern up front when the op is `Pow`.
+pub(super) fn runtime_extern_name_for_binop(op: GirBinOp, ty: &LirType) -> Option<&'static str> {
+    if !matches!(op, GirBinOp::Pow) {
+        return None;
+    }
+    Some(match ty {
+        LirType::I64 => "gorget_pow_checked_i64",
+        LirType::I32 => "gorget_pow_checked_i32",
+        LirType::I16 => "gorget_pow_checked_i16",
+        LirType::I8  => "gorget_pow_checked_i8",
+        LirType::U64 => "gorget_pow_checked_u64",
+        LirType::U32 => "gorget_pow_checked_u32",
+        LirType::U16 => "gorget_pow_checked_u16",
+        LirType::U8  => "gorget_pow_checked_u8",
+        LirType::F64 => "gorget_pow",
+        LirType::F32 => "gorget_powf",
+        _ => return None,
+    })
+}
+
 pub(super) fn lower_binop(dst: ValueId, op: GirBinOp, lhs: ValueId, rhs: ValueId, ty: LirType) -> Inst {
     // Plain `+`/`-`/`*` always check overflow (panic, or `catch Fault.Overflow`
     // recovers). The wrapping `+%`/`-%`/`*%` ops below emit `Overflow::Wrap`
@@ -91,9 +120,36 @@ pub(super) fn lower_binop(dst: ValueId, op: GirBinOp, lhs: ValueId, rhs: ValueId
         GirBinOp::Rem => Inst::Rem { dst, ty, lhs, rhs },
         GirBinOp::Mod => Inst::Mod { dst, ty, lhs, rhs },
         GirBinOp::Pow => {
-            // Pow doesn't have a direct LIR instruction. Emit as CallExtern to pow().
-            // For now, emit as Mul (placeholder).
-            Inst::Mul { dst, ty, lhs, rhs, overflow: Overflow::Trap }
+            // D28: `**` lowers to a checked runtime helper per width.
+            // Integer widths use `gorget_pow_checked_iN` (trap on overflow OR
+            // negative exponent); the wide `int` maps to `_i64`. Floats use
+            // `gorget_pow` (IEEE 754, no trap). Non-numeric types are
+            // rejected at typecheck (E_TypeMismatchInPow, R3) — reaching the
+            // `_` arm here means the writer upstream lost information (Core
+            // #1: fix at the write site).
+            let name = match ty {
+                LirType::I64 => "gorget_pow_checked_i64",
+                LirType::I32 => "gorget_pow_checked_i32",
+                LirType::I16 => "gorget_pow_checked_i16",
+                LirType::I8  => "gorget_pow_checked_i8",
+                LirType::U64 => "gorget_pow_checked_u64",
+                LirType::U32 => "gorget_pow_checked_u32",
+                LirType::U16 => "gorget_pow_checked_u16",
+                LirType::U8  => "gorget_pow_checked_u8",
+                LirType::F64 => "gorget_pow",
+                LirType::F32 => "gorget_powf",
+                _ => unreachable!(
+                    "lower_binop Pow reached with non-numeric ty {ty:?} — \
+                     typecheck's E_TypeMismatchInPow (D28 R3) should have \
+                     rejected this (Core #10 lower-or-reject)"
+                ),
+            };
+            Inst::CallExtern {
+                dst: Some(dst),
+                name: name.to_string(),
+                args: vec![lhs, rhs],
+                arg_abis: vec![crate::ir::abi::AbiKind::Scalar, crate::ir::abi::AbiKind::Scalar],
+            }
         }
         GirBinOp::BitAnd => Inst::BitAnd { dst, ty, lhs, rhs },
         GirBinOp::BitOr => Inst::BitOr { dst, ty, lhs, rhs },
