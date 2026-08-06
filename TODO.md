@@ -4,35 +4,24 @@
 
 **✅ ROUND XXXII CLOSED 2026-08-06** — theme MEMORY SAFETY / ONE OWNERSHIP BOUNDARY. **Closed under an OWNER WAIVER of the convergence gate, NOT in compliance** (owner granted 2026-08-06; third consecutive waivered round). See DONE.md for the verdict verbatim and the accounting. The waiver is per-round and is **NOT precedent**: this round starts from the rule.
 
-**▶ NEXT ROUND — HEADLINE: D27 SIGIL ECONOMY (`^` REPLACES `!` FOR MOVE).** Owner-selected 2026-08-06. D27 was ratified 2026-07-11 (`docs/define-gorget/decisions.md:978-1004`); its own implementation is bootstrap-gated and has been queued since. Wave-census scout 2026-07-11 measured **~1,114 move-sigil sites across 5 corpora, but that INCLUDED gorget-js/arena/gglox/gorget-conformance which are OUT-OF-REPO** (owner reaffirmed 2026-08-06 — see [d27-in-repo-scope](d27-in-repo-scope.md)). **In-repo scope = `src/` + `tests/` + `lib/` + `spec/` ONLY** (~1,048 sites by dated arithmetic; RE-CENSUS at scout stage — Core #5, never trust a dated number).
+**▶ NEXT ROUND — HEADLINE: BATCH C1 = D26 (FALLIBLE OPERATORS) + D28 (`**` POWER OPERATOR).** Owner-selected 2026-08-06 after the D27 scout wave revealed that **D27 solo violates the ratified Wave plan**. The plan (`docs/define-gorget/decisions.md:948-956`) is Batch C1 (D26+D28) → C2 (D25 fault-catch removal) → C3 (composed `gg fmt` sweep of D27 sigils + D22 `.slice()` + D28 pow — one pass per corpus). D27 is DEFERRED to C3; landing it solo now would force a second corpus-wide fmt pass later (which is exactly what C3's one-pass ratification exists to avoid).
 
-**THE D27 CHANGE (per `docs/define-gorget/decisions.md:978-1004`):**
-- `!` = the error channel (paired with D26 fallible operators `+! -! *! /! %!`)
-- `?` = optionals (already-shipped `?.` / `??`; bare postfix `?` stays dormant for future Option sugar)
-- **`^` = the MOVE sigil, REPLACING `!` in move position** (prefix-only; infix `^` stays XOR — same prefix/infix disambiguation `&` uses for borrow-vs-bitand)
-- D7 capture re-spelling `(^name, &total)(x):` / `^():` move-all — zero corpus uses, pure spec rider
+**⚠ D27 findings from the 3-scout wave (2026-08-06) — PRESERVED for the C3 round, do NOT re-scout at C3 stage:**
+- **Fresh in-repo census: ~1,637 sigils** (vs stale 2026-07-11 wave figure of ~1,048; +56% from D31 Addendum-2 full-strict migration + self-host expansion). Breakdown: 1,624 `!name` prefix + 5 `!(...)` move-closure + 8 corner cases (`!"literal"`, `*!bx`, `Vector[T !]` etc.) + 278 error-mark postfix (stay) + 780 `!=` inequality (stay) + 885 in strings/comments (skip).
+- **Both lexers already tokenize `^` as `Caret`** — no lexer change needed; prefix/infix resolved at parse time like `&`. Neither parser has a prefix `^` arm — straight copy of the existing `Bang` (move) arm. Rust: `src/parser/expr.rs:569-583` + `expr.rs:1477` needs `Token::Caret` REMOVED from the "never-sigil closure lookahead" set. SH: `tests/fixtures/self_host_parser/parser.gg:2241-2251`. Formatter 6 sites `src/formatter/mod.rs` + SH 3 sites in `self_host_{parser,lowerer}/format.gg`. Diagnostics 10+ sites in `src/semantic/errors.rs` (4 already carry pre-planted `// D27: !→^` breadcrumbs). Docs ~43 backtick-`!` refs in `docs/language-reference.md` alone.
+- **⚠ CRITICAL PREREQUISITE for D27's `gg fmt` migration: `gg fmt` on source with a parse error SILENTLY DROPS the offending statement and exits 0** (mechanism scout finding). Must be fixed before C3, or the migration eats lines. File as pre-D27 fix under C1 or C2 — take the earliest opportunity.
+- **Q2 decision (owner 2026-08-06): D27 EXTENDS to type-arg suffix sigils** (`Vector[T !]` → `Vector[T ^]`, 4 in-repo sites). See [d27-suffix-sigils](d27-suffix-sigils.md).
+- **Full scout reports preserved at `/tmp/scout_d27_{census,mechanism,phasing}.md`** for the C3 brief author.
 
-**IMPLEMENTATION SURFACE (per D27 ledger + owner ruling):**
-- Lexer + parser (BOTH compilers — Rust gg + self-host in `tests/fixtures/self_host_{lexer,parser,lowerer}/`)
-- Formatter (`gg fmt` = auto-migration vehicle — D22/D28 composition test PASSED, one pass per corpus)
-- Diagnostics — `E_MoveWithoutOperator` message + the `expr.rs:593` move-hint
-- Docs sweep (`docs/language-reference.md`, `docs/book/`, `docs/devbook/`)
-- Bootstrap-gated (SH must compile itself with the new sigil before the flip lands)
+**BATCH C1 = D26 + D28 — SCOPE:**
+- **D26** (ratified `docs/define-gorget/decisions.md`, ~line 940-945): **fallible arithmetic operators `+! -! *! /! %!`** with typed `Result[T, Overflow]`-style semantics. Auto-propagating like `!` postfix. Integer-only v1; floats reject with fix-it. `INT_MIN / -1` and shift-range → `Overflow` (mirrors the registry). Compound `+!=` excluded v1. Catch-in-const rejected v1. Glyphs pinned by D27 (this pin is what makes D26+D28 a natural C1 pair: both add new operators to the lexer/parser layer that D27 later renames the sigil vocabulary around).
+- **D28** (ratified same batch): **`**` power operator** (integer power). Owner-decided infix `^` STAYS as XOR (not power) — power is `**`. Includes an XOR-fix-it lint pinned to the GCC-12 `2^10` shape.
 
-**LIKELY PHASING (scout to confirm):**
-1. Lexer/parser (both compilers) ACCEPT `^` as move-sigil AND keep accepting `!` (backward-compat)
-2. Formatter emits `^` in move positions
-3. Diagnostic updates
-4. `gg fmt` auto-migrates ALL in-repo corpora (`!name` in move position → `^name`)
-5. Docs sweep
-6. Bootstrap verify (SH self-compiles with `^`)
-7. Lexer/parser (both compilers) REJECT `!` in move position (final flip; own round-close event)
+**CONVERGENCE LENS:** C1 is a NEW-OPERATOR round (adds lexer tokens + parser arms + type-check + lowering + docs). Unlike class-fix rounds, new-operator rounds SHOULD NOT surface adjacent debt — the added feature is orthogonal. Convergence-projected: probably 2:1 or better IF the scope stays crisp (D26 + D28, no compound assign, no cross-tie into old defects). Risk: parity impact if the new operators surface latent parser/lexer bugs.
 
-**CONVERGENCE LENS FOR ROUND SELECTION (Round-lifecycle step 1) — three consecutive waivered rounds is a pattern to name:** XXX + XXXI + XXXII all closed under waivers. Every round FOUND more debt than it closed because the touched-code surface EXPOSED adjacent latent defects. D27 is different in shape: it is a MECHANICAL sigil rename over ~1,048 in-repo sites, driven by `gg fmt` as the auto-migration vehicle. Provided the parser/formatter changes land cleanly, D27's scope should NOT surface new defect classes (unlike class-fix rounds); the risk is bootstrap divergence during the phased flip. **If D27 lands cleanly, it will be the first non-waivered close in 3 rounds.** If it surfaces bootstrap-gate churn, may need a two-round split.
-
-**Verify FIRST — both cheap, either flips the plan:**
-  1. Regenerate the sigil census (Core #5): `rg -c "!\\w" src/ tests/ lib/ spec/ | awk -F: '{sum+=$2} END {print sum}'` (rough estimate). Then a scout should classify each hit as move-sigil vs error-mark vs other-`!` (bool-not, macro-suffix, etc.) — the sigil census only counts move-sigil positions.
-  2. Verify `gg fmt` currently emits `^` for move positions in a controlled test (build a tiny probe with `!foo` and run `gg fmt` — if the formatter doesn't already emit `^`, that's the first phase's work).
+**Verify FIRST — cheap, flips the plan if surprising:**
+  1. Are D26 and D28 truly not-yet-landed? Grep `src/lexer/`, `src/parser/` for `TokPow`, `**`, `+!`, `-!` — the mechanism scout said NO. Confirm at scout stage.
+  2. Is there a scout report or spec doc for D26 / D28 implementation beyond the ledger's ratification? Grep `docs/devbook/` for chapters on arithmetic operators / fallible operators.
 
 **PULLED / NOT READY (do not resurrect without a scout):**
   - **Method-targ recorder (f-string).** Diagnosis wrong TWICE. `EFString` is genuinely absent from both walkers, but the causal chain is BROKEN: the undefined symbol is the iterator's own type, and `.iter()` fails `infer.gg`'s terminal/closure gate, so no targ entry is produced either way. The real hazard is `expr_link_types`, which is NOT in the snapshot/restore set. Filed in full on its ledger entry.
