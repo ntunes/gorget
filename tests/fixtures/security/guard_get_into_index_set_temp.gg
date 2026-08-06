@@ -1,0 +1,21 @@
+# Track B — CELL: Guard[String].get() → index-assign d[k] = v · TEMP form ·
+# payload String · backend C
+#
+# Sibling of guard_get_into_dict_put_double_free.gg on the DESTINATION-CONSUMER
+# axis: index-assign sugar `d[k] = v` lowers through the SAME consuming-arg
+# boundary as `d.put(k, v)`. The `.put` cell and the `[k]=v` cell must be
+# fixed by ONE writer change; if they diverged, either is a stale carve-out.
+#
+# Before Track B's fix: exit 134 (ASan double-free), identical to the .put
+# form.
+# After Track B: exit 0, prints `1`.
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    Mutex[String] m = Mutex[String](heaped())
+    Guard[String] g = m.lock()
+    Dict[String, String] d = {}
+    d["k"] = g.get()
+    print(d.len())

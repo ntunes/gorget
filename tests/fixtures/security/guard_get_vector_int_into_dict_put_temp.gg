@@ -1,0 +1,21 @@
+# Track B — CELL: Guard[Vector[int]].get() → Dict.put · TEMP form ·
+# payload Vector[int] (64-byte GorgetArray region) · backend C
+#
+# Sibling of guard_get_into_dict_put_double_free.gg on the PAYLOAD-TYPE axis.
+# The String cell double-freed a heap-forced string buffer; this cell
+# double-frees a heap-allocated GorgetArray region. Same class, same fix
+# (ensure_owned_at_consuming_arg's else-arm predicate).
+#
+# Before Track B's fix: exit 134 (ASan double-free on the 64-byte array region).
+# After Track B: exit 0, prints `1`.
+
+String suffix():
+    return "-forced"
+
+void main():
+    Vector[int] row = [1, 2, 3]
+    Mutex[Vector[int]] m = Mutex[Vector[int]](!row)
+    Guard[Vector[int]] g = m.lock()
+    Dict[String, Vector[int]] d = {}
+    d.put("k" + suffix(), g.get())
+    print(d.len())

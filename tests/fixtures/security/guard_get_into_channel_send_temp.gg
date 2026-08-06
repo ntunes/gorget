@@ -1,0 +1,32 @@
+# Track B — CELL: Guard[String].get() → Channel.send · TEMP form ·
+# payload String · backend C
+#
+# Sibling of guard_get_into_dict_put_double_free.gg on the DESTINATION-CONSUMER
+# axis. Channel.send takes ownership of the sent value (memcpy'd into the
+# ring-buffer slot); a View temp aliased the Mutex-owned buffer into that slot
+# and both frees fired.
+#
+# Before Track B's fix: exit 134 (ASan double-free on the shared String
+# buffer — the consumer task's recv-side drop and the producer-side scope-exit
+# drop of the mutex hit the same address).
+# After Track B: exit 0, prints `1`.
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+async void producer(Channel[String] ch, Mutex[String] m):
+    Guard[String] g = m.lock()
+    ch.send(g.get())
+
+async int consumer(Channel[String] ch):
+    String s = ch.recv()
+    return 1
+
+async void main():
+    Mutex[String] m = Mutex[String](heaped())
+    Channel[String] ch = Channel[String](2)
+    Task[void] tp = spawn producer(ch, m)
+    tp.await()
+    Task[int] tc = spawn consumer(ch)
+    int n = tc.await()
+    print(n)
