@@ -4,6 +4,7 @@ pub mod derive;
 pub mod errors;
 pub mod ids;
 pub mod lint_suggest_throws;
+pub mod lint_xor_likely_power;
 pub mod meta;
 pub mod purity;
 pub mod resolve;
@@ -374,6 +375,11 @@ pub fn analyze_with_source_dir(
             &expr_types,
             &mut lint_warnings,
         );
+    });
+    // D28 XOR-fix-it lint (`W_XorLikelyPower`) — flag `2 ^ N` / `10 ^ N` in
+    // the GCC-12 shape (narrow per ledger `:959-960`). Non-fatal.
+    time_pass(&mut pass_times, "lint_xor_likely_power", || {
+        lint_xor_likely_power::check_module(module, &mut lint_warnings);
     });
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)

@@ -118,6 +118,18 @@ pub enum SemanticWarningKind {
     /// Collection mutated while an implicit CoW borrow (from .get/.unwrap/index) is alive.
     /// The CoW system handles correctness, but the pattern may be confusing.
     CowBorrowMutation { source: String, borrow: String },
+    /// D28 XOR-fix-it lint: `int r = 2 ^ 10` (or `10 ^ N`) parses as XOR and
+    /// produces 8, but users likely meant `2 ** 10` = 1024. Narrowed to
+    /// GCC-12's `-Wxor-used-as-pow` shape per ledger `:959-960`: LHS in
+    /// `{2, 10}`, RHS in `0..=63`, both non-negative literals. The broader
+    /// `literal ^ literal` form is EXPLICITLY REJECTED (false-fires on
+    /// canonical XOR fixtures like `0xff ^ 0x0f`, `3 ^ 5`).
+    XorLikelyPower {
+        /// LHS literal value (used in the message + fix-it text).
+        lhs: i64,
+        /// RHS literal value.
+        rhs: i64,
+    },
     /// A function returning `Result[T, E]` contains one or more bindings of the
     /// `T x = match expr: case Ok(v): v; case Error(e): return Error(e)` shape.
     /// Declaring the function `throws E` would let `T x = expr` auto-propagate the
@@ -161,6 +173,7 @@ impl SemanticWarningKind {
             SemanticWarningKind::DeadBareParamWrite { .. } => "W_DeadBareParamWrite",
             SemanticWarningKind::RecursiveBareParamMaterialize { .. } => "W_RecursiveBareParamMaterialize",
             SemanticWarningKind::CowBorrowMutation { .. } => "W_CowBorrowMutation",
+            SemanticWarningKind::XorLikelyPower { .. } => "W_XorLikelyPower",
             SemanticWarningKind::SuggestThrowsRefactor { .. } => "W_SuggestThrowsRefactor",
         }
     }
@@ -234,6 +247,22 @@ impl std::fmt::Display for SemanticWarning {
             }
             SemanticWarningKind::CowBorrowMutation { source, borrow } => {
                 write!(f, "`{source}` mutated while `{borrow}` holds an element — clone is inserted automatically")
+            }
+            SemanticWarningKind::XorLikelyPower { lhs, rhs } => {
+                // Include the W_ code in the message text so a
+                // `stderr.contains("W_XorLikelyPower")` gate works even
+                // though warning-code header threading (`.with_code`) is
+                // Phase-1-deferred (`src/errors.rs::report_semantic_warning`).
+                let xor = lhs ^ rhs;
+                let pow: i64 = if *rhs >= 0 && *rhs <= 63 {
+                    (*lhs).checked_pow(*rhs as u32).unwrap_or(0)
+                } else {
+                    0
+                };
+                write!(
+                    f,
+                    "[W_XorLikelyPower] `{lhs} ^ {rhs}` is XOR = {xor}; if you meant power, write `{lhs} ** {rhs}` = {pow} (D28 XOR-fix-it lint)"
+                )
             }
             SemanticWarningKind::SuggestThrowsRefactor { fn_name, error_type, occurrence_count } => {
                 let sites = if *occurrence_count == 1 {
