@@ -42366,6 +42366,47 @@ fn pow_unary_minus_reject() {
     check_gg_fails("pow_unary_minus_reject.gg", "E_AmbiguousUnaryMinusPow");
 }
 
+/// D28 R1 cross-lane parity: the SH driver ALSO rejects `pow_unary_minus_reject.gg`
+/// with `E_AmbiguousUnaryMinusPow`. Pre-D28-R1-fix (measured 2026-08-06 with the
+/// SH parser at HEAD without this reject), the SH silently ACCEPTED the fixture
+/// and emitted valid C — a Core #9 silent-lane-gap: the shape a lane
+/// mathematically differed on (Rust parses `-x ** 2` as `-(x ** 2)`, SH as
+/// `(-x) ** 2`) was going through with no diagnostic on either interpretation.
+/// Fix: SH parser's unary-minus operand bp lowered 60 → 33 so `**` IS consumed
+/// inside the operand, then the R1 shape (peek-not-LParen + operand-is-Pow) is
+/// panic-rejected with the E_ code in the message body. Ratchet: this test.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_pow_unary_minus_ambiguous() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/pow_unary_minus_reject.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_pow_unary_minus_ambiguous",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver ACCEPTED `-x ** 2` (D28 amendment R1 silent-lane-gap: Rust \
+         REJECTS the shape at parse time, SH must too). exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_AmbiguousUnaryMinusPow"),
+        "SH driver rejected `-x ** 2` but the diagnostic did not name \
+         `E_AmbiguousUnaryMinusPow` — cross-lane parity requires the same \
+         error code on all lanes.\nstderr:\n{stderr}",
+    );
+}
+
 /// D28 N2: amendment R3 — mixed int base ** float exp REJECTs.
 #[test]
 fn pow_type_mismatch_int_float() {

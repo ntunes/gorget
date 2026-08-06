@@ -2242,7 +2242,21 @@ equip Parser:
         # Unary minus
         if ptag == TOK_MINUS:
             self.advance()
-            SpannedExpr operand = self.parse_expr_bp(60)
+            # D28 R1 (docs/define-gorget/decisions.md:1197): unparenthesized
+            # unary `-` with `**` is a compile REJECT (JS/TC39 guardrail).
+            # Cross-lane parity with Rust `src/parser/expr.rs:544-563`.
+            # Operand bp is 33 (one below Pow's left-bp of 34) so `**` IS
+            # consumed inside the operand — this exposes the shape for
+            # structural detection.
+            int r1_next_ptag = self.peek_tag()
+            SpannedExpr operand = self.parse_expr_bp(33)
+            if r1_next_ptag != TOK_LPAREN:
+                match operand.expr:
+                    case EBinaryOp(_l1, r1_op, _r1):
+                        if r1_op == "**":
+                            panic("error[E_AmbiguousUnaryMinusPow]: unparenthesized unary `-` with `**` is ambiguous (D28 amendment R1). Write `-(x ** y)` (negation of the result) or `(-x) ** y` (base is negated).")
+                    else:
+                        pass
             return SpannedExpr(EUnaryOp("-", Box(operand)), Span(start, operand.span.end))
 
         # Bitwise NOT
