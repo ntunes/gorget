@@ -11097,3 +11097,54 @@ fn backend_flag_set_matches_dispatch() {
          dispatch ever runs. Add it to BACKENDS."
     );
 }
+
+/// Track A · MEMORY-SAFETY round · CLASS-RETIRING GUARD (Core #6).
+///
+/// Every silent-drop of a sub-expression's inferred type in the checker is
+/// a Core #10 hazard. `Expr::Catch` (`src/semantic/typecheck.rs:4624`) and
+/// `Expr::FaultCatch` (`:4663`) previously called `self.infer_expr(recovery)`
+/// / `self.infer_expr(handler)` and DISCARDED the returned TypeId — the
+/// outer VarDecl then unified a fabricated OK type against itself, so an
+/// ill-typed recovery reached codegen (silent heap-ptr-as-int64 on
+/// same-C-layout mismatches like Vector[String] → Vector[int]).
+///
+/// This lint asserts both arms route through the shared helper
+/// `check_recovery_type` and neither carries a bare `self.infer_expr(recovery)`
+/// / `self.infer_expr(handler)` call. A new recovery/handler-yielding arm
+/// added to `impl_typecheck_expr` must join this whitelist consciously
+/// (grepping for `check_recovery_type` to see how, or adding the
+/// justification here if the new arm legitimately doesn't need it).
+#[test]
+fn recovery_arms_route_through_check_recovery_type() {
+    let src = std::fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+    for pat in &["Expr::Catch {", "Expr::FaultCatch {"] {
+        let start = src
+            .find(pat)
+            .unwrap_or_else(|| panic!("missing arm {pat} in src/semantic/typecheck.rs"));
+        let end = src[start + pat.len()..]
+            .find("\n            Expr::")
+            .map(|off| start + pat.len() + off)
+            .unwrap_or(src.len());
+        let arm = &src[start..end];
+        assert!(
+            arm.contains("check_recovery_type("),
+            "{pat}: must route through check_recovery_type — see \
+             tests/fixtures/known_gaps/catch_recovery_type_unchecked.gg for \
+             the class this guard retires. New recovery/handler-yielding arms \
+             must call check_recovery_type(recovery_or_handler, expected) at \
+             the writer site so ill-typed recoveries reject with E_TypeMismatch \
+             instead of reaching codegen (Core #10 lower-or-reject)."
+        );
+        assert!(
+            !arm.contains("self.infer_expr(recovery)"),
+            "{pat}: bare `self.infer_expr(recovery)` — Core #10 silent-drop \
+             class. Route through check_recovery_type instead."
+        );
+        assert!(
+            !arm.contains("self.infer_expr(handler)"),
+            "{pat}: bare `self.infer_expr(handler)` — Core #10 silent-drop \
+             class. Route through check_recovery_type instead."
+        );
+    }
+}

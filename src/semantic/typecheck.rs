@@ -4712,15 +4712,16 @@ impl<'a> TypeChecker<'a> {
                 // ill-typed recovery is rejected at the writer site. Also
                 // installs the OK type as `decl_type_hint` so literals like
                 // `[]` / `None` coerce here just as they do at those sites.
-                if let Some(t) = ok_ty {
-                    self.check_recovery_type(recovery, t);
-                    return t;
-                }
-                // Non-Result inner (already an error path today): fall back
-                // to the historical inner_type return. Still type the
-                // recovery so its own diagnostics fire.
-                self.infer_expr(recovery);
-                inner_type
+                // Non-Result inner (already an error path — inner_type is
+                // typically `error_id` here) routes through the same helper
+                // with `inner_type` as the expected slot; `unify`'s
+                // error_id-passes-through rule at `:980-982` makes that a
+                // no-op-safe check while still keeping the recovery's OWN
+                // diagnostics live and, critically, keeping this arm free of
+                // the bare-`infer_expr` shape the class-retiring lint watches.
+                let expected = ok_ty.unwrap_or(inner_type);
+                self.check_recovery_type(recovery, expected);
+                if let Some(t) = ok_ty { t } else { inner_type }
             }
             Expr::FaultCatch { expr: inner, pattern, handler } => {
                 // The wrapped expression is a plain (non-throwing) value — its
