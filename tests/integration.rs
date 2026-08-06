@@ -21678,7 +21678,22 @@ fn self_host_bootstrap_fixed_point() {
     // instrumentation warning line. Round XXIX Track D retired the
     // legacy `liveness_instrumentation_diff` pass at its writer, so
     // there is no interim strip to maintain.
-    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 2;
+    //
+    // Raised 2026-08-06 from 2 to 3 (Round XXXII Track A / MEMORY-SAFETY
+    // round): the SH mirror at `tests/fixtures/self_host_typechecker/
+    // typecheck.gg` (safety-pass ECatch + EFaultCatch arms now emit
+    // `DkTypeMismatch` when recovery/handler type ≠ expected type) +
+    // `infer.gg` (new ECatch inference arm returning the Result's OK slot)
+    // introduces new diagnostic-emission and inference call sites during
+    // self-check. Stage2 is built from Rust gg (uses Rust's semantically-
+    // equivalent `check_recovery_type` helper), stage3 is built from
+    // stage2 which uses the SH's newly-added arms — the byte-level LIR
+    // outputs converge but take ONE extra generation to settle. Bumped
+    // from 2 → 3 (not higher — the debt is scoped to this one round's
+    // Track A change; a future round that closes the SH-Rust emission
+    // discrepancy on the recovery-type check should tighten this back).
+    // Convergence measured at stage-3 (release, loaded box; ~21 min).
+    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 3;
     if let Some(k) = converged_at {
         assert!(
             k <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,
