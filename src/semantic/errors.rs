@@ -329,6 +329,11 @@ pub enum SemanticErrorKind {
     /// Type checking failure.
     TypeMismatch { expected: String, found: String },
 
+    /// D28 amendment R3: `**` requires both operands to have the same
+    /// numeric type — `int × int → int`, `float × float → float`; mixed
+    /// or non-numeric operands REJECT (no silent lossy conversion).
+    TypeMismatchInPow { left: String, right: String },
+
     /// Function call with wrong number of arguments.
     WrongArgCount { expected: usize, found: usize },
 
@@ -923,6 +928,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::UndefinedName { .. } => "E_UndefinedName",
             SemanticErrorKind::DuplicateDefinition { .. } => "E_DuplicateDefinition",
             SemanticErrorKind::TypeMismatch { .. } => "E_TypeMismatch",
+            SemanticErrorKind::TypeMismatchInPow { .. } => "E_TypeMismatchInPow",
             SemanticErrorKind::WrongArgCount { .. } => "E_WrongArgCount",
             SemanticErrorKind::NotAFunction { .. } => "E_NotAFunction",
             SemanticErrorKind::NotAType { .. } => "E_NotAType",
@@ -1048,6 +1054,14 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::TypeMismatch { expected, found } => {
                 write!(f, "type mismatch: expected `{expected}`, found `{found}`")
+            }
+            SemanticErrorKind::TypeMismatchInPow { left, right } => {
+                write!(
+                    f,
+                    "cannot use `**` with operands of type `{left}` and `{right}` — \
+                     `**` requires both operands to be the same integer type or both \
+                     float (D28 amendment R3); convert explicitly if you need cross-type"
+                )
             }
             SemanticErrorKind::WrongArgCount { expected, found } => {
                 write!(

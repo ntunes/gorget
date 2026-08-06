@@ -1705,6 +1705,66 @@ impl<'a> TypeChecker<'a> {
                         );
                         result
                     }
+                    // D28 `**` — amendment R3 no-type-switching. Both operands
+                    // must be the same numeric type (int×int → int, float×float
+                    // → float). Mixed or non-numeric operands REJECT with
+                    // `E_TypeMismatchInPow`. The negative-exp + overflow trap
+                    // semantics are enforced at runtime by the checked helper
+                    // (see `src/backend/c/runtime/runtime_math.c`).
+                    BinaryOp::Pow => {
+                        let l_resolved = self.resolve_type(left_type);
+                        let r_resolved = self.resolve_type(right_type);
+                        let l_is_int = matches!(
+                            self.types.get(l_resolved),
+                            ResolvedType::Primitive(p) if is_integer_type(p)
+                        );
+                        let r_is_int = matches!(
+                            self.types.get(r_resolved),
+                            ResolvedType::Primitive(p) if is_integer_type(p)
+                        );
+                        let l_is_float = matches!(
+                            self.types.get(l_resolved),
+                            ResolvedType::Primitive(
+                                PrimitiveType::Float
+                                | PrimitiveType::Float32
+                                | PrimitiveType::Float64
+                            )
+                        );
+                        let r_is_float = matches!(
+                            self.types.get(r_resolved),
+                            ResolvedType::Primitive(
+                                PrimitiveType::Float
+                                | PrimitiveType::Float32
+                                | PrimitiveType::Float64
+                            )
+                        );
+                        // Cascade guard: any Error / Var / Never in operand
+                        // skips the reject to avoid noisy cascading messages.
+                        let has_error = matches!(
+                            self.types.get(l_resolved),
+                            ResolvedType::Error | ResolvedType::Var(_) | ResolvedType::Never
+                        ) || matches!(
+                            self.types.get(r_resolved),
+                            ResolvedType::Error | ResolvedType::Var(_) | ResolvedType::Never
+                        );
+                        let both_int = l_is_int && r_is_int;
+                        let both_float = l_is_float && r_is_float;
+                        if !has_error && !(both_int || both_float) {
+                            let l_desc = self.describe_resolved_type(l_resolved);
+                            let r_desc = self.describe_resolved_type(r_resolved);
+                            self.errors.push(SemanticError {
+                                kind: SemanticErrorKind::TypeMismatchInPow {
+                                    left: l_desc,
+                                    right: r_desc,
+                                },
+                                span: expr.span,
+                            });
+                            return self.types.error_id;
+                        }
+                        // Unify to nail down the result type; on both-int or
+                        // both-float this is the same type as the operands.
+                        self.unify(left_type, right_type, expr.span)
+                    }
                     // Bitwise operators — result is same type (integer only)
                     BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor
                     | BinaryOp::Shl | BinaryOp::Shr => {
@@ -6267,6 +6327,7 @@ impl<'a> TypeChecker<'a> {
                 BinaryOp::Add => "+=",
                 BinaryOp::Sub => "-=",
                 BinaryOp::Mul => "*=",
+                BinaryOp::Pow => "**=",
                 BinaryOp::Div => "/=",
                 BinaryOp::Rem => "%=",
                 BinaryOp::AddWrap => "+%=",
@@ -6294,6 +6355,7 @@ impl<'a> TypeChecker<'a> {
                 BinaryOp::Add => "+",
                 BinaryOp::Sub => "-",
                 BinaryOp::Mul => "*",
+                BinaryOp::Pow => "**",
                 BinaryOp::Div => "/",
                 BinaryOp::Rem => "%",
                 BinaryOp::Mod => "mod",
