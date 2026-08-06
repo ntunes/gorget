@@ -1,22 +1,33 @@
-# Cell: ArcMutex · String · concat · spawn-sync · post-Track-D+E-fix `hello world-forced!`
+# Cell: ArcMutex · String · concat · spawn-sync · post-Track-D+E-fix `hello world-forced!` (C backend + LLVM)
 #
 # Graduated from known_gaps/ by Round XXXII Track D+E. Pre-fix BOTH LANES
 # were broken DIFFERENTLY on this shape:
 #   Rust (both backends): exit 101 ICE (move-follow-through violation)
 #   Self-host: compiled, then exit 134 `free(): double free detected in tcache 2`
 #
-# Two composed writer defects landed together in the class-fix:
-#   (a) Rust: `lower_shared_var_decl`'s three resource arms omitted the
+# ⚠ ONLY THE RUST LANE IS FIXED THIS ROUND. The SH sub-track (retire the
+# `< PRIM_COUNT` gate at `tests/fixtures/self_host_lowerer/lower_stmt.gg:62-66`)
+# was attempted (commit 9f822ea7) and REVERTED (commit b0f716c4) after the
+# brief's premise that SH is "reference-grade via op_consume" was
+# empirically falsified: retiring the gate exposed a SH `op_consume`
+# non-scalar-inner bug (returns OpCopy on a resource String source where
+# OpMove is required, triggering the SH's own validate_resource_moves
+# FATAL). The SH lane on this fixture therefore STILL silently lowers
+# `shared String` as plain `String` (via the `< PRIM_COUNT` fall-through)
+# and STILL double-frees at exit 134 under `spawn`. See the SH follow-up
+# TODO filed in TODO.md ("SH's `lower_shared_var_decl` doesn't handle
+# non-scalar inners") for the fix scope.
+#
+# The Rust-lane class-fix is:
+#   Rust: `lower_shared_var_decl`'s three resource arms omitted the
 #       Move-follow-through pattern. Fix at
 #       `src/ir/lowering/context.rs::materialize_addressable` +
 #       `assign_with_move_follow_through`; class-retiring lint at
 #       `tests/lints.rs::shared_var_decl_arms_route_through_materialize_addressable`.
-#   (b) Self-host: `lower_stmt.gg:62-66`'s `< PRIM_COUNT` gate silently fell
-#       non-scalar `shared T` decls through to the plain var-decl path,
-#       leaving `ctx.shared_locals` empty so `lower_shared_spawn` returned
-#       -1 and the caller fell through to `lower_named_fn_spawn`'s shallow
-#       `GorgetString` copy -- the source of the double-free. Fix: retire
-#       the `< PRIM_COUNT` gate.
+#
+# Because `tests/integration.rs::run_gg` uses the C backend, the integration
+# test asserts C-backend output only; the SH-lane double-free remains until
+# the SH `op_consume` follow-up lands.
 #
 # The outer `print(s)` is wrapped in `with s:` (the doc-compliant way per
 # `docs/language-reference.md:1366`, even though the bare-read reject is
